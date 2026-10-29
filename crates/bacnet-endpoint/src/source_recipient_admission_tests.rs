@@ -56,9 +56,11 @@ fn finish(fixture: &Fixture, id: u8, success: bool) {
             reject_reason: RejectReason::OTHER,
         })
     };
-    assert!(fixture
-        .owner
-        .admit_terminal(fixture.peer.local_mac(), None, None, &apdu));
+    assert!(
+        fixture
+            .owner
+            .admit_terminal(fixture.peer.local_mac(), None, None, &apdu)
+    );
 }
 async fn health(fixture: &Fixture) -> PropertyValue {
     fixture

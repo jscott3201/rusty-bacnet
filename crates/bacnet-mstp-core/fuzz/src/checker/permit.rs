@@ -1,6 +1,6 @@
 //! Whether the station may send a frame it hands over, and why.
 
-use bacnet_mstp_codec::{FrameType, BROADCAST_MAC, MAX_STANDARD_MPDU_DATA};
+use bacnet_mstp_codec::{BROADCAST_MAC, FrameType, MAX_STANDARD_MPDU_DATA};
 
 use super::{After, Ask, Checker, Custody, Hold, Owed, Role};
 use crate::model::{Seen, T_NO_TOKEN, T_SLOT};

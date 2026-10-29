@@ -4,7 +4,7 @@ use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStat
 use crate::traits::BACnetObject;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, PropertyIdentifier};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
 
 #[derive(Debug, PartialEq)]
@@ -56,10 +56,10 @@ fn acked_transitions(object: &dyn BACnetObject) -> EventTransitionBits {
 fn assert_protocol(error: Error, class: ErrorClass, code: ErrorCode) {
     assert!(matches!(
         error,
-        Error::Protocol {
+        Error::Remote(RemoteError::Error {
             class: actual_class,
             code: actual_code,
-        } if actual_class == class && actual_code == code
+        }) if actual_class == class && actual_code == code
     ));
 }
 

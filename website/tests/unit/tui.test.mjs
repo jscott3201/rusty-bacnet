@@ -102,18 +102,43 @@ test('the key reference lists every key the key map handles', async () => {
     'every key-map context has a section');
 });
 
+// Rust usage arrays may be formatted on one line or several lines. Extract
+// every quoted usage before expanding alternatives in any argument position.
+function commandUsages(source) {
+  return [...source.matchAll(/usage:\s*&\[((?:\s*"[^"]*"\s*,?)*\s*)\]/g)]
+    .flatMap(m => [...m[1].matchAll(/"([^"]*)"/g)].map(f => f[1]));
+}
+
+function commandForms(command) {
+  return command.split(' ').reduce((forms, token) =>
+    forms.flatMap(prefix => token.split('|').map(word => prefix ? `${prefix} ${word}` : word)), ['']);
+}
+
+test('command usages cover multiline arrays and alternatives in later tokens', () => {
+  const usage = commandUsages(`
+    usage: &["csv on|off", "watch DEVICE OBJECT [PROPERTY]"],
+    usage: &[
+      "mstp rotation|hold MS",
+      "mstp scan SECS|cancel",
+    ],
+  `);
+  assert.deepEqual(usage, ['csv on|off', 'watch DEVICE OBJECT [PROPERTY]', 'mstp rotation|hold MS', 'mstp scan SECS|cancel']);
+  assert.deepEqual(usage.flatMap(commandForms), [
+    'csv on', 'csv off', 'watch DEVICE OBJECT [PROPERTY]', 'mstp rotation MS', 'mstp hold MS', 'mstp scan SECS', 'mstp scan cancel',
+  ]);
+});
+
 test('the key reference lists every command-bar command', async () => {
   const source = await readRepo('crates/bacnet-cli/src/tui/app/command_bar.rs');
   // Each form in the COMMANDS table, which the parser reads.
   const table = source.slice(source.indexOf('pub(crate) const COMMANDS'), source.indexOf('\n];\n', source.indexOf('pub(crate) const COMMANDS')));
-  const usage = [...table.matchAll(/usage: &\[([^\n]*)\],\n/g)].flatMap(m => [...m[1].matchAll(/"([^"]*)"/g)].map(f => f[1]));
+  const usage = commandUsages(table);
   assert.ok(usage.length >= 6, 'the COMMANDS table was found');
+  const forms = usage.flatMap(commandForms);
+  assert.ok(forms.includes('mstp scan SECS'), 'the scan-window form was found');
+  assert.ok(forms.includes('mstp scan cancel'), 'the scan-cancel form was found');
   const page = await read('src/content/docs/tui/keys.mdx');
-  for (const command of usage) {
-    // "csv on|off" and "mstp rotation|hold MS" are listed one form a row.
-    const [head, ...rest] = command.split(' ');
-    for (const form of rest[0]?.includes('|') ? rest[0].split('|').map(word => [head, word, ...rest.slice(1)].join(' ')) : [command]) {
-      assert.ok(page.includes(`\`${form}\``), `keys.mdx lists \`${form}\``);
-    }
+  for (const form of forms) {
+    assert.ok(page.includes(`\`${form}\``), `keys.mdx lists \`${form}\``);
   }
 });

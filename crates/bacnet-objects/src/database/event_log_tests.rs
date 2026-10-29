@@ -14,8 +14,8 @@ use bacnet_types::enums::{
 };
 use bacnet_types::primitives::{BACnetTimeStamp, Date, ObjectIdentifier, PropertyValue, Time};
 use std::borrow::Cow;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct FixedClock(ClockFrame);
 
@@ -354,10 +354,10 @@ impl BACnetObject for Refusing {
     }
     fn add_event_log_record(&mut self, _: BACnetEventLogRecord) -> Result<(), Error> {
         self.0.fetch_add(1, Ordering::Relaxed);
-        Err(Error::Protocol {
-            class: ErrorClass::DEVICE,
-            code: ErrorCode::OPERATIONAL_PROBLEM,
-        })
+        Err(Error::protocol(
+            ErrorClass::DEVICE,
+            ErrorCode::OPERATIONAL_PROBLEM,
+        ))
     }
 }
 

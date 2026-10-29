@@ -6,10 +6,22 @@ Build BACnet object state with [`traits::BACnetObject`] and
 owns registered objects and supports identifier-based lookup; object modules
 provide their property implementations.
 
-This hosted crate requires `std` and allocating storage. It has no public
-features and no Tokio dependency. Using it alone does not start a transport,
-a server executor or event/COV delivery, and does not provide an alloc-only or
-no-heap firmware profile.
+The crate has no Tokio dependency. Using it alone does not start a
+transport, a server executor or event/COV delivery.
+
+## Features
+
+| Profile | Features | What it has |
+| --- | --- | --- |
+| Hosted | `std` (default) | Everything, including the file persistence backends (`FileAuditLogPersistence`, `FileLogPersistence` and the others), a writer thread per saving object, and tracing. |
+| `no_std` with a heap | `alloc` (without `std`) | Every object type, the database and the persistence traits, for a target with a global allocator and atomic compare-and-swap (#1615). A save runs on the caller's thread, and the application supplies the storage. |
+
+There is no build with neither feature: the database boxes every object, so a
+heap-free device answers from a static table instead. ARMv6-M
+(`thumbv6m-none-eabi`) lacks compare-and-swap, which `alloc::sync::Arc`
+needs, so the crate doesn't build there.
+[The design note](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/design/objects-no-std.md)
+has the details.
 
 ## Initialize and read an object
 
@@ -86,6 +98,7 @@ property and service documentation for its supported behavior.
 ## Documentation profile
 
 This README is included as the crate landing page and the program runs as a
-doctest. The docs.rs profile explicitly selects no features, disables defaults
-and targets `x86_64-unknown-linux-gnu`. Those metadata settings do not make this
-crate `no_std`, and a local render does not establish a docs.rs deployment.
+doctest. The docs.rs profile disables defaults, explicitly selects `std` and
+targets `x86_64-unknown-linux-gnu`, so it shows the hosted API, the file
+persistence backends included; it does not render the `alloc`-only build, and a
+local render does not establish a docs.rs deployment.

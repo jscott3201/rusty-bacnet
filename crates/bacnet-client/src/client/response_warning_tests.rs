@@ -3,7 +3,7 @@
 //! at debug and count toward the next warning.
 
 use super::*;
-use bacnet_encoding::apdu::{decode_apdu, SimpleAck};
+use bacnet_encoding::apdu::{SimpleAck, decode_apdu};
 use bacnet_transport::warn_throttle::WARNING_INTERVAL;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 

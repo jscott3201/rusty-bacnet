@@ -396,11 +396,11 @@ impl Line {
         let mut transmission = self.live.remove(&tx)?;
         transmission.truncated = true;
         self.active.retain(|octet| octet.tx != tx);
-        if let Some(window) = self.window.as_mut() {
-            if window.end > now {
-                window.corrupted = true;
-                window.broken = true;
-            }
+        if let Some(window) = self.window.as_mut()
+            && window.end > now
+        {
+            window.corrupted = true;
+            window.broken = true;
         }
         Some(transmission)
     }

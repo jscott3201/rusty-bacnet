@@ -34,12 +34,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         destination: &WriteGroupDestination,
         request: &WriteGroupRequest,
     ) -> Result<(), Error> {
-        if let WriteGroupDestination::RemoteBroadcast(network) = destination {
-            if !(1..u16::MAX).contains(network) {
-                return Err(Error::Encoding(format!(
-                    "WriteGroup remote network {network} out of range 1-65534"
-                )));
-            }
+        if let WriteGroupDestination::RemoteBroadcast(network) = destination
+            && !(1..u16::MAX).contains(network)
+        {
+            return Err(Error::Encoding(format!(
+                "WriteGroup remote network {network} out of range 1-65534"
+            )));
         }
         let mut service = BytesMut::new();
         request.encode(&mut service)?;

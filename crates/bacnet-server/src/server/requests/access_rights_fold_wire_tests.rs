@@ -56,12 +56,16 @@ async fn a_write_another_path_cannot_make_leaves_a_staged_save_to_its_request() 
         let mut db = written.expect("the database was held while it saved");
         let object = db.get_mut(&rights).unwrap();
         let past_end = PropertyValue::ApplicationData(encoded(&[zone_rule(9)]));
-        assert!(object
-            .write_property(P::POSITIVE_ACCESS_RULES, Some(5), past_end, None)
-            .is_err());
-        assert!(object
-            .write_property(P::LOG_ENABLE, None, PropertyValue::Null, None)
-            .is_err());
+        assert!(
+            object
+                .write_property(P::POSITIVE_ACCESS_RULES, Some(5), past_end, None)
+                .is_err()
+        );
+        assert!(
+            object
+                .write_property(P::LOG_ENABLE, None, PropertyValue::Null, None)
+                .is_err()
+        );
     }
     // Let every save through, so one queued meanwhile can't hold the test.
     drop(go);

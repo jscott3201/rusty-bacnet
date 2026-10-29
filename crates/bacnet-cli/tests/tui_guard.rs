@@ -4,7 +4,7 @@
 //! with stdin from /dev/null and stdout and stderr to files.
 #[allow(dead_code)]
 mod support;
-use support::{command, failure, run, Process};
+use support::{Process, command, failure, run};
 
 /// Plain `bacnet` in a pipeline or a script: the usage on stderr, nothing on
 /// stdout and exit status 2, whatever opted out of the TUI.

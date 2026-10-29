@@ -9,6 +9,8 @@
 //! Controlled_Variable_Value, the measurement it compares with Setpoint; the
 //! object doesn't follow Controlled_Variable_Reference itself.
 
+use crate::prelude::*;
+use alloc::borrow::Cow;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::{
     Action, EngineeringUnits, ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier,
@@ -16,7 +18,6 @@ use bacnet_types::enums::{
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
-use std::borrow::Cow;
 
 use crate::common::{self, read_property_list_property};
 use crate::reference::{self, ReferenceFrame};
@@ -326,10 +327,10 @@ impl BACnetObject for LoopObject {
             p if p == PropertyIdentifier::PROPERTY_LIST => {
                 read_property_list_property(&self.property_list(), array_index)
             }
-            _ => Err(Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::UNKNOWN_PROPERTY,
-            }),
+            _ => Err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::UNKNOWN_PROPERTY,
+            )),
         }
     }
 
@@ -391,10 +392,10 @@ impl BACnetObject for LoopObject {
                     self.update_interval = common::u64_to_u32(v)?;
                     return Ok(());
                 }
-                Err(Error::Protocol {
-                    class: ErrorClass::PROPERTY,
-                    code: ErrorCode::INVALID_DATA_TYPE,
-                })
+                Err(Error::protocol(
+                    ErrorClass::PROPERTY,
+                    ErrorCode::INVALID_DATA_TYPE,
+                ))
             }
             // Clause 12.17 Table 12-20 lists Reliability O7; that footnote requires
             // writes to be supported while Out_Of_Service is TRUE. The property's
@@ -417,20 +418,20 @@ impl BACnetObject for LoopObject {
                     self.reliability = v;
                     return Ok(());
                 }
-                Err(Error::Protocol {
-                    class: ErrorClass::PROPERTY,
-                    code: ErrorCode::INVALID_DATA_TYPE,
-                })
+                Err(Error::protocol(
+                    ErrorClass::PROPERTY,
+                    ErrorCode::INVALID_DATA_TYPE,
+                ))
             }
             p if p == PropertyIdentifier::DESCRIPTION => {
                 if let PropertyValue::CharacterString(s) = value {
                     self.description = s;
                     return Ok(());
                 }
-                Err(Error::Protocol {
-                    class: ErrorClass::PROPERTY,
-                    code: ErrorCode::INVALID_DATA_TYPE,
-                })
+                Err(Error::protocol(
+                    ErrorClass::PROPERTY,
+                    ErrorCode::INVALID_DATA_TYPE,
+                ))
             }
             // Table 12-20 types the two variable references
             // BACnetObjectPropertyReference: a write takes the reference's

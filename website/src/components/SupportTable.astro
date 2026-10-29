@@ -1,0 +1,26 @@
+---
+// One capability table from src/data/support.json (#1496). The rows come
+// from src/lib/support.mjs, which the plain-text export uses too.
+import support from '../data/support.json';
+import { supportTable } from '../lib/support.mjs';
+interface Props { table: string; }
+type Cell = string | { text?: string; code: string };
+type Table = { id: string; caption: string; columns: string[]; rows: Cell[][] };
+const table: Table = supportTable(Astro.props.table, support);
+---
+<div class="rb-table-scroll" tabindex="0" role="region" aria-label={table.caption}>
+  <table id={`table-${table.id}`}>
+    <caption>{table.caption}</caption>
+    <thead>
+      <tr>{table.columns.map((column) => <th scope="col">{column}</th>)}</tr>
+    </thead>
+    <tbody>
+      {table.rows.map((row: Cell[]) => <tr>
+        {row.map((cell: Cell, index: number) => {
+          const content = typeof cell === 'string' ? cell : <>{cell.text}<code>{cell.code}</code></>;
+          return index === 0 ? <th scope="row">{content}</th> : <td>{content}</td>;
+        })}
+      </tr>)}
+    </tbody>
+  </table>
+</div>

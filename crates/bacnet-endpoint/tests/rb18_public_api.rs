@@ -11,7 +11,7 @@ use std::time::Duration;
 
 // Promotion list resolves at both module and top-level paths.
 use bacnet_endpoint::bip::BipEndpointBuilder;
-use bacnet_endpoint::identity::{build_database_with_extra, DeviceIdentity, NetworkPortEntry};
+use bacnet_endpoint::identity::{DeviceIdentity, NetworkPortEntry, build_database_with_extra};
 use bacnet_endpoint::mstp::MstpEndpointBuilder;
 use bacnet_endpoint::roles::{ClientRoleHandle, ServerRoleHandle};
 use bacnet_endpoint::sc::ScEndpointBuilder;
@@ -88,15 +88,17 @@ async fn owner_shutdown_with_live_handles_fails_closed() {
     // Owner shutdown with handles alive: stop joins, clones fail closed.
     a.stop().await.unwrap();
     assert!(!live_server.is_session_alive());
-    assert!(live_client
-        .read_property(
-            &[0x02],
-            object_id(1),
-            PropertyIdentifier::PRESENT_VALUE,
-            None
-        )
-        .await
-        .is_err());
+    assert!(
+        live_client
+            .read_property(
+                &[0x02],
+                object_id(1),
+                PropertyIdentifier::PRESENT_VALUE,
+                None
+            )
+            .await
+            .is_err()
+    );
     assert!(live_server.suspend_next_reply().is_err());
     // Session borrows are released at termination.
     assert!(a.client().is_none());
@@ -117,18 +119,20 @@ async fn use_after_stop_fails_closed() {
     // Broadcast without running errors (no invented device, no send).
     assert!(s.broadcast_i_am().await.is_err());
     // Cloned client fails closed after stop.
-    assert!(tokio::time::timeout(
-        WAIT,
-        client.read_property(
-            &[0x02],
-            object_id(1),
-            PropertyIdentifier::PRESENT_VALUE,
-            None
+    assert!(
+        tokio::time::timeout(
+            WAIT,
+            client.read_property(
+                &[0x02],
+                object_id(1),
+                PropertyIdentifier::PRESENT_VALUE,
+                None
+            )
         )
-    )
-    .await
-    .expect("post-stop call hung")
-    .is_err());
+        .await
+        .expect("post-stop call hung")
+        .is_err()
+    );
 }
 
 #[tokio::test]
@@ -166,18 +170,20 @@ async fn role_teardown_while_other_session_remains() {
     // Tear down the server role owner; the client session remains running.
     server.stop().await.unwrap();
     assert!(client.is_running());
-    assert!(tokio::time::timeout(
-        WAIT,
-        client.client().unwrap().read_property(
-            &[0x02],
-            object_id(9),
-            PropertyIdentifier::PRESENT_VALUE,
-            None,
+    assert!(
+        tokio::time::timeout(
+            WAIT,
+            client.client().unwrap().read_property(
+                &[0x02],
+                object_id(9),
+                PropertyIdentifier::PRESENT_VALUE,
+                None,
+            )
         )
-    )
-    .await
-    .expect("post-teardown read hung")
-    .is_err());
+        .await
+        .expect("post-teardown read hung")
+        .is_err()
+    );
     client.stop().await.unwrap();
 }
 
@@ -196,15 +202,17 @@ async fn detached_handles_survive_drop_as_fail_closed_values() {
         .unwrap();
     assert!(moved);
     drop(a);
-    assert!(!detached_client
-        .read_property(
-            &[0x02],
-            object_id(1),
-            PropertyIdentifier::PRESENT_VALUE,
-            None
-        )
-        .await
-        .is_ok());
+    assert!(
+        !detached_client
+            .read_property(
+                &[0x02],
+                object_id(1),
+                PropertyIdentifier::PRESENT_VALUE,
+                None
+            )
+            .await
+            .is_ok()
+    );
     b.stop().await.unwrap();
 }
 
@@ -244,8 +252,8 @@ fn migration_adapters_build_unstarted() {
 /// stop; a session on another link has none.
 #[tokio::test(start_paused = true)]
 async fn mstp_session_exposes_its_transport_counters() {
-    use bacnet_transport::mstp::codec::{Frame, FrameType};
     use bacnet_transport::mstp::SerialPort;
+    use bacnet_transport::mstp::codec::{Frame, FrameType};
 
     let (serial, peer) = LoopbackSerial::pair();
     let mut session = MstpEndpointBuilder::new(serial, 5).build_session().unwrap();

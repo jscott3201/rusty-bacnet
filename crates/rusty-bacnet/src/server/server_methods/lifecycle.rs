@@ -73,12 +73,11 @@ impl BACnetServer {
         };
         // MS/TP serial open is synchronous and must succeed before pending
         // registrations are moved into the startup future.
-        let mut mstp_transport: Option<AnyTransport<crate::mstp_py::PySerial>> =
-            if self.transport_type == "mstp" {
-                Some(crate::mstp_py::build_mstp_transport(&self.mstp)?)
-            } else {
-                None
-            };
+        let mut mstp_transport: Option<AnyTransport> = if self.transport_type == "mstp" {
+            Some(crate::mstp_py::build_mstp_transport(&self.mstp)?)
+        } else {
+            None
+        };
 
         let inner = self.inner.clone();
         let started = self.started.clone();
@@ -90,6 +89,7 @@ impl BACnetServer {
         let broadcast_str = self.broadcast_address.clone();
         let share_port_by_address = self.share_port_by_address;
         let bip_mode = self.bip_mode.clone();
+        let bip6_foreign = self.bip6_foreign.clone();
         let multicast = self.multicast;
         let sc_hub = self.sc_hub.clone();
         let sc_vmac = self.sc_vmac.clone();
@@ -100,6 +100,7 @@ impl BACnetServer {
         let ipv6_interface = self.ipv6_interface.clone();
         let dcc_password = self.dcc_password.clone();
         let mutation_policy = self.mutation_policy;
+        let mutation_callback = self.mutation_callback.clone();
         let dcc_policy = self.dcc_policy;
         let dcc_source_restriction = self.dcc_source_restriction.clone();
         let dcc_disable_rate_limit = self.dcc_disable_rate_limit;
@@ -117,6 +118,7 @@ impl BACnetServer {
         let read_range_budget = self.read_range_budget;
         let get_event_information_budget = self.get_event_information_budget;
         let cov_policy = self.cov_policy.clone();
+        let router = self.router.clone();
         let time_sync_policy = self.time_sync_policy.clone();
 
         let objects: Vec<Box<dyn BACnetObject + Send>> = pending.drain(..).collect();
@@ -136,58 +138,70 @@ impl BACnetServer {
             let mut db = ObjectDatabase::new();
 
             // Prepare non-SC transports locally before constructing our Device.
-            let prepared_transport: Option<AnyTransport<crate::mstp_py::PySerial>> =
-                match transport_type.as_str() {
-                    "bip" => {
-                        let interface: Ipv4Addr = interface_str.parse().map_err(|e| {
-                            PyRuntimeError::new_err(format!("invalid interface: {e}"))
-                        })?;
-                        let broadcast: Ipv4Addr = broadcast_str.parse().map_err(|e| {
-                            PyRuntimeError::new_err(format!("invalid broadcast: {e}"))
-                        })?;
-                        let mut bip = BipTransport::new(interface, port, broadcast);
-                        bip.set_share_port_by_address(share_port_by_address);
-                        bip.set_mode(bip_mode);
-                        bip.set_multicast(multicast)
-                            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-                        Some(AnyTransport::Bip(Box::new(bip)))
+            let prepared_transport: Option<AppTransport> = match transport_type.as_str() {
+                "bip" => {
+                    let interface: Ipv4Addr = interface_str
+                        .parse()
+                        .map_err(|e| PyRuntimeError::new_err(format!("invalid interface: {e}")))?;
+                    let broadcast: Ipv4Addr = broadcast_str
+                        .parse()
+                        .map_err(|e| PyRuntimeError::new_err(format!("invalid broadcast: {e}")))?;
+                    let mut bip = BipTransport::new(interface, port, broadcast);
+                    bip.set_share_port_by_address(share_port_by_address);
+                    bip.set_mode(bip_mode);
+                    bip.set_multicast(multicast)
+                        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+                    Some(AnyTransport::Bip(Box::new(bip)).into())
+                }
+                "ipv6" => {
+                    let iface_str = ipv6_interface.as_deref().unwrap_or("::");
+                    let interface: std::net::Ipv6Addr = iface_str.parse().map_err(|e| {
+                        PyRuntimeError::new_err(format!("invalid IPv6 interface: {e}"))
+                    })?;
+                    // A B/IPv6 device's VMAC is its device instance
+                    // (Clauses U.1.3, H.7.2), so peers can name it by
+                    // instance; startup fails if another node on the
+                    // link already uses it.
+                    let mut bip6 = Bip6Transport::new(interface, port, Some(device_instance));
+                    if let Some(foreign) = bip6_foreign {
+                        bip6.register_as_foreign_device(foreign);
                     }
-                    "ipv6" => {
-                        let iface_str = ipv6_interface.as_deref().unwrap_or("::");
-                        let interface: std::net::Ipv6Addr = iface_str.parse().map_err(|e| {
-                            PyRuntimeError::new_err(format!("invalid IPv6 interface: {e}"))
-                        })?;
-                        // A B/IPv6 device's VMAC is its device instance
-                        // (Clauses U.1.3, H.7.2), so peers can name it by
-                        // instance; startup fails if another node on the
-                        // link already uses it.
-                        Some(AnyTransport::Bip6(Bip6Transport::new(
-                            interface,
-                            port,
-                            Some(device_instance),
-                        )))
+                    Some(AnyTransport::Bip6(bip6).into())
+                }
+                // SC can only be constructed after its dial; defer that I/O.
+                "sc" => None,
+                "mstp" => Some(
+                    mstp_transport
+                        .take()
+                        .ok_or_else(|| PyRuntimeError::new_err("MS/TP transport was not prepared"))?
+                        .into(),
+                ),
+                // The router's server port is taken only once the database
+                // is valid, so a refused start leaves it for the next one.
+                "router" => {
+                    if router.is_none() {
+                        return Err(PyRuntimeError::new_err("transport='router' needs router="));
                     }
-                    // SC can only be constructed after its dial; defer that I/O.
-                    "sc" => None,
-                    "mstp" => Some(mstp_transport.take().ok_or_else(|| {
-                        PyRuntimeError::new_err("MS/TP transport was not prepared")
-                    })?),
-                    other => {
-                        return Err(PyRuntimeError::new_err(format!(
-                            "unknown transport: '{other}'. Use 'bip', 'ipv6', 'sc', or 'mstp'"
-                        )));
-                    }
-                };
+                    None
+                }
+                other => {
+                    return Err(PyRuntimeError::new_err(format!(
+                        "unknown transport: '{other}'. Use 'bip', 'ipv6', 'sc', 'mstp' \
+                             or 'router'"
+                    )));
+                }
+            };
 
-            let local_capacity =
-                match &prepared_transport {
-                    Some(transport) => transport.local_receive_apdu_capacity(),
-                    // Only the SC branch defers construction. Its receive declaration
-                    // is owned by ScTransport and available before opening a socket.
-                    None => bacnet_transport::sc::ScTransport::<
-                        bacnet_transport::sc_tls::TlsWebSocket,
-                    >::LOCAL_RECEIVE_APDU_CAPACITY,
-                };
+            let local_capacity = match (&prepared_transport, &router) {
+                (Some(transport), _) => transport.local_receive_apdu_capacity(),
+                // The router's port, read where it is parked.
+                (None, Some(router)) => router.capacity().await?,
+                // SC defers construction too. Its receive declaration
+                // is owned by ScTransport and available before opening a socket.
+                (None, None) => bacnet_transport::sc::ScTransport::<
+                    bacnet_transport::sc_tls::TlsWebSocket,
+                >::LOCAL_RECEIVE_APDU_CAPACITY,
+            };
 
             // Validate the generated Device and entire pending DB before SC I/O.
             let identity = identity.resolve(local_capacity).map_err(to_py_err)?;
@@ -223,9 +237,11 @@ impl BACnetServer {
                 ))
             })?;
 
-            let transport = match prepared_transport {
-                Some(transport) => transport,
-                None => {
+            let transport = match (prepared_transport, router) {
+                (Some(transport), _) => transport,
+                // The database is valid: now spend the router's port.
+                (None, Some(router)) => AppTransport::Router(router.take().await?),
+                (None, None) => {
                     let hub_url = sc_hub.ok_or_else(|| {
                         PyRuntimeError::new_err("sc_hub is required for SC transport")
                     })?;
@@ -247,14 +263,15 @@ impl BACnetServer {
 
                     let mut sc = bacnet_transport::sc::ScTransport::new(ws, vmac)
                         .with_device_uuid(sc_device_uuid)
-                        .with_npdu_per_origin_limit(sc_npdu_admission_policy.per_origin_limit);
+                        .with_npdu_per_origin_limit(sc_npdu_admission_policy.per_origin_limit)
+                        .with_control_rate_limit(sc_npdu_admission_policy.control_rate);
                     if let Some(ms) = sc_heartbeat_interval_ms {
                         sc = sc.with_heartbeat_interval_ms(ms);
                     }
                     if let Some(ms) = sc_heartbeat_timeout_ms {
                         sc = sc.with_heartbeat_timeout_ms(ms);
                     }
-                    AnyTransport::Sc(Box::new(sc))
+                    AnyTransport::Sc(Box::new(sc)).into()
                 }
             };
 
@@ -272,16 +289,29 @@ impl BACnetServer {
                 .cov_policy(cov_policy)
                 .time_sync_policy(time_sync_policy)
                 .transport(transport);
+            // One policy holds every decision Python configures: installing
+            // a second would replace the first.
+            let mut policy = None;
             if let Some(sink) = audit_notification_sink {
                 builder = builder.audit_notification_sink(sink.object_id);
                 if sink.allow_all {
-                    builder = builder.policy(
+                    policy = Some(
                         bacnet_server::FnPolicy::new()
                             .audit_notification(|_| true)
                             .unconfirmed_audit_notification(|_| true),
                     );
                 }
                 // deny_all deliberately retains the Rust fail-closed defaults.
+            }
+            if let Some(callback) = mutation_callback {
+                policy = Some(
+                    policy
+                        .unwrap_or_default()
+                        .mutation(move |context| callback.decide(context)),
+                );
+            }
+            if let Some(policy) = policy {
+                builder = builder.policy(policy);
             }
             if let Some(pw) = dcc_password {
                 builder = builder.dcc_password(pw);
@@ -508,12 +538,13 @@ impl BACnetServer {
         crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
-    /// Update Present_Value for an application-owned Input, Loop or Life
-    /// Safety object.
+    /// Update Present_Value for an application-owned Input, noncommandable
+    /// Value, Loop or Life Safety object.
     ///
     /// This is the narrow application route for finite Analog Input and Loop
     /// REAL values, logical Binary Input Enumerated 0/1 values, in-range
-    /// Multi-state Input Unsigned values and Life Safety Point and Zone
+    /// Multi-state Input Unsigned values, the same for noncommandable Analog,
+    /// Binary and Multi-state Values, and Life Safety Point and Zone
     /// Enumerated BACnetLifeSafetyState values. The object implementation owns
     /// validation and Out_Of_Service simulation exclusivity.
     #[pyo3(signature = (object_id, value))]
@@ -565,8 +596,7 @@ mod capacity_tests {
     #[tokio::test]
     async fn binding_generated_mstp_device_matches_local_480_before_io() {
         let (serial, _peer) = LoopbackSerial::pair();
-        let transport: AnyTransport<LoopbackSerial> =
-            AnyTransport::Mstp(MstpTransport::new(serial, MstpConfig::default()));
+        let transport: AnyTransport = MstpTransport::new(serial, MstpConfig::default()).into();
         let identity = bacnet_objects::DeviceIdentity::new(893, 555)
             .unwrap()
             .resolve(transport.local_receive_apdu_capacity())

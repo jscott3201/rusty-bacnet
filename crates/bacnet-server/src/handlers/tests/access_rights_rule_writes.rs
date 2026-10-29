@@ -7,9 +7,10 @@
 //! before. Enable reads as an application BOOLEAN and takes BOOLEAN writes.
 //! ReadPropertyMultiple ALL carries what the writes left.
 
-use super::access_control_arrays::{array_cases, assert_reads, db_with, Expected};
-use super::access_rights_rules::{configured, ANYWHERE_OFF, BUSINESS_HOURS, REMOTE_ZONE};
+use super::access_control_arrays::{Expected, array_cases, assert_reads, db_with};
+use super::access_rights_rules::{ANYWHERE_OFF, BUSINESS_HOURS, REMOTE_ZONE, configured};
 use super::*;
+use PropertyIdentifier as P;
 use bacnet_encoding::constructed::encode_access_rule;
 use bacnet_objects::access_control::AccessRightsObject;
 use bacnet_services::common::BACnetPropertyValue;
@@ -19,7 +20,7 @@ use bacnet_types::constructed::{
     PropertyReference, ReadAccessSpecification,
 };
 use bacnet_types::enums::{AccessRuleLocationSpecifier, AccessRuleTimeRangeSpecifier};
-use PropertyIdentifier as P;
+use bacnet_types::error::RemoteError;
 
 const ARRAYS: [P; 2] = [P::POSITIVE_ACCESS_RULES, P::NEGATIVE_ACCESS_RULES];
 
@@ -109,7 +110,7 @@ fn write_multiple(
 
 fn assert_error(result: Result<(), Error>, class: ErrorClass, code: ErrorCode) {
     assert!(
-        matches!(result, Err(Error::Protocol { class: c, code: e })
+        matches!(result, Err(Error::Remote(RemoteError::Error { class: c, code: e }))
             if c == class && e == code),
         "expected {class:?} / {code:?}, got {result:?}"
     );

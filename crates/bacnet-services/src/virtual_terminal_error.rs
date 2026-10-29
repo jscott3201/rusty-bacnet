@@ -102,7 +102,7 @@ impl TryFrom<&ErrorPdu> for VTCloseError {
 
 impl From<VTCloseError> for Error {
     fn from(error: VTCloseError) -> Self {
-        Error::protocol(
+        Error::with_detail(
             error.error_class,
             error.error_code,
             error
@@ -114,6 +114,7 @@ impl From<VTCloseError> for Error {
 
 #[cfg(test)]
 mod tests {
+    use bacnet_types::error::RemoteError;
     use super::*;
     use bytes::Bytes;
 
@@ -153,7 +154,7 @@ mod tests {
     fn only_a_present_list_is_a_detail() {
         assert!(matches!(
             Error::from(sample(None)),
-            Error::Protocol { class: ErrorClass::SERVICES, code: ErrorCode::VT_SESSION_TERMINATION_FAILURE }
+            Error::Remote(RemoteError::Error { class: ErrorClass::SERVICES, code: ErrorCode::VT_SESSION_TERMINATION_FAILURE })
         ));
         assert!(matches!(
             Error::from(sample(Some(vec![1, 4]))),

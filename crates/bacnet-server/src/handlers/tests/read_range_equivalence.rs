@@ -7,6 +7,7 @@
 //! timestamps, a clock set back and timestamps that aren't actual moments,
 //! both must give the same bytes or the same error for every request. An
 //! Audit Log ring whose numbers skip falls back to the search.
+use bacnet_types::error::RemoteError;
 use std::collections::VecDeque;
 use std::ops::Range;
 
@@ -76,8 +77,8 @@ struct Clock((Date, Time));
 impl ClockReader for Clock {
     fn read_clock(&self) -> Option<ClockFrame> {
         Some(ClockFrame {
-            local_date: self.0 .0,
-            local_time: self.0 .1,
+            local_date: self.0.0,
+            local_time: self.0.1,
             utc_offset: 0,
             daylight_savings_status: false,
         })
@@ -319,7 +320,7 @@ fn handled_read(
     let mut ack = BytesMut::new();
     Some(match handle_read_range(db, &request, &mut ack) {
         Ok(()) => Ok(ack.to_vec()),
-        Err(Error::Protocol { class, code }) => {
+        Err(Error::Remote(RemoteError::Error { class, code })) => {
             assert_eq!(class, ErrorClass::PROPERTY);
             Err(code)
         }
@@ -609,7 +610,7 @@ fn an_audit_ring_holding_a_zero_still_refuses_what_it_cannot_place() {
     .unwrap_err();
     assert!(matches!(
         unnumbered,
-        Error::Protocol { code, .. } if code == ErrorCode::LIST_ITEM_NOT_NUMBERED
+        Error::Remote(RemoteError::Error { code, .. }) if code == ErrorCode::LIST_ITEM_NOT_NUMBERED
     ));
     let untimed = read(RangeSpec::ByTime {
         reference_time: (DATE, time(0)),
@@ -618,7 +619,7 @@ fn an_audit_ring_holding_a_zero_still_refuses_what_it_cannot_place() {
     .unwrap_err();
     assert!(matches!(
         untimed,
-        Error::Protocol { code, .. }
+        Error::Remote(RemoteError::Error { code, .. })
             if code == ErrorCode::LIST_ITEM_NOT_TIMESTAMPED
     ));
 }

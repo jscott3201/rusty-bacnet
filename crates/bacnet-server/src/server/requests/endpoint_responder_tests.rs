@@ -128,23 +128,25 @@ async fn responder_routes_reply_to_original_source_via_immediate_router() {
         mac_address: MacAddr::from_slice(&[0x44, 0x55]),
     };
 
-    assert!(responder
-        .handle(ReceivedApdu {
-            router_response: None,
-            direct_response: None,
-            apdu: read_property_request(0x41),
-            source_mac: MacAddr::from_slice(&[0x02]),
-            ingress_network: None,
-            source_network: Some(routed_source.clone()),
-            link_layer_group: false,
-            is_group: false,
-            global_broadcast: false,
-            data_attributes: Vec::new(),
-            provenance: TransportProvenance::unverified(),
-            reply_tx: None,
-        })
-        .await
-        .unwrap());
+    assert!(
+        responder
+            .handle(ReceivedApdu {
+                router_response: None,
+                direct_response: None,
+                apdu: read_property_request(0x41),
+                source_mac: MacAddr::from_slice(&[0x02]),
+                ingress_network: None,
+                source_network: Some(routed_source.clone()),
+                link_layer_group: false,
+                is_group: false,
+                global_broadcast: false,
+                data_attributes: Vec::new(),
+                provenance: TransportProvenance::unverified(),
+                reply_tx: None,
+            })
+            .await
+            .unwrap()
+    );
 
     let sent = tokio::time::timeout(std::time::Duration::from_secs(1), router_rx.recv())
         .await
@@ -214,23 +216,25 @@ async fn responder_ignores_write_group_and_leaves_its_channels_alone() {
     .unwrap();
     for is_group in [true, false] {
         let (reply_tx, reply_rx) = oneshot::channel();
-        assert!(!responder
-            .handle(ReceivedApdu {
-                router_response: None,
-                direct_response: None,
-                apdu: apdu.clone().freeze(),
-                source_mac: MacAddr::from_slice(&[0x02]),
-                ingress_network: None,
-                source_network: None,
-                link_layer_group: is_group,
-                is_group,
-                global_broadcast: false,
-                data_attributes: Vec::new(),
-                provenance: TransportProvenance::unverified(),
-                reply_tx: Some(reply_tx),
-            })
-            .await
-            .unwrap());
+        assert!(
+            !responder
+                .handle(ReceivedApdu {
+                    router_response: None,
+                    direct_response: None,
+                    apdu: apdu.clone().freeze(),
+                    source_mac: MacAddr::from_slice(&[0x02]),
+                    ingress_network: None,
+                    source_network: None,
+                    link_layer_group: is_group,
+                    is_group,
+                    global_broadcast: false,
+                    data_attributes: Vec::new(),
+                    provenance: TransportProvenance::unverified(),
+                    reply_tx: Some(reply_tx),
+                })
+                .await
+                .unwrap()
+        );
         assert!(reply_rx.await.is_err(), "WriteGroup is answered");
     }
     let db = responder.db().read().await;

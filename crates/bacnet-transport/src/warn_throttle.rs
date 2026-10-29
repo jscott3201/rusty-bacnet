@@ -76,7 +76,7 @@ pub use tracing as __tracing;
 /// ```
 #[macro_export]
 macro_rules! warn_throttled {
-    ($throttle:expr, $($event:tt)+) => {{
+    ($throttle:expr_2021, $($event:tt)+) => {{
         let occurrences = $crate::warn_throttle::WarnThrottle::note(&$throttle);
         match occurrences {
             Some(occurrences) => {

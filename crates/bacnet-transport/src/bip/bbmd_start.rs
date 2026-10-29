@@ -413,3 +413,17 @@ pub(super) fn refresh_own_address(
         ))
     })
 }
+
+impl super::BipTransport {
+    /// Enable foreign device registration on this BBMD with the given policy.
+    /// Must be called after `enable_bbmd()` and before `start()`.
+    pub fn enable_foreign_device_registration(&mut self, policy: ForeignDevicePolicy) {
+        if let Some(config) = &mut self.bbmd_config {
+            config.foreign_device_policy = Some(policy);
+        } else {
+            warn!(
+                "enable_foreign_device_registration called before enable_bbmd(); policy will be ignored"
+            );
+        }
+    }
+}

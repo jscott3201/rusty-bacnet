@@ -27,13 +27,15 @@ fn bounds_reject_zero_and_overflow_in_every_field() {
         }
     }
     let maximum = u64::MAX / TOKEN;
-    assert!(HubBudget::new(ScHubBroadcastRatePolicy {
-        sender_burst: maximum,
-        sender_per_second: maximum,
-        global_burst: maximum,
-        global_per_second: maximum,
-    })
-    .is_ok());
+    assert!(
+        HubBudget::new(ScHubBroadcastRatePolicy {
+            sender_burst: maximum,
+            sender_per_second: maximum,
+            global_burst: maximum,
+            global_per_second: maximum,
+        })
+        .is_ok()
+    );
     assert_eq!(
         ScHubBroadcastRatePolicy::default(),
         ScHubBroadcastRatePolicy {

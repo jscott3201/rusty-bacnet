@@ -5,7 +5,7 @@ expression: text
 " 1 2 3 [6 MS/TP] 7 | MSTP | listen only | PASSIVE | COV 0 | drop 0       ? help "
 "┌ MS/TP monitor: listen only ──────────────────────────────────────────────────┐"
 "│ /dev/ttyUSB7  38400 baud  up 10 s  24 stations  timestamps ±16 ms            │"
-"│ [Stations]  Token ring   Findings   Errors  Tab: next view                   │"
+"│ [Stations]  Token ring   Findings   Errors   Scan  Tab: next view            │"
 "│ Masters   0-31  .MMMMMMMMMMMM...................                             │"
 "│          32-63  ................................                             │"
 "│          64-95  ................................                             │"

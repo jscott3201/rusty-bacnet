@@ -6,13 +6,15 @@
 mod support;
 
 use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 
-use bacnet_encoding::apdu::{decode_apdu, encode_apdu, Apdu, ComplexAck};
+use bacnet_encoding::apdu::{Apdu, ComplexAck, decode_apdu, encode_apdu};
 use bacnet_encoding::constructed::encode_log_record;
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
+use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
+use bacnet_services::read_property::ReadPropertyRequest;
 use bacnet_services::read_range::{RangeSpec, ReadRangeAck, ReadRangeRequest};
 use bacnet_types::constructed::{BACnetLogRecord, LogDatum};
-use bacnet_types::enums::ConfirmedServiceChoice;
+use bacnet_types::enums::{ConfirmedServiceChoice, PropertyIdentifier};
 use bacnet_types::primitives::{Date, Time};
 use bytes::{Bytes, BytesMut};
 use support::run;
@@ -248,4 +250,152 @@ async fn the_minimum_interval_is_at_most_an_hour() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("3600000"), "{stderr}");
+}
+
+/// What a silent device was asked: each confirmed request's service, and
+/// for a ReadProperty the property.
+type Asked = Arc<Mutex<Vec<(ConfirmedServiceChoice, Option<PropertyIdentifier>)>>>;
+
+/// A B/IP device on loopback that answers nothing and keeps what it is
+/// asked.
+async fn silent() -> (String, Asked, JoinHandle<()>) {
+    let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let address = socket.local_addr().unwrap().to_string();
+    let asked: Asked = Arc::default();
+    let log = Arc::clone(&asked);
+    let task = tokio::spawn(async move {
+        let mut frame = [0u8; 1500];
+        while let Ok((length, _)) = socket.recv_from(&mut frame).await {
+            let Some(npdu) = frame
+                .get(4..length)
+                .and_then(|npdu| decode_npdu(Bytes::copy_from_slice(npdu)).ok())
+            else {
+                continue;
+            };
+            if let Ok(Apdu::ConfirmedRequest(request)) = decode_apdu(npdu.payload) {
+                let property = (request.service_choice == ConfirmedServiceChoice::READ_PROPERTY)
+                    .then(|| ReadPropertyRequest::decode(&request.service_request).ok())
+                    .flatten()
+                    .map(|read| read.property_identifier);
+                log.lock().unwrap().push((request.service_choice, property));
+            }
+        }
+    });
+    (address, asked, task)
+}
+
+/// A device that doesn't answer costs one timeout: the Trend Log's
+/// Log_DeviceObjectProperty is read only once the device has answered, so
+/// it is never asked for here (#2091).
+#[tokio::test]
+async fn a_silent_device_is_never_asked_for_the_reference() {
+    for flags in [&[][..], &["--all"][..]] {
+        let (target, asked, task) = silent().await;
+        let output = read_range(&target, "json", flags).await;
+        assert!(!output.status.success(), "{flags:?}");
+        let asked = asked.lock().unwrap().clone();
+        assert!(!asked.is_empty(), "{flags:?}");
+        assert!(
+            asked
+                .iter()
+                .all(|(_, property)| *property
+                    != Some(PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY)),
+            "{flags:?}: {asked:?}"
+        );
+        if flags.is_empty() {
+            assert!(
+                asked
+                    .iter()
+                    .all(|(service, _)| *service == ConfirmedServiceChoice::READ_RANGE),
+                "{asked:?}"
+            );
+        }
+        task.abort();
+    }
+}
+
+/// A logged string that holds an override, an escape sequence and a
+/// newline prints cleaned in the table and exactly in JSON (#2144).
+#[tokio::test]
+async fn a_logged_string_prints_cleaned_in_the_table() {
+    let text = "Door\u{202E} open\u{1b}[2J\nnow";
+    let (target, task) = device(move |request| {
+        let mut value = BytesMut::new();
+        bacnet_encoding::primitives::encode_app_character_string(&mut value, text).unwrap();
+        let record = BACnetLogRecord {
+            date: Date {
+                year: 126,
+                month: 10,
+                day: 5,
+                day_of_week: 1,
+            },
+            time: Time {
+                hour: 9,
+                minute: 0,
+                second: 1,
+                hundredths: 0,
+            },
+            log_datum: LogDatum::AnyValue(value.to_vec()),
+            status_flags: None,
+        };
+        let mut item_data = BytesMut::new();
+        encode_log_record(&record, &mut item_data).unwrap();
+        let mut ack = page(request, 1, 1, (true, true, false));
+        ack.item_data = item_data.to_vec();
+        Some(ack)
+    })
+    .await;
+    let range = ["--sequence", "1", "--count", "1"];
+    let output = read_range(&target, "table", &range).await;
+    let table = String::from_utf8(output.stdout).unwrap();
+    assert!(table.contains("\"Door open [2J now\""), "{table:?}");
+    let output = read_range(&target, "json", &range).await;
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["records"][0]["datum"], format!("\"{text}\""), "{json}");
+    task.abort();
+}
+
+/// A list that isn't a log prints one item a line; a string item holding
+/// an override, an escape sequence and a newline prints cleaned, and
+/// exactly in JSON (#2144).
+#[tokio::test]
+async fn a_list_item_string_prints_cleaned() {
+    let text = "Door\u{202E} open\u{1b}[2J\nnow";
+    let (target, task) = device(move |request| {
+        let mut item_data = BytesMut::new();
+        bacnet_encoding::primitives::encode_app_character_string(&mut item_data, text).unwrap();
+        Some(ReadRangeAck {
+            object_identifier: request.object_identifier,
+            property_identifier: request.property_identifier,
+            property_array_index: None,
+            result_flags: (true, true, false),
+            item_count: 1,
+            item_data: item_data.to_vec(),
+            first_sequence_number: None,
+        })
+    })
+    .await;
+    let read = |format: &'static str| {
+        run([
+            "--interface",
+            "127.0.0.1",
+            "--port",
+            "0",
+            "--timeout",
+            "100",
+            "--format",
+            format,
+            "read-range",
+            &target,
+            "msv:1",
+            "state-text",
+        ])
+    };
+    let output = read("table").await;
+    let table = String::from_utf8(output.stdout).unwrap();
+    assert!(table.contains("  [1] \"Door open [2J now\""), "{table:?}");
+    let output = read("json").await;
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["items"][0], format!("\"{text}\""), "{json}");
+    task.abort();
 }

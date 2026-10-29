@@ -1,11 +1,12 @@
 use super::*;
+use PropertyIdentifier as P;
 use bacnet_objects::{schedule::ScheduleObject, traits::BACnetObject};
 use bacnet_types::constructed::{
     BACnetCalendarEntry, BACnetDateRange, BACnetObjectPropertyReference, BACnetSpecialEvent,
     BACnetTimeValue, SpecialEventPeriod,
 };
+use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::{Date, PropertyValue, Time};
-use PropertyIdentifier as P;
 
 fn schedule_object(configuration: u8, out_of_service: bool) -> ScheduleObject {
     let mut object = ScheduleObject::new(7, "SCH-7", PropertyValue::Unsigned(42)).unwrap();
@@ -140,9 +141,11 @@ fn rpm_schedule_metadata_does_not_enable_create_object() {
         .encode(&mut request);
         let mut response = BytesMut::new();
         let result = handle_create_object(&mut db, &request, &mut response);
-        assert!(matches!(result, Err(Error::Protocol { class, code })
+        assert!(
+            matches!(result, Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::OBJECT
-                && code == ErrorCode::UNSUPPORTED_OBJECT_TYPE));
+                && code == ErrorCode::UNSUPPORTED_OBJECT_TYPE)
+        );
         assert!(response.is_empty());
         assert!(db.is_empty());
     }

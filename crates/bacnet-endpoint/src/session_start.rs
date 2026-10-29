@@ -145,10 +145,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                     ) {
                         source.number_changed(&*database.read().await);
                     }
-                    if let Some(npdu) = reply {
-                        if let Err(error) = egress.send_network_number_is(npdu).await {
-                            tracing::debug!(%error, "Network-Number-Is broadcast failed");
-                        }
+                    if let Some(npdu) = reply
+                        && let Err(error) = egress.send_network_number_is(npdu).await
+                    {
+                        tracing::debug!(%error, "Network-Number-Is broadcast failed");
                     }
                 }
             })

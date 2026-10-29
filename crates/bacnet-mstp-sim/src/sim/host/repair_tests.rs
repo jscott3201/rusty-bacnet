@@ -206,28 +206,30 @@ fn reply_wire_provenance_survives_turnaround_and_admission_retry() {
     sim.master_mut(0).unwrap().host.as_mut().unwrap().ready = Some(ms(0));
     sim.run_until(ms(8));
     assert!(sim.core(0).unwrap().snapshot().request_id.is_none());
-    assert!(sim
-        .master_mut(0)
-        .unwrap()
-        .host
-        .as_ref()
-        .unwrap()
-        .request
-        .is_some());
+    assert!(
+        sim.master_mut(0)
+            .unwrap()
+            .host
+            .as_ref()
+            .unwrap()
+            .request
+            .is_some()
+    );
     // At 9 ms this ready input wins the tie against the first admission.
     sim.host_character(0, Character::Clean(0x55));
     sim.run_until(ms(35));
     assert_eq!(sim.report().refused_starts, 1);
     assert!(sim.frames()[0].is(FrameType::BACNET_DATA_NOT_EXPECTING_REPLY, 0, 1));
     assert_eq!(sim.frames()[0].start, ms(18));
-    assert!(sim
-        .master_mut(0)
-        .unwrap()
-        .host
-        .as_ref()
-        .unwrap()
-        .request
-        .is_none());
+    assert!(
+        sim.master_mut(0)
+            .unwrap()
+            .host
+            .as_ref()
+            .unwrap()
+            .request
+            .is_none()
+    );
     sim.assert_no_violations();
 }
 
@@ -298,11 +300,12 @@ fn late_reply_keeps_original_wire_request_across_intervening_frames() {
                 "{kind:?}, source {source}: {}",
                 sim.dump(40)
             );
-            assert!(sim
-                .report()
-                .violations
-                .iter()
-                .all(|v| v.kind == ViolationKind::ReplyDelay));
+            assert!(
+                sim.report()
+                    .violations
+                    .iter()
+                    .all(|v| v.kind == ViolationKind::ReplyDelay)
+            );
             assert_eq!(sim.deliveries(0).iter().filter(|d| d.request).count(), 1);
         }
     }

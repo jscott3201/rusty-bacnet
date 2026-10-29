@@ -3,7 +3,7 @@
 #[allow(dead_code)]
 mod support;
 
-use support::{command, Process};
+use support::{Process, command};
 
 #[tokio::test]
 async fn discovery_succeeds_without_credentials_or_sc_feature() {
@@ -113,10 +113,12 @@ async fn feature_off_is_discoverable_but_execution_reports_structured_unavailabl
         let doc: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
         assert_eq!(doc["outcome"], "not_completed");
         assert_eq!(doc["error"]["category"], "feature_unavailable");
-        assert!(doc["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("--features sc-tls"));
+        assert!(
+            doc["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("--features sc-tls")
+        );
         for field in ["inspection", "summary"] {
             assert!(doc[field].is_null());
         }

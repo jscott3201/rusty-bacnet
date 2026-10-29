@@ -21,12 +21,14 @@ fn create_save_preview_and_attest_are_separate_explicit_actions() {
     press(&mut app, KeyCode::Char('n'));
     type_text(&mut app, "loopback");
     let commands = press(&mut app, KeyCode::Enter);
-    let [Command::Profile(Request::Save {
-        name,
-        profile,
-        create: true,
-        previous: None,
-    })] = commands.as_slice()
+    let [
+        Command::Profile(Request::Save {
+            name,
+            profile,
+            create: true,
+            previous: None,
+        }),
+    ] = commands.as_slice()
     else {
         panic!("unexpected {commands:?}");
     };
@@ -46,14 +48,15 @@ fn create_save_preview_and_attest_are_separate_explicit_actions() {
         press(&mut app, KeyCode::Enter).is_empty(),
         "ordinary Enter is not first-use attestation"
     );
-    assert!(app
-        .connection
-        .as_ref()
-        .unwrap()
-        .error
-        .as_ref()
-        .unwrap()
-        .contains("attest"));
+    assert!(
+        app.connection
+            .as_ref()
+            .unwrap()
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("attest")
+    );
     assert_eq!(
         press(&mut app, KeyCode::Char('a')),
         [Command::Profile(Request::Connect {
@@ -111,11 +114,13 @@ fn clearing_bbmd_returns_to_normal_and_network_edits_require_new_attestation() {
         press(&mut app, KeyCode::Backspace);
     }
     let commands = press(&mut app, KeyCode::Enter);
-    let [Command::Profile(Request::Save {
-        profile,
-        previous: Some(previous),
-        ..
-    })] = commands.as_slice()
+    let [
+        Command::Profile(Request::Save {
+            profile,
+            previous: Some(previous),
+            ..
+        }),
+    ] = commands.as_slice()
     else {
         panic!("{commands:?}");
     };
@@ -226,20 +231,24 @@ fn stale_editor_can_discard_then_reload_the_current_disk_profile() {
     external.bip_mut().timeout_ms = 7000;
     store.save("lab", &external, false).unwrap();
     let commands = press(&mut app, KeyCode::Enter);
-    let [Command::Profile(Request::Save {
-        name,
-        profile,
-        create,
-        previous,
-    })] = commands.as_slice()
+    let [
+        Command::Profile(Request::Save {
+            name,
+            profile,
+            create,
+            previous,
+        }),
+    ] = commands.as_slice()
     else {
         panic!("unexpected {commands:?}");
     };
     let result = service.save(name, profile.clone(), *create, previous.clone());
-    assert!(result
-        .as_ref()
-        .unwrap_err()
-        .contains("profile changed on disk"));
+    assert!(
+        result
+            .as_ref()
+            .unwrap_err()
+            .contains("profile changed on disk")
+    );
     worker(&mut app, WorkerEvent::Profile(result));
     assert!(screen(&mut app, 80, 24).contains("reload before saving"));
     assert_eq!(

@@ -17,11 +17,11 @@
 use std::net::Ipv6Addr;
 
 use arbitrary::Arbitrary;
-use bacnet_bip_codec::ipv6::{
-    decode, Bip6Address, Bip6Vmac, Bvlc6ResultCode, Bvll6, Bvll6Error, Bvll6Frame,
-};
 use bacnet_bip_codec::BvllSink;
-use bip_codec_fuzz::{bvll_octets, check_sinks, Npdu, SinkKnobs, HEADER, MAX_LENGTH, TYPE_BIP6};
+use bacnet_bip_codec::ipv6::{
+    Bip6Address, Bip6Vmac, Bvlc6ResultCode, Bvll6, Bvll6Error, Bvll6Frame, decode,
+};
+use bip_codec_fuzz::{HEADER, MAX_LENGTH, Npdu, SinkKnobs, TYPE_BIP6, bvll_octets, check_sinks};
 use libfuzzer_sys::fuzz_target;
 
 /// The result codes Annex U.2.1.1 defines.

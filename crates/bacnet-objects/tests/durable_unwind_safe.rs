@@ -9,6 +9,10 @@
 //! supplies, and the log also keeps settled results whose error can wrap an
 //! `std::io::Error`. Neither type has the traits; their docs say why.
 
+// Only std unwinds and checks these traits; without it the objects lock with
+// a spin lock, which has neither.
+#![cfg(feature = "std")]
+
 use std::panic::{RefUnwindSafe, UnwindSafe};
 
 use bacnet_objects::access_control::AccessRightsObject;

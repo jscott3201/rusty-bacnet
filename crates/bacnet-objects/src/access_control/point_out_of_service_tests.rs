@@ -6,7 +6,7 @@ use std::sync::Arc;
 use bacnet_types::enums::{ErrorCode, PropertyIdentifier as P};
 
 use super::credential_data_input_out_of_service_tests::{
-    assert_property_error, sequence, stamp, stamped, FixedClock,
+    FixedClock, assert_property_error, sequence, stamp, stamped,
 };
 use super::*;
 

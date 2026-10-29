@@ -14,7 +14,7 @@ mod alarm_summary;
 mod atomic_read_file;
 mod atomic_write_file;
 mod audit_notification;
-pub(super) use audit_notification::fail_closed_authorize;
+pub(super) use audit_notification::ask_policy;
 #[cfg(test)]
 mod confirmed;
 pub(super) mod confirmed_response;
@@ -27,6 +27,7 @@ mod enrollment_summary;
 mod event_information;
 mod issue;
 mod mutations;
+pub(super) use mutations::ask_mutation_policy;
 use mutations::{InitialCovNotification, MutationEffects};
 #[cfg(test)]
 mod audit_log_buffer_wire_tests;
@@ -57,7 +58,11 @@ mod mutation_wpm_priority_tests;
 #[cfg(test)]
 mod mutation_wpm_tests;
 #[cfg(test)]
+mod mutation_wpm_unlocked_tests;
+#[cfg(test)]
 mod notification_class_durable_tests;
+#[cfg(test)]
+mod policy_off_task_tests;
 
 pub(super) mod read_property;
 mod read_range;
@@ -186,7 +191,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             decisions: mutation_decisions,
             source_mac,
             source_network: source_network.as_ref(),
-            provenance,
+            provenance: provenance.clone(),
             req: &req,
             command_origin: command_origin.as_ref(),
         };
@@ -271,9 +276,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 dcc::response(
                     services,
                     &req,
-                    source_mac,
-                    source_network.as_ref(),
-                    local_network,
+                    super::dcc_timer::DccRequest {
+                        service_data: &req.service_request,
+                        source_mac,
+                        source: source_network.as_ref(),
+                        local_network,
+                        provenance,
+                        invoke_id,
+                    },
                     request_tasks,
                     &mut audit,
                 )
@@ -490,11 +500,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                     invoke_id,
                                     request: request.clone(),
                                 };
-                                let authorized = config.policy.as_ref().is_some_and(|policy| {
-                                    fail_closed_authorize(|| {
-                                        policy.authorize_life_safety_operation(&context)
-                                    })
-                                });
+                                let authorized = match &config.policy {
+                                    Some(policy) => {
+                                        ask_policy(policy, context, |policy, context| {
+                                            policy.authorize_life_safety_operation(context)
+                                        })
+                                        .await
+                                    }
+                                    None => false,
+                                };
                                 if !authorized {
                                     Err(handlers::life_safety_error(
                                         ErrorClass::SERVICES,
@@ -564,12 +578,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // admitted. The replay is a local idempotency extension, not a
         // Standard mandate, and makes no physical-idempotency claim.
         // Lock → clone → unlock → send; never held across `.await`.
-        if service_choice == ConfirmedServiceChoice::LIFE_SAFETY_OPERATION {
-            if let Some(pending) = lso_pending {
-                let mut encoded = BytesMut::new();
-                encode_apdu(&mut encoded, &response).expect("valid APDU encoding");
-                pending.complete_with_response(encoded.freeze());
-            }
+        if service_choice == ConfirmedServiceChoice::LIFE_SAFETY_OPERATION
+            && let Some(pending) = lso_pending
+        {
+            let mut encoded = BytesMut::new();
+            encode_apdu(&mut encoded, &response).expect("valid APDU encoding");
+            pending.complete_with_response(encoded.freeze());
         }
         // Non-LSO callers pass `None` (or an untracked guard whose completion
         // is a no-op); dropping here is intentional.

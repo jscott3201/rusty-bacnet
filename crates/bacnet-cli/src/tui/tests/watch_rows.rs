@@ -10,7 +10,7 @@ use ratatui::crossterm::event::KeyCode;
 
 use super::site::{ClientLimits, Quirks, Server, Site};
 use super::*;
-use crate::tui::app::watch::{Screen, HISTORY};
+use crate::tui::app::watch::{HISTORY, Screen};
 use crate::tui::watched::{RowId, Sample, Source, WatchEvent};
 
 /// Type `line` on the command bar and run it.

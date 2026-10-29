@@ -1,0 +1,140 @@
+---
+title: "Keep an MS/TP trunk reliable on Linux"
+description: "What MS/TP timing asks of a host, how to tune the ring, the serial path and the token thread on Linux, and how to measure the result before trusting it."
+---
+
+import { release, repository } from '../../../lib/site.mjs';
+
+[Connect to a network](/rusty-bacnet/connect/overview/) / MS/TP real-time
+
+An MS/TP station has to answer a token, a poll or a request within fixed times, on a host that also runs everything else. When it answers late, the trunk loses tokens, retries and drops replies, even though every frame decodes. This page explains what the timing asks for, which settings the stack gives you on Linux, and how to measure the result. Commission the trunk first with [MS/TP and RS-485](/rusty-bacnet/connect/mstp/).
+
+The page describes **v{release}**.
+
+**No adapter or host is qualified for on-wire timing yet.** The settings below lower delay on the host; they don't prove the timing on the wire. Measure on your own hardware, under your own load.
+
+## What the timing asks of a station
+
+Clause 9.5.3 names the timers, and Clause 9.2.3 the baud rates. In practice, four kinds of deadline matter:
+
+| Deadline | What it means on the trunk | This stack on a host |
+|---|---|---|
+| Answering the token or a poll (T_usage_delay) | A station that gets the token, or is polled for master, must start sending within 15 ms | The token loop runs on its own thread; scheduling, the adapter and the driver all spend from this budget |
+| Answering a request (T_reply_delay) | A station that receives a request expecting a reply starts the reply, or Reply Postponed (a frame saying the answer will come later, when it holds the token), within 250 ms | The application must answer in time; a late answer waits for the next token |
+| Waiting for others (T_usage_timeout, T_reply_timeout) | How long this station waits before it decides a peer didn't use the token or didn't reply | This stack defaults to the longest values the standard allows, 35 ms and 300 ms, so a USB adapter's delay isn't mistaken for silence (the CLI keeps them; Python and Rust can set them) |
+| Gaps inside a frame (T_frame_abort) and turnaround (T_turnaround) | A receiver drops a frame that stalls part-way; a sender waits 40 bit times after the line goes quiet before it drives | The receive side waits up to its 100 ms maximum before it drops a partial frame, because a USB adapter hands octets over in bursts |
+
+Token generation is tighter still: after a silence, each master's turn to start a new token comes in a 10 ms slot (T_slot). A host that hears the line late can misjudge whose slot it is, so a station that may generate the token needs the shortest adapter delay you can give it.
+
+The <a href={`${repository}/blob/v${release}/docs/mstp-qualification.md`}>qualification method</a> lists each quantity with its limit, the edges to measure it between, and how this stack's defaults interact with USB latency.
+
+## Tune the ring: Max_Master and Max_Info_Frames
+
+Two settings shape how fast the token goes round:
+
+- **Max_Master** is the highest address a master polls when it looks for other masters. Each master periodically polls the addresses between itself and the next master, and every poll to an empty address costs a wait. Number the masters closely, without large gaps, and set Max_Master to the highest master's address. A master whose address is above the others' Max_Master is never polled, so it never joins the ring.
+- **Max_Info_Frames** is how many frames a station sends each time it holds the token. With 1, the default, a station sends one frame per token rotation, however many it has waiting. A router or a busy supervisor may need more; every frame it sends lengthens the rotation for everyone else.
+
+The CLI takes them as `--mstp-max-master` (default 127) and `--mstp-max-info-frames` (default 1, up to 255), and Python as `mstp_max_master` and `mstp_max_info_frames`. The [receive-only monitor](#diagnose-with-the-receive-only-monitor) shows each master's Max_Master as its polls reveal it and flags one that leaves a station out.
+
+## Choose the serial path
+
+The stack has three ways to switch an RS-485 transceiver between sending and receiving:
+
+| Path | Platforms | Who can use it | Notes |
+|---|---|---|---|
+| Adapter switches by itself (most USB RS-485 adapters) | Linux, macOS, Windows | CLI, Python, Rust | Hardware evidence only on Linux; on macOS and Windows the `serial` feature builds and passes its tests in native CI (the pseudo-terminal tests run on macOS, not Windows), but no adapter has been tested there |
+| Kernel RS-485: the UART driver toggles RTS | Linux | Rust (`enable_kernel_rs485`) | The kernel switches direction itself; the call reads the settings back and fails on a mismatch |
+| GPIO pin, as on Raspberry Pi RS-485 hats | Linux | Rust, with the `serial-gpio` feature (`GpioDirectionPort`) | Switches back to receive only after the port reports the frame has left |
+
+The CLI and the Python bindings use neither Linux-only path: they expect an adapter that switches direction by itself. A transceiver whose receiver stays on while it sends returns every frame to the station; declare it (Python `mstp_echo=True`, Rust `Echo::full()`), or the station mistakes its own token for its successor's. The <a href={`${repository}/blob/v${release}/docs/rust-api.md#mstp-serial-rs-485`}>Rust API guide</a> covers all three paths and echo.
+
+## Cut the USB adapter's delay
+
+A USB adapter hands received octets to the host in batches. An FTDI chip waits up to its latency timer, 16 ms by default, before passing on a partial batch, and that wait comes out of the 15 ms a station has to answer a token or a poll. On Linux, set it to 1 ms (needs the adapter; the path names your adapter):
+
+```sh
+cat /sys/bus/usb-serial/devices/ttyUSB0/latency_timer
+echo 1 | sudo tee /sys/bus/usb-serial/devices/ttyUSB0/latency_timer
+```
+
+The setting lasts until the adapter is unplugged; a udev rule makes it permanent. CH340 and CP210x chips have no such timer. USB full speed moves data in 1 ms frames, so no setting takes an adapter's delay to zero.
+
+One lab report with USB adapters ([#707](https://github.com/jscott3201/rusty-bacnet/issues/707), open) found 38400 and 76800 baud working; at 19200 baud confirmed requests got no answer while the token still circulated, and at 9600 even passive listening decoded badly. That report predates the longer default timeouts above. Where the trunk allows, prefer 38400 or 76800 baud until there is more evidence.
+
+On Windows the port can't report when a frame has left, so by default the station adds 4 ms to each frame's time on the wire before it starts its timers (Python `mstp_transmit_latency_pad_ms`). Linux and macOS wait for the port to drain instead.
+
+## Give the token loop its own CPU (Linux)
+
+The MS/TP transport runs its token handling on a dedicated thread. On Linux you can run that thread under `SCHED_FIFO` (a real-time policy: the thread runs as soon as it is ready, ahead of every normal thread) and pin it to CPUs, from the CLI or the terminal UI (needs the adapter and a trunk):
+
+```sh
+bacnet --mstp /dev/ttyUSB0 --mstp-mac 3 --mstp-rt-priority 40 --mstp-cpus 3 discover
+```
+
+- `--mstp-rt-priority N` (1 to 99) needs `CAP_SYS_NICE` (the capability to raise scheduling priority) or a real-time limit of at least N (`ulimit -r`, `LimitRTPRIO=` in a systemd unit, `--ulimit rtprio=N` for a container). `--mstp-cpus` takes a list such as `2,3` and needs no privilege.
+- A setting the kernel refuses fails the join with the reason, before anything goes on the wire. The station never quietly runs without it.
+- The terminal UI's MS/TP screen shows what was applied in its `Thread` row, such as `FIFO 40, CPU 3`. The passive monitor itself always runs normally; only a station joined from it gets the settings.
+- On macOS and Windows both flags are usage errors (exit status 2).
+
+In Rust, the same settings are `MstpThreadConfig` inside `MstpExecutionMode::DedicatedThread`; `start` fails if either can't be applied, and `execution_status()` reports what the kernel applied. The Python bindings don't expose them.
+
+These settings shorten how long the scheduler keeps the loop waiting; they don't bound it. A PREEMPT_RT kernel (one built so that most kernel code can be interrupted by a higher-priority thread), the priority of the interrupt thread that delivers the port's bytes, isolated CPUs and locked memory all matter as well. The Rust API guide's <a href={`${repository}/blob/v${release}/docs/rust-api.md#real-time-scheduling-and-cpu-affinity-linux`}>real-time section</a> covers each one. The maintainer's check of these settings on RS-485 hardware is still to come ([#501](https://github.com/jscott3201/rusty-bacnet/issues/501), open).
+
+## Measure timer lateness
+
+The transport records how late its thread woke for every protocol deadline, in six bands: under 1 ms, 1 to 2, 2 to 5, 5 to 10, 10 to 25, and 25 ms or more, with the largest. It counts a wake 5 ms or more late as a late deadline. Tokio's timer alone puts most wakes in the first two bands, so those are ordinary.
+
+To compare two settings:
+
+1. Join as a participant with the terminal UI, under the load the host normally carries.
+2. Press `z` on the MS/TP screen to count from now, and let it run long enough for the slow cases to show (minutes, not seconds).
+3. Note the largest lateness, the late-deadline count and the bands, with the token retries and reply timeouts beside them.
+4. Change one thing (the real-time flags, the CPU, the latency timer, the kernel) and repeat under the same load.
+
+Rust applications read the same histogram from the snapshot an `MstpDiagnostics` handle takes: `MstpDiagnosticsSnapshot`'s `mac.deadline_lateness` and `mac.late_deadlines`. Lateness is the host's view; it says nothing about when bytes reached the wire. For that, the <a href={`${repository}/blob/v${release}/docs/mstp-qualification.md`}>qualification method</a> uses an independent analyzer and a result template.
+
+## Diagnose with the receive-only monitor
+
+The monitor listens to a trunk without transmitting: it opens the port, keeps only its read side, so it can't send, and never joins the ring. One caveat on Linux: opening a port raises RTS, so an adapter whose driver enable follows RTS may drive the line briefly as the port opens. Adapters that switch direction by themselves are unaffected. It maps the stations, follows the token, flags Max_Master and address-gap problems, and counts CRC errors, noise and lost tokens (needs the adapter):
+
+```sh
+bacnet tui --mstp-monitor /dev/ttyUSB1 --mstp-baud 38400
+```
+
+On a second adapter it is an independent observer of a station you are tuning: it doesn't open that station's port or take part in token passing. Its timestamps come from the host, so they are only as fine as the adapter's latency (16 ms by default). [Monitor and join MS/TP](/rusty-bacnet/tui/mstp/) walks through each view. In Rust, `MstpMonitor` over a `ReceiveOnlyPort` gives the same statistics.
+
+When you don't know a trunk's baud rate, the monitor can find it without transmitting. From a live monitor, `:mstp scan SECS` listens at each standard rate in turn for that many seconds, then returns to the configured rate. It scores each rate by its share of valid frames, suggests the best one when one is clearly best, and never changes the baud rate, joins or transmits by itself. It finds the rate of a trunk you don't know; it doesn't qualify the adapter. The <a href={`${repository}/blob/v${release}/docs/CLI.md#mstp-monitor-and-safe-join`}>CLI reference</a> describes it.
+
+## Test without hardware
+
+A source checkout holds three ways to run MS/TP with no serial port. None of them says anything about an adapter, a driver or the wire.
+
+- **The stress scenario** runs two stations on the real MS/TP transport over a simulated line that delivers octets no sooner than a UART at the baud rate would, and compares the request rate with the line's limit. This is a quick 5-second run at one rate; the benchmarks ran 10 seconds per rate (20 for the largest reply):
+
+  ```sh
+  cargo run --release -p bacnet-benchmarks --bin stress-test -- mstp --reply small --steps 38400 --duration 5
+  ```
+
+- **The bus simulator**, `bacnet-mstp-sim`, is a test-only crate (not published). It puts several master state machines on one virtual line, with adapter latency, inter-octet gaps, echo and noise, and checks the token ring's invariants after every event. Run its tests with `cargo nextest run -p bacnet-mstp-sim`.
+- **The core example** runs two master nodes on a simulated line: `cargo run -p bacnet-mstp-core --example node`.
+
+The <a href={`${repository}/blob/v${release}/Benchmarks.md#44-mstp`}>MS/TP benchmarks</a> for v{release} came from the stress scenario. Over the simulated line, the stack reached 90% to 100% of the line's limit for large replies at each measured rate (9,600, 38,400, 76,800 and 115,200 baud). For a small reply it reached 93% at 9,600 baud and 52% at 115,200, where a fixed host cost of about 1.5 to 2 milliseconds per frame matters more. The simulated line has no adapter latency, so real hardware sits further below the limit.
+
+## What is and isn't established
+
+| Claim | Evidence in v{release} |
+|---|---|
+| The real-time flags parse on Linux, apply when the host allows them, and fail the join with the reason when it doesn't | Unit tests on Linux CI |
+| The flags are refused on macOS and Windows | Unit tests on native CI |
+| The token ring's invariants hold with simulated adapter latency, inter-octet gaps and echo | The bus simulator and the transport's tests, in CI |
+| The monitor and a participant work with a USB RS-485 adapter | Used with hardware on Linux only |
+| Timing on the wire meets Clause 9 with any adapter or host | Not established: [#502](https://github.com/jscott3201/rusty-bacnet/issues/502) and [#707](https://github.com/jscott3201/rusty-bacnet/issues/707) are open |
+| Real-time scheduling lowers lateness on RS-485 hardware | Not yet checked on hardware: [#501](https://github.com/jscott3201/rusty-bacnet/issues/501) is open |
+
+## Next steps
+
+- [Monitor and join MS/TP](/rusty-bacnet/tui/mstp/) in the terminal UI.
+- [Commission an MS/TP lab](/rusty-bacnet/connect/mstp/).
+- Read the <a href={`${repository}/blob/v${release}/docs/CLI.md#mstp`}>CLI's MS/TP reference</a> and the <a href={`${repository}/blob/v${release}/docs/mstp-qualification.md`}>qualification method</a>.
+- Follow the on-wire work in [#502](https://github.com/jscott3201/rusty-bacnet/issues/502).

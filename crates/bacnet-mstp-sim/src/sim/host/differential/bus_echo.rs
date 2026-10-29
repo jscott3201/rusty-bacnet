@@ -157,11 +157,12 @@ async fn paired_bus(case: BusCase) {
     );
     if matches!(case, BusCase::Expired) {
         assert_eq!(actual.3, 1);
-        assert!(sim
-            .report
-            .violations
-            .iter()
-            .any(|v| v.kind == ViolationKind::CoreCounter));
+        assert!(
+            sim.report
+                .violations
+                .iter()
+                .any(|v| v.kind == ViolationKind::CoreCounter)
+        );
     } else {
         assert_eq!(actual.3, 0);
         sim.assert_no_violations();

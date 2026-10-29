@@ -206,10 +206,10 @@ impl Link {
         if self.subnet.is_group() && matches!(self.mode, Mode::Foreign(_)) {
             return Err(ConfigError::MulticastMode);
         }
-        if let Some(budget) = self.budget {
-            if budget < MIN_BUDGET {
-                return Err(ConfigError::Budget);
-            }
+        if let Some(budget) = self.budget
+            && budget < MIN_BUDGET
+        {
+            return Err(ConfigError::Budget);
         }
         if let Mode::Foreign(foreign) = &self.mode {
             let ttl = foreign.ttl_duration().as_nanos();

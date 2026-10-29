@@ -9,13 +9,13 @@ use rcgen::ExtendedKeyUsagePurpose;
 use tokio::sync::mpsc;
 
 use super::sc_hub::{
-    args, client_leaf, hub, is_on, rebind, until, Site, FAILOVER_VMAC, PRIMARY_VMAC, WAIT,
+    FAILOVER_VMAC, PRIMARY_VMAC, Site, WAIT, args, client_leaf, hub, is_on, rebind, until,
 };
 use super::sc_screen::sc_app;
 use super::*;
 use crate::transport::TransportArgs;
 use crate::tui::worker::session::{ConnectPlan, SessionOptions, TransportKind};
-use crate::tui::worker::{coordinator, EventSink};
+use crate::tui::worker::{EventSink, coordinator};
 
 /// A short policy, so the test waits tenths of a second, not minutes.
 fn quick() -> ScReconnectConfig {

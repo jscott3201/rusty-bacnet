@@ -20,10 +20,10 @@
 
 use arbitrary::Arbitrary;
 use bacnet_mstp_codec::{
-    decode_frame, decode_frame_in_place, Frame, FrameError, FrameSink, FrameType,
+    Frame, FrameError, FrameSink, FrameType, decode_frame, decode_frame_in_place,
 };
 use libfuzzer_sys::fuzz_target;
-use mstp_codec_fuzz::{self as wire, SinkKnobs, MAX_COBS_LENGTH, MAX_DATA, MIN_COBS_LENGTH};
+use mstp_codec_fuzz::{self as wire, MAX_COBS_LENGTH, MAX_DATA, MIN_COBS_LENGTH, SinkKnobs};
 
 #[derive(Debug, Arbitrary)]
 struct Input {

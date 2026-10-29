@@ -1,7 +1,7 @@
 use super::*;
 use crate::object_profile::{ObjectProfile, ProfileState, TagsPersistence};
 use crate::property_metadata::PropertyMetadata;
-use std::sync::Arc;
+use alloc::sync::Arc;
 
 mod metadata;
 
@@ -154,7 +154,7 @@ impl MultiStateInputObject {
     /// The values the object keeps that name a state, which a new count
     /// may not strand: Present_Value and Alarm_Values.
     fn held_states(&self) -> impl Iterator<Item = u32> + '_ {
-        std::iter::once(self.present_value).chain(self.event_detector.alarm_values.iter().copied())
+        core::iter::once(self.present_value).chain(self.event_detector.alarm_values.iter().copied())
     }
 
     fn recompute_reliability(&mut self) -> ReliabilityEvaluation {
@@ -198,10 +198,10 @@ impl BACnetObject for MultiStateInputObject {
         timestamp: &BACnetTimeStamp,
     ) -> Result<(), Error> {
         if !self.event_detection_enable {
-            return Err(Error::Protocol {
-                class: ErrorClass::OBJECT,
-                code: ErrorCode::NO_ALARM_CONFIGURED,
-            });
+            return Err(Error::protocol(
+                ErrorClass::OBJECT,
+                ErrorCode::NO_ALARM_CONFIGURED,
+            ));
         }
         self.event_history.acknowledge_correlated(
             &mut self.event_detector.acked_transitions,
@@ -385,7 +385,7 @@ impl BACnetObject for MultiStateInputObject {
         self.profile.capability()
     }
 
-    fn advance_monotonic_time_internal(&mut self, now: std::time::Duration) -> bool {
+    fn advance_monotonic_time_internal(&mut self, now: core::time::Duration) -> bool {
         self.profile.expire(now);
         false
     }
@@ -505,9 +505,10 @@ mod detection_enable_tests {
             msi.event_detector.pending.is_none(),
             "evaluate/tick re-armed a countdown while detection is disabled"
         );
-        assert!(msi
-            .property_list()
-            .contains(&PropertyIdentifier::EVENT_DETECTION_ENABLE));
+        assert!(
+            msi.property_list()
+                .contains(&PropertyIdentifier::EVENT_DETECTION_ENABLE)
+        );
         assert!(msi.is_writable_property(PropertyIdentifier::EVENT_DETECTION_ENABLE));
     }
 }

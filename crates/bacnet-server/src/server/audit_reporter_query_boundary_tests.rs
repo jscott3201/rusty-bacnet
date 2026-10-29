@@ -188,10 +188,12 @@ async fn audit_reporter_query_outbound_segmentation_and_divergence_are_silent() 
             req.segmented_response_accepted = segmented;
             let (tx, rx) = oneshot::channel();
             ingress(&fixture.server, req, Some(tx)).await;
-            assert!(tokio::time::timeout(Duration::from_secs(1), rx)
-                .await
-                .unwrap()
-                .is_err());
+            assert!(
+                tokio::time::timeout(Duration::from_secs(1), rx)
+                    .await
+                    .unwrap()
+                    .is_err()
+            );
         }
         settle().await;
         let response = fixture.transport.responses.lock().unwrap()[0].clone();

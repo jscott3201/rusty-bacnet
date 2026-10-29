@@ -1,5 +1,6 @@
 use super::*;
 use crate::server::test_transport::TestTransport;
+use bacnet_types::error::RemoteError;
 
 #[tokio::test]
 async fn enrollment_summary_defaults_and_all_builders_validate_before_start() {
@@ -129,7 +130,7 @@ async fn enrollment_summary_segmented_complete_ack_or_whole_abort() {
         server.stop().await.unwrap();
         match expected {
             Some(expected) => assert!(
-                matches!(result, Err(Error::Abort { reason }) if reason == expected),
+                matches!(result, Err(Error::Remote(RemoteError::Abort { reason })) if reason == expected),
                 "{result:?}"
             ),
             None => {
@@ -210,7 +211,7 @@ async fn default_object_budget_wire(candidate: bool) {
     client.stop().await.unwrap();
     server.stop().await.unwrap();
     assert!(
-        matches!(result, Err(Error::Abort { reason })
+        matches!(result, Err(Error::Remote(RemoteError::Abort { reason }))
         if reason == AbortReason::OUT_OF_RESOURCES),
         "{result:?}"
     );

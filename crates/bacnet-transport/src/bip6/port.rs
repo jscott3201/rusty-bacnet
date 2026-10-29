@@ -20,7 +20,7 @@ use super::reply_limit::ReplyLimiter;
 use super::resolver::{Driver, Resolver, UnresolvedSend};
 use super::socket::Bip6Socket;
 use super::vmac_table::{generate_random_vmac, vmac_from_device_instance};
-use super::{encode_bvll6, Bip6Vmac, Bvll6, MAX_VMAC_RETRIES};
+use super::{Bip6Vmac, Bvll6, MAX_VMAC_RETRIES, encode_bvll6};
 
 /// BACnet/IPv6 multicast group (link-local): FF02::BAC0.
 pub const BACNET_IPV6_MULTICAST_LINK_LOCAL: Ipv6Addr =
@@ -170,6 +170,8 @@ impl Bip6Transport {
     /// Foreign `::` derives a concrete source from the route to the BBMD and
     /// binds the production socket to it. An explicit address is retained.
     /// Foreign startup does not require normal-mode multicast membership.
+    /// `start()` refuses a registration that fails
+    /// [`Bip6ForeignDeviceConfig::check`] (a link-local BBMD, say).
     /// A foreign device must also have a configured Device instance. Random
     /// VMAC startup is rejected until BBMD-assisted collision resolution is
     /// implemented.
@@ -310,6 +312,12 @@ impl TransportPort for Bip6Transport {
             return Err(Error::Transport(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "BIP6 foreign devices require a configured Device instance until BBMD-assisted random-VMAC resolution is implemented",
+            )));
+        }
+        if let Some(Err(refusal)) = self.foreign_device.as_ref().map(|fd| fd.config().check()) {
+            return Err(Error::Transport(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("BIP6 foreign-device registration refused: {refusal}"),
             )));
         }
 

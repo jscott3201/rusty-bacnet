@@ -7,6 +7,7 @@ use super::*;
 use bacnet_objects::lighting::LightingOutputObject;
 use bacnet_services::cov::SubscribeCOVRequest;
 use bacnet_services::write_property::WritePropertyRequest;
+use bacnet_types::error::RemoteError;
 
 fn lo1() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::LIGHTING_OUTPUT, 1).unwrap()
@@ -85,7 +86,7 @@ async fn lighting_output_local_write_below_one_percent_is_stored_and_reported_as
 
     for level in [-1.5, 100.5, f32::NAN] {
         match write_local(&h, Real(level)).await {
-            Err(Error::Protocol { class, code }) => {
+            Err(Error::Remote(RemoteError::Error { class, code })) => {
                 assert_eq!(class, ErrorClass::PROPERTY);
                 assert_eq!(code, ErrorCode::VALUE_OUT_OF_RANGE);
             }

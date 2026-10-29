@@ -8,16 +8,16 @@ mod glue;
 use bacnet_bip_core::codec::BvlcFunction;
 use bacnet_bip_core::node::Mode;
 use bacnet_bip_core::port::NodePort;
+use bacnet_router_core::Instant;
 use bacnet_router_core::bip::BipPort;
 use bacnet_router_core::mstp::port_config;
 use bacnet_router_core::npdu::Npdu;
 use bacnet_router_core::npdu::{NetworkMessageType, RejectMessageReason};
 use bacnet_router_core::router::{Discard, Group, GroupClassifier, Options, Permissive, Received};
-use bacnet_router_core::Instant;
 
 use fixture::{
-    addr, apdu_to, bytes, deliver, learn_9_via_r7, reject_data, router_with, Outcome, TestRouter,
-    CONFIRMED, UNCONFIRMED,
+    CONFIRMED, Outcome, TestRouter, UNCONFIRMED, addr, apdu_to, bytes, deliver, learn_9_via_r7,
+    reject_data, router_with,
 };
 use glue::*;
 

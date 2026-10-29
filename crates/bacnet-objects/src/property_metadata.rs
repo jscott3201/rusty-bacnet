@@ -1,6 +1,6 @@
 //! Executable property metadata and compatibility projections.
 
-use std::borrow::Cow;
+use alloc::borrow::Cow;
 
 use bacnet_types::enums::PropertyIdentifier;
 

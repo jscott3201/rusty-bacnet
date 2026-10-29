@@ -1,4 +1,4 @@
-use super::{bounded, command, Files};
+use super::{Files, bounded, command};
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_server::server::BACnetServer;
@@ -12,8 +12,8 @@ use rcgen::{Certificate, CertificateParams, ExtendedKeyUsagePurpose, Issuer, Key
 use rustls::pki_types::PrivatePkcs8KeyDer;
 use std::panic::AssertUnwindSafe;
 use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio_rustls::TlsAcceptor;
 

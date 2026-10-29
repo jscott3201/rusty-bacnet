@@ -14,7 +14,7 @@ use bacnet_types::primitives::PropertyValue;
 use bytes::BytesMut;
 
 use super::tests::{
-    at, event_record, multiple_record, reference, trend_record, HandClock, TempBase, DATE,
+    DATE, HandClock, TempBase, at, event_record, multiple_record, reference, trend_record,
 };
 use super::*;
 use crate::event::commit_test_proposal;
@@ -384,8 +384,10 @@ fn a_reopened_log_continues_the_generation_it_loaded() {
     log.add_record(event_record(2)).unwrap();
     log.commit_final().unwrap().block();
     assert_eq!(log.storage_generation(), Some(2));
-    assert!(EventLogObject::new(2, "EL-2", 4)
-        .unwrap()
-        .storage_generation()
-        .is_none());
+    assert!(
+        EventLogObject::new(2, "EL-2", 4)
+            .unwrap()
+            .storage_generation()
+            .is_none()
+    );
 }

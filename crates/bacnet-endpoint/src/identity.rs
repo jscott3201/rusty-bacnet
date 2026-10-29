@@ -2,9 +2,9 @@
 //!
 //! The object model owns declarations and stock object construction. These
 //! functions adapt that data to client/server settings and I-Am encoding.
-use bacnet_encoding::apdu::{encode_apdu, Apdu, UnconfirmedRequest};
+use bacnet_encoding::apdu::{Apdu, UnconfirmedRequest, encode_apdu};
 pub use bacnet_objects::device_identity::{
-    build_database_with_extra, DeviceIdentity, NetworkPortEntry,
+    DeviceIdentity, NetworkPortEntry, build_database_with_extra,
 };
 use bacnet_services::who_is::IAmRequest;
 use bacnet_types::{enums::UnconfirmedServiceChoice, error::Error};

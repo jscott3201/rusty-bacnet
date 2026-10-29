@@ -3,14 +3,14 @@ use bacnet_npdu::{NetworkMessageType, RejectMessageReason};
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::loopback::LoopbackTransport;
 use std::net::Ipv4Addr;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 /// Stopping the layer ends its raw receiver's stream even though the
 /// loopback peer keeps its sender (#1713): what was queued before the stop
 /// is drained, a later frame isn't taken, and then the stream ends.
 #[tokio::test]
 async fn stop_ends_the_raw_stream_after_what_was_queued() {
-    use crate::loopback_fixture::{wire, APDU};
+    use crate::loopback_fixture::{APDU, wire};
     let (transport, mut peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut network = NetworkLayer::new(transport);
     let mut apdus = network.start().await.unwrap();
@@ -26,10 +26,12 @@ async fn stop_ends_the_raw_stream_after_what_was_queued() {
         .unwrap()
         .expect("the frame queued before the stop");
     assert_eq!(queued.apdu, APDU[..]);
-    assert!(timeout(Duration::from_secs(1), apdus.recv())
-        .await
-        .expect("the stream ends")
-        .is_none());
+    assert!(
+        timeout(Duration::from_secs(1), apdus.recv())
+            .await
+            .expect("the stream ends")
+            .is_none()
+    );
     peer.stop().await.unwrap();
 }
 
@@ -41,10 +43,12 @@ async fn dropping_the_layer_ends_the_raw_stream() {
     let mut apdus = network.start().await.unwrap();
     let _peer_rx = peer.start().await.unwrap();
     drop(network);
-    assert!(timeout(Duration::from_secs(1), apdus.recv())
-        .await
-        .expect("the stream ends")
-        .is_none());
+    assert!(
+        timeout(Duration::from_secs(1), apdus.recv())
+            .await
+            .expect("the stream ends")
+            .is_none()
+    );
     assert!(apdus.try_recv().is_err());
 }
 
@@ -128,9 +132,11 @@ async fn opted_in_network_control_stream_preserves_start_apdu_receiver() {
 
     // Polling the APDU receiver decodes the message, which goes to the
     // control receiver and yields no APDU (#1713).
-    assert!(timeout(Duration::from_millis(25), apdus.recv())
-        .await
-        .is_err());
+    assert!(
+        timeout(Duration::from_millis(25), apdus.recv())
+            .await
+            .is_err()
+    );
     let received = timeout(Duration::from_secs(1), controls.recv())
         .await
         .unwrap()
@@ -160,9 +166,11 @@ async fn network_controls_without_opt_in_are_discarded_without_stopping_apdu_ing
     )
     .await
     .unwrap();
-    assert!(timeout(Duration::from_millis(25), apdus.recv())
-        .await
-        .is_err());
+    assert!(
+        timeout(Duration::from_millis(25), apdus.recv())
+            .await
+            .is_err()
+    );
 
     peer.send_unicast(&encoded_npdu(None), &[0x01])
         .await
@@ -260,13 +268,13 @@ async fn router_preserves_link_group_for_ultimate_network_unicast() {
     assert!(received.link_layer_group);
     assert!(!received.is_group);
 
-    router.stop().await;
+    router.stop().await.unwrap();
     peer.stop().await.unwrap();
 }
 
 #[test]
 fn global_broadcast_npdu_has_dnet_ffff() {
-    use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
+    use bacnet_encoding::npdu::{Npdu, NpduAddress, decode_npdu, encode_npdu};
     use bacnet_npdu::NetworkPriority;
 
     let npdu = Npdu {
@@ -293,7 +301,7 @@ fn global_broadcast_npdu_has_dnet_ffff() {
 
 #[test]
 fn routed_send_encodes_dnet_dadr() {
-    use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
+    use bacnet_encoding::npdu::{Npdu, NpduAddress, decode_npdu, encode_npdu};
     use bacnet_npdu::NetworkPriority;
 
     let npdu = Npdu {
@@ -321,7 +329,7 @@ fn routed_send_encodes_dnet_dadr() {
 
 #[test]
 fn broadcast_to_network_encodes_specific_dnet() {
-    use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
+    use bacnet_encoding::npdu::{Npdu, NpduAddress, decode_npdu, encode_npdu};
     use bacnet_npdu::NetworkPriority;
 
     let npdu = Npdu {

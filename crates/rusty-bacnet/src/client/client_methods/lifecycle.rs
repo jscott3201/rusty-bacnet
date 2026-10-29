@@ -39,7 +39,9 @@ impl BACnetClient {
         reconnect=None,
         sc_npdu_per_origin_limit=None,
         sc_failover_hub=None,
-        sc_connect_timeout_ms=None
+        sc_connect_timeout_ms=None,
+        sc_control_rate_limit=None,
+        router=None
     ))]
     fn new(
         interface: &str,
@@ -77,8 +79,18 @@ impl BACnetClient {
         sc_npdu_per_origin_limit: Option<usize>,
         sc_failover_hub: Option<String>,
         sc_connect_timeout_ms: Option<u64>,
+        sc_control_rate_limit: Option<(u32, u32)>,
+        router: Option<PyRef<'_, crate::router::PyBACnetRouter>>,
     ) -> PyResult<Self> {
-        let sc_npdu_admission_policy = crate::sc_npdu::policy(transport, sc_npdu_per_origin_limit)?;
+        let router = crate::router::application::stack_router(
+            transport,
+            router,
+            crate::router::application::Role::Client,
+            apdu_timeout_ms,
+            "apdu_timeout_ms",
+        )?;
+        let sc_npdu_admission_policy =
+            crate::sc_npdu::policy(transport, sc_npdu_per_origin_limit, sc_control_rate_limit)?;
         if reconnect.is_some() && transport != "sc" {
             return Err(PyValueError::new_err(
                 "reconnect applies only to transport='sc'",
@@ -91,7 +103,10 @@ impl BACnetClient {
             sc_connect_timeout_ms,
         )?;
         crate::bip_options::only_on_bip(share_port_by_address, transport)?;
-        let bip_mode = crate::bip_options::bip_mode(transport, bbmd, foreign_device)?;
+        let crate::bip_options::IpModes {
+            bip: bip_mode,
+            bip6_foreign,
+        } = crate::bip_options::ip_modes(transport, bbmd, foreign_device)?;
         let multicast = crate::bip_options::bip_multicast(
             transport,
             interface,
@@ -101,6 +116,14 @@ impl BACnetClient {
             multicast,
         )?;
         let ipv6_device_instance = ipv6_device_instance_for(transport, ipv6_device_instance)?;
+        if bip6_foreign.is_some() && ipv6_device_instance.is_none() {
+            // A random VMAC would need the BBMD's help to settle a
+            // collision, which the transport doesn't do yet.
+            return Err(PyValueError::new_err(
+                "foreign_device with transport='ipv6' needs ipv6_device_instance: a B/IPv6 \
+                 foreign device uses its instance's VMAC",
+            ));
+        }
         if transport == "sc" {
             crate::tls::required_sc_credentials(
                 sc_ca_cert.as_deref(),
@@ -119,6 +142,7 @@ impl BACnetClient {
             broadcast_address: broadcast_address.to_string(),
             share_port_by_address,
             bip_mode,
+            bip6_foreign,
             multicast,
             apdu_timeout_ms,
             sc_hub,
@@ -150,6 +174,7 @@ impl BACnetClient {
                     reply_timeout_ms: mstp_reply_timeout_ms,
                 },
             },
+            router,
             min_request_interval_ms,
         })
     }
@@ -165,6 +190,7 @@ impl BACnetClient {
         let broadcast_str = slf.borrow().broadcast_address.clone();
         let share_port_by_address = slf.borrow().share_port_by_address;
         let bip_mode = slf.borrow().bip_mode.clone();
+        let bip6_foreign = slf.borrow().bip6_foreign.clone();
         let multicast = slf.borrow().multicast;
         let timeout_ms = slf.borrow().apdu_timeout_ms;
         let sc_hub = slf.borrow().sc_hub.clone();
@@ -183,6 +209,7 @@ impl BACnetClient {
         let ipv6_device_instance = slf.borrow().ipv6_device_instance;
         let mstp = slf.borrow().mstp.clone();
         let min_request_interval_ms = slf.borrow().min_request_interval_ms;
+        let router = slf.borrow().router.clone();
 
         crate::py_async::future_into_py(py, async move {
             let mut slot = state::starting(&inner).await?;
@@ -204,7 +231,7 @@ impl BACnetClient {
                             .multicast(multicast)
                             .apdu_timeout_ms(timeout_ms)
                             .min_request_interval_ms(min_request_interval_ms)
-                            .build_any::<crate::mstp_py::PySerial>(),
+                            .build_into(),
                     )
                     .await
                 }
@@ -221,7 +248,10 @@ impl BACnetClient {
                     if let Some(instance) = ipv6_device_instance {
                         builder = builder.device_instance(instance);
                     }
-                    Box::pin(builder.build_any::<crate::mstp_py::PySerial>()).await
+                    if let Some(foreign) = bip6_foreign {
+                        builder = builder.foreign_device(foreign);
+                    }
+                    Box::pin(builder.build_into()).await
                 }
                 "sc" => {
                     let hub_url = sc_hub.ok_or_else(|| {
@@ -249,6 +279,7 @@ impl BACnetClient {
                         .vmac(vmac)
                         .device_uuid(sc_device_uuid)
                         .npdu_per_origin_limit(sc_npdu_admission_policy.per_origin_limit)
+                        .control_rate_limit(sc_npdu_admission_policy.control_rate)
                         .apdu_timeout_ms(timeout_ms)
                         .min_request_interval_ms(min_request_interval_ms);
                     if let Some(ms) = sc_heartbeat_interval_ms {
@@ -268,7 +299,7 @@ impl BACnetClient {
                     }
                     // Subscribed before the client starts, so the first
                     // connection_events() sees the first Connected (#1908).
-                    Box::pin(builder.build_any_with_events::<crate::mstp_py::PySerial>())
+                    Box::pin(builder.build_into_with_events())
                         .await
                         .map(|(client, events)| {
                             inner.keep_first_sc_events(events);
@@ -279,7 +310,26 @@ impl BACnetClient {
                     let transport = crate::mstp_py::build_mstp_transport(&mstp)?;
                     Box::pin(
                         client::BACnetClient::generic_builder()
-                            .transport(transport)
+                            .transport(AppTransport::from(transport))
+                            .apdu_timeout_ms(timeout_ms)
+                            .min_request_interval_ms(min_request_interval_ms)
+                            .build(),
+                    )
+                    .await
+                }
+                "router" => {
+                    let router = router.ok_or_else(|| {
+                        PyRuntimeError::new_err("transport='router' needs router=")
+                    })?;
+                    // Nothing the build checks before starting the port
+                    // can fail here: the constructor checked the pacing
+                    // interval, the rest are defaults, and every router
+                    // port carries a full APDU. So a taken port is a
+                    // started one.
+                    let port = router.take().await?;
+                    Box::pin(
+                        client::BACnetClient::generic_builder()
+                            .transport(AppTransport::Router(port))
                             .apdu_timeout_ms(timeout_ms)
                             .min_request_interval_ms(min_request_interval_ms)
                             .build(),
@@ -288,7 +338,8 @@ impl BACnetClient {
                 }
                 other => {
                     return Err(PyRuntimeError::new_err(format!(
-                        "unknown transport: '{other}'. Use 'bip', 'ipv6', 'sc', or 'mstp'"
+                        "unknown transport: '{other}'. Use 'bip', 'ipv6', 'sc', 'mstp' or \
+                         'router'"
                     )));
                 }
             }

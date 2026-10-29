@@ -198,7 +198,7 @@ pub(super) async fn read_wire(
                 Some(Apdu::ComplexAck(ack)) => {
                     return Ok(ReadPropertyACK::decode(&ack.service_ack)
                         .unwrap()
-                        .property_value)
+                        .property_value);
                 }
                 Some(Apdu::Error(error)) => return Err(error.error_code),
                 _ => tokio::time::sleep(Duration::from_millis(1)).await,
@@ -403,12 +403,13 @@ async fn command_naming_another_device_fails_and_naming_this_device_is_local() {
     idle(&h, 1).await;
     // Device 9 has no binding and answers no Who-Is, so no request is sent
     // there.
-    assert!(!h
-        .frames
-        .lock()
-        .unwrap()
-        .iter()
-        .any(|apdu| matches!(apdu, Apdu::ConfirmedRequest(_))));
+    assert!(
+        !h.frames
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|apdu| matches!(apdu, Apdu::ConfirmedRequest(_)))
+    );
     assert_eq!(flags(&mut h, 5).await, [false, true]);
     assert_eq!(slot8(&h, ao(1)).await, PropertyValue::Null);
     assert_eq!(slot8(&h, ao(2)).await, PropertyValue::Real(80.0));

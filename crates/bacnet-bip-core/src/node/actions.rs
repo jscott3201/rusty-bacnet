@@ -145,7 +145,7 @@ impl<const X: usize> Actions<X> {
 mod tests {
     use bacnet_time::Instant;
 
-    use super::{Action, Actions, RegistrationEvent, EVENTS};
+    use super::{Action, Actions, EVENTS, RegistrationEvent};
 
     const fn renewed(secs: u64) -> RegistrationEvent {
         RegistrationEvent::Renewed {

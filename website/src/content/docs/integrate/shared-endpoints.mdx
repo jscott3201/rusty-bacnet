@@ -1,0 +1,105 @@
+---
+title: "Compose a shared endpoint"
+description: "Run requester and bounded responder roles through one B/IP, SC or MS/TP transport owner."
+---
+
+import { Code } from '@astrojs/starlight/components';
+import { release, repository } from '../../../lib/site.mjs';
+import endpointSource from '../../../../examples/rust/shared-endpoint/src/main.rs?raw';
+import endpointManifest from '../../../../examples/rust/shared-endpoint/Cargo.toml?raw';
+
+[Build and integrate](/rusty-bacnet/integrate/overview/) / Shared endpoints
+
+Use an endpoint when one local device needs to initiate requests and serve a bounded request set through the same transport. Keep standalone `BACnetClient` for a requester or `BACnetServer` for the full server service set; both remain public APIs.
+
+## One session owns the connection
+
+Rust's `EndpointSession` owns transport startup, ingress and shared outbound coordination. Choose `ClientOnly`, `ServerOnly` or `Both` before startup. The role handles use that owner and cannot independently restart its transport.
+
+This complete B/IP program uses synthetic Device instance `1001` and vendor identifier `42`, creates both roles on an ephemeral port, and waits for Enter or stdin EOF before explicitly stopping the owner. It demonstrates startup, role availability and socket cleanup; it does **not** exercise a BACnet request/reply, discovery, a property write or Audit reporting.
+
+The announced interface and configured broadcast destination are `127.0.0.1`. The default B/IP OS socket still binds wildcard (`0.0.0.0`), so this is **not a loopback-confined listener**. Run this synthetic example on an appropriate test machine; setting the announced interface does not change that bind behavior.
+
+### Save the program and manifest
+
+These files target **v{release}**, whose minimum Rust version is **1.95**. Put [Cargo.toml](/rusty-bacnet/examples/rust/shared-endpoint/Cargo.toml) in a new directory and [main.rs](/rusty-bacnet/examples/rust/shared-endpoint/src/main.rs) in its `src` subdirectory. The exact direct BACnet version is pinned; the empty workspace table makes this a standalone Cargo project.
+
+```text
+shared-endpoint-guide/
+  Cargo.toml
+  src/
+    main.rs
+```
+
+<Code code={endpointManifest} lang="toml" title="Cargo.toml" />
+
+<Code code={endpointSource} lang="rust" title="src/main.rs" />
+
+### Run and observe the owner
+
+From the directory containing `Cargo.toml`, run:
+
+```sh
+cargo run
+```
+
+The first line contains the actual nonzero port assigned by the OS. Press Enter to stop. Redirected stdin EOF also stops the program. A successful run has this shape, using the same assigned port in both address lines:
+
+```text
+Started endpoint: 127.0.0.1:<assigned-port>
+Roles: requester=true responder=true
+Press Enter to stop (or send EOF).
+Stopped: address=None requester=false responder=false
+Rebound endpoint: 127.0.0.1:<assigned-port>; owner running=false
+```
+
+The role and address observations come from the session APIs. After awaited stop, the program checks the released port by binding a temporary UDP socket and observes the still-live owner again. It then drops that temporary socket. Printing a start address alone does not establish stop or role availability, and role availability does not establish requester/responder traffic. A failure exits unsuccessfully; reporting and stdin errors after startup pass through the awaited-stop path.
+
+The exact source and manifest displayed here are checked with the development integration harness. They are also independently compiled against the published direct dependency and run through the same lifecycle checks. That evidence uses Rust 1.99.0 and a development test harness; it does not establish the release's minimum compiler, hardware behavior or protocol-service interoperability.
+
+The declared Network Port in the program is not automatically registered. Explicit registration is a separate [receiving-port contract](/rusty-bacnet/integrate/network-ports/). A successful start exposes the actual B/IP address, including the ephemeral port; after stop it is unavailable.
+
+For SC, `ScEndpointBuilder` composes a caller-dialed `TlsWebSocket` with `build_hub_session` under the `sc-tls` feature. For MS/TP, `MstpEndpointBuilder` owns one serial link. Python exposes `BipEndpoint`, `ScEndpoint` and `MstpEndpoint`, with `async with endpoint`, `await endpoint.client()` and `await endpoint.server()`; each takes `device_write_policy`, a callable that decides writes to the local Device under the same fail-closed rules as a server's `mutation_policy` callable.
+
+B/IPv6 has no endpoint builder, as it has no server builder. In Rust, compose an `EndpointSession` over a `Bip6Transport` (the `bacnet-transport/ipv6` feature) and declare its Network Port with `DeviceIdentity::with_bip6_port`. Build the transport with `Some(instance)` of the Device the session serves: that instance is the port's VMAC, and a registered B/IPv6 port refuses to start with another instance or a random VMAC. Python has no B/IPv6 endpoint, and Ethernet has none in either language; use their standalone owners.
+
+## Check requester and responder scope separately
+
+| Role | Bounded contract |
+|---|---|
+| Requester reads | ReadProperty, ReadRange and ReadPropertyMultiple; unsegmented requests/responses |
+| Requester RPM | 1–64 explicit property occurrences; concrete objects; no ALL, REQUIRED, OPTIONAL or wildcard object selectors |
+| Requester writes | Direct IPv4 B/IP WriteProperty only; required commandability declaration; no routed WP or WPM in this profile |
+| Default responder | ReadProperty, with Reject/Abort handling; no responder RPM, COV or full-server parity |
+| Opt-in responder writes | One built-in local Device's Description and, with a complete source profile, Audit_Notification_Recipient; mandatory mutation authorizer |
+
+The Device's advertised services must match the responder. Server-role declarations include RP and cannot add unsupported services; explicit write opt-in advertises RP+WP only after validation. The endpoint responder does not expose Device COV list properties.
+
+A requester write's commandability is a declaration about the remote property, not permission to write it. Rust requires `Commandability::{Commandable, Noncommandable}`; Python requires `commandability="commandable"` or `"noncommandable"`. For a first integration, exercise reads before enabling mutations. Consult <a href={`${repository}/blob/v${release}/docs/request-admission.md`}>request admission limits</a> for the shared budgets.
+
+## Add source READ or WRITE Audit reporting deliberately
+
+The optional Rust source Reporter profile belongs to this session and currently covers **direct IPv4 B/IP**. Configure it before startup:
+
+1. Put a concrete built-in Device and the selected Audit Reporter in the database. If it holds several Devices, the lowest instance is the local one (<a href={`${repository}/blob/v${release}/docs/rust-api.md#databases-with-several-devices`}>details</a>).
+2. Provision the Device's typed Audit recipient. A Device recipient needs an immutable `source_audit_device_binding`; a direct Address recipient needs none.
+3. Set the Reporter's audit level and READ/WRITE operation policy. `Monitored_Objects` must be absent, including no empty or NULL-only list.
+4. Select `with_source_audit_reporter`. A `Both` session also requires an explicit Device write authorizer.
+
+The <a href={`${repository}/blob/v${release}/docs/rust-api.md#bounded-endpoint-source-read-reporting`}>canonical source Reporter example</a> supplies the exact setup. Python exposes endpoint requests but **no source Reporter configuration**.
+
+READ reporting covers RP, ReadRange and RPM. Records retain attempted identities and outcomes; returned values remain caller-only. An RPM operation can produce a separate record for each eligible occurrence. WRITE reporting records eligible attempts across retries, with a complete Target_Value only when its encoding fits 0–32 bytes. It never invents remote Current_Value, target timestamp or proof that a write executed. Notification delivery failure does not replace the request's result.
+
+This source profile is separate from the full server's <a href={`${repository}/blob/v${release}/docs/target-audit-reporters.md`}>target Reporter ownership</a>, <a href={`${repository}/blob/v${release}/docs/device-audit-recipient.md`}>Device recipient</a> and Audit Log forwarding contracts.
+
+## Close the owner, including after cancellation
+
+In Rust, await `session.stop()`; in Python, await `close()` or leave the async context. Exported role handles do not keep a closed session usable. Stop owns admitted work and transport cleanup; dropping a caller's request is not a substitute for stopping the endpoint.
+
+Eligible source-reported requests retain terminal observation after caller cancellation. Other caller-owned requests can cancel queued sends, but an already attempted send may have reached its peer. Cancellation never proves that a remote write did not execute.
+
+Python startup and close serialize through the native lifecycle owner. If startup cancellation races publication, explicitly await close. A canceled admitted close waiter leaves cleanup owned; another awaited close joins it. Successful start consumes registrations, so restart does not replay them. See the <a href={`${repository}/blob/v${release}/docs/python-api.md#endpoint-lifecycle-and-cancellation`}>full lifecycle contract</a> for startup rollback boundaries.
+
+## Next steps
+
+[Register a B/IP receiving port](/rusty-bacnet/integrate/network-ports/) · [Compare transport evidence](/rusty-bacnet/reference/transports/) · <a href={`${repository}/blob/v${release}/docs/rust-api.md#bacnet-endpoint`}>Exact Rust endpoint APIs</a>

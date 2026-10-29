@@ -1,6 +1,6 @@
 //! How a Value object's Present_Value is written.
 
-use std::borrow::Cow;
+use alloc::borrow::Cow;
 
 use bacnet_types::enums::PropertyIdentifier;
 

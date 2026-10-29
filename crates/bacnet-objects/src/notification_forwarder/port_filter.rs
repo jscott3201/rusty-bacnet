@@ -2,6 +2,7 @@
 //! BACnetPortPermission whose size and Port_IDs are fixed, so a write changes
 //! only the Enabled members.
 
+use crate::prelude::*;
 use bacnet_encoding::constructed::{decode_port_permission, encode_port_permission};
 use bacnet_types::constructed::BACnetPortPermission;
 use bacnet_types::error::Error;

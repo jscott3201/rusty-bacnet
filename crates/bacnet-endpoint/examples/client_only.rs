@@ -8,16 +8,16 @@
 
 use std::time::Duration;
 
-use bacnet_encoding::apdu::{decode_apdu, encode_apdu, Apdu};
+use bacnet_encoding::apdu::{Apdu, decode_apdu, encode_apdu};
 use bacnet_endpoint::bip::BipEndpointBuilder;
 use bacnet_endpoint::session::SessionRole;
 use bacnet_network::layer::NetworkLayer;
 use bacnet_npdu::NetworkPriority;
 use bacnet_services::read_property::ReadPropertyACK;
 use bacnet_transport::bip::BipTransport;
+use bacnet_types::MacAddr;
 use bacnet_types::enums::{ConfirmedServiceChoice, ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
-use bacnet_types::MacAddr;
 use bytes::BytesMut;
 use std::net::Ipv4Addr;
 

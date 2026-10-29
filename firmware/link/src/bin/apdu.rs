@@ -64,7 +64,7 @@ mod heap {
 mod image {
     use core::hint::black_box;
 
-    use firmware_link::apdu::{run, DATAGRAMS};
+    use firmware_link::apdu::{DATAGRAMS, run};
 
     /// The reset entry.
     #[cortex_m_rt::entry]
@@ -90,7 +90,7 @@ mod image {
 #[allow(unsafe_code)]
 mod single_core {
     use core::arch::asm;
-    use core::sync::atomic::{compiler_fence, Ordering};
+    use core::sync::atomic::{Ordering, compiler_fence};
 
     use critical_section::RawRestoreState;
 
@@ -142,7 +142,7 @@ mod single_core {
 mod image {
     use core::hint::black_box;
 
-    use firmware_link::apdu::{run, DATAGRAMS};
+    use firmware_link::apdu::{DATAGRAMS, run};
 
     /// Links riscv, and with it the single-hart critical section its
     /// `critical-section-single-hart` feature defines. riscv-rt links the
@@ -172,7 +172,7 @@ mod emulate;
 mod emulated {
     use core::hint::black_box;
 
-    use firmware_link::apdu::{expected, run, DATAGRAMS};
+    use firmware_link::apdu::{DATAGRAMS, expected, run};
 
     /// Links riscv's single-hart critical section, as in `image`.
     #[cfg(target_arch = "riscv32")]

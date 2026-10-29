@@ -1,17 +1,17 @@
 use std::io;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use bacnet_encoding::apdu::{self, encode_apdu, Apdu, ComplexAck};
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
+use bacnet_encoding::apdu::{self, Apdu, ComplexAck, encode_apdu};
+use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort, TransportProvenance};
-use bacnet_types::enums::{AbortReason, ConfirmedServiceChoice};
-use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
+use bacnet_types::enums::{AbortReason, ConfirmedServiceChoice};
+use bacnet_types::error::{Error, RemoteError};
 use bytes::{Bytes, BytesMut};
-use tokio::sync::{mpsc, Notify};
-use tokio::time::{timeout, Duration};
+use tokio::sync::{Notify, mpsc};
+use tokio::time::{Duration, timeout};
 
 use super::{BACnetClient, ClientConfig};
 
@@ -141,7 +141,7 @@ async fn max_retry_budget_sends_exactly_255_retransmissions() {
     .expect("the maximum retry budget must terminate");
     assert!(matches!(
         result,
-        Err(Error::Abort { reason }) if reason == AbortReason::TSM_TIMEOUT
+        Err(Error::Remote(RemoteError::Abort { reason })) if reason == AbortReason::TSM_TIMEOUT
     ));
     assert_eq!(drain.await.unwrap(), 1 + usize::from(u8::MAX));
 

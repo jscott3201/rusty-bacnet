@@ -25,10 +25,10 @@ impl BACnetObject for UnsupportedFaultReindication {
         if property == PropertyIdentifier::NOTIFICATION_CLASS {
             Ok(PropertyValue::Unsigned(0))
         } else {
-            Err(Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::UNKNOWN_PROPERTY,
-            })
+            Err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::UNKNOWN_PROPERTY,
+            ))
         }
     }
 
@@ -39,10 +39,10 @@ impl BACnetObject for UnsupportedFaultReindication {
         _value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
-        Err(Error::Protocol {
-            class: ErrorClass::PROPERTY,
-            code: ErrorCode::WRITE_ACCESS_DENIED,
-        })
+        Err(Error::protocol(
+            ErrorClass::PROPERTY,
+            ErrorCode::WRITE_ACCESS_DENIED,
+        ))
     }
 
     fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {

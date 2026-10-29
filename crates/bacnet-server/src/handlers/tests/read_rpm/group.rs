@@ -1,4 +1,5 @@
 use super::*;
+use PropertyIdentifier as P;
 use bacnet_objects::{
     group::{GlobalGroupObject, GroupObject, StructuredViewObject},
     traits::BACnetObject,
@@ -6,8 +7,8 @@ use bacnet_objects::{
 use bacnet_types::constructed::{
     AccessResult, BACnetDeviceObjectPropertyReference, PropertyReference, ReadAccessSpecification,
 };
+use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::PropertyValue;
-use PropertyIdentifier as P;
 
 const EMPTY: &[u8] = &[];
 
@@ -76,13 +77,15 @@ pub(super) fn assert_cases(
             Err(expected) => {
                 assert!(result.property_value.is_none());
                 assert_eq!(result.error, Some((ErrorClass::PROPERTY, expected)));
-                assert!(matches!(rp, Err(Error::Protocol { class, code })
-                    if class == ErrorClass::PROPERTY && code == expected));
+                assert!(
+                    matches!(rp, Err(Error::Remote(RemoteError::Error { class, code }))
+                    if class == ErrorClass::PROPERTY && code == expected)
+                );
                 assert!(response.is_empty());
             }
         }
     }
-    use crate::handlers::{rpm_budget::handle_rpm_budgeted, ReadFailure};
+    use crate::handlers::{ReadFailure, rpm_budget::handle_rpm_budgeted};
     let members = group_member_rows(db, oid, cases.iter().map(|&(p, i, _)| (p, i)));
     let budget = crate::server::ReadPropertyMultipleBudget {
         max_result_elements: cases.len() + members,

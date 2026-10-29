@@ -378,10 +378,12 @@ async fn audit_reporter_monitored_objects_network_writes_are_denied_without_muta
                     );
                 }
                 assert_eq!(fixture.server.notification_transactions.active_count(), 0);
-                assert!(fixture
-                    .server
-                    .notification_transactions
-                    .delivery_workers_idle());
+                assert!(
+                    fixture
+                        .server
+                        .notification_transactions
+                        .delivery_workers_idle()
+                );
                 fixture.server.stop().await.unwrap();
             }
         }

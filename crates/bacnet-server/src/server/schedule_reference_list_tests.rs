@@ -18,7 +18,7 @@
 //! NO_SPACE_TO_ADD_LIST_ELEMENT 19, OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED 45,
 //! LIST_ELEMENT_NOT_FOUND 81.
 use super::cov_wire_test_support::*;
-use super::schedule_reference_write_tests::{av2, bv2, present_values, slot, LIST};
+use super::schedule_reference_write_tests::{LIST, av2, bv2, present_values, slot};
 use super::schedule_write_tests::{
     from_three, read, sch5, schedule, write_property, write_property_multiple,
 };

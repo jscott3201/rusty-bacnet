@@ -17,9 +17,9 @@ use bacnet_objects::command_source::{CommandDeviceBinding, CommandOrigin};
 use bacnet_objects::present_value_access::PresentValueAccess;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::WriteAccessSpecification;
+use bacnet_types::MacAddr;
 use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::enums::EngineeringUnits;
-use bacnet_types::MacAddr;
 
 const VS: PropertyIdentifier = PropertyIdentifier::VALUE_SOURCE;
 const PV: PropertyIdentifier = PropertyIdentifier::PRESENT_VALUE;

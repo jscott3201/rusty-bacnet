@@ -1,7 +1,7 @@
 use super::*;
+use PropertyIdentifier as P;
 use bacnet_objects::access_control::{AccessDoorObject, AccessPointObject, AccessZoneObject};
 use bacnet_types::primitives::PropertyValue;
-use PropertyIdentifier as P;
 
 fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
     // Independent (identifier, optional, writable) rows in declaration order; PICS sorts by property ID.

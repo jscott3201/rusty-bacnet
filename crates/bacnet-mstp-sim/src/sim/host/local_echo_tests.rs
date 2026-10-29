@@ -32,14 +32,15 @@ fn transmit_capture_survives_profile_change_completion_and_physical_release() {
     assert_eq!(sim.nodes[0].driving, None);
     assert!(sim.line.get(tx).is_none());
     assert!(sim.line.owner(tx).is_none());
-    assert!(sim
-        .master_mut(0)
-        .unwrap()
-        .host
-        .as_ref()
-        .unwrap()
-        .write
-        .is_none());
+    assert!(
+        sim.master_mut(0)
+            .unwrap()
+            .host
+            .as_ref()
+            .unwrap()
+            .write
+            .is_none()
+    );
     let queue = &sim.master_mut(0).unwrap().host.as_ref().unwrap().local_echo;
     assert_eq!(queue.len(), 13);
     for (index, echo) in queue.iter().enumerate() {
@@ -71,10 +72,12 @@ fn old_returns_survive_a_later_write_and_new_profiles_cannot_overtake_them() {
     let queue = &sim.master_mut(0).unwrap().host.as_ref().unwrap().local_echo;
     assert!(queue.iter().any(|echo| echo.tx == old));
     assert!(queue.iter().any(|echo| echo.tx == new));
-    assert!(queue
-        .iter()
-        .filter(|echo| echo.tx == new)
-        .all(|echo| echo.requested_at < echo.available_at && echo.available_at == ms(154)));
+    assert!(
+        queue
+            .iter()
+            .filter(|echo| echo.tx == new)
+            .all(|echo| echo.requested_at < echo.available_at && echo.available_at == ms(154))
+    );
     sim.run_until(ms(158));
     let returned: Vec<_> = sim
         .trace
@@ -90,19 +93,22 @@ fn old_returns_survive_a_later_write_and_new_profiles_cannot_overtake_them() {
         .collect();
     assert_eq!(returned.len(), 21);
     assert!(returned[..13].iter().all(|(tx, _, _)| *tx == old));
-    assert!(returned[13..]
-        .iter()
-        .all(|(tx, requested, actual)| *tx == new && *actual == ms(154) && requested < actual));
+    assert!(
+        returned[13..]
+            .iter()
+            .all(|(tx, requested, actual)| *tx == new && *actual == ms(154) && requested < actual)
+    );
     assert_eq!(sim.report.local_echo.pending, 0);
     assert_eq!(sim.report.local_echo.cancelled, 0);
     // Same-incarnation old bytes reach the real content heuristic. A new
     // confirmed start is not authority to discard those unread bytes.
     assert_eq!(sim.core(0).unwrap().counters().own_address_frames, 1);
-    assert!(sim
-        .report
-        .violations
-        .iter()
-        .any(|v| v.kind == ViolationKind::CoreCounter));
+    assert!(
+        sim.report
+            .violations
+            .iter()
+            .any(|v| v.kind == ViolationKind::CoreCounter)
+    );
 }
 
 #[test]
@@ -164,14 +170,15 @@ fn power_loss_wins_a_return_tie_and_reboot_cannot_observe_old_data() {
     assert_eq!(sim.report.local_echo.released, 13);
     assert_eq!(sim.report.local_echo.cancelled, 13);
     assert_eq!(sim.report.local_echo.pending, 0);
-    assert!(sim
-        .trace
-        .entries()
-        .filter_map(|entry| match entry.kind {
-            TraceKind::LocalEcho { incarnation, .. } => Some(incarnation),
-            _ => None,
-        })
-        .all(|incarnation| incarnation == 2));
+    assert!(
+        sim.trace
+            .entries()
+            .filter_map(|entry| match entry.kind {
+                TraceKind::LocalEcho { incarnation, .. } => Some(incarnation),
+                _ => None,
+            })
+            .all(|incarnation| incarnation == 2)
+    );
     assert_eq!(sim.report.host_transmits.last().unwrap().incarnation, 2);
     assert_eq!(sim.core(0).unwrap().counters().own_address_frames, 0);
     sim.assert_no_violations();
@@ -216,10 +223,11 @@ fn local_return_capacity_is_bounded_and_power_cycle_recovers() {
     sim.power_on(0);
     sim.enqueue(ms(4500), 0, 1, &[1, 0, 0xF1]);
     sim.run_until(ms(12000));
-    assert!(sim
-        .deliveries(1)
-        .iter()
-        .any(|delivery| delivery.data == [1, 0, 0xF1]));
+    assert!(
+        sim.deliveries(1)
+            .iter()
+            .any(|delivery| delivery.data == [1, 0, 0xF1])
+    );
     assert_eq!(sim.report.violations.len(), 1, "{}", sim.dump(60));
     assert_eq!(sim.core(0).unwrap().counters().own_address_frames, 0);
     assert_eq!(sim.report.local_echo.max_pending, RETURN_BOUND);

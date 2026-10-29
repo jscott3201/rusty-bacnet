@@ -39,11 +39,10 @@ impl WebSocketPort for OrderedSocket {
     async fn send(&self, bytes: &[u8]) -> Result<(), Error> {
         if decode_sc_message(bytes).unwrap().function == ScFunction::EncapsulatedNpdu
             && self.first_npdu.swap(false, Ordering::SeqCst)
+            && let Some(gate) = &self.gate
         {
-            if let Some(gate) = &self.gate {
-                self.events.send((self.id, "send")).await.unwrap();
-                gate.send.notified().await;
-            }
+            self.events.send((self.id, "send")).await.unwrap();
+            gate.send.notified().await;
         }
         self.ws.send(bytes).await
     }
@@ -95,7 +94,17 @@ impl Dials {
         let uri = self.uri.clone();
         tokio::spawn(async move {
             direct
-                .try_direct_uris(&[uri], REMOTE, NPDU, &[], &conn, 3000)
+                .try_direct_uris(
+                    &[uri],
+                    REMOTE,
+                    NPDU,
+                    &[],
+                    &conn,
+                    DirectTiming {
+                        connect_timeout_ms: 3000,
+                        heartbeat_ms: (30_000, 60_000),
+                    },
+                )
                 .await
                 .map_err(|_| ())
         })

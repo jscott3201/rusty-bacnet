@@ -79,10 +79,12 @@ async fn reject(config: Arc<rustls::ServerConfig>, node: ScNodeTlsConfig, direct
         };
         let accept = async {
             let (tcp, _) = listener.accept().await.unwrap();
-            assert!(tokio_rustls::TlsAcceptor::from(config)
-                .accept(tcp)
-                .await
-                .is_err());
+            assert!(
+                tokio_rustls::TlsAcceptor::from(config)
+                    .accept(tcp)
+                    .await
+                    .is_err()
+            );
         };
         let (error, ()) = tokio::join!(dial, accept);
         let sc = ScConnectError::from_error(&error).unwrap();

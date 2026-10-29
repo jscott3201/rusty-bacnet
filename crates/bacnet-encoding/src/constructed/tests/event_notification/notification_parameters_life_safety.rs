@@ -93,13 +93,15 @@ fn change_of_life_safety_rejects_values_above_u32() {
         for invalid in [&overflow_alias[..], &u64_max] {
             let mut values: [&[u8]; 3] = [&one, &one, &one];
             values[field] = invalid;
-            assert!(decode_params(&raw_change_of_life_safety(
-                values,
-                [0, 1, 2, 3],
-                &[4, 0x80],
-                Some(8),
-            ))
-            .is_err());
+            assert!(
+                decode_params(&raw_change_of_life_safety(
+                    values,
+                    [0, 1, 2, 3],
+                    &[4, 0x80],
+                    Some(8),
+                ))
+                .is_err()
+            );
         }
     }
 }
@@ -109,13 +111,15 @@ fn change_of_life_safety_requires_exact_field_tags() {
     for field in 0..4 {
         let mut field_tags = [0, 1, 2, 3];
         field_tags[field] = 7;
-        assert!(decode_params(&raw_change_of_life_safety(
-            [&[1], &[1], &[1]],
-            field_tags,
-            &[4, 0x80],
-            Some(8),
-        ))
-        .is_err());
+        assert!(
+            decode_params(&raw_change_of_life_safety(
+                [&[1], &[1], &[1]],
+                field_tags,
+                &[4, 0x80],
+                Some(8),
+            ))
+            .is_err()
+        );
     }
 
     let mut application_tagged =
@@ -133,32 +137,38 @@ fn change_of_life_safety_requires_four_status_bits_with_zero_padding() {
         &[4, 0xf1][..],
         &[4, 0xf0, 0][..],
     ] {
-        assert!(decode_params(&raw_change_of_life_safety(
-            [&[1], &[1], &[1]],
-            [0, 1, 2, 3],
-            invalid,
-            Some(8),
-        ))
-        .is_err());
+        assert!(
+            decode_params(&raw_change_of_life_safety(
+                [&[1], &[1], &[1]],
+                [0, 1, 2, 3],
+                invalid,
+                Some(8),
+            ))
+            .is_err()
+        );
     }
 }
 
 #[test]
 fn change_of_life_safety_requires_its_immediate_closing_tag() {
-    assert!(decode_params(&raw_change_of_life_safety(
-        [&[1], &[1], &[1]],
-        [0, 1, 2, 3],
-        &[4, 0x80],
-        None,
-    ))
-    .is_err());
-    assert!(decode_params(&raw_change_of_life_safety(
-        [&[1], &[1], &[1]],
-        [0, 1, 2, 3],
-        &[4, 0x80],
-        Some(9),
-    ))
-    .is_err());
+    assert!(
+        decode_params(&raw_change_of_life_safety(
+            [&[1], &[1], &[1]],
+            [0, 1, 2, 3],
+            &[4, 0x80],
+            None,
+        ))
+        .is_err()
+    );
+    assert!(
+        decode_params(&raw_change_of_life_safety(
+            [&[1], &[1], &[1]],
+            [0, 1, 2, 3],
+            &[4, 0x80],
+            Some(9),
+        ))
+        .is_err()
+    );
 
     let mut extra_field =
         raw_change_of_life_safety([&[1], &[1], &[1]], [0, 1, 2, 3], &[4, 0x80], None);

@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use tracing::field::{Field, Visit};
 use tracing::subscriber::{DefaultGuard, Interest};
-use tracing::{span, Event, Level, Metadata, Subscriber};
+use tracing::{Event, Level, Metadata, Subscriber, span};
 
 /// One captured event.
 #[derive(Clone, Debug)]

@@ -21,6 +21,7 @@ use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
 use bacnet_types::constructed::{BACnetDestination, BACnetRecipient};
+use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::Time;
 use std::borrow::Cow;
 use std::sync::Mutex as StdMutex;
@@ -217,7 +218,7 @@ async fn a_local_write_refused_before_the_object_releases_what_it_staged() {
         .await
         .unwrap_err();
     assert!(
-        matches!(error, Error::Protocol { class, code }
+        matches!(error, Error::Remote(RemoteError::Error { class, code })
             if class == ErrorClass::PROPERTY
                 && code == ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
         "{error:?}"

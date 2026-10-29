@@ -131,9 +131,10 @@ fn averaging_schedule_restarts_on_every_route_that_empties_the_window() {
     // A refused write changes neither the window nor the schedule.
     let mut avg = sampled(&time, clock);
     *time.lock().unwrap() = secs(1.5);
-    assert!(avg
-        .write_property(P::WINDOW_SAMPLES, None, PropertyValue::Unsigned(0), None)
-        .is_err());
+    assert!(
+        avg.write_property(P::WINDOW_SAMPLES, None, PropertyValue::Unsigned(0), None)
+            .is_err()
+    );
     assert_eq!(avg.next_monotonic_deadline_internal(), Some(secs(2.0)));
 }
 

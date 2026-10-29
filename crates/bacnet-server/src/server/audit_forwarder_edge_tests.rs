@@ -333,10 +333,11 @@ async fn audit_forwarding_terminal_failures_and_late_success_cannot_hide_new_fai
         invoke_id: requests[1].invoke_id,
         reject_reason: RejectReason::OTHER,
     });
-    assert!(f
-        .server
-        .notification_transactions
-        .admit_terminal(&[2], None, None, &failure));
+    assert!(
+        f.server
+            .notification_transactions
+            .admit_terminal(&[2], None, None, &failure)
+    );
     settle().await;
     assert!(f.ack(requests[0].invoke_id, &[2], requests[0].service_choice));
     settle().await;
@@ -364,10 +365,11 @@ async fn audit_forwarding_terminal_failures_and_late_success_cannot_hide_new_fai
                 error_data: Bytes::new(),
             })
         };
-        assert!(f
-            .server
-            .notification_transactions
-            .admit_terminal(&[2], None, None, &terminal));
+        assert!(
+            f.server
+                .notification_transactions
+                .admit_terminal(&[2], None, None, &terminal)
+        );
         settle().await;
         assert_eq!(f.server.notification_transactions.active_count(), 0);
     }

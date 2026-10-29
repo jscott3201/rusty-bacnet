@@ -15,8 +15,8 @@
 //! Run the scenario in a Linux container (`examples/docker`) for the figure.
 
 use std::net::Ipv4Addr;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use bacnet_transport::bbmd::ForeignDevicePolicy;
@@ -25,7 +25,7 @@ use bacnet_transport::bvll::decode_bip_mac;
 use bacnet_transport::port::TransportPort;
 
 use crate::stress::harness::current_rss_kb;
-use crate::stress::output::{rate, DegradationPoint, LatencyRecorder};
+use crate::stress::output::{DegradationPoint, LatencyRecorder, rate};
 
 /// Whether each foreign device gets its own loopback address: Linux routes
 /// all of 127.0.0.0/8 to the loopback interface.

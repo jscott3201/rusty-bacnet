@@ -9,14 +9,16 @@
 //! Roles expose no callbacks. Concurrent use is `asyncio.gather` over
 //! `read_property` plus `is_session_alive` polling, the same poll pattern as
 //! COV iterators. The only Python callable a native lock waits on is the
-//! owner's `on_reinitialize` (see [`crate::reinitialize`]).
+//! owner's `on_reinitialize` (see [`crate::reinitialize`]); the owner's
+//! `device_write_policy` runs with no lock held
+//! (see [`crate::mutation_policy`]).
 
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use crate::errors::to_py_err;
 use crate::types::{
-    parse_address, PyObjectIdentifier, PyPropertyIdentifier, PyPropertyValue, PyReadAccessSpec,
+    PyObjectIdentifier, PyPropertyIdentifier, PyPropertyValue, PyReadAccessSpec, parse_address,
 };
 
 /// Client role: initiates ReadProperty/ReadRange/ReadPropertyMultiple/WriteProperty over the owner's single transport.
@@ -99,7 +101,7 @@ impl PyEndpointClient {
             _ => {
                 return Err(pyo3::exceptions::PyValueError::new_err(
                     "commandability must be 'commandable' or 'noncommandable'",
-                ))
+                ));
             }
         };
         let invalid = |error: bacnet_types::error::Error| {
@@ -164,8 +166,8 @@ impl PyEndpointClient {
     }
 
     /// Read a list/log range; supports all-items, position, sequence and time
-    /// forms, checked strictly or leniently. Returns raw item_data bytes, a
-    /// three-boolean result_flags tuple and the rules a lenient read kept.
+    /// forms, checked strictly or leniently. Returns raw item_data bytes, the
+    /// result_flags as a BitString and the rules a lenient read kept.
     #[pyo3(signature = (address, object_id, property_id, array_index=None, range_type=None, reference_index=None, reference_seq=None, count=None, *, reference_time=None, validation="strict"))]
     fn read_range<'py>(
         &self,
@@ -273,19 +275,29 @@ pub struct PyEndpointServer {
     inner: bacnet_endpoint::roles::ServerRoleHandle,
     /// Whether the endpoint was built with `on_reinitialize` (#1566).
     reinitialize: bool,
+    /// Whether the endpoint was built with `device_write_policy` (#2033).
+    device_writes: bool,
 }
 
 impl PyEndpointServer {
-    pub(crate) fn new(inner: bacnet_endpoint::roles::ServerRoleHandle, reinitialize: bool) -> Self {
+    pub(crate) fn new(
+        inner: bacnet_endpoint::roles::ServerRoleHandle,
+        reinitialize: bool,
+        device_writes: bool,
+    ) -> Self {
         Self {
             inner,
             reinitialize,
+            device_writes,
         }
     }
 
     /// The services the server role executes.
     fn executes(&self) -> Vec<&'static str> {
         let mut services = vec!["read_property"];
+        if self.device_writes {
+            services.push("write_property");
+        }
         if self.reinitialize {
             services.push("reinitialize_device");
         }
@@ -312,8 +324,10 @@ impl PyEndpointServer {
         self.inner.suspend_next_reply().map_err(to_py_err)
     }
 
-    /// Narrow service scope: the endpoint server executes ReadProperty, and
-    /// ReinitializeDevice when the endpoint was built with `on_reinitialize`.
+    /// Narrow service scope: the endpoint server executes ReadProperty,
+    /// WriteProperty to its local Device when the endpoint was built with
+    /// `device_write_policy`, and ReinitializeDevice when it was built with
+    /// `on_reinitialize`.
     fn service_scope<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let dict = PyDict::new(py);
         dict.set_item("initiates", Vec::<String>::new())?;

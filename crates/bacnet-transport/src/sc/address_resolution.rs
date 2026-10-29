@@ -17,14 +17,13 @@ use bytes::BytesMut;
 use tokio::sync::Mutex;
 use tracing::warn;
 
+use super::WebSocketPort;
 use super::connection::{ScConnection, ScConnectionState};
 use super::data_attributes::build_bvlc_result_nak;
 use super::rejection::{RejectionBudget, RejectionExpired};
-use super::WebSocketPort;
 use crate::sc_frame::{
-    address_resolution_message_error, encode_sc_message,
-    first_must_understand_destination_option_marker, is_valid_wss_uri, ScFunction, ScMessage, Vmac,
-    BROADCAST_VMAC,
+    BROADCAST_VMAC, ScFunction, ScMessage, Vmac, address_resolution_message_error,
+    encode_sc_message, first_must_understand_destination_option_marker, is_valid_wss_uri,
 };
 
 /// Largest answer envelope an Address-Resolution-ACK can need: base header

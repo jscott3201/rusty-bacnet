@@ -1,7 +1,7 @@
 //! Criterion suite: ReadProperty, WriteProperty and 10-object RPM round-trip latency over
 //! BACnet/SC with mutual TLS through a local hub.
 #![allow(clippy::print_stderr)] // benchmarks note skipped setups on the console
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use tokio::runtime::Runtime;
 
 use bacnet_transport::sc::ScTransport;

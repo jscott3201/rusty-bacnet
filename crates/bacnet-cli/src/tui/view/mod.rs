@@ -15,6 +15,7 @@ mod dialogs;
 mod fit;
 mod help;
 mod monitor;
+mod monitor_scan;
 mod mstp;
 mod network;
 mod networks;
@@ -24,11 +25,11 @@ mod sc_credentials;
 mod watch;
 mod who_has;
 
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, Wrap};
-use ratatui::Frame;
 
 use super::app::names::Name;
 use super::app::watch::Screen;
@@ -138,11 +139,7 @@ pub(crate) struct Theme {
 
 impl Theme {
     fn pick(&self, colored: Style, plain: Style) -> Style {
-        if self.color {
-            colored
-        } else {
-            plain
-        }
+        if self.color { colored } else { plain }
     }
 
     /// Status bar.
@@ -205,12 +202,22 @@ impl Theme {
     }
 }
 
-/// `text` with each control character (a newline, a tab, an escape) as a
-/// space, as the log pane shows them: a device-supplied string must not
-/// move the cursor or break a row.
+/// `text` with each control character (a newline, a tab, an escape) and
+/// line or paragraph separator as a space, as the log pane shows them, and
+/// each invisible format character
+/// (a bidirectional override or isolate, a zero-width one) dropped: a
+/// device-supplied string must not move the cursor, break a row or
+/// reorder what follows it.
 pub(super) fn sanitize(text: &str) -> String {
     text.chars()
-        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .filter(|ch| !bacnet_types::text::is_hidden_on_screen(*ch))
+        .map(|ch| {
+            if bacnet_types::text::breaks_line(ch) {
+                ' '
+            } else {
+                ch
+            }
+        })
         .collect()
 }
 

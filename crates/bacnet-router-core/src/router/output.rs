@@ -15,7 +15,7 @@ use super::tasks::{Task, TaskKind};
 use super::{RejectOrigin, Storage};
 use crate::npdu::{NetworkMessageType, RejectMessageReason};
 use crate::npdu::{NetworkPriority, Npdu};
-use crate::{swap_apart, Mac, PortId};
+use crate::{Mac, PortId, swap_apart};
 
 /// What to do next. Poll [`Router::poll_action`](super::Router::poll_action)
 /// until [`Action::Idle`] after every call into the router.
@@ -167,6 +167,14 @@ pub(super) struct Current {
     port: PortId,
     /// The next port a fan-out tries.
     next: u16,
+    /// Where the NPDU starts in the scratch: 0 but for a tail.
+    start: u16,
+    /// A fan-out's trailing send to `port`, of the same NPDU without its
+    /// SNET and SADR, which starts this far into the scratch; 0 for none.
+    /// See [`Current::with_tail`].
+    tail: u16,
+    /// The tail's control octet: the NPDU's, without the SNET flag.
+    tail_control: u8,
     /// A single-port send that is a broadcast rather than to `to`.
     broadcast: bool,
     to: Mac,
@@ -186,6 +194,9 @@ impl Current {
         fan_out: false,
         port: PortId(0),
         next: 0,
+        start: 0,
+        tail: 0,
+        tail_control: 0,
         broadcast: false,
         to: Mac::EMPTY,
         table_ack: false,
@@ -245,10 +256,27 @@ impl Current {
         current
     }
 
+    /// End a fan-out to every port but `port` with a send to `port` too,
+    /// of the same global broadcast without its SNET and SADR: the router's
+    /// own, from its address on that port (#1809). The scratch holds the
+    /// NPDU with them, as DNET 0xFFFF, DLEN 0, SNET, SLEN, SADR, then the
+    /// hop count and the rest (Clause 6.2, Figure 6-1). The one without
+    /// them is the same from the hop count on, so once the fan-out is done
+    /// its five octets of version, control, DNET and DLEN are written over
+    /// the end of the source fields, just before the hop count, and the
+    /// send starts there: `offset` octets in, the SNET, SLEN and SADR's
+    /// length. Nothing is moved, so no memmove is linked.
+    pub(super) fn with_tail(mut self, offset: u16, control: u8) -> Self {
+        self.tail = offset;
+        self.tail_control = control;
+        self
+    }
+
     /// Whether it has a send left on a router of `ports` ports.
     fn has_more(&self, ports: usize) -> bool {
         self.active
             && (!self.fan_out
+                || self.tail != 0
                 || (usize::from(self.next)..ports).any(|port| port != usize::from(self.port.0)))
     }
 
@@ -333,14 +361,14 @@ impl Outputs {
 }
 
 impl<
-        const P: usize,
-        const R: usize,
-        const H: usize,
-        const D: usize,
-        const N: usize,
-        G: super::GroupClassifier,
-        const B: usize,
-    > Storage<P, R, H, D, N, G, B>
+    const P: usize,
+    const R: usize,
+    const H: usize,
+    const D: usize,
+    const N: usize,
+    G: super::GroupClassifier,
+    const B: usize,
+> Storage<P, R, H, D, N, G, B>
 {
     /// Drop whatever the caller left unpolled, counting each output, a
     /// waiting congestion announcement included.
@@ -422,7 +450,7 @@ impl<
                     } else {
                         Dest::Unicast(current.to.as_slice())
                     },
-                    npdu: &self.scratch[..current.len],
+                    npdu: &self.scratch[usize::from(current.start)..current.len],
                     priority: current.priority,
                     kind: current.kind(),
                     reject_origin: current.reject_origin.as_option(),
@@ -448,11 +476,12 @@ impl<
         }
         let ports = &self.ports[..self.port_count];
         let len = current.len;
-        let fits = |port: PortId, broadcast: bool| {
+        let fits_from = |start: usize, port: PortId, broadcast: bool| {
             ports
                 .get(usize::from(port.0))
-                .is_some_and(|config| len <= config.max_npdu.get(broadcast))
+                .is_some_and(|config| len - start <= config.max_npdu.get(broadcast))
         };
+        let fits = |port: PortId, broadcast: bool| fits_from(0, port, broadcast);
         if !current.fan_out {
             current.active = false;
             if fits(current.port, current.broadcast) {
@@ -473,6 +502,27 @@ impl<
             }
             bump(&mut self.counters.egress_too_long);
         }
+        let tail = usize::from(core::mem::take(&mut current.tail));
+        if tail != 0 {
+            // The global broadcast's version, control, DNET 0xFFFF and
+            // DLEN 0, just before its hop count (Current::with_tail).
+            let header = [crate::npdu::VERSION, current.tail_control, 0xFF, 0xFF, 0];
+            // The offset is the SNET, SLEN and SADR's length, so the header
+            // ends at the hop count, inside the NPDU and the scratch: the
+            // lookup below can't fail.
+            debug_assert!(
+                tail + header.len() < len,
+                "a tail's header ends before its hop count"
+            );
+            if let Some(slot) = self.scratch.get_mut(tail..tail + header.len()) {
+                slot.copy_from_slice(&header);
+                current.start = tail as u16;
+                if fits_from(tail, current.port, true) {
+                    return Some((current.port, true));
+                }
+                bump(&mut self.counters.egress_too_long);
+            }
+        }
         current.active = false;
         None
     }
@@ -485,10 +535,10 @@ impl<
         let clogged = self.flows[..self.port_count]
             .get(port)
             .is_some_and(|flow| flow.clogged());
-        if let Some(origin) = self.out.current.reject_origin.as_option() {
-            if clogged {
-                self.queue_reject(origin, RejectMessageReason::ROUTER_BUSY);
-            }
+        if let Some(origin) = self.out.current.reject_origin.as_option()
+            && clogged
+        {
+            self.queue_reject(origin, RejectMessageReason::ROUTER_BUSY);
         }
     }
 

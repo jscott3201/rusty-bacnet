@@ -18,7 +18,7 @@ use bacnet_types::primitives::ObjectIdentifier;
 use tokio::sync::RwLock;
 use tracing::debug;
 
-use super::{when_free, Unfinished};
+use super::{Unfinished, when_free};
 
 /// Runs taken from their objects, owned until each is handed on.
 ///
@@ -74,11 +74,12 @@ impl TakenRuns {
         if other.runs.is_empty() {
             return;
         }
-        debug_assert!(self
-            .database
-            .as_ref()
-            .zip(other.database.as_ref())
-            .is_none_or(|(ours, theirs)| Arc::ptr_eq(ours, theirs)));
+        debug_assert!(
+            self.database
+                .as_ref()
+                .zip(other.database.as_ref())
+                .is_none_or(|(ours, theirs)| Arc::ptr_eq(ours, theirs))
+        );
         if self.database.is_none() {
             self.database = other.database.take();
         }

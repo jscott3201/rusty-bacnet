@@ -3,6 +3,7 @@
 //! Split out to keep every file under the 700-LOC cap.
 
 use super::super::*;
+use bacnet_types::error::RemoteError;
 
 #[test]
 fn create_event_enrollment() {
@@ -226,7 +227,7 @@ fn decode_framed_event_parameters(
 
 #[test]
 fn write_event_parameters_structured_round_trip() {
-    use bacnet_types::constructed::{event_parameter_tag, BACnetEventParameter};
+    use bacnet_types::constructed::{BACnetEventParameter, event_parameter_tag};
     let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let params = BACnetEventParameter::OutOfRange {
         time_delay: 5,
@@ -308,7 +309,7 @@ fn write_event_parameters_framed_trailing_garbage_rejected() {
             None,
         );
         match result.unwrap_err() {
-            bacnet_types::error::Error::Protocol { class, code } => {
+            bacnet_types::error::Error::Remote(RemoteError::Error { class, code }) => {
                 assert_eq!(class, bacnet_types::enums::ErrorClass::PROPERTY);
                 assert_eq!(code, bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE);
             }
@@ -322,13 +323,7 @@ fn write_event_parameters_framed_trailing_garbage_rejected() {
             panic!("expected ApplicationData");
         };
         let (decoded, _) = bacnet_encoding::constructed::decode_event_parameter(bytes, 0).unwrap();
-        assert_eq!(
-            decoded,
-            BACnetEventParameter::Opaque {
-                tag: 20,
-                data: Vec::new()
-            }
-        );
+        assert_eq!(decoded, BACnetEventParameter::None);
     }
 }
 
@@ -339,14 +334,15 @@ fn write_event_parameters_framed_malformed_rejected() {
         vec![0x5E, 0x09, 0x07], // out-of-range opening with no closing
         vec![0x58],             // out-of-range encoded as a primitive tag
     ] {
-        assert!(ee
-            .write_property(
+        assert!(
+            ee.write_property(
                 PropertyIdentifier::EVENT_PARAMETERS,
                 None,
                 PropertyValue::ApplicationData(malformed),
                 None,
             )
-            .is_err());
+            .is_err()
+        );
     }
 }
 
@@ -365,14 +361,15 @@ fn write_event_parameters_flat_malformed_proprietary_body_rejected() {
         )],
     };
 
-    assert!(ee
-        .write_property(
+    assert!(
+        ee.write_property(
             PropertyIdentifier::EVENT_PARAMETERS,
             None,
             malformed.encode(),
             None,
         )
-        .is_err());
+        .is_err()
+    );
     assert_eq!(
         ee.read_property(PropertyIdentifier::EVENT_PARAMETERS, None)
             .unwrap(),
@@ -413,14 +410,15 @@ fn write_event_parameters_flat_reference_malformed_rejected() {
     reference.push(PropertyValue::Null);
 
     for malformed in [overflow, trailing] {
-        assert!(ee
-            .write_property(
+        assert!(
+            ee.write_property(
                 PropertyIdentifier::EVENT_PARAMETERS,
                 None,
                 PropertyValue::List(malformed),
                 None,
             )
-            .is_err());
+            .is_err()
+        );
         assert_eq!(
             ee.read_property(PropertyIdentifier::EVENT_PARAMETERS, None)
                 .unwrap(),
@@ -565,10 +563,10 @@ fn set_event_state_internal_default_rejects() {
             if property == PropertyIdentifier::OBJECT_NAME {
                 Ok(PropertyValue::CharacterString("default-only".to_string()))
             } else {
-                Err(bacnet_types::error::Error::Protocol {
-                    class: ErrorClass::PROPERTY,
-                    code: ErrorCode::UNKNOWN_PROPERTY,
-                })
+                Err(bacnet_types::error::Error::protocol(
+                    ErrorClass::PROPERTY,
+                    ErrorCode::UNKNOWN_PROPERTY,
+                ))
             }
         }
         fn write_property(
@@ -578,10 +576,10 @@ fn set_event_state_internal_default_rejects() {
             _value: PropertyValue,
             _priority: Option<u8>,
         ) -> Result<(), bacnet_types::error::Error> {
-            Err(bacnet_types::error::Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::WRITE_ACCESS_DENIED,
-            })
+            Err(bacnet_types::error::Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::WRITE_ACCESS_DENIED,
+            ))
         }
         fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
             Cow::Borrowed(&[PropertyIdentifier::OBJECT_NAME])
@@ -598,11 +596,11 @@ fn set_event_state_internal_default_rejects() {
     );
     let err = result.unwrap_err();
     match err {
-        bacnet_types::error::Error::Protocol { class, code } => {
+        bacnet_types::error::Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, ErrorClass::OBJECT);
             assert_eq!(code, ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED);
         }
-        _ => panic!("expected Error::Protocol from default set_event_state_internal"),
+        _ => panic!("expected an Error PDU's Error::Remote from default set_event_state_internal"),
     }
 }
 
@@ -648,7 +646,7 @@ fn ee_notify_type_rejects_out_of_production_values() {
             )
             .expect_err("an out-of-production Notify_Type write must be refused")
         {
-            Error::Protocol { class, code } => {
+            Error::Remote(RemoteError::Error { class, code }) => {
                 assert_eq!(class, ErrorClass::PROPERTY);
                 assert_eq!(code, ErrorCode::VALUE_OUT_OF_RANGE);
             }
@@ -698,7 +696,7 @@ fn ee_event_enable_rejects_noncanonical_bit_strings() {
             )
             .expect_err("a noncanonical Event_Enable shape must be refused")
         {
-            Error::Protocol { class, code } => {
+            Error::Remote(RemoteError::Error { class, code }) => {
                 assert_eq!(class, ErrorClass::PROPERTY);
                 assert_eq!(code, ErrorCode::INVALID_DATA_ENCODING);
             }
@@ -755,7 +753,7 @@ fn alert_enrollment_event_enable_rejects_noncanonical_bit_strings() {
         )
         .expect_err("an 8-bit string must be refused where 3 bits are defined")
     {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, ErrorClass::PROPERTY);
             assert_eq!(code, ErrorCode::INVALID_DATA_ENCODING);
         }

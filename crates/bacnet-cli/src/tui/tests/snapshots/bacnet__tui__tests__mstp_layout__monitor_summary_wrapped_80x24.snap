@@ -6,7 +6,7 @@ expression: text
 "┌ MS/TP monitor: listen only ──────────────────────────────────────────────────┐"
 "│ /dev/cu.usbserial-B0037OSC  38400 baud  up 10 s  24 stations                 │"
 "│ timestamps ±16 ms  PAUSED                                                    │"
-"│ [Stations]  Token ring   Findings   Errors  Tab: next view                   │"
+"│ [Stations]  Token ring   Findings   Errors   Scan  Tab: next view            │"
 "│ Masters   0-31  .MMMMMMMMMMMM...................                             │"
 "│          32-63  ................................                             │"
 "│          64-95  ................................                             │"

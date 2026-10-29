@@ -5,9 +5,9 @@
 
 use core::mem::size_of;
 
-use firmware_link::device::app::{answer, Answer, Scratch, ANSWER_LENGTH};
+use firmware_link::device::app::{ANSWER_LENGTH, Answer, Scratch, answer};
 use firmware_link::device::{
-    expected, run, Core, Memory, Storage, Summary, GLOBAL_READ_PROPERTY, REQUESTS,
+    Core, GLOBAL_READ_PROPERTY, Memory, REQUESTS, Storage, Summary, expected, run,
 };
 
 /// The whole summary, against the one the emulation build checks too

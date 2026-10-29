@@ -13,7 +13,7 @@
 //! reference's property and index inside tag 1, and the class and code
 //! inside tag 2 (0x2E ... 0x2F).
 
-use super::mutation_tests::{oid, Fixture};
+use super::mutation_tests::{Fixture, oid};
 use super::*;
 use crate::mutation::MutationPolicy;
 use bacnet_encoding::npdu::decode_npdu;
@@ -140,9 +140,10 @@ async fn create_object_refusals_go_out_as_create_object_errors() {
         // Nothing is created, and no name is left behind.
         let db = fixture.db.read().await;
         assert_eq!(db.len(), before, "{what}");
-        assert!(db
-            .check_name_available(&oid(ObjectType::BINARY_VALUE, 3), "x")
-            .is_ok());
+        assert!(
+            db.check_name_available(&oid(ObjectType::BINARY_VALUE, 3), "x")
+                .is_ok()
+        );
     }
 
     // A good request still creates the object.

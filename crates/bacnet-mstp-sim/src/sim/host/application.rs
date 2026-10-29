@@ -2,7 +2,7 @@
 use bacnet_mstp_core::{MasterState, RequestId};
 
 use super::state::{Decision, WireRequest};
-use crate::{sim::Sim, ViolationKind};
+use crate::{ViolationKind, sim::Sim};
 
 /// Same finite number of deferred replies as the production host adapter.
 const DECISION_BOUND: usize = 8;
@@ -76,10 +76,10 @@ impl Sim {
     pub(crate) fn host_finish_request(&mut self, node: usize) {
         let master = self.master_mut(node).unwrap();
         let answering = master.core.as_ref().unwrap().state() == MasterState::AnswerDataRequest;
-        if let Some(host) = master.host.as_mut() {
-            if !answering {
-                host.request = None;
-            }
+        if let Some(host) = master.host.as_mut()
+            && !answering
+        {
+            host.request = None;
         }
     }
 }

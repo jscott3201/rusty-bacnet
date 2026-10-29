@@ -8,7 +8,7 @@ use crate::tui::profile::service::{Request, Service};
 use crate::tui::profile::store::Store;
 use crate::tui::profile::{Overrides, Profile};
 use crate::tui::worker::session::{ConnectPlan, TransportKind};
-use crate::tui::worker::{coordinator, EventSink};
+use crate::tui::worker::{EventSink, coordinator};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -147,10 +147,9 @@ async fn failed_attempt_keeps_coordinator_available_for_corrected_interface() {
             generation: 1,
             event,
         } = event(&mut events).await
+            && matches!(*event, WorkerEvent::ConnectFailed { .. })
         {
-            if matches!(*event, WorkerEvent::ConnectFailed { .. }) {
-                break;
-            }
+            break;
         }
     }
     commands

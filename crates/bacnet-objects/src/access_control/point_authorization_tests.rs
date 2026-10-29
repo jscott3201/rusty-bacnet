@@ -4,6 +4,7 @@
 //! 12.31.10, 12.31.11, 12.31.14 and 12.31.33).
 
 use bacnet_types::enums::{AuthorizationMode, ErrorClass, ErrorCode, PropertyIdentifier as P};
+use bacnet_types::error::RemoteError;
 
 use super::*;
 
@@ -36,7 +37,7 @@ const STANDARD_MODES: [AuthorizationMode; 6] = [
 
 fn assert_error(result: Result<(), Error>, expected: ErrorCode) {
     assert!(
-        matches!(result, Err(Error::Protocol { class, code })
+        matches!(result, Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::PROPERTY
                 && code == expected),
         "expected {expected:?}, got {result:?}"

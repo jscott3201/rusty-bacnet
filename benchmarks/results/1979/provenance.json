@@ -1,0 +1,742 @@
+{
+  "schema": "1979-run-level-evidence-v1",
+  "revisions": {
+    "A": "dca94f7fa5acce74423606bf526de56d1f4360cf",
+    "B": "f056aba22cff95ec98f77511238711a93ce82da4",
+    "C": "5b6f541322cac7b346e8fdb749689b0c5c4b2239"
+  },
+  "candidate_source": "C is production revision5b6f541322cac7b346e8fdb749689b0c5c4b2239 plus the benchmark overlay at measured_overlay_commit. source_sha256 records the original measured snapshot, not every final PR byte. Production files and lockfiles are unchanged.",
+  "environment": {
+    "cpu": "Apple M5",
+    "physical_and_logical_cpus": 10,
+    "memory_bytes": 17179869184,
+    "os": "macOS 27.2 (26B5112a)",
+    "target": "aarch64-apple-darwin",
+    "rustc": "1.99.0 (b940084d7 2026-09-28), LLVM 23.1.1",
+    "cargo": "1.99.0 (5f94df478 2026-08-27)",
+    "power": "AC, battery100%, low power mode0; no thermal/performance warning at pre-run snapshots",
+    "build_CARGO_INCREMENTAL": "0",
+    "RUSTFLAGS": null,
+    "CARGO_ENCODED_RUSTFLAGS": null,
+    "TOKIO_WORKER_THREADS": null,
+    "quiet_prechecks": [
+      "root-quiet-final.json",
+      "root-quiet-constituents.json"
+    ]
+  },
+  "lock_sha256": {
+    "A": "c10f0e1ae4dea76fd5cceb68d20bf571887a44aaf902c696ad4b937fb35b0b91",
+    "B": "9475210bf3fc9e2aa15b98ac2c15fc108ff2e54a4e44252da7f9b859e6cf55d9",
+    "C": "0401b89d846d574b0ceac80405eb04c8f80c38226a118d2d0a6b83dcc6679659"
+  },
+  "source_sha256": {
+    "A/Cargo.lock": "c10f0e1ae4dea76fd5cceb68d20bf571887a44aaf902c696ad4b937fb35b0b91",
+    "A/Cargo.toml": "5219388bf73cb365119c8c3ccdfda7e869edbcbdb77d3b41345bad7ddc8ea04c",
+    "A/benchmarks/Cargo.toml": "462d76c62ab429db82cb3c4a101489b893cef93ddc9c220824486b1ac82aa14e",
+    "A/benchmarks/benches/encoding.rs": "ac26ce74e76735cfe83cb1ff9313a6400061282378b4927fc9f7674ba5fd1a2f",
+    "A/benchmarks/src/bin/normalized-clients.rs": "f3b71c876139db3df10f786684ad85c355aaf521ab4ec5f9a07fbd1a9783664e",
+    "B/Cargo.lock": "9475210bf3fc9e2aa15b98ac2c15fc108ff2e54a4e44252da7f9b859e6cf55d9",
+    "B/Cargo.toml": "1d92e3d4d0b2989598feb17435cbb7e4498dbdad8545d67cdbd7aa9ee5b1d91a",
+    "B/benchmarks/Cargo.toml": "c1a5ca58609fb7a95b6c300bd678cb51843b3239dea3b567dfb2b9402bff6a1c",
+    "B/benchmarks/benches/encoding.rs": "ac26ce74e76735cfe83cb1ff9313a6400061282378b4927fc9f7674ba5fd1a2f",
+    "B/benchmarks/src/bin/normalized-clients.rs": "ff0895eb7b875d88814618d592fbe8cab1e86e5e98d02472ad6402e995cffcd5",
+    "C/Cargo.lock": "0401b89d846d574b0ceac80405eb04c8f80c38226a118d2d0a6b83dcc6679659",
+    "C/Cargo.toml": "798a9023ca80902c654554e116eb9eaf7faa7badb0f7faced6e176860a6d903b",
+    "C/benchmarks/Cargo.toml": "4fbf105e35923bf3da28fb33dfd74cc671b30cf25360d2873b897e7ad169bcec",
+    "C/benchmarks/benches/bip6_latency.rs": "fda74a8e3a57d8b0f8da391e01133f5e58e7e34212fb0727dead5d5c821c9eb2",
+    "C/benchmarks/benches/bip6_throughput.rs": "e1114638a7ec73f3d02af61e7581382892676090ca999f8a0dfb47058ba38b88",
+    "C/benchmarks/benches/bip_latency.rs": "7e03dd11a189d370015b559c0d13785358775d62b9357893a4b8b217324948e3",
+    "C/benchmarks/benches/bip_throughput.rs": "f4c08281b8d9ce957860b207cfc4f674696eb1a4db41d5e613e6ec595581c2b9",
+    "C/benchmarks/benches/codecs.rs": "59a4acc7cc0f191568452e5c3a56b913a729e0f96b3220023aa8c9d34544a08f",
+    "C/benchmarks/benches/encoding.rs": "f00540206fe845c8e9a4fd556ffd7db84896569b093d88a422cbe44479f91692",
+    "C/benchmarks/benches/read_range.rs": "045c01f8839233ccd5ac51063baad97dc810be256bb71b6f319d8011d62c84e8",
+    "C/benchmarks/benches/sc_mtls_latency.rs": "25756f7f988228ba14466b1f15c010057b9a6de5dff93d26a504555d1d3df89f",
+    "C/benchmarks/benches/sc_mtls_throughput.rs": "d02f5ebf0ed0cf20c66f65469931e5297928a088a4b8339fb0e704440aa7623a",
+    "C/benchmarks/compat/README.md": "25094e2d246ffb3457151289cb38ef76c6d0a478e79ccefc6e409a95ad005bf6",
+    "C/benchmarks/compat/bootstrap.py": "d3c803800a8d4a3eaec1c53dda8f510697d98f307f50cd0aacced186abe6a108",
+    "C/benchmarks/compat/current_modules.rs": "f47b4b86206f3981ccbd792cb3310585c53da479ed1a31751f9dda66b34126f1",
+    "C/benchmarks/compat/encoding_guard.rs": "3c8e9bc6f52c16c3c012c2290da6c834e2cba0a61bc7b4c9035bc9580652b748",
+    "C/benchmarks/compat/normalized_main.rs": "b2101d8534274086ecc1f2b68011a4a1ca43f0e6c389a819cb8b7f30596c0c85",
+    "C/benchmarks/compat/v013_adapter.rs": "2c98156c6ced80b88a567680199f18ed08d495fdd82bd63623c0fd3cb5d1f069",
+    "C/benchmarks/python/bench_bip.py": "c2aa7877d3af31b9e97dea37b136816f5ac5af42484eeb2a2d4d196fa8ee971e",
+    "C/benchmarks/python/bench_sc.py": "a702a2f36c8b11a2c247d350a6cffd8a142e25c427b60de94cb143c51bc68157",
+    "C/benchmarks/python/conftest.py": "7c984942f6895cec16f51213f43a6b6f4a01f4ec88c8b8ec3dbaa83036923872",
+    "C/benchmarks/python/helpers.py": "1fdf6e6b7e8b14aec8836883e43b5aaa6f3873eb0484475f4caf6905f1c8d5bf",
+    "C/benchmarks/python/pyproject.toml": "b4db5c8b7e31da47fb4bd653892022c52cc18148fca10dce96c1199af3752bac",
+    "C/benchmarks/results/1979/run_matrix.py": "c12005a95180ed1d9b58d338bc5f0beb386535d7e49c516f4abe7733276f8316",
+    "C/benchmarks/schema/benchmark-result.schema.json": "70cad7cc2d74bc868d2d5f33f3a8e526c9e7ccec924910436d94a400e50b0f0c",
+    "C/benchmarks/src/bin/bacnet_bbmd.rs": "364b62269837fdc80af49b8ee928d455ab0b72a9df436f72d20125196164682a",
+    "C/benchmarks/src/bin/bacnet_device.rs": "a8ff61f4e64fce7daae5a475c0b72d2fda2d237cfeff43c3a07874172d9c0958",
+    "C/benchmarks/src/bin/bacnet_router.rs": "da4f9a02c094ff75db993a9f27b09546923434ba5c3528510b3c00b7c79d5877",
+    "C/benchmarks/src/bin/bacnet_sc_hub.rs": "b72e8b48aeed0627bed132471f6ebd68d8413b0e5043da5364f9a870954ac627",
+    "C/benchmarks/src/bin/nat_probe.rs": "03b1ec7c433ae1dae3ac8084eb305cf33301c424520d18d6080acdae144762e4",
+    "C/benchmarks/src/bin/normalized-clients.rs": "a26063c34a7b543537e8e3741e3476dd18ea0016375f45b24b70e14111777860",
+    "C/benchmarks/src/bin/orchestrator/scenarios.rs": "3f49aeb603e38d6eea8b208e718210bbbf882852ce1208af2ce0a4a7a70a0f97",
+    "C/benchmarks/src/bin/sc/credentials.rs": "e93fc83dbe9d4cd691b3242500592b8242c4b4b779bcf85b85619e3718b51b21",
+    "C/benchmarks/src/bin/sc/device.rs": "ac450b1bc51dde63239be9f6604a5d6d02e769667efa1133e78ced36c1fc4fd5",
+    "C/benchmarks/src/bin/stress_orchestrator.rs": "26023246b20075249ae33ad81c7154e0f329804af9a78a4b2f3b8cd82a82294f",
+    "C/benchmarks/src/bin/stress_test.rs": "75fcd8f2dbd26d2b7781171e6bae1303347d5f346d3ce87cc7d76946f3e7b357",
+    "C/benchmarks/src/helpers.rs": "3b168b4705d938f4deff5d925e3ba6aa7d5b6783c8c870bea4b01cf2c802316d",
+    "C/benchmarks/src/lib.rs": "90f1bfbbebf30265f411943ec3dd68f586f201f164f0896e5773e49058775ec1",
+    "C/benchmarks/src/sc_helpers.rs": "65487ffa909aed081ce6ef051e2f61c8ad4b1effb85ce374a2b09a6da530ccce",
+    "C/benchmarks/src/stress/bbmd.rs": "a8a2ad273cfeb47180c8806b4ca43143218525f2f755aeeecdddab777e4af3e2",
+    "C/benchmarks/src/stress/client_adapter.rs": "e1eda9e474671013a8cf67be95649e6c1310abc25501ddae5eb4e7e9cea324d9",
+    "C/benchmarks/src/stress/client_bip.rs": "67eafd84698814584f0f5b88eabdfbf458dfdca6115831dbd6f35d363d753aee",
+    "C/benchmarks/src/stress/client_counters.rs": "6b6042bb1c6109833306778e26831437a5d36504f43ae0a52777d11b6fecff80",
+    "C/benchmarks/src/stress/client_diagnostics.rs": "fb1391281c717f8c3b1f42680e2a31b5d2a2a5f8be4c60598e39385c6e45d02a",
+    "C/benchmarks/src/stress/client_diagnostics_tests.rs": "a2671eb1598e975114fc5a4afbd03a025d4327c85242be8debc9c267b6cf0bf9",
+    "C/benchmarks/src/stress/client_measure.rs": "2758ac7f98894d2bc778b262bf116fb5944a7681bbbc368d3ff181f742d498f6",
+    "C/benchmarks/src/stress/client_run.rs": "37872d962c167a2f43f89cb3a6cee355b75f1fc53fba2dc1696e2eaff50a70f0",
+    "C/benchmarks/src/stress/clients.rs": "2ae398a851d6c8746aed2c858e6bf455738cff063b03ceed1c836b426e4d348a",
+    "C/benchmarks/src/stress/cov.rs": "3214c846e30bdb87235bacbb6ee0d58af40daaf4e6a03a6794f53e99d402b4c3",
+    "C/benchmarks/src/stress/device_scan.rs": "39d6d21aa8dccb3c4712ef6adc5915822a03585c21d8a3544342901430dffc80",
+    "C/benchmarks/src/stress/harness.rs": "d2cac295c214fe1fca2b033ed76abd51fd0e6456c9cec2f1bbb80bbfa393d005",
+    "C/benchmarks/src/stress/mixed.rs": "112588e08538d7108f9dd863fe2be935ebe2298a433040b2eb7237a98098ba88",
+    "C/benchmarks/src/stress/mod.rs": "5704d3d43e416a534aed32668439ac68cf1a5dd3a62f139f6eec166c0527e1e8",
+    "C/benchmarks/src/stress/mstp.rs": "7c81692c23c6d31cc9feb206e91c9f2e8752218beb564951c7022d0cf4687c92",
+    "C/benchmarks/src/stress/objects.rs": "e14f9aabb34549b546a881f5877ccb0ae019c3b47663b2ce41e94202df955b18",
+    "C/benchmarks/src/stress/output.rs": "3c8a2666d1ca90c67342e80625934e5b3484dfc7dbb5e646eef77103c84f8cf7",
+    "C/benchmarks/src/stress/output_tests.rs": "f3b7c6cd51a6cffe74e92e9cdff8d643dc1b2bb6b231ba33e3a32fd4467e7656",
+    "C/benchmarks/src/stress/router.rs": "430fc5801408c0c082c71a52b710afb070921b514a146984c2ce66ed1fa7c282",
+    "C/benchmarks/src/stress/segmentation.rs": "3c8020d8a293dc0a8d7be9876c3c5a0b7e7b449d42ef682f421b74c074939ba5",
+    "C/benchmarks/tests/client_build_any.rs": "33aee778c66e592824155f569c4822fb1da14594782e47c0b48aa25d7a4b36e7",
+    "C/benchmarks/tests/client_build_any/options.rs": "a9ae45985d60a1abd63ca4e618f7411bae8847e6036f6602153c8c00a5a5c086",
+    "C/benchmarks/tests/client_build_any/sc_lifecycle.rs": "5708bddcd8431f3ddec51aeb2b638c36001638db5b28fd6a1ad03e394e86cf13",
+    "C/benchmarks/tests/clients_exit.rs": "386176a867b146d1b0ba6a31e219d97bc06c7fb5be751f60b0b396e18f1582f8",
+    "C/benchmarks/tests/sc_binary.rs": "35c58a60480eb352081d66115df25dfcb3e58c948815eb23703cdde66fac0731",
+    "C/benchmarks/tests/sc_binary/handshake.rs": "98418b9e661fdc2366123c743a813fe6344007b2618236fb54311f26bedccd77",
+    "C/benchmarks/tests/sc_binary/peer.rs": "db3bd0fcbf00e627dd0a338f54002e7bb0dc76376d5441ed7c3495d43711171a",
+    "C/benchmarks/tests/sc_binary/preflight.rs": "df0fa7599becdc120e26b0f706687dc44c53fff76ee8b90520bb5f1ac650b453",
+    "C/benchmarks/tests/sc_binary/support.rs": "f7e453fbe2f6ca1eb5f6d66fe5a78c95e0edbe731d160a8a30fdac8caf09765d",
+    "C/benchmarks/tests/sc_docker.rs": "17d959222d8c04b19668c80555f265331afd402b389e12f59e34aa9c2a4a7a3e",
+    "C/benchmarks/tests/sc_mtls.rs": "1e620356277c378442f49621ba84c4061918f2869e6ce813da375a893fed7899",
+    "C/benchmarks/tests/sc_mtls/client_handles.rs": "863a67bb782ac9b63af6c0e216dd8aa7a907ea5671fc27f91c7219fae4f9a5c0",
+    "C/benchmarks/tests/sc_mtls/node_identity.rs": "ed51968e8cf08dbdb0f57f025af63ac856c7f99c6b395976b3d6a56fa693e1e0",
+    "C/benchmarks/tests/sc_mtls/node_reconnect.rs": "ac2a14f1469439ccb9fec0b66eac2afd2bae4a2e45d75a6e2b4461f440cb7bf7",
+    "C/benchmarks/tests/sc_websocket.rs": "370659d0431e4ae20dac4674c3c7ea19a136a132183b15d21459c2b668aba664",
+    "C/benchmarks/tests/sc_ws_memory.rs": "2f2b7a4fe142a6fb9b29c90881ddd4cf84fc112866045290470df28858c91e84",
+    "C/benchmarks/tests/sc_ws_memory/peer.rs": "a69fd3b229b44b0b9af24e89eb85279c4af70eed47cf22ca07f97ce01a383a56",
+    "C/benchmarks/tests/sc_ws_memory/sampler.rs": "977e40017a356cfc70f763f4b6173c2bac97bdd7b5d42265b966616bc35f4fa8",
+    "C/benchmarks/tests/sc_ws_memory/victim.rs": "4d9a98393264ff7323ab16c82b71b0c67c6badb961f2b8b864f61f01feba4344"
+  },
+  "artifacts": {
+    "A-encoding": {
+      "sha256": "adb4b2f7cf87206991bbb0befb0bc2c77e48b5477d270d11f5beb1c1b3574af6",
+      "features": [],
+      "profile": {
+        "opt_level": "3",
+        "debuginfo": 0,
+        "debug_assertions": false,
+        "overflow_checks": false,
+        "test": true
+      }
+    },
+    "C-encoding": {
+      "sha256": "34a003485fb2e77db6749e3bef76a0f342813626ee2c8b0d30d7a2ae18907666",
+      "features": [],
+      "profile": {
+        "opt_level": "3",
+        "debuginfo": 0,
+        "debug_assertions": false,
+        "overflow_checks": false,
+        "test": true
+      }
+    },
+    "B-normalized": {
+      "sha256": "cd421c7ff00cc059e9c3a65c46bb207f249ac9afd3446e55f8edd61f98322e44",
+      "features": [],
+      "profile": {
+        "opt_level": "3",
+        "debuginfo": 0,
+        "debug_assertions": false,
+        "overflow_checks": false,
+        "test": false
+      }
+    },
+    "A-normalized": {
+      "sha256": "cee1a4fe6efac45717f17f69d86ba7b525e911b64eb9e08565a07d14bbae6d0d",
+      "features": [],
+      "profile": {
+        "opt_level": "3",
+        "debuginfo": 0,
+        "debug_assertions": false,
+        "overflow_checks": false,
+        "test": false
+      }
+    },
+    "C-normalized": {
+      "sha256": "44b4521df432bd4d22ca284d93693238b29108db2c84ada267c0f2821e2cc60c",
+      "features": [],
+      "profile": {
+        "opt_level": "3",
+        "debuginfo": 0,
+        "debug_assertions": false,
+        "overflow_checks": false,
+        "test": false
+      }
+    }
+  },
+  "critical_runtime_features": {
+    "A-encoding": {
+      "bytes": {
+        "package_id": "registry+https://github.com/rust-lang/crates.io-index#bytes@1.12.1",
+        "features": [
+          "default",
+          "std"
+        ],
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        }
+      },
+      "socket2": {
+        "package_id": "registry+https://github.com/rust-lang/crates.io-index#socket2@0.6.5",
+        "features": [
+          "all"
+        ],
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        }
+      },
+      "hdrhistogram": {
+        "package_id": "registry+https://github.com/rust-lang/crates.io-index#hdrhistogram@7.6.0",
+        "features": [
+          "default",
+          "serialization",
+          "sync"
+        ],
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        }
+      },
+      "tokio": {
+        "package_id": "registry+https://github.com/rust-lang/crates.io-index#tokio@1.53.1",
+        "features": [
+          "bytes",
+          "default",
+          "io-util",
+          "libc",
+          "macros",
+          "mio",
+          "net",
+          "rt",
+          "rt-multi-thread",
+          "signal",
+          "signal-hook-registry",
+          "socket2",
+          "sync",
+          "test-util",
+          "time",
+          "tokio-macros"
+        ],
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        }
+      },
+      "criterion": {
+        "package_id": "registry+https://github.com/rust-lang/crates.io-index#criterion@0.8.2",
+        "features": [
+          "async",
+          "async_tokio",
+          "cargo_bench_support",
+          "default",
+          "plotters",
+          "rayon"
+        ],
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        }
+      }
+    },
+    "C-encoding": {
+      "bytes": {
+        "package_id": "registry+https://github.com/rust-lang/crates.io-index#bytes@1.12.1",
+        "features": [
+          "default",
+          "std"
+        ],
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        }
+      },
+      "socket2": {
+        "package_id": "registry+https://github.com/rust-lang/crates.io-index#socket2@0.6.5",
+        "features": [
+          "all"
+        ],
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        }
+      },
+      "tokio": {
+        "package_id": "registry+https://github.com/rust-lang/crates.io-index#tokio@1.53.1",
+        "features": [
+          "bytes",
+          "default",
+          "io-util",
+          "libc",
+          "macros",
+          "mio",
+          "net",
+          "rt",
+          "rt-multi-thread",
+          "signal",
+          "signal-hook-registry",
+          "socket2",
+          "sync",
+          "test-util",
+          "time",
+          "tokio-macros"
+        ],
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        }
+      },
+      "hdrhistogram": {
+        "package_id": "registry+https://github.com/rust-lang/crates.io-index#hdrhistogram@7.6.0",
+        "features": [
+          "default",
+          "serialization",
+          "sync"
+        ],
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        }
+      },
+      "criterion": {
+        "package_id": "registry+https://github.com/rust-lang/crates.io-index#criterion@0.8.2",
+        "features": [
+          "async",
+          "async_tokio",
+          "cargo_bench_support",
+          "default",
+          "plotters",
+          "rayon"
+        ],
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        }
+      }
+    },
+    "B-normalized": {
+      "bytes": {
+        "package_id": "registry+https://github.com/rust-lang/crates.io-index#bytes@1.12.1",
+        "features": [
+          "default",
+          "std"
+        ],
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        }
+      },
+      "socket2": {
+        "package_id": "registry+https://github.com/rust-lang/crates.io-index#socket2@0.6.5",
+        "features": [
+          "all"
+        ],
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        }
+      },
+      "tokio": {
+        "package_id": "registry+https://github.com/rust-lang/crates.io-index#tokio@1.53.1",
+        "features": [
+          "bytes",
+          "default",
+          "io-util",
+          "libc",
+          "macros",
+          "mio",
+          "net",
+          "rt",
+          "rt-multi-thread",
+          "signal",
+          "signal-hook-registry",
+          "socket2",
+          "sync",
+          "time",
+          "tokio-macros"
+        ],
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        }
+      },
+      "hdrhistogram": {
+        "package_id": "registry+https://github.com/rust-lang/crates.io-index#hdrhistogram@7.6.0",
+        "features": [
+          "default",
+          "serialization",
+          "sync"
+        ],
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        }
+      },
+      "criterion": {
+        "package_id": "registry+https://github.com/rust-lang/crates.io-index#criterion@0.8.2",
+        "features": [
+          "async",
+          "async_tokio",
+          "cargo_bench_support",
+          "default",
+          "plotters",
+          "rayon"
+        ],
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        }
+      }
+    },
+    "A-normalized": {
+      "bytes": {
+        "package_id": "registry+https://github.com/rust-lang/crates.io-index#bytes@1.12.1",
+        "features": [
+          "default",
+          "std"
+        ],
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        }
+      },
+      "socket2": {
+        "package_id": "registry+https://github.com/rust-lang/crates.io-index#socket2@0.6.5",
+        "features": [
+          "all"
+        ],
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        }
+      },
+      "tokio": {
+        "package_id": "registry+https://github.com/rust-lang/crates.io-index#tokio@1.53.1",
+        "features": [
+          "bytes",
+          "default",
+          "io-util",
+          "libc",
+          "macros",
+          "mio",
+          "net",
+          "rt",
+          "rt-multi-thread",
+          "signal",
+          "signal-hook-registry",
+          "socket2",
+          "sync",
+          "time",
+          "tokio-macros"
+        ],
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        }
+      },
+      "criterion": {
+        "package_id": "registry+https://github.com/rust-lang/crates.io-index#criterion@0.8.2",
+        "features": [
+          "async",
+          "async_tokio",
+          "cargo_bench_support",
+          "default",
+          "plotters",
+          "rayon"
+        ],
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        }
+      },
+      "hdrhistogram": {
+        "package_id": "registry+https://github.com/rust-lang/crates.io-index#hdrhistogram@7.6.0",
+        "features": [
+          "default",
+          "serialization",
+          "sync"
+        ],
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        }
+      }
+    },
+    "C-normalized": {
+      "bytes": {
+        "package_id": "registry+https://github.com/rust-lang/crates.io-index#bytes@1.12.1",
+        "features": [
+          "default",
+          "std"
+        ],
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        }
+      },
+      "socket2": {
+        "package_id": "registry+https://github.com/rust-lang/crates.io-index#socket2@0.6.5",
+        "features": [
+          "all"
+        ],
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        }
+      },
+      "tokio": {
+        "package_id": "registry+https://github.com/rust-lang/crates.io-index#tokio@1.53.1",
+        "features": [
+          "bytes",
+          "default",
+          "io-util",
+          "libc",
+          "macros",
+          "mio",
+          "net",
+          "rt",
+          "rt-multi-thread",
+          "signal",
+          "signal-hook-registry",
+          "socket2",
+          "sync",
+          "time",
+          "tokio-macros"
+        ],
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        }
+      },
+      "criterion": {
+        "package_id": "registry+https://github.com/rust-lang/crates.io-index#criterion@0.8.2",
+        "features": [
+          "async",
+          "async_tokio",
+          "cargo_bench_support",
+          "default",
+          "plotters",
+          "rayon"
+        ],
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        }
+      },
+      "hdrhistogram": {
+        "package_id": "registry+https://github.com/rust-lang/crates.io-index#hdrhistogram@7.6.0",
+        "features": [
+          "default",
+          "serialization",
+          "sync"
+        ],
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        }
+      }
+    }
+  },
+  "feature_residuals": [
+    "A/C and A/B retain original dependency versions and graphs. Runtime-critical inspected bytes/Tokio/socket2/HDRHistogram/Criterion versions, features and optimization profiles match within the selected comparisons.",
+    "A encoding was built with --features tokio/test-util to match the current bench dev dependency; release normalized clients omit test-util on all sides.",
+    "Newer graphs add time formatting/parsing/macros, AWS-LC default/ring compatibility features, inert num-traits i128 and host syn visit. These are not invoked by the inspected timed codec or plain BIP path.",
+    "Newer target libc extra_traits adds traits rather than selecting a different socket syscall. Package/linker/code-layout effects are not excluded; this is a stack version comparison, not single-change attribution."
+  ],
+  "raw_archive": "_spec/roadmap-0.15/archive/perf-1979-2026-10-21 (local-only; not a public download)",
+  "raw_inputs_sha256": "33e7d9adba869d69818e0034daa5e03a03bd1f089f64172ad6df8c78cf0ddfb3",
+  "derived_csv_sha256": {
+    "encoding.csv": "5b251ec2b9626195e65aead9727432832312b8134d26f939dedde5d3d619220d",
+    "clients.csv": "ee665ea7eb527bc6820d27e26b0e3b837699a6759541ca4102178acde658c733"
+  },
+  "orders": {
+    "encoding": [
+      "A",
+      "C",
+      "C",
+      "A",
+      "A",
+      "C",
+      "C",
+      "A",
+      "A",
+      "C",
+      "C",
+      "A"
+    ],
+    "curves": [
+      "A",
+      "B",
+      "C"
+    ],
+    "stress": [
+      "A",
+      "B",
+      "C",
+      "C",
+      "B",
+      "A",
+      "A",
+      "B",
+      "C",
+      "C",
+      "B",
+      "A",
+      "A",
+      "B",
+      "C",
+      "C",
+      "B",
+      "A",
+      "A",
+      "B",
+      "C",
+      "C",
+      "B",
+      "A",
+      "A",
+      "B",
+      "C",
+      "C",
+      "B",
+      "A"
+    ],
+    "constituents": [
+      "A",
+      "C",
+      "C",
+      "A",
+      "A",
+      "C"
+    ]
+  },
+  "measurement_settings": {
+    "encoding_sample_size": 100,
+    "encoding_warm_up_seconds": 3,
+    "encoding_measurement_seconds": 5,
+    "encoding_direct_argument": "--bench",
+    "stress_objects": 100,
+    "stress_submission_seconds": 10,
+    "stress_timeout_seconds": 5,
+    "stress_default_retries": 3,
+    "stress_repeat_clients": 100,
+    "curve_clients": [
+      1,
+      10,
+      50,
+      100
+    ],
+    "timing": "preconnect and live value preflight before clock; completion tail included; counters and cleanup excluded"
+  },
+  "qualification_limits": [
+    "A original benchmark library contains no tests: initial nextest no-tests failure retained, not reported as passing. Common-driver tests and independent encoding/value guards qualify A instead.",
+    "The original stock A/B binaries are preserved separately; measured stress uses the same normalized local-module driver across all three versions.",
+    "Cargo build/bench can overwrite target aliases. Only immutable copied executables whose hashes appear here were measured; superseded smoke associations and their correction are preserved.",
+    "No OS UDP counters, Linux repeats, causal commit bracket or production tuning were performed."
+  ],
+  "archived_generated_crlf_csv_sha256": {
+    "encoding.csv": "ad9c55479254065544632f09e2267ab96f11ebb328939af531d3ef0ac6f4ff39",
+    "clients.csv": "3109b1aa73fb0a3af15668e1de11b65d3adbb6c812611f6470be3b7ac5448885"
+  },
+  "archived_generated_crlf_csv_directory": "derived-original-crlf/ within raw_archive",
+  "measured_overlay_commit": "4d5ccc2121297e6abe0d3442ccdd564f95d8b34d",
+  "post_measurement_changes": {
+    "source_paths": [
+      "benchmarks/src/stress/clients.rs",
+      "benchmarks/src/stress/client_bip6_setup.rs",
+      "benchmarks/src/stress/client_bip6_setup_tests.rs"
+    ],
+    "behavior": "B/IPv6 setup failures retain the attempted client index; server address failure has no client attribution. Focused regression only; no new timing.",
+    "measured_snapshot_retained": "The original source_sha256 entries, selected-artifact hashes and raw experiment evidence are unchanged. Reproduce the original source overlay from measured_overlay_commit.",
+    "timed_path_scope": "The repaired B/IPv6 setup path is not called by the normalized B/IP driver or original encoding workloads. Their source files and frozen executables are unchanged. The package library can compile clients.rs; final compilation closure and rebuilt binary byte identity are not claimed.",
+    "derived_data": "Only CRLF-to-LF normalization of derived CSV bytes; parsed rows and statistics unchanged. derived_csv_sha256 verifies the distributed LF files; original CRLF hashes/files are separately archived."
+  }
+}

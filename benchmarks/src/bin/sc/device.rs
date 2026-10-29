@@ -1,7 +1,7 @@
 //! Standalone-device input validation and shared strict local node TLS policy.
 
-use super::credentials::{required, Credentials};
 use super::Args;
+use super::credentials::{Credentials, required};
 use bacnet_transport::sc_tls::ScNodeTlsConfig;
 
 pub(super) struct ScConfig<'a> {

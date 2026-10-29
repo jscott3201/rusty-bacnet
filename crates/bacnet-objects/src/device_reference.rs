@@ -58,6 +58,7 @@
 //! (#1395). Those hold a `BACnetObjectPropertyReference`, which has no Device
 //! member, so the same octets get the same code there as well.
 
+use crate::prelude::*;
 use bacnet_encoding::constructed::{
     decode_device_object_property_reference, decode_device_object_reference,
     encode_device_object_property_reference, encode_device_object_reference,

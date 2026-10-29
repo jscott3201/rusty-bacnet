@@ -1,7 +1,7 @@
 //! Opening route survives request reassembly and every segmented reply path.
 use super::*;
 use crate::server::segmented_receive::{
-    check_opening_response_route, initial_state, RequestPayload,
+    RequestPayload, check_opening_response_route, initial_state,
 };
 use crate::server::segmented_send::{segmented_receive_key, segmented_transaction_key};
 use bacnet_types::enums::EngineeringUnits;
@@ -18,7 +18,7 @@ fn open(
         &received.source_mac,
         received.source_network.as_ref(),
         request.invoke_id,
-        received.provenance,
+        received.provenance.clone(),
     );
     let (state, ack) = initial_state(
         payload,
@@ -136,7 +136,7 @@ async fn r7_segment_opening_context_drives_ack_reassembly_and_retarget_abort() {
         matches!(routed.response(2000,4).await.0,Apdu::Abort(x) if x.abort_reason==AbortReason::INVALID_APDU_IN_THIS_STATE)
     );
     assert!(routed.wire.try_recv().is_err());
-    routed.router.stop().await;
+    routed.router.stop().await.unwrap();
 }
 
 #[tokio::test]
@@ -154,10 +154,12 @@ async fn r7_segment_capacity_abort_and_quiet_progress_expiry_keep_opening_route(
         .receive(2000, &Apdu::ConfirmedRequest(request.clone()), None)
         .await;
     let (key, mut state, _) = open(&received, &request);
-    assert!(state
-        .payload
-        .save_new(1, Bytes::from_static(&[1]), Some(usize::MAX))
-        .is_err());
+    assert!(
+        state
+            .payload
+            .save_new(1, Bytes::from_static(&[1]), Some(usize::MAX))
+            .is_err()
+    );
     BACnetServer::<TestTransport>::send_server_abort(
         &context.services.network,
         &state.source_mac,
@@ -200,7 +202,7 @@ async fn r7_segment_capacity_abort_and_quiet_progress_expiry_keep_opening_route(
         states.is_empty() && routed.wire.try_recv().is_err(),
         "protocol inactivity expiry stays silent"
     );
-    routed.router.stop().await;
+    routed.router.stop().await.unwrap();
 }
 
 #[tokio::test]
@@ -276,7 +278,7 @@ async fn r7_segmented_ack_retry_and_terminal_abort_use_one_saved_route() {
         bacnet_transport::port::TransportProvenance::unverified(),
     );
     assert!(!registry.lock().contains_key(&key));
-    routed.router.stop().await;
+    routed.router.stop().await.unwrap();
 }
 
 #[tokio::test]
@@ -324,7 +326,7 @@ async fn r7_segment_alternate_return_paths_keep_opening_reply_plan() {
                 &continuation.source_mac,
                 continuation.source_network.as_ref(),
                 last.invoke_id,
-                continuation.provenance,
+                continuation.provenance.clone(),
             ),
             "canonical routed requester did not change"
         );
@@ -393,7 +395,7 @@ async fn r7_segment_alternate_return_paths_keep_opening_reply_plan() {
             matches!(routed.response(2000,17).await.0,Apdu::Abort(x) if x.abort_reason==AbortReason::OTHER)
         );
         assert!(states.is_empty() && routed.wire.try_recv().is_err());
-        routed.router.stop().await;
+        routed.router.stop().await.unwrap();
     }
 }
 
@@ -417,9 +419,11 @@ async fn r7_segment_origin_comparison_keeps_implicit_and_local_port_isolation() 
     let local_peer = routed
         .receive_via(0, &[10], None, endpoint.clone(), &request, None)
         .await;
-    assert!(!local_a
-        .response_route()
-        .same_origin(&local_peer.response_route()));
+    assert!(
+        !local_a
+            .response_route()
+            .same_origin(&local_peer.response_route())
+    );
     let implicit = routed
         .receive_via(0, &[9], Some(address(9000, &[7])), None, &request, None)
         .await;
@@ -461,9 +465,11 @@ async fn r7_segment_origin_comparison_keeps_implicit_and_local_port_isolation() 
             None,
         )
         .await;
-    assert!(!remote
-        .response_route()
-        .same_origin(&different_remote.response_route()));
+    assert!(
+        !remote
+            .response_route()
+            .same_origin(&different_remote.response_route())
+    );
     let mut replacement = Routed::new().await;
     let other_router = replacement
         .receive_via(0, &[9], Some(address(9000, &[7])), endpoint, &request, None)
@@ -474,6 +480,6 @@ async fn r7_segment_origin_comparison_keeps_implicit_and_local_port_isolation() 
             .same_origin(&other_router.response_route()),
         "a new router instance cannot inherit an opening context"
     );
-    routed.router.stop().await;
-    replacement.router.stop().await;
+    routed.router.stop().await.unwrap();
+    replacement.router.stop().await.unwrap();
 }

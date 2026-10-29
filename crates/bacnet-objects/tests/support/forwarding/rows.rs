@@ -3,7 +3,7 @@
 
 use super::fixtures::{address, clock, day, monotonic, noon, oid, schedule_write, waker};
 use super::probe::{CUSTOM, CUSTOM_LIST};
-use bacnet_objects::access_control::{AccessControlInput, DoorStateReport};
+use bacnet_objects::access_control::{AccessControlInput, AccessEventReport, DoorStateReport};
 use bacnet_objects::accumulator::InputReading;
 use bacnet_objects::command::WriteFailure;
 use bacnet_objects::command_source::CommandOrigin;
@@ -19,8 +19,8 @@ use bacnet_types::constructed::{
     EventLogDatum, LogData, LogDatum, LogValue,
 };
 use bacnet_types::enums::{
-    AuditLevel, DoorStatus, EventState, LifeSafetyOperation, ObjectType, PropertyIdentifier as P,
-    Reliability,
+    AccessEvent, AuditLevel, DoorStatus, EventState, LifeSafetyOperation, ObjectType,
+    PropertyIdentifier as P, Reliability,
 };
 use bacnet_types::primitives::{BACnetTimeStamp, Date, PropertyValue};
 use std::time::Duration;
@@ -161,6 +161,9 @@ pub const QUERIES: &[(&str, Query)] = &[
     ("is_deleteable", |o| o.is_deleteable().to_string()),
     ("required_properties", |o| {
         format!("{:?}", o.required_properties())
+    }),
+    ("supports_access_event_batch_internal", |o| {
+        o.supports_access_event_batch_internal().to_string()
     }),
     ("supports_cov", |o| o.supports_cov().to_string()),
     // Rendered beside `supports_cov`: the probe's false must differ both from
@@ -469,6 +472,34 @@ pub const COMMANDS: &[(&str, Command)] = &[
         format!(
             "{:?}",
             o.set_tracking_value_internal(PropertyValue::Unsigned(4))
+        )
+    }),
+    ("record_access_event_batch_internal", |o| {
+        let reports = [
+            AccessEventReport {
+                time: Some(BACnetTimeStamp::SequenceNumber(12)),
+                ..AccessEventReport::new(AccessEvent::GRANTED, 41)
+            },
+            AccessEventReport {
+                time: Some(BACnetTimeStamp::SequenceNumber(13)),
+                ..AccessEventReport::new(AccessEvent::DENIED_OTHER, 42)
+            },
+        ];
+        format!(
+            "{:?}",
+            o.record_access_event_batch_internal(&reports)
+                .map(|events| events
+                    .into_iter()
+                    .map(|event| (
+                        event.report,
+                        event.snapshot.object_name().to_owned(),
+                        event
+                            .snapshot
+                            .read_property(P::ACCESS_EVENT_TAG, None)
+                            .unwrap(),
+                        event.clock_frame
+                    ))
+                    .collect::<Vec<_>>())
         )
     }),
     ("report_access_input_internal", |o| {

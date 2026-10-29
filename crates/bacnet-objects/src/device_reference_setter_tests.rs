@@ -7,6 +7,7 @@ use bacnet_types::constructed::{BACnetActionCommand, BACnetActionList, BACnetSta
 use bacnet_types::enums::{
     EngineeringUnits, ErrorClass, EventType, ObjectType, PropertyIdentifier,
 };
+use bacnet_types::error::RemoteError;
 
 use super::*;
 use crate::access_control::{
@@ -334,7 +335,7 @@ const SETTERS: [Setter; 18] = [
 
 fn assert_property_code(result: &Result<(), Error>, code: ErrorCode, context: &str) {
     assert!(
-        matches!(result, Err(Error::Protocol { class, code: c })
+        matches!(result, Err(Error::Remote(RemoteError::Error { class, code: c }))
             if *class == ErrorClass::PROPERTY && *c == code),
         "{context}: expected PROPERTY / {code:?}, got {result:?}"
     );

@@ -3,6 +3,7 @@
 //! carries, unresolved assignments and the caller's errors. The time-range
 //! and location rules are in `rights_evaluation_term_tests.rs`.
 
+use bacnet_types::error::RemoteError;
 use std::borrow::Cow;
 
 use bacnet_encoding::constructed::{encode_access_rule, encode_assigned_access_rights};
@@ -299,7 +300,7 @@ pub(super) fn stub_rights(
 
 fn assert_unknown_object(result: Result<AccessRightsEvaluation, Error>) {
     match result {
-        Err(Error::Protocol { class, code }) => {
+        Err(Error::Remote(RemoteError::Error { class, code })) => {
             assert_eq!(class, ErrorClass::OBJECT);
             assert_eq!(code, ErrorCode::UNKNOWN_OBJECT);
         }

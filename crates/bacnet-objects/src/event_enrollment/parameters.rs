@@ -1,5 +1,6 @@
 use bacnet_types::constructed::{BACnetEventParameter, FaultParameters};
-use bacnet_types::error::Error;
+use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::error::{DecodingKind, Error};
 use bacnet_types::primitives::PropertyValue;
 use bytes::BytesMut;
 
@@ -12,6 +13,17 @@ pub(super) fn decode_event_parameters(value: PropertyValue) -> Result<BACnetEven
         PropertyValue::ApplicationData(bytes) => {
             match bacnet_encoding::constructed::decode_event_parameter(&bytes, 0) {
                 Ok((parameters, consumed)) if consumed == bytes.len() => parameters,
+                // The one value the decoder can't convert is a string in a
+                // character set it doesn't support (a change-of-characterstring
+                // alarm value in DBCS, JIS or UCS-4).
+                Err(error)
+                    if matches!(error.decode_fault(), Some((_, DecodingKind::Unsupported))) =>
+                {
+                    return Err(common::protocol_error(
+                        ErrorClass::PROPERTY,
+                        ErrorCode::CHARACTER_SET_NOT_SUPPORTED,
+                    ));
+                }
                 _ => return Err(common::invalid_data_type_error()),
             }
         }

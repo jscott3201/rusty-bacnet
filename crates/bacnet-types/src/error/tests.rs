@@ -1,25 +1,106 @@
 use super::*;
 
+/// A remote error reads the same on its own and inside `Error::Remote`, and
+/// keeps the text the three variants it replaced had (#1815): class and code
+/// by name, a number for a value without one, reasons as numbers.
+#[test]
+fn remote_error_display_is_unchanged() {
+    for (remote, text) in [
+        (
+            RemoteError::Error {
+                class: ErrorClass::PROPERTY,
+                code: ErrorCode::UNKNOWN_OBJECT,
+            },
+            "BACnet error: property / unknown-object",
+        ),
+        (
+            RemoteError::Error {
+                class: ErrorClass::from_raw(999),
+                code: ErrorCode::from_raw(65_535),
+            },
+            "BACnet error: class=999 / code=65535",
+        ),
+        (
+            RemoteError::Reject {
+                reason: RejectReason::UNDEFINED_ENUMERATION,
+            },
+            "BACnet reject: reason=8",
+        ),
+        (
+            RemoteError::Reject {
+                reason: RejectReason::from_raw(200),
+            },
+            "BACnet reject: reason=200",
+        ),
+        (
+            RemoteError::Abort {
+                reason: AbortReason::SEGMENTATION_NOT_SUPPORTED,
+            },
+            "BACnet abort: reason=4",
+        ),
+        (
+            RemoteError::Abort {
+                reason: AbortReason::from_raw(255),
+            },
+            "BACnet abort: reason=255",
+        ),
+    ] {
+        assert_eq!(remote.to_string(), text);
+        let error = Error::from(remote);
+        assert_eq!(error.to_string(), text);
+        assert!(matches!(error, Error::Remote(held) if held == remote));
+        assert_eq!(error.remote(), Some(remote));
+    }
+}
+
+#[test]
+fn constructors_build_the_remote_arms() {
+    let (class, code) = (ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT);
+    assert_eq!(
+        Error::protocol(class, code).remote(),
+        Some(RemoteError::Error { class, code })
+    );
+    let reason = RejectReason::INVALID_TAG;
+    assert_eq!(
+        Error::reject(reason).remote(),
+        Some(RemoteError::Reject { reason })
+    );
+    assert_eq!(Error::reject(reason).reject_reason(), Some(reason));
+    let reason = AbortReason::OUT_OF_RESOURCES;
+    assert_eq!(
+        Error::abort(reason).remote(),
+        Some(RemoteError::Abort { reason })
+    );
+    // An abort is no syntax fault: a responder doesn't turn it into a reject.
+    assert_eq!(Error::abort(reason).reject_reason(), None);
+    assert_eq!(Error::Timeout(Duration::from_secs(1)).remote(), None);
+}
+
+/// A structured error reports its class and code as the remote error, without
+/// the detail.
+#[cfg(feature = "alloc")]
+#[test]
+fn remote_reads_a_structured_error_without_its_detail() {
+    let (class, code) = (ErrorClass::SERVICES, ErrorCode::LIST_ELEMENT_NOT_FOUND);
+    let structured =
+        Error::with_detail(class, code, Some(ErrorDetail::FirstFailedElementNumber(3)));
+    assert!(matches!(structured, Error::Structured { .. }));
+    assert_eq!(
+        structured.remote(),
+        Some(RemoteError::Error { class, code })
+    );
+}
+
 #[test]
 fn protocol_error_display() {
-    let err = Error::Protocol {
-        class: ErrorClass::PROPERTY,
-        code: ErrorCode::UNKNOWN_OBJECT,
-    };
+    let err = Error::protocol(ErrorClass::PROPERTY, ErrorCode::UNKNOWN_OBJECT);
     assert_eq!(err.to_string(), "BACnet error: property / unknown-object");
 
     // Unknown class/code falls back to numeric
-    let err2 = Error::Protocol {
-        class: ErrorClass::from_raw(999),
-        code: ErrorCode::from_raw(999),
-    };
+    let err2 = Error::protocol(ErrorClass::from_raw(999), ErrorCode::from_raw(999));
     assert_eq!(err2.to_string(), "BACnet error: class=999 / code=999");
     assert_eq!(
-        Error::Protocol {
-            class: ErrorClass::PROPERTY,
-            code: ErrorCode::from_raw(999)
-        }
-        .to_string(),
+        Error::protocol(ErrorClass::PROPERTY, ErrorCode::from_raw(999)).to_string(),
         "BACnet error: property / code=999"
     );
 }
@@ -83,7 +164,7 @@ fn structured_error_display_names_the_detail() {
         ),
     ] {
         assert_eq!(
-            Error::protocol(
+            Error::with_detail(
                 ErrorClass::from_raw(class),
                 ErrorCode::from_raw(code),
                 Some(detail)
@@ -93,11 +174,11 @@ fn structured_error_display_names_the_detail() {
         );
     }
     assert!(matches!(
-        Error::protocol(ErrorClass::PROPERTY, ErrorCode::UNKNOWN_OBJECT, None),
-        Error::Protocol {
+        Error::with_detail(ErrorClass::PROPERTY, ErrorCode::UNKNOWN_OBJECT, None),
+        Error::Remote(RemoteError::Error {
             class: ErrorClass::PROPERTY,
             code: ErrorCode::UNKNOWN_OBJECT
-        }
+        })
     ));
 }
 
@@ -165,30 +246,23 @@ fn syntax_faults_name_their_reject_reasons() {
             RejectReason::MISSING_REQUIRED_PARAMETER,
         ),
         (
-            Error::Reject {
-                reason: RejectReason::UNDEFINED_ENUMERATION,
-            },
+            Error::reject(RejectReason::UNDEFINED_ENUMERATION),
             RejectReason::UNDEFINED_ENUMERATION,
         ),
     ] {
         assert_eq!(error.reject_reason(), Some(reason), "{error}");
     }
     for error in [
-        Error::Protocol {
-            class: ErrorClass::SERVICES,
-            code: ErrorCode::OTHER,
-        },
+        Error::protocol(ErrorClass::SERVICES, ErrorCode::OTHER),
         Error::Range(RangeError::new("x")),
-        Error::Abort {
-            reason: AbortReason::BUFFER_OVERFLOW,
-        },
+        Error::abort(AbortReason::BUFFER_OVERFLOW),
     ] {
         assert_eq!(error.reject_reason(), None, "{error}");
     }
     // A request's decode error becomes its Reject; any other error stays.
     assert!(matches!(
         Error::trailing(3, "more").into_request_reject(),
-        Error::Reject { reason } if reason == RejectReason::TOO_MANY_ARGUMENTS
+        Error::Remote(RemoteError::Reject { reason }) if reason == RejectReason::TOO_MANY_ARGUMENTS
     ));
     assert!(matches!(
         Error::Range(RangeError::new("x")).into_request_reject(),
@@ -229,7 +303,10 @@ fn static_refusals_take_no_reject_reason() {
         Error::Segmentation(SegmentationError::ZeroSegmentSize),
     ] {
         assert_eq!(error.reject_reason(), None, "{error:?}");
-        assert!(!matches!(error.into_request_reject(), Error::Reject { .. }));
+        assert!(!matches!(
+            error.into_request_reject(),
+            Error::Remote(RemoteError::Reject { .. })
+        ));
     }
 }
 

@@ -7,8 +7,9 @@
 
 use super::super::*;
 use super::{make_dest_device, make_time};
-use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
 use bacnet_types::MacAddr;
+use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
+use bacnet_types::error::RemoteError;
 
 /// Build an address destination with the given network number and MAC.
 fn make_dest_address(network_number: u16, mac: &[u8]) -> BACnetDestination {
@@ -117,7 +118,7 @@ fn recipient_list_indexed_write_rejected_list_unchanged() {
         None,
     );
     match result.unwrap_err() {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, bacnet_types::enums::ErrorClass::PROPERTY);
             assert_eq!(
                 code,
@@ -203,10 +204,10 @@ fn routing_skips_delivery_when_stored_recipient_list_is_malformed() {
                 bytes.push(0x5E); // opening [5], never closed
                 Ok(PropertyValue::ApplicationData(bytes))
             } else {
-                Err(Error::Protocol {
-                    class: bacnet_types::enums::ErrorClass::PROPERTY,
-                    code: bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY,
-                })
+                Err(Error::protocol(
+                    bacnet_types::enums::ErrorClass::PROPERTY,
+                    bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY,
+                ))
             }
         }
         fn write_property(
@@ -216,10 +217,10 @@ fn routing_skips_delivery_when_stored_recipient_list_is_malformed() {
             _value: PropertyValue,
             _priority: Option<u8>,
         ) -> Result<(), Error> {
-            Err(Error::Protocol {
-                class: bacnet_types::enums::ErrorClass::PROPERTY,
-                code: bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED,
-            })
+            Err(Error::protocol(
+                bacnet_types::enums::ErrorClass::PROPERTY,
+                bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED,
+            ))
         }
         fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
             Cow::Borrowed(&[PropertyIdentifier::NOTIFICATION_CLASS])
@@ -398,7 +399,7 @@ fn recipient_list_flat_form_write_refused() {
         ("an empty flat list", PropertyValue::List(Vec::new())),
     ] {
         match nc.write_property(PropertyIdentifier::RECIPIENT_LIST, None, flat, None) {
-            Err(Error::Protocol { class, code }) => assert_eq!(
+            Err(Error::Remote(RemoteError::Error { class, code })) => assert_eq!(
                 (class, code),
                 (
                     bacnet_types::enums::ErrorClass::PROPERTY,
@@ -412,13 +413,15 @@ fn recipient_list_flat_form_write_refused() {
     }
     let flat = PropertyValue::List(vec![flat_entry]);
     assert!(decode_destination_list_pv(&flat).is_err());
-    assert!(filter_recipient_list(
-        &flat,
-        EventTransition::ToOffnormal,
-        DaysOfWeek::MONDAY,
-        &make_time(12, 0),
-    )
-    .is_empty());
+    assert!(
+        filter_recipient_list(
+            &flat,
+            EventTransition::ToOffnormal,
+            DaysOfWeek::MONDAY,
+            &make_time(12, 0),
+        )
+        .is_empty()
+    );
 }
 
 #[test]

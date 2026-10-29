@@ -2,7 +2,7 @@
 //! forwarder won't make leaves a write staged for another request alone
 //! (#1424).
 
-use super::storage::{block_on, persistent, MemoryPersistence, WAIT};
+use super::storage::{MemoryPersistence, WAIT, block_on, persistent};
 use super::*;
 use crate::durable::{DurableWrites, PendingWrite, SaveWait, StageStep};
 use bacnet_types::enums::PropertyIdentifier as P;

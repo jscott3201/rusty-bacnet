@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use tracing::field::{Field, Visit};
 use tracing::subscriber::DefaultGuard;
-use tracing::{span, Event, Level, Metadata, Subscriber};
+use tracing::{Event, Level, Metadata, Subscriber, span};
 
 /// One warning: its message, its `error` field, if any, and the
 /// `occurrences` a throttled warning reports.

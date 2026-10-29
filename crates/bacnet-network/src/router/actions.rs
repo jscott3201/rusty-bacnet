@@ -22,9 +22,9 @@ use bytes::Bytes;
 use tokio::sync::mpsc::error::TrySendError;
 use tracing::warn;
 
+use super::SendRequest;
 use super::engine::HostedRouter;
 use super::send_queue;
-use super::SendRequest;
 
 /// Send what `router` asks for on the port queues `send_txs`, by port
 /// index, until it is idle. `attributes` are the data attributes of the

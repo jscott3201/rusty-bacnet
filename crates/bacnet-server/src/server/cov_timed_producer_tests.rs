@@ -436,10 +436,10 @@ impl bacnet_objects::traits::BACnetObject for WritablePoint {
             },
             PropertyIdentifier::OUT_OF_SERVICE => PropertyValue::Boolean(self.out_of_service),
             _ => {
-                return Err(Error::Protocol {
-                    class: bacnet_types::enums::ErrorClass::PROPERTY,
-                    code: bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY,
-                })
+                return Err(Error::protocol(
+                    bacnet_types::enums::ErrorClass::PROPERTY,
+                    bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY,
+                ));
             }
         })
     }
@@ -459,10 +459,10 @@ impl bacnet_objects::traits::BACnetObject for WritablePoint {
                 self.out_of_service = value;
             }
             _ => {
-                return Err(Error::Protocol {
-                    class: bacnet_types::enums::ErrorClass::PROPERTY,
-                    code: bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED,
-                })
+                return Err(Error::protocol(
+                    bacnet_types::enums::ErrorClass::PROPERTY,
+                    bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED,
+                ));
             }
         }
         Ok(())

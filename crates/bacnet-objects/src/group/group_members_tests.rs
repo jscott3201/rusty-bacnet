@@ -3,6 +3,7 @@
 use super::*;
 use bacnet_types::constructed::PropertyReference;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::error::RemoteError;
 
 fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(object_type, instance).unwrap()
@@ -28,7 +29,7 @@ fn member(
 
 fn assert_property_error(error: Error, expected: ErrorCode) {
     assert!(
-        matches!(error, Error::Protocol { class, code }
+        matches!(error, Error::Remote(RemoteError::Error { class, code })
             if class == ErrorClass::PROPERTY
                 && code == expected),
         "expected {expected:?}, got {error:?}"

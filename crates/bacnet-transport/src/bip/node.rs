@@ -25,25 +25,25 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 use std::time::Duration;
 
 use bacnet_bip_codec::{BvlcFunction, Bvll, BvllError};
+use bacnet_bip_core::Instant as CoreInstant;
+use bacnet_bip_core::LocalSubnet;
 use bacnet_bip_core::node::{
     Action, Admission, ConfigError, ExchangeId, Foreign, Inbound, Link, LocalFailure, Mode, Node,
     NodeCounters, Policy, RegistrationEvent, Response, SendRefusal,
 };
-use bacnet_bip_core::Instant as CoreInstant;
-use bacnet_bip_core::LocalSubnet;
 use bacnet_time::HostClock;
 use bacnet_types::error::Error;
 use bytes::{Bytes, BytesMut};
-use tokio::sync::{oneshot, Notify};
+use tokio::sync::{Notify, oneshot};
 use tracing::{debug, info, warn};
 
+use super::BipSocket;
 use super::client_snapshot::{ClientRecord, ForeignRegistrationSnapshot};
 use super::foreign_device::HELD_BROADCASTS;
 use super::rate_limit::ManagementRateLimiter;
 use super::send_counters::SendRefusals;
-use super::BipSocket;
 use crate::bbmd;
-use crate::bvll::{bvll_error, encode_bvll, BvllMessage};
+use crate::bvll::{BvllMessage, bvll_error, encode_bvll};
 use crate::runtime_clock::tokio_clock;
 
 /// Exchange slots, which the management helpers and a foreign device's
@@ -299,6 +299,14 @@ impl NodeHandle {
         self.lock().stopped
     }
 
+    /// Whether the node's link would take `subnet` ([`set_subnet`](Self::set_subnet)),
+    /// changing nothing.
+    pub(super) fn check_subnet(&self, subnet: LocalSubnet) -> Result<(), Error> {
+        let mut link = self.link();
+        link.subnet = subnet;
+        link.validate().map_err(config_error)
+    }
+
     /// Whether this node, a foreign device, would take `foreign` as its
     /// registration ([`retarget`](Self::retarget)), changing nothing.
     pub(super) fn check_retarget(&self, foreign: Foreign) -> Result<(), Error> {
@@ -344,6 +352,11 @@ impl NodeHandle {
             *self.link.write().unwrap_or_else(PoisonError::into_inner) = *state.node.link();
             Ok(())
         })
+    }
+
+    /// Where this node's exchanges are counted.
+    pub(super) fn record(&self) -> &ClientRecord {
+        &self.record
     }
 
     /// The node's clock.

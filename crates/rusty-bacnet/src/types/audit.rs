@@ -5,11 +5,11 @@ use bacnet_services::audit::{
     BACnetAuditLogQueryParameters, BACnetAuditNotification,
 };
 use bacnet_services::common::MAX_DECODED_ITEMS;
+use bacnet_types::MacAddr;
 use bacnet_types::bitstring::AuditOperationFlags;
 use bacnet_types::constructed::{BACnetAddress, BACnetRecipient};
 use bacnet_types::enums::{AuditOperation, BACnetSuccessFilter};
 use bacnet_types::primitives::ObjectIdentifier;
-use bacnet_types::MacAddr;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBool, PyList, PyMapping, PyTuple};
@@ -18,7 +18,7 @@ use super::mapping::{
     bytes, discriminator, fixed_integer, mapping, object_identifier, optional_item, ranged_integer,
     required_item, string, validate_keys,
 };
-use super::{PyAuditOperation, PyBACnetTimeStamp, PyErrorClass, PyErrorCode, PyPropertyIdentifier};
+use super::{PyAuditOperation, PyBACnetTimeStamp, PyPropertyIdentifier, int_enums};
 
 const NOTIFICATION_REQUIRED: &[&str] = &["source_device", "operation", "target_device"];
 const NOTIFICATION_OPTIONAL: &[&str] = &[
@@ -144,16 +144,27 @@ fn result(
             "{name} must be an (ErrorClass, ErrorCode) tuple"
         )));
     }
+    // An int out of range keeps from_py's ValueError; any other refusal is
+    // a TypeError naming the item.
+    let py = value.py();
+    let item = |index: usize, what: &str| {
+        let what = what.to_owned();
+        move |error: PyErr| {
+            if error.is_instance_of::<PyValueError>(py) {
+                error
+            } else {
+                PyTypeError::new_err(format!("{name}[{index}] must be an {what} or int"))
+            }
+        }
+    };
     let error_class = value
-        .get_item(0)?
-        .extract::<PyErrorClass>()
-        .map(|value| value.to_rust())
-        .map_err(|_| PyTypeError::new_err(format!("{name}[0] must be an ErrorClass")))?;
+        .get_item(0)
+        .and_then(|value| int_enums::from_py(&value))
+        .map_err(item(0, "ErrorClass"))?;
     let error_code = value
-        .get_item(1)?
-        .extract::<PyErrorCode>()
-        .map(|value| value.to_rust())
-        .map_err(|_| PyTypeError::new_err(format!("{name}[1] must be an ErrorCode")))?;
+        .get_item(1)
+        .and_then(|value| int_enums::from_py(&value))
+        .map_err(item(1, "ErrorCode"))?;
     Ok((error_class, error_code))
 }
 

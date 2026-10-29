@@ -3,14 +3,14 @@
 //! long, on ports the test drives. The BACnet/SC failovers are in
 //! `tests/sc_limits.rs`.
 
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
+use bacnet_encoding::npdu::{Npdu, NpduAddress, decode_npdu, encode_npdu};
 use bacnet_npdu::NetworkMessageType;
 use bacnet_npdu::NpduLimits;
 use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
 use std::sync::atomic::Ordering;
 use tokio::sync::watch;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 use super::driven_port::{Driven, Handle, Sent};
 use super::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
@@ -152,4 +152,55 @@ async fn a_send_the_port_refuses_as_too_long_returns_reason_4() {
     assert_eq!((counters.refused, counters.rejects), (1, 1));
     let rejected = next_send(&mut node, is_reason_4).await;
     assert!(rejected.taken);
+}
+
+/// #2087: an application port keeps the receive capacity it declared when
+/// it was made after a router port's limit falls. The router refuses a relay
+/// too long for the smaller path with reason 4, and the port's own send too
+/// long for it fails as too long, while its egress limit follows the path.
+#[tokio::test(start_paused = true)]
+async fn an_application_port_keeps_its_declaration_when_a_path_shrinks() {
+    use bacnet_transport::port::TransportPort;
+    use bacnet_types::error::Error;
+
+    let (changes_tx, changes) = watch::channel(NpduLimits::STANDARD);
+    let (first, mut node) = Driven::new(1, 1497);
+    let (second, _peer) = Driven::new(2, 1497);
+    let ports = vec![
+        RouterPort {
+            transport: first,
+            network_number: 1000,
+        },
+        RouterPort {
+            transport: second.publishing(changes),
+            network_number: 2000,
+        },
+    ];
+    let started = BACnetRouter::start(ports, RouterOptions::new())
+        .await
+        .unwrap();
+    let (router, mut port, _controls) = started.into_application_port();
+    let _apdus = port.start().await.unwrap();
+    assert_eq!(port.local_receive_apdu_capacity(), 1476);
+    assert_eq!(port.egress_apdu_limit(), 1476);
+    let limit = |router: &BACnetRouter| router.shared.engine.lock().ports()[1].max_npdu;
+
+    changes_tx.send_replace(NpduLimits::both(480));
+    until("the router has 480", || {
+        limit(&router) == NpduLimits::both(480)
+    })
+    .await;
+    assert_eq!(port.local_receive_apdu_capacity(), 1476);
+    assert!(port.egress_apdu_limit() < 480);
+
+    // A relay onto the smaller path: reason 4 back to its source.
+    node.receive(to_peer(594), NODE).await;
+    next_send(&mut node, is_reason_4).await;
+
+    // The port's own send onto it: too long, refused before it goes.
+    let mut npdu = vec![1, 0x20, 0x07, 0xD0, 1, PEER[0], 255, 0x10, 0x08];
+    npdu.resize(600, 0);
+    let error = port.send_unicast(&npdu, &[0xEE]).await.unwrap_err();
+    assert!(matches!(error, Error::SendTooLong { .. }), "{error:?}");
+    assert_eq!(router.counters().egress_too_long, 2);
 }

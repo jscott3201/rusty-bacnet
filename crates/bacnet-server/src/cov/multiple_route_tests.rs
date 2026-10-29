@@ -31,10 +31,12 @@ fn cov_multiple_route_empty_renewal_fences_all_old_snapshots_without_new_generat
         "same-route renewal preserves authority"
     );
     let b = routed_proposal(2, None);
-    assert!(table
-        .subscribe_multiple(&context, &b.endpoint(), expiry, 3, None, vec![])
-        .unwrap()
-        .is_empty());
+    assert!(
+        table
+            .subscribe_multiple(&context, &b.endpoint(), expiry, 3, None, vec![])
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(table.generation, u64::MAX);
     for snapshot in &old {
         assert!(!table.is_current(snapshot));
@@ -108,13 +110,17 @@ fn cov_multiple_route_rejected_generation_or_identity_preserves_live_target() {
     resource_error(exhausted.error);
     let mut wrong_route = b.endpoint();
     wrong_route.network.as_mut().unwrap().network = 11;
-    assert!(table
-        .subscribe_multiple(&context, &wrong_route, expiry, 9, None, vec![])
-        .is_err());
+    assert!(
+        table
+            .subscribe_multiple(&context, &wrong_route, expiry, 9, None, vec![])
+            .is_err()
+    );
     b.subscriber_process_identifier += 1;
-    assert!(table
-        .subscribe_multiple(&context, &b.endpoint(), expiry, 9, None, vec![b.clone()])
-        .is_err());
+    assert!(
+        table
+            .subscribe_multiple(&context, &b.endpoint(), expiry, 9, None, vec![b.clone()])
+            .is_err()
+    );
     assert_eq!(table.len(), 1);
     assert!(table.is_current(&before));
     let live = table.get_subscription(before.key()).unwrap();

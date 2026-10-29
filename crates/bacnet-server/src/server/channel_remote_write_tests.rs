@@ -23,7 +23,7 @@ use super::command_remote_write_tests::{
 use super::cov_wire_test_support::*;
 use super::remote_write_discovery_tests::{everywhere, i_am, next_who_is, targeted, who_is_sent};
 use super::*;
-use bacnet_encoding::npdu::{encode_npdu, Npdu};
+use bacnet_encoding::npdu::{Npdu, encode_npdu};
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_services::write_group::{GroupChannelValue, WriteGroupRequest};
 use bacnet_services::write_property::WritePropertyRequest;
@@ -446,9 +446,11 @@ async fn channel_skips_the_rest_of_a_silent_device_for_the_distribution() {
     let mut attempts = silent;
     attempts.extend(sent_writes(&h));
     assert_eq!(attempts.len(), 4);
-    assert!(attempts
-        .iter()
-        .all(|(id, request)| *id == attempts[0].0 && request.object_identifier == ao(1)));
+    assert!(
+        attempts
+            .iter()
+            .all(|(id, request)| *id == attempts[0].0 && request.object_identifier == ao(1))
+    );
 
     // AO-3's turn at Device 9 comes once it has gone silent, so it fails
     // unsent: the distribution waits out one write's retries.

@@ -1,6 +1,6 @@
 //! Closed service family sharing one transaction owner.
 use super::*;
-use bacnet_services::write_property::{validate_priority, WritePropertyRequest};
+use bacnet_services::write_property::{WritePropertyRequest, validate_priority};
 
 /// Validated payload identity for the endpoint's supported operations.
 #[doc(hidden)]

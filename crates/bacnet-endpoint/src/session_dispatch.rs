@@ -1,6 +1,6 @@
 //! Fair selection among the session's single-consumer inputs and worker joins.
 use super::*;
-use std::future::{poll_fn, Future};
+use std::future::{Future, poll_fn};
 use std::task::Poll;
 
 pub(super) enum DispatchEvent {

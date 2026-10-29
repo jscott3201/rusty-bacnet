@@ -3,6 +3,7 @@ use bacnet_objects::accumulator::PulseConverterObject;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
 use bacnet_types::enums::EngineeringUnits;
+use bacnet_types::error::RemoteError;
 
 fn pulse_converter_db() -> (ObjectDatabase, ObjectIdentifier) {
     let mut db = ObjectDatabase::new();
@@ -62,7 +63,7 @@ fn write_multiple_wire(
 
 fn assert_write_access_denied<T>(result: Result<T, Error>) {
     match result {
-        Err(Error::Protocol { class, code }) => {
+        Err(Error::Remote(RemoteError::Error { class, code })) => {
             assert_eq!(class, ErrorClass::PROPERTY);
             assert_eq!(code, ErrorCode::WRITE_ACCESS_DENIED);
         }
@@ -276,7 +277,7 @@ fn write_property_adjust_value_past_zero_is_value_out_of_range_and_atomic() {
             PropertyIdentifier::ADJUST_VALUE,
             PropertyValue::Real(adjust),
         ) {
-            Err(Error::Protocol { class, code }) => {
+            Err(Error::Remote(RemoteError::Error { class, code })) => {
                 assert_eq!(class, ErrorClass::PROPERTY);
                 assert_eq!(code, ErrorCode::VALUE_OUT_OF_RANGE);
             }

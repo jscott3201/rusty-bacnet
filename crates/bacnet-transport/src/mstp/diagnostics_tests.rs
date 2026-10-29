@@ -5,7 +5,7 @@ use bacnet_mstp_codec::FrameType;
 use bytes::Bytes;
 use tokio::time::Duration;
 
-use super::test_support::{config, encode, Bus, Sent, T_REPLY_TIMEOUT};
+use super::test_support::{Bus, Sent, T_REPLY_TIMEOUT, config, encode};
 use super::{
     LoopbackSerial, MstpDiagnosticsSnapshot, MstpExecutionMode, MstpTransport, SerialPort,
 };

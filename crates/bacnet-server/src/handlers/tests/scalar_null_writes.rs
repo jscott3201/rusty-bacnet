@@ -5,6 +5,7 @@ use bacnet_objects::schedule::{CalendarObject, ScheduleObject};
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::WriteAccessSpecification;
 use bacnet_types::enums::{EngineeringUnits, Reliability};
+use bacnet_types::error::RemoteError;
 
 fn value(value: &PropertyValue) -> Vec<u8> {
     let mut bytes = BytesMut::new();
@@ -77,7 +78,7 @@ fn snapshot(db: &ObjectDatabase, oid: ObjectIdentifier) -> Vec<PropertyValue> {
 }
 fn assert_error(error: Error, class: ErrorClass, code: ErrorCode) {
     assert!(
-        matches!(error,Error::Protocol {class:actual_class,code:actual_code} if actual_class == class && actual_code == code),
+        matches!(error,Error::Remote(RemoteError::Error {class:actual_class,code:actual_code}) if actual_class == class && actual_code == code),
         "{error:?}"
     );
 }

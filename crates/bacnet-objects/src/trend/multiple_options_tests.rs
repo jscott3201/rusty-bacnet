@@ -7,6 +7,7 @@ use crate::clock::{ClockFrame, ClockReader};
 use bacnet_types::bitstring::LogStatus;
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::constructed::{BACnetLogMultipleRecord, LogData, LogValue};
+use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::{Date, Time};
 use std::sync::Mutex;
 
@@ -84,7 +85,7 @@ fn write(
 
 fn assert_refused(result: Result<(), Error>, class: ErrorClass, code: ErrorCode) {
     assert!(
-        matches!(result, Err(Error::Protocol { class: c, code: e })
+        matches!(result, Err(Error::Remote(RemoteError::Error { class: c, code: e }))
             if c == class && e == code),
         "expected {class:?} / {code:?}, got {result:?}"
     );

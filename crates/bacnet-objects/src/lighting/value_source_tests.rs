@@ -7,6 +7,7 @@ use crate::command_source::CommandOrigin;
 use bacnet_encoding::constructed::encode_value_source;
 use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetValueSource};
 use bacnet_types::enums::ErrorCode;
+use bacnet_types::error::RemoteError;
 use bytes::BytesMut;
 
 const PV: PropertyIdentifier = PropertyIdentifier::PRESENT_VALUE;
@@ -47,7 +48,7 @@ fn read(
 
 fn code(result: Result<(), Error>) -> ErrorCode {
     match result {
-        Err(Error::Protocol { code, .. }) => code,
+        Err(Error::Remote(RemoteError::Error { code, .. })) => code,
         other => panic!("expected a refusal, got {other:?}"),
     }
 }

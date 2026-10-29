@@ -10,9 +10,6 @@ use bacnet_transport::mstp::{Echo, MstpConfig, MstpTransport};
 use bacnet_transport::mstp_serial::{self, SerialConfig, TokioSerialPort};
 use bacnet_types::error::Error;
 
-/// Serial port type used by the Python bindings' [`AnyTransport`] parameter.
-pub type PySerial = TokioSerialPort;
-
 const SUPPORTED_MSTP_BAUD_RATES: [u32; 6] = [9_600, 19_200, 38_400, 57_600, 76_800, 115_200];
 const SUPPORTED_MSTP_BAUD_ERROR: &str =
     "mstp_baud must be one of 9600, 19200, 38400, 57600, 76800, or 115200";
@@ -153,12 +150,9 @@ impl MstpOptions {
 
 /// Open an MS/TP transport from Python kwargs, all checked before the port
 /// opens.
-pub(crate) fn build_mstp_transport(options: &MstpOptions) -> PyResult<AnyTransport<PySerial>> {
+pub(crate) fn build_mstp_transport(options: &MstpOptions) -> PyResult<AnyTransport> {
     let serial = open_port(options)?;
-    Ok(AnyTransport::Mstp(MstpTransport::new(
-        serial,
-        options.config(),
-    )))
+    Ok(MstpTransport::new(serial, options.config()).into())
 }
 
 /// Check the options, then open the serial port they name, declaring the

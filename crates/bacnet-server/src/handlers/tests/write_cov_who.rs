@@ -216,9 +216,11 @@ fn subscribe_cov_property_multiple_handler_returns_initial_subscriptions() {
         subscriptions[1].monitored_property,
         Some(PropertyIdentifier::STATUS_FLAGS)
     );
-    assert!(subscriptions
-        .iter()
-        .all(|sub| sub.expires_at.is_some() && sub.max_notification_delay() == Some(10)));
+    assert!(
+        subscriptions
+            .iter()
+            .all(|sub| sub.expires_at.is_some() && sub.max_notification_delay() == Some(10))
+    );
     assert_eq!(table.len(), 2);
 }
 

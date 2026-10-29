@@ -326,7 +326,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
             // Present_Value leads, except on an Access Point (Access_Event).
             let lead = crate::cov::reported::lead(oid.object_type());
-            let prepared = (|| {
+
+            (|| {
                 let leading = object.read_property(lead.property(), None).ok()?;
                 let sample = crate::cov::CovSample::new(&leading).ok()?;
                 let flags = crate::cov::flags::PreparedFlags::read(object).ok()?;
@@ -378,8 +379,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     })
                     .collect::<HashMap<_, _>>();
                 Some((values, observation, completions))
-            })();
-            prepared
+            })()
         } else {
             None
         };
@@ -445,15 +445,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         value: prepared.encoded,
                         priority: None,
                     }];
-                    if property != PropertyIdentifier::STATUS_FLAGS {
-                        if let Some(encoded) = flags.encoded {
-                            values.push(BACnetPropertyValue {
-                                property_identifier: PropertyIdentifier::STATUS_FLAGS,
-                                property_array_index: None,
-                                value: encoded,
-                                priority: None,
-                            });
-                        }
+                    if property != PropertyIdentifier::STATUS_FLAGS
+                        && let Some(encoded) = flags.encoded
+                    {
+                        values.push(BACnetPropertyValue {
+                            property_identifier: PropertyIdentifier::STATUS_FLAGS,
+                            property_array_index: None,
+                            value: encoded,
+                            priority: None,
+                        });
                     }
                     (values, observation)
                 };

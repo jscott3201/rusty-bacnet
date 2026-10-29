@@ -6,9 +6,9 @@ use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio_serial::{SerialPort as _, SerialStream};
 
-use super::ReceiveOnlyPort;
+use super::{ReceiveOnlyPort, SerialConfig};
 use crate::mstp::codec::FrameType;
-use crate::mstp::monitor::script::{analyse, ScriptedRing};
+use crate::mstp::monitor::script::{ScriptedRing, analyse};
 use crate::mstp::monitor::{MaxMaster, MonitorConfig, MstpMonitor};
 
 const BAUD: u32 = 38_400;
@@ -26,14 +26,22 @@ async fn monitor_over_a_pseudo_terminal_counts_the_ring_and_writes_nothing() {
     });
     let expected = analyse(BAUD, ring.line.chunks());
 
-    let (monitor_end, mut line) = SerialStream::pair().unwrap();
+    let (mut line, slave) = SerialStream::pair().unwrap();
+    let serial_config = SerialConfig {
+        port_name: slave.name().unwrap(),
+        baud_rate: BAUD,
+    };
+    drop(slave);
     // A pseudo-terminal isn't a timed line, and a loaded host can stall
     // between two parts of a frame: never give one up.
     let config = MonitorConfig {
         frame_abort: Duration::from_secs(3600),
         ..MonitorConfig::new(BAUD)
     };
-    let monitor = MstpMonitor::start(ReceiveOnlyPort::from_stream(monitor_end), config).unwrap();
+    let mut monitor =
+        MstpMonitor::start(ReceiveOnlyPort::open(&serial_config, None).unwrap(), config)
+            .await
+            .unwrap();
     let mut statistics = monitor.statistics();
     // The octets go in as fast as the pseudo-terminal takes them: no count
     // depends on timing.

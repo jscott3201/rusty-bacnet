@@ -1,7 +1,7 @@
 //! Duplicate classification while receiving segmented ComplexACK responses (#383).
 
-use bacnet_encoding::apdu::{self, encode_apdu, Apdu, ComplexAck};
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
+use bacnet_encoding::apdu::{self, Apdu, ComplexAck, encode_apdu};
+use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
 use bacnet_types::enums::ConfirmedServiceChoice;
@@ -9,7 +9,7 @@ use bacnet_types::error::Error;
 use bytes::{Bytes, BytesMut};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 use super::{BACnetClient, ClientConfig};
 

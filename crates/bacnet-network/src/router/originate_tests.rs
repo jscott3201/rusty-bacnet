@@ -28,9 +28,11 @@ fn to_3000(source: SourceSelection) -> Request<'static> {
 async fn a_request_is_routed_by_the_table_and_its_reply_comes_home() {
     let (mut router, mut apdus, mut peers) = start(2).await;
     let now = router.now();
-    assert!(router
-        .table()
-        .add_learned(3000, PortId(1), Mac::from_array([7]), now));
+    assert!(
+        router
+            .table()
+            .add_learned(3000, PortId(1), Mac::from_array([7]), now)
+    );
 
     // From the egress port's address: no SNET, to the next router.
     router
@@ -73,7 +75,7 @@ async fn a_request_is_routed_by_the_table_and_its_reply_comes_home() {
         (source.network, source.mac_address.as_slice()),
         (3000, &[5][..])
     );
-    router.stop().await;
+    router.stop().await.unwrap();
 }
 
 #[tokio::test]
@@ -90,16 +92,18 @@ async fn no_route_searches_and_refuses() {
         search.complete.send(Ok(())).unwrap();
     }
     assert_eq!(router.counters().originated, 0);
-    router.stop().await;
+    router.stop().await.unwrap();
 }
 
 #[tokio::test]
 async fn a_full_queue_refuses_and_a_stopped_router_refuses_everything() {
     let (mut router, _apdus, mut peers) = start(2).await;
     let now = router.now();
-    assert!(router
-        .table()
-        .add_learned(3000, PortId(1), Mac::from_array([7]), now));
+    assert!(
+        router
+            .table()
+            .add_learned(3000, PortId(1), Mac::from_array([7]), now)
+    );
     let request = to_3000(SourceSelection::EgressPort);
     router.originate(&request).unwrap();
     let _in_progress = sending(&mut peers[1]).await;
@@ -109,7 +113,7 @@ async fn a_full_queue_refuses_and_a_stopped_router_refuses_everything() {
     assert_eq!(router.originate(&request), Err(OriginateFailure::QueueFull));
     assert_eq!(router.counters().refused, 1);
 
-    router.stop().await;
+    router.stop().await.unwrap();
     assert_eq!(router.originate(&request), Err(OriginateFailure::Stopped));
 }
 
@@ -152,5 +156,57 @@ async fn a_busy_refused_in_the_same_drain_doesnt_fail_a_queued_request() {
         router.originate(&to_port(2000)),
         Err(OriginateFailure::QueueFull)
     );
-    router.stop().await;
+    router.stop().await.unwrap();
+}
+
+/// A global Who-Is from the router's own application leaves by every
+/// port as that link's broadcast, still global with a full hop count, from
+/// the address the request selects (#1809).
+#[tokio::test]
+async fn a_global_broadcast_leaves_by_every_port() {
+    const WHO_IS: [u8; 2] = [0x10, 0x08];
+    let (mut router, _apdus, mut peers) = start(3).await;
+    let global = |source| {
+        let mut request = Request::new(
+            Address {
+                network: 0xFFFF,
+                mac: &[],
+            },
+            &WHO_IS,
+        );
+        request.source = source;
+        request
+    };
+    let bare = [&[1, 0x20, 0xFF, 0xFF, 0, 255][..], &WHO_IS].concat();
+
+    router
+        .originate(&global(SourceSelection::EgressPort))
+        .unwrap();
+    for peer in &mut peers {
+        let sent = sending(peer).await;
+        assert_eq!(sent.to, None, "the link's broadcast");
+        assert_eq!(sent.npdu, bare);
+        assert!(sent.attributes.is_empty());
+        sent.complete.send(Ok(())).unwrap();
+    }
+
+    // From port 1's address: SNET 2000 and SADR [2] on the other ports,
+    // none on port 1 itself.
+    router
+        .originate(&global(SourceSelection::Port(PortId(1))))
+        .unwrap();
+    let sourced = [
+        &[1, 0x28, 0xFF, 0xFF, 0, 0x07, 0xD0, 1, 2, 255][..],
+        &WHO_IS,
+    ]
+    .concat();
+    for (index, peer) in peers.iter_mut().enumerate() {
+        let sent = sending(peer).await;
+        assert_eq!(sent.to, None, "port {index}");
+        let expected = if index == 1 { &bare } else { &sourced };
+        assert_eq!(&sent.npdu, expected, "port {index}");
+        sent.complete.send(Ok(())).unwrap();
+    }
+    assert_eq!(router.counters().originated, 2);
+    router.stop().await.unwrap();
 }

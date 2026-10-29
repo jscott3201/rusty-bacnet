@@ -11,6 +11,7 @@ use super::event_notifications_tests::{
 };
 use super::*;
 use crate::server::test_transport::{SendLog, TestTransport};
+use PropertyIdentifier as P;
 use bacnet_encoding::constructed::decode_bacnet_property_value;
 use bacnet_objects::access_control::AccessDoorObject;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
@@ -22,7 +23,6 @@ use bacnet_types::constructed::BACnetPropertyStates;
 use bacnet_types::enums::{DoorAlarmState, EventState, EventType, NotifyType, Reliability};
 use bacnet_types::primitives::StatusFlags;
 use bytes::Bytes;
-use PropertyIdentifier as P;
 
 /// The door's Notification Class; class 0 doesn't exist here, so a
 /// notification can reach the wire only by following the door's own one.

@@ -6,10 +6,10 @@ mod node_support;
 use core::net::Ipv4Addr;
 
 use bacnet_bip_codec::Bvll;
+use bacnet_bip_core::LocalSubnet;
 use bacnet_bip_core::node::{
     Addressed, ConfigError, Discard, Link, LocalAddresses, Mode, Node, Received, SendRefusal,
 };
-use bacnet_bip_core::LocalSubnet;
 use node_support::*;
 
 const NPDU: &[u8] = &[0x01, 0x00, 0x10, 0x08];

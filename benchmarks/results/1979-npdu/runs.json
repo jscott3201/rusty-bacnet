@@ -1,0 +1,771 @@
+{
+  "started": "2026-10-21T21:03:20.563152+00:00",
+  "inputs_sha256": "bac5e89136df788ce744b1f3f789ab6cc19363297a707c554500c8da1cf4523e",
+  "runner_sha256": "f4f1f81a0e95808b8da73c781756c11d4257406cccf729f933fe021736d6017f",
+  "order": [
+    "P",
+    "Q",
+    "R",
+    "R",
+    "Q",
+    "P",
+    "P",
+    "Q",
+    "R",
+    "R",
+    "Q",
+    "P",
+    "P",
+    "Q",
+    "R",
+    "R",
+    "Q",
+    "P"
+  ],
+  "workloads": [
+    "decode_npdu_100b_payload",
+    "npdu_diagnostic_borrowed_decode_100b_payload",
+    "npdu_diagnostic_shared_bytes_clone_drop_102b"
+  ],
+  "runs": [
+    {
+      "position": 1,
+      "label": "P",
+      "ordinal": 1,
+      "name": "01-P-01",
+      "started": "2026-10-21T21:03:20.759506+00:00",
+      "cwd": "/Users/justin/.codex/worktrees/npdu-parser-parent/rusty-bacnet",
+      "command": [
+        "/tmp/rusty-1979-npdu-build-v2/P-encoding",
+        "--bench",
+        "^(decode_npdu_100b_payload|npdu_diagnostic_borrowed_decode_100b_payload|npdu_diagnostic_shared_bytes_clone_drop_102b)$",
+        "--sample-size",
+        "100",
+        "--warm-up-time",
+        "3",
+        "--measurement-time",
+        "5",
+        "--noplot",
+        "--save-baseline",
+        "1979-npdu-01-P-01"
+      ],
+      "CARGO_TARGET_DIR": "/Users/justin/.codex/worktrees/npdu-parser-parent/rusty-bacnet/target",
+      "binary_sha256": "f81f35d73007213dd4328a9a5ea0829d793c445e53d74dab449559b3397ad001",
+      "load_before": [
+        2.21484375,
+        4.69921875,
+        3.373046875
+      ],
+      "free_bytes_before": 166550573056,
+      "power_before": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=36307043)\t100%; charged; 0:00 remaining present: true",
+      "ended": "2026-10-21T21:03:47.827175+00:00",
+      "exit_code": 0,
+      "load_after": [
+        2.048828125,
+        4.46435546875,
+        3.32568359375
+      ],
+      "out_sha256": "7e911d8f731e49dd4bd84618ad6fb2a39ec025f8fbbf6b7774e939e1c615ec5c",
+      "err_sha256": "3f0629c8feba5c351b29d1c551f4dbae69f87bf2e3714e31a4673b04dc815561",
+      "criterion_copied": true
+    },
+    {
+      "position": 2,
+      "label": "Q",
+      "ordinal": 1,
+      "name": "02-Q-01",
+      "started": "2026-10-21T21:03:47.832534+00:00",
+      "cwd": "/Users/justin/.codex/worktrees/npdu-parser-child/rusty-bacnet",
+      "command": [
+        "/tmp/rusty-1979-npdu-build-v2/Q-encoding",
+        "--bench",
+        "^(decode_npdu_100b_payload|npdu_diagnostic_borrowed_decode_100b_payload|npdu_diagnostic_shared_bytes_clone_drop_102b)$",
+        "--sample-size",
+        "100",
+        "--warm-up-time",
+        "3",
+        "--measurement-time",
+        "5",
+        "--noplot",
+        "--save-baseline",
+        "1979-npdu-02-Q-01"
+      ],
+      "CARGO_TARGET_DIR": "/Users/justin/.codex/worktrees/npdu-parser-child/rusty-bacnet/target",
+      "binary_sha256": "e29cebeb150d4e3596bbea070756841780c03ed5a18a200903340f2c86a8672c",
+      "load_before": [
+        2.048828125,
+        4.46435546875,
+        3.32568359375
+      ],
+      "free_bytes_before": 166986674176,
+      "power_before": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=36307043)\t100%; charged; 0:00 remaining present: true",
+      "ended": "2026-10-21T21:04:15.594541+00:00",
+      "exit_code": 0,
+      "load_after": [
+        1.63427734375,
+        4.1318359375,
+        3.24365234375
+      ],
+      "out_sha256": "8fd6b1cc124ba5635a9ac4251424b73adb3ce4d81c5d7206acdb877717c846f0",
+      "err_sha256": "d01356de6057093818651a2a5464027b231f1e8eab3bcde8a040ae5a92c2fb42",
+      "criterion_copied": true
+    },
+    {
+      "position": 3,
+      "label": "R",
+      "ordinal": 1,
+      "name": "03-R-01",
+      "started": "2026-10-21T21:04:15.599774+00:00",
+      "cwd": "/Users/justin/.codex/worktrees/npdu-parser-control/rusty-bacnet",
+      "command": [
+        "/tmp/rusty-1979-npdu-build-v2/R-encoding",
+        "--bench",
+        "^(decode_npdu_100b_payload|npdu_diagnostic_borrowed_decode_100b_payload|npdu_diagnostic_shared_bytes_clone_drop_102b)$",
+        "--sample-size",
+        "100",
+        "--warm-up-time",
+        "3",
+        "--measurement-time",
+        "5",
+        "--noplot",
+        "--save-baseline",
+        "1979-npdu-03-R-01"
+      ],
+      "CARGO_TARGET_DIR": "/Users/justin/.codex/worktrees/npdu-parser-control/rusty-bacnet/target",
+      "binary_sha256": "2e30c5d2859187385a52cb579d6709af3a190b99b74ea18b8423ca572baf106f",
+      "load_before": [
+        1.63427734375,
+        4.1318359375,
+        3.24365234375
+      ],
+      "free_bytes_before": 166988775424,
+      "power_before": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=36307043)\t100%; charged; 0:00 remaining present: true",
+      "ended": "2026-10-21T21:04:42.683543+00:00",
+      "exit_code": 0,
+      "load_after": [
+        1.81103515625,
+        3.9619140625,
+        3.20703125
+      ],
+      "out_sha256": "90828b3575a08d545a8742c479c5280dfae0eef42f7fd353a29d463908b58027",
+      "err_sha256": "e51d139e668982a9aa5ee7154e834dbbbd0e2bf1de5d616217bb05d37e6cd02e",
+      "criterion_copied": true
+    },
+    {
+      "position": 4,
+      "label": "R",
+      "ordinal": 2,
+      "name": "04-R-02",
+      "started": "2026-10-21T21:04:42.688876+00:00",
+      "cwd": "/Users/justin/.codex/worktrees/npdu-parser-control/rusty-bacnet",
+      "command": [
+        "/tmp/rusty-1979-npdu-build-v2/R-encoding",
+        "--bench",
+        "^(decode_npdu_100b_payload|npdu_diagnostic_borrowed_decode_100b_payload|npdu_diagnostic_shared_bytes_clone_drop_102b)$",
+        "--sample-size",
+        "100",
+        "--warm-up-time",
+        "3",
+        "--measurement-time",
+        "5",
+        "--noplot",
+        "--save-baseline",
+        "1979-npdu-04-R-02"
+      ],
+      "CARGO_TARGET_DIR": "/Users/justin/.codex/worktrees/npdu-parser-control/rusty-bacnet/target",
+      "binary_sha256": "2e30c5d2859187385a52cb579d6709af3a190b99b74ea18b8423ca572baf106f",
+      "load_before": [
+        1.81103515625,
+        3.9619140625,
+        3.20703125
+      ],
+      "free_bytes_before": 166986309632,
+      "power_before": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=36307043)\t100%; charged; 0:00 remaining present: true",
+      "ended": "2026-10-21T21:05:09.740565+00:00",
+      "exit_code": 0,
+      "load_after": [
+        1.78466796875,
+        3.74267578125,
+        3.15234375
+      ],
+      "out_sha256": "ac7f7177be4be3763e2ed3edddf9728cc9914bdf4c5c30c5b9ea4f12189646aa",
+      "err_sha256": "33c1b15340278762b05bf0fba8492620c7a637a75053bac2c00b9dbd7f56f4ec",
+      "criterion_copied": true
+    },
+    {
+      "position": 5,
+      "label": "Q",
+      "ordinal": 2,
+      "name": "05-Q-02",
+      "started": "2026-10-21T21:05:09.745550+00:00",
+      "cwd": "/Users/justin/.codex/worktrees/npdu-parser-child/rusty-bacnet",
+      "command": [
+        "/tmp/rusty-1979-npdu-build-v2/Q-encoding",
+        "--bench",
+        "^(decode_npdu_100b_payload|npdu_diagnostic_borrowed_decode_100b_payload|npdu_diagnostic_shared_bytes_clone_drop_102b)$",
+        "--sample-size",
+        "100",
+        "--warm-up-time",
+        "3",
+        "--measurement-time",
+        "5",
+        "--noplot",
+        "--save-baseline",
+        "1979-npdu-05-Q-02"
+      ],
+      "CARGO_TARGET_DIR": "/Users/justin/.codex/worktrees/npdu-parser-child/rusty-bacnet/target",
+      "binary_sha256": "e29cebeb150d4e3596bbea070756841780c03ed5a18a200903340f2c86a8672c",
+      "load_before": [
+        1.78466796875,
+        3.74267578125,
+        3.15234375
+      ],
+      "free_bytes_before": 166987010048,
+      "power_before": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=36307043)\t100%; charged; 0:00 remaining present: true",
+      "ended": "2026-10-21T21:05:37.441762+00:00",
+      "exit_code": 0,
+      "load_after": [
+        1.71923828125,
+        3.5693359375,
+        3.1064453125
+      ],
+      "out_sha256": "81b5b10ac5bf264a34d8fdf299bf78d7a4c49fc721daec69960757cd410df385",
+      "err_sha256": "81458e799368ff328ecab9cb7277515e95d2e0829c80ae066a190109aa78cc9b",
+      "criterion_copied": true
+    },
+    {
+      "position": 6,
+      "label": "P",
+      "ordinal": 2,
+      "name": "06-P-02",
+      "started": "2026-10-21T21:05:37.446961+00:00",
+      "cwd": "/Users/justin/.codex/worktrees/npdu-parser-parent/rusty-bacnet",
+      "command": [
+        "/tmp/rusty-1979-npdu-build-v2/P-encoding",
+        "--bench",
+        "^(decode_npdu_100b_payload|npdu_diagnostic_borrowed_decode_100b_payload|npdu_diagnostic_shared_bytes_clone_drop_102b)$",
+        "--sample-size",
+        "100",
+        "--warm-up-time",
+        "3",
+        "--measurement-time",
+        "5",
+        "--noplot",
+        "--save-baseline",
+        "1979-npdu-06-P-02"
+      ],
+      "CARGO_TARGET_DIR": "/Users/justin/.codex/worktrees/npdu-parser-parent/rusty-bacnet/target",
+      "binary_sha256": "f81f35d73007213dd4328a9a5ea0829d793c445e53d74dab449559b3397ad001",
+      "load_before": [
+        1.71923828125,
+        3.5693359375,
+        3.1064453125
+      ],
+      "free_bytes_before": 166986342400,
+      "power_before": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=36307043)\t100%; charged; 0:00 remaining present: true",
+      "ended": "2026-10-21T21:06:04.429037+00:00",
+      "exit_code": 0,
+      "load_after": [
+        1.57080078125,
+        3.3544921875,
+        3.0439453125
+      ],
+      "out_sha256": "69e74adc528264fc02f32502c40b9f16ce309e05f1fa50440bdfd785c78a76f1",
+      "err_sha256": "3f0629c8feba5c351b29d1c551f4dbae69f87bf2e3714e31a4673b04dc815561",
+      "criterion_copied": true
+    },
+    {
+      "position": 7,
+      "label": "P",
+      "ordinal": 3,
+      "name": "07-P-03",
+      "started": "2026-10-21T21:06:04.434204+00:00",
+      "cwd": "/Users/justin/.codex/worktrees/npdu-parser-parent/rusty-bacnet",
+      "command": [
+        "/tmp/rusty-1979-npdu-build-v2/P-encoding",
+        "--bench",
+        "^(decode_npdu_100b_payload|npdu_diagnostic_borrowed_decode_100b_payload|npdu_diagnostic_shared_bytes_clone_drop_102b)$",
+        "--sample-size",
+        "100",
+        "--warm-up-time",
+        "3",
+        "--measurement-time",
+        "5",
+        "--noplot",
+        "--save-baseline",
+        "1979-npdu-07-P-03"
+      ],
+      "CARGO_TARGET_DIR": "/Users/justin/.codex/worktrees/npdu-parser-parent/rusty-bacnet/target",
+      "binary_sha256": "f81f35d73007213dd4328a9a5ea0829d793c445e53d74dab449559b3397ad001",
+      "load_before": [
+        1.57080078125,
+        3.3544921875,
+        3.0439453125
+      ],
+      "free_bytes_before": 166986100736,
+      "power_before": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=36307043)\t100%; charged; 0:00 remaining present: true",
+      "ended": "2026-10-21T21:06:31.437816+00:00",
+      "exit_code": 0,
+      "load_after": [
+        1.375,
+        3.1640625,
+        2.9833984375
+      ],
+      "out_sha256": "36847b69b3a28c7ba3676528c7fe1148b0696ab749888a2d50c76849f1c64443",
+      "err_sha256": "9c236318b3faa4cb0fa503a826c79a0c3dff8f5d33497483cc92d8a409daee38",
+      "criterion_copied": true
+    },
+    {
+      "position": 8,
+      "label": "Q",
+      "ordinal": 3,
+      "name": "08-Q-03",
+      "started": "2026-10-21T21:06:31.443023+00:00",
+      "cwd": "/Users/justin/.codex/worktrees/npdu-parser-child/rusty-bacnet",
+      "command": [
+        "/tmp/rusty-1979-npdu-build-v2/Q-encoding",
+        "--bench",
+        "^(decode_npdu_100b_payload|npdu_diagnostic_borrowed_decode_100b_payload|npdu_diagnostic_shared_bytes_clone_drop_102b)$",
+        "--sample-size",
+        "100",
+        "--warm-up-time",
+        "3",
+        "--measurement-time",
+        "5",
+        "--noplot",
+        "--save-baseline",
+        "1979-npdu-08-Q-03"
+      ],
+      "CARGO_TARGET_DIR": "/Users/justin/.codex/worktrees/npdu-parser-child/rusty-bacnet/target",
+      "binary_sha256": "e29cebeb150d4e3596bbea070756841780c03ed5a18a200903340f2c86a8672c",
+      "load_before": [
+        1.375,
+        3.1640625,
+        2.9833984375
+      ],
+      "free_bytes_before": 166984720384,
+      "power_before": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=36307043)\t100%; charged; 0:00 remaining present: true",
+      "ended": "2026-10-21T21:06:59.137066+00:00",
+      "exit_code": 0,
+      "load_after": [
+        1.2265625,
+        2.9560546875,
+        2.9130859375
+      ],
+      "out_sha256": "2b81400b14cb3fd31d708cb294e3d4f32fb59075c427a8223795a5abc1523403",
+      "err_sha256": "5c4f17e49f36f8dc38644eba22f345c25d3ef40c2e8053f9744a155623774eec",
+      "criterion_copied": true
+    },
+    {
+      "position": 9,
+      "label": "R",
+      "ordinal": 3,
+      "name": "09-R-03",
+      "started": "2026-10-21T21:06:59.141765+00:00",
+      "cwd": "/Users/justin/.codex/worktrees/npdu-parser-control/rusty-bacnet",
+      "command": [
+        "/tmp/rusty-1979-npdu-build-v2/R-encoding",
+        "--bench",
+        "^(decode_npdu_100b_payload|npdu_diagnostic_borrowed_decode_100b_payload|npdu_diagnostic_shared_bytes_clone_drop_102b)$",
+        "--sample-size",
+        "100",
+        "--warm-up-time",
+        "3",
+        "--measurement-time",
+        "5",
+        "--noplot",
+        "--save-baseline",
+        "1979-npdu-09-R-03"
+      ],
+      "CARGO_TARGET_DIR": "/Users/justin/.codex/worktrees/npdu-parser-control/rusty-bacnet/target",
+      "binary_sha256": "2e30c5d2859187385a52cb579d6709af3a190b99b74ea18b8423ca572baf106f",
+      "load_before": [
+        1.2265625,
+        2.9560546875,
+        2.9130859375
+      ],
+      "free_bytes_before": 166984454144,
+      "power_before": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=36307043)\t100%; charged; 0:00 remaining present: true",
+      "ended": "2026-10-21T21:07:26.175459+00:00",
+      "exit_code": 0,
+      "load_after": [
+        1.2158203125,
+        2.81396484375,
+        2.86279296875
+      ],
+      "out_sha256": "0bfc6e6e5fa85c579139bd982a08fbb3cc2b169bbee5d677e91f3b57c832db17",
+      "err_sha256": "59ed8b4a4de39ca9e9a9c8b32cd114773d36e79f21d204aa39837d876f975e2f",
+      "criterion_copied": true
+    },
+    {
+      "position": 10,
+      "label": "R",
+      "ordinal": 4,
+      "name": "10-R-04",
+      "started": "2026-10-21T21:07:26.180645+00:00",
+      "cwd": "/Users/justin/.codex/worktrees/npdu-parser-control/rusty-bacnet",
+      "command": [
+        "/tmp/rusty-1979-npdu-build-v2/R-encoding",
+        "--bench",
+        "^(decode_npdu_100b_payload|npdu_diagnostic_borrowed_decode_100b_payload|npdu_diagnostic_shared_bytes_clone_drop_102b)$",
+        "--sample-size",
+        "100",
+        "--warm-up-time",
+        "3",
+        "--measurement-time",
+        "5",
+        "--noplot",
+        "--save-baseline",
+        "1979-npdu-10-R-04"
+      ],
+      "CARGO_TARGET_DIR": "/Users/justin/.codex/worktrees/npdu-parser-control/rusty-bacnet/target",
+      "binary_sha256": "2e30c5d2859187385a52cb579d6709af3a190b99b74ea18b8423ca572baf106f",
+      "load_before": [
+        1.2158203125,
+        2.81396484375,
+        2.86279296875
+      ],
+      "free_bytes_before": 166983127040,
+      "power_before": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=36307043)\t100%; charged; 0:00 remaining present: true",
+      "ended": "2026-10-21T21:07:53.223815+00:00",
+      "exit_code": 0,
+      "load_after": [
+        1.208984375,
+        2.68310546875,
+        2.81298828125
+      ],
+      "out_sha256": "10ab2c65f109786a461cb218bcfdb23a7d3dd13c15633f7fe14ac18beedb5f12",
+      "err_sha256": "33c1b15340278762b05bf0fba8492620c7a637a75053bac2c00b9dbd7f56f4ec",
+      "criterion_copied": true
+    },
+    {
+      "position": 11,
+      "label": "Q",
+      "ordinal": 4,
+      "name": "11-Q-04",
+      "started": "2026-10-21T21:07:53.229070+00:00",
+      "cwd": "/Users/justin/.codex/worktrees/npdu-parser-child/rusty-bacnet",
+      "command": [
+        "/tmp/rusty-1979-npdu-build-v2/Q-encoding",
+        "--bench",
+        "^(decode_npdu_100b_payload|npdu_diagnostic_borrowed_decode_100b_payload|npdu_diagnostic_shared_bytes_clone_drop_102b)$",
+        "--sample-size",
+        "100",
+        "--warm-up-time",
+        "3",
+        "--measurement-time",
+        "5",
+        "--noplot",
+        "--save-baseline",
+        "1979-npdu-11-Q-04"
+      ],
+      "CARGO_TARGET_DIR": "/Users/justin/.codex/worktrees/npdu-parser-child/rusty-bacnet/target",
+      "binary_sha256": "e29cebeb150d4e3596bbea070756841780c03ed5a18a200903340f2c86a8672c",
+      "load_before": [
+        1.208984375,
+        2.68310546875,
+        2.81298828125
+      ],
+      "free_bytes_before": 166981795840,
+      "power_before": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=36307043)\t100%; charged; 0:00 remaining present: true",
+      "ended": "2026-10-21T21:08:20.913990+00:00",
+      "exit_code": 0,
+      "load_after": [
+        1.2451171875,
+        2.55224609375,
+        2.76025390625
+      ],
+      "out_sha256": "9e8d53d55c6ec602563d3c3e66bea973c446486ebea72fb43ba66cdb26dbf648",
+      "err_sha256": "796ad75826d5d134417df4e5f28991af280d2afe71baf0e86ff295a47ca1a219",
+      "criterion_copied": true
+    },
+    {
+      "position": 12,
+      "label": "P",
+      "ordinal": 4,
+      "name": "12-P-04",
+      "started": "2026-10-21T21:08:20.919257+00:00",
+      "cwd": "/Users/justin/.codex/worktrees/npdu-parser-parent/rusty-bacnet",
+      "command": [
+        "/tmp/rusty-1979-npdu-build-v2/P-encoding",
+        "--bench",
+        "^(decode_npdu_100b_payload|npdu_diagnostic_borrowed_decode_100b_payload|npdu_diagnostic_shared_bytes_clone_drop_102b)$",
+        "--sample-size",
+        "100",
+        "--warm-up-time",
+        "3",
+        "--measurement-time",
+        "5",
+        "--noplot",
+        "--save-baseline",
+        "1979-npdu-12-P-04"
+      ],
+      "CARGO_TARGET_DIR": "/Users/justin/.codex/worktrees/npdu-parser-parent/rusty-bacnet/target",
+      "binary_sha256": "f81f35d73007213dd4328a9a5ea0829d793c445e53d74dab449559b3397ad001",
+      "load_before": [
+        1.2451171875,
+        2.55224609375,
+        2.76025390625
+      ],
+      "free_bytes_before": 166981906432,
+      "power_before": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=36307043)\t100%; charged; 0:00 remaining present: true",
+      "ended": "2026-10-21T21:08:47.902693+00:00",
+      "exit_code": 0,
+      "load_after": [
+        1.474609375,
+        2.49267578125,
+        2.73193359375
+      ],
+      "out_sha256": "4342d6ac230ec1df71ca47bf7e6ea5822cb56199669c984cbb041922d4b9d1d7",
+      "err_sha256": "3f0629c8feba5c351b29d1c551f4dbae69f87bf2e3714e31a4673b04dc815561",
+      "criterion_copied": true
+    },
+    {
+      "position": 13,
+      "label": "P",
+      "ordinal": 5,
+      "name": "13-P-05",
+      "started": "2026-10-21T21:08:47.907299+00:00",
+      "cwd": "/Users/justin/.codex/worktrees/npdu-parser-parent/rusty-bacnet",
+      "command": [
+        "/tmp/rusty-1979-npdu-build-v2/P-encoding",
+        "--bench",
+        "^(decode_npdu_100b_payload|npdu_diagnostic_borrowed_decode_100b_payload|npdu_diagnostic_shared_bytes_clone_drop_102b)$",
+        "--sample-size",
+        "100",
+        "--warm-up-time",
+        "3",
+        "--measurement-time",
+        "5",
+        "--noplot",
+        "--save-baseline",
+        "1979-npdu-13-P-05"
+      ],
+      "CARGO_TARGET_DIR": "/Users/justin/.codex/worktrees/npdu-parser-parent/rusty-bacnet/target",
+      "binary_sha256": "f81f35d73007213dd4328a9a5ea0829d793c445e53d74dab449559b3397ad001",
+      "load_before": [
+        1.474609375,
+        2.49267578125,
+        2.73193359375
+      ],
+      "free_bytes_before": 166985723904,
+      "power_before": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=36307043)\t100%; charged; 0:00 remaining present: true",
+      "ended": "2026-10-21T21:09:14.881647+00:00",
+      "exit_code": 0,
+      "load_after": [
+        1.55908203125,
+        2.4130859375,
+        2.69384765625
+      ],
+      "out_sha256": "52e6f1711b2365eca572750f3d4a851dab0d9ef0141786c74c5871d83941c1db",
+      "err_sha256": "573a9469cddd78f04151fec6fe9ce2511d548f7d171edc6a3507f679ae37f79c",
+      "criterion_copied": true
+    },
+    {
+      "position": 14,
+      "label": "Q",
+      "ordinal": 5,
+      "name": "14-Q-05",
+      "started": "2026-10-21T21:09:14.887087+00:00",
+      "cwd": "/Users/justin/.codex/worktrees/npdu-parser-child/rusty-bacnet",
+      "command": [
+        "/tmp/rusty-1979-npdu-build-v2/Q-encoding",
+        "--bench",
+        "^(decode_npdu_100b_payload|npdu_diagnostic_borrowed_decode_100b_payload|npdu_diagnostic_shared_bytes_clone_drop_102b)$",
+        "--sample-size",
+        "100",
+        "--warm-up-time",
+        "3",
+        "--measurement-time",
+        "5",
+        "--noplot",
+        "--save-baseline",
+        "1979-npdu-14-Q-05"
+      ],
+      "CARGO_TARGET_DIR": "/Users/justin/.codex/worktrees/npdu-parser-child/rusty-bacnet/target",
+      "binary_sha256": "e29cebeb150d4e3596bbea070756841780c03ed5a18a200903340f2c86a8672c",
+      "load_before": [
+        1.55908203125,
+        2.4130859375,
+        2.69384765625
+      ],
+      "free_bytes_before": 166987014144,
+      "power_before": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=36307043)\t100%; charged; 0:00 remaining present: true",
+      "ended": "2026-10-21T21:09:42.586804+00:00",
+      "exit_code": 0,
+      "load_after": [
+        1.3671875,
+        2.29833984375,
+        2.6435546875
+      ],
+      "out_sha256": "115f2c2fdd3802d6e93e685bef1a00da24801b455656bdbeda61de167b432373",
+      "err_sha256": "30d0ab2c523872993d2120038bdeaabe2214ae150c254bc97d2774faff38c70d",
+      "criterion_copied": true
+    },
+    {
+      "position": 15,
+      "label": "R",
+      "ordinal": 5,
+      "name": "15-R-05",
+      "started": "2026-10-21T21:09:42.592268+00:00",
+      "cwd": "/Users/justin/.codex/worktrees/npdu-parser-control/rusty-bacnet",
+      "command": [
+        "/tmp/rusty-1979-npdu-build-v2/R-encoding",
+        "--bench",
+        "^(decode_npdu_100b_payload|npdu_diagnostic_borrowed_decode_100b_payload|npdu_diagnostic_shared_bytes_clone_drop_102b)$",
+        "--sample-size",
+        "100",
+        "--warm-up-time",
+        "3",
+        "--measurement-time",
+        "5",
+        "--noplot",
+        "--save-baseline",
+        "1979-npdu-15-R-05"
+      ],
+      "CARGO_TARGET_DIR": "/Users/justin/.codex/worktrees/npdu-parser-control/rusty-bacnet/target",
+      "binary_sha256": "2e30c5d2859187385a52cb579d6709af3a190b99b74ea18b8423ca572baf106f",
+      "load_before": [
+        1.3671875,
+        2.29833984375,
+        2.6435546875
+      ],
+      "free_bytes_before": 166986235904,
+      "power_before": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=36307043)\t100%; charged; 0:00 remaining present: true",
+      "ended": "2026-10-21T21:10:09.641124+00:00",
+      "exit_code": 0,
+      "load_after": [
+        1.22119140625,
+        2.1728515625,
+        2.5849609375
+      ],
+      "out_sha256": "a4f137dc70d3c679bebdb3076b577aa65d6353d8c57181253e0852360c95b5e5",
+      "err_sha256": "99feaa33620d58e4ce952a39c3c2f16055d82b97db60ae852a50a6106ac52b56",
+      "criterion_copied": true
+    },
+    {
+      "position": 16,
+      "label": "R",
+      "ordinal": 6,
+      "name": "16-R-06",
+      "started": "2026-10-21T21:10:09.646538+00:00",
+      "cwd": "/Users/justin/.codex/worktrees/npdu-parser-control/rusty-bacnet",
+      "command": [
+        "/tmp/rusty-1979-npdu-build-v2/R-encoding",
+        "--bench",
+        "^(decode_npdu_100b_payload|npdu_diagnostic_borrowed_decode_100b_payload|npdu_diagnostic_shared_bytes_clone_drop_102b)$",
+        "--sample-size",
+        "100",
+        "--warm-up-time",
+        "3",
+        "--measurement-time",
+        "5",
+        "--noplot",
+        "--save-baseline",
+        "1979-npdu-16-R-06"
+      ],
+      "CARGO_TARGET_DIR": "/Users/justin/.codex/worktrees/npdu-parser-control/rusty-bacnet/target",
+      "binary_sha256": "2e30c5d2859187385a52cb579d6709af3a190b99b74ea18b8423ca572baf106f",
+      "load_before": [
+        1.22119140625,
+        2.1728515625,
+        2.5849609375
+      ],
+      "free_bytes_before": 166986350592,
+      "power_before": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=36307043)\t100%; charged; 0:00 remaining present: true",
+      "ended": "2026-10-21T21:10:36.716966+00:00",
+      "exit_code": 0,
+      "load_after": [
+        1.21240234375,
+        2.09375,
+        2.5439453125
+      ],
+      "out_sha256": "2a165b36430198bce5e00d95ebbafa63d5746c8ef2a8ac389aea26c71409919b",
+      "err_sha256": "4dd3b70841f17f65872a35e20b0296f642e18558a82023dc8644c30126349674",
+      "criterion_copied": true
+    },
+    {
+      "position": 17,
+      "label": "Q",
+      "ordinal": 6,
+      "name": "17-Q-06",
+      "started": "2026-10-21T21:10:36.722376+00:00",
+      "cwd": "/Users/justin/.codex/worktrees/npdu-parser-child/rusty-bacnet",
+      "command": [
+        "/tmp/rusty-1979-npdu-build-v2/Q-encoding",
+        "--bench",
+        "^(decode_npdu_100b_payload|npdu_diagnostic_borrowed_decode_100b_payload|npdu_diagnostic_shared_bytes_clone_drop_102b)$",
+        "--sample-size",
+        "100",
+        "--warm-up-time",
+        "3",
+        "--measurement-time",
+        "5",
+        "--noplot",
+        "--save-baseline",
+        "1979-npdu-17-Q-06"
+      ],
+      "CARGO_TARGET_DIR": "/Users/justin/.codex/worktrees/npdu-parser-child/rusty-bacnet/target",
+      "binary_sha256": "e29cebeb150d4e3596bbea070756841780c03ed5a18a200903340f2c86a8672c",
+      "load_before": [
+        1.21240234375,
+        2.09375,
+        2.5439453125
+      ],
+      "free_bytes_before": 166984663040,
+      "power_before": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=36307043)\t100%; charged; 0:00 remaining present: true",
+      "ended": "2026-10-21T21:11:04.400899+00:00",
+      "exit_code": 0,
+      "load_after": [
+        1.56982421875,
+        2.0859375,
+        2.5234375
+      ],
+      "out_sha256": "912b24387ebba0bc53e7bb77168947770dfe9fc43dabb879e6a178b3f9cd853f",
+      "err_sha256": "26d799f5eaa6c7190364a895e0f3795834d18ba1efdd4d358d63a9b3a0459856",
+      "criterion_copied": true
+    },
+    {
+      "position": 18,
+      "label": "P",
+      "ordinal": 6,
+      "name": "18-P-06",
+      "started": "2026-10-21T21:11:04.406318+00:00",
+      "cwd": "/Users/justin/.codex/worktrees/npdu-parser-parent/rusty-bacnet",
+      "command": [
+        "/tmp/rusty-1979-npdu-build-v2/P-encoding",
+        "--bench",
+        "^(decode_npdu_100b_payload|npdu_diagnostic_borrowed_decode_100b_payload|npdu_diagnostic_shared_bytes_clone_drop_102b)$",
+        "--sample-size",
+        "100",
+        "--warm-up-time",
+        "3",
+        "--measurement-time",
+        "5",
+        "--noplot",
+        "--save-baseline",
+        "1979-npdu-18-P-06"
+      ],
+      "CARGO_TARGET_DIR": "/Users/justin/.codex/worktrees/npdu-parser-parent/rusty-bacnet/target",
+      "binary_sha256": "f81f35d73007213dd4328a9a5ea0829d793c445e53d74dab449559b3397ad001",
+      "load_before": [
+        1.56982421875,
+        2.0859375,
+        2.5234375
+      ],
+      "free_bytes_before": 166984892416,
+      "power_before": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=36307043)\t100%; charged; 0:00 remaining present: true",
+      "ended": "2026-10-21T21:11:31.384109+00:00",
+      "exit_code": 0,
+      "load_after": [
+        1.90869140625,
+        2.12548828125,
+        2.52392578125
+      ],
+      "out_sha256": "c58c3749fe69ba55758176e9daa03a873ab73cd003fca89a61ef44ded89c1e2b",
+      "err_sha256": "2a6ad23773fc2678f67402d1dd9e6a4447174697eedf956630aa31cfe903c0f7",
+      "criterion_copied": true
+    }
+  ],
+  "completed": "2026-10-21T21:11:31.588915+00:00"
+}

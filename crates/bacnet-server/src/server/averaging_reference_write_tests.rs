@@ -20,6 +20,7 @@ use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleReques
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
 use bacnet_types::enums::ObjectType;
+use bacnet_types::error::RemoteError;
 
 const REFERENCE: PropertyIdentifier = PropertyIdentifier::OBJECT_PROPERTY_REFERENCE;
 const ATTEMPTED: PropertyIdentifier = PropertyIdentifier::ATTEMPTED_SAMPLES;
@@ -253,7 +254,7 @@ async fn a_reference_in_another_device_is_refused_and_changes_nothing() {
     );
     let refused = write_local(&h, PropertyValue::ApplicationData(present_value(remote()))).await;
     assert!(
-        matches!(refused, Err(Error::Protocol { code, .. })
+        matches!(refused, Err(Error::Remote(RemoteError::Error { code, .. }))
             if code == ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED),
         "write_local of a remote reference: {refused:?}"
     );

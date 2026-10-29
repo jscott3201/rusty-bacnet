@@ -43,10 +43,9 @@ pub(crate) fn handle_get_event_information_configured(
         };
         // Do not stop validating when the page is full, even for NORMAL objects.
         if let EventSummaryProjectionResult::Projected(summary) = project_event_summary(object, db)?
+            && is_active_event_state(&summary)
         {
-            if is_active_event_state(&summary) {
-                page.push(summary)?;
-            }
+            page.push(summary)?;
         }
     }
     page.finish(buf)

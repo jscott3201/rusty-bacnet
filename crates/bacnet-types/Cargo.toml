@@ -16,11 +16,11 @@ categories = ["network-programming", "no-std"]
 # error variants holding a String or a Box need `alloc`.
 [features]
 default = ["std"]
-# Hosted builds: adds what needs std, the transport I/O error and the B/IP
-# port contract (`bip_port`). thiserror needs no std for either: its derive
-# implements core::error::Error.
+# Hosted builds: adds what needs std, the transport I/O error. thiserror
+# needs no std for it: its derive implements core::error::Error.
 std = ["alloc"]
-# no_std with a global allocator: the owned types, and smallvec for MacAddr.
+# no_std with a global allocator: the owned types, smallvec for MacAddr, and,
+# on targets with atomic compare-and-swap, the B/IP port contract (`bip_port`).
 alloc = ["dep:smallvec"]
 serde = ["alloc", "dep:serde", "serde/alloc"]
 

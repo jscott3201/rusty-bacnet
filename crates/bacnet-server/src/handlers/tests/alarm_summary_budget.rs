@@ -1,8 +1,8 @@
 use super::*;
 use crate::server::GetAlarmSummaryBudget;
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 
 struct Counted {

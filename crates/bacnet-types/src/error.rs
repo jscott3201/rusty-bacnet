@@ -24,43 +24,12 @@ use crate::enums::{AbortReason, ErrorClass, ErrorCode, RejectReason};
 
 mod decode;
 mod encode;
+mod remote;
 pub use decode::{DecodeError, DecodingKind, RangeError};
 pub use encode::{EncodeError, SegmentationError};
-
-/// How a protocol error's class and code read: each name in lower case with
-/// hyphens, or the raw number for a value without one.
-struct ProtocolText {
-    class: ErrorClass,
-    code: ErrorCode,
-}
-
-impl fmt::Display for ProtocolText {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fn name(
-            f: &mut fmt::Formatter<'_>,
-            named: Option<&str>,
-            field: &str,
-            value: u16,
-        ) -> fmt::Result {
-            let Some(named) = named else {
-                return write!(f, "{field}={value}");
-            };
-            for c in named.chars() {
-                let c = if c == '_' {
-                    '-'
-                } else {
-                    c.to_ascii_lowercase()
-                };
-                fmt::Write::write_char(f, c)?;
-            }
-            Ok(())
-        }
-        f.write_str("BACnet error: ")?;
-        name(f, self.class.name(), "class", self.class.to_raw())?;
-        f.write_str(" / ")?;
-        name(f, self.code.name(), "code", self.code.to_raw())
-    }
-}
+#[cfg(feature = "alloc")]
+use remote::ProtocolText;
+pub use remote::RemoteError;
 
 /// [`Error::LogNotAdvancing`]'s text.
 struct NotAdvancing {
@@ -97,21 +66,19 @@ impl fmt::Display for NotAdvancing {
 // Clippy fails if the attribute above goes.
 #[deny(clippy::exhaustive_enums)]
 pub enum Error {
-    /// BACnet protocol error response (Clause 20.1.7).
-    #[error("{}", ProtocolText { class: *.class, code: *.code })]
-    Protocol {
-        /// Error class (Clause 18).
-        class: ErrorClass,
-        /// Error code (Clause 18).
-        code: ErrorCode,
-    },
+    /// A peer's Error, Reject or Abort PDU that turned a confirmed request
+    /// down (Clauses 20.1.5 to 20.1.7). An Error PDU whose Clause 21
+    /// production carries more than the class and code is
+    /// `Error::Structured` (with `alloc`) instead.
+    #[error("{0}")]
+    Remote(RemoteError),
 
     /// BACnet error response whose Clause 21 production carries more than the
     /// class and code: ChangeList-Error, CreateObject-Error,
     /// WritePropertyMultiple-Error, SubscribeCOVPropertyMultiple-Error,
     /// ConfirmedPrivateTransfer-Error or VTClose-Error. `detail` holds the
     /// extra fields; a body whose optional fields are all absent is reported
-    /// as [`Error::Protocol`]. Only with `alloc`.
+    /// as [`Error::Remote`]. Only with `alloc`.
     #[cfg(feature = "alloc")]
     #[error("{}, {detail}", ProtocolText { class: *.class, code: *.code })]
     Structured {
@@ -122,20 +89,6 @@ pub enum Error {
         /// The production's fields after the class and code. Boxed so the
         /// rare structured error does not widen every `Result<_, Error>`.
         detail: Box<ErrorDetail>,
-    },
-
-    /// BACnet reject PDU (Clause 20.1.5).
-    #[error("BACnet reject: reason={}", reason.to_raw())]
-    Reject {
-        /// Reject reason (Clause 18.9).
-        reason: RejectReason,
-    },
-
-    /// BACnet abort PDU (Clause 20.1.6).
-    #[error("BACnet abort: reason={}", reason.to_raw())]
-    Abort {
-        /// Abort reason (Clause 18.10).
-        reason: AbortReason,
     },
 
     /// A router reported that the active message was too long for a routed path.
@@ -254,6 +207,12 @@ pub enum Error {
         /// `None` when it returned no records.
         returned: Option<u64>,
     },
+}
+
+impl From<RemoteError> for Error {
+    fn from(error: RemoteError) -> Self {
+        Self::Remote(error)
+    }
 }
 
 impl From<DecodeError> for Error {
@@ -446,17 +405,48 @@ impl core::fmt::Display for ErrorDetail {
 pub type Result<T> = core::result::Result<T, Error>;
 
 impl Error {
+    /// An Error PDU's [`Error::Remote`] with its class and code.
+    pub const fn protocol(class: ErrorClass, code: ErrorCode) -> Self {
+        Self::Remote(RemoteError::Error { class, code })
+    }
+
+    /// A Reject PDU's [`Error::Remote`] with its reason.
+    pub const fn reject(reason: RejectReason) -> Self {
+        Self::Remote(RemoteError::Reject { reason })
+    }
+
+    /// An Abort PDU's [`Error::Remote`] with its reason.
+    pub const fn abort(reason: AbortReason) -> Self {
+        Self::Remote(RemoteError::Abort { reason })
+    }
+
     /// The error an Error PDU reports: [`Error::Structured`] when its body
-    /// carried a detail, [`Error::Protocol`] otherwise. Only with `alloc`.
+    /// carried a detail, [`Error::Remote`] otherwise. Only with `alloc`.
     #[cfg(feature = "alloc")]
-    pub fn protocol(class: ErrorClass, code: ErrorCode, detail: Option<ErrorDetail>) -> Self {
+    pub fn with_detail(class: ErrorClass, code: ErrorCode, detail: Option<ErrorDetail>) -> Self {
         match detail {
             Some(detail) => Self::Structured {
                 class,
                 code,
                 detail: Box::new(detail),
             },
-            None => Self::Protocol { class, code },
+            None => Self::protocol(class, code),
+        }
+    }
+
+    /// The peer's answer this error reports, without a structured error's
+    /// detail: the [`RemoteError`] of [`Error::Remote`], and an Error with
+    /// the class and code of `Error::Structured`. `None` for any other
+    /// error, which no peer sent.
+    pub fn remote(&self) -> Option<RemoteError> {
+        match self {
+            Self::Remote(error) => Some(*error),
+            #[cfg(feature = "alloc")]
+            Self::Structured { class, code, .. } => Some(RemoteError::Error {
+                class: *class,
+                code: *code,
+            }),
+            _ => None,
         }
     }
 
@@ -543,7 +533,7 @@ impl Error {
 
     /// The Reject reason a responder answers a confirmed request with when
     /// this error refused it while decoding its parameters (Clauses 18.9 and
-    /// 20.1.8): the reason itself for [`Error::Reject`], the kind's reason
+    /// 20.1.8): the reason itself for a Reject's [`Error::Remote`], the kind's reason
     /// for a decoding error (the table on
     /// [`DecodingKind::reject_reason`]), and MISSING_REQUIRED_PARAMETER for
     /// [`Error::BufferTooShort`], a member cut short because the data ran out
@@ -551,14 +541,14 @@ impl Error {
     /// of the request's parameters reports.
     pub fn reject_reason(&self) -> Option<RejectReason> {
         match self {
-            Self::Reject { reason } => Some(*reason),
+            Self::Remote(RemoteError::Reject { reason }) => Some(*reason),
             Self::BufferTooShort { .. } => Some(RejectReason::MISSING_REQUIRED_PARAMETER),
             _ => self.decode_fault().map(|(_, kind)| kind.reject_reason()),
         }
     }
 
     /// This error, met decoding a confirmed request's own parameters, as the
-    /// [`Error::Reject`] a responder answers with: the
+    /// Reject's [`Error::Remote`] a responder answers with: the
     /// [`reject_reason`](Self::reject_reason) when it is a syntax fault, the
     /// error unchanged otherwise.
     ///
@@ -567,7 +557,7 @@ impl Error {
     /// reject the request (Clause 20.1.8), so it stays as it is.
     pub fn into_request_reject(self) -> Self {
         match self.reject_reason() {
-            Some(reason) => Self::Reject { reason },
+            Some(reason) => Self::reject(reason),
             None => self,
         }
     }

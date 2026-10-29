@@ -49,6 +49,21 @@ impl<W: WebSocketPort> DirectSocket<W> {
             Self::Verified(ws) => Some(ws.verified_leaf),
         }
     }
+    /// The verified leaf certificate of a TLS dial, for the provenance of
+    /// what the peer sends (#1965); empty for a custom socket.
+    #[cfg(feature = "sc-tls")]
+    pub(crate) fn leaf_certificate(&self) -> crate::port::LeafCertificate {
+        match self {
+            Self::Custom(_) => Default::default(),
+            Self::Verified(ws) => ws
+                .peer_info()
+                .certificates()
+                .first()
+                .map_or_else(Default::default, |leaf| {
+                    crate::port::LeafCertificate::verified(Arc::new(leaf.clone()))
+                }),
+        }
+    }
     #[cfg(feature = "sc-tls")]
     pub(crate) fn peer_address(&self) -> Option<std::net::SocketAddr> {
         match self {

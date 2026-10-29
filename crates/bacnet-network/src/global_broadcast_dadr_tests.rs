@@ -16,7 +16,7 @@ use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportPort;
 
 use crate::layer::NetworkLayer;
-use crate::loopback_fixture::{next_from_router, pump, recv, reject_of, wire, RouterFixture, APDU};
+use crate::loopback_fixture::{APDU, RouterFixture, next_from_router, pump, recv, reject_of, wire};
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_npdu::RejectMessageToNetwork;
 

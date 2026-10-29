@@ -516,10 +516,12 @@ async fn check_invalid_accept_reconnect_probe(field: std::ops::Range<usize>) {
     nil[26..30].copy_from_slice(&[0, 16, 0, 1]);
     nil[field].fill(0);
     nil_hub.send(&nil).await.unwrap();
-    assert!(tokio::time::timeout(Duration::from_secs(1), nil_hub.recv())
-        .await
-        .unwrap()
-        .is_err());
+    assert!(
+        tokio::time::timeout(Duration::from_secs(1), nil_hub.recv())
+            .await
+            .unwrap()
+            .is_err()
+    );
     assert_ne!(*state.borrow(), ScConnectionState::Connected);
     {
         let after = conn.lock().await;

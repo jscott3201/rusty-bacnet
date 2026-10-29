@@ -4,6 +4,7 @@
 
 use bacnet_types::constructed::BACnetDeviceObjectReference;
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
+use bacnet_types::error::RemoteError;
 
 use super::*;
 
@@ -25,7 +26,7 @@ fn read(user: &AccessUserObject, property: P) -> PropertyValue {
 
 fn assert_value_out_of_range(result: Result<(), Error>, context: &str) {
     assert!(
-        matches!(result, Err(Error::Protocol { class, code })
+        matches!(result, Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::PROPERTY
                 && code == ErrorCode::VALUE_OUT_OF_RANGE),
         "{context}: expected PROPERTY / VALUE_OUT_OF_RANGE, got {result:?}"
@@ -78,7 +79,7 @@ fn access_user_lists_serve_device_object_references() {
         let served = read(&user, property);
         let result = user.write_property(property, None, served.clone(), None);
         assert!(
-            matches!(result, Err(Error::Protocol { code, .. })
+            matches!(result, Err(Error::Remote(RemoteError::Error { code, .. }))
                 if code == ErrorCode::WRITE_ACCESS_DENIED),
             "{property:?}: {result:?}"
         );

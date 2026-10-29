@@ -1,8 +1,9 @@
 use super::*;
+use PropertyIdentifier as P;
 use bacnet_encoding::constructed::encode_device_object_property_reference;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::error::RemoteError;
 use bytes::BytesMut;
-use PropertyIdentifier as P;
 
 pub(super) fn assert_error<T: std::fmt::Debug>(
     result: Result<T, Error>,
@@ -10,7 +11,7 @@ pub(super) fn assert_error<T: std::fmt::Debug>(
     code: ErrorCode,
 ) {
     assert!(
-        matches!(result, Err(Error::Protocol { class: c, code: e })
+        matches!(result, Err(Error::Remote(RemoteError::Error { class: c, code: e }))
             if c == class && e == code),
         "expected {class:?} / {code:?}, got {result:?}"
     );

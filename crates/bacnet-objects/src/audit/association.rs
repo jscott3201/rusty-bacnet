@@ -1,6 +1,7 @@
 //! Target-only association authority; selector membership is independent of filters.
 use super::*;
-use std::{collections::HashSet, sync::Mutex};
+use crate::collections::HashSet;
+use crate::sync::Mutex;
 
 #[doc(hidden)]
 #[derive(Clone)]
@@ -80,11 +81,11 @@ impl TargetAuditAssociation {
             .unwrap_or_else(|| self.snapshots(None).remove(0))
     }
     pub(crate) fn set_subjects(&self, subjects: impl IntoIterator<Item = ObjectIdentifier>) {
-        *self.subjects.lock().unwrap() = subjects.into_iter().collect();
+        *self.subjects.lock() = subjects.into_iter().collect();
         self.refresh_overlap();
     }
     pub(crate) fn membership_changed(&self, oid: ObjectIdentifier, present: bool) {
-        let mut subjects = self.subjects.lock().unwrap();
+        let mut subjects = self.subjects.lock();
         if present {
             subjects.insert(oid);
         } else {
@@ -95,7 +96,7 @@ impl TargetAuditAssociation {
     }
     pub fn refresh_overlap(&self) {
         let snapshots = self.snapshots(None);
-        let subjects = self.subjects.lock().unwrap();
+        let subjects = self.subjects.lock();
         let mut overlaps = vec![false; snapshots.len()];
         for subject in subjects.iter() {
             let matching: Vec<_> = snapshots

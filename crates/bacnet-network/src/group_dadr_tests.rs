@@ -9,13 +9,13 @@
 //! right after the refused ones is the first frame out of port B, which
 //! shows the refused ones went nowhere.
 
-use bacnet_encoding::npdu::{encode_npdu, Npdu, NpduAddress};
+use bacnet_encoding::npdu::{Npdu, NpduAddress, encode_npdu};
 use bacnet_npdu::RejectMessageToNetwork;
 use bacnet_npdu::{NetworkMessageType, RejectMessageReason};
 use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
 
-use crate::loopback_fixture::{next_from_router, recv, reject_of, RouterFixture, APDU, REMOTE};
+use crate::loopback_fixture::{APDU, REMOTE, RouterFixture, next_from_router, recv, reject_of};
 
 /// A group destination on port B (network 2000).
 const GROUP: u8 = 0xFF;

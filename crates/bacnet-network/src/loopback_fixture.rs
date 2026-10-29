@@ -7,14 +7,14 @@
 //! was sent to (#1243), and [`RouterFixture`]'s links carry data attributes
 //! both ways (#1289).
 
-use bacnet_encoding::npdu::{decode_npdu, Npdu};
+use bacnet_encoding::npdu::{Npdu, decode_npdu};
 use bacnet_npdu::{NetworkMessageType, RejectMessageToNetwork};
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::{DataAttribute, ReceivedNpdu, TransportPort};
 use bacnet_types::MacAddr;
 use bytes::Bytes;
 use tokio::sync::mpsc;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 use crate::layer::{ReceivedApdu, ReceivedNetworkControl};
 use crate::router::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
@@ -161,8 +161,8 @@ impl RouterFixture {
     }
 
     /// [`Self::start`], with the router's network-control receiver (#1175).
-    pub(crate) async fn start_with_network_control(
-    ) -> (Self, mpsc::Receiver<ReceivedNetworkControl>) {
+    pub(crate) async fn start_with_network_control()
+    -> (Self, mpsc::Receiver<ReceivedNetworkControl>) {
         let (fixture, controls) = Self::launch(true, None).await;
         (fixture, controls.expect("opted in"))
     }
@@ -251,7 +251,7 @@ impl RouterFixture {
     }
 
     pub(crate) async fn stop(mut self) {
-        self.router.stop().await;
+        self.router.stop().await.unwrap();
         self.peer_a.stop().await.unwrap();
         self.peer_b.stop().await.unwrap();
     }

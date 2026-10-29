@@ -11,11 +11,11 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::EventEnrollmentTransition;
 use crate::server::event_notification_payload::{
-    project_event_enrollment_payload, CapturedReferencedValue, CommittedNotificationPayload,
-    EventEnrollmentProjectionSnapshot,
+    CapturedReferencedValue, CommittedNotificationPayload, EventEnrollmentProjectionSnapshot,
+    project_event_enrollment_payload,
 };
 use crate::server::event_timestamp::{
-    confirm_event_timestamp, stage_event_timestamp, SampledEventClock,
+    SampledEventClock, confirm_event_timestamp, stage_event_timestamp,
 };
 
 /// Stage at which an Event Enrollment observation or commit was evaluated.

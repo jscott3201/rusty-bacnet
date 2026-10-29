@@ -4,6 +4,7 @@
 //! Setpoint_Reference as `BACnetSetpointReference`.
 
 use super::*;
+use bacnet_types::error::RemoteError;
 
 const CVR: PropertyIdentifier = PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE;
 const MVR: PropertyIdentifier = PropertyIdentifier::MANIPULATED_VARIABLE_REFERENCE;
@@ -53,7 +54,7 @@ fn assert_refused(
         .write_property(property, None, value.clone(), None)
         .unwrap_err();
     assert!(
-        matches!(error, Error::Protocol { class, code }
+        matches!(error, Error::Remote(RemoteError::Error { class, code })
             if class == ErrorClass::PROPERTY && code == expected),
         "{property:?} <- {value:?}: expected PROPERTY/{expected:?}, got {error:?}"
     );

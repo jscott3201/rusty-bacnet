@@ -7,9 +7,9 @@
 
 use std::time::Duration;
 
-use bacnet_transport::mstp::{LatenessHistogram, MstpDiagnosticsSnapshot, HOST_LATE_DEADLINE};
+use bacnet_transport::mstp::{HOST_LATE_DEADLINE, LatenessHistogram, MstpDiagnosticsSnapshot};
 
-use super::{App, Link, Overlay, FLASH_FOR};
+use super::{App, FLASH_FOR, Link, Overlay};
 use crate::mstp::MstpArgs;
 use crate::tui::message::Command;
 use crate::tui::mstp::{MstpReport, Sample};

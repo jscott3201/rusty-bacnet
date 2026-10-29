@@ -3,12 +3,13 @@
 use bacnet_transport::bip::BvlcExchangeError;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
-use bacnet_types::error::{Error, ErrorDetail};
+use bacnet_types::error::{Error, ErrorDetail, RemoteError};
 use pyo3::create_exception;
 use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyBytes, PyDict, PyList, PyTuple, PyType};
 
+use crate::types::int_enums::{self, PyIntEnum};
 use crate::types::{PyObjectIdentifier, PyPropertyIdentifier};
 
 // Exception hierarchy: BacnetError (base) with subtypes
@@ -64,9 +65,11 @@ const DETAIL_ATTRIBUTES: [&str; 7] = [
 
 /// Convert a Rust `Error` into a Python exception.
 ///
-/// Protocol errors, rejects, and aborts carry structured integer attributes
+/// Protocol errors, rejects, and aborts carry structured attributes
 /// (`error_class`/`error_code` or `reason`) so Python callers can inspect them
-/// programmatically without parsing the message string. A protocol error also
+/// programmatically without parsing the message string. Each is a member of
+/// its IntEnum class (`ErrorClass`, `ErrorCode`, `RejectReason`,
+/// `AbortReason`), which compares equal to the wire integer (#1816). A protocol error also
 /// carries what a structured error body adds, `None` when absent:
 /// `first_failed_element_number` (ChangeList-Error, CreateObject-Error),
 /// `first_failed_write_attempt` (WritePropertyMultiple-Error) and
@@ -77,7 +80,7 @@ const DETAIL_ATTRIBUTES: [&str; 7] = [
 /// threads, so the attributes are set through the exit gate (#1002).
 pub fn to_py_err(err: Error) -> PyErr {
     match err {
-        Error::Protocol { class, code } => protocol_error(
+        Error::Remote(RemoteError::Error { class, code }) => protocol_error(
             format!(
                 "BACnet error: class={} code={}",
                 class.to_raw(),
@@ -102,22 +105,20 @@ pub fn to_py_err(err: Error) -> PyErr {
             Some(*detail),
         ),
         Error::Timeout(_) => BacnetTimeoutError::new_err(err.to_string()),
-        Error::Reject { reason } => {
+        Error::Remote(RemoteError::Reject { reason }) => {
             let py_err =
                 BacnetRejectError::new_err(format!("BACnet reject: reason={}", reason.to_raw()));
             let _ = crate::py_async::attach(|py| {
-                let val = py_err.value(py);
-                let _ = val.setattr("reason", reason.to_raw());
+                set_enum_attr(py_err.value(py).as_any(), "reason", reason);
                 Ok(())
             });
             py_err
         }
-        Error::Abort { reason } => {
+        Error::Remote(RemoteError::Abort { reason }) => {
             let py_err =
                 BacnetAbortError::new_err(format!("BACnet abort: reason={}", reason.to_raw()));
             let _ = crate::py_async::attach(|py| {
-                let val = py_err.value(py);
-                let _ = val.setattr("reason", reason.to_raw());
+                set_enum_attr(py_err.value(py).as_any(), "reason", reason);
                 Ok(())
             });
             py_err
@@ -166,8 +167,9 @@ pub fn to_py_err(err: Error) -> PyErr {
 /// #1841). A NAK raises `BacnetBvlcNakError` with the BBMD's `result_code`;
 /// no reply raises `BacnetTimeoutError`, so the two never share a class. A
 /// reply of the wrong kind raises `BacnetBvlcUnexpectedResponseError` with
-/// the `expected` and `got` BVLC function codes, and a local failure raises
-/// what [`to_py_err`] makes of it.
+/// the `expected` and `got` BVLC function codes. A request the transport
+/// refused before sending it (busy, or no free slot) raises a plain
+/// `BacnetError`, and a local failure raises what [`to_py_err`] makes of it.
 pub(crate) fn bvlc_exchange_err(err: BvlcExchangeError) -> PyErr {
     match err {
         BvlcExchangeError::Nak(code) => {
@@ -189,6 +191,7 @@ pub(crate) fn bvlc_exchange_err(err: BvlcExchangeError) -> PyErr {
             });
             py_err
         }
+        BvlcExchangeError::Refused(_) => BacnetError::new_err(err.to_string()),
         BvlcExchangeError::Transport(error) => to_py_err(error),
         other => BacnetError::new_err(other.to_string()),
     }
@@ -250,8 +253,18 @@ fn transport_error_type(py: Python<'_>) -> PyResult<&Py<PyType>> {
     })
 }
 
-/// `BacnetProtocolError` with `error_class` and `error_code` as the wire
-/// integers, so Python callers keep comparing them to plain numbers (#915).
+/// Set `name` on `error` to `value`'s IntEnum member, which compares equal
+/// to the wire integer (#915, #1816); the plain integer if the member can't
+/// be made.
+fn set_enum_attr<T: PyIntEnum>(error: &Bound<'_, PyAny>, name: &str, value: T) {
+    let _ = match int_enums::to_py(error.py(), value) {
+        Ok(member) => error.setattr(name, member),
+        Err(_) => error.setattr(name, value.raw()),
+    };
+}
+
+/// `BacnetProtocolError` with `error_class` and `error_code` as `ErrorClass`
+/// and `ErrorCode` members, which compare equal to the wire integers.
 fn protocol_error(
     message: String,
     class: ErrorClass,
@@ -261,8 +274,8 @@ fn protocol_error(
     let py_err = BacnetProtocolError::new_err(message);
     let _ = crate::py_async::attach(|py| {
         let val = py_err.value(py);
-        let _ = val.setattr("error_class", u32::from(class.to_raw()));
-        let _ = val.setattr("error_code", u32::from(code.to_raw()));
+        set_enum_attr(val.as_any(), "error_class", class);
+        set_enum_attr(val.as_any(), "error_code", code);
         for name in DETAIL_ATTRIBUTES {
             let _ = val.setattr(name, py.None());
         }
@@ -376,7 +389,7 @@ mod tests {
             };
             let none = |error: &PyErr, name: &str| error.value(py).getattr(name).unwrap().is_none();
             // SERVICES / LIST_ELEMENT_NOT_FOUND at element 2 (#1026).
-            let change_list = to_py_err(Error::protocol(
+            let change_list = to_py_err(Error::with_detail(
                 ErrorClass::SERVICES,
                 ErrorCode::LIST_ELEMENT_NOT_FOUND,
                 Some(ErrorDetail::FirstFailedElementNumber(2)),
@@ -387,16 +400,16 @@ mod tests {
             assert_eq!(number(&change_list, "first_failed_element_number"), Some(2));
             assert!(none(&change_list, "vendor_id"));
 
-            let plain = to_py_err(Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::UNKNOWN_OBJECT,
-            });
+            let plain = to_py_err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::UNKNOWN_OBJECT,
+            ));
             assert!(plain.is_instance_of::<BacnetProtocolError>(py));
             assert_eq!(number(&plain, "error_code"), Some(31));
             assert_eq!(number(&plain, "first_failed_element_number"), None);
 
             // #1047: the other bodies.
-            let write = to_py_err(Error::protocol(
+            let write = to_py_err(Error::with_detail(
                 ErrorClass::PROPERTY,
                 ErrorCode::WRITE_ACCESS_DENIED,
                 Some(ErrorDetail::FirstFailedWriteAttempt(
@@ -428,7 +441,7 @@ mod tests {
             assert_eq!(index, Some(3));
             assert!(none(&write, "first_failed_subscription"));
 
-            let private = to_py_err(Error::protocol(
+            let private = to_py_err(Error::with_detail(
                 ErrorClass::SERVICES,
                 ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
                 Some(ErrorDetail::PrivateTransfer {
@@ -447,7 +460,7 @@ mod tests {
                 .unwrap();
             assert_eq!(parameters, [0x21, 1]);
 
-            let vt_close = to_py_err(Error::protocol(
+            let vt_close = to_py_err(Error::with_detail(
                 ErrorClass::SERVICES,
                 ErrorCode::VT_SESSION_TERMINATION_FAILURE,
                 Some(ErrorDetail::VtSessionIdentifiers(vec![1, 4])),
@@ -498,6 +511,11 @@ mod tests {
                 "refused".into(),
             )));
             assert!(local.value(py).get_type().is(py.get_type::<BacnetError>()));
+
+            let busy = bvlc_exchange_err(BvlcExchangeError::Refused(
+                bacnet_transport::bip::ExchangeRefusal::Full,
+            ));
+            assert!(busy.value(py).get_type().is(py.get_type::<BacnetError>()));
         });
     }
 
@@ -559,6 +577,50 @@ mod tests {
             let other = to_py_err(Error::Transport(std::io::Error::other("closed")));
             assert!(other.is_instance(py, transport_error_type(py).unwrap().bind(py)));
             assert_eq!(errno(&other), None);
+        });
+    }
+
+    /// A raised error's class, code and reason are members of their IntEnum
+    /// classes, equal to the wire numbers; a value without a name is a
+    /// pseudo-member (#1816).
+    #[test]
+    fn raised_errors_carry_int_enum_members() {
+        use bacnet_types::enums::{AbortReason, RejectReason};
+        Python::initialize();
+        Python::attach(|py| {
+            let attr = |error: &PyErr, name: &str| error.value(py).getattr(name).unwrap();
+            let check = |value: Bound<'_, PyAny>, class: &Bound<'_, PyType>, raw: u32| {
+                assert!(value.is_instance(class).unwrap(), "{value:?}");
+                assert_eq!(value.extract::<u32>().unwrap(), raw);
+            };
+            let classes = (
+                int_enums::class::<ErrorClass>(py).unwrap().clone(),
+                int_enums::class::<ErrorCode>(py).unwrap().clone(),
+            );
+            let plain = to_py_err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::from_raw(300),
+            ));
+            check(attr(&plain, "error_class"), &classes.0, 2);
+            check(attr(&plain, "error_code"), &classes.1, 300);
+            assert!(
+                attr(&plain, "error_code")
+                    .getattr("name")
+                    .unwrap()
+                    .is_none()
+            );
+
+            let reject = to_py_err(Error::reject(RejectReason::UNRECOGNIZED_SERVICE));
+            assert!(reject.is_instance_of::<BacnetRejectError>(py));
+            let class = int_enums::class::<RejectReason>(py).unwrap();
+            check(attr(&reject, "reason"), class, 9);
+
+            let abort = to_py_err(Error::abort(AbortReason::from_raw(200)));
+            assert!(abort.is_instance_of::<BacnetAbortError>(py));
+            let class = int_enums::class::<AbortReason>(py).unwrap();
+            check(attr(&abort, "reason"), class, 200);
+            // The message keeps its numbers.
+            assert_eq!(abort.value(py).to_string(), "BACnet abort: reason=200");
         });
     }
 }

@@ -22,14 +22,14 @@ use bacnet_services::rpm::{
 use bacnet_services::who_has::{IHaveRequest, WhoHasObject, WhoHasRequest};
 use bacnet_services::wpm::{WritePropertyMultipleCursor, WritePropertyMultipleEvent};
 use bacnet_services::write_property::WritePropertyRequest;
+use bacnet_types::MacAddr;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::{
     EnableDisable, ErrorClass, ErrorCode, EventState, EventType, ObjectType, PropertyIdentifier,
     RejectReason,
 };
-use bacnet_types::error::{Error, ErrorDetail};
+use bacnet_types::error::{Error, ErrorDetail, RemoteError};
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue};
-use bacnet_types::MacAddr;
 
 use bytes::BytesMut;
 

@@ -1,5 +1,6 @@
 use super::*;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::error::RemoteError;
 
 #[tokio::test]
 async fn endpoint_rp_only_wire_omits_nonexecuted_cov_properties() {
@@ -88,7 +89,7 @@ async fn wire_contract(writes: bool, custom: bool) {
             "RP-only endpoint must omit {property:?} from Property_List"
         );
         assert!(
-            matches!(result, Err(Error::Protocol { class, code }) if class == ErrorClass::PROPERTY && code == ErrorCode::UNKNOWN_PROPERTY),
+            matches!(result, Err(Error::Remote(RemoteError::Error { class, code })) if class == ErrorClass::PROPERTY && code == ErrorCode::UNKNOWN_PROPERTY),
             "nonexecuted COV property must be unknown"
         );
     }
@@ -115,11 +116,11 @@ impl BACnetObject for CustomDevice {
     ) -> Result<PropertyValue, Error> {
         match property {
             PropertyIdentifier::OBJECT_IDENTIFIER => {
-                return Ok(PropertyValue::ObjectIdentifier(oid(123)))
+                return Ok(PropertyValue::ObjectIdentifier(oid(123)));
             }
             PropertyIdentifier::VENDOR_IDENTIFIER => return Ok(PropertyValue::Unsigned(42)),
             PropertyIdentifier::MAX_APDU_LENGTH_ACCEPTED => {
-                return Ok(PropertyValue::Unsigned(1476))
+                return Ok(PropertyValue::Unsigned(1476));
             }
             _ => {}
         }
@@ -312,7 +313,7 @@ async fn endpoint_wildcard_keeps_frozen_identity_and_identity_free_selection_sta
                 let result = client.read_property(&mac, wildcard, property, None).await;
                 if composed && phase == 1 {
                     assert!(
-                        matches!(result, Err(Error::Protocol { class, code })
+                        matches!(result, Err(Error::Remote(RemoteError::Error { class, code }))
                         if class == ErrorClass::OBJECT && code == ErrorCode::UNKNOWN_OBJECT),
                         "{result:?}"
                     );

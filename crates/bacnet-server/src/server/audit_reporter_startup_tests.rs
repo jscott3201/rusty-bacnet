@@ -177,13 +177,15 @@ async fn target_reporter_set_validation_precedes_transport_start() {
         vec![first, oid(ObjectType::AUDIT_REPORTER, 2)],
     ] {
         let transport = AuditCapture::default();
-        assert!(start_profiles(
-            selected,
-            Some(oid(ObjectType::DEVICE, 20)),
-            transport.clone()
-        )
-        .await
-        .is_err());
+        assert!(
+            start_profiles(
+                selected,
+                Some(oid(ObjectType::DEVICE, 20)),
+                transport.clone()
+            )
+            .await
+            .is_err()
+        );
         assert!(!transport.started.load(Ordering::Acquire));
         assert!(transport.sent.lock().unwrap().is_empty());
     }

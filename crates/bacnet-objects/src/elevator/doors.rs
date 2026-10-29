@@ -18,6 +18,7 @@
 //! element when the car has one door; `door_values` checks each element. A
 //! refused write changes nothing.
 
+use crate::prelude::*;
 use bacnet_types::constructed::{
     BACnetAssignedLandingCalls, BACnetLandingDoorStatus, BACnetLiftCarCallList,
 };

@@ -1,5 +1,5 @@
 use super::*;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 async fn malformed_management_ack(function: BvlcFunction, payload_len: usize) -> BvlcExchangeError {
     let server = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))

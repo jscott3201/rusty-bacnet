@@ -1,15 +1,15 @@
 //! A received frame, from its link source to the decision on its APDU.
 
+use super::Group;
+use super::Storage;
 use super::config::Options;
 use super::counters::bump;
 use super::host::Host;
 use super::tasks::Task;
-use super::Group;
-use super::Storage;
-use crate::node::admit;
 pub(super) use crate::node::is_unconfirmed;
+use crate::node::{admit_npdu, admit_source};
 use crate::npdu::RejectMessageReason;
-use crate::npdu::{Address, AddressField, Malformed, NetworkPriority, Npdu, GLOBAL_NETWORK};
+use crate::npdu::{Address, AddressField, GLOBAL_NETWORK, Malformed, NetworkPriority, Npdu};
 use crate::table::{Reachability, Route};
 use crate::{Instant, Mac, PortId};
 
@@ -118,10 +118,16 @@ pub enum Discard {
     /// Its rewrite can't be written: longer than the scratch, or with a
     /// field no NPDU may carry, such as an SNET of 0.
     Unwritable,
-    /// A global broadcast seen within the duplicate time to live
-    /// ([`Options::duplicates`](super::Options::duplicates), #1698):
-    /// neither relayed nor delivered.
+    /// A global broadcast, or an I-Am-Router, Router-Busy,
+    /// Router-Available or Who-Is-Router the router would pass on, seen
+    /// within the duplicate time to live
+    /// ([`Options::duplicates`](super::Options::duplicates), #1698, #1810,
+    /// #2020): neither relayed, delivered nor applied.
     Duplicate,
+    /// A global broadcast or a Who-Is-Router whose SNET and SADR name the
+    /// router itself, on one of its ports: the router's own, come back
+    /// round a loop (#2021). Neither relayed nor delivered.
+    OwnSource,
     /// Only a [`Node`](crate::node::Node) gives this: an NPDU whose DNET
     /// names one network is for a device elsewhere, which a node that
     /// doesn't route drops (Clauses 6.5.2.1, 6.5.2.2 and 6.5.4).
@@ -166,14 +172,14 @@ fn local<'f>(at: &Arrival<'_>, npdu: &Npdu<'f>, group: bool, global: bool) -> Lo
 }
 
 impl<
-        const P: usize,
-        const R: usize,
-        const H: usize,
-        const D: usize,
-        const N: usize,
-        G: super::GroupClassifier,
-        const B: usize,
-    > Storage<P, R, H, D, N, G, B>
+    const P: usize,
+    const R: usize,
+    const H: usize,
+    const D: usize,
+    const N: usize,
+    G: super::GroupClassifier,
+    const B: usize,
+> Storage<P, R, H, D, N, G, B>
 {
     /// [`Router::receive`](super::Router::receive).
     pub(super) fn receive<'f>(
@@ -188,48 +194,57 @@ impl<
             bump(&mut self.counters.unknown_port);
             return Received::Discarded(Discard::UnknownPort);
         };
-        // The checks a node makes too, in one place (crate::node).
-        let admitted = match admit(frame.source, frame.npdu) {
-            Ok(admitted) => admitted,
-            Err(refused) => {
-                bump(self.counters.slot(refused.count));
-                // A global broadcast draws no reject, and an NPDU without a
-                // DNET has no network to name.
-                if let Some((source_mac, Some(dnet), source)) = refused.reject_to {
-                    if dnet != GLOBAL_NETWORK {
-                        let at = Arrival {
-                            port: frame.port,
-                            network: config.network,
-                            source: frame.source,
-                            source_mac,
-                            link_group: frame.link_group,
-                            now,
-                        };
-                        self.reject(
-                            &at,
-                            source,
-                            dnet,
-                            RejectMessageReason::ADDRESSING_ERROR,
-                            host,
-                        );
+        // The checks a node makes too, in one place (crate::node). The
+        // refusal carries no copy of the link source: the one arrival
+        // built here serves the reject path and the accepted frame alike.
+        let refused = match admit_source(frame.source) {
+            Err(refused) => refused,
+            Ok(source_mac) => {
+                let at = Arrival {
+                    port: frame.port,
+                    network: config.network,
+                    source: frame.source,
+                    source_mac,
+                    link_group: frame.link_group,
+                    now,
+                };
+                match admit_npdu(frame.npdu) {
+                    Ok(npdu) => return self.dispatch(&at, &npdu, options, host),
+                    Err(refused) => {
+                        // A global broadcast draws no reject, and an NPDU
+                        // without a DNET has no network to name.
+                        if let Some((Some(dnet), source)) = refused.reject_to
+                            && dnet != GLOBAL_NETWORK
+                        {
+                            self.reject(
+                                &at,
+                                source,
+                                dnet,
+                                RejectMessageReason::ADDRESSING_ERROR,
+                                host,
+                            );
+                        }
+                        refused
                     }
                 }
-                return Received::Discarded(refused.discard);
             }
         };
-        let npdu = admitted.npdu;
-        let at = Arrival {
-            port: frame.port,
-            network: config.network,
-            source: frame.source,
-            source_mac: admitted.source,
-            link_group: frame.link_group,
-            now,
-        };
+        bump(self.counters.slot(refused.count));
+        Received::Discarded(refused.discard)
+    }
+
+    /// Hand an admitted frame to the network-message or the APDU path.
+    fn dispatch<'f>(
+        &mut self,
+        at: &Arrival<'f>,
+        npdu: &Npdu<'f>,
+        options: &Options,
+        host: &mut impl Host,
+    ) -> Received<'f> {
         if let Some(kind) = npdu.message_type {
-            return self.network_message(&at, &npdu, kind, options, host);
+            return self.network_message(at, npdu, kind, options, host);
         }
-        self.route_apdu(&at, &npdu, options, host)
+        self.route_apdu(at, npdu, options, host)
     }
 
     /// Deliver or route an APDU by its DNET.
@@ -244,6 +259,9 @@ impl<
             return Received::Local(local(at, npdu, at.link_group, false));
         };
         if destination.network == GLOBAL_NETWORK {
+            if self.dropped_as_own(npdu) {
+                return Received::Discarded(Discard::OwnSource);
+            }
             if let Some(duplicates) = options.duplicates {
                 // Keyed by its origin: the SNET and SADR it carries, or
                 // those a relay would add.
@@ -305,6 +323,25 @@ impl<
         }
         let forwarded = self.forward(at, &npdu, &route, host);
         delivered.map_or(forwarded, Received::Local)
+    }
+
+    /// Whether `npdu`'s SNET and SADR name the router itself; if so, it is
+    /// counted (#2021). SNET and SADR name a message's first sender
+    /// (Clause 6.2.2), and a router adds them only for a sender on the
+    /// network it heard the message on (Clause 6.5.4), so on arrival they
+    /// can name this router only for a message it sent, come back: a
+    /// global broadcast it already sent on every port (Clauses 6.3.2,
+    /// 6.5.3), or a search of its own for a network (Clauses 6.5.3,
+    /// 6.6.3.1; Clause 6.6.3.2 has the relays add its address). Only
+    /// a loop, which the single path of Clauses 4.2 and 6.2.3 rules out,
+    /// brings one back. It needs no record, so it holds with
+    /// [`Options::duplicates`] off, as in firmware.
+    pub(super) fn dropped_as_own(&mut self, npdu: &Npdu<'_>) -> bool {
+        let own = npdu.source.is_some_and(|source| self.is_own(source));
+        if own {
+            bump(&mut self.counters.own_source_drops);
+        }
+        own
     }
 
     /// The usable route to `dnet`, marked as used; or, when the table has

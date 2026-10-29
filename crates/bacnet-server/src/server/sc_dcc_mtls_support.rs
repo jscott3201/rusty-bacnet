@@ -5,7 +5,7 @@
 use crate::server::heap_futures::boxed;
 use crate::server::*;
 use bacnet_encoding::apdu::decode_apdu;
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
+use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_services::device_mgmt::DeviceCommunicationControlRequest;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};

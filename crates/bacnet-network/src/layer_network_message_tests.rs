@@ -20,10 +20,13 @@ fn control(bytes: &[u8], group: bool) -> ReceivedNetworkControl {
 }
 
 fn report(bytes: &[u8], group: bool) -> Option<NetworkReport> {
-    ReceivedNetworkReport::parse(&control(bytes, group)).map(|received| {
+    let control = control(bytes, group);
+    let active = ReceivedNetworkReport::parse(&control).map(|received| {
         assert_eq!(received.source_mac.as_slice(), [7]);
         received.report
-    })
+    });
+    assert_eq!(NetworkReport::parse_npdu(&control.npdu, group), active);
+    active
 }
 
 #[test]

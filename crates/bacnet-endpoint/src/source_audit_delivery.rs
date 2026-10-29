@@ -1,6 +1,6 @@
 //! Bounded source notification delivery and local communication-result mapping.
 use super::*;
-use bacnet_encoding::apdu::{encode_apdu, Apdu, ConfirmedRequest, UnconfirmedRequest};
+use bacnet_encoding::apdu::{Apdu, ConfirmedRequest, UnconfirmedRequest, encode_apdu};
 use bacnet_endpoint_core::coordinator::CanonicalPeer;
 use bacnet_endpoint_core::endpoint_ingress::EndpointEgressAdmissionError;
 use bacnet_npdu::NetworkPriority;
@@ -9,11 +9,12 @@ use bacnet_server::server::{
     __endpoint_run_notification_worker as run_notification_worker,
 };
 use bacnet_services::audit::AuditNotificationRequest;
+use bacnet_types::MacAddr;
 use bacnet_types::enums::{
     AbortReason, ConfirmedServiceChoice, ErrorClass, ErrorCode, RejectReason,
     UnconfirmedServiceChoice,
 };
-use bacnet_types::MacAddr;
+use bacnet_types::error::RemoteError;
 use bytes::BytesMut;
 use tokio::time::{Duration, Instant};
 
@@ -119,10 +120,10 @@ pub(super) fn admit(
     owner.spawn(async move {
         let _permit = permit;
         let sent = admit_encoded(&egress, mac, encoded, confirmed, deadline);
-        if matches!(sent, Err(EndpointEgressAdmissionError::QueueFull)) {
-            if let (Some(source), Some(owner)) = (source.upgrade(), weak_owner.upgrade()) {
-                failures::record_drop(&source, &owner, failure, timestamp);
-            }
+        if matches!(sent, Err(EndpointEgressAdmissionError::QueueFull))
+            && let (Some(source), Some(owner)) = (source.upgrade(), weak_owner.upgrade())
+        {
+            failures::record_drop(&source, &owner, failure, timestamp);
         }
         completion.finish(finish_send(sent, reserved, deadline).await);
     });
@@ -238,9 +239,9 @@ pub(super) async fn finish_send(
 pub(super) fn result<T>(outcome: &Result<T, Error>) -> Option<(ErrorClass, ErrorCode)> {
     let error = outcome.as_ref().err()?;
     let code = match error {
-        Error::Protocol { class, code } => return Some((*class, *code)),
+        Error::Remote(RemoteError::Error { class, code }) => return Some((*class, *code)),
         Error::Timeout(_) => ErrorCode::TIMEOUT,
-        Error::Abort { reason } => match *reason {
+        Error::Remote(RemoteError::Abort { reason }) => match *reason {
             AbortReason::OTHER => ErrorCode::ABORT_OTHER,
             AbortReason::BUFFER_OVERFLOW => ErrorCode::ABORT_BUFFER_OVERFLOW,
             AbortReason::INVALID_APDU_IN_THIS_STATE => ErrorCode::ABORT_INVALID_APDU_IN_THIS_STATE,
@@ -260,7 +261,7 @@ pub(super) fn result<T>(outcome: &Result<T, Error>) -> Option<(ErrorClass, Error
             reason if reason.to_raw() >= 64 => ErrorCode::ABORT_PROPRIETARY,
             _ => ErrorCode::OTHER,
         },
-        Error::Reject { reason } => match *reason {
+        Error::Remote(RemoteError::Reject { reason }) => match *reason {
             RejectReason::OTHER => ErrorCode::REJECT_OTHER,
             RejectReason::BUFFER_OVERFLOW => ErrorCode::REJECT_BUFFER_OVERFLOW,
             RejectReason::INCONSISTENT_PARAMETERS => ErrorCode::REJECT_INCONSISTENT_PARAMETERS,
@@ -292,55 +293,43 @@ mod tests {
         let reject_codes = [69, 59, 60, 61, 62, 63, 64, 65, 66, 67];
         for (reason, code) in abort_codes.into_iter().enumerate() {
             assert_eq!(
-                result::<()>(&Err(Error::Abort {
-                    reason: AbortReason::from_raw(reason as u8)
-                })),
+                result::<()>(&Err(Error::abort(AbortReason::from_raw(reason as u8)))),
                 Some((ErrorClass::COMMUNICATION, ErrorCode::from_raw(code)))
             );
         }
         for (reason, code) in reject_codes.into_iter().enumerate() {
             assert_eq!(
-                result::<()>(&Err(Error::Reject {
-                    reason: RejectReason::from_raw(reason as u8)
-                })),
+                result::<()>(&Err(Error::reject(RejectReason::from_raw(reason as u8)))),
                 Some((ErrorClass::COMMUNICATION, ErrorCode::from_raw(code)))
             );
         }
         for reason in [12, 63] {
             assert_eq!(
-                result::<()>(&Err(Error::Abort {
-                    reason: AbortReason::from_raw(reason)
-                })),
+                result::<()>(&Err(Error::abort(AbortReason::from_raw(reason)))),
                 Some((ErrorClass::COMMUNICATION, ErrorCode::OTHER))
             );
         }
         for reason in [10, 11, 63] {
             assert_eq!(
-                result::<()>(&Err(Error::Reject {
-                    reason: RejectReason::from_raw(reason)
-                })),
+                result::<()>(&Err(Error::reject(RejectReason::from_raw(reason)))),
                 Some((ErrorClass::COMMUNICATION, ErrorCode::OTHER))
             );
         }
         for reason in [64, 255] {
             assert_eq!(
-                result::<()>(&Err(Error::Abort {
-                    reason: AbortReason::from_raw(reason)
-                })),
+                result::<()>(&Err(Error::abort(AbortReason::from_raw(reason)))),
                 Some((ErrorClass::COMMUNICATION, ErrorCode::ABORT_PROPRIETARY))
             );
             assert_eq!(
-                result::<()>(&Err(Error::Reject {
-                    reason: RejectReason::from_raw(reason)
-                })),
+                result::<()>(&Err(Error::reject(RejectReason::from_raw(reason)))),
                 Some((ErrorClass::COMMUNICATION, ErrorCode::REJECT_PROPRIETARY))
             );
         }
         assert_eq!(
-            result::<()>(&Err(Error::Protocol {
-                class: ErrorClass::from_raw(512),
-                code: ErrorCode::from_raw(513)
-            })),
+            result::<()>(&Err(Error::protocol(
+                ErrorClass::from_raw(512),
+                ErrorCode::from_raw(513)
+            ))),
             Some((ErrorClass::from_raw(512), ErrorCode::from_raw(513)))
         );
         assert_eq!(result(&Ok(())), None);

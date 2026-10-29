@@ -7,8 +7,8 @@
 //! PROPERTY 2, RESOURCES 3, SERVICES 5; NO_SPACE_TO_ADD_LIST_ELEMENT 19,
 //! VALUE_OUT_OF_RANGE 37, LIST_ELEMENT_NOT_FOUND 81.
 
-use super::mutation_list_wire_tests::{change_list_error, list_request, wire, ADD, REMOVE};
-use super::mutation_tests::{oid, Fixture};
+use super::mutation_list_wire_tests::{ADD, REMOVE, change_list_error, list_request, wire};
+use super::mutation_tests::{Fixture, oid};
 use super::*;
 use crate::server::test_forwarder::TestForwarder;
 use bacnet_encoding::apdu::decode_apdu;

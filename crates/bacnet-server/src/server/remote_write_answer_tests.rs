@@ -65,7 +65,7 @@ async fn remote_write_ignores_answers_from_another_peer_or_for_another_service()
 #[tokio::test(start_paused = true)]
 async fn remote_write_error_reject_or_abort_ends_it_at_once_saying_why() {
     let h = start_local().await;
-    let answers: [(Answer, Refusal); 3] = [
+    let answers: [(Answer, RemoteError); 3] = [
         (
             |invoke_id| {
                 Apdu::Error(ErrorPdu {
@@ -76,7 +76,7 @@ async fn remote_write_error_reject_or_abort_ends_it_at_once_saying_why() {
                     error_data: Bytes::new(),
                 })
             },
-            Refusal::Error {
+            RemoteError::Error {
                 class: ErrorClass::PROPERTY,
                 code: ErrorCode::INVALID_DATA_TYPE,
             },
@@ -88,7 +88,9 @@ async fn remote_write_error_reject_or_abort_ends_it_at_once_saying_why() {
                     reject_reason: RejectReason::INVALID_PARAMETER_DATA_TYPE,
                 })
             },
-            Refusal::Reject(RejectReason::INVALID_PARAMETER_DATA_TYPE),
+            RemoteError::Reject {
+                reason: RejectReason::INVALID_PARAMETER_DATA_TYPE,
+            },
         ),
         (
             |invoke_id| {
@@ -98,7 +100,9 @@ async fn remote_write_error_reject_or_abort_ends_it_at_once_saying_why() {
                     abort_reason: AbortReason::SEGMENTATION_NOT_SUPPORTED,
                 })
             },
-            Refusal::Abort(AbortReason::SEGMENTATION_NOT_SUPPORTED),
+            RemoteError::Abort {
+                reason: AbortReason::SEGMENTATION_NOT_SUPPORTED,
+            },
         ),
     ];
     for (answer, refusal) in answers {

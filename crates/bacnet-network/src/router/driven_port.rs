@@ -6,13 +6,13 @@
 //! octets each way, refusing a longer send, and publishes changes to it
 //! only when the test hands it a watch.
 
-use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 
 use bacnet_npdu::NpduLimits;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
-use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
+use bacnet_types::error::Error;
 use bytes::Bytes;
 use tokio::sync::{mpsc, watch};
 

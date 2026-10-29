@@ -1,8 +1,8 @@
 use super::*;
 use crate::cov::{CovRecipient, CovSample};
+use bacnet_types::MacAddr;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
-use bacnet_types::MacAddr;
 use std::sync::atomic::Ordering;
 
 pub(super) fn context(process_id: u32) -> MultipleContextKey {

@@ -1,18 +1,18 @@
 use std::sync::Arc;
 
-use bacnet_encoding::apdu::{self, encode_apdu, Apdu, SegmentAck, SimpleAck};
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
+use bacnet_encoding::apdu::{self, Apdu, SegmentAck, SimpleAck, encode_apdu};
+use bacnet_encoding::npdu::{Npdu, NpduAddress, decode_npdu, encode_npdu};
 use bacnet_npdu::{NetworkMessageType, RejectMessageReason};
 use bacnet_transport::port::{ReceivedNpdu, TransportPort, TransportProvenance};
+use bacnet_types::MacAddr;
 use bacnet_types::enums::ConfirmedServiceChoice;
 use bacnet_types::error::Error;
-use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use tokio::time::{sleep, timeout, Duration};
+use tokio::time::{Duration, sleep, timeout};
 
-use super::{routed_path_limits::MAX_ROUTED_PATH_ENTRIES, BACnetClient, ClientConfig};
+use super::{BACnetClient, ClientConfig, routed_path_limits::MAX_ROUTED_PATH_ENTRIES};
 
 pub(super) const DNET: u16 = 100;
 
@@ -423,9 +423,11 @@ async fn reason_4_completes_exact_caller_learns_bound_and_does_not_retry() {
             .unwrap(),
         Err(Error::RoutedPathTooLong { dnet: DNET })
     ));
-    assert!(timeout(Duration::from_millis(150), outbound.recv())
-        .await
-        .is_err());
+    assert!(
+        timeout(Duration::from_millis(150), outbound.recv())
+            .await
+            .is_err()
+    );
 
     // The rejected 315-octet forwarded NPDU is an exclusive upper bound,
     // leaving 303 APDU octets for the next request.

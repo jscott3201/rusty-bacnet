@@ -1,6 +1,7 @@
 //! A Trend Log kept in storage (#1541); see [`crate::log_persistence`].
 
-use std::sync::Arc;
+use crate::prelude::*;
+use alloc::sync::Arc;
 
 use bacnet_types::constructed::BACnetLogRecord;
 use bacnet_types::error::Error;
@@ -9,7 +10,7 @@ use bacnet_types::primitives::{Date, Time};
 use super::TrendLogObject;
 use crate::log_buffer::LogRecordBuffer;
 use crate::log_persistence::store::{
-    fit_to_buffer_size, impl_durable_log, DurableLog, LogState, LogStore,
+    DurableLog, LogState, LogStore, fit_to_buffer_size, impl_durable_log,
 };
 use crate::log_persistence::{LogCommitCadence, LogPersistence};
 

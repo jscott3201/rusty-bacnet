@@ -1,5 +1,5 @@
 use super::AnalogInputObject;
-use std::borrow::Cow;
+use alloc::borrow::Cow;
 
 use bacnet_types::enums::PropertyIdentifier as P;
 

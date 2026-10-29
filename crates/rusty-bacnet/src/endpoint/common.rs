@@ -4,9 +4,10 @@
 //! preparation performs TLS/file/serial setup and reports setup errors through
 //! the startup Future. No post-start configuration mutation is exposed.
 
+use bacnet_types::error::RemoteError;
 use std::net::Ipv4Addr;
 
-use bacnet_endpoint::identity::{build_database_with_extra, DeviceIdentity};
+use bacnet_endpoint::identity::{DeviceIdentity, build_database_with_extra};
 use bacnet_objects::analog::{AnalogInputObject, AnalogValueObject};
 use bacnet_objects::audit::ObjectAuditPolicy;
 use bacnet_objects::binary::{BinaryInputObject, BinaryValueObject};
@@ -147,14 +148,14 @@ pub(crate) fn with_sc_port(
 ///
 /// Truth direction stays identity-first: Device Object_List is seeded with
 /// Device + ports + extras upfront. Duplicate names map to ValueError (server
-/// parity: `ObjectDatabase::add` reports `Error::Protocol { PROPERTY,
-/// DUPLICATE_NAME }`, never an Encoding string).
+/// parity: `ObjectDatabase::add` reports `Error::protocol(PROPERTY,
+/// DUPLICATE_NAME)`, never an Encoding string).
 pub(crate) fn build_database(
     identity: &DeviceIdentity,
     extra: Vec<Box<dyn BACnetObject>>,
 ) -> PyResult<ObjectDatabase> {
     build_database_with_extra(identity, extra).map_err(|e| match &e {
-        bacnet_types::error::Error::Protocol { class, code }
+        bacnet_types::error::Error::Remote(RemoteError::Error { class, code })
             if *class == ErrorClass::PROPERTY && *code == ErrorCode::DUPLICATE_NAME =>
         {
             PyValueError::new_err(format!("duplicate object name: {e}"))

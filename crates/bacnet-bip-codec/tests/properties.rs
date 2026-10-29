@@ -4,7 +4,7 @@
 use core::net::{Ipv4Addr, SocketAddrV4};
 
 use bacnet_bip_codec::{
-    decode, BdtEntries, BdtEntry, BvlcResultCode, Bvll, BvllError, BvllFrame, FdtEntries, FdtEntry,
+    BdtEntries, BdtEntry, BvlcResultCode, Bvll, BvllError, BvllFrame, FdtEntries, FdtEntry, decode,
 };
 use proptest::prelude::*;
 

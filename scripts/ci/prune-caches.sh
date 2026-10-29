@@ -69,19 +69,50 @@ while IFS=$'\t' read -r _ _ _ _ size; do
 done <<<"$entries"
 echo "$count cache entries, $(mib "$total") in all"
 
+# A DELETE may have reached GitHub despite a gateway failure. Retrying the
+# same cache ID is safe: an already-completed deletion returns 404.
+delete_cache() {
+  local id=$1 line=$2 attempt=1 out status
+  while true; do
+    if out=$(gh api -X DELETE "repos/$repo/actions/caches/$id" 2>&1); then
+      echo "deleted $line"
+      return 0
+    fi
+    # Match gh's JSON/plain HTTP diagnostics, choosing the last one over
+    # earlier body lookalikes. Scope or SSO guidance may follow that line.
+    # gh prints a compact JSON body with no trailing newline, so its
+    # diagnostic can follow the body's closing brace on the same line.
+    status=$(sed -n \
+      -e 's/^\(.*}\)\{0,1\}gh: .* (HTTP \([0-9][0-9][0-9]\))$/\2/p' \
+      -e 's/^\(.*}\)\{0,1\}gh: HTTP \([0-9][0-9][0-9]\)$/\2/p' <<<"$out" | tail -n 1)
+    case "$status" in
+      404)
+        # The other workflow's prune, or an earlier attempt, got there first.
+        echo "already gone: $line"
+        return 0 ;;
+      502|503|504)
+        if [ "$attempt" -lt 3 ]; then
+          echo "retrying cache $id after HTTP $status: attempt $((attempt + 1))/3 in ${attempt}s"
+          if ! sleep "$attempt"; then
+            echo "::error::could not wait before retrying cache $id"
+            return 1
+          fi
+          attempt=$((attempt + 1))
+          continue
+        fi ;;
+    esac
+    echo "::error::could not delete $line: $out"
+    return 1
+  done
+}
+
 freed=0 removed=0 failed=0
 while IFS=$'\t' read -r id ref key created size reason; do
   [ -n "$id" ] || continue
   line="$key on $ref, $(mib "$size"), created $created: $reason"
   if $dry_run; then
     echo "would delete $line"
-  elif out=$(gh api -X DELETE "repos/$repo/actions/caches/$id" 2>&1); then
-    echo "deleted $line"
-  elif grep -q 'HTTP 404' <<<"$out"; then
-    # The other workflow's prune got there first.
-    echo "already gone: $line"
-  else
-    echo "::error::could not delete $line: $out"
+  elif ! delete_cache "$id" "$line"; then
     failed=$((failed + 1))
     continue
   fi

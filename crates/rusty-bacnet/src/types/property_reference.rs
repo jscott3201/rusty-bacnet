@@ -10,17 +10,17 @@
 //! `door_members`, #1285); the object taking the references decides the
 //! rest, such as how many it holds.
 
-use bacnet_types::constructed::{device_identifier_is_device, BACnetDeviceObjectPropertyReference};
+use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, device_identifier_is_device};
 use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::ObjectIdentifier;
 use pyo3::exceptions::{PyOverflowError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyMapping, PyTuple};
 
+use super::PyPropertyIdentifier;
 use super::mapping::{
     fixed_integer, mapping, object_identifier, optional_item, required_item, validate_keys,
 };
-use super::PyPropertyIdentifier;
 
 const REQUIRED: &[&str] = &["object_identifier", "property_identifier"];
 const OPTIONAL: &[&str] = &["property_array_index", "device_identifier"];

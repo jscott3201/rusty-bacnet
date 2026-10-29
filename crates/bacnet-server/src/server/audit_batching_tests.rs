@@ -105,8 +105,8 @@ fn ordinary(f: &Fixture) -> Vec<AuditNotificationRequest> {
         .collect()
 }
 #[tokio::test(start_paused = true)]
-async fn delayed_target_audit_first_deadline_batches_preserve_timestamps_and_increase_never_postpones(
-) {
+async fn delayed_target_audit_first_deadline_batches_preserve_timestamps_and_increase_never_postpones()
+ {
     let mut f = server(delayed(10)).await;
     write_value(&f.server, None).await;
     tokio::time::advance(Duration::from_secs(9)).await;

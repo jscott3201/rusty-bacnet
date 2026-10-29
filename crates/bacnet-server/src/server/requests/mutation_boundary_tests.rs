@@ -1,4 +1,4 @@
-use super::mutation_tests::{apdu, assert_denied, cases, oid, route, Fixture, SOURCE};
+use super::mutation_tests::{Fixture, SOURCE, apdu, assert_denied, cases, oid, route};
 use super::*;
 use crate::mutation::MutationTarget;
 use crate::server::test_transport::TestTransport;

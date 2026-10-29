@@ -3,7 +3,7 @@ use super::*;
 use crate::server::test_transport::{SendMode, TestTransport};
 use bacnet_encoding::{
     apdu::decode_apdu,
-    npdu::{decode_npdu, encode_npdu, Npdu},
+    npdu::{Npdu, decode_npdu, encode_npdu},
 };
 use bacnet_network::{
     layer::ReceivedApdu,
@@ -232,7 +232,7 @@ async fn r7_deferred_read_and_overload_abort_keep_each_addressed_endpoint() {
     ));
     settled(&context).await;
     assert_eq!(context.request_tasks.counters().confirmed_active, 0);
-    routed.router.stop().await;
+    routed.router.stop().await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
@@ -303,7 +303,7 @@ async fn r7_lso_replay_keeps_apdu_only_and_uses_current_der_or_router_context() 
     assert_eq!(routed.response(3000, 3).await.1, original);
     settled(&context).await;
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    routed.router.stop().await;
+    routed.router.stop().await.unwrap();
 }
 
 #[path = "r7_endpoint_tests.rs"]

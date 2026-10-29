@@ -31,16 +31,20 @@ fn auto_and_explicit_reject_different_ambiguities_without_default_route_guessing
         select("fd12::2".parse().unwrap(), &entries).unwrap().index,
         4
     );
-    assert!(select(
-        "fd12::1".parse().unwrap(),
-        &[entries[0], candidate("fd12::1", 4)]
-    )
-    .is_err());
-    assert!(select(
-        Ipv6Addr::UNSPECIFIED,
-        &[entries[0], candidate("fd12::2", 3)]
-    )
-    .is_err());
+    assert!(
+        select(
+            "fd12::1".parse().unwrap(),
+            &[entries[0], candidate("fd12::1", 4)]
+        )
+        .is_err()
+    );
+    assert!(
+        select(
+            Ipv6Addr::UNSPECIFIED,
+            &[entries[0], candidate("fd12::2", 3)]
+        )
+        .is_err()
+    );
     assert!(select("fd12::9".parse().unwrap(), &entries).is_err());
 }
 

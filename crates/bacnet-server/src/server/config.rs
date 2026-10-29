@@ -1,6 +1,6 @@
 use super::*;
-use crate::mutation::MutationPolicy;
 use crate::ServerPolicy;
+use crate::mutation::MutationPolicy;
 
 /// Server configuration.
 #[derive(Clone)]
@@ -74,7 +74,7 @@ pub struct ServerConfig {
     /// reaches it, and neither [`mutation_policy`](Self::mutation_policy) nor
     /// [`policy`](Self::policy) covers this service, so restrict sources
     /// through the context. Refuse
-    /// with [`Error::Protocol`]: a panic or an [`Error::Reject`] is answered
+    /// with [`Error::protocol`]: a panic or an [`Error::reject`] is answered
     /// SERVICES / OTHER.
     pub on_reinitialize: Option<ReinitializeHandler>,
     /// Local mutation authorization mode (default: permissive). SC mTLS channel/peer
@@ -226,9 +226,9 @@ impl ServerConfig {
     /// The installed policy, if it decides mutations
     /// ([`ServerPolicy::decides_mutations`]). `None` takes the no-policy
     /// path: allowed without decoding for authorization.
-    pub(crate) fn mutation_decider(&self) -> Option<&dyn ServerPolicy> {
+    pub(crate) fn mutation_decider(&self) -> Option<&Arc<dyn ServerPolicy>> {
         self.policy
-            .as_deref()
+            .as_ref()
             .filter(|policy| policy.decides_mutations())
     }
 }
@@ -339,7 +339,8 @@ impl BipServerBuilder {
     /// the server is the BBMD that serves the group (Annex J.8.3), and its
     /// own BDT row must be two-hop. A registered Network Port serves the
     /// group as `BACnet_IP_Multicast_Address`, writable when the server
-    /// answers ReinitializeDevice and isn't a BBMD (#941).
+    /// answers ReinitializeDevice (#941); on a BBMD a written group is
+    /// activated together with the BDT, both or neither (#1963).
     pub fn multicast(mut self, multicast: Option<BipMulticast>) -> Self {
         self.multicast = multicast;
         self

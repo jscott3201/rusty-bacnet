@@ -27,7 +27,7 @@ use port_retry::{bind_eventually, rerun_on_lost_port};
 use bacnet_client::client::{BACnetClient, ClientConfig};
 use bacnet_transport::bip6::{Bip6ForeignDeviceConfig, Bip6Transport};
 use std::net::{Ipv6Addr, SocketAddrV6};
-use support::{fixture, udp, DEADLINE, GROUP};
+use support::{DEADLINE, GROUP, fixture, udp};
 use tokio::net::UdpSocket;
 
 const NODE: [u8; 3] = [0x12, 0x34, 0x56];

@@ -3,7 +3,7 @@
 //! the write, a denial leaves the rules as they were, and an allowed write
 //! lands.
 
-use super::mutation_tests::{apdu, assert_denied, oid, wpm, Fixture};
+use super::mutation_tests::{Fixture, apdu, assert_denied, oid, wpm};
 use super::*;
 use crate::mutation::MutationTarget;
 use bacnet_objects::access_control::AccessRightsObject;

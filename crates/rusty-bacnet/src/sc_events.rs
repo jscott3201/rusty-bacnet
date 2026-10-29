@@ -6,10 +6,12 @@ use std::time::Duration;
 use bacnet_transport::sc::{
     ScActiveHub, ScConnectionState, ScDialStage, ScDisconnectCause, ScEvent, ScLinkStatus,
 };
+use bacnet_types::enums::{ErrorClass, ErrorCode};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
 use crate::event_stream::LossyReceiver;
+use crate::types::IntEnumValue;
 
 fn hub_name(hub: ScActiveHub) -> &'static str {
     match hub {
@@ -155,18 +157,18 @@ impl PyScEvent {
 
     /// The NAK's error class, for a `"nak"` cause.
     #[getter]
-    fn error_class(&self) -> Option<u16> {
+    fn error_class(&self) -> Option<IntEnumValue<ErrorClass>> {
         match self.cause_of()? {
-            ScDisconnectCause::Nak { error_class, .. } => Some(error_class.to_raw()),
+            ScDisconnectCause::Nak { error_class, .. } => Some(IntEnumValue(*error_class)),
             _ => None,
         }
     }
 
     /// The NAK's error code, for a `"nak"` cause.
     #[getter]
-    fn error_code(&self) -> Option<u16> {
+    fn error_code(&self) -> Option<IntEnumValue<ErrorCode>> {
         match self.cause_of()? {
-            ScDisconnectCause::Nak { error_code, .. } => Some(error_code.to_raw()),
+            ScDisconnectCause::Nak { error_code, .. } => Some(IntEnumValue(*error_code)),
             _ => None,
         }
     }

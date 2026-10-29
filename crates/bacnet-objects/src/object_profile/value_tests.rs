@@ -50,7 +50,7 @@ fn object(
     store: Option<Arc<Memory>>,
 ) -> Result<Box<dyn ProfileValue>, Error> {
     macro_rules! build {
-        ($ty:ty $(, $extra:expr)?) => {
+        ($ty:ty $(, $extra:expr_2021)?) => {
             Ok(Box::new(match store {
                 None => <$ty>::with_access(1, "value", $($extra,)? access)?,
                 Some(store) => <$ty>::with_tags_persistence(1, "value", $($extra,)? access, store)?,

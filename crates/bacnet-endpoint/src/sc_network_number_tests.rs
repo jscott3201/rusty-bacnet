@@ -143,11 +143,13 @@ async fn sc_number_endpoint_blocked_write_flood_ack_handler_queue_and_canceled_s
             .await
         );
     }
-    assert!(bounded(enqueue())
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("queue is full"));
+    assert!(
+        bounded(enqueue())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("queue is full")
+    );
     peer.send(false, &write_npdu()).await;
     handled(session.database.as_ref().unwrap()).await;
     assert_eq!(observed.numbers_completed.load(Ordering::SeqCst), 0);

@@ -748,3 +748,6 @@ mod door;
 
 #[path = "table_13_1_access_input_tests.rs"]
 mod access_inputs;
+
+#[path = "local_authorization_tests.rs"]
+mod local_authorization;

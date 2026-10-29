@@ -213,6 +213,10 @@ impl PyScHub {
     ///     probe_ack_age_ms: Strictly exceeded age from reservation, checked on
     ///         later scans (default 5000); not a hard ACK deadline.
     ///     probe_send_budget_ms: Sink acquisition plus send budget (default 5000).
+    ///     probe_liveness_bound_ms: Strictly exceeded silence after an unanswered
+    ///         probe before retirement (default 360000, at most 86400000). A
+    ///         missed ACK alone does not retire a connector that sends anything
+    ///         since the probe, such as its own Heartbeat-Request (#2141).
     ///         Probe values must be whole milliseconds in 1..=i64::MAX and
     ///         representable by the platform monotonic clock.
     ///         These local probes do not replace initiating-node keepalive.
@@ -232,7 +236,7 @@ impl PyScHub {
     ///         and forwarded BVLC-Result; probe/control/cleanup/shutdown stay separate.
     ///         Timeout does not retire, retry, or send a fabricated Result.
     #[new]
-    #[pyo3(signature = (listen, cert, key, vmac, ca_cert=None, *, device_uuid=None, max_clients=256, max_handshakes=256, admission_policy="allow_all", graceful_disconnect_ack_ms=5000, graceful_ws_close_ms=5000, graceful_overall_ms=15000, handshake_tls_ms=10000, handshake_websocket_upgrade_ms=10000, handshake_connect_request_ms=10000, probe_scan_interval_ms=30000, probe_idle_age_ms=60000, probe_ack_age_ms=5000, probe_send_budget_ms=5000, broadcast_sender_burst=1024, broadcast_sender_per_second=128, broadcast_global_burst=4096, broadcast_global_per_second=512, relay_send_budget_ms=5000, certificate_bindings=None))]
+    #[pyo3(signature = (listen, cert, key, vmac, ca_cert=None, *, device_uuid=None, max_clients=256, max_handshakes=256, admission_policy="allow_all", graceful_disconnect_ack_ms=5000, graceful_ws_close_ms=5000, graceful_overall_ms=15000, handshake_tls_ms=10000, handshake_websocket_upgrade_ms=10000, handshake_connect_request_ms=10000, probe_scan_interval_ms=30000, probe_idle_age_ms=60000, probe_ack_age_ms=5000, probe_send_budget_ms=5000, probe_liveness_bound_ms=360000, broadcast_sender_burst=1024, broadcast_sender_per_second=128, broadcast_global_burst=4096, broadcast_global_per_second=512, relay_send_budget_ms=5000, certificate_bindings=None))]
     fn new(
         listen: &str,
         cert: &str,
@@ -253,6 +257,7 @@ impl PyScHub {
         probe_idle_age_ms: u64,
         probe_ack_age_ms: u64,
         probe_send_budget_ms: u64,
+        probe_liveness_bound_ms: u64,
         broadcast_sender_burst: u64,
         broadcast_sender_per_second: u64,
         broadcast_global_burst: u64,
@@ -312,6 +317,9 @@ impl PyScHub {
             Duration::from_millis(probe_ack_age_ms),
             Duration::from_millis(probe_send_budget_ms),
         )
+        .and_then(|policy| {
+            policy.with_liveness_bound(Duration::from_millis(probe_liveness_bound_ms))
+        })
         .map_err(|error| PyValueError::new_err(error.to_string()))?;
         let relay_send_budget = Duration::from_millis(relay_send_budget_ms);
         bacnet_transport::sc_hub::ScHubTlsConfig::validate_relay_send_budget(relay_send_budget)

@@ -11,7 +11,7 @@ mod support;
 #[ignore = "requires explicit isolated Docker SC pair and caller-provided peer credentials"]
 async fn docker_pair_read_property() {
     use bacnet_transport::sc_tls::ScNodeTlsConfig;
-    use rustls::pki_types::{pem::PemObject, PrivateKeyDer};
+    use rustls::pki_types::{PrivateKeyDer, pem::PemObject};
     let required = |name| std::env::var(name).expect("explicit smoke environment required");
     let url = required("SC_SMOKE_URL");
     let ca = required("SC_SMOKE_CA");
@@ -38,5 +38,7 @@ async fn docker_pair_read_property() {
     .unwrap();
     let peer = peer::Peer::connect_identity(&url, tls, 42, hub_vmac, hub_uuid).await;
     peer.read().await;
-    eprintln!("Verified mutual-TLS 1.3 exact hub VMAC/UUID Connect-Accept and Device:5000 / AI:1 ReadProperty values");
+    eprintln!(
+        "Verified mutual-TLS 1.3 exact hub VMAC/UUID Connect-Accept and Device:5000 / AI:1 ReadProperty values"
+    );
 }

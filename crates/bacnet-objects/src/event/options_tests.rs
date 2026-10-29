@@ -4,12 +4,13 @@
 use super::*;
 use bacnet_encoding::constructed::encode_object_property_reference;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
 fn code(result: Option<Result<(), Error>>) -> ErrorCode {
     match result {
-        Some(Err(Error::Protocol { class, code })) => {
+        Some(Err(Error::Remote(RemoteError::Error { class, code }))) => {
             assert_eq!(class, ErrorClass::PROPERTY);
             code
         }
@@ -235,9 +236,11 @@ fn the_inhibit_is_writable_only_without_a_reference_and_with_detection_on() {
 fn other_properties_are_left_to_the_object() {
     let mut options = ReportingOptions::default();
     assert!(options.read(P::EVENT_MESSAGE_TEXTS, None).is_none());
-    assert!(options
-        .write(P::DESCRIPTION, None, &text("d"), true)
-        .is_none());
+    assert!(
+        options
+            .write(P::DESCRIPTION, None, &text("d"), true)
+            .is_none()
+    );
     for row in REPORTING_OPTION_METADATA {
         assert!(!row.is_required());
         assert!(row.write_capability.is_writable());

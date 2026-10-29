@@ -4,6 +4,7 @@
 //! such as the B/IP broadcast IP at another port, has no route: it is refused
 //! at startup and as a change.
 use super::*;
+use bacnet_types::error::RemoteError;
 
 /// A MAC the generic link reports as a group destination once started.
 const GROUP: &[u8] = &[0x43];
@@ -92,7 +93,10 @@ async fn an_address_recipient_at_a_group_address_is_refused() {
     let Err(error) = address_logger(&BROADCAST_IP_ELSEWHERE).await else {
         panic!("a server started with an Address recipient at a group address");
     };
-    assert!(matches!(error, Error::Protocol { .. }), "{error}");
+    assert!(
+        matches!(error, Error::Remote(RemoteError::Error { .. })),
+        "{error}"
+    );
 
     let mut fixture = address_logger(&STATION).await.expect("a station starts");
     let change = |mac: &[u8]| {
@@ -104,17 +108,19 @@ async fn an_address_recipient_at_a_group_address_is_refused() {
     let recipient = PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT;
     let source = || crate::LocalCommandSource::ServerDevice;
     let server = &fixture.server;
-    assert!(server
-        .write_local(
-            &device,
-            recipient,
-            None,
-            change(&BROADCAST_IP_ELSEWHERE),
-            None,
-            source()
-        )
-        .await
-        .is_err());
+    assert!(
+        server
+            .write_local(
+                &device,
+                recipient,
+                None,
+                change(&BROADCAST_IP_ELSEWHERE),
+                None,
+                source()
+            )
+            .await
+            .is_err()
+    );
     let mut station = STATION;
     station[3] = 4;
     server

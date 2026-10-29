@@ -1,6 +1,7 @@
 use super::*;
 use crate::clock::{ClockFrame, ClockReader};
 use bacnet_types::enums::ErrorCode;
+use bacnet_types::error::RemoteError;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
@@ -471,7 +472,7 @@ fn file_has_no_status_flags_reliability_or_out_of_service() {
         let write = file.write_property(property, None, PropertyValue::Boolean(true), None);
         for result in [read, write] {
             match result {
-                Err(Error::Protocol { class, code }) => {
+                Err(Error::Remote(RemoteError::Error { class, code })) => {
                     assert_eq!(class, ErrorClass::PROPERTY);
                     assert_eq!(code, ErrorCode::UNKNOWN_PROPERTY);
                 }
@@ -608,7 +609,7 @@ fn file_unknown_property_error() {
     let file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
     let result = file.read_property(PropertyIdentifier::PRESENT_VALUE, None);
     assert!(result.is_err());
-    if let Err(Error::Protocol { code, .. }) = result {
+    if let Err(Error::Remote(RemoteError::Error { code, .. })) = result {
         assert_eq!(code, ErrorCode::UNKNOWN_PROPERTY);
     } else {
         panic!("expected Protocol error");

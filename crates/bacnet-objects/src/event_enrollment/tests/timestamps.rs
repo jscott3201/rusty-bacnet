@@ -4,6 +4,7 @@ use super::super::*;
 use crate::property_metadata::{PropertyConformance, PropertyMetadata, PropertyWriteCapability};
 use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::{BACnetTimeStamp, Date, Time};
 
 fn alert_source() -> ObjectIdentifier {
@@ -119,7 +120,7 @@ fn assert_property_error<T: std::fmt::Debug>(
     context: &str,
 ) {
     match result.expect_err(context) {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, ErrorClass::PROPERTY, "{context}");
             assert_eq!(code, expected, "{context}");
         }
@@ -435,7 +436,9 @@ fn alert_to_normal_acknowledgment_cannot_be_cleared() {
     assert_eq!(alert.acked_transitions, EventTransitionBits::all());
 
     alert.set_event_detection_enable(false);
-    assert!(alert
-        .set_acked_transitions_internal(EventTransitionBits::TO_NORMAL, false)
-        .is_err());
+    assert!(
+        alert
+            .set_acked_transitions_internal(EventTransitionBits::TO_NORMAL, false)
+            .is_err()
+    );
 }

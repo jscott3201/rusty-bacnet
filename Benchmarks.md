@@ -9,7 +9,10 @@ and decodes, how long a request takes on each
 transport, how many requests a server answers, what routing costs, how close
 MS/TP gets to the wire, and how small the embedded builds are. It also says
 how each number was measured, so you can repeat it, and where the numbers are
-weak.
+weak. [Section 10.1](#101-repeated-comparison-for-1979) adds a separate repeated
+comparison against the 0.15.0 development stack, measured later the same day.
+The earlier tables remain historical measurements; they are not pooled with
+that new dataset.
 
 ## Contents
 
@@ -185,8 +188,11 @@ A complete request takes about 80 nanoseconds to build, so encoding is a
 fraction of a percent of the 29-microsecond round trip in
 [section 4](#4-transports). Decoding a ReadProperty request is four times
 faster than in 0.13.0 (19.9 nanoseconds then). Decoding an NPDU (11.2
-nanoseconds then) and building a whole request (68.7 then) are slower;
-[section 10](#10-guidance-for-future-work) lists them.
+nanoseconds then) and building a whole request (68.7 then) were slower in
+that historical comparison. The repeated comparison in
+[section 10.1](#101-repeated-comparison-for-1979) confirms a decode difference
+and a smaller composite-encode difference under its recorded controls; the
+absolute timings differ from this table.
 
 ### 3.2 Portable `no_std` codecs and the router core
 
@@ -458,15 +464,17 @@ server connected to a hub in the same process.
 Throughput peaks at 5 to 10 clients on B/IP and B/IPv6 and falls by 20% to
 35% from there to 100; beyond the peak, more clients only lengthen the
 queue, and latency grows in proportion. BACnet/SC peaks later, at 50
-clients. No request failed up to 50 clients. At 100 clients some timed
-out: 3,355 of 638,181 on B/IP (0.5%), 2,153 on B/IPv6 (0.3%) and 289 on
-BACnet/SC (0.03%), and each 100-client step ran about 2 seconds past its
-10 seconds while the last requests waited for their timeouts. In 0.13.0,
-380 of 672,778 B/IP requests (0.06%) timed out at 100 clients. The `dev`
-branch before #1713's last cuts also timed out 1,700 to 3,200 requests at
-that step with the current harness, so this pass did not cause it;
-[section 10](#10-guidance-for-future-work) lists it. Peak resident memory
-was 49 megabytes on B/IP.
+clients. No request failed up to 50 clients. At 100 clients the historical
+harness counted 3,355 failed reads of 638,181 on B/IP (0.5%), 2,153 on B/IPv6
+(0.3%) and 289 on BACnet/SC (0.03%). It did not classify those failures, so
+these counts do not establish timeout counts. Each step included roughly two
+seconds of completion tail. The old 0.13.0 report counted 380 failures of
+672,778 B/IP requests (0.06%) using different setup timing and histogram
+ownership. Issue-reported pre-#1713 ranges are additional historical context,
+not a matched repeat dataset. The normalized B/IP comparison and typed errors
+in [section 10.1](#101-repeated-comparison-for-1979) replace the earlier causal
+claim; B/IPv6 and BACnet/SC failure categories were not remeasured. Peak resident
+memory in this historical B/IP run was 49 megabytes.
 
 ### 6.2 Object database size
 
@@ -943,15 +951,15 @@ Where the time goes, and what to measure next.
   the same model, under an older operating system and compiler; this run
   measured 28.7. An A/B of 0.8.0 against the current branch on one machine
   would show how much of the gap is left.
-- **Two encoding figures grew since 0.13.0.** Decoding an NPDU of 100
-  bytes went from 11.2 to 15.6 nanoseconds and building a whole
-  ReadProperty request from 68.7 to 82.1. Both are small next to the round
-  trip, but a bisect would find the change.
-- **Timeouts at 100 clients.** At 100 concurrent B/IP clients 0.5% of the
-  requests timed out, against 0.06% in 0.13.0, and the branch did the same
-  before #1713's last cuts. Under the same load B/IPv6 lost 0.3% and
-  BACnet/SC 0.03%. Profiling that step would show whether the server's
-  admission, the transport queue or the clients' timers are the limit.
+- **Two encoding differences remain measurable.** The repeated experiment
+  below confirms a consistent NPDU-decode increase and a smaller increase in
+  whole-request encoding. Component measurements narrow the latter question;
+  neither change has a demonstrated causal commit in this report.
+- **Admission refusals at 100 B/IP clients.** Fresh classified runs observe
+  `OUT_OF_RESOURCES` Aborts and matching global admission counters. The
+  historical failure counts were not timeout evidence. The higher refusal
+  rate from B to C still needs causal attribution; changing admission limits
+  is outside this measurement pass.
 - **Concurrency peaks early.** One server peaks at 5 to 10 clients over
   B/IP and B/IPv6 and loses up to a third beyond that. Profiling the
   server's dispatch under 25 to 100 clients would show whether the limit is
@@ -980,6 +988,172 @@ Where the time goes, and what to measure next.
 add, and the BBMD capacity scenario of
 [section 6.6](#66-bbmd-foreign-devices), which needs the Linux container's
 one address per foreign device.
+
+### 10.1 Repeated comparison for #1979
+
+This follow-up uses one Apple M5 (10 cores, 16 GiB), macOS 27.2 build
+26B5112a, Rust/Cargo 1.99.0 and isolated locked builds. A is v0.13.0
+`dca94f7f`; B is `f056aba2`, before #1713's final cuts; C is `5b6f5413`,
+the production stack plus the measured benchmark overlay `4d5ccc21`.
+The final PR also repairs a B/IPv6 setup diagnostic after measurement. That path
+is not called by the normalized B/IP or encoding workloads; their timed sources
+and frozen binaries are retained unchanged. Rebuilt binary identity and an
+unchanged final compilation closure are not claimed.
+The [run-level data and provenance](benchmarks/results/1979/README.md) retain
+full revisions, measured-source and executable hashes, commands, environment,
+original locks, raw-output hashes and qualification limitations.
+
+All three stress binaries compile the same request loop, timing, per-client
+histogram, failure accounting and cleanup as local modules. Small setup/error
+adapters bridge the historical APIs. An independent live read checks AI1's
+Present_Value bytes for 20.1 before each step. No production code, retry default,
+admission limit or lockfile was changed. Original dependency graphs remain;
+critical inspected runtime features/profiles match, with TLS/parser, host-tool
+and libc feature residuals disclosed in provenance. This compares complete
+locked stacks under the recorded controls, without isolating a single source
+change or guaranteeing identical code layout.
+
+**Encoding.** The original benchmark closures and buffer/copy operations are
+unchanged. Six complete invocations per A/C ran in ACCA order repeated three
+times, with 100 Criterion samples, a 3-second warm-up and 5-second measurement
+per workload. Values below are the median and range of the six run medians;
+paired ratios match adjacent per-revision run ordinals.
+
+| Workload | A median [range], ns | C median [range], ns | Paired C/A median [range] |
+| --- | --- | --- | --- |
+| Decode NPDU, 100-byte payload | 11.854 [11.834–11.898] | 16.061 [16.046–16.082] | 1.355 [1.352–1.357] |
+| Whole ReadProperty request | 109.407 [108.895–110.185] | 113.000 [111.081–115.387] | 1.031 [1.014–1.060] |
+
+The decode difference is consistent across runs. Whole-request encoding is
+also slower in every pair here, but its approximately 3% paired median change
+is smaller than the earlier single comparison. Absolute whole-request timings
+from the historical report were not reproduced under these recorded builds.
+
+A preplanned follow-up ran the three existing component workloads three times
+per A/C in AC, CA, AC order, using the same frozen executables and flags:
+
+| Standalone encoder | A median [range], ns | C median [range], ns | Paired C/A median [range] |
+| --- | --- | --- | --- |
+| ReadProperty service | 23.121 [23.087–23.124] | 30.404 [30.139–31.590] | 1.317 [1.304–1.366] |
+| Confirmed-request APDU | 23.711 [22.603–24.114] | 23.557 [23.494–23.614] | 0.991 [0.977–1.045] |
+| NPDU, 100-byte payload | 20.739 [20.587–20.920] | 21.958 [21.705–23.444] | 1.059 [1.054–1.121] |
+
+The service and NPDU encoder results point to narrower investigation; APDU
+pairs have mixed directions. These standalone workloads use different buffer
+sizes and payload/copy arrangements from the composite, so their costs cannot
+be added to establish the composite's cause. Section 10.2 adds a bounded
+historical NPDU decode attribution; later-current-head decode differences and
+precise encode attribution remain open in
+[#1979](https://github.com/jscott3201/rusty-bacnet/issues/1979).
+
+**One hundred B/IP clients.** A sanity curve at 1, 10, 50 and 100 clients ran
+once per stack; then ABCCBA ran five times, giving ten 100-client repeats per
+stack. Each step preconnected clients before a shared 10-second submission
+window, retained the five-second timeout and three retries, and included all
+in-flight completion time. All 42 curve/repeat steps accounted for every client
+and passed validity checks. The 1/10/50-client curves had no errors.
+
+| Stack | Error rate median [range], % | Successful reads/s median [range] | Successful p50 / p99 medians, µs | Elapsed median [range], s |
+| --- | --- | --- | --- | --- |
+| A | 0.071 [0.060–0.109] | 47,209 [42,363–59,918] | 1,216.5 / 2,178 | 13.582 [10.747–15.001] |
+| B | 0.350 [0.252–0.413] | 51,441 [41,323–56,782] | 1,093.5 / 1,993 | 12.400 [10.703–14.230] |
+| C | 0.474 [0.406–0.861] | 47,981 [45,265–54,822] | 1,070.5 / 2,005 | 12.768 [11.582–13.715] |
+
+Error rate is `errors / (successful + errors)` for each run. Every terminal
+failure was Abort reason 9, `OUT_OF_RESOURCES`; this is distinct from transaction
+timer expiry (ASHRAE 135-2020, Clause 18.10). Source dispatch sends that Abort
+when request capacity is refused. Each of the 42 steps independently satisfies
+`Abort count = abort_admitted` and `global overload = Abort + fallback dropped`,
+with zero peer overload. Across the ten repeats:
+
+| Stack | Aborts / admitted Abort workers | Global overload | Fallback responses dropped |
+| --- | --- | --- | --- |
+| A | 4,858 | 5,309 | 451 |
+| B | 21,787 | 22,378 | 591 |
+| C | 32,030 | 32,639 | 609 |
+
+The configured admission defaults remain 64 confirmed slots with four reserved
+for recovery, an ordinary peer limit of 16 and eight Abort workers. Endpoint
+counter samples do not measure the peak active population. Zero terminal
+Timeout or TSM_TIMEOUT results does not mean no internal retry deadline fired:
+failed calls sometimes exceeded five seconds, and successful calls can include
+retries. Completion tails remain visible in the elapsed column. Failure timing
+is recorded separately from successful p50/p99. All observed user-space B/IP
+receive/drop counters were zero; this does not exclude kernel loss, and
+`npdu_too_long` measures size refusals rather than general socket-send failures.
+
+The B-to-C error-rate difference is positive in all ten adjacent pairs: median
+0.146 percentage points, range 0.018–0.471. Its cause remains unproven; observing
+refusals before #1713's final cuts does not show that later changes had no effect.
+Throughput varies substantially between runs, so this data is not a claim of a
+stable throughput improvement. No OS UDP sampling or Linux repeat was needed
+to classify the observed terminal failures, and neither was performed. Causal
+attribution and any production optimization remain separate work under #1979
+and [#1978](https://github.com/jscott3201/rusty-bacnet/issues/1978).
+
+### 10.2 NPDU owned-decode attribution
+
+A separate fixed experiment brackets the historical owned-decoder transition.
+P is parent `eab0b4e7`, Q is child `a5192b89`, and R is Q with the parent's
+parsing algorithm adapted to Q's owned representation and error contract.
+Only the experimental R parser differs between Q/R; all controls live in
+scratch historical checkouts. No production parser or benchmark default changes.
+[The dataset and reproduction controls](benchmarks/results/1979-npdu/README.md)
+include full revisions, exact locks/source/binary hashes, all 54 estimates and
+5,400 samples, compiler-unit profiles, independent oracles and measured assembly.
+
+On the same Apple M5/macOS platform with Rust/Cargo 1.99.0, the predetermined
+`P Q R R Q P` order ran three times. Each complete invocation used 100 Criterion
+samples, a three-second warm-up and five-second measurement per workload. The
+original retained shared-`Bytes` clone/decode/owned-result-drop closure is
+unchanged. Untimed literal guards prepromote the retained allocation equally;
+this excludes first-clone promotion and uniquely owned input behavior. Values
+below are the median and range of six invocation medians, not pooled samples.
+
+| Workload | P median [range], ns | Q median [range], ns | R median [range], ns |
+| --- | --- | --- | --- |
+| Owned NPDU decode, 100-byte payload | 11.899 [11.839–11.940] | 14.662 [14.651–14.725] | 11.925 [11.725–12.008] |
+| Borrowed decode diagnostic | 4.513 [4.470–4.516] | 4.511 [4.506–4.513] | 4.513 [4.510–4.516] |
+| Shared buffer clone/drop diagnostic | 3.530 [3.518–3.533] | 3.531 [3.528–3.542] | 3.539 [3.528–3.549] |
+
+Pairing equal invocation ordinals gives owned Q/P median ratio 1.234
+[1.229–1.238], R/Q 0.813 [0.800–0.818], and R/P 1.000 [0.989–1.010].
+The historical child is consistently slower; the direct-parser control returns
+to the parent's range while retaining Q's ABI. Standalone borrowed decode and
+clone/drop paired medians remain near one. Their diagnostic costs cannot be
+added or subtracted to assign an owned-reconstruction cost.
+
+In the actual measured Q executable, the owned adapter calls the borrowed
+decoder out of line, materializes its 88-byte result and reconstructs the
+128-byte owned result. R parses directly into the same Q result/error types.
+Q/R's successful caller instructions match after relocation normalization, and
+both retain slice-related ownership bookkeeping. Owned decoder stack reservations
+are 336/368/304 bytes for P/Q/R. P's error representation differs from Q/R despite
+equal owned-result size, so P/Q alone is not an ABI-controlled comparison.
+
+This supports a bounded attribution to the compiled borrowed-view/owned-adapter
+strategy under Q's representation, rather than a causal claim about one call,
+layout or instruction. Code placement also changes with the direct parser. All
+variants passed 688 codec tests and 21 doctests, plus independent literal/error
+oracles (4 tests on P, 7 on Q/R); all timed invocations succeeded. The earlier
+preparation-only test-wrapper failure is preserved in provenance. This does not
+establish arbitrary-packet equivalence or a current-head production optimization.
+
+The earlier current-stack value of 16.061 ns in section 10.1 came from a different
+revision and experiment. Historical Q's 14.662 ns does not explain that entire
+gap, and subtracting the datasets would not quantify a later residual. Later
+current-head decode changes, full ReadProperty encoding attribution and admission
+refusal frequency remain open under
+[#1979](https://github.com/jscott3201/rusty-bacnet/issues/1979). This PR contains
+no production tuning, extra timing bracket or cross-platform performance claim.
+
+### 10.3 Address-copy experiment (#1978)
+
+The [address-copy experiment](benchmarks/results/1978-macaddr/README.md) reduced
+ReadProperty instruction counts in the measured Linux environment, but did not
+meet its fixed native latency acceptance criteria. The candidate was rejected
+and production source restored. The report retains every observation, the rejected
+patch and data-reconstruction tools; it does not qualify a production speedup.
 
 ## 11. How to reproduce
 

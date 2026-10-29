@@ -8,7 +8,7 @@ use bacnet_time::Instant;
 
 use core::fmt;
 
-use super::bdt::{distribution_address, Bdt, BdtError, TWO_HOP_MASK};
+use super::bdt::{Bdt, BdtError, TWO_HOP_MASK, distribution_address};
 use super::fdt::Fdt;
 use super::nat::Nat;
 use crate::{Arrival, LocalSubnet};

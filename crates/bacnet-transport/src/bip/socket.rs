@@ -461,6 +461,8 @@ impl BipSocket {
     /// and the tap sees each one sent.
     #[cfg(not(test))]
     pub(super) fn send_to<'a>(&'a self, buf: &'a [u8], target: SocketAddrV4) -> SendTo<'a> {
+        #[cfg(feature = "test-support")]
+        super::send_observer::attempted(&self.socket);
         self.send_to_socket(buf, target)
     }
 
@@ -472,6 +474,7 @@ impl BipSocket {
     /// that same [`SendTo`].
     #[cfg(test)]
     pub(super) async fn send_to(&self, buf: &[u8], target: SocketAddrV4) -> io::Result<usize> {
+        super::send_observer::attempted(&self.socket);
         if let Some(sink) = &self.sink {
             if sink.yields() {
                 tokio::task::yield_now().await;

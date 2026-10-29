@@ -4,7 +4,7 @@ use super::super::*;
 use crate::server::test_transport::{SendLog, TestTransport};
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::constructed::{decode_object_property_reference, decode_recipient};
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
+use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
 use bacnet_encoding::{primitives, tags};
 use bacnet_objects::analog::AnalogValueObject;
 pub(super) use bacnet_objects::device::{DeviceConfig, DeviceObject};

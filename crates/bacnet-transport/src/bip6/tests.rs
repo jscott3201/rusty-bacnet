@@ -5,7 +5,7 @@ use bytes::BytesMut;
 use tokio::net::UdpSocket;
 
 use super::frame::encoded;
-use super::ingress::{destination_vmac_matches, original_destination_matches, LocalBinding};
+use super::ingress::{LocalBinding, destination_vmac_matches, original_destination_matches};
 use super::*;
 use crate::port::TransportPort;
 

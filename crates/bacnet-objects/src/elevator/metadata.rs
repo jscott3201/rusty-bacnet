@@ -1,5 +1,5 @@
 use super::{ElevatorGroupObject, EscalatorObject, LiftObject};
-use std::borrow::Cow;
+use alloc::borrow::Cow;
 
 use bacnet_types::enums::PropertyIdentifier as P;
 

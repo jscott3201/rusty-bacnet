@@ -36,9 +36,11 @@ fn scale_reads_as_a_float_or_an_int_by_its_choice() {
         // float-scale [0] REAL 2.5, then integer-scale [1] INTEGER -3.
         let (tag, value) = read_single(py, P::SCALE, &[0x0C, 0x40, 0x20, 0x00, 0x00]);
         assert_eq!(tag, "scale");
-        assert!(value
-            .bind(py)
-            .is_exact_instance_of::<pyo3::types::PyFloat>());
+        assert!(
+            value
+                .bind(py)
+                .is_exact_instance_of::<pyo3::types::PyFloat>()
+        );
         assert_eq!(value.extract::<f64>(py).unwrap(), 2.5);
         let (tag, value) = read_single(py, P::SCALE, &[0x19, 0xFD]);
         assert_eq!(tag, "scale");

@@ -70,10 +70,10 @@ where
 mod bip {
     use core::net::{Ipv4Addr, SocketAddrV4};
 
-    use bacnet_bip_core::codec::{address_to_octets, BvlcFunction, Bvll, BvllFrame};
+    use bacnet_bip_core::LocalSubnet;
+    use bacnet_bip_core::codec::{BvlcFunction, Bvll, BvllFrame, address_to_octets};
     use bacnet_bip_core::node::{Addressed, Datagram, Foreign, Link, Mode, Node, SendRefusal};
     use bacnet_bip_core::port::Datagrams;
-    use bacnet_bip_core::LocalSubnet;
     use bacnet_router_core::Instant;
 
     /// The B/IP port of the network's devices.

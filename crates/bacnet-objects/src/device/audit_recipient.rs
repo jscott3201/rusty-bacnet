@@ -1,7 +1,7 @@
 //! Device-owned recipient state and the synchronous runtime mutation capability.
 use super::*;
+use alloc::sync::Weak;
 use bacnet_types::constructed::{BACnetAddress, BACnetRecipient};
-use std::sync::Weak;
 
 /// Actual remote requester context, supplied only after service authorization.
 #[doc(hidden)]
@@ -32,10 +32,7 @@ pub(super) struct RecipientState {
 }
 
 fn property_error(code: ErrorCode) -> Error {
-    Error::Protocol {
-        class: ErrorClass::PROPERTY,
-        code,
-    }
+    Error::protocol(ErrorClass::PROPERTY, code)
 }
 
 /// A scoped operation capability for the built-in Device. It deliberately does
@@ -193,10 +190,10 @@ impl DeviceObject {
             return Err(property_error(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY));
         }
         if priority.is_some_and(|p| !(1..=16).contains(&p)) {
-            return Err(Error::Protocol {
-                class: ErrorClass::SERVICES,
-                code: ErrorCode::PARAMETER_OUT_OF_RANGE,
-            });
+            return Err(Error::protocol(
+                ErrorClass::SERVICES,
+                ErrorCode::PARAMETER_OUT_OF_RANGE,
+            ));
         }
         if value == PropertyValue::Null {
             return Ok(());

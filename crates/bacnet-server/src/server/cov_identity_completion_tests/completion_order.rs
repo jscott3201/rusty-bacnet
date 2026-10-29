@@ -176,14 +176,15 @@ async fn cov_order_newer_failure_or_cancellation_does_not_block_older_success() 
                 b.release.add_permits(1);
                 newer.await;
             }
-            assert!(f
-                .table
-                .read()
-                .await
-                .get_subscription(sub.key())
-                .unwrap()
-                .last_notified_observation
-                .is_none());
+            assert!(
+                f.table
+                    .read()
+                    .await
+                    .get_subscription(sub.key())
+                    .unwrap()
+                    .last_notified_observation
+                    .is_none()
+            );
             a.release.add_permits(1);
             older.await;
             assert_eq!(
@@ -439,14 +440,15 @@ async fn cov_order_multiple_companion_never_borrows_selected_progress() {
     // A later report includes PV as an implicit source companion only.
     f.fire(true, std::slice::from_ref(&source)).await;
     let newest_source = observation(&f, &source).await;
-    assert!(f
-        .table
-        .read()
-        .await
-        .get_subscription(pv.key())
-        .unwrap()
-        .last_notified_observation
-        .is_none());
+    assert!(
+        f.table
+            .read()
+            .await
+            .get_subscription(pv.key())
+            .unwrap()
+            .last_notified_observation
+            .is_none()
+    );
     a.release.add_permits(1);
     older.await;
     assert_eq!(observation(&f, &source).await, newest_source);

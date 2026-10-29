@@ -1,5 +1,5 @@
 //! Deterministic write failure/cancellation seam with a real TLS incumbent.
-use super::super::super::{serve_handshake, DirectFrame, DirectWarnings, DirectWs, DirectWsRead};
+use super::super::super::{DirectFrame, DirectWarnings, DirectWs, DirectWsRead, serve_handshake};
 use super::*;
 use tokio::sync::oneshot;
 
@@ -71,9 +71,11 @@ async fn failed_cancelled_timed_out_accept_preserves_real_tls_incumbent() {
                 tokio::select! { _ = barrier => {}, _ = &mut future => panic!("send must wait") }
                 assert_eq!(listener.membership.counts(), (1, 1));
                 if mode == 2 {
-                    assert!(tokio::time::timeout(Duration::from_millis(1), &mut future)
-                        .await
-                        .is_err());
+                    assert!(
+                        tokio::time::timeout(Duration::from_millis(1), &mut future)
+                            .await
+                            .is_err()
+                    );
                 }
                 // Dropping the pinned future is explicit caller cancellation.
             }

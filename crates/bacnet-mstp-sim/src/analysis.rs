@@ -129,7 +129,7 @@ mod tests {
     use bacnet_mstp_codec::{FrameHeader, FrameType};
     use bacnet_mstp_core::Instant;
 
-    use super::{holds, Hold};
+    use super::{Hold, holds};
     use crate::line::Driver;
     use crate::report::WireFrame;
 

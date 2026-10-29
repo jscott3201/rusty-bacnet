@@ -9,7 +9,7 @@ use bacnet_types::enums::{
     EngineeringUnits, ErrorClass, ErrorCode, LifeSafetyOperation, LifeSafetyState,
     PropertyIdentifier as P, SilencedState,
 };
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::PropertyValue;
 
 use crate::traits::BACnetObject;
@@ -45,7 +45,7 @@ fn set_out_of_service(object: &mut dyn BACnetObject, out_of_service: bool) {
 
 fn assert_error(result: Result<(), Error>, class: ErrorClass, code: ErrorCode) {
     assert!(
-        matches!(result, Err(Error::Protocol { class: c, code: e })
+        matches!(result, Err(Error::Remote(RemoteError::Error { class: c, code: e }))
             if c == class && e == code),
         "expected {class:?} / {code:?}, got {result:?}"
     );

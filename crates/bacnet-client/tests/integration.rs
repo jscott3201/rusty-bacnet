@@ -6,7 +6,7 @@
 
 use bacnet_client::client::BACnetClient;
 use bacnet_encoding::apdu::{
-    self, encode_apdu, Apdu, ComplexAck, UnconfirmedRequest as UnconfirmedRequestPdu,
+    self, Apdu, ComplexAck, UnconfirmedRequest as UnconfirmedRequestPdu, encode_apdu,
 };
 use bacnet_network::layer::NetworkLayer;
 use bacnet_npdu::NetworkPriority;
@@ -19,7 +19,7 @@ use bacnet_types::enums::{
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::{Bytes, BytesMut};
 use std::net::Ipv4Addr;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 #[tokio::test]
 async fn full_read_property_round_trip() {

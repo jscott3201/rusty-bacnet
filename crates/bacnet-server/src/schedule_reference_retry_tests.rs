@@ -10,8 +10,8 @@
 //! 5 October 2026, 09:00, inside every Schedule's period. The clock is
 //! paused.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bacnet_objects::analog::AnalogOutputObject;
 use bacnet_objects::channel::ChannelObject;
@@ -27,13 +27,13 @@ use tracing::subscriber::Interest;
 use tracing::{Event, Level, Metadata, Subscriber};
 
 use super::reference_reliability_tests::{
-    database, health, indexed, oid, read, reference, FAULTED, HEALTHY,
+    FAULTED, HEALTHY, database, health, indexed, oid, read, reference,
 };
 use super::tests::SettableClock;
 use super::*;
 
-use bacnet_types::enums::EngineeringUnits;
 use PropertyIdentifier as P;
+use bacnet_types::enums::EngineeringUnits;
 
 fn msv(instance: u32) -> ObjectIdentifier {
     oid(ObjectType::MULTI_STATE_VALUE, instance)

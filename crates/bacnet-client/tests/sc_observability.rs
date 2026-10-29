@@ -359,7 +359,6 @@ async fn build_with_events_sees_the_first_connect() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn build_any_with_events_sees_the_first_connect() {
     use bacnet_transport::any::AnyTransport;
-    use bacnet_transport::mstp::NoSerial;
     let pki = Pki::new();
     let mut primary = pki.hub(0, "127.0.0.1:0", PRIMARY_VMAC).await.unwrap();
     let (mut client, mut events) = BACnetClient::sc_builder()
@@ -367,7 +366,7 @@ async fn build_any_with_events_sees_the_first_connect() {
         .tls_config(pki.node.clone())
         .vmac([0x02, 0, 0, 0, 0, 0x26])
         .device_uuid([0x26; 16])
-        .build_any_with_events::<NoSerial>()
+        .build_any_with_events()
         .await
         .unwrap();
     let AnyTransport::Sc(transport) = client.transport() else {

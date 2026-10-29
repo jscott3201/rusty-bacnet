@@ -2,7 +2,7 @@
 #![forbid(unsafe_code)]
 
 use bacnet_client::client::BACnetClient;
-use bacnet_encoding::apdu::{encode_apdu, Apdu, ConfirmedRequest as ConfirmedRequestPdu};
+use bacnet_encoding::apdu::{Apdu, ConfirmedRequest as ConfirmedRequestPdu, encode_apdu};
 use bacnet_network::layer::NetworkLayer;
 use bacnet_npdu::NetworkPriority;
 use bacnet_objects::analog::AnalogInputObject;
@@ -12,12 +12,12 @@ use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::bip::BipTransport;
+use bacnet_types::MacAddr;
 use bacnet_types::enums::{
     AbortReason, ConfirmedServiceChoice, EngineeringUnits, ObjectType, PropertyIdentifier,
     Segmentation,
 };
 use bacnet_types::primitives::ObjectIdentifier;
-use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
 use std::net::Ipv4Addr;
 use std::sync::Arc;

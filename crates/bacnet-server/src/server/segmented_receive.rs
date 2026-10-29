@@ -463,16 +463,16 @@ pub(super) fn remove_peer_aborted_request(
     received: &bacnet_network::layer::ReceivedApdu,
     decoded: &Apdu,
 ) {
-    if let Apdu::Abort(abort) = decoded {
-        if !abort.sent_by_server {
-            let key = segmented_receive_key(
-                &received.source_mac,
-                received.source_network.as_ref(),
-                abort.invoke_id,
-                received.provenance,
-            );
-            remove_matching_reassemblies(receivers, &key);
-        }
+    if let Apdu::Abort(abort) = decoded
+        && !abort.sent_by_server
+    {
+        let key = segmented_receive_key(
+            &received.source_mac,
+            received.source_network.as_ref(),
+            abort.invoke_id,
+            received.provenance.clone(),
+        );
+        remove_matching_reassemblies(receivers, &key);
     }
 }
 

@@ -1,0 +1,55 @@
+[package]
+name = "bacnet-ops"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+description = "UI-free BACnet operations core shared by the bacnet CLI, its TUI and its MCP server"
+keywords = ["bacnet", "building-automation", "hvac"]
+categories = ["network-programming"]
+
+[package.metadata.docs.rs]
+no-default-features = true
+features = ["sc-tls"]
+default-target = "x86_64-unknown-linux-gnu"
+targets = []
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+bacnet-types = { workspace = true, features = ["std"] }
+bacnet-encoding = { workspace = true, features = ["std"] }
+bacnet-services = { workspace = true, features = ["std"] }
+bacnet-transport = { workspace = true, features = ["ipv6"] }
+bacnet-client = { workspace = true, features = ["ipv6"] }
+bacnet-npdu.workspace = true
+bytes = { workspace = true, features = ["std"] }
+futures-util.workspace = true
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+bacnet-objects.workspace = true
+bacnet-server.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+tempfile = "3"
+
+[features]
+# The BACnet/SC transport, so the target grammar can tell an SC link from
+# B/IP when it formats addresses (`AddressStyle::of`).
+sc-tls = ["bacnet-transport/sc-tls", "bacnet-client/sc-tls"]
+# Frame builders for decode tests (`decode::testing`), for the CLI's
+# capture tests. Not a stable API.
+test-support = []
+
+[lints]
+workspace = true
+
+# The release that first publishes this crate. Until the website names that
+# release, its crate map links the source here instead of docs.rs (#1989).
+[package.metadata.website]
+first-release = "0.15.0"

@@ -7,11 +7,11 @@
 #[cfg(not(feature = "std"))]
 use alloc::{string::String, vec::Vec};
 
+use crate::MacAddr;
 use crate::bitstring::{DaysOfWeek, EventTransitionBits};
 use crate::enums::LifeSafetyState;
 use crate::error::Error;
 use crate::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
-use crate::MacAddr;
 
 mod action;
 pub use action::{BACnetActionCommand, BACnetActionList};
@@ -705,7 +705,7 @@ pub enum BACnetValueSource {
 // ---------------------------------------------------------------------------
 
 mod event_parameter;
-pub use event_parameter::{event_parameter_tag, BACnetEventParameter, ChangeOfValueCriteria};
+pub use event_parameter::{BACnetEventParameter, ChangeOfValueCriteria, event_parameter_tag};
 
 mod property_states;
 pub use property_states::{

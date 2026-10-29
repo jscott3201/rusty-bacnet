@@ -1,8 +1,8 @@
 //! Receive-only heartbeat and Disconnect admission after generic syntax decoding.
 
 use super::{
-    encode_sc_message, first_must_understand_destination_option_marker, ScFunction, ScMessage,
-    BROADCAST_VMAC, UNKNOWN_VMAC,
+    BROADCAST_VMAC, ScFunction, ScMessage, UNKNOWN_VMAC, encode_sc_message,
+    first_must_understand_destination_option_marker,
 };
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bytes::{Bytes, BytesMut};

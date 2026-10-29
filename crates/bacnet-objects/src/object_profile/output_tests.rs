@@ -41,7 +41,7 @@ profile_output!(MultiStateOutputObject);
 
 fn object(kind: ObjectType, store: Option<Arc<Memory>>) -> Result<Box<dyn ProfileOutput>, Error> {
     macro_rules! build {
-        ($ty:ty $(, $extra:expr)?) => {
+        ($ty:ty $(, $extra:expr_2021)?) => {
             Ok(Box::new(match store {
                 None => <$ty>::new(1, "output" $(, $extra)?)?,
                 Some(store) => <$ty>::with_tags_persistence(1, "output", $($extra,)? store)?,

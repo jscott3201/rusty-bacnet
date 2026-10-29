@@ -5,8 +5,8 @@
 //!
 //! DEVICE 0; OPERATIONAL_PROBLEM 25.
 
-use super::mutation_list_wire_tests::{change_list_error, list_request, wire, ADD};
-use super::mutation_tests::{oid, Fixture};
+use super::mutation_list_wire_tests::{ADD, change_list_error, list_request, wire};
+use super::mutation_tests::{Fixture, oid};
 use super::*;
 use bacnet_encoding::constructed::{
     encode_destination_list, encode_event_notification_subscription_list,
@@ -25,7 +25,7 @@ use bacnet_types::constructed::{
 };
 use bacnet_types::primitives::Time;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{mpsc, Mutex as StdMutex};
+use std::sync::{Mutex as StdMutex, mpsc};
 use std::time::Duration;
 
 pub(super) const WAIT: Duration = Duration::from_secs(10);

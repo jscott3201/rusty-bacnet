@@ -21,9 +21,9 @@ use crate::tui::app::monitor::{MonitorTab, Wizard};
 use crate::tui::app::watch::Screen;
 use crate::tui::app::{Link, Overlay};
 use crate::tui::monitor::lines::test_line::TestLine;
-use crate::tui::monitor::{analysis, Lines, MonitorPlan, MstpOptions};
+use crate::tui::monitor::{Lines, MonitorPlan, MstpOptions, analysis};
 use crate::tui::worker::session::{ConnectPlan, SessionOptions, TransportKind};
-use crate::tui::worker::{coordinator, EventSink, EVENT_CHANNEL_CAPACITY};
+use crate::tui::worker::{EVENT_CHANNEL_CAPACITY, EventSink, coordinator};
 
 const BAUD: u32 = 38_400;
 const PORT: &str = "/dev/ttyUSB7";
@@ -141,6 +141,7 @@ impl Run {
         let plan = MonitorPlan::new(port.into(), BAUD, 1);
         let mut options = SessionOptions {
             mstp: MstpOptions {
+                scan: Default::default(),
                 monitor: Some(plan.clone()),
                 lines,
                 thread: Default::default(),
@@ -624,9 +625,11 @@ async fn the_analysis_is_honest_about_what_the_line_shows() {
         &ANNOUNCE,
     );
     let sample = stats_of(&quiet).await;
-    assert!(analysis::propose(&sample)
-        .unwrap_err()
-        .contains("No master"));
+    assert!(
+        analysis::propose(&sample)
+            .unwrap_err()
+            .contains("No master")
+    );
 
     // A sole master at 4 polls round to itself: once its polls wrap at 6,
     // everything but 4 up to 6 is free and polled.
@@ -703,7 +706,15 @@ async fn the_monitor_session_closes_the_port_before_it_returns() {
     commands.send(Command::Disconnect).await.unwrap();
     let plan = MonitorPlan::new(PORT.into(), BAUD, 1);
     let lines = Lines::Test(Arc::clone(&line));
-    bounded(crate::tui::monitor::worker::serve(plan, &lines, &sink, rx)).await;
+    bounded(crate::tui::monitor::worker::serve(
+        plan,
+        &lines,
+        &sink,
+        rx,
+        &Default::default(),
+    ))
+    .await
+    .unwrap();
     assert!(!line.held(), "the port is still open");
     assert_eq!(events.recv().await, Some(WorkerEvent::Passive));
 }

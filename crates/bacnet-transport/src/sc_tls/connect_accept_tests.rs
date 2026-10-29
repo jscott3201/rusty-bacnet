@@ -2,8 +2,8 @@ use super::*;
 use crate::port::TransportPort;
 use crate::sc::{ScConnection, ScConnectionState, ScTransport};
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 
 const CONNECT_WAIT: Duration = Duration::from_millis(500);

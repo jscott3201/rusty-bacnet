@@ -1,0 +1,59 @@
+{
+  "base": "2d82e9a949bb57702f4672705a46b19345bb3d59",
+  "measured_B": "b1f6845eca586bc03b98c4445e82b54fd49fdc98",
+  "measured_B_tree": "54d9c7c240825d2fc98b2bdeea657bf08c2ac34e",
+  "original_inputs_sha256": "ce1de4aae2541a1f4999e8931c9ec2f763015d8e6474079730eec5e0f802b461",
+  "candidate_patch_sha256": "b265d1844ca0f20f085645d59a0aede4cd93deb675179f1e1b0db57e15e16938",
+  "original_source_tests": {
+    "A_nextest_pass": 4105,
+    "B_nextest_pass": 4108,
+    "A_doctests_pass": 43,
+    "B_doctests_pass": 43,
+    "B_no_allocator_subset_pass": 2,
+    "B_envelope_layout_pass": 1,
+    "strict_clippy_private_rustdoc": "passed; exact commands in commands.json"
+  },
+  "final_delivery_product_source": "restored byte-for-byte to base; historical A/B validations are not a new final-head Cargo gate",
+  "measured_B_proof": {
+    "at": "2026-10-23T13:28:43.404622+00:00",
+    "head": "b1f6845eca586bc03b98c4445e82b54fd49fdc98",
+    "tree": "54d9c7c240825d2fc98b2bdeea657bf08c2ac34e",
+    "base": "2d82e9a949bb57702f4672705a46b19345bb3d59",
+    "source": {
+      "crates/bacnet-client/src/client/dispatch.rs": "7b7d9203cbfa230159cd5c8e65dc6709bb7617059d029af5504635a9dee72148",
+      "crates/bacnet-client/src/client/requests.rs": "7c035636a759f6047d325ccdad560864e86f4699c9df723b4efd237a7dcd2cf7",
+      "crates/bacnet-client/src/client/transaction_peer.rs": "d858f5acfe63a9497d5095358b221ba918463f2d1c4965e7620ca002b415eaa5",
+      "crates/bacnet-endpoint-core/src/coordinator.rs": "441436a133f2bce99138a44a1ffb1e51f49b02b1cdefce70cddda14a7b15a187",
+      "crates/bacnet-endpoint-core/src/coordinator_peer_tests.rs": "91cf033243a15d5ab1973f82f98e4842472fe91db4710b0ed091dfdbf139ed73",
+      "crates/bacnet-server/src/server/lifecycle.rs": "151176580a93e013da7cd2b671794f8964cae7ae5fb59ce18c066ab63fbd9efb",
+      "crates/bacnet-server/src/server/request_peer.rs": "cb3d7dcd6f6e1ca0bc5b7616a9c9720629f1d359e179f301dd3accb2511bca48",
+      "changelog.d/1978-address-copies.md": "edc6fe6fb2c765fc3ace811059619c712eeff320b8d36a61965163307e48f1a9"
+    },
+    "clean": true,
+    "role": "immutable measured B candidate; not delivery approval"
+  },
+  "environment_before_matrix": "Fri Oct 23 13:33:29 UTC 2026\nmachdep.cpu.brand_string: Apple M5\nhw.ncpu: 10\nhw.memsize: 17179869184\nProductName:\t\tmacOS\nProductVersion:\t\t27.2\nBuildVersion:\t\t26B118\nNow drawing from 'Battery Power'\n -InternalBattery-0 (id=36372579)\t100%; discharging; 2:04 remaining present: true\nFilesystem      Size    Used   Avail Capacity iused ifree %iused  Mounted on\n/dev/disk3s5   460Gi   266Gi   165Gi    62%    2.6M  1.7G    0%   /System/Volumes/Data\n29.8.2 aarch64 CPUs=4 Memory=5155708928\n",
+  "environment_after_matrix": "Fri Oct 23 13:41:19 UTC 2026\nNow drawing from 'Battery Power'\n -InternalBattery-0 (id=36372579)\t97%; discharging; 1:44 remaining present: true\n",
+  "original_pre_and_post_process_snapshots": {
+    "pre-timing-environment": "c525f013ced209bdfe81b5d0d9b38b959bf67bb059a53ab329163869a6fed137",
+    "post-timing-environment": "cfea76cdb3086f1c5b0edc87d3d870b189706d17c997426343e0b7f9971417bb"
+  },
+  "local_evidence_root": "/tmp/rusty-batch10-macaddr-measurement",
+  "local_profiles": "outputs/callgrind-final/*.cg (all48), plus exploratory original; not uploaded",
+  "selected_profiles": {
+    "exploratory-A-ct-10000.cg.gz": {
+      "compressed_sha256": "70f92ecb0774ffae145187a71dc271e57b139c5281bf97b71939a96d3759acb8",
+      "raw_sha256": "2ef6c5e4a0d938c91ec632a303274ea9ee74bf1a61887fc856aa99c988cf70c4"
+    },
+    "final-B1-ct-10000.cg.gz": {
+      "compressed_sha256": "cdfa3bece78f545235ae0964549c4107261702e93e9f450fd9e2037786fd6cec",
+      "raw_sha256": "65674d2d42734aca79b3c9a22dc60f6fbb947a5764a3e158287474b2ceb70ef0"
+    }
+  },
+  "actual_binaries": "paths and SHA256 hashes in inputs.json; local evidence only, not distributed",
+  "original_analysis_and_runners": "measured/ retains original frozen bytes; corrected top-level reproduction owns fresh source-bound builds and immutable image execution, deliberately differing from historical scripts without changing observations",
+  "candidate_patch_artifact": "candidate.patch.gz",
+  "candidate_patch_compressed_sha256": "e0fcb8edf9d1e9a62216a19af456e80003272bc03adeb421edd7ec38dad845dd",
+  "candidate_patch_encoding": "gzip with empty filename and mtime 0; candidate_patch_sha256 identifies decompressed exact original bytes",
+  "reproduction_validation": "reproduction-validation.json and test_capture.py: isolated external-command mocks, no new Cargo/Docker builds or timings"
+}

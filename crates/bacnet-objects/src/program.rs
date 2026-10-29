@@ -3,10 +3,11 @@
 //! The Program object represents an application program running within
 //! a BACnet device. It exposes the program's lifecycle state.
 
+use crate::prelude::*;
+use alloc::borrow::Cow;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
-use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
 use crate::traits::BACnetObject;

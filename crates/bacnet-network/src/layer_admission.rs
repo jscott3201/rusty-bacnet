@@ -100,10 +100,11 @@ impl QueueAdmissionState {
             self.queued_by_source.values().sum::<usize>(),
             self.snapshot.current_depth
         );
-        debug_assert!(self
-            .queued_by_source
-            .values()
-            .all(|count| (1..=APDU_SOURCE_CAPACITY).contains(count)));
+        debug_assert!(
+            self.queued_by_source
+                .values()
+                .all(|count| (1..=APDU_SOURCE_CAPACITY).contains(count))
+        );
     }
 }
 

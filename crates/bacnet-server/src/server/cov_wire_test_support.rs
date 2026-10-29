@@ -4,7 +4,7 @@
 use super::*;
 use crate::server::test_transport::{SentFrame, TestTransport};
 use bacnet_encoding::apdu::encode_apdu;
-use bacnet_encoding::npdu::{encode_npdu, Npdu};
+use bacnet_encoding::npdu::{Npdu, encode_npdu};
 use bacnet_objects::analog::AnalogValueObject;
 use bacnet_objects::clock::{ClockFrame, ClockReader};
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
@@ -21,8 +21,8 @@ use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
 use bacnet_types::constructed::PropertyReference;
 use bacnet_types::enums::{EngineeringUnits, ObjectType};
 use bacnet_types::primitives::{Date, Time};
-use std::sync::atomic::AtomicBool;
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::AtomicBool;
 use tokio::sync::mpsc;
 
 pub(super) const PV: PropertyIdentifier = PropertyIdentifier::PRESENT_VALUE;
@@ -71,6 +71,11 @@ pub(super) type Frames = Arc<StdMutex<Vec<Apdu>>>;
 enum PlanAction {
     /// Hold it in the transport until a permit arrives.
     Hold(Arc<tokio::sync::Semaphore>),
+    /// Signal arrival and hold this notification at the transport.
+    BarrierHold {
+        entered: Arc<tokio::sync::Semaphore>,
+        release: Arc<tokio::sync::Semaphore>,
+    },
     /// Fail its send.
     Fail,
     /// Disable initiation right after sending it.
@@ -80,6 +85,7 @@ enum PlanAction {
 /// An action on the COV-multiple notification after `after` more of them.
 struct NotificationPlan {
     after: usize,
+    single: bool,
     action: PlanAction,
 }
 
@@ -112,61 +118,8 @@ struct ClockLink {
     plan: Plan,
 }
 
-impl ClockLink {
-    /// The plan's action if `apdu` is the COV-multiple notification it names.
-    fn planned(&self, apdu: &Apdu) -> Option<PlanAction> {
-        if !is_cov_multiple(apdu) {
-            return None;
-        }
-        let mut plan = self.plan.lock().unwrap();
-        match plan.as_mut() {
-            Some(pending) if pending.after > 0 => {
-                pending.after -= 1;
-                None
-            }
-            Some(_) => plan.take().map(|due| due.action),
-            None => None,
-        }
-    }
-
-    async fn send(self, frame: SentFrame) -> Result<(), Error> {
-        if frame.broadcast {
-            if let Some(next) = self.after_broadcast.lock().unwrap().take() {
-                *self.clock.0.lock().unwrap() = next;
-            }
-            return Ok(());
-        }
-        let apdu = frame.apdu();
-        match &apdu {
-            Apdu::SimpleAck(_) | Apdu::Error(_) => {
-                if let Some(next) = self.after_ack.lock().unwrap().take() {
-                    *self.clock.0.lock().unwrap() = next;
-                }
-            }
-            Apdu::UnconfirmedRequest(_) | Apdu::ConfirmedRequest(_)
-                if self.fail_notifications.load(Ordering::Acquire) =>
-            {
-                return Err(Error::Encoding("injected notification send failure".into()));
-            }
-            _ => {}
-        }
-        match self.planned(&apdu) {
-            Some(PlanAction::Hold(release)) => {
-                release.acquire().await.unwrap().forget();
-                self.frames.lock().unwrap().push(apdu);
-            }
-            Some(PlanAction::Fail) => {
-                return Err(Error::Encoding("injected notification send failure".into()));
-            }
-            Some(PlanAction::Disable(comm_state)) => {
-                self.frames.lock().unwrap().push(apdu);
-                comm_state.set_for_test(DccState::DisableInitiation);
-            }
-            None => self.frames.lock().unwrap().push(apdu),
-        }
-        Ok(())
-    }
-}
+#[path = "cov_wire_link.rs"]
+mod link;
 
 pub(super) struct Harness {
     pub(super) server: BACnetServer<TestTransport>,
@@ -293,7 +246,11 @@ impl Harness {
     }
 
     fn plan(&self, after: usize, action: PlanAction) {
-        *self.plan.lock().unwrap() = Some(NotificationPlan { after, action });
+        *self.plan.lock().unwrap() = Some(NotificationPlan {
+            after,
+            action,
+            single: false,
+        });
     }
 
     /// Hold the COV-multiple notification after `after` more in the
@@ -302,6 +259,24 @@ impl Harness {
         let release = Arc::new(tokio::sync::Semaphore::new(0));
         self.plan(after, PlanAction::Hold(Arc::clone(&release)));
         release
+    }
+
+    /// Causal arrival/release barriers for the next single or multiple report.
+    pub(super) fn hold_notification_barrier(
+        &self,
+        single: bool,
+    ) -> (Arc<tokio::sync::Semaphore>, Arc<tokio::sync::Semaphore>) {
+        let entered = Arc::new(tokio::sync::Semaphore::new(0));
+        let release = Arc::new(tokio::sync::Semaphore::new(0));
+        *self.plan.lock().unwrap() = Some(NotificationPlan {
+            after: 0,
+            single,
+            action: PlanAction::BarrierHold {
+                entered: Arc::clone(&entered),
+                release: Arc::clone(&release),
+            },
+        });
+        (entered, release)
     }
 
     /// Fail the send of the COV-multiple notification after `after` more.

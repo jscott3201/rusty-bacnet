@@ -1,8 +1,9 @@
 //! AuditLog (type 61) and AuditReporter (type 62) objects per Addendum 135-2016bj.
 
-use std::borrow::Cow;
-use std::collections::VecDeque;
-use std::sync::Arc;
+use crate::prelude::*;
+use alloc::borrow::Cow;
+use alloc::collections::VecDeque;
+use alloc::sync::Arc;
 
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter, LogStatus};
 use bacnet_types::constructed::{
@@ -43,10 +44,10 @@ mod reporter_object;
 mod reporter_status;
 mod staging;
 pub use notification::AuditLogNotificationSink;
+#[cfg(feature = "std")]
+pub use persistence::FileAuditLogPersistence;
+pub use persistence::{AuditLogPersistence, AuditLogSnapshot, MAX_AUDIT_RECORDS};
 use persistence::{validate_record, validate_snapshot};
-pub use persistence::{
-    AuditLogPersistence, AuditLogSnapshot, FileAuditLogPersistence, MAX_AUDIT_RECORDS,
-};
 pub use receipt::{
     CompletedAuditReceipt, ConfirmedAuditNotificationOutcome, MAX_AUDIT_RECEIPT_KEY_BYTES,
     MAX_COMPLETED_AUDIT_RECEIPTS,
@@ -117,7 +118,7 @@ pub trait AuditLogStorage: Send + Sync {
 /// caller's thread with nothing to catch its panics, so asserting the traits
 /// for it would claim more than the type can promise. It also keeps the
 /// result of each staged batch that settled before its request collected it,
-/// and that result's [`Error`] can wrap a [`std::io::Error`], which has
+/// and that result's [`Error`] can wrap a `std::io::Error`, which has
 /// neither trait. Caller clocks get no unwind-safety bound.
 pub struct AuditLogObject {
     oid: ObjectIdentifier,
@@ -171,7 +172,7 @@ impl AuditLogObject {
                 }
                 validate_snapshot(&snapshot)?;
                 if snapshot.capacity != buffer_size {
-                    tracing::warn!(
+                    log_warn!(
                         audit_log = %oid,
                         configured = buffer_size,
                         stored = snapshot.capacity,
@@ -271,10 +272,10 @@ impl AuditLogObject {
             .as_ref()
             .and_then(|clock| clock.read_clock())
             .filter(|frame| frame.is_valid_actual_datetime())
-            .ok_or(Error::Protocol {
-                class: ErrorClass::DEVICE,
-                code: ErrorCode::OPERATIONAL_PROBLEM,
-            })?;
+            .ok_or(Error::protocol(
+                ErrorClass::DEVICE,
+                ErrorCode::OPERATIONAL_PROBLEM,
+            ))?;
         Ok((frame.local_date, frame.local_time))
     }
 
@@ -559,10 +560,10 @@ impl BACnetObject for AuditLogObject {
             p if p == PropertyIdentifier::LOG_BUFFER => {
                 Err(crate::log_buffer::log_buffer_read_denied())
             }
-            _ => Err(Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::UNKNOWN_PROPERTY,
-            }),
+            _ => Err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::UNKNOWN_PROPERTY,
+            )),
         }
     }
 
@@ -580,10 +581,10 @@ impl BACnetObject for AuditLogObject {
                 }
                 return self.commit_change(staging::StagedChange::LogEnable(v));
             }
-            return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::INVALID_DATA_TYPE,
-            });
+            return Err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::INVALID_DATA_TYPE,
+            ));
         }
         if property == PropertyIdentifier::BUFFER_SIZE {
             return self.write_buffer_size(&value);
@@ -591,20 +592,20 @@ impl BACnetObject for AuditLogObject {
         // Clause 12.64.11 keeps an Audit Log's Record_Count read-only, so no
         // peer can purge the log; the application uses `purge`.
         if property == PropertyIdentifier::RECORD_COUNT {
-            return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::WRITE_ACCESS_DENIED,
-            });
+            return Err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::WRITE_ACCESS_DENIED,
+            ));
         }
         if property == PropertyIdentifier::DESCRIPTION {
             if let PropertyValue::CharacterString(s) = value {
                 self.description = s;
                 return Ok(());
             }
-            return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::INVALID_DATA_TYPE,
-            });
+            return Err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::INVALID_DATA_TYPE,
+            ));
         }
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
@@ -653,7 +654,7 @@ impl BACnetObject for AuditLogObject {
         Some(self)
     }
 
-    fn advance_monotonic_time_internal(&mut self, _now: std::time::Duration) -> bool {
+    fn advance_monotonic_time_internal(&mut self, _now: core::time::Duration) -> bool {
         self.settle_finished();
         false
     }
@@ -684,8 +685,8 @@ pub struct AuditReporterObject {
     oid: ObjectIdentifier,
     name: String,
     status: Arc<AuditReporterStatus>,
-    change_sink: Option<std::sync::Weak<dyn AuditReporterChangeSink>>,
-    change_owner: std::sync::Weak<crate::database::AuditOwnership>,
+    change_sink: Option<alloc::sync::Weak<dyn AuditReporterChangeSink>>,
+    change_owner: alloc::sync::Weak<crate::database::AuditOwnership>,
     clock: Option<Arc<dyn ClockReader>>,
 }
 
@@ -697,7 +698,7 @@ impl AuditReporterObject {
             name: name.into(),
             status: Arc::new(AuditReporterStatus::default()),
             change_sink: None,
-            change_owner: std::sync::Weak::new(),
+            change_owner: alloc::sync::Weak::new(),
             clock: None,
         })
     }
@@ -751,7 +752,7 @@ impl AuditReporterObject {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 #[path = "audit/tests.rs"]
 mod tests;
 
@@ -759,7 +760,7 @@ mod tests;
 #[path = "audit/query_tests.rs"]
 mod query_tests;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 #[path = "audit/notification_tests.rs"]
 mod notification_tests;
 
@@ -767,11 +768,11 @@ mod notification_tests;
 #[path = "audit/receipt_tests.rs"]
 mod receipt_tests;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 #[path = "audit/persistence_receipt_tests.rs"]
 mod persistence_receipt_tests;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 #[path = "audit/persistence_schema_tests.rs"]
 mod persistence_schema_tests;
 
@@ -782,10 +783,10 @@ mod reporter_configuration;
 #[path = "audit/reporter_delay_tests.rs"]
 mod reporter_delay_tests;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 #[path = "audit/staging_tests.rs"]
 mod staging_tests;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 #[path = "audit/buffer_tests.rs"]
 mod buffer_tests;

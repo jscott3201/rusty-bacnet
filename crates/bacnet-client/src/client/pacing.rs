@@ -23,8 +23,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
+use bacnet_types::error::Error;
 use tokio::time::{Duration, Instant};
 
 use super::ConfirmedTarget;

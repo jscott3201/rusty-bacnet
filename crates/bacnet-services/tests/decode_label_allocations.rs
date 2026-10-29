@@ -37,6 +37,7 @@ use bacnet_services::virtual_terminal::VTDataRequest;
 use bacnet_services::who_am_i::{WhoAmIRequest, YouAreRequest};
 use bacnet_services::who_has::{WhoHasObject, WhoHasRequest};
 use bacnet_services::who_is::{DeviceInstanceRange, WhoIsRequest};
+use bacnet_types::MacAddr;
 use bacnet_types::bitstring::AuditOperationFlags;
 use bacnet_types::constructed::{BACnetAddress, BACnetRecipient};
 use bacnet_types::enums::{
@@ -44,7 +45,6 @@ use bacnet_types::enums::{
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
-use bacnet_types::MacAddr;
 use bytes::BytesMut;
 
 #[path = "support/counting_alloc.rs"]
@@ -513,7 +513,9 @@ fn limit_labels() {
         );
         assert_eq!(
             refusal(&high, decode),
-            format!("decoding error at offset 2: {service} high limit: [1] value 4294967296 exceeds u32"),
+            format!(
+                "decoding error at offset 2: {service} high limit: [1] value 4294967296 exceeds u32"
+            ),
         );
     }
 }
@@ -534,7 +536,9 @@ fn identity_labels() {
     ] {
         assert_eq!(
             refusal(&vendor, decode),
-            format!("decoding error at offset 0: {service} vendor-id: expected application-tagged Unsigned"),
+            format!(
+                "decoding error at offset 0: {service} vendor-id: expected application-tagged Unsigned"
+            ),
         );
         assert_eq!(
             refusal(&model, decode),

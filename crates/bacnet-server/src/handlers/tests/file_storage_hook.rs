@@ -10,14 +10,14 @@
 //! tests live here rather than in `file_persistence`.
 
 use super::file_access_method::{
-    assert_file_access_denied, file_oid, read_wire_for, record_file_db, write_wire_for, SENTINEL,
+    SENTINEL, assert_file_access_denied, file_oid, read_wire_for, record_file_db, write_wire_for,
 };
 use super::file_persistence::{
     assert_protocol_error, file_size, read_records, read_stream, record_count, write_records,
     write_stream,
 };
 use super::*;
-use bacnet_objects::file::{FileObject, DEFAULT_MAX_RECORD_COUNT};
+use bacnet_objects::file::{DEFAULT_MAX_RECORD_COUNT, FileObject};
 use bacnet_services::common::MAX_DECODED_ITEMS;
 use bacnet_services::file::{
     AtomicReadFileAck, FileAccessMethod, FileReadAckMethod, FileWriteAccessMethod,
@@ -47,10 +47,10 @@ impl BACnetObject for HookLessFile {
             p if p == PropertyIdentifier::FILE_ACCESS_METHOD => Ok(PropertyValue::Enumerated(
                 ObjectFileAccessMethod::STREAM_ACCESS.to_raw(),
             )),
-            _ => Err(Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::UNKNOWN_PROPERTY,
-            }),
+            _ => Err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::UNKNOWN_PROPERTY,
+            )),
         }
     }
 
@@ -61,10 +61,10 @@ impl BACnetObject for HookLessFile {
         _value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
-        Err(Error::Protocol {
-            class: ErrorClass::PROPERTY,
-            code: ErrorCode::WRITE_ACCESS_DENIED,
-        })
+        Err(Error::protocol(
+            ErrorClass::PROPERTY,
+            ErrorCode::WRITE_ACCESS_DENIED,
+        ))
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
@@ -345,10 +345,10 @@ impl BACnetObject for OpaqueReadOnlyFile {
             p if p == PropertyIdentifier::FILE_ACCESS_METHOD => Ok(PropertyValue::Enumerated(
                 ObjectFileAccessMethod::STREAM_ACCESS.to_raw(),
             )),
-            _ => Err(Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::UNKNOWN_PROPERTY,
-            }),
+            _ => Err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::UNKNOWN_PROPERTY,
+            )),
         }
     }
 

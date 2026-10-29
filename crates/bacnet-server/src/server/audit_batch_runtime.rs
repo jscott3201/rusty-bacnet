@@ -1,7 +1,7 @@
 //! One supervised scheduler; active sends are bounded by the existing shared permits.
 use super::audit_batch_queue::{AuditBatchQueue, LocalDisposition, QueuedAudit};
 use super::*;
-use futures_util::{stream::FuturesUnordered, StreamExt};
+use futures_util::{StreamExt, stream::FuturesUnordered};
 
 pub(super) fn start<T: TransportPort + 'static>(
     queue: Arc<AuditBatchQueue>,

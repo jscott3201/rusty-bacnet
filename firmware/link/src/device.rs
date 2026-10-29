@@ -53,7 +53,7 @@ use bacnet_mstp_codec::FrameType;
 use bacnet_mstp_core::{MasterCore, MasterState, MstpCoreConfig, StandardStorage};
 use bacnet_types::enums::{AbortReason, ErrorClass, ErrorCode, RejectReason};
 
-use app::{Scratch, ANSWER_LENGTH, MAX_INFO_FRAMES, MAX_MASTER};
+use app::{ANSWER_LENGTH, MAX_INFO_FRAMES, MAX_MASTER, Scratch};
 
 /// Unicast slots in the transmit queue. The device answers requests in
 /// the reply window, not through the queue, so one is plenty.
@@ -343,7 +343,7 @@ fn read_answer(npdu: &[u8]) -> Pdu {
 /// An Error's class and code: two application-tagged Enumerated values,
 /// and nothing after them.
 fn error_type(parameters: &[u8]) -> Option<(ErrorClass, ErrorCode)> {
-    use bacnet_encoding::primitives::{decode_application_value_ref, ApplicationValueRef};
+    use bacnet_encoding::primitives::{ApplicationValueRef, decode_application_value_ref};
     let (ApplicationValueRef::Enumerated(class), next) =
         decode_application_value_ref(parameters, 0).ok()?
     else {

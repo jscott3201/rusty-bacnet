@@ -10,19 +10,24 @@
 //! the value written, while the port keeps its group until activation.
 //! The view checks a written group when it is written, and the row takes
 //! writes only while the owner answers ReinitializeDevice and the view
-//! can change; otherwise it is listed read-only and refuses them. The
-//! B/IP transport's view of a BBMD that serves a group (Annex J.8.3) can't
-//! change: its own BDT row and its group go together, and the BBMD rows
-//! activate apart from this one (one activation for both is #1963).
+//! can change; otherwise it is listed read-only and refuses them.
+//!
+//! On a BBMD the group and the BDT go together: a BBMD that serves a group
+//! gives its own BDT row an all-ones mask (Annex J.8.3). When the BBMD's
+//! tables view takes the group ([`BbmdTables::changes_multicast_group`]), a
+//! written group waits with the BBMD rows instead (`pending`), is checked
+//! with them, and takes effect in the same activation, both or neither
+//! (#1963).
 
-use std::sync::Arc;
+use alloc::sync::Arc;
 
-use bacnet_types::bip_port::IpMulticast;
+use bacnet_types::bip_port::{BbmdChanges, BbmdTables, IpMulticast};
 use bacnet_types::enums::PropertyIdentifier as P;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 
 use super::NetworkPortObject;
+use super::bip_mode::LiveMode;
 use crate::common;
 
 /// A port's lent group and the value written to it, if any.
@@ -65,14 +70,25 @@ impl NetworkPortObject {
                 .is_some_and(super::ip_config::IpConfig::is_ipv4)
     }
 
+    /// The BBMD tables a written group goes to, with the rows, when this
+    /// port is a BBMD whose view takes its group (#1963).
+    pub(super) fn group_bbmd(&self) -> Option<&Arc<dyn BbmdTables>> {
+        match &self.mode {
+            LiveMode::Bbmd(tables) if tables.changes_multicast_group() => Some(tables),
+            _ => None,
+        }
+    }
+
     /// Whether a written group could take effect, so the row is writable.
     pub(super) fn activates_multicast(&self) -> bool {
+        let through_bbmd = self.group_bbmd().is_some_and(|tables| tables.can_change());
         self.activation
-            && self
-                .multicast
-                .view
-                .as_ref()
-                .is_some_and(|view| view.can_change())
+            && (through_bbmd
+                || self
+                    .multicast
+                    .view
+                    .as_ref()
+                    .is_some_and(|view| view.can_change()))
     }
 
     /// Read BACnet_IP_Multicast_Address: the written group while one
@@ -88,7 +104,10 @@ impl NetworkPortObject {
             .filter(|_| self.serves_multicast());
         Some(match view {
             Some(view) => {
-                let group = self.multicast.pending.unwrap_or_else(|| view.group());
+                let group = self
+                    .pending_group()
+                    .or(self.multicast.pending)
+                    .unwrap_or_else(|| view.group());
                 Ok(PropertyValue::OctetString(group.to_vec()))
             }
             None => Err(common::unknown_property_error()),
@@ -119,6 +138,17 @@ impl NetworkPortObject {
         let Ok(group) = <[u8; 4]>::try_from(octets.as_slice()) else {
             return Some(Err(common::value_out_of_range_error()));
         };
+        if let Some(tables) = self.group_bbmd() {
+            // Checked alone now; with the BDT waiting beside it at
+            // activation.
+            let mut changes = BbmdChanges::default();
+            changes.multicast_group = Some(group);
+            return Some(
+                tables
+                    .check_value(&changes)
+                    .map(|()| self.set_pending_group(group)),
+            );
+        }
         let view = self.multicast.view.as_ref()?;
         Some(
             view.check(group)

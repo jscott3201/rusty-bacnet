@@ -9,14 +9,14 @@
 //! the full-queue cases still fill.
 
 use std::cell::Cell;
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
-use bacnet_encoding::npdu::{encode_npdu, Npdu};
+use bacnet_encoding::npdu::{Npdu, encode_npdu};
 use bacnet_npdu::NetworkMessageType;
 use bacnet_npdu::NpduLimits;
-use bacnet_router_core::router::Options;
 use bacnet_router_core::Instant;
+use bacnet_router_core::router::Options;
 use bacnet_transport::port::{DataAttribute, ReceivedNpdu, TransportProvenance};
 use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
@@ -24,7 +24,7 @@ use tokio::sync::mpsc;
 
 use super::control_policy::ControlGate;
 use super::dispatch::{Outputs, PortDispatch, Shared};
-use super::engine::{tokio_clock, Engine, OPTIONS};
+use super::engine::{Engine, OPTIONS, tokio_clock};
 use super::local_control::LocalControl;
 use super::port_groups::PortGroups;
 use super::send_queue;
@@ -215,12 +215,7 @@ impl Harness {
             })
             .collect();
         let engine = Engine::new(&configs, tokio_clock(), options).unwrap();
-        let shared = Arc::new(Shared {
-            engine,
-            gate: Arc::clone(&gate),
-            networks: networks.to_vec(),
-            warnings: Default::default(),
-        });
+        let shared = Arc::new(Shared::new(engine, Arc::clone(&gate), networks.to_vec()));
         let (txs, rxs) = capacities.iter().map(|&n| send_queue::channel(n)).unzip();
         let (local_tx, apdus, counters) = AdmissionReceiver::channel(true);
         let mut harness = Self {
@@ -287,9 +282,10 @@ impl Harness {
     pub(super) fn learned(&self, network: u16, port: u8, next_hop: &[u8]) {
         let now = self.now();
         let next_hop = Mac::from_slice(next_hop).unwrap();
-        assert!(self
-            .table()
-            .add_learned(network, PortId(port), next_hop, now));
+        assert!(
+            self.table()
+                .add_learned(network, PortId(port), next_hop, now)
+        );
     }
 
     /// Take claims under hardened convergence.
@@ -354,6 +350,20 @@ impl Harness {
             link_layer_group: ctx.link_layer_group,
             data_attributes: ctx.data_attributes,
             provenance: ctx.provenance,
+            direct_response: None,
+            reply_tx: None,
+        });
+    }
+
+    /// Hand the raw `npdu` from `source_mac` to `port`, as its transport
+    /// would, with no encode in between.
+    pub(super) fn handle_frame(&mut self, port: usize, source_mac: &[u8], npdu: Bytes) {
+        self.ports[port].dispatch(ReceivedNpdu {
+            npdu,
+            source_mac: MacAddr::from_slice(source_mac),
+            link_layer_group: false,
+            data_attributes: Vec::new(),
+            provenance: TransportProvenance::unverified(),
             direct_response: None,
             reply_tx: None,
         });

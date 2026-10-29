@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Clippy and rustdoc for each publishable crate on its own, with default
 # features and only its lib/bin targets, denying warnings. Also covers the
-# feature-off builds of bacnet-types, bacnet-encoding and bacnet-services
-# (no_std with alloc) and of bacnet-cli (no TUI), and the rustdoc of the
+# feature-off builds of bacnet-types, bacnet-encoding, bacnet-services and
+# bacnet-objects (no_std with alloc) and of bacnet-cli (no TUI), and the rustdoc of the
 # MS/TP and B/IP crates with each storage feature alone. Every rustdoc run documents
 # private items, so a broken intra-doc link on an item that exists only in one
 # feature configuration fails here (#1192).
@@ -61,6 +61,12 @@ for crate in bacnet-types bacnet-encoding bacnet-services; do
   cargo_for clippy -p "$crate" --no-default-features --locked -- -D warnings
   cargo_for doc -p "$crate" --no-default-features --no-deps --locked --document-private-items
 done
+
+# bacnet-objects with alloc and without std (#1615). It has no build without
+# alloc: the database boxes every object.
+echo "==> bacnet-objects (no_std with alloc$label)"
+cargo_for clippy -p bacnet-objects --no-default-features --features alloc --locked -- -D warnings
+cargo_for doc -p bacnet-objects --no-default-features --features alloc --no-deps --locked --document-private-items
 
 # The rustdoc of the MS/TP and B/IP crates with each storage feature alone,
 # and of the router core with each glue feature alone. Their defaults have

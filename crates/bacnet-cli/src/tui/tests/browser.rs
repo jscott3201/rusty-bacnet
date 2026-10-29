@@ -3,6 +3,7 @@
 //! the ReadProperty fallback, the element-by-element Object_List and the
 //! one-request-per-device limit.
 
+use bacnet_ops::engine::ReadVia;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
 use insta::assert_snapshot;
@@ -11,7 +12,7 @@ use ratatui::crossterm::event::KeyCode;
 use super::site::{ClientLimits, Quirks, Server, Site};
 use super::*;
 use crate::tui::app::browser::{ListState, Pane, ViewState};
-use crate::tui::point::{BrowseRead, BrowseResult, ObjectView, ReadVia};
+use crate::tui::point::{BrowseRead, BrowseResult, ObjectView};
 
 /// The lab device's instance and address.
 const LAB: u32 = 100;

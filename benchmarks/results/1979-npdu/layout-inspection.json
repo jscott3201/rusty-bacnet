@@ -1,0 +1,109 @@
+{
+  "source": "/tmp/rusty-1979-npdu-prep/layout.rs",
+  "source_sha256": "70445d708cf915a5d3456fabc2c6c9407f74e9efc31ebaf4b116d07a940f35d2",
+  "note": "Separate untimed layout diagnostic linked against the exact measured build rlibs; disassembly evidence comes from the measured binaries themselves.",
+  "variants": {
+    "P": {
+      "command": [
+        "rustc",
+        "+1.99.0",
+        "--edition=2021",
+        "/tmp/rusty-1979-npdu-prep/layout.rs",
+        "-L",
+        "dependency=/Users/justin/.codex/worktrees/npdu-parser-parent/rusty-bacnet/target/release/deps",
+        "-o",
+        "/tmp/rusty-1979-npdu-build-v2/P-layout",
+        "--extern",
+        "bacnet_encoding=/Users/justin/.codex/worktrees/npdu-parser-parent/rusty-bacnet/target/release/deps/libbacnet_encoding-6bf4f5ae7daf57ad.rlib",
+        "--extern",
+        "bacnet_npdu=/Users/justin/.codex/worktrees/npdu-parser-parent/rusty-bacnet/target/release/deps/libbacnet_npdu-14d34fac2b68edc5.rlib"
+      ],
+      "values": {
+        "owned_size": 128,
+        "owned_align": 8,
+        "owned_result_size": 128,
+        "owned_error_size": 64,
+        "borrowed_size": 88,
+        "borrowed_result_size": 88
+      },
+      "exact_build_rlibs": {
+        "bacnet_encoding": {
+          "path": "/Users/justin/.codex/worktrees/npdu-parser-parent/rusty-bacnet/target/release/deps/libbacnet_encoding-6bf4f5ae7daf57ad.rlib",
+          "sha256": "1aa0c437abdbfac1940f9e9bc3c0858ccac8887f31ce331b938e143645271722"
+        },
+        "bacnet_npdu": {
+          "path": "/Users/justin/.codex/worktrees/npdu-parser-parent/rusty-bacnet/target/release/deps/libbacnet_npdu-14d34fac2b68edc5.rlib",
+          "sha256": "21a2584082f7b3808e28143da69f431e2bbb4ba56d93386949f4d7a17df5664d"
+        }
+      }
+    },
+    "Q": {
+      "command": [
+        "rustc",
+        "+1.99.0",
+        "--edition=2021",
+        "/tmp/rusty-1979-npdu-prep/layout.rs",
+        "-L",
+        "dependency=/Users/justin/.codex/worktrees/npdu-parser-child/rusty-bacnet/target/release/deps",
+        "-o",
+        "/tmp/rusty-1979-npdu-build-v2/Q-layout",
+        "--extern",
+        "bacnet_npdu=/Users/justin/.codex/worktrees/npdu-parser-child/rusty-bacnet/target/release/deps/libbacnet_npdu-14d34fac2b68edc5.rlib",
+        "--extern",
+        "bacnet_encoding=/Users/justin/.codex/worktrees/npdu-parser-child/rusty-bacnet/target/release/deps/libbacnet_encoding-eee7ce3cadec4eac.rlib"
+      ],
+      "values": {
+        "owned_size": 128,
+        "owned_align": 8,
+        "owned_result_size": 128,
+        "owned_error_size": 48,
+        "borrowed_size": 88,
+        "borrowed_result_size": 88
+      },
+      "exact_build_rlibs": {
+        "bacnet_npdu": {
+          "path": "/Users/justin/.codex/worktrees/npdu-parser-child/rusty-bacnet/target/release/deps/libbacnet_npdu-14d34fac2b68edc5.rlib",
+          "sha256": "1af31cf2e791eba01eeec43810f788a8bc5f3c91ee2c3f9c133513de52859547"
+        },
+        "bacnet_encoding": {
+          "path": "/Users/justin/.codex/worktrees/npdu-parser-child/rusty-bacnet/target/release/deps/libbacnet_encoding-eee7ce3cadec4eac.rlib",
+          "sha256": "9daf4aa9e8e5e3c2a4ab3c00e33330ef46a6117c634d2c8d33e31a1a972d7344"
+        }
+      }
+    },
+    "R": {
+      "command": [
+        "rustc",
+        "+1.99.0",
+        "--edition=2021",
+        "/tmp/rusty-1979-npdu-prep/layout.rs",
+        "-L",
+        "dependency=/Users/justin/.codex/worktrees/npdu-parser-control/rusty-bacnet/target/release/deps",
+        "-o",
+        "/tmp/rusty-1979-npdu-build-v2/R-layout",
+        "--extern",
+        "bacnet_npdu=/Users/justin/.codex/worktrees/npdu-parser-control/rusty-bacnet/target/release/deps/libbacnet_npdu-14d34fac2b68edc5.rlib",
+        "--extern",
+        "bacnet_encoding=/Users/justin/.codex/worktrees/npdu-parser-control/rusty-bacnet/target/release/deps/libbacnet_encoding-eee7ce3cadec4eac.rlib"
+      ],
+      "values": {
+        "owned_size": 128,
+        "owned_align": 8,
+        "owned_result_size": 128,
+        "owned_error_size": 48,
+        "borrowed_size": 88,
+        "borrowed_result_size": 88
+      },
+      "exact_build_rlibs": {
+        "bacnet_npdu": {
+          "path": "/Users/justin/.codex/worktrees/npdu-parser-control/rusty-bacnet/target/release/deps/libbacnet_npdu-14d34fac2b68edc5.rlib",
+          "sha256": "d8023d129f853960cf6f91ba0861074000537e169d38dd33d14c31b47383fce8"
+        },
+        "bacnet_encoding": {
+          "path": "/Users/justin/.codex/worktrees/npdu-parser-control/rusty-bacnet/target/release/deps/libbacnet_encoding-eee7ce3cadec4eac.rlib",
+          "sha256": "ae7586a6dc3d07fd5bd33d080fba0df95e757ee8414dd873659285afdc6cecf8"
+        }
+      }
+    }
+  }
+}

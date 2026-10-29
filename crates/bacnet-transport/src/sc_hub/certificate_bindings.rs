@@ -1,6 +1,6 @@
 //! Opt-in installation policy; configuration pins are never connection identity.
 
-use crate::sc_frame::{Vmac, BROADCAST_VMAC, UNKNOWN_VMAC};
+use crate::sc_frame::{BROADCAST_VMAC, UNKNOWN_VMAC, Vmac};
 use bacnet_types::error::Error;
 use std::{
     collections::{HashMap, HashSet},
@@ -176,12 +176,9 @@ mod tests {
             rustls::pki_types::CertificateDer::from(b"ignored issuer".to_vec()),
         ];
         let leaf = VerifiedLeaf::from_verified_chain(Some(&chain)).unwrap();
-        let map = ScHubCertificateBindings::new(vec![ScHubCertificateBinding::new(
-            [1; 16],
-            vec![[1; 6]],
-            vec![expected],
-        )
-        .unwrap()])
+        let map = ScHubCertificateBindings::new(vec![
+            ScHubCertificateBinding::new([1; 16], vec![[1; 6]], vec![expected]).unwrap(),
+        ])
         .unwrap();
         assert!(!map.permits(None, [1; 16], [1; 6]));
         assert!(map.permits(Some(&leaf), [1; 16], [1; 6]));

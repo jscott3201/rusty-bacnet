@@ -226,21 +226,27 @@ mod tests {
             assert_eq!(timing.max_post_drive(), Duration::from_nanos(max_ns));
             timing.validate_post_drive(Duration::ZERO);
             timing.validate_post_drive(Duration::from_nanos(max_ns));
-            assert!(std::panic::catch_unwind(|| {
-                timing.validate_post_drive(Duration::from_nanos(max_ns + 1));
-            })
-            .is_err());
-            assert!(std::panic::catch_unwind(|| {
-                timing.validate_post_drive(timing.bits(15));
-            })
-            .is_err());
+            assert!(
+                std::panic::catch_unwind(|| {
+                    timing.validate_post_drive(Duration::from_nanos(max_ns + 1));
+                })
+                .is_err()
+            );
+            assert!(
+                std::panic::catch_unwind(|| {
+                    timing.validate_post_drive(timing.bits(15));
+                })
+                .is_err()
+            );
         }
         // Rounding the 14-bit upper bound up to a character's microsecond
         // granularity would admit 122 us at 115200, exceeding the bound.
-        assert!(std::panic::catch_unwind(|| {
-            WireTiming::new(115_200).validate_post_drive(Duration::from_micros(122));
-        })
-        .is_err());
+        assert!(
+            std::panic::catch_unwind(|| {
+                WireTiming::new(115_200).validate_post_drive(Duration::from_micros(122));
+            })
+            .is_err()
+        );
     }
 
     #[test]
@@ -267,22 +273,28 @@ mod tests {
                 timing.duration_with_gap(1516, Duration::ZERO),
                 timing.boundary(1516)
             );
-            assert!(std::panic::catch_unwind(|| {
-                timing.validate_inter_octet_gap(Duration::from_nanos(gap_ns + 1));
-            })
-            .is_err());
-            assert!(std::panic::catch_unwind(|| {
-                timing.validate_inter_octet_gap(timing.bits(19));
-            })
-            .is_err());
+            assert!(
+                std::panic::catch_unwind(|| {
+                    timing.validate_inter_octet_gap(Duration::from_nanos(gap_ns + 1));
+                })
+                .is_err()
+            );
+            assert!(
+                std::panic::catch_unwind(|| {
+                    timing.validate_inter_octet_gap(timing.bits(19));
+                })
+                .is_err()
+            );
         }
         assert_eq!(
             WireTiming::new(10_000).max_inter_octet_gap(),
             Duration::from_micros(1_900)
         );
-        assert!(std::panic::catch_unwind(|| {
-            WireTiming::new(10_000).validate_inter_octet_gap(Duration::from_nanos(1_900_001));
-        })
-        .is_err());
+        assert!(
+            std::panic::catch_unwind(|| {
+                WireTiming::new(10_000).validate_inter_octet_gap(Duration::from_nanos(1_900_001));
+            })
+            .is_err()
+        );
     }
 }

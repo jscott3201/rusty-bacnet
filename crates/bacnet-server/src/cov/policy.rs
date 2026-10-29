@@ -6,9 +6,9 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use bacnet_types::MacAddr;
 use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::error::Error;
-use bacnet_types::MacAddr;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 /// Configuration policy for COV subscriptions and notification work budgets.

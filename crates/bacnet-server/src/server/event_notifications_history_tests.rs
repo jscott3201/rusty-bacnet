@@ -36,21 +36,21 @@ impl AtomicHistoryObject {
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
         let Some(index @ 1..=3) = array_index else {
-            return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::INVALID_ARRAY_INDEX,
-            });
+            return Err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::INVALID_ARRAY_INDEX,
+            ));
         };
         match &values[index as usize - 1] {
             IndexedHistoryRead::Value(value) => Ok(value.clone()),
-            IndexedHistoryRead::Missing => Err(Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::UNKNOWN_PROPERTY,
-            }),
-            IndexedHistoryRead::Unreadable => Err(Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::READ_ACCESS_DENIED,
-            }),
+            IndexedHistoryRead::Missing => Err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::UNKNOWN_PROPERTY,
+            )),
+            IndexedHistoryRead::Unreadable => Err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::READ_ACCESS_DENIED,
+            )),
         }
     }
 }
@@ -83,12 +83,9 @@ impl BACnetObject for AtomicHistoryObject {
             p if p == PropertyIdentifier::NOTIFY_TYPE => {
                 Ok(PropertyValue::Enumerated(NotifyType::ALARM.to_raw()))
             }
-            p if p == PropertyIdentifier::EVENT_TYPE => {
-                self.event_type.clone().ok_or(Error::Protocol {
-                    class: ErrorClass::PROPERTY,
-                    code: ErrorCode::UNKNOWN_PROPERTY,
-                })
-            }
+            p if p == PropertyIdentifier::EVENT_TYPE => self.event_type.clone().ok_or(
+                Error::protocol(ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY),
+            ),
             p if p == PropertyIdentifier::EVENT_TIME_STAMPS => {
                 Self::indexed(&self.timestamps, array_index)
             }
@@ -96,20 +93,17 @@ impl BACnetObject for AtomicHistoryObject {
                 Self::indexed(&self.messages, array_index)
             }
             p if p == PropertyIdentifier::PRESENT_VALUE => Ok(PropertyValue::Real(50.0)),
-            p if p == PropertyIdentifier::STATUS_FLAGS => {
-                self.status_flags.clone().ok_or(Error::Protocol {
-                    class: ErrorClass::PROPERTY,
-                    code: ErrorCode::UNKNOWN_PROPERTY,
-                })
-            }
+            p if p == PropertyIdentifier::STATUS_FLAGS => self.status_flags.clone().ok_or(
+                Error::protocol(ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY),
+            ),
             p if p == PropertyIdentifier::RELIABILITY => Ok(PropertyValue::Enumerated(0)),
             p if p == PropertyIdentifier::HIGH_LIMIT => Ok(PropertyValue::Real(80.0)),
             p if p == PropertyIdentifier::LOW_LIMIT => Ok(PropertyValue::Real(20.0)),
             p if p == PropertyIdentifier::DEADBAND => Ok(PropertyValue::Real(2.0)),
-            _ => Err(Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::UNKNOWN_PROPERTY,
-            }),
+            _ => Err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::UNKNOWN_PROPERTY,
+            )),
         }
     }
 
@@ -120,10 +114,10 @@ impl BACnetObject for AtomicHistoryObject {
         _value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
-        Err(Error::Protocol {
-            class: ErrorClass::PROPERTY,
-            code: ErrorCode::WRITE_ACCESS_DENIED,
-        })
+        Err(Error::protocol(
+            ErrorClass::PROPERTY,
+            ErrorCode::WRITE_ACCESS_DENIED,
+        ))
     }
 
     fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {

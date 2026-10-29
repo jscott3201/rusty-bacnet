@@ -747,7 +747,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
 #[path = "audit_delivery.rs"]
 mod delivery;
 pub(super) use delivery::{
-    deliver, deliver_global_broadcast, deliver_observed, encode_notification, DeliveryCompletion,
+    DeliveryCompletion, deliver, deliver_global_broadcast, deliver_observed, encode_notification,
 };
 
 /// Table 19-4 permits omission above 32 encoded octets. Bound encoding work,
@@ -771,7 +771,7 @@ pub(super) fn small_value(value: &PropertyValue) -> Option<Vec<u8>> {
             PropertyValue::OctetString(value) | PropertyValue::ApplicationData(value)
                 if value.len() > 32 =>
             {
-                return None
+                return None;
             }
             PropertyValue::BitString { data, .. } if data.len() > 32 => return None,
             _ => encode_property_value(out, value).ok()?,

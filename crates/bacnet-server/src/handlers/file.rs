@@ -2,6 +2,7 @@ use super::*;
 use bacnet_objects::file::FileWriteStart;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::FileAccessMethod as ObjectFileAccessMethod;
+use bacnet_types::error::RemoteError;
 
 /// Refuse a request whose access method does not match the File object's
 /// declared File_Access_Method, or whose declared method cannot be read
@@ -14,10 +15,7 @@ use bacnet_types::enums::FileAccessMethod as ObjectFileAccessMethod;
 /// closed: a missing, undecodable, or out-of-production property value is
 /// treated as a mismatch rather than defaulting to stream or record access.
 fn invalid_file_access_method() -> Error {
-    Error::Protocol {
-        class: ErrorClass::SERVICES,
-        code: ErrorCode::INVALID_FILE_ACCESS_METHOD,
-    }
+    Error::protocol(ErrorClass::SERVICES, ErrorCode::INVALID_FILE_ACCESS_METHOD)
 }
 
 /// Refuse a request whose 'File Identifier' names a non-File object type.
@@ -30,10 +28,7 @@ fn invalid_file_access_method() -> Error {
 /// check against the missing-File-object check, so an absent non-File
 /// identifier gets this error rather than OBJECT / UNKNOWN_OBJECT.
 fn inconsistent_object_type() -> Error {
-    Error::Protocol {
-        class: ErrorClass::SERVICES,
-        code: ErrorCode::INCONSISTENT_OBJECT_TYPE,
-    }
+    Error::protocol(ErrorClass::SERVICES, ErrorCode::INCONSISTENT_OBJECT_TYPE)
 }
 
 fn validate_file_access_method(
@@ -59,10 +54,7 @@ fn validate_file_access_method(
 /// INVALID_FILE_START_POSITION. Clause 14.2 defines only -1 as a negative
 /// write start (append), so any other negative value gets the same error.
 fn invalid_file_start_position() -> Error {
-    Error::Protocol {
-        class: ErrorClass::SERVICES,
-        code: ErrorCode::INVALID_FILE_START_POSITION,
-    }
+    Error::protocol(ErrorClass::SERVICES, ErrorCode::INVALID_FILE_START_POSITION)
 }
 
 /// Refuse access to a File object the handler cannot safely use.
@@ -75,26 +67,22 @@ fn invalid_file_start_position() -> Error {
 /// TRUE, unreadable, or not a BOOLEAN: like the access-method gate, it
 /// fails closed instead of assuming the file is writable.
 fn file_access_denied() -> Error {
-    Error::Protocol {
-        class: ErrorClass::SERVICES,
-        code: ErrorCode::FILE_ACCESS_DENIED,
-    }
+    Error::protocol(ErrorClass::SERVICES, ErrorCode::FILE_ACCESS_DENIED)
 }
 
 fn unknown_object() -> Error {
-    Error::Protocol {
-        class: ErrorClass::OBJECT,
-        code: ErrorCode::UNKNOWN_OBJECT,
-    }
+    Error::protocol(ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT)
 }
 
 /// Resolved write positions travel in the ACK as an INTEGER; the
 /// `FileStorage` contract keeps them within that range, so a value that
 /// does not fit is an implementation fault, not a client error.
 fn ack_position(actual: u64) -> Result<i32, Error> {
-    i32::try_from(actual).map_err(|_| Error::Protocol {
-        class: ErrorClass::DEVICE,
-        code: ErrorCode::INTERNAL_ERROR,
+    i32::try_from(actual).map_err(|_| {
+        Error::Remote(RemoteError::Error {
+            class: ErrorClass::DEVICE,
+            code: ErrorCode::INTERNAL_ERROR,
+        })
     })
 }
 
@@ -306,7 +294,7 @@ pub fn handle_atomic_write_file(
     })
 }
 
-/// A local admission refusal is not an opaque storage `Error::Abort`.
+/// A local admission refusal is not an opaque storage `Error::abort`.
 #[derive(Debug)]
 pub(crate) enum AtomicWriteFileFailure {
     Service(Error),
@@ -363,13 +351,9 @@ fn write_file(
         file_record_data,
         ..
     } = &request.access
+        && *record_count as usize != file_record_data.len()
     {
-        if *record_count as usize != file_record_data.len() {
-            return Err(Error::Reject {
-                reason: RejectReason::MISSING_REQUIRED_PARAMETER,
-            }
-            .into());
-        }
+        return Err(Error::reject(RejectReason::MISSING_REQUIRED_PARAMETER).into());
     }
 
     let target = request.file_identifier;

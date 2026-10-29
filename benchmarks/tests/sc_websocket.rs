@@ -3,21 +3,21 @@
 use std::time::Duration;
 
 use bacnet_benchmarks::sc_helpers::{
-    connect_ws_tls, generate_test_certs, make_client_tls_config_mtls, make_sc_transport_mtls,
-    start_sc_hub_mtls, CertMaterial, TlsClientWs,
+    CertMaterial, TlsClientWs, connect_ws_tls, generate_test_certs, make_client_tls_config_mtls,
+    make_sc_transport_mtls, start_sc_hub_mtls,
 };
 use bacnet_transport::port::TransportPort;
 use bacnet_transport::sc::ScConnectionState;
 use bacnet_transport::sc_frame::{
-    decode_sc_bvlc_result, decode_sc_message, encode_sc_message, ScBvlcResult, ScFunction,
-    ScMessage, ScOption, Vmac, BACNET_SC_HUB_SUBPROTOCOL, BROADCAST_VMAC,
+    BACNET_SC_HUB_SUBPROTOCOL, BROADCAST_VMAC, ScBvlcResult, ScFunction, ScMessage, ScOption, Vmac,
+    decode_sc_bvlc_result, decode_sc_message, encode_sc_message,
 };
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bytes::{Bytes, BytesMut};
 use futures_util::{SinkExt, StreamExt};
-use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
-use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio_tungstenite::tungstenite::ClientRequestBuilder;
+use tokio_tungstenite::tungstenite::protocol::Message;
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 type ClientWs = TlsClientWs;
 
@@ -222,9 +222,11 @@ async fn sc_websocket_routes_destination_option_nak_to_originating_node() {
             error_details: String::new(),
         }
     );
-    assert!(tokio::time::timeout(Duration::from_millis(50), rx_b.recv())
-        .await
-        .is_err());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), rx_b.recv())
+            .await
+            .is_err()
+    );
     assert_eq!(
         *transport_b.connection_state_changes().borrow(),
         ScConnectionState::Connected
@@ -362,9 +364,11 @@ async fn sc_websocket_hub_replaces_known_device_uuid_connection() {
         destination_vmac: Some(peer_vmac),
         ..to_old_vmac.clone()
     };
-    assert!(try_send_sc_message(&mut old_ws, &from_old_connection)
-        .await
-        .is_err());
+    assert!(
+        try_send_sc_message(&mut old_ws, &from_old_connection)
+            .await
+            .is_err()
+    );
     assert_no_sc_message(&mut peer_ws).await;
 
     let to_replacement = ScMessage {

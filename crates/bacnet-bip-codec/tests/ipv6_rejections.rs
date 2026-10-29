@@ -3,9 +3,9 @@
 use core::net::Ipv6Addr;
 
 use bacnet_bip_codec::ipv6::{
-    decode, Bip6Address, Bip6Vmac, Bvlc6Function, Bvlc6ResultCode, Bvll6, Bvll6Error, Bvll6Frame,
+    Bip6Address, Bip6Vmac, Bvlc6Function, Bvlc6ResultCode, Bvll6, Bvll6Error, Bvll6Frame, decode,
 };
-use bacnet_bip_codec::{BvllSink, PayloadShape, SinkFull, MAX_BVLL_LENGTH};
+use bacnet_bip_codec::{BvllSink, MAX_BVLL_LENGTH, PayloadShape, SinkFull};
 
 const SOURCE: Bip6Vmac = Bip6Vmac::new([0x00, 0x04, 0xD2]);
 const ORIGIN: Bip6Address = Bip6Address::new(Ipv6Addr::new(0x2001, 0xDB8, 0, 0, 0, 0, 0, 1), 47808);

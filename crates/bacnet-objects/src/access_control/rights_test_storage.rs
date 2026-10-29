@@ -4,8 +4,9 @@
 use super::*;
 use crate::durable::SaveWait;
 use bacnet_types::enums::PropertyIdentifier as P;
+use bacnet_types::error::RemoteError;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 /// Storage in memory. A save can be made to fail, or to wait until the test
@@ -25,6 +26,7 @@ struct Hold {
 
 /// The test's side of a held storage: each save reports on `started` and
 /// then waits for one message on `go`. Dropping `go` lets every save through.
+#[cfg(feature = "std")]
 pub(super) struct Held {
     pub(super) started: mpsc::Receiver<AccessRightsSnapshot>,
     pub(super) go: mpsc::Sender<()>,
@@ -35,6 +37,7 @@ pub(super) const WAIT: Duration = Duration::from_secs(10);
 
 impl MemoryPersistence {
     /// Make every later save wait for the test.
+    #[cfg(feature = "std")]
     pub(super) fn hold(&self) -> Held {
         let (started, started_rx) = mpsc::channel();
         let (go_tx, go) = mpsc::channel();
@@ -114,18 +117,21 @@ pub(super) fn block_on(wait: &SaveWait) {
 }
 
 /// A rule that applies at any time in Access Zone `instance` of this device.
+#[cfg(feature = "std")]
 pub(super) fn zone_rule(instance: u32) -> BACnetAccessRule {
     let zone = ObjectIdentifier::new(ObjectType::ACCESS_ZONE, instance).unwrap();
     BACnetAccessRule::new(None, Some(zone.into()), true)
 }
 
 /// A rule whose location is an Access Door, which every write refuses.
+#[cfg(feature = "std")]
 pub(super) fn door_rule() -> BACnetAccessRule {
     let door = ObjectIdentifier::new(ObjectType::ACCESS_DOOR, 1).unwrap();
     BACnetAccessRule::new(None, Some(door.into()), true)
 }
 
 /// `rules` back to back, as the server hands a written array to the object.
+#[cfg(feature = "std")]
 pub(super) fn octets(rules: &[BACnetAccessRule]) -> PropertyValue {
     let mut buf = BytesMut::new();
     for rule in rules {
@@ -145,6 +151,7 @@ pub(super) fn write(
 }
 
 /// Write the whole of Positive_Access_Rules.
+#[cfg(feature = "std")]
 pub(super) fn write_positive(
     rights: &mut AccessRightsObject,
     rules: &[BACnetAccessRule],
@@ -153,6 +160,7 @@ pub(super) fn write_positive(
 }
 
 /// What storage holds with only Positive_Access_Rules written, as `rules`.
+#[cfg(feature = "std")]
 pub(super) fn positive_only(rules: &[BACnetAccessRule]) -> AccessRightsSnapshot {
     AccessRightsSnapshot {
         positive_access_rules: Some(rules.to_vec()),
@@ -162,10 +170,10 @@ pub(super) fn positive_only(rules: &[BACnetAccessRule]) -> AccessRightsSnapshot 
 
 pub(super) fn assert_refused(result: Result<(), Error>, class: ErrorClass, code: ErrorCode) {
     match result {
-        Err(Error::Protocol {
+        Err(Error::Remote(RemoteError::Error {
             class: got_class,
             code: got_code,
-        }) => assert_eq!(
+        })) => assert_eq!(
             (got_class, got_code),
             (class, code),
             "expected {class:?} / {code:?}"

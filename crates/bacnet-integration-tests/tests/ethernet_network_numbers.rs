@@ -4,10 +4,8 @@
 use bacnet_client::client::{BACnetClient, ClientConfig};
 use bacnet_objects::{database::ObjectDatabase, network_port::NetworkPortObject};
 use bacnet_server::server::{BACnetServer, ServerConfig};
-use bacnet_transport::{
-    any::AnyTransport, ethernet::EthernetTransport, mstp::LoopbackSerial, port::TransportPort,
-};
-use bacnet_types::{enums::NetworkType, MacAddr};
+use bacnet_transport::{any::AnyTransport, ethernet::EthernetTransport, port::TransportPort};
+use bacnet_types::{MacAddr, enums::NetworkType};
 use std::{future::Future, path::PathBuf, time::Duration};
 
 fn interface() -> String {
@@ -197,8 +195,7 @@ async fn ethernet_number_full_server_and_client_wire() {
     );
     let before = raw_sockets();
     for case in ["server-stop", "server-drop", "client-stop", "client-drop"] {
-        let transport: AnyTransport<LoopbackSerial> =
-            AnyTransport::Ethernet(EthernetTransport::new(&interface()));
+        let transport: AnyTransport = AnyTransport::Ethernet(EthernetTransport::new(&interface()));
         assert!(transport.bip_port().is_none());
         let is_server = case.starts_with("server");
         let (mut server, mut client) = if is_server {

@@ -346,25 +346,31 @@ mod tests {
                 day_of_week: 1,
             },
         ] {
-            assert!(clock
-                .synchronize(invalid_date, time(12, 0, 0, 0), true)
-                .is_err());
+            assert!(
+                clock
+                    .synchronize(invalid_date, time(12, 0, 0, 0), true)
+                    .is_err()
+            );
         }
-        assert!(clock
-            .synchronize(
-                date(2024, 2, 29, 4),
-                Time {
-                    hour: Time::UNSPECIFIED,
-                    minute: 0,
-                    second: 0,
-                    hundredths: 0,
-                },
-                true,
-            )
-            .is_err());
-        assert!(clock
-            .synchronize(date(2024, 2, 29, 4), time(24, 0, 0, 0), true)
-            .is_err());
+        assert!(
+            clock
+                .synchronize(
+                    date(2024, 2, 29, 4),
+                    Time {
+                        hour: Time::UNSPECIFIED,
+                        minute: 0,
+                        second: 0,
+                        hundredths: 0,
+                    },
+                    true,
+                )
+                .is_err()
+        );
+        assert!(
+            clock
+                .synchronize(date(2024, 2, 29, 4), time(24, 0, 0, 0), true)
+                .is_err()
+        );
         assert_eq!(clock.state.lock().unwrap().synchronized_utc, anchor);
     }
 

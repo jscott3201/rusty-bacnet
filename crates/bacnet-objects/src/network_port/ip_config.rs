@@ -6,10 +6,10 @@
 //! foreign-device rows (`bip_mode`), the values waiting for activation
 //! (`pending`), and registration (`registration`).
 
+use bacnet_types::MacAddr;
 use bacnet_types::enums::{NetworkType, PropertyIdentifier as P};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
-use bacnet_types::MacAddr;
 
 use super::{Bip6Bind, Bip6PortConfig, BipPortConfig};
 use crate::common;
@@ -147,7 +147,7 @@ impl IpConfig {
             _ => {
                 return Err(Error::Encoding(
                     "Network Port bind is for the other IP version".into(),
-                ))
+                ));
             }
         })
     }

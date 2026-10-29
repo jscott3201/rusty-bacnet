@@ -10,6 +10,8 @@
 //! - [`pcap`]: the export, with IPv4 and UDP headers made up for B/IP
 //!   frames the tap saw inside the process.
 //! - `libpcap` (`pcap` feature): wire capture on a blocking thread.
+//! - [`redact`]: DeviceCommunicationControl and ReinitializeDevice
+//!   passwords masked before any frame is kept, whichever way it went.
 //!
 //! Sources:
 //!
@@ -30,12 +32,13 @@ use std::time::SystemTime;
 
 use bytes::Bytes;
 
-pub(crate) use crate::decode::frame::{FrameSummary, Framing};
+pub(crate) use bacnet_ops::decode::frame::{FrameSummary, Framing};
 
 pub(crate) mod filter;
 #[cfg(feature = "pcap")]
 pub(crate) mod libpcap;
 pub(crate) mod pcap;
+pub(crate) mod redact;
 pub(crate) mod ring;
 pub(crate) mod worker;
 
@@ -88,6 +91,8 @@ pub(crate) struct CaptureFrame {
     pub(crate) bytes: Bytes,
     /// Its headers, read by the worker.
     pub(crate) summary: FrameSummary,
+    /// A password in it was masked before it reached the ring ([`redact`]).
+    pub(crate) redacted: bool,
 }
 
 /// UI to worker: start capturing in this session. Idempotent; the capture

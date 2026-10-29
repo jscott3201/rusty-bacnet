@@ -75,9 +75,11 @@ fn write_and_flush_failures_override_completed_success_or_errors() {
                     ),
                     3
                 );
-                assert!(String::from_utf8(stderr)
-                    .unwrap()
-                    .contains("could not write or flush"));
+                assert!(
+                    String::from_utf8(stderr)
+                        .unwrap()
+                        .contains("could not write or flush")
+                );
             }
         }
     }

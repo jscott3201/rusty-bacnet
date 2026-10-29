@@ -6,7 +6,7 @@
 mod support;
 
 use bacnet_router_core::table::Reachability;
-use support::{mac, port, secs, Hosted, BASE};
+use support::{BASE, Hosted, mac, port, secs};
 
 /// Peer A serves 3000 and 3001 on port 1.
 const PEER_A: &[u8] = &[2];

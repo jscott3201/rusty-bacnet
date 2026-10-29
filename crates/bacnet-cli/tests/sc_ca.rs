@@ -6,8 +6,8 @@ mod support;
 
 use rcgen::ExtendedKeyUsagePurpose;
 use rcgen::{CertificateParams, KeyPair};
-use support::sc::{cli, read, Site};
-use support::{bounded, command, failure, Files, Process};
+use support::sc::{Site, cli, read};
+use support::{Files, Process, bounded, command, failure};
 
 #[tokio::test]
 async fn missing_ca_rejected_before_dial() {

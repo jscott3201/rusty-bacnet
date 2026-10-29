@@ -3,8 +3,8 @@
 use core::net::SocketAddrV4;
 
 use crate::{
-    address_from_octets, address_to_octets, BdtEntries, BvlcFunction, BvlcResultCode, BvllError,
-    BvllSink, FdtEntries, BVLC_TYPE_BIP, HEADER_LENGTH, MAX_BVLL_LENGTH,
+    BVLC_TYPE_BIP, BdtEntries, BvlcFunction, BvlcResultCode, BvllError, BvllSink, FdtEntries,
+    HEADER_LENGTH, MAX_BVLL_LENGTH, address_from_octets, address_to_octets,
 };
 
 /// A BVLL message whose header checks out, before its payload is read.
@@ -132,7 +132,7 @@ impl<'a> BvllFrame<'a> {
             _ => {
                 return Err(BvllError::UnknownFunction {
                     function: function.to_raw(),
-                })
+                });
             }
         })
     }
@@ -282,12 +282,12 @@ impl<'a> Bvll<'a> {
     /// other shape the standard forbids can't be built: each variant holds
     /// exactly its function's fields.
     pub fn encoded_len(&self) -> Result<usize, BvllError> {
-        if let Self::BvlcResult(code) = self {
-            if !code.is_defined() {
-                return Err(BvllError::UndefinedResultCode {
-                    code: code.to_raw(),
-                });
-            }
+        if let Self::BvlcResult(code) = self
+            && !code.is_defined()
+        {
+            return Err(BvllError::UndefinedResultCode {
+                code: code.to_raw(),
+            });
         }
         let length = HEADER_LENGTH + self.payload_length();
         if length > MAX_BVLL_LENGTH {
@@ -329,13 +329,13 @@ impl<'a> Bvll<'a> {
     /// [`BvllSink`].
     pub fn encode_to_sink<S: BvllSink + ?Sized>(&self, sink: &mut S) -> Result<usize, BvllError> {
         let length = self.encoded_len()?;
-        if let Some(available) = sink.remaining_capacity() {
-            if available < length {
-                return Err(BvllError::BufferExhausted {
-                    needed: length,
-                    available,
-                });
-            }
+        if let Some(available) = sink.remaining_capacity()
+            && available < length
+        {
+            return Err(BvllError::BufferExhausted {
+                needed: length,
+                available,
+            });
         }
         // `encoded_len` capped the length at 0xFFFF.
         let [high, low] = (length as u16).to_be_bytes();

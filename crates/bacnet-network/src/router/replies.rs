@@ -1,16 +1,16 @@
 //! Weak application reply authority for one running router.
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc, Weak,
+    atomic::{AtomicBool, Ordering},
 };
 
 use bacnet_router_core::router::ReplyPlan;
 use bacnet_transport::port::{DirectResponseScope, ResponseScopeGuard};
-use bacnet_types::{error::Error, MacAddr};
+use bacnet_types::{MacAddr, error::Error};
 use bytes::Bytes;
 use tokio::sync::oneshot;
 
-use super::{dispatch::Outputs, SendRequest};
+use super::{SendRequest, dispatch::Outputs};
 
 #[derive(Debug, Default)]
 pub(crate) struct ReplyLifetime {

@@ -1,5 +1,5 @@
+use alloc::borrow::Cow;
 use bacnet_types::enums::PropertyIdentifier;
-use std::borrow::Cow;
 
 use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead},

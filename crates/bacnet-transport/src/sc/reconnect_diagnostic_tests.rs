@@ -12,8 +12,10 @@ fn capture() -> (LogCapture, tracing::subscriber::DefaultGuard) {
 
 fn assert_summary(record: &Record, suppressed: u64) {
     assert_eq!(record.fields["suppressed"], suppressed.to_string());
-    assert!(record.fields["message"]
-        .ends_with(&format!("(suppressed {suppressed} reconnect diagnostics)")));
+    assert!(
+        record.fields["message"]
+            .ends_with(&format!("(suppressed {suppressed} reconnect diagnostics)"))
+    );
 }
 
 fn config(max_retries: u32) -> ScReconnectConfig {
@@ -209,9 +211,11 @@ async fn handshake_retry_warnings_share_the_redial_diagnostic_budget() {
     wait_exhausted(&mut transport).await;
     assert_eq!(dials.load(Ordering::SeqCst), 100);
     assert_eq!(capture.matching("SC reconnection redial failed").len(), 1);
-    assert!(capture
-        .matching("SC reconnection failed, retrying")
-        .is_empty());
+    assert!(
+        capture
+            .matching("SC reconnection failed, retrying")
+            .is_empty()
+    );
     let terminal = capture.matching("SC reconnection: max retries exhausted");
     assert_eq!(terminal.len(), 1);
     assert_summary(&terminal[0], 99);
@@ -237,9 +241,11 @@ async fn failover_transition_and_outcomes_bypass_a_full_diagnostic_window() {
             assert_eq!(outcome.len(), 1);
             assert_eq!(outcome[0].level, tracing::Level::INFO);
             assert_summary(&outcome[0], 99);
-            assert!(capture
-                .matching("SC reconnection: max retries exhausted")
-                .is_empty());
+            assert!(
+                capture
+                    .matching("SC reconnection: max retries exhausted")
+                    .is_empty()
+            );
         } else {
             drop(failover_hub);
             wait_exhausted(&mut transport).await;
@@ -293,10 +299,12 @@ async fn skipped_retries_are_gated_but_disconnect_and_exhaustion_always_emit() {
                 hub_limits: &limits,
                 observer: &super::super::ScObserver::new(),
             };
-            assert!(recovery
-                .reconnect(&ws, ScActiveHub::Primary, false)
-                .await
-                .is_none());
+            assert!(
+                recovery
+                    .reconnect(&ws, ScActiveHub::Primary, false)
+                    .await
+                    .is_none()
+            );
             let skipped = capture.matching(if eligible {
                 "SC retired socket cannot be reused"
             } else {

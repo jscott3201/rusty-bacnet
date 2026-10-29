@@ -1,6 +1,6 @@
 use super::*;
-use bacnet_encoding::apdu::{decode_apdu, encode_apdu, UnconfirmedRequest};
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
+use bacnet_encoding::apdu::{UnconfirmedRequest, decode_apdu, encode_apdu};
+use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::cov::SubscribeCOVRequest;
 use bacnet_transport::loopback::LoopbackTransport;
@@ -155,7 +155,7 @@ async fn managed_cov_subscription_uses_notification_observed_during_initial_subs
     let start = tokio::spawn(async move {
         client_for_task
             .manage_cov_subscription(
-                &peer_mac_for_task,
+                CovTarget::local(&peer_mac_for_task),
                 subscriber_process_identifier,
                 monitored_object,
                 false,
@@ -238,7 +238,7 @@ async fn managed_cov_subscription_renews_before_requested_lifetime() {
     let start = tokio::spawn(async move {
         client_for_task
             .manage_cov_subscription(
-                &peer_mac_for_task,
+                CovTarget::local(&peer_mac_for_task),
                 subscriber_process_identifier,
                 monitored_object,
                 false,
@@ -330,7 +330,7 @@ async fn managed_cov_subscription_uses_observed_time_remaining() {
     let start = tokio::spawn(async move {
         client_for_task
             .manage_cov_subscription(
-                &peer_mac_for_task,
+                CovTarget::local(&peer_mac_for_task),
                 subscriber_process_identifier,
                 monitored_object,
                 false,
@@ -444,7 +444,7 @@ async fn managed_cov_subscription_stop_cancels_in_flight_renewal() {
     let start = tokio::spawn(async move {
         client_for_task
             .manage_cov_subscription(
-                &peer_mac_for_task,
+                CovTarget::local(&peer_mac_for_task),
                 subscriber_process_identifier,
                 monitored_object,
                 false,
@@ -509,7 +509,7 @@ async fn managed_cov_subscription_records_failure_without_event_receiver() {
     let start = tokio::spawn(async move {
         client_for_task
             .manage_cov_subscription(
-                &peer_mac_for_task,
+                CovTarget::local(&peer_mac_for_task),
                 subscriber_process_identifier,
                 monitored_object,
                 false,
@@ -580,7 +580,7 @@ async fn managed_cov_subscription_validates_finite_lifetime_options() {
 
     let zero_lifetime = match Arc::clone(&client)
         .manage_cov_subscription(
-            &peer_mac,
+            CovTarget::local(&peer_mac),
             4003,
             monitored_object,
             false,
@@ -592,13 +592,15 @@ async fn managed_cov_subscription_validates_finite_lifetime_options() {
         Ok(_) => panic!("zero lifetime should be rejected before subscribing"),
         Err(error) => error,
     };
-    assert!(zero_lifetime
-        .to_string()
-        .contains("finite non-zero lifetime"));
+    assert!(
+        zero_lifetime
+            .to_string()
+            .contains("finite non-zero lifetime")
+    );
 
     let oversized_margin = match Arc::clone(&client)
         .manage_cov_subscription(
-            &peer_mac,
+            CovTarget::local(&peer_mac),
             4003,
             monitored_object,
             false,
@@ -610,14 +612,16 @@ async fn managed_cov_subscription_validates_finite_lifetime_options() {
         Ok(_) => panic!("oversized renewal margin should be rejected before subscribing"),
         Err(error) => error,
     };
-    assert!(oversized_margin
-        .to_string()
-        .contains("renewal margin must be shorter than lifetime"));
+    assert!(
+        oversized_margin
+            .to_string()
+            .contains("renewal margin must be shorter than lifetime")
+    );
 
     for capacity in [0, MAX_COV_CHANNEL_CAPACITY + 1] {
         let invalid_capacity = match Arc::clone(&client)
             .manage_cov_subscription(
-                &peer_mac,
+                CovTarget::local(&peer_mac),
                 4003,
                 monitored_object,
                 false,
@@ -629,9 +633,11 @@ async fn managed_cov_subscription_validates_finite_lifetime_options() {
             Ok(_) => panic!("invalid event channel capacity should be rejected before subscribing"),
             Err(error) => error,
         };
-        assert!(invalid_capacity
-            .to_string()
-            .contains("event channel capacity"));
+        assert!(
+            invalid_capacity
+                .to_string()
+                .contains("event channel capacity")
+        );
     }
 
     let mut client = match Arc::try_unwrap(client) {
@@ -674,7 +680,7 @@ async fn managed_cov_property_subscription_renews_with_subscribe_cov_property() 
     let start = tokio::spawn(async move {
         client_for_task
             .manage_cov_property_subscription(
-                &peer_mac_for_task,
+                CovTarget::local(&peer_mac_for_task),
                 subscription,
                 ManagedCOVSubscriptionOptions::default()
                     .with_renewal_margin(Duration::from_millis(1500)),

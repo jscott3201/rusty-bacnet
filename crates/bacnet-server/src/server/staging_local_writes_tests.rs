@@ -9,8 +9,8 @@ use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetStageLimitValue};
 use bacnet_types::enums::{EngineeringUnits, Reliability};
 use std::borrow::Cow;
-use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::Arc as StdArc;
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
 fn reference(object_type: ObjectType, instance: u32) -> BACnetDeviceObjectReference {
     BACnetDeviceObjectReference {
@@ -354,10 +354,10 @@ impl BACnetObject for CountingBinaryOutput {
                 ObjectType::BINARY_OUTPUT.to_raw(),
             )),
             PropertyIdentifier::PRESENT_VALUE => Ok(PropertyValue::Enumerated(0)),
-            _ => Err(Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::UNKNOWN_PROPERTY,
-            }),
+            _ => Err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::UNKNOWN_PROPERTY,
+            )),
         }
     }
 
@@ -375,10 +375,10 @@ impl BACnetObject for CountingBinaryOutput {
             self.writes.fetch_add(1, AtomicOrdering::SeqCst);
             return Ok(());
         }
-        Err(Error::Protocol {
-            class: ErrorClass::PROPERTY,
-            code: ErrorCode::WRITE_ACCESS_DENIED,
-        })
+        Err(Error::protocol(
+            ErrorClass::PROPERTY,
+            ErrorCode::WRITE_ACCESS_DENIED,
+        ))
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {

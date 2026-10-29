@@ -3,13 +3,14 @@
 //! The Load Control object provides a standard interface for demand-response
 //! load shedding. It tracks requested, expected, and actual shed levels.
 
+use crate::prelude::*;
+use alloc::borrow::Cow;
 use bacnet_encoding::constructed::{decode_shed_level, encode_shed_level};
 use bacnet_types::constructed::BACnetShedLevel;
 use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
 use bytes::BytesMut;
-use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
 use crate::traits::BACnetObject;
@@ -115,7 +116,7 @@ impl LoadControlObject {
     /// another choice, or an amount that isn't finite, fails with PROPERTY /
     /// VALUE_OUT_OF_RANGE and changes nothing.
     pub fn set_actual_shed_level(&mut self, level: BACnetShedLevel) -> Result<(), Error> {
-        if std::mem::discriminant(&level) != std::mem::discriminant(&self.requested_shed_level) {
+        if core::mem::discriminant(&level) != core::mem::discriminant(&self.requested_shed_level) {
             return Err(common::value_out_of_range_error());
         }
         if let BACnetShedLevel::Amount(amount) = level {

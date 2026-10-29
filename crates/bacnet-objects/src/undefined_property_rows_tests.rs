@@ -22,7 +22,7 @@ use crate::load_control::LoadControlObject;
 use crate::notification_class::NotificationClass;
 use crate::traits::BACnetObject;
 use bacnet_types::enums::{ErrorClass, ErrorCode, EventType, PropertyIdentifier as P};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::{PropertyValue, StatusFlags};
 
 const STATUS_ROWS: &[P] = &[P::STATUS_FLAGS, P::RELIABILITY, P::OUT_OF_SERVICE];
@@ -100,7 +100,7 @@ fn undefined_rows() -> Vec<(Box<dyn BACnetObject>, &'static [P])> {
 
 fn assert_unknown_property(result: Result<(), Error>, context: &str) {
     match result {
-        Err(Error::Protocol { class, code }) => {
+        Err(Error::Remote(RemoteError::Error { class, code })) => {
             assert_eq!(class, ErrorClass::PROPERTY, "{context}");
             assert_eq!(code, ErrorCode::UNKNOWN_PROPERTY, "{context}");
         }

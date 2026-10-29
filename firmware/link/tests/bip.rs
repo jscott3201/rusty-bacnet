@@ -3,7 +3,7 @@
 //! bare-metal image, and its emulation build, which checks the same summary
 //! on an emulated CPU, runs by hand (docs/ci.md, "Emulation (manual)").
 
-use firmware_link::bip::{run, Memory, EXPECTED};
+use firmware_link::bip::{EXPECTED, Memory, run};
 
 /// The whole summary, its B/IPv6 part included, against the one the
 /// emulation build checks too (`firmware_link::bip::EXPECTED`, which

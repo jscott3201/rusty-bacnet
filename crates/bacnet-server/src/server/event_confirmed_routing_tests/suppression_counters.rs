@@ -2,8 +2,8 @@
 //! undelivered-notification counter once for its recipient (#1142).
 
 use super::*;
-use crate::server::notification_transactions::canonical_direct_peer;
 use crate::server::EventNotificationCounters;
+use crate::server::notification_transactions::canonical_direct_peer;
 
 const TARGET: [u8; 6] = [192, 168, 1, 50, 0xBA, 0xC0];
 

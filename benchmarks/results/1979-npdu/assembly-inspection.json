@@ -1,0 +1,482 @@
+{
+  "P": {
+    "anchor": {
+      "path": "/tmp/rusty-1979-npdu-build-v2/P-anchor.asm",
+      "sha256": "17a51c10de1d0e829efbdecb2b85748416ff7015a02028da6acbb5e0375179c1",
+      "symbol": "0000000100023d00 <<criterion::bencher::Bencher>::iter::<(), encoding::bench_decode_npdu::{closure#0}::{closure#0}>>:",
+      "instructions": 108,
+      "calls": [
+        "100023d30:     \tbl\t0x10018fc54 <<std::time::Instant>::now>",
+        "100023d44:     \tbl\t0x100074e20 <<criterion::measurement::WallTime as criterion::measurement::Measurement>::start>",
+        "100023d70:     \tblr\tx8",
+        "100023d90:     \tblr\tx9",
+        "100023d9c:     \tbl\t0x10017ac6c <bacnet_encoding::npdu::decode_npdu>",
+        "100023de8:     \tbl\t0x1000305cc <__rustc::__rust_dealloc>",
+        "100023e08:     \tbl\t0x1000305cc <__rustc::__rust_dealloc>",
+        "100023e1c:     \tbl\t0x100074df8 <<criterion::measurement::WallTime as criterion::measurement::Measurement>::end>",
+        "100023e2c:     \tbl\t0x10018fc80 <<std::time::Instant>::elapsed>",
+        "100023e90:     \tbl\t0x1001dc53c <core::result::unwrap_failed>",
+        "100023ea0:     \tbl\t0x100025174 <core::ptr::drop_glue::<bacnet_encoding::npdu::decode_error::NpduDecodeError>>",
+        "100023ea8:     \tbl\t0x1001dca58 <dyld_stub_binder+0x1001dca58>",
+        "100023eac:     \tbl\t0x1001dc5e0 <core::panicking::panic_in_cleanup>"
+      ],
+      "stack_adjustments": [
+        "100023d00:     \tsub\tsp, sp, #0x170",
+        "100023e50:     \tadd\tsp, sp, #0x170"
+      ]
+    },
+    "borrowed-loop": {
+      "path": "/tmp/rusty-1979-npdu-build-v2/P-borrowed-loop.asm",
+      "sha256": "cfcb24e345f3b1c817e1a23b5bf7005655e4d131157eec482c77e65eaa428129",
+      "symbol": "0000000100024d58 <<criterion::bencher::Bencher>::iter::<(), encoding::npdu_attribution::diagnostics::{closure#0}::{closure#0}>>:",
+      "instructions": 71,
+      "calls": [
+        "100024d88:     \tbl\t0x10018fc54 <<std::time::Instant>::now>",
+        "100024d9c:     \tbl\t0x100074e20 <<criterion::measurement::WallTime as criterion::measurement::Measurement>::start>",
+        "100024dc0:     \tbl\t0x1000305dc <<bacnet_npdu::view::Npdu>::decode>",
+        "100024e08:     \tbl\t0x100074df8 <<criterion::measurement::WallTime as criterion::measurement::Measurement>::end>",
+        "100024e18:     \tbl\t0x10018fc80 <<std::time::Instant>::elapsed>",
+        "100024e70:     \tbl\t0x1001dc53c <core::result::unwrap_failed>"
+      ],
+      "stack_adjustments": [
+        "100024d58:     \tsub\tsp, sp, #0x120",
+        "100024e3c:     \tadd\tsp, sp, #0x120"
+      ]
+    },
+    "clone-loop": {
+      "path": "/tmp/rusty-1979-npdu-build-v2/P-clone-loop.asm",
+      "sha256": "47ba21b92ed420d37c5034087188d9bc97136f1ceda052969123478e91efb1de",
+      "symbol": "0000000100024e74 <<criterion::bencher::Bencher>::iter::<(), encoding::npdu_attribution::diagnostics::{closure#1}::{closure#0}>>:",
+      "instructions": 51,
+      "calls": [
+        "100024ea0:     \tbl\t0x10018fc54 <<std::time::Instant>::now>",
+        "100024eb4:     \tbl\t0x100074e20 <<criterion::measurement::WallTime as criterion::measurement::Measurement>::start>",
+        "100024ee0:     \tblr\tx9",
+        "100024ef0:     \tblr\tx8",
+        "100024f08:     \tbl\t0x100074df8 <<criterion::measurement::WallTime as criterion::measurement::Measurement>::end>",
+        "100024f18:     \tbl\t0x10018fc80 <<std::time::Instant>::elapsed>"
+      ],
+      "stack_adjustments": [
+        "100024e74:     \tsub\tsp, sp, #0x80",
+        "100024f38:     \tadd\tsp, sp, #0x80"
+      ]
+    },
+    "owned": {
+      "path": "/tmp/rusty-1979-npdu-build-v2/P-owned.asm",
+      "sha256": "113c292d558905a3c70fb81d6c93508d7c3da92aad1a9ad23224bb322b18f6ed",
+      "symbol": "000000010017ac6c <bacnet_encoding::npdu::decode_npdu>:",
+      "instructions": 524,
+      "calls": [
+        "10017ad14:     \tbl\t0x10017fe50 <tracing::__macro_support::__is_enabled>",
+        "10017ad6c:     \tbl\t0x100180320 <<tracing_core::event::Event>::dispatch>",
+        "10017aeb8:     \tblr\tx9",
+        "10017afe0:     \tbl\t0x10017a710 <<smallvec::SmallVec<[u8; 6]>>::from_slice>",
+        "10017b0a8:     \tbl\t0x1000305cc <__rustc::__rust_dealloc>",
+        "10017b0f8:     \tbl\t0x10017a9c0 <bacnet_encoding::npdu::decode_address::<core::option::Option<u16>>>",
+        "10017b1ac:     \tbl\t0x1001dc790 <core::panicking::panic_fmt>",
+        "10017b204:     \tbl\t0x1000305cc <__rustc::__rust_dealloc>",
+        "10017b21c:     \tbl\t0x10017b7bc <bacnet_encoding::npdu::source_behind>",
+        "10017b250:     \tbl\t0x1000305cc <__rustc::__rust_dealloc>",
+        "10017b2ac:     \tblr\tx8",
+        "10017b390:     \tbl\t0x1001d6f40 <<tracing_core::callsite::DefaultCallsite>::register>",
+        "10017b3e4:     \tbl\t0x1001dc5f8 <core::panicking::panic_bounds_check>",
+        "10017b418:     \tbl\t0x10017ac28 <core::ptr::drop_glue::<bacnet_encoding::npdu::decode_error::NpduDecodeError>>",
+        "10017b458:     \tbl\t0x1000305cc <__rustc::__rust_dealloc>",
+        "10017b47c:     \tbl\t0x1000305cc <__rustc::__rust_dealloc>",
+        "10017b48c:     \tblr\tx8",
+        "10017b494:     \tbl\t0x1001dca58 <dyld_stub_binder+0x1001dca58>",
+        "10017b498:     \tbl\t0x1001dc5e0 <core::panicking::panic_in_cleanup>"
+      ],
+      "stack_adjustments": [
+        "10017ac6c:     \tsub\tsp, sp, #0x150",
+        "10017b2c8:     \tadd\tsp, sp, #0x150"
+      ]
+    },
+    "borrowed": {
+      "path": "/tmp/rusty-1979-npdu-build-v2/P-borrowed.asm",
+      "sha256": "b687352259b15d9abbbef8c44e32b1ec7b8fdc15381b24d0cb56eb79f563354b",
+      "symbol": "00000001000305dc <<bacnet_npdu::view::Npdu>::decode>:",
+      "instructions": 149,
+      "calls": [
+        "100030704:     \tbl\t0x100030830 <bacnet_npdu::view::source_behind>",
+        "10003082c:     \tbl\t0x1001dc7f8 <core::slice::index::slice_index_fail>"
+      ],
+      "stack_adjustments": [
+        "1000305dc:     \tsub\tsp, sp, #0x50",
+        "100030804:     \tadd\tsp, sp, #0x50"
+      ]
+    },
+    "slice": {
+      "path": "/tmp/rusty-1979-npdu-build-v2/P-slice.asm",
+      "sha256": "322238be05b4ad95c0499fed7b44870742e7e0467f08956d6fba2c51435e095c",
+      "symbol": "000000010017e480 <<bytes::bytes::Bytes>::slice::<core::ops::range::RangeFrom<usize>>>:",
+      "instructions": 46,
+      "calls": [
+        "10017e4dc:     \tblr\tx9",
+        "10017e530:     \tbl\t0x1001dc790 <core::panicking::panic_fmt>"
+      ],
+      "stack_adjustments": [
+        "10017e480:     \tsub\tsp, sp, #0x60",
+        "10017e4fc:     \tadd\tsp, sp, #0x60"
+      ]
+    },
+    "clone": {
+      "path": "/tmp/rusty-1979-npdu-build-v2/P-clone.asm",
+      "sha256": "6a9e3d4c81a9ca3e503ac830870a95556d547d24d48b0ba807a7c70d63b44efd",
+      "symbol": "00000001001813c8 <bytes::bytes::shared_clone>:",
+      "instructions": 13,
+      "calls": [
+        "1001813f8:     \tbl\t0x1001d738c <bytes::abort>"
+      ],
+      "stack_adjustments": []
+    },
+    "drop": {
+      "path": "/tmp/rusty-1979-npdu-build-v2/P-drop.asm",
+      "sha256": "fbab2bc3028610b38e6be86e4c73dc2656a6ee144cfe2a4611adb53ae9a94344",
+      "symbol": "0000000100181314 <bytes::bytes::shared_drop>:",
+      "instructions": 44,
+      "calls": [
+        "100181350:     \tbl\t0x1000305cc <__rustc::__rust_dealloc>",
+        "1001813a0:     \tbl\t0x1001dc53c <core::result::unwrap_failed>",
+        "1001813b8:     \tbl\t0x1000305cc <__rustc::__rust_dealloc>",
+        "1001813c0:     \tbl\t0x1001dca58 <dyld_stub_binder+0x1001dca58>"
+      ],
+      "stack_adjustments": [
+        "100181314:     \tsub\tsp, sp, #0x30",
+        "100181368:     \tadd\tsp, sp, #0x30",
+        "100181378:     \tadd\tsp, sp, #0x30"
+      ]
+    },
+    "promotable-clone": {
+      "path": "/tmp/rusty-1979-npdu-build-v2/P-promotable-clone.asm",
+      "sha256": "0f598c33bd53a59b5805bfa634b8a054e71e364e23d5345890d19fca550c4d7a",
+      "symbol": "0000000100181b70 <bytes::bytes::promotable_even_clone>:",
+      "instructions": 20,
+      "calls": [
+        "100181bbc:     \tbl\t0x1001d738c <bytes::abort>"
+      ],
+      "stack_adjustments": []
+    }
+  },
+  "Q": {
+    "anchor": {
+      "path": "/tmp/rusty-1979-npdu-build-v2/Q-anchor.asm",
+      "sha256": "8c5004a2d9d9d83743b2fe2d27c7222ea58243cd1e2e8b31fcd948eaef713353",
+      "symbol": "0000000100028a40 <<criterion::bencher::Bencher>::iter::<(), encoding::bench_decode_npdu::{closure#0}::{closure#0}>>:",
+      "instructions": 114,
+      "calls": [
+        "100028a70:     \tbl\t0x10018fc54 <<std::time::Instant>::now>",
+        "100028a84:     \tbl\t0x100074ee0 <<criterion::measurement::WallTime as criterion::measurement::Measurement>::start>",
+        "100028ab0:     \tblr\tx8",
+        "100028ad0:     \tblr\tx9",
+        "100028adc:     \tbl\t0x10017c128 <bacnet_encoding::npdu::decode_npdu>",
+        "100028b28:     \tbl\t0x10003091c <__rustc::__rust_dealloc>",
+        "100028b48:     \tbl\t0x10003091c <__rustc::__rust_dealloc>",
+        "100028b5c:     \tbl\t0x100074eb8 <<criterion::measurement::WallTime as criterion::measurement::Measurement>::end>",
+        "100028b6c:     \tbl\t0x10018fc80 <<std::time::Instant>::elapsed>",
+        "100028bcc:     \tbl\t0x1001dc57c <core::result::unwrap_failed>",
+        "100028bfc:     \tbl\t0x10003091c <__rustc::__rust_dealloc>",
+        "100028c04:     \tbl\t0x1001dca98 <dyld_stub_binder+0x1001dca98>"
+      ],
+      "stack_adjustments": [
+        "100028a40:     \tsub\tsp, sp, #0x170",
+        "100028b90:     \tadd\tsp, sp, #0x170"
+      ]
+    },
+    "borrowed-loop": {
+      "path": "/tmp/rusty-1979-npdu-build-v2/Q-borrowed-loop.asm",
+      "sha256": "dad379025cf60b2571c4813261dd928b6c91c0c323652a49b4fea0c94ed009f5",
+      "symbol": "0000000100029ab4 <<criterion::bencher::Bencher>::iter::<(), encoding::npdu_attribution::diagnostics::{closure#0}::{closure#0}>>:",
+      "instructions": 71,
+      "calls": [
+        "100029ae4:     \tbl\t0x10018fc54 <<std::time::Instant>::now>",
+        "100029af8:     \tbl\t0x100074ee0 <<criterion::measurement::WallTime as criterion::measurement::Measurement>::start>",
+        "100029b1c:     \tbl\t0x10018291c <<bacnet_npdu::view::Npdu>::decode>",
+        "100029b64:     \tbl\t0x100074eb8 <<criterion::measurement::WallTime as criterion::measurement::Measurement>::end>",
+        "100029b74:     \tbl\t0x10018fc80 <<std::time::Instant>::elapsed>",
+        "100029bcc:     \tbl\t0x1001dc57c <core::result::unwrap_failed>"
+      ],
+      "stack_adjustments": [
+        "100029ab4:     \tsub\tsp, sp, #0x120",
+        "100029b98:     \tadd\tsp, sp, #0x120"
+      ]
+    },
+    "clone-loop": {
+      "path": "/tmp/rusty-1979-npdu-build-v2/Q-clone-loop.asm",
+      "sha256": "b850408f28d94b96832d2fa839d507191925dc9d7e51140e483b455e7320b3ca",
+      "symbol": "0000000100029bd0 <<criterion::bencher::Bencher>::iter::<(), encoding::npdu_attribution::diagnostics::{closure#1}::{closure#0}>>:",
+      "instructions": 51,
+      "calls": [
+        "100029bfc:     \tbl\t0x10018fc54 <<std::time::Instant>::now>",
+        "100029c10:     \tbl\t0x100074ee0 <<criterion::measurement::WallTime as criterion::measurement::Measurement>::start>",
+        "100029c3c:     \tblr\tx9",
+        "100029c4c:     \tblr\tx8",
+        "100029c64:     \tbl\t0x100074eb8 <<criterion::measurement::WallTime as criterion::measurement::Measurement>::end>",
+        "100029c74:     \tbl\t0x10018fc80 <<std::time::Instant>::elapsed>"
+      ],
+      "stack_adjustments": [
+        "100029bd0:     \tsub\tsp, sp, #0x80",
+        "100029c94:     \tadd\tsp, sp, #0x80"
+      ]
+    },
+    "owned": {
+      "path": "/tmp/rusty-1979-npdu-build-v2/Q-owned.asm",
+      "sha256": "cd0d05308ebc38424923efe5ce79152e7aa98a338bc160b41cb4c08d84638184",
+      "symbol": "000000010017c128 <bacnet_encoding::npdu::decode_npdu>:",
+      "instructions": 324,
+      "calls": [
+        "10017c1a0:     \tbl\t0x10017f778 <tracing::__macro_support::__is_enabled>",
+        "10017c1f8:     \tbl\t0x10017fc20 <<tracing_core::event::Event>::dispatch>",
+        "10017c210:     \tbl\t0x10018291c <<bacnet_npdu::view::Npdu>::decode>",
+        "10017c2a0:     \tbl\t0x1001dcd2c <dyld_stub_binder+0x1001dcd2c>",
+        "10017c2f4:     \tbl\t0x1001dcd2c <dyld_stub_binder+0x1001dcd2c>",
+        "10017c318:     \tbl\t0x100030928 <__rustc::__rust_no_alloc_shim_is_unstable_v2>",
+        "10017c324:     \tbl\t0x100030918 <__rustc::__rust_alloc>",
+        "10017c338:     \tbl\t0x1001dcd2c <dyld_stub_binder+0x1001dcd2c>",
+        "10017c374:     \tbl\t0x1001dcd2c <dyld_stub_binder+0x1001dcd2c>",
+        "10017c388:     \tbl\t0x100030928 <__rustc::__rust_no_alloc_shim_is_unstable_v2>",
+        "10017c394:     \tbl\t0x100030918 <__rustc::__rust_alloc>",
+        "10017c3a8:     \tbl\t0x1001dcd2c <dyld_stub_binder+0x1001dcd2c>",
+        "10017c41c:     \tblr\tx9",
+        "10017c4ac:     \tbl\t0x100030928 <__rustc::__rust_no_alloc_shim_is_unstable_v2>",
+        "10017c4b8:     \tbl\t0x100030918 <__rustc::__rust_alloc>",
+        "10017c4cc:     \tbl\t0x1001dcd2c <dyld_stub_binder+0x1001dcd2c>",
+        "10017c524:     \tblr\tx8",
+        "10017c57c:     \tbl\t0x1001dc7d0 <core::panicking::panic_fmt>",
+        "10017c58c:     \tbl\t0x1001d6f80 <<tracing_core::callsite::DefaultCallsite>::register>",
+        "10017c5a4:     \tbl\t0x1001dc2ec <alloc::raw_vec::handle_error>",
+        "10017c5b4:     \tbl\t0x1001dc2ec <alloc::raw_vec::handle_error>",
+        "10017c5fc:     \tbl\t0x10003091c <__rustc::__rust_dealloc>",
+        "10017c618:     \tbl\t0x10003091c <__rustc::__rust_dealloc>",
+        "10017c628:     \tblr\tx8",
+        "10017c630:     \tbl\t0x1001dca98 <dyld_stub_binder+0x1001dca98>",
+        "10017c634:     \tbl\t0x1001dc620 <core::panicking::panic_in_cleanup>"
+      ],
+      "stack_adjustments": [
+        "10017c128:     \tsub\tsp, sp, #0x170",
+        "10017c540:     \tadd\tsp, sp, #0x170"
+      ]
+    },
+    "borrowed": {
+      "path": "/tmp/rusty-1979-npdu-build-v2/Q-borrowed.asm",
+      "sha256": "84f61c92e43280a47f61848e36c0e543768fa83c039d529b78b37772001d8ea9",
+      "symbol": "000000010018291c <<bacnet_npdu::view::Npdu>::decode>:",
+      "instructions": 149,
+      "calls": [
+        "100182a44:     \tbl\t0x100182b70 <bacnet_npdu::view::source_behind>",
+        "100182b6c:     \tbl\t0x1001dc838 <core::slice::index::slice_index_fail>"
+      ],
+      "stack_adjustments": [
+        "10018291c:     \tsub\tsp, sp, #0x50",
+        "100182b44:     \tadd\tsp, sp, #0x50"
+      ]
+    },
+    "slice": {
+      "path": "/tmp/rusty-1979-npdu-build-v2/Q-slice.asm",
+      "sha256": "2f1bd987ac8c7186b754596fab173c8fd098b70d4fc8c8194a094ad3f1d009bb",
+      "symbol": "000000010017bc80 <<bytes::bytes::Bytes>::slice::<core::ops::range::RangeFrom<usize>>>:",
+      "instructions": 48,
+      "calls": [
+        "10017bcdc:     \tblr\tx9",
+        "10017bd30:     \tbl\t0x1001dc7d0 <core::panicking::panic_fmt>"
+      ],
+      "stack_adjustments": [
+        "10017bc80:     \tsub\tsp, sp, #0x60",
+        "10017bcfc:     \tadd\tsp, sp, #0x60"
+      ]
+    },
+    "clone": {
+      "path": "/tmp/rusty-1979-npdu-build-v2/Q-clone.asm",
+      "sha256": "f9dbd24b514dfa5015b527527f50ba25e3138fac03914b18c33b25b1d8609991",
+      "symbol": "0000000100180cc8 <bytes::bytes::shared_clone>:",
+      "instructions": 13,
+      "calls": [
+        "100180cf8:     \tbl\t0x1001d73cc <bytes::abort>"
+      ],
+      "stack_adjustments": []
+    },
+    "drop": {
+      "path": "/tmp/rusty-1979-npdu-build-v2/Q-drop.asm",
+      "sha256": "2e16060fbeea895735fc3cc1d7d7a2c84b6d9a5424aa6e6560d08adeb035965c",
+      "symbol": "0000000100180c14 <bytes::bytes::shared_drop>:",
+      "instructions": 44,
+      "calls": [
+        "100180c50:     \tbl\t0x10003091c <__rustc::__rust_dealloc>",
+        "100180ca0:     \tbl\t0x1001dc57c <core::result::unwrap_failed>",
+        "100180cb8:     \tbl\t0x10003091c <__rustc::__rust_dealloc>",
+        "100180cc0:     \tbl\t0x1001dca98 <dyld_stub_binder+0x1001dca98>"
+      ],
+      "stack_adjustments": [
+        "100180c14:     \tsub\tsp, sp, #0x30",
+        "100180c68:     \tadd\tsp, sp, #0x30",
+        "100180c78:     \tadd\tsp, sp, #0x30"
+      ]
+    },
+    "promotable-clone": {
+      "path": "/tmp/rusty-1979-npdu-build-v2/Q-promotable-clone.asm",
+      "sha256": "0a2ed51d7aa61d538927ebdaf8600d8528d7b1d9e2082336acf70a75470b1f13",
+      "symbol": "0000000100181470 <bytes::bytes::promotable_even_clone>:",
+      "instructions": 20,
+      "calls": [
+        "1001814bc:     \tbl\t0x1001d73cc <bytes::abort>"
+      ],
+      "stack_adjustments": []
+    }
+  },
+  "R": {
+    "anchor": {
+      "path": "/tmp/rusty-1979-npdu-build-v2/R-anchor.asm",
+      "sha256": "b5d91e8add4e914ab360b407d5c2dc483d159ddca127491caebce9cf9af5edbc",
+      "symbol": "0000000100028a40 <<criterion::bencher::Bencher>::iter::<(), encoding::bench_decode_npdu::{closure#0}::{closure#0}>>:",
+      "instructions": 114,
+      "calls": [
+        "100028a70:     \tbl\t0x100190054 <<std::time::Instant>::now>",
+        "100028a84:     \tbl\t0x100074ee0 <<criterion::measurement::WallTime as criterion::measurement::Measurement>::start>",
+        "100028ab0:     \tblr\tx8",
+        "100028ad0:     \tblr\tx9",
+        "100028adc:     \tbl\t0x10017a8a8 <bacnet_encoding::npdu::decode_npdu>",
+        "100028b28:     \tbl\t0x10003091c <__rustc::__rust_dealloc>",
+        "100028b48:     \tbl\t0x10003091c <__rustc::__rust_dealloc>",
+        "100028b5c:     \tbl\t0x100074eb8 <<criterion::measurement::WallTime as criterion::measurement::Measurement>::end>",
+        "100028b6c:     \tbl\t0x100190080 <<std::time::Instant>::elapsed>",
+        "100028bcc:     \tbl\t0x1001dc97c <core::result::unwrap_failed>",
+        "100028bfc:     \tbl\t0x10003091c <__rustc::__rust_dealloc>",
+        "100028c04:     \tbl\t0x1001dce98 <dyld_stub_binder+0x1001dce98>"
+      ],
+      "stack_adjustments": [
+        "100028a40:     \tsub\tsp, sp, #0x170",
+        "100028b90:     \tadd\tsp, sp, #0x170"
+      ]
+    },
+    "borrowed-loop": {
+      "path": "/tmp/rusty-1979-npdu-build-v2/R-borrowed-loop.asm",
+      "sha256": "fbfdd5e74d7809be47117cefecc4f9bca1064e0637fc361354521a8e35369af7",
+      "symbol": "0000000100029ab4 <<criterion::bencher::Bencher>::iter::<(), encoding::npdu_attribution::diagnostics::{closure#0}::{closure#0}>>:",
+      "instructions": 71,
+      "calls": [
+        "100029ae4:     \tbl\t0x100190054 <<std::time::Instant>::now>",
+        "100029af8:     \tbl\t0x100074ee0 <<criterion::measurement::WallTime as criterion::measurement::Measurement>::start>",
+        "100029b1c:     \tbl\t0x100182d1c <<bacnet_npdu::view::Npdu>::decode>",
+        "100029b64:     \tbl\t0x100074eb8 <<criterion::measurement::WallTime as criterion::measurement::Measurement>::end>",
+        "100029b74:     \tbl\t0x100190080 <<std::time::Instant>::elapsed>",
+        "100029bcc:     \tbl\t0x1001dc97c <core::result::unwrap_failed>"
+      ],
+      "stack_adjustments": [
+        "100029ab4:     \tsub\tsp, sp, #0x120",
+        "100029b98:     \tadd\tsp, sp, #0x120"
+      ]
+    },
+    "clone-loop": {
+      "path": "/tmp/rusty-1979-npdu-build-v2/R-clone-loop.asm",
+      "sha256": "fd5ec0978ee48fff0caf164c886b49df58cd63d44aa37d48464efad95c7fe974",
+      "symbol": "0000000100029bd0 <<criterion::bencher::Bencher>::iter::<(), encoding::npdu_attribution::diagnostics::{closure#1}::{closure#0}>>:",
+      "instructions": 51,
+      "calls": [
+        "100029bfc:     \tbl\t0x100190054 <<std::time::Instant>::now>",
+        "100029c10:     \tbl\t0x100074ee0 <<criterion::measurement::WallTime as criterion::measurement::Measurement>::start>",
+        "100029c3c:     \tblr\tx9",
+        "100029c4c:     \tblr\tx8",
+        "100029c64:     \tbl\t0x100074eb8 <<criterion::measurement::WallTime as criterion::measurement::Measurement>::end>",
+        "100029c74:     \tbl\t0x100190080 <<std::time::Instant>::elapsed>"
+      ],
+      "stack_adjustments": [
+        "100029bd0:     \tsub\tsp, sp, #0x80",
+        "100029c94:     \tadd\tsp, sp, #0x80"
+      ]
+    },
+    "owned": {
+      "path": "/tmp/rusty-1979-npdu-build-v2/R-owned.asm",
+      "sha256": "d5d471b1c3025a057182c4b05d43a18ec54adaaa304912fc848929625a4003b7",
+      "symbol": "000000010017a8a8 <bacnet_encoding::npdu::decode_npdu>:",
+      "instructions": 400,
+      "calls": [
+        "10017a920:     \tbl\t0x10017fb78 <tracing::__macro_support::__is_enabled>",
+        "10017a978:     \tbl\t0x100180020 <<tracing_core::event::Event>::dispatch>",
+        "10017aa28:     \tblr\tx8",
+        "10017aac0:     \tblr\tx9",
+        "10017ab84:     \tbl\t0x10017b238 <bacnet_encoding::npdu::source_behind>",
+        "10017abc0:     \tbl\t0x10017c9d0 <<smallvec::SmallVec<[u8; 6]>>::from_slice>",
+        "10017ac68:     \tbl\t0x10003091c <__rustc::__rust_dealloc>",
+        "10017ac9c:     \tbl\t0x10017a640 <bacnet_encoding::npdu::decode_address::<core::option::Option<u16>>>",
+        "10017ad68:     \tbl\t0x10003091c <__rustc::__rust_dealloc>",
+        "10017adb0:     \tbl\t0x1001d7380 <<tracing_core::callsite::DefaultCallsite>::register>",
+        "10017adf0:     \tbl\t0x1001dcbd0 <core::panicking::panic_fmt>",
+        "10017ae3c:     \tbl\t0x1001dca38 <core::panicking::panic_bounds_check>",
+        "10017aea4:     \tbl\t0x10003091c <__rustc::__rust_dealloc>",
+        "10017aec8:     \tbl\t0x10003091c <__rustc::__rust_dealloc>",
+        "10017aed8:     \tblr\tx8",
+        "10017aee0:     \tbl\t0x1001dce98 <dyld_stub_binder+0x1001dce98>",
+        "10017aee4:     \tbl\t0x1001dca20 <core::panicking::panic_in_cleanup>"
+      ],
+      "stack_adjustments": [
+        "10017a8a8:     \tsub\tsp, sp, #0x130",
+        "10017aa44:     \tadd\tsp, sp, #0x130"
+      ]
+    },
+    "borrowed": {
+      "path": "/tmp/rusty-1979-npdu-build-v2/R-borrowed.asm",
+      "sha256": "0e0993fbe6270393ab69dbc9cd08cfada714eb61be0fa249d55460eae416912f",
+      "symbol": "0000000100182d1c <<bacnet_npdu::view::Npdu>::decode>:",
+      "instructions": 149,
+      "calls": [
+        "100182e44:     \tbl\t0x100182f70 <bacnet_npdu::view::source_behind>",
+        "100182f6c:     \tbl\t0x1001dcc38 <core::slice::index::slice_index_fail>"
+      ],
+      "stack_adjustments": [
+        "100182d1c:     \tsub\tsp, sp, #0x50",
+        "100182f44:     \tadd\tsp, sp, #0x50"
+      ]
+    },
+    "slice": {
+      "path": "/tmp/rusty-1979-npdu-build-v2/R-slice.asm",
+      "sha256": "ea138b8433df963dabd3a43540e2a7261daa3f262ef246035a258d69c9d13010",
+      "symbol": "000000010017e100 <<bytes::bytes::Bytes>::slice::<core::ops::range::RangeFrom<usize>>>:",
+      "instructions": 48,
+      "calls": [
+        "10017e15c:     \tblr\tx9",
+        "10017e1b0:     \tbl\t0x1001dcbd0 <core::panicking::panic_fmt>"
+      ],
+      "stack_adjustments": [
+        "10017e100:     \tsub\tsp, sp, #0x60",
+        "10017e17c:     \tadd\tsp, sp, #0x60"
+      ]
+    },
+    "clone": {
+      "path": "/tmp/rusty-1979-npdu-build-v2/R-clone.asm",
+      "sha256": "9d7f95890a2b7052a439f87a2bc22b037fd9cad360bf90705e2bf35a6d60383d",
+      "symbol": "00000001001810c8 <bytes::bytes::shared_clone>:",
+      "instructions": 13,
+      "calls": [
+        "1001810f8:     \tbl\t0x1001d77cc <bytes::abort>"
+      ],
+      "stack_adjustments": []
+    },
+    "drop": {
+      "path": "/tmp/rusty-1979-npdu-build-v2/R-drop.asm",
+      "sha256": "84b66cb1829e1bc24ec7939fb8a27be569e5c2763e90d3c296d665b40b0606d3",
+      "symbol": "0000000100181014 <bytes::bytes::shared_drop>:",
+      "instructions": 44,
+      "calls": [
+        "100181050:     \tbl\t0x10003091c <__rustc::__rust_dealloc>",
+        "1001810a0:     \tbl\t0x1001dc97c <core::result::unwrap_failed>",
+        "1001810b8:     \tbl\t0x10003091c <__rustc::__rust_dealloc>",
+        "1001810c0:     \tbl\t0x1001dce98 <dyld_stub_binder+0x1001dce98>"
+      ],
+      "stack_adjustments": [
+        "100181014:     \tsub\tsp, sp, #0x30",
+        "100181068:     \tadd\tsp, sp, #0x30",
+        "100181078:     \tadd\tsp, sp, #0x30"
+      ]
+    },
+    "promotable-clone": {
+      "path": "/tmp/rusty-1979-npdu-build-v2/R-promotable-clone.asm",
+      "sha256": "07bce05556b93613169f939576ab18af938b0dea5f318e7398eb09fa4014704c",
+      "symbol": "0000000100181870 <bytes::bytes::promotable_even_clone>:",
+      "instructions": 20,
+      "calls": [
+        "1001818bc:     \tbl\t0x1001d77cc <bytes::abort>"
+      ],
+      "stack_adjustments": []
+    }
+  }
+}

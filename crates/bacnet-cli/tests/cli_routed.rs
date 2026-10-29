@@ -17,10 +17,9 @@ use bacnet_transport::any::AnyTransport;
 use bacnet_transport::bbmd::ForeignDevicePolicy;
 use bacnet_transport::bip::{BbmdOptions, BipMode, BipTransport};
 use bacnet_transport::loopback::LoopbackTransport;
-use bacnet_transport::mstp::NoSerial;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use support::lab::{lab_database, lab_identity};
-use support::{command, failure, run, Process};
+use support::{Process, command, failure, run};
 
 /// The lab device's network and instance.
 const DNET: u16 = 2;
@@ -32,6 +31,27 @@ const INSTANCE: u32 = 1234;
 /// before the router takes it, and another process can take it in
 /// between: a start that fails is tried again on a fresh port.
 async fn site() -> (BACnetRouter, BACnetServer<LoopbackTransport>, u16) {
+    site_with_database(read_services::database()).await
+}
+
+async fn site_with_database(
+    database: bacnet_objects::database::ObjectDatabase,
+) -> (BACnetRouter, BACnetServer<LoopbackTransport>, u16) {
+    site_with_config(
+        database,
+        bacnet_server::server::ServerConfig {
+            device: lab_identity(INSTANCE),
+            ..Default::default()
+        },
+    )
+    .await
+}
+
+async fn site_with_config(
+    database: bacnet_objects::database::ObjectDatabase,
+    config: bacnet_server::server::ServerConfig,
+) -> (BACnetRouter, BACnetServer<LoopbackTransport>, u16) {
+    let config = service_config(config);
     for _ in 0..8 {
         let port = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
             .unwrap()
@@ -46,7 +66,7 @@ async fn site() -> (BACnetRouter, BACnetServer<LoopbackTransport>, u16) {
         let (router_end, station) = LoopbackTransport::pair(vec![0x01], vec![0x05]);
         let ports = vec![
             RouterPort {
-                transport: AnyTransport::<NoSerial>::Bip(Box::new(bip)),
+                transport: AnyTransport::Bip(Box::new(bip)),
                 network_number: 1,
             },
             RouterPort {
@@ -57,17 +77,24 @@ async fn site() -> (BACnetRouter, BACnetServer<LoopbackTransport>, u16) {
         if let Ok(StartedRouter { router, .. }) =
             BACnetRouter::start(ports, RouterOptions::new()).await
         {
-            let server = BACnetServer::generic_builder()
-                .device(lab_identity(INSTANCE))
-                .transport(station)
-                .database(lab_database(INSTANCE))
-                .build()
+            let server = BACnetServer::start(config, database, station)
                 .await
                 .unwrap();
             return (router, server, port);
         }
     }
     panic!("no loopback UDP port the router could bind");
+}
+
+fn service_config(
+    mut config: bacnet_server::server::ServerConfig,
+) -> bacnet_server::server::ServerConfig {
+    // Each service command starts with an empty discovery cache, even if the
+    // OS reuses the preceding child's UDP source. Keep service assertions
+    // independent of duplicate suppression; discovery.rs tests that policy.
+    // Preserve admission limits, rate limits and directed replies.
+    config.discovery_policy.coalesce_window = std::time::Duration::ZERO;
+    config
 }
 
 /// `bacnet read` through the router's BBMD, waiting `wait_ms` for a routed
@@ -104,12 +131,17 @@ async fn a_routed_read_reaches_the_device_behind_the_router() {
         // The same shape a local read prints.
         assert_eq!(
             value,
-            json!({ "object": "ANALOG_INPUT:2", "property": "PRESENT_VALUE", "value": "51" }),
+            json!({
+                "object": "ANALOG_INPUT:2",
+                "property": "PRESENT_VALUE",
+                "value": "51",
+                "decoded": 51.0
+            }),
             "{target}"
         );
     }
     server.stop().await.unwrap();
-    router.stop().await;
+    router.stop().await.unwrap();
 }
 
 /// `whois-router` (#960) lists the router, at its B/IP address, with the
@@ -145,7 +177,7 @@ async fn whois_router_lists_the_router_and_its_network() {
     assert_eq!(whois_router(&["--dnet", "2"]).await, expected);
     assert_eq!(whois_router(&["--dnet", "77"]).await, json!([]));
     server.stop().await.unwrap();
-    router.stop().await;
+    router.stop().await.unwrap();
 }
 
 /// A routed target that nothing answers fails with the network named, and
@@ -161,11 +193,28 @@ async fn routed_targets_fail_clearly() {
         "--port",
         "0",
         "--json",
-        "alarms",
+        "bdt",
         &format!("{DNET}:{INSTANCE}"),
     ])
     .await;
     failure(&output, "is a routed target");
     server.stop().await.unwrap();
-    router.stop().await;
+    router.stop().await.unwrap();
 }
+
+#[path = "cli_routed/read_services.rs"]
+mod read_services;
+
+#[path = "cli_routed/file_fixture.rs"]
+mod file_fixture;
+#[path = "cli_routed/file_services.rs"]
+mod file_services;
+
+#[path = "cli_routed/device_admin.rs"]
+mod device_admin;
+
+#[path = "cli_routed/object_alarm.rs"]
+mod object_alarm;
+
+#[path = "cli_routed/discovery.rs"]
+mod discovery;

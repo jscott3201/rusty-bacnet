@@ -18,9 +18,9 @@
 //! WritePropertyMultiple that provisions an Access Rights object saves its
 //! rule arrays and Enable together, off the guard.
 //!
-//! Under a policy that decides mutations, a WritePropertyMultiple decides each attempt
-//! it would stage before staging it, and stages only those allowed (#1321).
-//! The handler then answers each such attempt from the decision made ahead
+//! Under a policy that decides mutations, a WritePropertyMultiple decides its
+//! attempts before staging any, and stages only those allowed (#1321, #2032).
+//! The handler then answers each attempt from the decision made ahead
 //! instead of asking again (`mutations::wpm_ahead`).
 //!
 //! Other requests read and write the database while the save runs. One that

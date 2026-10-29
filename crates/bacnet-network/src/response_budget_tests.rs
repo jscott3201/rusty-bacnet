@@ -5,10 +5,10 @@
 //! when the header length is wrong.
 use std::sync::{Arc, Mutex};
 
-use bacnet_encoding::npdu::{encode_npdu, Npdu, NpduAddress};
+use bacnet_encoding::npdu::{Npdu, NpduAddress, encode_npdu};
 use bacnet_npdu::NpduLimits;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
-use bacnet_types::{error::Error, MacAddr};
+use bacnet_types::{MacAddr, error::Error};
 use bytes::{Bytes, BytesMut};
 use tokio::sync::mpsc;
 
@@ -116,5 +116,5 @@ async fn router_route_budget_is_the_port_cap_less_the_reply_header() {
     assert_eq!(usize::from(route.max_apdu_length(1000, None).unwrap()), cap);
     // A smaller APDU limit wins.
     assert_eq!(route.max_apdu_length(480, None).unwrap(), 480);
-    started.router.stop().await;
+    started.router.stop().await.unwrap();
 }

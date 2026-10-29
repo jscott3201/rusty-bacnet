@@ -1,6 +1,6 @@
 use super::deadline_test_support::*;
 use super::*;
-use crate::port_ownership::{connect_loopback, ATTEMPTS};
+use crate::port_ownership::{ATTEMPTS, connect_loopback};
 use std::time::Duration;
 
 #[tokio::test]

@@ -71,10 +71,11 @@ fn a_request_is_answered_inside_treply_delay() {
     assert!(pass.is(FrameType::TOKEN, 0, 3), "{pass}");
     assert_eq!(pass.start, reply.end + sim.timing().bits(40));
     assert!(sim.deliveries(3).iter().any(|delivery| delivery.request));
-    assert!(sim
-        .deliveries(0)
-        .iter()
-        .any(|delivery| delivery.data == ANSWER));
+    assert!(
+        sim.deliveries(0)
+            .iter()
+            .any(|delivery| delivery.data == ANSWER)
+    );
     assert_eq!(sim.core(3).unwrap().counters().late_replies, 0);
     assert!(!sim.perturbed());
 }
@@ -111,10 +112,11 @@ fn a_slow_application_gets_reply_postponed_and_answers_with_the_token() {
     assert_eq!(answer.data, ANSWER);
     assert!(answer.start > request.end + millis(240));
     assert_eq!(sim.report().late_answers, 1);
-    assert!(sim
-        .deliveries(0)
-        .iter()
-        .any(|delivery| delivery.data == ANSWER));
+    assert!(
+        sim.deliveries(0)
+            .iter()
+            .any(|delivery| delivery.data == ANSWER)
+    );
     sim.assert_no_violations();
 }
 
@@ -130,10 +132,12 @@ fn an_application_may_postpone_at_once() {
     let (index, request) = the_request(frames);
     assert!(frames[index + 1].is(FrameType::REPLY_POSTPONED, 3, 0));
     assert_eq!(frames[index + 1].start, request.end + millis(10));
-    assert!(first_after(frames, frames[index + 1].end, |frame| {
-        frame.is(FrameType::BACNET_DATA_NOT_EXPECTING_REPLY, 3, 0) && frame.data == ANSWER
-    })
-    .is_some());
+    assert!(
+        first_after(frames, frames[index + 1].end, |frame| {
+            frame.is(FrameType::BACNET_DATA_NOT_EXPECTING_REPLY, 3, 0) && frame.data == ANSWER
+        })
+        .is_some()
+    );
     assert_eq!(sim.report().late_answers, 0);
     assert!(!sim.perturbed());
 }
@@ -231,10 +235,11 @@ fn a_reply_the_adapter_starts_late_goes_out_until_the_requester_may_give_up() {
     );
     assert_eq!(reply.start, request_end + millis(252));
     assert_eq!(sim.core(3).unwrap().counters().late_replies, 1);
-    assert!(sim
-        .deliveries(0)
-        .iter()
-        .any(|delivery| delivery.data == ANSWER));
+    assert!(
+        sim.deliveries(0)
+            .iter()
+            .any(|delivery| delivery.data == ANSWER)
+    );
     sim.assert_no_violations();
 
     // Would start at 260 ms: withheld, and the requester times out at 255 ms.

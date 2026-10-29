@@ -1,8 +1,8 @@
 use super::*;
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_transport::port::ReceivedNpdu;
-use std::future::{poll_fn, Future};
-use std::sync::{atomic::AtomicUsize, Mutex};
+use std::future::{Future, poll_fn};
+use std::sync::{Mutex, atomic::AtomicUsize};
 use std::task::Poll;
 use tokio::sync::mpsc;
 
@@ -119,19 +119,21 @@ async fn encoding_failure_never_issues_and_transport_failure_does_not_undo_issua
     assert!(matches!(error, Error::Encoding(s) if s.contains("DNET")));
     assert_eq!(issued.load(Ordering::SeqCst), 0);
     assert!(network.transport.frames.lock().unwrap().is_empty());
-    assert!(network
-        .send_apdu_on_issuance(
-            &[0x20, 1, 15],
-            &[1],
-            None,
-            false,
-            NetworkPriority::Normal,
-            || {
-                issued.fetch_add(1, Ordering::SeqCst);
-            }
-        )
-        .await
-        .is_err());
+    assert!(
+        network
+            .send_apdu_on_issuance(
+                &[0x20, 1, 15],
+                &[1],
+                None,
+                false,
+                NetworkPriority::Normal,
+                || {
+                    issued.fetch_add(1, Ordering::SeqCst);
+                }
+            )
+            .await
+            .is_err()
+    );
     assert_eq!(issued.load(Ordering::SeqCst), 1);
     assert_eq!(network.transport.frames.lock().unwrap().len(), 1);
 }

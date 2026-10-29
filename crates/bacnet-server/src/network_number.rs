@@ -1,6 +1,6 @@
 //! The two local nonrouter controls for an explicitly opted-in single link.
 use bacnet_network::layer::ReceivedNetworkControl;
-use bacnet_network::network_number::{number_is_reply, LocalNetworkNumber, NumberControl};
+use bacnet_network::network_number::{LocalNetworkNumber, NumberControl, number_is_reply};
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_types::network_number::NetworkNumber;
 use bacnet_types::primitives::ObjectIdentifier;

@@ -144,7 +144,7 @@ pub(crate) fn analyse(
     baud_rate: u32,
     chunks: &[(Duration, Vec<u8>)],
 ) -> super::stats::MonitorStats {
-    use super::line::{feed_chunk, LineClock};
+    use super::line::{LineClock, feed_chunk};
     use bacnet_mstp_codec::{DecodeEvent, StreamDecoder};
     let mut stats = super::stats::MonitorStats::new(baud_rate, Duration::ZERO);
     let mut storage = vec![0u8; MAX_COBS_FRAME_LENGTH + 512];

@@ -5,8 +5,8 @@ use super::tests::{
     unsigned_list,
 };
 use super::*;
-use bacnet_types::enums::{ErrorClass, ErrorCode};
 use PropertyIdentifier as P;
+use bacnet_types::enums::{ErrorClass, ErrorCode};
 
 #[test]
 fn channel_member_writes_keep_execution_delay_the_same_size() {

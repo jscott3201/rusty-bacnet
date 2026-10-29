@@ -8,7 +8,7 @@ import unittest
 from typing import Any
 
 import rusty_bacnet
-from rusty_bacnet import BACnetServer, EnableDisable
+from rusty_bacnet import BACnetClient, BACnetServer, EnableDisable, ReinitializedState
 
 
 class DccConstructorTests(unittest.TestCase):
@@ -80,10 +80,27 @@ class DccConstructorTests(unittest.TestCase):
                          sc_device_uuid=bytes.fromhex("8e62ac46d7084226913776a32b619315"),
                          sc_ca_cert="ca.pem", sc_client_cert="cert.pem", sc_client_key="key.pem")
             for policy in ["deny_all", "legacy_permissive"]:
-                for password in [None, "", "x" * 100]:
+                for password in [None, "x" * 20]:
                     BACnetServer(123, transport=transport, dcc_policy=policy, dcc_password=password,
                                  sc_device_uuid=bytes.fromhex("8e62ac46d7084226913776a32b619315"),
                                  sc_ca_cert="ca.pem", sc_client_cert="cert.pem", sc_client_key="key.pem")
+
+    def test_password_over_twenty_characters_refused_in_every_policy(self):
+        # The limit counts characters, not octets (#2060); a longer password
+        # could never be sent, whatever the policy.
+        for policy in ["deny_all", "require_password", "legacy_permissive"]:
+            with self.subTest(policy=policy):
+                with self.assertRaisesRegex(ValueError, "dcc_password exceeds the 20-character limit"):
+                    BACnetServer(123, dcc_policy=policy, dcc_password="é" * 21)
+                BACnetServer(123, dcc_policy=policy, dcc_password="é" * 20)
+
+    def test_empty_password_refused_in_every_policy(self):
+        # #2094: a request's empty password decodes as none, so a configured
+        # empty one could never match; None is how to configure no password.
+        for policy in ["deny_all", "require_password", "legacy_permissive"]:
+            with self.subTest(policy=policy):
+                with self.assertRaisesRegex(ValueError, "empty dcc_password"):
+                    BACnetServer(123, dcc_policy=policy, dcc_password="")
 
     def test_comm_state_stub_returns_enable_disable(self):
         stub_path = Path(rusty_bacnet.__file__).with_suffix(".pyi")
@@ -310,3 +327,36 @@ class DccNativeTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await server.stop()
             sock.close()
+
+    async def test_client_refuses_an_over_long_password_before_sending(self):
+        # #2085: 21 characters raise ValueError at the call and nothing reaches
+        # the server; 20 two-octet characters go out and match.
+        server = BACnetServer(123, interface="127.0.0.1", port=0,
+                              broadcast_address="127.0.0.1", dcc_policy="require_password",
+                              dcc_password="é" * 20)
+        await server.start()
+        try:
+            address = await server.local_address()
+            async with BACnetClient(interface="127.0.0.1", port=0) as client:
+                with self.assertRaisesRegex(ValueError, "password exceeds the 20-character limit"):
+                    client.device_communication_control(address, EnableDisable.DISABLE,
+                                                        password="é" * 21)
+                with self.assertRaisesRegex(ValueError, "password exceeds the 20-character limit"):
+                    client.reinitialize_device(address, ReinitializedState.COLDSTART,
+                                               password="é" * 21)
+                # #2094: an empty password is refused too; None sends none.
+                with self.assertRaisesRegex(ValueError, "empty password"):
+                    client.device_communication_control(address, EnableDisable.DISABLE,
+                                                        password="")
+                with self.assertRaisesRegex(ValueError, "empty password"):
+                    client.reinitialize_device(address, ReinitializedState.COLDSTART,
+                                               password="")
+                await client.device_communication_control(
+                    address, EnableDisable.DISABLE_INITIATION, time_duration=1,
+                    password="é" * 20)
+            self.assertEqual(await server.comm_state(), EnableDisable.DISABLE_INITIATION)
+            self.assertEqual(await server.dcc_outcome_counters(), dict(
+                accepted_total=1, policy_denied_total=0, password_failure_total=0,
+                deprecated_denied_total=0, malformed_total=0))
+        finally:
+            await server.stop()

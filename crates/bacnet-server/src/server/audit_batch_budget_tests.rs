@@ -95,9 +95,11 @@ async fn delayed_target_audit_queue_byte_limits_precede_record_limits_and_ordina
     }
     assert!(queue.enqueue(record(&statuses[0], 1476)).is_err());
     for i in 44..177 {
-        assert!(queue
-            .enqueue(record(&statuses[1 + (i - 44) / 40], 1476))
-            .is_ok());
+        assert!(
+            queue
+                .enqueue(record(&statuses[1 + (i - 44) / 40], 1476))
+                .is_ok()
+        );
     }
     assert_eq!(queue.resources().1, 177 * 1476);
     assert!(queue.enqueue(record(&statuses[4], 1476)).is_err());

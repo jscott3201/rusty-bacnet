@@ -20,16 +20,15 @@ use super::BipTransport;
 /// use bacnet_transport::any::AnyTransport;
 /// use bacnet_transport::bip::{AsBip, BipTransport};
 /// use bacnet_transport::loopback::LoopbackTransport;
-/// use bacnet_transport::mstp::NoSerial;
 /// use bacnet_types::data_link::DataLink;
 /// use bacnet_types::error::Error;
 ///
 /// let bip = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
-/// let any: AnyTransport<NoSerial> = bip.into();
+/// let any: AnyTransport = bip.into();
 /// assert_eq!(any.as_bip()?.management_counters().read_bdt_responses, 0);
 ///
 /// let (loopback, _peer) = LoopbackTransport::pair(vec![1], vec![2]);
-/// let any: AnyTransport<NoSerial> = loopback.into();
+/// let any: AnyTransport = loopback.into();
 /// assert!(matches!(
 ///     any.as_bip(),
 ///     Err(Error::UnsupportedTransport {

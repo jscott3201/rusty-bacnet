@@ -5,7 +5,7 @@
 //! accepted TLS socket; a separate generic-egress spy detects fallback.
 use super::*;
 use crate::server::test_transport::{SendMode, TestTransport};
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
+use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
 use bacnet_objects::life_safety::{LifeSafetyPointObject, LifeSafetyPointResetCommit};
 use bacnet_objects::value_types::CharacterStringValueObject;
 use bacnet_services::life_safety::LifeSafetyOperationRequest;
@@ -15,14 +15,18 @@ use bacnet_transport::sc::{ScConnection, WebSocketPort};
 use bacnet_transport::sc_frame::{decode_sc_message, encode_sc_message};
 use bacnet_transport::sc_tls::{DirectAcceptConfig, DirectListener, ScNodeTlsConfig, TlsWebSocket};
 use bacnet_types::enums::LifeSafetyState;
-use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::AtomicUsize;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 
+#[path = "direct_principal_certificate_tests.rs"]
+mod certificates;
 #[path = "direct_principal_complete_tests.rs"]
 mod complete;
 #[path = "direct_principal_context_tests.rs"]
 mod contexts;
+#[path = "direct_principal_dcc_tests.rs"]
+mod dcc;
 #[path = "direct_principal_policy_tests.rs"]
 mod policy;
 #[path = "direct_response_tests.rs"]

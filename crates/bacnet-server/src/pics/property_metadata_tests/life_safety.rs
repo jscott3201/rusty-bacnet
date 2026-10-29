@@ -1,9 +1,9 @@
 use super::*;
+use PropertyIdentifier as P;
 use bacnet_objects::{
     life_safety::{LifeSafetyPointObject, LifeSafetyZoneObject},
     traits::BACnetObject,
 };
-use PropertyIdentifier as P;
 
 #[test]
 fn pics_life_safety_point_property_metadata_is_exact() {

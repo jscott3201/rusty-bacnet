@@ -12,19 +12,20 @@ use bacnet_types::constructed::{
     BACnetCalendarEntry, BACnetDestination, BACnetDeviceObjectPropertyReference,
     BACnetEventNotificationSubscription,
 };
+use bacnet_types::error::RemoteError;
 use bytes::Bytes;
 use std::collections::hash_map::{Entry, HashMap};
-use std::mem::{discriminant, Discriminant};
+use std::mem::{Discriminant, discriminant};
 
 fn protocol_error(class: ErrorClass, code: ErrorCode) -> Error {
-    Error::Protocol { class, code }
+    Error::protocol(class, code)
 }
 
 /// A refusal of the element at `position` (from 1) of the request's List of
 /// Elements, sent as a ChangeList-Error with that First Failed Element Number.
 /// Every other refusal of these services goes out with element number 0.
 fn element_error(class: ErrorClass, code: ErrorCode, position: u32) -> Error {
-    Error::protocol(
+    Error::with_detail(
         class,
         code,
         Some(ErrorDetail::FirstFailedElementNumber(position)),
@@ -49,7 +50,7 @@ fn position(index: usize) -> u32 {
 /// Forwarder's Subscribed_Recipients, where an element naming an entry already
 /// present renews that entry. Nothing changes when any element is refused. A
 /// refusal of one element is `Error::Structured` naming its position; a
-/// refusal of the request or its target is `Error::Protocol`.
+/// refusal of the request or its target is `Error::protocol`.
 pub fn handle_add_list_element(db: &mut ObjectDatabase, service_data: &[u8]) -> Result<(), Error> {
     handle_list_element_observed(db, service_data, false, |_, _, _| {}).map(|_| ())
 }
@@ -517,7 +518,7 @@ fn edit_subscriptions(
 /// what remains, which holds no element of the request.
 fn object_refusal(error: Error, remove: bool, added: &Added) -> Error {
     let (class, code, named) = match error {
-        Error::Protocol { class, code } => (class, code, None),
+        Error::Remote(RemoteError::Error { class, code }) => (class, code, None),
         Error::Structured {
             class,
             code,
@@ -549,7 +550,7 @@ fn object_refusal(error: Error, remove: bool, added: &Added) -> Error {
         Some(named) => added.request_position(named),
         None => added.first_position().filter(|_| about_elements),
     };
-    Error::protocol(
+    Error::with_detail(
         class,
         code,
         element.map(ErrorDetail::FirstFailedElementNumber),

@@ -1,8 +1,8 @@
 //! Channel's RPM selectors follow its Table 12-62 rows (#1151, #1264).
 use super::*;
+use PropertyIdentifier as P;
 use bacnet_objects::{channel::ChannelObject, traits::BACnetObject};
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
-use PropertyIdentifier as P;
 
 #[test]
 fn rpm_channel_metadata_selectors_preserve_bytes_and_budgets() {

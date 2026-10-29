@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use bytes::BytesMut;
 
-use bacnet_encoding::apdu::{encode_apdu, Apdu, UnconfirmedRequest as UnconfirmedRequestPdu};
+use bacnet_encoding::apdu::{Apdu, UnconfirmedRequest as UnconfirmedRequestPdu, encode_apdu};
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_network::layer::{NetworkLayer, ReceivedApdu};
 use bacnet_npdu::NetworkPriority;
@@ -18,10 +18,10 @@ use bacnet_objects::database::ObjectDatabase;
 use bacnet_services::who_has::{WhoHasObject, WhoHasRequest};
 use bacnet_services::who_is::{DeviceInstanceRange, IAmRequest, WhoIsRequest};
 use bacnet_transport::port::TransportPort;
+use bacnet_types::MacAddr;
 use bacnet_types::enums::{ErrorClass, ErrorCode, UnconfirmedServiceChoice};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
-use bacnet_types::MacAddr;
 use tokio::sync::RwLock;
 
 use super::{BACnetServer, CommState, ServerConfig};
@@ -200,13 +200,14 @@ pub(crate) struct SourceKey {
 
 impl SourceKey {
     pub(crate) fn from_parts(source_mac: &MacAddr, source_network: Option<&NpduAddress>) -> Self {
-        if let Some(net) = source_network {
-            if (1..=0xFFFE).contains(&net.network) && !net.mac_address.is_empty() {
-                return Self {
-                    network: net.network,
-                    mac: MacAddr::from_slice(&net.mac_address),
-                };
-            }
+        if let Some(net) = source_network
+            && (1..=0xFFFE).contains(&net.network)
+            && !net.mac_address.is_empty()
+        {
+            return Self {
+                network: net.network,
+                mac: MacAddr::from_slice(&net.mac_address),
+            };
         }
         Self {
             network: 0,
@@ -567,10 +568,10 @@ impl DiscoveryLimiter {
                 state.global_byte_tokens = (state.global_byte_tokens - delta).max(0.0);
             }
             let key = SourceKey::from_parts(source_mac, source_network);
-            if let Some(src) = state.sources.get_mut(&key) {
-                if self.policy.max_bytes_per_sec_per_source != usize::MAX {
-                    src.byte_tokens = (src.byte_tokens - delta).max(0.0);
-                }
+            if let Some(src) = state.sources.get_mut(&key)
+                && self.policy.max_bytes_per_sec_per_source != usize::MAX
+            {
+                src.byte_tokens = (src.byte_tokens - delta).max(0.0);
             }
         }
         if !directed {
@@ -785,10 +786,10 @@ pub(crate) async fn broadcast_i_am_from<T: TransportPort + 'static>(
 
     drop(guard);
     if comm_state.initiation_restricted() {
-        return Err(Error::Protocol {
-            class: ErrorClass::SERVICES,
-            code: ErrorCode::COMMUNICATION_DISABLED,
-        });
+        return Err(Error::protocol(
+            ErrorClass::SERVICES,
+            ErrorCode::COMMUNICATION_DISABLED,
+        ));
     }
     if let Some(limiter) = limiter {
         limiter.record_i_am_sent(

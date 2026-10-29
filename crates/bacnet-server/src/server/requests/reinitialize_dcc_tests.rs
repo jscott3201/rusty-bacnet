@@ -255,10 +255,10 @@ async fn reinitialize_non_restart_and_failed_requests_preserve_disable_and_timer
     cases.push((accepting(), Bytes::new(), false));
     for config in [
         recording_config(None, || {
-            Err(Error::Protocol {
-                class: ErrorClass::DEVICE,
-                code: ErrorCode::CONFIGURATION_IN_PROGRESS,
-            })
+            Err(Error::protocol(
+                ErrorClass::DEVICE,
+                ErrorCode::CONFIGURATION_IN_PROGRESS,
+            ))
         })
         .0,
         recording_config(None, || panic!("refused restart")).0,

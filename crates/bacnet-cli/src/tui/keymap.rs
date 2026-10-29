@@ -403,7 +403,7 @@ pub(crate) const MSTP: &[Binding] = &[
                 Action::Mstp(MstpKey::Cycle { back: true }),
             ),
         ],
-        "Monitor: stations, token ring, findings, errors",
+        "Monitor: stations, token ring, findings, errors, scan",
     ),
     keys(
         &[(KeyCode::Char('J'), Action::Mstp(MstpKey::Join))],
@@ -411,6 +411,8 @@ pub(crate) const MSTP: &[Binding] = &[
     ),
     keys(
         &[
+            (KeyCode::Down, Action::Mstp(MstpKey::Pick { back: false })),
+            (KeyCode::Up, Action::Mstp(MstpKey::Pick { back: true })),
             (
                 KeyCode::Char('+'),
                 Action::Mstp(MstpKey::Pick { back: false }),
@@ -424,7 +426,7 @@ pub(crate) const MSTP: &[Binding] = &[
                 Action::Mstp(MstpKey::Pick { back: true }),
             ),
         ],
-        "Safe join: the next or previous free MAC",
+        "Safe join MAC, or Scan evidence row: next/previous",
     ),
     keys(
         &[(KeyCode::Enter, Action::Mstp(MstpKey::Accept))],

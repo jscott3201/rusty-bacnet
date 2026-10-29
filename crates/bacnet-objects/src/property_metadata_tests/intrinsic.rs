@@ -16,8 +16,8 @@ use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use crate::event_log::EventLogObject;
 use crate::trend::{TrendLogMultipleObject, TrendLogObject};
 
-use bacnet_types::enums::EngineeringUnits;
 use PropertyIdentifier as P;
+use bacnet_types::enums::EngineeringUnits;
 
 /// The rows every one of these tables requires of an intrinsic reporter.
 const COMMON_REQUIRED: [P; 6] = [

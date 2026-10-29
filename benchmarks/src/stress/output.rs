@@ -12,6 +12,8 @@ pub struct StressResult {
     pub transport: String,
     pub parameters: serde_json::Value,
     pub results: StressMetrics,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clients_diagnostics: Option<super::client_diagnostics::ClientsDiagnostics>,
 }
 
 /// Aggregate metrics for one scenario run, summed over every step of its
@@ -72,11 +74,7 @@ impl StressMetrics {
 /// Zero when nothing was timed.
 pub fn rate(count: u64, elapsed: Duration) -> f64 {
     let secs = elapsed.as_secs_f64();
-    if secs > 0.0 {
-        count as f64 / secs
-    } else {
-        0.0
-    }
+    if secs > 0.0 { count as f64 / secs } else { 0.0 }
 }
 
 /// Latency percentiles in microseconds.

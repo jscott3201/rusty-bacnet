@@ -180,18 +180,19 @@ async fn command_source_wire_origin_correlation_and_original_owner_matrix() {
         source(&mut wire, av(2), None).await,
         address_source(&direct())
     );
-    assert!(wire
-        .server
-        .write_local(
-            &av(2),
-            SOURCE,
-            None,
-            claimed(&forwarded),
-            None,
-            LocalCommandSource::ServerDevice
-        )
-        .await
-        .is_err());
+    assert!(
+        wire.server
+            .write_local(
+                &av(2),
+                SOURCE,
+                None,
+                claimed(&forwarded),
+                None,
+                LocalCommandSource::ServerDevice
+            )
+            .await
+            .is_err()
+    );
     wire.server.stop().await.unwrap();
 }
 
@@ -226,18 +227,19 @@ async fn command_source_local_required_identity_membership_and_owner_replacement
                 );
             }
         }
-        assert!(wire
-            .server
-            .write_local(
-                &av(1),
-                PV,
-                None,
-                PropertyValue::Real(99.0),
-                None,
-                LocalCommandSource::Object(av(999))
-            )
-            .await
-            .is_err());
+        assert!(
+            wire.server
+                .write_local(
+                    &av(1),
+                    PV,
+                    None,
+                    PropertyValue::Real(99.0),
+                    None,
+                    LocalCommandSource::Object(av(999))
+                )
+                .await
+                .is_err()
+        );
         // Unrelated writes preserve no-Device behavior even when the selected source is unavailable.
         wire.server
             .write_local(
@@ -290,18 +292,19 @@ async fn command_source_local_required_identity_membership_and_owner_replacement
                     .unwrap(),
                 ))
                 .unwrap();
-            assert!(wire
-                .server
-                .write_local(
-                    &av(1),
-                    SOURCE,
-                    None,
-                    claimed(&object_source(device())),
-                    None,
-                    LocalCommandSource::ServerDevice
-                )
-                .await
-                .is_err());
+            assert!(
+                wire.server
+                    .write_local(
+                        &av(1),
+                        SOURCE,
+                        None,
+                        claimed(&object_source(device())),
+                        None,
+                        LocalCommandSource::ServerDevice
+                    )
+                    .await
+                    .is_err()
+            );
         }
         wire.server.stop().await.unwrap();
     }

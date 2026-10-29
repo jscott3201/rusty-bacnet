@@ -32,7 +32,7 @@ The help overlay (`?`) lists these keys, then the screen's own and the command b
 |---|---|
 | `d` | Devices: the Who-Is form |
 | `Enter` | Browse the selected device; in the browser, read the selected object |
-| `Esc` | Browser: clear the filter, then close the browser and go back to the devices (`1` only hides it, keeping it as it was) |
+| `Esc` | Devices: clear the filter, or a notice. Browser: clear the filter, then close the browser and go back to the devices (`1` only hides it, keeping it as it was) |
 | `/` | Filter the devices, or in the browser the objects |
 | `s` | Devices: sort by the next column |
 | `S` | Devices: reverse the sort order |
@@ -66,7 +66,7 @@ The help overlay (`?`) lists these keys, then the screen's own and the command b
 
 | Key | Action |
 |---|---|
-| `Tab`, `Shift-Tab` | Next or previous tab: BDT, FDT, Matrix, Networks |
+| `Tab`, `Shift-Tab` | Next or previous tab: BDT, FDT, Matrix, Networks; from 160 columns wide, the next pane |
 | `r` | Read the BBMD's tables again; on the Networks tab, ask the routers |
 | `m` | Survey every BBMD the tables lead to, for the matrix |
 | `x` | Disconnect |
@@ -79,7 +79,7 @@ The help overlay (`?`) lists these keys, then the screen's own and the command b
 
 | Key | Action |
 |---|---|
-| `Tab`, `Shift-Tab` | Next or previous view: hub certificates, doctor, my credentials |
+| `Tab`, `Shift-Tab` | Next or previous view: hub certificates, doctor, my credentials; from 160 columns the credentials view shows the hub's chain on its left |
 | `p` | The profile dialog |
 | `c` | Reconnect |
 | `x` | Disconnect |
@@ -92,8 +92,10 @@ The help overlay (`?`) lists these keys, then the screen's own and the command b
 
 | Key | Action |
 |---|---|
-| `Tab`, `Shift-Tab` | Monitor: next or previous view (stations, token ring, findings, errors) |
+| `Tab`, `Shift-Tab` | Monitor: next or previous view (stations, token ring, findings, errors, scan) |
 | `J` | Monitor: start the safe join |
+| `Up` | Safe join: propose the previous free MAC; on the Scan view, select the previous baud row for its error breakdown |
+| `Down` | Safe join: propose the next free MAC; on the Scan view, select the next baud row for its error breakdown |
 | `+`, `=` | Safe join: propose the next free MAC |
 | `-` | Safe join: propose the previous free MAC |
 | `Enter` | Safe join: review the proposal in the join confirmation |
@@ -237,6 +239,32 @@ The arm dialog, the write and relinquish forms, the previews, the ledger and the
 
 Single or double quotes group words, and a backslash makes a following quote, whitespace character or backslash plain text. A quote left open shows an error instead of running the line. In `writem`, a quoted or escaped value is a character string; a quoted number, such as `'72.5'`, is a string too, so a numeric property refuses it. `find` takes the rest of the line as typed, and unwraps a name that is one quoted word, such as `find "Zone  Temp"`.
 
+### MS/TP baud scan
+
+These run from a live monitor. See [Scan: find the baud rate](/rusty-bacnet/tui/mstp/#scan-find-the-baud-rate).
+
+| Command | What it does |
+|---|---|
+| `mstp scan SECS` | Measure six baud rates from a live receive-only monitor; 1..3600 whole seconds per rate |
+| `mstp scan cancel` | Stop the scan, keep what it measured so far, and go back to the monitor's original baud rate |
+
+On the Scan view, Up and Down or `+` and `-` select the row whose error counts are broken down. A suggestion never applies a rate, joins the trunk or changes a profile.
+
+### Device management commands
+
+See [DCC and reinitialize](/rusty-bacnet/tui/writes/#dcc-and-reinitialize). Both go to the device open in Browse or selected on the Devices screen, ask for a masked password, and confirm at T3. They need an armed session on a profile with `dangerous = true`.
+
+| Command | What it does |
+|---|---|
+| `dcc enable` | DeviceCommunicationControl: let the device communicate again. `control` is the same command |
+| `dcc disable-initiation [MINUTES]` | Stop the device starting conversations for MINUTES (1 to 65535), 15 by default |
+| `dcc disable [MINUTES]` | The deprecated full disable, which current devices refuse; the confirmation warns |
+| `dcc disable-initiation forever` | The same with no time limit: it lasts until a `dcc enable` or a restart |
+| `dcc disable forever` | The deprecated full disable with no time limit |
+| `reinit coldstart` | ReinitializeDevice: a cold start |
+| `reinit warmstart` | ReinitializeDevice: a warm start |
+| `reinit STATE` | The other states: `start-backup`, `end-backup`, `start-restore`, `end-restore`, `abort-restore` or `activate-changes` |
+
 ## Flags
 
 `bacnet tui` takes these, as well as the global network flags. Plain `bacnet` uses their defaults; name `tui` to set them.
@@ -245,7 +273,7 @@ Single or double quotes group words, and a backslash makes a following quote, wh
 |---|---|---|
 | `--profile NAME` | | Preview this B/IP, BACnet/SC or MS/TP profile |
 | `--no-profile` | | Use flags only, with no profile or workspace |
-| `--passive` | | Transmit nothing; no client is built |
+| `--passive` | | Listen on B/IP and transmit nothing; `:find` searches overheard I-Haves |
 | `--mstp-monitor PORT` | | Listen to an MS/TP trunk on this port without transmitting |
 | `--fps N` | 20 | Redraws a second, 1 to 60. An idle screen isn't redrawn |
 | `--log-file FILE` | | Also append log lines to this file |

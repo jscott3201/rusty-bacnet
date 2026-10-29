@@ -5,9 +5,9 @@
 
 use core::mem::size_of;
 
-use bacnet_mstp_codec::{StreamDecoder, MAX_STANDARD_FRAME_LENGTH};
+use bacnet_mstp_codec::{MAX_STANDARD_FRAME_LENGTH, StreamDecoder};
 use bacnet_mstp_core::{ActionBuffers, FixedQueues, MasterCore};
-use firmware_link::mstp::{run, Core, Memory, Queues, Storage, EXPECTED};
+use firmware_link::mstp::{Core, EXPECTED, Memory, Queues, Storage, run};
 
 /// The whole summary, against the one the emulation build checks too
 /// (`firmware_link::mstp::EXPECTED`, which explains each value).

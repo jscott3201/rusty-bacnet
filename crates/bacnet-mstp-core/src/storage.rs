@@ -96,13 +96,8 @@ impl<Q, const DELIVERIES: usize, const NPDU: usize, const FRAME: usize>
     }
 }
 
-impl<
-        const U: usize,
-        const B: usize,
-        const DELIVERIES: usize,
-        const NPDU: usize,
-        const FRAME: usize,
-    > Storage<FixedQueues<U, B, NPDU>, DELIVERIES, NPDU, FRAME>
+impl<const U: usize, const B: usize, const DELIVERIES: usize, const NPDU: usize, const FRAME: usize>
+    Storage<FixedQueues<U, B, NPDU>, DELIVERIES, NPDU, FRAME>
 {
     /// Zeroed storage with empty queues: all zero bits.
     #[must_use]
@@ -111,13 +106,8 @@ impl<
     }
 }
 
-impl<
-        const U: usize,
-        const B: usize,
-        const DELIVERIES: usize,
-        const NPDU: usize,
-        const FRAME: usize,
-    > Default for Storage<FixedQueues<U, B, NPDU>, DELIVERIES, NPDU, FRAME>
+impl<const U: usize, const B: usize, const DELIVERIES: usize, const NPDU: usize, const FRAME: usize>
+    Default for Storage<FixedQueues<U, B, NPDU>, DELIVERIES, NPDU, FRAME>
 {
     fn default() -> Self {
         Self::new()
@@ -146,9 +136,5 @@ pub(crate) const fn receive_window(extended: bool, frame: usize) -> usize {
     } else {
         MAX_STANDARD_FRAME_LENGTH
     };
-    if wanted < frame {
-        wanted
-    } else {
-        frame
-    }
+    if wanted < frame { wanted } else { frame }
 }

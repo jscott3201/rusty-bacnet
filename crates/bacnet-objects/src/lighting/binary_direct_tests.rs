@@ -1,3 +1,4 @@
+use bacnet_types::error::RemoteError;
 use std::time::Duration;
 
 use bacnet_types::{
@@ -68,7 +69,7 @@ fn armed(operation: u32) -> BinaryLightingOutputObject {
 
 fn assert_property_error(error: Error, expected: ErrorCode) {
     match error {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, ErrorClass::PROPERTY);
             assert_eq!(code, expected);
         }

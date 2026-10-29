@@ -24,11 +24,11 @@ const LAB_MAC: [u8; 6] = [10, 0, 0, 100, 0xBA, 0xC0];
 const SUBSCRIBE_COV: u8 = 5;
 const SUBSCRIBE_COV_PROPERTY: u8 = 28;
 
-fn ai(instance: u32) -> ObjectIdentifier {
+pub(super) fn ai(instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::ANALOG_INPUT, instance).unwrap()
 }
 
-fn options(lifetime: u32, poll_secs: u64, max_rate: u32) -> SessionOptions {
+pub(super) fn options(lifetime: u32, poll_secs: u64, max_rate: u32) -> SessionOptions {
     SessionOptions {
         max_rate,
         watch: WatchOptions {
@@ -50,14 +50,14 @@ async fn lab_site(server: Server, options: SessionOptions) -> Site {
 }
 
 /// Type `line` on the command bar and run it.
-async fn command(site: &mut Site, line: &str) {
+pub(super) async fn command(site: &mut Site, line: &str) {
     site.press(KeyCode::Char(':')).await;
     type_text(&mut site.app, line);
     site.press(KeyCode::Enter).await;
 }
 
 /// Run until every row has left `Starting`.
-async fn settle(site: &mut Site) {
+pub(super) async fn settle(site: &mut Site) {
     site.pump_until(|app| {
         app.watch
             .rows()
@@ -67,7 +67,7 @@ async fn settle(site: &mut Site) {
     .await;
 }
 
-fn sources(site: &Site) -> Vec<Source> {
+pub(super) fn sources(site: &Site) -> Vec<Source> {
     site.app
         .watch
         .rows()
@@ -153,7 +153,8 @@ async fn the_renewal_goes_before_the_lifetime_ends() {
     for pair in subscribes.windows(2) {
         let gap = pair[1] - pair[0];
         assert!(
-            gap < Duration::from_secs(60) && gap >= Duration::from_secs(50),
+            // Renewed two 8 s request budgets early (#1791).
+            gap < Duration::from_secs(60) && gap >= Duration::from_secs(44),
             "renewed after {gap:?}"
         );
     }
@@ -299,7 +300,8 @@ async fn devices_without_cov_are_polled_within_the_rate_cap() {
 
 /// A device that stops answering is polled again after a wait that
 /// doubles, not every interval: over 300 s at a 1 s interval it gets a
-/// handful of polls rather than one every nine seconds.
+/// handful of reads rather than one every nine seconds. Retrying the
+/// initial subscription adds its own first reads at the separate backoff.
 #[tokio::test(start_paused = true)]
 async fn a_silent_device_is_polled_with_a_growing_wait() {
     const RPM: u8 = 14;
@@ -319,8 +321,14 @@ async fn a_silent_device_is_polled_with_a_growing_wait() {
     site.run_for(Duration::from_secs(300)).await;
     let to = tokio::time::Instant::now();
     // Each poll is sent four times (three retries) before it times out.
-    let polls = requests_in(&site, 100, Some(RPM), from, to) / 4;
-    assert!((4..=10).contains(&polls), "{polls} polls in 300 s");
+    let reads = requests_in(&site, 100, Some(RPM), from, to) / 4;
+    // Preserve the ten-poll ceiling, allowing the three first reads from
+    // subscription retries: waits 30, 60 and 120 s, each ending 8 s later.
+    // The next 240 s wait cannot finish within this 300 s observation.
+    assert!(
+        (4..=10 + 3).contains(&reads),
+        "{reads} read transactions in 300 s"
+    );
     let row = &site.app.watch.rows()[0];
     assert!(row.value.as_ref().unwrap().is_err(), "{:?}", row.value);
     site.stop().await;
@@ -427,3 +435,9 @@ async fn csv_logging_writes_samples_to_the_workspace() {
     assert!(flash.text.contains("profile workspace"), "{}", flash.text);
     site.stop().await;
 }
+
+#[path = "watch_initial_retry.rs"]
+mod initial_retry;
+
+#[path = "watch_flags.rs"]
+mod flags;

@@ -352,9 +352,11 @@ async fn unicast_and_control_share_quota_without_charging_control() {
 async fn close_and_cancellation_preserve_closed_precedence() {
     let (mut transport, ws_hub, mut rx) = start_transport([0x01; 6]).await;
     // A cancelled receive on the empty queue changes nothing.
-    assert!(tokio::time::timeout(Duration::from_millis(20), rx.recv())
-        .await
-        .is_err());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), rx.recv())
+            .await
+            .is_err()
+    );
     assert_eq!(transport.npdu_drop_counts(), ScNpduDropCounts::default());
     for seq in 0..quota() as u16 {
         send_npdu(&ws_hub, BURSTY, None, payload(0xA0, seq as u8), seq).await;

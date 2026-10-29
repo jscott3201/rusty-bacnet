@@ -6,6 +6,7 @@ use super::*;
 use crate::traits::BACnetObject;
 use bacnet_types::constructed::BACnetColorCommand;
 use bacnet_types::enums::{ColorOperation as Op, ErrorClass, ErrorCode, PropertyIdentifier};
+use bacnet_types::error::RemoteError;
 
 /// D65 white, where a new Color object starts.
 const D65: BACnetXyColor = BACnetXyColor::new(0.3127, 0.3290);
@@ -14,7 +15,7 @@ const CC: PropertyIdentifier = PropertyIdentifier::COLOR_COMMAND;
 
 fn assert_error<T: std::fmt::Debug>(result: Result<T, Error>, expected: ErrorCode) {
     match result {
-        Err(Error::Protocol { class, code }) => {
+        Err(Error::Remote(RemoteError::Error { class, code })) => {
             assert_eq!(class, ErrorClass::PROPERTY);
             assert_eq!(code, expected, "expected {expected:?}");
         }
@@ -368,9 +369,11 @@ fn color_objects_no_longer_answer_to_508_to_511() {
         }
         let list = object.property_list();
         assert!(list.contains(&PropertyIdentifier::from_raw(4_194_334)));
-        assert!(object
-            .read_property(PropertyIdentifier::from_raw(4_194_334), None)
-            .is_ok());
+        assert!(
+            object
+                .read_property(PropertyIdentifier::from_raw(4_194_334), None)
+                .is_ok()
+        );
     }
     let color = ColorObject::new(1, "CLR-1").unwrap();
     assert_eq!(

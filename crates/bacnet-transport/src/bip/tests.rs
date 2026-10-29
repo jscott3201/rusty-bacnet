@@ -1,6 +1,6 @@
 use super::*;
 use bytes::Bytes;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 fn test_bvll_message(function: BvlcFunction, payload: &[u8]) -> BvllMessage {
     BvllMessage {
@@ -236,9 +236,10 @@ async fn read_bdt_from_bbmd() {
     // Read the BDT — includes the configured entry plus the auto-inserted self entry
     let bdt = client_transport.read_bdt(&bbmd_mac).await.unwrap();
     assert_eq!(bdt.len(), 2);
-    assert!(bdt
-        .iter()
-        .any(|e| e.ip == [10, 0, 0, 1] && e.port == 0xBAC0));
+    assert!(
+        bdt.iter()
+            .any(|e| e.ip == [10, 0, 0, 1] && e.port == 0xBAC0)
+    );
     // Self entry is also present (auto-inserted by set_bdt)
     assert!(bdt.len() >= 2);
 

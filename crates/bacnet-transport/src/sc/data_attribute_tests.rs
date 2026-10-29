@@ -1,7 +1,7 @@
 use super::*;
-use crate::sc_frame::{decode_sc_bvlc_result, ScBvlcResult, ScOption};
+use crate::sc_frame::{ScBvlcResult, ScOption, decode_sc_bvlc_result};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 #[path = "mu_liveness_tests.rs"]
 mod mu_liveness_tests;
@@ -167,9 +167,11 @@ async fn unsupported_must_understand_destination_option_broadcast_drops_without_
     ws_hub.send(&buf).await.unwrap();
 
     assert!(timeout(Duration::from_millis(50), rx.recv()).await.is_err());
-    assert!(timeout(Duration::from_millis(50), ws_hub.recv())
-        .await
-        .is_err());
+    assert!(
+        timeout(Duration::from_millis(50), ws_hub.recv())
+            .await
+            .is_err()
+    );
 
     let state = transport.connection().unwrap().lock().await.state;
     assert_eq!(state, ScConnectionState::Connected);
@@ -201,9 +203,11 @@ async fn must_understand_data_option_is_preserved() {
         option.must_understand
     );
     assert_eq!(received.data_attributes[0].data, option.data);
-    assert!(timeout(Duration::from_millis(50), ws_hub.recv())
-        .await
-        .is_err());
+    assert!(
+        timeout(Duration::from_millis(50), ws_hub.recv())
+            .await
+            .is_err()
+    );
 
     transport.stop().await.unwrap();
 }
@@ -227,9 +231,11 @@ async fn non_must_understand_destination_option_allows_delivery() {
         .expect("SC NPDU channel closed");
     assert_eq!(received.npdu, msg.payload);
     assert!(received.data_attributes.is_empty());
-    assert!(timeout(Duration::from_millis(50), ws_hub.recv())
-        .await
-        .is_err());
+    assert!(
+        timeout(Duration::from_millis(50), ws_hub.recv())
+            .await
+            .is_err()
+    );
 
     transport.stop().await.unwrap();
 }
@@ -315,9 +321,11 @@ async fn invalid_secure_path_options_are_rejected_before_websocket_emission() {
             Error::Encoding(message) => assert!(message.contains(expected_message)),
             other => panic!("expected encoding error, got {other}"),
         }
-        assert!(timeout(Duration::from_millis(50), ws_hub.recv())
-            .await
-            .is_err());
+        assert!(
+            timeout(Duration::from_millis(50), ws_hub.recv())
+                .await
+                .is_err()
+        );
 
         transport.stop().await.unwrap();
     }

@@ -5,15 +5,16 @@
 /// that element's 1-based position as `FirstFailedElementNumber`. The server's
 /// AddListElement handler turns the position into the request's element
 /// number (#1048). Errors other than a class and code pass through.
+use bacnet_types::error::RemoteError;
 pub(crate) fn at_list_element(
     error: bacnet_types::error::Error,
     index: usize,
 ) -> bacnet_types::error::Error {
     use bacnet_types::error::{Error, ErrorDetail};
     match error {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             let position = u32::try_from(index).map_or(u32::MAX, |index| index.saturating_add(1));
-            Error::protocol(
+            Error::with_detail(
                 class,
                 code,
                 Some(ErrorDetail::FirstFailedElementNumber(position)),
@@ -26,7 +27,7 @@ pub(crate) fn at_list_element(
 /// Assert that a list-valued write was refused with `class` / `code`, naming
 /// the element at `position` (from 1) of the list it carried.
 #[cfg(test)]
-pub(crate) fn assert_list_element_refused<T: std::fmt::Debug>(
+pub(crate) fn assert_list_element_refused<T: core::fmt::Debug>(
     result: Result<T, bacnet_types::error::Error>,
     class: bacnet_types::enums::ErrorClass,
     code: bacnet_types::enums::ErrorCode,

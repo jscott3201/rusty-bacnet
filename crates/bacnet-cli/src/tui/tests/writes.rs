@@ -16,8 +16,8 @@ use serde_json::Value;
 use super::browser::{open_device, open_object};
 use super::site::{ClientLimits, Quirks, Server, Site};
 use super::*;
-use crate::tui::app::safety::{Modal, ARM_HINT, CONFIRM_GUARD};
 use crate::tui::app::Overlay;
+use crate::tui::app::safety::{ARM_HINT, CONFIRM_GUARD, Modal};
 use crate::tui::profile::{Safety, Writes};
 use crate::tui::safety::ledger::{Ledger, State};
 use crate::tui::safety::{
@@ -115,7 +115,10 @@ pub(super) fn outcomes(app: &App) -> Vec<Outcome> {
 
 pub(super) fn preview(app: &App) -> &crate::tui::safety::Preview {
     match modal(app) {
-        Some(Modal::Confirm { preview, .. }) => preview,
+        Some(Modal::Confirm {
+            change: crate::tui::safety::Change::Write(preview),
+            ..
+        }) => preview,
         other => panic!("expected a preview, got {other:?}"),
     }
 }
@@ -382,13 +385,14 @@ async fn a_writes_never_profile_says_why_and_arms_nothing() {
     let mut site = lab(dir.path(), policy, Server::lab(100, LAB)).await;
     let commands = press(&mut site.app, KeyCode::Char('W'));
     assert!(commands.is_empty(), "{commands:?}");
-    assert!(site
-        .app
-        .flash
-        .as_ref()
-        .unwrap()
-        .text
-        .contains("writes = \"never\""));
+    assert!(
+        site.app
+            .flash
+            .as_ref()
+            .unwrap()
+            .text
+            .contains("writes = \"never\"")
+    );
     assert_eq!(site.app.overlay, Overlay::None);
     // Straight to the worker: refused, and the refusal recorded.
     let arm = SafetyCommand::Arm {
@@ -613,21 +617,17 @@ async fn a_passive_session_puts_nothing_on_the_wire() {
 /// In production a passive session builds no client at all.
 #[tokio::test(start_paused = true)]
 async fn a_passive_session_builds_no_client() {
-    use crate::tui::worker::session::{spawn, ConnectPlan, TransportKind};
-    use crate::tui::worker::{EventSink, EVENT_CHANNEL_CAPACITY};
+    use crate::tui::worker::session::spawn;
+    use crate::tui::worker::{EVENT_CHANNEL_CAPACITY, EventSink};
     let dir = tempfile::tempdir().unwrap();
-    let plan = ConnectPlan {
-        kind: TransportKind::Bip,
-        // 47808 on every interface: binding it would be visible.
-        args: crate::tui::profile::Profile::default()
-            .transport_args()
-            .unwrap(),
-        await_interface: false,
-    };
+    let plan = super::network::plan(None);
     let (sink, mut events) = EventSink::channel(EVENT_CHANNEL_CAPACITY);
     let (commands, rx) = tokio::sync::mpsc::channel(16);
     let task = spawn(plan, sink, rx, options(dir.path(), Safety::default(), true));
-    assert_eq!(events.recv().await, Some(WorkerEvent::Passive));
+    assert!(matches!(
+        events.recv().await,
+        Some(WorkerEvent::PassiveListening { .. })
+    ));
     assert!(matches!(
         events.recv().await,
         Some(WorkerEvent::Safety(SafetyEvent::Ready {
@@ -636,7 +636,7 @@ async fn a_passive_session_builds_no_client() {
         }))
     ));
     drop(commands);
-    site_bounded(task).await.unwrap();
+    site_bounded(task).await.unwrap().unwrap();
 }
 
 async fn site_bounded<T>(future: impl std::future::Future<Output = T>) -> T {

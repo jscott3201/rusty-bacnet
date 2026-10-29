@@ -9,8 +9,8 @@
 //! rate a line at that baud rate carries the same data frames at, with only
 //! the token pass and the mandatory turnarounds between them.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use bacnet_client::client::BACnetClient;

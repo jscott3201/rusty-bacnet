@@ -8,25 +8,12 @@
 use std::cell::Cell;
 use std::collections::BTreeMap;
 
+use bacnet_ops::label::object_label;
 use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::ObjectIdentifier;
 
 use super::devices::Movement;
 use super::names::NameLookup;
-
-/// `ANALOG_INPUT` as `analog-input`.
-pub(crate) fn kebab(name: impl std::fmt::Display) -> String {
-    name.to_string().to_lowercase().replace('_', "-")
-}
-
-/// An object as the list shows it, such as `analog-input 1`.
-pub(crate) fn object_label(object: ObjectIdentifier) -> String {
-    format!(
-        "{} {}",
-        kebab(object.object_type()),
-        object.instance_number()
-    )
-}
 
 /// One line of the list.
 #[derive(Debug, Clone, PartialEq, Eq)]

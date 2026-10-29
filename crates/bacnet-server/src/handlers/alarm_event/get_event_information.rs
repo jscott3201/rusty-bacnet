@@ -8,7 +8,7 @@ use bacnet_types::enums::NotifyType;
 
 #[path = "event_information_page.rs"]
 mod page;
-pub(crate) use page::{handle_get_event_information_configured, EventInformationFailure};
+pub(crate) use page::{EventInformationFailure, handle_get_event_information_configured};
 
 const EVENT_SUMMARY_SIGNATURE: [PropertyIdentifier; 6] = [
     PropertyIdentifier::EVENT_STATE,
@@ -54,7 +54,7 @@ fn project_event_summary(
                 return Err(operational_problem(
                     object_identifier,
                     "Event_Detection_Enable is not Boolean",
-                ))
+                ));
             }
         }
     }
@@ -394,10 +394,7 @@ fn operational_problem(
     detail: impl std::fmt::Display,
 ) -> Error {
     tracing::warn!(?object_identifier, reason = %detail, "GetEventInformation projection failed");
-    Error::Protocol {
-        class: ErrorClass::DEVICE,
-        code: ErrorCode::OPERATIONAL_PROBLEM,
-    }
+    Error::protocol(ErrorClass::DEVICE, ErrorCode::OPERATIONAL_PROBLEM)
 }
 
 fn decode_event_timestamp(value: &PropertyValue) -> Option<BACnetTimeStamp> {

@@ -5,13 +5,13 @@
 use core::net::SocketAddrV4;
 
 use bacnet_bip_codec::{BvlcResultCode, Bvll, BvllError};
-use bacnet_time::{earliest, Duration, Instant};
+use bacnet_time::{Duration, Instant, earliest};
 
 use crate::LocalSubnet;
 
 use super::actions::{Action, Actions};
 use super::config::{ConfigError, Foreign, Link, Mode, Retry};
-use super::counters::{add, bump, NodeCounters, RegisterAttempt};
+use super::counters::{NodeCounters, RegisterAttempt, add, bump};
 use super::exchange::{
     Early, ExchangeId, ExchangeRefusal, Exchanges, Key, LocalFailure, Operation, Phase,
 };
@@ -249,15 +249,14 @@ impl<const X: usize> Node<X> {
         if code.is_some() {
             self.counters.last_unmatched_result = code;
         }
-        if code == Some(BvlcResultCode::DISTRIBUTE_BROADCAST_TO_NETWORK_NAK) {
-            if let (Mode::Foreign(foreign), Some(lifecycle)) =
+        if code == Some(BvlcResultCode::DISTRIBUTE_BROADCAST_TO_NETWORK_NAK)
+            && let (Mode::Foreign(foreign), Some(lifecycle)) =
                 (&self.link.mode, &mut self.lifecycle)
-            {
-                if foreign.bbmd == peer && foreign.retry == Retry::Backoff {
-                    bump(&mut self.counters.renewal_hints);
-                    lifecycle.hint(now);
-                }
-            }
+            && foreign.bbmd == peer
+            && foreign.retry == Retry::Backoff
+        {
+            bump(&mut self.counters.renewal_hints);
+            lifecycle.hint(now);
         }
         Inbound::Unmatched { peer, code, late }
     }
@@ -359,10 +358,11 @@ impl<const X: usize> Node<X> {
     ) -> Result<(ExchangeId, Outgoing<'r>), ExchangeRefusal> {
         self.advance(now);
         let operation = Operation::of(request.function()).ok_or(ExchangeRefusal::NotARequest)?;
-        if let Mode::Foreign(foreign) = &self.link.mode {
-            if foreign.bbmd == peer && operation.answered_by_success() {
-                return Err(ExchangeRefusal::ManagedRegistration);
-            }
+        if let Mode::Foreign(foreign) = &self.link.mode
+            && foreign.bbmd == peer
+            && operation.answered_by_success()
+        {
+            return Err(ExchangeRefusal::ManagedRegistration);
         }
         let ttl = match request {
             Bvll::RegisterForeignDevice { ttl } => ttl,
@@ -421,10 +421,8 @@ impl<const X: usize> Node<X> {
         };
         let (operation, automatic, early) = (slot.operation, slot.automatic, slot.early.take());
         bump(&mut self.counters.exchange_mut(operation).sent);
-        if automatic {
-            if let Some(lifecycle) = &mut self.lifecycle {
-                lifecycle.sent();
-            }
+        if automatic && let Some(lifecycle) = &mut self.lifecycle {
+            lifecycle.sent();
         }
         let settled = early.is_some();
         if let Some(early) = early {
@@ -483,12 +481,12 @@ impl<const X: usize> Node<X> {
         outcome: AttemptOutcome,
         result: Option<BvlcResultCode>,
     ) {
-        if let Some((latest, attempt)) = &mut self.latest_register {
-            if *latest == exchange {
-                attempt.outcome = outcome;
-                attempt.result = result;
-                self.counters.last_registration_attempt = Some(*attempt);
-            }
+        if let Some((latest, attempt)) = &mut self.latest_register
+            && *latest == exchange
+        {
+            attempt.outcome = outcome;
+            attempt.result = result;
+            self.counters.last_registration_attempt = Some(*attempt);
         }
     }
 

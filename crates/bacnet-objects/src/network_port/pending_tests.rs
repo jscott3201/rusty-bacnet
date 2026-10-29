@@ -7,6 +7,7 @@ use bacnet_encoding::constructed::{decode_bdt_entry_list, encode_bdt_entry_list}
 use bacnet_types::bip_port::{BbmdChanges, BbmdTables, BipPortMode};
 use bacnet_types::constructed::{BACnetBDTEntry, BACnetHostAddress, BACnetHostNPort};
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
+use bacnet_types::error::RemoteError;
 use bytes::BytesMut;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::{Arc, Mutex};
@@ -25,14 +26,11 @@ struct Tables {
 }
 
 fn refusal() -> Error {
-    Error::Protocol {
-        class: ErrorClass::PROPERTY,
-        code: ErrorCode::VALUE_OUT_OF_RANGE,
-    }
+    Error::protocol(ErrorClass::PROPERTY, ErrorCode::VALUE_OUT_OF_RANGE)
 }
 
 fn is_refusal(error: &Error) -> bool {
-    matches!(error, Error::Protocol { class, code }
+    matches!(error, Error::Remote(RemoteError::Error { class, code })
         if *class == ErrorClass::PROPERTY
             && *code == ErrorCode::VALUE_OUT_OF_RANGE)
 }
@@ -319,7 +317,7 @@ fn without_activation_the_rows_refuse_writes() {
     ] {
         let error = write(&mut db, property, value).unwrap_err();
         assert!(
-            matches!(error, Error::Protocol { class, code }
+            matches!(error, Error::Remote(RemoteError::Error { class, code })
                 if class == ErrorClass::PROPERTY && code == ErrorCode::WRITE_ACCESS_DENIED),
             "{error:?}"
         );

@@ -3,16 +3,16 @@
 //! saves, and the file backend.
 
 use super::test_storage::{
-    assert_refused, door_rule, octets, persistent, positive_only, write, write_positive, zone_rule,
-    MemoryPersistence,
+    MemoryPersistence, assert_refused, door_rule, octets, persistent, positive_only, write,
+    write_positive, zone_rule,
 };
 use super::*;
 use crate::access_control::rights_writes::grown_rule;
 use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference};
 use bacnet_types::enums::PropertyIdentifier as P;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const SAVED: [P; 3] = [
     P::POSITIVE_ACCESS_RULES,
@@ -515,9 +515,11 @@ fn file_persistence_refuses_a_file_past_its_size_or_entry_caps() {
             },
         )
         .unwrap();
-    assert!(refusal(&storage)
-        .to_string()
-        .contains("more entries than the cap"));
+    assert!(
+        refusal(&storage)
+            .to_string()
+            .contains("more entries than the cap")
+    );
 
     // A file past the size cap is refused before any of it is decoded; one
     // at the cap is read, and here refused for what it holds.

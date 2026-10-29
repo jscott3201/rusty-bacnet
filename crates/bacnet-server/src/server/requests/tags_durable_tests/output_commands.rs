@@ -1,11 +1,11 @@
 use super::*;
+use PropertyIdentifier as P;
 use bacnet_encoding::constructed::decode_value_source;
 use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_services::wpm::WritePropertyMultipleError;
 use bacnet_types::constructed::{BACnetAddress, BACnetValueSource};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::primitives::BACnetTimeStamp;
-use PropertyIdentifier as P;
 
 fn commanded(kind: Case) -> (PropertyValue, &'static [u8], PropertyValue) {
     match kind.kind {

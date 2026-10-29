@@ -313,33 +313,35 @@ async fn value_source_cov_send_failure_and_confirmation_baselines() {
                     "the baseline waits for the ACK (#896)"
                 );
                 f.finish(true).await;
-                assert!(f
-                    .table
-                    .read()
-                    .await
-                    .get_subscription(sub.key())
-                    .unwrap()
-                    .last_notified_observation
-                    .as_ref()
-                    .unwrap()
-                    .source_companions()
-                    .is_some());
+                assert!(
+                    f.table
+                        .read()
+                        .await
+                        .get_subscription(sub.key())
+                        .unwrap()
+                        .last_notified_observation
+                        .as_ref()
+                        .unwrap()
+                        .source_companions()
+                        .is_some()
+                );
             } else {
                 assert!(observation.is_none());
                 f.fail.store(false, Ordering::Relaxed);
                 f.sent.lock().unwrap().clear();
                 f.fire(true, std::slice::from_ref(&sub)).await;
-                assert!(f
-                    .table
-                    .read()
-                    .await
-                    .get_subscription(sub.key())
-                    .unwrap()
-                    .last_notified_observation
-                    .as_ref()
-                    .unwrap()
-                    .source_companions()
-                    .is_some());
+                assert!(
+                    f.table
+                        .read()
+                        .await
+                        .get_subscription(sub.key())
+                        .unwrap()
+                        .last_notified_observation
+                        .as_ref()
+                        .unwrap()
+                        .source_companions()
+                        .is_some()
+                );
                 f.finish(false).await;
             }
         }

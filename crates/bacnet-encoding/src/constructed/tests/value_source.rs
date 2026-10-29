@@ -13,11 +13,11 @@ fn value_source_none_golden_vector() {
 }
 
 use bacnet_types::{
+    MacAddr,
     constructed::{BACnetAddress, BACnetDeviceObjectReference},
     enums::ObjectType,
     error::Error,
     primitives::ObjectIdentifier,
-    MacAddr,
 };
 
 fn oid(kind: ObjectType, instance: u32) -> ObjectIdentifier {

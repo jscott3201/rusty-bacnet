@@ -1,4 +1,4 @@
-use super::integration::{indexed_reference_value, ReferenceValueObject};
+use super::integration::{ReferenceValueObject, indexed_reference_value};
 use super::*;
 use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_objects::analog::{AnalogInputObject, AnalogValueObject};
@@ -47,10 +47,10 @@ impl BACnetObject for OptionalReliabilityTarget {
         } else if property == PropertyIdentifier::RELIABILITY && self.malformed_reliability {
             Ok(PropertyValue::Real(0.0))
         } else {
-            Err(bacnet_types::error::Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::UNKNOWN_PROPERTY,
-            })
+            Err(bacnet_types::error::Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::UNKNOWN_PROPERTY,
+            ))
         }
     }
 
@@ -485,9 +485,11 @@ fn normalized_out_of_range_holds_reindicates_changed_cause_and_recovers() {
         timestamp_at(&db, enrollment_oid, 2),
         BACnetTimeStamp::SequenceNumber(0)
     );
-    assert!(evaluate_event_enrollments_report(&mut db, 1)
-        .reliability_results
-        .is_empty());
+    assert!(
+        evaluate_event_enrollments_report(&mut db, 1)
+            .reliability_results
+            .is_empty()
+    );
     assert_eq!(db.reserve_event_sequence_number().number(), 1);
 
     write_target(
@@ -552,13 +554,15 @@ fn missing_target_is_observation_unavailable_without_public_transition() {
 
     assert!(report.reliability_results.is_empty());
     assert!(report.transitions.is_empty());
-    assert!(report
-        .diagnostics
-        .contains(&EventEnrollmentEvaluationDiagnostic {
-            enrollment_oid,
-            stage: EventEnrollmentEvaluationStage::Reliability,
-            outcome: EventEnrollmentEvaluationOutcome::ObservationUnavailable,
-        }));
+    assert!(
+        report
+            .diagnostics
+            .contains(&EventEnrollmentEvaluationDiagnostic {
+                enrollment_oid,
+                stage: EventEnrollmentEvaluationStage::Reliability,
+                outcome: EventEnrollmentEvaluationOutcome::ObservationUnavailable,
+            })
+    );
     assert_eq!(
         reliability(&db, enrollment_oid),
         Reliability::NO_FAULT_DETECTED
@@ -587,9 +591,11 @@ fn fault_recovery_resets_cached_event_state_once_and_restarts_full_delay_next_pa
     let state_writes = enrollment.state_write_count.clone();
     let enrollment_oid = enrollment.object_identifier();
     db.add(Box::new(enrollment)).unwrap();
-    assert!(evaluate_event_enrollments_report(&mut db, 1)
-        .transitions
-        .is_empty());
+    assert!(
+        evaluate_event_enrollments_report(&mut db, 1)
+            .transitions
+            .is_empty()
+    );
 
     write_target(
         &mut db,
@@ -618,13 +624,14 @@ fn fault_recovery_resets_cached_event_state_once_and_restarts_full_delay_next_pa
     let recovery = evaluate_event_enrollments_report(&mut db, 1);
     assert_eq!(recovery.reliability_results.len(), 1);
     assert_eq!(state_writes.load(Ordering::SeqCst), 1);
-    assert!(db
-        .get(&enrollment_oid)
-        .unwrap()
-        .enrollment_eval_state_internal()
-        .unwrap()
-        .pending
-        .is_none());
+    assert!(
+        db.get(&enrollment_oid)
+            .unwrap()
+            .enrollment_eval_state_internal()
+            .unwrap()
+            .pending
+            .is_none()
+    );
 
     let next = evaluate_event_enrollments_report(&mut db, 1);
     assert!(next.transitions.is_empty());
@@ -684,72 +691,23 @@ fn rejected_and_mutating_custom_hooks_do_not_escape_tokens_or_consume_sequences(
         let report = evaluate_event_enrollments_report(&mut db, 1);
         assert!(report.reliability_results.is_empty());
         assert!(report.transitions.is_empty());
-        assert!(report
-            .diagnostics
-            .contains(&EventEnrollmentEvaluationDiagnostic {
-                enrollment_oid,
-                stage: EventEnrollmentEvaluationStage::Reliability,
-                outcome: if mutate_then_error {
-                    EventEnrollmentEvaluationOutcome::LandedAfterError
-                } else {
-                    EventEnrollmentEvaluationOutcome::Rejected
-                },
-            }));
+        assert!(
+            report
+                .diagnostics
+                .contains(&EventEnrollmentEvaluationDiagnostic {
+                    enrollment_oid,
+                    stage: EventEnrollmentEvaluationStage::Reliability,
+                    outcome: if mutate_then_error {
+                        EventEnrollmentEvaluationOutcome::LandedAfterError
+                    } else {
+                        EventEnrollmentEvaluationOutcome::Rejected
+                    },
+                })
+        );
         assert!(db.enrollment_eval_state_invalidated(&enrollment_oid));
         assert_eq!(db.reserve_event_sequence_number().number(), 0);
     }
 }
 
-#[test]
-fn held_configuration_error_clears_landed_after_error_invalidation_once() {
-    let mut db = ObjectDatabase::new();
-    let mut target = AnalogValueObject::new(306, "AV-held-config", CELSIUS).unwrap();
-    target
-        .write_property_from(
-            PropertyIdentifier::PRESENT_VALUE,
-            None,
-            PropertyValue::Real(50.0),
-            Some(1),
-            &crate::command_source::test_origin(),
-        )
-        .unwrap();
-    let target_oid = target.object_identifier();
-    db.add(Box::new(target)).unwrap();
-
-    let mut enrollment = ReferenceValueObject::new(Some(indexed_reference_value(target_oid, 1)));
-    enrollment
-        .inner
-        .set_fault_parameters(Some(FaultParameters::FaultCharacterString {
-            fault_values: vec!["unsupported".into()],
-        }));
-    enrollment.reliability_error_after_write = true;
-    let state_writes = enrollment.state_write_count.clone();
-    let enrollment_oid = enrollment.object_identifier();
-    db.add(Box::new(enrollment)).unwrap();
-
-    let first = evaluate_event_enrollments_report(&mut db, 1);
-    assert!(first
-        .diagnostics
-        .contains(&EventEnrollmentEvaluationDiagnostic {
-            enrollment_oid,
-            stage: EventEnrollmentEvaluationStage::Reliability,
-            outcome: EventEnrollmentEvaluationOutcome::LandedAfterError,
-        }));
-    assert!(db.enrollment_eval_state_invalidated(&enrollment_oid));
-    assert_eq!(
-        reliability(&db, enrollment_oid),
-        Reliability::CONFIGURATION_ERROR
-    );
-    assert_eq!(event_state(&db, enrollment_oid), EventState::FAULT);
-
-    state_writes.store(0, Ordering::SeqCst);
-    let held = evaluate_event_enrollments_report(&mut db, 1);
-    assert!(held.reliability_results.is_empty());
-    assert_eq!(state_writes.load(Ordering::SeqCst), 1);
-    assert!(!db.enrollment_eval_state_invalidated(&enrollment_oid));
-
-    let held_again = evaluate_event_enrollments_report(&mut db, 1);
-    assert!(held_again.reliability_results.is_empty());
-    assert_eq!(state_writes.load(Ordering::SeqCst), 1);
-    assert!(!db.enrollment_eval_state_invalidated(&enrollment_oid));
-}
+#[path = "reliability_invalidation.rs"]
+mod invalidation;

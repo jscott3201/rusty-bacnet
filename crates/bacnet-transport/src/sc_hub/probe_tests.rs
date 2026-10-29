@@ -8,11 +8,15 @@ use std::time::Duration;
 fn ms(value: u64) -> Duration {
     Duration::from_millis(value)
 }
+// Liveness bound cut to the ACK age: these tests pin ACK-age strictness and
+// scan skipping on the first unanswered probe, as before #2141.
 fn policy(scan: u64, idle: u64, ack: u64, send: u64) -> ScHubProbePolicy {
-    ScHubProbePolicy::new(ms(scan), ms(idle), ms(ack), ms(send)).unwrap()
+    ScHubProbePolicy::new(ms(scan), ms(idle), ms(ack), ms(send))
+        .and_then(|policy| policy.with_liveness_bound(ms(ack)))
+        .unwrap()
 }
 
-async fn start(tls: &TestTls, probe: ScHubProbePolicy) -> CountedHub {
+pub(super) async fn start(tls: &TestTls, probe: ScHubProbePolicy) -> CountedHub {
     let config = tls
         .hub_config
         .clone()
@@ -43,8 +47,28 @@ async fn start(tls: &TestTls, probe: ScHubProbePolicy) -> CountedHub {
 fn checked_policy_rejects_precision_zero_and_overflow_without_normative_bounds() {
     assert_eq!(
         ScHubProbePolicy::default(),
-        policy(30_000, 60_000, 5_000, 5_000)
+        ScHubProbePolicy::new(ms(30_000), ms(60_000), ms(5_000), ms(5_000)).unwrap()
     );
+    assert_eq!(
+        ScHubProbePolicy::default().liveness_bound(),
+        SC_HUB_PROBE_LIVENESS_BOUND
+    );
+    assert_eq!(SC_HUB_PROBE_LIVENESS_BOUND, Duration::from_secs(360));
+    let base = ScHubProbePolicy::default();
+    for bad in [
+        Duration::ZERO,
+        Duration::from_nanos(1),
+        SC_HUB_PROBE_MAX_LIVENESS_BOUND + ms(1),
+        Duration::MAX,
+    ] {
+        assert!(base.with_liveness_bound(bad).is_err(), "{bad:?}");
+    }
+    for good in [ms(1), SC_HUB_PROBE_MAX_LIVENESS_BOUND] {
+        assert_eq!(
+            base.with_liveness_bound(good).unwrap().liveness_bound(),
+            good
+        );
+    }
     for bad in [
         Duration::ZERO,
         Duration::from_nanos(1),
@@ -78,10 +102,12 @@ async fn configured_scan_idle_and_ack_age_are_precise_strict_exceeds() {
     );
     tokio::time::advance(ms(20)).await;
     until(|| hub.hub.tasks.probe_scans.load(Ordering::Acquire) == 2).await;
-    assert!(hub.clients.lock().await[&[0x42; 6]]
-        .heartbeat
-        .pending
-        .is_none());
+    assert!(
+        hub.clients.lock().await[&[0x42; 6]]
+            .heartbeat
+            .pending
+            .is_none()
+    );
     tokio::time::advance(ms(10)).await;
     let frame = poll_io(peer.ws.next()).await.unwrap().unwrap();
     let Message::Binary(bytes) = frame else {
@@ -138,10 +164,12 @@ async fn slow_sweep_skips_missed_ticks_instead_of_catch_up_burst() {
     let held = peer.sink.clone().lock_owned().await;
     tokio::time::advance(ms(30)).await;
     until(|| hub.hub.tasks.probe_scans.load(Ordering::Acquire) == 2).await;
-    assert!(hub.clients.lock().await[&[0x42; 6]]
-        .heartbeat
-        .pending
-        .is_some());
+    assert!(
+        hub.clients.lock().await[&[0x42; 6]]
+            .heartbeat
+            .pending
+            .is_some()
+    );
     tokio::time::advance(ms(64)).await;
     assert!(hub.clients.lock().await.contains_key(&[0x42; 6]));
     tokio::time::advance(ms(36)).await;
@@ -171,10 +199,12 @@ async fn configured_blocked_probe_is_owned_by_forceful_and_graceful_shutdown() {
         let held = peer.sink.clone().lock_owned().await;
         tokio::time::advance(ms(30)).await;
         until(|| hub.hub.tasks.probe_scans.load(Ordering::Acquire) == 2).await;
-        assert!(hub.clients.lock().await[&[0x42; 6]]
-            .heartbeat
-            .pending
-            .is_some());
+        assert!(
+            hub.clients.lock().await[&[0x42; 6]]
+                .heartbeat
+                .pending
+                .is_some()
+        );
         if graceful {
             let stop = hub.hub.shutdown_gracefully();
             tokio::pin!(stop);

@@ -31,12 +31,26 @@ test('capture actual production reading and installation states', async ({ page 
     await expect(slider).toHaveValue('300');
     await capture('diagram-expanded', false);
     await page.keyboard.press('Escape');
-    await page.goto(base + 'guides/configuration/');
+    await page.goto(base + 'connect/bacnet-ip/');
     await capture('article');
-    for (const route of ['overview', 'shared-endpoints', 'network-number']) {
-      await page.goto(base + 'development/' + route + '/');
-      await capture('development-' + route);
+    for (const route of ['overview', 'shared-endpoints', 'network-ports']) {
+      await page.goto(base + 'integrate/' + route + '/');
+      await capture('integrate-' + route);
     }
+    await page.goto(base + 'development/overview/#build-a-source-checkout');
+    await capture('legacy-source-bookmark', false);
+    await page.getByRole('link', { name: 'Continue: Build a source checkout', exact: true }).click();
+    await capture('contributor-source-build', false);
+    const menu = page.getByRole('button', { name: 'Menu', exact: true });
+    if (await menu.isVisible()) await menu.click();
+    const sidebar = page.locator('#starlight__sidebar');
+    for (const label of ['Start with v0.15', 'Connect to a network', 'Discover, read and write', 'Terminal UI']) {
+      const group = sidebar.locator('details').filter({ has: page.locator('summary').filter({ hasText: new RegExp('^' + label + '$') }) }).first();
+      if (await group.getAttribute('open') !== null) await group.locator('summary').first().click();
+    }
+    await sidebar.getByRole('link', { name: 'Build from source', exact: true }).scrollIntoViewIfNeeded();
+    await capture('integration-contributor-navigation', false);
+    if (await menu.isVisible()) await page.keyboard.press('Escape');
     for (const route of ['overview', 'writes']) {
       await page.goto(base + 'tui/' + route + '/');
       await capture('tui-' + route);

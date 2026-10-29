@@ -99,9 +99,11 @@ fn all_nine_expose_default_false_boolean_writable_property_and_pics_truth() {
             "{name} wire Property_List omitted inhibit"
         );
 
-        assert!(object
-            .write_property(INHIBIT, None, PropertyValue::Unsigned(1), None)
-            .is_err());
+        assert!(
+            object
+                .write_property(INHIBIT, None, PropertyValue::Unsigned(1), None)
+                .is_err()
+        );
         assert_eq!(
             read(&*object, INHIBIT),
             PropertyValue::Boolean(false),
@@ -144,9 +146,11 @@ fn true_normalizes_existing_fault_and_false_does_not_restore_it_on_all_nine() {
             Reliability::NO_FAULT_DETECTED.to_raw(),
             "{name} froze the prior fault"
         );
-        assert!(object
-            .set_reliability_internal(Reliability::OVER_RANGE)
-            .is_err());
+        assert!(
+            object
+                .set_reliability_internal(Reliability::OVER_RANGE)
+                .is_err()
+        );
         assert_eq!(
             read_reliability(&*object),
             Reliability::NO_FAULT_DETECTED.to_raw(),
@@ -304,9 +308,11 @@ fn rejected_oos_reliability_writes_do_not_create_an_override() {
             .set_reliability_internal(Reliability::OVER_RANGE)
             .unwrap();
         write_bool(&mut object, PropertyIdentifier::OUT_OF_SERVICE, true);
-        assert!(object
-            .write_property(PropertyIdentifier::RELIABILITY, None, rejected, None)
-            .is_err());
+        assert!(
+            object
+                .write_property(PropertyIdentifier::RELIABILITY, None, rejected, None)
+                .is_err()
+        );
         assert_eq!(read_reliability(&object), Reliability::OVER_RANGE.to_raw());
         write_bool(&mut object, INHIBIT, true);
         assert_eq!(

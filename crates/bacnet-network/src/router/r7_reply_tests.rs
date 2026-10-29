@@ -2,10 +2,10 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
+use bacnet_encoding::npdu::{Npdu, NpduAddress, decode_npdu, encode_npdu};
 use bacnet_npdu::NetworkPriority;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
-use bacnet_types::{error::Error, MacAddr};
+use bacnet_types::{MacAddr, error::Error};
 use bytes::{Bytes, BytesMut};
 use tokio::sync::mpsc;
 
@@ -140,7 +140,7 @@ async fn r7_response_matches_addressed_endpoint_and_invoke_id() {
     );
     assert!(response.destination.is_none());
     assert!(wire_b.try_recv().is_err());
-    started.router.stop().await;
+    started.router.stop().await.unwrap();
 }
 
 fn poll_once<F: std::future::Future>(future: std::pin::Pin<&mut F>) -> std::task::Poll<F::Output> {
@@ -226,9 +226,11 @@ async fn r7_clone_retains_owned_route_and_slice_without_repeating_der_authority(
     );
     let clone = received.clone();
     assert!(clone.reply_tx.is_none());
-    assert!(clone
-        .response_route()
-        .same_origin(&received.response_route()));
+    assert!(
+        clone
+            .response_route()
+            .same_origin(&received.response_route())
+    );
     let route = clone.response_route();
     assert_eq!(
         route.max_apdu_length(u16::MAX, None).unwrap(),
@@ -254,7 +256,9 @@ async fn r7_clone_retains_owned_route_and_slice_without_repeating_der_authority(
     assert_eq!(peer, [9]);
     assert_eq!(
         bytes.as_ref(),
-        [1, 0x28, 0x23, 0x28, 2, 3, 4, 7, 0xd0, 1, 2, 255, 0x20, 0x37, 12]
+        [
+            1, 0x28, 0x23, 0x28, 2, 3, 4, 7, 0xd0, 1, 2, 255, 0x20, 0x37, 12
+        ]
     );
     assert!(wire_b.try_recv().is_err() && unrelated.try_recv().is_err());
     drop(received);
@@ -262,14 +266,18 @@ async fn r7_clone_retains_owned_route_and_slice_without_repeating_der_authority(
         rx.await.is_err(),
         "only the original envelope held DER authority"
     );
-    started.router.stop().await;
-    assert!(network
-        .send_response_apdu_on_issuance(issued(), &route, || {})
-        .await
-        .is_err());
-    assert!(route
-        .encode_reply_npdu(&[0x20, 0x37, 12], None, false, NetworkPriority::Normal)
-        .is_err());
+    started.router.stop().await.unwrap();
+    assert!(
+        network
+            .send_response_apdu_on_issuance(issued(), &route, || {})
+            .await
+            .is_err()
+    );
+    assert!(
+        route
+            .encode_reply_npdu(&[0x20, 0x37, 12], None, false, NetworkPriority::Normal)
+            .is_err()
+    );
     assert!(wire_a.try_recv().is_err() && unrelated.try_recv().is_err());
 }
 
@@ -347,10 +355,12 @@ async fn r7_full_queue_is_bounded_and_issuance_callback_runs_only_when_selected(
         assert!(poll_once(send.as_mut()).is_pending());
         sends.push(send);
     }
-    assert!(network
-        .send_response_apdu_on_issuance(issued(), &route, || panic!("full queue cannot issue"))
-        .await
-        .is_err());
+    assert!(
+        network
+            .send_response_apdu_on_issuance(issued(), &route, || panic!("full queue cannot issue"))
+            .await
+            .is_err()
+    );
     assert_eq!(count.load(Ordering::SeqCst), 0);
     for queued in h.drain(0) {
         let super::SendRequest::Unicast {
@@ -387,8 +397,10 @@ async fn r7_prompt_handoff_checks_both_network_and_router_lifetime() {
         } else {
             drop(h);
         }
-        assert!(network
-            .encode_response_for_handoff(issued(), &route)
-            .is_err());
+        assert!(
+            network
+                .encode_response_for_handoff(issued(), &route)
+                .is_err()
+        );
     }
 }

@@ -18,7 +18,8 @@
 //! a refusal naming the object. Without a server nothing takes it, so it
 //! stays bounded by the objects and refusals that can produce entries.
 
-use std::sync::Arc;
+use crate::prelude::*;
+use alloc::sync::Arc;
 
 use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::ObjectIdentifier;
@@ -74,8 +75,8 @@ impl ObjectDatabase {
     #[doc(hidden)]
     pub fn take_membership_work_internal(&mut self) -> MembershipWork {
         MembershipWork {
-            changed: std::mem::take(&mut self.membership.changed),
-            schedule_retries: std::mem::take(&mut self.membership.schedule_retries),
+            changed: core::mem::take(&mut self.membership.changed),
+            schedule_retries: core::mem::take(&mut self.membership.schedule_retries),
         }
     }
 

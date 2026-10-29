@@ -9,6 +9,7 @@ use bacnet_objects::multistate::MultiStateInputObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::cov::COVNotificationRequest;
 use bacnet_types::enums::{EngineeringUnits, EventState, Reliability};
+use bacnet_types::error::RemoteError;
 struct Fixture {
     server: BACnetServer<TestTransport>,
     sent: SendLog,
@@ -102,10 +103,10 @@ async fn read(
 
 fn assert_protocol_error(error: Error, class: ErrorClass, code: ErrorCode) {
     match error {
-        Error::Protocol {
+        Error::Remote(RemoteError::Error {
             class: actual_class,
             code: actual_code,
-        } => {
+        }) => {
             assert_eq!(actual_class, class);
             assert_eq!(actual_code, code);
         }
@@ -498,11 +499,13 @@ async fn noncommandable_value_write_local_without_resolved_origin_runs_cov() {
         .unwrap();
     subscribe(&fixture.server, oid).await;
     let missing = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 999).unwrap();
-    assert!(crate::command_source::resolve_local(
-        &*fixture.server.database().read().await,
-        crate::LocalCommandSource::Object(missing),
-    )
-    .is_err());
+    assert!(
+        crate::command_source::resolve_local(
+            &*fixture.server.database().read().await,
+            crate::LocalCommandSource::Object(missing),
+        )
+        .is_err()
+    );
     fixture
         .server
         .write_local(

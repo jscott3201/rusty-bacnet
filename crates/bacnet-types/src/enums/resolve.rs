@@ -49,6 +49,35 @@ macro_rules! resolved_enum {
             Unknown(u32),
         }
 
+        impl ResolvedEnum {
+            /// The named constant this value is (`"ANALOG_INPUT"`, `"HIGH_LIMIT"`),
+            /// or `None` when the property has no known enumeration or the
+            /// number has no name in it (a vendor or reserved value).
+            pub const fn name(&self) -> Option<&'static str> {
+                match self {
+                    $( Self::$variant(v) => v.name(), )+
+                    Self::Unknown(_) => None,
+                }
+            }
+
+            /// The enumeration this value belongs to: its type name
+            /// (`"EventState"`) and every named constant with its wire value,
+            /// for parsing a name typed for the same property. `None` for
+            /// [`ResolvedEnum::Unknown`].
+            pub fn enumeration(&self) -> Option<(&'static str, Vec<(&'static str, u32)>)> {
+                match self {
+                    $( Self::$variant(_) => Some((
+                        stringify!($variant),
+                        <$ty>::ALL_NAMED
+                            .iter()
+                            .map(|&(name, value)| (name, u32::from(value.to_raw())))
+                            .collect(),
+                    )), )+
+                    Self::Unknown(_) => None,
+                }
+            }
+        }
+
         impl core::fmt::Display for ResolvedEnum {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 match self {
@@ -688,20 +717,24 @@ mod tests {
 
     #[test]
     fn resolve_bits_ignores_non_bitstring() {
-        assert!(resolve_bits(
-            PropertyIdentifier::STATUS_FLAGS,
-            &PropertyValue::Unsigned(1)
-        )
-        .is_none());
+        assert!(
+            resolve_bits(
+                PropertyIdentifier::STATUS_FLAGS,
+                &PropertyValue::Unsigned(1)
+            )
+            .is_none()
+        );
     }
 
     #[test]
     fn resolve_enum_ignores_non_enumerated() {
-        assert!(resolve_enum(
-            PropertyIdentifier::OBJECT_TYPE,
-            &PropertyValue::Unsigned(19)
-        )
-        .is_none());
+        assert!(
+            resolve_enum(
+                PropertyIdentifier::OBJECT_TYPE,
+                &PropertyValue::Unsigned(19)
+            )
+            .is_none()
+        );
         assert!(matches!(
             resolve_enum(
                 PropertyIdentifier::EVENT_STATE,

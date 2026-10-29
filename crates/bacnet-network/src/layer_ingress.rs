@@ -7,9 +7,9 @@
 //! queue. [`NetworkLayer::start_with_admission`](super::NetworkLayer::start_with_admission)
 //! runs the same [`Ingress`] in a dispatch task in front of its tracked queue.
 
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
-use std::task::{ready, Context, Poll};
+use std::sync::atomic::AtomicU64;
+use std::task::{Context, Poll, ready};
 
 use bacnet_router_core::node::Node;
 use bacnet_transport::port::ReceivedNpdu;
@@ -20,7 +20,7 @@ use tokio::sync::mpsc;
 use tracing::debug;
 
 use super::receive::{self, Inbound, NodeTotals};
-use super::{next_ingress_sequence, AdmissionSender, ReceivedApdu, ReceivedNetworkControl};
+use super::{AdmissionSender, ReceivedApdu, ReceivedNetworkControl, next_ingress_sequence};
 
 /// A layer's receive state: the router core's node, which applies the
 /// receive rules (#1795), and where network controls go.

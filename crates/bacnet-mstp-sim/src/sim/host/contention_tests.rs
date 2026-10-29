@@ -181,17 +181,19 @@ fn standard_winner_crc_corruption_and_errors_remain_distinct() {
         assert_eq!(sim.contention_stats(10).matched, 1);
         assert_eq!(sim.contention_stats(10).pending, 0);
         assert_eq!(sim.frames().len(), 2);
-        assert!(sim
-            .frames()
-            .iter()
-            .all(|f| f.collided && !f.is_clean() && f.end == Instant::from_micros(13_000)));
+        assert!(
+            sim.frames()
+                .iter()
+                .all(|f| f.collided && !f.is_clean() && f.end == Instant::from_micros(13_000))
+        );
         assert_eq!(sim.report().driver_releases.len(), 2);
-        assert!(sim
-            .report()
-            .driver_releases
-            .iter()
-            .all(|r| r.data_end == Some(Instant::from_micros(13_000))
-                && r.at == Instant::from_micros(13_000)));
+        assert!(
+            sim.report()
+                .driver_releases
+                .iter()
+                .all(|r| r.data_end == Some(Instant::from_micros(13_000))
+                    && r.at == Instant::from_micros(13_000))
+        );
         sim.assert_no_violations();
     }
 }
@@ -312,9 +314,11 @@ fn missing_winner_stays_diagnosed_after_an_unrelated_valid_frame() {
         .filter(|v| v.kind == crate::ViolationKind::ListenerMissedFrame)
         .collect();
     assert_eq!(missed.len(), 1, "{}", sim.trace().tail(20));
-    assert!(missed[0]
-        .detail
-        .contains("lost captured tx0's terminal character"));
+    assert!(
+        missed[0]
+            .detail
+            .contains("lost captured tx0's terminal character")
+    );
 }
 
 /// Standalone-valid bytes do not imply parser synchronization: this winner

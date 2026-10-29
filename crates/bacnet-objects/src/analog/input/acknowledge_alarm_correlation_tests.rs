@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_types::error::RemoteError;
 
 use crate::event::{EventStateChange, EventTransition, EventTransitionCommit, PendingTransition};
 
@@ -28,7 +29,7 @@ fn committed_input() -> AnalogInputObject {
 fn assert_invalid_event_state(error: Error) {
     assert!(matches!(
         error,
-        Error::Protocol { class, code }
+        Error::Remote(RemoteError::Error { class, code })
             if class == ErrorClass::SERVICES
                 && code == ErrorCode::INVALID_EVENT_STATE
     ));

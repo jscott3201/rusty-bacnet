@@ -1,0 +1,13 @@
+[package]
+name = "sc-operator-policy"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+
+[workspace]
+
+[dependencies]
+bacnet-server = { version = "=0.15.0", features = ["sc-tls"] }
+bacnet-transport = "=0.15.0"
+bacnet-types = "=0.15.0"

@@ -9,8 +9,8 @@ use insta::assert_snapshot;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::*;
-use crate::tui::app::watch::Screen;
 use crate::tui::app::Overlay;
+use crate::tui::app::watch::Screen;
 use crate::tui::help::{screens, sections};
 use crate::tui::monitor::MonitorPlan;
 
@@ -315,9 +315,10 @@ fn help_scrolls_at_80x24() {
     assert!(top.contains(" Global"), "{top}");
     assert!(top.contains("1-20 of"), "{top}");
     assert!(!top.contains("Commands (:)"), "{top}");
-    assert!(end.contains("Commands (:)"), "{end}");
+    // The last page ends with the command list's last rows.
     assert!(end.contains("bbmd [ADDRESS]"), "{end}");
     assert!(end.contains("mstp listen SECS"), "{end}");
+    assert!(end.contains("reinit coldstart|warmstart|STATE"), "{end}");
     assert_snapshot!("help_devices_80x24_top", top);
     assert_snapshot!("help_devices_80x24_end", end);
     // End leaves the view on the last page; Up moves from there.
@@ -549,10 +550,11 @@ fn a_session_reset_while_browsing_leaves_browse() {
         assert_eq!(app.screen, Screen::Main);
         press(&mut app, KeyCode::Char('2'));
         assert_eq!(app.screen, Screen::Main);
-        assert!(app
-            .flash
-            .as_ref()
-            .is_some_and(|f| f.text.starts_with("Open a device first")));
+        assert!(
+            app.flash
+                .as_ref()
+                .is_some_and(|f| f.text.starts_with("Open a device first"))
+        );
     }
 }
 

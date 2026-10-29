@@ -7,6 +7,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bacnet_client::client::BACnetClient;
+use bacnet_ops::limits::RequestLimits;
+use bacnet_ops::target::AddressStyle;
 use bacnet_services::who_is::WhoIsRequest;
 use bacnet_transport::port::TransportPort;
 use bacnet_transport::sc::ScEvent;
@@ -17,11 +19,9 @@ use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
-use super::browse::limits::RateCap;
 use super::watch::WatchOptions;
 use super::write::SafetyOptions;
-use super::{passive, DeviceFeed, EventSink, COMMAND_CHANNEL_CAPACITY};
-use crate::core::target::AddressStyle;
+use super::{COMMAND_CHANNEL_CAPACITY, DeviceFeed, EventSink, passive};
 use crate::transport::{self, TransportArgs};
 use crate::tui::message::{
     Command, DirectedTo, OpId, OpOutcome, WhoIsScope, WhoIsSpec, WorkerEvent,
@@ -29,7 +29,7 @@ use crate::tui::message::{
 use crate::tui::network::Foreign;
 use crate::tui::point::BrowseResult;
 #[cfg(feature = "sc-tls")]
-use crate::tui::sc::{credentials::Credentials, ScFailure, ScIdentity, ScReport};
+use crate::tui::sc::{ScFailure, ScIdentity, ScReport, credentials::Credentials};
 
 /// How often the worker checks whether the UI needs a resync.
 const RESYNC_EVERY: Duration = Duration::from_secs(1);
@@ -102,13 +102,14 @@ pub(crate) struct SessionOptions {
 const WATCH_CHANNEL_CAPACITY: usize = 128;
 
 /// Start the worker task. Boxed so the transport futures never sit on a
-/// small stack.
+/// small stack. An error means monitor input release is unproven and
+/// the coordinator must refuse any replacement.
 pub(crate) fn spawn(
     plan: ConnectPlan,
     sink: EventSink,
     commands: mpsc::Receiver<Command>,
     options: SessionOptions,
-) -> JoinHandle<()> {
+) -> JoinHandle<Result<(), String>> {
     tokio::spawn(Box::pin(connect(plan, sink, commands, options)))
 }
 
@@ -117,22 +118,30 @@ async fn connect(
     sink: EventSink,
     commands: mpsc::Receiver<Command>,
     mut options: SessionOptions,
-) {
+) -> Result<(), String> {
     // The monitor transmits nothing, so it runs with `--passive` too.
     if plan.kind == TransportKind::MstpMonitor {
         return match options.mstp.monitor.clone() {
             Some(monitor) => {
                 let lines = &options.mstp.lines;
                 Box::pin(crate::tui::monitor::worker::serve(
-                    monitor, lines, &sink, commands,
+                    monitor,
+                    lines,
+                    &sink,
+                    commands,
+                    &options.mstp.scan,
                 ))
                 .await
             }
-            None => failed(&sink, Error::Encoding("no MS/TP port to monitor".into())).await,
+            None => {
+                failed(&sink, Error::Encoding("no MS/TP port to monitor".into())).await;
+                Ok(())
+            }
         };
     }
     if options.safety.passive {
-        return Box::pin(passive::serve(&sink, commands, &options.safety)).await;
+        Box::pin(passive::serve(&plan, &sink, commands, &options.safety)).await;
+        return Ok(());
     }
     let args = plan.args;
     // The CLI's clients keep bacnet-client's default of three retries.
@@ -154,10 +163,12 @@ async fn connect(
                         if let Err(error) = client.stop().await {
                             tracing::warn!("client stop: {error}");
                         }
-                        return;
+                        return Ok(());
                     };
                     match outcome {
-                        Ok(()) => tracing::info!("BBMD {bbmd} accepted the foreign-device registration; it renews automatically"),
+                        Ok(()) => tracing::info!(
+                            "BBMD {bbmd} accepted the foreign-device registration; it renews automatically"
+                        ),
                         Err(error) => tracing::warn!("{error}; retrying in the background"),
                     }
                     // Accepted or retrying, the BBMD may hold an FDT entry
@@ -261,6 +272,7 @@ async fn connect(
         // Handled above, before the passive check.
         TransportKind::MstpMonitor => {}
     }
+    Ok(())
 }
 
 /// What an SC session dials, for the SC screen. `build_sc_client` needs the
@@ -373,11 +385,11 @@ async fn serve_with<T: TransportPort + 'static>(
     sc_events: Option<broadcast::Receiver<ScEvent>>,
 ) {
     let client = Arc::new(client);
-    let rate = RateCap::new(options.max_rate);
+    let rate = Arc::new(RequestLimits::new(options.max_rate));
     let mut local = style.format(client.local_mac());
     // A B/IPv6 VMAC alone doesn't say where the client is bound.
     if let Some(bound) =
-        crate::core::target::as_bip6(client.transport()).and_then(|t| t.local_address())
+        bacnet_ops::target::as_bip6(client.transport()).and_then(|t| t.local_address())
     {
         local = format!("{local} ({bound})");
     }
@@ -437,7 +449,7 @@ async fn serve_with<T: TransportPort + 'static>(
                                 sink.deliver(WorkerEvent::OpFinished { op: old, outcome: OpOutcome::Cancelled }).await;
                             }
                             if let WhoIsScope::Directed { to: DirectedTo::Bip6(peer), .. } = &spec.scope {
-                                let vmac = Box::pin(crate::core::target::bip6_vmac(client.transport(), *peer));
+                                let vmac = Box::pin(bacnet_ops::target::bip6_vmac(client.transport(), *peer));
                                 resolving = Some(Resolving { op, spec, vmac });
                             } else {
                                 listening = who_is(&client, &sink, op, &spec).await;
@@ -490,6 +502,9 @@ async fn serve_with<T: TransportPort + 'static>(
                             if capture.send(command).await.is_err() {
                                 tracing::debug!("the capture has ended");
                             }
+                        }
+                        Some(Command::MonitorScan(request)) => {
+                            sink.deliver(WorkerEvent::MonitorScan(crate::tui::monitor::scan::ScanReport::Rejected { id: request.id(), cancel: matches!(request, crate::tui::monitor::scan::ScanCommand::Cancel { .. }), reason: "only a receive-only MS/TP monitor can scan".into() })).await;
                         }
                         Some(Command::Disconnect) => break,
                         Some(Command::Connect { .. } | Command::JoinTrunk { .. } | Command::Reconnect | Command::Profile(_) | Command::CaptureExport(_)) => {}

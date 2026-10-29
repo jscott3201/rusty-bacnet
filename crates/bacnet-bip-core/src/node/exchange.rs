@@ -72,10 +72,10 @@ impl Operation {
         let mut index = 0;
         while index < Self::ALL.len() {
             let operation = Self::ALL[index];
-            if let Some(nak) = operation.function().nak() {
-                if nak.to_raw() == code.to_raw() {
-                    return Some(operation);
-                }
+            if let Some(nak) = operation.function().nak()
+                && nak.to_raw() == code.to_raw()
+            {
+                return Some(operation);
             }
             index += 1;
         }
@@ -408,10 +408,10 @@ impl<const X: usize> Exchanges<X> {
     pub(crate) fn next_deadline(&self) -> Option<(usize, Instant)> {
         let mut first: Option<(usize, Instant)> = None;
         for (index, slot) in self.slots.iter().enumerate() {
-            if let Phase::Sent { deadline } = slot.phase {
-                if first.is_none_or(|(_, earliest)| deadline < earliest) {
-                    first = Some((index, deadline));
-                }
+            if let Phase::Sent { deadline } = slot.phase
+                && first.is_none_or(|(_, earliest)| deadline < earliest)
+            {
+                first = Some((index, deadline));
             }
         }
         first

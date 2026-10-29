@@ -446,12 +446,14 @@ async fn source_recipient_unresolved_device_preserves_read_and_rejects_live_chan
             .number(),
         0
     );
-    assert!(local(
-        &session,
-        PropertyValue::ApplicationData(value(&direct(&sink)))
-    )
-    .await
-    .is_err());
+    assert!(
+        local(
+            &session,
+            PropertyValue::ApplicationData(value(&direct(&sink)))
+        )
+        .await
+        .is_err()
+    );
     assert_eq!(
         current(&session).await,
         PropertyValue::ApplicationData(value(&device(999)))

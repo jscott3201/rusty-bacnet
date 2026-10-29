@@ -1,0 +1,341 @@
+[
+  {
+    "from": "development/overview",
+    "to": "integrate/overview",
+    "sections": [
+      {
+        "heading": "Choose the owner for your application",
+        "anchor": "choose-the-owner-for-your-application",
+        "target": "integrate/overview/#choose-the-owner-for-your-application"
+      },
+      {
+        "heading": "Build a source checkout",
+        "anchor": "build-a-source-checkout",
+        "target": "development/build-from-source/#build-a-source-checkout"
+      },
+      {
+        "heading": "Use the reference for exact signatures",
+        "anchor": "use-the-reference-for-exact-signatures",
+        "target": "integrate/overview/#use-the-reference-for-exact-signatures"
+      },
+      {
+        "heading": "Next steps",
+        "anchor": "next-steps",
+        "target": "integrate/overview/#next-steps"
+      }
+    ]
+  },
+  {
+    "from": "development/shared-endpoints",
+    "to": "integrate/shared-endpoints",
+    "sections": [
+      {
+        "heading": "One session owns the connection",
+        "anchor": "one-session-owns-the-connection",
+        "target": "integrate/shared-endpoints/#one-session-owns-the-connection"
+      },
+      {
+        "heading": "Check requester and responder scope separately",
+        "anchor": "check-requester-and-responder-scope-separately",
+        "target": "integrate/shared-endpoints/#check-requester-and-responder-scope-separately"
+      },
+      {
+        "heading": "Add source READ or WRITE Audit reporting deliberately",
+        "anchor": "add-source-read-or-write-audit-reporting-deliberately",
+        "target": "integrate/shared-endpoints/#add-source-read-or-write-audit-reporting-deliberately"
+      },
+      {
+        "heading": "Close the owner, including after cancellation",
+        "anchor": "close-the-owner-including-after-cancellation",
+        "target": "integrate/shared-endpoints/#close-the-owner-including-after-cancellation"
+      },
+      {
+        "heading": "Next steps",
+        "anchor": "next-steps",
+        "target": "integrate/shared-endpoints/#next-steps"
+      }
+    ]
+  },
+  {
+    "from": "development/network-number",
+    "to": "integrate/network-ports",
+    "sections": [
+      {
+        "heading": "Three different actions",
+        "anchor": "three-different-actions",
+        "target": "integrate/network-ports/#three-different-actions"
+      },
+      {
+        "heading": "Register a B/IP receiving port",
+        "anchor": "register-a-bip-receiving-port",
+        "target": "integrate/network-ports/#register-a-bip-receiving-port"
+      },
+      {
+        "heading": "Let passive Number learning do its work",
+        "anchor": "let-passive-number-learning-do-its-work",
+        "target": "integrate/network-ports/#let-passive-number-learning-do-its-work"
+      },
+      {
+        "heading": "Know which owner and link were exercised",
+        "anchor": "know-which-owner-and-link-were-exercised",
+        "target": "integrate/network-ports/#know-which-owner-and-link-were-exercised"
+      },
+      {
+        "heading": "Next steps",
+        "anchor": "next-steps",
+        "target": "integrate/network-ports/#next-steps"
+      }
+    ]
+  },
+  {
+    "from": "development/transports",
+    "to": "reference/transports",
+    "sections": [
+      {
+        "heading": "Match the link to an owner",
+        "anchor": "match-the-link-to-an-owner",
+        "target": "connect/overview/#match-the-link-to-an-owner"
+      },
+      {
+        "heading": "Read the Number-control evidence at its actual scope",
+        "anchor": "read-the-number-control-evidence-at-its-actual-scope",
+        "target": "reference/transports/#read-the-number-control-evidence-at-its-actual-scope"
+      },
+      {
+        "heading": "Select IPv6 explicitly when discovery is ambiguous",
+        "anchor": "select-ipv6-explicitly-when-discovery-is-ambiguous",
+        "target": "reference/transports/#select-ipv6-explicitly-when-discovery-is-ambiguous"
+      },
+      {
+        "heading": "Plan your own validation",
+        "anchor": "plan-your-own-validation",
+        "target": "reference/transports/#plan-your-own-validation"
+      },
+      {
+        "heading": "Next steps",
+        "anchor": "next-steps",
+        "target": "reference/transports/#which-guide-next"
+      }
+    ]
+  },
+  {
+    "from": "development/bacnet-sc",
+    "to": "connect/bacnet-sc",
+    "sections": [
+      {
+        "heading": "Prepare identities and credentials before connecting",
+        "anchor": "prepare-identities-and-credentials-before-connecting",
+        "target": "connect/bacnet-sc/#prepare-identities-and-credentials-before-connecting"
+      },
+      {
+        "heading": "Connect with the CLI",
+        "anchor": "connect-with-the-cli",
+        "target": "connect/bacnet-sc/#cli-feature-and-identity-setup"
+      },
+      {
+        "heading": "Use the same prerequisites in Python and Rust",
+        "anchor": "use-the-same-prerequisites-in-python-and-rust",
+        "target": "connect/bacnet-sc/#use-the-same-prerequisites-in-python-and-rust"
+      },
+      {
+        "heading": "Diagnose the stage that failed",
+        "anchor": "diagnose-the-stage-that-failed",
+        "target": "connect/bacnet-sc/#diagnose-the-stage-that-failed"
+      },
+      {
+        "heading": "Keep transport identity separate from operation authority",
+        "anchor": "keep-transport-identity-separate-from-operation-authority",
+        "target": "connect/bacnet-sc/#keep-transport-identity-separate-from-operation-authority"
+      },
+      {
+        "heading": "Next steps",
+        "anchor": "next-steps",
+        "target": "connect/bacnet-sc/#next-steps"
+      }
+    ]
+  },
+  {
+    "from": "project/contributing",
+    "to": "development/documentation",
+    "sections": [
+      {
+        "heading": "Keep one task in focus",
+        "anchor": "keep-one-task-in-focus",
+        "target": "development/documentation/#keep-one-task-in-focus"
+      },
+      {
+        "heading": "Verify the interface",
+        "anchor": "verify-the-interface",
+        "target": "development/documentation/#verify-the-interface"
+      },
+      {
+        "heading": "Make visuals useful",
+        "anchor": "make-visuals-useful",
+        "target": "development/documentation/#make-visuals-useful"
+      },
+      {
+        "heading": "Keep the reading experience accessible",
+        "anchor": "keep-the-reading-experience-accessible",
+        "target": "development/documentation/#keep-the-reading-experience-accessible"
+      },
+      {
+        "heading": "Preserve technical evidence",
+        "anchor": "preserve-technical-evidence",
+        "target": "development/documentation/#preserve-technical-evidence"
+      },
+      {
+        "heading": "Work in the project",
+        "anchor": "work-in-the-project",
+        "target": "development/documentation/#work-in-the-project"
+      },
+      {
+        "heading": "Validate a content change",
+        "anchor": "validate-a-content-change",
+        "target": "development/documentation/#validate-a-content-change"
+      }
+    ]
+  },
+  {
+    "from": "guides/configuration",
+    "to": "connect/bacnet-ip",
+    "sections": [
+      {
+        "heading": "BACnet/IP settings",
+        "anchor": "bacnetip-settings",
+        "target": "connect/bacnet-ip/#bacnetip-settings"
+      },
+      {
+        "heading": "A remote port is not a local port",
+        "anchor": "a-remote-port-is-not-a-local-port",
+        "target": "connect/bacnet-ip/#a-remote-port-is-not-a-local-port"
+      },
+      {
+        "heading": "Configuration lives in the interface you use",
+        "anchor": "configuration-lives-in-the-interface-you-use",
+        "target": "connect/bacnet-ip/#configuration-lives-in-the-interface-you-use"
+      },
+      {
+        "heading": "Keep units visible",
+        "anchor": "keep-units-visible",
+        "target": "connect/bacnet-ip/#keep-units-visible"
+      },
+      {
+        "heading": "Network-specific prerequisites",
+        "anchor": "network-specific-prerequisites",
+        "target": "connect/bacnet-ip/#network-specific-prerequisites"
+      },
+      {
+        "heading": "Keep configuration out of published evidence",
+        "anchor": "keep-configuration-out-of-published-evidence",
+        "target": "connect/bacnet-ip/#keep-configuration-out-of-published-evidence"
+      },
+      {
+        "heading": "Sources and release scope",
+        "anchor": "sources-and-release-scope",
+        "target": "connect/bacnet-ip/#sources-and-release-scope"
+      }
+    ]
+  },
+  {
+    "from": "guides/bacnet-sc",
+    "to": "connect/bacnet-sc",
+    "sections": [
+      {
+        "heading": "Before connecting",
+        "anchor": "before-connecting",
+        "target": "connect/bacnet-sc/#before-connecting"
+      },
+      {
+        "heading": "Prepare identities and credentials before connecting",
+        "anchor": "prepare-identities-and-credentials-before-connecting",
+        "target": "connect/bacnet-sc/#prepare-identities-and-credentials-before-connecting"
+      },
+      {
+        "heading": "CLI feature and identity setup",
+        "anchor": "cli-feature-and-identity-setup",
+        "target": "connect/bacnet-sc/#cli-feature-and-identity-setup"
+      },
+      {
+        "heading": "Trust the hub's issuer, not the system roots",
+        "anchor": "trust-the-hubs-issuer-not-the-system-roots",
+        "target": "connect/bacnet-sc/#trust-the-hubs-issuer-not-the-system-roots"
+      },
+      {
+        "heading": "Python trust configuration",
+        "anchor": "python-trust-configuration",
+        "target": "connect/bacnet-sc/#python-trust-configuration"
+      },
+      {
+        "heading": "Use the same prerequisites in Python and Rust",
+        "anchor": "use-the-same-prerequisites-in-python-and-rust",
+        "target": "connect/bacnet-sc/#use-the-same-prerequisites-in-python-and-rust"
+      },
+      {
+        "heading": "Diagnose the stage that failed",
+        "anchor": "diagnose-the-stage-that-failed",
+        "target": "connect/bacnet-sc/#diagnose-the-stage-that-failed"
+      },
+      {
+        "heading": "Keep transport identity separate from operation authority",
+        "anchor": "keep-transport-identity-separate-from-operation-authority",
+        "target": "connect/bacnet-sc/#keep-transport-identity-separate-from-operation-authority"
+      },
+      {
+        "heading": "Validate the whole path",
+        "anchor": "validate-the-whole-path",
+        "target": "connect/bacnet-sc/#validate-the-whole-path"
+      },
+      {
+        "heading": "Sources and release scope",
+        "anchor": "sources-and-release-scope",
+        "target": "connect/bacnet-sc/#sources-and-release-scope"
+      },
+      {
+        "heading": "Next steps",
+        "anchor": "next-steps",
+        "target": "connect/bacnet-sc/#next-steps"
+      }
+    ]
+  },
+  {
+    "from": "guides/mstp",
+    "to": "connect/mstp",
+    "sections": [
+      {
+        "heading": "Choose the supported surface",
+        "anchor": "choose-the-supported-surface",
+        "target": "connect/mstp/#choose-the-supported-surface"
+      },
+      {
+        "heading": "Prepare the trunk",
+        "anchor": "prepare-the-trunk",
+        "target": "connect/mstp/#prepare-the-trunk"
+      },
+      {
+        "heading": "Start the repository's mini-device",
+        "anchor": "start-the-repositorys-mini-device",
+        "target": "connect/mstp/#start-the-repositorys-mini-device"
+      },
+      {
+        "heading": "Observe before increasing load",
+        "anchor": "observe-before-increasing-load",
+        "target": "connect/mstp/#observe-before-increasing-load"
+      },
+      {
+        "heading": "Is a real-time kernel required?",
+        "anchor": "is-a-real-time-kernel-required",
+        "target": "connect/mstp/#is-a-real-time-kernel-required"
+      },
+      {
+        "heading": "Stop and investigate",
+        "anchor": "stop-and-investigate",
+        "target": "connect/mstp/#stop-and-investigate"
+      },
+      {
+        "heading": "Sources and release scope",
+        "anchor": "sources-and-release-scope",
+        "target": "connect/mstp/#sources-and-release-scope"
+      }
+    ]
+  }
+]

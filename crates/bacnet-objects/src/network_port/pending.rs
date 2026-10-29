@@ -31,8 +31,8 @@ use bacnet_types::enums::PropertyIdentifier as P;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 
-use super::bip_mode::{bdt_value, host_n_port_value, LiveMode};
 use super::NetworkPortObject;
+use super::bip_mode::{LiveMode, bdt_value, host_n_port_value};
 use crate::common;
 
 /// The values written to a port and waiting for activation. Only the
@@ -185,6 +185,17 @@ impl NetworkPortObject {
         }
     }
 
+    /// The group written to a BBMD whose tables view takes it, waiting
+    /// with the BBMD rows (#1963).
+    pub(super) fn pending_group(&self) -> Option<[u8; 4]> {
+        self.pending.bbmd.multicast_group
+    }
+
+    /// Leave `group` waiting with the BBMD rows.
+    pub(super) fn set_pending_group(&mut self, group: [u8; 4]) {
+        self.pending.bbmd.multicast_group = Some(group);
+    }
+
     /// Whether written values wait for activation: Changes_Pending.
     pub(super) fn changes_pending(&self) -> bool {
         !self.pending.is_empty() || self.multicast.is_pending()
@@ -210,12 +221,12 @@ impl NetworkPortObject {
             return Ok(false);
         }
         self.check_pending_changes()?;
-        // Only a NORMAL port lends a group that can change, and NORMAL has
-        // no mode rows to write, so the two halves never wait together and
-        // the order below can't leave one half applied and the other
-        // refused. A BBMD that serves a group (#941) lends it read-only,
-        // since its own BDT row and its group go together (Annex J.8.3):
-        // making it writable needs one activation for both (#1963).
+        // Only a NORMAL port's group waits apart from the mode's values, and
+        // NORMAL has no mode rows to write, so the two halves never wait
+        // together and the order below can't leave one half applied and the
+        // other refused. A BBMD's group waits with its rows, since its own
+        // BDT row and its group go together (Annex J.8.3), and goes in with
+        // them in one activation (#1963).
         debug_assert!(
             self.pending.is_empty() || !self.multicast.is_pending(),
             "mode values and a multicast group pending together"
@@ -253,6 +264,9 @@ fn merge(pending: &mut BbmdChanges, written: BbmdChanges) {
     }
     if written.global_address.is_some() {
         pending.global_address = written.global_address;
+    }
+    if written.multicast_group.is_some() {
+        pending.multicast_group = written.multicast_group;
     }
 }
 

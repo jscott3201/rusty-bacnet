@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_types::error::RemoteError;
 
 use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use bacnet_types::enums::EngineeringUnits;
@@ -270,9 +271,11 @@ fn property_metadata_analog_write_capabilities_match_dispatch() {
                     "{p:?}, OOS={out_of_service}: {result:?}"
                 );
                 if !expected {
-                    assert!(matches!(result, Err(Error::Protocol { class, code })
+                    assert!(
+                        matches!(result, Err(Error::Remote(RemoteError::Error { class, code }))
                     if class == bacnet_types::enums::ErrorClass::PROPERTY
-                        && code == bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED));
+                        && code == bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED)
+                    );
                 }
             }
             if commandable {
@@ -290,7 +293,7 @@ fn property_metadata_analog_write_capabilities_match_dispatch() {
                 }
                 assert!(
                     matches!(object.write_property(P::PRIORITY_ARRAY, None, PropertyValue::Null, None),
-                Err(Error::Protocol { class, code })
+                Err(Error::Remote(RemoteError::Error { class, code }))
                     if class == bacnet_types::enums::ErrorClass::PROPERTY
                         && code == bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED)
                 );

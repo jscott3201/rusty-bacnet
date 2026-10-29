@@ -1,4 +1,5 @@
-//! Strict command-line parsing for the three BACnetTimeStamp choices.
+//! Strict command-line parsing for the three BACnetTimeStamp choices, and
+//! the forms the formatter prints them in.
 
 use bacnet_types::primitives::{BACnetTimeStamp, Date, Time};
 
@@ -102,9 +103,17 @@ fn normalize_outer_double_quotes(spec: &str) -> Result<&str, String> {
 /// Parse an exact BACnetTimeStamp CLI value without component normalization.
 pub(crate) fn parse_bacnet_timestamp(spec: &str) -> Result<BACnetTimeStamp, String> {
     let spec = normalize_outer_double_quotes(spec)?;
-    let (kind, value) = spec
+    let Some((kind, value)) = spec
         .split_once(':')
-        .ok_or_else(|| format!("invalid BACnetTimeStamp '{spec}'; expected {TIMESTAMP_GRAMMAR}"))?;
+        .filter(|(kind, _)| matches!(*kind, "sequence" | "time" | "datetime"))
+    else {
+        // Anything else is a timestamp as the formatter prints one
+        // (`seq 42`, `14:30:05`, `2026-10-25 Sun 14:30:05`), so a printed
+        // timestamp pastes straight back.
+        return bacnet_ops::parse::parse_timestamp(spec).map_err(|e| {
+            format!("invalid BACnetTimeStamp '{spec}': {e}; or use {TIMESTAMP_GRAMMAR}")
+        });
+    };
     match kind {
         "sequence" => {
             let sequence = decimal("sequence number", value)?;
@@ -113,8 +122,13 @@ pub(crate) fn parse_bacnet_timestamp(spec: &str) -> Result<BACnetTimeStamp, Stri
             })?;
             Ok(BACnetTimeStamp::SequenceNumber(sequence))
         }
+        // `time:` takes the write grammar's `HH:MM[:SS[.hh]]` too, so the
+        // prefix reads the same everywhere.
+        "time" if value.contains(':') => bacnet_ops::parse::parse_time(value)
+            .map(BACnetTimeStamp::Time)
+            .map_err(|e| format!("invalid BACnetTimeStamp time: {e}")),
         "time" => Ok(BACnetTimeStamp::Time(parse_time(value)?)),
-        "datetime" => {
+        _ => {
             let (date, time) = value.split_once(';').ok_or_else(|| {
                 format!("invalid BACnetTimeStamp datetime '{value}'; expected {TIMESTAMP_GRAMMAR}")
             })?;
@@ -123,9 +137,6 @@ pub(crate) fn parse_bacnet_timestamp(spec: &str) -> Result<BACnetTimeStamp, Stri
                 time: parse_time(time)?,
             })
         }
-        _ => Err(format!(
-            "unknown BACnetTimeStamp kind '{kind}'; expected sequence, time, or datetime ({TIMESTAMP_GRAMMAR})"
-        )),
     }
 }
 
@@ -276,6 +287,34 @@ mod tests {
                 "accepted invalid timestamp {invalid}"
             );
         }
+    }
+
+    #[test]
+    fn printed_timestamps_paste_back() {
+        assert_eq!(
+            parse_bacnet_timestamp("seq 42").unwrap(),
+            BACnetTimeStamp::SequenceNumber(42)
+        );
+        assert_eq!(
+            parse_bacnet_timestamp("14:30:05.25").unwrap(),
+            BACnetTimeStamp::Time(Time {
+                hour: 14,
+                minute: 30,
+                second: 5,
+                hundredths: 25,
+            })
+        );
+        assert_eq!(
+            parse_bacnet_timestamp("\"2026-10-25 Sun 14:30:05\"").unwrap(),
+            parse_bacnet_timestamp("datetime:2026,10,25,7;14,30,5,0").unwrap()
+        );
+        assert_eq!(
+            parse_bacnet_timestamp("time:14:30").unwrap(),
+            parse_bacnet_timestamp("time:14,30,0,0").unwrap()
+        );
+        assert!(parse_bacnet_timestamp("time:25:00").is_err());
+        let refused = parse_bacnet_timestamp("unknown:1").unwrap_err();
+        assert!(refused.contains("sequence:<0..65535>"), "{refused}");
     }
 
     #[test]

@@ -4,7 +4,7 @@ use super::support::*;
 use bacnet_benchmarks::sc_helpers::*;
 use bacnet_transport::sc_tls::ScNodeTlsConfig;
 use rcgen::{CertificateParams, Issuer, KeyPair};
-use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use std::sync::Arc;
 
 // The handshake callback's error type is fixed by tungstenite.
@@ -265,7 +265,7 @@ async fn device_rejects_hub_dates_and_san_then_good_pair_reads() {
 
 #[tokio::test]
 async fn device_tls12_rejected_and_connect_request_carries_explicit_identity() {
-    use bacnet_transport::sc_frame::{decode_sc_message, encode_sc_message, ScFunction, ScMessage};
+    use bacnet_transport::sc_frame::{ScFunction, ScMessage, decode_sc_message, encode_sc_message};
     use bytes::{Bytes, BytesMut};
     use futures_util::{SinkExt, StreamExt};
     let files = Files::new();

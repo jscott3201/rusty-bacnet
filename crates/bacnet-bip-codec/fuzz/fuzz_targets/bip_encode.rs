@@ -17,10 +17,10 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 
 use arbitrary::Arbitrary;
 use bacnet_bip_codec::{
-    decode, BdtEntries, BdtEntry, BvlcResultCode, Bvll, BvllError, BvllFrame, BvllSink, FdtEntries,
-    FdtEntry,
+    BdtEntries, BdtEntry, BvlcResultCode, Bvll, BvllError, BvllFrame, BvllSink, FdtEntries,
+    FdtEntry, decode,
 };
-use bip_codec_fuzz::{bvll_octets, check_sinks, Npdu, SinkKnobs, HEADER, MAX_LENGTH, TYPE_BIP};
+use bip_codec_fuzz::{HEADER, MAX_LENGTH, Npdu, SinkKnobs, TYPE_BIP, bvll_octets, check_sinks};
 use libfuzzer_sys::fuzz_target;
 
 /// The result codes Annex J.2.1.1 defines.

@@ -7,13 +7,14 @@
 //! back to hub delivery; default-off stays hub-only. Loopback fixtures only.
 
 use super::direct_discovery::{
-    redial_backoff_delay, DirectPool, RedialBackoff, DIRECT_POOL_IDLE_TTL, DIRECT_POOL_MAX_ENTRIES,
-    DIRECT_REDIAL_INITIAL_BACKOFF, DIRECT_REDIAL_MAX_BACKOFF, DIRECT_REDIAL_MAX_ENTRIES,
+    DIRECT_POOL_IDLE_TTL, DIRECT_POOL_MAX_ENTRIES, DIRECT_REDIAL_INITIAL_BACKOFF,
+    DIRECT_REDIAL_MAX_BACKOFF, DIRECT_REDIAL_MAX_ENTRIES, DirectPool, RedialBackoff,
+    redial_backoff_delay,
 };
 use super::*;
-use crate::sc_frame::{decode_sc_message, encode_sc_message, ScFunction, ScMessage};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use crate::sc_frame::{ScFunction, ScMessage, decode_sc_message, encode_sc_message};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::time::timeout;
@@ -80,8 +81,8 @@ fn counting_handshake_dialer(
 ) -> std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<LoopbackWebSocket, Error>> + Send>,
 > + Send
-       + Sync
-       + 'static {
++ Sync
++ 'static {
     move |_uri: String| {
         let dials = dials.clone();
         let peers = peers.clone();

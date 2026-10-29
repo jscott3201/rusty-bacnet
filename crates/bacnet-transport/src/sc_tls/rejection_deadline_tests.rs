@@ -4,8 +4,8 @@ use super::*;
 use crate::port::TransportPort;
 use crate::sc::{ScConnectionState, ScReconnectConfig, ScTransport};
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 use tokio_tungstenite::tungstenite::handshake::server::{
     Callback, ErrorResponse, Request, Response,
@@ -156,9 +156,11 @@ async fn exercise(wire: Vec<u8>) {
         .unwrap()
         .unwrap();
     drop(write);
-    assert!(tokio::time::timeout(Duration::from_millis(50), peer.next())
-        .await
-        .is_err());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), peer.next())
+            .await
+            .is_err()
+    );
     assert_eq!(
         (
             counts.sends.load(Ordering::SeqCst),

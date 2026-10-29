@@ -4,6 +4,7 @@
 
 use super::*;
 use bacnet_types::constructed::SpecialEventPeriod;
+use bacnet_types::error::RemoteError;
 
 type P = PropertyIdentifier;
 
@@ -37,7 +38,7 @@ fn write(
 
 fn assert_code(result: Result<(), Error>, class: ErrorClass, code: ErrorCode, what: &str) {
     match result {
-        Err(Error::Protocol { class: c, code: e }) => {
+        Err(Error::Remote(RemoteError::Error { class: c, code: e })) => {
             assert_eq!((c, e), (class, code), "{what}: expected {class:?}/{code:?}");
         }
         other => panic!("{what}: expected {code:?}, got {other:?}"),

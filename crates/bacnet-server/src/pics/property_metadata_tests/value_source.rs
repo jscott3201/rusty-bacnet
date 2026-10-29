@@ -3,11 +3,11 @@
 //! value-source footnote) and writable by its owner, and leaves it out of one
 //! that doesn't.
 use super::*;
+use PropertyIdentifier as P;
 use bacnet_objects::color::{ColorObject, ColorTemperatureObject};
 use bacnet_objects::present_value_access::PresentValueAccess;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::EngineeringUnits;
-use PropertyIdentifier as P;
 
 /// One instance of each type that can track a single source, tracked as
 /// `tracked` says.

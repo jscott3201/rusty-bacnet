@@ -100,15 +100,13 @@ pub(crate) struct WatchStats {
     /// COV subscriptions this session holds on devices, cancels in flight
     /// included: the remote footprint.
     pub(crate) subscriptions: usize,
-    /// Confirmed requests sent in the last [`METER_WINDOW_SECS`] seconds,
+    /// Confirmed requests sent in the last
+    /// [`METER_WINDOW_SECS`](bacnet_ops::limits::METER_WINDOW_SECS) seconds,
     /// browser and watch list together.
     pub(crate) recent_requests: usize,
     /// The CSV file samples go to, when logging.
     pub(crate) csv: Option<String>,
 }
-
-/// The request-rate meter's window.
-pub(crate) const METER_WINDOW_SECS: u64 = 10;
 
 /// Watch worker to UI.
 #[derive(Debug, Clone, PartialEq)]

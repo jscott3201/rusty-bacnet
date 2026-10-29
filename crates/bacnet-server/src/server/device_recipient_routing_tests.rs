@@ -1,9 +1,9 @@
 use super::device_bindings::{
-    DeviceBindingTable, ObservationOutcome, MAX_DEVICE_BINDINGS, OBSERVED_BINDING_TTL,
+    DeviceBindingTable, MAX_DEVICE_BINDINGS, OBSERVED_BINDING_TTL, ObservationOutcome,
 };
 use super::event_recipient_routing_tests::{
-    destination_for, distribute_counted, distribute_from_database_with_bindings, npdu_destination,
-    split_who_is, LITERAL_BROADCAST_MAC,
+    LITERAL_BROADCAST_MAC, destination_for, distribute_counted,
+    distribute_from_database_with_bindings, npdu_destination, split_who_is,
 };
 use super::*;
 use bacnet_objects::analog::AnalogInputObject;

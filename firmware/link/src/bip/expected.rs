@@ -12,7 +12,7 @@ use bacnet_bip_codec::{
     BdtEntry, BvlcFunction, BvlcResultCode, Bvll, BvllError, FdtEntries, FdtEntry, PayloadShape,
 };
 
-use super::{ipv6, Summary};
+use super::{Summary, ipv6};
 
 const fn address(octets: [u8; 4], port: u16) -> SocketAddrV4 {
     let [a, b, c, d] = octets;

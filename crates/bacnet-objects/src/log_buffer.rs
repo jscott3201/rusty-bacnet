@@ -1,6 +1,7 @@
 //! Shared resident storage and identity projection for BACnet log objects.
 
-use std::collections::VecDeque;
+use crate::prelude::*;
+use alloc::collections::VecDeque;
 
 use bacnet_encoding::constructed::{
     encode_event_log_record, encode_log_multiple_record, encode_log_record,
@@ -35,10 +36,7 @@ pub(crate) const TOTAL_RECORD_COUNT_METADATA: PropertyMetadata =
 /// names the property as present but not readable this way
 /// (Clause 15.5.1.3.1).
 pub(crate) fn log_buffer_read_denied() -> Error {
-    Error::Protocol {
-        class: ErrorClass::PROPERTY,
-        code: ErrorCode::READ_ACCESS_DENIED,
-    }
+    Error::protocol(ErrorClass::PROPERTY, ErrorCode::READ_ACCESS_DENIED)
 }
 
 /// A log object's Log_Buffer as ReadRange pages it: the resident records,

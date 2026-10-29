@@ -1,14 +1,15 @@
 //! The browser's display data from property values as read: the device
 //! card, an object's properties, its health badges and its priority pane,
-//! each value written by the TUI's formatter ([`crate::tui::format`]).
+//! each value written by the shared formatter ([`bacnet_ops::format`]).
 
-use bacnet_types::enums::{resolve_bits, ObjectType, PropertyIdentifier, ResolvedBits};
+use bacnet_ops::engine::ReadVia;
+use bacnet_ops::format::{Floats, RawRow, StateTexts, ValueFormat, decode_all, object_name, units};
+use bacnet_ops::label::PRIORITIES;
+use bacnet_types::enums::{ObjectType, PropertyIdentifier, ResolvedBits, resolve_bits};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 
-use crate::tui::format::{decode_all, object_name, units, Floats, RawRow, StateTexts, ValueFormat};
-use crate::tui::point::{
-    DeviceCard, Health, ObjectView, PriorityView, PropertyRow, ReadVia, PRIORITIES,
-};
+use crate::tui::point::{DeviceCard, Health, ObjectView, PriorityView, PropertyRow};
+use crate::tui::row_error::row_error_text;
 
 /// The single value of `property` among `rows`.
 fn single(rows: &[RawRow], property: PropertyIdentifier) -> Option<PropertyValue> {
@@ -59,7 +60,7 @@ pub(crate) fn card(rows: &[RawRow], via: ReadVia) -> DeviceCard {
                 Some((_, Ok(data))) => {
                     supported(data, property).unwrap_or_else(|| format.plain(property, data))
                 }
-                Some((_, Err(error))) => format!("({error})"),
+                Some((_, Err(error))) => format!("({})", row_error_text(error)),
                 None => "-".into(),
             };
             (label, text)
@@ -149,7 +150,7 @@ pub(crate) fn object_view(object: ObjectIdentifier, rows: &[RawRow], via: ReadVi
                     Ok(format.with_units(*property, data, units))
                 }
                 Ok(data) => Ok(format.value(*property, data)),
-                Err(error) => Err(error.clone()),
+                Err(error) => Err(row_error_text(error)),
             },
         })
         .collect();

@@ -4,7 +4,7 @@
 use core::fmt;
 
 use crate::view::{DESTINATION, EXPECTING_REPLY, NETWORK_MESSAGE, SOURCE};
-use crate::{Address, Npdu, GLOBAL_NETWORK, MAX_MAC_LEN, VERSION};
+use crate::{Address, GLOBAL_NETWORK, MAX_MAC_LEN, Npdu, VERSION};
 
 /// Why [`Npdu::encode_into`] refused an NPDU. Nothing was written.
 ///

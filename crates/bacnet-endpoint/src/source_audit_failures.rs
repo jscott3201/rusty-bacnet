@@ -1,6 +1,6 @@
 //! Memory-only source resource losses, never ordinary-record retries.
 use super::*;
-use tokio::time::{timeout_at, Instant};
+use tokio::time::{Instant, timeout_at};
 
 pub(super) fn record_drop(
     source: &Arc<SourceAudit>,

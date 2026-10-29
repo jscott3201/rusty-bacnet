@@ -160,10 +160,12 @@ async fn direct_response_both_owner_guards_retire_unstarted_writes() {
         );
         drop(write);
         assert!(send.await.is_err());
-        assert!(response
-            .send_with_owner(&[1, 0], &network, &guard)
-            .await
-            .is_err());
+        assert!(
+            response
+                .send_with_owner(&[1, 0], &network, &guard)
+                .await
+                .is_err()
+        );
         assert!(recv.try_recv().is_err());
     }
     let scope = DirectResponseScope::default();

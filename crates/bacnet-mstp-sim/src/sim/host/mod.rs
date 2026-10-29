@@ -22,8 +22,8 @@ mod state;
 #[cfg(test)]
 mod tests;
 
-use super::master::Input;
 use super::Sim;
+use super::master::Input;
 use crate::line::{Character, TxId};
 use crate::report::{HostStats, HostTransmitTiming, ViolationKind};
 use crate::trace::{TraceKind, Who};
@@ -156,17 +156,17 @@ impl Sim {
         let master = self.master_mut(node).expect("master");
         let spec = master.spec.adapter.host.expect("host mode");
         let host = master.host.as_mut().expect("host");
-        if let Some(write) = &mut host.write {
-            if !write.hunting {
-                if now < write.ended {
-                    return;
-                }
-                if let Some(grace) = spec.echo_grace {
-                    host.filter.start(&write.frame, write.ended, grace);
-                    write.hunting = true;
-                } else {
-                    self.host_complete(node);
-                }
+        if let Some(write) = &mut host.write
+            && !write.hunting
+        {
+            if now < write.ended {
+                return;
+            }
+            if let Some(grace) = spec.echo_grace {
+                host.filter.start(&write.frame, write.ended, grace);
+                write.hunting = true;
+            } else {
+                self.host_complete(node);
             }
         }
         // Once a write has returned, the main loop's biased select polls

@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::cursor::Show;
 use ratatui::crossterm::execute;
-use ratatui::crossterm::terminal::{enable_raw_mode, EnterAlternateScreen};
+use ratatui::crossterm::terminal::{EnterAlternateScreen, enable_raw_mode};
 use ratatui::{DefaultTerminal, Terminal};
 
 /// True while raw mode and the alternate screen are on.
@@ -138,7 +138,7 @@ impl Signals {
     pub(crate) fn install() -> io::Result<Self> {
         #[cfg(unix)]
         {
-            use tokio::signal::unix::{signal, SignalKind};
+            use tokio::signal::unix::{SignalKind, signal};
             let exit = |name, number: i32| SignalExit {
                 name,
                 code: 128 + number,
@@ -216,13 +216,17 @@ mod tests {
             "Windows has no TERM"
         );
         for (stdin, stdout) in [(false, true), (true, false), (false, false)] {
-            assert!(unusable_terminal(stdin, stdout, None)
-                .unwrap()
-                .contains("must both be a terminal"));
+            assert!(
+                unusable_terminal(stdin, stdout, None)
+                    .unwrap()
+                    .contains("must both be a terminal")
+            );
         }
-        assert!(unusable_terminal(true, true, Some(OsStr::new("dumb")))
-            .unwrap()
-            .contains("dumb"));
+        assert!(
+            unusable_terminal(true, true, Some(OsStr::new("dumb")))
+                .unwrap()
+                .contains("dumb")
+        );
     }
 
     #[test]

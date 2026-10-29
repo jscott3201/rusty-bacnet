@@ -15,8 +15,8 @@
 use super::{DirectAcceptConfig, DirectListener};
 use crate::sc::WebSocketPort;
 use crate::sc_frame::{
-    decode_sc_bvlc_result, decode_sc_message, encode_sc_message, ScBvlcResult, ScFunction,
-    ScMessage,
+    ScBvlcResult, ScFunction, ScMessage, decode_sc_bvlc_result, decode_sc_message,
+    encode_sc_message,
 };
 use crate::sc_tls::ScNodeTlsConfig;
 use bacnet_types::enums::{ErrorClass, ErrorCode};

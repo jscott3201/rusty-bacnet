@@ -39,7 +39,7 @@ impl TestForwarder {
 }
 
 fn refusal(class: ErrorClass, code: ErrorCode) -> Error {
-    Error::Protocol { class, code }
+    Error::protocol(class, code)
 }
 
 impl BACnetObject for TestForwarder {

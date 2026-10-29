@@ -1,0 +1,66 @@
+[package]
+name = "bacnet-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+description = "A Model Context Protocol server for BACnet sites, over the bacnet-ops engine, read-only unless a profile offers guarded writes"
+keywords = ["bacnet", "mcp", "building-automation", "hvac"]
+categories = ["network-programming"]
+
+[package.metadata.docs.rs]
+no-default-features = true
+features = ["stdio"]
+default-target = "x86_64-unknown-linux-gnu"
+targets = []
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+bacnet-ops.workspace = true
+bacnet-client = { workspace = true, features = ["ipv6"] }
+bacnet-transport = { workspace = true, features = ["ipv6"] }
+bacnet-types = { workspace = true, features = ["std"] }
+bacnet-services = { workspace = true, features = ["std"] }
+# The official MCP SDK, pinned (#2066): it has had three majors in 2026, and
+# a release counts here only once it is two weeks old. Server role only; the
+# stdio transport is the `stdio` feature.
+rmcp = { version = "=3.5.1", default-features = false, features = ["server"] }
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "rt", "sync", "time"] }
+tracing.workspace = true
+# A listen stream waits on many points' signals at once.
+futures-util = { workspace = true }
+# The cancellation token rmcp hands each request.
+tokio-util = { version = "0.7.19", default-features = false, features = ["rt"] }
+# Signed pagination cursors: HMAC-SHA256 under a per-process key.
+hmac = "0.13.0"
+sha2 = "0.11.0"
+getrandom = { workspace = true, features = ["std"] }
+# The write confirmation state, sealed under a per-process key (#2068):
+# XChaCha20-Poly1305 binds it to its caller and keeps it from the client.
+chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["alloc"] }
+
+[dev-dependencies]
+bacnet-encoding = { workspace = true, features = ["std"] }
+bacnet-objects.workspace = true
+bytes = { workspace = true, features = ["std"] }
+bacnet-server.workspace = true
+tempfile = "3"
+tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread", "test-util"] }
+
+[features]
+default = ["stdio"]
+# Serving on the process's own stdin and stdout.
+stdio = ["rmcp/transport-io", "tokio/io-std"]
+
+[lints]
+workspace = true
+
+# The release that first publishes this crate. Until the website names that
+# release, its crate map links the source here instead of docs.rs (#1989).
+[package.metadata.website]
+first-release = "0.15.0"

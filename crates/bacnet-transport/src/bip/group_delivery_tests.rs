@@ -206,9 +206,11 @@ async fn the_broadcast_listener_keeps_only_broadcasts() {
     let listener = Arrival::BroadcastListener;
     let on_listener = receive_on(&ctx, &mut rx, &local, listener, unicast, LOCAL, None);
     assert!(on_listener.await.is_none());
-    assert!(receive(&ctx, &mut rx, &local, unicast, LOCAL, None)
-        .await
-        .is_some());
+    assert!(
+        receive(&ctx, &mut rx, &local, unicast, LOCAL, None)
+            .await
+            .is_some()
+    );
 
     let broadcast = BvlcFunction::ORIGINAL_BROADCAST_NPDU;
     for destination in [SUBNET_BROADCAST, Ipv4Addr::BROADCAST] {

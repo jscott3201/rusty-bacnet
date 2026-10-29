@@ -65,7 +65,9 @@ async fn foreign_source(automatic: bool) {
         .unwrap();
     assert_eq!(
         unicast.bytes,
-        [0x82, 1, 0, 14, 0x12, 0x34, 0x56, 0x40, 0x88, 0x71, 1, 0, 0x10, 8]
+        [
+            0x82, 1, 0, 14, 0x12, 0x34, 0x56, 0x40, 0x88, 0x71, 1, 0, 0x10, 8
+        ]
     );
     // A byte-identical Forwarded-NPDU from an unconfigured port is rejected.
     // The later trusted marker establishes receive progress without sleeps.
@@ -84,7 +86,9 @@ async fn foreign_source(automatic: bool) {
         .unwrap()
         .unwrap();
     assert_eq!(admitted.npdu.as_ref(), marker);
-    eprintln!("foreign requested={requested} announced=[{announced}]:{port} registration={registration:?} dbtn={dbtn:?}");
+    eprintln!(
+        "foreign requested={requested} announced=[{announced}]:{port} registration={registration:?} dbtn={dbtn:?}"
+    );
     transport.stop().await.unwrap();
     assert_eq!(
         announced, selected,

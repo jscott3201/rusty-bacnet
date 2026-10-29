@@ -187,7 +187,10 @@ fn unicast_and_broadcast_share_one_quota_while_paths_stay_separate() {
         DirectPeer {
             vmac: source,
             addr: peer_addr,
-            identity: crate::port::DirectScIdentity::verified([1; 32], 1),
+            provenance: TransportProvenance::verified_direct_peer(
+                crate::port::DirectScIdentity::verified([1; 32], 1),
+                Default::default(),
+            ),
             response: None,
         },
     );
@@ -198,7 +201,10 @@ fn unicast_and_broadcast_share_one_quota_while_paths_stay_separate() {
         DirectPeer {
             vmac: source,
             addr: peer_addr,
-            identity: crate::port::DirectScIdentity::verified([1; 32], 1),
+            provenance: TransportProvenance::verified_direct_peer(
+                crate::port::DirectScIdentity::verified([1; 32], 1),
+                Default::default(),
+            ),
             response: None,
         },
     );

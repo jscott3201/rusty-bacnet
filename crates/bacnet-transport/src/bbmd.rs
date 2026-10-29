@@ -15,8 +15,8 @@ use std::time::Duration;
 use std::time::Instant;
 
 use bacnet_bip_codec::{self as codec, BdtEntries, BvlcResultCode, FdtEntries};
-use bacnet_bip_core::bbmd::{self as core_bbmd, BdtError, Request};
 use bacnet_bip_core::Arrival;
+use bacnet_bip_core::bbmd::{self as core_bbmd, BdtError, Request};
 use bacnet_time::HostClock;
 use bacnet_types::error::{DecodeError, DecodingKind, Error};
 use bytes::BytesMut;
@@ -33,11 +33,11 @@ mod tables;
 pub(crate) use forward::Forward;
 use nat::NatSetting;
 pub use nat::{NatError, NatTraversal, PrivateRange};
-pub(crate) use persist::{decode_file, BdtFile, PersistedNat};
+pub(crate) use persist::{BdtFile, PersistedNat, decode_file, write_atomically};
 use policy::ForeignDeviceRateTracker;
 pub use policy::{FdtCounters, ForeignDevicePolicy};
 pub(crate) use serve::Reply;
-pub(crate) use tables::{lock, LiveTables};
+pub(crate) use tables::{GroupChange, LiveTables, lock};
 
 /// Rows the BDT holds, this BBMD's own row included.
 const MAX_BDT: usize = 128;

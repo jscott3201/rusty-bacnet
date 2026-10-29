@@ -1,73 +1,85 @@
 use super::*;
 use bytes::Bytes;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 #[test]
 fn original_function_must_match_actual_ipv4_destination() {
     let local = Ipv4Addr::new(192, 0, 2, 10);
     let broadcast = Ipv4Addr::new(192, 0, 2, 255);
 
-    assert!(admitted_delivery(
-        BvlcFunction::ORIGINAL_UNICAST_NPDU,
-        local.into(),
-        local,
-        broadcast,
-        &[local],
-        false,
-        None,
-    )
-    .is_some());
-    assert!(admitted_delivery(
-        BvlcFunction::ORIGINAL_UNICAST_NPDU,
-        broadcast.into(),
-        local,
-        broadcast,
-        &[local],
-        false,
-        None,
-    )
-    .is_none());
-    assert!(admitted_delivery(
-        BvlcFunction::ORIGINAL_BROADCAST_NPDU,
-        local.into(),
-        local,
-        broadcast,
-        &[local],
-        false,
-        None,
-    )
-    .is_none());
-    assert!(admitted_delivery(
-        BvlcFunction::ORIGINAL_BROADCAST_NPDU,
-        broadcast.into(),
-        local,
-        broadcast,
-        &[local],
-        false,
-        None,
-    )
-    .is_some());
+    assert!(
+        admitted_delivery(
+            BvlcFunction::ORIGINAL_UNICAST_NPDU,
+            local.into(),
+            local,
+            broadcast,
+            &[local],
+            false,
+            None,
+        )
+        .is_some()
+    );
+    assert!(
+        admitted_delivery(
+            BvlcFunction::ORIGINAL_UNICAST_NPDU,
+            broadcast.into(),
+            local,
+            broadcast,
+            &[local],
+            false,
+            None,
+        )
+        .is_none()
+    );
+    assert!(
+        admitted_delivery(
+            BvlcFunction::ORIGINAL_BROADCAST_NPDU,
+            local.into(),
+            local,
+            broadcast,
+            &[local],
+            false,
+            None,
+        )
+        .is_none()
+    );
+    assert!(
+        admitted_delivery(
+            BvlcFunction::ORIGINAL_BROADCAST_NPDU,
+            broadcast.into(),
+            local,
+            broadcast,
+            &[local],
+            false,
+            None,
+        )
+        .is_some()
+    );
 
-    assert!(admitted_delivery(
-        BvlcFunction::ORIGINAL_UNICAST_NPDU,
-        Ipv4Addr::new(192, 0, 2, 11).into(),
-        local,
-        broadcast,
-        &[local, Ipv4Addr::new(192, 0, 2, 11)],
-        true,
-        None,
-    )
-    .is_some());
-    assert!(admitted_delivery(
-        BvlcFunction::ORIGINAL_UNICAST_NPDU,
-        broadcast.into(),
-        local,
-        broadcast,
-        &[local],
-        true,
-        Some(true),
-    )
-    .is_none());
+    assert!(
+        admitted_delivery(
+            BvlcFunction::ORIGINAL_UNICAST_NPDU,
+            Ipv4Addr::new(192, 0, 2, 11).into(),
+            local,
+            broadcast,
+            &[local, Ipv4Addr::new(192, 0, 2, 11)],
+            true,
+            None,
+        )
+        .is_some()
+    );
+    assert!(
+        admitted_delivery(
+            BvlcFunction::ORIGINAL_UNICAST_NPDU,
+            broadcast.into(),
+            local,
+            broadcast,
+            &[local],
+            true,
+            Some(true),
+        )
+        .is_none()
+    );
     // A wildcard bind takes unicast only to a listed address, on every OS
     // (#952). Windows flagging the datagram as unicast delivery is not
     // enough on its own any more.
@@ -99,8 +111,35 @@ fn original_function_must_match_actual_ipv4_destination() {
         BvlcFunction::DELETE_FOREIGN_DEVICE_TABLE_ENTRY,
         BvlcFunction::DISTRIBUTE_BROADCAST_TO_NETWORK,
     ] {
-        assert!(admitted_delivery(
-            function,
+        assert!(
+            admitted_delivery(
+                function,
+                local.into(),
+                local,
+                broadcast,
+                &[local],
+                false,
+                None,
+            )
+            .is_some()
+        );
+        assert!(
+            admitted_delivery(
+                function,
+                broadcast.into(),
+                local,
+                broadcast,
+                &[local],
+                false,
+                Some(true),
+            )
+            .is_none()
+        );
+    }
+
+    assert!(
+        admitted_delivery(
+            BvlcFunction::FORWARDED_NPDU,
             local.into(),
             local,
             broadcast,
@@ -108,9 +147,11 @@ fn original_function_must_match_actual_ipv4_destination() {
             false,
             None,
         )
-        .is_some());
-        assert!(admitted_delivery(
-            function,
+        .is_some()
+    );
+    assert!(
+        admitted_delivery(
+            BvlcFunction::FORWARDED_NPDU,
             broadcast.into(),
             local,
             broadcast,
@@ -118,29 +159,8 @@ fn original_function_must_match_actual_ipv4_destination() {
             false,
             Some(true),
         )
-        .is_none());
-    }
-
-    assert!(admitted_delivery(
-        BvlcFunction::FORWARDED_NPDU,
-        local.into(),
-        local,
-        broadcast,
-        &[local],
-        false,
-        None,
-    )
-    .is_some());
-    assert!(admitted_delivery(
-        BvlcFunction::FORWARDED_NPDU,
-        broadcast.into(),
-        local,
-        broadcast,
-        &[local],
-        false,
-        Some(true),
-    )
-    .is_some());
+        .is_some()
+    );
 }
 
 async fn recv_bvll(socket: &UdpSocket) -> BvllMessage {

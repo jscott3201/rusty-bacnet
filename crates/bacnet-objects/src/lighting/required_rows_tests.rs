@@ -6,11 +6,12 @@
 
 use super::*;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::error::RemoteError;
 use std::time::Duration;
 
 fn assert_error<T: std::fmt::Debug>(result: Result<T, Error>, expected: ErrorCode) {
     match result {
-        Err(Error::Protocol { class, code }) => {
+        Err(Error::Remote(RemoteError::Error { class, code })) => {
             assert_eq!(class, ErrorClass::PROPERTY);
             assert_eq!(code, expected, "expected {expected:?}");
         }
@@ -242,9 +243,10 @@ fn lighting_output_cov_increment_starts_at_zero_and_takes_writes() {
         PropertyValue::Real(2.5)
     );
     assert_eq!(lo.cov_increment(), Some(2.5));
-    assert!(lo
-        .property_list()
-        .contains(&PropertyIdentifier::COV_INCREMENT));
+    assert!(
+        lo.property_list()
+            .contains(&PropertyIdentifier::COV_INCREMENT)
+    );
 }
 
 #[test]

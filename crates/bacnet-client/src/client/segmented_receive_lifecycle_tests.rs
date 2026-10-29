@@ -21,19 +21,19 @@
 use std::sync::Arc;
 
 use bacnet_encoding::apdu::{
-    self, encode_apdu, AbortPdu, Apdu, ComplexAck, ErrorPdu, RejectPdu, SegmentAck,
+    self, AbortPdu, Apdu, ComplexAck, ErrorPdu, RejectPdu, SegmentAck, encode_apdu,
 };
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
+use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
 use bacnet_types::enums::{
     AbortReason, ConfirmedServiceChoice, ErrorClass, ErrorCode, RejectReason,
 };
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 use bytes::{Bytes, BytesMut};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 use super::{BACnetClient, ClientConfig};
 
@@ -209,7 +209,7 @@ async fn peer_abort_ends_the_reassembly_session() {
         .unwrap()
         .unwrap();
     match result {
-        Err(Error::Abort { reason }) => {
+        Err(Error::Remote(RemoteError::Abort { reason })) => {
             assert_eq!(reason, AbortReason::BUFFER_OVERFLOW)
         }
         other => panic!("expected Err(Abort), got {other:?}"),
@@ -245,7 +245,7 @@ async fn error_pdu_mid_reassembly_aborts_the_transfer() {
         .unwrap()
         .unwrap();
     match result {
-        Err(Error::Abort { reason }) => {
+        Err(Error::Remote(RemoteError::Abort { reason })) => {
             assert_eq!(reason, AbortReason::INVALID_APDU_IN_THIS_STATE)
         }
         other => panic!("expected Err(Abort), got {other:?}"),
@@ -277,7 +277,7 @@ async fn reject_pdu_mid_reassembly_aborts_the_transfer() {
         .unwrap()
         .unwrap();
     match result {
-        Err(Error::Abort { reason }) => {
+        Err(Error::Remote(RemoteError::Abort { reason })) => {
             assert_eq!(reason, AbortReason::INVALID_APDU_IN_THIS_STATE)
         }
         other => panic!("expected Err(Abort), got {other:?}"),
@@ -339,7 +339,7 @@ async fn error_and_reject_without_a_session_surface_as_themselves() {
         .unwrap()
         .unwrap();
     match result {
-        Err(Error::Protocol { class, code }) => {
+        Err(Error::Remote(RemoteError::Error { class, code })) => {
             assert_eq!(class, ErrorClass::PROPERTY);
             assert_eq!(code, ErrorCode::UNKNOWN_PROPERTY);
         }
@@ -361,7 +361,7 @@ async fn error_and_reject_without_a_session_surface_as_themselves() {
         .unwrap()
         .unwrap();
     match result {
-        Err(Error::Reject { reason }) => {
+        Err(Error::Remote(RemoteError::Reject { reason })) => {
             assert_eq!(reason, RejectReason::BUFFER_OVERFLOW)
         }
         other => panic!("expected Err(Reject), got {other:?}"),
@@ -577,7 +577,7 @@ async fn segmented_request_timeout_cleanup_preserves_replacement_sender() {
             .await
             .unwrap()
             .unwrap(),
-        Err(Error::Abort { reason }) if reason == AbortReason::TSM_TIMEOUT
+        Err(Error::Remote(RemoteError::Abort { reason })) if reason == AbortReason::TSM_TIMEOUT
     ));
     assert_eq!(
         client.tsm.lock().await.pending_count(),
@@ -647,7 +647,7 @@ async fn simple_ack_mid_reassembly_aborts_the_transfer() {
         .unwrap()
         .unwrap();
     match result {
-        Err(Error::Abort { reason }) => {
+        Err(Error::Remote(RemoteError::Abort { reason })) => {
             assert_eq!(reason, AbortReason::INVALID_APDU_IN_THIS_STATE)
         }
         other => panic!("expected Err(Abort), got {other:?}"),
@@ -690,7 +690,7 @@ async fn unsegmented_complex_ack_mid_reassembly_aborts_the_transfer() {
         .unwrap()
         .unwrap();
     match result {
-        Err(Error::Abort { reason }) => {
+        Err(Error::Remote(RemoteError::Abort { reason })) => {
             assert_eq!(reason, AbortReason::INVALID_APDU_IN_THIS_STATE)
         }
         other => panic!("expected Err(Abort), got {other:?}"),

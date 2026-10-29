@@ -7,13 +7,13 @@ fn validate_password(
     configured: &Option<String>,
     request_pw: &Option<String>,
 ) -> Result<(), Error> {
-    if let Some(ref expected) = configured {
+    if let Some(expected) = configured {
         match request_pw {
-            Some(ref pw) if constant_time_eq(pw.as_bytes(), expected.as_bytes()) => Ok(()),
-            _ => Err(Error::Protocol {
-                class: ErrorClass::SECURITY,
-                code: ErrorCode::PASSWORD_FAILURE,
-            }),
+            Some(pw) if constant_time_eq(pw.as_bytes(), expected.as_bytes()) => Ok(()),
+            _ => Err(Error::protocol(
+                ErrorClass::SECURITY,
+                ErrorCode::PASSWORD_FAILURE,
+            )),
         }
     } else {
         Ok(())
@@ -71,10 +71,7 @@ pub(crate) fn validate_dcc(
         // password validation, without changing state or the caller's timer.
         // No DccPolicy admits it, so DccState has no DISABLE.
         return Err(failure(
-            Error::Protocol {
-                class: ErrorClass::SERVICES,
-                code: ErrorCode::SERVICE_REQUEST_DENIED,
-            },
+            Error::protocol(ErrorClass::SERVICES, ErrorCode::SERVICE_REQUEST_DENIED),
             DccOutcome::DeprecatedDenied,
         ));
     } else if request.enable_disable == EnableDisable::DISABLE_INITIATION {
@@ -87,10 +84,7 @@ pub(crate) fn validate_dcc(
     };
     if policy == crate::server::DccPolicy::DenyAll {
         return Err(failure(
-            Error::Protocol {
-                class: ErrorClass::SERVICES,
-                code: ErrorCode::SERVICE_REQUEST_DENIED,
-            },
+            Error::protocol(ErrorClass::SERVICES, ErrorCode::SERVICE_REQUEST_DENIED),
             DccOutcome::PolicyDenied,
         ));
     }
@@ -111,10 +105,10 @@ pub fn handle_reinitialize_device(
     validate_password(reinit_password, &request.password)?;
     // ACTIVATE_CHANGES (7) is the highest state Clause 16.4 defines.
     if request.reinitialized_state.to_raw() > ReinitializedState::ACTIVATE_CHANGES.to_raw() {
-        return Err(Error::Protocol {
-            class: ErrorClass::SERVICES,
-            code: ErrorCode::SERVICE_REQUEST_DENIED,
-        });
+        return Err(Error::protocol(
+            ErrorClass::SERVICES,
+            ErrorCode::SERVICE_REQUEST_DENIED,
+        ));
     }
     Ok(request.reinitialized_state)
 }

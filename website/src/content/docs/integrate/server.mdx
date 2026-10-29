@@ -1,0 +1,143 @@
+---
+title: "Serve objects from your application"
+description: "Build a BACnetServer in Rust or Python, serve objects over BACnet/IP, supply their values, act on commands from the network, and stop it cleanly."
+---
+
+import { Code, Tabs, TabItem } from '@astrojs/starlight/components';
+import { release, repository } from '../../../lib/site.mjs';
+import serverSource from '../../../../examples/rust/server-device/src/main.rs?raw';
+import serverManifest from '../../../../examples/rust/server-device/Cargo.toml?raw';
+import serverPython from '../../../../examples/python/server_device.py?raw';
+
+[Build and integrate](/rusty-bacnet/integrate/overview/) / Serve objects
+
+A `BACnetServer` makes your application a BACnet device: it holds a Device object and the objects you add, and answers reads, writes, subscriptions and discovery for them. Your application supplies the values the server can't know, such as a measured temperature, and acts on the commands peers write. This page builds one on BACnet/IP in Rust and in Python and describes **v{release}**.
+
+The server has the full service set. If one device must also send requests through the same socket, use a [shared endpoint](/rusty-bacnet/integrate/shared-endpoints/) instead, whose responder is narrower.
+
+## Build a server
+
+In Rust, build an `ObjectDatabase` that holds a `DeviceObject` and your objects, then start the server with a builder:
+
+- `BACnetServer::bip_builder()` takes `device(..)`, `interface(..)`, `port(..)`, `broadcast_address(..)` and `database(..)`, and `build().await` binds the socket and starts serving.
+- `BACnetServer::generic_builder()` takes any transport you built, such as MS/TP or BACnet/IPv6. `BACnetServer::sc_builder()`, with the `sc-tls` feature, joins a BACnet/SC hub.
+
+In Python, `BACnetServer(device_instance, device_name, interface=..., port=..., broadcast_address=...)` builds the Device for you, and `add_analog_input`, `add_binary_output` and the other `add_*` methods add objects. Add every object before `await server.start()`; Python can't add objects to a running server.
+
+On BACnet/IP the server binds a socket on every address (`0.0.0.0`) and the port you give, but takes unicast requests only when they are sent to its interface address. Port `0` lets the operating system pick a free port, which suits tests; a device on a site network normally uses 47808 and the interface's subnet broadcast address.
+
+## Example: a small air handler
+
+These programs serve Device 1001 with two objects on 127.0.0.1, on a port the operating system picks:
+
+- Analog Input 1, *Supply air temperature*, whose value the program supplies: 21.5 °C at start.
+- Binary Output 1, *Supply fan*, which peers command. When the fan's value changes, the program prints it and changes the temperature: 19.0 °C while the fan runs, 21.5 °C when it stops.
+
+Each runs until you press Enter or send end of input, then stops the server and prints `Stopped`.
+
+<Tabs syncKey="lang">
+
+<TabItem label="Rust">
+
+### Save the Rust program and manifest
+
+These files target **v{release}**, whose minimum Rust version is **1.95**. Put [Cargo.toml](/rusty-bacnet/examples/rust/server-device/Cargo.toml) in a new directory and [main.rs](/rusty-bacnet/examples/rust/server-device/src/main.rs) in its `src` subdirectory. The BACnet crates are pinned to the release, and the empty workspace table makes the directory a standalone Cargo project.
+
+<Code code={serverManifest} lang="toml" title="Cargo.toml" />
+
+<Code code={serverSource} lang="rust" title="src/main.rs" />
+
+From the directory containing `Cargo.toml`, run:
+
+```sh
+cargo run
+```
+
+</TabItem>
+<TabItem label="Python">
+
+### Save the Python program
+
+The Python program does the same with the v{release} `rusty-bacnet` package; [install it in a virtual environment](/rusty-bacnet/start/python/) first. Save [server_device.py](/rusty-bacnet/examples/server_device.py) and run it with that environment's interpreter:
+
+```sh
+.venv/bin/python server_device.py
+```
+
+<Code code={serverPython} lang="python" title="server_device.py" />
+
+</TabItem>
+</Tabs>
+
+### Read and command it
+
+Both programs print the address the operating system gave them:
+
+```text
+Serving device 1001 at 127.0.0.1:<assigned-port>
+Press Enter to stop (or send EOF).
+```
+
+From another terminal, read the temperature, start the fan at priority 8, and read again. Writes need `--allow-write`; without it the CLI exits with status 4 and sends nothing.
+
+```sh
+bacnet --interface 127.0.0.1 --port 0 read 127.0.0.1:<assigned-port> ai:1 pv
+bacnet --interface 127.0.0.1 --port 0 --allow-write write 127.0.0.1:<assigned-port> bo:1 pv active --priority 8
+bacnet --interface 127.0.0.1 --port 0 read 127.0.0.1:<assigned-port> ai:1 pv
+bacnet --interface 127.0.0.1 --port 0 --allow-write write 127.0.0.1:<assigned-port> bo:1 pv null --priority 8
+```
+
+The first read returns 21.5 and the second 19, and the program prints `Supply fan: on`. Writing NULL at priority 8 relinquishes the command, and the program prints `Supply fan: off`. Press Enter in the program's terminal to stop it.
+
+CI compiles the Rust file and runs it in the `server_device` integration tests, and runs the Python file in `test_website_server.py`. Each test reads the temperature and the object names with a client, commands the fan, relinquishes it, and checks every line the program prints and that the port is free after `Stopped`.
+
+## Supply values from your application
+
+An input's value comes from your application, not from the network. Set it through the server, so that subscribers are notified:
+
+- Rust's `set_present_value_local(&oid, value)` takes Analog, Binary and Multi-state Inputs, Values whose Present_Value isn't commandable, a Loop's output, and Life Safety Points and Zones. For the Inputs, Values and Loop it refuses an object whose Out_Of_Service is TRUE, since a client is then simulating its value; a Life Safety object takes the value either way. `write_local(..)` makes the same write a network WriteProperty would, at a priority, for commandable objects.
+- Python's `set_present_value_local(object_id, value)` takes Analog, Binary and Multi-state Inputs, a Loop's output and Life Safety objects. `write_property_local(..., source_object=None)` makes a network-equivalent write.
+
+Local writes are trusted: no [server policy](/rusty-bacnet/integrate/security/) is asked. Read a served value back with Rust's `read_local(..)` or Python's `read_property(..)`, which evaluate it as a network ReadProperty does. In Rust, `server.database()` is the raw object database, behind a Tokio lock; don't hold its guard across an `.await`.
+
+## Act on commands from the network
+
+Outputs, and Values unless you make them read-only, are commandable: a peer writes Present_Value at a priority from 1 to 16, and the value with the highest priority wins, or Relinquish_Default when every priority is NULL. The server keeps the priority array; your application acts on the result.
+
+v{release} has no callback for a write. Read the commanded value when your application needs it, as the example does every 100 ms, and drive your hardware or logic from it.
+
+By default any peer may write. To decide who may change the device, install a policy or deny every network mutation; see [restrict who can change a device](/rusty-bacnet/integrate/security/).
+
+## Serve COV subscriptions
+
+The server answers SubscribeCOV, SubscribeCOVProperty and SubscribeCOVPropertyMultiple for the objects it serves, and sends the notifications. A value your application sets through the server notifies subscribers as a network write does; an analog object's COV_Increment still filters small changes. To watch a device as a client instead, see [observe changes with COV](/rusty-bacnet/guides/observe-changes/).
+
+Rust's builder takes a `CovPolicy` with `cov_policy(..)`, and Python's constructor a `cov_policy` dict. `cov_counters()` reports the subscriptions held and the notifications sent and throttled.
+
+## Know the limits
+
+| Limit | Default | What happens at the limit |
+|---|---|---|
+| COV subscriptions, all peers | 1,024 | The next subscription is refused |
+| COV subscriptions, one peer | 64 | That peer's next subscription is refused |
+| Objects created by CreateObject | Until the database holds 10,000 objects | CreateObject fails with RESOURCES / NO_SPACE_FOR_OBJECT |
+
+The COV limits are `CovPolicy` fields you can change. The CreateObject limit counts every object in the database but doesn't stop your application from adding more. Requests in flight, in total and per peer, have their own limits: see <a href={`${repository}/blob/v${release}/docs/request-admission.md`}>request admission</a>.
+
+## Describe the device in a PICS
+
+Rust's `server.generate_pics(&PicsConfig)` builds a Protocol Implementation Conformance Statement from the served objects and the server's services. `PicsConfig` supplies what the server can't know, such as the vendor and model names, and `Pics::generate_text()` or `generate_markdown()` renders it. Python has no PICS generator. [Generate a PICS for your device](/rusty-bacnet/integrate/pics/) walks through a program and the fields you fill in. See <a href={`https://docs.rs/bacnet-server/${release}/bacnet_server/pics/index.html`}>bacnet_server::pics</a> on docs.rs.
+
+## Stop the server
+
+Await `stop()` before your program exits or builds another server on the same port or storage. In Rust it refuses new local writes and broadcasts, waits for the work it already admitted, then closes the transport; `read_local`, the counters and the PICS still work afterwards. Python's `await server.stop()` does the same, after which `local_address()` raises `RuntimeError`. A server dropped without `stop()` aborts its tasks, and nothing waits for them.
+
+## Read the contracts
+
+- <a href={`${repository}/blob/v${release}/docs/rust-api.md#bacnet-server`}>Rust server API</a>: builders, handled services, shutdown and local writes.
+- <a href={`${repository}/blob/v${release}/docs/python-api.md#bacnetserver`}>Python BACnetServer</a>: the constructor, the `add_*` methods, runtime object access and the COV policy.
+- <a href={`https://docs.rs/bacnet-server/${release}/bacnet_server/server/struct.BACnetServer.html`}>BACnetServer</a> on docs.rs, for v{release}.
+
+## Next steps
+
+[Restrict who can change a device](/rusty-bacnet/integrate/security/) · [Route between networks](/rusty-bacnet/integrate/router/) · [Compose a shared endpoint](/rusty-bacnet/integrate/shared-endpoints/)

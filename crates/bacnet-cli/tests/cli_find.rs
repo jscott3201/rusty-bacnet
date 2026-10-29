@@ -11,7 +11,7 @@ use bacnet_server::server::BACnetServer;
 use bacnet_transport::bbmd::ForeignDevicePolicy;
 use bacnet_transport::bip::{BbmdOptions, BipMode, BipTransport};
 use bacnet_types::enums::EngineeringUnits;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use support::lab::{lab_database, lab_identity};
 use support::run;
 

@@ -7,17 +7,17 @@
 //! [`READ_TIMEOUT_MS`] milliseconds.
 
 use std::net::{Ipv4Addr, SocketAddr};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, UNIX_EPOCH};
 
 use bytes::Bytes;
 use tokio::sync::mpsc;
 
-use super::worker::{route, Next};
+use super::worker::{Next, route};
 use super::{CaptureFrame, Direction, Framing};
 use crate::commands::capture::{build_filter, resolve_device, udp_datagram};
-use crate::decode::frame::summarize_frame;
+use bacnet_ops::decode::frame::summarize_frame;
 
 /// How long one read waits before the thread looks at its stop flag.
 pub(crate) const READ_TIMEOUT_MS: i32 = 100;
@@ -144,6 +144,7 @@ fn read(
             via,
             bytes: Bytes::copy_from_slice(payload),
             summary,
+            redacted: false,
         };
         match tx.try_send(Ok(frame)) {
             Ok(()) => {}

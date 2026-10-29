@@ -1,7 +1,8 @@
 [package]
 name = "mini-device-revisited"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
+rust-version.workspace = true
 description = "Rusty-BACnet port of BACpypes3 mini-device-revisited.py"
 license.workspace = true
 publish = false

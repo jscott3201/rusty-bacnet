@@ -1,5 +1,5 @@
 //! The write guard for one-shot commands (#972): a command that isn't a
-//! [read](super::class::Class::Read) needs `--allow-write`, and a
+//! [read](bacnet_ops::class::Class::Read) needs `--allow-write`, and a
 //! device-management one also needs `--yes`, or the target typed at a
 //! terminal. A refused command sends nothing.
 
@@ -7,8 +7,8 @@ use std::io::{BufRead, IsTerminal, Write};
 
 use serde::Serialize;
 
-use super::class::Class;
-use super::target::{parse_target, Target};
+use bacnet_ops::class::Class;
+use bacnet_ops::target::{Target, parse_target};
 
 /// The process exit status of a refused one-shot command.
 /// 1 is a runtime error, 2 a usage error from clap, and 3 an `sc-check`
@@ -139,8 +139,8 @@ fn confirmation(target: &str) -> (String, String) {
 }
 
 /// May `command` (a one-shot subcommand name) of `class`
-/// run under `policy`? The caller gives the class: [`super::class::of`] by name,
-/// or [`super::class::of_subscribe`] when the arguments decide it. `None` refuses
+/// run under `policy`? The caller gives the class: [`bacnet_ops::class::of`] by name,
+/// or [`bacnet_ops::class::of_subscribe`] when the arguments decide it. `None` refuses
 /// it as unclassified. `target` is what a device-management confirmation
 /// names. Device management asks `confirm` only when the flags allow it
 /// and `--yes` is absent at a terminal.
@@ -206,7 +206,7 @@ mod tests {
     ) -> Result<(), Refusal> {
         super::check(
             command,
-            crate::core::class::of(command),
+            bacnet_ops::class::of(command),
             target,
             policy,
             confirm,
@@ -311,7 +311,9 @@ mod tests {
         assert_eq!(check("reinit", Some("1234"), ALLOW, &mut tty), Ok(()));
         assert_eq!(
             tty.prompts,
-            ["reinit is a device-management command. Type the device instance (1234) and Enter to send: "]
+            [
+                "reinit is a device-management command. Type the device instance (1234) and Enter to send: "
+            ]
         );
         // A routed target types its instance; an address types itself.
         let mut tty = Fake::new(true, &["77\n", "10.0.0.5:47808\n"]);

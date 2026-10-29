@@ -7,11 +7,11 @@ peer accepted it.
 
 ## Quickstart
 
-The tag-sink API below is new in 0.14.0:
+The tag-sink API below has been available since 0.14.0:
 
 ```toml
 [dependencies]
-bacnet-encoding = "0.14"
+bacnet-encoding = "0.15"
 ```
 
 Write a Real tag header into caller-owned storage, then verify that a header

@@ -3,7 +3,7 @@
 
 use super::*;
 use bytes::Bytes;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 async fn sink() -> (UdpSocket, u16) {
     let socket = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))

@@ -352,10 +352,11 @@ async fn stop_while_a_device_is_looked_for_closes_its_queue() {
     let sent = log.len();
     tokio::time::sleep(WAIT * 2).await;
     assert_eq!(log.len(), sent, "nothing is sent after stop()");
-    assert!(log
-        .frames()
-        .iter()
-        .all(|frame| frame.mac.as_slice() != DEVICE_9));
+    assert!(
+        log.frames()
+            .iter()
+            .all(|frame| frame.mac.as_slice() != DEVICE_9)
+    );
 }
 
 #[tokio::test(start_paused = true)]

@@ -306,22 +306,26 @@ async fn source_read_range_invalid_preflight_does_not_consume_sequence_or_lease(
             }),
         ),
     ] {
-        assert!(client
-            .read_range(peer.local_mac(), target(), property, index, range)
-            .await
-            .is_err());
+        assert!(
+            client
+                .read_range(peer.local_mac(), target(), property, index, range)
+                .await
+                .is_err()
+        );
     }
-    assert!(client
-        .read_range_with_destination(
-            bacnet_endpoint_core::endpoint_ingress::EndpointApduDestination::LocalBroadcast,
-            vec![],
-            target(),
-            PropertyIdentifier::LOG_BUFFER,
-            None,
-            None
-        )
-        .await
-        .is_err());
+    assert!(
+        client
+            .read_range_with_destination(
+                bacnet_endpoint_core::endpoint_ingress::EndpointApduDestination::LocalBroadcast,
+                vec![],
+                target(),
+                PropertyIdentifier::LOG_BUFFER,
+                None,
+                None
+            )
+            .await
+            .is_err()
+    );
     assert_eq!(session.active_leases(), 0);
     assert_eq!(
         session
@@ -529,9 +533,11 @@ async fn source_read_range_cancelled_caller_keeps_one_retry_record_and_stop_rele
     let (record, _) = notification(&receive(&mut records).await, false);
     assert_eq!(record.invoke_id, Some(invoke));
     assert_eq!(record.result, None);
-    assert!(timeout(Duration::from_millis(30), records.recv())
-        .await
-        .is_err());
+    assert!(
+        timeout(Duration::from_millis(30), records.recv())
+            .await
+            .is_err()
+    );
     let read = range_start(&session, peer.local_mac(), None);
     receive(&mut requests).await;
     session.stop().await.unwrap();
@@ -620,16 +626,18 @@ async fn source_read_range_drop_unblocks_retained_caller_and_releases_database()
     let coordinator = Arc::clone(&session.coordinator);
     drop(session);
     assert!(timeout(WAIT, read).await.unwrap().unwrap().is_err());
-    assert!(client
-        .read_range(
-            peer.local_mac(),
-            target(),
-            PropertyIdentifier::LOG_BUFFER,
-            None,
-            None
-        )
-        .await
-        .is_err());
+    assert!(
+        client
+            .read_range(
+                peer.local_mac(),
+                target(),
+                PropertyIdentifier::LOG_BUFFER,
+                None,
+                None
+            )
+            .await
+            .is_err()
+    );
     timeout(WAIT, async {
         loop {
             let mut db = db.write().await;

@@ -1,5 +1,5 @@
 //! Flags preparation shared by ordinary, Single and Multiple notification contexts.
-use super::{observation::validate_flags, CovObservation, CovSample};
+use super::{CovObservation, CovSample, observation::validate_flags};
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::{enums::PropertyIdentifier, error::Error, primitives::PropertyValue};

@@ -2,11 +2,11 @@
 //! the Length rule and its bounds, against the worked examples of Annexes G
 //! and T and boundary cases checked by hand.
 
-use bacnet_mstp_codec::crc::{crc32k, crc8};
+use bacnet_mstp_codec::crc::{crc8, crc32k};
 use bacnet_mstp_codec::{
-    decode_frame, decode_frame_in_place, Frame, FrameError, FrameType, MAX_COBS_FRAME_LENGTH,
-    MAX_COBS_LENGTH, MAX_EXTENDED_FRAME_LENGTH, MAX_EXTENDED_MPDU_DATA, MAX_STANDARD_FRAME_LENGTH,
-    MIN_COBS_LENGTH, PREAMBLE,
+    Frame, FrameError, FrameType, MAX_COBS_FRAME_LENGTH, MAX_COBS_LENGTH,
+    MAX_EXTENDED_FRAME_LENGTH, MAX_EXTENDED_MPDU_DATA, MAX_STANDARD_FRAME_LENGTH, MIN_COBS_LENGTH,
+    PREAMBLE, decode_frame, decode_frame_in_place,
 };
 use proptest::prelude::*;
 
@@ -106,7 +106,9 @@ fn annex_t_hello_world_encoding() {
     let encoded = masked(&cobs);
     assert_eq!(
         encoded,
-        [0x58, 0x1D, 0x30, 0x39, 0x39, 0x3A, 0x75, 0x02, 0x3A, 0x27, 0x39, 0x31, 0x5F, 0x54]
+        [
+            0x58, 0x1D, 0x30, 0x39, 0x39, 0x3A, 0x75, 0x02, 0x3A, 0x27, 0x39, 0x31, 0x5F, 0x54
+        ]
     );
     assert_eq!(length_field(&wire), 17);
     assert_eq!(wire.len(), 8 + 17 + 2);

@@ -34,7 +34,7 @@ This example file belongs to the documentation package; it is not assumed to shi
 
 ## 3. Run one complete read
 
-<Tabs>
+<Tabs syncKey="os">
 <TabItem label="macOS / Linux">
 
 ```sh
@@ -72,7 +72,7 @@ The script uses `try/finally` to stop its server and an async context manager fo
 
 After also installing the CLI, keep the example server open for five minutes:
 
-<Tabs>
+<Tabs syncKey="os">
 <TabItem label="macOS / Linux">
 
 ```sh
@@ -92,6 +92,8 @@ After also installing the CLI, keep the example server open for five minutes:
 The script prints a **complete command containing the actual server port**. Copy that command into another terminal. Substitute the downloaded executable filename when `bacnet` is not on your PATH.
 
 The printed command sets the CLI's interface to `127.0.0.1` and its local port to `0`, while the target uses the server's assigned port. These are **different sockets**. Do not copy port zero into general discovery or persistent COV recipes.
+
+The server also holds a commandable analog value, `av:1`, so the read, write and relinquish samples in [Write and relinquish deliberately](/rusty-bacnet/guides/safe-writes/) work against it too.
 
 The server stops after the requested duration. Ctrl+C stops it earlier. This is an optional CLI extension of the tutorial; the Python-only round trip above does not require the CLI.
 
@@ -120,11 +122,9 @@ Do not solve a failed local lab by replacing `127.0.0.1` with `0.0.0.0` or a bui
 
 This exercises **one directed BACnet/IP property read** through the native extension, with application-owned sample data and bounded lifecycle handling. It does not establish discovery, routed operation, MS/TP timing, BACnet/SC security, or full conformance.
 
-The recorded runs below used **an earlier release**, whose build is linked under Sources; they have not been repeated with v{release}.
+With v0.14.0, **all eight tutorial tests and the standalone lab passed on macOS arm64 with CPython 3.14**, using that release's wheel from PyPI. The **v0.14.0 macOS arm64 CLI** also read the served value (`72.5`) and units (`64`) through a separate ephemeral socket. That run has not been repeated with the v{release} wheel and CLI. CI runs these tests on every change, on Linux x86-64 with development builds of the wheel and the CLI, and runs the guides' CLI samples against this lab. The results cover these local tutorial flows, not a general wheel/platform matrix or physical-network interoperability.
 
-During site integration, **all eight tutorial tests and the standalone lab passed on macOS 27.0 arm64 with CPython 3.12.13**, using that release's cp312 wheel from the release workflow linked below. The optional **macOS arm64 CLI from the same release** also read the loopback server's value (`72.5`) and units (`64`) through a separate ephemeral socket; the server stopped after its 30-second limit. These results cover these local tutorial flows, not PyPI availability, a general wheel/platform matrix, or physical-network interoperability.
-
-The supplied documentation handoff separately records an earlier Python-only round trip on **Linux x86-64, CPython 3.13, and that release's wheel from the release workflow**. Its Linux CLI extension was blocked by a missing libpcap runtime. That Linux loader limitation was not retested or cleared by the macOS result.
+An **earlier release**, whose build is linked under Sources, also passed a Python-only round trip on **Linux x86-64 with CPython 3.13**. That Linux run has not been repeated with v{release}.
 
 <NextStep href="/rusty-bacnet/start/first-read/" label="Read a known, authorized device" description="Move from loopback to your actual interface and a specific target." />
 

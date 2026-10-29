@@ -39,7 +39,7 @@ mod expected;
 
 pub use expected::EXPECTED;
 
-use bacnet_mstp_codec::{decode_frame_in_place, Frame, FrameType, MAX_EXTENDED_MPDU_DATA};
+use bacnet_mstp_codec::{Frame, FrameType, MAX_EXTENDED_MPDU_DATA, decode_frame_in_place};
 use bacnet_mstp_core::npdu::NetworkPriority;
 use bacnet_mstp_core::{
     Action, Duration, ExtendedStorage, FixedQueues, Instant, MasterCore, MasterState,

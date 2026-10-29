@@ -16,15 +16,15 @@
 use std::net::SocketAddrV4;
 use std::time::{Duration, Instant};
 
+use bacnet_ops::label::kebab;
 use bacnet_transport::bip::{ForeignRegistrationOutcome, ForeignRegistrationSnapshot};
 
-use super::objects::kebab;
 use super::watch::Screen;
-use super::{App, Link, FLASH_FOR};
+use super::{App, FLASH_FOR, Link};
 use crate::tui::message::Command;
-use crate::tui::network::matrix::Matrix;
 use crate::tui::network::routers::RouterMap;
-use crate::tui::network::{own_entry, BdtRow, FdtRow, Foreign, NetworkCommand, NetworkEvent};
+use crate::tui::network::{BdtRow, FdtRow, Foreign, NetworkCommand, NetworkEvent, own_entry};
+use bacnet_ops::bbmd::{Matrix, Unfollowed};
 
 /// The table below the foreign-device panel.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -117,6 +117,8 @@ pub(crate) struct NetworkState {
     pub(crate) local: Option<SocketAddrV4>,
     /// The last survey and when it finished.
     pub(crate) matrix: Option<(Matrix, Instant)>,
+    /// The BDT entries the last survey did not follow, and why (#2130).
+    pub(crate) not_followed: Vec<Unfollowed>,
     /// A table read is out.
     pub(crate) reading: bool,
     /// A survey is out.
@@ -242,6 +244,18 @@ impl NetworkState {
             .map_or(0, |fdt| now.saturating_duration_since(fdt.at).as_secs());
         u64::from(entry.remaining).saturating_sub(elapsed)
     }
+
+    /// Whether an FDT entry is near expiry at `now` (#2130): the shared rule
+    /// ([`FdtRow::expiring`]) on the seconds the screen shows, so the marker
+    /// and the countdown beside it agree.
+    pub(crate) fn expiring(&self, entry: &FdtRow, now: Instant) -> bool {
+        let left = u16::try_from(self.remaining(entry, now)).unwrap_or(u16::MAX);
+        FdtRow {
+            remaining: left,
+            ..*entry
+        }
+        .expiring()
+    }
 }
 
 impl App {
@@ -276,7 +290,11 @@ impl App {
                     result: fdt,
                 });
             }
-            NetworkEvent::Survey { seed, probes } => {
+            NetworkEvent::Survey {
+                seed,
+                probes,
+                not_followed,
+            } => {
                 // A survey from a BBMD that is no longer the target would
                 // show its matrix under the new one.
                 if state.target != Some(seed) {
@@ -284,6 +302,7 @@ impl App {
                 }
                 state.surveying = false;
                 state.matrix = Some((Matrix::build(&probes), now));
+                state.not_followed = not_followed;
             }
             NetworkEvent::Refused { command, reason } => {
                 match command {
@@ -347,6 +366,7 @@ impl App {
             state.fdt = None;
             state.own = None;
             state.matrix = None;
+            state.not_followed.clear();
             // Answers to the old target's requests are dropped now.
             state.reading = false;
             state.surveying = false;

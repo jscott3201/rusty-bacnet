@@ -25,7 +25,7 @@ pub(crate) fn present_value_access(
         _ => {
             return Err(PyValueError::new_err(
                 "present_value_access must be 'commandable', 'writable' or 'read_only'",
-            ))
+            ));
         }
     };
     if value_source_tracking && access == PresentValueAccess::Commandable {

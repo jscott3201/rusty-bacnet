@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use tokio::net::UdpSocket;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 use tracing::Level;
 
 use super::fanout::{AtomicFanoutCounters, FanoutDispatcher, FanoutJob, FanoutRateLimiter};

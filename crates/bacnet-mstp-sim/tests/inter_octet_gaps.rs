@@ -54,14 +54,16 @@ fn budgeted_maximum_gap_rings_deliver_standard_and_extended_frames() {
             sim.enqueue(ms(1_000), 1, 0, &extended);
             sim.run_until(ms(10_000));
             sim.assert_no_violations();
-            assert!(sim
-                .deliveries(1)
-                .iter()
-                .any(|delivery| delivery.data == standard));
-            assert!(sim
-                .deliveries(0)
-                .iter()
-                .any(|delivery| delivery.data == extended));
+            assert!(
+                sim.deliveries(1)
+                    .iter()
+                    .any(|delivery| delivery.data == standard)
+            );
+            assert!(
+                sim.deliveries(0)
+                    .iter()
+                    .any(|delivery| delivery.data == extended)
+            );
             assert!(sim.frames().iter().any(|frame| frame.frame_type()
                 == Some(FrameType::BACNET_DATA_NOT_EXPECTING_REPLY)
                 && frame.octets.len() == 511));
@@ -71,11 +73,12 @@ fn budgeted_maximum_gap_rings_deliver_standard_and_extended_frames() {
             assert!(sim.frames().iter().all(|frame| frame.is_clean()));
             assert!(sim.report().collisions.is_empty());
             assert!(sim.report().max_pending_events <= 12);
-            assert!(sim
-                .report()
-                .host_transmits
-                .iter()
-                .all(|timing| timing.budget_overrun().is_none()));
+            assert!(
+                sim.report()
+                    .host_transmits
+                    .iter()
+                    .all(|timing| timing.budget_overrun().is_none())
+            );
             for station in [0, 1] {
                 assert_eq!(sim.core(station).unwrap().counters().transmit_timeouts, 0);
                 assert_eq!(sim.core(station).unwrap().counters().own_address_frames, 0);
@@ -134,11 +137,12 @@ fn seeded_gap_profiles_replay_with_bounded_events_and_receipts() {
             );
         }
         assert!(sim.report().max_pending_events <= 12);
-        assert!(sim
-            .report()
-            .host_transmits
-            .iter()
-            .all(|timing| timing.budget_overrun().is_none()));
+        assert!(
+            sim.report()
+                .host_transmits
+                .iter()
+                .all(|timing| timing.budget_overrun().is_none())
+        );
         assert!(sim.report().driver_releases.len() > 20);
         (
             sim.frames().to_vec(),

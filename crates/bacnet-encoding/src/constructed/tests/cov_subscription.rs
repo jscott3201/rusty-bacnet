@@ -382,11 +382,10 @@ fn cov_subscription_recipient_mac_holds_to_the_bacnet_address_bound() {
         assert!(
             encode_cov_subscription_list(&mut buf, &[device_subscription(), single(len)]).is_err()
         );
-        assert!(encode_cov_multiple_subscription_list(
-            &mut buf,
-            &[device_multiple(), multiple(len)]
-        )
-        .is_err());
+        assert!(
+            encode_cov_multiple_subscription_list(&mut buf, &[device_multiple(), multiple(len)])
+                .is_err()
+        );
         assert!(buf.is_empty(), "{len}-octet MAC left output behind");
     }
 }

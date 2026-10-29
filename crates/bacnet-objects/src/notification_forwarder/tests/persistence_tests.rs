@@ -1,6 +1,6 @@
 //! Subscribed_Recipients across a restart (Clause 12.51.9).
 
-use super::storage::{persistent, MemoryPersistence};
+use super::storage::{MemoryPersistence, persistent};
 use super::*;
 use bacnet_types::enums::PropertyIdentifier as P;
 use std::path::PathBuf;

@@ -1,7 +1,7 @@
 //! Independent UDP oracle for the full-server and bounded endpoint owners.
 use super::*;
 use bacnet_encoding::{
-    apdu::{decode_apdu, encode_apdu, Apdu, ComplexAck, ConfirmedRequest},
+    apdu::{Apdu, ComplexAck, ConfirmedRequest, decode_apdu, encode_apdu},
     primitives::{decode_application_value, encode_property_value},
 };
 use bacnet_services::{
@@ -261,13 +261,14 @@ async fn registered_port_real_owners_snapshot_wildcard_and_release() {
             }
             let db = owner.database();
             assert!(db.write().await.remove(&port()).is_err());
-            assert!(db
-                .write()
-                .await
-                .get_mut(&port())
-                .unwrap()
-                .write_property(P::OUT_OF_SERVICE, None, PropertyValue::Boolean(true), None)
-                .is_err());
+            assert!(
+                db.write()
+                    .await
+                    .get_mut(&port())
+                    .unwrap()
+                    .write_property(P::OUT_OF_SERVICE, None, PropertyValue::Boolean(true), None)
+                    .is_err()
+            );
             owner.stop().await;
             assert!(db.write().await.remove(&port()).unwrap().is_some());
             std::net::UdpSocket::bind(address).map(drop)

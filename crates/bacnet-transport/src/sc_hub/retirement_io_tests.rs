@@ -5,8 +5,8 @@ use super::retirement_tests::{heartbeat_wire, unicast_wire};
 use super::shutdown_blocked_tests::ControlledPeer;
 use super::*;
 use tokio_tungstenite::tungstenite::{
-    error::{CapacityError, ProtocolError},
     Error,
+    error::{CapacityError, ProtocolError},
 };
 
 struct Failure(std::sync::Mutex<Option<Error>>);
@@ -161,12 +161,16 @@ async fn heartbeat_send_failure_interrupts_source_relay_and_releases_admission()
         .unwrap()
         .last_activity
         .store(0, Ordering::Release);
-    let candidate = heartbeat::snapshot(&hub.clients, 100_000, ScHubProbePolicy::default())
-        .await
-        .into_iter()
-        .find(|(attempt, _)| attempt.vmac == [0x42; 6])
-        .unwrap()
-        .0;
+    let candidate = heartbeat::snapshot(
+        &hub.clients,
+        100_000,
+        super::heartbeat_test_support::ack_bound_policy(),
+    )
+    .await
+    .into_iter()
+    .find(|(attempt, _)| attempt.vmac == [0x42; 6])
+    .unwrap()
+    .0;
     let io = GatedIo::new(100_000);
     io.fail.store(true, Ordering::Release);
     let work = tokio::spawn({

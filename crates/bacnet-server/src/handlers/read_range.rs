@@ -69,17 +69,11 @@ pub(super) fn select_signed_range(
 }
 
 fn list_item_not_numbered() -> Error {
-    Error::Protocol {
-        class: ErrorClass::PROPERTY,
-        code: ErrorCode::LIST_ITEM_NOT_NUMBERED,
-    }
+    Error::protocol(ErrorClass::PROPERTY, ErrorCode::LIST_ITEM_NOT_NUMBERED)
 }
 
 fn list_item_not_timestamped() -> Error {
-    Error::Protocol {
-        class: ErrorClass::PROPERTY,
-        code: ErrorCode::LIST_ITEM_NOT_TIMESTAMPED,
-    }
+    Error::protocol(ErrorClass::PROPERTY, ErrorCode::LIST_ITEM_NOT_TIMESTAMPED)
 }
 
 /// Select a signed ReadRange window around the resident timestamp anchor.
@@ -259,20 +253,20 @@ fn read_range_items(
     if index.is_some() && !object.is_array_property(property) {
         // Read the whole property first so an unknown one keeps its error.
         object.read_property(property, None)?;
-        return Err(ReadRangeFailure::Service(Error::Protocol {
-            class: ErrorClass::PROPERTY,
-            code: ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
-        }));
+        return Err(ReadRangeFailure::Service(Error::protocol(
+            ErrorClass::PROPERTY,
+            ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
+        )));
     }
     let value =
         group_present_value::read_served_property(db, view, object, property, index, members)?;
     // An indexed array element is never a list: 135-2020 defines no
     // BACnetARRAY of BACnetLIST property.
     if index.is_some() || !object.is_list_property(property) {
-        return Err(ReadRangeFailure::Service(Error::Protocol {
-            class: ErrorClass::SERVICES,
-            code: ErrorCode::PROPERTY_IS_NOT_A_LIST,
-        }));
+        return Err(ReadRangeFailure::Service(Error::protocol(
+            ErrorClass::SERVICES,
+            ErrorCode::PROPERTY_IS_NOT_A_LIST,
+        )));
     }
     Ok(items::list_items(
         request.object_identifier.object_type(),
@@ -292,10 +286,10 @@ fn prepare_read_range<'a>(
     request: ReadRangeRequest,
     members: Option<GroupMembers>,
 ) -> Result<PreparedReadRange<'a>, ReadRangeFailure> {
-    let stored = db.get(&request.object_identifier).ok_or(Error::Protocol {
-        class: ErrorClass::OBJECT,
-        code: ErrorCode::UNKNOWN_OBJECT,
-    })?;
+    let stored = db.get(&request.object_identifier).ok_or(Error::protocol(
+        ErrorClass::OBJECT,
+        ErrorCode::UNKNOWN_OBJECT,
+    ))?;
     let served = view.map(|view| view.object(stored));
     let object: &dyn BACnetObject = served.as_ref().map_or(stored, |served| served);
     let (items, mut buffer_identities) = match logs::log_buffer(stored, &request)? {

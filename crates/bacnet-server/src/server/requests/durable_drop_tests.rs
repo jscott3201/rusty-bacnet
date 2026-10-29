@@ -16,8 +16,8 @@ use bacnet_objects::traits::BACnetObject;
 use bacnet_services::device_mgmt::DeviceCommunicationControlRequest;
 use bacnet_types::constructed::BACnetRecipient;
 use bacnet_types::enums::EnableDisable;
-use std::sync::mpsc as std_mpsc;
 use std::sync::Weak;
+use std::sync::mpsc as std_mpsc;
 use std::thread::ThreadId;
 
 /// Storage for one class that reports the thread it is dropped on. The

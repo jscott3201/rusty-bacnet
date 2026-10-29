@@ -23,9 +23,9 @@
 
 #![no_main]
 
-use bacnet_mstp_codec::{decode_frame, decode_frame_in_place, FrameError};
+use bacnet_mstp_codec::{FrameError, decode_frame, decode_frame_in_place};
 use libfuzzer_sys::fuzz_target;
-use mstp_codec_fuzz::{self as wire, Header, HEADER_END, MAX_DATA};
+use mstp_codec_fuzz::{self as wire, HEADER_END, Header, MAX_DATA};
 
 /// The error the first failing check gives, for input that starts with a
 /// preamble and has no whole valid frame.

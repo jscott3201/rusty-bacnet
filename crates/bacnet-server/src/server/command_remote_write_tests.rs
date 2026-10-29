@@ -14,7 +14,7 @@ use super::command_action_wire_tests::{
 use super::command_run_stop_tests::{db_flags, db_state};
 use super::cov_wire_test_support::*;
 use super::*;
-use bacnet_encoding::npdu::{encode_npdu, Npdu};
+use bacnet_encoding::npdu::{Npdu, encode_npdu};
 use bacnet_objects::command::CommandObject;
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};

@@ -4,8 +4,8 @@ use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
 
 use super::receive_counters::DropReason;
 use super::{
-    Bip6Vmac, Bvlc6Function, Bvll6, BACNET_IPV6_MULTICAST_LINK_LOCAL,
-    BACNET_IPV6_MULTICAST_ORG_LOCAL, BACNET_IPV6_MULTICAST_SITE_LOCAL,
+    BACNET_IPV6_MULTICAST_LINK_LOCAL, BACNET_IPV6_MULTICAST_ORG_LOCAL,
+    BACNET_IPV6_MULTICAST_SITE_LOCAL, Bip6Vmac, Bvlc6Function, Bvll6,
 };
 
 /// Whether a frame whose sender's VMAC is `source`, from `from`, is this

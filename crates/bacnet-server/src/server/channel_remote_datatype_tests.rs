@@ -230,9 +230,11 @@ async fn a_read_queued_behind_one_that_finds_the_device_silent_goes_unsent() {
     tokio::time::sleep(Duration::from_secs(13)).await;
     let reads = sent_reads(&h);
     assert_eq!(reads.len(), 4);
-    assert!(reads
-        .iter()
-        .all(|(id, request)| *id == reads[0].0 && request.object_identifier == bo1()));
+    assert!(
+        reads
+            .iter()
+            .all(|(id, request)| *id == reads[0].0 && request.object_identifier == bo1())
+    );
     assert_eq!(settled(&mut h, 13).await, WriteStatus::FAILED);
     assert_eq!(
         reliability(&mut h, 13).await,

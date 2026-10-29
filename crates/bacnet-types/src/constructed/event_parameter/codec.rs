@@ -269,9 +269,10 @@ pub(super) fn property_state_from_pv(pv: &PropertyValue) -> Result<BACnetPropert
     };
     let (data, marker) = match rest {
         [PropertyValue::OctetString(data)] => (data.clone(), None),
-        [PropertyValue::OctetString(data), PropertyValue::Boolean(marker)] => {
-            (data.clone(), Some(*marker))
-        }
+        [
+            PropertyValue::OctetString(data),
+            PropertyValue::Boolean(marker),
+        ] => (data.clone(), Some(*marker)),
         _ => return Err(Error::decoding(1, "property state data not octets")),
     };
     let tag =
@@ -422,4 +423,94 @@ pub(super) fn property_state_from_pv(pv: &PropertyValue) -> Result<BACnetPropert
             .into());
         }
     })
+}
+
+/// Read a `Unsigned` as a `u64`.
+pub(super) fn take_u64(items: &[PropertyValue], idx: &mut usize) -> Result<u64, Error> {
+    match items.get(*idx) {
+        Some(PropertyValue::Unsigned(v)) => {
+            *idx += 1;
+            Ok(*v)
+        }
+        _ => Err(Error::decoding(*idx, "expected Unsigned")),
+    }
+}
+
+/// Read a `Signed`.
+pub(super) fn take_signed(items: &[PropertyValue], idx: &mut usize) -> Result<i32, Error> {
+    match items.get(*idx) {
+        Some(PropertyValue::Signed(v)) => {
+            *idx += 1;
+            Ok(*v)
+        }
+        _ => Err(Error::decoding(*idx, "expected Signed")),
+    }
+}
+
+/// Read a `Double` (or a `Real`, widened).
+pub(super) fn take_double(items: &[PropertyValue], idx: &mut usize) -> Result<f64, Error> {
+    let v = match items.get(*idx) {
+        Some(PropertyValue::Double(v)) => *v,
+        Some(PropertyValue::Real(v)) => f64::from(*v),
+        _ => return Err(Error::decoding(*idx, "expected Double")),
+    };
+    *idx += 1;
+    Ok(v)
+}
+
+/// Read a list of enumerated values (an `Unsigned` item is taken too).
+pub(super) fn take_enum_list(
+    items: &[PropertyValue],
+    idx: &mut usize,
+) -> Result<alloc::vec::IntoIter<u32>, Error> {
+    let Some(PropertyValue::List(inner)) = items.get(*idx) else {
+        return Err(Error::decoding(*idx, "expected list of enumerations"));
+    };
+    *idx += 1;
+    let values = inner
+        .iter()
+        .map(|v| match v {
+            PropertyValue::Enumerated(raw) => Ok(*raw),
+            PropertyValue::Unsigned(raw) => {
+                u32::try_from(*raw).map_err(|_| Error::decoding(*idx, "enumeration exceeds u32"))
+            }
+            _ => Err(Error::decoding(*idx, "expected Enumerated")),
+        })
+        .collect::<Result<Vec<u32>, Error>>()?;
+    Ok(values.into_iter())
+}
+
+/// Read a list of character strings.
+pub(super) fn take_string_list(
+    items: &[PropertyValue],
+    idx: &mut usize,
+) -> Result<Vec<String>, Error> {
+    let Some(PropertyValue::List(inner)) = items.get(*idx) else {
+        return Err(Error::decoding(*idx, "expected list of strings"));
+    };
+    *idx += 1;
+    inner
+        .iter()
+        .map(|v| match v {
+            PropertyValue::CharacterString(s) => Ok(s.clone()),
+            _ => Err(Error::decoding(*idx, "expected CharacterString")),
+        })
+        .collect()
+}
+
+/// Read a four-bit BACnetStatusFlags bit string.
+pub(super) fn take_status_flags(
+    items: &[PropertyValue],
+    idx: &mut usize,
+) -> Result<StatusFlags, Error> {
+    match items.get(*idx) {
+        Some(PropertyValue::BitString {
+            unused_bits: 4,
+            data,
+        }) if data.len() == 1 && data[0] & 0x0f == 0 => {
+            *idx += 1;
+            Ok(StatusFlags::from_bits_retain(data[0] >> 4))
+        }
+        _ => Err(Error::decoding(*idx, "expected four status flags")),
+    }
 }

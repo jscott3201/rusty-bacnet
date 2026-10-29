@@ -9,8 +9,9 @@
 use super::endpoint_responder::EndpointResponder;
 #[cfg(feature = "sc-tls")]
 use super::mutation_tests::MutationAuthorizer;
-use super::mutation_tests::{apdu, assert_denied, cases, oid, route, Fixture, SOURCE};
+use super::mutation_tests::{Fixture, SOURCE, apdu, assert_denied, cases, oid, route};
 use super::*;
+#[cfg(feature = "sc-tls")]
 use crate::mutation::{MutationAuthorizationContext, MutationTrust};
 use crate::mutation::{MutationDecisionCounters, MutationPolicy};
 use crate::server::request_admission::{Class, RequestAdmissionPolicy};
@@ -31,9 +32,9 @@ use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportProvenance;
 use bacnet_types::constructed::ReadAccessSpecification;
 use bacnet_types::enums::{AcknowledgmentFilter, EnableDisable};
-use std::sync::atomic::AtomicUsize;
 #[cfg(feature = "sc-tls")]
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::AtomicUsize;
 
 fn confirmed(service: ConfirmedServiceChoice, bytes: Bytes, id: u8) -> ConfirmedRequestPdu {
     ConfirmedRequestPdu {
@@ -275,7 +276,40 @@ async fn shared_endpoint_rejects_every_mutation_choice() {
             &Apdu::ConfirmedRequest(confirmed(service, bytes, 20)),
         )
         .unwrap();
-        assert!(responder
+        assert!(
+            responder
+                .handle(ReceivedApdu {
+                    router_response: None,
+                    direct_response: None,
+                    apdu: encoded.freeze(),
+                    source_mac: MacAddr::from_slice(SOURCE),
+                    ingress_network: None,
+                    source_network: route(),
+                    link_layer_group: false,
+                    is_group: false,
+                    global_broadcast: false,
+                    data_attributes: vec![],
+                    provenance: TransportProvenance::unverified(),
+                    reply_tx: Some(reply_tx),
+                })
+                .await
+                .unwrap()
+        );
+        let reply = reply_rx.await.unwrap();
+        let rejected = decode_apdu(decode_npdu(reply).unwrap().payload).unwrap();
+        assert!(
+            matches!(rejected, Apdu::Reject(reject) if reject.reject_reason == RejectReason::UNRECOGNIZED_SERVICE && reject.invoke_id == 20),
+            "{service:?}"
+        );
+    }
+    // Segmented mutations draw segmentation-not-supported, still read-only.
+    let (reply_tx, reply_rx) = oneshot::channel();
+    let mut segmented = confirmed(service, bytes, 21);
+    segmented.segmented = true;
+    let mut encoded = BytesMut::new();
+    encode_apdu(&mut encoded, &Apdu::ConfirmedRequest(segmented)).unwrap();
+    assert!(
+        responder
             .handle(ReceivedApdu {
                 router_response: None,
                 direct_response: None,
@@ -291,37 +325,8 @@ async fn shared_endpoint_rejects_every_mutation_choice() {
                 reply_tx: Some(reply_tx),
             })
             .await
-            .unwrap());
-        let reply = reply_rx.await.unwrap();
-        let rejected = decode_apdu(decode_npdu(reply).unwrap().payload).unwrap();
-        assert!(
-            matches!(rejected, Apdu::Reject(reject) if reject.reject_reason == RejectReason::UNRECOGNIZED_SERVICE && reject.invoke_id == 20),
-            "{service:?}"
-        );
-    }
-    // Segmented mutations draw segmentation-not-supported, still read-only.
-    let (reply_tx, reply_rx) = oneshot::channel();
-    let mut segmented = confirmed(service, bytes, 21);
-    segmented.segmented = true;
-    let mut encoded = BytesMut::new();
-    encode_apdu(&mut encoded, &Apdu::ConfirmedRequest(segmented)).unwrap();
-    assert!(responder
-        .handle(ReceivedApdu {
-            router_response: None,
-            direct_response: None,
-            apdu: encoded.freeze(),
-            source_mac: MacAddr::from_slice(SOURCE),
-            ingress_network: None,
-            source_network: route(),
-            link_layer_group: false,
-            is_group: false,
-            global_broadcast: false,
-            data_attributes: vec![],
-            provenance: TransportProvenance::unverified(),
-            reply_tx: Some(reply_tx),
-        })
-        .await
-        .unwrap());
+            .unwrap()
+    );
     let reply = reply_rx.await.unwrap();
     let aborted = decode_apdu(decode_npdu(reply).unwrap().payload).unwrap();
     assert!(
@@ -550,7 +555,7 @@ async fn direct_peer() -> (
     use bacnet_transport::sc_tls::{
         DirectAcceptConfig, DirectListener, ScNodeTlsConfig, TlsWebSocket,
     };
-    use tokio::time::{timeout, Duration};
+    use tokio::time::{Duration, timeout};
     use tokio_rustls::rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 
     let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
@@ -628,7 +633,7 @@ async fn direct_channel_allows_where_unknown_leaf_denies() {
     use bacnet_transport::sc::WebSocketPort;
     let (direct, response, mut listener, peer) = direct_peer().await;
     assert_eq!(
-        MutationTrust::from_provenance(direct),
+        MutationTrust::from_provenance(&direct),
         MutationTrust::VerifiedChannel
     );
     let (authorizer, seen) = capturing(|context| context.trust != MutationTrust::Unverified);

@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::BACnetTimeStamp;
 
 const BACKUP_FAILURE_TIMEOUT: u16 = 90;
@@ -26,10 +27,10 @@ fn file(instance: u32) -> ObjectIdentifier {
 
 fn assert_property_error(result: Result<impl std::fmt::Debug, Error>, code: ErrorCode) {
     match result {
-        Err(Error::Protocol {
+        Err(Error::Remote(RemoteError::Error {
             class,
             code: actual,
-        }) => {
+        })) => {
             assert_eq!(class, ErrorClass::PROPERTY);
             assert_eq!(actual, code, "expected {code:?}");
         }

@@ -3,13 +3,13 @@
 //! [`envelope_harness`](super::envelope_harness). `bacnet-router-core`'s
 //! tests hold each one against the clause.
 
-use bacnet_encoding::npdu::{decode_npdu, Npdu, NpduAddress};
+use bacnet_encoding::npdu::{Npdu, NpduAddress, decode_npdu};
 use bacnet_npdu::{NetworkMessageType, NpduLimits};
 use bacnet_types::MacAddr;
 use bytes::Bytes;
 
-use super::envelope_harness::Harness;
 use super::SendRequest;
+use super::envelope_harness::Harness;
 
 /// The link sender of the NPDUs below: a B/IP node on port 0.
 const SENDER: [u8; 6] = [10, 0, 0, 9, 0xBA, 0xC0];

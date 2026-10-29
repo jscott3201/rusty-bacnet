@@ -3,7 +3,7 @@
 
 mod common;
 
-use bacnet_mstp_codec::{FrameHeader, FrameType, BROADCAST_MAC, MAX_EXTENDED_MPDU_DATA};
+use bacnet_mstp_codec::{BROADCAST_MAC, FrameHeader, FrameType, MAX_EXTENDED_MPDU_DATA};
 use bacnet_mstp_core::Instant;
 use bacnet_mstp_sim::{MasterSpec, ReplyPolicy, Sim, SimConfig, WireFrame};
 
@@ -76,14 +76,16 @@ fn a_type_32_request_is_answered_with_a_type_33() {
     let pass = &frames[index + 2];
     assert!(pass.is(FrameType::TOKEN, 0, 3), "{pass}");
     assert_eq!(pass.start, reply.end + sim.timing().bits(40));
-    assert!(sim
-        .deliveries(3)
-        .iter()
-        .any(|delivery| delivery.request && delivery.data == request));
-    assert!(sim
-        .deliveries(0)
-        .iter()
-        .any(|delivery| delivery.data == answer));
+    assert!(
+        sim.deliveries(3)
+            .iter()
+            .any(|delivery| delivery.request && delivery.data == request)
+    );
+    assert!(
+        sim.deliveries(0)
+            .iter()
+            .any(|delivery| delivery.data == answer)
+    );
     assert!(!sim.perturbed());
     sim.assert_no_violations();
 }
@@ -116,10 +118,11 @@ fn a_postponed_type_32_request_is_answered_later_with_a_type_33() {
     })
     .expect("the answer follows with a later token");
     assert_eq!(late.data, answer);
-    assert!(sim
-        .deliveries(0)
-        .iter()
-        .any(|delivery| delivery.data == answer));
+    assert!(
+        sim.deliveries(0)
+            .iter()
+            .any(|delivery| delivery.data == answer)
+    );
     assert!(!sim.perturbed());
     sim.assert_no_violations();
 }
@@ -245,10 +248,12 @@ fn a_master_without_extended_frames_counts_them_invalid_and_the_ring_is_unchange
     assert_eq!(counters.parser_errors, extended_for_five as u32);
     assert_eq!(counters.token_regenerations, 0);
     // Only the standard frames reach station 5's application.
-    assert!(without
-        .deliveries(5)
-        .iter()
-        .all(|delivery| delivery.data.len() == 3));
+    assert!(
+        without
+            .deliveries(5)
+            .iter()
+            .all(|delivery| delivery.data.len() == 3)
+    );
     assert_eq!(without.deliveries(5).len(), ROUNDS);
     assert_eq!(with.core(5).unwrap().counters().parser_errors, 0);
     assert_eq!(with.deliveries(5).len(), ROUNDS + extended_for_five);

@@ -5,11 +5,11 @@
 use super::super::*;
 use super::make_dest_device;
 use super::persistence_tests::{assert_refused, framed, write};
-use super::storage::{block_on, persistent, MemoryPersistence, WAIT};
-use crate::durable::{DurableWrites, SaveWait, StageStep, STAGED_WRITE_LIFETIME};
+use super::storage::{MemoryPersistence, WAIT, block_on, persistent};
+use crate::durable::{DurableWrites, STAGED_WRITE_LIFETIME, SaveWait, StageStep};
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 fn staged(step: StageStep) -> SaveWait {
@@ -192,9 +192,11 @@ fn a_forgotten_staged_write_is_dropped_by_the_next_write_that_stages() {
     let waiting = class_storage
         .busy_at(before)
         .expect("the staged write holds the class");
-    assert!(class_storage
-        .busy_at(after + STAGED_WRITE_LIFETIME)
-        .is_none());
+    assert!(
+        class_storage
+            .busy_at(after + STAGED_WRITE_LIFETIME)
+            .is_none()
+    );
     assert!(waiting.is_ready());
     // The next write's stage puts storage back to the served list before
     // its own save.
@@ -382,8 +384,10 @@ fn settling_forgotten_writes_puts_storage_back_and_frees_the_class() {
     assert_eq!(storage.saved(), Some(list.to_vec()));
     // Nothing is staged now, and a class without storage has nothing to settle.
     assert!(nc.settle_forgotten_writes().unwrap().is_ready());
-    assert!(NotificationClass::new(2, "NC-2")
-        .unwrap()
-        .settle_forgotten_writes()
-        .is_none());
+    assert!(
+        NotificationClass::new(2, "NC-2")
+            .unwrap()
+            .settle_forgotten_writes()
+            .is_none()
+    );
 }

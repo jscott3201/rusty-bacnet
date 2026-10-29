@@ -4,19 +4,18 @@
 
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use bacnet_bip_codec::{BvlcFunction, BvllFrame};
 use bacnet_bip_core::node::{Addressed, Datagram, Discard, LocalAddresses, Path};
 use tracing::{debug, warn};
 
 use crate::tap::FrameTap;
 use crate::udp_metadata::{
-    request_arrival_stamps, DestinationReceiver, IpVersion, ReceivedDatagram,
+    DestinationReceiver, IpVersion, ReceivedDatagram, request_arrival_stamps,
 };
 
-use super::io::{receive, RecvContext};
+use super::io::{RecvContext, receive};
 use super::multicast::GroupSwap;
 use super::receive_counters::{DropReason, ReceiveDrops};
 use super::socket::{BipSocket, BoundSockets};
@@ -75,10 +74,8 @@ impl Listener {
         arrival_stamp: bool,
     ) -> io::Result<Self> {
         let receiver = DestinationReceiver::configure(&socket, IpVersion::V4)?;
-        if arrival_stamp {
-            if let Err(error) = request_arrival_stamps(&socket) {
-                debug!(%error, "No receive timestamps; datagrams go up in the order they are read");
-            }
+        if arrival_stamp && let Err(error) = request_arrival_stamps(&socket) {
+            debug!(%error, "No receive timestamps; datagrams go up in the order they are read");
         }
         let socket = tokio::net::UdpSocket::from_std(socket.into())?;
         Ok(Self {
@@ -483,39 +480,14 @@ pub(super) async fn handle_datagram(
     let to = addressed(received.destination, received.os_group_delivery, local, ctx);
     let mut datagram = Datagram::new(data, source, Some(to));
     datagram.path = path;
-    if arrival == Arrival::BroadcastListener && kept_by_listener(&datagram) {
+    // The tap sees only what the node keeps, and sees it before the node
+    // acts on it, which may send: the node's own listener verdict decides
+    // (#1856).
+    if arrival == Arrival::BroadcastListener && ctx.node.link().listener_keeps(&datagram) {
         ctx.socket().tap_inbound(data, received.peer);
     }
     if let Some(Discard::ListenerMismatch { other_interface }) = receive(&datagram, ctx).await {
         log_listener_mismatch(other_interface, received, local);
-    }
-}
-
-/// Whether the node keeps a datagram a broadcast listener read, by the
-/// check its receive makes before anything else (`bacnet-bip-core`,
-/// node/receive.rs). It is made here first so that the tap sees only what
-/// the node keeps, and sees it before the node acts on it, which may send.
-/// `tap_tests` holds the two to the same verdict.
-pub(super) fn kept_by_listener(datagram: &Datagram<'_>) -> bool {
-    let (Some(to), Path::Listener { other_interface }) = (datagram.to, datagram.path) else {
-        return true;
-    };
-    if !to.broadcast || other_interface {
-        return false;
-    }
-    // With a broadcast address that is also the node's own, as in loopback
-    // tests, a point-to-point function passes the address checks, and the
-    // listener refuses it. A frame that doesn't decode is the node's to
-    // count as malformed.
-    match BvllFrame::decode(datagram.payload) {
-        Ok(frame) => {
-            !to.node
-                || matches!(
-                    frame.function,
-                    BvlcFunction::ORIGINAL_BROADCAST_NPDU | BvlcFunction::FORWARDED_NPDU
-                )
-        }
-        Err(_) => true,
     }
 }
 

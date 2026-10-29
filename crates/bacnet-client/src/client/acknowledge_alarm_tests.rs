@@ -1,6 +1,6 @@
 use super::*;
 
-use bacnet_encoding::apdu::{decode_apdu, SimpleAck};
+use bacnet_encoding::apdu::{SimpleAck, decode_apdu};
 use bacnet_services::alarm_event::AcknowledgeAlarmRequest;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_types::enums::{EventState, ObjectType};

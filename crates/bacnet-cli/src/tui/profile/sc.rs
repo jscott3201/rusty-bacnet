@@ -3,8 +3,8 @@
 //! key bytes or password is ever written to a profile.
 
 use crate::transport::{
-    check_sc_connect_timeout, parse_sc_device_uuid_arg, parse_sc_vmac_arg, same_hub_url,
-    DEFAULT_SC_CONNECT_TIMEOUT_MS,
+    DEFAULT_SC_CONNECT_TIMEOUT_MS, check_sc_connect_timeout, parse_sc_device_uuid_arg,
+    parse_sc_vmac_arg, same_hub_url,
 };
 use bacnet_transport::sc::ScReconnectConfig;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -340,9 +340,11 @@ mod tests {
         assert_eq!(vmac.to_string(), "22:01:02:03:04:ab");
         assert_eq!("22:01:02:03:04:ab".parse::<Vmac>().unwrap(), vmac);
         assert!("ff:ff:ff:ff:ff:ff".parse::<Vmac>().is_err());
-        assert!("00000000-0000-0000-0000-000000000000"
-            .parse::<DeviceUuid>()
-            .is_err());
+        assert!(
+            "00000000-0000-0000-0000-000000000000"
+                .parse::<DeviceUuid>()
+                .is_err()
+        );
     }
 
     #[test]

@@ -13,6 +13,7 @@ use bacnet_objects::schedule::ScheduleObject;
 use bacnet_objects::staging::{StagingConfig, StagingObject};
 use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetStageLimitValue};
 use bacnet_types::enums::EngineeringUnits;
+use bacnet_types::error::RemoteError;
 
 fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(object_type, instance).unwrap()
@@ -174,7 +175,7 @@ async fn an_encoded_local_write_is_refused_as_a_network_write_is() {
             .await
             .unwrap_err();
         assert!(
-            matches!(error, Error::Protocol { class: c, code: e }
+            matches!(error, Error::Remote(RemoteError::Error { class: c, code: e })
                 if c == class && e == code),
             "{property} {index:?}: {error:?}"
         );
@@ -238,7 +239,7 @@ async fn an_encoded_local_null_is_judged_as_a_network_null_is() {
             .await
             .unwrap_err();
         assert!(
-            matches!(error, Error::Protocol { class, code }
+            matches!(error, Error::Remote(RemoteError::Error { class, code })
                 if class == ErrorClass::PROPERTY
                     && code == ErrorCode::WRITE_ACCESS_DENIED),
             "{property} {index:?}: {error:?}"

@@ -4,6 +4,7 @@
 
 use super::super::*;
 use bacnet_types::enums::ObjectType;
+use bacnet_types::error::RemoteError;
 
 // CharacterStringValueObject
 // -----------------------------------------------------------------------
@@ -82,7 +83,7 @@ fn characterstring_value_priority_array_omitted_index_is_write_access_denied() {
         )
         .unwrap_err()
     {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, bacnet_types::enums::ErrorClass::PROPERTY);
             assert_eq!(code, bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED);
         }
@@ -106,7 +107,7 @@ fn characterstring_value_priority_array_omitted_index_is_write_access_denied() {
         )
         .unwrap_err()
     {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, bacnet_types::enums::ErrorClass::PROPERTY);
             assert_eq!(code, bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED);
         }

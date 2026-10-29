@@ -1,6 +1,6 @@
 use super::batching::{command, delayed};
 use super::*;
-use bacnet_encoding::npdu::{encode_npdu, Npdu};
+use bacnet_encoding::npdu::{Npdu, encode_npdu};
 use bacnet_transport::port::ReceivedNpdu;
 
 async fn fixture(confirmed: bool) -> (Fixture, mpsc::Sender<ReceivedNpdu>) {
@@ -64,8 +64,8 @@ fn confirmed_frames(f: &AuditCapture) -> Vec<ConfirmedRequestPdu> {
         .collect()
 }
 #[tokio::test(start_paused = true)]
-async fn delayed_target_audit_local_send_clears_command_before_ack_then_stop_keeps_only_ack_progress(
-) {
+async fn delayed_target_audit_local_send_clears_command_before_ack_then_stop_keeps_only_ack_progress()
+ {
     let (mut f, tx) = fixture(true).await;
     write_value(&f.server, None).await;
     command(&f, true).await;
@@ -104,15 +104,17 @@ async fn delayed_target_audit_local_send_clears_command_before_ack_then_stop_kee
             PropertyIdentifier::SEND_NOW,
             PropertyIdentifier::MAXIMUM_SEND_DELAY,
         ] {
-            assert!(reporter
-                .write_property_from(
-                    property,
-                    None,
-                    PropertyValue::Null,
-                    None,
-                    &crate::command_source::test_origin()
-                )
-                .is_err());
+            assert!(
+                reporter
+                    .write_property_from(
+                        property,
+                        None,
+                        PropertyValue::Null,
+                        None,
+                        &crate::command_source::test_origin()
+                    )
+                    .is_err()
+            );
         }
     }
 
@@ -197,11 +199,12 @@ async fn delayed_target_audit_canceled_stop_keeps_first_deadline_and_releases_re
     );
     f.server.stop().await.unwrap();
     assert!(f.server.notification_transactions.workers_empty());
-    assert!(db
-        .write()
-        .await
-        .remove(&oid(ObjectType::AUDIT_REPORTER, 1))
-        .is_ok());
+    assert!(
+        db.write()
+            .await
+            .remove(&oid(ObjectType::AUDIT_REPORTER, 1))
+            .is_ok()
+    );
     assert_eq!(queue.resources().0, 0);
 }
 #[tokio::test(start_paused = true)]
@@ -215,9 +218,10 @@ async fn delayed_target_audit_drop_cancels_unsent_without_wire_promise_and_relea
     settle().await;
     assert!(transport.sent.lock().unwrap().is_empty());
     assert_eq!(queue.resources(), (0, 0, 1));
-    assert!(db
-        .write()
-        .await
-        .remove(&oid(ObjectType::AUDIT_REPORTER, 1))
-        .is_ok());
+    assert!(
+        db.write()
+            .await
+            .remove(&oid(ObjectType::AUDIT_REPORTER, 1))
+            .is_ok()
+    );
 }

@@ -67,7 +67,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// against the ReadPropertyMultiple work limit
     /// ([`ReadPropertyMultipleBudget::max_result_elements`](crate::server::ReadPropertyMultipleBudget))
     /// as for network ReadProperty; past it the read fails with
-    /// [`Error::Abort`] carrying OUT_OF_RESOURCES.
+    /// [`Error::abort`] carrying OUT_OF_RESOURCES.
     pub async fn read_local(
         &self,
         oid: &ObjectIdentifier,
@@ -95,9 +95,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             handlers::plan_read_property(&db, Some(&view), lookup_oid, property, array_index)
                 .map_err(|failure| match failure {
                     handlers::ReadFailure::Service(error) => error,
-                    handlers::ReadFailure::Work | handlers::ReadFailure::Bytes => Error::Abort {
-                        reason: AbortReason::OUT_OF_RESOURCES,
-                    },
+                    handlers::ReadFailure::Work | handlers::ReadFailure::Bytes => {
+                        Error::abort(AbortReason::OUT_OF_RESOURCES)
+                    }
                 })?;
         use super::requests::confirmed_response::{active_cov_snapshot, address_bindings};
         let live = match plan.live_cov(&db) {
@@ -150,10 +150,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         self.active_network()?;
         let value = {
             let db = self.db.read().await;
-            let object = db.get(oid).ok_or(Error::Protocol {
-                class: ErrorClass::OBJECT,
-                code: ErrorCode::UNKNOWN_OBJECT,
-            })?;
+            let object = db.get(oid).ok_or(Error::protocol(
+                ErrorClass::OBJECT,
+                ErrorCode::UNKNOWN_OBJECT,
+            ))?;
             handlers::gate_and_decode_write(object, property, array_index, value)?
         };
         self.write_local(oid, property, array_index, value, priority, source)
@@ -179,7 +179,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Standalone [`PicsGenerator`](crate::pics::PicsGenerator) keeps raw-object semantics.
     ///
     /// The caller must supply a [`PicsConfig`](crate::pics::PicsConfig) for fields not available from the server
-    /// (vendor name, model, firmware revision, etc.).
+    /// (device profile, data links, network roles, etc.). The vendor and model names, the firmware and
+    /// application versions, and the protocol version and revision come from the served Device object,
+    /// so the PICS can't contradict what the device reports.
     pub async fn generate_pics(&self, pics_config: &crate::pics::PicsConfig) -> crate::pics::Pics {
         let db = self.db.read().await;
         crate::pics::PicsGenerator::new(&db, &self.config, pics_config)

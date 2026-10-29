@@ -123,9 +123,11 @@ mod tests {
             for error in [direct.err(), generic.err(), bip.err()] {
                 assert!(matches!(error, Some(Error::Encoding(m)) if m.contains("rpm_max_")));
             }
-            assert!(bacnet_objects::DeviceIdentity::default()
-                .with_max_apdu(3)
-                .is_err());
+            assert!(
+                bacnet_objects::DeviceIdentity::default()
+                    .with_max_apdu(3)
+                    .is_err()
+            );
         }
     }
 }

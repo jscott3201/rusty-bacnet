@@ -7,8 +7,8 @@
 //!
 //! - [`SerialPort`], the serial I/O the transport runs over: `tokio-serial`,
 //!   kernel RS-485 and GPIO direction control in `mstp_serial` (the
-//!   `serial` feature), and [`LoopbackSerial`] and [`NoSerial`] for tests
-//!   and non-MS/TP builds.
+//!   `serial` feature), [`LoopbackSerial`] for tests, and [`BoxedSerial`],
+//!   any of them boxed, for [`AnyTransport`](crate::any::AnyTransport).
 //! - [`MstpTransport`], whose Tokio task drives the core: it feeds every
 //!   received octet to the core, services the core's deadlines with Tokio
 //!   time, and carries out the core's actions (frames to send, NPDUs to
@@ -40,8 +40,8 @@ pub use bacnet_mstp_core::MasterState;
 pub use diagnostics::{MstpDiagnostics, MstpDiagnosticsSnapshot, MstpNodeState};
 use execution::DedicatedRuntime;
 pub use execution::{
-    MstpExecutionMode, MstpExecutionStatus, MstpThreadConfig, MAX_CPUS, MAX_REALTIME_PRIORITY,
-    MIN_REALTIME_PRIORITY,
+    MAX_CPUS, MAX_REALTIME_PRIORITY, MIN_REALTIME_PRIORITY, MstpExecutionMode, MstpExecutionStatus,
+    MstpThreadConfig,
 };
 pub use totals::{LatenessHistogram, MstpCounters, QueueCounters};
 
@@ -159,6 +159,11 @@ pub trait SerialPort: Send + Sync + 'static {
     /// as it does at the first read error: it counts the end in
     /// [`MstpDiagnosticsSnapshot::serial_read_errors`] and logs it, and the
     /// application finds the NPDU channel closed and its sends refused.
+    ///
+    /// The future must be cancel-safe: the transport races it against its
+    /// timers and drops it, unfinished, whenever a deadline comes first, so
+    /// octets it has taken from the line must not be lost when it is
+    /// dropped before returning them.
     fn read(
         &self,
         buf: &mut [u8],
@@ -362,11 +367,7 @@ impl MstpConfig {
     /// [`Self::max_npdu_length`] less room for the network header, 1476
     /// octets with extended frames and 480 without.
     pub fn max_apdu_length(&self) -> u16 {
-        if self.extended_frames {
-            1476
-        } else {
-            480
-        }
+        if self.extended_frames { 1476 } else { 480 }
     }
 
     /// The core configuration this one maps onto.
@@ -445,8 +446,10 @@ impl MstpConfig {
     }
 }
 
+mod boxed;
 mod port;
-pub use port::{LoopbackSerial, MstpTransport, NoSerial};
+pub use boxed::BoxedSerial;
+pub use port::{LoopbackSerial, MstpTransport};
 
 #[cfg(test)]
 mod test_support;

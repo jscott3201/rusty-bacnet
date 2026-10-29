@@ -90,14 +90,16 @@ async fn disconnect_envelopes_preserve_hub_registration_activity_and_probe() {
         );
     }
     live.ack(0x2233).await;
-    assert!(clients
-        .lock()
-        .await
-        .get(&live.vmac)
-        .unwrap()
-        .heartbeat
-        .pending
-        .is_none());
+    assert!(
+        clients
+            .lock()
+            .await
+            .get(&live.vmac)
+            .unwrap()
+            .heartbeat
+            .pending
+            .is_none()
+    );
     send_raw(&mut live, &[0x0A, 0, 0x44, 0x55]).await;
     assert_eq!(recv_raw(&mut live).await, [0x0B, 0, 0x44, 0x55]);
     send_raw(&mut live, &[8, 2, 0x55, 0x66, 0x9E, 0x1E]).await;

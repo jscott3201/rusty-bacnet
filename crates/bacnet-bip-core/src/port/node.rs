@@ -5,7 +5,7 @@ use core::net::SocketAddrV4;
 use bacnet_bip_codec::Bvll;
 use bacnet_time::Instant;
 
-use super::{count, Datagrams, HeldBroadcast, Ingress, PortCounters, PortError};
+use super::{Datagrams, HeldBroadcast, Ingress, PortCounters, PortError, count};
 use crate::node::{
     Action, Admission, Cast, Datagram, Foreign, Inbound, Link, LocalFailure, Mode, Node, Policy,
     SendRefusal,

@@ -15,8 +15,8 @@ use std::sync::{LazyLock, PoisonError, RwLock};
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use tracing::level_filters::LevelFilter;
 use tracing::Level;
+use tracing::level_filters::LevelFilter;
 
 /// The logger every forwarded event goes under.
 pub(crate) const PREFIX: &str = "rusty_bacnet";

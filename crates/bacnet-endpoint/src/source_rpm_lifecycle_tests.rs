@@ -70,10 +70,12 @@ async fn endpoint_rpm_prewire_profile_and_byte_bounds_with_and_without_source() 
         };
         bad.push(vec![too_large]);
         for specs in bad {
-            assert!(client
-                .read_property_multiple(peer.local_mac(), specs)
-                .await
-                .is_err());
+            assert!(
+                client
+                    .read_property_multiple(peer.local_mac(), specs)
+                    .await
+                    .is_err()
+            );
             assert_eq!(session.active_leases(), 0);
         }
         assert!(requests.try_recv().is_err());
@@ -221,10 +223,12 @@ async fn source_rpm_drop_releases_pending_operation_and_database() {
     receive(&mut requests).await;
     drop(session);
     assert!(timeout(WAIT, read).await.unwrap().unwrap().is_err());
-    assert!(client
-        .read_property_multiple(peer.local_mac(), specs())
-        .await
-        .is_err());
+    assert!(
+        client
+            .read_property_multiple(peer.local_mac(), specs())
+            .await
+            .is_err()
+    );
     timeout(WAIT, async {
         loop {
             let mut db = db.write().await;
@@ -271,9 +275,11 @@ async fn source_rpm_partial_notification_admission_counts_only_dropped_occurrenc
     send(&peer, &env.source_mac, response(invoke, &success(&rpm))).await;
     assert!(read.await.unwrap().is_ok());
     let delivered = records(&mut received, &sink, false, 2).await;
-    assert!(delivered
-        .iter()
-        .all(|r| r.operation == AuditOperation::READ));
+    assert!(
+        delivered
+            .iter()
+            .all(|r| r.operation == AuditOperation::READ)
+    );
     drop(held);
     let summary = notification(&receive(&mut received).await, false).0;
     assert_eq!(summary.operation, AuditOperation::AUDITING_FAILURE);

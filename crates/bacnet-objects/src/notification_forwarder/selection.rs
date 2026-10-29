@@ -1,6 +1,7 @@
 //! Which event notifications each forwarder takes, and the destinations it
 //! sends them to (Clause 12.51). See [`forwarding_targets`].
 
+use crate::prelude::*;
 use bacnet_encoding::constructed::{
     decode_event_notification_subscription, decode_port_permission,
 };
@@ -129,7 +130,7 @@ fn takes(forwarder: &dyn BACnetObject, input: &ForwardingInput<'_>) -> bool {
 fn port_enabled(value: &PropertyValue, port: u8) -> bool {
     let elements: &[PropertyValue] = match value {
         PropertyValue::List(elements) => elements,
-        single => std::slice::from_ref(single),
+        single => core::slice::from_ref(single),
     };
     elements.iter().any(|element| {
         let PropertyValue::ApplicationData(bytes) = element else {

@@ -1,8 +1,8 @@
 //! Synthetic digital observations on the shared physical character grid.
 
-use crate::line::{Character, Contributor, WindowOutcome};
 use crate::Driver;
 use crate::SimRng;
+use crate::line::{Character, Contributor, WindowOutcome};
 
 /// Opt-in receiver policy for real overlapping drivers. Uncontended input
 /// is unchanged. All contributors must span the same complete character

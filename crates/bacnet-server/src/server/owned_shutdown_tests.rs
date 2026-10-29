@@ -124,12 +124,14 @@ async fn cancelled_callers_keep_bounded_sends_owned_until_stop() {
     }
     let error = retained.broadcast_i_am().await.unwrap_err().to_string();
     assert!(error.contains("capacity"));
-    assert!(server
-        .broadcast_i_am()
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("capacity"));
+    assert!(
+        server
+            .broadcast_i_am()
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("capacity")
+    );
     assert!(events.try_recv().is_err());
     server.stop().await.unwrap();
     for _ in 0..32 {
@@ -211,12 +213,14 @@ async fn dropping_server_during_custom_cleanup_does_not_cancel_it() {
 async fn failed_custom_cleanup_retains_owner_for_retry() {
     let (mut server, probe, _events, _ingress) = fixture().await;
     probe.outcome.store(1, Ordering::SeqCst);
-    assert!(server
-        .stop()
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("injected cleanup failure"));
+    assert!(
+        server
+            .stop()
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("injected cleanup failure")
+    );
     assert_eq!(probe.drops.load(Ordering::SeqCst), 0);
     assert!(server.broadcast_i_am().await.is_err());
     probe.outcome.store(0, Ordering::SeqCst);
@@ -292,16 +296,20 @@ async fn stopped_local_mutations_fail_before_effects_but_reads_remain() {
             .unwrap(),
         before
     );
-    assert!(server
-        .set_present_value_local(&oid, PropertyValue::Real(1.0))
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("stopping or stopped"));
-    assert!(server
-        .set_life_safety_operation_expected_local(&oid, LifeSafetyOperation::NONE)
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("stopping or stopped"));
+    assert!(
+        server
+            .set_present_value_local(&oid, PropertyValue::Real(1.0))
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("stopping or stopped")
+    );
+    assert!(
+        server
+            .set_life_safety_operation_expected_local(&oid, LifeSafetyOperation::NONE)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("stopping or stopped")
+    );
 }

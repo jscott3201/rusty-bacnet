@@ -27,10 +27,10 @@ use super::sc_screen::sc_app;
 use super::*;
 use crate::transport::TransportArgs;
 use crate::tui::app::Link;
-use crate::tui::sc::doctor::Phase;
 use crate::tui::sc::Fault;
+use crate::tui::sc::doctor::Phase;
 use crate::tui::worker::session::{self, ConnectPlan, SessionOptions, TransportKind};
-use crate::tui::worker::{coordinator, EventSink};
+use crate::tui::worker::{EventSink, coordinator};
 
 pub(super) const WAIT: Duration = Duration::from_secs(30);
 /// A date as year, month, day.
@@ -310,7 +310,7 @@ async fn stopping_the_primary_fails_over_and_its_return_restores_it_in_order() {
     let (commands, rx) = mpsc::channel(16);
     let serving = tokio::spawn(Box::pin(session::serve(
         client,
-        crate::core::target::AddressStyle::Hex,
+        bacnet_ops::target::AddressStyle::Hex,
         sink,
         rx,
         SessionOptions::default(),
@@ -582,9 +582,9 @@ async fn an_expired_node_certificate_is_refused_before_the_hub() {
 /// the status.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stalls_and_a_refusing_proxy_each_land_on_their_phase() {
-    use crate::tui::sc::doctor::diagnose;
     use crate::tui::sc::ScFailure;
-    use bacnet_transport::sc::{dial_within, ScDialStage};
+    use crate::tui::sc::doctor::diagnose;
+    use bacnet_transport::sc::{ScDialStage, dial_within};
     use bacnet_transport::sc_tls::TlsWebSocket;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     const LIMIT: Duration = Duration::from_millis(300);

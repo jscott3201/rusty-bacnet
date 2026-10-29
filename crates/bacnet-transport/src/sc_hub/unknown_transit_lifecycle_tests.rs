@@ -11,7 +11,7 @@ use std::sync::atomic::AtomicU16;
 use std::time::Duration;
 
 #[tokio::test]
-async fn unknown_transit_activity_local_idle_and_independent_pending_ack_timeout() {
+async fn unknown_transit_activity_local_idle_and_activity_supersedes_unanswered_probe() {
     let tls = TestTls::new();
     let mut hub = CountedHub::start(&tls, ScHubHandshakeTimeouts::default()).await;
     let mut a = ControlledPeer::open(&tls, &hub).await;
@@ -110,6 +110,29 @@ async fn unknown_transit_activity_local_idle_and_independent_pending_ack_timeout
             .pending,
         pending
     );
+    // #2141: that transit shows the connector alive after the probe, so the
+    // unanswered probe alone no longer retires it, and nothing is resent
+    // before a fresh idle period.
+    heartbeat::sweep(&hub.clients, &ids, &ClockIo(AtomicU64::new(106_000))).await;
+    assert_eq!(
+        hub.clients
+            .lock()
+            .await
+            .get(&[0x42; 6])
+            .unwrap()
+            .heartbeat
+            .pending,
+        pending
+    );
+    assert_eq!(ids.load(Ordering::Acquire), 0x2234);
+    // Without activity since the probe, it retires through the existing owners.
+    hub.clients
+        .lock()
+        .await
+        .get(&[0x42; 6])
+        .unwrap()
+        .last_activity
+        .store(0, Ordering::Release);
     heartbeat::sweep(&hub.clients, &ids, &ClockIo(AtomicU64::new(106_000))).await;
     until(|| a.deadline.close_started.load(Ordering::Acquire)).await;
     until(|| hub.active.load(Ordering::Acquire) == 1).await;

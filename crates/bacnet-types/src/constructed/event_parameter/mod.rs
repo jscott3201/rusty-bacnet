@@ -9,8 +9,9 @@ use crate::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetExtendedPropertyState, BACnetPropertyStates,
     BACnetProprietaryPropertyState,
 };
+use crate::enums::{AccessEvent, LifeSafetyState, TimerState};
 use crate::error::{DecodeError, DecodingKind, Error};
-use crate::primitives::PropertyValue;
+use crate::primitives::{PropertyValue, StatusFlags};
 
 // ---------------------------------------------------------------------------
 // Algorithm tag constants
@@ -18,10 +19,11 @@ use crate::primitives::PropertyValue;
 
 /// Algorithm tag constants for the [`BACnetEventParameter`] CHOICE.
 ///
-/// These identify the `BACnetEventParameter` alternatives and are used as
-/// the leading element of the flat [`PropertyValue::List`] encoding so that an
-/// enrollment's parameters survive a complete property round trip without
-/// requiring ASN.1 context-tagged framing.
+/// Each tag is also the number of the event type the algorithm reports
+/// (Clause 21, `BACnetEventType`). They are used as the leading element of
+/// the flat [`PropertyValue::List`] encoding so that an enrollment's
+/// parameters survive a complete property round trip without requiring
+/// ASN.1 context-tagged framing.
 pub mod event_parameter_tag {
     /// Tag 0: the change-of-bitstring algorithm.
     pub const CHANGE_OF_BITSTRING: u8 = 0;
@@ -29,14 +31,38 @@ pub mod event_parameter_tag {
     pub const CHANGE_OF_STATE: u8 = 1;
     /// Tag 2: the change-of-value algorithm.
     pub const CHANGE_OF_VALUE: u8 = 2;
-    /// Tag 3: the command-failure algorithm, which has no structured variant.
+    /// Tag 3: the command-failure algorithm.
     pub const COMMAND_FAILURE: u8 = 3;
     /// Tag 4: the floating-limit algorithm.
     pub const FLOATING_LIMIT: u8 = 4;
     /// Tag 5: the out-of-range algorithm.
     pub const OUT_OF_RANGE: u8 = 5;
+    /// Tag 8: the change-of-life-safety algorithm.
+    pub const CHANGE_OF_LIFE_SAFETY: u8 = 8;
     /// Tag 9: a vendor-defined algorithm (the `extended` alternative).
     pub const EXTENDED: u8 = 9;
+    /// Tag 10: the buffer-ready algorithm.
+    pub const BUFFER_READY: u8 = 10;
+    /// Tag 11: the unsigned-range algorithm.
+    pub const UNSIGNED_RANGE: u8 = 11;
+    /// Tag 13: the access-event algorithm.
+    pub const ACCESS_EVENT: u8 = 13;
+    /// Tag 14: the double-out-of-range algorithm.
+    pub const DOUBLE_OUT_OF_RANGE: u8 = 14;
+    /// Tag 15: the signed-out-of-range algorithm.
+    pub const SIGNED_OUT_OF_RANGE: u8 = 15;
+    /// Tag 16: the unsigned-out-of-range algorithm.
+    pub const UNSIGNED_OUT_OF_RANGE: u8 = 16;
+    /// Tag 17: the change-of-characterstring algorithm.
+    pub const CHANGE_OF_CHARACTERSTRING: u8 = 17;
+    /// Tag 18: the change-of-status-flags algorithm.
+    pub const CHANGE_OF_STATUS_FLAGS: u8 = 18;
+    /// Tag 20: no algorithm (`none`).
+    pub const NONE: u8 = 20;
+    /// Tag 21: the change-of-discrete-value algorithm.
+    pub const CHANGE_OF_DISCRETE_VALUE: u8 = 21;
+    /// Tag 22: the change-of-timer algorithm.
+    pub const CHANGE_OF_TIMER: u8 = 22;
 }
 
 /// The `cov-criteria [1] CHOICE` nested inside `change-of-value`.
@@ -59,10 +85,10 @@ pub enum ChangeOfValueCriteria {
 
 /// Structured `Event_Parameters` for an EventEnrollment object.
 ///
-/// Models the evaluated algorithm alternatives of the `BACnetEventParameter`
-/// `CHOICE` that this library can evaluate.
-/// Unknown or vendor-defined alternatives are preserved verbatim via
-/// [`BACnetEventParameter::Opaque`] so that values written by a remote client
+/// Models every algorithm alternative of the Clause 21 `BACnetEventParameter`
+/// `CHOICE`. A context tag the 2020 production doesn't assign (a later
+/// addendum's or a vendor's) is preserved verbatim via
+/// [`BACnetEventParameter::Opaque`], so values written by a remote client
 /// are never silently discarded.
 ///
 /// The wire form is the full ASN.1 CHOICE framing of the Clause 21
@@ -100,6 +126,14 @@ pub enum BACnetEventParameter {
         /// `cov-criteria [1] CHOICE`.
         criteria: ChangeOfValueCriteria,
     },
+    /// `command-failure [3]`: report when a commanded value and its feedback
+    /// disagree.
+    CommandFailure {
+        /// `time-delay [0] Unsigned` — debounce seconds.
+        time_delay: u32,
+        /// `feedback-property-reference [1]` — where the feedback is read.
+        feedback_property_reference: BACnetDeviceObjectPropertyReference,
+    },
     /// `floating-limit [4]`: report when the value leaves a band around a
     /// setpoint reference.
     FloatingLimit {
@@ -128,6 +162,19 @@ pub enum BACnetEventParameter {
         /// `deadband [3] REAL`.
         deadband: f32,
     },
+    /// `change-of-life-safety [8]`: report when a life safety state enters
+    /// one of the listed states, or the mode changes.
+    ChangeOfLifeSafety {
+        /// `time-delay [0] Unsigned` — debounce seconds.
+        time_delay: u32,
+        /// `list-of-life-safety-alarm-values [1]` — states that are
+        /// life-safety alarms.
+        list_of_life_safety_alarm_values: Vec<LifeSafetyState>,
+        /// `list-of-alarm-values [2]` — states that are ordinary alarms.
+        list_of_alarm_values: Vec<LifeSafetyState>,
+        /// `mode-property-reference [3]` — where the mode is read.
+        mode_property_reference: BACnetDeviceObjectPropertyReference,
+    },
     /// `extended [9]`: vendor-defined algorithm.
     Extended {
         /// `vendor-id [0] Unsigned16`.
@@ -138,11 +185,107 @@ pub enum BACnetEventParameter {
         /// enclosing tag pair.
         parameters: Vec<u8>,
     },
-    /// Preserves an unmodeled constructed alternative or `none [20] NULL`.
+    /// `buffer-ready [10]`: report when a log has gathered enough new
+    /// records.
+    BufferReady {
+        /// `notification-threshold [0] Unsigned` — new records that trigger a
+        /// notification.
+        notification_threshold: u32,
+        /// `previous-notification-count [1] Unsigned32` — the record count at
+        /// the last notification.
+        previous_notification_count: u32,
+    },
+    /// `unsigned-range [11]`: report when an Unsigned value leaves a band.
+    UnsignedRange {
+        /// `time-delay [0] Unsigned` — debounce seconds.
+        time_delay: u32,
+        /// `low-limit [1] Unsigned`.
+        low_limit: u64,
+        /// `high-limit [2] Unsigned`.
+        high_limit: u64,
+    },
+    /// `access-event [13]`: report the listed access events.
+    AccessEvent {
+        /// `list-of-access-events [0]` — the events to report.
+        list_of_access_events: Vec<AccessEvent>,
+        /// `access-event-time-reference [1]` — where the event's time is read.
+        access_event_time_reference: BACnetDeviceObjectPropertyReference,
+    },
+    /// `double-out-of-range [14]`: [`Self::OutOfRange`] for a Double value.
+    DoubleOutOfRange {
+        /// `time-delay [0] Unsigned` — debounce seconds.
+        time_delay: u32,
+        /// `low-limit [1] Double`.
+        low_limit: f64,
+        /// `high-limit [2] Double`.
+        high_limit: f64,
+        /// `deadband [3] Double`.
+        deadband: f64,
+    },
+    /// `signed-out-of-range [15]`: [`Self::OutOfRange`] for a signed value.
+    SignedOutOfRange {
+        /// `time-delay [0] Unsigned` — debounce seconds.
+        time_delay: u32,
+        /// `low-limit [1] INTEGER`.
+        low_limit: i32,
+        /// `high-limit [2] INTEGER`.
+        high_limit: i32,
+        /// `deadband [3] Unsigned`.
+        deadband: u64,
+    },
+    /// `unsigned-out-of-range [16]`: [`Self::OutOfRange`] for an Unsigned
+    /// value.
+    UnsignedOutOfRange {
+        /// `time-delay [0] Unsigned` — debounce seconds.
+        time_delay: u32,
+        /// `low-limit [1] Unsigned`.
+        low_limit: u64,
+        /// `high-limit [2] Unsigned`.
+        high_limit: u64,
+        /// `deadband [3] Unsigned`.
+        deadband: u64,
+    },
+    /// `change-of-characterstring [17]`: report when a string matches one of
+    /// the listed values.
+    ChangeOfCharacterstring {
+        /// `time-delay [0] Unsigned` — debounce seconds.
+        time_delay: u32,
+        /// `list-of-alarm-values [1]` — the alarm strings.
+        list_of_alarm_values: Vec<String>,
+    },
+    /// `change-of-status-flags [18]`: report when one of the selected status
+    /// flags changes.
+    ChangeOfStatusFlags {
+        /// `time-delay [0] Unsigned` — debounce seconds.
+        time_delay: u32,
+        /// `selected-flags [1] BACnetStatusFlags` — the flags watched.
+        selected_flags: StatusFlags,
+    },
+    /// `none [20] NULL`: no algorithm; the enrollment only reports faults.
+    None,
+    /// `change-of-discrete-value [21]`: report any change of a discrete
+    /// value.
+    ChangeOfDiscreteValue {
+        /// `time-delay [0] Unsigned` — debounce seconds.
+        time_delay: u32,
+    },
+    /// `change-of-timer [22]`: report when a Timer enters one of the listed
+    /// states.
+    ChangeOfTimer {
+        /// `time-delay [0] Unsigned` — debounce seconds.
+        time_delay: u32,
+        /// `alarm-values [1]` — the timer states that are alarms.
+        alarm_values: Vec<TimerState>,
+        /// `update-time-reference [2]` — where the timer's update time is
+        /// read.
+        update_time_reference: BACnetDeviceObjectPropertyReference,
+    },
+    /// Preserves an alternative under a context tag the 2020 production
+    /// doesn't assign.
     ///
-    /// For constructed alternatives, `data` is the complete SEQUENCE body.
-    /// `Opaque { tag: 20, data: [] }` represents the primitive `none` value.
-    /// The framed encoder rejects modeled and reserved tags in this variant.
+    /// `data` is the complete SEQUENCE body. The framed encoder rejects the
+    /// assigned, omitted, deprecated and reserved tags in this variant; tag
+    /// 255 is the internal marker of a legacy raw-octet value.
     Opaque {
         /// The unrecognized algorithm tag.
         tag: u8,
@@ -154,222 +297,35 @@ pub enum BACnetEventParameter {
 impl BACnetEventParameter {
     /// Return the algorithm tag for this alternative.
     pub fn tag(&self) -> u8 {
+        use event_parameter_tag as T;
         match self {
-            Self::ChangeOfBitstring { .. } => event_parameter_tag::CHANGE_OF_BITSTRING,
-            Self::ChangeOfState { .. } => event_parameter_tag::CHANGE_OF_STATE,
-            Self::ChangeOfValue { .. } => event_parameter_tag::CHANGE_OF_VALUE,
-            Self::FloatingLimit { .. } => event_parameter_tag::FLOATING_LIMIT,
-            Self::OutOfRange { .. } => event_parameter_tag::OUT_OF_RANGE,
-            Self::Extended { .. } => event_parameter_tag::EXTENDED,
+            Self::ChangeOfBitstring { .. } => T::CHANGE_OF_BITSTRING,
+            Self::ChangeOfState { .. } => T::CHANGE_OF_STATE,
+            Self::ChangeOfValue { .. } => T::CHANGE_OF_VALUE,
+            Self::CommandFailure { .. } => T::COMMAND_FAILURE,
+            Self::FloatingLimit { .. } => T::FLOATING_LIMIT,
+            Self::OutOfRange { .. } => T::OUT_OF_RANGE,
+            Self::ChangeOfLifeSafety { .. } => T::CHANGE_OF_LIFE_SAFETY,
+            Self::Extended { .. } => T::EXTENDED,
+            Self::BufferReady { .. } => T::BUFFER_READY,
+            Self::UnsignedRange { .. } => T::UNSIGNED_RANGE,
+            Self::AccessEvent { .. } => T::ACCESS_EVENT,
+            Self::DoubleOutOfRange { .. } => T::DOUBLE_OUT_OF_RANGE,
+            Self::SignedOutOfRange { .. } => T::SIGNED_OUT_OF_RANGE,
+            Self::UnsignedOutOfRange { .. } => T::UNSIGNED_OUT_OF_RANGE,
+            Self::ChangeOfCharacterstring { .. } => T::CHANGE_OF_CHARACTERSTRING,
+            Self::ChangeOfStatusFlags { .. } => T::CHANGE_OF_STATUS_FLAGS,
+            Self::None => T::NONE,
+            Self::ChangeOfDiscreteValue { .. } => T::CHANGE_OF_DISCRETE_VALUE,
+            Self::ChangeOfTimer { .. } => T::CHANGE_OF_TIMER,
             Self::Opaque { tag, .. } => *tag,
         }
-    }
-
-    /// Encode this parameter set as a flat [`PropertyValue::List`].
-    ///
-    /// The first element is the algorithm tag as [`PropertyValue::Unsigned`],
-    /// followed by the variant's fields in declaration order. This is the
-    /// LEGACY pre-framing layout (see #154); the wire form is the full ASN.1
-    /// framing from `bacnet_encoding::constructed::encode_event_parameter`.
-    /// See [`Self::decode`] for the inverse.
-    pub fn encode(&self) -> PropertyValue {
-        let tag = PropertyValue::Unsigned(self.tag() as u64);
-        match self {
-            Self::ChangeOfBitstring {
-                time_delay,
-                bitmask,
-                list_of_values,
-            } => {
-                let mut items = vec![tag, PropertyValue::Unsigned(*time_delay as u64)];
-                items.push(bitstring_pv(bitmask.clone()));
-                items.push(PropertyValue::List(
-                    list_of_values
-                        .iter()
-                        .map(|bs| bitstring_pv(bs.clone()))
-                        .collect(),
-                ));
-                PropertyValue::List(items)
-            }
-            Self::ChangeOfState {
-                time_delay,
-                list_of_values,
-            } => PropertyValue::List(vec![
-                tag,
-                PropertyValue::Unsigned(*time_delay as u64),
-                PropertyValue::List(list_of_values.iter().map(property_state_pv).collect()),
-            ]),
-            Self::ChangeOfValue {
-                time_delay,
-                criteria,
-            } => {
-                let crit = match criteria {
-                    ChangeOfValueCriteria::Bitmask { unused_bits, data } => {
-                        PropertyValue::BitString {
-                            unused_bits: *unused_bits,
-                            data: data.clone(),
-                        }
-                    }
-                    ChangeOfValueCriteria::ReferencedPropertyIncrement(inc) => {
-                        PropertyValue::Real(*inc)
-                    }
-                };
-                PropertyValue::List(vec![tag, PropertyValue::Unsigned(*time_delay as u64), crit])
-            }
-            Self::FloatingLimit {
-                time_delay,
-                setpoint_reference,
-                low_diff_limit,
-                high_diff_limit,
-                deadband,
-            } => PropertyValue::List(vec![
-                tag,
-                PropertyValue::Unsigned(*time_delay as u64),
-                device_object_property_reference_pv(setpoint_reference),
-                PropertyValue::Real(*low_diff_limit),
-                PropertyValue::Real(*high_diff_limit),
-                PropertyValue::Real(*deadband),
-            ]),
-            Self::OutOfRange {
-                time_delay,
-                low_limit,
-                high_limit,
-                deadband,
-            } => PropertyValue::List(vec![
-                tag,
-                PropertyValue::Unsigned(*time_delay as u64),
-                PropertyValue::Real(*low_limit),
-                PropertyValue::Real(*high_limit),
-                PropertyValue::Real(*deadband),
-            ]),
-            Self::Extended {
-                vendor_id,
-                extended_event_type,
-                parameters,
-            } => PropertyValue::List(vec![
-                tag,
-                PropertyValue::Unsigned(*vendor_id as u64),
-                PropertyValue::Unsigned(*extended_event_type as u64),
-                PropertyValue::OctetString(parameters.clone()),
-            ]),
-            Self::Opaque { tag: _, data } => {
-                PropertyValue::List(vec![tag, PropertyValue::OctetString(data.clone())])
-            }
-        }
-    }
-
-    /// Decode a [`PropertyValue`] previously produced by [`Self::encode`].
-    ///
-    /// Returns `Ok` with the reconstructed parameter set, or a decoding
-    /// [`Error`] when the value is not a `List`, is empty, or has an
-    /// unrecognized/inconsistent shape. `Opaque` values round-trip unchanged.
-    pub fn decode(value: &PropertyValue) -> Result<Self, Error> {
-        let PropertyValue::List(items) = value else {
-            return Err(Error::decoding(0, "Event_Parameters is not a List"));
-        };
-        let Some((tag_pv, rest)) = items.split_first() else {
-            return Err(Error::decoding(0, "Event_Parameters list is empty"));
-        };
-        let PropertyValue::Unsigned(tag) = tag_pv else {
-            return Err(Error::decoding(0, "Event_Parameters tag is not Unsigned"));
-        };
-        let tag = u8::try_from(*tag)
-            .map_err(|_| Error::decoding(0, "Event_Parameters tag exceeds 255"))?;
-        let mut idx = 0;
-        let parameters = match tag {
-            event_parameter_tag::OUT_OF_RANGE => {
-                let time_delay = take_u32(rest, &mut idx)?;
-                let low_limit = take_real(rest, &mut idx)?;
-                let high_limit = take_real(rest, &mut idx)?;
-                let deadband = take_real(rest, &mut idx)?;
-                Self::OutOfRange {
-                    time_delay,
-                    low_limit,
-                    high_limit,
-                    deadband,
-                }
-            }
-            event_parameter_tag::FLOATING_LIMIT => {
-                let time_delay = take_u32(rest, &mut idx)?;
-                let setpoint_reference = take_dopr(rest, &mut idx)?;
-                let low_diff_limit = take_real(rest, &mut idx)?;
-                let high_diff_limit = take_real(rest, &mut idx)?;
-                let deadband = take_real(rest, &mut idx)?;
-                Self::FloatingLimit {
-                    time_delay,
-                    setpoint_reference,
-                    low_diff_limit,
-                    high_diff_limit,
-                    deadband,
-                }
-            }
-            event_parameter_tag::CHANGE_OF_STATE => {
-                let time_delay = take_u32(rest, &mut idx)?;
-                let list_of_values = take_property_state_list(rest, &mut idx)?;
-                Self::ChangeOfState {
-                    time_delay,
-                    list_of_values,
-                }
-            }
-            event_parameter_tag::CHANGE_OF_BITSTRING => {
-                let time_delay = take_u32(rest, &mut idx)?;
-                let bitmask = take_bitstring(rest, &mut idx)?;
-                let list_of_values = take_bitstring_list(rest, &mut idx)?;
-                Self::ChangeOfBitstring {
-                    time_delay,
-                    bitmask,
-                    list_of_values,
-                }
-            }
-            event_parameter_tag::CHANGE_OF_VALUE => {
-                let time_delay = take_u32(rest, &mut idx)?;
-                let criteria = match take_pv(rest, &mut idx) {
-                    Some(PropertyValue::BitString { unused_bits, data }) => {
-                        ChangeOfValueCriteria::Bitmask {
-                            unused_bits: *unused_bits,
-                            data: data.clone(),
-                        }
-                    }
-                    Some(PropertyValue::Real(inc)) => {
-                        ChangeOfValueCriteria::ReferencedPropertyIncrement(*inc)
-                    }
-                    _ => return Err(Error::decoding(idx, "invalid cov-criteria")),
-                };
-                Self::ChangeOfValue {
-                    time_delay,
-                    criteria,
-                }
-            }
-            event_parameter_tag::EXTENDED => {
-                let vendor_id = take_u16(rest, &mut idx)?;
-                let extended_event_type = take_u32(rest, &mut idx)?;
-                let parameters = match take_pv(rest, &mut idx) {
-                    Some(PropertyValue::OctetString(bytes)) => bytes.clone(),
-                    _ => return Err(Error::decoding(idx, "extended parameters not octets")),
-                };
-                Self::Extended {
-                    vendor_id,
-                    extended_event_type,
-                    parameters,
-                }
-            }
-            tag => {
-                let data = match take_pv(rest, &mut idx) {
-                    Some(PropertyValue::OctetString(bytes)) => bytes.clone(),
-                    Some(_) => return Err(Error::decoding(idx, "opaque payload not octets")),
-                    None => Vec::new(),
-                };
-                Self::Opaque { tag, data }
-            }
-        };
-        if idx != rest.len() {
-            return Err(Error::decoding(idx, "Event_Parameters has trailing values"));
-        }
-        Ok(parameters)
     }
 }
 
 mod codec;
 mod fault;
+mod legacy;
 use codec::*;
 
 #[cfg(test)]

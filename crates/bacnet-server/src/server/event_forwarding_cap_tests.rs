@@ -7,7 +7,7 @@
 use super::event_forwarding::Reception;
 use super::event_forwarding_bounds_tests::peer;
 use super::event_forwarding_tests::{
-    copies, database, destination, notification, unconfirmed, Forwarding, To, LOCAL_DEVICE,
+    Forwarding, LOCAL_DEVICE, To, copies, database, destination, notification, unconfirmed,
 };
 use super::event_recipient_routing_tests::{address_recipient, distribute_counted};
 use super::*;

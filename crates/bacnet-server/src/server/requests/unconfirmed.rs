@@ -12,7 +12,7 @@ use bacnet_objects::clock::ClockReader;
 use bacnet_services::alarm_event::ForwardedEventNotification;
 use bacnet_services::device_mgmt::TimeSynchronizationRequest;
 use bacnet_services::who_has::{WhoHasObject, WhoHasRequest};
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 #[cfg(test)]
 /// Every unconfirmed service choice with an inbound execution arm in
@@ -340,7 +340,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 config,
                 &received.source_mac,
                 received.source_network.as_ref(),
-                received.provenance,
+                received.provenance.clone(),
                 &req.service_request,
             )
             .await
@@ -416,7 +416,7 @@ pub(super) fn apply_time_sync_request(
             is_utc,
             source_mac: received.source_mac.clone(),
             source_network: received.source_network.clone(),
-            provenance: received.provenance,
+            provenance: received.provenance.clone(),
         };
         if catch_unwind(AssertUnwindSafe(|| callback(data))).is_err() {
             debug!(

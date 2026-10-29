@@ -3,9 +3,9 @@ use crate::cov::{
     CovNotificationKind, CovObservation, CovSample, CovSubscription, SubscriberEndpoint,
 };
 use bacnet_encoding::npdu::NpduAddress;
+use bacnet_types::MacAddr;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
-use bacnet_types::MacAddr;
 
 fn proposal(kind: CovNotificationKind, property: PropertyIdentifier) -> CovSubscription {
     CovSubscription {

@@ -30,6 +30,7 @@
 //! The server's notification payload is told separately which property an
 //! object type watches and which BACnetPropertyStates choice carries it.
 
+use crate::prelude::*;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
@@ -207,10 +208,10 @@ impl ChangeOfStateReporting {
         timestamp: &BACnetTimeStamp,
     ) -> Result<Option<EventStateChange>, Error> {
         if !self.event_detection_enable {
-            return Err(Error::Protocol {
-                class: ErrorClass::OBJECT,
-                code: ErrorCode::NO_ALARM_CONFIGURED,
-            });
+            return Err(Error::protocol(
+                ErrorClass::OBJECT,
+                ErrorCode::NO_ALARM_CONFIGURED,
+            ));
         }
         self.event_history.acknowledge_correlated_detailed(
             &mut self.event_detector.acked_transitions,
@@ -281,21 +282,18 @@ pub(crate) fn enumerated_list(
     states: ListedStates,
 ) -> Result<Vec<u32>, Error> {
     if array_index.is_some() {
-        return Err(Error::Protocol {
-            class: ErrorClass::PROPERTY,
-            code: ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
-        });
+        return Err(Error::protocol(
+            ErrorClass::PROPERTY,
+            ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
+        ));
     }
     let items = match value {
         PropertyValue::List(items) => items.as_slice(),
-        single => std::slice::from_ref(single),
+        single => core::slice::from_ref(single),
     };
     let cap = crate::multistate::MAX_ALARM_VALUES;
     if items.len() > cap {
-        let full = Error::Protocol {
-            class: ErrorClass::RESOURCES,
-            code: ErrorCode::NO_SPACE_TO_WRITE_PROPERTY,
-        };
+        let full = Error::protocol(ErrorClass::RESOURCES, ErrorCode::NO_SPACE_TO_WRITE_PROPERTY);
         return Err(common::at_list_element(full, cap));
     }
     items

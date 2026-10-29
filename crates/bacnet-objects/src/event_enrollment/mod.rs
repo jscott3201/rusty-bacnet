@@ -1,5 +1,7 @@
 //! EventEnrollment (type 9) object per ASHRAE 135-2020 Clause 12.12.
 
+use crate::prelude::*;
+use alloc::borrow::Cow;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventParameter, FaultParameters,
@@ -10,7 +12,6 @@ use bacnet_types::enums::{
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue, StatusFlags};
-use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
 use crate::event::history::EventHistory;
@@ -128,10 +129,7 @@ impl EventEnrollmentObject {
     /// of the BACnetEventParameter CHOICE (context tag 20, a NULL; Clause
     /// 21), so an unset enrollment serves a member of the property's
     /// datatype (#1868). The evaluator has no algorithm to run for it.
-    const UNSET_EVENT_PARAMETERS: BACnetEventParameter = BACnetEventParameter::Opaque {
-        tag: 20,
-        data: Vec::new(),
-    };
+    const UNSET_EVENT_PARAMETERS: BACnetEventParameter = BACnetEventParameter::None;
 
     /// Put the object in the state ASHRAE 135-2020 Clause 13.2.2.1 prescribes
     /// for disabled detection (`Event_Detection_Enable` FALSE): Event_State
@@ -232,11 +230,12 @@ impl EventEnrollmentObject {
     }
 
     /// The pTimeDelay the stored `Event_Parameters` supply: the `time_delay`
-    /// field every evaluated algorithm carries (Table 12-15). Unmodeled
-    /// alternatives — including `none` and the `0xFF` legacy octet layout,
-    /// which have no time-delay slot — contribute zero, so their TDN fallback reads as 0
-    /// and their evaluation fires immediately, exactly as they did before
-    /// delay honoring existed.
+    /// member of every algorithm that has one (Table 12-15), so an unset
+    /// Time_Delay_Normal reads back the algorithm's delay (#2090), whether
+    /// or not the server runs it. The alternatives with no time-delay slot
+    /// (`none`, buffer-ready, access-event, extended, an unassigned tag and
+    /// the `0xFF` legacy octet layout) contribute zero, so their evaluation
+    /// fires immediately, exactly as it did before delay honoring existed.
     fn event_parameters_time_delay(&self) -> u32 {
         use BACnetEventParameter as P;
         match &self.event_parameters {
@@ -244,7 +243,17 @@ impl EventEnrollmentObject {
             | P::ChangeOfState { time_delay, .. }
             | P::ChangeOfValue { time_delay, .. }
             | P::FloatingLimit { time_delay, .. }
-            | P::OutOfRange { time_delay, .. } => *time_delay,
+            | P::OutOfRange { time_delay, .. }
+            | P::CommandFailure { time_delay, .. }
+            | P::ChangeOfLifeSafety { time_delay, .. }
+            | P::UnsignedRange { time_delay, .. }
+            | P::DoubleOutOfRange { time_delay, .. }
+            | P::SignedOutOfRange { time_delay, .. }
+            | P::UnsignedOutOfRange { time_delay, .. }
+            | P::ChangeOfCharacterstring { time_delay, .. }
+            | P::ChangeOfStatusFlags { time_delay, .. }
+            | P::ChangeOfDiscreteValue { time_delay }
+            | P::ChangeOfTimer { time_delay, .. } => *time_delay,
             _ => 0,
         }
     }
@@ -569,10 +578,10 @@ impl BACnetObject for EventEnrollmentObject {
         transition_bit: EventTransitionBits,
     ) -> Result<(), bacnet_types::error::Error> {
         if !self.event_detection_enable {
-            return Err(bacnet_types::error::Error::Protocol {
-                class: bacnet_types::enums::ErrorClass::OBJECT,
-                code: bacnet_types::enums::ErrorCode::NO_ALARM_CONFIGURED,
-            });
+            return Err(bacnet_types::error::Error::protocol(
+                bacnet_types::enums::ErrorClass::OBJECT,
+                bacnet_types::enums::ErrorCode::NO_ALARM_CONFIGURED,
+            ));
         }
         self.acked_transitions |= transition_bit & EventTransitionBits::all();
         Ok(())
@@ -584,10 +593,10 @@ impl BACnetObject for EventEnrollmentObject {
         timestamp: &BACnetTimeStamp,
     ) -> Result<(), Error> {
         if !self.event_detection_enable || self.enrollment_summary_capability_internal().is_none() {
-            return Err(Error::Protocol {
-                class: ErrorClass::OBJECT,
-                code: ErrorCode::NO_ALARM_CONFIGURED,
-            });
+            return Err(Error::protocol(
+                ErrorClass::OBJECT,
+                ErrorCode::NO_ALARM_CONFIGURED,
+            ));
         }
         self.event_history.acknowledge_correlated(
             &mut self.acked_transitions,
@@ -602,10 +611,10 @@ impl BACnetObject for EventEnrollmentObject {
         timestamp: &BACnetTimeStamp,
     ) -> Result<Option<crate::event::EventStateChange>, Error> {
         if !self.event_detection_enable || self.enrollment_summary_capability_internal().is_none() {
-            return Err(Error::Protocol {
-                class: ErrorClass::OBJECT,
-                code: ErrorCode::NO_ALARM_CONFIGURED,
-            });
+            return Err(Error::protocol(
+                ErrorClass::OBJECT,
+                ErrorCode::NO_ALARM_CONFIGURED,
+            ));
         }
         self.event_history.acknowledge_correlated_detailed(
             &mut self.acked_transitions,

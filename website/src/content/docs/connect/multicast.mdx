@@ -1,0 +1,119 @@
+---
+title: "Join a B/IP multicast group"
+description: "Use an IPv4 multicast group in place of the subnet broadcast (B/IP-M), serve the group from a BBMD, and change it through the Network Port."
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import { release, repository } from '../../../lib/site.mjs';
+
+[Connect to a network](/rusty-bacnet/connect/overview/) / Multicast
+
+A BACnet/IP node can send its broadcasts to an IPv4 multicast group instead of its subnet's broadcast address (B/IP-M, Annex J.8). It then takes broadcasts only from the group, never a subnet broadcast, and directed messages stay unicast. A group can span IP routers that forward multicast, which a subnet broadcast can't.
+
+The page describes **v{release}**.
+
+## Plan the group
+
+- **One BACnet network.** The group's members should share one network number.
+- **No shared subnets.** B/IP-M devices and plain B/IP devices must not share an IP subnet (J.8.1). A member drops a subnet broadcast as belonging to another network.
+- **A class D group outside 224.0.0.0/24**, the block reserved for local network control.
+- **TTL.** The multicast TTL is 1 by default, which keeps the group on the local network. Raise it for a group that spans IP routers, which must forward multicast.
+- **An explicit interface.** The group is joined on the node's interface and multicasts leave from it, so `0.0.0.0` is refused. Bind the interface's primary address: with a secondary (alias) address, some systems send multicast from the primary one.
+- **Not a foreign device.** A foreign device broadcasts through its BBMD, so it can't also be a member. Sharing a port by address isn't supported with a group either.
+
+<Tabs syncKey="lang">
+
+<TabItem label="CLI">
+
+## Join from the CLI
+
+```sh
+bacnet --interface 192.0.2.20 --bip-multicast 239.255.66.1 discover
+```
+
+`discover` sends its Who-Is to the group, and the CLI takes only broadcasts sent to the group, not the subnet's. `--bip-multicast-ttl` sets the TTL (1 to 255). The group's UDP port is `--port` unless `--bip-multicast-port` names another. Several stacks on one host at one address can't share a unicast port, so each takes its own `--port` (0 picks one) and they share the group port:
+
+```sh
+bacnet --interface 127.0.0.1 --port 0 --bip-multicast 239.255.66.1 --bip-multicast-port 47809 discover
+```
+
+A named terminal UI profile keeps the same settings as `multicast`, `multicast_ttl` and `multicast_port` in its `[bip]` table. See <a href={`${repository}/blob/v${release}/docs/CLI.md#multicast-mode`}>Multicast mode</a> in the CLI reference.
+
+</TabItem>
+<TabItem label="Python">
+
+## Join from Python
+
+`BACnetClient`, `BACnetServer` and `BipEndpoint` take `multicast=`:
+
+```python
+import asyncio
+from rusty_bacnet import BACnetClient, Multicast
+
+
+async def main():
+    group = Multicast("239.255.66.1", ttl=2)
+    async with BACnetClient(interface="192.0.2.20", multicast=group) as client:
+        devices = await client.discover(timeout_ms=3000)
+        print([device.object_identifier.instance for device in devices])
+
+
+asyncio.run(main())
+```
+
+`Multicast(group, *, ttl=1, port=None)` takes the group's UDP port as `port`, by default the client's, server's or endpoint's own UDP port. Its constructor raises `ValueError` for `interface="0.0.0.0"`, `share_port_by_address=True`, `port=0` without `Multicast(port=...)`, another transport, or `foreign_device=`. See <a href={`${repository}/blob/v${release}/docs/python-api.md#bip-multicast`}>B/IP multicast</a> in the Python reference.
+
+</TabItem>
+<TabItem label="Rust">
+
+## Join from Rust
+
+Build the group with `BipMulticast::new(group)?`, then `with_ttl` and `with_port` as needed, and pass it to `.multicast(Some(group))` on the client, server or endpoint builder. On a `BipTransport` built by hand, `set_multicast` refuses a `0.0.0.0` interface at once. The <a href={`${repository}/blob/v${release}/docs/rust-api.md#bip-multicast-bip-m`}>B/IP multicast</a> section covers the sockets each OS uses.
+
+</TabItem>
+</Tabs>
+
+## Serve the group from a BBMD
+
+A BBMD with a group serves it (J.8.3): broadcasts from the group go on to its BDT peers and foreign devices, and theirs come back to the group. Enable the BBMD and set the group on the same owner:
+
+```python
+from rusty_bacnet import BACnetServer, Bbmd, Multicast
+
+server = BACnetServer(
+    1234, interface="192.0.2.10",
+    bbmd=Bbmd(["192.0.2.10:47808", "198.51.100.2:47808"], accept_foreign_devices=True),
+    multicast=Multicast("239.255.66.1"),
+)
+```
+
+- **Its own BDT row must have the all-ones mask**, so every peer sends it the network's broadcasts directly. A `Bbmd()` without its own row gets one that does; a row with another mask makes `start()` raise.
+- **The other BBMDs need nothing new.** A plain B/IP BBMD lists the group's BBMD as a two-hop peer, a row with the all-ones mask, so it sends the group's BBMD each broadcast by unicast.
+- **A network that mixes B/IP-M and plain B/IP devices needs exactly one BBMD for the group**, and the two kinds of device must not share an IP subnet. A plain peer BBMD on the group BBMD's own subnet works in one direction only, and `start()` warns about one. One node can't check either rule: configure the network so.
+- **Behind a NAT router**, a BBMD may serve a group too; the group stays on the private side. See [BACnet/IP across NAT](/rusty-bacnet/connect/nat/).
+
+In Rust, pass `BipMode::Bbmd(..)` and `.multicast(..)` to the same builder.
+
+## Change the group through the Network Port
+
+A registered [Network Port](/rusty-bacnet/integrate/network-ports/) serves the group as BACnet_IP_Multicast_Address, or 0.0.0.0 while multicast is off. With a ReinitializeDevice handler it is writable: the written value waits with Changes_Pending, and activation moves the running node to the new group, or off it with 0.0.0.0. A listener that can't be bound or joined fails the activation and leaves the old group in use.
+
+A group BBMD's group is writable the same way, in Rust and Python. A written group waits with the BBMD rows and goes in with them in one ReinitializeDevice activation, both or neither (in Rust, through `BbmdChanges::multicast_group`). A set that doesn't fit, such as a new group with an own row whose mask isn't all ones, answers INVALID_CONFIGURATION_DATA and stays pending; leaving the group (0.0.0.0) lifts the all-ones rule.
+
+### Keep an activated group across restarts
+
+Without a file to save it in, a group changed that way lasts until the process exits, and the next process starts with the group it is configured with. `BipTransport::set_multicast_persist_path` names a small file where each activation of BACnet_IP_Multicast_Address saves the group, its TTL and its port, or that multicast was turned off. A new process given the same path starts in the saved group ahead of its configured one, with a warning when they differ. A failed save is logged, counted in `multicast_persist_failures()`, and the group stays in use; a file that can't be read is logged and the configured group is used. The Python bindings don't set this file.
+
+On a group BBMD with a persisted BDT too, the two files are saved separately after the same activation, so a crash between the writes can leave the new group beside the old BDT. If that BDT's own row doesn't have the all-ones mask, the next start falls back to the configured BDT, and fails if that doesn't fit the group either. To recover, give the configured BDT an all-ones own row, write a fitting BDT to the persisted file, or delete the persisted-group file to start in the configured group.
+
+See <a href={`${repository}/blob/v${release}/docs/rust-api.md#bip-multicast-bip-m`}>B/IP multicast</a> for the Rust contract.
+
+## What is tested
+
+Loopback tests on Linux and macOS cover members discovering each other through a group, and a group BBMD exchanging broadcasts with members, a plain peer BBMD and a foreign device. Windows multicast is untested: there the group's port must equal the node's port, so two members can't share one Windows host. None of this qualifies a routed multicast deployment; test yours with its routers.
+
+## Next steps
+
+- [Reach devices on other subnets](/rusty-bacnet/connect/across-subnets/).
+- [Network Port and Number controls](/rusty-bacnet/integrate/network-ports/).
+- Read the <a href={`${repository}/blob/v${release}/docs/python-api.md#bip-multicast`}>Python</a> and <a href={`${repository}/blob/v${release}/docs/rust-api.md#bip-multicast-bip-m`}>Rust</a> contracts.

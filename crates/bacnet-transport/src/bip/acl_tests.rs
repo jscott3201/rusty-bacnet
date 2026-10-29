@@ -53,11 +53,13 @@ async fn management_acl_allows_listed_sender_delete_fdt_but_write_bdt_always_nak
         .delete_fdt_entry(&bbmd_mac, fd_ip, fd_port)
         .await
         .unwrap();
-    assert!(client_transport
-        .read_fdt(&bbmd_mac)
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        client_transport
+            .read_fdt(&bbmd_mac)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 
     client_transport.stop().await.unwrap();
     bbmd_transport.stop().await.unwrap();
@@ -197,11 +199,13 @@ async fn delete_fdt_entry_for_a_lapsed_registration_naks() {
             .nak(),
         Some(BvlcResultCode::DELETE_FOREIGN_DEVICE_TABLE_ENTRY_NAK)
     );
-    assert!(client_transport
-        .read_fdt(&bbmd_mac)
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        client_transport
+            .read_fdt(&bbmd_mac)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 
     client_transport.stop().await.unwrap();
     bbmd_transport.stop().await.unwrap();

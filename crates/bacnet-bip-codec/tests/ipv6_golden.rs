@@ -12,8 +12,8 @@
 use core::net::Ipv6Addr;
 
 use bacnet_bip_codec::ipv6::{
-    decode, Bip6Address, Bip6Vmac, Bvlc6Function, Bvlc6ResultCode, Bvll6, Bvll6Frame,
-    BIP6_ADDRESS_LENGTH, VMAC_LENGTH,
+    BIP6_ADDRESS_LENGTH, Bip6Address, Bip6Vmac, Bvlc6Function, Bvlc6ResultCode, Bvll6, Bvll6Frame,
+    VMAC_LENGTH, decode,
 };
 
 /// Device instance 1234.

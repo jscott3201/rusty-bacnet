@@ -109,12 +109,13 @@ fn mso_relinquish_default_is_not_range_locked_after_store() {
     );
     // The local API adds no Number_Of_States write arm of its own; the row
     // is writable only through a whole State_Text write (#1443).
-    assert!(mso
-        .write_property(
+    assert!(
+        mso.write_property(
             PropertyIdentifier::NUMBER_OF_STATES,
             None,
             PropertyValue::Unsigned(3),
             None
         )
-        .is_err());
+        .is_err()
+    );
 }

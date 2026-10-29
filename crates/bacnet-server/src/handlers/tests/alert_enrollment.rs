@@ -3,6 +3,7 @@
 use super::*;
 use bacnet_objects::event_enrollment::AlertEnrollmentObject;
 use bacnet_types::enums::NotifyType;
+use bacnet_types::error::RemoteError;
 
 fn make_alert_db() -> (ObjectDatabase, ObjectIdentifier, ObjectIdentifier) {
     let source = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 7).unwrap();
@@ -66,7 +67,7 @@ fn assert_property_error<T: std::fmt::Debug>(
     context: &str,
 ) {
     match result.expect_err(context) {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, ErrorClass::PROPERTY, "{context}");
             assert_eq!(code, expected, "{context}");
         }

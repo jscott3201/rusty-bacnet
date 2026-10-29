@@ -236,9 +236,9 @@ impl ScHubTlsConfig {
     pub fn with_admission_policy(
         mut self,
         policy: impl Fn(&super::ScHubAdmissionInput) -> super::ScHubAdmissionDecision
-            + Send
-            + Sync
-            + 'static,
+        + Send
+        + Sync
+        + 'static,
     ) -> Self {
         self.admission_policy = Some(Arc::new(policy));
         self

@@ -258,10 +258,12 @@ mod tests {
             let (cert, key) = node(400, &site);
             let p = profile(dir.path(), &cert, &key, &[&site]);
             let expired = inspect_at(&p, Some(NOW + 401 * 86_400));
-            assert!(expired
-                .refusal()
-                .unwrap_err()
-                .contains("Operational certificate"));
+            assert!(
+                expired
+                    .refusal()
+                    .unwrap_err()
+                    .contains("Operational certificate")
+            );
             let early = inspect_at(&p, Some(NOW - 3_600));
             assert_eq!(early.errors.len(), 1, "{early:?}");
             // A minute early is likely clock skew: a warning to confirm.

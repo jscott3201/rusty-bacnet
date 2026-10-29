@@ -4,6 +4,7 @@
 //! an analog present_value against HIGH_LIMIT and LOW_LIMIT with a DEADBAND
 //! to prevent oscillation at the boundary.
 
+use crate::prelude::*;
 use core::ops::ControlFlow;
 
 use bacnet_types::bitstring::{EventTransitionBits, LimitEnable};

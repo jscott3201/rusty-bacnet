@@ -1,13 +1,13 @@
 //! Profile editor and resolved connection preview at the supported terminal sizes.
 
-use super::{centered, Theme};
+use super::{Theme, centered};
 use crate::tui::app::connection::{Connection, Screen};
 use crate::tui::profile::{Profile, Transport, Writes};
 use ratatui::{
+    Frame,
     layout::Rect,
     text::Line,
     widgets::{Block, Clear, Padding, Paragraph, Wrap},
-    Frame,
 };
 
 /// `live`: a session is connecting or up, so the dialog offers disconnect.

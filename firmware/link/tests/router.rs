@@ -6,8 +6,8 @@
 use core::mem::size_of;
 
 use firmware_link::router::{
-    expected, run, Bbmd, BbmdTables, Core, Memory, MstpStorage, Queues, RouterEngine,
-    RouterStorage, Summary,
+    Bbmd, BbmdTables, Core, Memory, MstpStorage, Queues, RouterEngine, RouterStorage, Summary,
+    expected, run,
 };
 
 /// The whole summary against the one the emulation build checks too

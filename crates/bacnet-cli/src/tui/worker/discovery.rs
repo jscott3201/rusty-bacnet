@@ -10,18 +10,18 @@
 
 use bacnet_client::client::{BACnetClient, ReceivedIHave};
 use bacnet_network::layer::{NetworkReport, ReceivedNetworkReport};
+use bacnet_ops::target::AddressStyle;
 use bacnet_services::who_has::WhoHasObject;
 use bacnet_transport::port::TransportPort;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc;
 
 use super::EventSink;
-use crate::core::target::AddressStyle;
 use crate::tui::message::WorkerEvent;
 use crate::tui::network::discovery::{DiscoveryCommand, DiscoveryEvent, FoundRow};
 
 /// What an I-Have reports, as the UI shows it.
-fn found(reply: &ReceivedIHave, style: AddressStyle) -> FoundRow {
+pub(super) fn found(reply: &ReceivedIHave, style: AddressStyle) -> FoundRow {
     let routed = reply
         .source_network
         .as_ref()
@@ -38,7 +38,10 @@ fn found(reply: &ReceivedIHave, style: AddressStyle) -> FoundRow {
 }
 
 /// What a network report says, as the UI shows it.
-fn report(received: ReceivedNetworkReport, style: AddressStyle) -> Option<DiscoveryEvent> {
+pub(super) fn report(
+    received: ReceivedNetworkReport,
+    style: AddressStyle,
+) -> Option<DiscoveryEvent> {
     let from = style.format(&received.source_mac);
     Some(match received.report {
         NetworkReport::IAmRouterToNetwork(networks) => DiscoveryEvent::Router {
@@ -55,7 +58,7 @@ fn report(received: ReceivedNetworkReport, style: AddressStyle) -> Option<Discov
         NetworkReport::RejectMessageToNetwork(reject) => DiscoveryEvent::Rejected {
             router: from,
             network: reject.network,
-            reason: crate::decode::frame::kebab(reject.reason),
+            reason: bacnet_ops::decode::frame::kebab(reject.reason),
         },
         _ => return None,
     })
@@ -113,9 +116,9 @@ mod tests {
     use bacnet_encoding::npdu::NpduAddress;
     use bacnet_npdu::{RejectMessageReason, RejectMessageToNetwork};
     use bacnet_services::who_has::IHaveRequest;
+    use bacnet_types::MacAddr;
     use bacnet_types::enums::ObjectType;
     use bacnet_types::primitives::ObjectIdentifier;
-    use bacnet_types::MacAddr;
 
     use super::*;
 

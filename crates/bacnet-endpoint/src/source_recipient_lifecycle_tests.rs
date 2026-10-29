@@ -23,23 +23,25 @@ fn released_projection(db: &mut ObjectDatabase) {
 fn protected(db: &mut ObjectDatabase) {
     assert!(db.remove(&oid(ObjectType::DEVICE, 123)).is_err());
     assert!(db.remove(&selected()).is_err());
-    assert!(db
-        .add(Box::new(
+    assert!(
+        db.add(Box::new(
             AuditReporterObject::new(1, "replacement").unwrap()
         ))
-        .is_err());
+        .is_err()
+    );
     let mut extra = crate::DeviceIdentity::new(456, 42)
         .unwrap()
         .build_database()
         .unwrap();
-    assert!(db
-        .add(
+    assert!(
+        db.add(
             extra
                 .remove(&oid(ObjectType::DEVICE, 456))
                 .unwrap()
                 .unwrap()
         )
-        .is_err());
+        .is_err()
+    );
 }
 
 #[tokio::test]
@@ -53,45 +55,55 @@ async fn source_recipient_canceled_stop_keeps_sealed_membership_until_retry_barr
     let token = session.shared.token.clone();
     let mut guard = db.write().await;
     protected(&mut guard);
-    assert!(timeout(Duration::from_millis(20), session.stop())
-        .await
-        .is_err());
+    assert!(
+        timeout(Duration::from_millis(20), session.stop())
+            .await
+            .is_err()
+    );
     assert!(!token.is_open());
     assert!(!server.is_session_alive());
     protected(&mut guard);
-    assert!(guard
-        .get_mut(&oid(ObjectType::DEVICE, 123))
-        .unwrap()
-        .write_property(
-            PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT,
-            None,
-            PropertyValue::ApplicationData(value(&direct(&sink))),
-            None
-        )
-        .is_err());
+    assert!(
+        guard
+            .get_mut(&oid(ObjectType::DEVICE, 123))
+            .unwrap()
+            .write_property(
+                PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT,
+                None,
+                PropertyValue::ApplicationData(value(&direct(&sink))),
+                None
+            )
+            .is_err()
+    );
     drop(guard);
     timeout(WAIT, session.stop()).await.unwrap().unwrap();
     let mut guard = db.write().await;
-    assert!(!guard
-        .get(&oid(ObjectType::DEVICE, 123))
-        .unwrap()
-        .property_list()
-        .contains(&PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT));
+    assert!(
+        !guard
+            .get(&oid(ObjectType::DEVICE, 123))
+            .unwrap()
+            .property_list()
+            .contains(&PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT)
+    );
     released_projection(&mut guard);
     assert!(guard.remove(&selected()).unwrap().is_some());
-    assert!(guard
-        .remove(&oid(ObjectType::DEVICE, 123))
-        .unwrap()
-        .is_some());
-    assert!(client
-        .read_property(
-            sink.local_mac(),
-            target(),
-            PropertyIdentifier::PRESENT_VALUE,
-            None
-        )
-        .await
-        .is_err());
+    assert!(
+        guard
+            .remove(&oid(ObjectType::DEVICE, 123))
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        client
+            .read_property(
+                sink.local_mac(),
+                target(),
+                PropertyIdentifier::PRESENT_VALUE,
+                None
+            )
+            .await
+            .is_err()
+    );
     drop(guard);
     assert!(session.stop().await.is_err());
     sink.stop().await.unwrap();
@@ -123,10 +135,12 @@ async fn source_recipient_drop_does_not_pin_membership_for_dormant_external_read
     // Keep the external future unpolled: it must retain neither a sink nor a lease.
     released_projection(&mut guard);
     assert!(guard.remove(&selected()).unwrap().is_some());
-    assert!(guard
-        .remove(&oid(ObjectType::DEVICE, 123))
-        .unwrap()
-        .is_some());
+    assert!(
+        guard
+            .remove(&oid(ObjectType::DEVICE, 123))
+            .unwrap()
+            .is_some()
+    );
     drop(guard);
     assert!(timeout(WAIT, &mut read).await.unwrap().is_err());
     sink.stop().await.unwrap();

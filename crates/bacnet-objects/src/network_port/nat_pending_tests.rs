@@ -13,6 +13,7 @@ use bacnet_types::constructed::{
     BACnetBDTEntry, BACnetFDTEntry, BACnetHostAddress, BACnetHostNPort,
 };
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
+use bacnet_types::error::RemoteError;
 use bytes::BytesMut;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::{Arc, Mutex};
@@ -52,10 +53,7 @@ impl Tables {
 }
 
 fn refusal() -> Error {
-    Error::Protocol {
-        class: ErrorClass::PROPERTY,
-        code: ErrorCode::VALUE_OUT_OF_RANGE,
-    }
+    Error::protocol(ErrorClass::PROPERTY, ErrorCode::VALUE_OUT_OF_RANGE)
 }
 
 impl BbmdTables for Tables {
@@ -178,7 +176,7 @@ fn listed(db: &ObjectDatabase) -> Vec<P> {
 }
 
 fn is_unknown(result: Result<PropertyValue, Error>) -> bool {
-    matches!(result, Err(Error::Protocol { code, .. }) if code == ErrorCode::UNKNOWN_PROPERTY)
+    matches!(result, Err(Error::Remote(RemoteError::Error { code, .. })) if code == ErrorCode::UNKNOWN_PROPERTY)
 }
 
 #[test]
@@ -219,7 +217,7 @@ fn a_bbmd_that_cant_run_behind_nat_has_neither_row() {
         PropertyValue::Boolean(true),
     );
     assert!(
-        matches!(error, Err(Error::Protocol { code, .. }) if code == ErrorCode::UNKNOWN_PROPERTY),
+        matches!(error, Err(Error::Remote(RemoteError::Error { code, .. })) if code == ErrorCode::UNKNOWN_PROPERTY),
         "{error:?}"
     );
 }
@@ -317,12 +315,14 @@ fn a_global_address_the_bbmd_cant_take_is_refused_when_written() {
     ] {
         assert!(write(&mut db, P::BACNET_IP_GLOBAL_ADDRESS, wrong).is_err());
     }
-    assert!(write(
-        &mut db,
-        P::BACNET_IP_NAT_TRAVERSAL,
-        PropertyValue::Unsigned(1)
-    )
-    .is_err());
+    assert!(
+        write(
+            &mut db,
+            P::BACNET_IP_NAT_TRAVERSAL,
+            PropertyValue::Unsigned(1)
+        )
+        .is_err()
+    );
     assert_eq!(
         read(&db, P::CHANGES_PENDING).unwrap(),
         PropertyValue::Boolean(false)
@@ -336,7 +336,7 @@ fn without_activation_the_nat_rows_are_read_only() {
     let (mut db, _lease) = bbmd_port(&tables, false);
     let error = write(&mut db, P::BACNET_IP_GLOBAL_ADDRESS, written(&global())).unwrap_err();
     assert!(
-        matches!(error, Error::Protocol { code, .. } if code == ErrorCode::WRITE_ACCESS_DENIED),
+        matches!(error, Error::Remote(RemoteError::Error { code, .. }) if code == ErrorCode::WRITE_ACCESS_DENIED),
         "{error:?}"
     );
     let capability = db

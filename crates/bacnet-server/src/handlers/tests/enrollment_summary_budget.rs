@@ -7,8 +7,8 @@ use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::EventType;
 use std::borrow::Cow;
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 
 struct Counted(SummaryFixture, Arc<AtomicUsize>);

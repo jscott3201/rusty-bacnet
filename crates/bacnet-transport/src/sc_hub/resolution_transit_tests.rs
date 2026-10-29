@@ -4,7 +4,8 @@ use super::deadline_test_support::*;
 use super::response_silence_tests::Snapshot;
 use super::shutdown_blocked_tests::ControlledPeer;
 use super::unknown_transit_tests::{
-    barrier, connect_limits, matrix_barrier, matrix_pair, matrix_receive, raw, recv, send, stopped,
+    barrier, connect_limits, matrix_barrier, matrix_pair, matrix_receive, raw, recv, retired, send,
+    stopped,
 };
 use super::*;
 use crate::sc_frame::BROADCAST_VMAC;
@@ -102,8 +103,7 @@ async fn resolution_transit_local_preregistered_invalid_silence_and_state_matrix
                         {
                             continue; // accepted transit activity is tested separately
                         }
-                        let (mut hub, mut a, mut b) =
-                            matrix_pair(&tls, registered, 0x42, 0x43).await;
+                        let (hub, mut a, mut b) = matrix_pair(&tls, registered, 0x42, 0x43).await;
                         let expires = a.deadline.expires();
                         let before: Vec<_> = hub
                             .clients
@@ -115,7 +115,9 @@ async fn resolution_transit_local_preregistered_invalid_silence_and_state_matrix
                         // Two variants only per fresh preregistration deadline.
                         for (flags, body) in [(0, &b""[..]), (3, &b"\xE2\0\0\x1F\x7E\0\0\xFF"[..])]
                         {
-                            let case = format!("resolution registered={registered} function={function} id={id} origin={origin:02x?} dest={dest:02x?} flags={flags}");
+                            let case = format!(
+                                "resolution registered={registered} function={function} id={id} origin={origin:02x?} dest={dest:02x?} flags={flags}"
+                            );
                             send(&mut a, raw(function, id, origin, dest, flags, body)).await;
                             if function == 2
                                 && (!registered || dest.is_none())
@@ -146,7 +148,8 @@ async fn resolution_transit_local_preregistered_invalid_silence_and_state_matrix
                             assert!(a.deadline.is_committed());
                             assert_eq!(a.deadline.expires(), expires);
                         }
-                        stopped(&mut hub).await;
+                        drop(before); // its snapshots hold the peers' sinks
+                        retired(hub, [a, b]).await;
                     }
                 }
             }
@@ -172,8 +175,7 @@ async fn resolution_transit_result_for_2_and_3_relay_ack_nak_and_address_matrix(
                         Some([0; 6]),
                         Some(BROADCAST_VMAC),
                     ] {
-                        let (mut hub, mut b, mut a) =
-                            matrix_pair(&tls, registered, 0x43, 0x42).await;
+                        let (hub, mut b, mut a) = matrix_pair(&tls, registered, 0x43, 0x42).await;
                         let expires = b.deadline.expires();
                         for result in [
                             vec![result_for, 0],
@@ -181,7 +183,9 @@ async fn resolution_transit_result_for_2_and_3_relay_ack_nak_and_address_matrix(
                         ] {
                             let mut body = vec![0xFE, 0, 0, 0x1F];
                             body.extend_from_slice(&result);
-                            let case = format!("ResultFor={result_for} registered={registered} id={id} origin={origin:02x?} dest={dest:02x?} result={result:02x?}");
+                            let case = format!(
+                                "ResultFor={result_for} registered={registered} id={id} origin={origin:02x?} dest={dest:02x?} result={result:02x?}"
+                            );
                             send(&mut b, raw(0, id, origin, dest, 2, &body)).await;
                             if matches!(result_for, 2 | 3)
                                 && registered
@@ -205,7 +209,7 @@ async fn resolution_transit_result_for_2_and_3_relay_ack_nak_and_address_matrix(
                             );
                             cases[usize::from(registered)] += 1;
                         }
-                        stopped(&mut hub).await;
+                        retired(hub, [a, b]).await;
                     }
                 }
             }

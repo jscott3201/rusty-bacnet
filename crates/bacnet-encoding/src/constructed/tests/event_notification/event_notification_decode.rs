@@ -64,13 +64,15 @@ fn event_notification_u32_fields_reject_overflow_aliases() {
         for value in [[1, 0, 0, 0, 0].as_slice(), [0xff; 8].as_slice()] {
             let mut values = canonical_values();
             values[field] = value;
-            assert!(decode_event_notification(&raw_event_notification(
-                values,
-                canonical_tags(),
-                Some(&[1]),
-                false,
-            ))
-            .is_err());
+            assert!(
+                decode_event_notification(&raw_event_notification(
+                    values,
+                    canonical_tags(),
+                    Some(&[1]),
+                    false,
+                ))
+                .is_err()
+            );
         }
     }
 }
@@ -80,13 +82,15 @@ fn event_notification_priority_rejects_values_above_u8() {
     for value in [[1, 0].as_slice(), [1, 1].as_slice(), [0xff; 8].as_slice()] {
         let mut values = canonical_values();
         values[2] = value;
-        assert!(decode_event_notification(&raw_event_notification(
-            values,
-            canonical_tags(),
-            Some(&[1]),
-            false,
-        ))
-        .is_err());
+        assert!(
+            decode_event_notification(&raw_event_notification(
+                values,
+                canonical_tags(),
+                Some(&[1]),
+                false,
+            ))
+            .is_err()
+        );
     }
 }
 
@@ -125,47 +129,55 @@ fn event_notification_fields_require_owned_context_tags() {
     for field in 0..canonical_tags().len() {
         let mut field_tags = canonical_tags();
         field_tags[field].0 = 13;
-        assert!(decode_event_notification(&raw_event_notification(
-            canonical_values(),
-            field_tags,
-            Some(&[1]),
-            false,
-        ))
-        .is_err());
+        assert!(
+            decode_event_notification(&raw_event_notification(
+                canonical_values(),
+                field_tags,
+                Some(&[1]),
+                false,
+            ))
+            .is_err()
+        );
 
         let mut field_tags = canonical_tags();
         field_tags[field].1 = tags::TagClass::Application;
-        assert!(decode_event_notification(&raw_event_notification(
-            canonical_values(),
-            field_tags,
-            Some(&[1]),
-            false,
-        ))
-        .is_err());
+        assert!(
+            decode_event_notification(&raw_event_notification(
+                canonical_values(),
+                field_tags,
+                Some(&[1]),
+                false,
+            ))
+            .is_err()
+        );
     }
 }
 
 #[test]
 fn event_notification_rejects_unknown_fields_before_notify_type() {
-    assert!(decode_event_notification(&raw_event_notification(
-        canonical_values(),
-        canonical_tags(),
-        Some(&[1]),
-        true,
-    ))
-    .is_err());
+    assert!(
+        decode_event_notification(&raw_event_notification(
+            canonical_values(),
+            canonical_tags(),
+            Some(&[1]),
+            true,
+        ))
+        .is_err()
+    );
 }
 
 #[test]
 fn event_notification_ack_required_must_be_boolean() {
     for value in [&[][..], &[2], &[0, 1]] {
-        assert!(decode_event_notification(&raw_event_notification(
-            canonical_values(),
-            canonical_tags(),
-            Some(value),
-            false,
-        ))
-        .is_err());
+        assert!(
+            decode_event_notification(&raw_event_notification(
+                canonical_values(),
+                canonical_tags(),
+                Some(value),
+                false,
+            ))
+            .is_err()
+        );
     }
 }
 

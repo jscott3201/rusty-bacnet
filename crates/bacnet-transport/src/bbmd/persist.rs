@@ -35,7 +35,7 @@ use tracing::{debug, warn};
 
 use bacnet_types::error::Error;
 
-use super::{encode_bdt_entries, BbmdState, BdtEntry};
+use super::{BbmdState, BdtEntry, encode_bdt_entries};
 
 /// The NAT setting saved with the BDT: whether NAT traversal is on, and
 /// the global address, kept while it is off.
@@ -209,37 +209,44 @@ impl BdtFile {
     }
 
     fn write(&self, rows: &[BdtEntry], nat: Option<PersistedNat>) -> std::io::Result<()> {
-        static TEMPORARY: AtomicU64 = AtomicU64::new(0);
         let mut octets = BytesMut::new();
         encode_bdt_entries(rows, &mut octets);
         if let Some(nat) = nat {
             nat.encode(&mut octets);
         }
-        let name = self.path.file_name().ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::InvalidInput, "the path names no file")
-        })?;
-        // Unique to this process and save, so two writers of one path never
-        // share a temporary file.
-        let mut temporary = name.to_owned();
-        temporary.push(format!(
-            ".{}.{}.tmp",
-            std::process::id(),
-            TEMPORARY.fetch_add(1, Ordering::Relaxed)
-        ));
-        let temporary = self.path.with_file_name(temporary);
-        let written = (|| {
-            let mut file = std::fs::File::create(&temporary)?;
-            file.write_all(&octets)?;
-            file.sync_all()?;
-            std::fs::rename(&temporary, &self.path)
-        })();
-        if written.is_err() {
-            let _ = std::fs::remove_file(&temporary);
-        }
-        written?;
-        sync_directory(&self.path);
-        Ok(())
+        write_atomically(&self.path, &octets)
     }
+}
+
+/// Replace the file at `path` with `octets` whole: written to a temporary
+/// file beside it, synced, then renamed over it, and on Unix the directory
+/// synced, so a reader or a crash sees the old contents or the new.
+pub(crate) fn write_atomically(path: &Path, octets: &[u8]) -> std::io::Result<()> {
+    static TEMPORARY: AtomicU64 = AtomicU64::new(0);
+    let name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "the path names no file")
+    })?;
+    // Unique to this process and save, so two writers of one path never
+    // share a temporary file.
+    let mut temporary = name.to_owned();
+    temporary.push(format!(
+        ".{}.{}.tmp",
+        std::process::id(),
+        TEMPORARY.fetch_add(1, Ordering::Relaxed)
+    ));
+    let temporary = path.with_file_name(temporary);
+    let written = (|| {
+        let mut file = std::fs::File::create(&temporary)?;
+        file.write_all(octets)?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, path)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    written?;
+    sync_directory(path);
+    Ok(())
 }
 
 /// A save handed to another thread. Dropped without having run, because

@@ -93,10 +93,8 @@ impl NodeHandle {
         // local frame is on the wire. Whatever happens to it (see
         // OwnBroadcastForwarder::forward) never fails this send, and a
         // failed local send does not withdraw it.
-        if forward_own {
-            if let Some(forwarder) = forwarder {
-                forwarder.forward(npdu);
-            }
+        if forward_own && let Some(forwarder) = forwarder {
+            forwarder.forward(npdu);
         }
 
         self.socket()

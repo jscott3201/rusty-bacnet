@@ -27,12 +27,13 @@
 //!
 //! [`add_destination`]: NotificationClass::add_destination
 
+use crate::prelude::*;
+use alloc::borrow::Cow;
 use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
 use bacnet_types::constructed::{BACnetDestination, BACnetRecipient};
 use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags, Time};
-use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
 use crate::database::ObjectDatabase;
@@ -47,12 +48,12 @@ pub(crate) mod recipient_list;
 mod saving;
 #[doc(hidden)]
 pub use enrollment_summary::{
-    resolve_enrollment_summary_class_internal, EnrollmentSummaryClassProjection,
-    EnrollmentSummaryClassProjectionError,
+    EnrollmentSummaryClassProjection, EnrollmentSummaryClassProjectionError,
+    resolve_enrollment_summary_class_internal,
 };
-pub use persistence::{
-    FileNotificationClassPersistence, NotificationClassPersistence, NotificationClassSnapshot,
-};
+#[cfg(feature = "std")]
+pub use persistence::FileNotificationClassPersistence;
+pub use persistence::{NotificationClassPersistence, NotificationClassSnapshot};
 pub use recipient_list::MAX_RECIPIENT_LIST_DESTINATIONS;
 
 /// BACnet NotificationClass object.
@@ -130,7 +131,7 @@ impl NotificationClass {
     pub fn add_destination(&mut self, dest: BACnetDestination) -> Result<(), Error> {
         recipient_list::check_added(&dest)?;
         if self.recipient_list_saved() {
-            tracing::debug!(
+            log_debug!(
                 class = %self.oid,
                 "Saved Recipient_List kept over a configured destination"
             );
@@ -256,7 +257,7 @@ impl BACnetObject for NotificationClass {
         crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
-    fn advance_monotonic_time_internal(&mut self, now: std::time::Duration) -> bool {
+    fn advance_monotonic_time_internal(&mut self, now: core::time::Duration) -> bool {
         self.expire_staged_write(now);
         false
     }
@@ -349,15 +350,14 @@ fn find_notification_class(
     notification_class: u32,
 ) -> Option<&dyn BACnetObject> {
     // Try direct OID lookup first (instance == notification_class is the common case)
-    if let Ok(nc_oid) = ObjectIdentifier::new(ObjectType::NOTIFICATION_CLASS, notification_class) {
-        if let Some(obj) = db.get(&nc_oid) {
-            if matches!(
-                obj.read_property(PropertyIdentifier::NOTIFICATION_CLASS, None),
-                Ok(PropertyValue::Unsigned(n)) if n as u32 == notification_class
-            ) {
-                return Some(obj);
-            }
-        }
+    if let Ok(nc_oid) = ObjectIdentifier::new(ObjectType::NOTIFICATION_CLASS, notification_class)
+        && let Some(obj) = db.get(&nc_oid)
+        && matches!(
+            obj.read_property(PropertyIdentifier::NOTIFICATION_CLASS, None),
+            Ok(PropertyValue::Unsigned(n)) if n as u32 == notification_class
+        )
+    {
+        return Some(obj);
     }
 
     // Fall back to scanning all NotificationClass objects

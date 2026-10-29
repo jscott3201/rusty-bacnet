@@ -89,10 +89,10 @@ fn a_direct_certificate_keeps_one_budget_across_vmacs() {
     let admission = admission(4);
     let (tx, mut rx) = mpsc::channel(SC_NPDU_QUEUE_CAPACITY);
     let identity = |incarnation| {
-        TransportProvenance::verified_direct_peer(crate::port::DirectScIdentity::verified(
-            [7; 32],
-            incarnation,
-        ))
+        TransportProvenance::verified_direct_peer(
+            crate::port::DirectScIdentity::verified([7; 32], incarnation),
+            Default::default(),
+        )
     };
     let mut admit = |vmac: u8, incarnation| {
         let source = MacAddr::from_slice(&[vmac; 6]);

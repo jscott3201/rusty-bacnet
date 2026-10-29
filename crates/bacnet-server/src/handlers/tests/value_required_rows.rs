@@ -7,6 +7,7 @@
 use super::lighting_required_rows::{assert_refused, db_with, read_wire, write_wire};
 use super::property_metadata::assert_rpm_selector_bytes;
 use super::*;
+use PropertyIdentifier as P;
 use bacnet_objects::value_types::{
     BitStringValueObject, CharacterStringValueObject, DatePatternValueObject,
     DateTimePatternValueObject, DateTimeValueObject, DateValueObject, IntegerValueObject,
@@ -14,7 +15,6 @@ use bacnet_objects::value_types::{
     TimePatternValueObject, TimeValueObject,
 };
 use bacnet_types::primitives::{Date, Time};
-use PropertyIdentifier as P;
 
 /// One object of each commandable value type, with a Present_Value it takes.
 /// The three numeric types come first.
@@ -218,7 +218,7 @@ fn large_analog_value_cov_increment_is_a_writable_double_over_the_wire() {
 
 #[test]
 fn pics_value_types_list_current_command_priority_and_cov_increment() {
-    use crate::pics::{generate_pics, PicsConfig};
+    use crate::pics::{PicsConfig, generate_pics};
     use crate::server::ServerConfig;
 
     for (index, (object, _)) in every_value_type().into_iter().enumerate() {

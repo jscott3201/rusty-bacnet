@@ -7,8 +7,8 @@
 //! (Clause 15.3).
 
 use super::*;
-use bacnet_services::common::BACnetPropertyValue;
 use PropertyIdentifier as P;
+use bacnet_services::common::BACnetPropertyValue;
 
 pub(super) fn initial(
     property: P,

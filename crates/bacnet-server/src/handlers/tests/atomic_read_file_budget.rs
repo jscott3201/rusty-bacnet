@@ -7,11 +7,12 @@ use bacnet_services::file::{
     AtomicReadFileAck, AtomicReadFileRequest, FileAccessMethod, FileReadAckMethod,
 };
 use bacnet_types::enums::{AbortReason, EngineeringUnits, FileAccessMethod as Method};
+use bacnet_types::error::RemoteError;
 use std::{
     borrow::Cow,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
@@ -92,10 +93,7 @@ impl FileStorage for Probe {
     }
 }
 fn storage_error() -> Error {
-    Error::Protocol {
-        class: ErrorClass::SERVICES,
-        code: ErrorCode::FILE_ACCESS_DENIED,
-    }
+    Error::protocol(ErrorClass::SERVICES, ErrorCode::FILE_ACCESS_DENIED)
 }
 fn probe(record: bool) -> Probe {
     let mut file = FileObject::new(1, "file", "binary").unwrap();
@@ -135,7 +133,9 @@ fn wire(record: bool, start: i32, count: u32) -> BytesMut {
     wire
 }
 fn abort(result: Result<(), Error>, reason: AbortReason) {
-    assert!(matches!(result, Err(Error::Abort { reason: actual }) if actual == reason));
+    assert!(
+        matches!(result, Err(Error::Remote(RemoteError::Abort { reason: actual })) if actual == reason)
+    );
 }
 fn call(
     db: &ObjectDatabase,
@@ -147,7 +147,7 @@ fn call(
         handle_atomic_read_file_budgeted(db, request, &mut out, cap).map_err(
             |failure| match failure {
                 AtomicReadFileFailure::Service(error) => error,
-                AtomicReadFileFailure::Budget(reason) => Error::Abort { reason },
+                AtomicReadFileFailure::Budget(reason) => Error::abort(reason),
             },
         );
     if result.is_err() {

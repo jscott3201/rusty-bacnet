@@ -13,19 +13,22 @@
 //! labels padded to the longest among the objects listed, and leaves the
 //! names out when fewer than [`MIN_NAME`] columns are left for them.
 
+use bacnet_ops::engine::ReadVia;
+use bacnet_ops::label::{PRIORITIES, kebab, object_label, priority_label};
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
-use ratatui::Frame;
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::{
-    ellipsize, name_marker, sanitize, text_width, Names, Theme, FULL_WIDTH, MIN_NAME, WIDE_WIDTH,
+    FULL_WIDTH, MIN_NAME, Names, Theme, WIDE_WIDTH, ellipsize, name_marker, sanitize, text_width,
 };
 use crate::tui::app::browser::{Browser, ListState, Pane, ViewState};
-use crate::tui::app::objects::{kebab, object_label, ListRow};
-use crate::tui::point::{priority_label, ObjectView, PriorityView, ReadVia, PRIORITIES};
+
+use crate::tui::app::objects::ListRow;
+use crate::tui::point::{ObjectView, PriorityView};
 
 /// Width of the left column (card over objects) in the full layout.
 const LEFT_WIDTH: u16 = 46;
@@ -546,6 +549,13 @@ mod tests {
         assert_eq!(wrap("  lead on", 6), ["  lead", "on"]);
         // Control characters become spaces.
         assert_eq!(wrap("a\nb\tc\u{1b}", 10), ["a b c"]);
+        // So do the line and paragraph separators (#2148).
+        assert_eq!(sanitize("a\u{2028}b\u{2029}c"), "a b c");
+        // Bidirectional overrides and isolates are dropped (#2122).
+        assert_eq!(
+            wrap("2 (High\u{202E}) \u{2067}x\u{2069}", 20),
+            ["2 (High) x"]
+        );
         for line in wrap("[a, bb, ccc, dddd, eeeee, ffffff]", 9) {
             assert!(text_width(&line) <= 9, "{line:?}");
         }

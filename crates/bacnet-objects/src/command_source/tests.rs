@@ -10,10 +10,11 @@ use bacnet_encoding::{
     primitives::decode_timestamp_choice,
 };
 use bacnet_types::enums::EngineeringUnits;
+use bacnet_types::error::RemoteError;
 use bacnet_types::{
+    MacAddr,
     enums::{ErrorCode, PropertyIdentifier as P},
     primitives::{BACnetTimeStamp, PropertyValue},
-    MacAddr,
 };
 use bytes::BytesMut;
 fn device(n: u32) -> ObjectIdentifier {
@@ -176,15 +177,16 @@ fn command_source_six_family_transition_projection_and_time() {
             assert_eq!(source(o.as_ref(), None), claim);
             assert_eq!(time(o.as_ref()), 4);
             let before = snapshot(o.as_ref());
-            assert!(o
-                .write_property_from(
+            assert!(
+                o.write_property_from(
                     P::VALUE_SOURCE,
                     None,
                     source_value(&owner.published_source()),
                     Some(8),
                     &local(99, None)
                 )
-                .is_err());
+                .is_err()
+            );
             assert_eq!(snapshot(o.as_ref()), before);
         }
         o.write_property_from(
@@ -319,9 +321,10 @@ fn command_source_invalid_writes_are_atomic_and_metadata_is_paired() {
                 binding: CommandDeviceBinding::Unknown,
             };
             let before = snapshot(o.as_ref());
-            assert!(o
-                .write_property_from(P::PRESENT_VALUE, None, value.clone(), Some(8), &invalid)
-                .is_err());
+            assert!(
+                o.write_property_from(P::PRESENT_VALUE, None, value.clone(), Some(8), &invalid)
+                    .is_err()
+            );
             assert_eq!(snapshot(o.as_ref()), before);
         }
         assert_eq!(
@@ -342,8 +345,8 @@ fn command_source_invalid_writes_are_atomic_and_metadata_is_paired() {
 
 #[test]
 fn command_source_owner_matrix_retains_original_token() {
-    use bacnet_types::enums::EngineeringUnits;
     use CommandDeviceBinding::*;
+    use bacnet_types::enums::EngineeringUnits;
     let states = [Unknown, Unique(device(1)), Unique(device(2)), Ambiguous];
     for old in states {
         for new in states {
@@ -384,15 +387,16 @@ fn command_source_owner_matrix_retains_original_token() {
         &remote(1, Unique(device(9))),
     )
     .unwrap();
-    assert!(o
-        .write_property_from(
+    assert!(
+        o.write_property_from(
             P::VALUE_SOURCE,
             None,
             source_value(&BACnetValueSource::None),
             Some(8),
             &remote(2, Unique(device(9)))
         )
-        .is_err());
+        .is_err()
+    );
     // A new command replaces the token and grants the new Device correction rights.
     o.write_property_from(
         P::PRESENT_VALUE,
@@ -419,7 +423,7 @@ fn command_source_owner_matrix_retains_original_token() {
 #[test]
 fn command_source_correction_refuses_a_stranger_before_its_value() {
     let code = |result: Result<(), Error>| match result {
-        Err(Error::Protocol { code, .. }) => code,
+        Err(Error::Remote(RemoteError::Error { code, .. })) => code,
         other => panic!("expected a refusal, got {other:?}"),
     };
     for (mut o, value) in objects() {
@@ -480,9 +484,10 @@ fn remote_origin_mac_holds_to_the_bacnet_address_bound() {
         let too_long = origin(BACnetAddress::MAX_MAC_LEN + 1);
         assert!(too_long.validate().is_err());
         let before = snapshot(o.as_ref());
-        assert!(o
-            .write_property_from(P::PRESENT_VALUE, None, value.clone(), Some(7), &too_long)
-            .is_err());
+        assert!(
+            o.write_property_from(P::PRESENT_VALUE, None, value.clone(), Some(7), &too_long)
+                .is_err()
+        );
         assert_eq!(snapshot(o.as_ref()), before);
     }
 }

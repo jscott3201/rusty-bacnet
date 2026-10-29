@@ -2,15 +2,15 @@
 
 mod fixture;
 
+use bacnet_router_core::PortId;
 use bacnet_router_core::npdu::Mac;
 use bacnet_router_core::npdu::NetworkPriority;
 use bacnet_router_core::npdu::{Address, Npdu};
 use bacnet_router_core::npdu::{NetworkMessageType, RejectMessageReason};
 use bacnet_router_core::router::{Action, Frame, Kind, Permissive, RejectOrigin, SendRefusal};
-use bacnet_router_core::PortId;
 use fixture::{
-    addr, at, bytes, drain, learn_9_via_r7, message, router, sent_reject, TestRouter, NODE_A,
-    OWN_0, R7, UNCONFIRMED,
+    NODE_A, OWN_0, R7, TestRouter, UNCONFIRMED, addr, at, bytes, drain, learn_9_via_r7, message,
+    router, sent_reject,
 };
 
 fn receive(router: &mut TestRouter, packet: &[u8]) {

@@ -1,6 +1,6 @@
 //! Owned node identity at the Python configuration boundary; no I/O or generation.
 
-use pyo3::{exceptions::PyValueError, PyResult};
+use pyo3::{PyResult, exceptions::PyValueError};
 
 pub(crate) fn device_uuid(transport: &str, value: Option<Vec<u8>>) -> PyResult<[u8; 16]> {
     // Like the other SC options, this option is unused for non-SC transports.

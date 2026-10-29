@@ -363,9 +363,9 @@ fn pics_audit_reporter_metadata_is_complete_and_exact() {
 
 #[test]
 fn pics_analog_property_metadata_is_exact_for_each_configuration() {
+    use PropertyIdentifier as P;
     use bacnet_objects::traits::BACnetObject;
     use bacnet_types::enums::EngineeringUnits;
-    use PropertyIdentifier as P;
 
     // Expected (identifier, optional, writable) rows, not generated from metadata.
     // The event rows Tables 12-2, 12-3 and 12-4 require of an intrinsic
@@ -491,9 +491,9 @@ fn pics_analog_property_metadata_is_exact_for_each_configuration() {
 
 #[test]
 fn pics_binary_commandable_property_metadata_is_exact() {
+    use PropertyIdentifier as P;
     use bacnet_objects::traits::BACnetObject;
     use bacnet_types::primitives::PropertyValue;
-    use PropertyIdentifier as P;
 
     // Independent (identifier, optional, writable) fixture in legacy order.
     // Tables 12-8 and 12-10 require the event rows of an intrinsic reporter
@@ -602,9 +602,9 @@ fn pics_binary_commandable_property_metadata_is_exact() {
 
 #[test]
 fn pics_multistate_property_metadata_is_exact() {
+    use PropertyIdentifier as P;
     use bacnet_objects::traits::BACnetObject;
     use bacnet_types::primitives::PropertyValue;
-    use PropertyIdentifier as P;
 
     let base = [
         (P::OBJECT_IDENTIFIER, false, false),

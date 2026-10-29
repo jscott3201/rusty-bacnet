@@ -8,7 +8,6 @@ use bacnet_objects::{
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::{
     any::AnyTransport,
-    mstp::NoSerial,
     port::TransportPort,
     sc::{ScReconnectConfig, ScTransport},
     sc_hub::ScHub,
@@ -27,7 +26,7 @@ use tokio::{
 };
 
 type Client = BACnetClient<ScTransport<TlsWebSocket>>;
-type AnyClient = BACnetClient<AnyTransport<NoSerial>>;
+type AnyClient = BACnetClient<AnyTransport>;
 type Server = BACnetServer<ScTransport<TlsWebSocket>>;
 const SERVER: [u8; 6] = [2, 0, 0, 0, 0, 1];
 const SERVER_UUID: [u8; 16] = [
@@ -181,11 +180,7 @@ impl Fixture {
             .apdu_retries(0)
             .reconnect(reconnect());
         if erased {
-            self.any_client = Some(
-                bounded(boxed(|| builder.build_any::<NoSerial>()))
-                    .await
-                    .unwrap(),
-            );
+            self.any_client = Some(bounded(boxed(|| builder.build_any())).await.unwrap());
         } else {
             self.client = Some(bounded(boxed(|| builder.build())).await.unwrap());
         }

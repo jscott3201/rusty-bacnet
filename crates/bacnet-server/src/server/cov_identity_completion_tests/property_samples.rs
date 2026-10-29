@@ -49,7 +49,11 @@ async fn selected_change(kind: CovNotificationKind, property: PropertyIdentifier
         }
         fixture.fire(false, &[]).await;
         let frames = fixture.sent.lock().unwrap().clone();
-        assert_eq!(frames.len(), 1, "selected {property:?} change kind={kind:?} increment={increment:?} with unchanged PV must report");
+        assert_eq!(
+            frames.len(),
+            1,
+            "selected {property:?} change kind={kind:?} increment={increment:?} with unchanged PV must report"
+        );
         let Apdu::UnconfirmedRequest(request) =
             decode_apdu(decode_npdu(frames[0].clone()).unwrap().payload).unwrap()
         else {

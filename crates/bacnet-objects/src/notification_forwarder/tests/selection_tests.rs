@@ -96,9 +96,11 @@ fn out_of_service_forwarder_takes_nothing() {
     idle.write_property(P::OUT_OF_SERVICE, None, PropertyValue::Boolean(true), None)
         .unwrap();
     let db = database(vec![idle]);
-    assert!(forwarding_targets(&db, &input(5), &[])
-        .forwarders
-        .is_empty());
+    assert!(
+        forwarding_targets(&db, &input(5), &[])
+            .forwarders
+            .is_empty()
+    );
 }
 
 #[test]

@@ -1,5 +1,5 @@
 use super::super::*;
-use crate::server::test_transport::{SendMode, SentFrame, TestTransport, BIP_LOCAL_MAC};
+use crate::server::test_transport::{BIP_LOCAL_MAC, SendMode, SentFrame, TestTransport};
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::constructed::decode_bacnet_property_value;
 use bacnet_encoding::constructed::decode_event_notification;
@@ -124,26 +124,23 @@ impl BACnetObject for ObservedObject {
                 Ok(PropertyValue::Enumerated(ObjectType::ANALOG_VALUE.to_raw()))
             }
             p if p == PropertyIdentifier::PRESENT_VALUE => Ok(self.value.clone()),
-            p if p == PropertyIdentifier::RELIABILITY => {
-                self.reliability.clone().ok_or(Error::Protocol {
-                    class: ErrorClass::PROPERTY,
-                    code: ErrorCode::UNKNOWN_PROPERTY,
-                })
-            }
+            p if p == PropertyIdentifier::RELIABILITY => self.reliability.clone().ok_or(
+                Error::protocol(ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY),
+            ),
             p if p == PropertyIdentifier::STATUS_FLAGS => self
                 .status_flags
                 .map(|status_flags| PropertyValue::BitString {
                     unused_bits: 4,
                     data: vec![status_flags],
                 })
-                .ok_or(Error::Protocol {
-                    class: ErrorClass::PROPERTY,
-                    code: ErrorCode::UNKNOWN_PROPERTY,
-                }),
-            _ => Err(Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::UNKNOWN_PROPERTY,
-            }),
+                .ok_or(Error::protocol(
+                    ErrorClass::PROPERTY,
+                    ErrorCode::UNKNOWN_PROPERTY,
+                )),
+            _ => Err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::UNKNOWN_PROPERTY,
+            )),
         }
     }
 
@@ -163,10 +160,10 @@ impl BACnetObject for ObservedObject {
                 self.status_flags = Some(data[0]);
             }
             _ => {
-                return Err(Error::Protocol {
-                    class: ErrorClass::PROPERTY,
-                    code: ErrorCode::WRITE_ACCESS_DENIED,
-                });
+                return Err(Error::protocol(
+                    ErrorClass::PROPERTY,
+                    ErrorCode::WRITE_ACCESS_DENIED,
+                ));
             }
         }
         Ok(())

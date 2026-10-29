@@ -16,10 +16,10 @@ use insta::assert_snapshot;
 use ratatui::crossterm::event::KeyCode;
 
 use super::site::{ClientLimits, Server, Site};
-use super::writes::{arm, finished, lab, options, write, LAB};
+use super::writes::{LAB, arm, finished, lab, options, write};
 use super::*;
-use crate::tui::app::safety::Modal;
 use crate::tui::app::Overlay;
+use crate::tui::app::safety::Modal;
 use crate::tui::profile::Safety;
 
 /// Names the child's workspace; unset, [`killed_child`] does nothing.

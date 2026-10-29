@@ -13,9 +13,9 @@ use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBool};
 
+use super::PyObjectIdentifier;
 use super::mapping::{mapping, optional_item, required_item, validate_keys};
 use super::property_reference::{check_device, property_reference};
-use super::PyObjectIdentifier;
 
 const RULE_REQUIRED: &[&str] = &["enable"];
 const RULE_OPTIONAL: &[&str] = &["time_range", "location"];

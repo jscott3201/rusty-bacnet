@@ -1,7 +1,7 @@
 use super::*;
+use PropertyIdentifier as P;
 use bacnet_objects::{load_control::LoadControlObject, traits::BACnetObject};
 use bacnet_types::primitives::PropertyValue;
-use PropertyIdentifier as P;
 
 #[test]
 fn pics_load_control_property_metadata_is_exact() {

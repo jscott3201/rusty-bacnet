@@ -141,15 +141,9 @@ fn configured_apdu_timeout(db: &ObjectDatabase) -> Result<u32, Error> {
 }
 
 fn service_request_denied() -> Error {
-    Error::Protocol {
-        class: ErrorClass::SERVICES,
-        code: ErrorCode::SERVICE_REQUEST_DENIED,
-    }
+    Error::protocol(ErrorClass::SERVICES, ErrorCode::SERVICE_REQUEST_DENIED)
 }
 
 fn operational_problem() -> Error {
-    Error::Protocol {
-        class: ErrorClass::DEVICE,
-        code: ErrorCode::OPERATIONAL_PROBLEM,
-    }
+    Error::protocol(ErrorClass::DEVICE, ErrorCode::OPERATIONAL_PROBLEM)
 }

@@ -45,9 +45,16 @@ pub(super) async fn receive_confirmed_audit_notification(
         audit_log_sink: sink,
         request: request.clone(),
     };
-    if !config.policy.as_ref().is_some_and(|policy| {
-        fail_closed_authorize(|| policy.authorize_audit_notification(&context))
-    }) {
+    let allowed = match &config.policy {
+        Some(policy) => {
+            ask_policy(policy, context, |policy, context| {
+                policy.authorize_audit_notification(context)
+            })
+            .await
+        }
+        None => false,
+    };
+    if !allowed {
         return Err(request_denied());
     }
 
@@ -123,25 +130,29 @@ pub(super) async fn receive_unconfirmed_audit_notification(
     service_request: &Bytes,
 ) -> Result<Option<ForwardBatch>, Error> {
     validate_payload_size("UnconfirmedAuditNotification", service_request)?;
-    decode_authorize_and_store(
-        db,
-        config,
-        "UnconfirmedAuditNotification",
-        service_request,
-        |sink, request| {
-            let context = UnconfirmedAuditNotificationAuthorizationContext {
-                source_mac: MacAddr::from_slice(source_mac),
-                source_network: source_network.cloned(),
-                provenance,
-                audit_log_sink: sink,
-                request: request.clone(),
-            };
-            config.policy.as_ref().is_some_and(|policy| {
-                fail_closed_authorize(|| policy.authorize_unconfirmed_audit_notification(&context))
+    let request = decode_request("UnconfirmedAuditNotification", service_request)?;
+    let sink = config.audit_notification_sink.ok_or_else(request_denied)?;
+    let context = UnconfirmedAuditNotificationAuthorizationContext {
+        source_mac: MacAddr::from_slice(source_mac),
+        source_network: source_network.cloned(),
+        provenance,
+        audit_log_sink: sink,
+        request: request.clone(),
+    };
+    let allowed = match &config.policy {
+        Some(policy) => {
+            ask_policy(policy, context, |policy, context| {
+                policy.authorize_unconfirmed_audit_notification(context)
             })
-        },
-    )
-    .await
+            .await
+        }
+        None => false,
+    };
+    if !allowed {
+        return Err(request_denied());
+    }
+    let (_, forward) = store_staged(db, sink, &request, None, service_request).await?;
+    Ok(forward)
 }
 
 fn validate_payload_size(service: &str, service_request: &Bytes) -> Result<(), Error> {
@@ -151,26 +162,6 @@ fn validate_payload_size(service: &str, service_request: &Bytes) -> Result<(), E
         )));
     }
     Ok(())
-}
-
-async fn decode_authorize_and_store<F>(
-    db: &Arc<RwLock<ObjectDatabase>>,
-    config: &ServerConfig,
-    service: &str,
-    service_request: &Bytes,
-    authorize: F,
-) -> Result<Option<ForwardBatch>, Error>
-where
-    F: FnOnce(ObjectIdentifier, &bacnet_services::audit::AuditNotificationRequest) -> bool,
-{
-    let request = decode_request(service, service_request)?;
-    let sink = config.audit_notification_sink.ok_or_else(request_denied)?;
-    if !authorize(sink, &request) {
-        return Err(request_denied());
-    }
-
-    let (_, forward) = store_staged(db, sink, &request, None, service_request).await?;
-    Ok(forward)
 }
 
 fn decode_request(
@@ -199,9 +190,22 @@ pub(in crate::server) fn fail_closed_authorize(authorize: impl FnOnce() -> bool)
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(authorize)).unwrap_or(false)
 }
 
+/// Ask `policy` about `context` through `ask` on Tokio's blocking pool, as
+/// [`ask_mutation_policy`] does for mutations
+/// (#2032): the request task awaits the answer, so a policy that blocks holds
+/// no runtime worker and `stop()` can still abort the request. A panic, or a
+/// call that never reports back, denies.
+pub(in crate::server) async fn ask_policy<C: Send + 'static>(
+    policy: &Arc<dyn crate::ServerPolicy>,
+    context: C,
+    ask: fn(&dyn crate::ServerPolicy, &C) -> bool,
+) -> bool {
+    let policy = Arc::clone(policy);
+    tokio::task::spawn_blocking(move || fail_closed_authorize(|| ask(&*policy, &context)))
+        .await
+        .unwrap_or(false)
+}
+
 pub(super) fn request_denied() -> Error {
-    Error::Protocol {
-        class: ErrorClass::SERVICES,
-        code: ErrorCode::SERVICE_REQUEST_DENIED,
-    }
+    Error::protocol(ErrorClass::SERVICES, ErrorCode::SERVICE_REQUEST_DENIED)
 }

@@ -3,12 +3,12 @@ use bacnet_encoding::npdu::decode_npdu;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
 use bacnet_types::enums::AbortReason;
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 use tokio::sync::mpsc;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 use super::segmented_receive_lifecycle_tests::{
-    expect_segment_ack, response_segment, send_to_client, start_reassembly, CLIENT_MAC, SERVER_MAC,
+    CLIENT_MAC, SERVER_MAC, expect_segment_ack, response_segment, send_to_client, start_reassembly,
 };
 use super::{BACnetClient, ClientConfig};
 
@@ -74,7 +74,7 @@ async fn assert_active_initial_abort(
         .unwrap();
     assert!(matches!(
         result,
-        Err(Error::Abort { reason })
+        Err(Error::Remote(RemoteError::Abort { reason }))
             if reason == AbortReason::INVALID_APDU_IN_THIS_STATE
     ));
     {

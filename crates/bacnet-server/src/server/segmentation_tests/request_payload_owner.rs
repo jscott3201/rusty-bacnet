@@ -204,9 +204,11 @@ fn request_payload_owner_checked_aggregate_and_charge_fail_closed() {
         .unwrap()
         .payload;
     payload.saved_payload_bytes = usize::MAX;
-    assert!(payload
-        .save_new(1, Bytes::from_static(b"x"), Some(0))
-        .is_err());
+    assert!(
+        payload
+            .save_new(1, Bytes::from_static(b"x"), Some(0))
+            .is_err()
+    );
     assert_eq!(payload.receiver.received_count(), 1);
     assert_eq!(payload.saved_payload_bytes(), usize::MAX);
     assert_eq!(saved_request_payload_bytes(&receivers), None);

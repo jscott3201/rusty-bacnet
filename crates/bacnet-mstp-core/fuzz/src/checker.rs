@@ -73,11 +73,11 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use bacnet_mstp_codec::{FrameType, BROADCAST_MAC};
+use bacnet_mstp_codec::{BROADCAST_MAC, FrameType};
 use bacnet_mstp_core::RequestId;
 
 use crate::line::{Heard, Line};
-use crate::model::{Params, Seen, N_MIN_OCTETS, T_NO_TOKEN};
+use crate::model::{N_MIN_OCTETS, Params, Seen, T_NO_TOKEN};
 use crate::queues::QueueLog;
 
 /// Who holds the token, as far as the line shows.

@@ -42,7 +42,7 @@ const METER_TYPES: [ObjectType; 7] = [
 ];
 
 /// The proprietary object type range, open to vendors (Clause 23).
-const PROPRIETARY_TYPES: std::ops::RangeInclusive<u32> = 128..=1023;
+const PROPRIETARY_TYPES: core::ops::RangeInclusive<u32> = 128..=1023;
 
 /// Whether `object_type` can serve as the meter Energy_Meter_Ref names.
 fn is_meter_type(object_type: ObjectType) -> bool {

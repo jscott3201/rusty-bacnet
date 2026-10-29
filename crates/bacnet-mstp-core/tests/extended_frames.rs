@@ -6,9 +6,9 @@
 
 use bacnet_mstp_codec::crc::crc8;
 use bacnet_mstp_codec::{
-    decode_frame_in_place, Frame, FrameType, BROADCAST_MAC, MAX_COBS_FRAME_LENGTH,
-    MAX_EXTENDED_FRAME_LENGTH, MAX_EXTENDED_MPDU_DATA, MAX_STANDARD_FRAME_LENGTH,
-    MAX_STANDARD_MPDU_DATA,
+    BROADCAST_MAC, Frame, FrameType, MAX_COBS_FRAME_LENGTH, MAX_EXTENDED_FRAME_LENGTH,
+    MAX_EXTENDED_MPDU_DATA, MAX_STANDARD_FRAME_LENGTH, MAX_STANDARD_MPDU_DATA,
+    decode_frame_in_place,
 };
 use bacnet_mstp_core::npdu::NetworkPriority;
 use bacnet_mstp_core::{
@@ -251,22 +251,26 @@ fn extended_frames_need_extended_buffers() {
         MAX_EXTENDED_MPDU_DATA,
     );
     // All extended: accepted. All standard, flag off: accepted as before.
-    assert!(MasterCore::from_parts(
-        config(true),
-        Queues::new(),
-        &mut extended_rx,
-        &mut extended_actions,
-        Instant::ZERO,
-    )
-    .is_ok());
-    assert!(MasterCore::from_parts(
-        config(false),
-        FixedQueues::<4, 4>::new(),
-        &mut standard_rx,
-        &mut standard_actions,
-        Instant::ZERO,
-    )
-    .is_ok());
+    assert!(
+        MasterCore::from_parts(
+            config(true),
+            Queues::new(),
+            &mut extended_rx,
+            &mut extended_actions,
+            Instant::ZERO,
+        )
+        .is_ok()
+    );
+    assert!(
+        MasterCore::from_parts(
+            config(false),
+            FixedQueues::<4, 4>::new(),
+            &mut standard_rx,
+            &mut standard_actions,
+            Instant::ZERO,
+        )
+        .is_ok()
+    );
     assert_eq!(config(false).max_npdu(), MAX_STANDARD_MPDU_DATA);
     assert_eq!(config(true).max_npdu(), MAX_EXTENDED_MPDU_DATA);
 }

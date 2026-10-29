@@ -20,9 +20,9 @@
 //! when [`poll`](super::Storage::poll) reaches them, after every queued
 //! task, from the table as it is then.
 
+use super::Storage;
 use super::counters::bump;
 use super::output::{Cause, Current, Kind, Target};
-use super::Storage;
 use crate::message::Networks;
 use crate::npdu::{NetworkMessageType, NetworkPriority, Npdu};
 use crate::table::Reachability;
@@ -205,14 +205,14 @@ impl Flow {
 }
 
 impl<
-        const P: usize,
-        const R: usize,
-        const H: usize,
-        const D: usize,
-        const N: usize,
-        G: super::GroupClassifier,
-        const B: usize,
-    > Storage<P, R, H, D, N, G, B>
+    const P: usize,
+    const R: usize,
+    const H: usize,
+    const D: usize,
+    const N: usize,
+    G: super::GroupClassifier,
+    const B: usize,
+> Storage<P, R, H, D, N, G, B>
 {
     /// [`Router::egress_backlog`](super::Router::egress_backlog).
     pub(super) fn egress_backlog(

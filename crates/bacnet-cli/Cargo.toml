@@ -17,12 +17,16 @@ path = "src/main.rs"
 
 [dependencies]
 bacnet-npdu = { workspace = true }
+bacnet-bip-core = { workspace = true, optional = true }
 bacnet-types = { workspace = true, features = ["std"] }
 bacnet-encoding = { workspace = true, features = ["std"] }
 bacnet-services = { workspace = true, features = ["std"] }
 bacnet-transport = { workspace = true, features = ["ipv6"] }
 bacnet-network.workspace = true
 bacnet-client = { workspace = true, features = ["ipv6"] }
+bacnet-ops.workspace = true
+# `bacnet mcp serve` (the `mcp` feature, #2066).
+bacnet-mcp = { workspace = true, optional = true, features = ["stdio"] }
 bytes = { workspace = true, features = ["std"] }
 tracing.workspace = true
 tokio = { workspace = true, features = ["net", "rt-multi-thread", "sync", "macros", "time", "signal"] }
@@ -67,6 +71,8 @@ unicode-segmentation = { version = "1.13", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
+# The decode tests' frame builders (`bacnet_ops::decode::testing`).
+bacnet-ops = { workspace = true, features = ["test-support"] }
 bacnet-objects.workspace = true
 bacnet-server.workspace = true
 rcgen.workspace = true
@@ -90,6 +96,7 @@ default = ["tui"]
 # (#974). On by default since 0.14.0; `--no-default-features` builds the
 # one-shot commands without it (and without ratatui and crossterm).
 tui = [
+    "dep:bacnet-bip-core",
     "dep:ratatui",
     "dep:crossterm",
     "dep:futures-util",
@@ -103,12 +110,17 @@ tui = [
 sc-tls = [
     "bacnet-client/sc-tls",
     "bacnet-transport/sc-tls",
+    "bacnet-ops/sc-tls",
     "dep:tokio-rustls",
     "dep:rustls",
     "dep:rustls-pki-types",
     "dep:time",
 ]
 pcap = ["dep:pcap", "dep:ctrlc", "dep:libc"]
+# `bacnet mcp serve --stdio`: an MCP server for AI agent hosts (#2066),
+# read-only unless a profile opts in to writes (#2068), off by default. It
+# reads TUI profiles (their [mcp] table), so it brings the TUI along.
+mcp = ["tui", "dep:bacnet-mcp"]
 # MS/TP over a serial port (`--mstp`, `mstp-ports`). Released in the Linux
 # CLI; built and tested on macOS and Windows as experimental (#969).
 serial = ["bacnet-transport/serial"]

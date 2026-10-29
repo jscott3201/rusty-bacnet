@@ -1,5 +1,6 @@
 use super::*;
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
+use bacnet_types::error::RemoteError;
 
 fn read(lp: &LoopObject, property: PropertyIdentifier) -> PropertyValue {
     lp.read_property(property, None).unwrap()
@@ -63,7 +64,7 @@ fn python_add_loop_settings_are_checked_like_the_rust_setters() {
     for settings in refused {
         let error = loop_object(1, "LOOP-1", 62, settings).err().unwrap();
         assert!(
-            matches!(error, Error::Protocol { class, code }
+            matches!(error, Error::Remote(RemoteError::Error { class, code })
                 if class == ErrorClass::PROPERTY
                     && code == ErrorCode::VALUE_OUT_OF_RANGE),
             "{error:?}"

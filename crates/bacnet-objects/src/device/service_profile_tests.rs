@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_types::error::RemoteError;
 
 #[test]
 fn standalone_device_cov_properties_follow_declared_service_profile() {
@@ -35,7 +36,7 @@ fn standalone_device_cov_properties_follow_declared_service_profile() {
                 assert_eq!(result.unwrap(), PropertyValue::ApplicationData(vec![]));
             } else {
                 assert!(
-                    matches!(result, Err(Error::Protocol { class, code }) if class == ErrorClass::PROPERTY && code == ErrorCode::UNKNOWN_PROPERTY)
+                    matches!(result, Err(Error::Remote(RemoteError::Error { class, code })) if class == ErrorClass::PROPERTY && code == ErrorCode::UNKNOWN_PROPERTY)
                 );
             }
             let PropertyValue::List(list) = object

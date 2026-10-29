@@ -44,10 +44,11 @@ fn driver_remains_owned_after_data_end_until_release() {
     assert_eq!(sim.nodes[0].driving, None);
     assert_eq!(sim.nodes[0].listening_since, Some(us(2_400)));
     assert_eq!(sim.line.last_activity(), Some(us(1_000)));
-    assert!(!sim
-        .trace
-        .entries()
-        .any(|entry| matches!(entry.kind, crate::TraceKind::Garbled)));
+    assert!(
+        !sim.trace
+            .entries()
+            .any(|entry| matches!(entry.kind, crate::TraceKind::Garbled))
+    );
     assert_eq!(sim.frames.len(), 1);
     assert_eq!(sim.report.driver_releases.len(), 1);
     let release = sim.report.driver_releases[0];

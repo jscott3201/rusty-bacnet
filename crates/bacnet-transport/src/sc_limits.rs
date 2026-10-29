@@ -28,7 +28,7 @@ pub(crate) fn websocket(
 mod tests {
     use super::*;
     use std::io::{self, Read, Write};
-    use tokio_tungstenite::tungstenite::{protocol::Role, Error, Message, WebSocket};
+    use tokio_tungstenite::tungstenite::{Error, Message, WebSocket, protocol::Role};
 
     struct Blocked;
     impl Read for Blocked {

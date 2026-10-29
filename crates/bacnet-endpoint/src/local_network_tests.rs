@@ -12,16 +12,16 @@
 //! learned through the session's own Network-Number-Is intake.
 use super::*;
 use crate::roles::EndpointApduDestination;
-use bacnet_encoding::apdu::{decode_apdu, encode_apdu, ComplexAck, ConfirmedRequest};
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
+use bacnet_encoding::apdu::{ComplexAck, ConfirmedRequest, decode_apdu, encode_apdu};
+use bacnet_encoding::npdu::{Npdu, NpduAddress, decode_npdu, encode_npdu};
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_transport::bvll::encode_bip_mac;
 use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
-use bacnet_types::enums::{ConfirmedServiceChoice, ObjectType, PropertyIdentifier};
 use bacnet_types::MacAddr;
+use bacnet_types::enums::{ConfirmedServiceChoice, ObjectType, PropertyIdentifier};
 use bytes::{Bytes, BytesMut};
 use std::net::{Ipv4Addr, SocketAddrV4};
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 #[path = "local_network_source_tests.rs"]
 mod source;

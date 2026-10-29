@@ -88,7 +88,7 @@ async fn router_time_is_tokio_time_and_the_sweep_runs_at_its_deadline() {
         router.table().lookup(3000).is_none(),
         "the 360 s sweep purges it"
     );
-    router.stop().await;
+    router.stop().await.unwrap();
 }
 
 /// The authorizer runs with the engine's lock held, as its contract says:
@@ -122,7 +122,7 @@ async fn the_authorizer_runs_under_the_engine_lock() {
     assert_eq!(npdu.as_ref(), [1, 0x80, 0x01, 0x0b, 0xb8]);
     assert_eq!(*locked.lock().unwrap(), [true]);
     assert!(!router.shared.engine.is_locked());
-    router.stop().await;
+    router.stop().await.unwrap();
 }
 
 /// The counts take no lock: on a thread that holds the table's guard,
@@ -170,7 +170,7 @@ async fn the_counts_return_while_the_table_guard_lives() {
     let Ok(mut router) = Arc::try_unwrap(router) else {
         panic!("the reader let the router go");
     };
-    router.stop().await;
+    router.stop().await.unwrap();
 }
 
 /// An I-Could-Be-Router for a network the table lacks is stored only below
@@ -183,9 +183,11 @@ async fn i_could_be_router_stops_at_the_route_cap() {
     drain_announcements(&mut peers).await;
     let now = router.now();
     for network in 1000..1254 {
-        assert!(router
-            .table()
-            .add_learned(network, PortId(0), Mac::from_array([9]), now));
+        assert!(
+            router
+                .table()
+                .add_learned(network, PortId(0), Mac::from_array([9]), now)
+        );
     }
     assert_eq!(router.table().len(), ROUTE_CAP);
     peers[1]
@@ -215,7 +217,7 @@ async fn i_could_be_router_stops_at_the_route_cap() {
     );
     assert_eq!(router.table().claim_counters().learned_cap_ignored, 1);
     assert_quiet(&mut peers);
-    router.stop().await;
+    router.stop().await.unwrap();
 }
 
 async fn refused(ports: Vec<RouterPort<LoopbackTransport>>) -> Option<Error> {
@@ -253,7 +255,7 @@ async fn start_refuses_what_the_engine_cannot_run() {
     )
     .await
     .expect("18 octets is within the bound");
-    router.stop().await;
+    router.stop().await.unwrap();
 }
 
 /// A port on network 0 or 0xFFFF is refused before any transport starts
@@ -299,7 +301,7 @@ async fn start_refuses_a_reserved_network_before_any_transport_starts() {
 #[tokio::test]
 async fn a_rewrite_past_the_scratch_is_dropped_and_counted() {
     use super::envelope_harness::Harness;
-    use bacnet_encoding::npdu::{decode_npdu, NpduAddress};
+    use bacnet_encoding::npdu::{NpduAddress, decode_npdu};
     use bacnet_npdu::NpduLimits;
 
     let widest = [NpduLimits::both(u16::MAX); 2];

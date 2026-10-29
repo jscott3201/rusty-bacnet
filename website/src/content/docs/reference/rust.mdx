@@ -1,0 +1,76 @@
+---
+title: "Rust crate map"
+description: "Every published Rust crate: its layer, purpose, feature flags and dependencies, with links to its documentation on docs.rs."
+---
+
+import { release, repository } from '../../../lib/site.mjs';
+
+The stack is a set of crates, each built on the ones in the layers below it. Depend on the highest one that covers your task: `bacnet-client` to read and write remote devices, `bacnet-server` to serve objects, `bacnet-endpoint` for both roles on one transport, and the portable cores for firmware without an operating system. Every item, with its feature gates and examples, is in each crate's rustdoc on docs.rs; this page helps you find the crate.
+
+Each link opens the crate's documentation for v{release}. All crates but `bacnet-time` share that version; `bacnet-time` versions on its own, so its link opens the latest build, and docs.rs's version menu picks another. A crate's rustdoc lists the features its docs.rs build turns on.
+
+:::note[On `dev` after the release]
+This page is generated from the `dev` branch and tracks the next release. A crate merged after v{release} is marked unreleased and links to its source instead of docs.rs, and features or dependencies added since may not be in the released crates. The <a href={`${repository}/releases/tag/v${release}`}>v{release} release notes</a> and the <a href={`${repository}/tree/dev/changelog.d`}>changes waiting for the next release</a> say what changed.
+:::
+
+Lifecycle, ownership and migration contracts that span crates are in the <a href={`${repository}/blob/v${release}/docs/rust-api.md`}>Rust API guide</a> and the <a href={`${repository}/blob/v${release}/docs/architecture.md`}>architecture notes</a>. For a first program, start with [Embed with Rust](/rusty-bacnet/start/rust/) or [Run on a microcontroller](/rusty-bacnet/start/embedded/).
+
+`website/scripts/reference-rust.mjs` writes the tables below from `cargo metadata`: names, descriptions, features and workspace dependencies. Edit the crates' manifests, not this part of the page.
+
+{/* generated:start by website/scripts/reference-rust.mjs; do not edit below this line */}
+
+## Portable cores
+
+`no_std` crates that need no allocator: the clock, the network-layer vocabulary, the frame codecs and the sans-IO MS/TP, B/IP and router engines that firmware and the hosted transports share.
+
+| Crate | Purpose | Features | Depends on |
+|---|---|---|---|
+| <a href={`https://docs.rs/bacnet-time/latest`}>bacnet-time</a> | The no-std monotonic Instant and Duration, in nanoseconds, that the portable BACnet cores share. | `std` | — |
+| <a href={`https://docs.rs/bacnet-npdu/${release}`}>bacnet-npdu</a> | The no-std BACnet network-layer vocabulary (Clause 6): a borrowed NPDU view and encoder, network message types, reject reasons, network priority and NPDU limits. | — | — |
+| <a href={`https://docs.rs/bacnet-mstp-codec/${release}`}>bacnet-mstp-codec</a> | Portable no-std BACnet MS/TP frame codec. | `alloc`, `bytes`, `crc32k-table`, `heapless` | — |
+| <a href={`https://docs.rs/bacnet-bip-codec/${release}`}>bacnet-bip-codec</a> | Portable no-std BACnet/IP and BACnet/IPv6 (Annexes J and U) BVLL codec. | `alloc`, `bytes`, `heapless` | — |
+| <a href={`https://docs.rs/bacnet-mstp-core/${release}`}>bacnet-mstp-core</a> | Portable allocation-bounded BACnet MS/TP master core. | `alloc`, `inspect` | `bacnet-mstp-codec`, `bacnet-npdu`, `bacnet-time` |
+| <a href={`https://docs.rs/bacnet-bip-core/${release}`}>bacnet-bip-core</a> | Portable no-std BACnet/IP behaviour (Annex J): a sans-IO node engine, BBMD tables and broadcast forwarding. | — | `bacnet-bip-codec`, `bacnet-npdu`, `bacnet-time` |
+| <a href={`https://docs.rs/bacnet-router-core/${release}`}>bacnet-router-core</a> | Portable no-std BACnet router (Clause 6): a sans-IO routing engine over a borrowed NPDU view and writer, network-layer messages, a routing table and route discovery, with B/IP and MS/TP port glue. | `bip`, `mstp` | `bacnet-bip-core`, `bacnet-mstp-core`, `bacnet-npdu`, `bacnet-time` |
+
+## Application layer
+
+Types, the APDU codec and the service requests and responses. They build with `std`, or `no_std` with or without an allocator.
+
+| Crate | Purpose | Features | Depends on |
+|---|---|---|---|
+| <a href={`https://docs.rs/bacnet-types/${release}`}>bacnet-types</a> | BACnet protocol types, enums, and primitives per ASHRAE 135-2020. | `alloc`, `serde`, `std` (default) | `bacnet-npdu` |
+| <a href={`https://docs.rs/bacnet-encoding/${release}`}>bacnet-encoding</a> | BACnet ASN.1/BER encoding, APDU and NPDU codecs per ASHRAE 135-2020. | `alloc`, `heapless`, `std` (default) | `bacnet-npdu`, `bacnet-types` |
+| <a href={`https://docs.rs/bacnet-services/${release}`}>bacnet-services</a> | BACnet service request/response encode/decode per ASHRAE 135-2020. | `alloc`, `std` (default) | `bacnet-encoding`, `bacnet-types` |
+
+## Hosted network
+
+The Tokio data links and the network layer with its router.
+
+| Crate | Purpose | Features | Depends on |
+|---|---|---|---|
+| <a href={`https://docs.rs/bacnet-transport/${release}`}>bacnet-transport</a> | BACnet transport layer: BIP, IPv6, BACnet/SC, MS/TP, BBMD, Ethernet. | `ethernet`, `ipv6`, `sc-tls`, `serial`, `serial-gpio`, `test-support` | `bacnet-bip-codec`, `bacnet-bip-core`, `bacnet-encoding`, `bacnet-mstp-codec`, `bacnet-mstp-core`, `bacnet-npdu`, `bacnet-time`, `bacnet-types` |
+| <a href={`https://docs.rs/bacnet-network/${release}`}>bacnet-network</a> | BACnet network layer: routing, router tables, priority channels. | — | `bacnet-encoding`, `bacnet-npdu`, `bacnet-router-core`, `bacnet-time`, `bacnet-transport`, `bacnet-types` |
+
+## Objects and roles
+
+The object database, the client and server roles, and the shared endpoint that runs both on one transport.
+
+| Crate | Purpose | Features | Depends on |
+|---|---|---|---|
+| <a href={`https://docs.rs/bacnet-objects/${release}`}>bacnet-objects</a> | BACnet object model: traits, database, and standard object types. | `alloc`, `std` (default) | `bacnet-encoding`, `bacnet-types` |
+| <a href={`https://docs.rs/bacnet-endpoint-core/${release}`}>bacnet-endpoint-core</a> | Shared BACnet endpoint ownership and transaction coordination. | — | `bacnet-encoding`, `bacnet-network`, `bacnet-npdu`, `bacnet-transport`, `bacnet-types` |
+| <a href={`https://docs.rs/bacnet-client/${release}`}>bacnet-client</a> | BACnet async client: TSM, segmentation, discovery, and service APIs. | `ipv6`, `sc-tls` | `bacnet-encoding`, `bacnet-endpoint-core`, `bacnet-network`, `bacnet-npdu`, `bacnet-router-core`, `bacnet-services`, `bacnet-transport`, `bacnet-types` |
+| <a href={`https://docs.rs/bacnet-server/${release}`}>bacnet-server</a> | BACnet server: APDU dispatch and service handlers. | `sc-tls` | `bacnet-encoding`, `bacnet-endpoint-core`, `bacnet-network`, `bacnet-npdu`, `bacnet-objects`, `bacnet-services`, `bacnet-transport`, `bacnet-types` |
+| <a href={`https://docs.rs/bacnet-endpoint/${release}`}>bacnet-endpoint</a> | BACnet endpoint that owns one transport and runs client and server roles through it. | `sc-tls` | `bacnet-client`, `bacnet-encoding`, `bacnet-endpoint-core`, `bacnet-network`, `bacnet-npdu`, `bacnet-objects`, `bacnet-server`, `bacnet-services`, `bacnet-transport`, `bacnet-types` |
+
+## Tools
+
+The operations core, the MCP server for AI agent hosts, and the command-line tool.
+
+| Crate | Purpose | Features | Depends on |
+|---|---|---|---|
+| <a href={`https://docs.rs/bacnet-ops/${release}`}>bacnet-ops</a> | UI-free BACnet operations core shared by the bacnet CLI, its TUI and its MCP server. | `sc-tls`, `test-support` | `bacnet-client`, `bacnet-encoding`, `bacnet-npdu`, `bacnet-services`, `bacnet-transport`, `bacnet-types` |
+| <a href={`https://docs.rs/bacnet-mcp/${release}`}>bacnet-mcp</a> | A Model Context Protocol server for BACnet sites, over the bacnet-ops engine, read-only unless a profile offers guarded writes. | `stdio` (default) | `bacnet-client`, `bacnet-ops`, `bacnet-services`, `bacnet-transport`, `bacnet-types` |
+| <a href={`https://crates.io/crates/bacnet-cli`}>bacnet-cli</a> | BACnet command-line tool for device discovery, reading, and writing. A program, not a library: its commands are in the [CLI reference](/rusty-bacnet/reference/cli/). | `mcp`, `pcap`, `sc-tls`, `serial`, `tui` (default) | `bacnet-bip-core`, `bacnet-client`, `bacnet-encoding`, `bacnet-mcp`, `bacnet-network`, `bacnet-npdu`, `bacnet-ops`, `bacnet-services`, `bacnet-transport`, `bacnet-types` |
+{/* generated:end */}

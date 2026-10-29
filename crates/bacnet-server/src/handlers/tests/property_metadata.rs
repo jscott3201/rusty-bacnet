@@ -346,10 +346,10 @@ fn rpm_metadata_selectors_are_exact_for_audit_reporter() {
 
 #[test]
 fn rpm_metadata_analog_required_optional_and_budgeted_bytes_agree() {
+    use PropertyIdentifier as P;
     use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
     use bacnet_objects::traits::BACnetObject;
     use bacnet_types::enums::EngineeringUnits;
-    use PropertyIdentifier as P;
 
     let required = vec![
         P::OBJECT_IDENTIFIER,
@@ -488,9 +488,9 @@ const INTRINSIC_REQUIRED: [PropertyIdentifier; 7] = [
 
 #[test]
 fn rpm_metadata_binary_required_optional_and_budgeted_bytes_agree() {
+    use PropertyIdentifier as P;
     use bacnet_objects::traits::BACnetObject;
     use bacnet_types::primitives::PropertyValue;
-    use PropertyIdentifier as P;
 
     let base = [
         P::OBJECT_IDENTIFIER,
@@ -617,8 +617,8 @@ pub(super) fn multistate_objects() -> [Box<dyn bacnet_objects::traits::BACnetObj
 
 #[test]
 fn rpm_metadata_multistate_required_optional_and_budgeted_bytes_agree() {
-    use bacnet_types::primitives::PropertyValue;
     use PropertyIdentifier as P;
+    use bacnet_types::primitives::PropertyValue;
     let base = [
         P::OBJECT_IDENTIFIER,
         P::OBJECT_NAME,

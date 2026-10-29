@@ -11,7 +11,6 @@ test('the Terminal UI guide is one sidebar group, chained page to page', async (
   await page.locator('.sl-markdown-content').getByRole('link', { name: 'Use the terminal UI', exact: true }).click();
   await expect(page).toHaveURL(base + 'tui/overview/');
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Use the terminal UI');
-  await expect(page.locator('main')).toContainText('plain bacnet on a terminal opens it');
   // Each page's NextStep leads to the next one in the sidebar.
   for (const [index, item] of tui.slice(0, -1).entries()) {
     await page.goto(base + item.slug + '/');
@@ -35,7 +34,9 @@ test('screenshots are optimized images with their manifest alt text', async ({ p
     expect((await request.get(src!)).status()).toBe(200);
   }
   const raw = await (await request.get(base + 'raw/tui/writes.md')).text();
-  expect(raw).toContain('*Screenshot: The dialog that arms a write session, with a reason and a length in minutes.*');
+  const shown = manifest.shots.filter((shot: { name: string }) => shot.name.startsWith('writes-'));
+  expect(shown.length).toBeGreaterThan(8);
+  for (const shot of shown) expect(raw).toContain(`*Screenshot: ${shot.alt}*`);
   expect(raw).not.toContain('assets/tui/');
 });
 

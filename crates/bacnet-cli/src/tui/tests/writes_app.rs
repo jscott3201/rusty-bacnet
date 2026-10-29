@@ -6,8 +6,8 @@ use insta::assert_snapshot;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
 use super::*;
-use crate::tui::app::safety::Modal;
 use crate::tui::app::Overlay;
+use crate::tui::app::safety::Modal;
 use crate::tui::profile::Safety;
 use crate::tui::safety::ledger::{Entry, State};
 use crate::tui::safety::{Level, SafetyCommand, SafetyEvent, Stored};
@@ -44,6 +44,7 @@ fn entry(run: &str) -> Entry {
         state: State::Applied,
         kept: false,
         seq: 1,
+        origin: Default::default(),
     }
 }
 
@@ -141,7 +142,7 @@ fn a_double_ctrl_c_goes_through_the_exit_guard() {
 
 #[test]
 fn ctrl_c_on_a_preview_declines_it() {
-    use crate::tui::safety::{Gate, Preview, Tier};
+    use crate::tui::safety::{Change, Gate, Preview, Tier};
     let mut app = connected_app();
     ready(&mut app, true, Vec::new());
     let preview = Box::new(Preview {
@@ -152,7 +153,7 @@ fn ctrl_c_on_a_preview_declines_it() {
     });
     app.overlay = Overlay::Safety(Box::new(Modal::Confirm {
         req: 1,
-        preview: preview.clone(),
+        change: Change::Write(preview.clone()),
         typed: String::new(),
         error: None,
         opened: app.now,
@@ -160,14 +161,16 @@ fn ctrl_c_on_a_preview_declines_it() {
     let commands = press_with(&mut app, KeyCode::Char('c'), KeyModifiers::CONTROL);
     assert_eq!(
         commands,
-        [Command::Safety(SafetyCommand::Declined { preview })]
+        [Command::Safety(SafetyCommand::Declined {
+            change: Change::Write(preview)
+        })]
     );
     assert_eq!(app.overlay, Overlay::None);
 }
 
 /// An armed app showing a T1 preview opened now.
 fn confirming() -> App {
-    use crate::tui::safety::{Gate, Preview, Tier};
+    use crate::tui::safety::{Change, Gate, Preview, Tier};
     let mut app = connected_app();
     ready(&mut app, true, Vec::new());
     worker(
@@ -176,12 +179,12 @@ fn confirming() -> App {
     );
     app.overlay = Overlay::Safety(Box::new(Modal::Confirm {
         req: 1,
-        preview: Box::new(Preview {
+        change: Change::Write(Box::new(Preview {
             device: 100,
             items: Vec::new(),
             batch: false,
             gate: Gate::Allowed(Tier::T1),
-        }),
+        })),
         typed: String::new(),
         error: None,
         opened: app.now,
@@ -254,4 +257,49 @@ fn entries_from_an_earlier_run_open_the_ledger_at_launch() {
     let text = screen(&mut app, 120, 40);
     assert!(text.contains("[earlier run]"), "{text}");
     assert!(text.contains("[kept, earlier run]"), "{text}");
+}
+
+/// An MCP agent's change, saved to the profile's ledger by the shared
+/// desk, is listed when the TUI opens the profile afterwards, marked with
+/// its front end and principal (#2068, acceptance 7).
+#[test]
+fn an_agents_entries_are_listed_and_marked_as_mcp() {
+    use crate::tui::safety::ledger::{Ledger, Origin};
+    use crate::tui::safety::{Effect, Gate, Occupancy, Planned, Tier, WriteSpec};
+    use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+    use bacnet_types::primitives::ObjectIdentifier;
+    let dir = tempfile::tempdir().unwrap();
+    let planned = Planned {
+        spec: WriteSpec {
+            device: 100,
+            object: ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap(),
+            property: PropertyIdentifier::PRESENT_VALUE,
+            index: None,
+            value: Some("42".into()),
+            priority: Some(12),
+        },
+        priority: Some(12),
+        value: entry("mcp-run").written,
+        commandable: true,
+        before: None,
+        occupancy: Occupancy::Empty,
+        effect: Effect::NotPresentValue,
+        out_of_service: None,
+        notes: Vec::new(),
+        gate: Gate::Allowed(Tier::T1),
+    };
+    let mut ledger = Ledger::open(dir.path())
+        .unwrap()
+        .written_by(Origin::mcp("agent-user"));
+    let id = ledger.begin(&planned, "mcp-run", "2026-10-29T12:00:00.000Z");
+    ledger.finish(id, Some(true), &[]);
+    ledger.save().unwrap();
+    let file = std::fs::read_to_string(dir.path().join("ledger.json")).unwrap();
+    assert!(file.contains("\"front_end\": \"mcp\""), "{file}");
+    let mut app = connected_app();
+    let entries = Ledger::open(dir.path()).unwrap().entries().to_vec();
+    ready(&mut app, true, entries);
+    let text = screen(&mut app, 120, 40);
+    assert!(text.contains("[earlier run] [mcp:"), "{text}");
+    assert!(text.contains("agent-user]"), "{text}");
 }

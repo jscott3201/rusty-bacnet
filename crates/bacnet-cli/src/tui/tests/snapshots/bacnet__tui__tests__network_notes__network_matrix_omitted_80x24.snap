@@ -1,0 +1,28 @@
+---
+source: crates/bacnet-cli/src/tui/tests/network_notes.rs
+expression: text
+---
+" 1 2 3 [4 Network] 7 | BIP | up | READ-ONLY | COV 0 | FD held | drop 0   ? help "
+"┌ Foreign device ──────────────────────────────────────────────────────────────┐"
+"│BBMD 10.0.1.1:47808   TTL 60 s   renews every 30 s                            │"
+"│Status registered, lease 43 s left                                            │"
+"│Counts attempts 2  accepted 2  refused 0  lapses 0                            │"
+"│Last BVLC-Result successful-completion (0x0000), attempt accepted             │"
+"│Next registration in  13 s  █████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░│"
+"│As the BBMD sees us 10.0.9.5:47808  TTL 60 s + 30 s grace, 85 s left          │"
+"└──────────────────────────────────────────────────────────────────────────────┘"
+"┌ BDT FDT [Matrix] Networks | 10.0.1.1:47808 | read 0s ago ────────────────────┐"
+"│BBMD (row lists column)   #1    #2    #3    #4    #5    #6    #7    +33 more  │"
+"│#1 10.0.1.1:47808         uni   uni   uni   uni   uni   uni   uni             │"
+"│#2 10.0.2.1:47808         uni   uni   uni   uni   uni   uni   uni             │"
+"│#3 10.0.3.1:47808         uni   uni   uni   uni   uni   uni   uni             │"
+"│#4 10.0.4.1:47808         uni   uni   uni   uni   uni   uni   uni             │"
+"│#5 10.0.5.1:47808         uni   uni   uni   uni   uni   uni   uni             │"
+"│#6 10.0.6.1:47808         uni   uni   uni   uni   uni   uni   uni             │"
+"│#7 10.0.7.1:47808         uni   uni   uni   uni   uni   uni   uni             │"
+"│+33 more                                                                      │"
+"│Some BDTs were not read.                                                      │"
+"│8 more BBMDs past the grid's limit of 32 are not shown.                       │"
+"│                                                                              │"
+"└──────────────────────────────────────────────────────────────────────────────┘"
+" r read tables  m survey BBMDs  Tab tables  Esc back  ? help  q quit            "

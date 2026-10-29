@@ -25,18 +25,9 @@
 //! A [`Node`] keeps nothing but its counts, which it drains as the router
 //! and the link cores do ([`Node::take_counters`]).
 
-use crate::npdu::{Address, DecodeError, Npdu, GLOBAL_NETWORK};
-use crate::router::{bump, Discard};
 use crate::Mac;
-
-/// A frame that passed [`admit`]: its link source, stored, and its NPDU.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Admitted<'f> {
-    /// The link source.
-    pub(crate) source: Mac,
-    /// The NPDU.
-    pub(crate) npdu: Npdu<'f>,
-}
+use crate::npdu::{Address, DecodeError, GLOBAL_NETWORK, Npdu};
+use crate::router::{Discard, bump};
 
 /// Which count a refusal of [`admit`] goes in: the router's
 /// [`Counters`](crate::router::Counters) and a node's [`Counters`] both
@@ -60,10 +51,11 @@ pub(crate) struct Refused<'f> {
     pub(crate) discard: Discard,
     /// Where it is counted.
     pub(crate) count: Count,
-    /// For an over-long DLEN or SLEN: the link source, the DNET, if the
-    /// frame names one, and the SNET and SADR behind the DADR, if
-    /// readable. A router's reject goes there; a node sends nothing.
-    pub(crate) reject_to: Option<(Mac, Option<u16>, Option<Address<'f>>)>,
+    /// For an over-long DLEN or SLEN: the DNET, if the frame names one,
+    /// and the SNET and SADR behind the DADR, if readable. A router's
+    /// reject goes there, by way of the link source the caller holds; a
+    /// node sends nothing.
+    pub(crate) reject_to: Option<(Option<u16>, Option<Address<'f>>)>,
 }
 
 impl Refused<'_> {
@@ -78,17 +70,30 @@ impl Refused<'_> {
 }
 
 /// The checks every frame passes before anything acts on it, at a router
-/// and at a node alike: the link source's length, the NPDU's decode, a
-/// DADR beside DNET 0xFFFF, and what a broadcast may carry. See the
+/// and at a node alike: [`admit_source`], then [`admit_npdu`]. See the
 /// [module](self) for the order.
-pub(crate) fn admit<'f>(source: &[u8], npdu: &'f [u8]) -> Result<Admitted<'f>, Refused<'f>> {
-    let Ok(link_source) = Mac::from_slice(source) else {
-        let length = source.len();
-        return Err(Refused::only(
-            Discard::SourceTooLong { length },
+pub(crate) fn admit<'f>(source: &[u8], npdu: &'f [u8]) -> Result<Npdu<'f>, Refused<'f>> {
+    admit_source(source)?;
+    admit_npdu(npdu)
+}
+
+/// The first check: the link source's length. A router keeps the stored
+/// source for the rest of the frame's handling, so it calls this and
+/// [`admit_npdu`] apart, building its one arrival record between them.
+pub(crate) fn admit_source(source: &[u8]) -> Result<Mac, Refused<'static>> {
+    Mac::from_slice(source).map_err(|_| {
+        Refused::only(
+            Discard::SourceTooLong {
+                length: source.len(),
+            },
             Count::AddressLength,
-        ));
-    };
+        )
+    })
+}
+
+/// The checks after the link source: the NPDU's decode, a DADR beside
+/// DNET 0xFFFF, and what a broadcast may carry.
+pub(crate) fn admit_npdu(npdu: &[u8]) -> Result<Npdu<'_>, Refused<'_>> {
     let npdu = match Npdu::decode(npdu) {
         Ok(npdu) => npdu,
         Err(DecodeError::AddressTooLong {
@@ -100,8 +105,8 @@ pub(crate) fn admit<'f>(source: &[u8], npdu: &'f [u8]) -> Result<Admitted<'f>, R
             return Err(Refused {
                 discard: Discard::AddressTooLong { field, length },
                 count: Count::AddressLength,
-                reject_to: Some((link_source, dnet, source)),
-            })
+                reject_to: Some((dnet, source)),
+            });
         }
         Err(DecodeError::Malformed(fault)) => {
             return Err(Refused::only(Discard::Malformed(fault), Count::Malformed));
@@ -120,10 +125,7 @@ pub(crate) fn admit<'f>(source: &[u8], npdu: &'f [u8]) -> Result<Admitted<'f>, R
             ));
         }
     }
-    Ok(Admitted {
-        source: link_source,
-        npdu,
-    })
+    Ok(npdu)
 }
 
 /// Whether an APDU is an Unconfirmed-Request: the high nibble of its first
@@ -256,7 +258,7 @@ impl Node {
     /// or multicast.
     pub fn receive<'f>(&mut self, source: &[u8], link_group: bool, npdu: &'f [u8]) -> Received<'f> {
         let npdu = match admit(source, npdu) {
-            Ok(admitted) => admitted.npdu,
+            Ok(npdu) => npdu,
             Err(refused) => {
                 bump(self.counters.slot(refused.count));
                 return Received::Discarded(refused.discard);

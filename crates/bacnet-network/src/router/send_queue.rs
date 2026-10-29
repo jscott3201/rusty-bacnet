@@ -11,13 +11,13 @@ use bacnet_npdu::NetworkPriority;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use tokio::sync::mpsc::error::{TryRecvError, TrySendError};
 use tokio::sync::Notify;
+use tokio::sync::mpsc::error::{TryRecvError, TrySendError};
 
 use bacnet_router_core::router::Backlog;
 
-use super::engine::EngineGuard;
 use super::SendRequest;
+use super::engine::EngineGuard;
 
 pub(super) const CAPACITY: usize = 256;
 

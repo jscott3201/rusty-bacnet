@@ -174,7 +174,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     let lso_pending = match confirmed_request_tracker.lso.begin(
                         source_mac,
                         received.source_network.as_ref(),
-                        received.provenance,
+                        received.provenance.clone(),
                         req.clone(),
                     ) {
                         LsoAdmission::Replay(bytes) => {
@@ -235,7 +235,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let pending = match confirmed_request_tracker.begin(
                     source_mac,
                     received.source_network.as_ref(),
-                    received.provenance,
+                    received.provenance.clone(),
                     req.clone(),
                 ) {
                     ConfirmedRequestAdmission::Duplicate => return,

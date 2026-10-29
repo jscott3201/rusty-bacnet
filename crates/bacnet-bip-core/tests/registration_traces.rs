@@ -407,7 +407,8 @@ fn every_attempt_is_bounded_by_the_renewal_schedule() {
             "{pair:?}"
         );
     }
-    assert!(!log
-        .iter()
-        .any(|(_, entry)| matches!(entry, Event(RegistrationEvent::Registered { .. }))));
+    assert!(
+        !log.iter()
+            .any(|(_, entry)| matches!(entry, Event(RegistrationEvent::Registered { .. })))
+    );
 }

@@ -1,6 +1,7 @@
 use super::*;
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier as P};
+use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::ObjectIdentifier;
 
 fn read(log: &TrendLogMultipleObject, property: P) -> PropertyValue {
@@ -34,7 +35,7 @@ fn assert_refused(result: Result<TrendLogMultipleObject, Error>, code: ErrorCode
         ErrorClass::PROPERTY
     };
     assert!(
-        matches!(error, Error::Protocol { class: c, code: e }
+        matches!(error, Error::Remote(RemoteError::Error { class: c, code: e })
             if c == class && e == code),
         "{error:?}"
     );
@@ -266,7 +267,7 @@ fn python_add_trend_log_settings_are_checked_like_the_rust_setters() {
     let refused = |settings: TrendLogSettings, code: ErrorCode| {
         let error = trend_log(1, "TL-1", 50, None, settings).err().unwrap();
         assert!(
-            matches!(error, Error::Protocol { class: ErrorClass::PROPERTY, code: e } if e == code),
+            matches!(error, Error::Remote(RemoteError::Error { class: ErrorClass::PROPERTY, code: e }) if e == code),
             "{error:?}"
         );
     };

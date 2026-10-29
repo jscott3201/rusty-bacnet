@@ -1,7 +1,7 @@
 //! Raw Device declarations remain distinct from Confirmed-Request header codes.
 use bacnet_encoding::{
-    apdu::{decode_apdu, encode_apdu, Apdu, ComplexAck},
-    npdu::{decode_npdu, encode_npdu, Npdu},
+    apdu::{Apdu, ComplexAck, decode_apdu, encode_apdu},
+    npdu::{Npdu, decode_npdu, encode_npdu},
 };
 use bacnet_endpoint::{DeviceIdentity, EndpointSession, SessionConfig, SessionRole};
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};

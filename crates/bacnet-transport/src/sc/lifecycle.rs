@@ -7,7 +7,7 @@ use tokio::task::JoinHandle;
 
 use crate::port::TransportPort;
 
-use super::{advertisement, ScConnectionState, ScTransport, WebSocketPort};
+use super::{ScConnectionState, ScTransport, WebSocketPort, advertisement};
 use crate::sc_frame::encode_sc_message;
 use bacnet_types::error::Error;
 use bytes::BytesMut;
@@ -84,10 +84,10 @@ impl<W: WebSocketPort> ScTransport<W> {
         if let Some(task) = &restore_task {
             task.abort();
         }
-        if let Some(conn) = &self.connection {
-            if let Ok(mut c) = conn.try_lock() {
-                c.state = ScConnectionState::Disconnected;
-            }
+        if let Some(conn) = &self.connection
+            && let Ok(mut c) = conn.try_lock()
+        {
+            c.state = ScConnectionState::Disconnected;
         }
         self.hub_limits.reset_apdu();
         self.state_tx.send_replace(ScConnectionState::Disconnected);

@@ -3,7 +3,7 @@
 use super::*;
 
 /// Where an inbound segmented ComplexAck came from.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(super) struct InboundSegmentSource<'a> {
     /// Immediate MAC the segment arrived from.
     pub(super) mac: &'a [u8],

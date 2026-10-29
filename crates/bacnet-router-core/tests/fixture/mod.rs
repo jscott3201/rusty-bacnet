@@ -386,7 +386,9 @@ pub fn listed(sent: &Sent) -> Vec<u16> {
 
 /// R7 serving network 9 through port 1, learned at `now`.
 pub fn learn_9_via_r7<G: GroupClassifier>(router: &mut TestRouter<G>, now: Instant) {
-    assert!(router
-        .table_mut()
-        .add_learned(9, PortId(1), Mac::from_slice(R7).unwrap(), now));
+    assert!(
+        router
+            .table_mut()
+            .add_learned(9, PortId(1), Mac::from_slice(R7).unwrap(), now)
+    );
 }

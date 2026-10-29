@@ -156,11 +156,13 @@ fn the_editor_creates_an_mstp_profile() {
         connection.key(Key::Char(ch));
     }
     assert_eq!(connection.key(Key::Submit), None);
-    assert!(connection
-        .error
-        .as_ref()
-        .unwrap()
-        .contains("MAC must be 0 to 127"));
+    assert!(
+        connection
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("MAC must be 0 to 127")
+    );
     connection.key(Key::Next);
     connection.key(Key::Char('3'));
     let Some(crate::tui::message::Command::Profile(service::Request::Save { profile, .. })) =

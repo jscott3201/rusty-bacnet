@@ -1,6 +1,6 @@
 use super::*;
-use bacnet_encoding::apdu::{decode_apdu, encode_apdu, UnconfirmedRequest};
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
+use bacnet_encoding::apdu::{UnconfirmedRequest, decode_apdu, encode_apdu};
+use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportPort;
@@ -79,12 +79,14 @@ async fn cov_notification_channel_uses_configured_capacity() {
     assert!(max_options.validate().is_ok());
     for capacity in [0, MAX_COV_CHANNEL_CAPACITY + 1] {
         let (bad_transport, _) = LoopbackTransport::pair(vec![0x10], vec![0x11]);
-        assert!(BACnetClient::generic_builder()
-            .transport(bad_transport)
-            .cov_channel_capacity(capacity)
-            .build()
-            .await
-            .is_err());
+        assert!(
+            BACnetClient::generic_builder()
+                .transport(bad_transport)
+                .cov_channel_capacity(capacity)
+                .build()
+                .await
+                .is_err()
+        );
     }
     let (transport, _) = LoopbackTransport::pair(vec![0x20], vec![0x21]);
     let mut client = BACnetClient::generic_builder()
@@ -383,9 +385,11 @@ async fn confirmed_cov_notification_ack_policy_can_suppress_response() {
         .expect("timed out waiting for COV notification")
         .expect("COV channel closed");
     assert_eq!(received.notification.subscriber_process_identifier, 13);
-    assert!(timeout(Duration::from_millis(100), peer_rx.recv())
-        .await
-        .is_err());
+    assert!(
+        timeout(Duration::from_millis(100), peer_rx.recv())
+            .await
+            .is_err()
+    );
 
     client.stop().await.unwrap();
     peer_transport.stop().await.unwrap();

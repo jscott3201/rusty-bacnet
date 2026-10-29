@@ -36,10 +36,7 @@ pub fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
 }
 
 pub fn property_error(code: ErrorCode) -> Error {
-    Error::Protocol {
-        class: ErrorClass::PROPERTY,
-        code,
-    }
+    Error::protocol(ErrorClass::PROPERTY, code)
 }
 
 struct NoClock;

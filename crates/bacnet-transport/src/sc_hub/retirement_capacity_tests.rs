@@ -2,7 +2,7 @@
 
 use super::deadline_capacity_tests::CountedHub;
 use super::deadline_test_support::*;
-use super::heartbeat_test_support::{frame, ClockIo};
+use super::heartbeat_test_support::{ClockIo, frame};
 use super::retirement_tests::{encode, heartbeat_wire, unicast_wire};
 use super::*;
 

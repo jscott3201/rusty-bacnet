@@ -112,10 +112,11 @@ done
   -m crates/rusty-bacnet/Cargo.toml --out dist
 echo "::endgroup::"
 
-# The default features add the terminal UI (`tui`, #974).
+# The default features add the terminal UI (`tui`, #974); `mcp` adds
+# `bacnet mcp serve` (#2068).
 echo "::group::CLI"
 LIBPCAP_LIBDIR=/tmp/libpcap/lib LIBPCAP_VER=$(pin LIBPCAP_VERSION) \
-  cargo build --profile dist --locked -p bacnet-cli --features sc-tls,pcap,serial --target "$target"
+  cargo build --profile dist --locked -p bacnet-cli --features sc-tls,pcap,serial,mcp --target "$target"
 mkdir -p out
 cp "target/$target/dist/bacnet" "out/$cli"
 echo "::endgroup::"

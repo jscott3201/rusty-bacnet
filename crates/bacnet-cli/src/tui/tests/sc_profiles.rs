@@ -12,9 +12,9 @@ use crate::tui::profile::sc_tests::{pem_files, sc_profile};
 use crate::tui::profile::service::{Reply, Request, Service};
 use crate::tui::profile::store::Store;
 use crate::tui::profile::tests::cli;
-use crate::tui::profile::{startup, Overrides, Profile};
+use crate::tui::profile::{Overrides, Profile, startup};
 use crate::tui::worker::session::{ConnectPlan, TransportKind};
-use crate::tui::worker::{coordinator, EventSink};
+use crate::tui::worker::{EventSink, coordinator};
 use insta::assert_snapshot;
 use std::path::Path;
 use tokio::sync::mpsc;
@@ -59,12 +59,14 @@ fn create_through_the_screen(app: &mut App, service: &Service, sc: Option<&Path>
         type_text(app, "47809");
     }
     let commands = press(app, KeyCode::Enter);
-    let [Command::Profile(Request::Save {
-        name,
-        profile,
-        create: true,
-        previous: None,
-    })] = commands.as_slice()
+    let [
+        Command::Profile(Request::Save {
+            name,
+            profile,
+            create: true,
+            previous: None,
+        }),
+    ] = commands.as_slice()
     else {
         panic!("expected one save, got {commands:?}");
     };
@@ -171,12 +173,14 @@ fn editing_an_sc_profile_keeps_its_identity() {
     press(&mut app, KeyCode::Tab);
     type_text(&mut app, "0");
     let commands = press(&mut app, KeyCode::Enter);
-    let [Command::Profile(Request::Save {
-        name,
-        profile,
-        previous,
-        ..
-    })] = commands.as_slice()
+    let [
+        Command::Profile(Request::Save {
+            name,
+            profile,
+            previous,
+            ..
+        }),
+    ] = commands.as_slice()
     else {
         panic!("expected a save, got {commands:?}");
     };

@@ -1,8 +1,8 @@
 use bacnet_encoding::apdu::ConfirmedRequest;
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_objects::audit::CompletedAuditReceipt;
-use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
+use bacnet_types::error::Error;
 
 const KEY_FORMAT_VERSION: u8 = 1;
 

@@ -1,7 +1,7 @@
 //! Deterministic admission seam: saturated requester leases, without a scheduler
 //! race to refill the just-completed READ lease before its audit admission.
 use super::*;
-use bacnet_encoding::apdu::{decode_apdu, Apdu, SimpleAck};
+use bacnet_encoding::apdu::{Apdu, SimpleAck, decode_apdu};
 use bacnet_endpoint_core::coordinator::{
     LeaseMetadata, OutboundTransactionCoordinator, TerminalPolicy,
 };
@@ -12,7 +12,7 @@ use bacnet_services::audit::AuditNotificationRequest;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_types::bitstring::BACnetPriorityFilter;
 use bacnet_types::enums::{ConfirmedServiceChoice, Reliability};
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 const WAIT: Duration = Duration::from_secs(1);
 fn oid(kind: ObjectType, instance: u32) -> ObjectIdentifier {

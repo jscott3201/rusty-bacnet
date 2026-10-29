@@ -1,0 +1,968 @@
+{
+  "cliTargets": [
+    "aarch64-apple-darwin",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu"
+  ],
+  "dataLinks": [
+    {
+      "cli": {
+        "aarch64-apple-darwin": true,
+        "aarch64-unknown-linux-gnu": true,
+        "x86_64-apple-darwin": true,
+        "x86_64-pc-windows-msvc": true,
+        "x86_64-unknown-linux-gnu": true
+      },
+      "feature": null,
+      "id": "bip",
+      "label": "BACnet/IP (Annex J)",
+      "python": true
+    },
+    {
+      "cli": {
+        "aarch64-apple-darwin": true,
+        "aarch64-unknown-linux-gnu": true,
+        "x86_64-apple-darwin": true,
+        "x86_64-pc-windows-msvc": true,
+        "x86_64-unknown-linux-gnu": true
+      },
+      "feature": "ipv6",
+      "id": "bip6",
+      "label": "BACnet/IPv6 (Annex U)",
+      "python": true
+    },
+    {
+      "cli": {
+        "aarch64-apple-darwin": true,
+        "aarch64-unknown-linux-gnu": true,
+        "x86_64-apple-darwin": true,
+        "x86_64-pc-windows-msvc": true,
+        "x86_64-unknown-linux-gnu": true
+      },
+      "feature": "sc-tls",
+      "id": "sc",
+      "label": "BACnet/SC (Annex AB)",
+      "python": true
+    },
+    {
+      "cli": {
+        "aarch64-apple-darwin": false,
+        "aarch64-unknown-linux-gnu": true,
+        "x86_64-apple-darwin": false,
+        "x86_64-pc-windows-msvc": false,
+        "x86_64-unknown-linux-gnu": true
+      },
+      "feature": "serial",
+      "id": "mstp",
+      "label": "MS/TP (Clause 9)",
+      "python": true
+    },
+    {
+      "cli": {
+        "aarch64-apple-darwin": false,
+        "aarch64-unknown-linux-gnu": false,
+        "x86_64-apple-darwin": false,
+        "x86_64-pc-windows-msvc": false,
+        "x86_64-unknown-linux-gnu": false
+      },
+      "feature": "ethernet",
+      "id": "ethernet",
+      "label": "BACnet Ethernet (Clause 7)",
+      "python": false
+    }
+  ],
+  "excludedObjectTypes": [
+    {
+      "id": 38,
+      "name": "NETWORK_SECURITY"
+    }
+  ],
+  "generatedBy": "crates/bacnet-integration-tests/support_tables.rs; run `cargo run -p bacnet-integration-tests --example support-tables`, do not edit",
+  "objectTypes": [
+    {
+      "create": true,
+      "delete": true,
+      "id": 0,
+      "name": "ANALOG_INPUT"
+    },
+    {
+      "create": true,
+      "delete": true,
+      "id": 1,
+      "name": "ANALOG_OUTPUT"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 2,
+      "name": "ANALOG_VALUE"
+    },
+    {
+      "create": true,
+      "delete": true,
+      "id": 3,
+      "name": "BINARY_INPUT"
+    },
+    {
+      "create": true,
+      "delete": true,
+      "id": 4,
+      "name": "BINARY_OUTPUT"
+    },
+    {
+      "create": true,
+      "delete": true,
+      "id": 5,
+      "name": "BINARY_VALUE"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 6,
+      "name": "CALENDAR"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 7,
+      "name": "COMMAND"
+    },
+    {
+      "create": false,
+      "delete": false,
+      "id": 8,
+      "name": "DEVICE"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 9,
+      "name": "EVENT_ENROLLMENT"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 10,
+      "name": "FILE"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 11,
+      "name": "GROUP"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 12,
+      "name": "LOOP"
+    },
+    {
+      "create": true,
+      "delete": true,
+      "id": 13,
+      "name": "MULTI_STATE_INPUT"
+    },
+    {
+      "create": true,
+      "delete": true,
+      "id": 14,
+      "name": "MULTI_STATE_OUTPUT"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 15,
+      "name": "NOTIFICATION_CLASS"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 16,
+      "name": "PROGRAM"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 17,
+      "name": "SCHEDULE"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 18,
+      "name": "AVERAGING"
+    },
+    {
+      "create": true,
+      "delete": true,
+      "id": 19,
+      "name": "MULTI_STATE_VALUE"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 20,
+      "name": "TREND_LOG"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 21,
+      "name": "LIFE_SAFETY_POINT"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 22,
+      "name": "LIFE_SAFETY_ZONE"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 23,
+      "name": "ACCUMULATOR"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 24,
+      "name": "PULSE_CONVERTER"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 25,
+      "name": "EVENT_LOG"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 26,
+      "name": "GLOBAL_GROUP"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 27,
+      "name": "TREND_LOG_MULTIPLE"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 28,
+      "name": "LOAD_CONTROL"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 29,
+      "name": "STRUCTURED_VIEW"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 30,
+      "name": "ACCESS_DOOR"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 31,
+      "name": "TIMER"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 32,
+      "name": "ACCESS_CREDENTIAL"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 33,
+      "name": "ACCESS_POINT"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 34,
+      "name": "ACCESS_RIGHTS"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 35,
+      "name": "ACCESS_USER"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 36,
+      "name": "ACCESS_ZONE"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 37,
+      "name": "CREDENTIAL_DATA_INPUT"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 39,
+      "name": "BITSTRING_VALUE"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 40,
+      "name": "CHARACTERSTRING_VALUE"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 41,
+      "name": "DATEPATTERN_VALUE"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 42,
+      "name": "DATE_VALUE"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 43,
+      "name": "DATETIMEPATTERN_VALUE"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 44,
+      "name": "DATETIME_VALUE"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 45,
+      "name": "INTEGER_VALUE"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 46,
+      "name": "LARGE_ANALOG_VALUE"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 47,
+      "name": "OCTETSTRING_VALUE"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 48,
+      "name": "POSITIVE_INTEGER_VALUE"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 49,
+      "name": "TIMEPATTERN_VALUE"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 50,
+      "name": "TIME_VALUE"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 51,
+      "name": "NOTIFICATION_FORWARDER"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 52,
+      "name": "ALERT_ENROLLMENT"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 53,
+      "name": "CHANNEL"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 54,
+      "name": "LIGHTING_OUTPUT"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 55,
+      "name": "BINARY_LIGHTING_OUTPUT"
+    },
+    {
+      "create": false,
+      "delete": false,
+      "id": 56,
+      "name": "NETWORK_PORT"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 57,
+      "name": "ELEVATOR_GROUP"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 58,
+      "name": "ESCALATOR"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 59,
+      "name": "LIFT"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 60,
+      "name": "STAGING"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 61,
+      "name": "AUDIT_LOG"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 62,
+      "name": "AUDIT_REPORTER"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 63,
+      "name": "COLOR"
+    },
+    {
+      "create": false,
+      "delete": true,
+      "id": 64,
+      "name": "COLOR_TEMPERATURE"
+    }
+  ],
+  "release": "0.15.0",
+  "services": [
+    {
+      "bit": 0,
+      "clientSends": true,
+      "endpoint": null,
+      "kind": "confirmed",
+      "label": "AcknowledgeAlarm",
+      "name": "ACKNOWLEDGE_ALARM",
+      "pythonSends": true,
+      "serverExecutes": true,
+      "serverInitiates": false
+    },
+    {
+      "bit": 8,
+      "clientSends": true,
+      "endpoint": null,
+      "kind": "confirmed",
+      "label": "AddListElement",
+      "name": "ADD_LIST_ELEMENT",
+      "pythonSends": true,
+      "serverExecutes": true,
+      "serverInitiates": false
+    },
+    {
+      "bit": 6,
+      "clientSends": true,
+      "endpoint": null,
+      "kind": "confirmed",
+      "label": "AtomicReadFile",
+      "name": "ATOMIC_READ_FILE",
+      "pythonSends": true,
+      "serverExecutes": true,
+      "serverInitiates": false
+    },
+    {
+      "bit": 7,
+      "clientSends": true,
+      "endpoint": null,
+      "kind": "confirmed",
+      "label": "AtomicWriteFile",
+      "name": "ATOMIC_WRITE_FILE",
+      "pythonSends": true,
+      "serverExecutes": true,
+      "serverInitiates": false
+    },
+    {
+      "bit": 45,
+      "clientSends": true,
+      "endpoint": null,
+      "kind": "confirmed",
+      "label": "AuditLogQuery",
+      "name": "AUDIT_LOG_QUERY",
+      "pythonSends": true,
+      "serverExecutes": true,
+      "serverInitiates": false
+    },
+    {
+      "bit": 44,
+      "clientSends": true,
+      "endpoint": null,
+      "kind": "confirmed",
+      "label": "ConfirmedAuditNotification",
+      "name": "CONFIRMED_AUDIT_NOTIFICATION",
+      "pythonSends": true,
+      "serverExecutes": true,
+      "serverInitiates": true
+    },
+    {
+      "bit": 1,
+      "clientSends": false,
+      "endpoint": null,
+      "kind": "confirmed",
+      "label": "ConfirmedCOVNotification",
+      "name": "CONFIRMED_COV_NOTIFICATION",
+      "pythonSends": false,
+      "serverExecutes": false,
+      "serverInitiates": true
+    },
+    {
+      "bit": 42,
+      "clientSends": false,
+      "endpoint": null,
+      "kind": "confirmed",
+      "label": "ConfirmedCOVNotificationMultiple",
+      "name": "CONFIRMED_COV_NOTIFICATION_MULTIPLE",
+      "pythonSends": false,
+      "serverExecutes": false,
+      "serverInitiates": true
+    },
+    {
+      "bit": 2,
+      "clientSends": false,
+      "endpoint": null,
+      "kind": "confirmed",
+      "label": "ConfirmedEventNotification",
+      "name": "CONFIRMED_EVENT_NOTIFICATION",
+      "pythonSends": false,
+      "serverExecutes": true,
+      "serverInitiates": true
+    },
+    {
+      "bit": 18,
+      "clientSends": false,
+      "endpoint": null,
+      "kind": "confirmed",
+      "label": "ConfirmedPrivateTransfer",
+      "name": "CONFIRMED_PRIVATE_TRANSFER",
+      "pythonSends": true,
+      "serverExecutes": false,
+      "serverInitiates": false
+    },
+    {
+      "bit": 19,
+      "clientSends": false,
+      "endpoint": null,
+      "kind": "confirmed",
+      "label": "ConfirmedTextMessage",
+      "name": "CONFIRMED_TEXT_MESSAGE",
+      "pythonSends": true,
+      "serverExecutes": true,
+      "serverInitiates": false
+    },
+    {
+      "bit": 10,
+      "clientSends": true,
+      "endpoint": null,
+      "kind": "confirmed",
+      "label": "CreateObject",
+      "name": "CREATE_OBJECT",
+      "pythonSends": true,
+      "serverExecutes": true,
+      "serverInitiates": false
+    },
+    {
+      "bit": 11,
+      "clientSends": true,
+      "endpoint": null,
+      "kind": "confirmed",
+      "label": "DeleteObject",
+      "name": "DELETE_OBJECT",
+      "pythonSends": true,
+      "serverExecutes": true,
+      "serverInitiates": false
+    },
+    {
+      "bit": 17,
+      "clientSends": true,
+      "endpoint": null,
+      "kind": "confirmed",
+      "label": "DeviceCommunicationControl",
+      "name": "DEVICE_COMMUNICATION_CONTROL",
+      "pythonSends": true,
+      "serverExecutes": true,
+      "serverInitiates": false
+    },
+    {
+      "bit": 3,
+      "clientSends": true,
+      "endpoint": null,
+      "kind": "confirmed",
+      "label": "GetAlarmSummary",
+      "name": "GET_ALARM_SUMMARY",
+      "pythonSends": true,
+      "serverExecutes": true,
+      "serverInitiates": false
+    },
+    {
+      "bit": 4,
+      "clientSends": true,
+      "endpoint": null,
+      "kind": "confirmed",
+      "label": "GetEnrollmentSummary",
+      "name": "GET_ENROLLMENT_SUMMARY",
+      "pythonSends": true,
+      "serverExecutes": true,
+      "serverInitiates": false
+    },
+    {
+      "bit": 39,
+      "clientSends": true,
+      "endpoint": null,
+      "kind": "confirmed",
+      "label": "GetEventInformation",
+      "name": "GET_EVENT_INFORMATION",
+      "pythonSends": true,
+      "serverExecutes": true,
+      "serverInitiates": false
+    },
+    {
+      "bit": 37,
+      "clientSends": false,
+      "endpoint": null,
+      "kind": "confirmed",
+      "label": "LifeSafetyOperation",
+      "name": "LIFE_SAFETY_OPERATION",
+      "pythonSends": true,
+      "serverExecutes": true,
+      "serverInitiates": false
+    },
+    {
+      "bit": 12,
+      "clientSends": true,
+      "endpoint": "always",
+      "kind": "confirmed",
+      "label": "ReadProperty",
+      "name": "READ_PROPERTY",
+      "pythonSends": true,
+      "serverExecutes": true,
+      "serverInitiates": true
+    },
+    {
+      "bit": 14,
+      "clientSends": true,
+      "endpoint": null,
+      "kind": "confirmed",
+      "label": "ReadPropertyMultiple",
+      "name": "READ_PROPERTY_MULTIPLE",
+      "pythonSends": true,
+      "serverExecutes": true,
+      "serverInitiates": false
+    },
+    {
+      "bit": 35,
+      "clientSends": true,
+      "endpoint": null,
+      "kind": "confirmed",
+      "label": "ReadRange",
+      "name": "READ_RANGE",
+      "pythonSends": true,
+      "serverExecutes": true,
+      "serverInitiates": false
+    },
+    {
+      "bit": 20,
+      "clientSends": true,
+      "endpoint": "with_reinitialize",
+      "kind": "confirmed",
+      "label": "ReinitializeDevice",
+      "name": "REINITIALIZE_DEVICE",
+      "pythonSends": true,
+      "serverExecutes": true,
+      "serverInitiates": false
+    },
+    {
+      "bit": 9,
+      "clientSends": true,
+      "endpoint": null,
+      "kind": "confirmed",
+      "label": "RemoveListElement",
+      "name": "REMOVE_LIST_ELEMENT",
+      "pythonSends": true,
+      "serverExecutes": true,
+      "serverInitiates": false
+    },
+    {
+      "bit": 5,
+      "clientSends": true,
+      "endpoint": null,
+      "kind": "confirmed",
+      "label": "SubscribeCOV",
+      "name": "SUBSCRIBE_COV",
+      "pythonSends": true,
+      "serverExecutes": true,
+      "serverInitiates": false
+    },
+    {
+      "bit": 38,
+      "clientSends": true,
+      "endpoint": null,
+      "kind": "confirmed",
+      "label": "SubscribeCOVProperty",
+      "name": "SUBSCRIBE_COV_PROPERTY",
+      "pythonSends": false,
+      "serverExecutes": true,
+      "serverInitiates": false
+    },
+    {
+      "bit": 41,
+      "clientSends": false,
+      "endpoint": null,
+      "kind": "confirmed",
+      "label": "SubscribeCOVPropertyMultiple",
+      "name": "SUBSCRIBE_COV_PROPERTY_MULTIPLE",
+      "pythonSends": true,
+      "serverExecutes": true,
+      "serverInitiates": false
+    },
+    {
+      "bit": 22,
+      "clientSends": false,
+      "endpoint": null,
+      "kind": "confirmed",
+      "label": "VT-Close",
+      "name": "VT_CLOSE",
+      "pythonSends": true,
+      "serverExecutes": false,
+      "serverInitiates": false
+    },
+    {
+      "bit": 23,
+      "clientSends": false,
+      "endpoint": null,
+      "kind": "confirmed",
+      "label": "VT-Data",
+      "name": "VT_DATA",
+      "pythonSends": true,
+      "serverExecutes": false,
+      "serverInitiates": false
+    },
+    {
+      "bit": 21,
+      "clientSends": false,
+      "endpoint": null,
+      "kind": "confirmed",
+      "label": "VT-Open",
+      "name": "VT_OPEN",
+      "pythonSends": true,
+      "serverExecutes": false,
+      "serverInitiates": false
+    },
+    {
+      "bit": 15,
+      "clientSends": true,
+      "endpoint": "with_device_writes",
+      "kind": "confirmed",
+      "label": "WriteProperty",
+      "name": "WRITE_PROPERTY",
+      "pythonSends": true,
+      "serverExecutes": true,
+      "serverInitiates": true
+    },
+    {
+      "bit": 16,
+      "clientSends": true,
+      "endpoint": null,
+      "kind": "confirmed",
+      "label": "WritePropertyMultiple",
+      "name": "WRITE_PROPERTY_MULTIPLE",
+      "pythonSends": true,
+      "serverExecutes": true,
+      "serverInitiates": false
+    },
+    {
+      "bit": 26,
+      "clientSends": false,
+      "endpoint": null,
+      "kind": "unconfirmed",
+      "label": "I-Am",
+      "name": "I_AM",
+      "pythonSends": false,
+      "serverExecutes": false,
+      "serverInitiates": true
+    },
+    {
+      "bit": 27,
+      "clientSends": false,
+      "endpoint": null,
+      "kind": "unconfirmed",
+      "label": "I-Have",
+      "name": "I_HAVE",
+      "pythonSends": false,
+      "serverExecutes": false,
+      "serverInitiates": true
+    },
+    {
+      "bit": 32,
+      "clientSends": true,
+      "endpoint": null,
+      "kind": "unconfirmed",
+      "label": "TimeSynchronization",
+      "name": "TIME_SYNCHRONIZATION",
+      "pythonSends": true,
+      "serverExecutes": true,
+      "serverInitiates": false
+    },
+    {
+      "bit": 36,
+      "clientSends": true,
+      "endpoint": null,
+      "kind": "unconfirmed",
+      "label": "UTCTimeSynchronization",
+      "name": "UTC_TIME_SYNCHRONIZATION",
+      "pythonSends": true,
+      "serverExecutes": true,
+      "serverInitiates": false
+    },
+    {
+      "bit": 46,
+      "clientSends": true,
+      "endpoint": null,
+      "kind": "unconfirmed",
+      "label": "UnconfirmedAuditNotification",
+      "name": "UNCONFIRMED_AUDIT_NOTIFICATION",
+      "pythonSends": true,
+      "serverExecutes": true,
+      "serverInitiates": true
+    },
+    {
+      "bit": 28,
+      "clientSends": false,
+      "endpoint": null,
+      "kind": "unconfirmed",
+      "label": "UnconfirmedCOVNotification",
+      "name": "UNCONFIRMED_COV_NOTIFICATION",
+      "pythonSends": false,
+      "serverExecutes": false,
+      "serverInitiates": true
+    },
+    {
+      "bit": 43,
+      "clientSends": false,
+      "endpoint": null,
+      "kind": "unconfirmed",
+      "label": "UnconfirmedCOVNotificationMultiple",
+      "name": "UNCONFIRMED_COV_NOTIFICATION_MULTIPLE",
+      "pythonSends": false,
+      "serverExecutes": false,
+      "serverInitiates": true
+    },
+    {
+      "bit": 29,
+      "clientSends": false,
+      "endpoint": null,
+      "kind": "unconfirmed",
+      "label": "UnconfirmedEventNotification",
+      "name": "UNCONFIRMED_EVENT_NOTIFICATION",
+      "pythonSends": false,
+      "serverExecutes": true,
+      "serverInitiates": true
+    },
+    {
+      "bit": 30,
+      "clientSends": false,
+      "endpoint": null,
+      "kind": "unconfirmed",
+      "label": "UnconfirmedPrivateTransfer",
+      "name": "UNCONFIRMED_PRIVATE_TRANSFER",
+      "pythonSends": true,
+      "serverExecutes": false,
+      "serverInitiates": false
+    },
+    {
+      "bit": 31,
+      "clientSends": false,
+      "endpoint": null,
+      "kind": "unconfirmed",
+      "label": "UnconfirmedTextMessage",
+      "name": "UNCONFIRMED_TEXT_MESSAGE",
+      "pythonSends": true,
+      "serverExecutes": true,
+      "serverInitiates": false
+    },
+    {
+      "bit": 47,
+      "clientSends": false,
+      "endpoint": null,
+      "kind": "unconfirmed",
+      "label": "Who-Am-I",
+      "name": "WHO_AM_I",
+      "pythonSends": true,
+      "serverExecutes": false,
+      "serverInitiates": false
+    },
+    {
+      "bit": 33,
+      "clientSends": true,
+      "endpoint": null,
+      "kind": "unconfirmed",
+      "label": "WhoHas",
+      "name": "WHO_HAS",
+      "pythonSends": true,
+      "serverExecutes": true,
+      "serverInitiates": false
+    },
+    {
+      "bit": 34,
+      "clientSends": true,
+      "endpoint": null,
+      "kind": "unconfirmed",
+      "label": "WhoIs",
+      "name": "WHO_IS",
+      "pythonSends": true,
+      "serverExecutes": true,
+      "serverInitiates": true
+    },
+    {
+      "bit": 40,
+      "clientSends": true,
+      "endpoint": null,
+      "kind": "unconfirmed",
+      "label": "WriteGroup",
+      "name": "WRITE_GROUP",
+      "pythonSends": true,
+      "serverExecutes": true,
+      "serverInitiates": false
+    }
+  ],
+  "tracks": "dev"
+}

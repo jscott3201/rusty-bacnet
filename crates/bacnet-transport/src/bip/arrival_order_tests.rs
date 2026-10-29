@@ -188,7 +188,7 @@ fn listeners_data(listeners: &Listeners, source: Source, len: usize) -> [u8; 4] 
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn a_broadcast_then_a_unicast_come_up_in_that_order() {
-    use crate::port_ownership::{lost_port, ATTEMPTS};
+    use crate::port_ownership::{ATTEMPTS, lost_port};
 
     let (ip, subnet) = (
         Ipv4Addr::new(127, 0, 0, 2),

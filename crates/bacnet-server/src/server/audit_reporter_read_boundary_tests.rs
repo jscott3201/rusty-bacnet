@@ -38,9 +38,11 @@ async fn audit_reporter_read_duplicate_admission_is_silent() {
         else {
             panic!("first admission");
         };
-        assert!(dispatch_optional(&fixture.server, service, data)
-            .await
-            .is_none());
+        assert!(
+            dispatch_optional(&fixture.server, service, data)
+                .await
+                .is_none()
+        );
         settle().await;
         assert_eq!(reads.load(Ordering::Acquire), 0);
         assert!(records(&fixture).is_empty());
@@ -138,9 +140,11 @@ async fn audit_reporter_read_segmentation_divergence_is_silent() {
                 ),
             )
         };
-        assert!(dispatch_optional(&fixture.server, service, data)
-            .await
-            .is_none());
+        assert!(
+            dispatch_optional(&fixture.server, service, data)
+                .await
+                .is_none()
+        );
         settle().await;
         let responses = fixture.transport.responses.lock().unwrap().clone();
         assert_eq!(responses.len(), 1);
@@ -458,9 +462,11 @@ async fn audit_reporter_rpm_256_results_reuse_64_permits_summary_deadline_and_no
             (false, 0, 64)
         );
         fixture.server.stop().await.unwrap();
-        assert!(fixture
-            .server
-            .notification_transactions
-            .delivery_workers_idle());
+        assert!(
+            fixture
+                .server
+                .notification_transactions
+                .delivery_workers_idle()
+        );
     }
 }

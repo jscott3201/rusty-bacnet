@@ -2,7 +2,7 @@ use super::*;
 use bacnet_npdu::NetworkMessageType;
 use bacnet_transport::port::ReceivedNpdu;
 use tokio::sync::mpsc;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 // Injection retains real ReceivedNpdu ownership, including the non-cloneable
 // reply sender. No socket, wall clock, or additional dispatch task is involved.
@@ -176,10 +176,12 @@ async fn full_apdu_queue_drops_arrival_releases_reply_and_allows_control_progres
             closed_drops: 0,
         }
     );
-    assert!(timeout(Duration::from_secs(1), rejected_reply)
-        .await
-        .unwrap()
-        .is_err());
+    assert!(
+        timeout(Duration::from_secs(1), rejected_reply)
+            .await
+            .unwrap()
+            .is_err()
+    );
     assert_eq!(
         accepted_reply.try_recv(),
         Err(oneshot::error::TryRecvError::Empty)
@@ -314,14 +316,18 @@ async fn closed_apdu_receiver_releases_reply_and_ends_dispatch_with_legacy_contr
     tx.send(apdu).await.unwrap();
     tx.send(incoming(true, 42)).await.unwrap();
 
-    assert!(timeout(Duration::from_secs(1), reply_rx)
-        .await
-        .unwrap()
-        .is_err());
-    assert!(timeout(Duration::from_secs(1), controls.recv())
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        timeout(Duration::from_secs(1), reply_rx)
+            .await
+            .unwrap()
+            .is_err()
+    );
+    assert!(
+        timeout(Duration::from_secs(1), controls.recv())
+            .await
+            .unwrap()
+            .is_none()
+    );
     timeout(Duration::from_secs(1), tx.closed()).await.unwrap();
     assert_eq!(network.network_control_ingress_sequence(), 0);
     assert_eq!(
@@ -396,10 +402,12 @@ async fn stop_with_both_queues_full_is_bounded_and_preserves_drain_and_drop_acco
     let mut overflow = incoming(true, 256);
     overflow.reply_tx = Some(reply_tx);
     tx.send(overflow).await.unwrap();
-    assert!(timeout(Duration::from_secs(1), barrier)
-        .await
-        .unwrap()
-        .is_err());
+    assert!(
+        timeout(Duration::from_secs(1), barrier)
+            .await
+            .unwrap()
+            .is_err()
+    );
     assert_eq!(apdu_counters.snapshot().current_depth, 256);
     assert_eq!(control_counters.snapshot().current_depth, 256);
     timeout(Duration::from_secs(1), network.stop())
@@ -564,10 +572,12 @@ async fn closing_full_receivers_preserves_depth_until_drained_and_counts_closed_
     let mut control = incoming(true, 257);
     control.reply_tx = Some(reply_tx);
     tx.send(control).await.unwrap();
-    assert!(timeout(Duration::from_secs(1), barrier)
-        .await
-        .unwrap()
-        .is_err());
+    assert!(
+        timeout(Duration::from_secs(1), barrier)
+            .await
+            .unwrap()
+            .is_err()
+    );
     apdus.close();
     assert_eq!(apdu_counters.snapshot().current_depth, 256);
     tx.send(incoming(false, 256)).await.unwrap();

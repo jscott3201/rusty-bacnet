@@ -79,8 +79,7 @@ impl OutcomeCounters {
 }
 
 pub(super) fn increment(counter: &AtomicU64) {
-    #[allow(deprecated, reason = "try_update needs Rust 1.95; the MSRV is 1.93")]
-    let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+    let _ = counter.try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
         Some(value.saturating_add(1))
     });
 }

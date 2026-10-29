@@ -3,9 +3,9 @@
 use std::time::Duration;
 
 use bacnet_mstp_codec::FrameType;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, DuplexStream};
 
-use super::script::{analyse, LineScript, ScriptedRing};
+use super::script::{LineScript, ScriptedRing, analyse};
 use super::*;
 
 const BAUD: u32 = 38_400;
@@ -47,10 +47,11 @@ async fn monitor_publishes_what_the_engine_computes_and_writes_nothing() {
     let expected = analyse(BAUD, ring.line.chunks());
 
     let (mut line, monitor_end) = tokio::io::duplex(4096);
-    let monitor = MstpMonitor::start(
-        monitor_end,
+    let mut monitor = MstpMonitor::start(
+        DropOnClose::new(monitor_end),
         MonitorConfig::new(BAUD).with_timestamp_resolution(Duration::ZERO),
     )
+    .await
     .unwrap();
     let mut statistics = monitor.statistics();
     play(&mut line, ring.line.chunks()).await;
@@ -112,7 +113,12 @@ async fn the_live_stream_carries_frames_and_errors_in_order() {
         );
 
     let (mut line, monitor_end) = tokio::io::duplex(4096);
-    let monitor = MstpMonitor::start(monitor_end, MonitorConfig::new(BAUD)).unwrap();
+    let mut monitor = MstpMonitor::start(
+        super::DropOnClose::new(monitor_end),
+        MonitorConfig::new(BAUD),
+    )
+    .await
+    .unwrap();
     let mut frames = monitor.frames();
     play(&mut line, script.chunks()).await;
 
@@ -157,7 +163,9 @@ async fn a_slow_subscriber_loses_the_oldest_records_and_never_holds_up_the_monit
         ..MonitorConfig::new(BAUD)
     };
     let (mut line, monitor_end) = tokio::io::duplex(4096);
-    let monitor = MstpMonitor::start(monitor_end, config).unwrap();
+    let mut monitor = MstpMonitor::start(super::DropOnClose::new(monitor_end), config)
+        .await
+        .unwrap();
     let mut frames = monitor.frames();
     let mut statistics = monitor.statistics();
     play(&mut line, script.chunks()).await;
@@ -179,7 +187,12 @@ async fn a_slow_subscriber_loses_the_oldest_records_and_never_holds_up_the_monit
 #[tokio::test(start_paused = true)]
 async fn the_end_of_the_stream_ends_the_monitor() {
     let (mut line, monitor_end) = tokio::io::duplex(64);
-    let monitor = MstpMonitor::start(monitor_end, MonitorConfig::new(BAUD)).unwrap();
+    let mut monitor = MstpMonitor::start(
+        super::DropOnClose::new(monitor_end),
+        MonitorConfig::new(BAUD),
+    )
+    .await
+    .unwrap();
     let mut script = LineScript::new(BAUD);
     script.frame(FrameType::TOKEN, 2, 1, &[]);
     play(&mut line, script.chunks()).await;
@@ -213,7 +226,9 @@ impl AsyncRead for Broken {
 
 #[tokio::test]
 async fn a_read_error_ends_the_monitor_with_that_error() {
-    let monitor = MstpMonitor::start(Broken, MonitorConfig::new(BAUD)).unwrap();
+    let mut monitor = MstpMonitor::start(super::DropOnClose::new(Broken), MonitorConfig::new(BAUD))
+        .await
+        .unwrap();
     while !monitor.is_finished() {
         tokio::task::yield_now().await;
     }
@@ -224,7 +239,12 @@ async fn a_read_error_ends_the_monitor_with_that_error() {
 #[tokio::test(start_paused = true)]
 async fn dropping_the_monitor_stops_its_task() {
     let (line, monitor_end) = tokio::io::duplex(64);
-    let monitor = MstpMonitor::start(monitor_end, MonitorConfig::new(BAUD)).unwrap();
+    let monitor = MstpMonitor::start(
+        super::DropOnClose::new(monitor_end),
+        MonitorConfig::new(BAUD),
+    )
+    .await
+    .unwrap();
     let mut frames = monitor.frames();
     drop(monitor);
     // The task ends, dropping its end of the line and the stream's sender.

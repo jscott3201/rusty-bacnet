@@ -1,7 +1,7 @@
 //! Offline command boundary, execution diagnostics and fallible result output.
 
 use crate::{args::Cli, output::OutputFormat};
-use clap::{error::ErrorKind, parser::ValueSource, ArgMatches, CommandFactory};
+use clap::{ArgMatches, CommandFactory, error::ErrorKind, parser::ValueSource};
 use serde::Serialize;
 use std::io::{self, Write};
 
@@ -40,13 +40,13 @@ pub(super) fn validate(matches: &ArgMatches) -> Result<(), clap::Error> {
             "sc-check requires --sc-cert <FILE>; --sc-ca and --sc-key are optional",
         ));
     }
-    if let Some(format) = matches.get_one::<String>("format") {
-        if !matches!(format.as_str(), "table" | "json") {
-            return Err(Cli::command().error(
-                ErrorKind::InvalidValue,
-                "sc-check --format must be table or json, including when --json is supplied",
-            ));
-        }
+    if let Some(format) = matches.get_one::<String>("format")
+        && !matches!(format.as_str(), "table" | "json")
+    {
+        return Err(Cli::command().error(
+            ErrorKind::InvalidValue,
+            "sc-check --format must be table or json, including when --json is supplied",
+        ));
     }
     for (id, flag) in [
         ("interface", "--interface"),
@@ -197,7 +197,7 @@ pub(super) fn execute(
         ) {
             Ok(report) => report,
             Err(error) => {
-                return execution_error(projection::input_error(error), format, stdout, stderr)
+                return execution_error(projection::input_error(error), format, stdout, stderr);
             }
         };
         let document = projection::completed(&report);
@@ -221,8 +221,7 @@ pub(super) fn execute(
                 index: None,
                 kind: None,
                 os_code: None,
-                message:
-                    "Install or rebuild bacnet-cli with --features sc-tls to inspect SC files.",
+                message: "Install or rebuild bacnet-cli with --features sc-tls to inspect SC files.",
             },
             format,
             stdout,

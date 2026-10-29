@@ -4,7 +4,7 @@
 //! lists the global address, and put into effect together by
 //! ReinitializeDevice, after which Read-BDT answers with the global row.
 
-use super::network_port_activation_tests::{reinitialize, wp, FALSE, TRUE};
+use super::network_port_activation_tests::{FALSE, TRUE, reinitialize, wp};
 use super::network_port_mode_tests::{host, port_oid, property_list, rp};
 use super::*;
 use bacnet_encoding::constructed::{decode_host_n_port, encode_bdt_entry_list, encode_host_n_port};

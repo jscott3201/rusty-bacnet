@@ -213,6 +213,122 @@ fn opaque_unknown_tag_preserved() {
     assert_eq!(BACnetEventParameter::decode(&p.encode()).unwrap(), p);
 }
 
+/// Every algorithm #2090 modelled survives the legacy flat form, and keeps
+/// its tag.
+#[test]
+fn new_algorithms_round_trip_the_legacy_form() {
+    use crate::enums::{AccessEvent, TimerState};
+    use BACnetEventParameter as EP;
+    let cases = [
+        (
+            EP::CommandFailure {
+                time_delay: 4,
+                feedback_property_reference: dopr(3),
+            },
+            event_parameter_tag::COMMAND_FAILURE,
+        ),
+        (
+            EP::ChangeOfLifeSafety {
+                time_delay: 10,
+                list_of_life_safety_alarm_values: vec![LifeSafetyState::from_raw(2)],
+                list_of_alarm_values: vec![LifeSafetyState::from_raw(1)],
+                mode_property_reference: dopr(1),
+            },
+            event_parameter_tag::CHANGE_OF_LIFE_SAFETY,
+        ),
+        (
+            EP::BufferReady {
+                notification_threshold: 50,
+                previous_notification_count: 7,
+            },
+            event_parameter_tag::BUFFER_READY,
+        ),
+        (
+            EP::UnsignedRange {
+                time_delay: 1,
+                low_limit: 10,
+                high_limit: u64::MAX,
+            },
+            event_parameter_tag::UNSIGNED_RANGE,
+        ),
+        (
+            EP::AccessEvent {
+                list_of_access_events: vec![AccessEvent::from_raw(129)],
+                access_event_time_reference: dopr(7),
+            },
+            event_parameter_tag::ACCESS_EVENT,
+        ),
+        (
+            EP::DoubleOutOfRange {
+                time_delay: 0,
+                low_limit: -1.5,
+                high_limit: 1e300,
+                deadband: 0.5,
+            },
+            event_parameter_tag::DOUBLE_OUT_OF_RANGE,
+        ),
+        (
+            EP::SignedOutOfRange {
+                time_delay: 3,
+                low_limit: i32::MIN,
+                high_limit: 40,
+                deadband: 2,
+            },
+            event_parameter_tag::SIGNED_OUT_OF_RANGE,
+        ),
+        (
+            EP::UnsignedOutOfRange {
+                time_delay: 5,
+                low_limit: 10,
+                high_limit: 300,
+                deadband: 1,
+            },
+            event_parameter_tag::UNSIGNED_OUT_OF_RANGE,
+        ),
+        (
+            EP::ChangeOfCharacterstring {
+                time_delay: 2,
+                list_of_alarm_values: vec!["FIRE".into(), String::new()],
+            },
+            event_parameter_tag::CHANGE_OF_CHARACTERSTRING,
+        ),
+        (
+            EP::ChangeOfStatusFlags {
+                time_delay: 1,
+                selected_flags: crate::primitives::StatusFlags::FAULT,
+            },
+            event_parameter_tag::CHANGE_OF_STATUS_FLAGS,
+        ),
+        (EP::None, event_parameter_tag::NONE),
+        (
+            EP::ChangeOfDiscreteValue { time_delay: 9 },
+            event_parameter_tag::CHANGE_OF_DISCRETE_VALUE,
+        ),
+        (
+            EP::ChangeOfTimer {
+                time_delay: 3,
+                alarm_values: vec![TimerState::from_raw(2)],
+                update_time_reference: dopr(2),
+            },
+            event_parameter_tag::CHANGE_OF_TIMER,
+        ),
+    ];
+    for (parameter, tag) in cases {
+        assert_eq!(parameter.tag(), tag);
+        assert_eq!(
+            BACnetEventParameter::decode(&parameter.encode()).unwrap(),
+            parameter
+        );
+    }
+    // `none` as it was written while it was opaque: an empty octet string
+    // after the tag.
+    let old_none = PropertyValue::List(vec![
+        PropertyValue::Unsigned(20),
+        PropertyValue::OctetString(Vec::new()),
+    ]);
+    assert_eq!(BACnetEventParameter::decode(&old_none).unwrap(), EP::None);
+}
+
 #[test]
 fn decode_rejects_non_list() {
     assert!(BACnetEventParameter::decode(&PropertyValue::Null).is_err());
@@ -234,11 +350,13 @@ fn decode_rejects_non_unsigned_tag() {
 #[test]
 fn decode_rejects_truncated_out_of_range() {
     // tag + time_delay only — missing the three REAL limits.
-    assert!(BACnetEventParameter::decode(&PropertyValue::List(vec![
-        PropertyValue::Unsigned(event_parameter_tag::OUT_OF_RANGE as u64),
-        PropertyValue::Unsigned(0),
-    ]))
-    .is_err());
+    assert!(
+        BACnetEventParameter::decode(&PropertyValue::List(vec![
+            PropertyValue::Unsigned(event_parameter_tag::OUT_OF_RANGE as u64),
+            PropertyValue::Unsigned(0),
+        ]))
+        .is_err()
+    );
 }
 
 #[test]

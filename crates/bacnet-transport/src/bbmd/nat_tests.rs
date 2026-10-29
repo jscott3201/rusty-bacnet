@@ -314,15 +314,19 @@ fn behind_nat_an_empty_bdt_is_taken() {
 #[test]
 fn a_written_bdt_is_checked_under_the_nat_rules() {
     let state = behind_nat();
-    assert!(state
-        .check_written_bdt(&written(&[two_hop(OTHER_SITE)]))
-        .is_err());
-    assert!(state
-        .check_written_bdt(&written(&[
-            two_hop(GLOBAL),
-            row(OTHER_SITE, [255, 255, 255, 0])
-        ]))
-        .is_err());
+    assert!(
+        state
+            .check_written_bdt(&written(&[two_hop(OTHER_SITE)]))
+            .is_err()
+    );
+    assert!(
+        state
+            .check_written_bdt(&written(&[
+                two_hop(GLOBAL),
+                row(OTHER_SITE, [255, 255, 255, 0])
+            ]))
+            .is_err()
+    );
     state
         .check_written_bdt(&written(&[two_hop(GLOBAL)]))
         .unwrap();

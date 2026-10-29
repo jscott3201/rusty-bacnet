@@ -4,10 +4,10 @@ mod lifecycle;
 
 use lifecycle::{Lifecycle, LifecycleError, Session};
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicUsize, Ordering},
 };
-use tokio::sync::{oneshot, Notify};
+use tokio::sync::{Notify, oneshot};
 
 struct Resource {
     live: Arc<AtomicUsize>,

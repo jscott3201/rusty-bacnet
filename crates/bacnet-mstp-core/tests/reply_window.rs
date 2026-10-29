@@ -2,10 +2,10 @@
 //! deadline keeps a transmit margin inside T_reply_delay, and a late deadline
 //! call or transmit start still answers with Reply Postponed (Clause 9.5.6.9).
 
-use bacnet_mstp_codec::{decode_frame, Frame, FrameType};
+use bacnet_mstp_codec::{Frame, FrameType, decode_frame};
 use bacnet_mstp_core::{
-    Action, Direction, Duration, FixedQueues, Instant, MasterCore, MasterState, MstpCoreConfig,
-    ReceiveError, ReplyDecision, RequestId, TransmitError, TransmitId, DEFAULT_LATE_DEADLINE,
+    Action, DEFAULT_LATE_DEADLINE, Direction, Duration, FixedQueues, Instant, MasterCore,
+    MasterState, MstpCoreConfig, ReceiveError, ReplyDecision, RequestId, TransmitError, TransmitId,
 };
 
 type Queues = FixedQueues<4, 4>;

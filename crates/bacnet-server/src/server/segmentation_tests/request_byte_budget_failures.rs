@@ -100,8 +100,8 @@ impl Fixture {
 }
 
 #[tokio::test]
-async fn request_byte_budget_routed_abort_removes_current_before_failed_send_and_stop_releases_rest(
-) {
+async fn request_byte_budget_routed_abort_removes_current_before_failed_send_and_stop_releases_rest()
+ {
     let drops = Arc::new(AtomicUsize::new(0));
     let _probe = observe_payload_drops(&drops);
     let mut f = Fixture::start().await;

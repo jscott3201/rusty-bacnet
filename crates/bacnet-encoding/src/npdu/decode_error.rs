@@ -2,7 +2,7 @@
 
 use core::fmt;
 
-use bacnet_npdu::{AddressField, Malformed, MAX_MAC_LEN};
+use bacnet_npdu::{AddressField, MAX_MAC_LEN, Malformed};
 use bacnet_types::error::{DecodeError, DecodingKind, Error, RangeError};
 
 use super::NpduAddress;

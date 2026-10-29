@@ -6,17 +6,17 @@
 mod fixture;
 mod glue;
 
-use bacnet_mstp_codec::{Frame as MstpFrame, FrameType, BROADCAST_MAC, MAX_EXTENDED_FRAME_LENGTH};
+use bacnet_mstp_codec::{BROADCAST_MAC, Frame as MstpFrame, FrameType, MAX_EXTENDED_FRAME_LENGTH};
 use bacnet_mstp_core::{
     Action, DequeuedNpdu, ExtendedActionBuffers, Instant, MasterCore, QueueCounters, QueueItemInfo,
     QueueKind, QueueRefusal, QueueStorage, ReplyDecision, RequestError, RequestId,
 };
+use bacnet_router_core::PortId;
 use bacnet_router_core::mstp::{MstpPort, NotExtended, PortAction};
 use bacnet_router_core::npdu::Mac;
 use bacnet_router_core::npdu::Npdu;
 use bacnet_router_core::npdu::NpduLimits;
 use bacnet_router_core::router::{Dest, Group, GroupClassifier, Options, Received, SendRefusal};
-use bacnet_router_core::PortId;
 
 use bacnet_router_core::npdu::NetworkPriority;
 use fixture::*;

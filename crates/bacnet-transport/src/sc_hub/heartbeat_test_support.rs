@@ -2,7 +2,7 @@ use super::heartbeat::HeartbeatIo;
 use super::*;
 use crate::sc_tls::boxed;
 use std::time::Duration;
-use tokio_tungstenite::tungstenite::{client::ClientRequestBuilder, Error};
+use tokio_tungstenite::tungstenite::{Error, client::ClientRequestBuilder};
 
 type ClientWs = WebSocketStream<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>;
 type AckHook = Arc<std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>>;
@@ -34,6 +34,21 @@ impl LiveClient {
         vmac: Vmac,
         admission: Arc<super::admission::AdmissionRuntime>,
     ) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        boxed(|| Self::open_on(&listener, clients, vmac, admission)).await
+    }
+
+    /// [`Self::open_with`], accepting on `listener`, which a test that opens
+    /// many clients one after another can share. When the hub's end closes
+    /// first, its TIME_WAIT then stays on the shared port rather than taking
+    /// one per client; Windows keeps such a port out of use for two minutes
+    /// by default (#2055).
+    pub async fn open_on(
+        listener: &TcpListener,
+        clients: Clients,
+        vmac: Vmac,
+        admission: Arc<super::admission::AdmissionRuntime>,
+    ) -> Self {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let rcgen::CertifiedKey { cert, signing_key } =
             rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
@@ -47,7 +62,6 @@ impl LiveClient {
         let client = rustls::ClientConfig::builder()
             .with_root_certificates(roots)
             .with_no_client_auth();
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let url = format!("wss://localhost:{}", address.port());
         let request = ClientRequestBuilder::new(url.parse().unwrap())
@@ -216,7 +230,7 @@ pub(super) struct ClockIo(pub AtomicU64);
 
 impl HeartbeatIo for ClockIo {
     fn policy(&self) -> ScHubProbePolicy {
-        ScHubProbePolicy::default()
+        ack_bound_policy()
     }
     fn now_ms(&self) -> u64 {
         self.0.load(Ordering::Acquire)
@@ -246,7 +260,7 @@ impl GatedIo {
 
 impl HeartbeatIo for GatedIo {
     fn policy(&self) -> ScHubProbePolicy {
-        ScHubProbePolicy::default()
+        ack_bound_policy()
     }
     fn now_ms(&self) -> u64 {
         self.now.load(Ordering::Acquire)
@@ -268,7 +282,16 @@ impl HeartbeatIo for GatedIo {
 pub(super) fn probe_runtime() -> super::timing::HubTiming {
     super::timing::HubTiming {
         origin: tokio::time::Instant::now() - Duration::from_secs(100),
-        policy: ScHubProbePolicy::default(),
+        policy: ack_bound_policy(),
         relay_send_budget: Duration::from_secs(5),
     }
+}
+
+/// The default probe policy with its liveness bound cut to the ACK age, so
+/// the first unanswered probe retires, as before #2141. The sweep fixtures
+/// here test ACK matching, generations and retirement races at t=100s/106s,
+/// not the liveness bound, which `probe_liveness_tests` covers.
+pub(super) fn ack_bound_policy() -> ScHubProbePolicy {
+    let policy = ScHubProbePolicy::default();
+    policy.with_liveness_bound(policy.ack_age()).unwrap()
 }

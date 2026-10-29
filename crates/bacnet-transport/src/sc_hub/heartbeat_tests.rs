@@ -18,7 +18,7 @@ async fn wire_ack_during_send_completion_survives_next_sweep() {
     let request = live.recv().await;
     assert_eq!(request.function, ScFunction::HeartbeatRequest);
     live.ack(request.message_id).await; // production ACK dispatch has returned
-                                        // Neither the sink wait nor send completion owns the clients map.
+    // Neither the sink wait nor send completion owns the clients map.
     peer.send(frame(ScFunction::HeartbeatRequest, 43)).await;
     assert_eq!(peer.recv().await.message_id, 43);
     io.release.notify_one();

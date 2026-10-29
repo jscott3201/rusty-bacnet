@@ -5,7 +5,7 @@ use core::iter::FusedIterator;
 use core::net::{Ipv4Addr, SocketAddrV4};
 
 use crate::{
-    BvllError, BvllSink, SinkFull, BDT_ENTRY_LENGTH, BIP_ADDRESS_LENGTH, FDT_ENTRY_LENGTH,
+    BDT_ENTRY_LENGTH, BIP_ADDRESS_LENGTH, BvllError, BvllSink, FDT_ENTRY_LENGTH, SinkFull,
 };
 
 /// Octets in one table entry: both tables use the same size (Annex J.2.2.1,

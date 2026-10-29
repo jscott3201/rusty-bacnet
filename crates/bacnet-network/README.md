@@ -18,7 +18,7 @@ by the example is a direct dependency, including the Tokio runtime and macros.
 [dependencies]
 bacnet-network = { path = "../rusty-bacnet/crates/bacnet-network" }
 bacnet-transport = { path = "../rusty-bacnet/crates/bacnet-transport" }
-bacnet-types = { path = "../rusty-bacnet/crates/bacnet-types" }
+bacnet-npdu = { path = "../rusty-bacnet/crates/bacnet-npdu" }
 tokio = { version = "1", features = ["macros", "rt", "time"] }
 ```
 
@@ -72,7 +72,14 @@ response, a completed BACnet transaction or forwarding between networks.
   counters and the documented per-source admission policy.
 - `router` owns forwarding between configured ports and delivery to local
   endpoints. Its `BACnetRouter`, `RouterPort` and `RouterOptions` types describe
-  that lifecycle separately from `NetworkLayer`.
+  that lifecycle separately from `NetworkLayer`. `router.stop().await` returns
+  `Result<(), RouterStopError>`: success means router workers and each transport's
+  async cleanup have completed. A cancelled stop wait leaves cleanup running;
+  subsequent calls replay the same result, including original transport errors
+  in `RouterStopError::failures()`. Dropping a router or cancelling startup
+  initiates cleanup on a live runtime, without an immediate resource-reuse
+  guarantee. Awaited startup failure settles rollback for every attempted port;
+  its original startup error takes precedence over logged cleanup failures.
 - `network_number`, `router_table`, `response_route` and `priority_channel`
   provide the associated state, captured reply routes and queue primitives.
 

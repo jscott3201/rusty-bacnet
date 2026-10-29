@@ -123,7 +123,7 @@ impl TryFrom<&ErrorPdu> for SubscribeCOVPropertyMultipleError {
 
 impl From<SubscribeCOVPropertyMultipleError> for Error {
     fn from(error: SubscribeCOVPropertyMultipleError) -> Self {
-        Error::protocol(
+        Error::with_detail(
             error.error_class,
             error.error_code,
             error
@@ -135,6 +135,7 @@ impl From<SubscribeCOVPropertyMultipleError> for Error {
 
 #[cfg(test)]
 mod tests {
+    use bacnet_types::error::RemoteError;
     use super::*;
     use bacnet_types::enums::ObjectType;
     use bacnet_types::primitives::ObjectIdentifier;
@@ -204,7 +205,7 @@ mod tests {
     fn only_the_subscription_choice_carries_a_detail() {
         assert!(matches!(
             Error::from(general()),
-            Error::Protocol { class: ErrorClass::SERVICES, code: ErrorCode::VALUE_OUT_OF_RANGE }
+            Error::Remote(RemoteError::Error { class: ErrorClass::SERVICES, code: ErrorCode::VALUE_OUT_OF_RANGE })
         ));
         let error = subscription(Some(8));
         let reference = error.first_failed_subscription.clone().unwrap();

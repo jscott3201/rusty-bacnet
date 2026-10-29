@@ -3,6 +3,7 @@ use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::wpm::WritePropertyMultipleRequest;
 use bacnet_types::enums::EngineeringUnits;
+use bacnet_types::error::RemoteError;
 
 fn make_db_with_ai() -> ObjectDatabase {
     let mut db = ObjectDatabase::new();
@@ -80,7 +81,7 @@ fn group_member_rows(
 /// handler named an element of the request.
 fn list_refusal(result: Result<(), Error>) -> (ErrorClass, ErrorCode, u32) {
     let (class, code, element) = match result {
-        Err(Error::Protocol { class, code }) => (class, code, 0),
+        Err(Error::Remote(RemoteError::Error { class, code })) => (class, code, 0),
         Err(Error::Structured {
             class,
             code,
@@ -219,6 +220,6 @@ fn sourced_wpm(db: &mut ObjectDatabase, data: &[u8]) -> Result<Vec<ObjectIdentif
     ) {
         WritePropertyMultipleOutcome::Success { committed_oids } => Ok(committed_oids),
         WritePropertyMultipleOutcome::Error { error, .. } => Err(error),
-        WritePropertyMultipleOutcome::Reject { reason } => Err(Error::Reject { reason }),
+        WritePropertyMultipleOutcome::Reject { reason } => Err(Error::reject(reason)),
     }
 }

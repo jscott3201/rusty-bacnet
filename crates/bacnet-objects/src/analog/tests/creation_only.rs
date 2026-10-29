@@ -4,10 +4,11 @@
 
 use super::super::*;
 use bacnet_types::enums::EngineeringUnits;
+use bacnet_types::error::RemoteError;
 
 fn code(result: Result<(), Error>) -> ErrorCode {
     match result {
-        Err(Error::Protocol { class, code }) => {
+        Err(Error::Remote(RemoteError::Error { class, code })) => {
             assert_eq!(class, ErrorClass::PROPERTY);
             code
         }

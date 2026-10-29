@@ -147,32 +147,32 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         };
         let total_segments = segments.len();
 
-        if let Some(max_segments) = client_max_segments {
-            if total_segments > max_segments as usize {
-                warn_throttled!(
-                    seg_ack_senders.warning,
-                    total_segments,
-                    max_segments,
-                    "Response exceeds client's max-segments-accepted, aborting"
-                );
-                let abort = Apdu::Abort(AbortPdu {
-                    sent_by_server: true,
-                    invoke_id,
-                    abort_reason: AbortReason::BUFFER_OVERFLOW,
-                });
-                let mut buf = BytesMut::new();
-                encode_apdu(&mut buf, &abort).expect("valid APDU encoding");
-                let _ = Self::issue_terminal_response(
-                    network,
-                    &buf,
-                    source_mac,
-                    source_network,
-                    route,
-                    pending.take(),
-                )
-                .await;
-                return;
-            }
+        if let Some(max_segments) = client_max_segments
+            && total_segments > max_segments as usize
+        {
+            warn_throttled!(
+                seg_ack_senders.warning,
+                total_segments,
+                max_segments,
+                "Response exceeds client's max-segments-accepted, aborting"
+            );
+            let abort = Apdu::Abort(AbortPdu {
+                sent_by_server: true,
+                invoke_id,
+                abort_reason: AbortReason::BUFFER_OVERFLOW,
+            });
+            let mut buf = BytesMut::new();
+            encode_apdu(&mut buf, &abort).expect("valid APDU encoding");
+            let _ = Self::issue_terminal_response(
+                network,
+                &buf,
+                source_mac,
+                source_network,
+                route,
+                pending.take(),
+            )
+            .await;
+            return;
         }
 
         if total_segments > 256 {

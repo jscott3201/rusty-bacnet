@@ -13,6 +13,7 @@ use bacnet_objects::lighting::BinaryLightingOutputObject;
 use bacnet_objects::object_profile::ObjectProfile;
 use bacnet_objects::object_profile::{TagsPersistence, TagsSnapshot};
 use bacnet_types::constructed::BACnetNameValue;
+use bacnet_types::error::RemoteError;
 use std::sync::{Arc, Mutex};
 
 const TAGS: PropertyIdentifier = PropertyIdentifier::TAGS;
@@ -201,7 +202,7 @@ fn tags_take_array_writes_and_the_profile_rows_none() {
     // Past the resource cap: RESOURCES / NO_SPACE_TO_WRITE_PROPERTY.
     let too_many = write_at(&mut db, oid, TAGS, Some(0), &[0x22, 0x04, 0x01]);
     assert!(
-        matches!(too_many, Err(Error::Protocol { class, code })
+        matches!(too_many, Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::RESOURCES
                 && code == ErrorCode::NO_SPACE_TO_WRITE_PROPERTY),
         "{too_many:?}"
@@ -253,7 +254,7 @@ fn a_whole_tags_write_takes_up_to_max_tags_elements() {
     );
     let too_many = write_at(&mut db, oid, TAGS, None, &tag.repeat(max + 1));
     assert!(
-        matches!(too_many, Err(Error::Protocol { class, code })
+        matches!(too_many, Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::RESOURCES
                 && code == ErrorCode::NO_SPACE_TO_WRITE_PROPERTY),
         "{too_many:?}"
@@ -287,7 +288,7 @@ fn value_profiles_read_with_exact_wire_bytes() {
             profile_name: Some(NAME.into()),
         };
         macro_rules! build {
-            ($object:expr) => {{
+            ($object:expr_2021) => {{
                 let mut object = $object.unwrap();
                 // Absent rows refuse both reads and writes before provisioning.
                 for property in [
@@ -378,7 +379,7 @@ fn input_profiles_read_with_exact_wire_bytes_in_either_oos_state() {
             profile_name: Some(NAME.into()),
         };
         macro_rules! build {
-            ($object:expr) => {{
+            ($object:expr_2021) => {{
                 let mut object = $object.unwrap();
                 for property in [
                     TAGS,
@@ -447,7 +448,7 @@ fn input_profiles_read_with_exact_wire_bytes_in_either_oos_state() {
             );
             let count = write_at(&mut db, oid, TAGS, Some(0), &[0x22, 4, 1]);
             assert!(
-                matches!(count, Err(Error::Protocol { class, code }) if class == ErrorClass::RESOURCES && code == ErrorCode::NO_SPACE_TO_WRITE_PROPERTY)
+                matches!(count, Err(Error::Remote(RemoteError::Error { class, code })) if class == ErrorClass::RESOURCES && code == ErrorCode::NO_SPACE_TO_WRITE_PROPERTY)
             );
             assert_eq!(read_wire(&db, oid, TAGS), [EXHAUST, FLOOR].concat());
             write_at(&mut db, oid, TAGS, None, &FLOOR).unwrap();
@@ -515,7 +516,7 @@ fn output_profiles_read_with_exact_wire_bytes_in_either_oos_state() {
             profile_name: Some(NAME.into()),
         };
         macro_rules! build {
-            ($object:expr) => {{
+            ($object:expr_2021) => {{
                 let mut object = $object.unwrap();
                 for property in [
                     TAGS,
@@ -600,11 +601,11 @@ fn output_profiles_read_with_exact_wire_bytes_in_either_oos_state() {
             // Broken application framing is rejected by the outer service parser.
             assert!(matches!(
                 write_at(&mut db, oid, TAGS, None, &[0xff]),
-                Err(Error::Reject { reason }) if reason == RejectReason::INVALID_TAG
+                Err(Error::Remote(RemoteError::Reject { reason })) if reason == RejectReason::INVALID_TAG
             ));
             let count = write_at(&mut db, oid, TAGS, Some(0), &[0x22, 4, 1]);
             assert!(
-                matches!(count, Err(Error::Protocol { class, code }) if class == ErrorClass::RESOURCES && code == ErrorCode::NO_SPACE_TO_WRITE_PROPERTY)
+                matches!(count, Err(Error::Remote(RemoteError::Error { class, code })) if class == ErrorClass::RESOURCES && code == ErrorCode::NO_SPACE_TO_WRITE_PROPERTY)
             );
             assert_eq!(read_wire(&db, oid, TAGS), [EXHAUST, FLOOR].concat());
             write_at(&mut db, oid, TAGS, None, &FLOOR).unwrap();

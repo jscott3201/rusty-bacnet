@@ -1,5 +1,6 @@
 use super::*;
 use bacnet_types::enums::{ErrorClass, ErrorCode, EscalatorMode, EscalatorOperationDirection};
+use bacnet_types::error::RemoteError;
 
 mod energy_meter_ref;
 mod escalator_status_writability;
@@ -30,7 +31,7 @@ fn oos_escalator() -> EscalatorObject {
 
 fn assert_value_out_of_range(result: Result<(), Error>, context: &str) {
     match result.expect_err(&format!("{context}: write must be refused")) {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, ErrorClass::PROPERTY, "{context}: wrong error class");
             assert_eq!(
                 code,
@@ -44,7 +45,7 @@ fn assert_value_out_of_range(result: Result<(), Error>, context: &str) {
 
 fn assert_invalid_data_type(result: Result<(), Error>, context: &str) {
     match result.expect_err(&format!("{context}: write must be refused")) {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, ErrorClass::PROPERTY, "{context}: wrong error class");
             assert_eq!(
                 code,
@@ -58,7 +59,7 @@ fn assert_invalid_data_type(result: Result<(), Error>, context: &str) {
 
 fn assert_property_error(result: Result<(), Error>, expected: ErrorCode, context: &str) {
     match result {
-        Err(Error::Protocol { class, code }) => {
+        Err(Error::Remote(RemoteError::Error { class, code })) => {
             assert_eq!(class, ErrorClass::PROPERTY, "{context}");
             assert_eq!(code, expected, "{context}: {expected:?}");
         }

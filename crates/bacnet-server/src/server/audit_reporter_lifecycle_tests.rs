@@ -231,16 +231,18 @@ async fn audit_reporter_create_late_initial_value_decode_failure_is_silent_and_r
             let db = fixture.server.db.read().await;
             assert_eq!(db.len(), initial_count);
             assert!(db.get(&candidate).is_none());
-            assert!(!db
-                .find_by_type(ObjectType::BINARY_VALUE)
-                .contains(&candidate));
+            assert!(
+                !db.find_by_type(ObjectType::BINARY_VALUE)
+                    .contains(&candidate)
+            );
             // Use a different OID: a stale name-index entry for the rolled-back
             // candidate must not look like a successful same-owner name check.
             let other = oid(ObjectType::BINARY_VALUE, 4);
             assert!(db.check_name_available(&other, "x").is_ok());
-            assert!(db
-                .check_name_available(&other, &format!("{:?}-3", ObjectType::BINARY_VALUE))
-                .is_ok());
+            assert!(
+                db.check_name_available(&other, &format!("{:?}-3", ObjectType::BINARY_VALUE))
+                    .is_ok()
+            );
         }
         settle().await;
         assert!(notifications(&fixture.transport.sent).is_empty());
@@ -588,14 +590,16 @@ async fn audit_reporter_selected_reporter_deletion_is_denied_until_stopped() {
         Some((ErrorClass::OBJECT, ErrorCode::OBJECT_DELETION_NOT_PERMITTED)),
     );
     fixture.server.stop().await.unwrap();
-    assert!(fixture
-        .server
-        .db
-        .write()
-        .await
-        .remove(&target)
-        .unwrap()
-        .is_some());
+    assert!(
+        fixture
+            .server
+            .db
+            .write()
+            .await
+            .remove(&target)
+            .unwrap()
+            .is_some()
+    );
 }
 
 #[tokio::test]

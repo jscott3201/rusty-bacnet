@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::mstp::{MstpArgs, DEFAULT_BAUD, MAX_MASTER_MAC};
+use crate::mstp::{DEFAULT_BAUD, MAX_MASTER_MAC, MstpArgs};
 
 /// MS/TP settings. `port` and `mac` have no default: both are a choice
 /// about this trunk.

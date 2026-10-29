@@ -11,8 +11,8 @@ use bacnet_router_core::router::{
 use bacnet_router_core::table::{Reachability, RejectEffect};
 use bacnet_router_core::{Duration, Instant, PortId, Storage};
 use fixture::{
-    addr, at, at_ms, bytes, deliver, deliver_broadcast, learn_9_via_r7, message, networks,
-    reject_data, router_with, two_ports, Outcome, Recorder, TestRouter, NODE_A, R7, UNCONFIRMED,
+    NODE_A, Outcome, R7, Recorder, TestRouter, UNCONFIRMED, addr, at, at_ms, bytes, deliver,
+    deliver_broadcast, learn_9_via_r7, message, networks, reject_data, router_with, two_ports,
 };
 
 /// Another router on port 1, beside R7.

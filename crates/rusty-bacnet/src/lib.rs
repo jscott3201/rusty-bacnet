@@ -8,6 +8,7 @@
 
 use pyo3::prelude::*;
 
+mod app_transport;
 mod bip_options;
 mod client;
 mod discovery;
@@ -20,11 +21,13 @@ mod hub_bindings;
 mod log_records;
 mod logging_bridge;
 mod mstp_py;
+mod mutation_policy;
 mod object_audit_policy;
 mod object_options;
 mod py_async;
 mod read_range;
 mod reinitialize;
+mod router;
 mod sc_events;
 mod sc_identity;
 mod sc_inspection;
@@ -76,7 +79,9 @@ fn rusty_bacnet(m: &Bound<'_, PyModule>) -> PyResult<()> {
     discovery::register(m)?;
     sc_inspection::register(m)?;
     endpoint::register(m)?;
+    router::register(m)?;
     reinitialize::register(m)?;
+    mutation_policy::register(m)?;
     m.add_function(wrap_pyfunction!(mstp_py::list_serial_ports, m)?)?;
     m.add_function(wrap_pyfunction!(log_records::decode_log_records, m)?)?;
 

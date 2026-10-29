@@ -29,10 +29,15 @@ fn request_data(state: ReinitializedState, password: Option<&str>) -> Bytes {
     let mut data = BytesMut::new();
     ReinitializeDeviceRequest {
         reinitialized_state: state,
-        password: password.map(str::to_owned),
+        password: None,
     }
     .encode(&mut data)
     .unwrap();
+    // Appended by hand, so a test can send what the encoder refuses: a
+    // password over 20 characters (#2085).
+    if let Some(password) = password {
+        bacnet_encoding::primitives::encode_ctx_character_string(&mut data, 1, password).unwrap();
+    }
     data.freeze()
 }
 
@@ -187,7 +192,7 @@ fn states(received: &Received) -> Vec<ReinitializedState> {
 }
 
 fn protocol(class: ErrorClass, code: ErrorCode) -> Error {
-    Error::Protocol { class, code }
+    Error::protocol(class, code)
 }
 
 #[tokio::test(start_paused = true)]
@@ -209,6 +214,38 @@ async fn reinitialize_device_passes_every_defined_state_to_the_handler() {
             assert_eq!(states(&received), vec![state]);
         }
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn reinitialize_device_accepts_a_twenty_character_multi_octet_password() {
+    // 20 characters, 40 UTF-8 octets: the limit counts characters (#2060).
+    let password = "é".repeat(20);
+    let (config, received) = recording_config(Some(&password), || Ok(()));
+    let state = ReinitializedState::START_BACKUP;
+    let apdu = dispatch_with(
+        request_data(state, Some(&password)),
+        config,
+        DccState::Enable,
+    )
+    .await;
+    assert!(matches!(apdu, Apdu::SimpleAck(_)), "{apdu:?}");
+    assert_eq!(states(&received), vec![state]);
+
+    // One character more is refused before the password check or the handler.
+    let too_long = format!("{password}é");
+    let (config, received) = recording_config(Some(&too_long), || Ok(()));
+    let apdu = dispatch_with(
+        request_data(state, Some(&too_long)),
+        config,
+        DccState::Enable,
+    )
+    .await;
+    // Valid encoding, size out of the service's range (#2085).
+    let Apdu::Reject(reject) = apdu else {
+        panic!("expected a Reject, got {apdu:?}")
+    };
+    assert_eq!(reject.reject_reason, RejectReason::PARAMETER_OUT_OF_RANGE);
+    assert!(states(&received).is_empty());
 }
 
 #[tokio::test(start_paused = true)]
@@ -292,12 +329,8 @@ async fn reinitialize_device_handler_panic_is_answered_services_other() {
 /// SERVICES / OTHER, while a structured refusal keeps its class and code.
 #[tokio::test(start_paused = true)]
 async fn reinitialize_device_handler_reject_is_answered_services_other() {
-    let reject = || Error::Reject {
-        reason: RejectReason::PARAMETER_OUT_OF_RANGE,
-    };
-    let abort = || Error::Abort {
-        reason: AbortReason::OTHER,
-    };
+    let reject = || Error::reject(RejectReason::PARAMETER_OUT_OF_RANGE);
+    let abort = || Error::abort(AbortReason::OTHER);
     let encoding = || Error::Encoding("handler failure".into());
     for error in [reject, abort, encoding] {
         let (config, _) = recording_config(None, move || Err(error()));

@@ -1,9 +1,9 @@
 use super::*;
 use crate::cov::{CovNotificationKind, CovSample, CovSubscription};
 use bacnet_types::{
+    MacAddr,
     enums::{ObjectType, PropertyIdentifier},
     primitives::{ObjectIdentifier, PropertyValue},
-    MacAddr,
 };
 use std::time::{Duration, Instant};
 fn proposal(kind: CovNotificationKind, confirmed: bool) -> CovSubscription {

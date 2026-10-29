@@ -9,8 +9,8 @@ use bacnet_bip_codec::Bvll;
 use bacnet_bip_core::bbmd::{Context, DistributeRefusal, ForwardRefusal, Tables, Target, Via};
 use bacnet_bip_core::{Arrival, Instant};
 use support::{
-    addr, context, destinations, register_all, row, secs, storage, tables, target, Small,
-    LOCAL_BROADCAST, MASK_24, MASK_32, OWN, PORT, SUBNET,
+    LOCAL_BROADCAST, MASK_24, MASK_32, OWN, PORT, SUBNET, Small, addr, context, destinations,
+    register_all, row, secs, storage, tables, target,
 };
 
 const NPDU: &[u8] = &[0x01, 0x20, 0xFF, 0xFF, 0x00, 0xFF, 0x10, 0x08];
@@ -495,9 +495,11 @@ fn only_a_live_registration_may_distribute() {
         ),
         nak
     );
-    assert!(tables
-        .distribute_broadcast(&context(T0 + secs(90)), &SUBNET, FD1, NPDU, &mut out)
-        .is_ok());
+    assert!(
+        tables
+            .distribute_broadcast(&context(T0 + secs(90)), &SUBNET, FD1, NPDU, &mut out)
+            .is_ok()
+    );
     assert_eq!(
         tables.distribute_broadcast(&context(T0 + secs(91)), &SUBNET, FD1, NPDU, &mut out),
         nak

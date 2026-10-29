@@ -1,7 +1,8 @@
 use super::*;
-use bacnet_objects::{timer::TimerObject, traits::BACnetObject};
-use bacnet_types::primitives::{Date, PropertyValue, Time};
 use PropertyIdentifier as P;
+use bacnet_objects::{timer::TimerObject, traits::BACnetObject};
+use bacnet_types::error::RemoteError;
+use bacnet_types::primitives::{Date, PropertyValue, Time};
 
 fn timer_object(configured: bool) -> TimerObject {
     let mut object = TimerObject::new(7, "TMR-7").unwrap();
@@ -126,9 +127,11 @@ fn rpm_timer_metadata_does_not_enable_create_object() {
         .encode(&mut request);
         let mut response = BytesMut::new();
         let result = handle_create_object(&mut db, &request, &mut response);
-        assert!(matches!(result, Err(Error::Protocol { class, code })
+        assert!(
+            matches!(result, Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::OBJECT
-                && code == ErrorCode::UNSUPPORTED_OBJECT_TYPE));
+                && code == ErrorCode::UNSUPPORTED_OBJECT_TYPE)
+        );
         assert!(response.is_empty());
         assert!(db.is_empty());
     }

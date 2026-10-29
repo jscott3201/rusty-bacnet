@@ -11,8 +11,9 @@ pub mod sc;
 pub mod session;
 mod source_audit;
 
-pub use identity::{build_database_with_extra, DeviceIdentity, NetworkPortEntry};
+pub use identity::{DeviceIdentity, NetworkPortEntry, build_database_with_extra};
 pub use roles::{ClientRoleHandle, EndpointApduDestination, ServerRoleHandle};
 pub use session::{
-    EndpointSession, PolicyCountersSnapshot, SessionConfig, SessionExit, SessionRole,
+    EndpointSession, PolicyCountersSnapshot, RESPONDER_OPT_IN_SERVICES, RESPONDER_SERVICES,
+    ResponderOptIn, SessionConfig, SessionExit, SessionRole,
 };

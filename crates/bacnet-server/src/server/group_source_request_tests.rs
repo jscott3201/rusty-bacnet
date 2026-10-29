@@ -6,23 +6,23 @@
 
 use std::time::Duration;
 
-use bacnet_encoding::apdu::{encode_apdu, Apdu, ConfirmedRequest as ConfirmedRequestPdu};
-use bacnet_encoding::npdu::{encode_npdu, Npdu};
+use bacnet_encoding::apdu::{Apdu, ConfirmedRequest as ConfirmedRequestPdu, encode_apdu};
+use bacnet_encoding::npdu::{Npdu, encode_npdu};
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_services::cov::SubscribeCOVRequest;
 use bacnet_services::read_property::ReadPropertyRequest;
 use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
+use bacnet_types::MacAddr;
 use bacnet_types::enums::{
     ConfirmedServiceChoice, EngineeringUnits, ObjectType, PropertyIdentifier,
 };
 use bacnet_types::primitives::ObjectIdentifier;
-use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
 use tokio::sync::mpsc;
 
-use crate::server::test_transport::{TestTransport, BIP_LOCAL_MAC};
+use crate::server::test_transport::{BIP_LOCAL_MAC, TestTransport};
 use crate::server::{BACnetServer, ServerConfig};
 
 /// A B/IP multicast address the test transport reports as a group.

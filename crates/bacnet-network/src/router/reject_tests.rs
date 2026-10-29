@@ -12,9 +12,9 @@ use bacnet_transport::port::DataAttribute;
 use bacnet_types::MacAddr;
 use bytes::Bytes;
 
-use super::control_policy::ControlGate;
-use super::envelope_harness::{attributes, Harness, IngressContext, TableSeed, PORT_MACS};
 use super::SendRequest;
+use super::control_policy::ControlGate;
+use super::envelope_harness::{Harness, IngressContext, PORT_MACS, TableSeed, attributes};
 use crate::router_table::Reachability;
 
 /// Reason 1 for network 5000: the payload every reject below carries.
@@ -252,4 +252,34 @@ async fn a_reject_for_another_node_or_a_denied_one_skips_the_routers_consumer() 
         Some(Reachability::Reachable)
     );
     h.assert_quiet();
+}
+
+/// The control the router hands its consumer is built from the engine's
+/// view, not a second decode, and matches what the owned decoder gives for
+/// the same frame: every NPCI field, and the data sharing the frame (#1844).
+#[tokio::test]
+async fn a_control_for_the_router_matches_the_owned_decoder() {
+    use bacnet_encoding::npdu::decode_npdu;
+
+    let frames: [&'static [u8]; 3] = [
+        // No DNET, expecting a reply, urgent priority.
+        &[0x01, 0x86, 0x03, 0x01, 0x13, 0x88],
+        // SNET 3000 / SADR [30], normal priority.
+        &[0x01, 0x88, 0x0B, 0xB8, 0x01, 0x30, 0x03, 0x01, 0x13, 0x88],
+        // DNET 2000 / DADR [02], the router's own; SNET 3000 / SADR [30];
+        // hop count 200; critical priority.
+        &[
+            0x01, 0xAB, 0x07, 0xD0, 0x01, 0x02, 0x0B, 0xB8, 0x01, 0x30, 0xC8, 0x03, 0x01, 0x13,
+            0x88,
+        ],
+    ];
+    for frame in frames {
+        let mut h = relay_harness();
+        let mut controls = h.network_control();
+        h.handle_frame(1, &[0x0B], Bytes::from_static(frame));
+        let control = controls.try_recv().expect("a control");
+        let decoded = decode_npdu(Bytes::from_static(frame)).unwrap();
+        assert_eq!(control.npdu, decoded, "{frame:02X?}");
+        assert_eq!(control.npdu.payload, NO_ROUTE_TO_5000[..], "{frame:02X?}");
+    }
 }

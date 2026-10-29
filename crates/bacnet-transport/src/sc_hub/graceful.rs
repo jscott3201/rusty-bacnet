@@ -55,18 +55,18 @@
 //! count; that would double-count the same registration.
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use bacnet_types::error::Error;
 use bytes::{Bytes, BytesMut};
 use futures_util::{SinkExt, StreamExt};
-use tokio::sync::{watch, Mutex, Notify};
+use tokio::sync::{Mutex, Notify, watch};
 use tokio_tungstenite::tungstenite::Message;
 use tracing::debug;
 
-use crate::sc_frame::{decode_sc_message, encode_sc_message, ScFunction, ScMessage};
+use crate::sc_frame::{ScFunction, ScMessage, decode_sc_message, encode_sc_message};
 
 use super::{Clients, DeviceUuid, Vmac, WsSink};
 
@@ -614,12 +614,14 @@ mod tests {
                 "{ack:?}/{close:?}/{overall:?}"
             );
         }
-        assert!(ScHubGracefulTimeouts::new(
-            Duration::from_secs(1),
-            Duration::from_secs(1),
-            Duration::from_secs(2),
-        )
-        .is_ok());
+        assert!(
+            ScHubGracefulTimeouts::new(
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+                Duration::from_secs(2),
+            )
+            .is_ok()
+        );
     }
 
     #[test]

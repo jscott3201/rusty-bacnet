@@ -3,6 +3,7 @@ use crate::clock::{ClockFrame, ClockReader};
 use bacnet_encoding::constructed::{decode_log_multiple_record, decode_log_record};
 use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{BACnetLogMultipleRecord, LogData, LogDatum, LogValue};
+use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::{Date, Time};
 use bytes::BytesMut;
 use std::sync::Arc;
@@ -234,9 +235,10 @@ fn trendlog_set_description_convenience() {
 #[test]
 fn trendlog_description_in_property_list() {
     let tl = TrendLogObject::new(1, "TL-1", 100).unwrap();
-    assert!(tl
-        .property_list()
-        .contains(&PropertyIdentifier::DESCRIPTION));
+    assert!(
+        tl.property_list()
+            .contains(&PropertyIdentifier::DESCRIPTION)
+    );
 }
 
 #[test]
@@ -264,7 +266,7 @@ fn trendlog_log_buffer_empty() {
     assert_eq!(tl.log_buffer_internal().unwrap().record_count(), 0);
     assert!(matches!(
         tl.read_property(PropertyIdentifier::LOG_BUFFER, None),
-        Err(Error::Protocol { class, code })
+        Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::PROPERTY
                 && code == ErrorCode::READ_ACCESS_DENIED
     ));
@@ -550,7 +552,7 @@ fn trendlog_reliability_is_not_network_writable() {
         None,
     );
     match result.expect_err("Reliability write must be refused") {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, ErrorClass::PROPERTY);
             assert_eq!(code, ErrorCode::WRITE_ACCESS_DENIED);
         }
@@ -581,10 +583,12 @@ fn trend_logs_have_no_out_of_service_property() {
                 .contains(&PropertyIdentifier::OUT_OF_SERVICE),
             "{kind:?}"
         );
-        assert!(!object
-            .property_metadata()
-            .iter()
-            .any(|row| row.property_identifier == PropertyIdentifier::OUT_OF_SERVICE));
+        assert!(
+            !object
+                .property_metadata()
+                .iter()
+                .any(|row| row.property_identifier == PropertyIdentifier::OUT_OF_SERVICE)
+        );
         assert!(!object.is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
         let read = object
             .read_property(PropertyIdentifier::OUT_OF_SERVICE, None)
@@ -597,7 +601,7 @@ fn trend_logs_have_no_out_of_service_property() {
         );
         for result in [read, write] {
             match result.expect_err("no Out_Of_Service property") {
-                Error::Protocol { class, code } => {
+                Error::Remote(RemoteError::Error { class, code }) => {
                     assert_eq!(class, ErrorClass::PROPERTY, "{kind:?}");
                     assert_eq!(code, ErrorCode::UNKNOWN_PROPERTY, "{kind:?}");
                 }
@@ -623,7 +627,7 @@ fn trendlog_multiple_reliability_is_not_network_writable() {
         None,
     );
     match result.expect_err("Reliability write must be refused") {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, ErrorClass::PROPERTY);
             assert_eq!(code, ErrorCode::WRITE_ACCESS_DENIED);
         }

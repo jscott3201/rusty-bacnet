@@ -6,7 +6,7 @@
 
 use core::mem::size_of;
 
-use firmware_link::mstp_extended::{run, Core, Memory, Queues, Storage, EXPECTED};
+use firmware_link::mstp_extended::{Core, EXPECTED, Memory, Queues, Storage, run};
 
 /// The whole summary against the one the emulation build checks too
 /// (`firmware_link::mstp_extended::EXPECTED`, which explains each value).

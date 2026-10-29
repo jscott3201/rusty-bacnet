@@ -4,7 +4,7 @@
 
 use super::*;
 use std::future::Future;
-use tokio_tungstenite::tungstenite::{error::ProtocolError, Error};
+use tokio_tungstenite::tungstenite::{Error, error::ProtocolError};
 
 impl HubRelaySink {
     pub(super) fn capture(vmac: Vmac, client: &HubClient) -> Self {

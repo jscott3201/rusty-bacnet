@@ -196,14 +196,16 @@ fn change_of_state_matches_boolean_extended_and_proprietary_values() {
 
     // Context [63] packs the choice discriminator for transport; the
     // referenced property's semantic value remains Enumerated(7).
-    assert!(algorithms::eval_change_of_state_struct(
-        &[BACnetPropertyStates::ExtendedValue(extended)],
-        algorithms::PropertyStateValue::Unsigned(u64::from(extended.encoded())),
-        EventState::NORMAL,
-        None,
-    )
-    .indication
-    .is_none());
+    assert!(
+        algorithms::eval_change_of_state_struct(
+            &[BACnetPropertyStates::ExtendedValue(extended)],
+            algorithms::PropertyStateValue::Unsigned(u64::from(extended.encoded())),
+            EventState::NORMAL,
+            None,
+        )
+        .indication
+        .is_none()
+    );
 }
 
 #[test]
@@ -233,22 +235,26 @@ fn change_of_state_keeps_discrete_datatypes_distinct() {
         assert_eq!(evaluation.indication.unwrap().condition, 0);
     }
 
-    assert!(algorithms::eval_change_of_state_struct(
-        &[BACnetPropertyStates::BinaryValue(1)],
-        algorithms::PropertyStateValue::Unsigned(1),
-        EventState::NORMAL,
-        None,
-    )
-    .indication
-    .is_none());
-    assert!(algorithms::eval_change_of_state_struct(
-        &[BACnetPropertyStates::UnsignedValue(1)],
-        algorithms::PropertyStateValue::Enumerated(1),
-        EventState::NORMAL,
-        None,
-    )
-    .indication
-    .is_none());
+    assert!(
+        algorithms::eval_change_of_state_struct(
+            &[BACnetPropertyStates::BinaryValue(1)],
+            algorithms::PropertyStateValue::Unsigned(1),
+            EventState::NORMAL,
+            None,
+        )
+        .indication
+        .is_none()
+    );
+    assert!(
+        algorithms::eval_change_of_state_struct(
+            &[BACnetPropertyStates::UnsignedValue(1)],
+            algorithms::PropertyStateValue::Enumerated(1),
+            EventState::NORMAL,
+            None,
+        )
+        .indication
+        .is_none()
+    );
 
     let alarm_values = [
         BACnetPropertyStates::BooleanValue(true),

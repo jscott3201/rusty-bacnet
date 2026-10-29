@@ -2,17 +2,17 @@
 //! on paused time (#1535).
 use std::sync::{Arc, Mutex as StdMutex};
 
-use bacnet_encoding::apdu::{self, encode_apdu, Apdu, SimpleAck};
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
+use bacnet_encoding::apdu::{self, Apdu, SimpleAck, encode_apdu};
+use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
 use bacnet_transport::port::{ReceivedNpdu, TransportPort, TransportProvenance};
+use bacnet_types::MacAddr;
 use bacnet_types::enums::ConfirmedServiceChoice;
 use bacnet_types::error::Error;
-use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
 use tokio::sync::mpsc;
 use tokio::time::{Duration, Instant};
 
-use super::pacing::{with_capacity, PaceKey, RequestPacer};
+use super::pacing::{PaceKey, RequestPacer, with_capacity};
 use super::{BACnetClient, ConfirmedTarget};
 
 type Sends = Arc<StdMutex<Vec<(Instant, MacAddr)>>>;

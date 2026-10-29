@@ -4,9 +4,9 @@
 use bacnet_mstp_codec::FrameType;
 use tokio::time::{Duration, Instant};
 
-use super::test_support::{config, Bus, DrainMode, Port, Sent};
+use super::test_support::{Bus, DrainMode, Port, Sent, config};
 use super::{
-    LatenessHistogram, MstpConfig, HOST_LATE_DEADLINE, HOST_USAGE_TIMEOUT, USB_TRANSMIT_LATENCY_PAD,
+    HOST_LATE_DEADLINE, HOST_USAGE_TIMEOUT, LatenessHistogram, MstpConfig, USB_TRANSMIT_LATENCY_PAD,
 };
 use crate::port::TransportPort;
 

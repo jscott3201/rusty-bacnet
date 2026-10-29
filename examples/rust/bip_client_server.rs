@@ -125,10 +125,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for result in &rpm_ack.list_of_read_access_results {
         println!("  Object: {:?}", result.object_identifier);
         for prop_result in &result.list_of_results {
-            if let Some(ref value_bytes) = prop_result.property_value {
-                if let Ok((val, _)) = decode_application_value(value_bytes, 0) {
-                    println!("    {:?}: {:?}", prop_result.property_identifier, val);
-                }
+            if let Some(ref value_bytes) = prop_result.property_value
+                && let Ok((val, _)) = decode_application_value(value_bytes, 0)
+            {
+                println!("    {:?}: {:?}", prop_result.property_identifier, val);
             }
         }
     }
@@ -140,9 +140,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     client.who_is_directed(&server_mac, None).await?;
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     let devices = client.discovered_devices().await;
-    assert!(devices
-        .iter()
-        .any(|dev| dev.object_identifier.instance_number() == 1234));
+    assert!(
+        devices
+            .iter()
+            .any(|dev| dev.object_identifier.instance_number() == 1234)
+    );
     println!("\nDiscovered {} device(s):", devices.len());
     for dev in &devices {
         println!(

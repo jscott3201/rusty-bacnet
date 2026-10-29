@@ -6,13 +6,13 @@
 //! `stop()` drops such a write and waits until storage holds the list the
 //! class serves again, so a restart serves that list.
 
-use super::durable_write_wire_tests::{destination, HeldStorage, WAIT};
+use super::durable_write_wire_tests::{HeldStorage, WAIT, destination};
 use super::mutation_tests::wpm;
 use super::*;
-use crate::server::durable_writes::{slow_save_warnings, SLOW_SAVE_REPEAT, SLOW_SAVE_WARNING};
+use crate::server::durable_writes::{SLOW_SAVE_REPEAT, SLOW_SAVE_WARNING, slow_save_warnings};
 use crate::server::test_transport::TestTransport;
 use bacnet_encoding::constructed::encode_destination_list;
-use bacnet_encoding::npdu::{encode_npdu, Npdu};
+use bacnet_encoding::npdu::{Npdu, encode_npdu};
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::notification_class::{
     NotificationClass, NotificationClassPersistence, NotificationClassSnapshot,

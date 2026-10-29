@@ -87,7 +87,7 @@
 use arbitrary::Arbitrary;
 use bacnet_mstp_codec::{DecodeEvent, FrameError, StreamDecoder, StreamPhase};
 use libfuzzer_sys::fuzz_target;
-use mstp_codec_fuzz::{self as wire, Header, HEADER_END, MAX_COBS_WIRE, MAX_DATA};
+use mstp_codec_fuzz::{self as wire, HEADER_END, Header, MAX_COBS_WIRE, MAX_DATA};
 
 /// A stream stops taking chunks past this many octets, to keep runs quick.
 const MAX_STREAM: usize = 16 * 1024;
@@ -208,13 +208,11 @@ impl Stream {
                     stream.octets.extend_from_slice(&octets);
                 }
                 Chunk::Noise(octets) => stream.octets.extend_from_slice(octets),
-                Chunk::Inert(octets) => stream.octets.extend(octets.iter().map(|&octet| {
-                    if octet == 0x55 {
-                        0x54
-                    } else {
-                        octet
-                    }
-                })),
+                Chunk::Inert(octets) => stream.octets.extend(
+                    octets
+                        .iter()
+                        .map(|&octet| if octet == 0x55 { 0x54 } else { octet }),
+                ),
             }
         }
         stream

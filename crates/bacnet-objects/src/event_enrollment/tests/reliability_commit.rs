@@ -156,14 +156,16 @@ fn network_reliability_write_remains_denied() {
     let mut object =
         EventEnrollmentObject::new(33, "EE-network-reliability", EventType::CHANGE_OF_BITSTRING)
             .unwrap();
-    assert!(object
-        .write_property(
-            PropertyIdentifier::RELIABILITY,
-            None,
-            PropertyValue::Enumerated(Reliability::OVER_RANGE.to_raw()),
-            None,
-        )
-        .is_err());
+    assert!(
+        object
+            .write_property(
+                PropertyIdentifier::RELIABILITY,
+                None,
+                PropertyValue::Enumerated(Reliability::OVER_RANGE.to_raw()),
+                None,
+            )
+            .is_err()
+    );
     assert_eq!(
         object
             .read_property(PropertyIdentifier::RELIABILITY, None)

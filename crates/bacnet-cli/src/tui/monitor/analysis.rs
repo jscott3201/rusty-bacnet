@@ -127,7 +127,7 @@ pub(crate) fn masters(stats: &MonitorStats) -> impl Iterator<Item = (u8, &Statio
     stats
         .stations
         .iter()
-        .filter(|(&mac, station)| mac <= MAX_MASTER_MAC && station.is_master())
+        .filter(|&(&mac, station)| mac <= MAX_MASTER_MAC && station.is_master())
         .map(|(&mac, station)| (mac, station))
 }
 
@@ -332,7 +332,7 @@ fn sample_above(sample: &MonitorSample, value: u8) -> Vec<String> {
     stats
         .stations
         .iter()
-        .filter(|(&mac, s)| {
+        .filter(|&(&mac, s)| {
             mac > value && mac <= MAX_MASTER_MAC && (s.is_present() || addressed(s))
         })
         .map(|(mac, _)| format!("mstp:{mac}"))

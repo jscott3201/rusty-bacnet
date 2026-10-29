@@ -14,14 +14,14 @@ use tokio::sync::mpsc;
 use super::capture::{bip_frame, mixed, wall};
 use super::site::bounded;
 use super::*;
-use crate::decode::frame::summarize_frame;
-use crate::decode::testing;
 use crate::tui::capture::pcap::{
-    bip_file, export, ipv4_udp_header, mstp_file, LINKTYPE_ETHERNET, LINKTYPE_IPV4, LINKTYPE_MSTP,
+    LINKTYPE_ETHERNET, LINKTYPE_IPV4, LINKTYPE_MSTP, bip_file, export, ipv4_udp_header, mstp_file,
 };
 use crate::tui::capture::{CaptureEvent, CaptureFrame, Direction, ExportJob, Framing};
 use crate::tui::worker::session::SessionOptions;
-use crate::tui::worker::{coordinator, EventSink, EVENT_CHANNEL_CAPACITY};
+use crate::tui::worker::{EVENT_CHANNEL_CAPACITY, EventSink, coordinator};
+use bacnet_ops::decode::frame::summarize_frame;
+use bacnet_ops::decode::testing;
 
 fn u32_at(file: &[u8], at: usize) -> u32 {
     u32::from_le_bytes(file[at..at + 4].try_into().unwrap())
@@ -81,6 +81,7 @@ fn mstp_frames() -> Vec<Arc<CaptureFrame>> {
         via: None,
         summary: summarize_frame(Framing::Mstp, &bytes),
         bytes: Bytes::from(bytes),
+        redacted: false,
     })
     .map(Arc::new)
     .collect()

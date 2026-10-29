@@ -62,14 +62,16 @@ fn encode_bvlc6_oversized_payload_errors() {
     let source = vmac([0x01; 3]);
     let npdu = vec![0; u16::MAX as usize - (HEADER_LENGTH + VMAC_LENGTH) + 1];
     let mut buf = BytesMut::new();
-    assert!(encode_bvll6(
-        &mut buf,
-        &Bvll6::OriginalBroadcastNpdu {
-            source,
-            npdu: &npdu
-        }
-    )
-    .is_err());
+    assert!(
+        encode_bvll6(
+            &mut buf,
+            &Bvll6::OriginalBroadcastNpdu {
+                source,
+                npdu: &npdu
+            }
+        )
+        .is_err()
+    );
     assert!(buf.is_empty());
 }
 

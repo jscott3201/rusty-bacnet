@@ -3,6 +3,7 @@
 //! `ObjectDatabase::lighting_color` following the reference in use, with the
 //! override switching sources without disturbing a colour fade.
 
+use bacnet_types::error::RemoteError;
 use std::sync::{Arc, Mutex};
 
 use super::*;
@@ -42,7 +43,7 @@ fn overridable() -> ColorLink {
 fn assert_error(result: Result<impl std::fmt::Debug, Error>, expected: ErrorCode) {
     let error = result.unwrap_err();
     assert!(
-        matches!(error, Error::Protocol { class, code }
+        matches!(error, Error::Remote(RemoteError::Error { class, code })
             if class == ErrorClass::PROPERTY
                 && code == expected),
         "expected {expected:?}, got {error:?}"

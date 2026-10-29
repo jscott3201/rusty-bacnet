@@ -1,11 +1,11 @@
 use super::*;
 use crate::server::{
-    request_tasks::RequestTasks, DccDisableRateLimit, DccSource, DccSourceRestriction,
+    DccDisableRateLimit, DccSource, DccSourceRestriction, request_tasks::RequestTasks,
 };
 use bacnet_services::device_mgmt::DeviceCommunicationControlRequest;
 use bacnet_types::enums::EnableDisable;
 use std::future::Future;
-use tokio::time::{advance, Duration};
+use tokio::time::{Duration, advance};
 
 struct Fixture {
     config: ServerConfig,
@@ -96,9 +96,14 @@ impl Fixture {
         response(
             &services,
             &req,
-            &[peer],
-            source.as_ref(),
-            None,
+            crate::server::dcc_timer::DccRequest {
+                service_data: &req.service_request,
+                source_mac: &[peer],
+                source: source.as_ref(),
+                local_network: None,
+                provenance: Default::default(),
+                invoke_id: peer,
+            },
             &self.tasks.spawner(),
             &mut audit,
         )
@@ -403,4 +408,52 @@ async fn dcc_disable_rate_authorized_timer_parity_and_repeated_charge() {
         denied(fixture.disable(2).await);
         fixture.cleanup().await;
     }
+}
+
+/// The server policy is asked before the disable rate limit is charged
+/// (#1964): disables the policy denies spend none of the shared budget, so
+/// an authorized one still gets the single slot afterwards.
+#[tokio::test(start_paused = true)]
+async fn dcc_policy_denied_disables_do_not_spend_the_rate_limit() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize};
+    let mut fixture = Fixture::new(Some(DccDisableRateLimit {
+        capacity: 1,
+        ..Default::default()
+    }));
+    let (allow, asked) = (
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(AtomicUsize::new(0)),
+    );
+    let (allows, counts) = (allow.clone(), asked.clone());
+    fixture.config.policy = Some(Arc::new(
+        crate::FnPolicy::new().device_communication_control(move |_| {
+            counts.fetch_add(1, Ordering::AcqRel);
+            allows.load(Ordering::Acquire)
+        }),
+    ));
+    for peer in 1..=3 {
+        denied(fixture.disable(peer).await);
+    }
+    assert_eq!(asked.load(Ordering::Acquire), 3);
+    assert_eq!(fixture.state.get(), DccState::Enable);
+    // The budget of one is still whole for the authorized requester.
+    allow.store(true, Ordering::Release);
+    accepted(fixture.disable(4).await);
+    assert_eq!(fixture.state.get(), DccState::DisableInitiation);
+    // Now it is spent: an allowed disable is refused by the limit.
+    denied(fixture.disable(5).await);
+    assert_eq!(asked.load(Ordering::Acquire), 5);
+    // ENABLE is exempt from the limit.
+    accepted(
+        fixture
+            .send(EnableDisable::ENABLE, None, None, 6, false)
+            .await,
+    );
+    let counters = fixture.outcomes.snapshot();
+    assert_eq!(
+        (counters.accepted_total, counters.policy_denied_total),
+        (2, 4)
+    );
+    assert_eq!(fixture.state.get(), DccState::Enable);
+    fixture.cleanup().await;
 }

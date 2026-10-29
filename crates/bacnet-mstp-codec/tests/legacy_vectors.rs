@@ -3,10 +3,10 @@
 //! already pin: literal encodings, deterministic length boundaries in both
 //! decoders, a bad preamble, and the preamble search at its edges.
 
-use bacnet_mstp_codec::crc::{crc16, crc16_valid, crc8, crc8_valid};
+use bacnet_mstp_codec::crc::{crc8, crc8_valid, crc16, crc16_valid};
 use bacnet_mstp_codec::{
-    decode_frame, find_preamble, DecodeEvent, Frame, FrameError, FrameType, StreamDecoder,
-    MAX_STANDARD_FRAME_LENGTH, MAX_STANDARD_MPDU_DATA, PREAMBLE,
+    DecodeEvent, Frame, FrameError, FrameType, MAX_STANDARD_FRAME_LENGTH, MAX_STANDARD_MPDU_DATA,
+    PREAMBLE, StreamDecoder, decode_frame, find_preamble,
 };
 
 mod support;
@@ -44,7 +44,9 @@ fn literal_frames_encode_to_their_known_octets() {
     let wire = encode(data);
     assert_eq!(
         wire,
-        [0x55, 0xFF, 0x06, 0x00, 0x07, 0x00, 0x02, 0xD9, 0x01, 0x00, 0x9F, 0x16]
+        [
+            0x55, 0xFF, 0x06, 0x00, 0x07, 0x00, 0x02, 0xD9, 0x01, 0x00, 0x9F, 0x16
+        ]
     );
     let (decoded, consumed) = decode_frame(&wire).unwrap();
     assert_eq!(

@@ -10,6 +10,7 @@ use bacnet_types::constructed::{
     BACnetBDTEntry, BACnetFDTEntry, BACnetHostAddress, BACnetHostNPort,
 };
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
+use bacnet_types::error::RemoteError;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 
@@ -89,7 +90,7 @@ fn read(db: &ObjectDatabase, property: P) -> Result<PropertyValue, Error> {
 
 fn assert_code(result: Result<impl std::fmt::Debug, Error>, class: ErrorClass, code: ErrorCode) {
     assert!(
-        matches!(&result, Err(Error::Protocol { class: c, code: e })
+        matches!(&result, Err(Error::Remote(RemoteError::Error { class: c, code: e }))
             if *c == class && *e == code),
         "{result:?}"
     );
@@ -262,15 +263,16 @@ fn a_bbmd_without_tables_is_refused_and_a_new_owner_starts_normal() {
         PropertyValue::Enumerated(0)
     );
     // A BBMD that has not started has no tables to lend.
-    assert!(db
-        .publish_bip_port_internal(
+    assert!(
+        db.publish_bip_port_internal(
             oid(),
             [127, 0, 0, 1],
             47808,
             1476,
             BipPortMode::Bbmd { tables: None },
         )
-        .is_err());
+        .is_err()
+    );
     assert_eq!(db.registered_port_internal(), None);
     assert_eq!(
         read(&db, P::BACNET_IP_MODE).unwrap(),

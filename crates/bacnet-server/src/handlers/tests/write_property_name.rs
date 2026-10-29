@@ -14,6 +14,7 @@
 use super::*;
 use bacnet_objects::binary::BinaryValueObject;
 use bacnet_objects::event_enrollment::EventEnrollmentObject;
+use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::PropertyValue;
 
 /// Build a `WritePropertyRequest` body for `OBJECT_NAME` on `oid` set to `name`.
@@ -37,7 +38,7 @@ fn encode_name_write(oid: ObjectIdentifier, name: &str) -> Vec<u8> {
 /// 15.9.1.3.1 and 15.10.1.3.1).
 fn assert_duplicate_name<T: std::fmt::Debug>(result: Result<T, Error>) {
     match result {
-        Err(Error::Protocol { class, code }) => assert_eq!(
+        Err(Error::Remote(RemoteError::Error { class, code })) => assert_eq!(
             (class, code),
             (ErrorClass::PROPERTY, ErrorCode::DUPLICATE_NAME)
         ),

@@ -80,13 +80,13 @@ use bytes::Bytes;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
-use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
+use bacnet_types::error::Error;
 
-use super::control_rate::{is_network_message, ControlRate, ControlSource, ScControlRateLimit};
-use super::{data_attributes, ScTransport, WebSocketPort};
+use super::control_rate::{ControlRate, ControlSource, ScControlRateLimit, is_network_message};
+use super::{ScTransport, WebSocketPort, data_attributes};
 use crate::port::{ReceivedNpdu, TransportProvenance};
-use crate::sc_frame::{ScMessage, Vmac, BROADCAST_VMAC};
+use crate::sc_frame::{BROADCAST_VMAC, ScMessage, Vmac};
 use crate::warn_throttle::WarnThrottle;
 
 /// SC NPDU queue capacity: the aggregate admission cap.
@@ -231,10 +231,11 @@ impl AdmissionState {
         debug_assert!(self.counts.len() <= self.queued.len());
         debug_assert!(self.queued.len() <= SC_NPDU_QUEUE_CAPACITY);
         debug_assert_eq!(self.counts.values().sum::<usize>(), self.queued.len());
-        debug_assert!(self
-            .counts
-            .values()
-            .all(|count| (1..=per_origin_limit).contains(count)));
+        debug_assert!(
+            self.counts
+                .values()
+                .all(|count| (1..=per_origin_limit).contains(count))
+        );
     }
 }
 
@@ -277,8 +278,9 @@ pub(crate) struct DirectPeer {
     pub(crate) vmac: Vmac,
     /// Peer socket address, for drop logging.
     pub(crate) addr: SocketAddr,
-    /// Verified TLS identity of the peer.
-    pub(crate) identity: crate::port::DirectScIdentity,
+    /// The connection's verified direct provenance, built once for it:
+    /// identity and leaf certificate (#1965).
+    pub(crate) provenance: TransportProvenance,
     /// Handle for replying on the direct connection, when available.
     pub(crate) response: Option<crate::port::DirectResponse>,
 }
@@ -415,7 +417,7 @@ impl ScNpduAdmission {
         let DirectPeer {
             vmac: peer,
             addr: peer_addr,
-            identity,
+            provenance,
             response: direct_response,
         } = peer;
         let source_mac = MacAddr::from_slice(&peer);
@@ -424,7 +426,7 @@ impl ScNpduAdmission {
             source_mac: source_mac.clone(),
             link_layer_group: false,
             data_attributes: data_attributes::from_data_options(msg),
-            provenance: TransportProvenance::verified_direct_peer(identity),
+            provenance,
             direct_response,
             reply_tx: None,
         };

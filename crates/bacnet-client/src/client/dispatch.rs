@@ -1,7 +1,8 @@
 use super::dispatch_context::{DispatchContext, InboundApdu};
 use super::response_admission::{
-    admit_terminal_during_reassembly, complete_terminal_response, current_reassembly_owner,
-    log_coordinated_mismatch, take_current_reassembly, TerminalDispatchOutcome, TerminalResponse,
+    TerminalDispatchOutcome, TerminalResponse, admit_terminal_during_reassembly,
+    complete_terminal_response, current_reassembly_owner, log_coordinated_mismatch,
+    take_current_reassembly,
 };
 use super::segmentation_context::InboundSegmentSource;
 use super::*;
@@ -307,9 +308,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         invoke_id: rej.invoke_id,
                         peer: &canonical_peer,
                         apdu: &coordinator_apdu,
-                        response: TsmResponse::Reject {
-                            reason: rej.reject_reason,
-                        },
+                        response: TsmResponse::remote(rej.remote_error()),
                         phase_gate: false,
                         owner: None,
                     },
@@ -344,9 +343,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 let reassembly_owner = current_reassembly_owner(tsm, seg_state, &key).await;
                 debug!(invoke_id = abt.invoke_id, "Received Abort PDU");
                 // Carries no service choice (Clause 20.1.9).
-                let response = TsmResponse::Abort {
-                    reason: abt.abort_reason,
-                };
+                let response = TsmResponse::remote(abt.remote_error());
                 let coordinator_apdu = Apdu::Abort(abt.clone());
                 let outcome = complete_terminal_response(
                     tsm,
@@ -366,15 +363,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     TerminalDispatchOutcome::Completion(CoordinatedCompletion::Completed(
                         CompletionOutcome::Delivered
                     ))
-                ) {
-                    if let Some(owner) = reassembly_owner {
-                        if seg_state
-                            .get(&key)
-                            .is_some_and(|state| state.owner.same_as(&owner))
-                        {
-                            seg_state.remove(&key);
-                        }
-                    }
+                ) && let Some(owner) = reassembly_owner
+                    && seg_state
+                        .get(&key)
+                        .is_some_and(|state| state.owner.same_as(&owner))
+                {
+                    seg_state.remove(&key);
                 }
             }
             Apdu::ConfirmedRequest(req) => {

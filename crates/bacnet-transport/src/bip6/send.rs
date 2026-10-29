@@ -79,7 +79,7 @@ impl SelectedSender {
         peer: SocketAddrV6,
         link: SelectedLink,
     ) -> io::Result<usize> {
-        use nix::sys::socket::{sendmsg, ControlMessage, MsgFlags, SockaddrIn6};
+        use nix::sys::socket::{ControlMessage, MsgFlags, SockaddrIn6, sendmsg};
         use std::{io::IoSlice, os::fd::AsRawFd};
         let info = libc::in6_pktinfo {
             ipi6_addr: libc::in6_addr {

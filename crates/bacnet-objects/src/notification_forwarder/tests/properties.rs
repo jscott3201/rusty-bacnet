@@ -166,9 +166,10 @@ fn notification_forwarder_recipient_list_takes_framed_writes_up_to_the_cap() {
         framed_destinations(&list)
     );
     let full = vec![destination(address(0, &[1]), 4, false); MAX_RECIPIENT_LIST_DESTINATIONS + 1];
-    assert!(nf
-        .write_property(P::RECIPIENT_LIST, None, framed_destinations(&full), None)
-        .is_err());
+    assert!(
+        nf.write_property(P::RECIPIENT_LIST, None, framed_destinations(&full), None)
+            .is_err()
+    );
     assert_eq!(nf.recipient_list(), list, "a refused write changes nothing");
     assert_refused(
         nf.write_property(P::RECIPIENT_LIST, Some(1), framed_destinations(&list), None),
@@ -179,9 +180,10 @@ fn notification_forwarder_recipient_list_takes_framed_writes_up_to_the_cap() {
         nf.add_destination(destination(device(1), 1, false))
             .unwrap();
     }
-    assert!(nf
-        .add_destination(destination(device(1), 1, false))
-        .is_err());
+    assert!(
+        nf.add_destination(destination(device(1), 1, false))
+            .is_err()
+    );
 }
 
 #[test]

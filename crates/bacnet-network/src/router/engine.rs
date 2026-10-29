@@ -24,13 +24,13 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use bacnet_npdu::NpduLimits;
 use bacnet_router_core::router::{
-    ConfigError, Counters as EngineCounters, Options, PortConfig, MIN_PORT_LIMIT,
+    ConfigError, Counters as EngineCounters, MIN_PORT_LIMIT, Options, PortConfig,
 };
 use bacnet_router_core::{Instant, Router, Storage};
 use bacnet_time::HostClock;
 
-use super::port_groups::PortGroups;
 use super::Counters;
+use super::port_groups::PortGroups;
 use crate::totals::totals;
 
 use crate::router_table::{HOLD_RECORDS, ROUTE_CAP};
@@ -238,6 +238,7 @@ totals!(
     busy_announced,
     available_announced,
     duplicate_drops,
+    own_source_drops,
     not_next_hop,
     originated,
     }
@@ -254,8 +255,8 @@ fn boxed_storage() -> Box<HostedStorage> {
 mod tests {
     use bacnet_npdu::Mac;
     use bacnet_npdu::NpduLimits;
-    use bacnet_router_core::router::{Frame, Permissive};
     use bacnet_router_core::PortId;
+    use bacnet_router_core::router::{Frame, Permissive};
 
     use super::*;
     use std::sync::atomic::Ordering;

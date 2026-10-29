@@ -60,14 +60,18 @@
 //! joined before the link changes (the primary socket's multicast send
 //! options may be set first), then the link moves to the group and the
 //! receive loop takes the listener in place of the old one. A later start
-//! uses the group activated last. A BBMD serves the row read-only, started
-//! or not: its group and its own BDT row go together under the all-ones
-//! rule, and the Network Port activates its BBMD rows and its group through
-//! separate views, so a joint change could take effect half way (one
-//! activation for both is #1963).
+//! uses the group activated last, and with a persisted-group file
+//! ([`BipTransport::set_multicast_persist_path`](super::BipTransport::set_multicast_persist_path),
+//! #1954) so does a new process. On a BBMD the group and its own BDT row go
+//! together under the all-ones rule (Annex J.8.3), so its group changes
+//! through the BBMD's tables view instead, checked and applied with the
+//! BDT waiting beside it, both or neither ([`GroupChange`], #1963): the
+//! listener and the link check first, then the tables go in, then the
+//! link moves, and a failure at any step undoes the ones before it.
 //!
 //! Lock order: the object database (held by the caller), then the
-//! control's lock, then the node's. No lock here is held across an await.
+//! control's lock, then the BBMD state's lock (a group BBMD's tables, taken
+//! and released inside an activation), then the node's. No lock here is held across an await.
 
 use std::fmt;
 use std::io;
@@ -83,7 +87,13 @@ use tracing::{info, warn};
 
 use super::ingress::Listener;
 use super::node::NodeHandle;
+use crate::bbmd::GroupChange;
 use crate::tap::FrameTap;
+
+mod file;
+#[cfg(test)]
+mod persist_tests;
+use file::{GroupFile, PersistedGroup};
 
 /// A B/IP-M node's group (Annex J.8): where its broadcasts go and come
 /// from. See [`BipTransport::set_multicast`](super::BipTransport::set_multicast).
@@ -323,6 +333,8 @@ struct ControlState {
     port: Option<u16>,
     /// The running transport, while one runs.
     running: Option<Running>,
+    /// Where an activated group is kept across a restart (#1954).
+    file: Option<Arc<GroupFile>>,
 }
 
 /// What an activation changes in a running transport. On Windows only the
@@ -335,10 +347,10 @@ pub(super) struct Running {
     /// Where broadcasts go without a group: the configured broadcast
     /// address at the bound port.
     pub(super) subnet: SocketAddrV4,
-    /// The receive loop's listener hand-off (not on Windows, nor for a
-    /// BBMD, whose group doesn't change at run time).
+    /// The receive loop's listener hand-off (not on Windows).
     pub(super) swap: Option<Arc<GroupSwap>>,
-    /// The transport is a BBMD: its group is read-only (module docs).
+    /// The transport is a BBMD: its group changes with its tables, never
+    /// alone (module docs).
     pub(super) bbmd: bool,
     /// What a new listener keeps and reports to: the Network Port lease and
     /// the transport's frame tap.
@@ -356,14 +368,22 @@ pub(crate) struct MulticastControl {
     /// The transport's configured port, 0 when the OS picks it: a group at
     /// a picked port couldn't share it with the other members.
     configured_port: u16,
-    /// The transport is a BBMD, configured or started: its group is
-    /// read-only, running or not (module docs). The transport sets it each
-    /// time it lends the view.
+    /// The transport is a BBMD, configured or started: its group never
+    /// changes through this view alone (module docs). The transport sets it
+    /// each time it lends the view.
     bbmd: std::sync::atomic::AtomicBool,
+    /// Whether the started BBMD's state holds the group's own-row rule
+    /// (`BbmdState::serves_group`), as a start or an activation of its
+    /// group last set it, so a restart locks the state only to change it.
+    bbmd_serves_group: std::sync::atomic::AtomicBool,
     /// Makes the next listener an activation opens fail, for tests. Not on
     /// Windows, which opens no listener.
     #[cfg(all(test, not(windows)))]
     pub(super) fail_next_listener: std::sync::atomic::AtomicBool,
+    /// Makes the next link move a BBMD's group change makes fail, after
+    /// its tables went in, for tests of the undo.
+    #[cfg(test)]
+    pub(super) fail_next_subnet: std::sync::atomic::AtomicBool,
 }
 
 impl MulticastControl {
@@ -374,12 +394,16 @@ impl MulticastControl {
                 ttl: BipMulticast::DEFAULT_TTL,
                 port: None,
                 running: None,
+                file: None,
             }),
             interface,
             configured_port,
             bbmd: Default::default(),
+            bbmd_serves_group: Default::default(),
             #[cfg(all(test, not(windows)))]
             fail_next_listener: Default::default(),
+            #[cfg(test)]
+            fail_next_subnet: Default::default(),
         }
     }
 
@@ -397,6 +421,61 @@ impl MulticastControl {
         self.lock().config
     }
 
+    /// The group a start uses: the one in the persisted-group file when it
+    /// holds one this transport can use (#1954), ahead of the configured
+    /// one, with a warning when the two differ; else the group in effect.
+    /// A file that can't be read or used is logged, and the start goes on
+    /// with the group in effect.
+    pub(super) fn start_config(&self) -> Option<BipMulticast> {
+        let mut state = self.lock();
+        let Some(file) = state.file.clone() else {
+            return state.config;
+        };
+        let path = file.path().display();
+        match file.load() {
+            Ok(None) => {}
+            Ok(Some(persisted)) => {
+                let group = persisted.multicast();
+                if let Some(refused) = group.and_then(|group| self.refusal(&group)) {
+                    warn!(%path, %refused, "The persisted B/IP multicast group can't be used here; using the configured one");
+                } else {
+                    if group != state.config {
+                        warn!(
+                            %path,
+                            persisted = ?group,
+                            configured = ?state.config,
+                            "The persisted B/IP multicast group differs from the configured one; using the persisted group"
+                        );
+                    }
+                    state.config = group;
+                    state.ttl = persisted.ttl;
+                    state.port = persisted.port;
+                }
+            }
+            Err(error) => {
+                warn!(%path, %error, "Could not read the persisted B/IP multicast group; using the configured one");
+            }
+        }
+        state.config
+    }
+
+    /// Keep the group in effect in the persisted-group file, if there is
+    /// one, on a thread of its own (#1954). A group BBMD's persisted BDT is
+    /// saved apart from it, so a crash between the two saves can leave a
+    /// saved group beside a saved BDT that doesn't fit it; the next start
+    /// then falls back to the configured BDT (docs/rust-api.md, B/IP
+    /// multicast).
+    fn persist(state: &ControlState) {
+        if let Some(file) = &state.file {
+            let group = PersistedGroup {
+                group: state.config.map(|multicast| multicast.group),
+                ttl: state.ttl,
+                port: state.port,
+            };
+            file.save_later(file.next_generation(), group);
+        }
+    }
+
     /// Configure the group, or none, for the next start.
     pub(super) fn set(&self, multicast: Option<BipMulticast>) {
         let mut state = self.lock();
@@ -405,6 +484,18 @@ impl MulticastControl {
             state.port = multicast.port;
         }
         state.config = multicast;
+    }
+
+    /// Whether the started BBMD's state serves a group, as last set.
+    pub(super) fn bbmd_serves_group(&self) -> bool {
+        self.bbmd_serves_group
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Note whether the started BBMD's state serves a group.
+    pub(super) fn set_bbmd_serves_group(&self, serves: bool) {
+        self.bbmd_serves_group
+            .store(serves, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Say whether the transport is a BBMD, configured or started.
@@ -422,10 +513,13 @@ impl MulticastControl {
         self.lock().running = None;
     }
 
-    /// The running node: attached, not stopped, and not a BBMD's, whose
-    /// group stays as it started.
-    fn running(state: &ControlState) -> Option<(Arc<NodeHandle>, &Running)> {
-        let running = state.running.as_ref().filter(|running| !running.bbmd)?;
+    /// The running node: attached, not stopped, and a BBMD's when `bbmd`
+    /// says so, else not: a BBMD's group changes only with its tables.
+    fn running(state: &ControlState, bbmd: bool) -> Option<(Arc<NodeHandle>, &Running)> {
+        let running = state
+            .running
+            .as_ref()
+            .filter(|running| running.bbmd == bbmd)?;
         let node = running.node.upgrade().filter(|node| !node.is_stopped())?;
         Some((node, running))
     }
@@ -561,10 +655,7 @@ impl MulticastControl {
 }
 
 fn protocol(code: ErrorCode) -> Error {
-    Error::Protocol {
-        class: ErrorClass::PROPERTY,
-        code,
-    }
+    Error::protocol(ErrorClass::PROPERTY, code)
 }
 
 impl IpMulticast for MulticastControl {
@@ -576,7 +667,7 @@ impl IpMulticast for MulticastControl {
 
     fn check(&self, group: [u8; 4]) -> Result<(), Error> {
         let state = self.lock();
-        if Self::running(&state).is_none() {
+        if Self::running(&state, false).is_none() {
             return Err(protocol(ErrorCode::WRITE_ACCESS_DENIED));
         }
         self.written(&state, group).map(drop)
@@ -588,7 +679,7 @@ impl IpMulticast for MulticastControl {
         if next == state.config {
             return Ok(());
         }
-        let Some((node, running)) = Self::running(&state) else {
+        let Some((node, running)) = Self::running(&state, false) else {
             return Err(protocol(ErrorCode::WRITE_ACCESS_DENIED));
         };
         let old = state.config;
@@ -607,10 +698,12 @@ impl IpMulticast for MulticastControl {
         self.commit(&node, running, prepared, old);
         info!(group = ?next.map(|multicast| multicast.group), "B/IP multicast group changed");
         state.config = next;
+        Self::persist(&state);
         Ok(())
     }
 
-    /// Not for a BBMD, running or not (module docs).
+    /// Not for a BBMD, running or not: its group changes with its tables
+    /// (module docs).
     fn can_change(&self) -> bool {
         !self.bbmd.load(std::sync::atomic::Ordering::Relaxed)
             && !self
@@ -621,7 +714,110 @@ impl IpMulticast for MulticastControl {
     }
 }
 
+impl GroupChange for MulticastControl {
+    fn check_group(&self, group: [u8; 4]) -> Result<bool, Error> {
+        let state = self.lock();
+        if Self::running(&state, true).is_none() {
+            return Err(protocol(ErrorCode::WRITE_ACCESS_DENIED));
+        }
+        self.written(&state, group).map(|next| next.is_some())
+    }
+
+    fn change_group(
+        &self,
+        group: [u8; 4],
+        apply: &mut dyn FnMut(bool) -> Result<(), Error>,
+        undo: &mut dyn FnMut(),
+    ) -> Result<(), Error> {
+        let mut state = self.lock();
+        let next = self.written(&state, group)?;
+        let Some((node, running)) = Self::running(&state, true) else {
+            return Err(protocol(ErrorCode::WRITE_ACCESS_DENIED));
+        };
+        if next == state.config {
+            return apply(next.is_some());
+        }
+        let old = state.config;
+        let subnet = subnet(next, running.subnet);
+        // Every step that can fail about the group first, then the tables,
+        // then the link, then the hand-off: a failure leaves the old group,
+        // tables, link and listener in use.
+        node.check_subnet(subnet)
+            .map_err(|_| protocol(ErrorCode::VALUE_OUT_OF_RANGE))?;
+        let prepared = self.prepare(&node, running, next).map_err(|error| {
+            warn!(%error, "B/IP multicast group change failed; the old group stays in use");
+            Error::Transport(error)
+        })?;
+        if let Err(error) = apply(next.is_some()) {
+            self.roll_back(&node, prepared, old);
+            return Err(error);
+        }
+        #[cfg(test)]
+        let moved = if self
+            .fail_next_subnet
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            Err(Error::Encoding("injected link failure".into()))
+        } else {
+            node.set_subnet(subnet)
+        };
+        #[cfg(not(test))]
+        let moved = node.set_subnet(subnet);
+        if let Err(error) = moved {
+            undo();
+            self.roll_back(&node, prepared, old);
+            return Err(error);
+        }
+        self.commit(&node, running, prepared, old);
+        self.set_bbmd_serves_group(next.is_some());
+        info!(group = ?next.map(|multicast| multicast.group), "B/IP multicast BBMD moved to a new group");
+        state.config = next;
+        Self::persist(&state);
+        Ok(())
+    }
+}
+
 impl super::BipTransport {
+    /// Keep a group activated through the Network Port object
+    /// (BACnet_IP_Multicast_Address) in the file at `path`, so a restart,
+    /// of this transport or of a new process given the same path, uses it
+    /// (#1954; Clause 12.56 asks a device to keep the values it needs to
+    /// operate). Each activation replaces the file whole, on a thread of its
+    /// own; one that fails is logged at warn and counted
+    /// ([`multicast_persist_failures`](Self::multicast_persist_failures)),
+    /// and the group stays in use. At `start()` a usable group in the file,
+    /// or the file's record that multicast was turned off, wins over the
+    /// configured one ([`set_multicast`](Self::set_multicast)), with a
+    /// warning when they differ; a file that can't be read is logged and
+    /// the configured group is used. It is a small file of its own, beside
+    /// the persisted BDT if the two should be kept together: a plain member
+    /// has no BDT. Call before `start()`.
+    pub fn set_multicast_persist_path(&mut self, path: impl Into<std::path::PathBuf>) {
+        self.multicast.lock().file = Some(Arc::new(GroupFile::new(path.into())));
+    }
+
+    /// How many saves of an activated group to the persisted-group file
+    /// have failed ([`set_multicast_persist_path`](Self::set_multicast_persist_path)).
+    pub fn multicast_persist_failures(&self) -> u64 {
+        self.multicast
+            .lock()
+            .file
+            .as_ref()
+            .map_or(0, |file| file.failures())
+    }
+
+    /// The group view a BBMD's tables view changes its group through.
+    pub(super) fn group_change(&self) -> Arc<dyn GroupChange> {
+        Arc::clone(&self.multicast) as Arc<dyn GroupChange>
+    }
+
+    /// The persisted-group file, for tests waiting on a save; its callers
+    /// run where loopback multicast does (multicast/persist_tests.rs).
+    #[cfg(all(test, any(target_os = "linux", target_vendor = "apple")))]
+    pub(super) fn multicast_file(&self) -> Option<Arc<GroupFile>> {
+        self.multicast.lock().file.clone()
+    }
+
     /// Make this node a B/IP-M member of `multicast`'s group (Annex J.8), or,
     /// with `None`, not. Its broadcasts then go to the group as
     /// Original-Broadcast-NPDU, and it takes Original-Broadcast-NPDU and
@@ -679,10 +875,9 @@ impl super::BipTransport {
     /// Hand the multicast control the started node, so a Network Port
     /// activation can move its group, and return the listener hand-off for
     /// the receive loop: only for a transport that lends its group
-    /// ([`supports_multicast`](Self::supports_multicast)), never for a BBMD,
-    /// whose group doesn't change, and never on Windows, whose primary
-    /// socket joins the group. Without one the receive loop waits on
-    /// nothing extra.
+    /// ([`supports_multicast`](Self::supports_multicast)), a BBMD's included
+    /// (#1963), and never on Windows, whose primary socket joins the group.
+    /// Without one the receive loop waits on nothing extra.
     pub(super) fn attach_multicast(
         &self,
         node: &Arc<NodeHandle>,
@@ -693,7 +888,7 @@ impl super::BipTransport {
             return None;
         }
         let bbmd = self.bbmd.is_some();
-        let swap = (!cfg!(windows) && !bbmd).then(|| Arc::new(GroupSwap::default()));
+        let swap = (!cfg!(windows)).then(|| Arc::new(GroupSwap::default()));
         self.multicast.attach(Running {
             node: Arc::downgrade(node),
             port: subnet.port(),

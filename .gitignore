@@ -40,10 +40,7 @@ dist/
 .ruff_cache/
 
 # AI assistants
-codex-id.json
 claude-id.json
-_codex-briefs/
-codex-overnight-status.md
 .claude/
 CLAUDE.md
 .copilot/

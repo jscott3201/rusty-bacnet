@@ -1,5 +1,5 @@
 use crate::port::DataAttribute;
-use crate::sc_frame::{encode_sc_message, ScFunction, ScMessage, ScOption, BROADCAST_VMAC};
+use crate::sc_frame::{BROADCAST_VMAC, ScFunction, ScMessage, ScOption, encode_sc_message};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
 use bytes::{Bytes, BytesMut};
@@ -7,9 +7,9 @@ use tracing::warn;
 
 use std::sync::{Mutex, OnceLock};
 
+use super::WebSocketPort;
 use super::diagnostic_throttle::DiagnosticThrottle;
 use super::rejection::{RejectionBudget, RejectionExpired};
-use super::WebSocketPort;
 
 const MAX_SC_DATA_ATTRIBUTES: usize = 64;
 const SECURE_PATH_OPTION_TYPE: u8 = 1;

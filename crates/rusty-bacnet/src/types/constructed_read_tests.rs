@@ -24,8 +24,8 @@ use std::ffi::CStr;
 use crate::types::destination::destination as destination_from_py;
 use crate::types::read_value::decode_read_value;
 use crate::types::{
-    action_lists_from_py, py_to_rpm_specs, rpm_ack_to_py, PyObjectIdentifier, PyPropertyIdentifier,
-    PyReadAccessSpec,
+    PyObjectIdentifier, PyPropertyIdentifier, PyReadAccessSpec, action_lists_from_py,
+    py_to_rpm_specs, rpm_ack_to_py,
 };
 
 const NF: ObjectType = ObjectType::NOTIFICATION_FORWARDER;
@@ -186,11 +186,13 @@ fn port_filters_read_as_the_pairs_written_whole_and_by_index() {
             second.getattr("tag").unwrap().extract::<String>().unwrap(),
             "port_permission"
         );
-        assert!(second
-            .getattr("value")
-            .unwrap()
-            .eq(pairs.get_item(1).unwrap())
-            .unwrap());
+        assert!(
+            second
+                .getattr("value")
+                .unwrap()
+                .eq(pairs.get_item(1).unwrap())
+                .unwrap()
+        );
         assert_eq!(
             read(NF, port_filter.1, Some(0), &[0x21, 0x02]),
             PyPropertyValue::from_rust(PropertyValue::Unsigned(2))

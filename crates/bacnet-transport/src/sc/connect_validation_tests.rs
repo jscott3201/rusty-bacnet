@@ -352,9 +352,11 @@ async fn check_invalid_wrong_id(field: std::ops::Range<usize>) {
     peer.send(&accept).await.unwrap();
     next_receive(&mut received).await;
     assert_unchanged(&*conn.lock().await, &expected);
-    assert!(timeout(Duration::from_millis(10), peer.recv())
-        .await
-        .is_err());
+    assert!(
+        timeout(Duration::from_millis(10), peer.recv())
+            .await
+            .is_err()
+    );
     peer.send(&valid).await.unwrap();
     let error = task.await.unwrap().unwrap_err();
     assert_eq!(

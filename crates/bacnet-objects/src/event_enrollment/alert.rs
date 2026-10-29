@@ -1,4 +1,5 @@
-use std::borrow::Cow;
+use crate::prelude::*;
+use alloc::borrow::Cow;
 
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{EventState, NotifyType, ObjectType, PropertyIdentifier};
@@ -190,12 +191,14 @@ impl BACnetObject for AlertEnrollmentObject {
             )),
             p if p == PropertyIdentifier::ACKED_TRANSITIONS => Ok(PropertyValue::BitString {
                 unused_bits: 5,
-                data: vec![if self.event_detection_enable {
-                    self.acked_transitions
-                } else {
-                    EventTransitionBits::all()
-                }
-                .to_bacnet()],
+                data: vec![
+                    if self.event_detection_enable {
+                        self.acked_transitions
+                    } else {
+                        EventTransitionBits::all()
+                    }
+                    .to_bacnet(),
+                ],
             }),
             _ => Err(common::unknown_property_error()),
         }

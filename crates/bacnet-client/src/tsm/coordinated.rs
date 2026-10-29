@@ -1,3 +1,4 @@
+use bacnet_types::error::RemoteError;
 use std::collections::hash_map::Entry;
 use std::fmt;
 use std::sync::Arc;
@@ -7,8 +8,8 @@ use bacnet_endpoint_core::coordinator::{
     Admission, AdmissionKind, AdmissionOutcome, CanonicalPeer, LeaseMetadata, LeaseOwner,
     LeaseToken, OutboundTransactionCoordinator, ReserveError, TerminalPolicy,
 };
-use bacnet_types::enums::ConfirmedServiceChoice;
 use bacnet_types::MacAddr;
+use bacnet_types::enums::ConfirmedServiceChoice;
 
 use super::{
     CompletionOutcome, FinalSegmentIssue, PendingTransaction, SegmentAckPhase,
@@ -222,11 +223,27 @@ impl Tsm {
             {
                 Some(pdu.service_choice)
             }
-            (Apdu::Error(pdu), TsmResponse::Error { .. }) if pdu.invoke_id == invoke_id => {
-                Some(pdu.service_choice)
-            }
-            (Apdu::Reject(pdu), TsmResponse::Reject { .. }) if pdu.invoke_id == invoke_id => None,
-            (Apdu::Abort(pdu), TsmResponse::Abort { .. }) if pdu.invoke_id == invoke_id => None,
+            (
+                Apdu::Error(pdu),
+                TsmResponse::Remote {
+                    error: RemoteError::Error { .. },
+                    ..
+                },
+            ) if pdu.invoke_id == invoke_id => Some(pdu.service_choice),
+            (
+                Apdu::Reject(pdu),
+                TsmResponse::Remote {
+                    error: RemoteError::Reject { .. },
+                    ..
+                },
+            ) if pdu.invoke_id == invoke_id => None,
+            (
+                Apdu::Abort(pdu),
+                TsmResponse::Remote {
+                    error: RemoteError::Abort { .. },
+                    ..
+                },
+            ) if pdu.invoke_id == invoke_id => None,
             _ => return CoordinatedCompletion::Rejected,
         };
         if observed_service_choice

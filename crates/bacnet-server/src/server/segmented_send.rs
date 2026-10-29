@@ -106,7 +106,7 @@ pub(crate) fn segmented_receive_key(
     provenance: TransportProvenance,
 ) -> SegRecvKey {
     let (mac, network, id, _) =
-        segmented_transaction_key(source_mac, source_network, invoke_id, provenance);
+        segmented_transaction_key(source_mac, source_network, invoke_id, provenance.clone());
     (mac, network, id, provenance)
 }
 

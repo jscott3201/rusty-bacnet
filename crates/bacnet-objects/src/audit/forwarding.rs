@@ -33,7 +33,7 @@ impl AuditLogObject {
     /// CONFIGURATION_ERROR and cause no forwarding I/O.
     pub fn set_member_of(&mut self, parent: Option<BACnetDeviceObjectReference>) {
         self.forwarding = parent.map(|parent| {
-            std::sync::Arc::new(AuditLogForwarding {
+            alloc::sync::Arc::new(AuditLogForwarding {
                 parent,
                 status: AuditReporterStatus::default(),
             })

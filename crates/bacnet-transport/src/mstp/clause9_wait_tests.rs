@@ -5,11 +5,11 @@
 //! Each test states the rule it checks by clause; none encodes what the
 //! transport did before the portable core.
 
-use bacnet_mstp_codec::{FrameType, BROADCAST_MAC};
+use bacnet_mstp_codec::{BROADCAST_MAC, FrameType};
 use tokio::time::{Duration, Instant};
 
-use super::test_support::{config, encode, Bus, Sent, T_USAGE_TIMEOUT};
 use super::MstpConfig;
+use super::test_support::{Bus, Sent, T_USAGE_TIMEOUT, config, encode};
 use crate::port::TransportPort;
 
 const T_NO_TOKEN: Duration = Duration::from_millis(500);

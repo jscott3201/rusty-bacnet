@@ -2,7 +2,7 @@
 use super::deadline_capacity_tests::CountedHub;
 use super::deadline_test_support::*;
 use super::*;
-use tokio_tungstenite::tungstenite::protocol::{frame::coding::CloseCode, CloseFrame};
+use tokio_tungstenite::tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
 
 fn close_frame(code: CloseCode, reason: &'static str) -> Message {
     Message::Close(Some(CloseFrame {

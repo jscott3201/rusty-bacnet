@@ -1,7 +1,7 @@
 use super::*;
+use PropertyIdentifier as P;
 use bacnet_objects::{command::CommandObject, traits::BACnetObject};
 use bacnet_types::primitives::PropertyValue;
-use PropertyIdentifier as P;
 
 #[test]
 fn pics_command_property_metadata_is_exact() {

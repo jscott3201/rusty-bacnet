@@ -80,6 +80,13 @@ async fn outbound_verified_leaf_full_and_resumed_tls_have_new_incarnations() {
             .unwrap();
         let identity = incoming.provenance.direct_sc_identity().unwrap();
         assert_eq!(identity.leaf_sha256(), expected);
+        // The dialled peer's verified leaf rides along, after a resumed
+        // handshake too, and is the certificate the identity fingerprints.
+        let leaf = incoming.provenance.leaf_certificate().unwrap();
+        assert_eq!(
+            aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, leaf.der()).as_ref(),
+            expected
+        );
         assert_eq!(
             incoming.direct_response.as_ref().unwrap().identity(),
             identity
@@ -102,12 +109,14 @@ async fn outbound_verified_leaf_full_and_resumed_tls_have_new_incarnations() {
         })
         .await
         .unwrap();
-        assert!(incoming
-            .direct_response
-            .unwrap()
-            .send(NPDU, &DirectResponseScope::default())
-            .await
-            .is_err());
+        assert!(
+            incoming
+                .direct_response
+                .unwrap()
+                .send(NPDU, &DirectResponseScope::default())
+                .await
+                .is_err()
+        );
     }
     assert_ne!(identities[0].incarnation(), identities[1].incarnation());
     task.await.unwrap();
@@ -173,12 +182,14 @@ async fn outbound_admitted_identity_survives_accepted_replacement_but_reply_neve
     assert_ne!(a_identity.leaf_sha256(), b_identity.leaf_sha256());
     assert_ne!(a_identity.incarnation(), b_identity.incarnation());
     assert_eq!(admitted_a.provenance.direct_sc_identity(), Some(a_identity));
-    assert!(admitted_a
-        .direct_response
-        .unwrap()
-        .send(&[1, 0, 0x43], &DirectResponseScope::default())
-        .await
-        .is_err());
+    assert!(
+        admitted_a
+            .direct_response
+            .unwrap()
+            .send(&[1, 0, 0x43], &DirectResponseScope::default())
+            .await
+            .is_err()
+    );
     admitted_b
         .direct_response
         .unwrap()

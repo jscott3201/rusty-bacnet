@@ -65,7 +65,7 @@ use bacnet_bip_core::port::{BbmdPort, Datagrams, NodePort};
 
 use crate::npdu::NpduLimits;
 use crate::router::{Dest, Groups, PortConfig, Send, SendRefusal};
-use crate::{Arrived, Instant, Mac, PortId, MAX_NPDU};
+use crate::{Arrived, Instant, MAX_NPDU, Mac, PortId};
 
 /// A router port on a B/IP link, by its index: the translator between the
 /// router and a bip-core [`NodePort`] or [`BbmdPort`], which the caller owns

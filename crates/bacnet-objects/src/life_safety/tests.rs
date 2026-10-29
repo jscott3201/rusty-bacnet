@@ -3,6 +3,7 @@ use bacnet_types::enums::{
     ErrorClass, ErrorCode, LifeSafetyMode, LifeSafetyOperation, LifeSafetyState, ObjectType,
     SilencedState,
 };
+use bacnet_types::error::RemoteError;
 
 use crate::database::ObjectDatabase;
 use crate::traits::LifeSafetyOperationEffect;
@@ -17,10 +18,10 @@ fn read_enumerated(object: &dyn BACnetObject, property: PropertyIdentifier) -> u
 fn assert_protocol_error(error: Error, class: ErrorClass, code: ErrorCode) {
     assert!(matches!(
         error,
-        Error::Protocol {
+        Error::Remote(RemoteError::Error {
             class: actual_class,
             code: actual_code,
-        } if actual_class == class && actual_code == code
+        }) if actual_class == class && actual_code == code
     ));
 }
 
@@ -733,22 +734,29 @@ fn life_safety_property_metadata_drives_required_sets() {
     assert!(matches!(point.property_metadata(), Cow::Borrowed(_)));
     assert_eq!(point.property_metadata().len(), 18);
     assert_eq!(point.required_properties().len(), 14);
-    assert!(point
-        .required_properties()
-        .contains(&PropertyIdentifier::PROPERTY_LIST));
-    assert!(!point
-        .property_list()
-        .contains(&PropertyIdentifier::PROPERTY_LIST));
+    assert!(
+        point
+            .required_properties()
+            .contains(&PropertyIdentifier::PROPERTY_LIST)
+    );
+    assert!(
+        !point
+            .property_list()
+            .contains(&PropertyIdentifier::PROPERTY_LIST)
+    );
     assert!(!point.is_createable());
     let zone = LifeSafetyZoneObject::new(1, "LSZ-1").unwrap();
     assert!(matches!(zone.property_metadata(), Cow::Borrowed(_)));
     assert_eq!(zone.property_metadata().len(), 17);
     assert_eq!(zone.required_properties().len(), 15);
-    assert!(zone
-        .required_properties()
-        .contains(&PropertyIdentifier::PROPERTY_LIST));
-    assert!(!zone
-        .property_list()
-        .contains(&PropertyIdentifier::PROPERTY_LIST));
+    assert!(
+        zone.required_properties()
+            .contains(&PropertyIdentifier::PROPERTY_LIST)
+    );
+    assert!(
+        !zone
+            .property_list()
+            .contains(&PropertyIdentifier::PROPERTY_LIST)
+    );
     assert!(!zone.is_createable());
 }

@@ -8,12 +8,12 @@ mod support;
 
 use std::io::ErrorKind;
 use std::net::{Ipv4Addr, UdpSocket};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use bacnet_server::server::{BACnetServer, DccPolicy};
 use bacnet_transport::bip::BipTransport;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use support::lab::{lab_database, lab_identity};
 use support::run;
 

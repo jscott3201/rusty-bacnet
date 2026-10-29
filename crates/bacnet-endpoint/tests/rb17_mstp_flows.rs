@@ -21,8 +21,8 @@ mod rb17_harness;
 
 use std::sync::Arc;
 
-use bacnet_encoding::apdu::{decode_apdu, Apdu};
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
+use bacnet_encoding::apdu::{Apdu, decode_apdu};
+use bacnet_encoding::npdu::{Npdu, NpduAddress, decode_npdu, encode_npdu};
 use bacnet_endpoint::session::SessionRole;
 use bacnet_endpoint_core::endpoint_ingress::{EndpointApduDestination, EndpointIngress};
 use bacnet_network::layer::{NetworkLayer, ReceivedApdu};
@@ -35,11 +35,11 @@ use bacnet_transport::mstp::{
 };
 use bacnet_transport::port::{DataAttribute, ReceivedNpdu, TransportPort, TransportProvenance};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
-use bacnet_types::{error::Error, MacAddr};
+use bacnet_types::{MacAddr, error::Error};
 use bytes::{Bytes, BytesMut};
-use mstp_wire::{pfm_frame, token_frame, FrameType, MstpFrame};
+use mstp_wire::{FrameType, MstpFrame, pfm_frame, token_frame};
 use rb17_harness::*;
-use tokio::sync::{mpsc, oneshot, RwLock};
+use tokio::sync::{RwLock, mpsc, oneshot};
 
 async fn dropped_sender_impl(mode: MstpExecutionMode, frames: Frames) {
     // Client-only session has no server role: the lone reply sender is
@@ -574,16 +574,15 @@ async fn nonrouting_impl(mode: MstpExecutionMode, frames: Frames) {
     let mut routed_answered = false;
     let reply = h
         .wait_for("local ComplexAck", |f| {
-            if f.frame_type == FrameType::BACNET_DATA_NOT_EXPECTING_REPLY {
-                if let Ok(npdu) = decode_npdu(f.data.clone()) {
-                    if let Ok(Apdu::ComplexAck(ack)) = decode_apdu(npdu.payload) {
-                        if ack.invoke_id == 77 {
-                            routed_answered = true;
-                        }
-                        if ack.invoke_id == 66 {
-                            return true;
-                        }
-                    }
+            if f.frame_type == FrameType::BACNET_DATA_NOT_EXPECTING_REPLY
+                && let Ok(npdu) = decode_npdu(f.data.clone())
+                && let Ok(Apdu::ComplexAck(ack)) = decode_apdu(npdu.payload)
+            {
+                if ack.invoke_id == 77 {
+                    routed_answered = true;
+                }
+                if ack.invoke_id == 66 {
+                    return true;
                 }
             }
             false

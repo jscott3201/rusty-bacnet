@@ -1,6 +1,6 @@
 # Engineering documentation
 
-These documents follow the `dev` branch. The latest release is **0.14.0**, and the [v0.14.0 documentation tree](https://github.com/jscott3201/rusty-bacnet/tree/v0.14.0/docs) is the copy that matches it. A `dev` checkout may hold later changes while its version still reads 0.14.0, so record the source revision when using these APIs. The [website](https://jscott3201.github.io/rusty-bacnet/) gives a shorter task-oriented path for the release: its `start/` pages install and make a first read, and its `development/` guides lead to these contracts.
+These documents follow the `dev` branch. The latest release is **0.15.0**, and the [v0.15.0 documentation tree](https://github.com/jscott3201/rusty-bacnet/tree/v0.15.0/docs) is the copy that matches it. A `dev` checkout may hold later changes while its version still reads 0.15.0, so record the source revision when using these APIs. The [website](https://jscott3201.github.io/rusty-bacnet/) gives a shorter task-oriented path for the release: its `start/` pages install and make a first read, and its `integrate/` guides lead to these contracts.
 
 ## Start with your question
 
@@ -10,6 +10,7 @@ These documents follow the `dev` branch. The latest release is **0.14.0**, and t
 | What is the exact Rust API or feature boundary? | [Rust API](rust-api.md); [encoding into caller-owned storage](encoding-sinks.md) |
 | How do I configure and close a Python owner? | [Python API](python-api.md) |
 | Which CLI arguments does the current checkout accept? | [CLI reference](CLI.md) |
+| How does an AI agent host use the stack, and what may it do? | [MCP server](mcp.md); [design](design/mcp.md) |
 | Should I use a shared endpoint or a standalone owner? | [Endpoint roles and scope](rust-api.md#bacnet-endpoint) |
 | Is a Network Port registered, or is its number passively learned? | [Registration and local Number controls](rust-api.md#registered-bip-network-port) |
 | What does the stack support? | [What's supported](https://jscott3201.github.io/rusty-bacnet/project/support/#whats-supported), on the website's support page |
@@ -18,6 +19,7 @@ These documents follow the `dev` branch. The latest release is **0.14.0**, and t
 ## Policy and resource contracts
 
 - [Server authorization policy](mutation-policy.md) (mutations, LifeSafetyOperation, Audit receipt, SC principals), [Device Communication Control](dcc-policy.md) and [time synchronization](time-sync-policy.md).
+- [Completed local access authorization](local-access-authorization.md) documents terminal event publication, diagnostic-only outcomes and cancellation boundaries.
 - [Request admission](request-admission.md), [ReadPropertyMultiple budgets](rpm-budget.md), [ReadRange budgets](read-range-budget.md) and [full-server segmentation timing](server-segmentation.md).
 - [AtomicReadFile](atomic-read-file-budget.md), [AtomicWriteFile](atomic-write-file-budget.md), [alarm summary](alarm-summary-budget.md), [enrollment summary](enrollment-summary-budget.md) and [event information](event-information-budget.md) response budgets.
 - [Target Audit Reporters](target-audit-reporters.md), [Device Audit recipient](device-audit-recipient.md), [delayed target Audit](delayed-target-audit.md) and [Audit Log forwarding](audit-log-forwarding.md).
@@ -27,6 +29,10 @@ These documents follow the `dev` branch. The latest release is **0.14.0**, and t
 ## Design
 
 - [Terminal UI](design/tui.md): the `bacnet` TUI's architecture, screens, safety model and test strategy.
+- [MCP server](design/mcp.md): the `bacnet-ops` core, the `bacnet-mcp` tool surface, its safety model and phases (#2064).
+- [`bacnet-objects` without std](design/objects-no-std.md): the `alloc` build for bare-metal targets with an allocator, what it drops and why (#1615).
+- [Website audit for 0.15.0](design/website-audit-0.15.md): page inventory, sample verification, and the task sitemap and PR plan the maintainer approved for the 0.15 site.
+- [Conformance and support reporting](design/conformance-reporting.md): how the website shows support: capability tables generated from the code and a sample PICS (#1496).
 
 ## Website and engineering docs
 

@@ -1,9 +1,9 @@
 //! Integration tests for one-shot MS/TP frame encode and decode, CRCs and sinks.
 
-use bacnet_mstp_codec::crc::{crc16, crc16_valid, crc8, crc8_valid};
+use bacnet_mstp_codec::crc::{crc8, crc8_valid, crc16, crc16_valid};
 use bacnet_mstp_codec::{
-    decode_frame, find_preamble, Frame, FrameError, FrameHeader, FrameSink, FrameType, SinkFull,
-    MAX_STANDARD_FRAME_LENGTH, MAX_STANDARD_MPDU_DATA, PREAMBLE,
+    Frame, FrameError, FrameHeader, FrameSink, FrameType, MAX_STANDARD_FRAME_LENGTH,
+    MAX_STANDARD_MPDU_DATA, PREAMBLE, SinkFull, decode_frame, find_preamble,
 };
 use proptest::prelude::*;
 
@@ -445,11 +445,13 @@ fn frame_error_is_a_core_error() {
         describe(&FrameError::BroadcastSource),
         "source address is broadcast (0xFF)"
     );
-    assert!(describe(&FrameError::FrameTooLong {
-        needed: 13,
-        capacity: 12
-    })
-    .contains("13"));
+    assert!(
+        describe(&FrameError::FrameTooLong {
+            needed: 13,
+            capacity: 12
+        })
+        .contains("13")
+    );
 }
 
 /// A sink that accepts a fixed number of writes, then fails. It reports no

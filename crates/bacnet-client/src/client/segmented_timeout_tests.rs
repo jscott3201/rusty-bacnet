@@ -4,12 +4,12 @@ use bacnet_encoding::apdu::Apdu;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{AbortReason, ConfirmedServiceChoice};
-use bacnet_types::error::Error;
-use tokio::time::{timeout, Duration};
+use bacnet_types::error::{Error, RemoteError};
+use tokio::time::{Duration, timeout};
 
 use super::segmented_receive_lifecycle_tests::{
-    expect_client_abort, expect_segment_ack, recv_apdu, response_segment, send_to_client,
-    start_reassembly, CLIENT_MAC, SERVER_MAC,
+    CLIENT_MAC, SERVER_MAC, expect_client_abort, expect_segment_ack, recv_apdu, response_segment,
+    send_to_client, start_reassembly,
 };
 use super::{BACnetClient, ClientConfig};
 
@@ -31,7 +31,7 @@ async fn segment_timer_timeout_ends_the_reassembly_session() {
         .unwrap();
     assert!(matches!(
         result,
-        Err(Error::Abort { reason }) if reason == AbortReason::TSM_TIMEOUT
+        Err(Error::Remote(RemoteError::Abort { reason })) if reason == AbortReason::TSM_TIMEOUT
     ));
     assert_eq!(client.tsm.lock().await.pending_count(), 0);
     assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
@@ -79,7 +79,7 @@ async fn response_segment_restarts_segment_timer_from_its_arrival() {
     let waited = restarted.elapsed();
     assert!(matches!(
         result,
-        Err(Error::Abort { reason }) if reason == AbortReason::TSM_TIMEOUT
+        Err(Error::Remote(RemoteError::Abort { reason })) if reason == AbortReason::TSM_TIMEOUT
     ));
     assert!(
         waited >= segment_timer && waited < segment_timer + segment_timer / 8,
@@ -137,7 +137,7 @@ async fn segmented_request_without_segment_ack_returns_local_tsm_timeout() {
         .unwrap();
     assert!(matches!(
         result,
-        Err(Error::Abort { reason }) if reason == AbortReason::TSM_TIMEOUT
+        Err(Error::Remote(RemoteError::Abort { reason })) if reason == AbortReason::TSM_TIMEOUT
     ));
     assert_eq!(client.tsm.lock().await.pending_count(), 0);
     assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
@@ -216,7 +216,7 @@ async fn delayed_timeout_cleanup_preserves_newer_segmented_response() {
             .await
             .unwrap()
             .unwrap(),
-        Err(Error::Abort { reason }) if reason == AbortReason::TSM_TIMEOUT
+        Err(Error::Remote(RemoteError::Abort { reason })) if reason == AbortReason::TSM_TIMEOUT
     ));
     assert!(
         timeout(

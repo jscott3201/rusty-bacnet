@@ -7,8 +7,16 @@ use std::time::Duration;
 // Real TLS/WebSocket handler attached to the production supervisor's task set.
 // Exposing its sink before Connect makes blocked Accept admission deterministic.
 pub(super) struct ControlledPeer {
-    pub ws: ClientWs,
+    // `sink` comes before `ws` so that, once the hub has stopped and only
+    // this sink keeps the hub's end open, a dropped peer closes the hub's
+    // end first. The side that closes first holds the connection's port in
+    // TIME_WAIT. The hub's end is on the port that `TestTls::pair` shares
+    // across a test's connections; the test client's end is a fresh
+    // ephemeral port each time, and Windows keeps one out of use for two
+    // minutes. The matrix tests open hundreds of peers each, and with the
+    // client closing first they ran the Windows job out of ports (#2055).
     pub sink: Arc<Mutex<WsSink>>,
+    pub ws: ClientWs,
     pub deadline: Arc<deadlines::ConnectDeadline>,
 }
 
@@ -46,7 +54,19 @@ impl ControlledPeer {
             let _admission = admission;
             operation.await;
         }));
-        Self { ws, sink, deadline }
+        Self { sink, ws, deadline }
+    }
+
+    /// Closes a peer whose hub has stopped, hub end first: drops the sink,
+    /// the last hold on the hub's end, waits until the client reads that
+    /// end's close, and only then drops the client. Dropping both at once
+    /// races, and a client that closes before the hub's close reaches it
+    /// leaves its own fresh port in TIME_WAIT too (#2055).
+    pub async fn close_after_hub(self) {
+        let Self { sink, mut ws, .. } = self;
+        assert_eq!(Arc::strong_count(&sink), 1, "the hub still holds the sink");
+        drop(sink);
+        poll_io(async { while let Some(Ok(_)) = ws.next().await {} }).await;
     }
 
     pub async fn connect(&mut self, id: u8) {

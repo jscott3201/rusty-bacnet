@@ -37,7 +37,7 @@ async fn every_context_withholds_the_principal_of_a_routed_request() {
         let lso = LifeSafetyOperationAuthorizationContext {
             source_mac: source_mac.clone(),
             source_network: source_network.clone(),
-            provenance,
+            provenance: provenance.clone(),
             invoke_id: 1,
             request: LifeSafetyOperationRequest {
                 requesting_process_identifier: 1,
@@ -53,7 +53,7 @@ async fn every_context_withholds_the_principal_of_a_routed_request() {
         let audit = AuditNotificationAuthorizationContext {
             source_mac: source_mac.clone(),
             source_network: source_network.clone(),
-            provenance,
+            provenance: provenance.clone(),
             invoke_id: 1,
             audit_log_sink: sink,
             request: notifications.clone(),
@@ -70,7 +70,7 @@ async fn every_context_withholds_the_principal_of_a_routed_request() {
         let unconfirmed = UnconfirmedAuditNotificationAuthorizationContext {
             source_mac: source_mac.clone(),
             source_network: source_network.clone(),
-            provenance,
+            provenance: provenance.clone(),
             audit_log_sink: sink,
             request: notifications.clone(),
         };
@@ -85,7 +85,7 @@ async fn every_context_withholds_the_principal_of_a_routed_request() {
             ReinitializedState::WARMSTART,
             source_mac.clone(),
             source_network,
-            provenance,
+            provenance.clone(),
             1,
         );
         assert_eq!(

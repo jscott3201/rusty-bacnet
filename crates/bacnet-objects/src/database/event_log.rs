@@ -1,14 +1,14 @@
 //! The event notifications the device builds, and those it receives, into
 //! its Event Log objects (Clause 12.27). The caller owns synchronization.
 
+use crate::prelude::*;
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventLogRecord, EventLogDatum,
     EventNotificationRequest, NotificationParameters,
 };
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::ObjectIdentifier;
-use tracing::{debug, warn};
 
 use super::ObjectDatabase;
 use crate::device_reference::decode_reference;
@@ -49,7 +49,7 @@ impl ObjectDatabase {
         if reports_an_event_log_buffer(notification)
             || self.enrollment_watches_an_event_log(notification.event_object_identifier)
         {
-            debug!(
+            log_debug!(
                 event_object = %notification.event_object_identifier,
                 "Report on an Event Log not logged"
             );
@@ -135,7 +135,7 @@ impl ObjectDatabase {
             .clock_frame()
             .filter(|frame| frame.is_valid_actual_datetime())
         else {
-            debug!(
+            log_debug!(
                 event_object = %notification.event_object_identifier,
                 "No valid Device clock; event notification not logged"
             );
@@ -153,10 +153,10 @@ impl ObjectDatabase {
             match log.add_event_log_record(record) {
                 Ok(()) => {}
                 Err(error) if is_unsupported(&error) => {
-                    debug!(log = %oid, "Event Log object takes no records");
+                    log_debug!(log = %oid, "Event Log object takes no records");
                 }
                 Err(error) => {
-                    warn!(log = %oid, %error, "Event Log refused an event notification record");
+                    log_warn!(log = %oid, %error, "Event Log refused an event notification record");
                 }
             }
         }
@@ -201,7 +201,7 @@ fn reports_an_event_log_buffer(notification: &EventNotificationRequest) -> bool 
 /// The trait default's answer: an object of type Event Log that has no
 /// record insertion.
 fn is_unsupported(error: &Error) -> bool {
-    matches!(error, Error::Protocol { class, code }
+    matches!(error, Error::Remote(RemoteError::Error { class, code })
         if *class == ErrorClass::OBJECT
             && *code == ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED)
 }

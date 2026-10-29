@@ -1,5 +1,6 @@
 use super::*;
 use bacnet_services::write_property::WritePropertyRequest;
+use bacnet_types::error::RemoteError;
 use std::sync::Mutex;
 
 struct WritableObject {
@@ -151,7 +152,7 @@ async fn device_execution_owned_wp_rejects_custom_writer() {
         )
         .await;
     assert!(
-        matches!(local, Err(Error::Protocol { class, code }) if class == ErrorClass::PROPERTY && code == ErrorCode::WRITE_ACCESS_DENIED)
+        matches!(local, Err(Error::Remote(RemoteError::Error { class, code })) if class == ErrorClass::PROPERTY && code == ErrorCode::WRITE_ACCESS_DENIED)
     );
     assert!(calls.lock().unwrap().is_empty());
     simple_ack(

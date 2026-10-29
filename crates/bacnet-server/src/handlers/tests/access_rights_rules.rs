@@ -7,12 +7,12 @@
 
 use super::access_control_arrays::{array_cases, assert_reads, db_with};
 use super::*;
+use PropertyIdentifier as P;
 use bacnet_objects::access_control::AccessRightsObject;
 use bacnet_types::constructed::{
     BACnetAccessRule, BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference,
     PropertyReference, ReadAccessSpecification,
 };
-use PropertyIdentifier as P;
 
 fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(object_type, instance).unwrap()

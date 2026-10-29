@@ -16,10 +16,14 @@ async fn ack_and_timeout_linearize_in_both_map_lock_orders() {
         )
         .await;
         assert_eq!(live.recv().await.message_id, 1);
-        let attempt = snapshot(&clients, 106_000, ScHubProbePolicy::default())
-            .await
-            .remove(0)
-            .0;
+        let attempt = snapshot(
+            &clients,
+            106_000,
+            super::heartbeat_test_support::ack_bound_policy(),
+        )
+        .await
+        .remove(0)
+        .0;
         let clock = ClockIo(AtomicU64::new(106_000));
         let guard = clients.lock().await;
         let ack = clear_matching_heartbeat_ack(&clients, live.vmac, &attempt.sink, 1, 106_000);
@@ -68,10 +72,14 @@ async fn stale_failure_and_timeout_preserve_new_pending_and_new_acked_generation
     )
     .await;
     assert_eq!(live.recv().await.message_id, 1);
-    let old = snapshot(&clients, 106_000, ScHubProbePolicy::default())
-        .await
-        .remove(0)
-        .0;
+    let old = snapshot(
+        &clients,
+        106_000,
+        super::heartbeat_test_support::ack_bound_policy(),
+    )
+    .await
+    .remove(0)
+    .0;
     // Recheck the deadline at retirement, not just the advisory snapshot.
     assert!(
         !retire(
@@ -121,10 +129,14 @@ async fn replacement_during_sink_wait_rejects_old_send_ack_and_retirement() {
     let old_work = sweep(&clients, &ids, &clock);
     tokio::pin!(old_work);
     assert!(futures_util::poll!(&mut old_work).is_pending());
-    let old_attempt = snapshot(&clients, 106_000, ScHubProbePolicy::default())
-        .await
-        .remove(0)
-        .0;
+    let old_attempt = snapshot(
+        &clients,
+        106_000,
+        super::heartbeat_test_support::ack_bound_policy(),
+    )
+    .await
+    .remove(0)
+    .0;
     let mut replacement = LiveClient::connect(clients.clone(), old.vmac).await;
     replacement.idle().await;
     sweep(&clients, &AtomicU16::new(1), &clock).await;
@@ -157,10 +169,14 @@ async fn advisory_reservation_rechecks_activity_pending_closed_and_identity() {
     let clients = clients();
     let mut live = LiveClient::connect(clients.clone(), [0x22; 6]).await;
     live.idle().await;
-    let candidate = snapshot(&clients, 100_000, ScHubProbePolicy::default())
-        .await
-        .remove(0)
-        .0;
+    let candidate = snapshot(
+        &clients,
+        100_000,
+        super::heartbeat_test_support::ack_bound_policy(),
+    )
+    .await
+    .remove(0)
+    .0;
     let clock = ClockIo(AtomicU64::new(100_000));
     clients
         .lock()

@@ -9,12 +9,13 @@ use crate::property_metadata::{
 };
 use bacnet_types::enums::PropertyIdentifier as P;
 use bacnet_types::enums::{ErrorClass, ErrorCode, EscalatorMode};
+use bacnet_types::error::RemoteError;
 
 /// The class and code only: a refused list element is also named (#1048),
 /// which the Fault_Signals suites check.
 pub(super) fn assert_error(error: Error, expected: ErrorCode) {
     assert!(
-        matches!(error, Error::Protocol { class, code } | Error::Structured { class, code, .. }
+        matches!(error, Error::Remote(RemoteError::Error { class, code }) | Error::Structured { class, code, .. }
             if class == ErrorClass::PROPERTY
                 && code == expected),
         "expected {expected:?}, got {error:?}"

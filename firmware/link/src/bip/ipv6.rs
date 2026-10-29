@@ -18,13 +18,13 @@
 
 use core::net::Ipv6Addr;
 
-use bacnet_bip_codec::ipv6::{
-    decode, Bip6Address, Bip6Vmac, Bvlc6Function, Bvlc6ResultCode, Bvll6, Bvll6Error,
-};
 use bacnet_bip_codec::PayloadShape;
+use bacnet_bip_codec::ipv6::{
+    Bip6Address, Bip6Vmac, Bvlc6Function, Bvlc6ResultCode, Bvll6, Bvll6Error, decode,
+};
 
-use super::{Sink, NPDU, WIRE_LENGTH};
-use crate::tally::{fnv1a, FNV_OFFSET};
+use super::{NPDU, Sink, WIRE_LENGTH};
+use crate::tally::{FNV_OFFSET, fnv1a};
 
 /// This node's VMAC: device instance 1234.
 pub const SOURCE: Bip6Vmac = Bip6Vmac::new([0x00, 0x04, 0xD2]);

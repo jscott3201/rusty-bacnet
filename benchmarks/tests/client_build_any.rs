@@ -5,7 +5,6 @@ use bacnet_transport::{
     any::AnyTransport,
     bip::{BbmdOptions, BipMode, BipTransport, ForeignDeviceConfig},
     bip6::{Bip6Transport, Bip6Vmac},
-    mstp::NoSerial,
     port::TransportPort,
     sc::ScReconnectConfig,
 };
@@ -78,7 +77,7 @@ async fn sc_builders_reject_invalid_options_before_any_tcp_dial() {
                 tokio::select! {
                     result = async {
                         if erased {
-                            Box::pin(builder.build_any::<NoSerial>()).await.map(|_| ())
+                            Box::pin(builder.build_any()).await.map(|_| ())
                         } else {
                             Box::pin(builder.build()).await.map(|_| ())
                         }
@@ -113,9 +112,7 @@ async fn bip_builders_preserve_foreign_mode_and_registration_status() {
                 renewal_interval: Some(Duration::from_secs(15)),
             }));
         if erased {
-            let client = bounded(Box::pin(builder.build_any::<NoSerial>()))
-                .await
-                .unwrap();
+            let client = bounded(Box::pin(builder.build_any())).await.unwrap();
             foreign_registration(client, &peer).await;
         } else {
             let client = bounded(Box::pin(builder.build())).await.unwrap();
@@ -172,7 +169,7 @@ async fn bip_build_any_keeps_bbmd_policy_and_shared_address_validation() {
             management_acl: vec![[127, 0, 0, 9]],
             ..Default::default()
         }))
-        .build_any::<NoSerial>()
+        .build_any()
         .await
         .unwrap();
     let AnyTransport::Bip(transport) = client.transport() else {
@@ -190,7 +187,7 @@ async fn bip_build_any_keeps_bbmd_policy_and_shared_address_validation() {
             .interface(interface)
             .port(port)
             .share_port_by_address(true)
-            .build_any::<NoSerial>()
+            .build_any()
             .await
             .err()
             .unwrap();
@@ -212,7 +209,7 @@ async fn bip_builders_preserve_shared_address_and_broadcast_endpoint() {
             .broadcast_address(Ipv4Addr::new(127, 255, 255, 255))
             .share_port_by_address(true);
         if erased {
-            let client = builder.build_any::<NoSerial>().await.unwrap();
+            let client = builder.build_any().await.unwrap();
             shared_address(client, port).await;
         } else {
             let client = builder.build().await.unwrap();
@@ -261,7 +258,7 @@ async fn bip6_builders_preserve_explicit_and_random_identity_and_interface() {
                 builder = builder.device_instance(instance);
             }
             let outcome = if erased {
-                match builder.build_any::<NoSerial>().await {
+                match builder.build_any().await {
                     Ok(mut client) => {
                         let AnyTransport::Bip6(transport) = client.transport() else {
                             panic!("expected B/IPv6");

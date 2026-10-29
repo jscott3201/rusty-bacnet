@@ -8,6 +8,7 @@ use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
 use bacnet_types::constructed::{BACnetLandingCallStatus, LandingCallCommand};
 use bacnet_types::enums::LiftCarDirection;
+use bacnet_types::error::RemoteError;
 
 const LCC: PropertyIdentifier = PropertyIdentifier::LANDING_CALL_CONTROL;
 const LANDING_CALLS: PropertyIdentifier = PropertyIdentifier::LANDING_CALLS;
@@ -73,7 +74,7 @@ fn control(db: &ObjectDatabase, oid: ObjectIdentifier) -> BACnetLandingCallStatu
 
 fn assert_property_error(result: Result<(), Error>, expected: ErrorCode, context: &str) {
     match result.expect_err(context) {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, ErrorClass::PROPERTY, "{context}");
             assert_eq!(code, expected, "{context}: {expected:?}");
         }
@@ -263,7 +264,9 @@ fn landing_calls_read_as_a_list_and_refuse_writes() {
     let bytes = read_wire(&db_with_calls, with_calls, LANDING_CALLS);
     assert_eq!(
         bytes,
-        [0x09, 0x02, 0x19, 0x04, 0x09, 0x09, 0x29, 0x01, 0x3A, 0x00, 0x4C]
+        [
+            0x09, 0x02, 0x19, 0x04, 0x09, 0x09, 0x29, 0x01, 0x3A, 0x00, 0x4C
+        ]
     );
     assert_eq!(
         bacnet_encoding::constructed::decode_landing_call_status_list(&bytes)

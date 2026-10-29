@@ -178,7 +178,7 @@ fn read(fault: &Fault) -> (Option<Phase>, String, String) {
                      balancer in the path: {}",
                     upgrade_status_hint(*status)
                 ),
-            )
+            );
         }
         Fault::DialTimeout(Some(stage)) => {
             let (phase, hint) = stalled(*stage);
@@ -233,7 +233,7 @@ fn read(fault: &Fault) -> (Option<Phase>, String, String) {
                     "The hub answered with a NAK ({class:?}, {code:?}); its log says why. \
                      Check that the URL is a hub's and that this node is admitted."
                 ),
-            )
+            );
         }
         Fault::HeartbeatTimeout => (
             Phase::Connect,
@@ -247,7 +247,7 @@ fn read(fault: &Fault) -> (Option<Phase>, String, String) {
                 None,
                 "closed by this node".into(),
                 "The connection was closed here, by a stop or a disconnect.".into(),
-            )
+            );
         }
         Fault::DialTimeout(None) => {
             return (
@@ -257,14 +257,14 @@ fn read(fault: &Fault) -> (Option<Phase>, String, String) {
                  connect timeout; the dialler did not say which. Something on the path may \
                  have accepted the connection and then gone quiet."
                     .into(),
-            )
+            );
         }
         Fault::Other(text) => {
             return (
                 None,
                 "failed outside the hub dial".into(),
                 format!("This failed before or outside the phases below: {text}"),
-            )
+            );
         }
     };
     (Some(phase), summary.into(), hint)
@@ -508,9 +508,11 @@ mod tests {
                     let at = PHASES.iter().position(|p| *p == phase).unwrap();
                     assert_eq!(diagnosis.marks[at], Mark::Failed, "{fault:?}");
                     assert!(diagnosis.marks[..at].iter().all(|m| *m == Mark::Passed));
-                    assert!(diagnosis.marks[at + 1..]
-                        .iter()
-                        .all(|m| *m == Mark::NotReached));
+                    assert!(
+                        diagnosis.marks[at + 1..]
+                            .iter()
+                            .all(|m| *m == Mark::NotReached)
+                    );
                 }
                 None => assert_eq!(diagnosis.marks, [Mark::Unknown; 6]),
             }
@@ -560,18 +562,26 @@ mod tests {
     #[test]
     fn the_hubs_alerts_name_this_nodes_side() {
         let alert = |a| diagnose(&Fault::Tls(ScTlsFailure::AlertReceived(a)));
-        assert!(alert(ScTlsAlert::UnsupportedCertificate)
-            .hint
-            .contains("client-authentication"));
-        assert!(alert(ScTlsAlert::DecryptError)
-            .hint
-            .starts_with("Often a key mismatch"));
-        assert!(alert(ScTlsAlert::CertificateExpired)
-            .hint
-            .contains("clocks"));
-        assert!(alert(ScTlsAlert::UnknownCa)
-            .summary
-            .contains("this node's CA"));
+        assert!(
+            alert(ScTlsAlert::UnsupportedCertificate)
+                .hint
+                .contains("client-authentication")
+        );
+        assert!(
+            alert(ScTlsAlert::DecryptError)
+                .hint
+                .starts_with("Often a key mismatch")
+        );
+        assert!(
+            alert(ScTlsAlert::CertificateExpired)
+                .hint
+                .contains("clocks")
+        );
+        assert!(
+            alert(ScTlsAlert::UnknownCa)
+                .summary
+                .contains("this node's CA")
+        );
         let incompatible = diagnose(&Fault::Tls(ScTlsFailure::PeerIncompatible));
         assert!(incompatible.hint.contains("TLS 1.3"));
     }

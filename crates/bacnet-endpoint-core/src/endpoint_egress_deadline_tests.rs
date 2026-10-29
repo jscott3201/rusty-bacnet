@@ -1,7 +1,7 @@
 use super::*;
 use bacnet_transport::port::ReceivedNpdu;
 use tokio::sync::Semaphore;
-use tokio::time::{timeout, Duration, Instant};
+use tokio::time::{Duration, Instant, timeout};
 
 struct GateTransport {
     receiver: Option<mpsc::Receiver<ReceivedNpdu>>,
@@ -91,7 +91,7 @@ async fn endpoint_egress_discards_expired_and_canceled_commands_before_transport
 #[tokio::test]
 async fn network_number_egress_cancellation_retracts_queued_and_in_progress_commands() {
     use std::{
-        future::{poll_fn, Future},
+        future::{Future, poll_fn},
         task::Poll,
     };
     let (_input, receiver) = mpsc::channel(8);
@@ -142,18 +142,22 @@ async fn network_number_egress_cancellation_retracts_queued_and_in_progress_comm
     drop(control); // in-progress transport future is now canceled
     let last = enqueue(4);
     gate.add_permits(1);
-    assert!(timeout(Duration::from_secs(1), last.complete())
-        .await
-        .unwrap()
-        .result
-        .is_ok());
+    assert!(
+        timeout(Duration::from_secs(1), last.complete())
+            .await
+            .unwrap()
+            .result
+            .is_ok()
+    );
     assert_eq!(emissions.recv().await.unwrap(), vec![4]);
     assert!(emissions.try_recv().is_err());
-    assert!(receivers
-        .egress
-        .send_network_number_is(vec![1, 0, 0x10, 8])
-        .await
-        .is_err());
+    assert!(
+        receivers
+            .egress
+            .send_network_number_is(vec![1, 0, 0x10, 8])
+            .await
+            .is_err()
+    );
     ingress.stop().await.unwrap();
     assert!(receivers.egress.send_network_number_is(npdu).await.is_err());
 }

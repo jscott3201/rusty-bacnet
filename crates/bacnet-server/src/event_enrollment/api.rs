@@ -3,7 +3,7 @@ use bacnet_objects::event::EventStateChange;
 use bacnet_types::enums::EventType;
 use bacnet_types::primitives::ObjectIdentifier;
 
-use super::{evaluate_event_enrollments_for_delivery, EventEnrollmentEvaluationReport};
+use super::{EventEnrollmentEvaluationReport, evaluate_event_enrollments_for_delivery};
 
 /// A state transition detected during event enrollment evaluation.
 #[derive(Debug, Clone, PartialEq)]

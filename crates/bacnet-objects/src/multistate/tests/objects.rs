@@ -67,24 +67,26 @@ fn msi_write_out_of_range_rejected() {
         None,
     )
     .unwrap();
-    assert!(msi
-        .write_property_from(
+    assert!(
+        msi.write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Unsigned(0),
             None,
             &crate::command_source::test_origin(),
         )
-        .is_err());
-    assert!(msi
-        .write_property_from(
+        .is_err()
+    );
+    assert!(
+        msi.write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Unsigned(5),
             None,
             &crate::command_source::test_origin(),
         )
-        .is_err());
+        .is_err()
+    );
 }
 
 #[test]
@@ -153,24 +155,26 @@ fn mso_relinquish_falls_to_default() {
 #[test]
 fn mso_out_of_range_rejected() {
     let mut mso = MultiStateOutputObject::new(1, "MSO-1", 5).unwrap();
-    assert!(mso
-        .write_property_from(
+    assert!(
+        mso.write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Unsigned(0),
             None,
             &crate::command_source::test_origin(),
         )
-        .is_err());
-    assert!(mso
-        .write_property_from(
+        .is_err()
+    );
+    assert!(
+        mso.write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Unsigned(6),
             None,
             &crate::command_source::test_origin(),
         )
-        .is_err());
+        .is_err()
+    );
 }
 
 #[test]
@@ -273,24 +277,26 @@ fn msv_read_relinquish_default() {
 #[test]
 fn msv_write_out_of_range_rejected() {
     let mut msv = MultiStateValueObject::new(1, "MSV-1", 3).unwrap();
-    assert!(msv
-        .write_property_from(
+    assert!(
+        msv.write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Unsigned(0),
             None,
             &crate::command_source::test_origin(),
         )
-        .is_err());
-    assert!(msv
-        .write_property_from(
+        .is_err()
+    );
+    assert!(
+        msv.write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Unsigned(4),
             None,
             &crate::command_source::test_origin(),
         )
-        .is_err());
+        .is_err()
+    );
 }
 
 #[test]
@@ -418,25 +424,27 @@ fn msv_direct_priority_array_index_17_error() {
 fn msv_present_value_priority_range_validation() {
     let mut msv = MultiStateValueObject::new(1, "MSV-1", 5).unwrap();
     // Value 0 is out of range (valid: 1..=5)
-    assert!(msv
-        .write_property_from(
+    assert!(
+        msv.write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Unsigned(0),
             None,
             &crate::command_source::test_origin(),
         )
-        .is_err());
+        .is_err()
+    );
     // Value 6 is out of range
-    assert!(msv
-        .write_property_from(
+    assert!(
+        msv.write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Unsigned(6),
             None,
             &crate::command_source::test_origin(),
         )
-        .is_err());
+        .is_err()
+    );
     // Value 5 is valid
     msv.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
@@ -643,9 +651,10 @@ fn msi_one_state_is_valid_initial_value_in_range() {
         PropertyValue::CharacterString("State 1".into())
     );
     // No second state exists.
-    assert!(msi
-        .read_property(PropertyIdentifier::STATE_TEXT, Some(2))
-        .is_err());
+    assert!(
+        msi.read_property(PropertyIdentifier::STATE_TEXT, Some(2))
+            .is_err()
+    );
 }
 
 #[test]
@@ -747,13 +756,14 @@ fn msi_one_state_write_out_of_range_rejected() {
         None,
     )
     .unwrap();
-    assert!(msi
-        .write_property_from(
+    assert!(
+        msi.write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Unsigned(2),
             None,
             &crate::command_source::test_origin(),
         )
-        .is_err());
+        .is_err()
+    );
 }

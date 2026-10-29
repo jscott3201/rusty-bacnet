@@ -5,8 +5,8 @@
 
 use bacnet_encoding::sink::{EncodeSink, SinkFull};
 use bacnet_encoding::tags::{
-    encode_closing_tag, encode_closing_tag_to_sink, encode_opening_tag, encode_opening_tag_to_sink,
-    encode_tag, encode_tag_to_sink, TagClass,
+    TagClass, encode_closing_tag, encode_closing_tag_to_sink, encode_opening_tag,
+    encode_opening_tag_to_sink, encode_tag, encode_tag_to_sink,
 };
 use bytes::BytesMut;
 

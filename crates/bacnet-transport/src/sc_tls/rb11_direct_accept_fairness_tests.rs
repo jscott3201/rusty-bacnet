@@ -8,7 +8,7 @@
 use super::{DirectAcceptConfig, DirectListener};
 use crate::sc::npdu_admission::{DEFAULT_NPDU_PER_ORIGIN_LIMIT as QUOTA, SC_NPDU_QUEUE_CAPACITY};
 use crate::sc::{ScConnection, WebSocketPort};
-use crate::sc_frame::{decode_sc_message, encode_sc_message, ScFunction};
+use crate::sc_frame::{ScFunction, decode_sc_message, encode_sc_message};
 use crate::sc_tls::ScNodeTlsConfig;
 
 use std::net::SocketAddr;

@@ -8,23 +8,55 @@ license.workspace = true
 repository.workspace = true
 description = "BACnet object model: traits, database, and standard object types"
 keywords = ["bacnet", "building-automation", "objects", "ashrae"]
-categories = ["network-programming"]
+categories = ["network-programming", "no-std"]
+
+# Without `std` the crate builds for bare-metal targets with a global
+# allocator and atomic compare-and-swap (#1615): every object type, the
+# database and the persistence traits. One of `std` and `alloc` is required;
+# the crate boxes every object.
+[features]
+default = ["std"]
+# Hosted builds: the file persistence backends, the save writer's own thread,
+# tracing, std's hash maps and std's mutex. It doesn't turn on `alloc`, so a
+# hosted build compiles none of the no_std stand-ins below; with both on,
+# `std` wins and they go unused.
+std = [
+    "bacnet-types/std",
+    "bacnet-encoding/std",
+    "bytes/std",
+    "dep:tracing",
+    "dep:libc",
+]
+# no_std with a global allocator. Saves run on the caller's thread, and the
+# hash maps, locks and float rounding come from hashbrown, spinning_top and
+# libm. A hosted application wants `std`: this one drops the file backends,
+# the writer thread, the wall-clock expiry of staged writes and tracing.
+alloc = [
+    "bacnet-types/alloc",
+    "bacnet-encoding/alloc",
+    "dep:hashbrown",
+    "dep:libm",
+    "dep:spinning_top",
+]
 
 [package.metadata.docs.rs]
 no-default-features = true
-features = []
+features = ["std"]
 default-target = "x86_64-unknown-linux-gnu"
 targets = []
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
-bacnet-types = { workspace = true, features = ["std"] }
-bacnet-encoding = { workspace = true, features = ["std"] }
-bytes = { workspace = true, features = ["std"] }
-tracing.workspace = true
+bacnet-types = { workspace = true }
+bacnet-encoding = { workspace = true }
+bytes = { workspace = true }
+hashbrown = { workspace = true, optional = true }
+libm = { workspace = true, optional = true }
+spinning_top = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
-libc.workspace = true
+libc = { workspace = true, optional = true }
 
 [lints]
 workspace = true

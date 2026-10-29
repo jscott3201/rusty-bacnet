@@ -3,8 +3,8 @@
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_services::audit::AuditNotificationRequest;
 use bacnet_transport::port::TransportProvenance;
-use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::MacAddr;
+use bacnet_types::primitives::ObjectIdentifier;
 
 /// Local maximum accepted AuditNotification service payload.
 pub const MAX_AUDIT_NOTIFICATION_BYTES: usize = 64 * 1024;
@@ -42,7 +42,7 @@ impl AuditNotificationAuthorizationContext {
     /// carries no routed source. `None` for other ingress, hub-relayed and
     /// routed requests included (see [`crate::policy`]).
     pub fn principal(&self) -> Option<bacnet_transport::port::ScPrincipal> {
-        crate::policy::originating_principal(self.provenance, self.source_network.as_ref())
+        crate::policy::originating_principal(&self.provenance, self.source_network.as_ref())
     }
 
     /// The principal of the direct BACnet/SC peer that handed this request
@@ -52,6 +52,8 @@ impl AuditNotificationAuthorizationContext {
     pub fn forwarding_peer_principal(&self) -> Option<bacnet_transport::port::ScPrincipal> {
         self.provenance.principal()
     }
+
+    crate::policy::certificate_accessors!();
 }
 
 /// Transport provenance and decoded content supplied to
@@ -83,7 +85,7 @@ impl UnconfirmedAuditNotificationAuthorizationContext {
     /// carries no routed source. `None` for other ingress, hub-relayed and
     /// routed requests included (see [`crate::policy`]).
     pub fn principal(&self) -> Option<bacnet_transport::port::ScPrincipal> {
-        crate::policy::originating_principal(self.provenance, self.source_network.as_ref())
+        crate::policy::originating_principal(&self.provenance, self.source_network.as_ref())
     }
 
     /// The principal of the direct BACnet/SC peer that handed this request
@@ -93,6 +95,8 @@ impl UnconfirmedAuditNotificationAuthorizationContext {
     pub fn forwarding_peer_principal(&self) -> Option<bacnet_transport::port::ScPrincipal> {
         self.provenance.principal()
     }
+
+    crate::policy::certificate_accessors!();
 }
 
 impl std::fmt::Debug for AuditNotificationAuthorizationContext {

@@ -3,7 +3,7 @@ use bytes::BytesMut;
 use bacnet_types::error::Error;
 
 use crate::port::DataAttribute;
-use crate::sc_frame::{encode_sc_message, Vmac, BROADCAST_VMAC};
+use crate::sc_frame::{BROADCAST_VMAC, Vmac, encode_sc_message};
 
 use super::{ScConnectionState, ScTransport, WebSocketPort};
 
@@ -26,13 +26,13 @@ impl<W: WebSocketPort> ScTransport<W> {
         let mut dest_vmac = [0u8; 6];
         dest_vmac.copy_from_slice(mac);
 
-        if dest_vmac != BROADCAST_VMAC {
-            if let Some(route) = self.direct_membership.route(&dest_vmac) {
-                match route.send_npdu(npdu, data_attributes).await {
-                    Ok(()) => return Ok(()),
-                    Err(super::direct_egress::DirectSendError::Unavailable) => {}
-                    Err(error) => return Err(error.into_error()),
-                }
+        if dest_vmac != BROADCAST_VMAC
+            && let Some(route) = self.direct_membership.route(&dest_vmac)
+        {
+            match route.send_npdu(npdu, data_attributes).await {
+                Ok(()) => return Ok(()),
+                Err(super::direct_egress::DirectSendError::Unavailable) => {}
+                Err(error) => return Err(error.into_error()),
             }
         }
 
@@ -59,7 +59,10 @@ impl<W: WebSocketPort> ScTransport<W> {
                     npdu,
                     data_attributes,
                     conn,
-                    self.connect_timeout_ms,
+                    super::direct_discovery::DirectTiming {
+                        connect_timeout_ms: self.connect_timeout_ms,
+                        heartbeat_ms: (self.heartbeat_interval_ms, self.heartbeat_timeout_ms),
+                    },
                 )
                 .await
             {

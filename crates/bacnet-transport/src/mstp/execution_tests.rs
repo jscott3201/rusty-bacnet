@@ -3,9 +3,10 @@
 //! thread, turnaround after chunked input, application answers, and
 //! teardown.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use bacnet_mstp_codec::{decode_frame, FrameType};
+use bacnet_mstp_codec::{FrameType, decode_frame};
 use bytes::Bytes;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
@@ -20,13 +21,35 @@ pub(crate) const TURNAROUNDS: [(u32, u64); 3] = [(9600, 4167), (38400, 1042), (7
 /// A port that reports each read and write with its time and thread.
 struct ExecutionObserved<S> {
     inner: S,
+    /// When not zero, the next read takes at most this many octets, so a
+    /// frame already waiting on the port reaches the task in two reads.
+    first_read_limit: AtomicUsize,
     reads: mpsc::UnboundedSender<(Instant, std::thread::ThreadId, usize)>,
     writes: mpsc::UnboundedSender<(Instant, std::thread::ThreadId, Vec<u8>)>,
 }
 
+impl<S> ExecutionObserved<S> {
+    fn new(
+        inner: S,
+        reads: mpsc::UnboundedSender<(Instant, std::thread::ThreadId, usize)>,
+        writes: mpsc::UnboundedSender<(Instant, std::thread::ThreadId, Vec<u8>)>,
+    ) -> Self {
+        Self {
+            inner,
+            first_read_limit: AtomicUsize::new(0),
+            reads,
+            writes,
+        }
+    }
+}
+
 impl<S: SerialPort> SerialPort for ExecutionObserved<S> {
     async fn read(&self, buf: &mut [u8]) -> Result<usize, bacnet_types::error::Error> {
-        let count = self.inner.read(buf).await?;
+        let limit = match self.first_read_limit.swap(0, Ordering::Relaxed) {
+            0 => buf.len(),
+            limit => limit.min(buf.len()),
+        };
+        let count = self.inner.read(&mut buf[..limit]).await?;
         if count > 0 {
             let _ = self
                 .reads
@@ -48,9 +71,20 @@ impl<S: SerialPort> SerialPort for ExecutionObserved<S> {
 }
 
 /// Shared host-timing and byte-order harness, also used by the native
-/// serial tests. Station 3 queues two NPDUs and receives a Token (whole, or
-/// with a late tail); it sends both, then polls for a successor. Returns the
-/// bytes it wrote, which must match in every mode and backend.
+/// serial tests. Station 3 queues two NPDUs and receives a Token (in one
+/// read, or `chunked` into two); it sends both, then polls for a successor.
+/// Returns the bytes it wrote, which must match in every mode and backend.
+///
+/// The Token is written whole and split only at the port's read boundary.
+/// Delivering its tail later from the test (an earlier version slept 10 ms
+/// between the two writes) made the gap depend on host scheduling: a stall
+/// of about 90 ms on a loaded runner pushed it past T_frame_abort (100 ms on
+/// a host), the station rightly dropped the partial Token, and after
+/// T_no_token it polled for a master instead of sending its data. The late
+/// tail on either side of T_frame_abort, and turnaround from the last
+/// chunk, are covered in paused time by
+/// `mstp::tests::a_late_tail_completes_its_frame_within_the_host_frame_abort`
+/// and `turnaround_counts_from_the_last_chunk_read`.
 pub(crate) async fn execution_timing_harness<S: SerialPort, P: SerialPort>(
     serial: S,
     peer: P,
@@ -62,12 +96,15 @@ pub(crate) async fn execution_timing_harness<S: SerialPort, P: SerialPort>(
         let app_thread = std::thread::current().id();
         let (read_tx, mut reads) = mpsc::unbounded_channel();
         let (write_tx, mut writes) = mpsc::unbounded_channel();
+        let incoming = encode(FrameType::TOKEN, 3, 7, &[]);
+        let observed = ExecutionObserved::new(serial, read_tx, write_tx);
+        if chunked {
+            observed
+                .first_read_limit
+                .store(incoming.len() - 1, Ordering::Relaxed);
+        }
         let mut transport = MstpTransport::new(
-            ExecutionObserved {
-                inner: serial,
-                reads: read_tx,
-                writes: write_tx,
-            },
+            observed,
             MstpConfig {
                 baud_rate: baud,
                 max_info_frames: 2,
@@ -81,29 +118,22 @@ pub(crate) async fn execution_timing_harness<S: SerialPort, P: SerialPort>(
         assert_eq!(npdus.max_capacity(), 64);
         transport.send_unicast(&[1, 0, 0x10], &[7]).await.unwrap();
         transport.send_unicast(&[1, 0, 0x20], &[8]).await.unwrap();
-        let incoming = encode(FrameType::TOKEN, 3, 7, &[]);
-        let split = if chunked {
-            incoming.len() - 1
-        } else {
-            incoming.len()
-        };
-        peer.write(&incoming[..split]).await.unwrap();
+        // T_no_token (500 ms from the start) is the only real-clock budget
+        // left: the Token must be read before it runs out.
+        peer.write(&incoming).await.unwrap();
         let mut received = 0;
+        let mut read_count = 0;
         let (last_read, worker_thread) = loop {
             let (at, thread, count) = reads.recv().await.unwrap();
             received += count;
+            read_count += 1;
             if received == incoming.len() {
                 break (at, thread);
             }
-            if received == split {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-                assert!(
-                    writes.try_recv().is_err(),
-                    "partial token must not transmit"
-                );
-                peer.write(&incoming[split..]).await.unwrap();
-            }
         };
+        if chunked {
+            assert!(read_count >= 2, "the Token must arrive in two reads");
+        }
         assert_eq!(
             worker_thread == app_thread,
             mode.unwrap_or_default() == MstpExecutionMode::Tokio
@@ -134,6 +164,8 @@ pub(crate) async fn execution_timing_harness<S: SerialPort, P: SerialPort>(
             let (at, thread, bytes) = writes.recv().await.unwrap();
             assert_eq!(thread, worker_thread);
             if index == 0 {
+                // Writes are reported in order, so this also shows that
+                // nothing was sent on a partial Token.
                 assert!(at >= last_read + Duration::from_micros(turnaround));
             }
             let (frame, consumed) = decode_frame(&bytes).unwrap();
@@ -203,11 +235,7 @@ async fn execution_modes_answer_requests_in_time() {
                 let (read_tx, mut reads) = mpsc::unbounded_channel();
                 let (write_tx, mut writes) = mpsc::unbounded_channel();
                 let mut transport = MstpTransport::new(
-                    ExecutionObserved {
-                        inner: serial,
-                        reads: read_tx,
-                        writes: write_tx,
-                    },
+                    ExecutionObserved::new(serial, read_tx, write_tx),
                     config(3, 127),
                 )
                 .with_execution_mode(mode.clone());

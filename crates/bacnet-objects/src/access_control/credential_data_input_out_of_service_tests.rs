@@ -2,6 +2,7 @@
 //! Out_Of_Service is TRUE (Clauses 12.36.4, 12.36.7 and 12.36.8, Table 12-43
 //! footnote 1, #1168).
 
+use bacnet_types::error::RemoteError;
 use std::sync::Arc;
 
 use bacnet_types::constructed::{BACnetAuthenticationFactor, BACnetAuthenticationFactorFormat};
@@ -148,7 +149,7 @@ fn status_flags(fault: bool, out_of_service: bool) -> PropertyValue {
 
 pub(super) fn assert_property_error(result: Result<(), Error>, code: ErrorCode) {
     assert!(
-        matches!(result, Err(Error::Protocol { class, code: actual })
+        matches!(result, Err(Error::Remote(RemoteError::Error { class, code: actual }))
             if class == ErrorClass::PROPERTY
                 && actual == code),
         "expected PROPERTY / {code:?}, got {result:?}"

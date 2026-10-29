@@ -109,14 +109,14 @@ mod nat;
 mod serve;
 
 pub use bdt::{
-    canonicalize, distribution_address, validate_entry, Bdt, BdtError, EntryError, TWO_HOP_MASK,
+    Bdt, BdtError, EntryError, TWO_HOP_MASK, canonicalize, distribution_address, validate_entry,
 };
 pub use fdt::{
-    Fdt, RegisterOutcome, Registered, Registration, RegistrationLimits, RegistrationRefusal,
-    Reservation, StorageFull, GRACE_PERIOD,
+    Fdt, GRACE_PERIOD, RegisterOutcome, Registered, Registration, RegistrationLimits,
+    RegistrationRefusal, Reservation, StorageFull,
 };
 pub use forward::{
     Context, DistributeRefusal, Distribution, Fanout, ForwardRefusal, Tables, Target, Via,
 };
-pub use nat::{is_rfc1918, Nat, NatError, PrivateRange, MAX_PRIVATE_RANGES};
+pub use nat::{MAX_PRIVATE_RANGES, Nat, NatError, PrivateRange, is_rfc1918};
 pub use serve::{Answer, DeleteRefusal, Request, Rules, Served};

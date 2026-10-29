@@ -2,7 +2,7 @@
 
 use std::collections::VecDeque;
 
-use bacnet_mstp_codec::{DecodeEvent, FrameHeader, StreamDecoder, MAX_EXTENDED_FRAME_LENGTH};
+use bacnet_mstp_codec::{DecodeEvent, FrameHeader, MAX_EXTENDED_FRAME_LENGTH, StreamDecoder};
 use bacnet_mstp_core::{Duration, Instant};
 
 use super::master::Input;

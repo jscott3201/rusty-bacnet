@@ -3,6 +3,76 @@
  "font": "Menlo 12",
  "shots": [
   {
+   "name": "mstp-scan-stopped",
+   "file": "mstp-scan-stopped.webp",
+   "alt": "Original-rate restoration failed; the scan evidence remains visible.",
+   "size": "80x24",
+   "source": "snapshot",
+   "command": "(insta snapshot)",
+   "keys": "",
+   "commit": "b53e47299"
+  },
+  {
+   "name": "mstp-scan-cancelled",
+   "file": "mstp-scan-cancelled.webp",
+   "alt": "Manual cancellation retains partial evidence and restores the original monitor.",
+   "size": "80x24",
+   "source": "snapshot",
+   "command": "(insta snapshot)",
+   "keys": "",
+   "commit": "b53e47299"
+  },
+  {
+   "name": "mstp-scan-partial",
+   "file": "mstp-scan-partial.webp",
+   "alt": "A failed candidate leaves partial evidence and no global best.",
+   "size": "80x24",
+   "source": "snapshot",
+   "command": "(insta snapshot)",
+   "keys": "",
+   "commit": "b53e47299"
+  },
+  {
+   "name": "mstp-scan-insufficient",
+   "file": "mstp-scan-insufficient.webp",
+   "alt": "No valid decoded frames: insufficient traffic for a baud suggestion.",
+   "size": "80x24",
+   "source": "snapshot",
+   "command": "(insta snapshot)",
+   "keys": "",
+   "commit": "b53e47299"
+  },
+  {
+   "name": "mstp-scan-ambiguous",
+   "file": "mstp-scan-ambiguous.webp",
+   "alt": "Equal best ratios remain ambiguous across two rates.",
+   "size": "80x24",
+   "source": "snapshot",
+   "command": "(insta snapshot)",
+   "keys": "",
+   "commit": "b53e47299"
+  },
+  {
+   "name": "mstp-scan-result",
+   "file": "mstp-scan-result.webp",
+   "alt": "A scripted 38400 baud suggestion, with the original 19200 baud monitor restored.",
+   "size": "120x40",
+   "source": "snapshot",
+   "command": "(insta snapshot)",
+   "keys": "",
+   "commit": "b53e47299"
+  },
+  {
+   "name": "mstp-scan-progress",
+   "file": "mstp-scan-progress.webp",
+   "alt": "A receive-only scan measuring the first of six rates.",
+   "size": "80x24",
+   "source": "snapshot",
+   "command": "(insta snapshot)",
+   "keys": "",
+   "commit": "b53e47299"
+  },
+  {
    "name": "profiles-picker",
    "file": "profiles-picker.webp",
    "alt": "The profile picker listing four saved profiles, with keys to preview, create or reload them.",
@@ -45,12 +115,12 @@
   {
    "name": "profiles-passive",
    "file": "profiles-passive.webp",
-   "alt": "A passive session: the status bar reads PASSIVE and the device list says nothing is transmitted.",
+   "alt": "A passive B/IP session: the status bar reads listening and PASSIVE, and the footer says foreign-device settings are ignored.",
    "size": "120x36",
    "source": "live",
    "command": "bacnet tui --profile lab --passive",
    "keys": "Enter",
-   "commit": "93125c060"
+   "commit": "051e083c0"
   },
   {
    "name": "discovery-whois-form",
@@ -310,7 +380,7 @@
    "source": "live",
    "command": "bacnet tui",
    "keys": "1 ?",
-   "commit": "93125c060"
+   "commit": "b53e47299"
   },
   {
    "name": "network-fd-bdt",
@@ -450,7 +520,7 @@
    "source": "snapshot",
    "command": "(insta snapshot)",
    "keys": "",
-   "commit": "93125c060"
+   "commit": "b53e47299"
   },
   {
    "name": "mstp-monitor-ring",
@@ -460,7 +530,7 @@
    "source": "snapshot",
    "command": "(insta snapshot)",
    "keys": "",
-   "commit": "93125c060"
+   "commit": "b53e47299"
   },
   {
    "name": "mstp-monitor-findings",
@@ -470,7 +540,7 @@
    "source": "snapshot",
    "command": "(insta snapshot)",
    "keys": "",
-   "commit": "93125c060"
+   "commit": "b53e47299"
   },
   {
    "name": "mstp-monitor-errors",
@@ -480,7 +550,7 @@
    "source": "snapshot",
    "command": "(insta snapshot)",
    "keys": "",
-   "commit": "93125c060"
+   "commit": "b53e47299"
   },
   {
    "name": "mstp-join-proposal",
@@ -490,7 +560,7 @@
    "source": "snapshot",
    "command": "(insta snapshot)",
    "keys": "",
-   "commit": "93125c060"
+   "commit": "b53e47299"
   },
   {
    "name": "mstp-join-confirm",
@@ -500,7 +570,7 @@
    "source": "snapshot",
    "command": "(insta snapshot)",
    "keys": "",
-   "commit": "f9025d9b1"
+   "commit": "b53e47299"
   },
   {
    "name": "mstp-participant-join",

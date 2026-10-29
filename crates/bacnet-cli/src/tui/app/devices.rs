@@ -12,7 +12,7 @@ use std::time::Instant;
 
 use bacnet_types::enums::Segmentation;
 
-use super::names::{device_object, NameCache};
+use super::names::{NameCache, device_object};
 use crate::tui::message::DeviceRow;
 
 /// Columns the table can sort by, in the order `s` cycles through them.

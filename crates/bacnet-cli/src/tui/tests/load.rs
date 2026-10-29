@@ -5,13 +5,13 @@ use std::time::{Duration, Instant};
 
 use bacnet_client::client::{DeviceEvent, DeviceEventKind};
 use bacnet_client::discovery::DiscoveredDevice;
+use bacnet_types::MacAddr;
 use bacnet_types::enums::{ObjectType, Segmentation};
 use bacnet_types::primitives::ObjectIdentifier;
-use bacnet_types::MacAddr;
 use tokio::sync::{broadcast, mpsc};
 
 use super::*;
-use crate::tui::worker::{DeviceFeed, EventSink, EVENT_CHANNEL_CAPACITY};
+use crate::tui::worker::{DeviceFeed, EVENT_CHANNEL_CAPACITY, EventSink};
 
 /// Distinct instances the burst cycles through.
 const INSTANCES: u32 = 500;
@@ -171,7 +171,7 @@ fn drawing_a_full_device_table_at_120x40_fits_the_frame_budget() {
 /// within the same budget.
 #[test]
 fn drawing_a_full_watch_list_at_120x40_fits_the_frame_budget() {
-    use crate::tui::app::watch::{Screen, HISTORY};
+    use crate::tui::app::watch::{HISTORY, Screen};
     use crate::tui::watched::{Sample, WatchEvent};
     use crate::tui::worker::watch::MAX_ROWS;
     use ratatui::crossterm::event::KeyCode;
@@ -203,11 +203,12 @@ fn drawing_a_full_watch_list_at_120x40_fits_the_frame_budget() {
             .collect();
         worker(&mut app, WorkerEvent::Watch(WatchEvent::Samples(samples)));
     }
-    assert!(app
-        .watch
-        .rows()
-        .iter()
-        .all(|row| row.history.len() == HISTORY));
+    assert!(
+        app.watch
+            .rows()
+            .iter()
+            .all(|row| row.history.len() == HISTORY)
+    );
     app.screen = Screen::Watch;
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     const FRAMES: u32 = 50;

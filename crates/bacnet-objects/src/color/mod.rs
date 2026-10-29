@@ -21,8 +21,8 @@
 //! serve none of them. Value_Source, once tracked, names the last writer of
 //! Present_Value (#1552).
 
-use std::ops::RangeInclusive;
-use std::time::Duration;
+use core::ops::RangeInclusive;
+use core::time::Duration;
 
 use bacnet_types::constructed::BACnetXyColor;
 use bacnet_types::enums::ColorTransition;
@@ -40,9 +40,9 @@ mod saving;
 mod temperature;
 mod xy;
 
-pub use persistence::{
-    ColorOutputPersistence, ColorOutputSnapshot, ColorOutputValue, FileColorOutputPersistence,
-};
+#[cfg(feature = "std")]
+pub use persistence::FileColorOutputPersistence;
+pub use persistence::{ColorOutputPersistence, ColorOutputSnapshot, ColorOutputValue};
 pub use saving::ColorOutputSaveCounters;
 pub use temperature::ColorTemperatureObject;
 pub use xy::ColorObject;
@@ -53,7 +53,7 @@ mod command_tests;
 mod engine_tests;
 #[cfg(test)]
 mod metadata_tests;
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod persistence_tests;
 #[cfg(test)]
 mod rows_tests;

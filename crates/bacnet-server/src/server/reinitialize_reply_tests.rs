@@ -145,10 +145,10 @@ async fn the_after_reply_hook_never_runs_for_a_refusal() {
         (
             "handler refusal",
             || {
-                Err(Error::Protocol {
-                    class: ErrorClass::DEVICE,
-                    code: ErrorCode::CONFIGURATION_IN_PROGRESS,
-                })
+                Err(Error::protocol(
+                    ErrorClass::DEVICE,
+                    ErrorCode::CONFIGURATION_IN_PROGRESS,
+                ))
             },
             None,
             ErrorCode::CONFIGURATION_IN_PROGRESS,

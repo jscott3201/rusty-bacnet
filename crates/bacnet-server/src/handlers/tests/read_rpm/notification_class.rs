@@ -1,11 +1,12 @@
 use super::*;
+use PropertyIdentifier as P;
 use bacnet_objects::{notification_class::NotificationClass, traits::BACnetObject};
 use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
 use bacnet_types::constructed::{
     BACnetDestination, BACnetRecipient, PropertyReference, ReadAccessSpecification,
 };
+use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::Time;
-use PropertyIdentifier as P;
 
 #[test]
 fn rpm_notification_class_indexed_reads_and_constructed_bytes_are_unchanged() {
@@ -140,8 +141,10 @@ fn rpm_notification_class_indexed_reads_and_constructed_bytes_are_unchanged() {
             Err(expected) => {
                 assert!(result.property_value.is_none());
                 assert_eq!(result.error, Some((ErrorClass::PROPERTY, expected)));
-                assert!(matches!(rp, Err(Error::Protocol { class, code })
-                    if class == ErrorClass::PROPERTY && code == expected));
+                assert!(
+                    matches!(rp, Err(Error::Remote(RemoteError::Error { class, code }))
+                    if class == ErrorClass::PROPERTY && code == expected)
+                );
                 assert!(response.is_empty());
             }
         }
@@ -150,7 +153,7 @@ fn rpm_notification_class_indexed_reads_and_constructed_bytes_are_unchanged() {
         max_result_elements: cases.len(),
         max_service_ack_bytes: legacy.len(),
     };
-    use crate::handlers::{rpm_budget::handle_rpm_budgeted, ReadFailure};
+    use crate::handlers::{ReadFailure, rpm_budget::handle_rpm_budgeted};
     let mut bounded = BytesMut::new();
     handle_rpm_budgeted(&db, &request_bytes, &mut bounded, budget).unwrap();
     assert_eq!(bounded, legacy);

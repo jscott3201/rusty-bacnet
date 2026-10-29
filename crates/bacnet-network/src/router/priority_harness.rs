@@ -2,14 +2,14 @@
 
 use bacnet_npdu::NpduLimits;
 use bacnet_transport::port::{DataAttribute, ReceivedNpdu, TransportPort};
-use bacnet_types::{error::Error, MacAddr};
+use bacnet_types::{MacAddr, error::Error};
 use bytes::Bytes;
 use std::sync::{
-    atomic::{AtomicU16, Ordering},
     Arc,
+    atomic::{AtomicU16, Ordering},
 };
 use tokio::sync::{mpsc, oneshot};
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 use super::{BACnetRouter, RouterOptions, RouterPort};
 use crate::layer::ReceivedApdu;
@@ -113,6 +113,14 @@ pub(super) async fn start_with(
     count: usize,
     options: RouterOptions,
 ) -> (BACnetRouter, mpsc::Receiver<ReceivedApdu>, Vec<Peer>) {
+    start_any(count, options).await
+}
+
+/// [`start_with`], for either local receiver type.
+pub(super) async fn start_any<A: super::LocalApduReceiver>(
+    count: usize,
+    options: RouterOptions<A>,
+) -> (BACnetRouter, A, Vec<Peer>) {
     let (ports, mut peers): (Vec<_>, Vec<_>) = (0..count)
         .map(|index| {
             let (frames, incoming) = mpsc::channel(64);

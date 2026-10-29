@@ -1,7 +1,7 @@
 //! Persistence and resolution regressions use isolated temporary roots.
 
 use super::service::Service;
-use super::store::{validate_name, Store};
+use super::store::{Store, validate_name};
 use super::*;
 use clap::{CommandFactory, FromArgMatches};
 
@@ -305,13 +305,17 @@ fn stale_preview_and_stale_edits_never_overwrite_or_connect() {
     let mut changed = original.clone();
     changed.bip_mut().port = 1234;
     store.save("site", &changed, false).unwrap();
-    assert!(service
-        .prepare("site", &original, true, &[])
-        .unwrap_err()
-        .contains("changed on disk"));
-    assert!(service
-        .save("site", original.clone(), false, Some(original))
-        .is_err());
+    assert!(
+        service
+            .prepare("site", &original, true, &[])
+            .unwrap_err()
+            .contains("changed on disk")
+    );
+    assert!(
+        service
+            .save("site", original.clone(), false, Some(original))
+            .is_err()
+    );
     assert_eq!(store.load("site").unwrap(), changed);
 }
 
@@ -326,10 +330,12 @@ fn workspace_failure_does_not_produce_a_prepared_connection() {
         store: Ok(store),
         overrides: Overrides::default(),
     };
-    assert!(service
-        .prepare("site", &p, true, &[])
-        .unwrap_err()
-        .contains("workspace"));
+    assert!(
+        service
+            .prepare("site", &p, true, &[])
+            .unwrap_err()
+            .contains("workspace")
+    );
 }
 
 #[cfg(unix)]
@@ -463,9 +469,11 @@ fn explicit_broadcast_survives_interface_autoselection_and_picker_choices() {
     );
     assert_eq!(broadcast, Ipv4Addr::BROADCAST);
     if let Some(picker) = picker {
-        assert!(picker
-            .items
-            .iter()
-            .all(|item| item.broadcast == Ipv4Addr::BROADCAST));
+        assert!(
+            picker
+                .items
+                .iter()
+                .all(|item| item.broadcast == Ipv4Addr::BROADCAST)
+        );
     }
 }

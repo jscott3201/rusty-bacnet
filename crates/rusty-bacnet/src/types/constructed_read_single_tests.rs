@@ -44,6 +44,9 @@ fn assert_single((object_type, property): (O, P), octets: &[u8], element: Elemen
             inner: P::PRESENT_VALUE,
         };
         locals.set_item("PV", pv).unwrap();
+        locals
+            .set_item("BitString", py.get_type::<super::super::PyBitString>())
+            .unwrap();
         let expected = CString::new(expected).unwrap();
         let expected = py.eval(&expected, None, Some(&locals)).unwrap();
         assert!(read.eq(&expected).unwrap(), "{read} != {expected}");
@@ -185,8 +188,8 @@ fn event_parameters_read_as_a_mapping_per_algorithm() {
                 list_of_values: vec![(5, vec![0x40])],
             },
             "{'kind': 'change_of_bitstring', 'time_delay': 2, \
-             'bitmask': {'unused_bits': 5, 'data': b'\\xa0'}, \
-             'list_of_values': [{'unused_bits': 5, 'data': b'\\x40'}]}",
+             'bitmask': BitString(5, b'\\xa0'), \
+             'list_of_values': [BitString(5, b'\\x40')]}",
         ),
         (
             BACnetEventParameter::ChangeOfState {
@@ -215,7 +218,7 @@ fn event_parameters_read_as_a_mapping_per_algorithm() {
                 },
             },
             "{'kind': 'change_of_value', 'time_delay': 0, \
-             'bitmask': {'unused_bits': 0, 'data': b'\\xff'}, \
+             'bitmask': BitString(0, b'\\xff'), \
              'referenced_property_increment': None}",
         ),
         (
@@ -240,19 +243,13 @@ fn event_parameters_read_as_a_mapping_per_algorithm() {
             "{'kind': 'extended', 'vendor_id': 555, 'extended_event_type': 9, \
              'parameters': b'\\x21\\x05'}",
         ),
+        (BACnetEventParameter::None, "{'kind': 'none'}"),
         (
             BACnetEventParameter::Opaque {
-                tag: 20,
-                data: Vec::new(),
-            },
-            "{'kind': 'none'}",
-        ),
-        (
-            BACnetEventParameter::Opaque {
-                tag: 3,
+                tag: 30,
                 data: vec![0x09, 0x05, 0x1e, 0x0c, 0, 0x80, 0, 7, 0x19, 0x55, 0x1f],
             },
-            "{'kind': 'other', 'tag': 3, \
+            "{'kind': 'other', 'tag': 30, \
              'data': b'\\x09\\x05\\x1e\\x0c\\x00\\x80\\x00\\x07\\x19\\x55\\x1f'}",
         ),
     ];
@@ -262,6 +259,151 @@ fn event_parameters_read_as_a_mapping_per_algorithm() {
             &parameter_octets(&parameter),
             Element::EventParameter,
             expected,
+        );
+    }
+}
+
+/// The algorithms #2090 modelled read as mappings too, and keep their
+/// octets.
+#[test]
+fn newly_modelled_event_parameters_read_as_mappings() {
+    use BACnetEventParameter as EP;
+    use bacnet_types::enums::{AccessEvent, LifeSafetyState, TimerState};
+    use bacnet_types::primitives::StatusFlags;
+    let target = (O::EVENT_ENROLLMENT, P::EVENT_PARAMETERS);
+    let av7 = || {
+        BACnetDeviceObjectPropertyReference::new_local(
+            ObjectIdentifier::new(O::ANALOG_VALUE, 7).unwrap(),
+            P::PRESENT_VALUE.to_raw(),
+        )
+    };
+    let av7_py = "{'object_identifier': AV7, 'property_identifier': PV, \
+                  'property_array_index': None, 'device_identifier': None}";
+    let cases = [
+        (
+            EP::CommandFailure {
+                time_delay: 4,
+                feedback_property_reference: av7(),
+            },
+            format!(
+                "{{'kind': 'command_failure', 'time_delay': 4, \
+                 'feedback_property_reference': {av7_py}}}"
+            ),
+        ),
+        (
+            EP::ChangeOfLifeSafety {
+                time_delay: 10,
+                list_of_life_safety_alarm_values: vec![LifeSafetyState::ALARM],
+                list_of_alarm_values: vec![LifeSafetyState::PRE_ALARM, LifeSafetyState::FAULT],
+                mode_property_reference: av7(),
+            },
+            format!(
+                "{{'kind': 'change_of_life_safety', 'time_delay': 10, \
+                 'list_of_life_safety_alarm_values': [2], 'list_of_alarm_values': [1, 3], \
+                 'mode_property_reference': {av7_py}}}"
+            ),
+        ),
+        (
+            EP::BufferReady {
+                notification_threshold: 50,
+                previous_notification_count: 7,
+            },
+            "{'kind': 'buffer_ready', 'notification_threshold': 50, \
+             'previous_notification_count': 7}"
+                .into(),
+        ),
+        (
+            EP::UnsignedRange {
+                time_delay: 30,
+                low_limit: 10,
+                high_limit: 300,
+            },
+            "{'kind': 'unsigned_range', 'time_delay': 30, 'low_limit': 10, 'high_limit': 300}"
+                .into(),
+        ),
+        (
+            EP::AccessEvent {
+                list_of_access_events: vec![AccessEvent::GRANTED],
+                access_event_time_reference: av7(),
+            },
+            format!(
+                "{{'kind': 'access_event', 'list_of_access_events': [1], \
+                 'access_event_time_reference': {av7_py}}}"
+            ),
+        ),
+        (
+            EP::DoubleOutOfRange {
+                time_delay: 0,
+                low_limit: -1.5,
+                high_limit: 99.25,
+                deadband: 0.5,
+            },
+            "{'kind': 'double_out_of_range', 'time_delay': 0, 'low_limit': -1.5, \
+             'high_limit': 99.25, 'deadband': 0.5}"
+                .into(),
+        ),
+        (
+            EP::SignedOutOfRange {
+                time_delay: 30,
+                low_limit: -5,
+                high_limit: 40,
+                deadband: 2,
+            },
+            "{'kind': 'signed_out_of_range', 'time_delay': 30, 'low_limit': -5, \
+             'high_limit': 40, 'deadband': 2}"
+                .into(),
+        ),
+        (
+            EP::UnsignedOutOfRange {
+                time_delay: 5,
+                low_limit: 10,
+                high_limit: 300,
+                deadband: 1,
+            },
+            "{'kind': 'unsigned_out_of_range', 'time_delay': 5, 'low_limit': 10, \
+             'high_limit': 300, 'deadband': 1}"
+                .into(),
+        ),
+        (
+            EP::ChangeOfCharacterstring {
+                time_delay: 2,
+                list_of_alarm_values: vec!["FIRE".into(), String::new()],
+            },
+            "{'kind': 'change_of_characterstring', 'time_delay': 2, \
+             'list_of_alarm_values': ['FIRE', '']}"
+                .into(),
+        ),
+        (
+            EP::ChangeOfStatusFlags {
+                time_delay: 1,
+                selected_flags: StatusFlags::IN_ALARM | StatusFlags::FAULT,
+            },
+            "{'kind': 'change_of_status_flags', 'time_delay': 1, \
+             'selected_flags': BitString(4, b'\\xc0')}"
+                .into(),
+        ),
+        (
+            EP::ChangeOfDiscreteValue { time_delay: 9 },
+            "{'kind': 'change_of_discrete_value', 'time_delay': 9}".into(),
+        ),
+        (
+            EP::ChangeOfTimer {
+                time_delay: 3,
+                alarm_values: vec![TimerState::EXPIRED],
+                update_time_reference: av7(),
+            },
+            format!(
+                "{{'kind': 'change_of_timer', 'time_delay': 3, 'alarm_values': [2], \
+                 'update_time_reference': {av7_py}}}"
+            ),
+        ),
+    ];
+    for (parameter, expected) in cases {
+        assert_single(
+            target,
+            &parameter_octets(&parameter),
+            Element::EventParameter,
+            &expected,
         );
     }
 }
@@ -277,10 +419,7 @@ fn event_parameter_forms_that_are_not_the_choice_stay_generic() {
     let legacy = [0xfe, 0xff, 0x21, 0x01, 0xff, 0xff];
     assert!(decode_read_value(object, property, None, &legacy).is_err());
     // Two values back to back are not one.
-    let none = parameter_octets(&BACnetEventParameter::Opaque {
-        tag: 20,
-        data: Vec::new(),
-    });
+    let none = parameter_octets(&BACnetEventParameter::None);
     let twice = [none.as_slice(), none.as_slice()].concat();
     let value = generic(object, property, &twice);
     assert_eq!(value.inner, PropertyValue::ApplicationData(twice));

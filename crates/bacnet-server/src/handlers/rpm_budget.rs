@@ -6,6 +6,7 @@ use super::*;
 use crate::server::ReadPropertyMultipleBudget;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
+use bacnet_types::error::RemoteError;
 
 /// One specification after target resolution and ALL/REQUIRED/OPTIONAL
 /// expansion; a Group's Present_Value plans its members the same way.
@@ -337,7 +338,7 @@ pub(super) fn element(
                     .map(|()| encoded.to_vec())
                     .map_err(|_| (ErrorClass::PROPERTY, ErrorCode::OTHER))
             }
-            Err(Error::Protocol { class, code }) => Err((class, code)),
+            Err(Error::Remote(RemoteError::Error { class, code })) => Err((class, code)),
             Err(_) => Err((ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY)),
         },
     };

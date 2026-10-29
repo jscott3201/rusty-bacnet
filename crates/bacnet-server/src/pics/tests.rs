@@ -37,10 +37,10 @@ impl BACnetObject for TestAnalogInput {
         _value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
-        Err(Error::Protocol {
-            class: ErrorClass::PROPERTY,
-            code: ErrorCode::WRITE_ACCESS_DENIED,
-        })
+        Err(Error::protocol(
+            ErrorClass::PROPERTY,
+            ErrorCode::WRITE_ACCESS_DENIED,
+        ))
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         static PROPS: [PropertyIdentifier; 8] = [
@@ -112,10 +112,16 @@ impl BACnetObject for TestDevice {
     }
     fn read_property(
         &self,
-        _property: PropertyIdentifier,
+        property: PropertyIdentifier,
         _array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
-        Ok(PropertyValue::Unsigned(0))
+        // The PICS prints the Device's Vendor_Name. Its Vendor_Identifier
+        // isn't an unsigned value, so the ServerConfig's vendor ID stands in.
+        Ok(match property {
+            PropertyIdentifier::VENDOR_NAME => PropertyValue::CharacterString("Acme Corp".into()),
+            PropertyIdentifier::VENDOR_IDENTIFIER => PropertyValue::Null,
+            _ => PropertyValue::Unsigned(0),
+        })
     }
     fn write_property(
         &mut self,
@@ -124,10 +130,10 @@ impl BACnetObject for TestDevice {
         _value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
-        Err(Error::Protocol {
-            class: ErrorClass::PROPERTY,
-            code: ErrorCode::WRITE_ACCESS_DENIED,
-        })
+        Err(Error::protocol(
+            ErrorClass::PROPERTY,
+            ErrorCode::WRITE_ACCESS_DENIED,
+        ))
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         static PROPS: [PropertyIdentifier; 6] = [
@@ -178,12 +184,6 @@ fn make_test_db() -> ObjectDatabase {
 
 fn make_pics_config() -> PicsConfig {
     PicsConfig {
-        vendor_name: "Acme Corp".into(),
-        model_name: "BACnet Controller 3000".into(),
-        firmware_revision: "1.0.0".into(),
-        application_software_version: "2.0.0".into(),
-        protocol_version: 1,
-        protocol_revision: 24,
         device_profile: DeviceProfile::BAsc,
         data_link_layers: vec![DataLinkSupport::BipV4],
         network_layer: NetworkLayerSupport {
@@ -355,7 +355,8 @@ fn services_match_implementation() {
         .iter()
         .find(|s| s.service_name == "ReadProperty")
         .expect("ReadProperty should be listed");
-    assert!(!rp.initiator);
+    // It initiates ReadProperty too, for a Channel member in another device.
+    assert!(rp.initiator);
     assert!(rp.executor);
 
     // I-Am is initiator only

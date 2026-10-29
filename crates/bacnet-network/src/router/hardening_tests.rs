@@ -2,8 +2,8 @@
 //! engine: next-hop rejects and duplicate global-broadcast suppression.
 
 use bacnet_npdu::Mac;
-use bacnet_router_core::table::Reachability;
 use bacnet_router_core::PortId;
+use bacnet_router_core::table::Reachability;
 
 use super::priority_harness::*;
 use super::{BACnetRouter, Duplicates, RouterOptions};
@@ -35,7 +35,7 @@ async fn a_repeated_global_broadcast_is_dropped_when_asked() {
     until(&router, |router| router.counters().duplicate_drops == 1).await;
     assert!(peers[1].sent.try_recv().is_err(), "not relayed again");
     assert!(apdus.try_recv().is_err(), "not delivered again");
-    router.stop().await;
+    router.stop().await.unwrap();
 }
 
 #[tokio::test]
@@ -47,7 +47,22 @@ async fn by_default_a_repeat_goes_through() {
         assert_eq!(apdus.recv().await.unwrap().apdu.as_ref(), [0x10, 0x08]);
     }
     assert_eq!(router.counters().duplicate_drops, 0);
-    router.stop().await;
+    router.stop().await.unwrap();
+}
+
+/// A global Who-Is whose SNET and SADR name the router on port 1 (network
+/// 2000, MAC 2), arriving on port 0: its own, come back round a loop
+/// (#2021). Dropped with no option set, and counted in the totals.
+#[tokio::test]
+async fn the_routers_own_global_broadcast_coming_back_is_dropped() {
+    let own = vec![1, 0x28, 0xFF, 0xFF, 0, 0x07, 0xD0, 1, 2, 255, 0x10, 0x08];
+    let (mut router, mut apdus, mut peers) = start(2).await;
+    receive(&peers[0], own.clone(), 0).await;
+    receive(&peers[0], own, 0).await;
+    until(&router, |router| router.counters().own_source_drops == 2).await;
+    assert!(peers[1].sent.try_recv().is_err(), "not relayed");
+    assert!(apdus.try_recv().is_err(), "not delivered");
+    router.stop().await.unwrap();
 }
 
 /// Network 3000 learned through node 7 on port 1, then a reject naming it
@@ -55,9 +70,11 @@ async fn by_default_a_repeat_goes_through() {
 async fn off_path_reject(options: RouterOptions) -> (Option<Reachability>, u64) {
     let (mut router, _apdus, peers) = start_with(2, options).await;
     let now = router.now();
-    assert!(router
-        .table()
-        .add_learned(3000, PortId(1), Mac::from_array([7]), now));
+    assert!(
+        router
+            .table()
+            .add_learned(3000, PortId(1), Mac::from_array([7]), now)
+    );
     let reject = vec![1, 0x80, 0x03, 1, 0x0B, 0xB8];
     receive(&peers[0], reject, 0).await;
     until(&router, |router| {
@@ -73,7 +90,7 @@ async fn off_path_reject(options: RouterOptions) -> (Option<Reachability>, u64) 
         .lookup(3000)
         .map(|route| route.reachability());
     let counted = router.counters().not_next_hop;
-    router.stop().await;
+    router.stop().await.unwrap();
     (reachability, counted)
 }
 

@@ -1,6 +1,6 @@
 use super::*;
-use bacnet_types::enums::ConfirmedServiceChoice;
 use bacnet_types::MacAddr;
+use bacnet_types::enums::ConfirmedServiceChoice;
 use bytes::Bytes;
 
 fn request(invoke_id: u8, body: impl Into<Bytes>) -> ConfirmedRequest {
@@ -153,11 +153,13 @@ fn cancellation_panic_and_counter_exhaustion_leave_no_alias() {
     let req = request(1, Bytes::new());
     let panicking = tracker.clone();
     let input = req.clone();
-    assert!(std::panic::catch_unwind(move || {
-        let _owner = new(begin(&panicking, input));
-        panic!("injected");
-    })
-    .is_err());
+    assert!(
+        std::panic::catch_unwind(move || {
+            let _owner = new(begin(&panicking, input));
+            panic!("injected");
+        })
+        .is_err()
+    );
     let owner = new(begin(&tracker, req.clone()));
     tracker.state.lock().unwrap().next_id = u64::MAX;
     let fallback = new(begin(&tracker, request(2, Bytes::new())));

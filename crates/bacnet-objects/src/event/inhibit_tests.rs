@@ -9,7 +9,7 @@ use bacnet_types::enums::{
 };
 use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
 
-use super::{commit_test_proposal, EventTransitionCommit, TransitionOutcome};
+use super::{EventTransitionCommit, TransitionOutcome, commit_test_proposal};
 use crate::access_control::AccessZoneObject;
 use crate::analog::AnalogInputObject;
 use crate::binary::{BinaryOutputObject, BinaryValueObject};
@@ -195,14 +195,15 @@ fn an_access_zone_takes_the_rows_and_the_inhibit() {
         P::EVENT_DETECTION_ENABLE,
         PropertyValue::Boolean(false),
     );
-    assert!(zone
-        .write_property(
+    assert!(
+        zone.write_property(
             P::EVENT_ALGORITHM_INHIBIT,
             None,
             PropertyValue::Boolean(false),
             None
         )
-        .is_err());
+        .is_err()
+    );
     assert_eq!(
         zone.read_property(P::EVENT_MESSAGE_TEXTS_CONFIG, None)
             .unwrap(),

@@ -6,7 +6,7 @@
 
 use std::future::Future;
 use std::sync::{Arc, Mutex as StdMutex};
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{Mutex, oneshot};
 
 /// The concrete owner must finish failed-start cleanup before returning Err;
 /// stop must settle teardown even when it reports a terminal dispatch error.

@@ -8,7 +8,7 @@ use bacnet_network::layer::{NetworkReport, ReceivedNetworkReport};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
-use crate::event_stream::{ended, LossyReceiver};
+use crate::event_stream::{LossyReceiver, ended};
 use crate::types::PyObjectIdentifier;
 
 fn source_network(source: &Option<NpduAddress>) -> Option<u16> {

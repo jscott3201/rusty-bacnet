@@ -37,7 +37,7 @@ impl BACnetServer {
         &self,
         object_id: PyObjectIdentifier,
         input: AccessControlInput,
-    ) -> impl std::future::Future<Output = PyResult<()>> + Send + 'static {
+    ) -> impl std::future::Future<Output = PyResult<()>> + Send + 'static + use<> {
         let inner = self.inner.clone();
         let oid = object_id.to_rust();
         async move {

@@ -6,12 +6,12 @@ use std::hint::black_box;
 use std::net::{Ipv4Addr, SocketAddrV4};
 
 use bytes::Bytes;
-use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 
 use bacnet_bip_codec::Bvll;
 use bacnet_mstp_codec::{
-    crc, decode_frame, decode_frame_in_place, Frame, FrameType, MAX_EXTENDED_FRAME_LENGTH,
-    MAX_EXTENDED_MPDU_DATA, MAX_STANDARD_FRAME_LENGTH, MAX_STANDARD_MPDU_DATA,
+    Frame, FrameType, MAX_EXTENDED_FRAME_LENGTH, MAX_EXTENDED_MPDU_DATA, MAX_STANDARD_FRAME_LENGTH,
+    MAX_STANDARD_MPDU_DATA, crc, decode_frame, decode_frame_in_place,
 };
 use bacnet_router_core::npdu::{Address, Npdu};
 

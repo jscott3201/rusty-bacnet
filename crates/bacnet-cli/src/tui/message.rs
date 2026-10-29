@@ -167,6 +167,8 @@ pub(crate) enum Command {
     Network(super::network::NetworkCommand),
     /// A Who-Has or router discovery request.
     Discovery(super::network::discovery::DiscoveryCommand),
+    /// An explicit receive-only MS/TP scan control.
+    MonitorScan(super::monitor::scan::ScanCommand),
     /// A capture request for the session.
     Capture(super::capture::CaptureCommand),
     /// Write the ring to pcap files; the coordinator does it, on a
@@ -374,6 +376,13 @@ pub(crate) enum WorkerEvent {
     Safety(super::safety::SafetyEvent),
     /// A passive session started: there is no client.
     Passive,
+    /// A receive-only B/IP socket has successfully bound.
+    PassiveListening {
+        /// Selected interface and actual port.
+        local: String,
+        /// Configured foreign registration is deliberately inactive.
+        foreign_ignored: bool,
+    },
     /// The client holds, or keeps asking for, an entry in this BBMD's
     /// foreign-device table.
     ForeignDevice(super::network::Foreign),
@@ -389,6 +398,8 @@ pub(crate) enum WorkerEvent {
     Mstp(super::mstp::MstpReport),
     /// An MS/TP monitor report (#970).
     Monitor(super::monitor::MonitorReport),
+    /// Receive-only baud-scan progress or admission failure.
+    MonitorScan(super::monitor::scan::ScanReport),
     /// Captured frames and capture reports (#971).
     Capture(super::capture::CaptureEvent),
 }

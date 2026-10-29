@@ -9,10 +9,11 @@
 //! forwards it.
 
 use super::*;
+use bacnet_types::error::RemoteError;
 #[path = "../../bacnet-objects/tests/support/forwarding/mod.rs"]
 mod forwarding;
 
-use forwarding::probe::{take, CallLog, Probe};
+use forwarding::probe::{CallLog, Probe, take};
 use forwarding::rows::QUERIES;
 
 /// The calls the view handed on, less the identity reads it makes to tell a
@@ -69,7 +70,27 @@ fn a_device_keeps_its_owned_answers_and_forwards_every_other_query() {
         }
     }
     assert_eq!(view.cov_snapshot_internal().map(|_| ()), None);
-    assert!(view
-        .property_list()
-        .contains(&P::PROTOCOL_SERVICES_SUPPORTED));
+    assert!(
+        view.property_list()
+            .contains(&P::PROTOCOL_SERVICES_SUPPORTED)
+    );
+}
+
+#[test]
+fn a_read_view_refuses_batch_mutation_without_calling_the_wrapped_object() {
+    let db = ObjectDatabase::new();
+    let context = DeviceReadContext::new(&db, DeviceExecution::FullServer);
+    let log = CallLog::default();
+    let probe = Probe::new(ObjectType::ACCESS_POINT, log.clone());
+    let mut view = context.object(&probe);
+    assert!(view.supports_access_event_batch_internal());
+    take(&log);
+    assert!(matches!(
+        view.record_access_event_batch_internal(&[]),
+        Err(Error::Remote(RemoteError::Error {
+            class: ErrorClass::OBJECT,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+        }))
+    ));
+    assert!(forwarded(&log).is_empty());
 }

@@ -1,9 +1,10 @@
 //! The Color Temperature object (type 64, Addendum 135-2020ca Clause 12.Y):
 //! a correlated colour temperature in kelvin.
 
-use std::borrow::Cow;
-use std::sync::Arc;
-use std::time::Duration;
+use crate::prelude::*;
+use alloc::borrow::Cow;
+use alloc::sync::Arc;
+use core::time::Duration;
 
 use bacnet_types::constructed::BACnetColorCommand;
 use bacnet_types::enums::{ColorOperation, ColorTransition, ObjectType, PropertyIdentifier};
@@ -12,7 +13,7 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::engine::Engine;
 use super::persistence::{ColorOutputPersistence, ColorOutputValue};
-use super::saving::{impl_color_durable, ColorOutputSaveCounters, OutputStorage};
+use super::saving::{ColorOutputSaveCounters, OutputStorage, impl_color_durable};
 use super::{
     command, metadata, milliseconds, noncommandable_audit_policy, written_transition,
     written_unsigned,
@@ -156,7 +157,7 @@ impl ColorTemperatureObject {
                 return Err(Error::Encoding(
                     "saved Color Temperature output is not a temperature the object can hold"
                         .into(),
-                ))
+                ));
             }
             None => {}
         }
@@ -581,7 +582,7 @@ impl BACnetObject for ColorTemperatureObject {
                     self.property_metadata().as_ref(),
                     property,
                     array_index,
-                ))
+                ));
             }
         }
         Ok(())

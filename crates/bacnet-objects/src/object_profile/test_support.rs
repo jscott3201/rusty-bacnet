@@ -1,9 +1,14 @@
+// Without std the tests that hold a save open on the writer's thread are
+// left out, and the helpers only they use with them.
+#![cfg_attr(not(feature = "std"), allow(dead_code))]
+
 use super::*;
 use crate::durable::{PendingWrite, SaveWait, StageStep};
 use bacnet_types::enums::ObjectType;
+use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::ObjectIdentifier;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 pub(super) const WAIT: Duration = Duration::from_secs(10);
@@ -106,5 +111,7 @@ pub(super) fn apply(state: &mut ProfileState, write: &PendingWrite) -> Result<()
         .unwrap()
 }
 pub(super) fn assert_code<T>(result: Result<T, Error>, expected: ErrorCode) {
-    assert!(matches!(result, Err(Error::Protocol { code, .. }) if code == expected));
+    assert!(
+        matches!(result, Err(Error::Remote(RemoteError::Error { code, .. })) if code == expected)
+    );
 }

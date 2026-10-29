@@ -14,7 +14,7 @@ async fn running_client() -> ClientInner {
             .interface(Ipv4Addr::LOCALHOST)
             .broadcast_address(Ipv4Addr::LOCALHOST)
             .port(0)
-            .build_any::<crate::mstp_py::PySerial>()
+            .build_into()
             .await
             .unwrap(),
     );
@@ -83,5 +83,53 @@ async fn failed_shutdown_keeps_client_closed_to_operations_until_retry() {
         .unwrap()
         .unwrap();
     assert!(state.client.read().await.is_none());
+    assert!(!state.closing.load(Ordering::Acquire));
+}
+
+/// Poll `future` once, so a lock acquisition in it joins the lock's queue.
+async fn poll_once<F: std::future::Future + Unpin>(future: &mut F) -> bool {
+    std::future::poll_fn(|cx| {
+        std::task::Poll::Ready(std::pin::Pin::new(&mut *future).poll(cx).is_pending())
+    })
+    .await
+}
+
+/// An operation and an entry queued behind a pending entry before close is
+/// admitted fail with "closing" once it is, instead of waiting for the entry
+/// to finish (#2030: the flake hunt's probe hung behind a held entry).
+#[tokio::test]
+async fn queued_work_behind_a_pending_entry_learns_of_close_at_once() {
+    pyo3::Python::initialize();
+    let state = Arc::new(ClientState::default());
+    // The pending entry: an exclusive hold on the slot, as `starting` keeps.
+    let entry = state.client.write().await;
+    let mut operation = Box::pin(started(&state));
+    let mut second_entry = Box::pin(starting(&state));
+    assert!(poll_once(&mut operation).await, "queued behind the entry");
+    assert!(
+        poll_once(&mut second_entry).await,
+        "queued behind the entry"
+    );
+    // Close is admitted at once; its native stop waits for the entry.
+    let closing = tokio::spawn(close(Arc::clone(&state)));
+    let error = timeout(Duration::from_secs(3), operation)
+        .await
+        .expect("the queued operation sees the close")
+        .err()
+        .expect("refused");
+    assert!(error.to_string().contains("closing"), "{error}");
+    let error = timeout(Duration::from_secs(3), second_entry)
+        .await
+        .expect("the queued entry sees the close")
+        .err()
+        .expect("refused");
+    assert!(error.to_string().contains("closing"), "{error}");
+    assert!(!closing.is_finished(), "close still waits for the entry");
+    drop(entry);
+    timeout(Duration::from_secs(3), closing)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
     assert!(!state.closing.load(Ordering::Acquire));
 }

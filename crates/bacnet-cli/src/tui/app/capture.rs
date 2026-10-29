@@ -15,12 +15,12 @@ use tui_tree_widget::{TreeItem, TreeState};
 
 use super::devices::{DeviceTable, Movement};
 use super::watch::Screen;
-use super::{App, FilterKey, Link, FLASH_FOR};
-use crate::decode::tree::{decode_tree, Field};
+use super::{App, FLASH_FOR, FilterKey, Link};
 use crate::tui::capture::filter::Filter;
 use crate::tui::capture::ring::Ring;
-use crate::tui::capture::{CaptureCommand, CaptureEvent, ExportJob, DEFAULT_RING};
+use crate::tui::capture::{CaptureCommand, CaptureEvent, DEFAULT_RING, ExportJob};
 use crate::tui::message::Command;
+use bacnet_ops::decode::tree::{Field, decode_tree};
 
 /// The focused pane.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -346,7 +346,11 @@ impl App {
 
     /// Ask the session for a capture, when one is up to give it.
     pub(crate) fn start_capture(&mut self, out: &mut Vec<Command>) {
-        let monitoring = self.link == Link::Passive && self.monitor.is_some();
+        let monitoring = self.link == Link::Passive
+            && self
+                .monitor
+                .as_ref()
+                .is_some_and(|m| m.live && m.scan.as_ref().is_none_or(|scan| !scan.active()));
         if self.capture.wanted && (matches!(self.link, Link::Up { .. }) || monitoring) {
             out.push(Command::Capture(CaptureCommand::Start));
         }

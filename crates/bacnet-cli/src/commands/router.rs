@@ -3,11 +3,11 @@
 use std::net::Ipv4Addr;
 
 use bacnet_client::client::{BACnetClient, DiscoveredRouter};
+use bacnet_ops::target::AddressStyle;
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::port::TransportPort;
 use serde::Serialize;
 
-use crate::core::target::AddressStyle;
 use crate::output::{self, OutputFormat};
 
 /// A router `whois-router` heard from, as it prints it.

@@ -1,11 +1,11 @@
 use super::*;
+use PropertyIdentifier as P;
 use bacnet_objects::audit::ObjectAuditPolicy;
 use bacnet_objects::color::{ColorObject, ColorTemperatureObject};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::bitstring::AuditOperationFlags;
 use bacnet_types::enums::AuditLevel;
 use bacnet_types::primitives::PropertyValue;
-use PropertyIdentifier as P;
 
 fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
     // Independent (identifier, optional, writable) rows in declaration order; PICS sorts by property ID.

@@ -80,9 +80,10 @@ async fn broadcast_budget(function: u8) {
     // One concurrent budget, not two serial budgets; no timeout retirement.
     for peer in [&first, &second] {
         let map = hub.clients.lock().await;
-        assert!(map
-            .values()
-            .any(|c| Arc::ptr_eq(&c.sink, &peer.sink) && !c.closed.load(Ordering::Acquire)));
+        assert!(
+            map.values()
+                .any(|c| Arc::ptr_eq(&c.sink, &peer.sink) && !c.closed.load(Ordering::Acquire))
+        );
     }
     drop((first_held, second_held));
     poll_io(barrier(&mut first)).await;

@@ -12,7 +12,7 @@
 
 use core::fmt;
 
-use crate::{NetworkMessageType, NetworkPriority, GLOBAL_NETWORK, MAX_MAC_LEN, VERSION};
+use crate::{GLOBAL_NETWORK, MAX_MAC_LEN, NetworkMessageType, NetworkPriority, VERSION};
 
 /// Control octet: a network-layer message, not an APDU.
 pub(crate) const NETWORK_MESSAGE: u8 = 0x80;

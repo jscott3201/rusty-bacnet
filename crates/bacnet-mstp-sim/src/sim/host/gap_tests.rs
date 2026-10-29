@@ -56,11 +56,12 @@ fn host_drain_before_and_after_gapped_data_keeps_independent_budget_clocks() {
             );
             assert_eq!(sim.core(0).unwrap().counters().transmit_timeouts, 0);
             assert_eq!(sim.core(0).unwrap().counters().own_address_frames, 0);
-            assert!(sim
-                .frames
-                .iter()
-                .filter(|frame| frame.driver == crate::Driver::Station(0))
-                .all(|frame| frame.is_clean()));
+            assert!(
+                sim.frames
+                    .iter()
+                    .filter(|frame| frame.driver == crate::Driver::Station(0))
+                    .all(|frame| frame.is_clean())
+            );
             sim.assert_no_violations();
         }
     }

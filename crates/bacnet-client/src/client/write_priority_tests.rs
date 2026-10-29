@@ -95,9 +95,11 @@ async fn write_priority_invalid_direct_local_routed_and_batch_never_admit_or_sen
         assert!(matches!(results[0].result, Err(Error::Encode(_))));
         assert_eq!(results[0].request_index, 0);
     }
-    assert!(timeout(Duration::from_millis(25), received.recv())
-        .await
-        .is_err());
+    assert!(
+        timeout(Duration::from_millis(25), received.recv())
+            .await
+            .is_err()
+    );
     assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
     client.stop().await.unwrap();
     peer.stop().await.unwrap();

@@ -2,6 +2,7 @@
 //! The B/IP mode is not configuration here: a registered owner publishes it.
 
 use crate::common;
+use crate::prelude::*;
 use bacnet_types::error::Error;
 
 /// Complete configured B/IP snapshot. Fixed-size addresses prevent malformed

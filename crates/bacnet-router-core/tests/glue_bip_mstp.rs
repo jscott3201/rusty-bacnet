@@ -16,15 +16,15 @@ use bacnet_bip_core::node::{self, Discard, Link, Mode, Permissive};
 use bacnet_bip_core::port::{Ingress, NodePort};
 use bacnet_mstp_codec::{Frame as MstpFrame, FrameType};
 use bacnet_mstp_core::{Action, Instant};
+use bacnet_router_core::PortId;
 use bacnet_router_core::bip::BipPort;
 use bacnet_router_core::mstp::MstpPort;
 use bacnet_router_core::npdu::NpduLimits;
 use bacnet_router_core::npdu::{Address, Npdu};
 use bacnet_router_core::router::{Options, PortConfig, Received, SendRefusal};
-use bacnet_router_core::PortId;
 
 use bacnet_router_core::npdu::NetworkPriority;
-use fixture::{apdu_to, router_with, TestRouter, CONFIRMED, UNCONFIRMED};
+use fixture::{CONFIRMED, TestRouter, UNCONFIRMED, apdu_to, router_with};
 use glue::*;
 
 const BIP_NET: u16 = 1;

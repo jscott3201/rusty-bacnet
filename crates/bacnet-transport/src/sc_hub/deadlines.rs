@@ -3,7 +3,7 @@
 use super::context::{HubConnectionContext, PeerConnection};
 use super::*;
 use std::future::Future;
-use tokio::time::{sleep_until, Instant};
+use tokio::time::{Instant, sleep_until};
 
 pub(super) struct ConnectDeadline {
     expires: Instant,

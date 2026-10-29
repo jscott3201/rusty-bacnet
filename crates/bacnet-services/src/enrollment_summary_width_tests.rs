@@ -1,3 +1,4 @@
+use bacnet_types::error::RemoteError;
 use super::*;
 use bacnet_types::constructed::{BACnetAddress, BACnetRecipient};
 use bacnet_types::enums::ObjectType;
@@ -275,7 +276,7 @@ fn request_rejects_undefined_acknowledgment_filter_and_inverted_priority() {
         let encoded = [0x09, raw];
         assert!(matches!(
             GetEnrollmentSummaryRequest::decode(&encoded),
-            Err(Error::Reject { reason })
+            Err(Error::Remote(RemoteError::Reject { reason }))
                 if reason == bacnet_types::enums::RejectReason::UNDEFINED_ENUMERATION
         ));
     }
@@ -445,20 +446,20 @@ fn request_rejects_undefined_event_state_filter() {
         primitives::encode_ctx_enumerated(&mut encoded, 2, raw);
         assert!(matches!(
             GetEnrollmentSummaryRequest::decode(&encoded),
-            Err(Error::Reject { reason })
+            Err(Error::Remote(RemoteError::Reject { reason }))
                 if reason == bacnet_types::enums::RejectReason::UNDEFINED_ENUMERATION
         ));
     }
     let above_u32 = [0x09, 0, 0x2D, 0x05, 1, 0, 0, 0, 0];
     assert!(matches!(
         GetEnrollmentSummaryRequest::decode(&above_u32),
-        Err(Error::Reject { reason })
+        Err(Error::Remote(RemoteError::Reject { reason }))
             if reason == bacnet_types::enums::RejectReason::UNDEFINED_ENUMERATION
     ));
     let above_u64 = [0x09, 0, 0x2D, 0x09, 1, 0, 0, 0, 0, 0, 0, 0, 0];
     assert!(matches!(
         GetEnrollmentSummaryRequest::decode(&above_u64),
-        Err(Error::Reject { reason })
+        Err(Error::Remote(RemoteError::Reject { reason }))
             if reason == bacnet_types::enums::RejectReason::UNDEFINED_ENUMERATION
     ));
 

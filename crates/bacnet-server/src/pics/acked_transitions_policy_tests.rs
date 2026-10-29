@@ -10,7 +10,7 @@ use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::{
     EngineeringUnits, ErrorClass, ErrorCode, EventType, ObjectType, PropertyIdentifier,
 };
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::{PicsConfig, PicsGenerator};
@@ -135,7 +135,7 @@ fn acked_transitions_network_policy_is_uniform_on_all_supported_types() {
         assert!(
             matches!(
                 error,
-                Error::Protocol { class, code }
+                Error::Remote(RemoteError::Error { class, code })
                     if class == ErrorClass::PROPERTY
                         && code == ErrorCode::WRITE_ACCESS_DENIED
             ),

@@ -257,13 +257,6 @@ impl BACnetServer {
         self.push_pending(Box::new(obj))
     }
 
-    /// Add an Access Credential object to the server (before starting).
-    #[pyo3(signature = (instance, name))]
-    fn add_access_credential(&self, instance: u32, name: &str) -> PyResult<()> {
-        let obj = AccessCredentialObject::new(instance, name).map_err(to_py_err)?;
-        self.push_pending(Box::new(obj))
-    }
-
     /// Add an Elevator Group object to the server (before starting).
     ///
     /// `machine_room_id` names the Positive Integer Value object served as

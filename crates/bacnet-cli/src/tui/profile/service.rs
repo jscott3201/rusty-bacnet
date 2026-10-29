@@ -1,7 +1,7 @@
 //! Profile I/O at the coordinator boundary, before client construction.
 
 use super::checks::{self, Checks};
-use super::{store::Store, Overrides, Profile};
+use super::{Overrides, Profile, store::Store};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Pure UI requests. Connecting includes the exact document previewed by the UI.

@@ -6,8 +6,8 @@
 use std::vec::Vec;
 
 use super::support::{
-    held_networks, holds_for, learned_table, mac, port, purge, secs, Hosted, BASE, HOLD_DOWN, NANO,
-    TIMING,
+    BASE, HOLD_DOWN, Hosted, NANO, TIMING, held_networks, holds_for, learned_table, mac, port,
+    purge, secs,
 };
 use crate::npdu::RejectMessageReason;
 use crate::table::holds::Hold;

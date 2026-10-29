@@ -24,7 +24,7 @@
 //! refuses the change with DEVICE / OPERATIONAL_PROBLEM and leaves the log as
 //! it was.
 
-use super::staging::{operational_problem, StagedChange};
+use super::staging::{StagedChange, operational_problem};
 use super::*;
 
 /// The local date and time a record is stamped with.
@@ -118,8 +118,5 @@ pub(super) fn apply_change(
 }
 
 fn property_error(code: ErrorCode) -> Error {
-    Error::Protocol {
-        class: ErrorClass::PROPERTY,
-        code,
-    }
+    Error::protocol(ErrorClass::PROPERTY, code)
 }

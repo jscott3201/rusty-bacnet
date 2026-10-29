@@ -1,7 +1,7 @@
 //! Configured Network Port declarations, independent of a running transport.
-use crate::network_port::{BipPortConfig, NetworkPortObject};
-use bacnet_types::{enums::NetworkType, error::Error, MacAddr};
-use std::net::Ipv4Addr;
+use crate::network_port::{Bip6PortConfig, BipPortConfig, NetworkPortObject};
+use bacnet_types::{MacAddr, enums::NetworkType, error::Error};
+use core::net::{Ipv4Addr, Ipv6Addr};
 
 /// One configured Network-Port entry (see module docs for the profile boundary).
 ///
@@ -12,16 +12,20 @@ use std::net::Ipv4Addr;
 pub struct NetworkPortEntry {
     /// Network-Port object instance (caller-stable; B/IP=1, SC=2 by convention).
     pub instance: u32,
-    /// Clause 12.56 Network_Type (IPV4=5 for B/IP, VIRTUAL=7 for SC/loopback).
+    /// Clause 12.56 Network_Type (IPV4=5 for B/IP, IPV6=9 for B/IPv6,
+    /// VIRTUAL=7 for SC/loopback).
     pub network_type: u32,
     /// BACnet network number for this port.
     pub network_number: u32,
-    /// Port MAC (B/IP 6-byte IP+port, SC VMAC, loopback MAC).
-    /// B/IP admission rejects a MAC inconsistent with the configured IP/UDP.
+    /// Port MAC (B/IP 6-byte IP+port, B/IPv6 3-byte VMAC, SC VMAC,
+    /// loopback MAC). B/IP admission rejects a MAC inconsistent with the
+    /// configured IP/UDP.
     pub mac: MacAddr,
-    /// IPv4 octets for B/IP; zeros for SC/loopback.
+    /// IPv4 octets for B/IP; zeros otherwise.
     pub ip: [u8; 4],
-    /// UDP port for B/IP; 0 for SC/loopback.
+    /// IPv6 octets for B/IPv6; zeros otherwise.
+    pub ipv6: [u8; 16],
+    /// UDP port for B/IP and B/IPv6; 0 for SC/loopback.
     pub udp_port: u16,
 }
 
@@ -33,7 +37,7 @@ impl NetworkPortEntry {
     /// selected entry with its actual ephemeral port during startup.
     ///
     /// ```
-    /// use std::net::Ipv4Addr;
+    /// use core::net::Ipv4Addr;
     /// use bacnet_objects::device_identity::NetworkPortEntry;
     ///
     /// let entry = NetworkPortEntry::bip(1, 0, Ipv4Addr::LOCALHOST, 47808);
@@ -51,6 +55,45 @@ impl NetworkPortEntry {
             network_number,
             mac,
             ip: o,
+            ipv6: [0; 16],
+            udp_port,
+        }
+    }
+
+    /// B/IPv6 entry (Annex U) with the configured address and UDP port
+    /// (possibly unbound).
+    ///
+    /// The VMAC is a zero placeholder: registering the port on a started
+    /// `Bip6Transport` publishes the VMAC the transport uses, with its
+    /// actual UDP port.
+    ///
+    /// ```
+    /// use core::net::Ipv6Addr;
+    /// use bacnet_objects::device_identity::NetworkPortEntry;
+    ///
+    /// let entry = NetworkPortEntry::bip6(1, 0, Ipv6Addr::LOCALHOST, 47808);
+    /// assert_eq!(entry.ipv6, Ipv6Addr::LOCALHOST.octets());
+    /// assert_eq!(entry.mac.as_slice(), &[0, 0, 0]);
+    /// ```
+    pub fn bip6(instance: u32, network_number: u32, ip: Ipv6Addr, udp_port: u16) -> Self {
+        Self::bip6_with_vmac(instance, network_number, ip, udp_port, [0; 3])
+    }
+
+    /// [`bip6`](Self::bip6) with a known VMAC.
+    pub(super) fn bip6_with_vmac(
+        instance: u32,
+        network_number: u32,
+        ip: Ipv6Addr,
+        udp_port: u16,
+        vmac: [u8; 3],
+    ) -> Self {
+        Self {
+            instance,
+            network_type: NetworkType::IPV6.to_raw(),
+            network_number,
+            mac: MacAddr::from_slice(&vmac),
+            ip: [0; 4],
+            ipv6: ip.octets(),
             udp_port,
         }
     }
@@ -74,6 +117,11 @@ impl NetworkPortEntry {
                     "B/IP MAC must match configured IPv4 address and UDP port".into(),
                 ));
             }
+            if self.ipv6 != [0; 16] {
+                return Err(Error::Encoding(
+                    "a B/IP entry carries no IPv6 address".into(),
+                ));
+            }
             NetworkPortObject::new_bip(
                 self.instance,
                 name,
@@ -82,6 +130,19 @@ impl NetworkPortEntry {
                     apdu_length,
                     ip_address: self.ip,
                     udp_port: self.udp_port,
+                    ..Default::default()
+                },
+            )
+        } else if self.network_type == NetworkType::IPV6.to_raw() {
+            NetworkPortObject::new_bip6(
+                self.instance,
+                name,
+                Bip6PortConfig {
+                    network_number,
+                    apdu_length,
+                    ip_address: self.ipv6,
+                    udp_port: self.udp_port,
+                    vmac: self.vmac()?,
                     ..Default::default()
                 },
             )
@@ -108,7 +169,20 @@ impl NetworkPortEntry {
             network_number,
             mac: MacAddr::from_slice(&vmac),
             ip: [0; 4],
+            ipv6: [0; 16],
             udp_port: 0,
         }
+    }
+
+    /// A B/IPv6 entry's VMAC: exactly three octets (Annex U.1.3), and no
+    /// IPv4 address beside its IPv6 one.
+    pub(super) fn vmac(&self) -> Result<[u8; 3], Error> {
+        if self.ip != [0; 4] {
+            return Err(Error::Encoding(
+                "a B/IPv6 entry carries no IPv4 address".into(),
+            ));
+        }
+        <[u8; 3]>::try_from(self.mac.as_slice())
+            .map_err(|_| Error::Encoding("B/IPv6 MAC must be a 3-octet VMAC".into()))
     }
 }

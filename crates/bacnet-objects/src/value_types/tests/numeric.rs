@@ -4,6 +4,7 @@
 
 use super::super::*;
 use bacnet_types::enums::ObjectType;
+use bacnet_types::error::RemoteError;
 
 // -----------------------------------------------------------------------
 // IntegerValueObject
@@ -202,14 +203,15 @@ fn scalar_value_relinquish_default_write_recaptures_present_value() {
         "with an empty priority array, PV must resolve to the written default"
     );
     // Wrong type refuses with state untouched.
-    assert!(iv
-        .write_property(
+    assert!(
+        iv.write_property(
             PropertyIdentifier::RELINQUISH_DEFAULT,
             None,
             PropertyValue::Unsigned(42),
             None,
         )
-        .is_err());
+        .is_err()
+    );
     assert_eq!(
         iv.read_property(PropertyIdentifier::RELINQUISH_DEFAULT, None)
             .unwrap(),
@@ -264,7 +266,7 @@ fn scalar_value_relinquish_default_write_recaptures_present_value() {
             )
             .expect_err("non-finite Relinquish_Default must refuse")
         {
-            Error::Protocol { class, code } => {
+            Error::Remote(RemoteError::Error { class, code }) => {
                 assert_eq!(class, bacnet_types::enums::ErrorClass::PROPERTY);
                 assert_eq!(code, bacnet_types::enums::ErrorCode::VALUE_OUT_OF_RANGE);
             }

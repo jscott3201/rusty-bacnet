@@ -15,7 +15,7 @@
 
 pub(super) use bacnet_encoding::constructed::ConstructedElement as Element;
 use bacnet_encoding::constructed::{
-    decode_access_rule, decode_action_list, decode_authentication_factor,
+    ElementShape, decode_access_rule, decode_action_list, decode_authentication_factor,
     decode_authentication_factor_format, decode_authentication_policy, decode_calendar_entry,
     decode_cov_subscription, decode_daily_schedule, decode_date_range, decode_destination,
     decode_device_object_property_reference, decode_device_object_reference,
@@ -23,7 +23,7 @@ use bacnet_encoding::constructed::{
     decode_port_permission, decode_prescale, decode_property_access_result,
     decode_read_access_specification, decode_recipient, decode_scale, decode_shed_level,
     decode_special_event, decode_stage_limit_value, decode_value_source, property_element,
-    split_elements, ElementShape,
+    split_elements,
 };
 use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_encoding::tags;
@@ -35,8 +35,8 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
-use super::constructed_py::Decoded;
 use super::PyPropertyValue;
+use super::constructed_py::Decoded;
 
 /// The typed form of a read of `property` on `object_type`, or `None` when
 /// the property has no element production here or `octets` don't decode as

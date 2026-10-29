@@ -1,0 +1,61 @@
+{
+  "P": {
+    "revision": "eab0b4e727fad0dc27ed75aecd3f8458eebbb191",
+    "files": {
+      "Cargo.lock": "ceb3a0d083393a3cba8a922272ea7951845ae9a036957bd7e79a8ec6298fba20",
+      "benchmarks/Cargo.toml": "4eee44dbf1f27f35e02b2d39c92d5c55fc21c372fb0347cfec686a7578f79d28",
+      "benchmarks/benches/encoding.rs": "ab186f0dfc73aee9e011a293db6b70742a97b60cdb301c575903316838efa131",
+      "benchmarks/compat/encoding_guard.rs": "3c8e9bc6f52c16c3c012c2290da6c834e2cba0a61bc7b4c9035bc9580652b748",
+      "benchmarks/compat/npdu_attribution.rs": "0bd94423fe7f2cb1004da0ae74ecff14374053e3bb568a909c6ae0887cf0ab62",
+      "benchmarks/tests/encoding_guard.rs": "6e70a2a1739ce5abd96501597e54e40b6662c571dc90b40aa31e427ff821f58f",
+      "benchmarks/tests/npdu_oracle.rs": "6ccb622933a398a711abec9d79c0c490b9e82cb309651b36c89b827ddca7dc60"
+    },
+    "extra_files": [
+      "benchmarks/compat/encoding_guard.rs",
+      "benchmarks/compat/npdu_attribution.rs",
+      "benchmarks/tests/encoding_guard.rs",
+      "benchmarks/tests/npdu_oracle.rs"
+    ]
+  },
+  "Q": {
+    "revision": "a5192b89a37771790fb236f1d349b23e23ee8e69",
+    "files": {
+      "Cargo.lock": "f9298cf468a1aa8431187dc861f18caac4456aa68eee93a11f8d7a6b70e1ab3a",
+      "benchmarks/Cargo.toml": "4eee44dbf1f27f35e02b2d39c92d5c55fc21c372fb0347cfec686a7578f79d28",
+      "benchmarks/benches/encoding.rs": "ab186f0dfc73aee9e011a293db6b70742a97b60cdb301c575903316838efa131",
+      "benchmarks/compat/encoding_guard.rs": "3c8e9bc6f52c16c3c012c2290da6c834e2cba0a61bc7b4c9035bc9580652b748",
+      "benchmarks/compat/npdu_attribution.rs": "0bd94423fe7f2cb1004da0ae74ecff14374053e3bb568a909c6ae0887cf0ab62",
+      "benchmarks/tests/encoding_guard.rs": "6e70a2a1739ce5abd96501597e54e40b6662c571dc90b40aa31e427ff821f58f",
+      "benchmarks/tests/npdu_child_oracle.rs": "c5d2b8776f9264f27c3a026bc80d93742ebc9f70759994d5a990a6e506e9b3e9",
+      "benchmarks/tests/npdu_oracle.rs": "e42865023316e5e351284d08038f0c94bfdff0bdd193d039bea3d964aa568faa"
+    },
+    "extra_files": [
+      "benchmarks/compat/encoding_guard.rs",
+      "benchmarks/compat/npdu_attribution.rs",
+      "benchmarks/tests/encoding_guard.rs",
+      "benchmarks/tests/npdu_child_oracle.rs",
+      "benchmarks/tests/npdu_oracle.rs"
+    ]
+  },
+  "R": {
+    "revision": "a5192b89a37771790fb236f1d349b23e23ee8e69",
+    "files": {
+      "Cargo.lock": "f9298cf468a1aa8431187dc861f18caac4456aa68eee93a11f8d7a6b70e1ab3a",
+      "benchmarks/Cargo.toml": "4eee44dbf1f27f35e02b2d39c92d5c55fc21c372fb0347cfec686a7578f79d28",
+      "benchmarks/benches/encoding.rs": "ab186f0dfc73aee9e011a293db6b70742a97b60cdb301c575903316838efa131",
+      "benchmarks/compat/encoding_guard.rs": "3c8e9bc6f52c16c3c012c2290da6c834e2cba0a61bc7b4c9035bc9580652b748",
+      "benchmarks/compat/npdu_attribution.rs": "0bd94423fe7f2cb1004da0ae74ecff14374053e3bb568a909c6ae0887cf0ab62",
+      "benchmarks/tests/encoding_guard.rs": "6e70a2a1739ce5abd96501597e54e40b6662c571dc90b40aa31e427ff821f58f",
+      "benchmarks/tests/npdu_child_oracle.rs": "c5d2b8776f9264f27c3a026bc80d93742ebc9f70759994d5a990a6e506e9b3e9",
+      "benchmarks/tests/npdu_oracle.rs": "e42865023316e5e351284d08038f0c94bfdff0bdd193d039bea3d964aa568faa",
+      "crates/bacnet-encoding/src/npdu.rs": "c583490172b55f3c3c393cb376a363cd5e57425e48d508790621e996d4c2e2db"
+    },
+    "extra_files": [
+      "benchmarks/compat/encoding_guard.rs",
+      "benchmarks/compat/npdu_attribution.rs",
+      "benchmarks/tests/encoding_guard.rs",
+      "benchmarks/tests/npdu_child_oracle.rs",
+      "benchmarks/tests/npdu_oracle.rs"
+    ]
+  }
+}

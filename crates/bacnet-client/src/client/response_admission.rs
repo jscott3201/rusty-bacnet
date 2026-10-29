@@ -66,12 +66,12 @@ pub(super) fn find_provenance_conflict(
     seg_state: &HashMap<SegKey, SegmentedReceiveState>,
     tsm_mac: &MacAddr,
     invoke_id: u8,
-    provenance: TransportProvenance,
+    provenance: &TransportProvenance,
 ) -> Option<SegKey> {
     seg_state
         .keys()
         .find(|existing| {
-            existing.0 == *tsm_mac && existing.1 == invoke_id && existing.2 != provenance
+            existing.0 == *tsm_mac && existing.1 == invoke_id && existing.2 != *provenance
         })
         .cloned()
 }
@@ -213,9 +213,9 @@ pub(super) async fn complete_terminal_response(
                     invoke_id,
                     &owner,
                     None,
-                    TsmResponse::Abort {
+                    TsmResponse::remote(RemoteError::Abort {
                         reason: bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
-                    },
+                    }),
                 );
                 return TerminalDispatchOutcome::PrematureSegmentedRequestAborted;
             }

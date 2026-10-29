@@ -1,0 +1,9 @@
+{
+  "exploratory_A_has_selected_generic_Extend": true,
+  "final_B_ct_has_selected_generic_Extend": false,
+  "baseline_generic_self_instructions": 7018976,
+  "baseline_request_count_including_warmup_oracles": 10202,
+  "baseline_generic_calls_per_request": 8,
+  "baseline_generic_self_instructions_per_request": 688.0,
+  "scope": "Only the measured SmallVec<[u8;6]> generic byte-copy frames; not a global claim about all SmallVec uses."
+}

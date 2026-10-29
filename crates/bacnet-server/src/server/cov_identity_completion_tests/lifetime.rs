@@ -165,12 +165,14 @@ async fn cov_lifetime_admitted_confirmed_retry_survives_expiry_and_ack_drains() 
         let mut sub = proposal(kind, true, PropertyIdentifier::PRESENT_VALUE);
         let expiry = runtime_clock::now() + Duration::from_millis(100);
         sub.expires_at = Some(expiry);
-        let snapshots = vec![fixture
-            .table
-            .write()
-            .await
-            .admit_for_test(sub.clone(), 0)
-            .unwrap()];
+        let snapshots = vec![
+            fixture
+                .table
+                .write()
+                .await
+                .admit_for_test(sub.clone(), 0)
+                .unwrap(),
+        ];
         fixture.fire(true, &snapshots).await;
         wait_for_frames(&fixture.sent, 1).await;
         assert_eq!(fixture.transactions.active_count(), 1);

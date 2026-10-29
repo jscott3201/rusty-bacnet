@@ -2,6 +2,7 @@ use super::*;
 use bacnet_encoding::constructed::{decode_log_multiple_record, decode_log_record};
 use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{BACnetLogMultipleRecord, LogData, LogDatum, LogValue};
+use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::{Date, StatusFlags, Time};
 use bytes::BytesMut;
 
@@ -63,7 +64,7 @@ fn trend_logs_refuse_read_property_of_log_buffer() {
         .unwrap();
     for object in [&trend as &dyn BACnetObject, &multiple] {
         match object.read_property(PropertyIdentifier::LOG_BUFFER, None) {
-            Err(Error::Protocol { class, code }) => {
+            Err(Error::Remote(RemoteError::Error { class, code })) => {
                 assert_eq!(class, ErrorClass::PROPERTY);
                 assert_eq!(code, ErrorCode::READ_ACCESS_DENIED);
             }
@@ -109,12 +110,14 @@ fn trend_log_keeps_log_status_and_record_status_flags_as_distinct_bitstrings() {
     let served = served(&trend);
     assert_eq!(
         served,
-        vec![[
-            timestamp(1),
-            // log-status [0] inside log-datum [1], then status-flags [2].
-            vec![0x1E, 0x0A, 0x05, 0xA0, 0x1F, 0x2A, 0x04, 0x40],
+        vec![
+            [
+                timestamp(1),
+                // log-status [0] inside log-datum [1], then status-flags [2].
+                vec![0x1E, 0x0A, 0x05, 0xA0, 0x1F, 0x2A, 0x04, 0x40],
+            ]
+            .concat()
         ]
-        .concat()]
     );
     assert_eq!(
         decode_log_record(&served[0], 0).unwrap(),
@@ -206,15 +209,19 @@ fn trend_logs_refuse_unencodable_records_at_add() {
     multiple
         .add_record(multiple_record(1, vec![LogValue::RealValue(10.0)]))
         .unwrap();
-    assert!(multiple
-        .add_record(multiple_record(
-            2,
-            vec![LogValue::RealValue(1.0), LogValue::AnyValue(stray_close)],
-        ))
-        .is_err());
-    assert!(multiple
-        .add_trend_multiple_record(multiple_record(2, vec![bad_padding]))
-        .is_err());
+    assert!(
+        multiple
+            .add_record(multiple_record(
+                2,
+                vec![LogValue::RealValue(1.0), LogValue::AnyValue(stray_close)],
+            ))
+            .is_err()
+    );
+    assert!(
+        multiple
+            .add_trend_multiple_record(multiple_record(2, vec![bad_padding]))
+            .is_err()
+    );
     multiple
         .add_record(multiple_record(3, vec![LogValue::RealValue(30.0)]))
         .unwrap();

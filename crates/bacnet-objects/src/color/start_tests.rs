@@ -9,6 +9,7 @@ use std::time::Duration;
 use super::*;
 use crate::command_source::{CommandDeviceBinding, CommandOrigin};
 use crate::traits::BACnetObject;
+use bacnet_types::MacAddr;
 use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::constructed::BACnetColorCommand;
 use bacnet_types::enums::ObjectType;
@@ -16,7 +17,6 @@ use bacnet_types::enums::{
     ColorOperation as Op, ColorOperationInProgress as InProgress, PropertyIdentifier as P,
 };
 use bacnet_types::primitives::ObjectIdentifier;
-use bacnet_types::MacAddr;
 
 /// Storage holding one value in memory.
 #[derive(Default)]

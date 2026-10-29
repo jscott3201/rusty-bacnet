@@ -1,11 +1,11 @@
 use super::*;
-use bacnet_transport::sc_frame::{decode_sc_message, encode_sc_message, ScFunction};
+use bacnet_transport::sc_frame::{ScFunction, decode_sc_message, encode_sc_message};
 use bytes::BytesMut;
 use futures_util::{SinkExt, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio_rustls::{rustls::pki_types::ServerName, TlsAcceptor, TlsConnector, TlsStream};
-use tokio_tungstenite::{tungstenite::Message, WebSocketStream};
+use tokio_rustls::{TlsAcceptor, TlsConnector, TlsStream, rustls::pki_types::ServerName};
+use tokio_tungstenite::{WebSocketStream, tungstenite::Message};
 
 pub struct Peer {
     pub ws: WebSocketStream<TlsStream<TcpStream>>,

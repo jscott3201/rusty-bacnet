@@ -14,6 +14,7 @@ use bacnet_objects::value_types::DateTimeValueObject;
 use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
 use bacnet_types::constructed::{BACnetDestination, BACnetRecipient};
 use bacnet_types::enums::EngineeringUnits;
+use bacnet_types::error::RemoteError;
 
 const POSITION: Option<RangeSpec> = Some(RangeSpec::ByPosition {
     reference_index: 1,
@@ -44,10 +45,10 @@ fn assert_refused(
     context: &str,
 ) {
     match result {
-        Err(Error::Protocol {
+        Err(Error::Remote(RemoteError::Error {
             class: got_class,
             code: got_code,
-        }) => assert_eq!(
+        })) => assert_eq!(
             (got_class, got_code),
             (class, code),
             "{context}: expected {class:?}/{code:?}"
@@ -65,7 +66,7 @@ fn assert_not_a_list(
     for &(oid, property, index) in cases {
         for range in [None, POSITION, SEQUENCE, by_time()] {
             let result = call_with_index(db, oid, property, index, range.clone());
-            if !matches!(&result, Err(Error::Protocol { class, code })
+            if !matches!(&result, Err(Error::Remote(RemoteError::Error { class, code }))
                 if *class == ErrorClass::SERVICES
                     && *code == ErrorCode::PROPERTY_IS_NOT_A_LIST)
             {
@@ -142,10 +143,10 @@ impl BACnetObject for FixedList {
         if property == self.property {
             Ok(self.value.clone())
         } else {
-            Err(Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::UNKNOWN_PROPERTY,
-            })
+            Err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::UNKNOWN_PROPERTY,
+            ))
         }
     }
 
@@ -156,10 +157,10 @@ impl BACnetObject for FixedList {
         _value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
-        Err(Error::Protocol {
-            class: ErrorClass::PROPERTY,
-            code: ErrorCode::WRITE_ACCESS_DENIED,
-        })
+        Err(Error::protocol(
+            ErrorClass::PROPERTY,
+            ErrorCode::WRITE_ACCESS_DENIED,
+        ))
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {

@@ -1,3 +1,4 @@
+pub mod alarms;
 #[cfg(feature = "pcap")]
 pub mod capture;
 pub mod device;

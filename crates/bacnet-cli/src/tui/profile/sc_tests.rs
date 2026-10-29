@@ -268,17 +268,21 @@ fn sc_flags_override_profile_fields_and_flags_for_the_other_transport_are_refuse
     let none = Overrides::from_cli(&cli(&["bacnet", "tui", "--profile", "site"])).unwrap();
     assert_eq!(none.resolve(&p).unwrap(), p);
     let bip_flag = cli(&["bacnet", "--port", "47809", "tui", "--profile", "site"]);
-    assert!(Overrides::from_cli(&bip_flag)
-        .unwrap()
-        .resolve(&p)
-        .unwrap_err()
-        .contains("SC profile"));
+    assert!(
+        Overrides::from_cli(&bip_flag)
+            .unwrap()
+            .resolve(&p)
+            .unwrap_err()
+            .contains("SC profile")
+    );
     let sc_flag = cli(&["bacnet", "--sc", "tui", "--profile", "site"]);
-    assert!(Overrides::from_cli(&sc_flag)
-        .unwrap()
-        .resolve(&Profile::default())
-        .unwrap_err()
-        .contains("B/IP profile"));
+    assert!(
+        Overrides::from_cli(&sc_flag)
+            .unwrap()
+            .resolve(&Profile::default())
+            .unwrap_err()
+            .contains("B/IP profile")
+    );
     assert!(Overrides::from_cli(&sc_flag).unwrap().resolve(&p).is_ok());
 }
 

@@ -34,7 +34,7 @@ use super::*;
     frozen,
     from_py_object
 )]
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct PyPropertyValue {
     /// The value as it travels: what a write of this value encodes.
     pub(crate) inner: primitives::PropertyValue,
@@ -44,6 +44,16 @@ pub struct PyPropertyValue {
     /// `tag` and `value` follow it, while `inner` keeps each element's
     /// octets as read.
     pub(crate) element: Option<Element>,
+    /// The property a read took the value from (#2080), which names its
+    /// enumerated value (`name`) and its bit string's bits (`value`). Not part
+    /// of the value: it doesn't take part in equality, hashing or pickling.
+    pub(crate) property: Option<bacnet_types::enums::PropertyIdentifier>,
+}
+
+impl PartialEq for PyPropertyValue {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner == other.inner && self.element == other.element
+    }
 }
 
 impl PyPropertyValue {
@@ -55,7 +65,15 @@ impl PyPropertyValue {
         Self {
             inner: value,
             element: None,
+            property: None,
         }
+    }
+
+    /// This value as read from `property`, so its enumerated value and bit
+    /// string's bits come out named.
+    pub(crate) fn read_from(mut self, property: bacnet_types::enums::PropertyIdentifier) -> Self {
+        self.property = Some(property);
+        self
     }
 
     /// A typed read of constructed elements; see [`Self::element`].
@@ -63,6 +81,7 @@ impl PyPropertyValue {
         Self {
             inner: value,
             element: Some(element),
+            property: None,
         }
     }
 }
@@ -71,7 +90,11 @@ impl PyPropertyValue {
 // PropertyValue -> native Python conversion (used by PropertyValue.value getter)
 // ---------------------------------------------------------------------------
 
-fn property_value_to_py(py: Python<'_>, value: &primitives::PropertyValue) -> PyResult<Py<PyAny>> {
+fn property_value_to_py(
+    py: Python<'_>,
+    value: &primitives::PropertyValue,
+    property: Option<bacnet_types::enums::PropertyIdentifier>,
+) -> PyResult<Py<PyAny>> {
     Ok(match value {
         primitives::PropertyValue::Null => py.None(),
         primitives::PropertyValue::Boolean(b) => {
@@ -89,25 +112,50 @@ fn property_value_to_py(py: Python<'_>, value: &primitives::PropertyValue) -> Py
         primitives::PropertyValue::ObjectIdentifier(oid) => {
             Py::new(py, PyObjectIdentifier::from_rust(*oid))?.into_any()
         }
-        primitives::PropertyValue::BitString { unused_bits, data } => {
-            let dict = pyo3::types::PyDict::new(py);
-            dict.set_item("unused_bits", unused_bits)?;
-            dict.set_item("data", PyBytes::new(py, data))?;
-            dict.into_any().unbind()
-        }
+        primitives::PropertyValue::BitString { unused_bits, data } => Py::new(
+            py,
+            super::PyBitString::for_property(property, *unused_bits, data),
+        )?
+        .into_any(),
         primitives::PropertyValue::Date(d) => date_value(d).into_pyobject(py)?.into_any().unbind(),
         primitives::PropertyValue::Time(t) => time_value(t).into_pyobject(py)?.into_any().unbind(),
         primitives::PropertyValue::List(elements) => {
             let list = pyo3::types::PyList::empty(py);
             for elem in elements {
-                list.append(property_value_to_py(py, elem)?)?;
+                list.append(property_value_to_py(py, elem, property)?)?;
             }
             list.into_any().unbind()
         }
         primitives::PropertyValue::ApplicationData(bytes) => {
-            PyBytes::new(py, bytes).into_any().unbind()
+            match priority_date_time(bytes, property) {
+                // A date-time Priority_Array slot (#2098) reads as its
+                // object's Present_Value does: the date, then the time.
+                Some((date, time)) => {
+                    let pair = pyo3::types::PyList::empty(py);
+                    pair.append(date_value(&date))?;
+                    pair.append(time_value(&time))?;
+                    pair.into_any().unbind()
+                }
+                None => PyBytes::new(py, bytes).into_any().unbind(),
+            }
         }
     })
+}
+
+/// The Date and Time of a Priority_Array slot holding the date-time choice
+/// of BACnetPriorityValue, context tag 1 around them; `None` for any other
+/// octets or property.
+fn priority_date_time(
+    octets: &[u8],
+    property: Option<bacnet_types::enums::PropertyIdentifier>,
+) -> Option<(primitives::Date, primitives::Time)> {
+    if property != Some(bacnet_types::enums::PropertyIdentifier::PRIORITY_ARRAY) {
+        return None;
+    }
+    match bacnet_encoding::primitives::decode_priority_date_time(octets, 0) {
+        Ok((date_time, end)) if end == octets.len() => Some(date_time),
+        _ => None,
+    }
 }
 
 #[pymethods]
@@ -277,12 +325,25 @@ impl PyPropertyValue {
                         primitives::PropertyValue::ApplicationData(octets) => {
                             element.to_py(py, octets)?
                         }
-                        item => property_value_to_py(py, item)?,
+                        item => property_value_to_py(py, item, self.property)?,
                     })?;
                 }
                 Ok(list.into_any().unbind())
             }
-            (inner, _) => property_value_to_py(py, inner),
+            (inner, _) => property_value_to_py(py, inner, self.property),
+        }
+    }
+
+    /// The name of an enumerated value read from a property whose
+    /// enumeration is known (`"HIGH_LIMIT"` for an Event_State of 3), else
+    /// `None`. `value` stays the number.
+    #[getter]
+    fn name(&self) -> Option<&'static str> {
+        match (&self.inner, self.property) {
+            (primitives::PropertyValue::Enumerated(value), Some(property)) => {
+                super::bit_string::resolved_enum_name(property, *value)
+            }
+            _ => None,
         }
     }
 
@@ -335,13 +396,21 @@ impl PyPropertyValue {
     /// tag, where `.value` would give `real` and `double` alike as a float.
     /// A typed constructed element (#1310) rebuilds from its octets as read
     /// through `_typed_element`: `.value` is decoded from those octets and
-    /// needn't encode back to them.
+    /// needn't encode back to them. A value read from a property (#2080)
+    /// rebuilds through `_read_from` with the value and that property, so the
+    /// copy keeps its names.
     fn __reduce__<'py>(
         slf: &Bound<'py, Self>,
     ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyTuple>)> {
         use primitives::PropertyValue as V;
         let py = slf.py();
         let this = slf.get();
+        if let Some(property) = this.property {
+            let mut value = this.clone();
+            value.property = None;
+            let arguments = (value, PyPropertyIdentifier { inner: property }).into_pyobject(py)?;
+            return Ok((slf.get_type().getattr("_read_from")?, arguments));
+        }
         let constructor = match (&this.inner, this.element) {
             (V::ApplicationData(_), Some(_)) => "_typed_element",
             (inner, _) => tag(inner),
@@ -384,6 +453,14 @@ impl PyPropertyValue {
             }
         };
         Ok((slf.get_type().getattr(constructor)?, arguments))
+    }
+
+    /// `value` as read from `property`, so its enumerated value and bit
+    /// string come out named: what `__reduce__` makes `copy` and `pickle`
+    /// call for a value a read gave.
+    #[staticmethod]
+    fn _read_from(value: Self, property: PyPropertyIdentifier) -> Self {
+        value.read_from(property.to_rust())
     }
 
     /// One typed constructed element, tagged `tag`, from the octets a read

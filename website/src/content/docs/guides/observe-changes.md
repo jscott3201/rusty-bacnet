@@ -11,7 +11,7 @@ Change of Value (COV) subscriptions can notify a client about selected property 
 bacnet subscribe 192.168.1.100 ai:1 --lifetime 300
 ```
 
-Use a known device and an object that supports the requested COV behavior. The lifetime is measured in seconds. The CLI watches for notifications; Ctrl+C stops the local watcher. Do not assume that stopping a client immediately removes remote state—verify cancellation behavior or allow the finite lifetime to expire.
+Use a known device and an object that supports the requested COV behavior. The lifetime is measured in seconds. The CLI watches for notifications, renews the subscription while it watches, and cancels it when it stops (Ctrl+C, or SIGTERM on Unix). The finite lifetime (300 seconds by default) bounds a subscription whose cancellation is lost, for example when the process is killed. `--lifetime 0` asks for one that never expires and stays after the CLI exits; it needs `--allow-write`.
 
 ## Read first, then subscribe
 
@@ -33,6 +33,6 @@ Define how your application represents missing data, detects stale values, handl
 
 ## Sources and release scope
 
-These instructions target **v0.14.0**. Source review is not a claim of hardware qualification.
+These instructions target **v0.15.0**. Source review is not a claim of hardware qualification.
 
-[CLI subscription command](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/CLI.md) · [Python subscription lifecycle](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/python-api.md) · [COV example](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/examples/python/cov_subscriptions.py).
+[CLI subscription command](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/docs/CLI.md) · [Python subscription lifecycle](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/docs/python-api.md) · [COV example](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/examples/python/cov_subscriptions.py).

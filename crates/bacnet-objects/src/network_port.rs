@@ -14,11 +14,12 @@
 //! Other snapshots expose only the common application rows;
 //! they do not claim a complete transport-specific SC, Ethernet or MS/TP profile.
 
+use crate::prelude::*;
+use alloc::borrow::Cow;
+use bacnet_types::MacAddr;
 use bacnet_types::enums::{NetworkType, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
-use bacnet_types::MacAddr;
-use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
 use crate::traits::BACnetObject;
@@ -32,9 +33,9 @@ mod multicast;
 mod pending;
 mod registration;
 use bacnet_types::network_number::NetworkNumber;
+pub use bip_config::BipPortConfig;
 pub(crate) use bip6_config::Bip6Bind;
 pub use bip6_config::Bip6PortConfig;
-pub use bip_config::BipPortConfig;
 use ip_config::IpConfig;
 pub(crate) use ip_config::{PortAddress, PortBind};
 
@@ -63,7 +64,7 @@ pub struct NetworkPortObject {
     activation: bool,
     /// The B/IP multicast group the owner lends, and a written one waiting.
     multicast: multicast::Multicast,
-    binding: std::sync::Weak<()>,
+    binding: alloc::sync::Weak<()>,
 }
 
 impl NetworkPortObject {
@@ -109,7 +110,7 @@ impl NetworkPortObject {
             pending: Default::default(),
             activation: false,
             multicast: Default::default(),
-            binding: std::sync::Weak::new(),
+            binding: alloc::sync::Weak::new(),
         })
     }
 
@@ -148,7 +149,7 @@ impl NetworkPortObject {
             pending: Default::default(),
             activation: false,
             multicast: Default::default(),
-            binding: std::sync::Weak::new(),
+            binding: alloc::sync::Weak::new(),
         })
     }
 

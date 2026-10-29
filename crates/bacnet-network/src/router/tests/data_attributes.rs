@@ -3,9 +3,9 @@ use super::*;
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_transport::sc::{LoopbackWebSocket, ScTransport, WebSocketPort};
 use bacnet_transport::sc_frame::{
-    decode_sc_message, encode_sc_message, ScFunction, ScMessage, ScOption, Vmac,
+    ScFunction, ScMessage, ScOption, Vmac, decode_sc_message, encode_sc_message,
 };
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 async fn sc_hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
     sc_hub_accept_with_limits(ws_hub, hub_vmac, 1476, 1476).await;
@@ -233,5 +233,5 @@ async fn sc_to_sc_forwarding_preserves_data_attributes_as_data_options() {
     assert!(!msg.data_options[1].must_understand);
     assert_eq!(msg.data_options[1].data, vec![0x12, 0x34, 0x56]);
 
-    router.stop().await;
+    router.stop().await.unwrap();
 }

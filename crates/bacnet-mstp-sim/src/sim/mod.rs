@@ -15,12 +15,12 @@ mod post_drive_tests;
 use std::collections::BTreeMap;
 
 use bacnet_mstp_codec::{
-    FrameHeader, StreamDecoder, MAX_EXTENDED_FRAME_LENGTH, MAX_EXTENDED_MPDU_DATA,
+    FrameHeader, MAX_EXTENDED_FRAME_LENGTH, MAX_EXTENDED_MPDU_DATA, StreamDecoder,
 };
 use bacnet_mstp_core::npdu::NetworkPriority;
 use bacnet_mstp_core::{
-    AllocQueues, Duration, Instant, MasterCore, MasterState, QueueRefusal, RequestId, Storage,
-    TransmitId, DEFAULT_DELIVERY_SLOTS,
+    AllocQueues, DEFAULT_DELIVERY_SLOTS, Duration, Instant, MasterCore, MasterState, QueueRefusal,
+    RequestId, Storage, TransmitId,
 };
 
 use crate::event::{Class, Key, Queue};

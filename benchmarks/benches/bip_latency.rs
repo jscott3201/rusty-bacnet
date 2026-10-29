@@ -1,7 +1,7 @@
 //! Criterion suite: ReadProperty, WriteProperty and 10-object RPM round-trip latency over
 //! BACnet/IP on loopback.
 #![allow(clippy::print_stderr)] // benchmarks note skipped setups on the console
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use tokio::runtime::Runtime;
 
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};

@@ -32,10 +32,10 @@ impl CustomPoint {
                     changed_properties: vec![],
                 })
             }
-            Behavior::Refuse => Err(Error::Protocol {
-                class: ErrorClass::OBJECT,
-                code: ErrorCode::INVALID_OPERATION_IN_THIS_STATE,
-            }),
+            Behavior::Refuse => Err(Error::protocol(
+                ErrorClass::OBJECT,
+                ErrorCode::INVALID_OPERATION_IN_THIS_STATE,
+            )),
             Behavior::AlreadyApplied => Ok(LifeSafetyOperationOutcome {
                 effect: LifeSafetyOperationEffect::AlreadyApplied,
                 changed_properties: vec![],
@@ -88,10 +88,10 @@ impl BACnetObject for CustomPoint {
                 unused_bits: 4,
                 data: vec![0],
             }),
-            _ => Err(Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::UNKNOWN_PROPERTY,
-            }),
+            _ => Err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::UNKNOWN_PROPERTY,
+            )),
         }
     }
     fn write_property(
@@ -101,10 +101,10 @@ impl BACnetObject for CustomPoint {
         _: PropertyValue,
         _: Option<u8>,
     ) -> Result<(), Error> {
-        Err(Error::Protocol {
-            class: ErrorClass::PROPERTY,
-            code: ErrorCode::WRITE_ACCESS_DENIED,
-        })
+        Err(Error::protocol(
+            ErrorClass::PROPERTY,
+            ErrorCode::WRITE_ACCESS_DENIED,
+        ))
     }
     fn supports_cov(&self) -> bool {
         true
@@ -167,7 +167,11 @@ fn subscriptions(oid: ObjectIdentifier) -> Vec<CovSubscription> {
 }
 fn assert_notifications(apdus: &[Apdu], oid: ObjectIdentifier, invoke_id: u8) {
     assert!(matches!(&apdus[0], Apdu::SimpleAck(ack) if ack.invoke_id == invoke_id));
-    assert_eq!(apdus.len(), 3, "ACK precedes exactly the whole-object and Tracking_Value COV; unchanged Silenced is silent");
+    assert_eq!(
+        apdus.len(),
+        3,
+        "ACK precedes exactly the whole-object and Tracking_Value COV; unchanged Silenced is silent"
+    );
     let mut payloads = Vec::new();
     for apdu in &apdus[1..] {
         let Apdu::UnconfirmedRequest(request) = apdu else {

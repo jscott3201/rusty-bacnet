@@ -11,13 +11,11 @@
 //!
 //! # Receive only
 //!
-//! The monitor never transmits. It takes any [`AsyncRead`], and nothing
-//! else: the code that drives it has no way to write, so it can't send a
-//! frame or turn a line driver on. With the `serial` feature,
-//! `mstp_serial::ReceiveOnlyPort` opens a serial port that way: it keeps
-//! only the read half of the port, configures no kernel RS-485 transmit
-//! control and touches no GPIO, so a transceiver whose driver is enabled
-//! by a GPIO stays as it was, normally receiving.
+//! The monitor takes a [`MonitorRead`] input with explicit awaited close.
+//! With the `serial` feature, `mstp_serial::ReceiveOnlyPort` uses native
+//! read-only access. It configures no kernel RS-485 mode and touches no GPIO.
+//! Driver/open transitions can still affect modem lines; this is not an
+//! electrical-silence guarantee.
 //!
 //! # Timestamps
 //!
@@ -36,15 +34,15 @@
 //!
 //! ```
 //! use bacnet_transport::mstp::codec::{Frame, FrameType};
-//! use bacnet_transport::mstp::monitor::{MonitorConfig, MstpMonitor};
+//! use bacnet_transport::mstp::monitor::{DropOnClose, MonitorConfig, MstpMonitor};
 //! use tokio::io::AsyncWriteExt;
 //!
 //! # #[tokio::main(flavor = "current_thread")]
-//! # async fn main() -> Result<(), bacnet_types::error::Error> {
+//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! // A stand-in for the line: the monitor gets only the read side.
 //! let (mut line, monitor_end) = tokio::io::duplex(1024);
 //! let (reader, _writer) = tokio::io::split(monitor_end);
-//! let monitor = MstpMonitor::start(reader, MonitorConfig::new(38_400))?;
+//! let mut monitor = MstpMonitor::start(DropOnClose::new(reader), MonitorConfig::new(38_400)).await?;
 //! let mut stats = monitor.statistics();
 //!
 //! let mut wire = [0u8; 8];
@@ -61,10 +59,16 @@
 
 use std::time::Duration;
 
-use bacnet_mstp_codec::{StreamDecoder, MAX_COBS_FRAME_LENGTH};
+use bacnet_mstp_codec::{MAX_COBS_FRAME_LENGTH, StreamDecoder};
 use bacnet_types::error::Error;
 use bytes::Bytes;
-use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::io::AsyncReadExt;
+
+mod admission;
+pub use admission::MonitorAdmissionError;
+mod reader;
+pub use reader::{DropOnClose, MonitorRead};
+pub(crate) use reader::{Failure, combine, context};
 use tokio::sync::{broadcast, oneshot, watch};
 use tokio::task::JoinHandle;
 
@@ -72,9 +76,9 @@ mod line;
 mod stats;
 
 pub use stats::{
-    octet_time, CountStats, DurationStats, FrameTypeCounts, LineErrorKind, LineErrors, LineEvent,
-    LostToken, MaxMaster, MonitorStats, SilenceHistogram, StationStats, TimingQuality,
-    NO_TOKEN_SILENCE, SILENCE_BUCKET_BOUNDS,
+    CountStats, DurationStats, FrameTypeCounts, LineErrorKind, LineErrors, LineEvent, LostToken,
+    MaxMaster, MonitorStats, NO_TOKEN_SILENCE, SILENCE_BUCKET_BOUNDS, SilenceHistogram,
+    StationStats, TimingQuality, octet_time,
 };
 
 /// [`MonitorConfig::timestamp_resolution`]'s default: 16 ms, the receive
@@ -224,13 +228,15 @@ impl MonitorFrames {
 
 /// A receive-only MS/TP monitor; see the [module docs](crate::mstp::monitor).
 ///
-/// Dropping it stops its task.
+/// Dropping it requests shutdown without waiting. Await [`stop`](Self::stop)
+/// to release the input; a cancelled stop can be resumed on the same monitor.
 #[derive(Debug)]
 pub struct MstpMonitor {
     statistics: watch::Receiver<MonitorStats>,
-    records: broadcast::Sender<MonitorRecord>,
+    records: broadcast::WeakSender<MonitorRecord>,
     stop: Option<oneshot::Sender<()>>,
-    task: JoinHandle<Result<(), Error>>,
+    task: JoinHandle<std::io::Result<()>>,
+    completed: Option<Result<(), Failure>>,
 }
 
 impl MstpMonitor {
@@ -242,16 +248,23 @@ impl MstpMonitor {
     ///
     /// # Errors
     ///
-    /// The errors of [`MonitorConfig::validate`].
+    /// The errors of [`MonitorConfig::validate`] and closing rejected input.
+    /// Check [`MonitorAdmissionError::release_confirmed`] before reopening.
     ///
     /// # Panics
     ///
     /// Outside a Tokio runtime.
-    pub fn start<R>(reader: R, config: MonitorConfig) -> Result<Self, Error>
+    pub async fn start<R>(
+        mut reader: R,
+        config: MonitorConfig,
+    ) -> Result<Self, MonitorAdmissionError>
     where
-        R: AsyncRead + Unpin + Send + 'static,
+        R: MonitorRead + 'static,
     {
-        config.validate()?;
+        if let Err(error) = config.validate() {
+            let closed = std::future::poll_fn(|cx| reader.poll_close(cx)).await;
+            return Err(MonitorAdmissionError::after_close(error, closed));
+        }
         let (statistics_tx, statistics) = watch::channel(MonitorStats::new(
             config.baud_rate,
             config.timestamp_resolution,
@@ -261,9 +274,10 @@ impl MstpMonitor {
         let task = tokio::spawn(run(reader, config, statistics_tx, records.clone(), stop_rx));
         Ok(Self {
             statistics,
-            records,
+            records: records.downgrade(),
             stop: Some(stop),
             task,
+            completed: None,
         })
     }
 
@@ -278,7 +292,10 @@ impl MstpMonitor {
     #[must_use]
     pub fn frames(&self) -> MonitorFrames {
         MonitorFrames {
-            receiver: self.records.subscribe(),
+            receiver: self
+                .records
+                .upgrade()
+                .map_or_else(|| broadcast::channel(1).1, |records| records.subscribe()),
             dropped: 0,
         }
     }
@@ -291,19 +308,27 @@ impl MstpMonitor {
     }
 
     /// Stop the monitor, wait for its task to end and return the final
-    /// statistics.
+    /// statistics. Cancelling this future retains the shutdown and join state;
+    /// call it again to await the same barrier. Repeated errors remain errors.
     ///
     /// # Errors
     ///
-    /// The read error that ended the task, if one did; the statistics up
-    /// to it are still in every [`statistics`](Self::statistics) receiver.
-    pub async fn stop(mut self) -> Result<MonitorStats, Error> {
+    /// A read, input-close or task failure. Statistics recorded before the
+    /// failure remain in every [`statistics`](Self::statistics) receiver.
+    pub async fn stop(&mut self) -> Result<MonitorStats, Error> {
         drop(self.stop.take());
-        let task = &mut self.task;
-        let result = task
-            .await
-            .map_err(|error| Error::Encoding(format!("MS/TP monitor task failed: {error}")))?;
-        result.map(|()| self.statistics.borrow().clone())
+        if self.completed.is_none() {
+            let result = (&mut self.task).await.unwrap_or_else(|error| {
+                Err(std::io::Error::other(format!(
+                    "MS/TP monitor task failed: {error}"
+                )))
+            });
+            self.completed = Some(result.map_err(Failure::new));
+        }
+        match self.completed.as_ref().expect("completion stored") {
+            Ok(()) => Ok(self.statistics.borrow().clone()),
+            Err(error) => Err(Error::Transport(error.error())),
+        }
     }
 }
 
@@ -322,10 +347,22 @@ async fn run<R>(
     statistics: watch::Sender<MonitorStats>,
     records: broadcast::Sender<MonitorRecord>,
     mut stop: oneshot::Receiver<()>,
-) -> Result<(), Error>
+) -> std::io::Result<()>
 where
-    R: AsyncRead + Unpin + Send,
+    R: MonitorRead,
 {
+    let result = read_loop(&mut reader, config, statistics, records, &mut stop).await;
+    let closed = std::future::poll_fn(|cx| reader.poll_close(cx)).await;
+    combine(result, closed)
+}
+
+async fn read_loop<R: MonitorRead>(
+    reader: &mut R,
+    config: MonitorConfig,
+    statistics: watch::Sender<MonitorStats>,
+    records: broadcast::Sender<MonitorRecord>,
+    stop: &mut oneshot::Receiver<()>,
+) -> std::io::Result<()> {
     let started = tokio::time::Instant::now();
     let mut storage = vec![0u8; MAX_COBS_FRAME_LENGTH + READ_LENGTH];
     let mut decoder = StreamDecoder::new(&mut storage).with_reserved_cobs();
@@ -334,8 +371,8 @@ where
     loop {
         let count = tokio::select! {
             biased;
-            _ = &mut stop => return Ok(()),
-            read = reader.read(&mut buffer) => read.map_err(Error::Transport)?,
+            _ = &mut *stop => return Ok(()),
+            read = reader.read(&mut buffer) => read?,
         };
         if count == 0 {
             return Ok(());

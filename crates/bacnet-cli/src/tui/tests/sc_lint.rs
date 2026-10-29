@@ -62,11 +62,13 @@ fn warnings_hold_the_connection_until_y_accepts_them() {
     for key in ['c', 'a'] {
         assert!(press(&mut app, KeyCode::Char(key)).is_empty());
         let connection = app.connection.as_ref().unwrap();
-        assert!(connection
-            .error
-            .as_ref()
-            .unwrap()
-            .contains("y accepts them"));
+        assert!(
+            connection
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("y accepts them")
+        );
     }
     assert!(press(&mut app, KeyCode::Enter).is_empty());
     assert_eq!(app.link, Link::Down, "nothing was asked of the coordinator");
@@ -226,7 +228,7 @@ mod coordinator {
     use crate::tui::profile::sc_tests::sc_profile;
     use crate::tui::profile::service::Service;
     use crate::tui::profile::store::Store;
-    use crate::tui::worker::{coordinator, EventSink};
+    use crate::tui::worker::{EventSink, coordinator};
     use std::path::Path;
     use tokio::sync::mpsc;
 

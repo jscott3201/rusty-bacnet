@@ -9,7 +9,7 @@ use bytes::BytesMut;
 
 #[path = "scalar_sinks/cases.rs"]
 mod cases;
-use cases::{all_cases, compatibility_cases, wire_cases, Case, Encoding, Form, Value};
+use cases::{Case, Encoding, Form, Value, all_cases, compatibility_cases, wire_cases};
 
 const PREFIX: [u8; 2] = [0xCA, 0xFE];
 

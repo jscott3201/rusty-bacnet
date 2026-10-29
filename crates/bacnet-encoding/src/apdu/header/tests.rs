@@ -256,8 +256,8 @@ fn field_codes_name_their_sizes() {
 #[test]
 fn the_header_agrees_with_the_owned_codec() {
     use crate::apdu::{
-        decode_apdu, encode_apdu, AbortPdu, Apdu, ComplexAck, ConfirmedRequest, ErrorPdu,
-        RejectPdu, UnconfirmedRequest,
+        AbortPdu, Apdu, ComplexAck, ConfirmedRequest, ErrorPdu, RejectPdu, UnconfirmedRequest,
+        decode_apdu, encode_apdu,
     };
     use bacnet_types::enums::{ErrorClass, ErrorCode};
     use bytes::{Bytes, BytesMut};

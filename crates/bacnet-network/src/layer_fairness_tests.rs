@@ -1,7 +1,7 @@
 use super::*;
 use bacnet_transport::port::ReceivedNpdu;
 use bacnet_transport::port::TransportProvenance;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 // Same owned-NPDU fake-transport pattern as layer_admission_tests: the real
 // dispatch task receives payload, provenance, attributes and the reply sender.
@@ -81,10 +81,12 @@ async fn barrier(tx: &mpsc::Sender<ReceivedNpdu>) {
     tx.send(arrival).await.unwrap();
     // The control reply is released after all earlier ingress has dispatched,
     // without consuming any APDU or relying on scheduling sleeps.
-    assert!(timeout(Duration::from_secs(1), reply_rx)
-        .await
-        .expect("dispatch stalled")
-        .is_err());
+    assert!(
+        timeout(Duration::from_secs(1), reply_rx)
+            .await
+            .expect("dispatch stalled")
+            .is_err()
+    );
 }
 
 fn assert_apdu(apdu: &ReceivedApdu, source: &[u8], id: u16) {
@@ -125,10 +127,12 @@ async fn single_source_flood_caps_at_sixteen_and_another_source_progresses() {
         arrival.reply_tx = Some(reply_tx);
         tx.send(arrival).await.unwrap();
         if id >= 16 {
-            assert!(timeout(Duration::from_secs(1), reply_rx)
-                .await
-                .expect("fairness drop retained reply sender")
-                .is_err());
+            assert!(
+                timeout(Duration::from_secs(1), reply_rx)
+                    .await
+                    .expect("fairness drop retained reply sender")
+                    .is_err()
+            );
         }
     }
     for id in 0..16 {
@@ -312,10 +316,12 @@ async fn close_and_drop_preserve_closed_precedence_and_release_all_source_entrie
         let mut arrival = incoming(&[2], 16);
         arrival.reply_tx = Some(reply_tx);
         tx.send(arrival).await.unwrap();
-        assert!(timeout(Duration::from_secs(1), reply_rx)
-            .await
-            .unwrap()
-            .is_err());
+        assert!(
+            timeout(Duration::from_secs(1), reply_rx)
+                .await
+                .unwrap()
+                .is_err()
+        );
         timeout(Duration::from_secs(1), tx.closed()).await.unwrap();
         assert_eq!(counters.snapshot().closed_drops, 1);
         assert_eq!(counters.snapshot().fairness_drops, 0);
@@ -365,13 +371,15 @@ async fn raw_apdus_and_tracked_controls_have_no_per_source_cap() {
             ..Default::default()
         }
     );
-    assert!(controls
-        .counters
-        .0
-        .lock()
-        .unwrap()
-        .queued_by_source
-        .is_empty());
+    assert!(
+        controls
+            .counters
+            .0
+            .lock()
+            .unwrap()
+            .queued_by_source
+            .is_empty()
+    );
     for id in 0..256u64 {
         let control = controls.try_recv().unwrap();
         assert_eq!(control.source_mac.as_slice(), &[2]);
@@ -517,12 +525,14 @@ fn router_key_churn_keeps_entries_bounded_by_depth_and_drop_clears_them() {
         for port in 0..256 {
             let mut apdu = apdus.try_recv().unwrap();
             assert_eq!(apdu.ingress_network, Some(port));
-            assert!(!counters
-                .0
-                .lock()
-                .unwrap()
-                .queued_by_source
-                .contains_key(&apdu_source(&apdu)));
+            assert!(
+                !counters
+                    .0
+                    .lock()
+                    .unwrap()
+                    .queued_by_source
+                    .contains_key(&apdu_source(&apdu))
+            );
             apdu.ingress_network = None;
             apdu.source_mac.clear();
             assert_sources(&counters, usize::from(255 - port), usize::from(255 - port));

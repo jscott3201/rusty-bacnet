@@ -3,7 +3,7 @@
 //! the handler and the password, and the guarded reply the full server and
 //! endpoint sessions share.
 
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use bacnet_transport::port::{DirectScIdentity, TransportProvenance};
 use bacnet_types::enums::{AuditOperation, ReinitializedState};
@@ -82,11 +82,11 @@ use super::*;
 ///   handler. Neither [`MutationPolicy`](crate::mutation::MutationPolicy)
 ///   nor the [`ServerPolicy`](crate::ServerPolicy) covers ReinitializeDevice, so check the
 ///   [`ReinitializeContext`] to restrict sources.
-/// - **Refuse with [`Error::Protocol`].** Its class and code go back in an
+/// - **Refuse with [`Error::protocol`].** Its class and code go back in an
 ///   Error PDU, for example DEVICE / CONFIGURATION_IN_PROGRESS (Clause
 ///   16.4.1.3.1). Once the handler has run, the request may no longer be
-///   rejected (Clause 20.1.8), so an [`Error::Reject`], or any error other
-///   than `Protocol` or `Structured`, is sent as SERVICES / OTHER. A panic is
+///   rejected (Clause 20.1.8), so an [`Error::reject`], or any error other
+///   than an Error PDU's `Remote` or `Structured`, is sent as SERVICES / OTHER. A panic is
 ///   caught (with unwind builds) and also answered SERVICES / OTHER, since
 ///   the handler may have partly acted.
 pub type ReinitializeHandler =
@@ -250,7 +250,7 @@ impl ReinitializeContext {
     /// carries no routed source. `None` for other ingress, hub-relayed and
     /// routed requests included (see [`crate::policy`]).
     pub fn principal(&self) -> Option<bacnet_transport::port::ScPrincipal> {
-        crate::policy::originating_principal(self.provenance, self.source_network.as_ref())
+        crate::policy::originating_principal(&self.provenance, self.source_network.as_ref())
     }
 
     /// The principal of the direct BACnet/SC peer that handed this request
@@ -260,6 +260,8 @@ impl ReinitializeContext {
     pub fn forwarding_peer_principal(&self) -> Option<bacnet_transport::port::ScPrincipal> {
         self.provenance.principal()
     }
+
+    crate::policy::certificate_accessors!();
 
     /// The immediate direct-SC hop's verified leaf and connection incarnation:
     /// for a routed request, the router that forwarded it. Absent off a
@@ -466,7 +468,9 @@ fn invoke(
 ) -> Result<(), Error> {
     match catch_unwind(AssertUnwindSafe(|| handler(context, db))) {
         Ok(Ok(())) => Ok(()),
-        Ok(Err(error @ (Error::Protocol { .. } | Error::Structured { .. }))) => Err(error),
+        Ok(Err(error @ (Error::Remote(RemoteError::Error { .. }) | Error::Structured { .. }))) => {
+            Err(error)
+        }
         Ok(Err(error)) => {
             debug!(%error, "ReinitializeDevice handler error answered SERVICES / OTHER");
             Err(services_error(ErrorCode::OTHER))
@@ -495,10 +499,7 @@ fn activates(state: ReinitializedState) -> bool {
 /// PROPERTY / INVALID_CONFIGURATION_DATA (Clause 16.4.1.3.1).
 fn invalid_configuration(error: &Error) -> Error {
     debug!(%error, "Network Port activation refused");
-    Error::Protocol {
-        class: ErrorClass::PROPERTY,
-        code: ErrorCode::INVALID_CONFIGURATION_DATA,
-    }
+    Error::protocol(ErrorClass::PROPERTY, ErrorCode::INVALID_CONFIGURATION_DATA)
 }
 
 /// Before the handler runs, check that the pending Network Port values
@@ -528,10 +529,7 @@ fn activate_network_ports(state: ReinitializedState, db: &mut ObjectDatabase) ->
 }
 
 fn services_error(code: ErrorCode) -> Error {
-    Error::Protocol {
-        class: ErrorClass::SERVICES,
-        code,
-    }
+    Error::protocol(ErrorClass::SERVICES, code)
 }
 
 impl<T: TransportPort + 'static> BACnetServer<T> {

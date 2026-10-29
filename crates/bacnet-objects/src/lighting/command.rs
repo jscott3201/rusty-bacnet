@@ -22,7 +22,7 @@
 //!   the one a Channel makes of the lighting commands it takes, so a command
 //!   a Channel passes on and the same command written directly fare alike.
 
-use std::ops::RangeInclusive;
+use core::ops::RangeInclusive;
 
 use bacnet_encoding::constructed::{decode_lighting_command_value, encode_lighting_command};
 use bacnet_types::constructed::BACnetLightingCommand;
@@ -31,7 +31,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 use bytes::BytesMut;
 
-use super::{lighting_percent, DEFAULT_FADE_TIME_MS};
+use super::{DEFAULT_FADE_TIME_MS, lighting_percent};
 use crate::common;
 
 /// The BACnetLightingOperation values open to vendors (Clause 23).

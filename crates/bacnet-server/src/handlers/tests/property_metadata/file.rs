@@ -62,7 +62,7 @@ fn rpm_metadata_file_selectors_preserve_bytes_and_budgets() {
 // keep this suite selectable by the existing `pics::` gate.
 mod pics {
     use super::*;
-    use crate::pics::{generate_pics, PicsConfig};
+    use crate::pics::{PicsConfig, generate_pics};
     use crate::server::ServerConfig;
 
     #[test]

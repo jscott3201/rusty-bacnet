@@ -11,7 +11,9 @@ use crate::durable::DurableWrites;
 mod persistence;
 #[path = "rights_saving.rs"]
 mod saving;
-pub use persistence::{AccessRightsPersistence, AccessRightsSnapshot, FileAccessRightsPersistence};
+#[cfg(feature = "std")]
+pub use persistence::FileAccessRightsPersistence;
+pub use persistence::{AccessRightsPersistence, AccessRightsSnapshot};
 
 // AccessRightsObject (type 34)
 // ---------------------------------------------------------------------------
@@ -407,7 +409,7 @@ impl BACnetObject for AccessRightsObject {
         crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
-    fn advance_monotonic_time_internal(&mut self, now: std::time::Duration) -> bool {
+    fn advance_monotonic_time_internal(&mut self, now: core::time::Duration) -> bool {
         self.expire_staged_write(now);
         false
     }
@@ -425,15 +427,15 @@ mod tests;
 #[path = "rights_test_storage.rs"]
 mod test_storage;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 #[path = "rights_persistence_tests.rs"]
 mod persistence_tests;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 #[path = "rights_staging_tests.rs"]
 mod staging_tests;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 #[path = "rights_fold_tests.rs"]
 mod fold_tests;
 

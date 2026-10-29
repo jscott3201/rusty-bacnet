@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use bacnet_client::client::BACnetClient;
 use bacnet_transport::bip::{
-    BipTransport, ForeignDeviceConfig, ForeignRegistrationOutcome, DEFAULT_BACNET_PORT,
+    BipTransport, DEFAULT_BACNET_PORT, ForeignDeviceConfig, ForeignRegistrationOutcome,
 };
 
 /// How long a one-shot command waits for the first registration's answer.
@@ -74,12 +74,12 @@ pub(crate) async fn await_registration(
             Some(ForeignRegistrationOutcome::LocalError) => {
                 return Err(format!(
                     "could not send the foreign-device registration to BBMD {bbmd}"
-                ))
+                ));
             }
             Some(ForeignRegistrationOutcome::TimedOut | ForeignRegistrationOutcome::Cancelled) => {
                 return Err(format!(
                     "BBMD {bbmd} did not answer the foreign-device registration"
-                ))
+                ));
             }
             Some(ForeignRegistrationOutcome::Pending) | None => {}
         }

@@ -1,7 +1,7 @@
 //! Real incoming Bytes backing owners must not survive as saved payload owners.
 
 use super::*;
-use bacnet_encoding::npdu::{encode_npdu, Npdu};
+use bacnet_encoding::npdu::{Npdu, encode_npdu};
 use bacnet_transport::port::ReceivedNpdu;
 use bacnet_transport::port::TransportProvenance;
 use request_peer_quota::{assert_positive_ack, next_routed_apdu};

@@ -123,6 +123,6 @@ async fn a_direct_unicast_control_is_taken_only_from_configured_router_principal
     );
     let counted = router.control_snapshot().i_am;
     assert_eq!((counted.allow_total, counted.deny_total), (1, 2));
-    router.stop().await;
+    router.stop().await.unwrap();
     f.stop().await;
 }

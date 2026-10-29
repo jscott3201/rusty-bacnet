@@ -1,6 +1,6 @@
-use super::binary::BinaryLightingOutputObject;
 use super::LightingOutputObject;
-use std::borrow::Cow;
+use super::binary::BinaryLightingOutputObject;
+use alloc::borrow::Cow;
 
 use bacnet_types::enums::PropertyIdentifier as P;
 
@@ -202,16 +202,16 @@ fn with_rows(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::collections::HashSet;
     use crate::property_metadata::PropertyWriteCapability;
     use crate::traits::BACnetObject;
     use bacnet_types::enums::{ErrorClass, ErrorCode};
-    use bacnet_types::error::Error;
+    use bacnet_types::error::{Error, RemoteError};
     use bacnet_types::primitives::PropertyValue;
-    use std::collections::HashSet;
 
     fn assert_error(error: Error, expected: ErrorCode) {
         assert!(
-            matches!(error, Error::Protocol { class, code }
+            matches!(error, Error::Remote(RemoteError::Error { class, code })
                 if class == ErrorClass::PROPERTY
                     && code == expected),
             "expected {expected:?}, got {error:?}"

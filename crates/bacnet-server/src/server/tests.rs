@@ -369,9 +369,11 @@ async fn server_runs_fault_detection_without_enrollment() {
 
 #[test]
 fn identity_rejects_below_minimum_local_apdu_capacity() {
-    assert!(bacnet_objects::DeviceIdentity::default()
-        .with_max_apdu(49)
-        .is_err());
+    assert!(
+        bacnet_objects::DeviceIdentity::default()
+            .with_max_apdu(49)
+            .is_err()
+    );
 }
 
 fn test_mac(byte: u8) -> MacAddr {
@@ -384,7 +386,9 @@ fn cov_ack_result_debug_and_eq() {
     assert_eq!(CovAckResult::Ack, CovAckResult::Ack);
     assert_ne!(
         CovAckResult::Ack,
-        CovAckResult::Error(Refusal::Abort(AbortReason::OTHER))
+        CovAckResult::Error(RemoteError::Abort {
+            reason: AbortReason::OTHER
+        })
     );
     let _debug = format!("{:?}", CovAckResult::Ack);
 }
@@ -523,9 +527,7 @@ fn service_reject_error_preserves_reason_on_wire_response() {
     let response = BACnetServer::<BipTransport>::error_apdu_from_error(
         0x31,
         ConfirmedServiceChoice::GET_ENROLLMENT_SUMMARY,
-        &Error::Reject {
-            reason: RejectReason::UNDEFINED_ENUMERATION,
-        },
+        &Error::reject(RejectReason::UNDEFINED_ENUMERATION),
     );
     assert_eq!(
         response,

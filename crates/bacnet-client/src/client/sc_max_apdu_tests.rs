@@ -1,27 +1,42 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Instant;
 
-use bacnet_encoding::apdu::{self, encode_apdu, Apdu, SegmentAck, SimpleAck};
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
+use bacnet_encoding::apdu::{self, Apdu, SegmentAck, SimpleAck, encode_apdu};
+use bacnet_encoding::npdu::{Npdu, NpduAddress, decode_npdu, encode_npdu};
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
 use bacnet_transport::sc::{LoopbackWebSocket, ScReconnectConfig, ScTransport, WebSocketPort};
 use bacnet_transport::sc_frame::{
-    decode_sc_message, encode_sc_message, ScFunction, ScMessage, Vmac,
+    ScFunction, ScMessage, Vmac, decode_sc_message, encode_sc_message,
 };
+use bacnet_types::MacAddr;
 use bacnet_types::enums::{ConfirmedServiceChoice, ObjectType, Segmentation};
 use bacnet_types::primitives::ObjectIdentifier;
-use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
 use tokio::sync::mpsc;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 use crate::discovery::DiscoveredDevice;
 
 use super::BACnetClient;
 
+/// A loopback transport whose egress APDU limit a test sets, and can change
+/// while the client runs through the shared handle.
 struct LimitedTransport {
     inner: LoopbackTransport,
-    max_apdu_length: u16,
+    max_apdu_length: Arc<AtomicU16>,
+}
+
+impl LimitedTransport {
+    fn new(inner: LoopbackTransport, max_apdu_length: u16) -> (Self, Arc<AtomicU16>) {
+        let limit = Arc::new(AtomicU16::new(max_apdu_length));
+        let transport = Self {
+            inner,
+            max_apdu_length: Arc::clone(&limit),
+        };
+        (transport, limit)
+    }
 }
 
 impl TransportPort for LimitedTransport {
@@ -54,7 +69,7 @@ impl TransportPort for LimitedTransport {
     }
 
     fn egress_apdu_limit(&self) -> u16 {
-        self.max_apdu_length
+        self.max_apdu_length.load(Ordering::Relaxed)
     }
 }
 
@@ -151,10 +166,7 @@ async fn client_segments_known_device_requests_to_live_transport_limit() {
     let peer_mac = vec![0x02];
     let (client_inner, mut peer_transport) =
         LoopbackTransport::pair(client_mac.clone(), peer_mac.clone());
-    let client_transport = LimitedTransport {
-        inner: client_inner,
-        max_apdu_length: 478,
-    };
+    let (client_transport, _) = LimitedTransport::new(client_inner, 478);
     let mut peer_rx = peer_transport.start().await.unwrap();
 
     let mut client = BACnetClient::generic_builder()
@@ -256,10 +268,7 @@ async fn client_routed_unsegmented_request_accounts_for_npdu_overhead_bucket() {
     let remote_mac = vec![0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
     let (client_inner, mut router_transport) =
         LoopbackTransport::pair(client_mac.clone(), router_mac.clone());
-    let client_transport = LimitedTransport {
-        inner: client_inner,
-        max_apdu_length: 1024,
-    };
+    let (client_transport, _) = LimitedTransport::new(client_inner, 1024);
     let mut router_rx = router_transport.start().await.unwrap();
 
     let mut client = BACnetClient::generic_builder()
@@ -376,4 +385,146 @@ async fn client_max_apdu_length_reflects_sc_failover_transport_limit() {
 
     client.stop().await.unwrap();
     drop(failover_hub);
+}
+
+/// One ConfirmedRequest PDU as the peer saw it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SeenRequest {
+    advertised_max_apdu: u16,
+    npdu_len: usize,
+    segmented: bool,
+}
+
+/// Send a `len`-octet WriteProperty from `client` to a peer it has no
+/// device-table row for, ack every segment and the request, and return
+/// each request PDU the peer saw.
+async fn write_to_unknown_peer(
+    client: &BACnetClient<LimitedTransport>,
+    peer: &LoopbackTransport,
+    peer_rx: &mut mpsc::Receiver<ReceivedNpdu>,
+    len: usize,
+) -> Vec<SeenRequest> {
+    let (client_mac, peer_mac) = ([0x01], [0x02]);
+    let service_data: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+    let request = client.confirmed_request(
+        &peer_mac,
+        ConfirmedServiceChoice::WRITE_PROPERTY,
+        &service_data,
+    );
+    let peer_side = async {
+        let mut seen = Vec::new();
+        let mut received = Vec::new();
+        loop {
+            let frame = timeout(Duration::from_secs(3), peer_rx.recv())
+                .await
+                .expect("timed out waiting for the request")
+                .expect("peer channel closed");
+            let npdu = decode_npdu(Bytes::copy_from_slice(&frame.npdu)).unwrap();
+            let Apdu::ConfirmedRequest(req) = apdu::decode_apdu(npdu.payload).unwrap() else {
+                panic!("expected a ConfirmedRequest");
+            };
+            seen.push(SeenRequest {
+                advertised_max_apdu: req.max_apdu_length,
+                npdu_len: frame.npdu.len(),
+                segmented: req.segmented,
+            });
+            received.extend_from_slice(&req.service_request);
+            if req.segmented {
+                let ack = Apdu::SegmentAck(SegmentAck {
+                    negative_ack: false,
+                    sent_by_server: true,
+                    invoke_id: req.invoke_id,
+                    sequence_number: req.sequence_number.unwrap(),
+                    actual_window_size: 1,
+                });
+                send_peer_apdu(peer, &client_mac, ack).await.unwrap();
+            }
+            if !req.more_follows {
+                let ack = Apdu::SimpleAck(SimpleAck {
+                    invoke_id: req.invoke_id,
+                    service_choice: ConfirmedServiceChoice::WRITE_PROPERTY,
+                });
+                send_peer_apdu(peer, &client_mac, ack).await.unwrap();
+                break;
+            }
+        }
+        assert_eq!(received, service_data);
+        seen
+    };
+    let (result, seen) = tokio::join!(request, peer_side);
+    assert!(result.unwrap().is_empty());
+    seen
+}
+
+/// A client on a transport whose limit changes while it runs.
+async fn limited_client(
+    configured_max_apdu: u16,
+    start_limit: u16,
+) -> (
+    BACnetClient<LimitedTransport>,
+    Arc<AtomicU16>,
+    LoopbackTransport,
+    mpsc::Receiver<ReceivedNpdu>,
+) {
+    let (client_inner, mut peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
+    let (transport, limit) = LimitedTransport::new(client_inner, start_limit);
+    let peer_rx = peer.start().await.unwrap();
+    let client = BACnetClient::generic_builder()
+        .transport(transport)
+        .max_apdu_length(configured_max_apdu)
+        .apdu_timeout_ms(5000)
+        .build()
+        .await
+        .unwrap();
+    (client, limit, peer, peer_rx)
+}
+
+/// #2086: a limit that grows after start (a router port or an SC hub
+/// failover publishing a larger one) raises what the client advertises and
+/// the segment size it sends, up to the configured maximum.
+#[tokio::test(start_paused = true)]
+async fn client_follows_a_rising_transport_limit_up_to_the_configured_maximum() {
+    // (configured, raised limit, advertised and segment APDU size after)
+    for (configured, raised, expected) in [(1476, 1024, 1024), (480, 1476, 480)] {
+        let (mut client, limit, mut peer, mut peer_rx) = limited_client(configured, 206).await;
+        assert_eq!(client.max_apdu_length(), 206);
+        limit.store(raised, Ordering::Relaxed);
+        assert_eq!(client.max_apdu_length(), expected);
+
+        let seen = write_to_unknown_peer(&client, &peer, &mut peer_rx, 1400).await;
+        let segment_payload = usize::from(expected) - 6;
+        assert_eq!(seen.len(), 1400usize.div_ceil(segment_payload), "{seen:?}");
+        // A full segment fills the APDU; the NPDU header adds two octets.
+        assert_eq!(seen[0].npdu_len, usize::from(expected) + 2, "{seen:?}");
+        for request in &seen {
+            assert!(request.segmented, "{seen:?}");
+            assert_eq!(request.advertised_max_apdu, expected, "{seen:?}");
+        }
+        client.stop().await.unwrap();
+        peer.stop().await.unwrap();
+    }
+}
+
+/// A limit that falls after start still lowers both, as before #2086.
+#[tokio::test(start_paused = true)]
+async fn client_follows_a_falling_transport_limit() {
+    let (mut client, limit, mut peer, mut peer_rx) = limited_client(1476, 1476).await;
+    assert_eq!(client.max_apdu_length(), 1476);
+    let seen = write_to_unknown_peer(&client, &peer, &mut peer_rx, 900).await;
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].advertised_max_apdu, 1476);
+    assert!(!seen[0].segmented);
+
+    limit.store(478, Ordering::Relaxed);
+    assert_eq!(client.max_apdu_length(), 206);
+    let seen = write_to_unknown_peer(&client, &peer, &mut peer_rx, 900).await;
+    // Segments fill the live limit; the advertised bucket is the one below it.
+    assert_eq!(seen.len(), 900usize.div_ceil(478 - 6), "{seen:?}");
+    assert_eq!(seen[0].npdu_len, 480, "{seen:?}");
+    for request in &seen {
+        assert!(request.segmented, "{seen:?}");
+        assert_eq!(request.advertised_max_apdu, 206, "{seen:?}");
+    }
+    client.stop().await.unwrap();
+    peer.stop().await.unwrap();
 }

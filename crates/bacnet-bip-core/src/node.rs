@@ -105,6 +105,7 @@
 //! | A Forwarded-NPDU whose origin is a group address is dropped (#1493) | `node_receive.rs` `group_sources_and_origins_are_dropped` |
 //! | The node's own frames, and Forwarded-NPDUs naming it as the origin, are dropped | `node_receive.rs` `own_echoes_are_dropped` |
 //! | A broadcast listener keeps only this link's broadcasts, from its own interface (#1538) | `node_receive.rs` `listeners_keep_only_this_links_broadcasts` |
+//! | `Link::listener_keeps` gives a listener's datagram the verdict `receive` gives it, so a host's frame tap can't drift from the node (#1856) | `node_listener.rs` `the_predicate_and_receive_agree` |
 //! | A wildcard bind takes unicast only at the host's own addresses (#952) | `node_receive.rs` `wildcard_binds_take_unicast_only_at_own_addresses` |
 //! | The host's rate limit sees the four covered requests before their payload | `node_receive.rs` `the_policy_sees_covered_requests_before_their_payload` |
 //! | No NAK goes to an address a reply can't reach | `node_naks.rs` `no_nak_to_an_unanswerable_source` |
@@ -130,8 +131,8 @@ mod send;
 pub use actions::Action;
 pub use addressing::{Addressed, Groups, LocalAddresses};
 pub use config::{
-    ConfigError, Foreign, ForwardedTrust, Link, Mode, Retry, DEFAULT_RESPONSE_TIMEOUT,
-    MAX_DATAGRAM, MIN_BUDGET, MIN_RENEWAL,
+    ConfigError, DEFAULT_RESPONSE_TIMEOUT, Foreign, ForwardedTrust, Link, MAX_DATAGRAM, MIN_BUDGET,
+    MIN_RENEWAL, Mode, Retry,
 };
 pub use counters::{ExchangeCounters, NodeCounters, RegisterAttempt};
 pub use engine::{Inbound, Node};

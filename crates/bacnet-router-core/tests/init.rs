@@ -3,13 +3,13 @@
 
 mod fixture;
 
+use bacnet_router_core::PortId;
 use bacnet_router_core::message::RoutingEntries;
 use bacnet_router_core::npdu::Mac;
 use bacnet_router_core::npdu::NetworkMessageType;
 use bacnet_router_core::router::{ControlClass, Discard, Event, Kind, SendRefusal};
-use bacnet_router_core::PortId;
 use fixture::{
-    at, deliver, drain_refusing, learn_9_via_r7, message, router, Outcome, Recorder, NODE_A, R7,
+    NODE_A, Outcome, R7, Recorder, at, deliver, drain_refusing, learn_9_via_r7, message, router,
 };
 
 /// An Initialize-Routing-Table with these (network, Port ID) entries, each
@@ -130,9 +130,10 @@ fn query_splits_into_bounded_acks() {
     let (outcome, sent) = deliver(&mut router, &mut host, 0, NODE_A, &init_rt(&[], &[]), at(1));
     assert_eq!(outcome, Outcome::Handled);
     assert_eq!(sent.len(), 2);
-    assert!(sent
-        .iter()
-        .all(|sent| sent.port == 0 && sent.to.as_deref() == Some(NODE_A)));
+    assert!(
+        sent.iter()
+            .all(|sent| sent.port == 0 && sent.to.as_deref() == Some(NODE_A))
+    );
     let first = ack_entries(&sent[0]);
     let second = ack_entries(&sent[1]);
     assert_eq!((first.len(), second.len()), (124, 8));

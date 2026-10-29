@@ -78,7 +78,7 @@ mod tests {
     use bacnet_encoding::constructed::decode_event_notification;
     use std::sync::Arc;
 
-    use bacnet_encoding::apdu::{decode_apdu, Apdu};
+    use bacnet_encoding::apdu::{Apdu, decode_apdu};
     use bacnet_encoding::npdu::decode_npdu;
     use bacnet_network::layer::NetworkLayer;
     use bacnet_objects::analog::AnalogInputObject;

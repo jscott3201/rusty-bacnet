@@ -1,5 +1,5 @@
 use super::TrendLogMultipleObject;
-use std::borrow::Cow;
+use alloc::borrow::Cow;
 
 use bacnet_types::enums::{LoggingType, PropertyIdentifier as P};
 

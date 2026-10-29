@@ -18,7 +18,7 @@ use bacnet_types::constructed::{
     LogDatum, LogValue,
 };
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::{Date, PropertyValue, Time};
 use bytes::BytesMut;
 
@@ -54,7 +54,7 @@ fn datetime((date, time): (Date, Time)) -> PropertyValue {
 
 fn assert_refused(result: Result<(), Error>, code: ErrorCode) {
     assert!(
-        matches!(result, Err(Error::Protocol { class, code: c })
+        matches!(result, Err(Error::Remote(RemoteError::Error { class, code: c }))
             if class == ErrorClass::PROPERTY && c == code),
         "expected PROPERTY / {code:?}, got {result:?}"
     );

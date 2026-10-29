@@ -3,8 +3,8 @@
 //! opaque via the shared relay mechanics (AB.5.3.2 forwarding).
 use super::*;
 use crate::sc_frame::{
-    advertisement_message_error, first_must_understand_destination_option_marker, BROADCAST_VMAC,
-    UNKNOWN_VMAC,
+    BROADCAST_VMAC, UNKNOWN_VMAC, advertisement_message_error,
+    first_must_understand_destination_option_marker,
 };
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bytes::Bytes;
@@ -58,7 +58,7 @@ pub(super) fn local_nak(msg: &ScMessage, wire: &[u8]) -> Option<ScMessage> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sc_frame::{decode_sc_bvlc_result, decode_sc_message, ScBvlcResult};
+    use crate::sc_frame::{ScBvlcResult, decode_sc_bvlc_result, decode_sc_message};
 
     fn decoded(function: u8, flags: u8, body: &[u8]) -> (ScMessage, Vec<u8>) {
         let mut wire = vec![function, flags, 0x22, 0x33];

@@ -111,13 +111,15 @@ async fn dcc_timer_stop_handles_absent_and_completed_timer() {
     tokio::task::yield_now().await;
     tokio::time::advance(Duration::from_secs(60)).await;
     tokio::task::yield_now().await;
-    assert!(server
-        .dcc_timer
-        .lock()
-        .await
-        .as_ref()
-        .unwrap()
-        .is_finished());
+    assert!(
+        server
+            .dcc_timer
+            .lock()
+            .await
+            .as_ref()
+            .unwrap()
+            .is_finished()
+    );
     assert_eq!(server.comm_state(), DccState::Enable);
     server.stop().await.unwrap();
     assert!(server.dcc_timer.lock().await.is_none());

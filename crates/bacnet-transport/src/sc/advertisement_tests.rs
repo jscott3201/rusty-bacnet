@@ -188,7 +188,7 @@ async fn advertisement_negative_matrix_nak_vs_silence() {
 
 #[tokio::test]
 async fn advertisement_silence_and_known_codes_never_consult_expired_budget() {
-    use super::rejection::{reject, RejectionBudget, RejectionExpired};
+    use super::rejection::{RejectionBudget, RejectionExpired, reject};
     struct NoIo;
     impl WebSocketPort for NoIo {
         async fn send(&self, _: &[u8]) -> Result<(), Error> {

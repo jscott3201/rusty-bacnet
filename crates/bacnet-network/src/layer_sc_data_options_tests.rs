@@ -1,12 +1,12 @@
 use super::NetworkLayer;
-use bacnet_encoding::npdu::{encode_npdu, Npdu};
+use bacnet_encoding::npdu::{Npdu, encode_npdu};
 use bacnet_npdu::NetworkPriority;
 use bacnet_transport::sc::{LoopbackWebSocket, ScTransport, WebSocketPort};
 use bacnet_transport::sc_frame::{
-    decode_sc_message, encode_sc_message, ScFunction, ScMessage, ScOption, Vmac,
+    ScFunction, ScMessage, ScOption, Vmac, decode_sc_message, encode_sc_message,
 };
 use bytes::{Bytes, BytesMut};
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 async fn sc_hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
     let data = ws_hub.recv().await.unwrap();

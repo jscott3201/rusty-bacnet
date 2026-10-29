@@ -20,10 +20,10 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use crate::endpoint::common::{
-    build_database, build_identity, build_pending_boxes, lifecycle_error, make_analog_input,
-    make_analog_value, make_binary_input, make_binary_value, parse_device_uuid, parse_ipv4,
-    parse_read_work_limit, parse_segmentation, parse_services, pending_group, with_bip_port,
-    PendingObject,
+    PendingObject, build_database, build_identity, build_pending_boxes, lifecycle_error,
+    make_analog_input, make_analog_value, make_binary_input, make_binary_value, parse_device_uuid,
+    parse_ipv4, parse_read_work_limit, parse_segmentation, parse_services, pending_group,
+    with_bip_port,
 };
 use crate::endpoint::lifecycle::Lifecycle;
 use crate::endpoint::roles::{PyEndpointClient, PyEndpointServer};
@@ -52,6 +52,8 @@ struct BipEndpointConfig {
     /// The B/IP multicast group `multicast=` asked for (#941).
     multicast: Option<bacnet_transport::bip::BipMulticast>,
     reinitialize: crate::reinitialize::EndpointReinitialize,
+    /// The `device_write_policy` callable, if any (#2033).
+    device_writes: crate::mutation_policy::DeviceWritePolicy,
 }
 
 type BipSession = EndpointSession<BipTransport>;
@@ -102,6 +104,7 @@ impl BipEndpointConfig {
             builder = builder.registered_network_port(oid);
         }
         let session = builder.build_session().map_err(to_py_err)?;
+        let session = config.device_writes.install(session);
         Ok(config.reinitialize.install(session))
     }
 }
@@ -189,6 +192,12 @@ impl PyBipEndpoint {
     ///     on_reinitialize / after_reinitialize / reinit_password:
     ///         Keyword-only. Execute ReinitializeDevice, as `BACnetServer`'s
     ///         keywords of the same names do (#1566).
+    ///     device_write_policy: Keyword-only (default None). A callable that
+    ///         decides each WriteProperty to the local Device's Description
+    ///         or installed Audit recipient (#2033). It gets a
+    ///         `MutationContext` and returns a bool, with the fail-closed
+    ///         rules of `BACnetServer`'s `mutation_policy` callable. Without
+    ///         it the endpoint executes no WriteProperty.
     #[new]
     #[pyo3(signature = (
         device_instance,
@@ -216,7 +225,8 @@ impl PyBipEndpoint {
         multicast=None,
         on_reinitialize=None,
         after_reinitialize=None,
-        reinit_password=None
+        reinit_password=None,
+        device_write_policy=None
     ))]
     fn new(
         device_instance: u32,
@@ -244,12 +254,14 @@ impl PyBipEndpoint {
         on_reinitialize: Option<&Bound<'_, PyAny>>,
         after_reinitialize: Option<&Bound<'_, PyAny>>,
         reinit_password: Option<String>,
+        device_write_policy: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         let reinitialize = crate::reinitialize::EndpointReinitialize::parse(
             on_reinitialize,
             after_reinitialize,
             reinit_password,
         )?;
+        let device_writes = crate::mutation_policy::DeviceWritePolicy::parse(device_write_policy)?;
         let mode = crate::bip_options::bip_mode("bip", bbmd, foreign_device)?;
         let multicast = crate::bip_options::bip_multicast(
             "bip",
@@ -269,16 +281,17 @@ impl PyBipEndpoint {
             crate::client::parse_min_request_interval_ms(min_request_interval_ms)?;
         let interface_ip = parse_ipv4(interface, "interface")?;
         let broadcast = parse_ipv4(broadcast_address, "broadcast_address")?;
-        if let Some(selected) = registered_network_port {
-            if !(1..=255).contains(&selected)
+        if let Some(selected) = registered_network_port
+            && (!(1..=255).contains(&selected)
                 || selected != network_port_instance
                 || interface_ip.is_unspecified()
                 || interface_ip.is_multicast()
                 || interface_ip.is_broadcast()
-                || interface_ip == broadcast
-            {
-                return Err(PyValueError::new_err("registered_network_port must select the declared 1..255 port on a concrete unicast interface"));
-            }
+                || interface_ip == broadcast)
+        {
+            return Err(PyValueError::new_err(
+                "registered_network_port must select the declared 1..255 port on a concrete unicast interface",
+            ));
         }
         let segmentation = parse_segmentation(segmentation);
         let service_list = parse_services(services);
@@ -318,6 +331,7 @@ impl PyBipEndpoint {
                 mode,
                 multicast,
                 reinitialize,
+                device_writes,
             },
         })
     }
@@ -502,6 +516,7 @@ impl PyBipEndpoint {
     fn server<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.lifecycle.session.clone();
         let reinitialize = self.config.reinitialize.enabled();
+        let device_writes = self.config.device_writes.enabled();
         crate::py_async::future_into_py(py, async move {
             let handle = {
                 let guard = inner.lock().await;
@@ -516,7 +531,7 @@ impl PyBipEndpoint {
                     )
                 })?
             };
-            Ok(PyEndpointServer::new(handle, reinitialize))
+            Ok(PyEndpointServer::new(handle, reinitialize, device_writes))
         })
     }
 

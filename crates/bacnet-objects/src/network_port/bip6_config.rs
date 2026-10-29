@@ -3,6 +3,7 @@
 //! owner publishes it, with its actual bind.
 
 use crate::common;
+use crate::prelude::*;
 use bacnet_types::error::Error;
 
 /// FF05::BAC0, the site-local BACnet group a B/IPv6 transport broadcasts to
@@ -74,7 +75,7 @@ impl Bip6PortConfig {
         // is an IPv6 multicast address (Annex U.4); an IPv4-mapped address
         // is an IPv4 port, which `new_bip` describes.
         if !(1..=255).contains(&instance)
-            || std::net::Ipv6Addr::from(self.ip_address)
+            || core::net::Ipv6Addr::from(self.ip_address)
                 .to_ipv4_mapped()
                 .is_some()
             || self.network_number == u16::MAX

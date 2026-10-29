@@ -3,13 +3,14 @@
 //! Backs AtomicReadFile and AtomicWriteFile services. Supports both
 //! stream-access and record-access modes.
 
+use crate::prelude::*;
+use alloc::borrow::Cow;
+use alloc::sync::Arc;
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, FileAccessMethod, ObjectType, PropertyIdentifier,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
-use std::borrow::Cow;
-use std::sync::Arc;
 
 use crate::clock::ClockReader;
 use crate::common::{self, read_identity_properties};
@@ -446,7 +447,7 @@ impl FileStorage for FileObject {
             usize::try_from(start).map_err(|_| file_full())?,
             usize::try_from(end).map_err(|_| file_full())?,
         );
-        let mut updated = std::mem::take(&mut self.data);
+        let mut updated = core::mem::take(&mut self.data);
         if end_idx > updated.len() {
             updated.resize(end_idx, 0);
         }
@@ -495,7 +496,7 @@ impl FileStorage for FileObject {
         if projected > self.max_file_size.max(existing) {
             return Err(file_full());
         }
-        let mut updated = std::mem::take(&mut self.records);
+        let mut updated = core::mem::take(&mut self.records);
         if end_idx > updated.len() {
             updated.resize(end_idx, Vec::new());
         }

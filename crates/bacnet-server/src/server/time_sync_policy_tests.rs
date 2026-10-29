@@ -4,13 +4,13 @@ use crate::server::{BACnetServer, ServerConfig};
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_transport::port::TransportProvenance;
 use bacnet_types::{
-    primitives::{Date, Time},
     MacAddr,
+    primitives::{Date, Time},
 };
 use bytes::Bytes;
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 
 fn received(mac: &[u8], routed: Option<(u16, &[u8])>) -> ReceivedApdu {
@@ -182,17 +182,21 @@ fn step_cap_exact_boundary_both_directions_and_utc_local_parity() {
             assert_eq!(delta, Some(100));
             assert!(check_step(delta, Some(Duration::from_secs(1))).is_ok());
             assert!(check_step(delta, Some(Duration::from_nanos(999_999_999))).is_err());
-            assert!(check_step(
-                step_hundredths(current + sign * 101, is_utc, frame),
-                Some(Duration::from_secs(1))
-            )
-            .is_err());
+            assert!(
+                check_step(
+                    step_hundredths(current + sign * 101, is_utc, frame),
+                    Some(Duration::from_secs(1))
+                )
+                .is_err()
+            );
         }
-        assert!(check_step(
-            step_hundredths(current, is_utc, frame),
-            Some(Duration::ZERO)
-        )
-        .is_ok());
+        assert!(
+            check_step(
+                step_hundredths(current, is_utc, frame),
+                Some(Duration::ZERO)
+            )
+            .is_ok()
+        );
     }
     assert!(check_step(None, None).is_ok());
     assert!(check_step(None, Some(Duration::MAX)).is_err());
@@ -212,24 +216,32 @@ fn time_sync_rates_bound_bursts_and_restore_cadence_without_denial_debits() {
     for _ in 0..2 {
         limiter.apply_at(&a, None, now, || Ok(())).unwrap();
     }
-    assert!(limiter
-        .apply_at(&a, None, now, || panic!("source limited"))
-        .is_err());
+    assert!(
+        limiter
+            .apply_at(&a, None, now, || panic!("source limited"))
+            .is_err()
+    );
     limiter.apply_at(&b, None, now, || Ok(())).unwrap();
-    assert!(limiter
-        .apply_at(&b, None, now, || panic!("global limited"))
-        .is_err());
-    assert!(limiter
-        .apply_at(&a, None, now + Duration::from_millis(999), || panic!(
-            "early refill"
-        ))
-        .is_err());
+    assert!(
+        limiter
+            .apply_at(&b, None, now, || panic!("global limited"))
+            .is_err()
+    );
+    assert!(
+        limiter
+            .apply_at(&a, None, now + Duration::from_millis(999), || panic!(
+                "early refill"
+            ))
+            .is_err()
+    );
     for seconds in 1..=5 {
         let now = now + Duration::from_secs(seconds);
         limiter.apply_at(&a, None, now, || Ok(())).unwrap();
-        assert!(limiter
-            .apply_at(&b, None, now, || panic!("global limited"))
-            .is_err());
+        assert!(
+            limiter
+                .apply_at(&b, None, now, || panic!("global limited"))
+                .is_err()
+        );
     }
 }
 
@@ -246,29 +258,35 @@ fn coalescing_and_source_capacity_preserve_active_routed_identity() {
     let b = received(&[1], Some((8, &[8])));
     let now = runtime_clock::now();
     limiter.apply_at(&a, None, now, || Ok(())).unwrap();
-    assert!(limiter
-        .apply_at(
-            &same_via_other_router,
-            None,
-            now + Duration::from_secs(1),
-            || panic!("coalesced")
-        )
-        .is_err());
-    assert!(limiter
-        .apply_at(&b, None, now + Duration::from_secs(1), || panic!(
-            "table full"
-        ))
-        .is_err());
+    assert!(
+        limiter
+            .apply_at(
+                &same_via_other_router,
+                None,
+                now + Duration::from_secs(1),
+                || panic!("coalesced")
+            )
+            .is_err()
+    );
+    assert!(
+        limiter
+            .apply_at(&b, None, now + Duration::from_secs(1), || panic!(
+                "table full"
+            ))
+            .is_err()
+    );
     // Denials did not extend the original coalescing window.
     limiter
         .apply_at(&b, None, now + Duration::from_secs(2), || Ok(()))
         .unwrap();
     assert_eq!(limiter.state.lock().unwrap().sources.len(), 1);
-    assert!(limiter
-        .apply_at(&a, None, now + Duration::from_secs(2), || panic!(
-            "cannot evict active"
-        ))
-        .is_err());
+    assert!(
+        limiter
+            .apply_at(&a, None, now + Duration::from_secs(2), || panic!(
+                "cannot evict active"
+            ))
+            .is_err()
+    );
 }
 
 #[test]
@@ -281,14 +299,18 @@ fn failed_step_does_not_spend_rate_or_coalescing_budget() {
     });
     let a = received(&[1], None);
     let now = runtime_clock::now();
-    assert!(limiter
-        .apply_at(&a, None, now, || Err(denied("step cap exceeded")))
-        .is_err());
+    assert!(
+        limiter
+            .apply_at(&a, None, now, || Err(denied("step cap exceeded")))
+            .is_err()
+    );
     assert!(limiter.state.lock().unwrap().sources.is_empty());
     limiter.apply_at(&a, None, now, || Ok(())).unwrap();
-    assert!(limiter
-        .apply_at(&a, None, now, || panic!("limited"))
-        .is_err());
+    assert!(
+        limiter
+            .apply_at(&a, None, now, || panic!("limited"))
+            .is_err()
+    );
 }
 
 #[test]
@@ -312,11 +334,13 @@ fn limits_are_independent_and_monotonic_time_does_not_refill_backwards() {
         let a = received(&[1], None);
         let b = received(&[2], None);
         limiter.apply_at(&a, None, now, || Ok(())).unwrap();
-        assert!(limiter
-            .apply_at(&a, None, now - Duration::from_secs(1), || panic!(
-                "backwards"
-            ))
-            .is_err());
+        assert!(
+            limiter
+                .apply_at(&a, None, now - Duration::from_secs(1), || panic!(
+                    "backwards"
+                ))
+                .is_err()
+        );
         assert_eq!(
             limiter.apply_at(&b, None, now, || Ok(())).is_ok(),
             policy.global_rate.is_none()
@@ -466,18 +490,22 @@ fn global_coalescing_bounds_direct_routed_and_sc_vmac_without_extending_cadence(
         received(&[2, 3, 4, 5, 6, 7], None),
     ];
     let now = runtime_clock::now();
-    assert!(limiter
-        .apply_at(&contexts[0], None, now, || Err(denied("step cap exceeded")))
-        .is_err());
+    assert!(
+        limiter
+            .apply_at(&contexts[0], None, now, || Err(denied("step cap exceeded")))
+            .is_err()
+    );
     for (index, context) in contexts.iter().enumerate() {
         let at = now + Duration::from_secs(index as u64 * 2);
         limiter.apply_at(context, None, at, || Ok(())).unwrap();
         for other in &contexts {
-            assert!(limiter
-                .apply_at(other, None, at + Duration::from_millis(1999), || panic!(
-                    "globally coalesced"
-                ))
-                .is_err());
+            assert!(
+                limiter
+                    .apply_at(other, None, at + Duration::from_millis(1999), || panic!(
+                        "globally coalesced"
+                    ))
+                    .is_err()
+            );
         }
     }
     assert!(limiter.state.lock().unwrap().sources.is_empty());

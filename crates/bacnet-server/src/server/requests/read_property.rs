@@ -8,6 +8,7 @@
 //! notifications or command runs to follow its response.
 use super::issue::ResponsePlan;
 use super::*;
+use bacnet_types::error::RemoteError;
 
 /// An admitted confirmed request and everything its handler owns.
 pub(in crate::server) struct AdmittedRequest<T: TransportPort + 'static> {
@@ -117,8 +118,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 |db, oid, req, result| {
                     let result = match result {
                         Ok(()) => None,
-                        Err(Error::Timeout(_) | Error::Reject { .. } | Error::Abort { .. }) => {
-                            return
+                        Err(
+                            Error::Timeout(_)
+                            | Error::Remote(RemoteError::Reject { .. })
+                            | Error::Remote(RemoteError::Abort { .. }),
+                        ) => {
+                            return;
                         }
                         Err(error) => Some(confirmed_response::error_fields(error)),
                     };

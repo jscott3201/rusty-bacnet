@@ -118,6 +118,21 @@ class ConstructorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "after_reinitialize needs on_reinitialize"):
             BipEndpoint(4101, after_reinitialize=lambda request: None)
 
+    def test_password_over_twenty_characters_is_refused(self):
+        # The limit counts characters, not octets (#2060).
+        handler = lambda request: None
+        with self.assertRaisesRegex(ValueError, "reinit_password exceeds the 20-character limit"):
+            server(on_reinitialize=handler, reinit_password="é" * 21)
+        with self.assertRaisesRegex(ValueError, "reinit_password exceeds the 20-character limit"):
+            BipEndpoint(4101, on_reinitialize=handler, reinit_password="é" * 21)
+        # An empty one could never match (#2094).
+        with self.assertRaisesRegex(ValueError, "empty reinit_password"):
+            server(on_reinitialize=handler, reinit_password="")
+        with self.assertRaisesRegex(ValueError, "empty reinit_password"):
+            BipEndpoint(4101, on_reinitialize=handler, reinit_password="")
+        server(on_reinitialize=handler, reinit_password="é" * 20)
+        BipEndpoint(4101, on_reinitialize=handler, reinit_password="é" * 20)
+
 
 class ServerTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -244,7 +259,7 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
                              error(1, *SERVICES_OTHER))
         await self.run_server(owner, exchange)
         self.assertEqual(len(failures), 1)
-        self.assertIn("server lock", failures[0])
+        self.assertIn("cannot start a binding operation", failures[0])
 
     async def test_after_reinitialize_runs_once_the_reply_is_on_the_link(self):
         """The hook runs only after the server sent the reply. Whether the

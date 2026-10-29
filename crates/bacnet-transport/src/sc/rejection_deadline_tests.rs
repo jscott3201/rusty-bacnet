@@ -315,9 +315,11 @@ async fn rejection_deadline_timely_completion_and_immediate_error_preserve_pendi
             }
             // No new probe without an ACK: completion/error must not clear the
             // pending probe. An ACK to the ORIGINAL identity starts a new one.
-            assert!(timeout(Duration::from_millis(100), hub.recv())
-                .await
-                .is_err());
+            assert!(
+                timeout(Duration::from_millis(100), hub.recv())
+                    .await
+                    .is_err()
+            );
             assert_eq!(
                 *transport.connection_state_changes().borrow(),
                 ScConnectionState::Connected
@@ -334,7 +336,7 @@ async fn rejection_deadline_timely_completion_and_immediate_error_preserve_pendi
 
 #[tokio::test]
 async fn rejection_deadline_expired_budget_never_polls_send_or_times_out_silence() {
-    use super::rejection::{reject, RejectionBudget, RejectionExpired};
+    use super::rejection::{RejectionBudget, RejectionExpired, reject};
     let (client, _hub, observed) = GateSocket::pair();
     let budget = RejectionBudget::new(tokio::time::Instant::now() - Duration::from_secs(1), 1);
     for wire in rejection_wires() {

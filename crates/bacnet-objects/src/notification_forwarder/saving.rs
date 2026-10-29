@@ -35,9 +35,14 @@
 //! operation task retries its saves a minute later, and storage keeps the last
 //! lists that were saved.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
-use std::time::{Duration, Instant};
+use crate::prelude::*;
+use core::sync::atomic::Ordering;
+
+use crate::sync::{AtomicU64, Mutex};
+use alloc::sync::Arc;
+use core::time::Duration;
+#[cfg(all(test, feature = "std"))]
+use std::time::Instant;
 
 use bacnet_types::constructed::BACnetDestination;
 use bacnet_types::enums::PropertyIdentifier;
@@ -70,10 +75,9 @@ impl ForwarderSaveCounters {
     }
 
     fn record_failure(&self) {
-        #[allow(deprecated, reason = "try_update needs Rust 1.95; the MSRV is 1.93")]
         let _ = self
             .failed_saves
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
                 Some(n.saturating_add(1))
             });
     }
@@ -124,11 +128,11 @@ impl Storage {
             move |snapshot: &ForwarderSnapshot| persistence.save(oid, snapshot),
             move |snapshot, result| match result {
                 Ok(()) => {
-                    *saved.lock().unwrap_or_else(PoisonError::into_inner) = snapshot.clone();
+                    *saved.lock() = snapshot.clone();
                 }
                 Err(error) => {
                     counters.record_failure();
-                    tracing::warn!(
+                    log_warn!(
                         forwarder = %oid,
                         %error,
                         "Failed to save Notification Forwarder lists"
@@ -147,10 +151,11 @@ impl Storage {
     /// The wait for a staged write that still holds the forwarder (see
     /// [`StagedSaves::busy`]).
     pub(super) fn busy(&mut self) -> Option<SaveWait> {
-        self.busy_at(Instant::now())
+        self.saves.busy()
     }
 
     /// [`busy`](Self::busy), judged at `now`.
+    #[cfg(all(test, feature = "std"))]
     pub(super) fn busy_at(&mut self, now: Instant) -> Option<SaveWait> {
         self.saves.busy_at(now)
     }
@@ -238,12 +243,7 @@ impl Storage {
         // A staged write dropped just now: save the served lists below.
         self.resave_now |= self.saves.take_correction();
         let current = current();
-        if current
-            == *self
-                .confirmed
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-        {
+        if current == *self.confirmed.lock() {
             self.resave_now = false;
             return;
         }

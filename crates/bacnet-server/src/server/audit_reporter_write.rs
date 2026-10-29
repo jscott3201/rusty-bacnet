@@ -1,5 +1,6 @@
 //! Per-element pre-state selection and successful policy-change exceptions.
 use super::*;
+use bacnet_types::error::RemoteError;
 
 pub(super) struct WriteSelection {
     ordinary: bool,
@@ -160,7 +161,9 @@ impl<T: TransportPort + 'static> WriteCommitObserver for WriteAudit<'_, T> {
         // particular, never manufacture an Error for a timeout/Reject/Abort.
         if matches!(
             error,
-            Error::Timeout(_) | Error::Reject { .. } | Error::Abort { .. }
+            Error::Timeout(_)
+                | Error::Remote(RemoteError::Reject { .. })
+                | Error::Remote(RemoteError::Abort { .. })
         ) {
             self.pending = None;
             return;

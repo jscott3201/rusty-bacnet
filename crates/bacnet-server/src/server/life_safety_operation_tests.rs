@@ -1,7 +1,7 @@
 use super::*;
 
-use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::AtomicUsize;
 
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::npdu::decode_npdu;

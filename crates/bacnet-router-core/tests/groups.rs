@@ -10,8 +10,8 @@ use bacnet_router_core::npdu::Npdu;
 use bacnet_router_core::npdu::{NetworkMessageType, RejectMessageReason};
 use bacnet_router_core::router::{Discard, Group, GroupClassifier, Kind, Options, PortConfig};
 use fixture::{
-    addr, apdu_to, at, bytes, deliver, learn_9_via_r7, reject_data, Outcome, Recorder, CONFIRMED,
-    NODE_A, R7, UNCONFIRMED,
+    CONFIRMED, NODE_A, Outcome, R7, Recorder, UNCONFIRMED, addr, apdu_to, at, bytes, deliver,
+    learn_9_via_r7, reject_data,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -222,13 +222,12 @@ fn only_a_directly_attached_ports_groups_count() {
     assert_eq!(outcome, Outcome::Handled);
     assert_eq!((sent[0].port, sent[0].to.as_deref()), (1, Some(R7)));
     assert_eq!(sent[0].parsed().destination, Some(addr(9, PORT_1_GROUP)));
-    assert!(router.ports().iter().all(|port| port
-        .groups
-        .asked
-        .as_ref()
-        .unwrap()
-        .borrow()
-        .is_empty()));
+    assert!(
+        router
+            .ports()
+            .iter()
+            .all(|port| port.groups.asked.as_ref().unwrap().borrow().is_empty())
+    );
 
     // Port 0's group address, sent to port 1: an ordinary unicast there.
     let (outcome, sent) = deliver(
@@ -352,22 +351,26 @@ fn reusing_storage_releases_custom_rules_of_removed_ports() {
 fn assert_unconfigured_port(npdu: &[u8]) {
     for port in [2, 255] {
         let mut router = router();
-        assert!(router
-            .table_mut()
-            .add_direct(9, bacnet_router_core::PortId(port)));
+        assert!(
+            router
+                .table_mut()
+                .add_direct(9, bacnet_router_core::PortId(port))
+        );
         let (outcome, sent) = deliver(&mut router, &mut host(), 0, NODE_A, npdu, at(1));
         assert_eq!(outcome, Outcome::Discarded(Discard::UnknownPort));
         assert!(sent.is_empty());
         assert_eq!(router.counters().unknown_port, 1);
         assert_eq!(router.counters().group_dadr_drops, 0);
         assert_eq!(router.counters().rejects, 0);
-        assert!(router.ports().iter().all(|port| port
-            .groups
-            .asked
-            .as_ref()
-            .unwrap()
-            .borrow()
-            .is_empty()));
+        assert!(
+            router.ports().iter().all(|port| port
+                .groups
+                .asked
+                .as_ref()
+                .unwrap()
+                .borrow()
+                .is_empty())
+        );
     }
 }
 

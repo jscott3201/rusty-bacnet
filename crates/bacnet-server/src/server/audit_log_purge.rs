@@ -60,7 +60,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 }
 
 fn protocol_error(class: ErrorClass, code: ErrorCode) -> Error {
-    Error::Protocol { class, code }
+    Error::protocol(class, code)
 }
 
 #[cfg(test)]

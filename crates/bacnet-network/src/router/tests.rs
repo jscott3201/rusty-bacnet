@@ -3,7 +3,7 @@
 //! router's engine through [`super::envelope_harness`] (#1679). The
 //! rewrite's unit cases moved to `bacnet-router-core`'s `tests/forward.rs`.
 
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
+use bacnet_encoding::npdu::{Npdu, NpduAddress, decode_npdu, encode_npdu};
 use bacnet_npdu::{NetworkMessageType, RejectMessageReason};
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::port::{DataAttribute, TransportPort};
@@ -12,7 +12,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 use std::net::Ipv4Addr;
 use tokio::time::Duration;
 
-use super::envelope_harness::{control_npdu, Harness, TableSeed};
+use super::envelope_harness::{Harness, TableSeed, control_npdu};
 use super::{BACnetRouter, RouterOptions, RouterPort, SendRequest, StartedRouter};
 use crate::router_table::PortId;
 
@@ -85,7 +85,7 @@ async fn router_forwards_between_networks() {
     assert!(table.lookup(2000).unwrap().is_direct());
     drop(table);
 
-    router.stop().await;
+    router.stop().await.unwrap();
 }
 
 #[tokio::test]
@@ -124,7 +124,7 @@ async fn router_table_populated_on_start() {
     assert_eq!(table.lookup(300).unwrap().port().0, 2);
     drop(table);
 
-    router.stop().await;
+    router.stop().await.unwrap();
 }
 
 #[tokio::test]
@@ -148,7 +148,7 @@ async fn local_message_delivered_to_application() {
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    router.stop().await;
+    router.stop().await.unwrap();
 }
 
 #[tokio::test]
@@ -489,7 +489,7 @@ async fn provenance_threads_by_value_to_every_consumer() {
         payload: Bytes::from_static(&[0x10, 0x08]),
         ..Npdu::default()
     };
-    h.handle(h.ctx_with_provenance(0, &[0x0A], apdu, provenance))
+    h.handle(h.ctx_with_provenance(0, &[0x0A], apdu, provenance.clone()))
         .await;
     let delivered = h.apdus.try_recv().unwrap();
     assert_eq!(delivered.provenance, provenance);
@@ -499,12 +499,12 @@ async fn provenance_threads_by_value_to_every_consumer() {
         NetworkMessageType::REJECT_MESSAGE_TO_NETWORK,
         &reject_payload(RejectMessageReason::NOT_DIRECTLY_CONNECTED, 3000),
     );
-    h.handle(h.ctx_with_provenance(1, &[0x0B], reject, provenance))
+    h.handle(h.ctx_with_provenance(1, &[0x0B], reject, provenance.clone()))
         .await;
     assert_eq!(controls.try_recv().unwrap().provenance, provenance);
 
     let i_am = control_npdu(NetworkMessageType::I_AM_ROUTER_TO_NETWORK, &[0x0b, 0xb8]);
-    h.handle(h.ctx_with_provenance(1, &[0x0B], i_am, provenance))
+    h.handle(h.ctx_with_provenance(1, &[0x0B], i_am, provenance.clone()))
         .await;
     let seen = seen.lock().unwrap();
     assert_eq!(seen.len(), 2);

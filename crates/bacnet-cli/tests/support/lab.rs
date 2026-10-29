@@ -3,6 +3,7 @@
 //! commanded at priority 10. Shared by the TUI's in-process tests (through
 //! `#[path]`) and the one-shot integration tests.
 
+use bacnet_objects::DeviceIdentity;
 use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use bacnet_objects::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use bacnet_objects::command_source::CommandOrigin;
@@ -12,7 +13,6 @@ use bacnet_objects::multistate::MultiStateValueObject;
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_objects::trend::TrendLogObject;
-use bacnet_objects::DeviceIdentity;
 use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 

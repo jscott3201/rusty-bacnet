@@ -3,6 +3,7 @@ use super::rpm_budget::{self, PlannedRow};
 use super::*;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::PropertyReference;
+use bacnet_types::error::RemoteError;
 
 /// One single-property read (ReadProperty, ReadRange or the local read),
 /// planned before any value is read: its target and row, with the member rows
@@ -134,10 +135,10 @@ pub(crate) fn read_property_value(
     } = plan;
     let property = reference.property_identifier;
     let array_index = reference.property_array_index;
-    let object = read_target_object(db, &lookup_oid).ok_or(Error::Protocol {
-        class: ErrorClass::OBJECT,
-        code: ErrorCode::UNKNOWN_OBJECT,
-    })?;
+    let object = read_target_object(db, &lookup_oid).ok_or(Error::protocol(
+        ErrorClass::OBJECT,
+        ErrorCode::UNKNOWN_OBJECT,
+    ))?;
 
     let served = view.map(|view| view.object(object));
     let object: &dyn BACnetObject = served.as_ref().map_or(object, |served| served);
@@ -148,10 +149,10 @@ pub(crate) fn read_property_value(
     // type-dependent identifiers, e.g. ALARM_VALUES), so the handler defers
     // to the trait query.
     if array_index.is_some() && !object.is_array_property(property) {
-        return Err(Error::Protocol {
-            class: ErrorClass::PROPERTY,
-            code: ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
-        });
+        return Err(Error::protocol(
+            ErrorClass::PROPERTY,
+            ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
+        ));
     }
 
     group_present_value::read_served_property(db, view, object, property, array_index, members)
@@ -373,7 +374,9 @@ pub fn handle_read_property_multiple(
                             }
                             Err(e) => {
                                 let (err_class, err_code) = match &e {
-                                    Error::Protocol { class, code } => (*class, *code),
+                                    Error::Remote(RemoteError::Error { class, code }) => {
+                                        (*class, *code)
+                                    }
                                     _ => (ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY),
                                 };
                                 elements.push(ReadResultElement {

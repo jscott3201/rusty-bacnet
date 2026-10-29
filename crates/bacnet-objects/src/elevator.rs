@@ -4,11 +4,15 @@
 //! - EscalatorObject (type 58) — Clause 12.60
 //! - LiftObject (type 59) — Clause 12.59
 
+use crate::prelude::*;
+use alloc::borrow::Cow;
 use bacnet_types::constructed::BACnetLandingCallStatus;
 use bacnet_types::enums::{LiftCarDirection, LiftGroupMode, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
-use std::{borrow::Cow, collections::HashSet, hash::Hash};
+use core::hash::Hash;
+
+use crate::collections::HashSet;
 
 use crate::common;
 use crate::traits::BACnetObject;

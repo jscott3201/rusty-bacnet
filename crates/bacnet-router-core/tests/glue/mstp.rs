@@ -1,6 +1,6 @@
 //! An MS/TP master core over boxed storage, and the frames it sends.
 
-use bacnet_mstp_codec::{decode_frame_in_place, Frame, FrameType, MAX_EXTENDED_MPDU_DATA};
+use bacnet_mstp_codec::{Frame, FrameType, MAX_EXTENDED_MPDU_DATA, decode_frame_in_place};
 use bacnet_mstp_core::{Action, ExtendedStorage, FixedQueues, Instant, MasterCore, MstpCoreConfig};
 use bacnet_router_core::mstp::MstpPort;
 use bacnet_router_core::npdu::Mac;

@@ -12,11 +12,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bacnet_encoding::apdu::{
-    decode_apdu, encode_apdu, Apdu, ComplexAck, ConfirmedRequest as ConfirmedPdu,
+    Apdu, ComplexAck, ConfirmedRequest as ConfirmedPdu, decode_apdu, encode_apdu,
 };
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
+use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
 use bacnet_encoding::primitives::encode_property_value;
-use bacnet_endpoint::identity::{build_database_with_extra, DeviceIdentity};
+use bacnet_endpoint::identity::{DeviceIdentity, build_database_with_extra};
 use bacnet_endpoint::mstp::MstpEndpointBuilder;
 use bacnet_endpoint::session::{EndpointSession, SessionRole};
 use bacnet_npdu::NetworkPriority;
@@ -34,7 +34,7 @@ use bytes::{Bytes, BytesMut};
 use tokio::sync::mpsc;
 
 use crate::mstp_wire::{
-    decode_frame, encode_frame, reply_to_poll, token_frame, FrameType, MstpFrame,
+    FrameType, MstpFrame, decode_frame, encode_frame, reply_to_poll, token_frame,
 };
 
 pub const WAIT: Duration = Duration::from_secs(5);

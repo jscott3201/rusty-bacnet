@@ -40,7 +40,7 @@
 //! one DCC holds back: DCC is checked again before each send.
 
 use super::super::binding_probes::{
-    can_look_for, DeviceLookup, LookupMiss, LookupStart, ProbeWait,
+    DeviceLookup, LookupMiss, LookupStart, ProbeWait, can_look_for,
 };
 use super::super::device_bindings::DeviceResolution;
 use super::*;

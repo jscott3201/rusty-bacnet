@@ -1,9 +1,9 @@
 use super::*;
+use PropertyIdentifier as P;
 use bacnet_objects::{file::FileObject, traits::BACnetObject};
 use bacnet_services::rpm::ReadPropertyMultipleACK;
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::primitives::PropertyValue;
-use PropertyIdentifier as P;
 
 #[test]
 fn rpm_file_indexed_property_list_and_scalar_gates_preserve_bytes() {

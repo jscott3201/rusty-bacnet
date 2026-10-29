@@ -3,8 +3,8 @@
 //! 12.53.8 to 12.53.10, #1264).
 use super::tests::{assert_property_error, configured, device, member, read};
 use super::*;
-use bacnet_types::enums::ErrorCode;
 use PropertyIdentifier as P;
+use bacnet_types::enums::ErrorCode;
 
 fn reliability(channel: &ChannelObject) -> Reliability {
     match read(channel, P::RELIABILITY) {
@@ -80,8 +80,12 @@ fn channel_reliability_names_the_failure_and_clears_on_the_next_success() {
         .write_property(P::PRESENT_VALUE, None, PropertyValue::Real(3.0), None)
         .unwrap();
     let run = channel.take_command_run_internal().unwrap();
-    assert!(!channel
-        .complete_command_run_internal(run.generation.wrapping_add(1), Err(WriteFailure::Process)));
+    assert!(
+        !channel.complete_command_run_internal(
+            run.generation.wrapping_add(1),
+            Err(WriteFailure::Process)
+        )
+    );
     assert_eq!(reliability(&channel), Reliability::NO_FAULT_DETECTED);
 }
 

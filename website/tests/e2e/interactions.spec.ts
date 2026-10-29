@@ -159,6 +159,27 @@ test('original diagram and text remain available without JavaScript', async ({ b
   }
 });
 
+test('without JavaScript, every language tab shows its content', async ({ browser, baseURL }) => {
+  const context = await browser.newContext({ javaScriptEnabled: false, baseURL });
+  try {
+    const page = await context.newPage();
+    // Multicast's Rust tab is prose under its heading; the server's tabs hold programs.
+    for (const [route, rust] of [['connect/multicast/', 'h2#join-from-rust'], ['integrate/server/', 'pre[data-language="rust"]']]) {
+      await page.goto(base + route);
+      const panels = page.locator('starlight-tabs [role="tabpanel"]');
+      expect(await panels.count(), route).toBeGreaterThan(1);
+      for (const panel of await panels.all()) await expect(panel, route).toBeVisible();
+      await expect(page.locator('starlight-tabs pre[data-language="python"]').first(), `${route} python`).toBeVisible();
+      await expect(page.locator(`starlight-tabs ${rust}`).first(), `${route} rust`).toBeVisible();
+      // axe needs scripts in a page of this context, so it runs only on the
+      // scripted pages (site.spec.ts), which show the same panels a tab at a time.
+      await expectContainedPage(page);
+    }
+  } finally {
+    await context.close();
+  }
+});
+
 test('native code copy writes the displayed code to the clipboard', async ({ page, context, browserName }) => {
   // Clipboard permission is a Chromium-only automation capability, not a UI substitute.
   expect(browserName).toBe('chromium');

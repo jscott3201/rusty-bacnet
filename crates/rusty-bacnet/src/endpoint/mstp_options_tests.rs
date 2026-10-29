@@ -4,8 +4,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use bacnet_encoding::apdu::{decode_apdu, encode_apdu, Apdu, ConfirmedRequest};
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
+use bacnet_encoding::apdu::{Apdu, ConfirmedRequest, decode_apdu, encode_apdu};
+use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_transport::mstp::codec::{self, FrameType};
 use bacnet_transport::mstp::{LoopbackSerial, SerialPort};
@@ -69,6 +69,7 @@ fn timed_endpoint(
         timing.transmit_latency_pad_ms,
         timing.usage_timeout_ms,
         timing.reply_timeout_ms,
+        None,
         None,
         None,
         None,

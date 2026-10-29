@@ -1,10 +1,11 @@
 use super::*;
+use PropertyIdentifier as P;
 use bacnet_objects::{
     life_safety::{LifeSafetyPointObject, LifeSafetyZoneObject},
     traits::BACnetObject,
 };
+use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::PropertyValue;
-use PropertyIdentifier as P;
 
 fn point_object(configured: bool, out_of_service: bool) -> LifeSafetyPointObject {
     let mut object = LifeSafetyPointObject::new(7, "LSP-7").unwrap();
@@ -184,9 +185,11 @@ fn rpm_life_safety_metadata_does_not_enable_create_object() {
             .encode(&mut request);
             let mut response = BytesMut::new();
             let result = handle_create_object(&mut db, &request, &mut response);
-            assert!(matches!(result, Err(Error::Protocol { class, code })
+            assert!(
+                matches!(result, Err(Error::Remote(RemoteError::Error { class, code }))
                 if class == ErrorClass::OBJECT
-                    && code == ErrorCode::UNSUPPORTED_OBJECT_TYPE));
+                    && code == ErrorCode::UNSUPPORTED_OBJECT_TYPE)
+            );
             assert!(response.is_empty());
             assert!(db.is_empty());
         }

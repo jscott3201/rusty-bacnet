@@ -1,13 +1,14 @@
 //! Lighting Output (type 54) and Binary Lighting Output (type 55) objects per
 //! ASHRAE 135-2020 Clauses 12.54 and 12.55.
 
+use crate::prelude::*;
+use alloc::borrow::Cow;
+use alloc::sync::Arc;
 use bacnet_types::constructed::BACnetLightingCommand;
 use bacnet_types::enums::{LightingOperation, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
-use std::borrow::Cow;
-use std::sync::Arc;
-use std::time::Duration;
+use core::time::Duration;
 
 use crate::command_source::{CommandOrigin, ValueSourceTracking};
 use crate::common::{self, read_common_properties, read_priority_array};
@@ -369,7 +370,7 @@ fn normalized_level(value: f32) -> Result<f32, Error> {
 
 /// The Default_Fade_Time range of Clause 12.54.16, in milliseconds, which a
 /// lighting command's fade time shares (Table 12-66).
-const DEFAULT_FADE_TIME_MS: std::ops::RangeInclusive<u32> = 100..=86_400_000;
+const DEFAULT_FADE_TIME_MS: core::ops::RangeInclusive<u32> = 100..=86_400_000;
 
 /// Check a Default_Ramp_Rate or Default_Step_Increment value, or a lighting
 /// command's ramp rate or step increment, which share the 0.1..=100.0 range.

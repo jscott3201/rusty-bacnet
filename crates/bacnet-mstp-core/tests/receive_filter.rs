@@ -3,7 +3,7 @@
 
 use bacnet_mstp_codec::crc::crc8;
 use bacnet_mstp_codec::{
-    Frame, FrameType, BROADCAST_MAC, MAX_COBS_FRAME_LENGTH, MAX_EXTENDED_FRAME_LENGTH,
+    BROADCAST_MAC, Frame, FrameType, MAX_COBS_FRAME_LENGTH, MAX_EXTENDED_FRAME_LENGTH,
     MAX_EXTENDED_MPDU_DATA, PREAMBLE,
 };
 use bacnet_mstp_core::npdu::NetworkPriority;

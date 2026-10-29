@@ -1,8 +1,8 @@
 use super::*;
 use bacnet_transport::sc::{LoopbackWebSocket, ScReconnectConfig, WebSocketPort};
-use bacnet_transport::sc_frame::{decode_sc_message, encode_sc_message, ScFunction, ScMessage};
+use bacnet_transport::sc_frame::{ScFunction, ScMessage, decode_sc_message, encode_sc_message};
 use bytes::{Bytes, BytesMut};
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 #[tokio::test]
 async fn sc_client_builder_sends_configured_vmac_and_device_uuid() {
@@ -225,7 +225,6 @@ async fn sc_client_test_builder_reconnect_preflight_drops_input_without_io() {
 
 #[tokio::test]
 async fn sc_client_builder_npdu_limit_preflight_covers_all_build_paths() {
-    use bacnet_transport::mstp::NoSerial;
     for limit in [0, 257, usize::MAX] {
         let builder = || {
             BACnetClient::sc_builder()
@@ -235,7 +234,7 @@ async fn sc_client_builder_npdu_limit_preflight_covers_all_build_paths() {
         };
         for error in [
             builder().build().await.err().unwrap(),
-            builder().build_any::<NoSerial>().await.err().unwrap(),
+            builder().build_any().await.err().unwrap(),
         ] {
             assert!(
                 matches!(error, Error::OutOfRange(message) if message.contains("per-origin limit"))

@@ -18,7 +18,7 @@ use bacnet_types::enums::{
     EngineeringUnits, ErrorClass, ErrorCode, LifeSafetyMode, LifeSafetyOperation, LifeSafetyState,
     ObjectType, PropertyIdentifier, Reliability, SilencedState,
 };
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 
 /// Values no write path range-checks today: an unnamed small value, a value
@@ -41,10 +41,10 @@ fn write(
 
 fn assert_protocol_error(result: Result<(), Error>, class: ErrorClass, code: ErrorCode) {
     match result {
-        Err(Error::Protocol {
+        Err(Error::Remote(RemoteError::Error {
             class: actual_class,
             code: actual_code,
-        }) => {
+        })) => {
             assert_eq!(actual_class, class);
             assert_eq!(actual_code, code);
         }
@@ -318,7 +318,7 @@ fn silence_operation_refuses_a_reserved_or_proprietary_silenced_state_and_keeps_
         point.set_silenced(SilencedState::from_raw(raw));
         point.set_operation_expected(LifeSafetyOperation::SILENCE_AUDIBLE);
         match point.apply_life_safety_operation(LifeSafetyOperation::SILENCE_AUDIBLE) {
-            Err(Error::Protocol { class, code }) => {
+            Err(Error::Remote(RemoteError::Error { class, code })) => {
                 assert_eq!(class, ErrorClass::OBJECT);
                 assert_eq!(code, ErrorCode::INVALID_OPERATION_IN_THIS_STATE);
             }

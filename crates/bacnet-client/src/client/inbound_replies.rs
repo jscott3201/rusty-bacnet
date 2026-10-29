@@ -107,21 +107,21 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let destination = reply_network
             .as_ref()
             .filter(|address| !address.mac_address.is_empty());
-        if !route.requires_direct_response() {
-            if let Some(reply_tx) = reply.reply_tx {
-                let npdu = network.encode_response_for_handoff(
-                    IssuedApdu {
-                        apdu: buf,
-                        next_hop: reply_mac,
-                        destination,
-                        expecting_reply: false,
-                        priority: NetworkPriority::Normal,
-                    },
-                    &route,
-                )?;
-                if reply_tx.send(npdu.freeze()).is_ok() {
-                    return Ok(());
-                }
+        if !route.requires_direct_response()
+            && let Some(reply_tx) = reply.reply_tx
+        {
+            let npdu = network.encode_response_for_handoff(
+                IssuedApdu {
+                    apdu: buf,
+                    next_hop: reply_mac,
+                    destination,
+                    expecting_reply: false,
+                    priority: NetworkPriority::Normal,
+                },
+                &route,
+            )?;
+            if reply_tx.send(npdu.freeze()).is_ok() {
+                return Ok(());
             }
         }
         if route.requires_original_route() {

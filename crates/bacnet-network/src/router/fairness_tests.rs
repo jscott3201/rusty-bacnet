@@ -30,10 +30,12 @@ async fn keyed_drop(peers: &mut [Peer], branch: LocalBranch, source: &[u8]) {
     peers[0].tx.send(arrival).await.unwrap();
     branch_forward(peers, branch, 0, 256).await;
     forwarding_progress(peers, 0).await;
-    assert!(timeout(Duration::from_secs(2), reply_rx)
-        .await
-        .expect("admission drop retained reply sender")
-        .is_err());
+    assert!(
+        timeout(Duration::from_secs(2), reply_rx)
+            .await
+            .expect("admission drop retained reply sender")
+            .is_err()
+    );
     assert_quiet(peers);
 }
 
@@ -51,10 +53,12 @@ async fn each_branch_caps_a_flood_and_same_mac_on_another_port_has_its_own_quota
             peers[0].tx.send(arrival).await.unwrap();
             branch_forward(&mut peers, branch, 0, id).await;
             if id >= 16 {
-                assert!(timeout(Duration::from_secs(2), reply_rx)
-                    .await
-                    .expect("fairness drop retained reply sender")
-                    .is_err());
+                assert!(
+                    timeout(Duration::from_secs(2), reply_rx)
+                        .await
+                        .expect("fairness drop retained reply sender")
+                        .is_err()
+                );
             }
         }
         barrier(&mut peers[0]).await;
@@ -104,7 +108,7 @@ async fn each_branch_caps_a_flood_and_same_mac_on_another_port_has_its_own_quota
         }
         assert_eq!(counters.snapshot().current_depth, 0);
         assert_quiet(&mut peers); // Only pre-existing broadcast forwarding occurred.
-        router.stop().await;
+        router.stop().await.unwrap();
     }
 }
 
@@ -178,7 +182,7 @@ async fn recv_and_try_recv_replenish_only_the_exact_port_mac_key_one_for_one() {
     assert_eq!(counters.snapshot().fairness_drops, 4);
     assert_keyed_apdu(&retained[0], LocalBranch::NoDnet, 0, &[2], 0);
     assert_keyed_apdu(&retained[1], LocalBranch::NoDnet, 0, &[2], 1);
-    router.stop().await;
+    router.stop().await.unwrap();
     for port in 0..2 {
         for id in 32..48 {
             assert_keyed_apdu(
@@ -230,7 +234,7 @@ async fn closed_precedes_fairness_which_precedes_full_in_all_local_branches() {
         drop(apdus);
         assert!(accepted_reply.await.is_err());
         assert_eq!(counters.snapshot().current_depth, 0);
-        router.stop().await;
+        router.stop().await.unwrap();
     }
 }
 
@@ -253,5 +257,5 @@ async fn legacy_local_queue_accepts_256_from_one_port_mac_without_a_quota() {
     for id in 0..256 {
         assert_keyed_apdu(&apdus.try_recv().unwrap(), LocalBranch::NoDnet, 0, &[2], id);
     }
-    router.stop().await;
+    router.stop().await.unwrap();
 }

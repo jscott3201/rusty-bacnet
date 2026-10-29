@@ -21,7 +21,7 @@
 use bacnet_mstp_core::RequestId;
 
 use super::{Ask, Checker, Custody, Owed};
-use crate::model::{Seen, MIN_REPLY_TIMEOUT, MIN_USAGE_TIMEOUT};
+use crate::model::{MIN_REPLY_TIMEOUT, MIN_USAGE_TIMEOUT, Seen};
 
 /// A decision the core took for a request.
 #[derive(Debug, Clone, Copy)]

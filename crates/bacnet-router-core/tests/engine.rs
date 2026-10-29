@@ -12,8 +12,8 @@ use bacnet_router_core::router::{
 };
 use bacnet_router_core::{Duration, Instant, PortId, Router, RouterIn, Storage};
 use fixture::{
-    apdu_to, at, deliver, drain, i_am, learn_9_via_r7, message, options, port_on, router,
-    sent_reject, two_ports, Outcome, Recorder, Store, CONFIRMED, NODE_A, OWN_0, OWN_1, R7,
+    CONFIRMED, NODE_A, OWN_0, OWN_1, Outcome, R7, Recorder, Store, apdu_to, at, deliver, drain,
+    i_am, learn_9_via_r7, message, options, port_on, router, sent_reject, two_ports,
 };
 use proptest::prelude::*;
 

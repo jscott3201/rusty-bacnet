@@ -1,6 +1,7 @@
 use super::super::*;
 use bacnet_types::bitstring::LimitEnable;
 use bacnet_types::enums::EventState;
+use bacnet_types::error::RemoteError;
 
 // --- AnalogInput ---
 
@@ -278,9 +279,10 @@ fn ai_set_description_convenience() {
 #[test]
 fn ai_description_in_property_list() {
     let ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
-    assert!(ai
-        .property_list()
-        .contains(&PropertyIdentifier::DESCRIPTION));
+    assert!(
+        ai.property_list()
+            .contains(&PropertyIdentifier::DESCRIPTION)
+    );
 }
 
 #[test]
@@ -318,17 +320,19 @@ fn ai_is_writable_property_mirrors_write_property() {
     // caught it.
     let mut ai_mut = AnalogInputObject::new(2, "ai-2", EngineeringUnits::NO_UNITS).unwrap();
     assert!(!ai.is_writable_property(PropertyIdentifier::ACKED_TRANSITIONS));
-    assert!(ai_mut
-        .write_property(
-            PropertyIdentifier::ACKED_TRANSITIONS,
-            None,
-            bacnet_types::primitives::PropertyValue::BitString {
-                unused_bits: 5,
-                data: vec![0x80],
-            },
-            None,
-        )
-        .is_err());
+    assert!(
+        ai_mut
+            .write_property(
+                PropertyIdentifier::ACKED_TRANSITIONS,
+                None,
+                bacnet_types::primitives::PropertyValue::BitString {
+                    unused_bits: 5,
+                    data: vec![0x80],
+                },
+                None,
+            )
+            .is_err()
+    );
 
     // Universal read-only.
     assert!(!ai.is_writable_property(PropertyIdentifier::OBJECT_IDENTIFIER));
@@ -347,10 +351,10 @@ fn ai_is_writable_property_mirrors_write_property() {
 
 fn assert_property_error_code(result: Result<(), Error>, code: bacnet_types::enums::ErrorCode) {
     match result.unwrap_err() {
-        Error::Protocol {
+        Error::Remote(RemoteError::Error {
             class,
             code: actual,
-        } => {
+        }) => {
             assert_eq!(class, bacnet_types::enums::ErrorClass::PROPERTY);
             assert_eq!(actual, code);
         }
@@ -513,10 +517,10 @@ fn ai_limit_enable_rejects_noncanonical_bit_strings() {
 
 fn assert_tdn_protocol_error(result: Result<(), Error>, code: bacnet_types::enums::ErrorCode) {
     match result.unwrap_err() {
-        Error::Protocol {
+        Error::Remote(RemoteError::Error {
             class,
             code: actual,
-        } => {
+        }) => {
             assert_eq!(class, bacnet_types::enums::ErrorClass::PROPERTY);
             assert_eq!(actual, code);
         }

@@ -231,10 +231,15 @@ fn enable(id: u8, password: Option<&str>) -> Apdu {
     DeviceCommunicationControlRequest {
         time_duration: None,
         enable_disable: EnableDisable::ENABLE,
-        password: password.map(str::to_owned),
+        password: None,
     }
     .encode(&mut data)
     .unwrap();
+    // Appended by hand, so a test can send what the encoder refuses: a
+    // password over 20 characters (#2085).
+    if let Some(password) = password {
+        bacnet_encoding::primitives::encode_ctx_character_string(&mut data, 2, password).unwrap();
+    }
     req.service_request = data.freeze();
     Apdu::ConfirmedRequest(req)
 }
@@ -518,23 +523,27 @@ async fn recovery_invalid_reserve_before_direct_generic_and_bip_start() {
             .unwrap();
         assert!(matches!(error, Error::Encoding(m) if m.contains("confirmed_recovery_reserve")));
         assert!(!started.load(Ordering::Acquire));
-        assert!(BACnetServer::bip_builder()
-            .interface(Ipv4Addr::LOCALHOST)
-            .port(0)
-            .request_admission_policy(policy)
-            .build()
-            .await
-            .is_err());
+        assert!(
+            BACnetServer::bip_builder()
+                .interface(Ipv4Addr::LOCALHOST)
+                .port(0)
+                .request_admission_policy(policy)
+                .build()
+                .await
+                .is_err()
+        );
     }
     for reserve in [0, 4] {
         for bad in [0, usize::MAX] {
-            assert!(RequestAdmissionPolicy {
-                confirmed_recovery_reserve: reserve,
-                max_recovery_in_flight_per_peer: bad,
-                ..Default::default()
-            }
-            .validate()
-            .is_err());
+            assert!(
+                RequestAdmissionPolicy {
+                    confirmed_recovery_reserve: reserve,
+                    max_recovery_in_flight_per_peer: bad,
+                    ..Default::default()
+                }
+                .validate()
+                .is_err()
+            );
         }
     }
 }

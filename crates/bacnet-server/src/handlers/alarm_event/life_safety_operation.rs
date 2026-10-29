@@ -110,5 +110,5 @@ fn is_life_safety_object(oid: ObjectIdentifier) -> bool {
 }
 
 pub(crate) fn life_safety_error(class: ErrorClass, code: ErrorCode) -> Error {
-    Error::Protocol { class, code }
+    Error::protocol(class, code)
 }

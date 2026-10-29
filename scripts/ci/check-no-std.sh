@@ -38,6 +38,10 @@
 # portable-atomic or critical-section in it, and no bytes with
 # extra-platforms. The harness would hide such a choice on ARMv6-M.
 #
+# A crate in `cas_only` needs atomic compare-and-swap (alloc::sync::Arc), so
+# it is checked only on the targets that have it: ARMv6-M is passed over
+# (#1615).
+#
 # To cover another crate or feature set, add a line to `checks`.
 set -euo pipefail
 
@@ -71,6 +75,7 @@ checks=(
   "bacnet-encoding alloc,heapless"
   "bacnet-services -"
   "bacnet-services alloc"
+  "bacnet-objects alloc"
 )
 default_targets=(thumbv6m-none-eabi thumbv7em-none-eabihf riscv32imac-unknown-none-elf)
 # Crates that need std (or, for tracing, atomics the no_std crates don't
@@ -78,6 +83,9 @@ default_targets=(thumbv6m-none-eabi thumbv7em-none-eabihf riscv32imac-unknown-no
 host_only=(tracing tracing-core tokio socket2)
 # The firmware stand-in for ARMv6-M builds that use bytes; see above.
 harness=nostd-harness
+# The crates that need compare-and-swap, and the targets that lack it.
+cas_only=(bacnet-objects)
+no_cas_target_re='^thumbv6m-'
 # The crates whose builds without `alloc` (or `std` or `serde`, which turn it
 # on) are their allocation-free profile (#1614), and the packages that
 # allocate, which none of those builds' graphs may hold.
@@ -186,6 +194,12 @@ for check in "${checks[@]}"; do
   [ "$features" = - ] || feature_args+=(--features "$features")
   together=()
   for triple in "${targets[@]}"; do
+    case " ${cas_only[*]} " in
+      *" $crate "*) if grep -qE "$no_cas_target_re" <<<"$triple"; then
+          echo "==> $crate (features: $features; $triple): passed over, no compare-and-swap"
+          continue
+        fi ;;
+    esac
     tree=$(graph -p "$crate" "${feature_args[@]}" --target "$triple")
     check_std "$crate" "$features" "$triple" "" "$tree"
     check_backend "$crate" "$features" "$triple" "$tree"

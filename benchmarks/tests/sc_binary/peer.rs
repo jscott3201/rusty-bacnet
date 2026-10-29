@@ -1,10 +1,10 @@
 //! A bounded independent wire peer: no background tasks to strand on panic.
 use super::support::bounded;
-use bacnet_encoding::apdu::{decode_apdu, Apdu};
+use bacnet_encoding::apdu::{Apdu, decode_apdu};
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_services::read_property::ReadPropertyACK;
 use bacnet_transport::sc::WebSocketPort;
-use bacnet_transport::sc_frame::{decode_sc_message, encode_sc_message, ScFunction, ScMessage};
+use bacnet_transport::sc_frame::{ScFunction, ScMessage, decode_sc_message, encode_sc_message};
 use bacnet_transport::sc_tls::{ScNodeTlsConfig, TlsWebSocket};
 use bytes::{Bytes, BytesMut};
 

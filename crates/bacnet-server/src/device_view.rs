@@ -23,7 +23,7 @@ use bacnet_types::{
     error::Error,
     primitives::{ObjectIdentifier, PropertyValue},
 };
-use identity::{identity_property, IdentityView};
+use identity::{IdentityView, identity_property};
 use std::borrow::Cow;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -168,10 +168,7 @@ pub(crate) fn check_executor_owned_write(oid: ObjectIdentifier, property: P) -> 
 }
 
 fn property_error(code: ErrorCode) -> Error {
-    Error::Protocol {
-        class: ErrorClass::PROPERTY,
-        code,
-    }
+    Error::protocol(ErrorClass::PROPERTY, code)
 }
 
 impl DeviceReadView<'_> {
@@ -438,6 +435,10 @@ impl BACnetObject for DeviceReadView<'_> {
     fn is_deleteable(&self) -> bool {
         self.object.is_deleteable()
     }
+    fn supports_access_event_batch_internal(&self) -> bool {
+        self.object.supports_access_event_batch_internal()
+    }
+
     fn supports_cov(&self) -> bool {
         self.object.supports_cov()
     }

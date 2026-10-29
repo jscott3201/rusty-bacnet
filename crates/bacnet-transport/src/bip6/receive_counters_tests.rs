@@ -16,7 +16,7 @@ use tokio::sync::mpsc;
 use tracing::Level;
 
 use super::frame::{encoded, raw_frame};
-use super::receive::{receive_failed, Receiver, Reply};
+use super::receive::{Receiver, Reply, receive_failed};
 use super::receive_counters::ReceiveDrops;
 use super::reply_limit::REPLIES_PER_DESTINATION;
 use super::resolver::Resolver;

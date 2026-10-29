@@ -4,7 +4,7 @@ use core::fmt;
 
 use super::{Reachability, Table, Timing};
 use crate::npdu::RejectMessageReason;
-use crate::{swap_apart, Instant, PortId};
+use crate::{Instant, PortId, swap_apart};
 
 /// What [`Table::apply_reject`] did.
 ///

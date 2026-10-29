@@ -37,8 +37,7 @@ macro_rules! totals {
                 $(
                     if counts.$field != 0 {
                         let added = u64::from(counts.$field);
-                        #[allow(deprecated, reason = "try_update needs Rust 1.95; the MSRV is 1.93")]
-                        let _ = self.$field.fetch_update(
+                        let _ = self.$field.try_update(
                             Ordering::Release,
                             Ordering::Relaxed,
                             |total| Some(total.saturating_add(added)),

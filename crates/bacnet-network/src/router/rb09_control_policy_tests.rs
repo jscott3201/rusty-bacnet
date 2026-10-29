@@ -3,16 +3,16 @@
 //! In-memory, deterministic, no sleeps. Uses [`super::envelope_harness`] and
 //! `ctx_with_provenance`. Deny is silent: no mutation, relay, ACK, or Reject.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bacnet_encoding::npdu::{Npdu, NpduAddress};
 use bacnet_npdu::NetworkMessageType;
 use bacnet_types::MacAddr;
 
+use super::SendRequest;
 use super::control_policy::{ControlAuthContext, ControlAuthorizer, ControlGate, ControlPolicy};
 use super::envelope_harness::*;
-use super::SendRequest;
 use crate::router_table::{PortId, Reachability};
 
 fn hardened() -> Arc<ControlGate> {

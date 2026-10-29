@@ -13,22 +13,30 @@
 //! dropped; a write nobody staged waits where it is ([`crate::durable`] lists
 //! those paths).
 
+use crate::prelude::*;
+#[cfg(feature = "std")]
 use std::path::Path;
 
+#[cfg(feature = "std")]
 use bacnet_encoding::constructed::tagged::{
     decode_ctx_boolean, expect_closing, expect_opening, next_is_context, next_is_opening,
 };
+#[cfg(feature = "std")]
 use bacnet_encoding::constructed::{
     decode_access_rule, decode_device_object_reference, encode_access_rule,
     encode_device_object_reference,
 };
+#[cfg(feature = "std")]
 use bacnet_encoding::{primitives, tags};
 use bacnet_types::constructed::{BACnetAccessRule, BACnetDeviceObjectReference};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
+#[cfg(feature = "std")]
 use bytes::BytesMut;
 
+#[cfg(feature = "std")]
 use super::MAX_ACCESS_RULES;
+#[cfg(feature = "std")]
 use crate::durable::file::ObjectFile;
 
 /// What an Access Rights object keeps across a restart. Each member is
@@ -64,18 +72,25 @@ pub trait AccessRightsPersistence: Send + Sync {
 /// `RBNFWD01` files are siblings with the same header; a new layout gets a
 /// new tag. Accompaniment (#1393) is an optional member after the others,
 /// so a file written before it existed is one with that member absent.
+#[cfg(feature = "std")]
 const MAGIC: &[u8; 8] = b"RBNACR01";
 /// A rule this object accepts encodes in at most 40 octets, so two full
 /// arrays of [`MAX_ACCESS_RULES`] take about 80 KiB, and Accompaniment at
 /// most 12 octets more. Anything much larger is not a file this backend
 /// wrote.
+#[cfg(feature = "std")]
 pub(super) const MAX_FILE_BYTES: u64 = 128 * 1024;
 /// The context tags of the four members, in file order.
+#[cfg(feature = "std")]
 const POSITIVE_TAG: u8 = 0;
+#[cfg(feature = "std")]
 const NEGATIVE_TAG: u8 = 1;
+#[cfg(feature = "std")]
 const ENABLE_TAG: u8 = 2;
+#[cfg(feature = "std")]
 const ACCOMPANIMENT_TAG: u8 = 3;
 /// The label decoding errors carry.
+#[cfg(feature = "std")]
 const WHAT: &str = "Access Rights file";
 
 /// A file holding one Access Rights object's written rule arrays, Enable and
@@ -102,10 +117,12 @@ const WHAT: &str = "Access Rights file";
 ///
 /// [`FileNotificationClassPersistence`]: crate::notification_class::FileNotificationClassPersistence
 #[derive(Clone, Debug)]
+#[cfg(feature = "std")]
 pub struct FileAccessRightsPersistence {
     file: ObjectFile,
 }
 
+#[cfg(feature = "std")]
 impl FileAccessRightsPersistence {
     /// Keep the rule arrays, Enable and Accompaniment in the file at `path`.
     pub fn new(path: impl AsRef<Path>) -> Result<Self, Error> {
@@ -173,6 +190,7 @@ impl FileAccessRightsPersistence {
     }
 }
 
+#[cfg(feature = "std")]
 impl AccessRightsPersistence for FileAccessRightsPersistence {
     fn load(&self, rights: ObjectIdentifier) -> Result<Option<AccessRightsSnapshot>, Error> {
         let Some(body) = self.file.load(rights)? else {

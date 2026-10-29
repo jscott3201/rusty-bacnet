@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use alloc::sync::Arc;
 
 use bacnet_encoding::constructed::encode_authentication_factor;
 use bacnet_types::constructed::{BACnetAuthenticationFactor, BACnetAuthenticationPolicy};
@@ -9,6 +9,14 @@ use super::point_authorization::Authorization;
 use super::point_event_time::next_event_time;
 use super::*;
 use crate::clock::ClockReader;
+
+#[path = "point_event_batch.rs"]
+mod event_batch;
+pub use event_batch::CommittedAccessEvent;
+
+#[cfg(test)]
+#[path = "point_event_batch_tests.rs"]
+mod event_batch_tests;
 
 // AccessPointObject (type 33)
 // ---------------------------------------------------------------------------
@@ -89,6 +97,7 @@ pub const MAX_AUTHENTICATION_POLICIES: u32 = 256;
 /// value served at the edge, follows only those writes, and the return to
 /// service serves the derived value again. Status_Flags carries FAULT from
 /// the value served.
+#[derive(Clone)]
 pub struct AccessPointObject {
     oid: ObjectIdentifier,
     name: String,
@@ -484,6 +493,17 @@ impl BACnetObject for AccessPointObject {
 
     fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
         self.clock = clock;
+    }
+
+    fn supports_access_event_batch_internal(&self) -> bool {
+        true
+    }
+
+    fn record_access_event_batch_internal(
+        &mut self,
+        reports: &[AccessEventReport],
+    ) -> Result<Vec<CommittedAccessEvent>, Error> {
+        self.record_event_batch(reports)
     }
 
     /// Take an access event the application reports (#1132), through

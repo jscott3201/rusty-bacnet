@@ -1,7 +1,7 @@
 //! A router's local delivery gives the reply capability only to a
 //! Confirmed-Request, the one APDU answered on its arrival route (#1713).
 
-use crate::loopback_fixture::{recv, RouterFixture};
+use crate::loopback_fixture::{RouterFixture, recv};
 
 /// NPDU bytes for a local APDU: version 1, no addresses, then `apdu`.
 fn local(apdu: &[u8]) -> Vec<u8> {

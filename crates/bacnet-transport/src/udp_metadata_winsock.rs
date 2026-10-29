@@ -113,10 +113,10 @@ pub(super) fn windows_destination(
             }
             _ => None,
         };
-        if let Some(candidate) = candidate {
-            if destination.replace(candidate).is_some() {
-                return Err(invalid_metadata("duplicate UDP destination metadata"));
-            }
+        if let Some(candidate) = candidate
+            && destination.replace(candidate).is_some()
+        {
+            return Err(invalid_metadata("duplicate UDP destination metadata"));
         }
         let next = length.next_multiple_of(size_of::<usize>());
         rest = rest.get(next..).unwrap_or_default();

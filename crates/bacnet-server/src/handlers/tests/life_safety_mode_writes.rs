@@ -7,6 +7,7 @@ use bacnet_objects::life_safety::{LifeSafetyPointObject, LifeSafetyZoneObject};
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
 use bacnet_types::enums::{LifeSafetyMode, LifeSafetyState};
+use bacnet_types::error::RemoteError;
 
 /// One Point and one Zone, both accepting only OFF, ON and TEST.
 fn life_safety_db() -> (ObjectDatabase, [ObjectIdentifier; 2]) {
@@ -68,7 +69,7 @@ fn read_bytes(db: &ObjectDatabase, oid: ObjectIdentifier, property: PropertyIden
 
 fn assert_property_error(result: Result<(), Error>, expected: ErrorCode) {
     assert!(
-        matches!(result, Err(Error::Protocol { class, code })
+        matches!(result, Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::PROPERTY
                 && code == expected),
         "expected PROPERTY / {expected:?}, got {result:?}"

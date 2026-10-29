@@ -9,7 +9,7 @@ use super::super::*;
 use bacnet_encoding::primitives::encode_timestamp_choice;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{ErrorClass, ErrorCode, EventState};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 use bytes::BytesMut;
 
 fn timestamp_property_value(timestamp: &BACnetTimeStamp) -> PropertyValue {
@@ -115,7 +115,7 @@ fn assert_write_access_denied(
     label: &str,
 ) {
     match result.expect_err(&format!("{label}: {property:?} write must be refused")) {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(
                 class,
                 ErrorClass::PROPERTY,
@@ -248,9 +248,11 @@ fn assert_event_properties_round_trip(object: &mut dyn BACnetObject, label: &str
         label,
     );
     assert!(!object.is_writable_property(PropertyIdentifier::ACKED_TRANSITIONS));
-    assert!(object
-        .property_list()
-        .contains(&PropertyIdentifier::ACKED_TRANSITIONS));
+    assert!(
+        object
+            .property_list()
+            .contains(&PropertyIdentifier::ACKED_TRANSITIONS)
+    );
 
     // Event_State is maintained by the detector, never assignable from the
     // network — a write arm would let a client fake an alarm state.
@@ -389,7 +391,7 @@ fn multistate_event_history_is_listed_readable_and_read_only() {
 }
 
 macro_rules! assert_multistate_history_reset {
-    ($object:expr, $label:literal) => {{
+    ($object:expr_2021, $label:literal) => {{
         let mut object = $object;
         object.event_history.time_stamps[0] = BACnetTimeStamp::SequenceNumber(91);
         object.event_history.message_texts[1] = "seeded".into();
@@ -439,10 +441,10 @@ fn assert_property_error(result: Result<(), Error>, code: ErrorCode) {
 
 fn assert_property_read_error(result: Result<PropertyValue, Error>, code: ErrorCode) {
     match result.unwrap_err() {
-        Error::Protocol {
+        Error::Remote(RemoteError::Error {
             class,
             code: actual,
-        } => {
+        }) => {
             assert_eq!(class, ErrorClass::PROPERTY);
             assert_eq!(actual, code);
         }
@@ -467,9 +469,11 @@ fn multistate_alarm_values_round_trip_and_match_pics() {
                 .unwrap(),
             value
         );
-        assert!(object
-            .property_list()
-            .contains(&PropertyIdentifier::ALARM_VALUES));
+        assert!(
+            object
+                .property_list()
+                .contains(&PropertyIdentifier::ALARM_VALUES)
+        );
         assert!(object.is_writable_property(PropertyIdentifier::ALARM_VALUES));
         assert_property_error(
             object.write_property(
@@ -612,9 +616,11 @@ fn unsupported_fault_and_output_alarm_surfaces_are_unknown() {
             object.read_property(PropertyIdentifier::FAULT_VALUES, None),
             ErrorCode::UNKNOWN_PROPERTY,
         );
-        assert!(!object
-            .property_list()
-            .contains(&PropertyIdentifier::FAULT_VALUES));
+        assert!(
+            !object
+                .property_list()
+                .contains(&PropertyIdentifier::FAULT_VALUES)
+        );
         assert!(!object.is_writable_property(PropertyIdentifier::FAULT_VALUES));
     }
     let mso = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();
@@ -622,12 +628,14 @@ fn unsupported_fault_and_output_alarm_surfaces_are_unknown() {
         mso.read_property(PropertyIdentifier::ALARM_VALUES, None),
         ErrorCode::UNKNOWN_PROPERTY,
     );
-    assert!(!mso
-        .property_list()
-        .contains(&PropertyIdentifier::ALARM_VALUES));
-    assert!(!mso
-        .property_list()
-        .contains(&PropertyIdentifier::FAULT_VALUES));
+    assert!(
+        !mso.property_list()
+            .contains(&PropertyIdentifier::ALARM_VALUES)
+    );
+    assert!(
+        !mso.property_list()
+            .contains(&PropertyIdentifier::FAULT_VALUES)
+    );
 }
 
 #[test]

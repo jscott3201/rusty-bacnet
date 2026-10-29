@@ -6,6 +6,7 @@ use super::{assert_invalid_data_type, assert_value_out_of_range};
 use bacnet_encoding::constructed::decode_landing_call_status;
 use bacnet_types::constructed::{BACnetLandingCallStatus, LandingCallCommand};
 use bacnet_types::enums::{ErrorClass, ErrorCode, LiftCarDirection};
+use bacnet_types::error::RemoteError;
 
 const LCC: PropertyIdentifier = PropertyIdentifier::LANDING_CALL_CONTROL;
 
@@ -44,7 +45,7 @@ fn direction_bytes(raw: u32) -> Vec<u8> {
 
 fn assert_invalid_data_encoding(result: Result<(), Error>, context: &str) {
     match result.expect_err(&format!("{context}: write must be refused")) {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, ErrorClass::PROPERTY, "{context}");
             assert_eq!(code, ErrorCode::INVALID_DATA_ENCODING, "{context}");
         }

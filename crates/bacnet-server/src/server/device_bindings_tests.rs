@@ -1,6 +1,6 @@
 use super::device_bindings::{
-    BindingFreshness, DeviceBindingTable, DeviceResolution, ObservationOutcome,
-    MAX_DEVICE_BINDINGS, OBSERVED_BINDING_TTL,
+    BindingFreshness, DeviceBindingTable, DeviceResolution, MAX_DEVICE_BINDINGS,
+    OBSERVED_BINDING_TTL, ObservationOutcome,
 };
 use super::*;
 use crate::server::test_transport::TestTransport;
@@ -63,11 +63,13 @@ fn configured_registration_rejects_entry_beyond_capacity_without_mutation() {
         .unwrap();
     }
     assert_eq!(configured.len(), MAX_DEVICE_BINDINGS);
-    assert!(super::device_bindings::register_configured_binding(
-        &mut configured,
-        DeviceBinding::local(device(MAX_DEVICE_BINDINGS as u32), LOCAL_PEER).unwrap(),
-    )
-    .is_err());
+    assert!(
+        super::device_bindings::register_configured_binding(
+            &mut configured,
+            DeviceBinding::local(device(MAX_DEVICE_BINDINGS as u32), LOCAL_PEER).unwrap(),
+        )
+        .is_err()
+    );
     assert_eq!(configured.len(), MAX_DEVICE_BINDINGS);
 }
 
@@ -560,7 +562,7 @@ fn source_binding_takes_a_binding_routed_through_this_network_as_local() {
     use bacnet_objects::command_source::CommandDeviceBinding::{Unique, Unknown};
     let routed = |network, mac| {
         configured(vec![
-            DeviceBinding::routed(device(1), network, mac, ROUTER).unwrap()
+            DeviceBinding::routed(device(1), network, mac, ROUTER).unwrap(),
         ])
     };
     let here = routed(THIS_NETWORK, FINAL_PEER);

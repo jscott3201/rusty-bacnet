@@ -4,11 +4,12 @@ use super::{ClientInner, CoreClient};
 use crate::errors::to_py_err;
 use bacnet_transport::sc::ScEvent;
 use bacnet_types::error::Error;
-use pyo3::exceptions::PyRuntimeError;
 use pyo3::PyResult;
+use pyo3::exceptions::PyRuntimeError;
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard, PoisonError};
-use tokio::sync::{broadcast, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use tokio::sync::{Mutex, Notify, RwLock, RwLockReadGuard, RwLockWriteGuard, broadcast};
 use tokio::task::JoinHandle;
 
 #[cfg(test)]
@@ -20,6 +21,10 @@ mod tests;
 pub(super) struct ClientState {
     client: RwLock<Option<CoreClient>>,
     closing: AtomicBool,
+    /// Woken when close is admitted, so an operation or entry queued behind
+    /// a pending entry's exclusive hold fails at once instead of waiting
+    /// for that entry to finish (#2030).
+    closing_admitted: Notify,
     shutdown: Mutex<Option<JoinHandle<Result<(), Error>>>>,
     /// An SC client's event receiver, subscribed while it was built, so it
     /// holds the first `Connected` (#1908). The first `connection_events()`
@@ -50,15 +55,39 @@ fn closing() -> pyo3::PyErr {
     PyRuntimeError::new_err("client closing — await stop() before starting new work")
 }
 
+/// Take `guard`, a lock on the client slot, unless close is admitted first
+/// or meanwhile. A pending entry holds the slot exclusively until it
+/// finishes, and close waits for it; an operation queued behind it still
+/// learns of the close at once (#2030).
+///
+/// When the close wins, the queued lock future is dropped in that same
+/// poll, leaving the lock's queue, and the arm awaits nothing, so no
+/// unpolled waiter can sit on a granted guard (#1494).
+async fn admitted<G>(inner: &ClientInner, guard: impl Future<Output = G>) -> PyResult<G> {
+    let admitted = inner.closing_admitted.notified();
+    tokio::pin!(admitted);
+    // Registered before the flag is read, so a close admitted after the
+    // read still wakes this waiter.
+    admitted.as_mut().enable();
+    if inner.closing.load(Ordering::Acquire) {
+        return Err(closing());
+    }
+    tokio::select! {
+        biased;
+        () = &mut admitted => Err(closing()),
+        guard = guard => {
+            if inner.closing.load(Ordering::Acquire) {
+                Err(closing())
+            } else {
+                Ok(guard)
+            }
+        }
+    }
+}
+
 /// Hold shared ownership through a native operation, without serializing readers.
 pub(super) async fn started(inner: &ClientInner) -> PyResult<RwLockReadGuard<'_, CoreClient>> {
-    if inner.closing.load(Ordering::Acquire) {
-        return Err(closing());
-    }
-    let guard = inner.client.read().await;
-    if inner.closing.load(Ordering::Acquire) {
-        return Err(closing());
-    }
+    let guard = admitted(inner, inner.client.read()).await?;
     RwLockReadGuard::try_map(guard, Option::as_ref)
         .map_err(|_| PyRuntimeError::new_err("client not started — use 'async with'"))
 }
@@ -68,13 +97,7 @@ pub(super) async fn started(inner: &ClientInner) -> PyResult<RwLockReadGuard<'_,
 pub(super) async fn starting(
     inner: &ClientInner,
 ) -> PyResult<RwLockWriteGuard<'_, Option<CoreClient>>> {
-    if inner.closing.load(Ordering::Acquire) {
-        return Err(closing());
-    }
-    let guard = inner.client.write().await;
-    if inner.closing.load(Ordering::Acquire) {
-        return Err(closing());
-    }
+    let guard = admitted(inner, inner.client.write()).await?;
     if guard.is_some() {
         return Err(PyRuntimeError::new_err("client already started"));
     }
@@ -90,6 +113,7 @@ pub(super) async fn close(inner: ClientInner) -> PyResult<()> {
         // No await separates admission closure from storing the task. A waiter
         // cancelled before this mutex is acquired cannot leave a closing flag.
         inner.closing.store(true, Ordering::Release);
+        inner.closing_admitted.notify_waiters();
         let state = Arc::clone(&inner);
         *shutdown = Some(tokio::spawn(stop_native(state)));
     }

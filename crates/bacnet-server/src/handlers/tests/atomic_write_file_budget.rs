@@ -10,8 +10,8 @@ use bacnet_types::enums::AbortReason;
 use std::{
     borrow::Cow,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
@@ -32,11 +32,13 @@ impl BACnetObject for Probe {
         Cow::Borrowed(&[])
     }
     fn read_property(&self, p: PropertyIdentifier, i: Option<u32>) -> Result<PropertyValue, Error> {
-        assert!([
-            PropertyIdentifier::READ_ONLY,
-            PropertyIdentifier::FILE_ACCESS_METHOD
-        ]
-        .contains(&p));
+        assert!(
+            [
+                PropertyIdentifier::READ_ONLY,
+                PropertyIdentifier::FILE_ACCESS_METHOD
+            ]
+            .contains(&p)
+        );
         if p == PropertyIdentifier::READ_ONLY {
             match self.gate {
                 2 => return Ok(PropertyValue::Boolean(true)),
@@ -62,11 +64,7 @@ impl BACnetObject for Probe {
         (self.gate != 1).then_some(self)
     }
     fn file_storage_internal_mut(&mut self) -> Option<&mut dyn FileStorage> {
-        if self.gate == 6 {
-            None
-        } else {
-            Some(self)
-        }
+        if self.gate == 6 { None } else { Some(self) }
     }
 }
 impl FileStorage for Probe {
@@ -93,18 +91,16 @@ impl FileStorage for Probe {
 }
 fn backend_error(kind: u8) -> Error {
     if kind == 2 {
-        Error::Abort {
-            reason: AbortReason::OUT_OF_RESOURCES,
-        }
+        Error::abort(AbortReason::OUT_OF_RESOURCES)
     } else {
-        Error::Protocol {
-            class: if kind == 0 {
+        Error::protocol(
+            if kind == 0 {
                 ErrorClass::OBJECT
             } else {
                 ErrorClass::SERVICES
             },
-            code: ErrorCode::FILE_FULL,
-        }
+            ErrorCode::FILE_FULL,
+        )
     }
 }
 fn probe(record: bool) -> Probe {

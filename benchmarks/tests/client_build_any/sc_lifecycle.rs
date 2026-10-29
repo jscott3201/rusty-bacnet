@@ -10,11 +10,11 @@ use tokio::{
     time::Instant,
 };
 use tokio_tungstenite::{
-    tungstenite::{
-        handshake::server::{ErrorResponse, Request, Response},
-        Message,
-    },
     WebSocketStream,
+    tungstenite::{
+        Message,
+        handshake::server::{ErrorResponse, Request, Response},
+    },
 };
 
 type Socket = WebSocketStream<tokio_rustls::server::TlsStream<TcpStream>>;
@@ -94,7 +94,7 @@ async fn eof(mut tcp: TcpStream) {
                         std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::BrokenPipe
                     ) =>
                 {
-                    break
+                    break;
                 }
                 Err(e) => panic!("unexpected TCP read error: {e}"),
             }
@@ -120,11 +120,11 @@ async fn erased_sc_preserves_heartbeat_retry_spacing_and_stop_cancels_pending_tl
                 .await
                 .unwrap()
                 .unwrap();
-            if let Message::Binary(data) = message {
-                if data[0] == 10 {
-                    events.send(0).await.unwrap();
-                    break;
-                }
+            if let Message::Binary(data) = message
+                && data[0] == 10
+            {
+                events.send(0).await.unwrap();
+                break;
             }
         }
         let (mut retry, _) = bounded(listener.accept()).await.unwrap();
@@ -148,7 +148,7 @@ async fn erased_sc_preserves_heartbeat_retry_spacing_and_stop_cancels_pending_tl
         );
         drop(ws);
     }));
-    let mut client: BACnetClient<AnyTransport<NoSerial>> = observe(
+    let mut client: BACnetClient<AnyTransport> = observe(
         "initial SC connection",
         Duration::from_secs(5),
         Box::pin(
@@ -160,7 +160,7 @@ async fn erased_sc_preserves_heartbeat_retry_spacing_and_stop_cancels_pending_tl
                     max_delay_ms: 120,
                     max_retries: 10,
                 })
-                .build_any::<NoSerial>(),
+                .build_any(),
         ),
     )
     .await
@@ -213,9 +213,7 @@ async fn erased_sc_without_reconnect_does_not_redial() {
                 .is_err()
         );
     }));
-    let mut client = Box::pin(builder(&url, &certs).build_any::<NoSerial>())
-        .await
-        .unwrap();
+    let mut client = Box::pin(builder(&url, &certs).build_any()).await.unwrap();
     let AnyTransport::Sc(transport) = client.transport() else {
         panic!("expected SC");
     };
@@ -236,7 +234,7 @@ async fn cancel_erased_sc_build_during_tls_releases_its_socket() {
     let certs = generate_test_certs();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("wss://localhost:{}", listener.local_addr().unwrap().port());
-    let pending = Box::pin(builder(&url, &certs).build_any::<NoSerial>());
+    let pending = Box::pin(builder(&url, &certs).build_any());
     let tcp = bounded(async {
         tokio::pin!(pending);
         tokio::select! {
@@ -266,7 +264,7 @@ async fn cancel_erased_sc_build_waiting_for_connect_accept_releases_tls() {
         assert!(closed.is_none() || matches!(closed, Some(Err(_)) | Some(Ok(Message::Close(_)))));
     }));
     {
-        let pending = Box::pin(builder(&url, &certs).build_any::<NoSerial>());
+        let pending = Box::pin(builder(&url, &certs).build_any());
         tokio::pin!(pending);
         tokio::select! {
             result = &mut pending => panic!("SC peer has not accepted: {:?}", result.err()),
@@ -286,9 +284,9 @@ fn concrete_and_erased_build_futures_stay_small_and_send() {
         );
     }
     check(BACnetClient::bip_builder().build());
-    check(BACnetClient::bip_builder().build_any::<NoSerial>());
+    check(BACnetClient::bip_builder().build_any());
     check(BACnetClient::bip6_builder().build());
-    check(BACnetClient::bip6_builder().build_any::<NoSerial>());
+    check(BACnetClient::bip6_builder().build_any());
     check(BACnetClient::<bacnet_transport::sc::ScTransport<TlsWebSocket>>::sc_builder().build());
-    check(BACnetClient::sc_builder().build_any::<NoSerial>());
+    check(BACnetClient::sc_builder().build_any());
 }

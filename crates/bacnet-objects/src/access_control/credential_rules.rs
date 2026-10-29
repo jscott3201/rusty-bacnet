@@ -16,7 +16,7 @@ use crate::common;
 
 /// The vendor range of the extensible access-control enumerations (Clause
 /// 21): ASHRAE owns 0 to 63.
-const VENDOR: std::ops::RangeInclusive<u32> = 64..=65535;
+const VENDOR: core::ops::RangeInclusive<u32> = 64..=65535;
 
 /// A moment to the hundredth of a second; ordering is chronological.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -206,7 +206,7 @@ pub(super) fn check_authentication_factor(
 /// access-control enumerations it tops out at 255: the comment on its Clause
 /// 21 production and Table 23-1 reserve 0 to 63 for ASHRAE and leave 64 to
 /// 255 to vendors.
-const EXEMPTION_VENDOR: std::ops::RangeInclusive<u32> = 64..=255;
+const EXEMPTION_VENDOR: core::ops::RangeInclusive<u32> = 64..=255;
 
 /// Refuse an Authorization_Exemptions value outside the named checks and the
 /// vendor range with VALUE_OUT_OF_RANGE.

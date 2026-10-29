@@ -140,13 +140,13 @@ fn encode_marker<S: EncodeSink + ?Sized>(
 }
 
 fn write_header<S: EncodeSink + ?Sized>(sink: &mut S, header: &[u8]) -> Result<usize, SinkFull> {
-    if let Some(available) = sink.remaining_capacity() {
-        if available < header.len() {
-            return Err(SinkFull {
-                needed: header.len(),
-                available,
-            });
-        }
+    if let Some(available) = sink.remaining_capacity()
+        && available < header.len()
+    {
+        return Err(SinkFull {
+            needed: header.len(),
+            available,
+        });
     }
     sink.write(header)?;
     Ok(header.len())

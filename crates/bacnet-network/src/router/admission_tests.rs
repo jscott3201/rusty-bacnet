@@ -66,7 +66,7 @@ async fn full_shared_local_queue_drops_arrivals_in_all_four_branches_and_keeps_f
                 ..Default::default()
             }
         );
-        router.stop().await;
+        router.stop().await.unwrap();
     }
 }
 
@@ -109,7 +109,7 @@ async fn admitted_local_branches_preserve_metadata_and_reply_ownership() {
         );
     }
     assert_quiet(&mut peers);
-    router.stop().await;
+    router.stop().await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
@@ -137,7 +137,7 @@ async fn legacy_local_receiver_retains_type_and_nonblocking_full_closed_policy()
         dropped_arrival(&mut peers, branch, 1).await;
     }
     assert!(apdus.recv().await.is_none());
-    router.stop().await;
+    router.stop().await.unwrap();
 }
 
 #[path = "admission_lifecycle_tests.rs"]

@@ -12,13 +12,13 @@ use std::net::SocketAddrV6;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use bacnet_types::error::Error;
-use tokio::sync::{oneshot, Notify};
+use tokio::sync::{Notify, oneshot};
 use tokio::time::Instant;
 use tracing::debug;
 
 use super::frame::encoded;
 use super::resolve::{
-    Failure, Neighbours, Route, VirtualRoute, RESOLUTION_INTERVAL, RESOLUTION_TIMEOUT,
+    Failure, Neighbours, RESOLUTION_INTERVAL, RESOLUTION_TIMEOUT, Route, VirtualRoute,
 };
 use super::resolve_counters::{Bip6ResolutionCounters, ResolutionCounts};
 use super::socket::Bip6Socket;
@@ -83,8 +83,7 @@ fn failed(kind: io::ErrorKind, message: String) -> Error {
 
 /// A VMAC as six hex digits, as in `0x0004D2`.
 pub(super) fn vmac_text(vmac: Bip6Vmac) -> String {
-    let [high, middle, low] = vmac.octets();
-    format!("0x{high:02X}{middle:02X}{low:02X}")
+    bacnet_types::bip6_vmac::VmacHex(vmac.octets()).to_string()
 }
 
 /// The VMAC a network-layer MAC names: exactly three octets (U.1.3).
@@ -217,7 +216,7 @@ impl Resolver {
                         "B/IPv6 VMAC {} did not resolve a moment ago",
                         vmac_text(destination)
                     ),
-                ))
+                ));
             }
             Route::Full(limit) => {
                 return Err(failed(
@@ -226,7 +225,7 @@ impl Resolver {
                         "too many B/IPv6 sends waiting on resolution ({limit:?} bound), refusing one to VMAC {}",
                         vmac_text(destination)
                     ),
-                ))
+                ));
             }
         };
         send_original_unicast(socket, source, destination, npdu, addr).await
@@ -249,7 +248,7 @@ impl Resolver {
                 return Err(failed(
                     io::ErrorKind::QuotaExceeded,
                     format!("too many Virtual-Address-Resolutions running ({limit:?} bound)"),
-                ))
+                ));
             }
             VirtualRoute::Wait { rx, wake } => {
                 if wake {

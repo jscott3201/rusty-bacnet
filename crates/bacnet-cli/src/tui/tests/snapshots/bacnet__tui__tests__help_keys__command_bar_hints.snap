@@ -11,7 +11,7 @@ expression: out
 "watch 100 "
  :watch 100 _  watch DEVICE OBJECT [PROPERTY]  Enter run  Esc close             
 "mstp"
- :mstp_  mstp rotation|hold MS | mstp listen SECS  Enter run  Esc close         
+ :mstp_  mstp rotation|hold MS | mstp listen SECS | mstp …  Enter run  Esc close
 "bb"
  :bb_  bbmd [ADDRESS]  Enter run  Esc close                                     
 "zz"

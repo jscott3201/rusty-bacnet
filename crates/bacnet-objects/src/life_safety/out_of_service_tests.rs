@@ -7,7 +7,7 @@ use bacnet_types::enums::{
     ErrorClass, ErrorCode, LifeSafetyOperation, LifeSafetyState, PropertyIdentifier as P,
     Reliability, SilencedState,
 };
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::PropertyValue;
 
 use crate::traits::BACnetObject;
@@ -41,7 +41,7 @@ fn set_out_of_service(object: &mut dyn BACnetObject, out_of_service: bool) {
 
 fn assert_property_error(result: Result<(), Error>, code: ErrorCode) {
     assert!(
-        matches!(result, Err(Error::Protocol { class, code: actual })
+        matches!(result, Err(Error::Remote(RemoteError::Error { class, code: actual }))
             if class == ErrorClass::PROPERTY
                 && actual == code),
         "expected PROPERTY / {code:?}, got {result:?}"

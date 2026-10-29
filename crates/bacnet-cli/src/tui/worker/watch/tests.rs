@@ -1,122 +1,116 @@
-//! The aggregator on its own: notifications into rows, the ring's bound,
-//! and every loss counted.
+//! The worker on its own: the hub's settings for the list, rows as hub
+//! points, how a snapshot reads as a row's source, and the log's lines.
 
-use bacnet_client::client::COVNotificationDelivery;
-use bacnet_encoding::primitives::encode_property_value;
-use bacnet_services::common::BACnetPropertyValue;
-use bacnet_services::cov::COVNotificationRequest;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
-use bytes::BytesMut;
-use tokio::sync::broadcast;
+use bacnet_types::primitives::ObjectIdentifier;
 
 use super::*;
-use crate::tui::worker::EVENT_CHANNEL_CAPACITY;
-
-const DEVICE: u32 = 100;
 
 fn ai(instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::ANALOG_INPUT, instance).unwrap()
 }
 
-fn notification(row: RowId, object: ObjectIdentifier, value: f32) -> ReceivedCOVNotification {
-    let mut buf = BytesMut::new();
-    encode_property_value(&mut buf, &PropertyValue::Real(value)).unwrap();
-    ReceivedCOVNotification {
-        notification: COVNotificationRequest {
-            subscriber_process_identifier: row,
-            initiating_device_identifier: ObjectIdentifier::new(ObjectType::DEVICE, DEVICE)
-                .unwrap(),
-            monitored_object_identifier: object,
-            time_remaining: 300,
-            list_of_values: vec![BACnetPropertyValue {
-                property_identifier: PropertyIdentifier::PRESENT_VALUE,
-                property_array_index: None,
-                value: buf.to_vec(),
-                priority: None,
-            }],
-        },
-        source_mac: MacAddr::from_slice(&[10, 0, 0, 100, 0xBA, 0xC0]),
-        source_network: None,
-        source_address: None,
-        delivery: COVNotificationDelivery::Unconfirmed,
+/// The list's settings are a valid hub, at the bounds of the options too:
+/// a 10 s lifetime, a 1 s poll interval, a long request budget.
+#[test]
+fn the_list_settings_make_a_valid_hub() {
+    let defaults = hub_options(&WatchOptions::default());
+    assert!(defaults.validate().is_ok());
+    assert_eq!(defaults.missing, MissingDevice::Fail);
+    assert_eq!(defaults.reads, Reads::value());
+    assert_eq!(defaults.renewal_margin, DEFAULT_REQUEST_BUDGET * 2);
+    for (lifetime, poll, budget) in [(10, 1, 24), (28_800, 3_600, 8), (300, 10, 600)] {
+        let options = WatchOptions {
+            lifetime,
+            poll_every: Duration::from_secs(poll),
+            workspace: None,
+            request_budget: Duration::from_secs(budget),
+        };
+        let hub = hub_options(&options);
+        assert!(hub.validate().is_ok(), "{options:?}: {:?}", hub.validate());
+        assert_eq!(hub.lifetime.secs(), lifetime);
     }
 }
 
-/// A state with row 1 watching AI:1, as if its start job were running.
-fn state_with_row<'a>(sink: &'a EventSink, options: &'a WatchOptions) -> State<'a> {
-    let mut state = State::new(sink, options);
-    state.command(WatchCommand::Add {
-        row: 1,
-        point: Point {
-            device: DEVICE,
-            network: None,
-            object: ai(1),
-            property: PropertyIdentifier::PRESENT_VALUE,
-        },
-    });
-    state.rows.get_mut(&1).unwrap().mode = Mode::Starting;
-    state
-}
-
-/// A notification lands in its own row only, and the next tick hands it
-/// to the UI.
-#[tokio::test(start_paused = true)]
-async fn notifications_fold_into_their_row() {
-    let (sink, mut events) = EventSink::channel(EVENT_CHANNEL_CAPACITY);
-    let options = WatchOptions::default();
-    let mut state = state_with_row(&sink, &options);
-    assert!(state.notification(Ok(notification(1, ai(1), 72.5))));
-    // Another object, or another row's process id, is not this row's.
-    state.notification(Ok(notification(1, ai(2), 1.0)));
-    state.notification(Ok(notification(9, ai(1), 2.0)));
-    state.tick(&RateCap::new(0));
-    let Some(WorkerEvent::Watch(WatchEvent::Samples(samples))) = events.recv().await else {
-        panic!("expected samples");
+/// Present_Value follows the object (SubscribeCOV); any other property is
+/// a property watch.
+#[test]
+fn rows_map_to_hub_points() {
+    let mut point = Point {
+        device: 2001,
+        network: Some(2),
+        object: ai(1),
+        property: PropertyIdentifier::PRESENT_VALUE,
     };
-    assert_eq!(samples.len(), 1);
-    assert_eq!(samples[0].0, 1);
-    assert_eq!(samples[0].1.value.as_deref(), Ok("72.5"));
+    assert_eq!(hub_point(&point).watched, Watched::Object);
+    point.property = PropertyIdentifier::STATUS_FLAGS;
+    assert_eq!(
+        hub_point(&point).watched,
+        Watched::Property {
+            property: PropertyIdentifier::STATUS_FLAGS,
+            index: None,
+        }
+    );
+    assert_eq!(
+        (hub_point(&point).device, hub_point(&point).object),
+        (2001, ai(1))
+    );
 }
 
-/// Flooding past the client's notification channel: the receiver lags,
-/// and every notification it missed is counted as dropped, as is every
-/// sample the row's ring pushes out before a tick.
-#[tokio::test(start_paused = true)]
-async fn a_flood_past_capacity_counts_every_lost_notification() {
-    let (sink, _events) = EventSink::channel(EVENT_CHANNEL_CAPACITY);
-    let dropped = sink.dropped_counter();
-    let options = WatchOptions::default();
-    let mut state = state_with_row(&sink, &options);
-    let (tx, mut rx) = broadcast::channel(8);
-    for n in 0..50 {
-        tx.send(notification(1, ai(1), n as f32)).unwrap();
+fn snapshot(source: Option<hub::Source>, why: Option<Why>, note: Option<&str>) -> Snapshot {
+    Snapshot {
+        source,
+        why,
+        note: note.map(str::to_string),
+        ..Snapshot::default()
     }
-    let mut received = 0;
-    loop {
-        match rx.try_recv() {
-            Ok(note) => {
-                received += 1;
-                state.notification(Ok(note));
-            }
-            Err(broadcast::error::TryRecvError::Lagged(missed)) => {
-                state.notification(Err(RecvError::Lagged(missed)));
-            }
-            Err(_) => break,
-        }
-    }
-    assert_eq!(received, 8);
-    assert_eq!(dropped.load(std::sync::atomic::Ordering::Relaxed), 42);
+}
 
-    // The ring keeps the newest PENDING_PER_ROW between ticks.
-    for n in 0..PENDING_PER_ROW + 3 {
-        state.notification(Ok(notification(1, ai(1), n as f32)));
+/// The hub's reasons read as the list has always shown them, and a poll's
+/// error, which only changes the note, doesn't change the source.
+#[test]
+fn a_snapshot_reads_as_the_row_source() {
+    let poll = Some(hub::Source::Poll);
+    let cases = [
+        (snapshot(None, None, None), None),
+        (
+            snapshot(Some(hub::Source::Cov), None, None),
+            Some(Source::Cov { lifetime: 60 }),
+        ),
+        (
+            snapshot(poll, Some(Why::Refused("rejected".into())), Some("timeout")),
+            Some(Source::Polled("COV refused: rejected".into())),
+        ),
+        (
+            snapshot(poll, Some(Why::NoAnswer("timeout".into())), None),
+            Some(Source::Polled("no answer: timeout".into())),
+        ),
+        (
+            snapshot(poll, Some(Why::Lapsed(Some("timeout".into()))), None),
+            Some(Source::Polled("renewal failed: timeout".into())),
+        ),
+        (
+            snapshot(poll, Some(Why::Lapsed(None)), None),
+            Some(Source::Polled("renewal stopped".into())),
+        ),
+        (
+            snapshot(
+                None,
+                Some(Why::Missing),
+                Some("device 7 is not in the device table"),
+            ),
+            Some(Source::Failed("device 7 is not in the device table".into())),
+        ),
+        // Between the steps of a change: no source yet.
+        (snapshot(poll, None, Some("timeout")), None),
+        (
+            snapshot(Some(hub::Source::Cov), Some(Why::Refused("x".into())), None),
+            None,
+        ),
+    ];
+    for (snapshot, expected) in cases {
+        assert_eq!(source_of(&snapshot, 60), expected, "{snapshot:?}");
     }
-    assert_eq!(
-        dropped.load(std::sync::atomic::Ordering::Relaxed),
-        42 + 8 + 3,
-        "the 8 pending from the flood and 3 more fell out of the ring"
-    );
 }
 
 /// The log keeps the device a plain instance; a routed one's network has

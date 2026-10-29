@@ -2,7 +2,8 @@
 //! device with the objects whose values need more than an application tag
 //! to read: an analog input in alarm with its event timestamps, a binary
 //! and a multi-state output with state texts, a schedule with a weekly
-//! schedule, and a trend log with its monitored reference.
+//! schedule, a trend log with its monitored reference, and a notification
+//! class with a recipient.
 
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::binary::BinaryOutputObject;
@@ -14,7 +15,10 @@ use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::schedule::ScheduleObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_objects::trend::TrendLogObject;
-use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetTimeValue};
+use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
+use bacnet_types::constructed::{
+    BACnetDestination, BACnetDeviceObjectPropertyReference, BACnetRecipient, BACnetTimeValue,
+};
 use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, Time};
 use insta::assert_snapshot;
@@ -60,8 +64,8 @@ fn at(hour: u8, minute: u8) -> Time {
 }
 
 /// The plant device: Device, AI:3 above its high limit, BO:1 on at
-/// priority 8, MSO:1 at state 2 from priority 12, NC:1, SCHED:1 and TL:1
-/// logging AI:3.
+/// priority 8, MSO:1 at state 2 from priority 12, NC:1, NC:2 with one
+/// recipient, SCHED:1 and TL:1 logging AI:3.
 fn plant() -> ObjectDatabase {
     let operator = CommandOrigin::Local {
         owner_device: oid(ObjectType::DEVICE, PLANT),
@@ -148,11 +152,25 @@ fn plant() -> ObjectDatabase {
     )))
     .unwrap();
 
+    // No object reports to NC:2, so its recipient is never sent anything.
+    let mut desk = NotificationClass::new(2, "Desk").unwrap();
+    desk.add_destination(BACnetDestination {
+        valid_days: DaysOfWeek::from_bits_truncate(0b001_1111),
+        from_time: at(8, 0),
+        to_time: at(17, 0),
+        recipient: BACnetRecipient::Device(oid(ObjectType::DEVICE, 99)),
+        process_identifier: 7,
+        issue_confirmed_notifications: true,
+        transitions: EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_FAULT,
+    })
+    .unwrap();
+
     let objects: Vec<Box<dyn BACnetObject>> = vec![
         Box::new(ai3),
         Box::new(bo1),
         Box::new(mso1),
         Box::new(NotificationClass::new(1, "Alarms").unwrap()),
+        Box::new(desk),
         Box::new(schedule),
         Box::new(log),
     ];
@@ -297,6 +315,7 @@ async fn the_browser_shows_constructed_and_state_values_decoded() {
         ("multi-state-output 1", "mso1"),
         ("schedule 1", "schedule"),
         ("trend-log 1", "trendlog"),
+        ("notification-class 2", "nc2"),
     ] {
         let view = open_object(&mut site, filter).await;
         // AI:3's to-offnormal stamp is the server's wall clock, so it is
@@ -331,6 +350,13 @@ async fn the_browser_shows_constructed_and_state_values_decoded() {
             }
             "bo1" => assert_eq!(value(P::PRESENT_VALUE).as_deref(), Some("active (On)")),
             "mso1" => assert_eq!(value(P::PRESENT_VALUE).as_deref(), Some("2 (Medium)")),
+            "nc2" => assert_eq!(
+                value(P::RECIPIENT_LIST).as_deref(),
+                Some(
+                    "[device 99 process 7: Mon-Fri 08:00-17:00, confirmed, \
+                     to-offnormal | to-fault]"
+                )
+            ),
             "trendlog" => assert_eq!(
                 value(P::LOG_DEVICE_OBJECT_PROPERTY).as_deref(),
                 Some("analog-input 3 present-value")

@@ -2,7 +2,7 @@
 //! Annex J layout, since the receive path moved onto `bacnet-bip-codec`.
 
 use super::*;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 /// Send `datagram` from a fresh socket and return the reply, if one comes.
 async fn exchange(target: &[u8], datagram: &[u8]) -> Option<BvllMessage> {

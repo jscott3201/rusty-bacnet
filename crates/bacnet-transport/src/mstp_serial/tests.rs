@@ -1,10 +1,10 @@
 use std::future::Future;
-use std::pin::{pin, Pin};
+use std::pin::{Pin, pin};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll, Waker};
 
 use tokio::sync::Semaphore;
-use tokio::time::{advance, Duration, Instant};
+use tokio::time::{Duration, Instant, advance};
 
 use super::*;
 
@@ -180,10 +180,12 @@ async fn gpio_failed_drain_retains_de_and_read_recovers_only_after_completion() 
     );
     assert!(serial.direction.tx.load(Ordering::SeqCst));
     let mut buf = [0];
-    assert!(direction
-        .read(&serial, &*serial.direction, &mut buf)
-        .await
-        .is_err());
+    assert!(
+        direction
+            .read(&serial, &*serial.direction, &mut buf)
+            .await
+            .is_err()
+    );
     serial.fail_drain.store(false, Ordering::SeqCst);
     let mut read = pin!(direction.read(&serial, &*serial.direction, &mut buf));
     assert!(poll_once(read.as_mut()).is_pending());
@@ -281,7 +283,17 @@ async fn gpio_direction_errors_are_reported_and_recoverable() {
 
 #[tokio::test]
 async fn custom_backend_without_drain_never_claims_tx_complete() {
-    assert!(matches!(crate::mstp::NoSerial.drain().await,
+    /// A backend that leaves `drain` at the trait's default.
+    struct NoDrain;
+    impl SerialPort for NoDrain {
+        async fn write(&self, _data: &[u8]) -> Result<(), Error> {
+            Ok(())
+        }
+        async fn read(&self, _buf: &mut [u8]) -> Result<usize, Error> {
+            Ok(0)
+        }
+    }
+    assert!(matches!(NoDrain.drain().await,
         Err(Error::Transport(e)) if e.kind() == std::io::ErrorKind::Unsupported));
 }
 
@@ -313,7 +325,7 @@ impl<S: SerialPort> SerialPort for WithoutDrain<S> {
 #[cfg(unix)]
 #[tokio::test]
 async fn unix_serial_with_echo_drops_its_own_frames() {
-    use crate::mstp::codec::{decode_frame, FrameType};
+    use crate::mstp::codec::{FrameType, decode_frame};
     use crate::mstp::{MstpConfig, MstpTransport};
     use crate::port::TransportPort;
 
@@ -385,10 +397,10 @@ async fn unix_serial_drain_uses_the_native_backend() {
 #[cfg(unix)]
 #[tokio::test]
 async fn native_serial_execution_modes_share_host_timing_harness() {
-    use crate::mstp::{execution_tests::execution_timing_harness, MstpExecutionMode};
+    use crate::mstp::{MstpExecutionMode, execution_tests::execution_timing_harness};
 
     // Native pseudo-terminals exercise the backend used for UART and USB ports;
-    // late-tail delivery models host chunking, not physical RS-485 timing.
+    // split reads model host chunking, not physical RS-485 timing.
     for baud in [9600, 38400, 76800] {
         for chunked in [false, true] {
             for software_direction in [false, true] {

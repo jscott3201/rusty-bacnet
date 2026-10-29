@@ -200,7 +200,9 @@ fn table_messages_encode_from_typed_rows() {
     ));
     assert_eq!(
         &wire[..],
-        &[0x81, 0x01, 0x00, 0x0E, 192, 0, 2, 10, 0xBA, 0xC0, 255, 255, 255, 0]
+        &[
+            0x81, 0x01, 0x00, 0x0E, 192, 0, 2, 10, 0xBA, 0xC0, 255, 255, 255, 0
+        ]
     );
 }
 

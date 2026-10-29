@@ -380,14 +380,16 @@ async fn auditing_failure_admission_order_survives_reversed_completions_and_cont
     let mut worker = queue
         .record_drop(&owner, second, BACnetTimeStamp::SequenceNumber(0), 1)
         .unwrap();
-    assert!(queue
-        .record_drop(
-            &owner,
-            first.clone(),
-            BACnetTimeStamp::SequenceNumber(65535),
-            1
-        )
-        .is_none());
+    assert!(
+        queue
+            .record_drop(
+                &owner,
+                first.clone(),
+                BACnetTimeStamp::SequenceNumber(65535),
+                1
+            )
+            .is_none()
+    );
     let (batch, permit, reserved) = worker.next().await.unwrap();
     assert_eq!(batch.count, 2);
     assert_eq!(batch.earliest, BACnetTimeStamp::SequenceNumber(65535));
@@ -397,13 +399,17 @@ async fn auditing_failure_admission_order_survives_reversed_completions_and_cont
     reporter.set_issue_confirmed_notifications(false).unwrap();
     reporter.set_issue_confirmed_notifications(true).unwrap();
     let current = failure_ticket(&owner, &reporter);
-    assert!(queue
-        .record_drop(&owner, first, BACnetTimeStamp::SequenceNumber(65535), 7)
-        .is_none());
+    assert!(
+        queue
+            .record_drop(&owner, first, BACnetTimeStamp::SequenceNumber(65535), 7)
+            .is_none()
+    );
     assert_eq!(owner.audit_resources(), (true, 0, 64));
-    assert!(queue
-        .record_drop(&owner, current, BACnetTimeStamp::SequenceNumber(1), 3)
-        .is_none());
+    assert!(
+        queue
+            .record_drop(&owner, current, BACnetTimeStamp::SequenceNumber(1), 3)
+            .is_none()
+    );
     let (batch, permit, reserved) = worker.next().await.unwrap();
     assert_eq!(batch.count, 3);
     assert_eq!(batch.earliest, BACnetTimeStamp::SequenceNumber(1));
@@ -436,12 +442,16 @@ async fn auditing_failure_context_change_wakes_separately_and_never_transfers_co
             1,
             "context change is its own wake reason"
         );
-        assert!(queue
-            .record_drop(&owner, new, BACnetTimeStamp::SequenceNumber(5), 2)
-            .is_none());
-        assert!(queue
-            .record_drop(&owner, old, BACnetTimeStamp::SequenceNumber(4), 9)
-            .is_none());
+        assert!(
+            queue
+                .record_drop(&owner, new, BACnetTimeStamp::SequenceNumber(5), 2)
+                .is_none()
+        );
+        assert!(
+            queue
+                .record_drop(&owner, old, BACnetTimeStamp::SequenceNumber(4), 9)
+                .is_none()
+        );
         let Poll::Ready(Some((batch, permit, reserved))) = next.as_mut().poll(&mut cx) else {
             panic!("unconfirmed context requires no released invoke ID")
         };
@@ -472,9 +482,11 @@ async fn auditing_failure_timestamp_choice_changes_do_not_change_admission_order
         .audit_failure_queue(&reporter.status_internal())
         .unwrap();
     let mut worker = queue.record_drop(&owner, second, clock_time, 1).unwrap();
-    assert!(queue
-        .record_drop(&owner, first, BACnetTimeStamp::SequenceNumber(99), 1)
-        .is_none());
+    assert!(
+        queue
+            .record_drop(&owner, first, BACnetTimeStamp::SequenceNumber(99), 1)
+            .is_none()
+    );
     let (batch, permit, reserved) = worker.next().await.unwrap();
     assert_eq!(batch.count, 2);
     assert_eq!(batch.earliest, BACnetTimeStamp::SequenceNumber(99));
@@ -519,12 +531,16 @@ async fn target_reporter_loss_queues_are_isolated_with_one_global_budget_and_per
     }
     let current = failure_ticket(&owner, &first);
     let queue = owner.audit_failure_queue(&first.status_internal()).unwrap();
-    assert!(queue
-        .record_drop(&owner, stale, BACnetTimeStamp::SequenceNumber(0), 99)
-        .is_none());
-    assert!(queue
-        .record_drop(&owner, current, BACnetTimeStamp::SequenceNumber(50), 11)
-        .is_none());
+    assert!(
+        queue
+            .record_drop(&owner, stale, BACnetTimeStamp::SequenceNumber(0), 99)
+            .is_none()
+    );
+    assert!(
+        queue
+            .record_drop(&owner, current, BACnetTimeStamp::SequenceNumber(50), 11)
+            .is_none()
+    );
     assert_eq!(
         owner.audit_resources(),
         (true, 127, 0),

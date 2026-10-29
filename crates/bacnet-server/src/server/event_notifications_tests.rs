@@ -1,5 +1,5 @@
 use super::*;
-use crate::server::test_transport::{SendLog, SendMode, TestTransport, BIP_LOCAL_MAC};
+use crate::server::test_transport::{BIP_LOCAL_MAC, SendLog, SendMode, TestTransport};
 use bacnet_encoding::constructed::decode_event_notification;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
@@ -164,8 +164,8 @@ pub(super) fn local_broadcast_destination() -> bacnet_types::constructed::BACnet
 /// Notification Class instance 0 — the class an object points at when its
 /// `Notification_Class` property is left at its default — carrying the single
 /// local-broadcast recipient from [`local_broadcast_destination`].
-pub(super) fn notification_class_0_broadcasting(
-) -> bacnet_objects::notification_class::NotificationClass {
+pub(super) fn notification_class_0_broadcasting()
+-> bacnet_objects::notification_class::NotificationClass {
     let mut nc = bacnet_objects::notification_class::NotificationClass::new(0, "NC-0").unwrap();
     nc.add_destination(local_broadcast_destination()).unwrap();
     nc

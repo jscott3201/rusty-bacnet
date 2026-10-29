@@ -12,17 +12,17 @@ use std::collections::VecDeque;
 use std::time::Duration;
 
 use bacnet_transport::mstp::monitor::{MaxMaster, MonitorStats};
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Padding, Paragraph, Wrap};
-use ratatui::Frame;
 
 use super::columns::{self, Column};
 use super::watch::sparkline;
-use super::{ellipsize, more, text_width, Theme, WIDE_WIDTH};
+use super::{Theme, WIDE_WIDTH, ellipsize, more, text_width};
 use crate::tui::app::monitor::{MonitorState, MonitorTab, Wizard};
-use crate::tui::monitor::analysis::{self, millis, Role, Severity};
 use crate::tui::monitor::MonitorSample;
+use crate::tui::monitor::analysis::{self, Role, Severity, millis};
 
 /// The monitor screen.
 pub(super) fn draw(frame: &mut Frame, area: Rect, monitor: &MonitorState, theme: &Theme) {
@@ -42,8 +42,15 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, monitor: &MonitorState, theme:
     .areas(inner);
     frame.render_widget(Paragraph::new(summary), summary_area);
     frame.render_widget(Paragraph::new(tab_bar(monitor, theme)), tabs);
+    if monitor.tab == MonitorTab::Scan {
+        return super::monitor_scan::draw(frame, body, monitor, theme);
+    }
     let Some(sample) = sample else {
-        let text = "Listening; the first reading comes within a second.";
+        let text = if monitor.live {
+            "Listening; the first reading comes within a second."
+        } else {
+            "Monitor is not listening. See Scan for progress or restoration errors."
+        };
         frame.render_widget(Paragraph::new(Line::styled(text, theme.dim())), body);
         return;
     };
@@ -52,6 +59,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, monitor: &MonitorState, theme:
         MonitorTab::Ring => ring(monitor, sample, usize::from(body.width), theme),
         MonitorTab::Findings => findings(monitor, sample, theme),
         MonitorTab::Errors => errors(monitor, sample, theme),
+        MonitorTab::Scan => unreachable!("scan rendered before sample"),
     };
     let paragraph = if matches!(monitor.tab, MonitorTab::Findings | MonitorTab::Errors) {
         Paragraph::new(lines).wrap(Wrap { trim: false })

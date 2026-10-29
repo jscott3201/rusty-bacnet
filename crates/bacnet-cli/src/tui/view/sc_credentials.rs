@@ -6,8 +6,8 @@
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
-use super::sc::Row;
 use super::Theme;
+use super::sc::Row;
 use crate::sc_check::HUB_NAME_NOTE;
 use crate::tui::sc::credentials::{Cert, Credentials, Level};
 
@@ -59,13 +59,13 @@ pub(super) fn rows<'a>(
             return vec![Row::flow(Line::styled(
                 "No dial yet: the credentials are checked just before each one.",
                 theme.dim(),
-            ))]
+            ))];
         }
         None => {
             return vec![Row::flow(Line::styled(
                 "Credential checks need a build with the sc-tls feature.",
                 theme.dim(),
-            ))]
+            ))];
         }
         Some(Err(error)) => {
             let line = Line::from(vec![

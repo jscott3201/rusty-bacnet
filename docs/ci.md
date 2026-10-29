@@ -25,7 +25,7 @@ only when every job under it did (see [Merge evidence](#merge-evidence)).
 | Lint: rustfmt, 700-LOC cap, no-secret scan, script regressions, the `named_codes!` copies, changelog fragments, the [tool pins](#tool-pins), the [fuzz crates' lockfiles](#fuzzing) | ✓ | ✓ | ✓ | ✓ |
 | Clippy and rustdoc, warnings denied: every feature, PyO3 crate, `bacnet-cli` without default features, each published crate with default features for Linux, Windows and macOS, the `no_std` crates on bare-metal targets and their `alloc` tests on the host; the every-feature and PyO3 rustdoc runs include private items. The workspace runs include the [samples](#samples). Also the [firmware link test](#firmware-link-test): the MS/TP, B/IP and MS/TP device images built without an allocator, and the APDU image with one, checked against their size budgets | ✓ | ✓ | ✓ | ✓ |
 | Test: Linux, every feature (`LINUX_FEATURES`); also the [`no_std` crates](#no_std-checks)' tests and doctests with `alloc` and without `std`, and their tests without either | ✓ | ✓ | ✓ | ✓ |
-| Python bindings: `maturin develop` (maturin at its [pinned](#tool-pins) version), then `python -m unittest discover -s crates/rusty-bacnet/tests` and the crate's Rust tests (`cargo nextest run -p rusty-bacnet`) | ✓ | ✓ | ✓ | ✓ |
+| Python bindings: `maturin develop` (maturin at its [pinned](#tool-pins) version), then `python -m unittest discover -s crates/rusty-bacnet/tests`, the website's sample tests (`python -m unittest discover -s website/tests/python`: the loopback lab, and the CLI samples on the pages run against it with a debug `bacnet-cli` build; the root README's samples too (#2105): its quickstart server runs, its Python programs and CLI lines run against it, its MCP host configuration is parsed, its Rust blocks must match the `readme_*` Cargo examples that clippy compiles, and its dependency table must name published crates at the release; the step sets `BACNET_LAB_EXPECTED_VERSION` to the workspace version, since the lab otherwise expects the site's release and the wheel under test can be ahead of it) and the crate's Rust tests (`cargo nextest run -p rusty-bacnet`) | ✓ | ✓ | ✓ | ✓ |
 | MSRV (`RUST_MSRV` in [`.github/ci-pins.env`](../.github/ci-pins.env)), Linux native (`check-msrv.sh --linux-native`), the `no_std` builds included |  | ✓ |  | ✓ |
 | Cargo Audit + Cargo Deny |  | ✓ |  | ✓ |
 | **CI OK**: fails if any job above failed | ✓ | ✓ | ✓ | ✓ |
@@ -90,9 +90,10 @@ features, the lean CLI without the TUI (`tui` is a default feature since
 #974), whose own tests cover plain `bacnet` and `bacnet tui` without it.
 Only Linux runs the lean CLI's tests; macOS and Windows lint it with clippy
 in the native-tests workflow (and `local-macos.sh` runs both on a Mac). The last steps
-run the tests and doctests of `bacnet-types`, `bacnet-encoding` and
-`bacnet-services` with `alloc` and without `std`, the code their bare-metal
-builds compile, which the runs before leave out (see
+run the tests and doctests of `bacnet-types`, `bacnet-encoding`,
+`bacnet-services` and `bacnet-objects` with `alloc` and without `std`, and of
+the first three without `alloc` either, the code their bare-metal builds
+compile, which the runs before leave out (see
 [`no_std` checks](#no_std-checks)).
 
 ```bash
@@ -100,8 +101,8 @@ cargo nextest run --workspace --exclude rusty-bacnet --locked --features "$LINUX
 cargo test --doc --workspace --exclude rusty-bacnet --locked --features "$LINUX_FEATURES"
 cargo nextest run -p bacnet-cli --locked --profile ci
 cargo nextest run -p bacnet-cli --no-default-features --locked --profile ci
-cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --features alloc --locked --profile ci
-cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --features alloc --locked
+cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects --no-default-features --features alloc --locked --profile ci
+cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects --no-default-features --features alloc --locked
 cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --locked --profile ci
 cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --locked
 ```
@@ -199,7 +200,9 @@ but not `[workspace.lints]`, since samples print to the terminal.
 
 `bacnet-types`, `bacnet-encoding` and `bacnet-services` build without `std`
 when `alloc` replaces their default `std` feature, and without an allocator
-when neither is on (#1614), and the MS/TP and B/IP
+when neither is on (#1614). `bacnet-objects` builds without `std` with
+`alloc` (#1615), on targets with atomic compare-and-swap (so not
+`thumbv6m-none-eabi`); it has no build without an allocator. The MS/TP and B/IP
 crates (`bacnet-mstp-codec`, `bacnet-mstp-core`, `bacnet-bip-codec` and
 `bacnet-bip-core`), the router core (`bacnet-router-core`), the cores'
 time type (`bacnet-time`) and the network-layer vocabulary (`bacnet-npdu`)
@@ -208,12 +211,12 @@ proves all of that; each check covers a part.
 
 | Check | Job | What it shows |
 | --- | --- | --- |
-| `scripts/ci/check-no-std.sh` | Clippy, `NO_STD_TARGETS` | Each crate and feature set compiles clean under clippy on `thumbv6m-none-eabi`, `thumbv7em-none-eabihf` and `riscv32imac-unknown-none-elf`, with nothing skipped, and no package in its graph turns `std` on or is `tracing`, `tokio` or `socket2`. Nor does the crate choose atomics for the firmware: its own graph holds no `portable-atomic` or `critical-section`, and no `bytes` with `extra-platforms` |
-| `scripts/ci/check-default-features.sh` | Clippy | Clippy and rustdoc, private items included, for the three crates with `alloc` and without `std`, and without either, on Linux, Windows and macOS |
-| `cargo clippy -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features [--features alloc] --all-targets` | Clippy | The three crates' tests with `alloc` and without `std`, and without either, which the Test job runs, are lint-clean too |
-| The `alloc` tests and doctests | Test | The three crates' tests and doctests with `alloc` and without `std`: the code a bare-metal build compiles. The tests link `std`; `check-no-std.sh` shows the code needs none |
+| `scripts/ci/check-no-std.sh` | Clippy, `NO_STD_TARGETS` | Each crate and feature set compiles clean under clippy on `thumbv6m-none-eabi`, `thumbv7em-none-eabihf` and `riscv32imac-unknown-none-elf`, with nothing skipped but `bacnet-objects` on `thumbv6m-none-eabi` (it needs atomic compare-and-swap, #1615), and no package in its graph turns `std` on or is `tracing`, `tokio` or `socket2`. Nor does the crate choose atomics for the firmware: its own graph holds no `portable-atomic` or `critical-section`, and no `bytes` with `extra-platforms` |
+| `scripts/ci/check-default-features.sh` | Clippy | Clippy and rustdoc, private items included, for the three crates with `alloc` and without `std`, and without either, and for `bacnet-objects` with `alloc`, on Linux, Windows and macOS |
+| `cargo clippy -p bacnet-types -p bacnet-encoding -p bacnet-services [-p bacnet-objects --features alloc] --no-default-features --all-targets` | Clippy | The tests with `alloc` and without `std` (the three crates and `bacnet-objects`), and the three crates' tests without either, which the Test job runs, are lint-clean too |
+| The `alloc` tests and doctests | Test | The three crates' and `bacnet-objects`' tests and doctests with `alloc` and without `std`: the code a bare-metal build compiles. The tests link `std`; `check-no-std.sh` shows the code needs none |
 | The allocation-free tests | Test | The three crates' tests without `alloc` either, including `bacnet-services/tests/no_alloc_subset.rs`, which runs Who-Is, I-Am and ReadProperty through the APDU header under a counting allocator and finds no allocation, and their doctests, whose examples write to sinks (#1779) |
-| `scripts/ci/check-msrv.sh` | MSRV | The three crates with `alloc` and without `std` build at the MSRV, in a run of their own, since the hosted crates turn `std` back on in the main run |
+| `scripts/ci/check-msrv.sh` | MSRV | The three crates and `bacnet-objects` with `alloc` and without `std` build at the MSRV, in a run of their own, since the hosted crates turn `std` back on in the main run |
 | [Firmware link test](#firmware-link-test) | Clippy, `FIRMWARE_TARGETS` | The MS/TP and B/IP stacks, and an MS/TP device with its application layer, link into bare-metal images with no allocator, and `bacnet-encoding` and `bacnet-services` into one with an allocator, each within its size budget |
 
 **ARMv6-M and `bytes`.** `bytes` needs atomic compare-and-swap, which
@@ -254,8 +257,8 @@ test and the harness's target table both generalised.
 rustup target add thumbv6m-none-eabi thumbv7em-none-eabihf riscv32imac-unknown-none-elf
 bash scripts/ci/check-no-std.sh                       # every default target
 bash scripts/ci/check-no-std.sh thumbv6m-none-eabi    # one
-cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --features alloc --locked
-cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --features alloc --locked
+cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects --no-default-features --features alloc --locked
+cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects --no-default-features --features alloc --locked
 cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --locked
 cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --locked   # examples on sinks, no allocator (#1779)
 ```
@@ -1017,7 +1020,11 @@ The Lint job's "Check the pins" step fails when:
   plus 25%. Copy them into the file, and the peaks into its comments and
   that section's table.
 - **MSRV:** `Cargo.toml`'s `rust-version`, `RUST_MSRV` and
-  `scripts/ci/check-msrv.sh` together.
+  `scripts/ci/check-msrv.sh` together. The minimum increases only in minor
+  releases, to a stable Rust release at least about six months old. From 0.15.0
+  the workspace uses edition 2024 and requires Rust 1.95, released
+  on [2026-04-16](https://blog.rust-lang.org/2026/04/16/Rust-1.95.0/). The
+  pinned development toolchain remains separate from this minimum.
 - **Fuzz nightly:** `RUST_FUZZ_NIGHTLY`, normally to a nightly of the
   release `rust-toolchain.toml` pins (`rustc +nightly-<date> -V` names the
   version). Run `bash scripts/ci/fuzz.sh check` and `build` with it first:
@@ -1528,7 +1535,7 @@ bash scripts/ci/local-macos.sh --quick  # lint, clippy and rustdoc only
 other optional feature, `serial` included (#958): the serial port crates build
 on all three systems, and its pseudo-terminal tests run on macOS too. The
 native-tests workflow reads the same list from the script. That includes
-per-crate features such as `bacnet-endpoint/sc-tls` and `bacnet-cli/{sc-tls,pcap,serial}`, which nothing else in
+per-crate features such as `bacnet-endpoint/sc-tls` and `bacnet-cli/{sc-tls,pcap,serial,mcp}`, which nothing else in
 the workspace turns on, so a transport-only list never built them (#906). CI's
 `LINUX_FEATURES` is the same list plus `bacnet-transport/{serial-gpio,ethernet}`
 and `bacnet-integration-tests/ethernet`.
@@ -1549,7 +1556,8 @@ Clippy runs six ways:
   `bacnet-mstp-core`, `bacnet-bip-codec`, `bacnet-bip-core`,
   `bacnet-router-core`, and `bacnet-types`,
   `bacnet-encoding` and `bacnet-services` with `alloc` in place of their
-  default `std`, and with neither) on
+  default `std`, and with neither, and `bacnet-objects` with `alloc`,
+  except on `thumbv6m-none-eabi`) on
   bare-metal targets, once per feature set
   (`scripts/ci/check-no-std.sh`). A host build always has `std` and an
   allocator, so only a target without them shows that a crate needs neither.
@@ -1562,11 +1570,12 @@ Clippy runs six ways:
   `tokio` or `socket2`: a dependency whose std leaks in through feature
   unification is caught even where it would still compile;
 - `bacnet-types`, `bacnet-encoding` and `bacnet-services` with `alloc` in
-  place of `std`, and with neither, and `--all-targets`, on the host, so the
+  place of `std`, and with neither, and `bacnet-objects` with `alloc`, with
+  `--all-targets`, on the host, so the
   tests the Test job runs without `std` are linted too;
 - each published crate alone with default features, plus the `no_std` builds
-  of `bacnet-types`, `bacnet-encoding` and `bacnet-services`
-  (`scripts/ci/check-default-features.sh`). This also runs rustdoc, which is
+  of `bacnet-types`, `bacnet-encoding`, `bacnet-services` and
+  `bacnet-objects` (`scripts/ci/check-default-features.sh`). This also runs rustdoc, which is
   how docs.rs builds, a rustdoc-only run of `bacnet-cli` without the TUI,
   and rustdoc-only runs of `bacnet-mstp-core` with `alloc`, of
   `bacnet-mstp-codec` and `bacnet-bip-codec` with `alloc` alone and
@@ -1605,7 +1614,7 @@ cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked --feature
 cargo clippy -p rusty-bacnet --all-targets --locked -- -D warnings
 cargo clippy -p bacnet-cli --no-default-features --all-targets --locked -- -D warnings
 bash scripts/ci/check-default-features.sh   # the host; or pass target triples, as CI does
-cargo clippy -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --features alloc --all-targets --locked -- -D warnings
+cargo clippy -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects --no-default-features --features alloc --all-targets --locked -- -D warnings
 cargo clippy -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --all-targets --locked -- -D warnings
 bash scripts/ci/check-no-std.sh             # needs the bare-metal targets (rustup target add)
 bash scripts/ci/check-firmware-link.sh      # likewise; see "Firmware link test"
@@ -1613,8 +1622,8 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude rusty-bacnet --no-dep
 RUSTDOCFLAGS="-D warnings" cargo doc -p rusty-bacnet --no-deps --locked --document-private-items
 cargo nextest run -p bacnet-cli --locked   # the CLI's feature-off tests
 cargo nextest run -p bacnet-cli --no-default-features --locked   # without the TUI
-cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --features alloc --locked   # no_std code, alloc
-cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --features alloc --locked
+cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects --no-default-features --features alloc --locked   # no_std code, alloc
+cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects --no-default-features --features alloc --locked
 cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --locked   # no_std code, no allocator
 cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --locked
 cargo nextest run -p rusty-bacnet --locked # the PyO3 crate's Rust tests
@@ -1731,23 +1740,91 @@ To release:
    ```bash
    bash scripts/ci/fuzz.sh lock                # the fuzz crates' Cargo.lock files
    python3 scripts/changelog.py preview        # what the section will hold
-   python3 scripts/changelog.py assemble --version 0.14.0 [--date 2026-10-21]
+   python3 scripts/changelog.py assemble --version 0.15.0 [--date 2026-10-29]
    ```
 
-   `assemble` adds `## [0.14.0] - <date>` below `[Unreleased]`, with the
+   `assemble` adds `## [0.15.0] - <date>` below `[Unreleased]`, with the
    entries grouped by heading and ordered by issue number, and deletes the
    fragments it used. Each entry ends with a link to the GitHub commit that
    brought its fragment into dev, found along the first-parent history, so run
    it on a branch cut from dev's tip with full history (#1188); `preview` shows
    the same links. A tag fails if any fragment is still waiting.
+
+   In the same PR, regenerate the website's generated references (#1989) so
+   the site published from the release describes it. Run them after
+   `website/src/lib/site.mjs` names the new release: the Python pages' note
+   names it, and the crate map marks a crate whose Cargo.toml sets
+   `[package.metadata.website] first-release` to a later release as
+   unreleased, linking its source instead of docs.rs. Set that key on a
+   crate that is new since the last release. Each script rewrites the
+   generated part of its pages and leaves the authored text around it;
+   `--check` changes nothing and fails when a page is stale:
+
+   ```bash
+   node website/scripts/reference-cli.mjs       # reference/cli.md, from the clap definitions (all features; needs libpcap)
+   python3 website/scripts/reference-python.py  # reference/python.md and reference/python/*.md, from rusty_bacnet.pyi
+   node website/scripts/reference-rust.mjs      # reference/rust.mdx, from cargo metadata
+   ```
+
+   PR CI doesn't run the `--check` modes: concurrent PRs that add an option
+   or a method would each fail on, and conflict over, the same pages. What
+   it checks instead: Docs validation checks that the pages parse and link
+   correctly, list every `bacnet` subcommand and list exactly the published
+   crates; and bacnet-cli's tests run the CLI generator, so the generator
+   can't rot, and check that the committed page has a section for every
+   command. They don't compare the rendered page with the committed one.
+
+   Regenerate the capability tables and the sample PICS too (#1496), after
+   `site.mjs` names the new release, since `website/src/data/support.json`
+   records the release the site describes and the sample PICS
+   (`website/src/content/docs/project/sample-pics.md`) names it in its
+   version fields:
+
+   ```bash
+   cargo run -p bacnet-integration-tests --example support-tables  # support.json and sample-pics.md
+   ```
+
+   Unlike the references, both files are checked on every PR: the workspace
+   test `bacnet-integration-tests::support_tables` regenerates them and
+   fails when a committed copy differs. A PR that adds an object type, a
+   service to one of the lists the tables read, a Python client method named
+   after a service, or a `bacnet-transport` feature runs the command above
+   and commits the result; so does one that changes an object's property
+   metadata or the PICS generator's output, which the sample shows. Check
+   that the sample still opens with its banner naming the reference
+   configuration. The files change rarely, so concurrent PRs seldom
+   conflict over them.
+
+   **README site links and versions (#2105).** GitHub shows the `dev`
+   README, but the website is published from the release, so the README
+   links only pages the live site has. In the same PR:
+   - Bump the README's `[dependencies]` versions to the new release. The
+     website sample tests' `Deps` check compares them with
+     `website/src/lib/site.mjs`, so it fails until they match. The README's
+     Rust blocks are compiled against `dev`; this is the point where the
+     release catches up with them.
+   - At 0.15.0, after the Pages deploy, point these README links at the new
+     pages: the MCP row and section (now `docs/mcp.md`) at `guides/ai-agents/`,
+     the shared-endpoints row (now `development/shared-endpoints/`) at
+     `integrate/shared-endpoints/`, the routing row (now
+     `docs/rust-api.md#bacnet-network`) at `integrate/router/`, the Rust
+     server's link (now `docs/rust-api.md#bacnet-server`) at
+     `integrate/server/`, the crate map (now `reference/api/`) at
+     `reference/rust/`, building from source (now
+     `development/overview/#build-a-source-checkout`) at
+     `development/build-from-source/`, and the transports link (now
+     `reference/transports/`) at `connect/overview/` if wanted; the same
+     build-from-source link sits in `docs/rust-api.md` and
+     `docs/python-api.md`. Then `curl -sI` every
+     `jscott3201.github.io/rusty-bacnet/` link in the README for a 200.
 2. Optionally, dispatch a dry run on the release branch first: it runs
    everything the release does short of publishing.
 3. Tag a commit on `main`'s or `dev`'s first-parent history (a merge commit,
    not one inside a merged branch), once its CI has passed:
 
    ```bash
-   git tag -a v0.14.0 -m "Rusty BACnet 0.14.0"
-   git push origin v0.14.0
+   git tag -a v0.15.0 -m "Rusty BACnet 0.15.0"
+   git push origin v0.15.0
    ```
 
 The tag push also starts CI's heavy jobs on the tagged commit, and the release
@@ -1888,8 +1965,10 @@ one failing doesn't cancel the others.
   it and its name with ReadPropertyMultiple, writes the value's present value
   at priority 8 and reads it back.
 - **CLI.** [`cli_smoke.sh`](../scripts/release/cli_smoke.sh): `--version` must
-  print `bacnet <version>`, `--help` runs, and the README quickstart `read` and
-  `--json readm` run against the README server on the cp312 wheel. On Linux,
+  print `bacnet <version>`, `--help` runs, `mcp serve --stdio` without a
+  profile must give the MCP server's own refusal (a build without `mcp`
+  gives the rebuild advice instead; `mcp --help` parses either way), and the README quickstart `read` and
+  `--json readm` run against the README server on the cp312 wheel (the website sample tests check that its copy of that server matches the README). On Linux,
   `capture --read` also decodes a one-packet pcap file, through the static
   libpcap and its filter compiler, without needing capture privileges. The
   macOS and Windows builds have no packet capture.
@@ -2048,9 +2127,9 @@ mounted. In the image it:
   `--compatibility manylinux2014` tags them `manylinux_2_17`, and
   `--auditwheel check` fails the build on a symbol or library outside that
   policy instead of copying a library into the wheel;
-- builds the CLI with `--features sc-tls,pcap,serial`. MS/TP (`serial`) is in
-  the Linux CLI only, until a USB RS-485 adapter has been tested on macOS and
-  Windows (#969).
+- builds the CLI with `--features sc-tls,pcap,serial,mcp`. MS/TP (`serial`) is
+  in the Linux CLI only, until a USB RS-485 adapter has been tested on macOS and
+  Windows (#969). `mcp` (the MCP server) is in every release CLI from 0.15.0.
 
 AWS-LC (`aws-lc-sys`, for BACnet/SC) builds with the image's GCC 10 through
 its default builder, which needs no CMake. Its build checks the compiler for
@@ -2059,7 +2138,7 @@ GCC's `memcmp` bug, which GCC 10.2 doesn't have.
 **macOS and Windows** ([`build_native.sh`](../scripts/release/build_native.sh)).
 The job installs the pinned toolchain and the four CPythons, and the script
 builds the wheels with the pinned maturin, in a venv, then the CLI with
-`--features sc-tls`.
+`--features sc-tls,mcp`.
 
 Both scripts install maturin with `pip install --require-hashes --only-binary
 :all: -r` [`maturin-requirements.txt`](../scripts/release/maturin-requirements.txt),
@@ -2164,8 +2243,8 @@ BACnet's own licence, then every third-party component in the release
 binaries with the licence files it ships, identical texts printed once.
 
 - The crates come from `cargo tree --locked --offline -e normal,no-proc-macro`
-  for the CLI (`-p bacnet-cli --features sc-tls,pcap,serial` on Linux, `--features
-  sc-tls` on macOS and Windows) and the Python extension (`-p rusty-bacnet`) on
+  for the CLI (`-p bacnet-cli --features sc-tls,pcap,serial,mcp` on Linux, `--features
+  sc-tls,mcp` on macOS and Windows) and the Python extension (`-p rusty-bacnet`) on
   each of the five release targets, so build scripts, proc-macros,
   dev-dependencies and crates for other platforms, which no release binary
   contains, are left out. Platform crates such as `windows-sys` and
@@ -2256,7 +2335,8 @@ permissions it declares (the workflow's default is none):
   `bacnet-mstp-codec`, `bacnet-bip-codec`, `bacnet-mstp-core`,
   `bacnet-bip-core` and `bacnet-router-core`, which a token scoped to
   existing crates couldn't publish, as 0.12.0 was for `bacnet-endpoint` and
-  `bacnet-cli`.
+  `bacnet-cli`. 0.15.0 is the first release of `bacnet-ops` and
+  `bacnet-mcp`, so its token must be able to publish new crates too.
   crates.io trusted publishing may replace it later.
 - **PyPI trusted publishing.** PyPI accepts the PyPI job's OIDC token for
   `rusty-bacnet` when the project's trusted publisher names owner

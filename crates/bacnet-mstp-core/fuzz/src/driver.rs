@@ -6,12 +6,12 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use bacnet_mstp_codec::{
-    FrameType, BROADCAST_MAC, MAX_EXTENDED_FRAME_LENGTH, MAX_EXTENDED_MPDU_DATA,
+    BROADCAST_MAC, FrameType, MAX_EXTENDED_FRAME_LENGTH, MAX_EXTENDED_MPDU_DATA,
     MAX_STANDARD_FRAME_LENGTH, MAX_STANDARD_MPDU_DATA,
 };
 use bacnet_mstp_core::{
-    Action, ActionBuffers, AllocQueues, Direction, FixedQueues, Instant, MasterCore,
-    MstpCoreConfig, QueueStorage, RequestId, TransmitId, MIN_RX_STORAGE,
+    Action, ActionBuffers, AllocQueues, Direction, FixedQueues, Instant, MIN_RX_STORAGE,
+    MasterCore, MstpCoreConfig, QueueStorage, RequestId, TransmitId,
 };
 
 use crate::checker::{Checker, Delivered};
@@ -338,10 +338,10 @@ impl<'s> Driver<'s> {
                         eprintln!("  {} us: transmit {:?}", self.now, Seen::decode(&octets));
                     }
                     self.checker.handover(&octets, self.now);
-                    if let Ok(frame) = Seen::decode(&octets) {
-                        if frame.destination != BROADCAST_MAC {
-                            self.peer = frame.destination;
-                        }
+                    if let Ok(frame) = Seen::decode(&octets)
+                        && frame.destination != BROADCAST_MAC
+                    {
+                        self.peer = frame.destination;
                     }
                     self.tx = Some(Tx {
                         id,

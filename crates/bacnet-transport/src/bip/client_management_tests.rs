@@ -349,7 +349,13 @@ async fn bvlc_busy_timeout_and_late_result_are_distinct_observations() {
             received = peer.recv_from(&mut packet) => { received.unwrap(); }
         }
         let busy = transport.write_bdt(&target, &[]).await.unwrap_err();
-        assert!(busy.to_string().contains("already in flight"), "{busy}");
+        assert!(
+            matches!(
+                busy,
+                BvlcExchangeError::Refused(ExchangeRefusal::ResultClass)
+            ),
+            "{busy}"
+        );
         {
             let read = transport.read_fdt(&target);
             tokio::pin!(read);

@@ -2,11 +2,11 @@ use super::*;
 
 #[test]
 fn pics_loop_program_notification_class_property_metadata_is_exact() {
+    use PropertyIdentifier as P;
     use bacnet_objects::notification_class::NotificationClass;
     use bacnet_objects::{loop_obj::LoopObject, program::ProgramObject, traits::BACnetObject};
     use bacnet_types::enums::EngineeringUnits;
     use bacnet_types::primitives::PropertyValue;
-    use PropertyIdentifier as P;
 
     let loop_rows = [
         (P::OBJECT_IDENTIFIER, false, false),

@@ -10,8 +10,8 @@ use bacnet_router_core::router::{
 };
 use bacnet_router_core::{Instant, PortId};
 use fixture::{
-    addr, apdu_to, at, at_ms, bytes, drain, learn_9_via_r7, listed, port_on, router_with,
-    sent_reject, two_ports, Sent, TestRouter, NODE_A, R7, UNCONFIRMED,
+    NODE_A, R7, Sent, TestRouter, UNCONFIRMED, addr, apdu_to, at, at_ms, bytes, drain,
+    learn_9_via_r7, listed, port_on, router_with, sent_reject, two_ports,
 };
 
 const BUSY: Kind = Kind::Congestion(NetworkMessageType::ROUTER_BUSY_TO_NETWORK);
@@ -173,9 +173,11 @@ fn unreachable_networks_are_left_out_and_long_lists_split() {
     router.table_mut().mark_unreachable(9);
     let r7 = bacnet_router_core::npdu::Mac::from_slice(R7).unwrap();
     for network in 100..140 {
-        assert!(router
-            .table_mut()
-            .add_learned(network, PortId(1), r7, Instant::ZERO));
+        assert!(
+            router
+                .table_mut()
+                .add_learned(network, PortId(1), r7, Instant::ZERO)
+        );
     }
     // Port 0 carries broadcasts of 64 octets: 30 networks a message.
     let mut ports = two_ports();
@@ -183,9 +185,11 @@ fn unreachable_networks_are_left_out_and_long_lists_split() {
     ports[0].max_npdu.broadcast = 64;
     let mut small = router_with(&ports, congested_options());
     for network in 100..140 {
-        assert!(small
-            .table_mut()
-            .add_learned(network, PortId(1), r7, Instant::ZERO));
+        assert!(
+            small
+                .table_mut()
+                .add_learned(network, PortId(1), r7, Instant::ZERO)
+        );
     }
     let _ = report(&mut small, 256, at(0));
     let busy = report(&mut small, 256, at(2));

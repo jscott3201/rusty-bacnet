@@ -4,7 +4,7 @@ use bacnet_types::enums::{
     AuditLevel, AuditOperation, ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier,
     Reliability,
 };
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use crate::property_metadata::{PropertyConformance, PropertyWriteCapability};
@@ -19,7 +19,7 @@ fn read(reporter: &AuditReporterObject, property: PropertyIdentifier) -> Propert
 fn assert_write_access_denied(error: Error) {
     assert!(matches!(
         error,
-        Error::Protocol { class, code }
+        Error::Remote(RemoteError::Error { class, code })
             if class == ErrorClass::PROPERTY
                 && code == ErrorCode::WRITE_ACCESS_DENIED
     ));
@@ -34,17 +34,19 @@ fn audit_reporter_configuration_hook_is_opt_in_and_atomic() {
         other.configure_audit_reporter_internal(
             AuditLevel::AUDIT_ALL, operations, true, None, BACnetPriorityFilter::all(),
          None,),
-        Err(Error::Protocol { class, code })
+        Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::OBJECT
                 && code == ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED
     ));
 
     let mut object: Box<dyn BACnetObject> = Box::new(AuditReporterObject::new(1, "AR").unwrap());
     let reporter = object.audit_reporter_internal().unwrap();
-    assert!(reporter
-        .configuration_internal()
-        .monitored_objects
-        .is_none());
+    assert!(
+        reporter
+            .configuration_internal()
+            .monitored_objects
+            .is_none()
+    );
     assert_eq!(
         reporter.configuration_internal().audit_priority_filter,
         BACnetPriorityFilter::all()
@@ -78,16 +80,18 @@ fn audit_reporter_configuration_hook_is_opt_in_and_atomic() {
         .iter()
         .map(|&p| object.read_property(p, None).unwrap())
         .collect();
-    assert!(object
-        .configure_audit_reporter_internal(
-            AuditLevel::DEFAULT,
-            AuditOperationFlags::empty(),
-            false,
-            None,
-            BACnetPriorityFilter::empty(),
-            None,
-        )
-        .is_err());
+    assert!(
+        object
+            .configure_audit_reporter_internal(
+                AuditLevel::DEFAULT,
+                AuditOperationFlags::empty(),
+                false,
+                None,
+                BACnetPriorityFilter::empty(),
+                None,
+            )
+            .is_err()
+    );
     for (&property, expected) in properties.iter().zip(before) {
         assert_eq!(object.read_property(property, None).unwrap(), expected);
     }
@@ -123,15 +127,19 @@ fn audit_reporter_configuration_hook_is_opt_in_and_atomic() {
         reporter.configuration_internal().audit_level,
         AuditLevel::NONE
     );
-    assert!(reporter
-        .configuration_internal()
-        .auditable_operations
-        .is_empty());
+    assert!(
+        reporter
+            .configuration_internal()
+            .auditable_operations
+            .is_empty()
+    );
     assert!(!reporter.confirmed_internal());
-    assert!(reporter
-        .configuration_internal()
-        .monitored_objects
-        .is_none());
+    assert!(
+        reporter
+            .configuration_internal()
+            .monitored_objects
+            .is_none()
+    );
     assert_eq!(
         reporter.configuration_internal().audit_priority_filter,
         BACnetPriorityFilter::all()
@@ -173,14 +181,16 @@ fn audit_reporter_monitored_objects_is_an_optional_array_even_when_absent() {
     for index in [None, Some(0), Some(1)] {
         assert!(matches!(
             reporter.read_property(PropertyIdentifier::MONITORED_OBJECTS, index),
-            Err(Error::Protocol { class, code })
+            Err(Error::Remote(RemoteError::Error { class, code }))
                 if class == ErrorClass::PROPERTY
                     && code == ErrorCode::UNKNOWN_PROPERTY
         ));
     }
-    assert!(!reporter
-        .property_list()
-        .contains(&PropertyIdentifier::MONITORED_OBJECTS));
+    assert!(
+        !reporter
+            .property_list()
+            .contains(&PropertyIdentifier::MONITORED_OBJECTS)
+    );
 }
 
 #[test]
@@ -225,19 +235,21 @@ fn audit_reporter_monitored_objects_local_configuration_and_removal_are_truthful
     for index in [4, u32::MAX] {
         assert!(
             matches!(reporter.read_property(PropertyIdentifier::MONITORED_OBJECTS, Some(index)),
-            Err(Error::Protocol { class, code }) if class == ErrorClass::PROPERTY && code == ErrorCode::INVALID_ARRAY_INDEX)
+            Err(Error::Remote(RemoteError::Error { class, code })) if class == ErrorClass::PROPERTY && code == ErrorCode::INVALID_ARRAY_INDEX)
         );
     }
     assert_eq!(reporter.required_properties().as_ref(), required);
-    assert!(reporter
-        .property_metadata()
-        .iter()
-        .any(
-            |row| row.property_identifier == PropertyIdentifier::MONITORED_OBJECTS
-                && row.conformance == PropertyConformance::Optional
-                && row.write_capability == PropertyWriteCapability::ReadOnly
-                && row.presence_condition.is_none()
-        ));
+    assert!(
+        reporter
+            .property_metadata()
+            .iter()
+            .any(
+                |row| row.property_identifier == PropertyIdentifier::MONITORED_OBJECTS
+                    && row.conformance == PropertyConformance::Optional
+                    && row.write_capability == PropertyWriteCapability::ReadOnly
+                    && row.presence_condition.is_none()
+            )
+    );
     assert!(reporter.monitors_object_internal(selected));
     assert!(!reporter.monitors_object_internal(other));
     assert!(reporter.monitors_object_internal(input));
@@ -264,9 +276,11 @@ fn audit_reporter_monitored_objects_local_configuration_and_removal_are_truthful
         reporter.set_monitored_objects(Some(selection)).unwrap();
         assert!(!reporter.monitors_object_internal(selected));
         assert!(!reporter.monitors_object_internal(input));
-        assert!(reporter
-            .property_list()
-            .contains(&PropertyIdentifier::MONITORED_OBJECTS));
+        assert!(
+            reporter
+                .property_list()
+                .contains(&PropertyIdentifier::MONITORED_OBJECTS)
+        );
         assert!(!reporter.monitors_object_internal(reporter.object_identifier()));
     }
     reporter.set_monitored_objects(None).unwrap();
@@ -276,7 +290,7 @@ fn audit_reporter_monitored_objects_local_configuration_and_removal_are_truthful
     assert!(reporter.monitors_object_internal(input));
     assert!(
         matches!(reporter.read_property(PropertyIdentifier::MONITORED_OBJECTS, None),
-        Err(Error::Protocol { code, .. }) if code == ErrorCode::UNKNOWN_PROPERTY)
+        Err(Error::Remote(RemoteError::Error { code, .. })) if code == ErrorCode::UNKNOWN_PROPERTY)
     );
 }
 
@@ -483,7 +497,7 @@ fn audit_reporter_property_list_preserves_bacnet_array_projection() {
         .unwrap_err();
     assert!(matches!(
         error,
-        Error::Protocol { class, code }
+        Error::Remote(RemoteError::Error { class, code })
             if class == ErrorClass::PROPERTY
                 && code == ErrorCode::INVALID_ARRAY_INDEX
     ));
@@ -647,7 +661,7 @@ fn audit_reporter_description_write_and_metadata_remain_compatible() {
         .unwrap_err();
     assert!(matches!(
         error,
-        Error::Protocol { class, code }
+        Error::Remote(RemoteError::Error { class, code })
             if class == ErrorClass::PROPERTY
                 && code == ErrorCode::INVALID_DATA_TYPE
     ));
@@ -661,64 +675,6 @@ fn audit_reporter_description_write_and_metadata_remain_compatible() {
         read(&reporter, PropertyIdentifier::DESCRIPTION),
         PropertyValue::CharacterString("local description".into())
     );
-}
-
-#[test]
-fn audit_reporter_lifecycle_configuration_filters_do_not_use_priority() {
-    let mut reporter = AuditReporterObject::new(1, "AR").unwrap();
-    reporter
-        .set_audit_priority_filter(BACnetPriorityFilter::from_bits(0))
-        .unwrap();
-    for level in [
-        AuditLevel::NONE,
-        AuditLevel::AUDIT_CONFIG,
-        AuditLevel::AUDIT_ALL,
-        AuditLevel::from_raw(64),
-    ] {
-        reporter.set_audit_level(level).unwrap();
-        for selected in [
-            AuditOperation::CREATE,
-            AuditOperation::DELETE,
-            AuditOperation::WRITE,
-        ] {
-            let mut flags = AuditOperationFlags::empty();
-            flags.insert(selected);
-            reporter.set_auditable_operations(flags).unwrap();
-            for operation in [AuditOperation::CREATE, AuditOperation::DELETE] {
-                assert_eq!(
-                    crate::audit::ObjectAuditPolicy::default()
-                        .effective_internal(&reporter.configuration_internal())
-                        .reports(operation, None, None),
-                    level != AuditLevel::NONE && selected == operation
-                );
-            }
-        }
-    }
-}
-
-#[test]
-fn audit_reporter_unassigned_creation_selection_needs_type_or_catch_all() {
-    let mut reporter = AuditReporterObject::new(1, "AR").unwrap();
-    let kind = ObjectType::BINARY_VALUE;
-    for (selectors, expected) in [
-        (None, true),
-        (Some(vec![]), false),
-        (Some(vec![Selector::None]), false),
-        (
-            Some(vec![Selector::Object(
-                ObjectIdentifier::new(kind, 1).unwrap(),
-            )]),
-            false,
-        ),
-        (
-            Some(vec![Selector::ObjectType(ObjectType::ANALOG_INPUT)]),
-            false,
-        ),
-        (Some(vec![Selector::None, Selector::ObjectType(kind)]), true),
-    ] {
-        reporter.set_monitored_objects(selectors).unwrap();
-        assert_eq!(reporter.monitors_unassigned_create_internal(kind), expected);
-    }
 }
 
 #[path = "reporter_filter_tests.rs"]

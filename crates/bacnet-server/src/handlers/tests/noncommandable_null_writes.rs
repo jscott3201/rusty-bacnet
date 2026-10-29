@@ -7,6 +7,7 @@
 
 use super::*;
 use crate::handlers::relinquish::null_in_datatype;
+use PropertyIdentifier as P;
 use bacnet_objects::access_control::{AccessCredentialObject, AccessRightsObject};
 use bacnet_objects::analog::{AnalogOutputObject, AnalogValueObject};
 use bacnet_objects::command_source::CommandOrigin;
@@ -18,7 +19,7 @@ use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::WriteAccessSpecification;
 use bacnet_types::constructed::BACnetPortPermission;
 use bacnet_types::enums::EngineeringUnits;
-use PropertyIdentifier as P;
+use bacnet_types::error::RemoteError;
 
 /// One application NULL, the whole value.
 const NULL: &[u8] = &[0x00];
@@ -214,7 +215,7 @@ fn read(db: &ObjectDatabase, oid: ObjectIdentifier, property: P) -> Vec<u8> {
 
 fn assert_error(result: Result<impl std::fmt::Debug, Error>, class: ErrorClass, code: ErrorCode) {
     assert!(
-        matches!(&result, Err(Error::Protocol { class: c, code: e })
+        matches!(&result, Err(Error::Remote(RemoteError::Error { class: c, code: e }))
             if *c == class && *e == code),
         "expected {class:?} / {code:?}, got {result:?}"
     );

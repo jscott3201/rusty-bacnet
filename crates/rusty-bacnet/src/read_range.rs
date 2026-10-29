@@ -41,7 +41,7 @@ pub(crate) fn request(
         Some(_) => {
             return Err(PyValueError::new_err(
                 "range_type must be 'position', 'sequence', 'time', or None",
-            ))
+            ));
         }
         None => None,
     };
@@ -83,7 +83,10 @@ pub(crate) fn reply_to_dict(py: Python<'_>, reply: ReadRangeReply) -> PyResult<P
         },
     )?;
     dict.set_item("array_index", ack.property_array_index)?;
-    dict.set_item("result_flags", ack.result_flags)?;
+    dict.set_item(
+        "result_flags",
+        crate::types::PyBitString::result_flags(ack.result_flags),
+    )?;
     dict.set_item("item_count", ack.item_count)?;
     dict.set_item("item_data", PyBytes::new(py, &ack.item_data))?;
     dict.set_item("first_sequence_number", ack.first_sequence_number)?;

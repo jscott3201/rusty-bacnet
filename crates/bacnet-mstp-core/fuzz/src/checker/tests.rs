@@ -8,7 +8,7 @@ use bacnet_mstp_core::MstpCoreConfig;
 
 use super::Checker;
 use crate::line::{Heard, Line};
-use crate::model::{encode, Params, Seen};
+use crate::model::{Params, Seen, encode};
 use crate::queues::QueueLog;
 
 fn poll_from(source: u8) -> Seen {

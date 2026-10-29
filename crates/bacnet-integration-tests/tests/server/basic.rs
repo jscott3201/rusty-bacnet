@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_types::error::RemoteError;
 
 #[tokio::test]
 async fn rpm_default_work_budget_aborts_whole_service() {
@@ -25,7 +26,7 @@ async fn rpm_default_work_budget_aborts_whole_service() {
     client.stop().await.unwrap();
     server.stop().await.unwrap();
     assert!(
-        matches!(result, Err(Error::Abort { reason }) if reason == AbortReason::OUT_OF_RESOURCES),
+        matches!(result, Err(Error::Remote(RemoteError::Abort { reason })) if reason == AbortReason::OUT_OF_RESOURCES),
         "{result:?}"
     );
 }

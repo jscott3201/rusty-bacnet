@@ -32,8 +32,8 @@
 
 use std::net::SocketAddr;
 use std::panic::AssertUnwindSafe;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use bacnet_types::error::Error;
 
@@ -184,7 +184,7 @@ impl super::HubClientRegistrationDecision {
 ///
 /// Only requests that already passed shape validation (nonzero UUID,
 /// nonzero limits) and reserved-VMAC screening reach the policy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScHubAdmissionInput {
     /// Current registry relationship, classified before this policy executes
     /// under the same lock as the eventual registration decision. An Allow
@@ -320,10 +320,9 @@ impl AdmissionRuntime {
     /// Record one admin denial (saturating; statistics only, never an
     /// input to limiting decisions).
     pub(super) fn note_denied(&self) {
-        #[allow(deprecated, reason = "try_update needs Rust 1.95; the MSRV is 1.93")]
         let _ = self
             .denied
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 Some(value.saturating_add(1))
             });
     }

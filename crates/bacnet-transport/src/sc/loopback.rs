@@ -1,4 +1,4 @@
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 
 use super::WebSocketPort;
 use bacnet_types::error::Error;

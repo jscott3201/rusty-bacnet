@@ -1,17 +1,21 @@
 //! One place for the server's authorization decisions (#524).
 //!
 //! [`ServerPolicy`] answers every "may this peer do this?" question the
-//! server asks of an application: the covered mutations, LifeSafetyOperation
-//! and both AuditNotification services. Each method has a documented
-//! default, so a policy overrides only what it decides.
+//! server asks of an application: the covered mutations, LifeSafetyOperation,
+//! DeviceCommunicationControl and both AuditNotification services. Each
+//! method has a documented default, so a policy overrides only what it
+//! decides.
 //!
 //! What stays outside it, and why:
 //! - [`MutationPolicy::DenyAll`](crate::mutation::MutationPolicy::DenyAll)
 //!   is a static hardening switch on [`ServerConfig`](crate::server::ServerConfig).
 //!   It wins over any policy, which isn't asked, and its denials are counted
 //!   apart.
-//! - DeviceCommunicationControl's password, source restriction and rate
-//!   limit are static settings, not callbacks.
+//! - DeviceCommunicationControl's password, static
+//!   [`DccPolicy`](crate::server::DccPolicy), source restriction and
+//!   disable rate limit are settings, not callbacks. The policy is asked
+//!   after the password, `DccPolicy` and source checks, and before the rate
+//!   limit is charged.
 //! - `on_reinitialize` carries out a restart rather than deciding on one,
 //!   and runs after the server's own checks.
 //! - `on_time_sync` observes a change it can't refuse.
@@ -36,6 +40,14 @@
 //! everything it forwards. A source VMAC, UUID or routed SNET/SADR is a
 //! claim, never a principal.
 //!
+//! With `sc-tls`, every context's `certificate()` returns the verified leaf
+//! certificate that `principal()` fingerprints, under the same rule, and
+//! `forwarding_peer_certificate()` the forwarding peer's. Its metadata gives
+//! the subject, issuer and Subject Alternative Names, so a rule can follow a
+//! name across certificate renewal instead of listing old and new
+//! fingerprints. Allow on a name found rather than deny on one missing, and
+//! never log a certificate's contents.
+//!
 //! So `principal()` means the direct SC peer that sent the NPDU without an
 //! SNET. A router that doesn't follow the standard, or an application
 //! gateway that re-originates requests, shows its own principal for what it
@@ -47,10 +59,11 @@
 //!
 //! ## Calling rules
 //!
-//! Every method must be fast, nonblocking and free of side effects. The
-//! server calls them on its dispatch tasks, sometimes with the object
-//! database locked (each method says when); calling back into the server
-//! from one can deadlock. Calls may run concurrently. Returning `false`, or
+//! Every method should be quick and free of side effects. For a received
+//! request the server calls them on Tokio's blocking pool with no object
+//! database guard held (#2032; each method says when it asks), so a slow
+//! policy delays only its own request, but a call that never returns keeps
+//! the process from exiting. Calls may run concurrently. Returning `false`, or
 //! panicking, denies, and the request changes nothing.
 //!
 //! ```
@@ -89,17 +102,20 @@
 use crate::audit_notification::{
     AuditNotificationAuthorizationContext, UnconfirmedAuditNotificationAuthorizationContext,
 };
+use crate::device_communication_control::DeviceCommunicationControlAuthorizationContext;
 use crate::life_safety::LifeSafetyOperationAuthorizationContext;
 use crate::mutation::MutationAuthorizationContext;
 use bacnet_encoding::npdu::NpduAddress;
 pub use bacnet_transport::port::ScPrincipal;
 use bacnet_transport::port::TransportProvenance;
+#[cfg(feature = "sc-tls")]
+pub use bacnet_transport::sc_tls::{ScCertificateMetadata, ScPeerCertificate, ScSubjectAltName};
 use std::sync::Arc;
 
 /// The originating peer's principal: the direct-SC leaf, unless the request
 /// was routed, when the connection only authenticates the forwarding router.
 pub(crate) fn originating_principal(
-    provenance: TransportProvenance,
+    provenance: &TransportProvenance,
     source_network: Option<&NpduAddress>,
 ) -> Option<ScPrincipal> {
     source_network
@@ -107,6 +123,49 @@ pub(crate) fn originating_principal(
         .then(|| provenance.principal())
         .flatten()
 }
+
+/// The originating peer's verified leaf certificate, under the rule
+/// [`originating_principal`] applies (#1965).
+#[cfg(feature = "sc-tls")]
+pub(crate) fn originating_certificate<'a>(
+    provenance: &'a TransportProvenance,
+    source_network: Option<&NpduAddress>,
+) -> Option<&'a ScPeerCertificate> {
+    source_network
+        .is_none()
+        .then(|| provenance.leaf_certificate())
+        .flatten()
+}
+
+/// The `certificate()` and `forwarding_peer_certificate()` accessors every
+/// policy context has, for a context with `provenance` and
+/// `source_network` fields. With `sc-tls` only: no other build has direct
+/// SC peers.
+macro_rules! certificate_accessors {
+    () => {
+        /// The verified leaf certificate of the peer that originated the
+        /// request: the one [`principal`](Self::principal) fingerprints, for
+        /// rules by subject, Subject Alternative Name or issuer, which
+        /// survive certificate renewal. `None` exactly when `principal()`
+        /// is: other ingress, hub-relayed and routed requests (see
+        /// [`crate::policy`]). Its contents are the peer's: don't log them.
+        #[cfg(feature = "sc-tls")]
+        pub fn certificate(&self) -> Option<&$crate::policy::ScPeerCertificate> {
+            $crate::policy::originating_certificate(&self.provenance, self.source_network.as_ref())
+        }
+
+        /// The verified leaf certificate of the direct BACnet/SC peer that
+        /// handed this request over, a router included when the request
+        /// was routed: the one
+        /// [`forwarding_peer_principal`](Self::forwarding_peer_principal)
+        /// fingerprints. `None` off a verified direct SC connection.
+        #[cfg(feature = "sc-tls")]
+        pub fn forwarding_peer_certificate(&self) -> Option<&$crate::policy::ScPeerCertificate> {
+            self.provenance.leaf_certificate()
+        }
+    };
+}
+pub(crate) use certificate_accessors;
 
 /// The server's authorization decisions, each with a documented default.
 ///
@@ -148,17 +207,27 @@ pub trait ServerPolicy: Send + Sync + 'static {
     /// denies without asking.
     ///
     /// WritePropertyMultiple asks once per decoded, validated element, in
-    /// wire order, just before that element's write, with the database
-    /// write-locked. A denial, or a malformed later element, leaves the
-    /// elements before it written. An element that an object saves before
-    /// serving it (a Notification Forwarder's or Notification Class's list,
-    /// an Access Rights object's rules, Enable or Accompaniment, an Audit
-    /// Log's Log_Enable or Buffer_Size) is asked about earlier, under a
-    /// database read guard, before the save is staged off the write lock
-    /// (#1321). It is still asked once and in wire order among such
-    /// elements, so the policy can be asked about an element the request
-    /// never reaches. The other confirmed services ask once, for the whole
-    /// decoded request.
+    /// wire order, up to the first it denies, all before the database is
+    /// write-locked and with no database guard held (#2032); the writes
+    /// follow under the lock. A denial, or a malformed later element, leaves
+    /// the elements before it written. Since every element is asked about
+    /// first, the policy can be asked about an element the request never
+    /// reaches, when an earlier one fails as it is written. An element whose
+    /// object appears between the decisions and the writes, so it was never
+    /// asked about, is denied. The other confirmed services ask once, for
+    /// the whole decoded request, also with no database guard held.
+    ///
+    /// Every call for a received request runs on Tokio's blocking pool while
+    /// the request waits (#2032), so a policy that blocks delays only that
+    /// request: it holds no runtime worker, and `BACnetServer::stop` ends
+    /// without waiting for it (the abandoned call finishes on its own and is
+    /// ignored). That costs one trip to the pool per request (a
+    /// WritePropertyMultiple's elements share one; WriteGroup makes one per
+    /// Channel), so keep the policy quick all the same. A call that never
+    /// returns keeps its blocking thread after `stop()`, and a Tokio runtime
+    /// waits for blocking tasks when it shuts down, so such a policy keeps
+    /// the process from exiting. The other `authorize_*` methods for a
+    /// received request run the same way.
     ///
     /// An inbound WriteGroup asks once per Channel it would write, with no
     /// database guard held, no invoke ID and the unconfirmed service in the
@@ -173,8 +242,10 @@ pub trait ServerPolicy: Send + Sync + 'static {
     /// Whether to carry out a LifeSafetyOperation (default: deny).
     ///
     /// Asked after the request is validated and its object found, with no
-    /// database guard held. A denial is answered SERVICES /
-    /// SERVICE_REQUEST_DENIED before the object changes.
+    /// database guard held, on Tokio's blocking pool as
+    /// [`authorize_mutation`](Self::authorize_mutation) is (#2032). A denial
+    /// is answered SERVICES / SERVICE_REQUEST_DENIED before the object
+    /// changes.
     fn authorize_life_safety_operation(
         &self,
         context: &LifeSafetyOperationAuthorizationContext,
@@ -183,12 +254,36 @@ pub trait ServerPolicy: Send + Sync + 'static {
         false
     }
 
+    /// Whether to carry out a DeviceCommunicationControl request (default:
+    /// allow).
+    ///
+    /// Asked after decoding, the password, the deprecated DISABLE refusal,
+    /// the static [`DccPolicy`](crate::server::DccPolicy) and the source
+    /// restriction; a request any of them refuses never reaches the policy.
+    /// For DISABLE_INITIATION the disable rate limit is charged only after
+    /// the policy allows, so a denied requester spends none of that shared
+    /// budget. Asked with no lock held, on Tokio's blocking pool as
+    /// [`authorize_mutation`](Self::authorize_mutation) is (#2032), before
+    /// the timer is replaced or the state changes. A denial is answered SERVICES /
+    /// SERVICE_REQUEST_DENIED, changes neither the state nor a running
+    /// timer, writes no Audit record and is counted in
+    /// `BACnetServer::dcc_outcome_counters` as `policy_denied_total`, which
+    /// also counts the static source and rate-limit refusals.
+    fn authorize_device_communication_control(
+        &self,
+        context: &DeviceCommunicationControlAuthorizationContext,
+    ) -> bool {
+        let _ = context;
+        true
+    }
+
     /// Whether to store a ConfirmedAuditNotification in the configured
     /// Audit Log sink (default: deny).
     ///
     /// Asked after the request is decoded and checked against completed
-    /// receipts, with no database guard held. A denial is answered
-    /// SERVICES / SERVICE_REQUEST_DENIED and stores nothing.
+    /// receipts, with no database guard held, on Tokio's blocking pool as
+    /// [`authorize_mutation`](Self::authorize_mutation) is (#2032). A denial
+    /// is answered SERVICES / SERVICE_REQUEST_DENIED and stores nothing.
     fn authorize_audit_notification(
         &self,
         context: &AuditNotificationAuthorizationContext,
@@ -200,8 +295,10 @@ pub trait ServerPolicy: Send + Sync + 'static {
     /// Whether to store an UnconfirmedAuditNotification in the configured
     /// Audit Log sink (default: deny).
     ///
-    /// Asked after the request is decoded, with no database guard held. A
-    /// denial drops the request silently and stores nothing.
+    /// Asked after the request is decoded, with no database guard held, on
+    /// Tokio's blocking pool as
+    /// [`authorize_mutation`](Self::authorize_mutation) is (#2032). A denial
+    /// drops the request silently and stores nothing.
     fn authorize_unconfirmed_audit_notification(
         &self,
         context: &UnconfirmedAuditNotificationAuthorizationContext,
@@ -222,6 +319,7 @@ type Decide<C> = Arc<dyn Fn(&C) -> bool + Send + Sync>;
 pub struct FnPolicy {
     mutation: Option<Decide<MutationAuthorizationContext>>,
     life_safety_operation: Option<Decide<LifeSafetyOperationAuthorizationContext>>,
+    device_communication_control: Option<Decide<DeviceCommunicationControlAuthorizationContext>>,
     audit_notification: Option<Decide<AuditNotificationAuthorizationContext>>,
     unconfirmed_audit_notification:
         Option<Decide<UnconfirmedAuditNotificationAuthorizationContext>>,
@@ -252,6 +350,16 @@ impl FnPolicy {
         self
     }
 
+    /// Decide DeviceCommunicationControl with `decide`; see
+    /// [`ServerPolicy::authorize_device_communication_control`].
+    pub fn device_communication_control(
+        mut self,
+        decide: impl Fn(&DeviceCommunicationControlAuthorizationContext) -> bool + Send + Sync + 'static,
+    ) -> Self {
+        self.device_communication_control = Some(Arc::new(decide));
+        self
+    }
+
     /// Decide ConfirmedAuditNotification with `decide`; see
     /// [`ServerPolicy::authorize_audit_notification`].
     pub fn audit_notification(
@@ -267,9 +375,9 @@ impl FnPolicy {
     pub fn unconfirmed_audit_notification(
         mut self,
         decide: impl Fn(&UnconfirmedAuditNotificationAuthorizationContext) -> bool
-            + Send
-            + Sync
-            + 'static,
+        + Send
+        + Sync
+        + 'static,
     ) -> Self {
         self.unconfirmed_audit_notification = Some(Arc::new(decide));
         self
@@ -288,6 +396,12 @@ impl<P: ServerPolicy + ?Sized> ServerPolicy for Arc<P> {
         context: &LifeSafetyOperationAuthorizationContext,
     ) -> bool {
         (**self).authorize_life_safety_operation(context)
+    }
+    fn authorize_device_communication_control(
+        &self,
+        context: &DeviceCommunicationControlAuthorizationContext,
+    ) -> bool {
+        (**self).authorize_device_communication_control(context)
     }
     fn authorize_audit_notification(
         &self,
@@ -316,6 +430,12 @@ impl<P: ServerPolicy + ?Sized> ServerPolicy for Box<P> {
     ) -> bool {
         (**self).authorize_life_safety_operation(context)
     }
+    fn authorize_device_communication_control(
+        &self,
+        context: &DeviceCommunicationControlAuthorizationContext,
+    ) -> bool {
+        (**self).authorize_device_communication_control(context)
+    }
     fn authorize_audit_notification(
         &self,
         context: &AuditNotificationAuthorizationContext,
@@ -337,6 +457,10 @@ impl std::fmt::Debug for FnPolicy {
             .field(
                 "life_safety_operation",
                 &self.life_safety_operation.is_some(),
+            )
+            .field(
+                "device_communication_control",
+                &self.device_communication_control.is_some(),
             )
             .field("audit_notification", &self.audit_notification.is_some())
             .field(
@@ -364,6 +488,15 @@ impl ServerPolicy for FnPolicy {
         self.life_safety_operation
             .as_ref()
             .is_some_and(|decide| decide(context))
+    }
+
+    fn authorize_device_communication_control(
+        &self,
+        context: &DeviceCommunicationControlAuthorizationContext,
+    ) -> bool {
+        self.device_communication_control
+            .as_ref()
+            .is_none_or(|decide| decide(context))
     }
 
     fn authorize_audit_notification(

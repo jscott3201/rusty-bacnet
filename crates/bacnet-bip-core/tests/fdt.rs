@@ -5,11 +5,11 @@ mod support;
 
 use bacnet_bip_codec::{BvlcResultCode, FdtEntry};
 use bacnet_bip_core::bbmd::{
-    Fdt, Registered, Registration, RegistrationLimits, RegistrationRefusal, Reservation,
-    StorageFull, GRACE_PERIOD,
+    Fdt, GRACE_PERIOD, Registered, Registration, RegistrationLimits, RegistrationRefusal,
+    Reservation, StorageFull,
 };
 use bacnet_bip_core::{Duration, Instant};
-use support::{addr, secs, OPEN, PORT};
+use support::{OPEN, PORT, addr, secs};
 
 const T0: Instant = Instant::from_secs(1_000);
 
@@ -54,10 +54,11 @@ fn time_to_live_outside_the_limits_is_refused_without_touching_the_entry() {
     limits.min_ttl = 30;
     limits.max_ttl = 300;
     let device = addr(10, 0, 0, 1, PORT);
-    assert!(fdt
-        .register(device, 60, T0, &limits, Reservation::Ordinary, || true)
-        .result
-        .is_ok());
+    assert!(
+        fdt.register(device, 60, T0, &limits, Reservation::Ordinary, || true)
+            .result
+            .is_ok()
+    );
     for ttl in [0, 10, 29, 301, u16::MAX] {
         let outcome = fdt.register(
             device,
@@ -154,14 +155,16 @@ fn one_address_may_hold_its_quota_across_ports() {
     let mut limits = OPEN;
     limits.max_entries_per_source = 2;
     let ip = |port| addr(10, 0, 0, 1, port);
-    assert!(fdt
-        .register(ip(1), 60, T0, &limits, Reservation::Ordinary, || true)
-        .result
-        .is_ok());
-    assert!(fdt
-        .register(ip(2), 60, T0, &limits, Reservation::Ordinary, || true)
-        .result
-        .is_ok());
+    assert!(
+        fdt.register(ip(1), 60, T0, &limits, Reservation::Ordinary, || true)
+            .result
+            .is_ok()
+    );
+    assert!(
+        fdt.register(ip(2), 60, T0, &limits, Reservation::Ordinary, || true)
+            .result
+            .is_ok()
+    );
     assert_eq!(
         fdt.register(ip(3), 60, T0, &limits, Reservation::Ordinary, || true)
             .result,
@@ -173,8 +176,8 @@ fn one_address_may_hold_its_quota_across_ports() {
             .result,
         Ok(Registered::Renewed)
     );
-    assert!(fdt
-        .register(
+    assert!(
+        fdt.register(
             addr(10, 0, 0, 2, 1),
             60,
             T0,
@@ -183,7 +186,8 @@ fn one_address_may_hold_its_quota_across_ports() {
             || true
         )
         .result
-        .is_ok());
+        .is_ok()
+    );
 }
 
 #[test]

@@ -11,13 +11,14 @@ async function revealHashTarget() {
   for (let node = target; node; node = node.parentElement) {
     if (node.getAttribute('role') === 'tabpanel') panels.unshift(node);
   }
-  let revealed = false;
   for (const panel of panels) {
     if (!panel.hidden) continue;
     const control = document.getElementById(panel.getAttribute('aria-labelledby') || '');
-    if (control instanceof HTMLElement) { control.click(); revealed = true; }
+    if (control instanceof HTMLElement) control.click();
   }
-  if (revealed) {
+  // A synced tab group (syncKey) may already show the panel, restored from
+  // an earlier choice before this runs; focus the destination either way.
+  if (panels.length) {
     // Native tab activation focuses its control. Move reading/keyboard focus
     // to the revealed destination instead of leaving it above the scrolled view.
     if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');

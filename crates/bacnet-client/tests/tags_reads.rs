@@ -1,7 +1,7 @@
 //! Actual RP/RPM exchange with independently encoded Tags payloads.
 use bacnet_client::client::BACnetClient;
-use bacnet_client::tags::{decode_tags_read, TagsRead};
-use bacnet_encoding::apdu::{decode_apdu, Apdu};
+use bacnet_client::tags::{TagsRead, decode_tags_read};
+use bacnet_encoding::apdu::{Apdu, decode_apdu};
 use bacnet_network::layer::NetworkLayer;
 use bacnet_npdu::NetworkPriority;
 use bacnet_services::read_property::ReadPropertyRequest;
@@ -13,7 +13,7 @@ use bacnet_types::enums::{
 };
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use std::net::Ipv4Addr;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 const SEMANTIC: &[u8] = &[0x0a, 0, b'a'];
 const VALUE: &[u8] = &[0x0a, 0, b'b', 0x21, 3];

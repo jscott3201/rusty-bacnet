@@ -124,7 +124,9 @@ async fn group_present_value_bip_wire_rebuilds_from_members() {
     );
     assert_eq!(
         served[1],
-        [0x0C, 0, 0, 0, 9, 0x1E, 0x29, 85, 0x5E, 0x91, 1, 0x91, 31, 0x5F, 0x1F]
+        [
+            0x0C, 0, 0, 0, 9, 0x1E, 0x29, 85, 0x5E, 0x91, 1, 0x91, 31, 0x5F, 0x1F
+        ]
     );
     // The Device member carries the services this server executes, the
     // value a direct read of the Device returns.

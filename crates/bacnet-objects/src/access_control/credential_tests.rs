@@ -3,6 +3,7 @@
 //! validity window against the wall clock, Global_Identifier, and the two
 //! constructed arrays.
 
+use bacnet_types::error::RemoteError;
 use std::sync::{Arc, Mutex};
 
 use bacnet_encoding::constructed::{
@@ -74,7 +75,7 @@ fn reasons(raw: &[u32]) -> PropertyValue {
 
 fn assert_property_error<T: std::fmt::Debug>(result: Result<T, Error>, expected: ErrorCode) {
     match result {
-        Err(Error::Protocol { class, code }) => {
+        Err(Error::Remote(RemoteError::Error { class, code })) => {
             assert_eq!(class, ErrorClass::PROPERTY);
             assert_eq!(code, expected, "expected {expected:?}");
         }

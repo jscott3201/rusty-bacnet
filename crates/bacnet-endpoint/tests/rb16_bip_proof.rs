@@ -22,14 +22,14 @@
 
 use std::net::Ipv4Addr;
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 use std::time::Duration;
 
-use bacnet_encoding::apdu::{decode_apdu, encode_apdu, Apdu, ConfirmedRequest as ConfirmedPdu};
+use bacnet_encoding::apdu::{Apdu, ConfirmedRequest as ConfirmedPdu, decode_apdu, encode_apdu};
 use bacnet_endpoint::bip::BipEndpointBuilder;
-use bacnet_endpoint::identity::{build_database_with_extra, DeviceIdentity};
+use bacnet_endpoint::identity::{DeviceIdentity, build_database_with_extra};
 use bacnet_endpoint::session::{SessionConfig, SessionRole};
 use bacnet_network::layer::NetworkLayer;
 use bacnet_npdu::NetworkPriority;
@@ -37,12 +37,12 @@ use bacnet_objects::analog::AnalogInputObject;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
+use bacnet_types::MacAddr;
 use bacnet_types::enums::{
     ConfirmedServiceChoice, EngineeringUnits, ObjectType, PropertyIdentifier, Segmentation,
     ServiceSupported,
 };
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
-use bacnet_types::MacAddr;
 use bytes::BytesMut;
 use tokio::sync::mpsc;
 

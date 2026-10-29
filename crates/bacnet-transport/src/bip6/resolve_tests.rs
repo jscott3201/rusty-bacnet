@@ -10,12 +10,12 @@ use tokio::sync::oneshot::error::TryRecvError;
 use tokio::time::Instant;
 
 use super::resolve::{
-    Failure, Limit, Neighbours, Route, VirtualRoute, MAX_QUEUED, MAX_QUEUED_PER_VMAC,
-    MAX_RESOLVING, MAX_VIRTUAL, MAX_WAITERS, MAX_WAITERS_PER_VMAC,
+    Failure, Limit, MAX_QUEUED, MAX_QUEUED_PER_VMAC, MAX_RESOLVING, MAX_VIRTUAL, MAX_WAITERS,
+    MAX_WAITERS_PER_VMAC, Neighbours, Route, VirtualRoute,
 };
 use super::resolve_counters::{Bip6ResolutionCounters, ResolutionCounts};
 use super::vmac_table::{
-    Heard, DIRECT_PRECEDENCE, MAX_UNREACHABLE, MAX_VMAC_TABLE_ENTRIES, REVALIDATE_AFTER,
+    DIRECT_PRECEDENCE, Heard, MAX_UNREACHABLE, MAX_VMAC_TABLE_ENTRIES, REVALIDATE_AFTER,
     UNREACHABLE_FOR,
 };
 use super::{Bip6Vmac, UnresolvedSend};
@@ -359,9 +359,11 @@ fn a_full_table_evicts_the_peer_heard_from_least_recently() {
     let t0 = Instant::now();
     for n in 0..MAX_VMAC_TABLE_ENTRIES {
         let at = t0 + Duration::from_millis(n as u64);
-        assert!(state
-            .table
-            .learn(nth(n), addr(n as u16 + 1), Heard::Direct, at));
+        assert!(
+            state
+                .table
+                .learn(nth(n), addr(n as u16 + 1), Heard::Direct, at)
+        );
     }
     let later = t0 + secs(10);
     state.table.learn(nth(0), addr(1), Heard::Direct, later);

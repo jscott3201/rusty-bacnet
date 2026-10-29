@@ -64,6 +64,10 @@
 //!   count-only saturating and never affect decisions.
 
 mod actions;
+mod application;
+mod application_feed;
+mod application_replies;
+mod application_transactions;
 pub mod control_policy;
 mod counters;
 mod dispatch;
@@ -79,11 +83,15 @@ mod replies;
 mod send_queue;
 mod send_warning;
 mod sender;
+mod shutdown;
+mod startup;
+pub use application::{RouterApplicationPort, RouterApplicationPorts};
 pub use replies::RouterResponse;
+pub use shutdown::{RouterStopError, RouterStopFailure};
 
 use std::ops::{Deref, DerefMut};
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
 use bacnet_npdu::Mac;
 pub use bacnet_router_core::router::{
@@ -91,13 +99,12 @@ pub use bacnet_router_core::router::{
 };
 use bacnet_router_core::{Instant, PortId};
 use bacnet_transport::port::{DataAttribute, TransportPort};
-use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
+use bacnet_types::error::Error;
 use bytes::Bytes;
 pub use counters::Counters;
 pub use originate::OriginateFailure;
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
 
 use crate::layer::ReceivedNetworkControl;
 use crate::layer::{AdmissionReceiver, AdmissionSender, QueueAdmissionCounters, ReceivedApdu};
@@ -106,7 +113,7 @@ pub use control_policy::{ControlAuthContext, ControlAuthorizer, ControlClass};
 pub use control_policy::{ControlDecisionCounters, ControlGate, ControlPolicy};
 pub use control_policy::{ControlServiceCounters, ControlTrust};
 use dispatch::{Outputs, PortDispatch, Shared};
-use engine::{tokio_clock, Engine, EngineGuard, PORTS};
+use engine::{Engine, EngineGuard, PORTS, tokio_clock};
 pub use options::{LocalApduReceiver, NetworkControlReceiver, RouterOptions, StartedRouter};
 use port_groups::PortGroups;
 
@@ -114,7 +121,7 @@ use port_groups::PortGroups;
 // engine.
 #[cfg(test)]
 use {
-    bacnet_encoding::npdu::{encode_npdu, Npdu},
+    bacnet_encoding::npdu::{Npdu, encode_npdu},
     bacnet_npdu::NetworkMessageType,
     bacnet_transport::port::TransportProvenance,
     bytes::BytesMut,
@@ -148,7 +155,14 @@ enum SendRequest {
 /// an NPDU too long for the port with reject reason 4 (#1665). It follows
 /// the limit's changes after that, for a transport that publishes them
 /// ([`TransportPort::max_npdu_changes`], #1696).
-pub struct RouterPort<T: TransportPort> {
+///
+/// `T` defaults to [`AnyTransport`], so `RouterPort` alone names a port of a
+/// router that mixes link types; `RouterPort<BipTransport>` and the like
+/// name one of a router whose ports share a concrete transport.
+///
+/// [`AnyTransport`]: bacnet_transport::any::AnyTransport
+/// [`BipTransport`]: bacnet_transport::bip::BipTransport
+pub struct RouterPort<T: TransportPort = bacnet_transport::any::AnyTransport> {
     /// The transport for this port.
     pub transport: T,
     /// The network number assigned to this port: 1 to 65534.
@@ -156,6 +170,32 @@ pub struct RouterPort<T: TransportPort> {
     /// the global broadcast DNET, which can't be the SNET the router puts
     /// in what it relays from the port (Clause 6.2.2.1).
     pub network_number: u16,
+}
+
+/// An owned address snapshot captured after a router port starts.
+///
+/// This contains no transport or socket owner. Its index is the configured
+/// input position and the MAC is the transport's actual post-start address.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RouterPortInfo {
+    index: u8,
+    network_number: u16,
+    mac: MacAddr,
+}
+
+impl RouterPortInfo {
+    /// Zero-based configured input position, also the route's egress port ID.
+    pub fn index(&self) -> u8 {
+        self.index
+    }
+    /// The directly attached BACnet network number.
+    pub fn network_number(&self) -> u16 {
+        self.network_number
+    }
+    /// The actual local MAC captured after successful transport startup.
+    pub fn local_mac(&self) -> &[u8] {
+        &self.mac
+    }
 }
 
 /// BACnet router connecting multiple networks.
@@ -182,15 +222,8 @@ pub struct BACnetRouter {
     outputs: std::sync::Weak<Outputs>,
     /// The engine, the gate and the ports' groups.
     shared: Arc<Shared>,
-    /// Dispatch tasks (one per port).
-    dispatch_tasks: Vec<JoinHandle<()>>,
-    /// Sender tasks (one per port, owns the transport for outgoing messages).
-    sender_tasks: Vec<JoinHandle<()>>,
-    /// Background task that runs the engine's sweep when it is due.
-    aging_task: Option<JoinHandle<()>>,
-    /// Tasks that follow a port's NPDU limit (one per port whose transport
-    /// publishes its changes).
-    limit_tasks: Vec<JoinHandle<()>>,
+    lifecycle: shutdown::Lifecycle,
+    port_info: Vec<RouterPortInfo>,
     /// Last sequence given to a control for the router's own consumer.
     network_control_ingress_sequence: Arc<AtomicU64>,
 }
@@ -250,7 +283,14 @@ impl BACnetRouter {
     /// before any transport starts; and if a transport fails to start, or
     /// if a transport's own MAC is longer than
     /// [`MAX_MAC_LEN`](bacnet_npdu::MAX_MAC_LEN)
-    /// octets.
+    /// octets. Failed startup awaits cleanup of every attempted port, including
+    /// a partially started failing port. The original startup error takes
+    /// precedence; cleanup failures are logged with port identity.
+    ///
+    /// Cancelling startup initiates retained cleanup on the current runtime.
+    /// It does not imply cleanup has completed or resources can be reused.
+    /// Dropping a running router similarly initiates best-effort cleanup;
+    /// await [`Self::stop`] for a successful cleanup barrier.
     pub async fn start<T, A, C>(
         ports: Vec<RouterPort<T>>,
         options: RouterOptions<A, C>,
@@ -381,187 +421,12 @@ impl BACnetRouter {
         self.counters().group_dadr_drops
     }
 
-    async fn start_dispatch<T: TransportPort + 'static>(
-        mut ports: Vec<RouterPort<T>>,
-        track_depth: bool,
-        control: Arc<control_policy::ControlGate>,
-        network_control: Option<AdmissionSender<ReceivedNetworkControl>>,
-        engine_options: bacnet_router_core::router::Options,
-    ) -> Result<(Self, mpsc::Receiver<ReceivedApdu>, QueueAdmissionCounters), Error> {
-        if ports.is_empty() || ports.len() > PORTS {
-            return Err(Error::Encoding(format!(
-                "A router needs 1 to {PORTS} ports, not {}",
-                ports.len()
-            )));
-        }
-        // Refuse reserved and duplicate network numbers
-        {
-            let mut seen = std::collections::HashSet::new();
-            for port in &ports {
-                if matches!(port.network_number, 0 | 0xFFFF) {
-                    return Err(Error::Encoding(format!(
-                        "A router port can't be on network {}: ports take 1 to 65534",
-                        port.network_number
-                    )));
-                }
-                if !seen.insert(port.network_number) {
-                    return Err(Error::Encoding(format!(
-                        "Duplicate network number {} in router ports",
-                        port.network_number
-                    )));
-                }
-            }
-        }
-
-        let (local_tx, local_rx, counters) = AdmissionReceiver::channel(track_depth);
-
-        // Start each transport, and note what the engine and its hooks need.
-        let mut port_receivers = Vec::new();
-        let mut configs = Vec::new();
-        let mut networks = Vec::new();
-        let mut limit_changes = Vec::new();
-
-        for port in &mut ports {
-            // A routing node may owe its data link more than other nodes:
-            // MS/TP turns on extended frames here (Clause 9.3).
-            port.transport.prepare_for_routing();
-            let rx = port.transport.start().await?;
-            port_receivers.push(rx);
-            let mac = Mac::from_slice(port.transport.local_mac()).map_err(|_| {
-                Error::Encoding(format!(
-                    "Router port on network {} has a MAC longer than {} octets",
-                    port.network_number,
-                    bacnet_npdu::MAX_MAC_LEN
-                ))
-            })?;
-            // Read once the transport has started: MS/TP's grows with the
-            // extended frames routing turned on, and BACnet/SC's comes from
-            // its hub connection.
-            configs.push(Engine::port(
-                port.network_number,
-                mac,
-                port.transport.max_npdu(),
-                PortGroups {
-                    groups: port.transport.group_destinations(),
-                    local_broadcasts: port.transport.local_broadcast_destinations(),
-                },
-            ));
-            // Taken after that read; the task that follows it applies the
-            // value it holds first, so a change in between isn't lost.
-            limit_changes.push(port.transport.max_npdu_changes());
-            networks.push(port.network_number);
-        }
-        let engine = Engine::new(&configs, tokio_clock(), engine_options)
-            .map_err(|error| Error::Encoding(error.to_string()))?;
-
-        let network_control_ingress_sequence = Arc::new(AtomicU64::new(0));
-        let shared = Arc::new(Shared {
-            engine,
-            gate: control,
-            networks,
-            warnings: Default::default(),
-        });
-
-        let (send_txs, send_rxs): (Vec<_>, Vec<_>) = (0..ports.len())
-            .map(|_| send_queue::channel(send_queue::CAPACITY))
-            .unzip();
-        let replies = Arc::new(replies::ReplyLifetime::default());
-        let outputs = Arc::new(Outputs {
-            replies: Arc::clone(&replies),
-            send_txs,
-            local_tx,
-            local_control: local_control::LocalControl::new(
-                network_control,
-                Arc::clone(&network_control_ingress_sequence),
-            ),
-        });
-        // Senders may return a late rejection through these queues, but
-        // must not keep them or the local consumers alive after dispatch.
-        let sender_tasks = ports
-            .into_iter()
-            .zip(send_rxs)
-            .enumerate()
-            .map(|(index, (port, send_rx))| {
-                tokio::spawn(sender::run(
-                    port.transport,
-                    // At most 255 ports, checked above.
-                    PortId(index as u8),
-                    send_rx,
-                    Arc::clone(&shared),
-                    Arc::downgrade(&outputs),
-                ))
-            })
-            .collect();
-
-        // Follow the limits of the ports whose transports publish them.
-        let limit_tasks = limit_changes
-            .into_iter()
-            .enumerate()
-            .filter_map(|(index, changes)| {
-                // At most 255 ports, checked above.
-                let port = PortId(index as u8);
-                let task = limits::follow(Arc::clone(&shared), port, changes?);
-                Some(tokio::spawn(task))
-            })
-            .collect();
-
-        // Startup: each port hears its own network number, in a
-        // Network-Number-Is (R3, Clause 6.4.20), then, in an I-Am-Router,
-        // which networks lie beyond the other ports.
-        shared.announce(&outputs.send_txs);
-
-        let dispatch_tasks = port_receivers
-            .into_iter()
-            .enumerate()
-            .map(|(index, rx)| {
-                let port = PortDispatch {
-                    shared: Arc::clone(&shared),
-                    outputs: Arc::clone(&outputs),
-                    // At most 255 ports, checked above.
-                    port: index as u8,
-                };
-                tokio::spawn(port.run(rx))
-            })
-            .collect();
-
-        // Run the engine's sweep at each of its deadlines: it purges stale
-        // learned routes, lapsed busy marks, hardened pending slots and
-        // discovery entries. `last_used` never extends `last_seen` expiry.
-        //
-        // The task sleeps until the deadline it last read, and nothing
-        // wakes it early. That holds because only the sweep itself
-        // (`on_deadline`) moves the engine's `next_deadline`; if the core
-        // ever lets another call move it, that call's site must wake this
-        // task (a `Notify`, say), or the sweep runs late.
-        let aging = Arc::clone(&shared);
-        let aging_task = tokio::spawn(async move {
-            let clock = aging.engine.clock();
-            // A deadline past the host clock's range never comes.
-            let wake = |next: Option<Instant>| next.and_then(|at| clock.to_std(at));
-            let mut next = wake(aging.engine.lock().next_deadline());
-            loop {
-                match next {
-                    Some(at) => tokio::time::sleep_until(at.into()).await,
-                    None => std::future::pending().await,
-                }
-                next = wake(aging.sweep());
-            }
-        });
-
-        Ok((
-            Self {
-                replies,
-                outputs: Arc::downgrade(&outputs),
-                shared,
-                dispatch_tasks,
-                sender_tasks,
-                aging_task: Some(aging_task),
-                limit_tasks,
-                network_control_ingress_sequence,
-            },
-            local_rx,
-            counters,
-        ))
+    /// Immutable post-start address snapshots in configured-port order.
+    ///
+    /// Copies retain no live transport resources. The snapshots remain readable
+    /// after stop and describe that generation, not a new bind or live lookup.
+    pub fn ports(&self) -> &[RouterPortInfo] {
+        &self.port_info
     }
 
     /// The routing table, locked for local management: read routes, or
@@ -588,35 +453,22 @@ impl BACnetRouter {
         self.shared.engine.now()
     }
 
-    /// Stop the router.
+    /// Stop the router and await every transport's async cleanup.
     ///
-    /// Aborts and awaits dispatch, sender, aging and limit tasks without
-    /// waiting for the local application consumer, even with a full queue.
-    /// Queued local APDUs remain drainable, retaining their reply senders
-    /// until consumed or the receiver is dropped. Stop is not an admission
-    /// drop and does not clear depth/high-water/drop totals. See the
-    /// [receive-queue contract](crate::layer#receive-queue-admission).
-    pub async fn stop(&mut self) {
+    /// Seals forwarding and replies, interrupts pending sends, joins router
+    /// workers and awaits every transport stop, even when another fails. `Ok`
+    /// is a cleanup completion barrier; `Err` retains typed failures and makes
+    /// no resource-release promise for the failed owners. Repeated calls replay
+    /// the same result without retrying. Cancelling this wait leaves cleanup
+    /// running; another call can await its completion.
+    ///
+    /// Queued local APDUs remain drainable, but their replies are sealed. Stop
+    /// does not clear admission totals or wait for local consumers, even with
+    /// a full queue. See the [receive-queue contract](crate::layer#receive-queue-admission).
+    pub async fn stop(&mut self) -> Result<(), RouterStopError> {
         self.replies.seal();
-        for task in self.dispatch_tasks.drain(..) {
-            task.abort();
-            let _ = task.await;
-        }
-        for task in self.sender_tasks.drain(..) {
-            task.abort();
-            let _ = task.await;
-        }
-        if let Some(task) = self.aging_task.take() {
-            task.abort();
-            let _ = task.await;
-        }
-        for task in self.limit_tasks.drain(..) {
-            task.abort();
-            let _ = task.await;
-        }
-        // Cancel pending unknown-destination discovery so no further
-        // solicitation is emitted and coalesced waiters observe shutdown.
         self.shared.engine.lock().cancel_discovery();
+        self.lifecycle.stop().await
     }
 
     /// How many unknown networks the router is looking for.
@@ -666,6 +518,14 @@ mod mstp_extended_tests;
 #[cfg(test)]
 mod originate_tests;
 #[cfg(test)]
+mod owned_bip_tests;
+#[cfg(test)]
+mod owned_fixture;
+#[cfg(test)]
+mod owned_lifecycle_tests;
+#[cfg(test)]
+mod owned_startup_tests;
+#[cfg(test)]
 mod priority_harness;
 #[cfg(test)]
 mod priority_tests;
@@ -683,5 +543,7 @@ mod tests;
 impl Drop for BACnetRouter {
     fn drop(&mut self) {
         self.replies.seal();
+        self.shared.engine.lock().cancel_discovery();
+        self.lifecycle.begin();
     }
 }

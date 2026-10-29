@@ -69,15 +69,17 @@ async fn registered_port_invalid_selection_profile_and_identity_fail_before_publ
             );
         }
         assert!(endpoint.bip_local_address().is_none());
-        assert!(endpoint
-            .database
-            .as_ref()
-            .unwrap()
-            .write()
-            .await
-            .remove(&port())
-            .unwrap()
-            .is_some());
+        assert!(
+            endpoint
+                .database
+                .as_ref()
+                .unwrap()
+                .write()
+                .await
+                .remove(&port())
+                .unwrap()
+                .is_some()
+        );
     }
     let id = identity();
     let (transport, _peer) = bacnet_transport::loopback::LoopbackTransport::pair(vec![1], vec![2]);

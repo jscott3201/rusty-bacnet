@@ -260,10 +260,11 @@ async fn control_queued_before_activation_cannot_claim_the_new_generation() {
     limits
         .handle_network_control(&tsm, reason_4_control(&router, 100, 5))
         .await;
-    assert!(tsm
-        .lock()
-        .await
-        .owner_is_current(&tsm_mac, 9, &registration.owner));
+    assert!(
+        tsm.lock()
+            .await
+            .owner_is_current(&tsm_mac, 9, &registration.owner)
+    );
     assert!(registration.response.try_recv().is_err());
 
     limits

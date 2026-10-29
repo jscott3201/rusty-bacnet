@@ -1,4 +1,4 @@
-use super::mutation_tests::{apdu, oid, Fixture};
+use super::mutation_tests::{Fixture, apdu, oid};
 use super::*;
 use bacnet_encoding::{primitives, tags};
 use bacnet_objects::analog::AnalogOutputObject;

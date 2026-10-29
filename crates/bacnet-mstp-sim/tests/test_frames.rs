@@ -115,12 +115,16 @@ fn a_broadcast_test_request_gets_no_answer() {
     });
     sim.run_until(ms(2_000));
     let frames = sim.frames();
-    assert!(frames
-        .iter()
-        .any(|frame| frame.is(FrameType::TEST_REQUEST, 5, 0xFF)));
-    assert!(!frames
-        .iter()
-        .any(|frame| frame.frame_type() == Some(FrameType::TEST_RESPONSE)));
+    assert!(
+        frames
+            .iter()
+            .any(|frame| frame.is(FrameType::TEST_REQUEST, 5, 0xFF))
+    );
+    assert!(
+        !frames
+            .iter()
+            .any(|frame| frame.frame_type() == Some(FrameType::TEST_RESPONSE))
+    );
     assert!(sim.deliveries(0).is_empty());
     sim.assert_no_violations();
 }
@@ -146,10 +150,11 @@ fn test_responses_and_proprietary_frames_are_passed_up() {
         }
     });
     sim.run_until(ms(2_000));
-    assert!(sim
-        .frames()
-        .iter()
-        .any(|frame| frame.is(FrameType::TEST_RESPONSE, 5, 0)));
+    assert!(
+        sim.frames()
+            .iter()
+            .any(|frame| frame.is(FrameType::TEST_RESPONSE, 5, 0))
+    );
     let delivered: Vec<_> = sim
         .deliveries(0)
         .iter()

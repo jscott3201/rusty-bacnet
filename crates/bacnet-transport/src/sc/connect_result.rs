@@ -3,7 +3,7 @@ use bacnet_types::error::Error;
 
 use crate::sc_frame::{ScBvlcResult, ScFunction};
 
-use super::{generate_random48_vmac, ScConnection, ScConnectionState};
+use super::{ScConnection, ScConnectionState, generate_random48_vmac};
 
 impl ScConnection {
     pub(crate) fn abort_connect(&mut self) {

@@ -35,7 +35,7 @@ test('engine smoke: deep tabs, keyboard-scrollable code, Pagefind and modal', as
   await expect(dialog.locator('output')).toHaveText('300%');
   await page.keyboard.press('Escape');
   await expect(opener).toBeFocused();
-  await page.goto(base + 'guides/configuration/#bacnetip-settings');
+  await page.goto(base + 'connect/bacnet-ip/#bacnetip-settings');
   const table = page.getByRole('region', { name: 'Scrollable reference table' }).first();
   await expect(table.getByRole('table')).toBeVisible();
   await expect(table).toHaveAttribute('tabindex', '0');

@@ -8,7 +8,7 @@ mod node_support;
 use core::net::{Ipv4Addr, SocketAddrV4};
 
 use bacnet_bip_codec::{BdtEntries, BdtEntry, Bvll, FdtEntry};
-use bacnet_bip_core::bbmd::{Nat, Reservation, Tables, Target, TWO_HOP_MASK};
+use bacnet_bip_core::bbmd::{Nat, Reservation, TWO_HOP_MASK, Tables, Target};
 use bacnet_bip_core::node::{Mode, Permissive};
 use bacnet_bip_core::port::{BbmdPort, Ingress};
 use node_support::*;

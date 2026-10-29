@@ -1,0 +1,26 @@
+{
+  "untampered_before_and_after": "passed",
+  "cases": [
+    {
+      "case": "metric",
+      "outer_hashes_resealed": true,
+      "rejected": true,
+      "exit_code": 1,
+      "diagnostic": "ValueError: Callgrind metric differs from original stderr"
+    },
+    {
+      "case": "source_identity",
+      "outer_hashes_resealed": true,
+      "rejected": true,
+      "exit_code": 1,
+      "diagnostic": "ValueError: wrong source identity: A"
+    },
+    {
+      "case": "missing_sample",
+      "outer_hashes_resealed": true,
+      "rejected": true,
+      "exit_code": 1,
+      "diagnostic": "ValueError: missing Criterion sample"
+    }
+  ]
+}

@@ -27,12 +27,13 @@ fn device_description_write_read() {
             .unwrap(),
         PropertyValue::CharacterString("Main building controller".into())
     );
-    assert!(dev
-        .write_property(
+    assert!(
+        dev.write_property(
             PropertyIdentifier::DESCRIPTION,
             Some(0),
             PropertyValue::Null,
             None
         )
-        .is_err());
+        .is_err()
+    );
 }

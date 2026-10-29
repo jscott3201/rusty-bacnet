@@ -9,8 +9,8 @@ use super::confirmed_request_tracker::ConfirmedRequestTracker;
 use super::event_forwarding::Reception;
 use super::event_forwarding_origin_tests::{confirmed_services, reply_apdu};
 use super::event_forwarding_tests::{
-    copies, database, destination, encoded, forwarding_transport, notification, unconfirmed,
-    Forwarding, To, LOCAL_DEVICE, PEER_A, PEER_B,
+    Forwarding, LOCAL_DEVICE, PEER_A, PEER_B, To, copies, database, destination, encoded,
+    forwarding_transport, notification, unconfirmed,
 };
 use super::event_recipient_routing_tests::address_recipient;
 use super::test_transport::{SendLog, TestTransport};

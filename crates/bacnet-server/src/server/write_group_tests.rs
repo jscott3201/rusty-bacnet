@@ -20,7 +20,7 @@ use crate::server::channel_wire_tests::{ch, channel, member, slot};
 use crate::server::command_action_wire_tests::ao;
 use crate::server::cov_wire_test_support::{Harness, PEER, PV};
 use bacnet_encoding::apdu::encode_apdu;
-use bacnet_encoding::npdu::{encode_npdu, Npdu};
+use bacnet_encoding::npdu::{Npdu, encode_npdu};
 use bacnet_objects::analog::AnalogOutputObject;
 use bacnet_services::write_group::GroupChannelValue;
 use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
@@ -572,7 +572,7 @@ async fn write_group_dropped_after_a_channel_took_its_value_ends_that_distributi
 
 #[tokio::test(start_paused = true)]
 async fn write_group_lighting_command_reaches_a_lighting_output() {
-    use crate::server::lighting_command_member_tests::{lighting_command, objects, FRAMED};
+    use crate::server::lighting_command_member_tests::{FRAMED, lighting_command, objects};
     // CH-1 (channel 11, group 27) passes its value to LO-1's Lighting_Command.
     let h = Harness::start_with(ServerConfig::default(), objects).await;
     send(&h, &request(27, 10, vec![entry(11, None, FRAMED.to_vec())])).await;

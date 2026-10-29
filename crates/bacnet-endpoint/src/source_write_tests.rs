@@ -334,9 +334,11 @@ async fn source_write_commandability_priority_policy_matrix() {
                 );
                 assert_eq!(record.target_value, Some(value));
             } else {
-                assert!(timeout(Duration::from_millis(15), records.recv())
-                    .await
-                    .is_err());
+                assert!(
+                    timeout(Duration::from_millis(15), records.recv())
+                        .await
+                        .is_err()
+                );
             }
         }
     }

@@ -1,8 +1,9 @@
 use super::*;
 use bacnet_types::bitstring::EventTransitionBits;
+use bacnet_types::error::RemoteError;
 
 use bacnet_encoding::primitives;
-use bacnet_encoding::tags::{encode_tag, TagClass};
+use bacnet_encoding::tags::{TagClass, encode_tag};
 use bacnet_objects::analog::{AnalogOutputObject, AnalogValueObject};
 use bacnet_objects::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use bacnet_objects::event::{EnrollmentSummaryCapability, EventStateChange, EventTransitionCommit};
@@ -110,7 +111,7 @@ fn snapshot(
 fn assert_protocol(error: Error, class: ErrorClass, code: ErrorCode) {
     assert!(matches!(
         error,
-        Error::Protocol { class: actual_class, code: actual_code }
+        Error::Remote(RemoteError::Error { class: actual_class, code: actual_code })
             if actual_class == class && actual_code == code
     ));
 }
@@ -617,6 +618,9 @@ fn invalid_source_text_is_sanitized_but_malformed_source_framing_is_rejected() {
 
     let before = snapshot(&db, oid);
     let error = handle_acknowledge_alarm(&mut db, &encode_request_with_raw_source(oid, &[]));
-    assert!(matches!(error, Err(Error::Reject { .. })), "{error:?}");
+    assert!(
+        matches!(error, Err(Error::Remote(RemoteError::Reject { .. }))),
+        "{error:?}"
+    );
     assert_eq!(snapshot(&db, oid), before);
 }

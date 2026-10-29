@@ -1,6 +1,7 @@
 use super::super::*;
 use crate::traits::{BACnetObject, ReliabilityEvaluation};
 use bacnet_types::enums::{ErrorClass, ErrorCode, Reliability};
+use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::StatusFlags;
 
 fn reliability(object: &dyn BACnetObject) -> u32 {
@@ -34,7 +35,7 @@ fn assert_unchanged(result: Result<ReliabilityEvaluation, Error>) {
 fn assert_unknown_property<T>(result: Result<T, Error>) {
     assert!(matches!(
         result,
-        Err(Error::Protocol { class, code })
+        Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::PROPERTY
                 && code == ErrorCode::UNKNOWN_PROPERTY
     ));
@@ -43,7 +44,7 @@ fn assert_unknown_property<T>(result: Result<T, Error>) {
 fn assert_write_denied(result: Result<(), Error>) {
     assert!(matches!(
         result,
-        Err(Error::Protocol { class, code })
+        Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::PROPERTY
                 && code == ErrorCode::WRITE_ACCESS_DENIED
     ));
@@ -85,7 +86,7 @@ fn assert_fault_properties(object: &dyn BACnetObject, expected: bool) {
 }
 
 macro_rules! assert_property_surface {
-    ($object:expr) => {{
+    ($object:expr_2021) => {{
         let mut object = $object;
         assert_unknown_property(object.read_property(PropertyIdentifier::FAULT_LOW_LIMIT, None));
         assert_unknown_property(object.read_property(PropertyIdentifier::FAULT_HIGH_LIMIT, None));
@@ -146,7 +147,7 @@ fn ai_and_av_fault_limit_properties_are_atomic_optional_and_read_only() {
 }
 
 macro_rules! assert_invalid_configuration_is_atomic {
-    ($object:expr) => {{
+    ($object:expr_2021) => {{
         let mut object = $object;
         let invalid_limits = [
             (f32::NAN, 1.0),
@@ -209,18 +210,12 @@ macro_rules! assert_invalid_configuration_is_atomic {
 
 #[test]
 fn invalid_ai_and_av_configuration_changes_no_public_or_private_state() {
-    assert_invalid_configuration_is_atomic!(AnalogInputObject::new(
-        1,
-        "AI-1",
-        EngineeringUnits::DEGREES_CELSIUS
-    )
-    .unwrap());
-    assert_invalid_configuration_is_atomic!(AnalogValueObject::new(
-        1,
-        "AV-1",
-        EngineeringUnits::DEGREES_CELSIUS
-    )
-    .unwrap());
+    assert_invalid_configuration_is_atomic!(
+        AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap()
+    );
+    assert_invalid_configuration_is_atomic!(
+        AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap()
+    );
 }
 
 #[test]
@@ -237,7 +232,7 @@ fn configured_ai_evaluator_enters_under_range_from_no_fault() {
 }
 
 macro_rules! assert_strict_range_transitions {
-    ($object:expr) => {{
+    ($object:expr_2021) => {{
         let mut object = $object;
         object.configure_fault_out_of_range(10.0, 20.0).unwrap();
 
@@ -318,22 +313,16 @@ macro_rules! assert_strict_range_transitions {
 
 #[test]
 fn ai_and_av_use_strict_entry_inclusive_recovery_and_no_deadband() {
-    assert_strict_range_transitions!(AnalogInputObject::new(
-        1,
-        "AI-1",
-        EngineeringUnits::DEGREES_CELSIUS
-    )
-    .unwrap());
-    assert_strict_range_transitions!(AnalogValueObject::new(
-        1,
-        "AV-1",
-        EngineeringUnits::DEGREES_CELSIUS
-    )
-    .unwrap());
+    assert_strict_range_transitions!(
+        AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap()
+    );
+    assert_strict_range_transitions!(
+        AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap()
+    );
 }
 
 macro_rules! assert_first_stage_precedence {
-    ($object:expr) => {{
+    ($object:expr_2021) => {{
         let mut object = $object;
         object.configure_fault_out_of_range(10.0, 20.0).unwrap();
 
@@ -366,9 +355,11 @@ macro_rules! assert_first_stage_precedence {
             Reliability::UNDER_RANGE,
         );
 
-        assert!(object
-            .set_reliability_internal(Reliability::from_raw(11))
-            .is_err());
+        assert!(
+            object
+                .set_reliability_internal(Reliability::from_raw(11))
+                .is_err()
+        );
         object.set_test_value(10.0);
         assert_changed(
             object.evaluate_reliability_internal(),
@@ -409,18 +400,12 @@ macro_rules! assert_first_stage_precedence {
 
 #[test]
 fn ai_and_av_preserve_first_stage_values_and_clear_only_owned_faults() {
-    assert_first_stage_precedence!(AnalogInputObject::new(
-        1,
-        "AI-1",
-        EngineeringUnits::DEGREES_CELSIUS
-    )
-    .unwrap());
-    assert_first_stage_precedence!(AnalogValueObject::new(
-        1,
-        "AV-1",
-        EngineeringUnits::DEGREES_CELSIUS
-    )
-    .unwrap());
+    assert_first_stage_precedence!(
+        AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap()
+    );
+    assert_first_stage_precedence!(
+        AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap()
+    );
 }
 
 #[test]

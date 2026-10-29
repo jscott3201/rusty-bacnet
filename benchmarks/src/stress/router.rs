@@ -29,7 +29,7 @@ use bacnet_types::primitives::ObjectIdentifier;
 use crate::stress::harness::{
     make_bip_server_with_db, make_large_db, make_stress_client, stress_device_config,
 };
-use crate::stress::mstp::{station, SimWire};
+use crate::stress::mstp::{SimWire, station};
 use crate::stress::output::{DegradationPoint, LatencyRecorder};
 
 /// The network the clients are on.
@@ -82,11 +82,11 @@ impl Running {
                 let _ = server.stop().await;
             }
             Self::Bip(mut router, mut server) => {
-                router.stop().await;
+                router.stop().await.unwrap();
                 let _ = server.stop().await;
             }
             Self::Mstp(mut router, mut server) => {
-                router.stop().await;
+                router.stop().await.unwrap();
                 let _ = server.stop().await;
             }
         }
@@ -170,10 +170,7 @@ async fn start(path: Path, baud: u32) -> (Running, Target) {
                         network_number: CLIENT_NET,
                     },
                     RouterPort {
-                        transport: AnyTransport::Mstp(MstpTransport::new(
-                            router_end,
-                            station(0, baud, true),
-                        )),
+                        transport: MstpTransport::new(router_end, station(0, baud, true)).into(),
                         network_number: SERVER_NET,
                     },
                 ];

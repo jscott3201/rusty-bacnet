@@ -24,7 +24,9 @@ class MutationPolicyConfigurationTests(unittest.TestCase):
     def test_runtime_and_installed_stub_contract(self):
         parameter = inspect.signature(BACnetServer).parameters["mutation_policy"]
         self.assertEqual(parameter.kind, inspect.Parameter.KEYWORD_ONLY)
-        self.assertEqual(parameter.default, "permissive")
+        # The runtime signature can't render the parsed default; the stub
+        # says "permissive" (#1966).
+        self.assertIs(parameter.default, Ellipsis)
         tree = ast.parse(Path(rusty_bacnet.__file__).with_suffix(".pyi").read_text())
         server = next(
             n for n in tree.body
@@ -40,7 +42,7 @@ class MutationPolicyConfigurationTests(unittest.TestCase):
         )
         self.assertEqual(
             ast.unparse(constructor.args.kwonlyargs[index].annotation),
-            "Literal['permissive', 'deny_all']",
+            "Literal['permissive', 'deny_all'] | MutationHandler",
         )
         self.assertEqual(ast.literal_eval(constructor.args.kw_defaults[index]), "permissive")
 
@@ -51,12 +53,15 @@ class MutationPolicyConfigurationTests(unittest.TestCase):
                     # Missing SC credentials / MS/TP device must not mask mode validation.
                     with self.assertRaisesRegex(ValueError, "mutation_policy"):
                         BACnetServer(503001, transport=transport, mutation_policy=mode)
-            for mode in (None, True, 1, lambda: True):
+            for mode in (None, True, 1, b"deny_all"):
                 with self.subTest(transport=transport, wrong_type=type(mode)):
                     with self.assertRaises(TypeError):
                         BACnetServer(503001, transport=transport, mutation_policy=mode)
         server = BACnetServer(503001, mutation_policy="deny_all", port=0)
         server.add_analog_value(1, "valid after rejection")
+        # A callable is accepted without being called (#1966).
+        BACnetServer(503001, port=0, mutation_policy=lambda context: False)
+        BACnetServer(503001, port=0)
 
 
 class MutationPolicyWireTests(unittest.IsolatedAsyncioTestCase):
@@ -95,7 +100,7 @@ class MutationPolicyWireTests(unittest.IsolatedAsyncioTestCase):
                     before_value = await client.read_property(address, av, pv)
                     before_list = await server.read_property(msi, alarms)
                     before_file = await client.atomic_read_file(address, file, "stream", requested_octet_count=64)
-                    self.assertIn(b"sentinel", before_file)
+                    self.assertIn(b"sentinel", before_file["data"])
                     operations = (
                         ("property", lambda: client.write_property(address, av, pv, PropertyValue.real(42.0))),
                         ("object", lambda: client.delete_object(address, av)),

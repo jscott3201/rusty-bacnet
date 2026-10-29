@@ -173,7 +173,7 @@ fn reliability_multi_state_out_of_range() {
 /// `bacnet_enum!` type's `ALL_NAMED`: same length, same order, and every
 /// entry round-trips `from_raw` / `Display`.
 macro_rules! assert_production_values {
-    ($Ty:ident, [$($pair:expr),+ $(,)?] $(,)?) => {
+    ($Ty:ident, [$($pair:expr_2021),+ $(,)?] $(,)?) => {
         let all = [$($pair),+];
         assert_eq!($Ty::ALL_NAMED.len(), all.len(), "{} count", stringify!($Ty));
         for (i, &(name, raw)) in all.iter().enumerate() {
@@ -246,9 +246,11 @@ fn door_alarm_state_values_match_clause_21() {
 
     // The conflation guard: lock-fault belongs to LockStatus, at value 2.
     assert_eq!(LockStatus::LOCK_FAULT.to_raw(), 2);
-    assert!(DoorAlarmState::ALL_NAMED
-        .iter()
-        .all(|(name, _)| *name != "LOCK_FAULT"));
+    assert!(
+        DoorAlarmState::ALL_NAMED
+            .iter()
+            .all(|(name, _)| *name != "LOCK_FAULT")
+    );
 }
 
 /// 135-2020 Clause 21 (`BACnetLifeSafetyState ::= ENUMERATED`) runs through
@@ -818,4 +820,16 @@ fn name_returns_the_constant_name_or_none() {
     }
 }
 
+#[test]
+fn resolved_enum_name_is_the_constant_or_none() {
+    let name = |property, value| ResolvedEnum::from_property(property, value).name();
+    assert_eq!(name(PropertyIdentifier::EVENT_STATE, 3), Some("HIGH_LIMIT"));
+    assert_eq!(name(PropertyIdentifier::OBJECT_TYPE, 8), Some("DEVICE"));
+    // A known enumeration, but a number it doesn't name.
+    assert_eq!(name(PropertyIdentifier::EVENT_STATE, 900), None);
+    // No enumeration known from the property alone.
+    assert_eq!(name(PropertyIdentifier::PRESENT_VALUE, 1), None);
+}
+
 mod access_production;
+mod enumeration;

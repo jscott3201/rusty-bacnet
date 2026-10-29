@@ -1,7 +1,7 @@
 //! A router port on a real BACnet/SC hub (#518): broadcast route
 //! announcements arrive hub-relayed, with no principal, and a node's
 //! control-message rate limit drops a flood end to end.
-use super::support::{bounded, run, Certificates};
+use super::support::{Certificates, bounded, run};
 use crate::server::*;
 use bacnet_network::router::control_policy::{
     ControlAuthContext, ControlAuthorizer, ControlPolicy,
@@ -111,7 +111,7 @@ async fn sc_hub_relayed_route_announcements_carry_no_principal() {
         for transport in [&mut listed, &mut stranger] {
             bounded(transport.stop()).await.unwrap();
         }
-        router.stop().await;
+        router.stop().await.unwrap();
     })
     .await;
 }
@@ -152,7 +152,7 @@ async fn a_control_flood_through_the_hub_stops_at_the_node_rate_limit() {
         assert!((4..=5).contains(&learned), "learned {learned}");
         assert_eq!(router.control_snapshot().i_am.allow_total as usize, learned);
         bounded(flooder.stop()).await.unwrap();
-        router.stop().await;
+        router.stop().await.unwrap();
     })
     .await;
 }

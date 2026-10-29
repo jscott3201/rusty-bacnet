@@ -49,6 +49,13 @@ macro_rules! py_bacnet_enum {
                 self.inner.to_raw()
             }
 
+            /// The constant's name (`"HIGH_LIMIT"`), or `None` for a value
+            /// without one (a vendor or reserved number).
+            #[getter]
+            fn name(&self) -> Option<&'static str> {
+                self.inner.name()
+            }
+
             fn __repr__(&self) -> String {
                 format!(concat!($py_name, ".{}"), self.inner)
             }
@@ -86,8 +93,6 @@ py_bacnet_enum!(
     bacnet_enums::PropertyIdentifier,
     u32
 );
-py_bacnet_enum!("ErrorClass", PyErrorClass, bacnet_enums::ErrorClass, u16);
-py_bacnet_enum!("ErrorCode", PyErrorCode, bacnet_enums::ErrorCode, u16);
 py_bacnet_enum!(
     "AuditOperation",
     PyAuditOperation,
@@ -132,6 +137,7 @@ py_bacnet_enum!(
     u32
 );
 py_bacnet_enum!("EventType", PyEventType, bacnet_enums::EventType, u32);
+py_bacnet_enum!("NotifyType", PyNotifyType, bacnet_enums::NotifyType, u32);
 py_bacnet_enum!(
     "MessagePriority",
     PyMessagePriority,

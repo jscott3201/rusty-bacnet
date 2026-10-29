@@ -4,20 +4,19 @@
 //! command watches and cancelled when it stops, so it leaves nothing behind
 //! on the device. A lifetime of 0 asks for one that never expires (Clause
 //! 13.14.1.1.4); it stays after the CLI exits, which is why the write guard
-//! treats it as a write (`core::class`).
+//! treats it as a write (`bacnet_ops::class`).
 
 use std::future::Future;
 use std::time::Duration;
 
 use bacnet_client::client::{BACnetClient, COVNotificationDelivery, ReceivedCOVNotification};
-use bacnet_encoding::primitives::decode_application_value;
+use bacnet_ops::destination::Destination;
+use bacnet_ops::target::routed_station;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::ObjectIdentifier;
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::core::destination::Destination;
-use crate::core::target::routed_station;
 use crate::output::{self, OutputFormat};
 
 /// The lifetime a subscription asks for when `--lifetime` is not given.
@@ -57,7 +56,7 @@ pub struct Subscription {
 /// subscription goes out, so an early signal still cancels it.
 #[cfg(unix)]
 pub(crate) fn stop_signal() -> impl Future<Output = ()> {
-    use tokio::signal::unix::{signal, SignalKind};
+    use tokio::signal::unix::{SignalKind, signal};
     let interrupt = signal(SignalKind::interrupt());
     let terminate = signal(SignalKind::terminate());
     async move {
@@ -96,8 +95,8 @@ pub async fn subscribe_cmd<T: TransportPort + 'static>(
     } = subscription;
     let oid = ObjectIdentifier::new(object_type, instance)?;
     let process_id = std::process::id(); // Use PID instead of hardcoded 1
-                                         // Absent with Issue Confirmed Notifications present is indefinite too
-                                         // (Clause 13.14.2), and is what the CLI has always sent for it.
+    // Absent with Issue Confirmed Notifications present is indefinite too
+    // (Clause 13.14.2), and is what the CLI has always sent for it.
     let wire_lifetime = (lifetime != 0).then_some(lifetime);
 
     let mut rx = client.cov_notifications();
@@ -151,15 +150,15 @@ pub async fn subscribe_cmd<T: TransportPort + 'static>(
         }
     };
 
-    if lifetime != 0 {
-        if let Err(error) = to.unsubscribe_cov(client, process_id, oid).await {
-            let message = format!("cancelling the subscription failed: {error}");
-            return Err(match watched {
-                Ok(()) => message,
-                Err(watch) => format!("{watch}; {message}"),
-            }
-            .into());
+    if lifetime != 0
+        && let Err(error) = to.unsubscribe_cov(client, process_id, oid).await
+    {
+        let message = format!("cancelling the subscription failed: {error}");
+        return Err(match watched {
+            Ok(()) => message,
+            Err(watch) => format!("{watch}; {message}"),
         }
+        .into());
     }
     watched
 }
@@ -191,11 +190,18 @@ fn cov_notification_text(received: &ReceivedCOVNotification, format: OutputForma
         .zip(received.source_address.as_ref())
         .and_then(|(network, address)| routed_station(network, address));
 
-    // Decode property values
+    // The values through the shared formatter, named for the object.
+    let values = super::read::formatter(notification.monitored_object_identifier.object_type());
     let mut props = Vec::new();
+    let mut decoded = serde_json::Map::new();
     for pv in &notification.list_of_values {
         let prop_name = format!("{}", pv.property_identifier);
-        let value_str = decode_cov_value(&pv.value);
+        let value_str = values.value(pv.property_identifier, &pv.value);
+        let data = values.data(pv.property_identifier, &pv.value);
+        decoded.insert(
+            prop_name.clone(),
+            serde_json::to_value(data).unwrap_or_default(),
+        );
         props.push((prop_name, value_str));
     }
 
@@ -209,7 +215,7 @@ fn cov_notification_text(received: &ReceivedCOVNotification, format: OutputForma
                 parts.push(format!("  routed-source = {routed_source}"));
             }
             for (prop, val) in &props {
-                parts.push(format!("  {prop} = {val}"));
+                parts.push(format!("  {prop} = {}", crate::output::screen(val)));
             }
             parts.join("\n")
         }
@@ -228,6 +234,7 @@ fn cov_notification_text(received: &ReceivedCOVNotification, format: OutputForma
                 "routed_source": routed_source,
                 "time_remaining": notification.time_remaining,
                 "values": prop_map,
+                "decoded": decoded,
             });
             serde_json::to_string(&json).unwrap_or_default()
         }
@@ -249,29 +256,6 @@ fn format_mac(mac: &[u8]) -> String {
         .join(":")
 }
 
-fn decode_cov_value(data: &[u8]) -> String {
-    let mut offset = 0;
-    let mut values = Vec::new();
-    while offset < data.len() {
-        match decode_application_value(data, offset) {
-            Ok((value, next)) => {
-                values.push(crate::output::format_property_value(&value));
-                offset = next;
-            }
-            Err(_) => {
-                let hex: String = data[offset..]
-                    .iter()
-                    .map(|b| format!("{b:02x}"))
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                values.push(format!("[raw: {hex}]"));
-                break;
-            }
-        }
-    }
-    values.join(", ")
-}
-
 #[cfg(test)]
 mod tests {
     use super::{format_mac, renewal_interval};
@@ -288,7 +272,7 @@ mod tests {
         assert_eq!(renewal_interval(u32::MAX), secs(u64::from(u32::MAX) - 30));
         assert_eq!(renewal_interval(0), None);
     }
-    use crate::core::target::{parse_target, Target};
+    use bacnet_ops::target::{Target, parse_target};
 
     /// A COV source on B/IPv6 prints as the `bip6:` VMAC a target takes back;
     /// other MACs print as hex.
@@ -311,9 +295,9 @@ mod tests {
     fn routed_cov_sources_print_as_targets() {
         use bacnet_client::client::{COVNotificationDelivery, ReceivedCOVNotification};
         use bacnet_services::cov::COVNotificationRequest;
+        use bacnet_types::MacAddr;
         use bacnet_types::enums::ObjectType;
         use bacnet_types::primitives::ObjectIdentifier;
-        use bacnet_types::MacAddr;
 
         use super::cov_notification_text;
         use crate::output::OutputFormat;
@@ -358,6 +342,40 @@ mod tests {
                 })
             );
         }
+        // Values are named for the monitored object (#2078): the text, and
+        // in JSON the typed form beside it.
+        let mut named = received(None);
+        named.notification.monitored_object_identifier =
+            ObjectIdentifier::new(ObjectType::BINARY_INPUT, 1).unwrap();
+        named.notification.list_of_values = vec![
+            bacnet_types::constructed::BACnetPropertyValue {
+                property_identifier: bacnet_types::enums::PropertyIdentifier::PRESENT_VALUE,
+                property_array_index: None,
+                value: vec![0x91, 0x01],
+                priority: None,
+            },
+            bacnet_types::constructed::BACnetPropertyValue {
+                property_identifier: bacnet_types::enums::PropertyIdentifier::STATUS_FLAGS,
+                property_array_index: None,
+                value: vec![0x82, 0x04, 0x80],
+                priority: None,
+            },
+        ];
+        let table = cov_notification_text(&named, OutputFormat::Table);
+        assert!(table.contains("\n  PRESENT_VALUE = active"), "{table}");
+        assert!(table.contains("\n  STATUS_FLAGS = in-alarm"), "{table}");
+        let json: serde_json::Value =
+            serde_json::from_str(&cov_notification_text(&named, OutputFormat::Json)).unwrap();
+        assert_eq!(json["values"]["PRESENT_VALUE"], "active");
+        assert_eq!(
+            json["decoded"]["PRESENT_VALUE"],
+            serde_json::json!({"value": 1, "name": "active"})
+        );
+        assert_eq!(
+            json["decoded"]["STATUS_FLAGS"],
+            serde_json::json!({"bits": "1000", "names": ["in-alarm"]})
+        );
+
         // A local source has no routed source.
         let local = received(None);
         assert!(!cov_notification_text(&local, OutputFormat::Table).contains("routed-source"));

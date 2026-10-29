@@ -1,0 +1,149 @@
+---
+title: "Reach devices on other subnets"
+description: "Carry BACnet/IP broadcasts between IP subnets using BBMDs and foreign-device registration, from the CLI, Python or Rust."
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import { release, repository } from '../../../lib/site.mjs';
+
+[Connect to a network](/rusty-bacnet/connect/overview/) / Across subnets
+
+BACnet/IP discovery runs on broadcasts, and IP routers don't forward them. A read sent to a device's known address crosses routers like any other UDP datagram; a Who-Is doesn't. Annex J offers two ways to carry broadcasts further: a broadcast management device (BBMD) on each subnet, which forwards them to the BBMDs listed in its Broadcast Distribution Table (BDT), and foreign-device registration, where a node on a subnet with no BBMD registers with a remote BBMD and is listed in its Foreign Device Table (FDT).
+
+The page describes **v{release}**.
+
+## Decide whether you need one
+
+| Situation | What to use |
+|---|---|
+| You know the device's address and only read or write it | Nothing: send to `IP:port` directly |
+| You need discovery, or broadcasts such as I-Am, from one host on a subnet with no BBMD | Have that host register with a BBMD on the devices' network |
+| Several subnets form one BACnet network | A BBMD on each subnet, each listing the others in its BDT |
+| Sites joined across the internet | Prefer [BACnet/SC](/rusty-bacnet/connect/bacnet-sc/); a BBMD behind a NAT router is covered in [BACnet/IP across NAT](/rusty-bacnet/connect/nat/) |
+
+A B/IP node runs in one mode: normal (the default), foreign device, or BBMD. Rust names it `BipMode`, and Python raises `ValueError` when given both `bbmd=` and `foreign_device=`, so a BBMD that also registers as a foreign device can't be built.
+
+## Read a BBMD's tables
+
+The CLI reads both tables of any BBMD it can reach. These commands are BACnet/IP only:
+
+```sh
+bacnet bdt 192.168.1.10
+bacnet fdt 192.168.1.10
+```
+
+A BDT row is a peer's address, port and broadcast mask; the BBMD's own row is in it too. An FDT row is a registered foreign device with the TTL it asked for and the seconds left, which include a 30-second grace period. A device that isn't a BBMD answers with a BVLC-Result NAK, or stays silent until the request times out; either way the command fails. In Python, `read_bdt` and `read_fdt` return the same rows; see <a href={`${repository}/blob/v${release}/docs/python-api.md#bbmd-management`}>BBMD management</a>.
+
+<Tabs syncKey="lang">
+
+<TabItem label="CLI">
+
+## Register the CLI as a foreign device
+
+The global `--foreign-bbmd` option makes the CLI's transport a foreign device. It registers when it starts, renews on its own and sends its broadcasts through the BBMD, so `discover` reaches the BBMD's network:
+
+```sh
+bacnet --foreign-bbmd 192.168.1.10 discover
+bacnet --foreign-bbmd 192.168.1.10:47808 --ttl 600 --renewal 20 discover 1000-2000
+```
+
+The BBMD takes `IP` or `IP:port`, with port 47808 by default. A one-shot command waits for the first registration to be answered, and fails when the BBMD refuses or stays silent. While the transport manages the registration, `register` and `unregister` to that BBMD are refused. Log lines go to stderr, so `--json` output stays clean. The terminal UI shows the registration, its countdown and the last BVLC-Result on its Network screen; see the <a href={`${repository}/blob/v${release}/docs/CLI.md#foreign-device-mode`}>CLI reference</a>.
+
+`register` sends one registration from an otherwise normal node and exits without renewing it, so its broadcasts stay local. `unregister` deletes an FDT entry and is a write:
+
+```sh
+bacnet register 192.168.1.10 --ttl 300
+bacnet --interface 192.168.2.50 --allow-write unregister 192.168.1.10
+```
+
+`unregister` names the CLI's own local address. On the default `0.0.0.0` bind that may not be the address the BBMD recorded, so give `--interface` with the address you registered from. The BBMD also has to allow the deletion; see [Limit who can change a BBMD](#limit-who-can-change-a-bbmd).
+
+</TabItem>
+<TabItem label="Python">
+
+## Register from Python
+
+`ForeignDevice` works on `BACnetClient`, `BACnetServer` and `BipEndpoint`:
+
+```python
+import asyncio
+from rusty_bacnet import BACnetClient, ForeignDevice
+
+
+async def main():
+    bbmd = ForeignDevice("192.168.1.10:47808", ttl=600, renewal=20)
+    async with BACnetClient(port=0, foreign_device=bbmd) as client:
+        devices = await client.discover(timeout_ms=3000)
+        status = await client.foreign_registration()
+        print(status["last_outcome"], status["lease_remaining"])
+        for device in devices:
+            print(device.object_identifier.instance)
+
+
+asyncio.run(main())
+```
+
+The client, server or endpoint registers when it starts, and its first broadcasts wait for that registration to be answered. `foreign_registration()` reads the state without sending anything. `registered` and `lease_remaining` describe the lease; `last_outcome` and `last_result` describe the latest attempt. They are separate: a lease can still be live while a renewal is pending, refused or timed out. The totals (`attempts`, `accepted`, `refused`, `lapses`, `renewal_hints`) survive a stop. See <a href={`${repository}/blob/v${release}/docs/python-api.md#bbmd-and-foreign-device-modes`}>BBMD and foreign-device modes</a> for every field.
+
+</TabItem>
+<TabItem label="Rust">
+
+## Register from Rust
+
+Pass `BipMode::Foreign(ForeignDeviceConfig { bbmd_ip, bbmd_port, ttl, renewal_interval })` to `.mode(..)` on the client, server or endpoint builder. `BACnetClient::foreign_registration()`, `BACnetServer::foreign_registration()` and `EndpointSession::foreign_registration()` return a `ForeignRegistrationSnapshot` with the same fields as Python's. The <a href={`${repository}/blob/v${release}/docs/rust-api.md#bip-modes-on-the-builders`}>B/IP modes on the builders</a> section has a complete example.
+
+</TabItem>
+</Tabs>
+
+## Choose a TTL and a renewal interval
+
+- **TTL** is how many seconds the BBMD keeps the entry: 300 by default in the CLI and Python, 1 to 65535 on the wire. This stack's BBMD refuses a TTL over 3600 seconds under its default policy, so check what the BBMD you use accepts.
+- **Renewal** is the time between registrations, half the TTL by default. It must be shorter than the TTL. Python takes 0.1 seconds or more; Rust takes any positive interval and raises one below 100 ms to 100 ms.
+- **Behind a NAT router**, keep the renewal below the router's UDP mapping timeout, which is 30 seconds or less on many routers, and keep the TTL long. The [NAT page](/rusty-bacnet/connect/nat/#register-a-foreign-device-from-behind-nat) explains why.
+- **When the BBMD has no entry for you**, it refuses the broadcasts you send through it (Distribute-Broadcast-To-Network) with a NAK. The client, server or endpoint counts each one in `renewal_hints` and brings its next registration forward. A lease that ran out with no newer success counts in `lapses`.
+
+## Run a BBMD
+
+In Python, give a server, client or endpoint a `Bbmd`:
+
+```python
+from rusty_bacnet import BACnetServer, Bbmd
+
+server = BACnetServer(
+    1234, interface="192.168.1.10", broadcast_address="192.168.1.255",
+    bbmd=Bbmd(["10.0.5.2:47808"], accept_foreign_devices=True,
+              management_acl=["192.168.1.100"]),
+)
+```
+
+- **BDT rows.** A plain `"ip:port"` row is a peer the BBMD forwards to by unicast (an all-ones mask). A `("ip:port", "mask")` pair gives another mask. The BBMD's own row is added when it is missing. Give each BBMD of the network a row for every other one.
+- **An explicit interface** and that subnet's broadcast address avoid guessing on a host with several addresses. A BBMD bound to `0.0.0.0` reads its own address from the BDT, or fails to start and asks for one; see <a href={`${repository}/blob/v${release}/docs/rust-api.md#bbmd`}>BBMD</a>.
+- **Foreign devices** are refused unless `accept_foreign_devices=True`.
+- **Persisted BDT.** `bdt_persist_path` names a file to start from, and a BDT activated through the registered Network Port is saved there. Write-BDT from the network is always refused; change the BDT through the [Network Port](/rusty-bacnet/integrate/network-ports/) and ReinitializeDevice instead.
+
+In Rust, the same options are fields of `BbmdOptions`, passed as `BipMode::Bbmd(..)` on a builder or set by hand on a `BipTransport`. A BBMD holds at most 128 BDT rows and 128 FDT entries.
+
+## Limit who can change a BBMD
+
+A BBMD answers anyone who can send it a datagram, and B/IP has no authentication. Its limits are what protect it:
+
+- **Management access list.** `management_acl` (Python) or `BbmdOptions::management_acl` (Rust) lists the IPv4 addresses allowed to delete FDT entries. Empty, the default, denies every source, so an `unregister` gets a NAK.
+- **Foreign-device policy.** In Rust, `ForeignDevicePolicy` sets the accepted TTL range (1 to 3600 seconds by default), an optional list of allowed source addresses, at most 8 entries per source address, registration rates (8 per source and 64 overall per second by default), reserved slots and how many foreign devices receive each broadcast (32). Python's `accept_foreign_devices=True` applies the defaults.
+- **Fan-out budgets.** `FanoutPolicy` bounds how many datagrams one broadcast can turn into, and `fanout_counters()` shows what was throttled.
+
+The <a href={`${repository}/blob/v${release}/docs/rust-api.md#bbmd`}>BBMD</a> section covers forwarding and the budgets in detail.
+
+## Release the old BBMD's entry after a move
+
+A foreign device moved to another BBMD through its Network Port (FD_BBMD_Address, then ReinitializeDevice) can also ask the old BBMD to delete its entry, so it goes before its TTL and grace period run out. Turn it on with `BipTransport::set_release_previous_bbmd(true)`, after `register_as_foreign_device`; it is off by default. A NAK or silence never fails the move and is counted in the snapshot's `previous_release_refused` and `previous_release_unanswered`. The request names the device's own local address, so behind a NAT router, or on a host whose registration left from another address, the old BBMD knows the device by another address and will usually refuse. This stack's BBMD refuses unless its management access list names the device. Python doesn't expose it. See <a href={`${repository}/blob/v${release}/docs/rust-api.md#registered-bip-network-port`}>Registered B/IP Network Port</a>.
+
+## What is tested
+
+CLI tests run `--foreign-bbmd` discovery through a BBMD, a refused and a silent registration, and `register` and `unregister` against an accepting and a refusing BBMD. Python tests cover a foreign client discovering a server through its BBMD, a refused registration, and the BDT and FDT round trip with its NAKs. All run on one host's loopback interface; none qualifies a routed site network.
+
+## Next steps
+
+- [Run a BBMD behind a NAT router](/rusty-bacnet/connect/nat/).
+- [Join a B/IP multicast group](/rusty-bacnet/connect/multicast/).
+- [Find devices and address them](/rusty-bacnet/guides/discovery/).
+- Read the <a href={`${repository}/blob/v${release}/docs/python-api.md#bbmd-and-foreign-device-modes`}>Python</a> and <a href={`${repository}/blob/v${release}/docs/rust-api.md#bip-modes-on-the-builders`}>Rust</a> contracts.

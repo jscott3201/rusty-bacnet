@@ -18,15 +18,15 @@
   },
   "dependencies": {
     "@astrojs/markdown-satteri": "0.4.1",
-    "@astrojs/starlight": "0.42.0",
-    "astro": "7.3.2"
+    "@astrojs/starlight": "0.42.6",
+    "astro": "7.3.8"
   },
   "devDependencies": {
     "@astrojs/check": "0.9.10",
     "typescript": "6.0.3",
     "@playwright/test": "1.61.1",
     "playwright-core": "1.61.1",
-    "@axe-core/playwright": "^4.11.0",
+    "@axe-core/playwright": "4.13.0",
     "yaml": "2.9.0"
   }
 }

@@ -1,15 +1,15 @@
 //! The Who-Is form and the interface picker.
 
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Padding, Paragraph, Wrap};
-use ratatui::Frame;
 
-use super::{centered, Theme};
+use super::{Theme, centered};
+use crate::tui::app::App;
 use crate::tui::app::picker::Picker;
 use crate::tui::app::whois::{Field, ScopeChoice, WhoIsForm};
-use crate::tui::app::App;
 
 /// The Who-Is form.
 pub(super) fn who_is(frame: &mut Frame, area: Rect, app: &App, form: &WhoIsForm, theme: &Theme) {

@@ -1,46 +1,37 @@
-//! Max concurrent clients stress scenario.
-//!
-//! Scales the number of concurrent clients doing ReadProperty against a
-//! single server to find the throughput ceiling and error threshold, over
-//! B/IP, B/IPv6 or BACnet/SC (mutual TLS, through a hub in this process).
-//! Every client connects before the step's clock starts, and each records
-//! into its own histogram, so neither setup nor a shared lock is measured.
-
-use std::net::Ipv6Addr;
-use std::time::{Duration, Instant};
-
+//! Concurrent ReadProperty clients, with one clock and complete accounting.
+use super::client_measure::{StepReport, drive, stop_clients};
+use super::client_run::{ClientsRun, run_steps};
+use super::harness::{make_large_db, stress_device_config};
+use crate::sc_helpers::{
+    CertMaterial, generate_test_certs, try_make_hub_tls_config, try_make_node_tls_config,
+};
 use bacnet_client::client::BACnetClient;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::bip6::Bip6Transport;
-use bacnet_transport::port::TransportPort;
 use bacnet_transport::sc::ScTransport;
+use bacnet_transport::sc_hub::{ScHub, ScHubHandshakeTimeouts};
 use bacnet_transport::sc_tls::TlsWebSocket;
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::ObjectIdentifier;
-
-use crate::sc_helpers::{generate_test_certs, make_sc_transport_mtls, start_sc_hub_mtls};
-use crate::stress::harness::{
-    make_bip_server_with_db, make_large_db, make_stress_client, stress_device_config,
-};
-use crate::stress::output::{DegradationPoint, LatencyRecorder};
-
+use std::net::Ipv6Addr;
+use std::time::Duration;
 const DEVICE_INSTANCE: u32 = 1234;
 
-/// The data link the clients and the server share.
+#[path = "client_bip6_setup.rs"]
+mod bip6_setup;
+
+/// The data link shared by clients and server.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClientTransport {
-    /// B/IP on 127.0.0.1.
+    /// B/IP on loopback.
     Bip,
-    /// B/IPv6 on ::1.
+    /// B/IPv6 on loopback.
     Bip6,
-    /// BACnet/SC with mutual TLS, through a hub in this process.
+    /// Mutually authenticated BACnet/SC through an in-process hub.
     Sc,
 }
-
 impl ClientTransport {
-    /// `bip`, `bip6` or `sc`.
+    /// Parse the command-line transport name.
     pub fn parse(name: &str) -> Option<Self> {
         match name {
             "bip" => Some(Self::Bip),
@@ -56,50 +47,43 @@ pub async fn run(
     object_count: u32,
     duration_secs: u64,
     steps: &[u64],
-) -> Vec<DegradationPoint> {
-    let duration = Duration::from_secs(duration_secs);
-    let mut curve = Vec::new();
-    for &count in steps {
-        eprintln!("--- {count} clients ({transport:?}) ---");
-        let db = make_large_db(DEVICE_INSTANCE, object_count);
-        let result = match transport {
-            ClientTransport::Bip => bip_step(db, count, duration).await,
-            ClientTransport::Bip6 => bip6_step(db, count, duration).await,
-            ClientTransport::Sc => sc_step(db, count, duration).await,
-        };
-        match result {
-            Ok(point) => {
-                point.log();
-                curve.push(point);
+) -> ClientsRun {
+    run_steps(
+        object_count,
+        duration_secs,
+        steps,
+        |index, count, duration| async move {
+            match transport {
+                ClientTransport::Bip => {
+                    super::client_bip::step(index, object_count, count, duration).await
+                }
+                ClientTransport::Bip6 => {
+                    bip6_step(
+                        make_large_db(DEVICE_INSTANCE, object_count),
+                        index,
+                        count,
+                        duration,
+                    )
+                    .await
+                }
+                ClientTransport::Sc => {
+                    sc_step(
+                        make_large_db(DEVICE_INSTANCE, object_count),
+                        index,
+                        count,
+                        duration,
+                    )
+                    .await
+                }
             }
-            Err(e) => eprintln!("  step skipped: {e}"),
-        }
-    }
-    curve
+        },
+    )
+    .await
 }
 
-async fn bip_step(
-    db: ObjectDatabase,
-    count: u64,
-    duration: Duration,
-) -> Result<DegradationPoint, Error> {
-    let mut server = make_bip_server_with_db(db).await?;
-    let mac = server.local_mac().to_vec();
-    let mut clients = Vec::new();
-    for _ in 0..count {
-        clients.push(make_stress_client().await?);
-    }
-    let point = drive(clients, mac, count, duration).await;
-    let _ = server.stop().await;
-    Ok(point)
-}
-
-async fn bip6_step(
-    db: ObjectDatabase,
-    count: u64,
-    duration: Duration,
-) -> Result<DegradationPoint, Error> {
-    let mut server = BACnetServer::<Bip6Transport>::generic_builder()
+async fn bip6_step(db: ObjectDatabase, index: usize, count: u64, duration: Duration) -> StepReport {
+    let mut report = StepReport::new(index, count);
+    let mut server = match BACnetServer::<Bip6Transport>::generic_builder()
         .device(stress_device_config(DEVICE_INSTANCE).identity)
         .transport(Bip6Transport::new(
             Ipv6Addr::LOCALHOST,
@@ -108,32 +92,52 @@ async fn bip6_step(
         ))
         .database(db)
         .build()
-        .await?;
+        .await
+    {
+        Ok(server) => server,
+        Err(error) => {
+            report.diagnostics.fail("server_setup", None, error);
+            report.finish();
+            return report;
+        }
+    };
+    let mut clients = Vec::new();
     let address = server
         .transport()
         .and_then(Bip6Transport::local_address)
-        .ok_or_else(|| Error::Encoding("the B/IPv6 server is not running".into()))?;
-    let mut clients = Vec::new();
-    let mut mac = Vec::new();
-    for _ in 0..count {
-        let client = BACnetClient::<Bip6Transport>::generic_builder()
-            .transport(Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, None))
-            .apdu_timeout_ms(5000)
-            .build()
-            .await?;
-        // Each client learns the server's VMAC before the clock starts, so
-        // no request waits on address resolution.
-        let vmac = client.transport().resolve_virtual_address(address).await?;
-        mac = vmac.octets().to_vec();
-        clients.push(client);
+        .ok_or_else(|| Error::Encoding("the B/IPv6 server is not running".into()));
+    let setup = bip6_setup::setup(
+        address,
+        count,
+        &mut clients,
+        async || {
+            BACnetClient::<Bip6Transport>::generic_builder()
+                .transport(Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, None))
+                .apdu_timeout_ms(5000)
+                .build()
+                .await
+        },
+        async |client: &BACnetClient<Bip6Transport>, address| {
+            client
+                .transport()
+                .resolve_virtual_address(address)
+                .await
+                .map(|vmac| vmac.octets().to_vec())
+        },
+        &mut report,
+    )
+    .await;
+    match setup {
+        Some(mac) => drive(clients, mac, duration, |_| None, &mut report).await,
+        None => stop_clients(&mut clients, &mut report).await,
     }
-    let point = drive(clients, mac, count, duration).await;
-    let _ = server.stop().await;
-    Ok(point)
+    if let Err(error) = server.stop().await {
+        report.diagnostics.fail("server_stop", None, error);
+    }
+    report.finish();
+    report
 }
 
-/// A locally administered VMAC (and a matching Device UUID) for node `n`
-/// of `role`: 1 for the server, 2 for the clients.
 fn sc_identity(role: u8, n: u64) -> ([u8; 6], [u8; 16]) {
     let [.., hi, lo] = n.to_be_bytes();
     let vmac = [0x02, role, 0, 0, hi, lo];
@@ -144,84 +148,110 @@ fn sc_identity(role: u8, n: u64) -> ([u8; 6], [u8; 16]) {
     (vmac, uuid)
 }
 
-async fn sc_step(
-    db: ObjectDatabase,
-    count: u64,
-    duration: Duration,
-) -> Result<DegradationPoint, Error> {
+async fn sc_step(db: ObjectDatabase, index: usize, count: u64, duration: Duration) -> StepReport {
+    let mut report = StepReport::new(index, count);
+    if count > 65536 {
+        report.diagnostics.fail(
+            "arguments",
+            None,
+            "SC client identities support at most 65536 clients",
+        );
+        report.finish();
+        return report;
+    }
     let certs = generate_test_certs();
-    let (mut hub, url) = start_sc_hub_mtls(&certs, [0x02, 0, 0, 0, 0, 1]).await;
-    let (vmac, uuid) = sc_identity(1, 0);
-    let server_transport = make_sc_transport_mtls(&url, &certs, vmac)
+    let setup_hub = async {
+        ScHub::start_with_tls_config(
+            "127.0.0.1:0",
+            try_make_hub_tls_config(&certs)?,
+            [0x02, 0, 0, 0, 0, 1],
+            [0x48; 16],
+            ScHubHandshakeTimeouts::default(),
+        )
         .await
-        .with_device_uuid(uuid);
-    let mut server = BACnetServer::<ScTransport<TlsWebSocket>>::generic_builder()
-        .device(stress_device_config(DEVICE_INSTANCE).identity)
-        .transport(server_transport)
-        .database(db)
-        .build()
-        .await?;
+    }
+    .await;
+    let mut hub = match setup_hub {
+        Ok(hub) => hub,
+        Err(error) => {
+            report.diagnostics.fail("hub_setup", None, error);
+            report.finish();
+            return report;
+        }
+    };
+    let setup_server = async {
+        let address = hub
+            .local_addr()
+            .ok_or_else(|| Error::Encoding("SC hub address unavailable".into()))?;
+        let url = format!("wss://localhost:{}", address.port());
+        let (vmac, uuid) = sc_identity(1, 0);
+        let transport = sc_transport(&url, &certs, vmac, uuid).await?;
+        let server = BACnetServer::<ScTransport<TlsWebSocket>>::generic_builder()
+            .device(stress_device_config(DEVICE_INSTANCE).identity)
+            .transport(transport)
+            .database(db)
+            .build()
+            .await?;
+        Ok::<_, Error>((server, url))
+    }
+    .await;
+    let (mut server, url) = match setup_server {
+        Ok(result) => result,
+        Err(error) => {
+            report.diagnostics.fail("server_setup", None, error);
+            hub.stop().await;
+            report.finish();
+            return report;
+        }
+    };
     let mac = server.local_mac().to_vec();
     let mut clients = Vec::new();
     for n in 0..count {
         let (vmac, uuid) = sc_identity(2, n);
-        let transport = make_sc_transport_mtls(&url, &certs, vmac)
-            .await
-            .with_device_uuid(uuid);
-        clients.push(
+        let setup_client = async {
+            let transport = sc_transport(&url, &certs, vmac, uuid).await?;
             BACnetClient::<ScTransport<TlsWebSocket>>::generic_builder()
                 .transport(transport)
                 .apdu_timeout_ms(5000)
                 .build()
-                .await?,
-        );
-    }
-    // Let the hub finish admitting the last connections.
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let point = drive(clients, mac, count, duration).await;
-    let _ = server.stop().await;
-    hub.stop().await;
-    Ok(point)
-}
-
-/// Run every client's ReadProperty loop for `duration`, from one start, and
-/// time the step from that start to the last loop's end.
-async fn drive<T: TransportPort + 'static>(
-    clients: Vec<BACnetClient<T>>,
-    server_mac: Vec<u8>,
-    parameter: u64,
-    duration: Duration,
-) -> DegradationPoint {
-    let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-    let started = Instant::now();
-    let deadline = started + duration;
-    let mut handles = Vec::new();
-    for mut client in clients {
-        let mac = server_mac.clone();
-        handles.push(tokio::spawn(async move {
-            let mut recorder = LatencyRecorder::new();
-            while Instant::now() < deadline {
-                let start = Instant::now();
-                match client
-                    .read_property(&mac, oid, PropertyIdentifier::PRESENT_VALUE, None)
-                    .await
-                {
-                    Ok(_) => recorder.record_success(start),
-                    Err(_) => recorder.record_failure(),
-                }
+                .await
+        }
+        .await;
+        match setup_client {
+            Ok(client) => clients.push(client),
+            Err(error) => {
+                report
+                    .diagnostics
+                    .fail("client_setup", Some(n as usize), error);
+                break;
             }
-            let ended = Instant::now();
-            let _ = client.stop().await;
-            (recorder, ended)
-        }));
-    }
-    let mut results = Vec::new();
-    for h in handles {
-        if let Ok(result) = h.await {
-            results.push(result);
         }
     }
-    DegradationPoint::from_clients(parameter, started, results)
+
+    if report.diagnostics.lifecycle_failures.is_empty() {
+        // Existing setup settling interval, outside the measured clock.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        drive(clients, mac, duration, |_| None, &mut report).await;
+    } else {
+        report.diagnostics.started_clients = clients.len();
+        stop_clients(&mut clients, &mut report).await;
+    }
+    if let Err(error) = server.stop().await {
+        report.diagnostics.fail("server_stop", None, error);
+    }
+    hub.stop().await;
+    report.finish();
+    report
+}
+
+async fn sc_transport(
+    url: &str,
+    certs: &CertMaterial,
+    vmac: [u8; 6],
+    uuid: [u8; 16],
+) -> Result<ScTransport<TlsWebSocket>, Error> {
+    let ws = TlsWebSocket::connect(url, try_make_node_tls_config(certs)?).await?;
+    Ok(ScTransport::new(ws, vmac).with_device_uuid(uuid))
 }
 
 #[cfg(test)]

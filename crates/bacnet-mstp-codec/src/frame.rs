@@ -1,9 +1,9 @@
 //! Frame types, headers, and encoding.
 
 use crate::cobs;
-use crate::crc::{crc16, crc8};
+use crate::crc::{crc8, crc16};
 use crate::{
-    FrameError, FrameSink, BROADCAST_MAC, HEADER_LENGTH, MAX_COBS_LENGTH, MAX_STANDARD_MPDU_DATA,
+    BROADCAST_MAC, FrameError, FrameSink, HEADER_LENGTH, MAX_COBS_LENGTH, MAX_STANDARD_MPDU_DATA,
     MIN_COBS_LENGTH, PREAMBLE,
 };
 
@@ -34,7 +34,7 @@ macro_rules! named_codes {
         pub struct $Name:ident($inner:ty);
         $(
             $(#[$vmeta:meta])*
-            const $VARIANT:ident = $val:expr;
+            const $VARIANT:ident = $val:expr_2021;
         )*
     ) => {
         $(#[$meta])*
@@ -322,13 +322,13 @@ impl<'a> Frame<'a> {
     pub fn encode_to_sink<S: FrameSink + ?Sized>(self, sink: &mut S) -> Result<usize, FrameError> {
         let length = self.checked_length()?;
         let total = wire_length(length);
-        if let Some(available) = sink.remaining_capacity() {
-            if available < total {
-                return Err(FrameError::BufferExhausted {
-                    needed: total,
-                    available,
-                });
-            }
+        if let Some(available) = sink.remaining_capacity()
+            && available < total
+        {
+            return Err(FrameError::BufferExhausted {
+                needed: total,
+                available,
+            });
         }
         let fields = [
             self.header.frame_type.to_raw(),

@@ -2,8 +2,8 @@
 //! time-range value reads as TRUE or FALSE, the time ranges with nothing to
 //! judge, and which locations cover a point.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bacnet_types::enums::BinaryPV;
 

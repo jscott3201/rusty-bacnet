@@ -20,6 +20,7 @@
 //! reference changed past the server's write paths, or a named property
 //! whose datatype changes, is caught there too.
 
+use crate::prelude::*;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};

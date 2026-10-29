@@ -82,7 +82,7 @@ impl TryFrom<&ErrorPdu> for ChangeListError {
 
 impl From<ChangeListError> for Error {
     fn from(error: ChangeListError) -> Self {
-        Error::protocol(
+        Error::with_detail(
             error.error_class,
             error.error_code,
             Some(ErrorDetail::FirstFailedElementNumber(

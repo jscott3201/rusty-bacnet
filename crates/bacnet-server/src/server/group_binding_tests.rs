@@ -5,7 +5,7 @@
 //! server send its confirmed requests to a group.
 
 use super::*;
-use crate::server::test_transport::{TestTransport, BIP_LOCAL_MAC};
+use crate::server::test_transport::{BIP_LOCAL_MAC, TestTransport};
 use bacnet_transport::port::TransportProvenance;
 
 /// A multicast address: a group destination, not the link's broadcast.

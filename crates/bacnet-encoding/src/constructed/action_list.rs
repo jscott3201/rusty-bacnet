@@ -34,15 +34,14 @@ pub fn encode_action_command(
     buf: &mut BytesMut,
     command: &BACnetActionCommand,
 ) -> Result<(), Error> {
-    if let Some(priority) = command.priority {
-        if !(1..=16).contains(&priority) {
+    if let Some(priority) = command.priority
+        && !(1..=16).contains(&priority) {
             return Err(
                 RangeError::new("BACnetActionCommand: priority {} is outside 1..=16")
                     .with_value(priority.into())
                     .into(),
             );
         }
-    }
     let start = buf.len();
     if let Some(device) = &command.device_identifier {
         primitives::encode_ctx_object_id(buf, 0, device);

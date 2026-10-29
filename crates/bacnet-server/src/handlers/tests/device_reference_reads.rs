@@ -13,6 +13,7 @@ use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference,
     BACnetObjectPropertyReference, PropertyReference, ReadAccessSpecification,
 };
+use bacnet_types::error::RemoteError;
 
 fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(object_type, instance).unwrap()
@@ -91,7 +92,7 @@ fn event_enrollment_object_property_reference_is_served_framed() {
     .unwrap();
     assert!(matches!(
         sourced_wp(&mut db, &request),
-        Err(Error::Protocol { class, code })
+        Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::PROPERTY
                 && code == ErrorCode::WRITE_ACCESS_DENIED
     ));
@@ -203,7 +204,7 @@ fn access_zone_entry_and_exit_points_are_served_framed() {
     .unwrap();
     assert!(matches!(
         sourced_wp(&mut db, &request),
-        Err(Error::Protocol { class, code })
+        Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::PROPERTY
                 && code == ErrorCode::WRITE_ACCESS_DENIED
     ));
@@ -268,7 +269,7 @@ fn access_user_reference_lists_are_served_framed() {
     let mut ack = BytesMut::new();
     assert!(matches!(
         handle_read_property(&db, &request, &mut ack),
-        Err(Error::Protocol { class, code })
+        Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::PROPERTY
                 && code == ErrorCode::PROPERTY_IS_NOT_AN_ARRAY
     ));
@@ -284,7 +285,7 @@ fn access_user_reference_lists_are_served_framed() {
     .unwrap();
     assert!(matches!(
         sourced_wp(&mut db, &request),
-        Err(Error::Protocol { class, code })
+        Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::PROPERTY
                 && code == ErrorCode::WRITE_ACCESS_DENIED
     ));

@@ -99,7 +99,7 @@ pub(crate) fn read_access_result_to_py(
             elem_dict.set_item("error", py.None())?;
         } else if let Some((ec, ev)) = elem.error {
             elem_dict.set_item("value", py.None())?;
-            let err_tuple = (PyErrorClass { inner: ec }, PyErrorCode { inner: ev });
+            let err_tuple = (IntEnumValue(ec), IntEnumValue(ev));
             elem_dict.set_item("error", err_tuple)?;
         } else {
             elem_dict.set_item("value", py.None())?;

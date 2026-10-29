@@ -2,6 +2,7 @@ use super::super::*;
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_types::bitstring::LimitEnable;
 use bacnet_types::enums::EventState;
+use bacnet_types::error::RemoteError;
 use bytes::BytesMut;
 
 // --- AnalogOutput ---
@@ -203,9 +204,10 @@ fn ao_description_read_write() {
 #[test]
 fn ao_description_in_property_list() {
     let ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
-    assert!(ao
-        .property_list()
-        .contains(&PropertyIdentifier::DESCRIPTION));
+    assert!(
+        ao.property_list()
+            .contains(&PropertyIdentifier::DESCRIPTION)
+    );
 }
 
 #[test]
@@ -405,7 +407,7 @@ fn ao_direct_priority_array_no_index_error() {
         )
         .unwrap_err()
     {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, bacnet_types::enums::ErrorClass::PROPERTY);
             assert_eq!(code, bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED);
         }
@@ -426,7 +428,7 @@ fn ao_direct_priority_array_index_zero_error() {
         )
         .unwrap_err()
     {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, bacnet_types::enums::ErrorClass::PROPERTY);
             assert_eq!(code, bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED);
         }
@@ -446,7 +448,7 @@ fn ao_direct_priority_array_index_17_error() {
         )
         .unwrap_err()
     {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, bacnet_types::enums::ErrorClass::PROPERTY);
             assert_eq!(code, bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED);
         }
@@ -547,7 +549,7 @@ fn ao_relinquish_default_write_recaptures_present_value() {
             .write_property(PropertyIdentifier::RELINQUISH_DEFAULT, None, value, None)
             .expect_err("{code}: invalid Relinquish_Default write must refuse")
         {
-            Error::Protocol { class, code: c } => {
+            Error::Remote(RemoteError::Error { class, code: c }) => {
                 assert_eq!(class, bacnet_types::enums::ErrorClass::PROPERTY);
                 assert_eq!(
                     c,

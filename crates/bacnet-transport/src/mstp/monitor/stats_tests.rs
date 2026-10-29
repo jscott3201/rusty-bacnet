@@ -5,10 +5,10 @@ use std::time::Duration;
 
 use bacnet_mstp_codec::{FrameHeader, FrameType};
 
-use super::script::{analyse, Damage, LineScript, ScriptedRing, TURNAROUND, USAGE_TIMEOUT};
+use super::script::{Damage, LineScript, ScriptedRing, TURNAROUND, USAGE_TIMEOUT, analyse};
 use super::stats::{
-    octet_time, LineErrorKind, LineEvent, MaxMaster, MonitorStats, NO_TOKEN_SILENCE,
-    SILENCE_BUCKET_BOUNDS,
+    LineErrorKind, LineEvent, MaxMaster, MonitorStats, NO_TOKEN_SILENCE, SILENCE_BUCKET_BOUNDS,
+    octet_time,
 };
 
 const BAUD: u32 = 38_400;

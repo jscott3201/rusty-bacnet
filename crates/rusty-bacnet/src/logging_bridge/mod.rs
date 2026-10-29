@@ -36,9 +36,9 @@
 //! The stack's throttled warnings (#1624, #1712) throttle before they log, so
 //! they reach Python as rarely as they reach any subscriber.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
 
 use pyo3::exceptions::{PyRuntimeError, PyRuntimeWarning};
 use pyo3::intern;
@@ -55,7 +55,7 @@ mod record;
 mod tests;
 
 use deliver::Message;
-use levels::{logger_name, python_level, Levels, PREFIX};
+use levels::{Levels, PREFIX, logger_name, python_level};
 use record::Record;
 
 /// Records waiting for the forwarder; past this, new ones are dropped.

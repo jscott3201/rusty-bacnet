@@ -1,5 +1,5 @@
 use super::TrendLogObject;
-use std::borrow::Cow;
+use alloc::borrow::Cow;
 
 use bacnet_types::enums::PropertyIdentifier as P;
 
@@ -92,10 +92,10 @@ mod tests {
     use crate::property_metadata::PropertyPresenceCondition;
     use crate::traits::BACnetObject;
     use crate::trend::TrendLogMultipleObject;
+    use alloc::sync::Arc;
     use bacnet_types::enums::{ErrorClass, ErrorCode, LoggingType, ObjectType};
-    use bacnet_types::error::Error;
+    use bacnet_types::error::{Error, RemoteError};
     use bacnet_types::primitives::{Date, PropertyValue, Time};
-    use std::sync::Arc;
 
     /// The modes both trend objects take; only a Trend Log takes COV
     /// (#1480), which leaves its rows as POLLED does.
@@ -184,7 +184,7 @@ mod tests {
 
     fn assert_error(error: Error, class: ErrorClass, code: ErrorCode) {
         assert!(
-            matches!(error, Error::Protocol { class: c, code: e }
+            matches!(error, Error::Remote(RemoteError::Error { class: c, code: e })
             if c == class && e == code),
             "{error:?}"
         );

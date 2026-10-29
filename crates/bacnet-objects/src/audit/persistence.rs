@@ -1,8 +1,15 @@
 //! Explicit persistence for one AuditLog object. The object calls it from its
 //! writer thread, never under the database guard ([`crate::durable`]).
 
+// Without std there is no file backend, so the snapshot format goes unused.
+#![cfg_attr(not(feature = "std"), allow(dead_code))]
+
+use crate::prelude::*;
+#[cfg(feature = "std")]
 use std::fs::{File, OpenOptions};
+#[cfg(feature = "std")]
 use std::io::{ErrorKind, Read, Write};
+#[cfg(feature = "std")]
 use std::path::{Path, PathBuf};
 
 use bacnet_encoding::constructed::{decode_audit_log_record, encode_audit_log_record};
@@ -77,10 +84,12 @@ pub trait AuditLogPersistence: Send + Sync {
 /// failed commit, but does not provide multi-process coordination or stronger
 /// portable power-loss guarantees than `sync_all`.
 #[derive(Clone, Debug)]
+#[cfg(feature = "std")]
 pub struct FileAuditLogPersistence {
     slot_paths: [PathBuf; 2],
 }
 
+#[cfg(feature = "std")]
 impl FileAuditLogPersistence {
     /// Use `base_path.slot0` and `base_path.slot1` for this object's snapshots.
     pub fn new(base_path: impl AsRef<Path>) -> Result<Self, Error> {
@@ -106,6 +115,7 @@ impl FileAuditLogPersistence {
     }
 }
 
+#[cfg(feature = "std")]
 enum SlotState {
     Missing,
     Recoverable(Error),
@@ -113,11 +123,13 @@ enum SlotState {
     Valid(AuditLogSnapshot),
 }
 
+#[cfg(feature = "std")]
 enum SlotReadFailure {
     Recoverable(Error),
     Fatal(Error),
 }
 
+#[cfg(feature = "std")]
 impl AuditLogPersistence for FileAuditLogPersistence {
     fn load(&self, expected_object: ObjectIdentifier) -> Result<Option<AuditLogSnapshot>, Error> {
         let slots = [
@@ -163,6 +175,7 @@ impl AuditLogPersistence for FileAuditLogPersistence {
     }
 }
 
+#[cfg(feature = "std")]
 fn select_newest_slot(slots: [SlotState; 2]) -> Result<Option<AuditLogSnapshot>, Error> {
     let mut newest: Option<AuditLogSnapshot> = None;
     let mut present = false;
@@ -208,6 +221,7 @@ fn select_newest_slot(slots: [SlotState; 2]) -> Result<Option<AuditLogSnapshot>,
     }
 }
 
+#[cfg(feature = "std")]
 fn invalidate_failed_slot(file: &File) {
     // Best effort only: the other slot remains the last known valid state.
     // No stronger portable power-loss behavior is promised after an I/O error.
@@ -215,6 +229,7 @@ fn invalidate_failed_slot(file: &File) {
     let _ = file.sync_all();
 }
 
+#[cfg(feature = "std")]
 fn read_slot(path: &Path, expected_object: ObjectIdentifier) -> SlotState {
     match read_slot_inner(path, expected_object) {
         Ok(Some(snapshot)) => SlotState::Valid(snapshot),
@@ -224,6 +239,7 @@ fn read_slot(path: &Path, expected_object: ObjectIdentifier) -> SlotState {
     }
 }
 
+#[cfg(feature = "std")]
 fn read_slot_inner(
     path: &Path,
     expected_object: ObjectIdentifier,
@@ -320,7 +336,7 @@ fn encode_snapshot(snapshot: &AuditLogSnapshot) -> Result<Vec<u8>, Error> {
     encode_snapshot_for_version(snapshot, SCHEMA_VERSION)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 pub(super) fn encode_snapshot_v1(snapshot: &AuditLogSnapshot) -> Result<Vec<u8>, Error> {
     if !snapshot.completed_receipts.is_empty() {
         return Err(Error::Encoding(
@@ -333,7 +349,7 @@ pub(super) fn encode_snapshot_v1(snapshot: &AuditLogSnapshot) -> Result<Vec<u8>,
 /// Encode `snapshot` under the schema-v2 header. The records are encoded as
 /// today's codec does, so a test reproduces a 0.11.0 file by handing it the
 /// log statuses that encode to the old octets.
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 pub(super) fn encode_snapshot_v2(snapshot: &AuditLogSnapshot) -> Result<Vec<u8>, Error> {
     encode_snapshot_for_version(snapshot, SCHEMA_VERSION_V2)
 }
@@ -656,7 +672,7 @@ fn take_u64(data: &[u8], offset: &mut usize, field: &str) -> Result<u64, Error> 
     ))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
     use bacnet_types::enums::ObjectType;

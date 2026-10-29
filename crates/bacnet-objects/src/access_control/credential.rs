@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use alloc::sync::Arc;
 
 use bacnet_encoding::constructed::{
     encode_assigned_access_rights, encode_credential_authentication_factor,

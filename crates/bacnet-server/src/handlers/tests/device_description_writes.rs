@@ -1,5 +1,6 @@
 use super::*;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
+use bacnet_types::error::RemoteError;
 
 #[test]
 fn device_description_full_handler_null_is_noop_and_priority_range_is_typed() {
@@ -26,7 +27,7 @@ fn device_description_full_handler_null_is_noop_and_priority_range_is_typed() {
         let result = handle_write_property(&mut db, &bytes);
         if matches!(priority, Some(0 | 17)) {
             assert!(
-                matches!(result, Err(Error::Protocol {class,code}) if class == ErrorClass::SERVICES && code == ErrorCode::PARAMETER_OUT_OF_RANGE)
+                matches!(result, Err(Error::Remote(RemoteError::Error {class,code})) if class == ErrorClass::SERVICES && code == ErrorCode::PARAMETER_OUT_OF_RANGE)
             );
         } else {
             assert_eq!(result.unwrap(), oid);

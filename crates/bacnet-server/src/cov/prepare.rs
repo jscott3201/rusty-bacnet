@@ -21,10 +21,7 @@ impl PreparedCovValue {
     }
 }
 fn property_error(code: ErrorCode) -> Error {
-    Error::Protocol {
-        class: ErrorClass::PROPERTY,
-        code,
-    }
+    Error::protocol(ErrorClass::PROPERTY, code)
 }
 /// Caller has already performed the selected read, preserving its error precedence.
 pub(crate) fn prepare_value(

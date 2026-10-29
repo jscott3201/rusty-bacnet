@@ -8,6 +8,7 @@ use super::*;
 use crate::tsm::TsmResponse;
 use bacnet_encoding::apdu::{AbortPdu, ErrorPdu, RejectPdu};
 use bacnet_types::enums::{AbortReason, ErrorClass, ErrorCode, RejectReason};
+use bacnet_types::error::RemoteError;
 
 /// An application-tagged ENUMERATED (tag 9) with the fewest content octets,
 /// written out by hand so the test does not lean on the encoder it checks.
@@ -63,7 +64,7 @@ fn every_error_class_and_code_round_trips_through_the_wire() {
                 panic!("expected an Error PDU");
             };
             let result = confirmed_response_result(TsmResponse::from_error_pdu(&pdu));
-            let Err(Error::Protocol { class: c, code: k }) = result else {
+            let Err(Error::Remote(RemoteError::Error { class: c, code: k })) = result else {
                 panic!("expected a protocol error, got {result:?}");
             };
             assert_eq!((c.to_raw(), k.to_raw()), (class.to_raw(), code.to_raw()));
@@ -89,15 +90,15 @@ fn every_reject_and_abort_reason_round_trips_through_the_wire() {
         let Apdu::Reject(pdu) = apdu::decode_apdu(buf.freeze()).unwrap() else {
             panic!("expected a Reject PDU");
         };
-        let result = confirmed_response_result(TsmResponse::Reject {
+        let result = confirmed_response_result(TsmResponse::remote(RemoteError::Reject {
             reason: pdu.reject_reason,
-        });
-        let Err(Error::Reject { reason: got }) = result else {
+        }));
+        let Err(Error::Remote(RemoteError::Reject { reason: got })) = result else {
             panic!("expected a reject, got {result:?}");
         };
         assert_eq!(got.to_raw(), raw);
         // A responder answers with the reason it was given.
-        assert_eq!(Error::Reject { reason: got }.reject_reason(), Some(reason));
+        assert_eq!(Error::reject(got).reject_reason(), Some(reason));
 
         let reason = AbortReason::from_raw(raw);
         let mut buf = BytesMut::new();
@@ -114,10 +115,10 @@ fn every_reject_and_abort_reason_round_trips_through_the_wire() {
         let Apdu::Abort(pdu) = apdu::decode_apdu(buf.freeze()).unwrap() else {
             panic!("expected an Abort PDU");
         };
-        let result = confirmed_response_result(TsmResponse::Abort {
+        let result = confirmed_response_result(TsmResponse::remote(RemoteError::Abort {
             reason: pdu.abort_reason,
-        });
-        let Err(Error::Abort { reason: got }) = result else {
+        }));
+        let Err(Error::Remote(RemoteError::Abort { reason: got })) = result else {
             panic!("expected an abort, got {result:?}");
         };
         assert_eq!(got.to_raw(), raw);
@@ -127,17 +128,11 @@ fn every_reject_and_abort_reason_round_trips_through_the_wire() {
 #[test]
 fn display_keeps_the_numeric_reasons() {
     assert_eq!(
-        Error::Reject {
-            reason: RejectReason::UNDEFINED_ENUMERATION
-        }
-        .to_string(),
+        Error::reject(RejectReason::UNDEFINED_ENUMERATION).to_string(),
         "BACnet reject: reason=8"
     );
     assert_eq!(
-        Error::Abort {
-            reason: AbortReason::from_raw(200)
-        }
-        .to_string(),
+        Error::abort(AbortReason::from_raw(200)).to_string(),
         "BACnet abort: reason=200"
     );
 }

@@ -2,8 +2,8 @@
 //! LLC command or decodes the frame, as a pure decision every OS can test.
 
 use super::{
-    accepts_ethernet_destination, check_llc_control, is_group_mac, LLC_CONTROL_TEST_CMD,
-    LLC_CONTROL_XID_CMD,
+    LLC_CONTROL_TEST_CMD, LLC_CONTROL_XID_CMD, accepts_ethernet_destination, check_llc_control,
+    is_group_mac,
 };
 use crate::warn_throttle::WarnThrottle;
 

@@ -30,8 +30,8 @@
 
 use std::collections::HashMap;
 
-use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
+use bacnet_types::error::Error;
 use tokio::time::Instant;
 
 use crate::port::ScPrincipal;

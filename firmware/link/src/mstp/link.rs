@@ -1,7 +1,7 @@
 //! The core part: one token exchange with a peer, driven the way a UART
 //! adapter would drive it, then the capacity paths.
 
-use bacnet_mstp_codec::{decode_frame, Frame, FrameType};
+use bacnet_mstp_codec::{Frame, FrameType, decode_frame};
 use bacnet_mstp_core::npdu::NetworkPriority;
 use bacnet_mstp_core::{
     Action, Duration, Instant, MasterCore, MstpCoreConfig, QueueRefusal, ReplyDecision, RequestId,

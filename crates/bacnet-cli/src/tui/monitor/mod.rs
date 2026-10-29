@@ -23,10 +23,12 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::Duration;
 
-use bacnet_transport::mstp::monitor::{LostToken, MonitorStats, DEFAULT_TIMESTAMP_RESOLUTION};
+use bacnet_transport::mstp::monitor::{DEFAULT_TIMESTAMP_RESOLUTION, LostToken, MonitorStats};
 
 pub(crate) mod analysis;
 pub(crate) mod lines;
+pub(crate) mod scan;
+pub(crate) mod scan_worker;
 pub(crate) mod worker;
 
 pub(crate) use lines::Lines;
@@ -88,6 +90,8 @@ pub(crate) struct MstpOptions {
     pub(crate) monitor: Option<MonitorPlan>,
     /// Where serial ports are opened.
     pub(crate) lines: Lines,
+    /// Scan reservation shared only within this session.
+    pub(crate) scan: scan::ScanGate,
     /// How a joined station's thread is scheduled (`--mstp-rt-priority`,
     /// `--mstp-cpus`), whichever way it joins.
     pub(crate) thread: bacnet_transport::mstp::MstpThreadConfig,
@@ -128,3 +132,6 @@ pub(crate) enum MonitorReport {
     /// The monitor ended by itself: the port closed or failed.
     Ended(String),
 }
+
+#[cfg(test)]
+pub(crate) mod scan_fixture;

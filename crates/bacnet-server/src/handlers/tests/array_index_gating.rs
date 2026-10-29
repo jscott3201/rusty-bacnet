@@ -23,6 +23,7 @@ use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::WriteAccessSpecification;
 use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetStageLimitValue};
 use bacnet_types::enums::EngineeringUnits;
+use bacnet_types::error::RemoteError;
 
 fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(object_type, instance).unwrap()
@@ -176,7 +177,7 @@ fn read_indexed(
 
 fn assert_not_an_array(result: Result<(), Error>, context: &str) {
     match result {
-        Err(Error::Protocol { class, code }) => {
+        Err(Error::Remote(RemoteError::Error { class, code })) => {
             assert_eq!(class, ErrorClass::PROPERTY, "{context}: wrong error class");
             assert_eq!(
                 code,
@@ -190,7 +191,7 @@ fn assert_not_an_array(result: Result<(), Error>, context: &str) {
 
 fn assert_protocol_error(result: Result<(), Error>, expected_code: ErrorCode, context: &str) {
     match result {
-        Err(Error::Protocol { class, code }) => {
+        Err(Error::Remote(RemoteError::Error { class, code })) => {
             assert_eq!(class, ErrorClass::PROPERTY, "{context}: wrong error class");
             assert_eq!(code, expected_code, "{context}: wrong error code");
         }

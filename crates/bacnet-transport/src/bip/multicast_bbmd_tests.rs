@@ -1,5 +1,6 @@
 //! A BBMD that serves a B/IP-M group (Annex J.8.3, #941): it lends its
-//! group to the Network Port read-only, it refuses a BDT whose own row
+//! group to the Network Port through a view that can't change it alone
+//! (its tables view changes it, multicast/persist_tests.rs), it refuses a BDT whose own row
 //! isn't two-hop, and on one host it joins a group's members, a plain peer
 //! BBMD and a foreign device into one network.
 // The loopback tests run on Linux and macOS only; elsewhere their helpers
@@ -11,6 +12,7 @@
 
 use super::*;
 use bacnet_types::enums::ErrorCode;
+use bacnet_types::error::RemoteError;
 use tokio::time::timeout;
 
 const GROUP: Ipv4Addr = Ipv4Addr::new(239, 255, 94, 7);
@@ -79,12 +81,13 @@ async fn a_bbmd_for_a_group_needs_a_two_hop_own_row_and_keeps_its_group() {
     let refused = bbmd::lock(&state).set_bdt(vec![row(own_port, [255, 0, 0, 0])]);
     assert!(refused.is_err());
 
-    // The Network Port reads the group, and can't change it.
+    // The Network Port reads the group, and can't change it through this
+    // view: it changes only with the BBMD's tables (#1963).
     let view = bbmd.bip_port().unwrap().multicast.expect("lent");
     assert_eq!(view.group(), GROUP.octets());
     assert!(!view.can_change());
     for group in [[239, 255, 94, 8], [0; 4]] {
-        let Err(Error::Protocol { code, .. }) = view.check(group) else {
+        let Err(Error::Remote(RemoteError::Error { code, .. })) = view.check(group) else {
             panic!("refused");
         };
         assert_eq!(code, ErrorCode::WRITE_ACCESS_DENIED);

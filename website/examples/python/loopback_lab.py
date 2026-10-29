@@ -1,8 +1,9 @@
 """A bounded BACnet/IP learning lab on this machine only.
 
-Requires rusty-bacnet==0.14.0 and Python >=3.11. No physical device is needed.
+Requires rusty-bacnet==0.15.0 and Python >=3.11. No physical device is needed.
 Default: create an example server, read its analog input, verify it, and stop.
 --serve: keep that server available for directed CLI reads for a limited time.
+The server also holds a commandable analog value (av:1) for CLI write samples.
 Neither mode performs Who-Is discovery, a remote write, or a COV subscription.
 """
 from __future__ import annotations
@@ -10,10 +11,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 from importlib.metadata import PackageNotFoundError, version
+import os
 import sys
 
 LOOPBACK = "127.0.0.1"
-EXPECTED_VERSION = "0.14.0"
+EXPECTED_VERSION = "0.15.0"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -30,12 +32,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def check_version() -> None:
+    # The project's CI sets this to the version of the wheel it just built.
+    expected = os.environ.get("BACNET_LAB_EXPECTED_VERSION") or EXPECTED_VERSION
     try:
         installed = version("rusty-bacnet")
     except PackageNotFoundError as exc:
-        raise RuntimeError(f"Install rusty-bacnet=={EXPECTED_VERSION} in this Python environment first.") from exc
-    if installed != EXPECTED_VERSION:
-        raise RuntimeError(f"This lab targets {EXPECTED_VERSION}; installed package is {installed}. Use a matching environment.")
+        raise RuntimeError(f"Install rusty-bacnet=={expected} in this Python environment first.") from exc
+    if installed != expected:
+        raise RuntimeError(f"This lab targets {expected}; installed package is {installed}. Use a matching environment.")
 
 
 def require_local_address(address: str) -> str:
@@ -59,6 +63,7 @@ async def run_lab(args: argparse.Namespace) -> None:
         broadcast_address=LOOPBACK,
     )
     server.add_analog_input(instance=1, name="Zone Temperature", units=64, present_value=72.5)
+    server.add_analog_value(instance=1, name="Zone Setpoint", units=64)
     try:
         await asyncio.wait_for(server.start(), timeout=5)
         address = require_local_address(await server.local_address())

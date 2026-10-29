@@ -1,16 +1,16 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use bacnet_encoding::apdu::{decode_apdu, encode_apdu, Apdu, ConfirmedRequest, UnconfirmedRequest};
-use bacnet_encoding::npdu::{decode_npdu, NpduAddress};
+use bacnet_encoding::apdu::{Apdu, ConfirmedRequest, UnconfirmedRequest, decode_apdu, encode_apdu};
+use bacnet_encoding::npdu::{NpduAddress, decode_npdu};
 use bacnet_npdu::NetworkPriority;
 use bacnet_transport::port::{DataAttribute, ReceivedNpdu, TransportPort};
+use bacnet_types::MacAddr;
 use bacnet_types::enums::{ConfirmedServiceChoice, UnconfirmedServiceChoice};
 use bacnet_types::error::Error;
-use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
 use tokio::sync::mpsc;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 use super::*;
 

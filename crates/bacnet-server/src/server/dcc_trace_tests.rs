@@ -1,6 +1,6 @@
 use super::*;
 use std::collections::BTreeMap;
-use tracing::{span, Event, Metadata, Subscriber};
+use tracing::{Event, Metadata, Subscriber, span};
 
 #[derive(Clone)]
 pub(in crate::server) struct Capture(pub Arc<std::sync::Mutex<Vec<BTreeMap<String, String>>>>);

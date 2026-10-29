@@ -7,10 +7,10 @@ use bacnet_time::Instant;
 use crate::config::DEFAULT_STARVATION_LIMIT;
 use crate::counters::QueueCounters;
 
-use super::slots::{expired, Lane, LiveItems, Selected, Slot};
+use super::slots::{Lane, LiveItems, Selected, Slot, expired};
 use super::{
-    DequeuedNpdu, NetworkPriority, QueueItemInfo, QueueKind, QueueRefusal, QueueStorage,
-    MAX_STANDARD_MPDU_DATA,
+    DequeuedNpdu, MAX_STANDARD_MPDU_DATA, NetworkPriority, QueueItemInfo, QueueKind, QueueRefusal,
+    QueueStorage,
 };
 
 const EMPTY_QUEUE_COUNTERS: QueueCounters = QueueCounters {

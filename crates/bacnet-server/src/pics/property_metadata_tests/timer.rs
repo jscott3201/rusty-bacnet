@@ -1,7 +1,7 @@
 use super::*;
+use PropertyIdentifier as P;
 use bacnet_objects::{timer::TimerObject, traits::BACnetObject};
 use bacnet_types::primitives::{Date, PropertyValue, Time};
-use PropertyIdentifier as P;
 
 #[test]
 fn pics_timer_property_metadata_is_exact() {

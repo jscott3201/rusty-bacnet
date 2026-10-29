@@ -19,9 +19,9 @@ use bacnet_services::object_mgmt::{CreateObjectRequest, DeleteObjectRequest};
 use bacnet_services::wpm::WritePropertyAttempt;
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_transport::port::TransportProvenance;
+use bacnet_types::MacAddr;
 use bacnet_types::enums::{ConfirmedServiceChoice, UnconfirmedServiceChoice};
 use bacnet_types::primitives::ObjectIdentifier;
-use bacnet_types::MacAddr;
 
 /// Channel/relay scope derived from ingress provenance, mirroring RB-09
 /// `ControlTrust`. Scope only, never leaf identity: a verified SC ingress
@@ -48,7 +48,7 @@ pub enum MutationTrust {
 
 impl MutationTrust {
     /// Derive the channel/relay scope from one reassembled ingress snapshot.
-    pub fn from_provenance(provenance: TransportProvenance) -> Self {
+    pub fn from_provenance(provenance: &TransportProvenance) -> Self {
         if provenance.is_direct_peer() || provenance.is_hub_channel() {
             Self::VerifiedChannel
         } else if provenance.is_relayed_origin() {
@@ -207,7 +207,7 @@ impl MutationAuthorizationContext {
     /// carries no routed source. `None` for other ingress, hub-relayed and
     /// routed requests included (see [`crate::policy`]).
     pub fn principal(&self) -> Option<bacnet_transport::port::ScPrincipal> {
-        crate::policy::originating_principal(self.provenance, self.source_network.as_ref())
+        crate::policy::originating_principal(&self.provenance, self.source_network.as_ref())
     }
 
     /// The principal of the direct BACnet/SC peer that handed this request
@@ -217,6 +217,8 @@ impl MutationAuthorizationContext {
     pub fn forwarding_peer_principal(&self) -> Option<bacnet_transport::port::ScPrincipal> {
         self.provenance.principal()
     }
+
+    crate::policy::certificate_accessors!();
 
     /// The immediate direct-SC hop's verified leaf and connection incarnation:
     /// for a routed request, the router that forwarded it. Absent off a
@@ -270,7 +272,9 @@ pub struct MutationServiceCounters {
 /// New servers start at zero. Each field is independently sampled and saturates at
 /// `u64::MAX`, so snapshots are not atomic aggregates. Counters never affect policy.
 /// WPM counts each element reaching its gate, not requests or an unvisited suffix,
-/// even one the policy was asked about ahead of the handler (#1321).
+/// even one the policy was asked about ahead of the handler (#1321, #2032).
+/// An element whose object appeared between that ahead pass and the writes,
+/// so the policy never saw it, is denied and counted in `deny_total`.
 /// Pre-gate failures and duplicates do not count. In permissive mode without
 /// a policy, a decision allows without decoding, so a later handler failure still counts.
 /// An inbound WriteGroup counts once per Channel write it would make.
@@ -300,7 +304,7 @@ pub struct MutationDecisionCounters {
     pub write_group: MutationServiceCounters,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MutationDecision {
     Allow,
     Deny,
@@ -312,16 +316,27 @@ pub(crate) struct MutationDecisions([[AtomicU64; 3]; 11]);
 
 impl MutationDecisions {
     pub(crate) fn snapshot(&self) -> MutationDecisionCounters {
-        let [write_property, write_property_multiple, create_object, delete_object, add_list_element, remove_list_element, atomic_write_file, subscribe_cov, subscribe_cov_property, subscribe_cov_property_multiple, write_group] =
-            self.0.each_ref().map(|row| {
-                let [allow_total, deny_total, policy_deny_total] =
-                    row.each_ref().map(|n| n.load(Ordering::Relaxed));
-                MutationServiceCounters {
-                    allow_total,
-                    deny_total,
-                    policy_deny_total,
-                }
-            });
+        let [
+            write_property,
+            write_property_multiple,
+            create_object,
+            delete_object,
+            add_list_element,
+            remove_list_element,
+            atomic_write_file,
+            subscribe_cov,
+            subscribe_cov_property,
+            subscribe_cov_property_multiple,
+            write_group,
+        ] = self.0.each_ref().map(|row| {
+            let [allow_total, deny_total, policy_deny_total] =
+                row.each_ref().map(|n| n.load(Ordering::Relaxed));
+            MutationServiceCounters {
+                allow_total,
+                deny_total,
+                policy_deny_total,
+            }
+        });
         MutationDecisionCounters {
             write_property,
             write_property_multiple,
@@ -363,8 +378,7 @@ impl MutationDecisions {
 
     fn increment(&self, index: usize, decision: MutationDecision) {
         let increment = |column: usize| {
-            #[allow(deprecated, reason = "try_update needs Rust 1.95; the MSRV is 1.93")]
-            let _ = self.0[index][column].fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+            let _ = self.0[index][column].try_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
                 Some(n.saturating_add(1))
             });
         };

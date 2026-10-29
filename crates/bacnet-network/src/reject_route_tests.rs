@@ -23,8 +23,8 @@ use bacnet_types::MacAddr;
 use bytes::Bytes;
 
 use crate::loopback_fixture::{
-    next_frame_from_router, next_received_from_router, recv, wire, FromRouter, RouterFixture,
-    ORIGIN, REMOTE, TOO_LONG,
+    FromRouter, ORIGIN, REMOTE, RouterFixture, TOO_LONG, next_frame_from_router,
+    next_received_from_router, recv, wire,
 };
 use crate::router::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
 use crate::router_table::{PortId, Reachability};
@@ -438,8 +438,8 @@ async fn chained_routers_carry_a_reject_back_to_the_originating_device() {
         [0x01, 0x88, 0x07, 0xD0, 0x01, 0x03, 0x03, 0x01, 0x13, 0x88]
     );
 
-    r1.stop().await;
-    r2.stop().await;
+    r1.stop().await.unwrap();
+    r2.stop().await.unwrap();
     device.stop().await.unwrap();
     far.stop().await.unwrap();
 }

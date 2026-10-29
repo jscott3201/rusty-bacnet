@@ -55,12 +55,16 @@ mod tests {
             config_root(Some("relative".into()), None).unwrap(),
             Path::new("relative")
         );
-        assert!(config_root(Some(OsString::new()), Some(&dirs()))
-            .unwrap_err()
-            .contains(CONFIG_DIR_ENV));
-        assert!(config_root(None, None)
-            .unwrap_err()
-            .contains(CONFIG_DIR_ENV));
+        assert!(
+            config_root(Some(OsString::new()), Some(&dirs()))
+                .unwrap_err()
+                .contains(CONFIG_DIR_ENV)
+        );
+        assert!(
+            config_root(None, None)
+                .unwrap_err()
+                .contains(CONFIG_DIR_ENV)
+        );
     }
 
     #[test]

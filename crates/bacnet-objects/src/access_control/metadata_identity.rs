@@ -1,7 +1,7 @@
 use super::{
     AccessCredentialObject, AccessRightsObject, AccessUserObject, CredentialDataInputObject,
 };
-use std::borrow::Cow;
+use alloc::borrow::Cow;
 
 use bacnet_types::enums::PropertyIdentifier as P;
 

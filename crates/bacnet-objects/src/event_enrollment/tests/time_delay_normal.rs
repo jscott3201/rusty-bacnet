@@ -4,6 +4,7 @@
 
 use super::super::*;
 use bacnet_types::bitstring::EventTransitionBits;
+use bacnet_types::error::RemoteError;
 
 /// Absent a write, the property reads back the `Event_Parameters`
 /// `Time_Delay` — the Clause 13.3 fallback to pTimeDelay,
@@ -91,7 +92,7 @@ fn time_delay_normal_write_validation() {
         )
         .unwrap_err()
     {
-        bacnet_types::error::Error::Protocol { class, code } => {
+        bacnet_types::error::Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(
                 (class, code),
                 (
@@ -112,7 +113,7 @@ fn time_delay_normal_write_validation() {
         )
         .unwrap_err()
     {
-        bacnet_types::error::Error::Protocol { class, code } => {
+        bacnet_types::error::Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(
                 (class, code),
                 (
@@ -201,40 +202,44 @@ fn configuration_setters_cancel_pending_countdowns() {
         high_limit: 1.0,
         deadband: 0.0,
     });
-    assert!(ee
-        .enrollment_eval_state_internal()
-        .unwrap()
-        .pending
-        .is_none());
+    assert!(
+        ee.enrollment_eval_state_internal()
+            .unwrap()
+            .pending
+            .is_none()
+    );
 
     seed(&mut ee);
     ee.set_time_delay_normal(Some(3));
-    assert!(ee
-        .enrollment_eval_state_internal()
-        .unwrap()
-        .pending
-        .is_none());
+    assert!(
+        ee.enrollment_eval_state_internal()
+            .unwrap()
+            .pending
+            .is_none()
+    );
 
     seed(&mut ee);
     ee.set_object_property_reference(None).unwrap();
-    assert!(ee
-        .enrollment_eval_state_internal()
-        .unwrap()
-        .pending
-        .is_none());
+    assert!(
+        ee.enrollment_eval_state_internal()
+            .unwrap()
+            .pending
+            .is_none()
+    );
 
     seed(&mut ee);
     let before = ee
         .read_property(PropertyIdentifier::EVENT_PARAMETERS, None)
         .unwrap();
-    assert!(ee
-        .write_property(
+    assert!(
+        ee.write_property(
             PropertyIdentifier::EVENT_PARAMETERS,
             None,
             PropertyValue::Unsigned(1),
             None
         )
-        .is_err());
+        .is_err()
+    );
     assert_eq!(
         ee.read_property(PropertyIdentifier::EVENT_PARAMETERS, None)
             .unwrap(),
@@ -287,8 +292,8 @@ fn disabling_detection_clears_eval_state_and_refuses_writes() {
 
     // And while disabled the internal write paths refuse — the invariant
     // holds by construction, as with set_event_state_internal (#130).
-    assert!(ee
-        .set_enrollment_eval_state_internal(EventEnrollmentEvalState {
+    assert!(
+        ee.set_enrollment_eval_state_internal(EventEnrollmentEvalState {
             pending: Some(EventEnrollmentPending {
                 state: EventState::OFFNORMAL,
                 remaining: 1,
@@ -297,13 +302,16 @@ fn disabling_detection_clears_eval_state_and_refuses_writes() {
             }),
             ..EventEnrollmentEvalState::default()
         })
-        .is_err());
-    assert!(ee
-        .set_enrollment_eval_source_internal(Some(source))
-        .is_err());
-    assert!(ee
-        .set_acked_transitions_internal(EventTransitionBits::TO_OFFNORMAL, false)
-        .is_err());
+        .is_err()
+    );
+    assert!(
+        ee.set_enrollment_eval_source_internal(Some(source))
+            .is_err()
+    );
+    assert!(
+        ee.set_acked_transitions_internal(EventTransitionBits::TO_OFFNORMAL, false)
+            .is_err()
+    );
 
     // Re-enabling both reopens the channel and evaluates afresh (the first
     // COV sample after re-enable seeds a new baseline, not a transition).
@@ -372,10 +380,14 @@ fn acked_transitions_internal_set_and_clear() {
 fn eval_state_trait_defaults_reject() {
     let mut object = crate::averaging::AveragingObject::new(1, "AVG-1").unwrap();
     assert!(object.enrollment_eval_state_internal().is_none());
-    assert!(object
-        .set_enrollment_eval_state_internal(EventEnrollmentEvalState::default())
-        .is_err());
-    assert!(object
-        .set_acked_transitions_internal(EventTransitionBits::TO_OFFNORMAL, false)
-        .is_err());
+    assert!(
+        object
+            .set_enrollment_eval_state_internal(EventEnrollmentEvalState::default())
+            .is_err()
+    );
+    assert!(
+        object
+            .set_acked_transitions_internal(EventTransitionBits::TO_OFFNORMAL, false)
+            .is_err()
+    );
 }

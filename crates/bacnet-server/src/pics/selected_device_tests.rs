@@ -5,7 +5,7 @@ use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_types::enums::ServiceSupported;
 
-use super::{generate_pics, PicsConfig};
+use super::{PicsConfig, generate_pics};
 use crate::server::ServerConfig;
 
 fn device(instance: u32, services: &[ServiceSupported]) -> Box<DeviceObject> {

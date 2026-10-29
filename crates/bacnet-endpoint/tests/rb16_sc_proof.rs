@@ -25,8 +25,8 @@
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
-use bacnet_encoding::apdu::{decode_apdu, encode_apdu, Apdu};
-use bacnet_endpoint::identity::{build_database_with_extra, DeviceIdentity};
+use bacnet_encoding::apdu::{Apdu, decode_apdu, encode_apdu};
+use bacnet_endpoint::identity::{DeviceIdentity, build_database_with_extra};
 use bacnet_endpoint::sc::ScEndpointBuilder;
 use bacnet_endpoint::session::SessionRole;
 use bacnet_network::layer::NetworkLayer;
@@ -36,13 +36,13 @@ use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_transport::sc::{ScReconnectConfig, ScTransport};
 use bacnet_transport::sc_hub::{ScHub, ScHubTlsConfig};
 use bacnet_transport::sc_tls::{ScNodeTlsConfig, TlsWebSocket};
+use bacnet_types::MacAddr;
 use bacnet_types::enums::{
     ConfirmedServiceChoice, EngineeringUnits, ObjectType, PropertyIdentifier, Segmentation,
     ServiceSupported, UnconfirmedServiceChoice,
 };
 use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::primitives::PropertyValue;
-use bacnet_types::MacAddr;
 use bytes::BytesMut;
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -346,15 +346,17 @@ async fn sc_one_node_bidirectional_with_provenance_and_admin() {
     let detached = endpoint.cloned_client_handle().unwrap();
     endpoint.stop().await.unwrap();
     assert!(endpoint.stop().await.is_err());
-    assert!(detached
-        .read_property(
-            &peer.mac(),
-            oid(ObjectType::ANALOG_INPUT, 1),
-            PropertyIdentifier::PRESENT_VALUE,
-            None
-        )
-        .await
-        .is_err());
+    assert!(
+        detached
+            .read_property(
+                &peer.mac(),
+                oid(ObjectType::ANALOG_INPUT, 1),
+                PropertyIdentifier::PRESENT_VALUE,
+                None
+            )
+            .await
+            .is_err()
+    );
     peer.net.stop().await.unwrap();
     hub.stop().await;
 }
@@ -482,10 +484,12 @@ async fn sc_kill_reconnect_preserves_vmac_uuid_vs_transient() {
         .unwrap()
         .with_device_uuid([0x99; 16]);
     let ws_bad = dial_node(hub_port, ca.node_tls.clone()).await;
-    assert!(ScEndpointBuilder::new([0x07; 6], [0x77; 16])
-        .device(bad_id)
-        .build_hub_session(ws_bad)
-        .is_err());
+    assert!(
+        ScEndpointBuilder::new([0x07; 6], [0x77; 16])
+            .device(bad_id)
+            .build_hub_session(ws_bad)
+            .is_err()
+    );
 
     s2.stop().await.unwrap();
     s3.stop().await.unwrap();

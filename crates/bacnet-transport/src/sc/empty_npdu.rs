@@ -4,8 +4,8 @@ use bytes::BytesMut;
 use tracing::warn;
 
 use super::rejection::{RejectionBudget, RejectionExpired};
-use super::{data_attributes::build_bvlc_result_nak, WebSocketPort};
-use crate::sc_frame::{encode_sc_message, missing_npdu_payload, ScMessage};
+use super::{WebSocketPort, data_attributes::build_bvlc_result_nak};
+use crate::sc_frame::{ScMessage, encode_sc_message, missing_npdu_payload};
 
 pub(super) async fn reject<W: WebSocketPort>(
     msg: &ScMessage,

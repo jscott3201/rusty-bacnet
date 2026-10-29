@@ -234,7 +234,7 @@ async fn direct_response_budget_too_small_for_abort_finishes_without_fallback() 
     for _ in 0..2 {
         let envelope = f.capture_from(&mut peer, &request(true), None).await;
         saved_route = Some(bacnet_network::response_route::ResponseRoute::new(
-            envelope.provenance,
+            envelope.provenance.clone(),
             envelope.direct_response.clone(),
         ));
         assert_eq!(

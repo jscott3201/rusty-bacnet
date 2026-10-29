@@ -1,7 +1,7 @@
 //! Public Random-48 VMAC API tests.
 
 use bacnet_transport::sc::generate_random48_vmac;
-use bacnet_transport::sc_frame::{is_valid_random48_vmac, BROADCAST_VMAC, UNKNOWN_VMAC};
+use bacnet_transport::sc_frame::{BROADCAST_VMAC, UNKNOWN_VMAC, is_valid_random48_vmac};
 
 #[test]
 fn public_random48_generator_is_callable_and_shape_valid() {

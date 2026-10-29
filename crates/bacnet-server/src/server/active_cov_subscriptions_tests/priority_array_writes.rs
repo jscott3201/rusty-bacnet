@@ -3,6 +3,7 @@ use super::*;
 use bacnet_objects::analog::AnalogOutputObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::EngineeringUnits;
+use bacnet_types::error::RemoteError;
 
 #[tokio::test]
 async fn priority_array_wire_wp_must_not_ack_direct_slot_write() {
@@ -74,7 +75,7 @@ fn objects() -> Vec<Box<dyn BACnetObject>> {
 
 fn denied(result: Result<(), Error>) {
     assert!(
-        matches!(result, Err(Error::Protocol { class, code })
+        matches!(result, Err(Error::Remote(RemoteError::Error { class, code }))
         if class == ErrorClass::PROPERTY
         && code == ErrorCode::WRITE_ACCESS_DENIED),
         "{result:?}"
@@ -111,7 +112,20 @@ fn priority_array_all_twenty_profiles_trait_metadata_and_pics_are_read_only() {
                 &crate::command_source::test_origin(),
             )
             .unwrap();
-        assert_eq!(object.read_property(PA, Some(8)).unwrap(), default);
+        // A date-time slot is the BACnetPriorityValue [1] choice (#2098);
+        // every other slot carries Present_Value's own form.
+        let slot = match &default {
+            PropertyValue::List(pair) => match pair.as_slice() {
+                [PropertyValue::Date(date), PropertyValue::Time(time)] => {
+                    let mut buf = BytesMut::new();
+                    bacnet_encoding::primitives::encode_priority_date_time(&mut buf, date, time);
+                    PropertyValue::ApplicationData(buf.to_vec())
+                }
+                _ => default.clone(),
+            },
+            _ => default.clone(),
+        };
+        assert_eq!(object.read_property(PA, Some(8)).unwrap(), slot, "{oid:?}");
         assert_eq!(
             object.read_property(PA, Some(0)).unwrap(),
             PropertyValue::Unsigned(16)

@@ -2,8 +2,8 @@
 //! maximum APDU (#986), owed untimestamped references (#1038), and changes
 //! sent one value per notification (#1090).
 use super::tests::{
-    change, context, dropped, frame, histories, item_len, key, seconds, store, subscriber_for,
-    timed_reference, LIFETIME,
+    LIFETIME, change, context, dropped, frame, histories, item_len, key, seconds, store,
+    subscriber_for, timed_reference,
 };
 use super::*;
 

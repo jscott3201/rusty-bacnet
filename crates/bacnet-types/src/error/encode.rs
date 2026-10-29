@@ -11,8 +11,8 @@
 
 use core::fmt;
 
-use super::decode::write_label;
 use super::DecodeError;
+use super::decode::write_label;
 use crate::enums::Segmentation;
 
 /// A value an encoder or validator refused to put on the wire, without an

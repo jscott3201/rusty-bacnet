@@ -6,7 +6,7 @@ use bacnet_types::MacAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(test)]
 use tokio::sync::Notify;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 
 use crate::tsm::{TransactionOwner, Tsm};
 

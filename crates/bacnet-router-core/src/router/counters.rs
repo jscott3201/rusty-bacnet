@@ -65,9 +65,17 @@ pub struct Counters {
     /// Router-Available announcements started for a port that drained
     /// (#1697).
     pub available_announced: u32,
-    /// Global broadcasts dropped as repeats of one seen within the
-    /// [`Duplicates`](super::Duplicates) time to live (#1698).
+    /// Global broadcasts, relayed I-Am-Router, Router-Busy and
+    /// Router-Available messages, and Who-Is-Router queries the router
+    /// would pass on, dropped as repeats of one seen within the
+    /// [`Duplicates`](super::Duplicates) time to live (#1698, #1810,
+    /// #2020).
     pub duplicate_drops: u32,
+    /// Global broadcasts and Who-Is-Router queries dropped because their
+    /// SNET and SADR name the router itself: its own, come back round a
+    /// loop (#2021). Counted whether or not
+    /// [`Options::duplicates`](super::Options::duplicates) is on.
+    pub own_source_drops: u32,
     /// Networks a received reject or flow-control message named whose
     /// learned route goes through another router, left unchanged (#1698):
     /// rejects under [`Options::next_hop_rejects`](super::Options::next_hop_rejects),
@@ -110,6 +118,7 @@ impl Counters {
         busy_announced: 0,
         available_announced: 0,
         duplicate_drops: 0,
+        own_source_drops: 0,
         not_next_hop: 0,
         originated: 0,
     };

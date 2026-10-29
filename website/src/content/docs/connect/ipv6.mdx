@@ -1,0 +1,101 @@
+---
+title: "Connect over BACnet/IPv6"
+description: "Select an IPv6 interface, name peers by VMAC, resolve a VMAC from an address, and know which B/IPv6 features each surface supports."
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import { release, repository } from '../../../lib/site.mjs';
+
+[Connect to a network](/rusty-bacnet/connect/overview/) / BACnet/IPv6
+
+BACnet/IPv6 (B/IPv6, Annex U) carries BACnet over UDP on IPv6. Its broadcasts go to IPv6 multicast groups, and every node has a 3-octet virtual MAC address (VMAC) that the network and application layers use in place of its IPv6 address. This page shows how to start a B/IPv6 node from the CLI, Python and Rust, and how to name its peers.
+
+The page describes **v{release}**.
+
+## Name peers by VMAC
+
+A B/IPv6 node is addressed by its VMAC, not its IPv6 address (U.1.3). A device's VMAC is its device instance (H.7.2), so device 1234 is `bip6:1234` without any discovery. Any VMAC can be written as `bip6:0x0004D2`, the form the CLI, the terminal UI and Python print.
+
+When you only know a node's IPv6 address and port, resolve its VMAC first: the stack asks the node with a unicast Virtual-Address-Resolution (U.5), three times a second apart, and fails after three seconds without an answer. Unicast reaches a node that multicast doesn't.
+
+A node needs its own VMAC too. Give it a device instance (`--device-instance`, `ipv6_device_instance` or the transport's `device_instance`) and the VMAC follows from it. Without one the node picks a random VMAC at each start, and first asks the link by multicast whether another node already has it. A link with no multicast, such as Linux loopback, can't carry that question, so give a device instance there.
+
+## Select one interface
+
+With `::`, which is the default, startup picks one unambiguous usable link and address: a non-loopback multicast interface first, then a unique non-link-local address on it, otherwise a unique link-local one. Loopback is the last choice, taken only when no other interface qualifies. Several candidates fail startup rather than guessing; give a concrete local IPv6 address instead. Older releases asked the routing table for an address and fell back to `::1` when that failed; that fallback is gone. Loopback, chosen or given, stays on the host. See [Select IPv6 explicitly](/rusty-bacnet/reference/transports/#select-ipv6-explicitly-when-discovery-is-ambiguous).
+
+Broadcasts go to `FF05::BAC0`, the site-local group, by default. In Rust, `Bip6Transport::set_broadcast_scope` selects the link-local (`FF02::BAC0`) or organization-local (`FF08::BAC0`) group instead. A group's scope alone doesn't prove that the group reaches another link: check what your routers forward.
+
+<Tabs syncKey="lang">
+
+<TabItem label="CLI">
+
+## Use the CLI
+
+`--ipv6` selects B/IPv6, `--ipv6-interface` the local address and `--device-instance` the CLI's own VMAC. A bracketed address is resolved to a VMAC before the command runs:
+
+```sh
+bacnet --ipv6 --ipv6-interface 2001:db8::20 --device-instance 4321 read '[2001:db8::10]:47808' dev:1234 object-name
+```
+
+Quote the bracketed target so the shell doesn't treat it as a pattern. A link-local address carries its interface as a numeric zone, `[fe80::1%3]:47809`. `read bip6:1234 ...` names device 1234 by its VMAC; the CLI then finds the device's address with a multicast Address-Resolution, so that form and `discover` need a multicast-capable link. A `bip6:` target without `--ipv6` is refused. See <a href={`${repository}/blob/v${release}/docs/CLI.md#target-resolution`}>Target Resolution</a> in the CLI reference.
+
+</TabItem>
+<TabItem label="Python">
+
+## Use Python
+
+Pass `transport="ipv6"` to a client or server. `resolve_vmac` turns an `"[ip]:port"` address into the `"bip6:0x..."` form that every other method takes:
+
+```python
+import asyncio
+from rusty_bacnet import BACnetClient, ObjectIdentifier, ObjectType, PropertyIdentifier
+
+
+async def main():
+    async with BACnetClient(transport="ipv6", ipv6_interface="2001:db8::20", port=0,
+                            ipv6_device_instance=4321) as client:
+        vmac = await client.resolve_vmac("[2001:db8::10]:47808")
+        device = ObjectIdentifier(ObjectType.DEVICE, 1234)
+        name = await client.read_property(vmac, device, PropertyIdentifier.OBJECT_NAME)
+        print(vmac, name.value)
+
+
+asyncio.run(main())
+```
+
+Every `address` parameter takes `"bip6:1234"`, `"bip6:0x40ABCD"` or the raw `"00:04:d2"`; a bracketed address raises `ValueError`. When nothing answers within three seconds, `resolve_vmac` raises `BacnetTransportError`. `add_bip6_network_port` registers a read-only IPV6 Network Port object. See <a href={`${repository}/blob/v${release}/docs/python-api.md#bacnetipv6`}>BACnet/IPv6</a> and <a href={`${repository}/blob/v${release}/docs/python-api.md#resolve_vmacaddress---str`}>resolve_vmac</a> in the Python reference.
+
+</TabItem>
+<TabItem label="Rust">
+
+## Use Rust
+
+B/IPv6 needs the `ipv6` feature of `bacnet-transport` (or `bacnet-client`). Build a `Bip6Transport::new(interface, port, device_instance)` and give it to `BACnetClient::generic_builder().transport(..)` or the server's generic builder. Peers are 3-octet VMACs everywhere a MAC goes; `resolve_virtual_address` finds one from an address, and `vmac_from_device_instance` gives an instance's. A transport that can't resolve a VMAC fails the send with a transport error before the transaction timer starts. A server or shared endpoint that registers a B/IPv6 Network Port needs the transport built with `Some(instance)` of the Device it serves, since that instance is the VMAC the port publishes; another instance, or `None` for a random VMAC, fails at start. See <a href={`${repository}/blob/v${release}/docs/rust-api.md#bip6-ipv6`}>BIP6 (IPv6)</a> and <a href={`${repository}/blob/v${release}/docs/rust-api.md#peers-are-named-by-vmac`}>Peers are named by VMAC</a>.
+
+</TabItem>
+</Tabs>
+
+## Register as a foreign device
+
+In Rust, call `register_as_foreign_device` with a `Bip6ForeignDeviceConfig` (the BBMD's address, its port and a TTL) before `start()`, or pass one to `foreign_device(..)` on the B/IPv6 client builder. In Python, give `BACnetClient` or `BACnetServer` with `transport="ipv6"` a `foreign_device=ForeignDevice("[2001:db8::10]:47808", ttl=600)` (an IPv6 port needs the brackets); the client also needs `ipv6_device_instance`. The node needs a configured device instance, since a random VMAC is refused in this mode. With `::`, it picks the source address it would use to reach the BBMD. The BBMD must be an IPv6 unicast host: an unspecified, multicast, link-local, IPv4-mapped or IPv4-compatible address is refused (`ValueError` in Python, and `start()` fails in Rust). A B/IPv6 foreign device renews at half the TTL, but never more often than every 30 seconds, so Python's `renewal=` is B/IP only. A registered Network Port reports BACnet_IPv6_Mode FOREIGN and can move the registration to another BBMD, or change its TTL, at a ReinitializeDevice.
+
+The CLI has no B/IPv6 foreign-device option. The stack is never a B/IPv6 BBMD: requests meant for one are refused with a NAK.
+
+## What is supported
+
+| Surface | B/IPv6 support in v{release} |
+|---|---|
+| CLI | `--ipv6` for device commands and the terminal UI (the BBMD commands are B/IP only); VMAC and bracketed targets; no foreign-device mode |
+| Python | Client and server with `transport="ipv6"`; `resolve_vmac`; `add_bip6_network_port`; foreign-device mode (`foreign_device=`); no shared endpoint |
+| Rust | Standalone client and server; foreign-device mode; registered Network Port; a shared endpoint composed over a `Bip6Transport`, with no endpoint builder |
+| BBMD | None: the stack doesn't act as a B/IPv6 BBMD |
+
+Linux tests on isolated ULA bridges and macOS loopback tests cover multicast intake and unicast and control replies. Windows has compile evidence only. This is bounded transport evidence, not full Annex U conformance or a qualification of your network.
+
+## Next steps
+
+- [Choose a data link](/rusty-bacnet/connect/overview/).
+- [Find devices and address them](/rusty-bacnet/guides/discovery/).
+- [Read the evidence for each transport](/rusty-bacnet/reference/transports/).
+- Read the <a href={`${repository}/blob/v${release}/docs/python-api.md#bacnetipv6`}>Python</a> and <a href={`${repository}/blob/v${release}/docs/rust-api.md#bip6-ipv6`}>Rust</a> contracts.

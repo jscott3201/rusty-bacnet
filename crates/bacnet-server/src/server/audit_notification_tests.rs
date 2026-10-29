@@ -266,17 +266,19 @@ async fn authorized_routed_request_preserves_provenance_and_duplicate_is_silent(
         BACnetRecipient::Device(oid(ObjectType::DEVICE, 999))
     );
 
-    assert!(dispatch(
-        &db,
-        &config,
-        &confirmed_request_tracker,
-        9,
-        &[0x10],
-        context.source_network,
-        bytes
-    )
-    .await
-    .is_err());
+    assert!(
+        dispatch(
+            &db,
+            &config,
+            &confirmed_request_tracker,
+            9,
+            &[0x10],
+            context.source_network,
+            bytes
+        )
+        .await
+        .is_err()
+    );
     assert_eq!(count(&db, sink).await, (1, 1));
     assert_eq!(contexts.lock().unwrap().len(), 1);
 
@@ -536,10 +538,14 @@ fn executed_service_truth_includes_confirmed_and_unconfirmed_receipt() {
     assert!(
         EXECUTED_UNCONFIRMED.contains(&UnconfirmedServiceChoice::UNCONFIRMED_AUDIT_NOTIFICATION)
     );
-    assert!(bacnet_objects::device::EXECUTED_SERVICES
-        .contains(&ServiceSupported::CONFIRMED_AUDIT_NOTIFICATION));
-    assert!(bacnet_objects::device::EXECUTED_SERVICES
-        .contains(&ServiceSupported::UNCONFIRMED_AUDIT_NOTIFICATION));
+    assert!(
+        bacnet_objects::device::EXECUTED_SERVICES
+            .contains(&ServiceSupported::CONFIRMED_AUDIT_NOTIFICATION)
+    );
+    assert!(
+        bacnet_objects::device::EXECUTED_SERVICES
+            .contains(&ServiceSupported::UNCONFIRMED_AUDIT_NOTIFICATION)
+    );
 }
 
 #[test]

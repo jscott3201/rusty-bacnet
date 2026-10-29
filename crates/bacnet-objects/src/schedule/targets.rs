@@ -52,13 +52,14 @@
 //! - Every accepted write counts as a change, even of the value already
 //!   held; sending the current value again is harmless.
 
+use crate::prelude::*;
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetObjectPropertyReference,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 
-use super::{writes, ScheduleObject, ScheduleWrite};
+use super::{ScheduleObject, ScheduleWrite, writes};
 use crate::{common, device_reference};
 
 /// Resource cap on List_Of_Object_Property_References members, the bound
@@ -172,7 +173,7 @@ impl ScheduleObject {
     /// change of the targets owes, then the Present_Value owed out of service,
     /// for a client's write or a change of the targets (`out_of_service.rs`).
     pub(super) fn take_owed_writes(&mut self) -> Vec<ScheduleWrite> {
-        let mut writes = std::mem::take(&mut self.relinquish_owed);
+        let mut writes = core::mem::take(&mut self.relinquish_owed);
         let owed = match self.simulated_write.take() {
             Some(value) => Some(value),
             None if self.out_of_service && self.rewrite_owed => Some(self.present_value.clone()),

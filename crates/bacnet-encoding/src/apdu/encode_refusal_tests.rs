@@ -2,7 +2,7 @@
 //! [`Error::Range`] that names the field and its value (#1777).
 
 use super::*;
-use crate::npdu::{encode_npdu, Npdu, NpduAddress};
+use crate::npdu::{Npdu, NpduAddress, encode_npdu};
 use bacnet_types::MacAddr;
 
 /// The refusal's text, which a range error builds only when displayed.

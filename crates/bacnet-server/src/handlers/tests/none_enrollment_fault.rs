@@ -2,8 +2,8 @@
 //! reliability only (Clause 12.12.7, #1868): when its monitored object
 //! faults it goes TO_FAULT, and that transition is listed by
 //! GetEnrollmentSummary (Table 13-2) and GetEventInformation and takes an
-//! AcknowledgeAlarm (Table 13-10). So does one whose parameters the stack
-//! doesn't model, such as access-event. One that can't fault stays out.
+//! AcknowledgeAlarm (Table 13-10). So does one whose algorithm the server
+//! doesn't run, such as access-event. One that can't fault stays out.
 
 use super::enrollment_summary_support::{request, response};
 use super::*;
@@ -109,13 +109,17 @@ fn a_none_enrollment_that_faults_is_listed_and_acknowledged() {
     fault_listed_and_acknowledged(None, EventType::NONE);
 }
 
-/// access-event [13] is kept as opaque octets and runs no algorithm, but
-/// the enrollment still faults on its monitored object.
+/// access-event [13] is decoded (#2090) but runs no algorithm here, as when
+/// it was kept as opaque octets; the enrollment still faults on its
+/// monitored object.
 #[test]
-fn an_unmodeled_enrollment_that_faults_is_listed_and_acknowledged() {
-    let access_event = BACnetEventParameter::Opaque {
-        tag: 13,
-        data: vec![0x09, 0x00],
+fn an_unevaluated_enrollment_that_faults_is_listed_and_acknowledged() {
+    let access_event = BACnetEventParameter::AccessEvent {
+        list_of_access_events: vec![bacnet_types::enums::AccessEvent::GRANTED],
+        access_event_time_reference: BACnetDeviceObjectPropertyReference::new_local(
+            ObjectIdentifier::new(bacnet_types::enums::ObjectType::ACCESS_POINT, 1).unwrap(),
+            PropertyIdentifier::ACCESS_EVENT_TIME.to_raw(),
+        ),
     };
     fault_listed_and_acknowledged(Some(access_event), EventType::from_raw(13));
 }
@@ -177,10 +181,12 @@ fn a_none_enrollment_that_cant_fault_stays_out() {
     // No monitored reference: nothing to fault on.
     let (db, ee_oid, _) = make_db(false);
     let summary = response(&db, &request()).unwrap();
-    assert!(summary
-        .entries
-        .iter()
-        .all(|e| e.object_identifier != ee_oid));
+    assert!(
+        summary
+            .entries
+            .iter()
+            .all(|e| e.object_identifier != ee_oid)
+    );
 
     // Detection disabled: the handler leaves it out too.
     let (mut db, ee_oid, _) = make_db(true);
@@ -194,8 +200,10 @@ fn a_none_enrollment_that_cant_fault_stays_out() {
         )
         .unwrap();
     let summary = response(&db, &request()).unwrap();
-    assert!(summary
-        .entries
-        .iter()
-        .all(|e| e.object_identifier != ee_oid));
+    assert!(
+        summary
+            .entries
+            .iter()
+            .all(|e| e.object_identifier != ee_oid)
+    );
 }

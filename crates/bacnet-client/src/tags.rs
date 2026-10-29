@@ -38,12 +38,12 @@ pub enum TagsRead {
 pub fn decode_tags_read(array_index: Option<u32>, octets: &[u8]) -> Result<TagsRead, Error> {
     if array_index == Some(0) {
         let (value, end) = decode_application_value(octets, 0)?;
-        if let PropertyValue::Unsigned(size) = value {
-            if end == octets.len() {
-                return u32::try_from(size)
-                    .map(TagsRead::Size)
-                    .map_err(|_| Error::decoding(0, "Tags array size exceeds u32"));
-            }
+        if let PropertyValue::Unsigned(size) = value
+            && end == octets.len()
+        {
+            return u32::try_from(size)
+                .map(TagsRead::Size)
+                .map_err(|_| Error::decoding(0, "Tags array size exceeds u32"));
         }
         return Err(Error::decoding(0, "Tags array size must be one Unsigned"));
     }

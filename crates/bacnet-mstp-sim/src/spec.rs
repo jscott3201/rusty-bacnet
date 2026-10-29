@@ -32,9 +32,33 @@ pub struct AdapterSpec {
     /// Further lateness drawn per deadline, uniformly from zero to this, from
     /// the run's seeded generator, in whole microseconds: the granularity of
     /// a tick-driven timer. Below the core's `late_deadline` (1 ms by
-    /// default) it is not counted late. Without
-    /// any, two masters that start in step can stay in step for ever.
+    /// default) it is not counted late. Without either it or a
+    /// [`Self::timer_tick`], two masters that start in step can stay in
+    /// step for ever.
     pub deadline_jitter: Duration,
+    /// The period of the timer process that services the core's deadlines,
+    /// or zero (the default) for exact timers. Clause 9.5.2 gives
+    /// SilenceTimer a coarse resolution (a nominal 5 ms) and has a
+    /// free-running process advance it out of step with line events, so a
+    /// reading stands for a span of real time up to a tick wide, and a
+    /// plain threshold test on it can pass up to a tick early. The core's
+    /// deadlines are minimums (turnaround, slot timing), so this adapter
+    /// is one that guarantees the minimum: it services each deadline on the
+    /// first tick at or after it, never early and late by anything under
+    /// one tick, depending on where the tick grid falls. The grid runs on
+    /// the node's own clock from a phase drawn from the run's seed and the
+    /// station at each boot, so the lateness varies from one deadline to
+    /// the next and differs between nodes, while the run still replays from
+    /// its seed. A tick of `late_deadline` or more makes the core count
+    /// late deadlines; the simulator then checks that each deadline is
+    /// still serviced inside the tick plus any configured lateness and
+    /// jitter.
+    ///
+    /// Two masters that restart a timeout on the same line event otherwise
+    /// expire it at instants a fixed offset apart, and adjacent masters at
+    /// opposite clock edges can then collide on every Poll For Master
+    /// (#1804). [`Self::NOMINAL_TIMER_TICK`] is the nominal resolution.
+    pub timer_tick: Duration,
 }
 
 /// A buffered serial adapter. This is a deterministic model, not hardware
@@ -97,6 +121,10 @@ impl HostSpec {
 }
 
 impl AdapterSpec {
+    /// SilenceTimer's nominal resolution (Clause 9.5.2), for
+    /// [`Self::timer_tick`].
+    pub const NOMINAL_TIMER_TICK: Duration = Duration::from_millis(5);
+
     /// Whether this adapter is slow: it starts frames late, or services
     /// deadlines late by more than timer jitter.
     #[must_use]
@@ -109,7 +137,20 @@ impl AdapterSpec {
     /// deadline service late.
     #[must_use]
     pub fn may_miss_deadlines(&self, late_deadline: Duration) -> bool {
-        self.deadline_lateness + self.deadline_jitter >= late_deadline
+        self.deadline_lateness + self.deadline_jitter + self.timer_tick >= late_deadline
+    }
+
+    /// A bound this adapter keeps every deadline's lateness under, as a
+    /// core on a clock `clock_ppm` off measures it: under one tick of its
+    /// own clock, plus the lateness and the most jitter, which run on the
+    /// line's clock and so read up to `clock_ppm` longer, plus a nanosecond
+    /// each for the two clock conversions.
+    pub(crate) fn lateness_bound(&self, clock_ppm: i32) -> Duration {
+        const MILLION: u64 = 1_000_000;
+        let line = (self.deadline_lateness + self.deadline_jitter).as_nanos();
+        let rate = MILLION + u64::from(clock_ppm.unsigned_abs());
+        let local = (line * rate).div_ceil(MILLION);
+        self.timer_tick + Duration::from_nanos(local + 2)
     }
 }
 

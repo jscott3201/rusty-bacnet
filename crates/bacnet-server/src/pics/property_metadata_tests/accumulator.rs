@@ -1,8 +1,8 @@
 use super::*;
+use PropertyIdentifier as P;
 use bacnet_objects::accumulator::{AccumulatorObject, PulseConverterObject};
 use bacnet_types::enums::EngineeringUnits;
 use bacnet_types::primitives::PropertyValue;
-use PropertyIdentifier as P;
 
 fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
     // Independent (identifier, optional, writable) rows in declaration order; PICS sorts by property ID.

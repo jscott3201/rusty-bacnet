@@ -4,6 +4,7 @@
 
 use bacnet_types::enums::PropertyIdentifier as P;
 use bacnet_types::enums::{AccessZoneOccupancyState as S, ErrorClass, ErrorCode};
+use bacnet_types::error::RemoteError;
 
 use super::*;
 
@@ -30,7 +31,7 @@ fn set_out_of_service(zone: &mut AccessZoneObject, out_of_service: bool) {
 
 fn assert_property_error(result: Result<(), Error>, expected: ErrorCode) {
     assert!(
-        matches!(result, Err(Error::Protocol { class, code })
+        matches!(result, Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::PROPERTY
                 && code == expected),
         "expected PROPERTY / {expected:?}, got {result:?}"

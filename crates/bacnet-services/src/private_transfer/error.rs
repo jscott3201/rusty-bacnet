@@ -107,7 +107,7 @@ impl TryFrom<&ErrorPdu> for PrivateTransferError {
 
 impl From<PrivateTransferError> for Error {
     fn from(error: PrivateTransferError) -> Self {
-        Error::protocol(
+        Error::with_detail(
             error.error_class,
             error.error_code,
             Some(ErrorDetail::PrivateTransfer {

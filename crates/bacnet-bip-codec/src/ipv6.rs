@@ -74,7 +74,7 @@ mod message;
 pub use address::{Bip6Address, Bip6Vmac};
 pub use error::Bvll6Error;
 pub use function::{Bvlc6Function, Bvlc6ResultCode};
-pub use message::{decode, Bvll6, Bvll6Frame};
+pub use message::{Bvll6, Bvll6Frame, decode};
 
 /// The BVLC Type octet of a B/IPv6 message (Annex U.2).
 pub const BVLC_TYPE_BIP6: u8 = 0x82;

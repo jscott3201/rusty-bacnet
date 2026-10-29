@@ -3,7 +3,7 @@
 use core::fmt;
 use core::net::{Ipv6Addr, SocketAddrV6};
 
-use super::{Bvll6Error, BIP6_ADDRESS_LENGTH, VMAC_LENGTH};
+use super::{BIP6_ADDRESS_LENGTH, Bvll6Error, VMAC_LENGTH};
 
 /// Octets in the IPv6 address at the front of a B/IPv6 address.
 const IPV6_LENGTH: usize = 16;

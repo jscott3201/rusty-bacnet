@@ -2,10 +2,10 @@
 //! does with the octets a port hears while it sends, and when it reports a
 //! frame complete to the core.
 
-use bacnet_mstp_codec::{decode_frame, FrameType};
+use bacnet_mstp_codec::{FrameType, decode_frame};
 use tokio::time::Duration;
 
-use super::test_support::{config, encode, Bus, DrainMode, Port, T_USAGE_TIMEOUT};
+use super::test_support::{Bus, DrainMode, Port, T_USAGE_TIMEOUT, config, encode};
 use super::{Echo, LoopbackSerial, MstpTransport, SerialPort};
 use crate::port::TransportPort;
 

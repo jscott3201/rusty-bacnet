@@ -106,7 +106,7 @@ fn integer_delta(delta: u64, increment: Option<f64>) -> bool {
         None => delta != 0,
         Some(i) if i <= 0.0 => delta != 0,
         Some(i) if i.is_nan() || i >= 18_446_744_073_709_551_616.0 => false,
-        Some(i) => delta >= i.ceil() as u64,
+        Some(i) => delta >= crate::float::ceil(i) as u64,
     }
 }
 

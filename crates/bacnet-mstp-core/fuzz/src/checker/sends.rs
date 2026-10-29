@@ -1,7 +1,7 @@
 //! The station's own frames from hand-over to completion, and what it hands
 //! up.
 
-use bacnet_mstp_codec::{FrameType, BROADCAST_MAC};
+use bacnet_mstp_codec::{BROADCAST_MAC, FrameType};
 use bacnet_mstp_core::RequestId;
 
 use super::{After, Ask, Checker, Custody, Handover, Hold, Owed, Pass, Role};

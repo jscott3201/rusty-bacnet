@@ -5,14 +5,14 @@
 //! compares the whole snapshot, so a drop counted twice, or under another
 //! reason, fails it.
 
-use super::ingress::{receive_failed, AfterReceiveError};
+use super::ingress::{AfterReceiveError, receive_failed};
 use super::rate_limit::MANAGEMENT_RATE_PER_SOURCE_IP;
 use super::receive_counters::ReceiveDrops;
 use super::*;
 use crate::udp_metadata::ReceivedDatagram;
 use crate::warn_throttle::WARNING_INTERVAL;
 use std::io;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 const LOCAL: Ipv4Addr = Ipv4Addr::new(192, 0, 2, 10);
 const SUBNET_BROADCAST: Ipv4Addr = Ipv4Addr::new(192, 0, 2, 255);

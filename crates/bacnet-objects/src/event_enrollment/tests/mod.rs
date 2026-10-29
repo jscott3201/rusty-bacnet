@@ -5,6 +5,7 @@ mod enrollment;
 mod enrollment_summary;
 mod event_type;
 mod fault_parameters;
+mod modelled_parameters;
 mod object_name;
 mod reliability_commit;
 mod reporting_options;

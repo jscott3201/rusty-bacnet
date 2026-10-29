@@ -35,18 +35,20 @@ fn feedback_value_round_trips_and_is_advertised_writable() {
             .unwrap(),
         PropertyValue::Unsigned(2)
     );
-    assert!(mso
-        .property_list()
-        .contains(&PropertyIdentifier::FEEDBACK_VALUE));
+    assert!(
+        mso.property_list()
+            .contains(&PropertyIdentifier::FEEDBACK_VALUE)
+    );
     assert!(mso.is_writable_property(PropertyIdentifier::FEEDBACK_VALUE));
-    assert!(mso
-        .write_property(
+    assert!(
+        mso.write_property(
             PropertyIdentifier::FEEDBACK_VALUE,
             None,
             PropertyValue::Enumerated(2),
             None,
         )
-        .is_err());
+        .is_err()
+    );
 }
 
 /// Clause 12.19 defines an out-of-range Feedback_Value as a reportable condition
@@ -64,15 +66,16 @@ fn feedback_value_outside_the_state_set_is_accepted_unlike_present_value() {
         PropertyValue::Unsigned(7)
     );
 
-    assert!(mso
-        .write_property_from(
+    assert!(
+        mso.write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Unsigned(7),
             None,
             &crate::command_source::test_origin(),
         )
-        .is_err());
+        .is_err()
+    );
 }
 
 /// `feedback_value` initializes to match the initial `Present_Value` so that enabling
@@ -103,14 +106,15 @@ fn oversized_feedback_value_is_rejected_rather_than_wrapped_into_agreement() {
     set_detection_enabled(&mut mso, true);
     write_unsigned(&mut mso, PropertyIdentifier::PRESENT_VALUE, 2);
 
-    assert!(mso
-        .write_property(
+    assert!(
+        mso.write_property(
             PropertyIdentifier::FEEDBACK_VALUE,
             None,
             PropertyValue::Unsigned(0x1_0000_0002),
             None,
         )
-        .is_err());
+        .is_err()
+    );
 
     // The rejected write left the feedback value alone, so Present_Value 2 against the
     // initial feedback of 1 still disagrees and still reports COMMAND_FAILURE.
@@ -209,8 +213,8 @@ fn generic_event_properties_round_trip_and_match_pics() {
     // both fabricate and erase acknowledgments, and it would break the Clause 12.19
     // requirement that the field sit at its initial condition while
     // Event_Detection_Enable is FALSE.
-    assert!(mso
-        .write_property(
+    assert!(
+        mso.write_property(
             PropertyIdentifier::ACKED_TRANSITIONS,
             None,
             PropertyValue::BitString {
@@ -219,7 +223,8 @@ fn generic_event_properties_round_trip_and_match_pics() {
             },
             None,
         )
-        .is_err());
+        .is_err()
+    );
     assert!(!mso.is_writable_property(PropertyIdentifier::ACKED_TRANSITIONS));
 
     for property in [
@@ -232,14 +237,15 @@ fn generic_event_properties_round_trip_and_match_pics() {
         assert!(mso.property_list().contains(&property));
         assert!(mso.is_writable_property(property));
     }
-    assert!(mso
-        .write_property(
+    assert!(
+        mso.write_property(
             PropertyIdentifier::EVENT_STATE,
             None,
             PropertyValue::Enumerated(EventState::NORMAL.to_raw()),
             None,
         )
-        .is_err());
+        .is_err()
+    );
     assert!(!mso.is_writable_property(PropertyIdentifier::EVENT_STATE));
 }
 
@@ -302,8 +308,9 @@ fn detection_enable_is_a_disabled_by_default_invariant() {
             .unwrap(),
         PropertyValue::Boolean(false)
     );
-    assert!(mso
-        .property_list()
-        .contains(&PropertyIdentifier::EVENT_DETECTION_ENABLE));
+    assert!(
+        mso.property_list()
+            .contains(&PropertyIdentifier::EVENT_DETECTION_ENABLE)
+    );
     assert!(mso.is_writable_property(PropertyIdentifier::EVENT_DETECTION_ENABLE));
 }

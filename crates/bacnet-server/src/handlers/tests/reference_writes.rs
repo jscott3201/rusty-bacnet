@@ -16,6 +16,7 @@ use bacnet_types::constructed::{
     BACnetObjectPropertyReference, PropertyReference, ReadAccessSpecification,
 };
 use bacnet_types::enums::EngineeringUnits;
+use bacnet_types::error::RemoteError;
 
 const CVR: PropertyIdentifier = PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE;
 const MVR: PropertyIdentifier = PropertyIdentifier::MANIPULATED_VARIABLE_REFERENCE;
@@ -140,7 +141,7 @@ fn assert_refused(
 ) {
     let before = read_raw(db, oid, property);
     match write_raw(db, oid, property, raw_value).expect_err(context) {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, ErrorClass::PROPERTY, "{context}: wrong error class");
             assert_eq!(code, expected_code, "{context}: wrong error code");
         }
@@ -567,7 +568,7 @@ fn wpm_reference_write_commits_in_order_and_keeps_prefix_on_failure() {
     )
     .unwrap_err();
     match err {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, ErrorClass::PROPERTY);
             assert_eq!(code, ErrorCode::INVALID_DATA_TYPE);
         }
@@ -596,7 +597,7 @@ fn wpm_reference_write_commits_in_order_and_keeps_prefix_on_failure() {
     )
     .unwrap_err();
     assert!(
-        matches!(err, Error::Protocol { class, code }
+        matches!(err, Error::Remote(RemoteError::Error { class, code })
             if class == ErrorClass::PROPERTY
                 && code == ErrorCode::INVALID_DATA_TYPE),
         "{err:?}"

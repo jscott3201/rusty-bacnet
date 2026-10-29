@@ -167,12 +167,11 @@ async fn foreign_mode_refuses_manual_requests_that_could_change_its_registration
     for refusal in refusals {
         let error = refusal.unwrap_err();
         assert!(
-            matches!(error, BvlcExchangeError::Transport(Error::Encoding(_))),
+            matches!(
+                error,
+                BvlcExchangeError::Refused(ExchangeRefusal::ManagedRegistration)
+            ),
             "{error:?}"
-        );
-        assert!(
-            error.to_string().contains("managed automatically"),
-            "{error}"
         );
     }
     let snapshot = transport.bvlc_client_snapshot();
@@ -461,7 +460,9 @@ async fn check_tiny_interval_pacing(busy: bool, local_error: bool) {
     let snapshot = node.snapshot();
     let counters = snapshot.register_foreign_device;
     let attempts = counters.sent + counters.busy + counters.local_errors;
-    eprintln!("tiny interval busy={busy} local_error={local_error}: {attempts} attempts in {elapsed:?}; counters={counters:?}");
+    eprintln!(
+        "tiny interval busy={busy} local_error={local_error}: {attempts} attempts in {elapsed:?}; counters={counters:?}"
+    );
     assert!(attempts > 0, "worker must make progress");
     let limit = elapsed.as_millis() / 100 + 1;
     assert!(

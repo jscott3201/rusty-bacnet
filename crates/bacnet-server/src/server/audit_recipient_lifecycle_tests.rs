@@ -18,16 +18,17 @@ async fn recipient_cancelled_stop_stays_sealed_until_retry_uninstalls() {
             .is_err()
     );
     assert!(db.remove(&oid(ObjectType::DEVICE, 10)).is_err());
-    assert!(db
-        .get_mut(&oid(ObjectType::DEVICE, 10))
-        .unwrap()
-        .write_property(
-            PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT,
-            None,
-            PropertyValue::Null,
-            None
-        )
-        .is_err());
+    assert!(
+        db.get_mut(&oid(ObjectType::DEVICE, 10))
+            .unwrap()
+            .write_property(
+                PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT,
+                None,
+                PropertyValue::Null,
+                None
+            )
+            .is_err()
+    );
     assert_eq!(
         fixture.server.notification_transactions.audit_resources().2,
         62
@@ -42,12 +43,14 @@ async fn recipient_cancelled_stop_stays_sealed_until_retry_uninstalls() {
     fixture.server.stop().await.unwrap();
     fixture.server.stop().await.unwrap();
     assert!(fixture.server.notification_transactions.workers_empty());
-    assert!(database
-        .write()
-        .await
-        .remove(&oid(ObjectType::DEVICE, 10))
-        .unwrap()
-        .is_some());
+    assert!(
+        database
+            .write()
+            .await
+            .remove(&oid(ObjectType::DEVICE, 10))
+            .unwrap()
+            .is_some()
+    );
 }
 
 fn complete(fixture: &Fixture, index: usize, mac: &[u8], success: bool) {
@@ -66,10 +69,12 @@ fn complete(fixture: &Fixture, index: usize, mac: &[u8], success: bool) {
             error_data: Bytes::new(),
         })
     };
-    assert!(fixture
-        .server
-        .notification_transactions
-        .admit_terminal(mac, None, None, &response));
+    assert!(
+        fixture
+            .server
+            .notification_transactions
+            .admit_terminal(mac, None, None, &response)
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -234,18 +239,20 @@ async fn recipient_no_runtime_and_closed_admission_fail_before_commit() {
     .unwrap();
     assert!(result.is_err());
     fixture.server.notification_transactions.close();
-    assert!(fixture
-        .server
-        .write_local(
-            &oid(ObjectType::DEVICE, 10),
-            PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT,
-            None,
-            PropertyValue::ApplicationData(value(&device(21))),
-            None,
-            crate::LocalCommandSource::ServerDevice,
-        )
-        .await
-        .is_err());
+    assert!(
+        fixture
+            .server
+            .write_local(
+                &oid(ObjectType::DEVICE, 10),
+                PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT,
+                None,
+                PropertyValue::ApplicationData(value(&device(21))),
+                None,
+                crate::LocalCommandSource::ServerDevice,
+            )
+            .await
+            .is_err()
+    );
     assert_eq!(
         read_recipient(&fixture).await,
         PropertyValue::ApplicationData(value(&device(20)))

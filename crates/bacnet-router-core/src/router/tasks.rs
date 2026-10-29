@@ -1,9 +1,9 @@
 //! Outputs that wait in the queue, and how each is written when polled.
 
+use super::Storage;
 use super::config::PortConfig;
 use super::counters::bump;
 use super::output::{Cause, Current, Kind, Target};
-use super::Storage;
 use crate::message::{NetworkNumberIs, Networks, RoutingEntries};
 use crate::npdu::{Address, NetworkPriority, Npdu};
 use crate::npdu::{NetworkMessageType, RejectMessageReason, RejectMessageToNetwork};
@@ -175,14 +175,14 @@ fn other_networks<G>(
 }
 
 impl<
-        const P: usize,
-        const R: usize,
-        const H: usize,
-        const D: usize,
-        const N: usize,
-        G: super::GroupClassifier,
-        const B: usize,
-    > Storage<P, R, H, D, N, G, B>
+    const P: usize,
+    const R: usize,
+    const H: usize,
+    const D: usize,
+    const N: usize,
+    G: super::GroupClassifier,
+    const B: usize,
+> Storage<P, R, H, D, N, G, B>
 {
     /// Write the front task's next output into the scratch as the current
     /// one. `false` when no task is left.

@@ -10,7 +10,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 use bytes::BytesMut;
 
-use super::fake_device::{client_with_device, DEVICE_MAC};
+use super::fake_device::{DEVICE_MAC, client_with_device};
 
 fn trend_log() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::TREND_LOG, 1).unwrap()

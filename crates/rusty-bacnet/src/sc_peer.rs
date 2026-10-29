@@ -2,7 +2,8 @@
 
 use bacnet_transport::sc::ScHubPeerInfo;
 use bacnet_transport::sc_tls::{
-    ScCertificateMetadata, ScHandshakeKind, ScPeerCertificate, ScUntrustedPeerInfo,
+    ScCertificateMetadata, ScHandshakeKind, ScPeerCertificate, ScSubjectAltName,
+    ScUntrustedPeerInfo,
 };
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyTuple};
@@ -169,8 +170,64 @@ impl PyScCertificateMetadata {
     fn text_truncated(&self) -> bool {
         self.0.text_truncated()
     }
+    /// The DNS, URI, email and IP Subject Alternative Names, in certificate
+    /// order (#2022). Other name forms are left out.
+    #[getter]
+    fn subject_alt_names<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(
+            py,
+            self.0
+                .subject_alt_names()
+                .iter()
+                .filter(|name| PyScSubjectAltName::kind_of(name).is_some())
+                .map(|name| Py::new(py, PyScSubjectAltName(name.clone())))
+                .collect::<PyResult<Vec<_>>>()?,
+        )
+    }
     fn __repr__(&self) -> &'static str {
         "ScCertificateMetadata(...)"
+    }
+}
+
+/// One Subject Alternative Name exactly as the certificate wrote it: no case
+/// folding, wildcards as written. Compare for equality, never by suffix. Its
+/// repr shows the kind only.
+#[pyclass(name = "ScSubjectAltName", module = "rusty_bacnet", frozen)]
+pub(crate) struct PyScSubjectAltName(ScSubjectAltName);
+
+impl PyScSubjectAltName {
+    fn kind_of(name: &ScSubjectAltName) -> Option<&'static str> {
+        match name {
+            ScSubjectAltName::Dns(_) => Some("dns"),
+            ScSubjectAltName::Uri(_) => Some("uri"),
+            ScSubjectAltName::Email(_) => Some("email"),
+            ScSubjectAltName::Ip(_) => Some("ip"),
+            _ => None,
+        }
+    }
+}
+
+#[pymethods]
+impl PyScSubjectAltName {
+    /// `"dns"`, `"uri"`, `"email"` or `"ip"`.
+    #[getter]
+    fn kind(&self) -> &'static str {
+        Self::kind_of(&self.0).unwrap_or("other")
+    }
+    /// The name: a `str`, or an `ipaddress.IPv4Address` or `IPv6Address`
+    /// for an IP name.
+    #[getter]
+    fn value<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        match &self.0 {
+            ScSubjectAltName::Dns(name)
+            | ScSubjectAltName::Uri(name)
+            | ScSubjectAltName::Email(name) => Ok(name.into_pyobject(py)?.into_any()),
+            ScSubjectAltName::Ip(address) => address.into_pyobject(py),
+            _ => Ok(py.None().into_bound(py)),
+        }
+    }
+    fn __repr__(&self) -> String {
+        format!("ScSubjectAltName(kind='{}')", self.kind())
     }
 }
 
@@ -179,5 +236,6 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyScPeerInfo>()?;
     m.add_class::<PyScPeerCertificate>()?;
     m.add_class::<PyScCertificateMetadata>()?;
+    m.add_class::<PyScSubjectAltName>()?;
     Ok(())
 }

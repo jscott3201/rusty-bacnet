@@ -5,6 +5,7 @@ use bacnet_objects::clock::ClockFrame;
 use bacnet_objects::database::{AuditOwnership, EventSequence};
 use bacnet_objects::device::{AuditRecipientChangeSink, AuditWriteSource};
 use bacnet_types::enums::{ConfirmedServiceChoice, ErrorClass, ErrorCode};
+use bacnet_types::error::RemoteError;
 use std::collections::HashMap;
 use std::net::SocketAddrV4;
 
@@ -106,10 +107,7 @@ impl SourceRoutes {
     }
 }
 fn denied() -> Error {
-    Error::Protocol {
-        class: ErrorClass::SERVICES,
-        code: ErrorCode::SERVICE_REQUEST_DENIED,
-    }
+    Error::protocol(ErrorClass::SERVICES, ErrorCode::SERVICE_REQUEST_DENIED)
 }
 
 pub(crate) struct SourceRecipient {
@@ -136,9 +134,11 @@ impl SourceRecipient {
                 // A MAC past BACnetAddress::MAX_MAC_LEN does not encode; the
                 // Device refuses it the same way when a write carries one.
                 bacnet_encoding::constructed::encode_recipient(&mut bytes, &recipient).map_err(
-                    |_| Error::Protocol {
-                        class: ErrorClass::PROPERTY,
-                        code: ErrorCode::INVALID_DATA_ENCODING,
+                    |_| {
+                        Error::Remote(RemoteError::Error {
+                            class: ErrorClass::PROPERTY,
+                            code: ErrorCode::INVALID_DATA_ENCODING,
+                        })
                     },
                 )?;
                 PropertyValue::ApplicationData(bytes.to_vec())
@@ -174,10 +174,13 @@ impl SourceRecipient {
     }
 
     pub(crate) fn seal(&self) {
-        if let Some(notifications) = self.notifications.upgrade() {
-            notifications.seal_audit_owner(&self.owner);
-        } else {
-            self.owner.seal();
+        match self.notifications.upgrade() {
+            Some(notifications) => {
+                notifications.seal_audit_owner(&self.owner);
+            }
+            _ => {
+                self.owner.seal();
+            }
         }
     }
     pub(crate) fn uninstall(self: &Arc<Self>, db: &mut ObjectDatabase) {

@@ -1,6 +1,6 @@
 //! Shared transport preparation for concrete and transport-erased clients.
 use super::*;
-use bacnet_transport::{any::AnyTransport, mstp::SerialPort};
+use bacnet_transport::any::AnyTransport;
 
 impl BipClientBuilder {
     fn prepare(self) -> Result<(ClientConfig, BipTransport, ClientOptions), Error> {
@@ -26,22 +26,30 @@ impl BipClientBuilder {
 
     /// Build and start a configured B/IP client with a transport-erased type.
     ///
-    /// Uses the same settings and validation as [`Self::build`]. Choose
-    /// [`NoSerial`](bacnet_transport::mstp::NoSerial) when MS/TP is not needed;
-    /// no serial-port value is constructed or required.
+    /// Uses the same settings and validation as [`Self::build`], and returns
+    /// a [`BACnetClient`] over its default transport type, [`AnyTransport`].
     ///
     /// ```no_run
     /// use bacnet_client::client::BACnetClient;
-    /// use bacnet_transport::{any::AnyTransport, mstp::NoSerial};
     /// # async fn example() -> Result<(), bacnet_types::error::Error> {
-    /// let mut client: BACnetClient<AnyTransport<NoSerial>> = BACnetClient::bip_builder()
+    /// let mut client: BACnetClient = BACnetClient::bip_builder()
     ///     .port(0)
     ///     .apdu_retries(2)
-    ///     .build_any::<NoSerial>().await?;
+    ///     .build_any().await?;
     /// client.stop().await?;
     /// # Ok(()) }
     /// ```
-    pub async fn build_any<S: SerialPort>(self) -> Result<BACnetClient<AnyTransport<S>>, Error> {
+    pub async fn build_any(self) -> Result<BACnetClient<AnyTransport>, Error> {
+        self.build_into().await
+    }
+
+    /// Build and start a configured B/IP client over any transport type a
+    /// [`BipTransport`] converts into, such as an application's own enum of
+    /// transports (#2071). [`Self::build_any`] is this with [`AnyTransport`].
+    pub async fn build_into<T>(self) -> Result<BACnetClient<T>, Error>
+    where
+        T: TransportPort + From<BipTransport> + 'static,
+    {
         Box::pin(async move {
             let (config, transport, options) = self.prepare()?;
             Box::pin(BACnetClient::start_with_options(
@@ -58,7 +66,11 @@ impl BipClientBuilder {
 #[cfg(feature = "ipv6")]
 impl Bip6ClientBuilder {
     fn prepare(self) -> (ClientConfig, Bip6Transport, ClientOptions) {
-        let transport = Bip6Transport::new(self.interface, self.config.port, self.device_instance);
+        let mut transport =
+            Bip6Transport::new(self.interface, self.config.port, self.device_instance);
+        if let Some(foreign) = self.foreign_device {
+            transport.register_as_foreign_device(foreign);
+        }
         (self.config, transport, self.options)
     }
 
@@ -74,19 +86,28 @@ impl Bip6ClientBuilder {
     /// Build and start a configured B/IPv6 client with a transport-erased type.
     ///
     /// Uses the same interface, device identity and client options as
-    /// [`Self::build`]. No serial-port value is required.
+    /// [`Self::build`], over the default transport type, [`AnyTransport`].
     ///
     /// ```no_run
     /// use bacnet_client::client::BACnetClient;
-    /// use bacnet_transport::{any::AnyTransport, mstp::NoSerial};
     /// # async fn example() -> Result<(), bacnet_types::error::Error> {
-    /// let mut client: BACnetClient<AnyTransport<NoSerial>> = BACnetClient::bip6_builder()
+    /// let mut client: BACnetClient = BACnetClient::bip6_builder()
     ///     .device_instance(123)
-    ///     .build_any::<NoSerial>().await?;
+    ///     .build_any().await?;
     /// client.stop().await?;
     /// # Ok(()) }
     /// ```
-    pub async fn build_any<S: SerialPort>(self) -> Result<BACnetClient<AnyTransport<S>>, Error> {
+    pub async fn build_any(self) -> Result<BACnetClient<AnyTransport>, Error> {
+        self.build_into().await
+    }
+
+    /// Build and start a configured B/IPv6 client over any transport type a
+    /// [`Bip6Transport`] converts into (#2071). [`Self::build_any`] is this
+    /// with [`AnyTransport`].
+    pub async fn build_into<T>(self) -> Result<BACnetClient<T>, Error>
+    where
+        T: TransportPort + From<Bip6Transport> + 'static,
+    {
         Box::pin(async move {
             let (config, transport, options) = self.prepare();
             Box::pin(BACnetClient::start_with_options(
@@ -333,24 +354,35 @@ impl ScClientBuilder {
     /// Shares [`Self::build`]'s validation, TLS policy, identity, heartbeat and
     /// optional reconnect configuration. Identity, NPDU admission, reconnect and client options
     /// are checked before dialing; heartbeat timing is checked when the transport
-    /// starts. No serial-port value is required.
+    /// starts. The client's type is the default, over [`AnyTransport`].
     ///
     /// ```no_run
     /// use bacnet_client::client::BACnetClient;
-    /// use bacnet_transport::{any::AnyTransport, mstp::NoSerial, sc::ScReconnectConfig};
+    /// use bacnet_transport::sc::ScReconnectConfig;
     /// use bacnet_transport::sc_tls::ScNodeTlsConfig;
-    /// async fn connect(tls: ScNodeTlsConfig) -> Result<BACnetClient<AnyTransport<NoSerial>>,
-    ///     bacnet_types::error::Error> {
+    /// async fn connect(tls: ScNodeTlsConfig) -> Result<BACnetClient, bacnet_types::error::Error> {
     ///     BACnetClient::sc_builder()
     ///         .hub_url("wss://hub.example.com/bacnet")
     ///         .tls_config(tls)
     ///         .vmac([2, 0, 0, 0, 0, 1])
     ///         .device_uuid([0x42; 16])
     ///         .reconnect(ScReconnectConfig::default())
-    ///         .build_any::<NoSerial>().await
+    ///         .build_any().await
     /// }
     /// ```
-    pub async fn build_any<S: SerialPort>(self) -> Result<BACnetClient<AnyTransport<S>>, Error> {
+    pub async fn build_any(self) -> Result<BACnetClient<AnyTransport>, Error> {
+        self.build_into().await
+    }
+
+    /// Connect to the hub and start a BACnet/SC client over any transport
+    /// type an [`ScTransport`](bacnet_transport::sc::ScTransport) converts
+    /// into (#2071). [`Self::build_any`] is this with [`AnyTransport`].
+    pub async fn build_into<T>(self) -> Result<BACnetClient<T>, Error>
+    where
+        T: TransportPort
+            + From<bacnet_transport::sc::ScTransport<bacnet_transport::sc_tls::TlsWebSocket>>
+            + 'static,
+    {
         Box::pin(async move {
             let (config, transport, options) = Box::pin(self.prepare()).await?;
             Box::pin(BACnetClient::start_with_options(
@@ -374,7 +406,7 @@ impl ScClientBuilder {
     ///
     /// ```no_run
     /// use bacnet_client::client::BACnetClient;
-    /// use bacnet_transport::{mstp::NoSerial, sc::ScEvent};
+    /// use bacnet_transport::sc::ScEvent;
     /// use bacnet_transport::sc_tls::ScNodeTlsConfig;
     ///
     /// async fn first_event(tls: ScNodeTlsConfig) -> Result<(), bacnet_types::error::Error> {
@@ -383,22 +415,41 @@ impl ScClientBuilder {
     ///         .tls_config(tls)
     ///         .vmac([0x02, 0, 0, 0, 0, 0x01])
     ///         .device_uuid([0x42; 16])
-    ///         .build_any_with_events::<NoSerial>()
+    ///         .build_any_with_events()
     ///         .await?;
     ///     assert!(matches!(events.recv().await, Ok(ScEvent::Connected { .. })));
     ///     drop(client);
     ///     Ok(())
     /// }
     /// ```
-    pub async fn build_any_with_events<S: SerialPort>(
+    pub async fn build_any_with_events(
         self,
     ) -> Result<
         (
-            BACnetClient<AnyTransport<S>>,
+            BACnetClient<AnyTransport>,
             tokio::sync::broadcast::Receiver<bacnet_transport::sc::ScEvent>,
         ),
         Error,
     > {
+        self.build_into_with_events().await
+    }
+
+    /// [`Self::build_into`], also returning the hub-connector event receiver
+    /// that [`Self::build_any_with_events`] returns (#2071).
+    pub async fn build_into_with_events<T>(
+        self,
+    ) -> Result<
+        (
+            BACnetClient<T>,
+            tokio::sync::broadcast::Receiver<bacnet_transport::sc::ScEvent>,
+        ),
+        Error,
+    >
+    where
+        T: TransportPort
+            + From<bacnet_transport::sc::ScTransport<bacnet_transport::sc_tls::TlsWebSocket>>
+            + 'static,
+    {
         Box::pin(async move {
             let (config, transport, options, events) = Box::pin(self.prepare_subscribed()).await?;
             let client = Box::pin(BACnetClient::start_with_options(

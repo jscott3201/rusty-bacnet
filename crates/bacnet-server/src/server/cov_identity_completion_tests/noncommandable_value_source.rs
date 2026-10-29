@@ -6,6 +6,7 @@ use bacnet_objects::{
     present_value_access::PresentValueAccess, traits::BACnetObject,
 };
 use bacnet_types::enums::EngineeringUnits;
+use bacnet_types::error::RemoteError;
 
 const FIELDS: [PropertyIdentifier; 3] = [
     PropertyIdentifier::PRESENT_VALUE,
@@ -364,7 +365,7 @@ fn value_source_cov_noncommandable_admission_requires_tracking() {
                         assert_eq!(table.len(), 1);
                     } else {
                         assert!(
-                            matches!(result.unwrap_err(), Error::Protocol { class, code }
+                            matches!(result.unwrap_err(), Error::Remote(RemoteError::Error { class, code })
                             | Error::Structured { class, code, .. }
                             if class == ErrorClass::PROPERTY
                                 && code == ErrorCode::UNKNOWN_PROPERTY)

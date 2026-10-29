@@ -1,7 +1,7 @@
 //! Hub-owned tasks. Only the supervisor polls joins; weak spawners cannot
 //! keep the task set alive through the futures it owns.
 
-use std::future::{poll_fn, Future};
+use std::future::{Future, poll_fn};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::task::{Poll, Waker};
@@ -20,6 +20,9 @@ pub(super) struct Tasks {
     outcome: Arc<Mutex<Option<ScHubShutdownOutcome>>>,
     #[cfg(test)]
     pub(super) probe_scans: Arc<std::sync::atomic::AtomicU64>,
+    /// Scans whose sweep has finished (test-only barrier, after `probe_scans`).
+    #[cfg(test)]
+    pub(super) probe_sweeps: Arc<std::sync::atomic::AtomicU64>,
     pub(super) timing: super::timing::HubTiming,
     pub(super) broadcast: Arc<super::broadcast_rate::HubBudget>,
 }
@@ -50,6 +53,8 @@ impl Tasks {
             outcome: Arc::new(Mutex::new(None)),
             #[cfg(test)]
             probe_scans: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            #[cfg(test)]
+            probe_sweeps: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             timing: super::timing::HubTiming::new(super::ScHubProbePolicy::default()),
             broadcast: Arc::new(super::broadcast_rate::HubBudget::default()),
         }
@@ -146,7 +151,13 @@ impl Tasks {
                     state.empty_waiter = Some(cx.waker().clone());
                     Poll::Pending
                 }
-                Poll::Ready(Some(_)) => Poll::Ready(()),
+                Poll::Ready(Some(result)) => {
+                    // A panic payload can run arbitrary Drop code. Release the
+                    // task-set lock before dropping it, as before the edition migration.
+                    drop(state);
+                    drop(result);
+                    Poll::Ready(())
+                }
                 Poll::Pending => Poll::Pending,
             }
         })
@@ -223,5 +234,36 @@ impl Drop for AbortOnExit {
     fn drop(&mut self) {
         self.0.request_shutdown();
         self.0.state.lock().unwrap().set.abort_all();
+    }
+}
+
+#[cfg(test)]
+mod edition_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn reap_drops_panic_payload_after_releasing_task_set_lock() {
+        struct PanicPayload {
+            state: Arc<Mutex<State>>,
+            dropped_unlocked: Arc<AtomicBool>,
+        }
+        impl Drop for PanicPayload {
+            fn drop(&mut self) {
+                self.dropped_unlocked
+                    .store(self.state.try_lock().is_ok(), Ordering::Release);
+            }
+        }
+
+        let tasks = Tasks::new();
+        let dropped_unlocked = Arc::new(AtomicBool::new(false));
+        let payload = PanicPayload {
+            state: Arc::clone(&tasks.state),
+            dropped_unlocked: Arc::clone(&dropped_unlocked),
+        };
+        assert!(tasks.spawner().spawn(async move {
+            std::panic::panic_any(payload);
+        }));
+        tasks.reap().await;
+        assert!(dropped_unlocked.load(Ordering::Acquire));
     }
 }

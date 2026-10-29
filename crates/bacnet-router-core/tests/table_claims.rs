@@ -10,8 +10,8 @@ use bacnet_router_core::table::{Convergence, Learned, Reachability, RejectEffect
 use bacnet_router_core::table::{LearnRefusal, Timing};
 use bacnet_router_core::{Instant, PortId};
 use support::{
-    claim_counts, expire_pending, hardened, learned_hardened as learned_table, mac, port, purge,
-    secs, Hosted, BASE, CORROBORATION_WINDOW, HOLD_DOWN, NANO, TIMING,
+    BASE, CORROBORATION_WINDOW, HOLD_DOWN, Hosted, NANO, TIMING, claim_counts, expire_pending,
+    hardened, learned_hardened as learned_table, mac, port, purge, secs,
 };
 
 fn claim(table: &mut Hosted, port: u8, now: Instant) -> bool {
@@ -227,12 +227,16 @@ fn cleanup_never_leaves_pending_without_a_learned_route() {
         assert_eq!(table.pending_count(), 0, "{cleanup}");
         assert_eq!(table.claim_counters().pending_expired, 0, "{cleanup}");
         table.add_learned(4000, port(0), Mac::EMPTY, now);
-        assert!(table
-            .apply_claim(4000, port(0), Mac::EMPTY, now, &TIMING)
-            .applied());
-        assert!(!table
-            .apply_claim(4000, port(1), Mac::EMPTY, now, &TIMING)
-            .applied());
+        assert!(
+            table
+                .apply_claim(4000, port(0), Mac::EMPTY, now, &TIMING)
+                .applied()
+        );
+        assert!(
+            !table
+                .apply_claim(4000, port(1), Mac::EMPTY, now, &TIMING)
+                .applied()
+        );
         assert_eq!(table.pending_count(), 1);
     }
 }
@@ -244,9 +248,11 @@ fn pending_store_is_bounded_and_networks_are_independent() {
     for net in 1..=256u16 {
         table.add_learned(net, port(0), Mac::EMPTY, now);
         for challenger in 1..=10 {
-            assert!(!table
-                .apply_claim(net, port(challenger), Mac::EMPTY, now, &TIMING)
-                .applied());
+            assert!(
+                !table
+                    .apply_claim(net, port(challenger), Mac::EMPTY, now, &TIMING)
+                    .applied()
+            );
             assert_eq!(table.pending_count(), usize::from(net));
             let learned = table
                 .routes()
@@ -256,9 +262,11 @@ fn pending_store_is_bounded_and_networks_are_independent() {
         }
     }
     for net in 1..=256u16 {
-        assert!(table
-            .apply_claim(net, port(10), Mac::EMPTY, now, &TIMING)
-            .applied());
+        assert!(
+            table
+                .apply_claim(net, port(10), Mac::EMPTY, now, &TIMING)
+                .applied()
+        );
         assert_eq!(table.pending_count(), 256 - usize::from(net));
     }
     assert_eq!(
@@ -319,9 +327,11 @@ fn standard_converges_on_single_claim_under_sustained_traffic() {
 fn hardened_holds_then_reaps_then_recovers() {
     let mut table = hardened();
     table.add_learned(3000, port(0), mac(&[1]), BASE);
-    assert!(!table
-        .apply_claim(3000, port(1), mac(&[2]), BASE, &TIMING)
-        .applied());
+    assert!(
+        !table
+            .apply_claim(3000, port(1), mac(&[2]), BASE, &TIMING)
+            .applied()
+    );
     assert_eq!(table.lookup(3000).unwrap().port(), port(0));
     assert_eq!(table.pending_count(), 1);
     // The sweep clears the slot so a single-shot advertiser does not linger:
@@ -331,12 +341,16 @@ fn hardened_holds_then_reaps_then_recovers() {
     assert_eq!(table.pending_count(), 0);
     assert_eq!(table.claim_counters().pending_expired, 1);
     // A fresh challenger pends again, and an immediate repeat corroborates.
-    assert!(!table
-        .apply_claim(3000, port(1), mac(&[2]), BASE + secs(62), &TIMING)
-        .applied());
-    assert!(table
-        .apply_claim(3000, port(1), mac(&[2]), BASE + secs(63), &TIMING)
-        .applied());
+    assert!(
+        !table
+            .apply_claim(3000, port(1), mac(&[2]), BASE + secs(62), &TIMING)
+            .applied()
+    );
+    assert!(
+        table
+            .apply_claim(3000, port(1), mac(&[2]), BASE + secs(63), &TIMING)
+            .applied()
+    );
     assert_eq!(table.lookup(3000).unwrap().port(), port(1));
     assert_eq!(table.claim_counters().corroborated_applied, 1);
 }
@@ -348,15 +362,17 @@ fn hardened_alternation_never_converges_robustness_only() {
     let mut table = hardened();
     table.add_learned(3000, port(0), mac(&[1]), BASE);
     for i in 0..10u64 {
-        assert!(!table
-            .apply_claim(
-                3000,
-                port(1 + (i % 2) as u8),
-                mac(&[2]),
-                BASE + secs(i),
-                &TIMING
-            )
-            .applied());
+        assert!(
+            !table
+                .apply_claim(
+                    3000,
+                    port(1 + (i % 2) as u8),
+                    mac(&[2]),
+                    BASE + secs(i),
+                    &TIMING
+                )
+                .applied()
+        );
         assert_eq!(table.lookup(3000).unwrap().port(), port(0));
     }
     assert_eq!(table.pending_count(), 1);

@@ -5,16 +5,16 @@
 //! Each pane is as wide as its content where both fit (#1893), and a pane
 //! too short for its rows ends with `+N more`. The keys are in the footer.
 
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Padding, Paragraph, Wrap};
-use ratatui::Frame;
 
-use super::{centered, more, text_width, Theme};
-use crate::tui::app::mstp::{
-    JoinDialog, JoinOrigin, Lateness, LatenessMax, MstpState, LATENESS_BANDS,
-};
+use super::{Theme, centered, more, text_width};
 use crate::tui::app::App;
+use crate::tui::app::mstp::{
+    JoinDialog, JoinOrigin, LATENESS_BANDS, Lateness, LatenessMax, MstpState,
+};
 
 /// The MS/TP screen.
 pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {

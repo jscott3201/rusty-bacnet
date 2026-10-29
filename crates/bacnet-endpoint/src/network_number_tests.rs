@@ -37,11 +37,11 @@ impl TransportPort for ObservedBip {
         Ok(self.input_override.take().unwrap_or(real))
     }
     async fn stop(&mut self) -> Result<(), Error> {
-        if let Some(gates) = &self.gates {
-            if gates.hold_stop.load(Ordering::SeqCst) {
-                gates.stop_entered.notify_one();
-                gates.stop_release.acquire().await.unwrap().forget();
-            }
+        if let Some(gates) = &self.gates
+            && gates.hold_stop.load(Ordering::SeqCst)
+        {
+            gates.stop_entered.notify_one();
+            gates.stop_release.acquire().await.unwrap().forget();
         }
         self.bip.stop().await?;
         if let Some(gates) = &self.gates {
@@ -66,11 +66,11 @@ impl TransportPort for ObservedBip {
         self.bip.send_unicast(mac, npdu).await
     }
     async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        if let Some(gates) = &self.gates {
-            if gates.hold_send.load(Ordering::SeqCst) {
-                gates.send_entered.notify_one();
-                gates.send_release.acquire().await.unwrap().forget();
-            }
+        if let Some(gates) = &self.gates
+            && gates.hold_send.load(Ordering::SeqCst)
+        {
+            gates.send_entered.notify_one();
+            gates.send_release.acquire().await.unwrap().forget();
         }
         self.bip.send_broadcast(npdu).await?;
         self.sent
@@ -218,13 +218,15 @@ async fn network_number_full_server_answers_configured_local_what_is() {
                 .num_alive_tasks(),
             0
         );
-        assert!(fixture
-            .database()
-            .write()
-            .await
-            .remove(&selected())
-            .unwrap()
-            .is_some());
+        assert!(
+            fixture
+                .database()
+                .write()
+                .await
+                .remove(&selected())
+                .unwrap()
+                .is_some()
+        );
         UdpSocket::bind((Ipv4Addr::UNSPECIFIED, fixture.address.port()))
             .await
             .map(drop)
@@ -244,13 +246,15 @@ async fn network_number_endpoint_answers_configured_local_what_is() {
                 .num_alive_tasks(),
             0
         );
-        assert!(fixture
-            .database()
-            .write()
-            .await
-            .remove(&selected())
-            .unwrap()
-            .is_some());
+        assert!(
+            fixture
+                .database()
+                .write()
+                .await
+                .remove(&selected())
+                .unwrap()
+                .is_some()
+        );
         UdpSocket::bind((Ipv4Addr::UNSPECIFIED, fixture.address.port()))
             .await
             .map(drop)
@@ -286,7 +290,7 @@ impl Fixture {
     }
     async fn read_pair(&self, number: u16, quality: u32) {
         use bacnet_encoding::{
-            apdu::{decode_apdu, Apdu},
+            apdu::{Apdu, decode_apdu},
             primitives::decode_application_value,
         };
         use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
@@ -380,13 +384,14 @@ async fn network_number_real_owners_learn_precedence_and_refuse_invalid_controls
         f.query(1, 0).await;
         f.quiet().await;
         f.stop().await;
-        assert!(f
-            .database()
-            .write()
-            .await
-            .remove(&selected())
-            .unwrap()
-            .is_some());
+        assert!(
+            f.database()
+                .write()
+                .await
+                .remove(&selected())
+                .unwrap()
+                .is_some()
+        );
         let mut restarted = Fixture::start(full, true, 0).await;
         restarted.read_pair(0, 0).await;
         restarted.send(0x0a, &[1, 0x80, 0x12]).await;
@@ -497,9 +502,11 @@ async fn network_number_held_database_cancels_control_before_endpoint_settlement
         } else {
             // Endpoint stop now waits for the database's durable settlement,
             // but first aborts and joins the queued Number control task.
-            assert!(tokio::time::timeout(Duration::from_millis(20), f.stop())
-                .await
-                .is_err());
+            assert!(
+                tokio::time::timeout(Duration::from_millis(20), f.stop())
+                    .await
+                    .is_err()
+            );
             let Owner::Endpoint(endpoint) = &f.owner else {
                 unreachable!()
             };

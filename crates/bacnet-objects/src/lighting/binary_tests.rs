@@ -1,5 +1,6 @@
 use super::*;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::error::RemoteError;
 
 fn write(object: &mut BinaryLightingOutputObject, value: PropertyValue, priority: u8) {
     object
@@ -47,7 +48,7 @@ fn slot(object: &BinaryLightingOutputObject, priority: u32) -> PropertyValue {
 
 fn assert_property_error(error: Error, expected: ErrorCode) {
     match error {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, ErrorClass::PROPERTY);
             assert_eq!(code, expected);
         }
@@ -548,15 +549,17 @@ fn fractional_and_large_elapsed_values_are_safe() {
 fn rejected_command_preserves_operation_remaining_time_and_blink_observation() {
     let mut object = armed_warn_off(5);
     assert!(!object.advance_time_internal(Duration::from_millis(1_500)));
-    assert!(object
-        .write_property_from(
-            PropertyIdentifier::PRESENT_VALUE,
-            None,
-            PropertyValue::Unsigned(ON as u64),
-            Some(4),
-            &crate::command_source::test_origin()
-        )
-        .is_err());
+    assert!(
+        object
+            .write_property_from(
+                PropertyIdentifier::PRESENT_VALUE,
+                None,
+                PropertyValue::Unsigned(ON as u64),
+                Some(4),
+                &crate::command_source::test_origin()
+            )
+            .is_err()
+    );
     assert_eq!(slot(&object, 4), PropertyValue::Null);
     assert_eq!(object.lighting_blink_count_internal(), 1);
     assert_eq!(slot(&object, 8), PropertyValue::Enumerated(ON));

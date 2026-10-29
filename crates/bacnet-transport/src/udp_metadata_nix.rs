@@ -7,7 +7,7 @@ use std::io::IoSliceMut;
 use std::os::fd::AsRawFd;
 
 use nix::sys::socket::{
-    recvmsg, setsockopt, sockopt, ControlMessageOwned, MsgFlags, SockaddrStorage,
+    ControlMessageOwned, MsgFlags, SockaddrStorage, recvmsg, setsockopt, sockopt,
 };
 
 use super::*;

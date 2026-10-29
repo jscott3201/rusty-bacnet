@@ -3,8 +3,8 @@ use crate::layer::ReceivedNetworkControl;
 use bacnet_npdu::NetworkMessageType;
 use bacnet_router_core::message::NetworkNumberIs;
 use bacnet_types::network_number::NetworkNumber;
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, Ordering};
 
 /// A validated local control, independent of transport and configured authority.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,7 +22,11 @@ pub enum NumberControl {
 impl NumberControl {
     /// Refuse routed, malformed or ineligible controls without changing state.
     pub fn parse(control: &ReceivedNetworkControl) -> Option<Self> {
-        let npdu = &control.npdu;
+        Self::parse_npdu(&control.npdu, control.link_layer_group)
+    }
+
+    /// Parse a decoded NPDU with its actual logical link delivery kind.
+    pub fn parse_npdu(npdu: &bacnet_encoding::npdu::Npdu, link_layer_group: bool) -> Option<Self> {
         if !npdu.is_network_message() || npdu.source.is_some() || npdu.destination.is_some() {
             return None;
         }
@@ -32,7 +36,7 @@ impl NumberControl {
             {
                 Some(Self::WhatIs)
             }
-            Some(t) if t == NetworkMessageType::NETWORK_NUMBER_IS && control.link_layer_group => {
+            Some(t) if t == NetworkMessageType::NETWORK_NUMBER_IS && link_layer_group => {
                 // The router core's view, the one reader of this payload
                 // (#1818): it refuses any length but three octets.
                 let NetworkNumberIs { network, flag } =

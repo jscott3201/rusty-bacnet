@@ -158,10 +158,10 @@ async fn refused_requests_record_nothing() {
         (
             "handler refusal",
             || {
-                Err(Error::Protocol {
-                    class: ErrorClass::DEVICE,
-                    code: ErrorCode::CONFIGURATION_IN_PROGRESS,
-                })
+                Err(Error::protocol(
+                    ErrorClass::DEVICE,
+                    ErrorCode::CONFIGURATION_IN_PROGRESS,
+                ))
             },
             Some("required"),
         ),

@@ -1,13 +1,14 @@
-//! Hub-relayed requests carry no principal (#524): the hub authenticated its
-//! own TLS clients, and the origin's certificate never reaches the server.
-use super::support::{run, Certificates, PEERS};
+//! Hub-relayed requests carry no principal (#524) and no certificate
+//! (#1965): the hub authenticated its own TLS clients, and the origin's
+//! certificate never reaches the server.
+use super::support::{Certificates, PEERS, run};
 use crate::mutation::MutationAuthorizationContext;
 use crate::server::*;
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_transport::port::{ScPrincipal, TransportProvenance};
 use std::sync::Mutex as StdMutex;
 
-type Seen = Arc<StdMutex<Vec<(Option<ScPrincipal>, TransportProvenance)>>>;
+type Seen = Arc<StdMutex<Vec<(Option<ScPrincipal>, TransportProvenance, bool)>>>;
 
 fn description_write(text: &str) -> Bytes {
     let mut value = BytesMut::new();
@@ -35,10 +36,12 @@ async fn sc_hub_relayed_mutation_has_no_principal() {
         // Writes only from a verified direct peer: nothing through a hub.
         let policy =
             crate::FnPolicy::new().mutation(move |context: &MutationAuthorizationContext| {
-                record
-                    .lock()
-                    .unwrap()
-                    .push((context.principal(), context.provenance));
+                record.lock().unwrap().push((
+                    context.principal(),
+                    context.provenance.clone(),
+                    context.certificate().is_some()
+                        || context.forwarding_peer_certificate().is_some(),
+                ));
                 context.principal().is_some()
             });
         f.start(&certs, BACnetServer::sc_builder().policy(policy))
@@ -74,8 +77,9 @@ async fn sc_hub_relayed_mutation_has_no_principal() {
         assert_eq!(description(f).await, before);
         let seen = seen.lock().unwrap().clone();
         assert_eq!(seen.len(), PEERS.len());
-        for (principal, provenance) in seen {
+        for (principal, provenance, certificate) in seen {
             assert_eq!(principal, None);
+            assert!(!certificate, "a hub-relayed request has no certificate");
             assert!(!provenance.is_direct_peer());
             assert_eq!(provenance.direct_sc_identity(), None);
         }

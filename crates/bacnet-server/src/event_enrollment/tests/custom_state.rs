@@ -1,5 +1,5 @@
 use super::super::*;
-use super::integration::{indexed_reference_value, reference_value, ReferenceValueObject};
+use super::integration::{ReferenceValueObject, indexed_reference_value, reference_value};
 use bacnet_objects::analog::{AnalogInputObject, AnalogValueObject};
 use bacnet_objects::binary::BinaryValueObject;
 use bacnet_objects::traits::BACnetObject;
@@ -7,8 +7,8 @@ use bacnet_types::constructed::{
     BACnetEventParameter, BACnetPropertyStates, ChangeOfValueCriteria,
 };
 use bacnet_types::enums::EngineeringUnits;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 #[test]
 fn unreadable_parameters_cancel_pending_countdown() {
@@ -41,13 +41,14 @@ fn unreadable_parameters_cancel_pending_countdown() {
 
     parameters_readable.store(false, Ordering::SeqCst);
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
-    assert!(db
-        .get(&enrollment_oid)
-        .unwrap()
-        .enrollment_eval_state_internal()
-        .unwrap()
-        .pending
-        .is_none());
+    assert!(
+        db.get(&enrollment_oid)
+            .unwrap()
+            .enrollment_eval_state_internal()
+            .unwrap()
+            .pending
+            .is_none()
+    );
 
     parameters_readable.store(true, Ordering::SeqCst);
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
@@ -588,13 +589,15 @@ fn mutation_then_error_is_visible_but_never_reports_a_transition() {
 
     let report = evaluate_event_enrollments_report(&mut db, 1);
     assert!(report.transitions.is_empty());
-    assert!(report
-        .diagnostics
-        .contains(&EventEnrollmentEvaluationDiagnostic {
-            enrollment_oid,
-            stage: EventEnrollmentEvaluationStage::EventTransition,
-            outcome: EventEnrollmentEvaluationOutcome::LandedAfterError,
-        }));
+    assert!(
+        report
+            .diagnostics
+            .contains(&EventEnrollmentEvaluationDiagnostic {
+                enrollment_oid,
+                stage: EventEnrollmentEvaluationStage::EventTransition,
+                outcome: EventEnrollmentEvaluationOutcome::LandedAfterError,
+            })
+    );
     assert!(db.enrollment_eval_state_invalidated(&enrollment_oid));
     assert_eq!(db.reserve_event_sequence_number().number(), 0);
     assert_eq!(

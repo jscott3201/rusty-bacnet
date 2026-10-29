@@ -108,7 +108,7 @@ fn checked_reference(reference: ObjectIdentifier) -> Result<ObjectIdentifier, Er
 /// them. Each is required while present (the tables' footnotes), and each
 /// takes writes: Color_Override must, and the references take one that
 /// names a colour object.
-pub(super) fn metadata(link: Option<&ColorLink>) -> impl Iterator<Item = PropertyMetadata> {
+pub(super) fn metadata(link: Option<&ColorLink>) -> impl Iterator<Item = PropertyMetadata> + use<> {
     let overridable = link.is_some_and(|link| link.color_override.is_some());
     [
         (P::COLOR_REFERENCE, link.is_some()),

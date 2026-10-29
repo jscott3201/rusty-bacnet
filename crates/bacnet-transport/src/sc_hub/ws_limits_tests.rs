@@ -130,11 +130,13 @@ async fn initiating_websocket_rejects_cumulative_fragment_overflow() {
         send,
         tokio::time::timeout(Duration::from_secs(2), node.recv())
     );
-    assert!(result
-        .unwrap()
-        .unwrap_err()
-        .to_string()
-        .contains("Space limit exceeded"));
+    assert!(
+        result
+            .unwrap()
+            .unwrap_err()
+            .to_string()
+            .contains("Space limit exceeded")
+    );
 }
 
 #[tokio::test]

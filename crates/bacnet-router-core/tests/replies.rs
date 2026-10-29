@@ -3,7 +3,7 @@ mod fixture;
 use bacnet_router_core::npdu::{Address, EncodeError, NetworkPriority, Npdu};
 use bacnet_router_core::router::{Action, Frame, Permissive, Received, ReplyPlan, ReplyPlanError};
 use bacnet_router_core::{Instant, PortId};
-use fixture::{router, NODE_A, OWN_0, OWN_1};
+use fixture::{NODE_A, OWN_0, OWN_1, router};
 
 #[test]
 fn r7_owned_reply_keeps_target_return_peer_and_remote_origin_after_scratch_reuse() {

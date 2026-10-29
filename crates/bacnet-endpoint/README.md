@@ -176,7 +176,7 @@ async fn main() -> Result<(), bacnet_types::error::Error> {
 | B/IP BBMD / foreign-device mode | [`bip::BipEndpointBuilder::mode`] | The standalone builders' transport and modes; loopback Network Number wire coverage; [`session::EndpointSession::foreign_registration`] reports a registration; live BVLC queries stay on [`BipTransport`](bacnet_transport::bip::BipTransport) |
 | BACnet/SC via hub | [`sc::ScEndpointBuilder`] | Real constrained-TLS hub proof (RB-16, `sc-tls`); loopback composition for unit validation |
 | MS/TP | [`mstp::MstpEndpointBuilder`] | **Simulator evidence only** (`LoopbackSerial` ownership + frame sequencing); no bench or on-wire conformance; timing is RB-26 |
-| BIPv6 | None | Explicitly unsupported: no endpoint builder; use `bacnet-transport` directly |
+| BIPv6 | None: compose [`EndpointSession::new`](session::EndpointSession::new) over a `Bip6Transport` | Real loopback UDP: a registered Network Port in NORMAL and FOREIGN mode (#1940) |
 | Ethernet | None | Explicitly unsupported: no endpoint builder; use `bacnet-transport` directly |
 
 Do not expect identical administration across data links: BBMD, SC hub
@@ -251,13 +251,16 @@ for the narrower endpoint responder scope above.
 | `BACnetServer::bip_builder()...build().await` | `BipEndpointBuilder::new(iface, port, bcast).role(ServerOnly).database(db).device(id).build_session()?` then `start()` |
 | Client + server on one device | `BipEndpointBuilder::...role(Both).database(db).device(id).build_session()?` (or the SC / MS/TP builder) |
 | `BACnetClient::sc_builder()...build().await` | `ScEndpointBuilder::new(vmac, uuid)...build_hub_session(ws)?` (`sc-tls`; dial first, then compose) |
-| `BACnetServer::sc_builder()...build().await` | Same `ScEndpointBuilder` with `ServerOnly` + `database` + `identity` |
+| `BACnetServer::sc_builder()...build().await` | Same `ScEndpointBuilder` with `ServerOnly` + `database` + `device` |
 | `generic_builder().transport(mstp)...` | `MstpEndpointBuilder::new(serial, station)...build_session()?` (one serial owner, simulator evidence) |
 
 Standalone BBMD helpers (`read_bdt` / `write_bdt` / `read_fdt` / foreign
 registration) stay on [`BipTransport`](bacnet_transport::bip::BipTransport);
 [`bip::BipEndpointBuilder::mode`] sets the endpoint's B/IP mode before start.
-BIPv6/Ethernet have no endpoint builder: keep the standalone path there.
+B/IPv6 has no endpoint builder: compose the session over a `Bip6Transport`
+and register its port with
+[`with_registered_network_port`](session::EndpointSession::with_registered_network_port).
+Ethernet has no endpoint builder: keep the standalone path there.
 See `docs/rust-api.md` for the same table with service-scope notes.
 
 ## Module map
@@ -266,9 +269,10 @@ See `docs/rust-api.md` for the same table with service-scope notes.
   [`SessionRole`], [`SessionConfig`],
   [`PolicyCountersSnapshot`],
   [`SessionExit`].
-- [`roles`] — [`ClientRoleHandle`] (`read_property`
-  and `read_property_with_destination`, addressed by
-  [`EndpointApduDestination`]) +
+- [`roles`] — [`ClientRoleHandle`] (`read_property`,
+  `read_property_multiple` and `read_range`, each with a `_with_destination`
+  form addressed by [`EndpointApduDestination`], plus `read_log_page` and
+  `write_property`) +
   [`ServerRoleHandle`] (inbound / liveness / suspend /
   notification admit-complete).
 - [`identity`] — [`DeviceIdentity`],

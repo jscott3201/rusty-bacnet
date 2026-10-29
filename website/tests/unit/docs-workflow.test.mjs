@@ -61,7 +61,7 @@ test('validation uses the event SHA without persisted checkout credentials or re
 test('native Ubuntu validation installs the lockfile, Chromium and runs the complete verify script', () => {
   assert.equal(validate.name, 'Docs validation');
   assert.equal(validate['runs-on'], 'ubuntu-latest');
-  assert.equal(validate['timeout-minutes'], 20);
+  assert.equal(validate['timeout-minutes'], 35);
   assert.deepEqual(validate.defaults, { run: { 'working-directory': 'website', shell: 'bash' } });
   assert.deepEqual(validate.env, { DOCS_TEST_PORT: '46329' });
   assert.equal(validate.if, undefined);

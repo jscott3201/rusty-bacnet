@@ -126,7 +126,9 @@ mod tests {
                                  got max_delay_ms={max_delay_ms}"
                             )
                         ),
-                        result => panic!("expected delay-cap rejection for {config:?}, got {result:?}"),
+                        result => {
+                            panic!("expected delay-cap rejection for {config:?}, got {result:?}")
+                        }
                     }
                 }
             }

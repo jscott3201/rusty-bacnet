@@ -1,10 +1,13 @@
 import { test, expect } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import navigation from '../../src/data/navigation.json' with { type: 'json' };
+import legacyRoutes from '../../src/data/legacy-routes.json' with { type: 'json' };
 import { release } from '../../src/lib/site.mjs';
 const base = '/rusty-bacnet/';
 const origin = 'https://jscott3201.github.io';
-const routes = ['', ...navigation.flatMap(group => group.items.map(item => `${item.slug}/`))];
+// A sidebar entry: a page, or a nested group of pages.
+type NavItem = { slug?: string; items?: NavItem[] };
+const routes = ['', ...navigation.flatMap(group => (group.items as NavItem[]).flatMap((item): NavItem[] => item.items ?? [item]).map(item => `${item.slug}/`))];
 
 test('canonical, sitemap, all local links and assets resolve under the project prefix', async ({ page, request }) => {
   const targets = new Map<string, Set<string>>();
@@ -18,6 +21,7 @@ test('canonical, sitemap, all local links and assets resolve under the project p
       const url = new URL(value, page.url());
       if (url.origin !== new URL(page.url()).origin) continue;
       expect(url.pathname, `${route}: ${value}`).toMatch(/^\/rusty-bacnet\//);
+      expect(legacyRoutes.some(legacy => url.pathname === base + legacy.from + '/'), `${route}: noncanonical link ${value}`).toBe(false);
       const hashes = targets.get(url.pathname) || new Set<string>();
       if (url.hash) hashes.add(decodeURIComponent(url.hash.slice(1)));
       targets.set(url.pathname, hashes);
@@ -52,7 +56,8 @@ test('download, MDX source view, Markdown exports and llms are source-derived', 
   const index = await llms.text();
   expect(index.match(/^- \[/gm)).toHaveLength(routes.length - 1);
   expect(index).toContain(`Guides for the v${release} release`);
-  expect(index).toContain('development/ to integrate');
+  expect(index).toContain('integrate/ for application owners');
+  expect(index).toContain('development/ for source builds');
   for (const route of routes.filter(Boolean)) {
     const rawPath = `raw/${route.slice(0, -1)}.md`;
     expect(index).toContain(origin + base + rawPath);
@@ -63,14 +68,26 @@ test('download, MDX source view, Markdown exports and llms are source-derived', 
     expect(body).not.toMatch(/\]\(\/(?!rusty-bacnet\/)/);
     expect(body).not.toMatch(/<(?:Tabs|TabItem|Code|Diagram|NextStep|DownloadList)\b/);
     if (route === 'start/local-lab/') expect(body).toContain(source.trim());
-    if (route.startsWith('development/')) {
+    if (route.startsWith('integrate/') || route.startsWith('development/')) {
       expect(body).toContain('https://github.com/jscott3201/rusty-bacnet/');
-      expect(index).toContain(`[Integration: `);
+      expect(index).toContain(route.startsWith('integrate/') ? '[Integration: ' : '[Contribution: ');
     }
   }
   await page.goto(base + 'start/local-lab/');
   await page.getByText('Show the complete loopback_lab.py script', { exact: true }).click();
   await expect(page.locator('details code')).toHaveText(source.trim(), { useInnerText: true });
+});
+
+test('the search index holds each canonical page once and no compatibility page', async ({ request }) => {
+  const entry = await (await request.get(base + 'pagefind/pagefind-entry.json')).json();
+  expect(Object.values(entry.languages).reduce((sum: number, language: any) => sum + language.page_count, 0)).toBe(routes.length);
+  for (const route of routes) {
+    const html = await (await request.get(base + route)).text();
+    expect(html.match(/data-pagefind-body/g) ?? [], route).toHaveLength(1);
+  }
+  for (const legacy of legacyRoutes) {
+    expect(await (await request.get(base + legacy.from + '/')).text(), legacy.from).not.toContain('data-pagefind-body');
+  }
 });
 
 test('unknown route returns a useful custom 404 with working local recovery', async ({ page }) => {

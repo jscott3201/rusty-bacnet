@@ -6,7 +6,7 @@
 //! request or its target is refused, and the element's position, counted from
 //! 1, when an element is.
 
-use super::mutation_tests::{oid, Fixture};
+use super::mutation_tests::{Fixture, oid};
 use super::*;
 use crate::mutation::MutationPolicy;
 use bacnet_encoding::npdu::decode_npdu;

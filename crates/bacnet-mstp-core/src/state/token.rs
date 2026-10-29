@@ -24,12 +24,12 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
         // the first. T_slot is 10 ms and validation caps Max_Master at 127, so
         // a cycle is at most 1.28 s; `checked_rem` takes one step per bit of
         // the cycles passed, with no 64-bit division.
-        if now >= first + T_SLOT {
-            if let Some(offset) = (now - first).checked_rem(cycle) {
-                start = now - offset;
-                if offset >= T_SLOT {
-                    start += cycle;
-                }
+        if now >= first + T_SLOT
+            && let Some(offset) = (now - first).checked_rem(cycle)
+        {
+            start = now - offset;
+            if offset >= T_SLOT {
+                start += cycle;
             }
         }
         if now < start {

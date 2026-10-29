@@ -3,14 +3,15 @@
 //! 12.54, Table 12-67).
 
 use super::*;
-use crate::channel::{coerce_channel_value, MemberDatatype};
+use crate::channel::{MemberDatatype, coerce_channel_value};
 use bacnet_types::enums::{ErrorClass, ErrorCode, LightingOperation as Op};
+use bacnet_types::error::RemoteError;
 
 const LC: PropertyIdentifier = PropertyIdentifier::LIGHTING_COMMAND;
 
 fn assert_error<T: std::fmt::Debug>(result: Result<T, Error>, expected: ErrorCode) {
     match result {
-        Err(Error::Protocol { class, code }) => {
+        Err(Error::Remote(RemoteError::Error { class, code })) => {
             assert_eq!(class, ErrorClass::PROPERTY);
             assert_eq!(code, expected, "expected {expected:?}");
         }

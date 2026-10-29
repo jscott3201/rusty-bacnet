@@ -11,7 +11,7 @@ use crate::bip::{AsBip, BipTransport};
 #[cfg(feature = "ipv6")]
 use crate::bip6::Bip6Transport;
 use crate::loopback::LoopbackTransport;
-use crate::mstp::{MstpTransport, SerialPort};
+use crate::mstp::{BoxedSerial, MstpTransport, SerialPort};
 use crate::port::{DataAttribute, ReceivedNpdu, TransportPort};
 
 #[cfg(all(feature = "ethernet", target_os = "linux"))]
@@ -32,10 +32,10 @@ use crate::sc_tls::TlsWebSocket;
 /// can still be constructed directly:
 ///
 /// ```
-/// use bacnet_transport::{any::AnyTransport, loopback::LoopbackTransport, mstp::NoSerial};
+/// use bacnet_transport::{any::AnyTransport, loopback::LoopbackTransport};
 ///
 /// let (port, _peer) = LoopbackTransport::pair(vec![1], vec![2]);
-/// let transport = AnyTransport::<NoSerial>::Loopback(port);
+/// let transport = AnyTransport::Loopback(port);
 /// let name = match &transport {
 ///     AnyTransport::Bip(_) => "B/IP",
 ///     _ => "another transport",
@@ -46,9 +46,9 @@ use crate::sc_tls::TlsWebSocket;
 /// Even listing every currently enabled variant needs a fallback externally:
 ///
 /// ```compile_fail,E0004
-/// use bacnet_transport::{any::AnyTransport, mstp::NoSerial};
+/// use bacnet_transport::any::AnyTransport;
 ///
-/// fn transport_name(transport: &AnyTransport<NoSerial>) -> &'static str {
+/// fn transport_name(transport: &AnyTransport) -> &'static str {
 ///     match transport {
 ///         AnyTransport::Bip(_) => "B/IP",
 ///         AnyTransport::Mstp(_) => "MS/TP",
@@ -63,12 +63,14 @@ use crate::sc_tls::TlsWebSocket;
 /// }
 /// ```
 #[non_exhaustive]
-pub enum AnyTransport<S: SerialPort + 'static> {
+pub enum AnyTransport {
     /// BACnet/IP over UDP. Boxed, like `Sc`, because it is several times larger
     /// than the other variants.
     Bip(Box<BipTransport>),
-    /// MS/TP over RS-485.
-    Mstp(MstpTransport<S>),
+    /// MS/TP over RS-485, over any [`SerialPort`] boxed as a
+    /// [`BoxedSerial`]. Converting an [`MstpTransport`] with
+    /// [`From`] boxes its port.
+    Mstp(MstpTransport<BoxedSerial>),
     /// BACnet/IPv6 over UDP.
     #[cfg(feature = "ipv6")]
     Bip6(Bip6Transport),
@@ -82,7 +84,7 @@ pub enum AnyTransport<S: SerialPort + 'static> {
     Loopback(LoopbackTransport),
 }
 
-impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
+impl TransportPort for AnyTransport {
     fn supports_local_nonrouter_number_controls(&self) -> bool {
         match self {
             Self::Bip(t) => t.supports_local_nonrouter_number_controls(),
@@ -412,7 +414,7 @@ impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
     }
 }
 
-impl<S: SerialPort + 'static> AnyTransport<S> {
+impl AnyTransport {
     /// The data link this variant carries, for errors.
     fn data_link(&self) -> DataLink {
         match self {
@@ -446,7 +448,7 @@ impl<S: SerialPort + 'static> AnyTransport<S> {
     }
 }
 
-impl<S: SerialPort + 'static> AsBip for AnyTransport<S> {
+impl AsBip for AnyTransport {
     /// The [`Bip`](Self::Bip) variant's transport.
     ///
     /// # Errors
@@ -464,40 +466,40 @@ impl<S: SerialPort + 'static> AsBip for AnyTransport<S> {
     }
 }
 
-impl<S: SerialPort> From<BipTransport> for AnyTransport<S> {
+impl From<BipTransport> for AnyTransport {
     fn from(t: BipTransport) -> Self {
         Self::Bip(Box::new(t))
     }
 }
 
-impl<S: SerialPort> From<MstpTransport<S>> for AnyTransport<S> {
+impl<S: SerialPort> From<MstpTransport<S>> for AnyTransport {
     fn from(t: MstpTransport<S>) -> Self {
-        Self::Mstp(t)
+        Self::Mstp(t.into_boxed())
     }
 }
 
 #[cfg(feature = "ipv6")]
-impl<S: SerialPort> From<Bip6Transport> for AnyTransport<S> {
+impl From<Bip6Transport> for AnyTransport {
     fn from(t: Bip6Transport) -> Self {
         Self::Bip6(t)
     }
 }
 
 #[cfg(all(feature = "ethernet", target_os = "linux"))]
-impl<S: SerialPort> From<EthernetTransport> for AnyTransport<S> {
+impl From<EthernetTransport> for AnyTransport {
     fn from(t: EthernetTransport) -> Self {
         Self::Ethernet(t)
     }
 }
 
 #[cfg(feature = "sc-tls")]
-impl<S: SerialPort> From<ScTransport<TlsWebSocket>> for AnyTransport<S> {
+impl From<ScTransport<TlsWebSocket>> for AnyTransport {
     fn from(t: ScTransport<TlsWebSocket>) -> Self {
         Self::Sc(Box::new(t))
     }
 }
 
-impl<S: SerialPort> From<LoopbackTransport> for AnyTransport<S> {
+impl From<LoopbackTransport> for AnyTransport {
     fn from(t: LoopbackTransport) -> Self {
         Self::Loopback(t)
     }
@@ -512,7 +514,7 @@ mod tests {
     #[test]
     fn any_transport_bip_local_mac() {
         let bip = BipTransport::new(Ipv4Addr::LOCALHOST, 47808, Ipv4Addr::BROADCAST);
-        let any: AnyTransport<LoopbackSerial> = AnyTransport::Bip(Box::new(bip));
+        let any: AnyTransport = AnyTransport::Bip(Box::new(bip));
         assert_eq!(any.local_mac().len(), 6);
         assert!(any.supports_local_nonrouter_number_controls());
     }
@@ -520,7 +522,7 @@ mod tests {
     #[test]
     fn any_transport_bip_max_apdu() {
         let bip = BipTransport::new(Ipv4Addr::LOCALHOST, 47808, Ipv4Addr::BROADCAST);
-        let any: AnyTransport<LoopbackSerial> = AnyTransport::Bip(Box::new(bip));
+        let any: AnyTransport = AnyTransport::Bip(Box::new(bip));
         assert_eq!(any.egress_apdu_limit(), 1476);
         assert_eq!(any.local_receive_apdu_capacity(), 1476);
     }
@@ -536,7 +538,7 @@ mod tests {
             ..MstpConfig::default()
         };
         let mstp = MstpTransport::new(serial, config);
-        let any: AnyTransport<LoopbackSerial> = AnyTransport::Mstp(mstp);
+        let any: AnyTransport = mstp.into();
         assert_eq!(any.local_mac(), &[42]);
         assert!(any.supports_local_nonrouter_number_controls());
         assert!(any.bip_port().is_none());
@@ -546,7 +548,7 @@ mod tests {
     fn any_transport_mstp_max_apdu() {
         let (serial, _) = LoopbackSerial::pair();
         let mstp = MstpTransport::new(serial, MstpConfig::default());
-        let any: AnyTransport<LoopbackSerial> = AnyTransport::Mstp(mstp);
+        let any: AnyTransport = mstp.into();
         assert_eq!(any.egress_apdu_limit(), 480);
         assert_eq!(any.local_receive_apdu_capacity(), 480);
     }
@@ -559,14 +561,14 @@ mod tests {
         use bacnet_npdu::NpduLimits;
         let (serial, _) = LoopbackSerial::pair();
         let mstp = MstpTransport::new(serial, MstpConfig::default());
-        let mut any: AnyTransport<LoopbackSerial> = mstp.into();
+        let mut any: AnyTransport = mstp.into();
         assert_eq!(any.max_npdu(), NpduLimits::both(501));
         any.prepare_for_routing();
         assert_eq!(any.max_npdu(), NpduLimits::both(1497));
         // Neither limit changes once started (#1696).
         assert!(any.max_npdu_changes().is_none());
         let bip = BipTransport::new(Ipv4Addr::LOCALHOST, 47808, Ipv4Addr::BROADCAST);
-        let any: AnyTransport<LoopbackSerial> = bip.into();
+        let any: AnyTransport = bip.into();
         assert_eq!(any.max_npdu(), NpduLimits::STANDARD);
         assert!(any.max_npdu_changes().is_none());
     }
@@ -574,13 +576,13 @@ mod tests {
     #[test]
     fn any_transport_from_bip() {
         let bip = BipTransport::new(Ipv4Addr::LOCALHOST, 47808, Ipv4Addr::BROADCAST);
-        let any: AnyTransport<LoopbackSerial> = bip.into();
+        let any: AnyTransport = bip.into();
         assert_eq!(any.egress_apdu_limit(), 1476);
         assert_eq!(any.local_receive_apdu_capacity(), 1476);
     }
 
     /// `as_bip` refuses `any`, naming `link` as the data link it carries.
-    fn assert_refused(any: &AnyTransport<LoopbackSerial>, link: DataLink) {
+    fn assert_refused(any: &AnyTransport, link: DataLink) {
         assert_eq!(any.data_link(), link);
         assert!(matches!(
             any.as_bip(),
@@ -591,7 +593,7 @@ mod tests {
     #[test]
     fn as_bip_lends_the_bip_variant_and_names_every_other_data_link() {
         let bip = BipTransport::new(Ipv4Addr::LOCALHOST, 47808, Ipv4Addr::BROADCAST);
-        let any: AnyTransport<LoopbackSerial> = bip.into();
+        let any: AnyTransport = bip.into();
         assert_eq!(any.data_link(), DataLink::Bip);
         let lent = any.as_bip().expect("the Bip variant lends its transport");
         assert_eq!(lent.local_mac(), any.local_mac());
@@ -621,7 +623,7 @@ mod tests {
     fn any_transport_from_mstp() {
         let (serial, _) = LoopbackSerial::pair();
         let mstp = MstpTransport::new(serial, MstpConfig::default());
-        let any: AnyTransport<LoopbackSerial> = mstp.into();
+        let any: AnyTransport = mstp.into();
         assert_eq!(any.egress_apdu_limit(), 480);
         assert_eq!(any.local_receive_apdu_capacity(), 480);
     }
@@ -631,7 +633,7 @@ mod tests {
     fn any_transport_bip6_local_mac() {
         use crate::bip6::UnresolvedSend;
         let bip6 = crate::bip6::Bip6Transport::new(std::net::Ipv6Addr::LOCALHOST, 47808, None);
-        let mut any: AnyTransport<LoopbackSerial> = AnyTransport::Bip6(bip6);
+        let mut any: AnyTransport = AnyTransport::Bip6(bip6);
         // The MAC is the 3-octet VMAC (U.1.3), zero until the transport starts.
         assert_eq!(any.local_mac(), [0; 3]);
         assert!(any.supports_local_nonrouter_number_controls());
@@ -652,7 +654,7 @@ mod tests {
     #[test]
     fn any_transport_bip6_max_apdu() {
         let bip6 = crate::bip6::Bip6Transport::new(std::net::Ipv6Addr::LOCALHOST, 47808, None);
-        let any: AnyTransport<LoopbackSerial> = AnyTransport::Bip6(bip6);
+        let any: AnyTransport = AnyTransport::Bip6(bip6);
         assert_eq!(any.egress_apdu_limit(), 1476);
         assert_eq!(any.local_receive_apdu_capacity(), 1476);
     }
@@ -661,7 +663,7 @@ mod tests {
     #[test]
     fn any_transport_from_bip6() {
         let bip6 = crate::bip6::Bip6Transport::new(std::net::Ipv6Addr::LOCALHOST, 47808, None);
-        let any: AnyTransport<LoopbackSerial> = bip6.into();
+        let any: AnyTransport = bip6.into();
         assert_eq!(any.egress_apdu_limit(), 1476);
         assert_eq!(any.local_receive_apdu_capacity(), 1476);
     }

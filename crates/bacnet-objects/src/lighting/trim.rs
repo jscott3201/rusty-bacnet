@@ -46,8 +46,8 @@
 //! so (Clauses 12.54.Y1 and 12.54.Y2), and the trims hold nothing until it's
 //! put right. Putting it right gives back the Reliability the trims replaced.
 
-use std::ops::RangeInclusive;
-use std::time::Duration;
+use core::ops::RangeInclusive;
+use core::time::Duration;
 
 use bacnet_types::enums::Reliability;
 use bacnet_types::error::Error;

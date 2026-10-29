@@ -3,7 +3,7 @@ title: "Write and relinquish deliberately"
 description: "Keep control-changing operations separate from read-only onboarding."
 ---
 
-A BACnet write can change real equipment behavior. Use this page only for an authorized, identified, commandable point with a reviewed site procedure. Prefer an isolated lab device while learning.
+A BACnet write can change real equipment behavior. Use this page only for an authorized, identified, commandable point with a reviewed site procedure. Prefer an isolated lab device while learning; the [local lab](/rusty-bacnet/start/local-lab/) serves one on loopback as `av:1`.
 
 ## Before the write
 
@@ -23,7 +23,7 @@ A missing or rejected property is information about the target. Resolve it befor
 
 ## Write only at an approved priority
 
-For a lab point whose approved test value is `72.5` and whose approved free slot is priority `8`:
+For a lab point whose approved test value is `72.5` and whose approved free slot is priority `8`, the commands below show the shape of the write. As shown, without `--allow-write`, the CLI refuses the write and sends nothing; [the write guard](#the-write-guard) gives the commands that send:
 
 ```sh
 bacnet write 192.168.1.100 av:1 pv 72.5 --priority 8
@@ -62,6 +62,6 @@ Record what was requested, the response, readback, and cleanup outcome in the ap
 
 ## Sources and release scope
 
-These instructions target **v0.14.0**. Source review is not a claim of hardware qualification.
+These instructions target **v0.15.0**. Source review is not a claim of hardware qualification.
 
-[Write and relinquish grammar](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/CLI.md) · [CLI arguments and acknowledgment inputs](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/crates/bacnet-cli/src/args.rs) · [Python typed values](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/python-api.md).
+[Write and relinquish grammar](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/docs/CLI.md) · [CLI arguments and acknowledgment inputs](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/crates/bacnet-cli/src/args.rs) · [Python typed values](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/docs/python-api.md).

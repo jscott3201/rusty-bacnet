@@ -21,7 +21,6 @@ use bacnet_services::who_has::{IHaveRequest, WhoHasObject};
 use bacnet_services::who_is::DeviceInstanceRange;
 use bacnet_transport::any::AnyTransport;
 use bacnet_transport::loopback::LoopbackTransport;
-use bacnet_transport::mstp::NoSerial;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
@@ -186,7 +185,7 @@ async fn routed_site() -> (
     let (router_far, station) = LoopbackTransport::pair(vec![0x02], vec![STATION]);
     let ports = vec![
         RouterPort {
-            transport: AnyTransport::<NoSerial>::Loopback(router_near),
+            transport: AnyTransport::Loopback(router_near),
             network_number: 1,
         },
         RouterPort {
@@ -259,7 +258,7 @@ async fn the_router_and_its_remote_network_are_found_and_reached() {
 
     client.stop().await.unwrap();
     server.stop().await.unwrap();
-    router.stop().await;
+    router.stop().await.unwrap();
 }
 
 /// The Who-Has is a global broadcast, so the router passes it on to network
@@ -280,7 +279,7 @@ async fn who_has_finds_an_object_behind_the_router() {
     );
     client.stop().await.unwrap();
     server.stop().await.unwrap();
-    router.stop().await;
+    router.stop().await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
@@ -299,7 +298,7 @@ async fn a_reject_for_an_unknown_network_is_surfaced() {
     );
     client.stop().await.unwrap();
     server.stop().await.unwrap();
-    router.stop().await;
+    router.stop().await.unwrap();
 }
 
 /// The router knows network 1's number, configured, and says so when asked.
@@ -324,5 +323,5 @@ async fn the_router_answers_what_is_network_number() {
     );
     client.stop().await.unwrap();
     server.stop().await.unwrap();
-    router.stop().await;
+    router.stop().await.unwrap();
 }

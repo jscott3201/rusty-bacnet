@@ -1,5 +1,6 @@
 //! Optional instance-owned Audit overrides: Analog and Binary Values, and
 //! the Color and Color Temperature objects (#1525).
+use crate::prelude::*;
 use crate::{
     common,
     property_metadata::{
@@ -81,10 +82,10 @@ impl ObjectAuditPolicy {
         self.read(property, index).map(|present| {
             present?;
             if priority.is_some_and(|v| !(1..=16).contains(&v)) {
-                return Err(Error::Protocol {
-                    class: ErrorClass::SERVICES,
-                    code: ErrorCode::PARAMETER_OUT_OF_RANGE,
-                });
+                return Err(Error::protocol(
+                    ErrorClass::SERVICES,
+                    ErrorCode::PARAMETER_OUT_OF_RANGE,
+                ));
             }
             // NULL relinquishes ordinary noncommandable properties without a
             // change. For the nullable priority filter it is the actual value.
@@ -116,7 +117,7 @@ impl ObjectAuditPolicy {
         })
     }
 
-    pub(crate) fn metadata(&self) -> impl Iterator<Item = PropertyMetadata> {
+    pub(crate) fn metadata(&self) -> impl Iterator<Item = PropertyMetadata> + use<> {
         [
             (P::AUDIT_LEVEL, self.level.is_some()),
             (P::AUDITABLE_OPERATIONS, self.operations.is_some()),

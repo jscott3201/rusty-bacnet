@@ -27,7 +27,7 @@
 mod image {
     use core::hint::black_box;
 
-    use firmware_link::bbmd::{run, Memory};
+    use firmware_link::bbmd::{Memory, run};
 
     /// The reset entry. cortex-m-rt's macro turns the `static mut` below
     /// into a `&'static mut`, which is sound because the entry runs once.
@@ -47,7 +47,7 @@ mod image {
     use core::hint::black_box;
     use core::ptr::addr_of_mut;
 
-    use firmware_link::bbmd::{run, Memory};
+    use firmware_link::bbmd::{Memory, run};
 
     static mut MEMORY: Memory = Memory::new();
 
@@ -84,7 +84,7 @@ mod emulate;
 mod emulated {
     use core::hint::black_box;
 
-    use firmware_link::bbmd::{run, Memory, EXPECTED};
+    use firmware_link::bbmd::{EXPECTED, Memory, run};
 
     /// On Cortex-M, as `image::main`.
     #[cfg(target_arch = "arm")]

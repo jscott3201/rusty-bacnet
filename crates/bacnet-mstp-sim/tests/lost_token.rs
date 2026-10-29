@@ -50,9 +50,11 @@ fn a_holder_dying_mid_frame_leaves_the_lowest_station_to_regenerate() {
     assert!(next.generation);
     assert_eq!(next.start, cut.end + millis(500));
     // Nothing at all in between: the line was silent.
-    assert!(frames
-        .iter()
-        .all(|frame| frame.end <= cut.end || frame.start >= next.start));
+    assert!(
+        frames
+            .iter()
+            .all(|frame| frame.end <= cut.end || frame.start >= next.start)
+    );
     assert_eq!(sim.core(0).unwrap().counters().token_regenerations, 2);
     assert_eq!(
         token_users(frames, next.end)

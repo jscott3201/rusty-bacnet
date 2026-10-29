@@ -37,6 +37,7 @@ impl<W: WebSocketPort> ScTransport<W> {
     ///
     /// Production transports validate this at [`TransportPort::start`](crate::port::TransportPort::start) against
     /// the Annex AB.6.3 configurable heartbeat timeout range of 3..300 seconds.
+    /// It also paces heartbeats on direct connections this node dials.
     pub fn with_heartbeat_interval_ms(mut self, ms: u64) -> Self {
         self.heartbeat_interval_ms = ms;
         self

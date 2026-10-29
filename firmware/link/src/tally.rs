@@ -4,7 +4,7 @@
 
 use core::net::SocketAddrV4;
 
-use bacnet_bip_codec::{address_to_octets, Bvll};
+use bacnet_bip_codec::{Bvll, address_to_octets};
 
 /// FNV-1a's 32-bit offset basis.
 pub(crate) const FNV_OFFSET: u32 = 0x811C_9DC5;

@@ -9,6 +9,7 @@ use super::super::*;
 use super::{assert_invalid_data_type, assert_value_out_of_range};
 use bacnet_types::constructed::{BACnetLandingDoorStatus, LandingDoor};
 use bacnet_types::enums::{DoorStatus, EngineeringUnits, ErrorClass, ErrorCode, LiftFault};
+use bacnet_types::error::RemoteError;
 
 type P = PropertyIdentifier;
 
@@ -26,7 +27,7 @@ fn write(lift: &mut LiftObject, property: P, value: PropertyValue) -> Result<(),
 
 fn assert_property_error(result: Result<impl std::fmt::Debug, Error>, expected: ErrorCode) {
     match result {
-        Err(Error::Protocol { class, code }) => {
+        Err(Error::Remote(RemoteError::Error { class, code })) => {
             assert_eq!(class, ErrorClass::PROPERTY);
             assert_eq!(code, expected, "expected {expected:?}");
         }

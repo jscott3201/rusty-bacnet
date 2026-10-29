@@ -1,0 +1,73 @@
+[
+  {
+    "stage": "image build attempt1",
+    "exit_code": 1,
+    "classification": "sandbox buildx activity write denial; no image built",
+    "evidence": "outputs/image-build.log",
+    "remedy": "Task-local BUILDX_CONFIG used for attempt2; no shared image mutation."
+  },
+  {
+    "stage": "image build attempt2",
+    "exit_code": 0,
+    "classification": "successful task derivative creation",
+    "evidence": "outputs/image-build-attempt2.log",
+    "environment": {
+      "BUILDX_CONFIG": "/tmp/rusty-batch10-macaddr-measurement/buildx"
+    }
+  },
+  {
+    "stage": "initial harness lock normalization and A build",
+    "exit_code": 0,
+    "classification": "explicit unlocked initial external-harness resolution; only harness record added; unused workspace packages removed; no retained versions/checksums changed",
+    "evidence": [
+      "outputs/build-a-initial.log",
+      "outputs/lock-normalization.json"
+    ],
+    "command": [
+      "docker",
+      "run",
+      "--rm",
+      "--name",
+      "rb-batch10-build-a",
+      "-e",
+      "CARGO_INCREMENTAL=0",
+      "-e",
+      "CARGO_TARGET_DIR=/target",
+      "-v",
+      "/Users/justin/.codex/worktrees/macaddr-copy-control/rusty-bacnet:/wt:ro",
+      "-v",
+      "/tmp/rusty-batch10-macaddr-measurement/harness:/h",
+      "-v",
+      "rb-batch10-target-a:/target",
+      "-w",
+      "/h",
+      "rb-batch10-callgrind:rust1.99.0",
+      "cargo",
+      "build",
+      "--release"
+    ]
+  },
+  {
+    "stage": "first candidate source write",
+    "exit_code": 1,
+    "classification": "sandbox PermissionError before first file mutation",
+    "error": "PermissionError: [Errno 1] Operation not permitted: '/Users/justin/.codex/worktrees/macaddr-copy-cost/rusty-bacnet/crates/bacnet-client/src/client/transaction_peer.rs'",
+    "remedy": "Same authorized script succeeded with reviewed escalation; no partial first write."
+  },
+  {
+    "stage": "non-escalated process read",
+    "exit_code": 1,
+    "classification": "sandbox process read denial",
+    "error": "zsh:1: operation not permitted: ps",
+    "remedy": "Fresh pre/post timing read-only process inventory succeeded with reviewed escalation."
+  },
+  {
+    "stage": "routine path discovery",
+    "classification": "missing guessed coordinator/peer_tests.rs and .agents/gate.sh; no build/test implication",
+    "remedy": "Read actual coordinator_peer_tests.rs path and repository scripts/ci/local-macos.sh."
+  },
+  {
+    "stage": "full fixed matrices",
+    "classification": "48 Callgrind and12 native invocations all exit0; no exclusions or retries; native acceptance not established"
+  }
+]

@@ -1,6 +1,6 @@
 use super::*;
 
-use bacnet_encoding::apdu::{decode_apdu, ComplexAck, SimpleAck};
+use bacnet_encoding::apdu::{ComplexAck, SimpleAck, decode_apdu};
 use bacnet_services::audit::{
     AuditLogQueryAck, AuditLogQueryRequest, AuditNotificationRequest, AuditPropertyReference,
     BACnetAuditLogDatum, BACnetAuditLogQueryParameters, BACnetAuditLogRecord,

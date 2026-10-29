@@ -131,7 +131,9 @@
 //! `on_receive_error` for each garbled one, timestamped when the character
 //! ends. It is off while the node drives the line, unless
 //! [`AdapterSpec::echo`] is set. Deadlines are serviced at
-//! `next_deadline`, plus any configured lateness and per-deadline jitter.
+//! `next_deadline`, rounded up to the adapter's next timer tick when it has
+//! a [`AdapterSpec::timer_tick`], plus any configured lateness and
+//! per-deadline jitter.
 //! Octet adapters service the transmit watchdog while a frame is going out;
 //! expiry truncates it, releases its driver and enables reception. A final
 //! stop exactly at the deadline completes first; a later octet starting at
@@ -213,9 +215,10 @@
 //!
 //! One percent is a stress band, far wider than a crystal's 100 ppm. At its
 //! edges, adjacent masters' token-generation slots meet: at 38,400 baud
-//! and above they collide once and form a ring, but at 9,600 and 19,200
-//! baud the simulator's exact timers keep them in lockstep until the
-//! adapters add deadline jitter (#1804).
+//! and above they collide once and form a ring. At 9,600 and 19,200 baud
+//! exact timers keep them in lockstep; timers that tick at SilenceTimer's
+//! nominal resolution ([`AdapterSpec::timer_tick`], Clause 9.5.2) let them
+//! fall out of step within a few collisions, as real nodes do (#1804).
 //!
 //! **Scripted stations** decode the line with the codec's stream decoder
 //! and react to frames through a [`Script`]: a minimal master that answers
@@ -317,8 +320,8 @@
 //!   further off, and the bit errors its receivers would see, are not
 //!   modeled. A skewed character is received whole, as a UART takes one
 //!   whose rate is a couple of percent off. Clocks run at a constant rate:
-//!   there is no wander, and seeded [`AdapterSpec::deadline_jitter`] stands
-//!   in for timer variation.
+//!   there is no wander. A phased [`AdapterSpec::timer_tick`] and seeded
+//!   [`AdapterSpec::deadline_jitter`] stand in for timer variation.
 //! - **Noise at bit level.** Noise on an idle line arrives as clean random
 //!   octets; noise over a frame follows the selected contention policy. There are no
 //!   overruns, parity errors or breaks.
@@ -372,7 +375,7 @@ mod spec;
 mod trace;
 mod wire;
 
-pub use app::{Answer, Application, Outbox, Received, ReplyPolicy, BROADCAST};
+pub use app::{Answer, Application, BROADCAST, Outbox, Received, ReplyPolicy};
 pub use contention::{ContentionPolicy, ContentionStats};
 pub use line::Driver;
 pub use report::{
@@ -382,9 +385,9 @@ pub use report::{
 };
 pub use rng::SimRng;
 pub use sim::{Sim, SimConfig, SimCore};
-pub use skew::{Skew, MAX_SKEW_PPM};
+pub use skew::{MAX_SKEW_PPM, Skew};
 pub use spec::{
     AdapterSpec, Corruption, Fault, HostSpec, MasterSpec, Script, ScriptSend, SeenFrame,
 };
 pub use trace::{Millis, Trace, TraceEntry, TraceKind, Who};
-pub use wire::{WireTiming, BITS_PER_OCTET};
+pub use wire::{BITS_PER_OCTET, WireTiming};

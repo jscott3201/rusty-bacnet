@@ -10,8 +10,8 @@ use bacnet_router_core::npdu::NetworkMessageType;
 use bacnet_router_core::router::{Event, Kind, Options};
 use bacnet_router_core::{PortId, Router};
 use fixture::{
-    apdu_to, at, deliver, deliver_broadcast, i_am, message, router, two_ports, Outcome, Recorder,
-    Store, CONFIRMED, NODE_A, R7,
+    CONFIRMED, NODE_A, Outcome, R7, Recorder, Store, apdu_to, at, deliver, deliver_broadcast, i_am,
+    message, router, two_ports,
 };
 
 /// A route learned by a frame stamped before the router's start is

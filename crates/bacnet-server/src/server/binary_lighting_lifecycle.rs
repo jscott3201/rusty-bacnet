@@ -72,10 +72,10 @@ pub(super) fn spawn_binary_lighting_operation_task<T: TransportPort + 'static>(
                 next_deadline = None;
                 database.for_each_object_mut(|oid, object| {
                     object.set_tracking_cov_increment_internal(finest.get(&oid).copied());
-                    if object.advance_monotonic_time_internal(now) {
-                        if let Some(snapshot) = object.cov_snapshot_internal() {
-                            changed.push((oid, snapshot));
-                        }
+                    if object.advance_monotonic_time_internal(now)
+                        && let Some(snapshot) = object.cov_snapshot_internal()
+                    {
+                        changed.push((oid, snapshot));
                     }
                     if let Some(deadline) = object.next_monotonic_deadline_internal() {
                         next_deadline =

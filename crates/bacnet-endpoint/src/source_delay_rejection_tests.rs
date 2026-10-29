@@ -46,16 +46,18 @@ async fn source_read_delay_preflight_is_atomic_and_adapter_rejects_even_zero() {
         {
             let mut db = session.database.as_ref().unwrap().write().await;
             let object = db.get_mut(&selected()).unwrap();
-            assert!(object
-                .configure_audit_reporter_internal(
-                    AuditLevel::NONE,
-                    AuditOperationFlags::empty(),
-                    true,
-                    None,
-                    BACnetPriorityFilter::empty(),
-                    Some(bacnet_objects::audit::AuditSendDelay::new(0).unwrap())
-                )
-                .is_err());
+            assert!(
+                object
+                    .configure_audit_reporter_internal(
+                        AuditLevel::NONE,
+                        AuditOperationFlags::empty(),
+                        true,
+                        None,
+                        BACnetPriorityFilter::empty(),
+                        Some(bacnet_objects::audit::AuditSendDelay::new(0).unwrap())
+                    )
+                    .is_err()
+            );
             assert_eq!(
                 object
                     .read_property(PropertyIdentifier::AUDIT_LEVEL, None)

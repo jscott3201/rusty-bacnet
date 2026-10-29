@@ -9,8 +9,8 @@ use bacnet_mstp_codec::FrameType;
 use bytes::Bytes;
 use tokio::time::{Duration, Instant};
 
-use super::test_support::{config, encode, Bus, DrainMode, Port, Sent, T_USAGE_TIMEOUT};
 use super::Echo;
+use super::test_support::{Bus, DrainMode, Port, Sent, T_USAGE_TIMEOUT, config, encode};
 use crate::port::TransportPort;
 
 const TICK: Duration = Duration::from_millis(1);

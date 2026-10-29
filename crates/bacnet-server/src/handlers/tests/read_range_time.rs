@@ -1,8 +1,8 @@
 use super::read_range::*;
 use super::*;
 use bacnet_client::client::BACnetClient;
-use bacnet_encoding::apdu::{decode_apdu, encode_apdu, Apdu, ComplexAck};
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
+use bacnet_encoding::apdu::{Apdu, ComplexAck, decode_apdu, encode_apdu};
+use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
 use bacnet_objects::event_log::EventLogObject;
 use bacnet_objects::log_buffer::LogRecordIdentity;
 use bacnet_objects::trend::{TrendLogMultipleObject, TrendLogObject};
@@ -11,13 +11,14 @@ use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::constructed::{BACnetLogRecord, LogDatum};
 use bacnet_types::enums::ConfirmedServiceChoice;
+use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::{Date, StatusFlags, Time};
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 fn assert_property_error(error: Error, expected: ErrorCode) {
     assert!(matches!(
         error,
-        Error::Protocol { class, code }
+        Error::Remote(RemoteError::Error { class, code })
             if class == ErrorClass::PROPERTY
                 && code == expected
     ));
@@ -365,7 +366,10 @@ fn zero_array_index_is_rejected_by_request_decoder() {
     bacnet_encoding::primitives::encode_ctx_object_id(&mut service_data, 0, &oid);
     service_data.extend_from_slice(&[0x19, 131, 0x29, 0]);
     let error = handle_read_range(&db, &service_data, &mut BytesMut::new()).unwrap_err();
-    assert!(matches!(error, Error::Reject { .. }), "{error:?}");
+    assert!(
+        matches!(error, Error::Remote(RemoteError::Reject { .. })),
+        "{error:?}"
+    );
 }
 
 #[tokio::test]

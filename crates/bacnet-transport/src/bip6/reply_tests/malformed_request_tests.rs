@@ -146,9 +146,11 @@ async fn malformed_requests_count_against_the_nak_quota() {
         "another address has its own"
     );
     tokio::time::advance(REPLY_WINDOW).await;
-    assert!(reply_to(&receiver, &frame, sender(), local_ip())
-        .await
-        .is_some());
+    assert!(
+        reply_to(&receiver, &frame, sender(), local_ip())
+            .await
+            .is_some()
+    );
 }
 
 /// Only the three requests a BBMD serves are NAKed when malformed. A

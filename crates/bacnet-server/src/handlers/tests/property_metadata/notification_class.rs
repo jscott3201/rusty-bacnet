@@ -1,9 +1,9 @@
 use super::*;
+use PropertyIdentifier as P;
 use bacnet_objects::{notification_class::NotificationClass, traits::BACnetObject};
 use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
 use bacnet_types::constructed::{BACnetDestination, BACnetRecipient};
 use bacnet_types::primitives::{PropertyValue, Time};
-use PropertyIdentifier as P;
 
 #[test]
 fn rpm_notification_class_metadata_selectors_preserve_bytes_and_budgets() {

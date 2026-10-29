@@ -112,6 +112,15 @@ impl BipClientBuilder {
 
 #[cfg(feature = "ipv6")]
 impl Bip6ClientBuilder {
+    /// Make the client a foreign device of a B/IPv6 BBMD (Annex U.4.5),
+    /// which then carries its broadcasts. Needs
+    /// [`Self::device_instance`]; the build fails without one, or when the
+    /// registration fails [`Bip6ForeignDeviceConfig::check`].
+    pub fn foreign_device(mut self, config: Bip6ForeignDeviceConfig) -> Self {
+        self.foreign_device = Some(config);
+        self
+    }
+
     /// Set the independent event notification broadcast channel capacity.
     pub fn event_channel_capacity(mut self, capacity: usize) -> Self {
         self.options.event_channel_capacity = capacity;

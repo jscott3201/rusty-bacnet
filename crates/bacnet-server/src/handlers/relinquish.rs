@@ -45,7 +45,7 @@
 
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::PropertyValue;
 
 /// The one encoding the rule applies to: an application-tagged NULL.
@@ -87,7 +87,9 @@ pub(crate) fn leaves_unchanged(
 
 /// PROPERTY / INVALID_DATA_TYPE, plain or naming the list element refused.
 fn refused_as_datatype(error: &Error) -> bool {
-    let (Error::Protocol { class, code } | Error::Structured { class, code, .. }) = error else {
+    let (Error::Remote(RemoteError::Error { class, code }) | Error::Structured { class, code, .. }) =
+        error
+    else {
         return false;
     };
     *class == ErrorClass::PROPERTY && *code == ErrorCode::INVALID_DATA_TYPE

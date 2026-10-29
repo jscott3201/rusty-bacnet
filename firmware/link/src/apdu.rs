@@ -42,19 +42,19 @@ mod expected;
 pub use expected::expected;
 
 use bacnet_encoding::apdu::{
-    decode_apdu, encode_apdu, Apdu, ComplexAck, ConfirmedRequest, UnconfirmedRequest,
+    Apdu, ComplexAck, ConfirmedRequest, UnconfirmedRequest, decode_apdu, encode_apdu,
 };
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress, NpduDecodeError};
+use bacnet_encoding::npdu::{Npdu, NpduAddress, NpduDecodeError, decode_npdu, encode_npdu};
 use bacnet_encoding::primitives::{decode_application_value, encode_app_real};
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_services::who_is::{DeviceInstanceRange, IAmRequest, WhoIsRequest};
+use bacnet_types::MacAddr;
 use bacnet_types::enums::{
     ConfirmedServiceChoice, ObjectType, PropertyIdentifier, RejectReason, Segmentation,
     UnconfirmedServiceChoice,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
-use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
 
 /// The heap the apdu image gives its allocator, in octets.

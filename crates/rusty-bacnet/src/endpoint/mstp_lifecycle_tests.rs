@@ -1,8 +1,8 @@
 //! Private injection: exercises the actual MS/TP Python wrapper and session.
 //! Darwin PTYs reject the serial backend's ioctl; this is no hardware claim.
 use super::*;
-use bacnet_encoding::apdu::{decode_apdu, encode_apdu, Apdu, ConfirmedRequest};
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
+use bacnet_encoding::apdu::{Apdu, ConfirmedRequest, decode_apdu, encode_apdu};
+use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
 use bacnet_services::read_property::ReadPropertyRequest;
 use bacnet_transport::mstp::codec::{self, FrameType};
 use bacnet_transport::mstp::{LoopbackSerial, SerialPort};
@@ -12,8 +12,8 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::{Bytes, BytesMut};
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 
 pub(super) type SerialOpener = Arc<dyn Fn(&SerialConfig) -> PyResult<TestSerial> + Send + Sync>;
@@ -106,6 +106,7 @@ fn mstp_python_wrapper_owns_one_serial_and_returns_none() {
         0,
         false,
         false,
+        None,
         None,
         None,
         None,
@@ -326,6 +327,7 @@ fn mstp_python_wrapper_applies_its_read_work_limit() {
         0,
         false,
         false,
+        None,
         None,
         None,
         None,

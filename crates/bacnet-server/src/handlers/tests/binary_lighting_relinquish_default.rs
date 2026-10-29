@@ -5,6 +5,7 @@ use bacnet_objects::lighting::BinaryLightingOutputObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
+use bacnet_types::error::RemoteError;
 
 fn encode_value(value: PropertyValue) -> Vec<u8> {
     let mut bytes = BytesMut::new();
@@ -77,7 +78,7 @@ fn read_property(
 
 fn assert_value_out_of_range<T>(result: Result<T, Error>) {
     match result {
-        Err(Error::Protocol { class, code }) => {
+        Err(Error::Remote(RemoteError::Error { class, code })) => {
             assert_eq!(class, ErrorClass::PROPERTY);
             assert_eq!(code, ErrorCode::VALUE_OUT_OF_RANGE);
         }

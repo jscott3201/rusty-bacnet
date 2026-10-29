@@ -19,7 +19,8 @@ name: CI
 #           linked and checked against their size budgets,
 #           every-feature Linux tests plus bacnet-cli's feature-off tests
 #           and the no_std crates' tests and doctests without std,
-#           and the Python bindings built with maturin, their unittest suite
+#           and the Python bindings built with maturin, their unittest suite,
+#           the website's sample tests (the loopback lab and the CLI samples)
 #           and the PyO3 crate's own Rust tests.
 #   Heavy — PRs to main, push to main, v* tags, weekly schedule, manual:
 #           MSRV (Linux native, incl. optional features, the no_std builds
@@ -81,7 +82,7 @@ env:
   # else in the workspace turns on (#906). bacnet-cli's `tui` is a default
   # feature (#974), so every workspace run has it. bacnet-benchmarks/console
   # is left out: it needs tokio_unstable.
-  LINUX_FEATURES: bacnet-types/serde,bacnet-encoding/heapless,bacnet-mstp-codec/bytes,bacnet-mstp-codec/heapless,bacnet-mstp-core/alloc,bacnet-bip-codec/bytes,bacnet-bip-codec/heapless,bacnet-router-core/bip,bacnet-router-core/mstp,bacnet-transport/ipv6,bacnet-transport/sc-tls,bacnet-transport/serial,bacnet-transport/serial-gpio,bacnet-transport/ethernet,bacnet-client/ipv6,bacnet-client/sc-tls,bacnet-server/sc-tls,bacnet-endpoint/sc-tls,bacnet-integration-tests/ipv6,bacnet-integration-tests/ethernet,bacnet-cli/sc-tls,bacnet-cli/pcap,bacnet-cli/serial
+  LINUX_FEATURES: bacnet-types/serde,bacnet-encoding/heapless,bacnet-mstp-codec/bytes,bacnet-mstp-codec/heapless,bacnet-mstp-core/alloc,bacnet-bip-codec/bytes,bacnet-bip-codec/heapless,bacnet-router-core/bip,bacnet-router-core/mstp,bacnet-transport/ipv6,bacnet-transport/sc-tls,bacnet-transport/serial,bacnet-transport/serial-gpio,bacnet-transport/ethernet,bacnet-client/ipv6,bacnet-client/sc-tls,bacnet-server/sc-tls,bacnet-endpoint/sc-tls,bacnet-integration-tests/ipv6,bacnet-integration-tests/ethernet,bacnet-integration-tests/sc-tls,bacnet-cli/sc-tls,bacnet-cli/pcap,bacnet-cli/serial,bacnet-cli/mcp
 
 jobs:
   # Whether this push to dev can skip the Lean jobs (#1466): see
@@ -288,12 +289,12 @@ jobs:
           rustup target add $NO_STD_TARGETS
           # shellcheck disable=SC2086
           bash scripts/ci/check-no-std.sh $NO_STD_TARGETS
-      # bacnet-types, bacnet-encoding and bacnet-services with alloc and
-      # without std, tests included: Test runs those tests, and no run above
-      # lints them (#1613).
+      # bacnet-types, bacnet-encoding, bacnet-services and bacnet-objects
+      # with alloc and without std, tests included: Test runs those tests,
+      # and no run above lints them (#1613, #1615).
       - name: Clippy (no_std crates with alloc, all targets)
         if: ${{ !cancelled() }}
-        run: cargo clippy -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --features alloc --all-targets --locked -- -D warnings
+        run: cargo clippy -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects --no-default-features --features alloc --all-targets --locked -- -D warnings
       # And without alloc either, the allocation-free profile (#1614).
       - name: Clippy (no_std crates without alloc, all targets)
         if: ${{ !cancelled() }}
@@ -380,14 +381,16 @@ jobs:
         run: cargo nextest run -p bacnet-cli --no-default-features --locked --profile ci
       # The no_std crates with alloc and their std feature off: the code a
       # bare-metal build compiles, which every run above leaves out (#1613).
+      # For bacnet-objects that is the inline save writer, the spin lock and
+      # hashbrown's maps (#1615).
       # The tests themselves still link std; check-no-std.sh shows the code
       # needs none.
       - name: no_std crates' tests (alloc, without std)
         if: ${{ !cancelled() }}
-        run: cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --features alloc --locked --profile ci
+        run: cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects --no-default-features --features alloc --locked --profile ci
       - name: no_std crates' doctests (alloc, without std)
         if: ${{ !cancelled() }}
-        run: cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --features alloc --locked
+        run: cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects --no-default-features --features alloc --locked
       # Without alloc either (#1614): the allocation-free profile's code, and
       # tests/no_alloc_subset.rs, which counts the subset's allocations: none.
       - name: no_std crates' tests (without alloc)
@@ -432,6 +435,25 @@ jobs:
           . "$RUNNER_TEMP/venv/bin/activate"
           openssl version
           python -m unittest discover -s crates/rusty-bacnet/tests
+      # The website's samples (#1989): the loopback lab's tests, and the CLI
+      # samples its pages show, run against that lab on 127.0.0.1. This is
+      # the only job with the extension installed, and its maturin build
+      # has already compiled the BACnet crates the CLI shares, in the same
+      # target directory and dev profile, so the CLI build adds little; the
+      # dev runs cache it with the rest.
+      - name: Build the CLI for the website samples
+        if: ${{ !cancelled() }}
+        run: cargo build -p bacnet-cli --locked
+      - name: Website sample tests
+        if: ${{ !cancelled() }}
+        env:
+          BACNET_CLI: ${{ github.workspace }}/target/debug/bacnet
+        run: |
+          . "$RUNNER_TEMP/venv/bin/activate"
+          # The lab expects the site's release; this wheel has the workspace's version.
+          BACNET_LAB_EXPECTED_VERSION=$(python -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
+          export BACNET_LAB_EXPECTED_VERSION
+          python -m unittest discover -s website/tests/python -v
       # The crate's lib unit tests and integration tests, linked against
       # PYO3_PYTHON's libpython (#919), not the venv's, so this step doesn't
       # depend on the maturin build.
@@ -469,7 +491,7 @@ jobs:
           cache-bin: false
           save-if: ${{ github.ref == 'refs/heads/dev' }}
       # Publishable crates with consumer-visible features, the no_std builds
-      # of bacnet-types, bacnet-encoding and bacnet-services (alloc, no std),
+      # of bacnet-types, bacnet-encoding, bacnet-services and bacnet-objects (alloc, no std),
       # then the ethernet, serial and serial-gpio transport checks and a
       # linked bacnet-cli pcap build.
       - run: bash scripts/ci/check-msrv.sh --linux-native

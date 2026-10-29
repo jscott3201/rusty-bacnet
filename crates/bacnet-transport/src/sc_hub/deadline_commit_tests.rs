@@ -1,5 +1,5 @@
 use super::deadline_test_support::*;
-use super::heartbeat_test_support::{clients, LiveClient};
+use super::heartbeat_test_support::{LiveClient, clients};
 use super::*;
 use std::time::Duration;
 

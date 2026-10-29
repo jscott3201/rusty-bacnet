@@ -1,0 +1,18 @@
+---
+import Default from '@astrojs/starlight/components/MarkdownContent.astro';
+import { generatedSearchWeight } from '../lib/site.mjs';
+
+// A page with a generated reference region (between generated:start and
+// generated:end markers, written by scripts/reference-*) lists every option,
+// method and signature under its own heading, so it matches almost any search
+// term. Pagefind counts its body, headings included, at a lower weight, so the
+// task guides rank first; the page title keeps its normal weight.
+// The marker as the generators write it, on a line of its own: an HTML comment
+// in .md, an MDX comment in .mdx (the same pattern as site_samples.py).
+const marker = /^(?:<!--|\{\/\*) generated:start\b/m;
+const body = Astro.locals.starlightRoute.entry.body ?? '';
+const generated = marker.test(body);
+---
+{generated
+  ? <div data-pagefind-weight={String(generatedSearchWeight)}><Default><slot /></Default></div>
+  : <Default><slot /></Default>}

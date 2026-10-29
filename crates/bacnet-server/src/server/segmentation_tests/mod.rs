@@ -1,6 +1,6 @@
 use super::*;
 use crate::server::test_transport::{
-    SendLog, SendMode, TestTransport, TestTransportHandle, BIP_LOCAL_MAC,
+    BIP_LOCAL_MAC, SendLog, SendMode, TestTransport, TestTransportHandle,
 };
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::npdu::decode_npdu;

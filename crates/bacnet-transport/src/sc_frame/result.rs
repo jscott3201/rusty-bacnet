@@ -1,6 +1,6 @@
 use bacnet_types::error::{DecodeError, DecodingKind, Error};
 
-use super::{ScFunction, ScMessage, SC_MIN_HEADER};
+use super::{SC_MIN_HEADER, ScFunction, ScMessage};
 
 /// Decoded BACnet/SC BVLC-Result payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,7 +81,7 @@ mod tests {
     use bytes::Bytes;
 
     use super::*;
-    use crate::sc_frame::{decode_sc_message, ScOption};
+    use crate::sc_frame::{ScOption, decode_sc_message};
 
     #[test]
     fn bvlc_result_ack_decode() {

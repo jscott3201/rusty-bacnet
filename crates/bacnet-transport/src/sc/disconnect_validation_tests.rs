@@ -46,13 +46,15 @@ async fn disconnect_request_payload_gets_nak_before_state_change() {
         *transport.connection_state_changes().borrow(),
         ScConnectionState::Connected
     );
-    assert!(transport
-        .connection()
-        .unwrap()
-        .lock()
-        .await
-        .disconnect_ack_to_send
-        .is_none());
+    assert!(
+        transport
+            .connection()
+            .unwrap()
+            .lock()
+            .await
+            .disconnect_ack_to_send
+            .is_none()
+    );
     transport.stop().await.unwrap();
 }
 
@@ -166,13 +168,15 @@ async fn disconnect_envelopes_preserve_node_state_and_pending_probe() {
             "{}",
             case.name
         );
-        assert!(transport
-            .connection()
-            .unwrap()
-            .lock()
-            .await
-            .disconnect_ack_to_send
-            .is_none());
+        assert!(
+            transport
+                .connection()
+                .unwrap()
+                .lock()
+                .await
+                .disconnect_ack_to_send
+                .is_none()
+        );
     }
     assert!(
         timeout(Duration::from_millis(350), ws.recv())

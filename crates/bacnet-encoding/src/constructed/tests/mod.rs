@@ -23,6 +23,7 @@ mod event_log_record;
 mod event_notification;
 mod event_notification_subscription;
 mod event_parameter;
+mod event_parameter_more;
 mod fault_parameter;
 mod landing_call_status;
 mod landing_door_status;
@@ -394,17 +395,11 @@ fn device_object_property_references_decode_one_list_element_at_a_time() {
 }
 
 #[test]
-fn event_parameter_opaque_primitive_form_decodes() {
+fn event_parameter_none_primitive_form_decodes() {
     // none [20] NULL — primitive context tag, zero contents (extended tag).
     let data = [0xF8, 20];
     let (decoded, end) = decode_event_parameter(&data, 0).unwrap();
-    assert_eq!(
-        decoded,
-        BACnetEventParameter::Opaque {
-            tag: 20,
-            data: Vec::new()
-        }
-    );
+    assert_eq!(decoded, BACnetEventParameter::None);
     assert_eq!(end, data.len());
     let mut encoded = BytesMut::new();
     encode_event_parameter(&mut encoded, &decoded).unwrap();

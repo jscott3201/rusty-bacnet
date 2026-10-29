@@ -6,7 +6,7 @@ use bacnet_transport::port::TransportProvenance;
 use bacnet_types::enums::AuditOperation;
 
 use super::audit_notification_tests::{
-    count, database, database_with_device, notification, oid, request_bytes, MemoryPersistence,
+    MemoryPersistence, count, database, database_with_device, notification, oid, request_bytes,
 };
 use super::*;
 use crate::server::test_transport::{SendLog, TestTransport};
@@ -134,14 +134,16 @@ async fn accepted_direct_and_routed_requests_commit_atomically_without_output() 
     assert_eq!(count(&db, sink).await, (2, 2));
     assert_eq!(routed_sends.len(), 0, "the routed request must not send");
     assert_eq!(direct_sends.len(), 0, "the direct request must not send");
-    assert!(persistence
-        .snapshot
-        .lock()
-        .unwrap()
-        .as_ref()
-        .unwrap()
-        .completed_receipts
-        .is_empty());
+    assert!(
+        persistence
+            .snapshot
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .completed_receipts
+            .is_empty()
+    );
 
     let contexts = contexts.lock().unwrap();
     assert_eq!(contexts[0].source_mac, MacAddr::from_slice(&[0x10]));
@@ -242,25 +244,29 @@ async fn every_precommit_failure_is_silent_and_nonmutating() {
     let db = database(Arc::clone(&persistence), 7);
     persistence.fail.store(true, Ordering::Release);
     assert_silent_drop(&db, sink, &authorized, valid.clone()).await;
-    assert!(persistence
-        .snapshot
-        .lock()
-        .unwrap()
-        .as_ref()
-        .unwrap()
-        .records
-        .is_empty());
+    assert!(
+        persistence
+            .snapshot
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .records
+            .is_empty()
+    );
 
     let persistence = Arc::new(MemoryPersistence::default());
     let db = database(Arc::clone(&persistence), 7);
     db.write().await.set_clock_reader(None);
     assert_silent_drop(&db, sink, &authorized, valid).await;
-    assert!(persistence
-        .snapshot
-        .lock()
-        .unwrap()
-        .as_ref()
-        .unwrap()
-        .records
-        .is_empty());
+    assert!(
+        persistence
+            .snapshot
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .records
+            .is_empty()
+    );
 }

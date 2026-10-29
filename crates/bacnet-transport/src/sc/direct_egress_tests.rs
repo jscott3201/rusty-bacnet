@@ -101,9 +101,11 @@ async fn ordinary_direct_expired_queue_and_sealed_registry_never_reopen() {
     let late = pending.commit_with_limits((100, 96), Duration::from_secs(5));
     assert!(!late.is_current());
     assert!(owner.route(&[3; 6]).is_none());
-    assert!(owner
-        .reserve([4; 16], [4; 6], [1; 16], [1; 6], DirectRole::Outbound, 2)
-        .is_err());
+    assert!(
+        owner
+            .reserve([4; 16], [4; 6], [1; 16], [1; 6], DirectRole::Outbound, 2)
+            .is_err()
+    );
     assert!(matches!(
         member.egress.send_npdu(&[1, 0], &[]).await,
         Err(DirectSendError::Unavailable)

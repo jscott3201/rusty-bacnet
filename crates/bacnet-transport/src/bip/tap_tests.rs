@@ -3,7 +3,6 @@
 //! verdict as the node's own listener check; and a transport's receiver
 //! ends once the transport is dropped.
 
-use super::ingress::kept_by_listener;
 use super::*;
 use crate::tap::{FrameTap, TapDirection, TapPeer};
 use crate::udp_metadata::ReceivedDatagram;
@@ -123,13 +122,6 @@ async fn a_broadcast_listener_taps_only_what_the_node_keeps() {
             .count();
         assert_eq!(primary, 0, "case {index}");
     }
-}
-
-#[test]
-fn a_datagram_off_the_listener_is_always_kept() {
-    let data = raw_frame(BvlcFunction::ORIGINAL_UNICAST_NPDU, NPDU);
-    let datagram = bacnet_bip_core::node::Datagram::new(&data, SENDER, None);
-    assert!(kept_by_listener(&datagram));
 }
 
 /// Stopped, a transport's receiver waits on; dropped, it ends.

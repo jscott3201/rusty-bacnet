@@ -5,16 +5,16 @@ use std::time::Duration;
 
 use bacnet_types::error::Error;
 use bytes::BytesMut;
-use tokio::sync::{watch, Mutex};
+use tokio::sync::{Mutex, watch};
 use tracing::{debug, warn};
 
 use crate::sc_frame::{
-    decode_sc_bvlc_result, decode_sc_message, encode_sc_message, ScBvlcResult, ScFunction,
+    ScBvlcResult, ScFunction, decode_sc_bvlc_result, decode_sc_message, encode_sc_message,
 };
 
 use super::{
-    diagnostic_throttle::DiagnosticThrottle, heartbeat, ScConnectError, ScConnection,
-    ScConnectionState, WebSocketPort,
+    ScConnectError, ScConnection, ScConnectionState, WebSocketPort,
+    diagnostic_throttle::DiagnosticThrottle, heartbeat,
 };
 
 fn notify_state(state_tx: Option<&watch::Sender<ScConnectionState>>, state: ScConnectionState) {

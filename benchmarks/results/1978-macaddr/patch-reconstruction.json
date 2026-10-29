@@ -1,0 +1,20 @@
+{
+  "base": "2d82e9a949bb57702f4672705a46b19345bb3d59",
+  "patch_sha256": "b265d1844ca0f20f085645d59a0aede4cd93deb675179f1e1b0db57e15e16938",
+  "scratch": "/var/folders/yr/g3z60l0d09g6_3vqc9ttccx80000gn/T/rb-batch10-gzip-patch-check-4jea550m",
+  "exit_code": 0,
+  "all8_measured_B_files_match": true,
+  "hashes": {
+    "crates/bacnet-client/src/client/dispatch.rs": "7b7d9203cbfa230159cd5c8e65dc6709bb7617059d029af5504635a9dee72148",
+    "crates/bacnet-client/src/client/requests.rs": "7c035636a759f6047d325ccdad560864e86f4699c9df723b4efd237a7dcd2cf7",
+    "crates/bacnet-client/src/client/transaction_peer.rs": "d858f5acfe63a9497d5095358b221ba918463f2d1c4965e7620ca002b415eaa5",
+    "crates/bacnet-endpoint-core/src/coordinator.rs": "441436a133f2bce99138a44a1ffb1e51f49b02b1cdefce70cddda14a7b15a187",
+    "crates/bacnet-endpoint-core/src/coordinator_peer_tests.rs": "91cf033243a15d5ab1973f82f98e4842472fe91db4710b0ed091dfdbf139ed73",
+    "crates/bacnet-server/src/server/lifecycle.rs": "151176580a93e013da7cd2b671794f8964cae7ae5fb59ce18c066ab63fbd9efb",
+    "crates/bacnet-server/src/server/request_peer.rs": "cb3d7dcd6f6e1ca0bc5b7616a9c9720629f1d359e179f301dd3accb2511bca48",
+    "changelog.d/1978-address-copies.md": "edc6fe6fb2c765fc3ace811059619c712eeff320b8d36a61965163307e48f1a9"
+  },
+  "patch_artifact": "candidate.patch.gz",
+  "compressed_sha256": "e0fcb8edf9d1e9a62216a19af456e80003272bc03adeb421edd7ec38dad845dd",
+  "decompressed_matches_original": true
+}

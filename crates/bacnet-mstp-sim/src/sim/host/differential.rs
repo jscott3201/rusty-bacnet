@@ -8,7 +8,7 @@ use bacnet_mstp_core::{Duration as CoreDuration, Instant as CoreInstant};
 use bacnet_transport::mstp::{Echo, MstpConfig, MstpTransport, SerialPort};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::error::Error;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tokio::time::{Duration, Instant};
 
 use crate::line::Character;

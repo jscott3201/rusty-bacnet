@@ -10,8 +10,8 @@ use bacnet_mstp_codec::FrameType;
 use bacnet_mstp_core::MasterState;
 use bacnet_types::enums::{AbortReason, ErrorClass, ErrorCode, RejectReason};
 
-use super::{Pdu, Reply, Summary, CLIENT, LINK_FRAMES, REPLIES};
-use crate::tally::{fnv1a, FNV_OFFSET};
+use super::{CLIENT, LINK_FRAMES, Pdu, REPLIES, Reply, Summary};
+use crate::tally::{FNV_OFFSET, fnv1a};
 
 /// The I-Am, to every network (control 0x20: DNET 0xFFFF, DLEN 0, hop
 /// count 255): Unconfirmed-Request 0x10, I-Am 0x00, then Device 1234

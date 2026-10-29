@@ -6,10 +6,10 @@
 //! distinct outcome that mutates nothing and wakes nobody.
 
 use super::admission::{AdmissionRuntime, ScHubAdmissionDecision, ScHubAdmissionLimits};
-use super::deadline_test_support::{poll_io, request, ClientWs, TestTls};
+use super::deadline_test_support::{ClientWs, TestTls, poll_io, request};
 use super::heartbeat_test_support::clients;
 use super::*;
-use crate::sc_frame::{decode_sc_bvlc_result, ScBvlcResult};
+use crate::sc_frame::{ScBvlcResult, decode_sc_bvlc_result};
 use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 
@@ -128,7 +128,7 @@ async fn allow_policy_registers_with_claimed_values_and_reports_input() {
         Some(Arc::new({
             let seen = seen.clone();
             move |input: &ScHubAdmissionInput| {
-                seen.lock().unwrap().push(*input);
+                seen.lock().unwrap().push(input.clone());
                 ScHubAdmissionDecision::Allow
             }
         })),
@@ -523,12 +523,9 @@ async fn certificate_bindings_missing_leaf_never_commits_or_calls_policy() {
         })),
     );
     runtime.bindings = Some(
-        ScHubCertificateBindings::new(vec![ScHubCertificateBinding::new(
-            [0x42; 16],
-            vec![[0x42; 6]],
-            vec![[1; 32]],
-        )
-        .unwrap()])
+        ScHubCertificateBindings::new(vec![
+            ScHubCertificateBinding::new([0x42; 16], vec![[0x42; 6]], vec![[1; 32]]).unwrap(),
+        ])
         .unwrap(),
     );
     let runtime = Arc::new(runtime);

@@ -1,8 +1,8 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use bacnet_client::client::ClientConfig;
 use bacnet_client::EndpointRequester;
+use bacnet_client::client::ClientConfig;
 use bacnet_encoding::apdu::{decode_apdu, encode_apdu};
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_endpoint_core::coordinator::{
@@ -207,9 +207,11 @@ async fn loopback_shared_runtime_routes_same_invoke_id_by_admitted_role() {
         let response = ReadPropertyACK::decode(&responder_ack.service_ack).unwrap();
         assert_real_value(&response, 42.0);
         responder_wire_tx.send(()).unwrap();
-        assert!(timeout(Duration::from_millis(50), peer_rx.recv())
-            .await
-            .is_err());
+        assert!(
+            timeout(Duration::from_millis(50), peer_rx.recv())
+                .await
+                .is_err()
+        );
         (requester_request.invoke_id, responder_ack.invoke_id, peer)
     });
 

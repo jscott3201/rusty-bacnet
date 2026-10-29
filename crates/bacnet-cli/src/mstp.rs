@@ -542,7 +542,7 @@ pub(crate) fn dedup(names: Vec<String>) -> Vec<String> {
 /// names come first, in place of the kernel names they point to.
 #[cfg(feature = "serial")]
 pub(crate) fn list_ports() -> Result<Vec<String>, String> {
-    use bacnet_transport::mstp_serial::{available_port_infos, PortKind};
+    use bacnet_transport::mstp_serial::{PortKind, available_port_infos};
     let mut listed = Vec::new();
     #[cfg(target_os = "linux")]
     listed.extend(linked_ports(std::path::Path::new("/dev/serial/by-id")));

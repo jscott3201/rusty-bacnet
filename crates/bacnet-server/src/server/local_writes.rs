@@ -10,8 +10,8 @@ mod finish;
 
 #[path = "local_access_inputs.rs"]
 mod access_inputs;
-use finish::local_runtime;
 pub(super) use finish::Committed;
+pub(super) use finish::local_runtime;
 
 #[cfg(test)]
 #[path = "input_present_value_tests.rs"]
@@ -101,10 +101,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let mut db = Arc::clone(&self.db).write_owned().await;
         let mut commit = crate::committed_cov::BackgroundCommit::new();
         commit.before_change(&db, *oid);
-        let object = db.get_mut(oid).ok_or(Error::Protocol {
-            class: ErrorClass::OBJECT,
-            code: ErrorCode::UNKNOWN_OBJECT,
-        })?;
+        let object = db.get_mut(oid).ok_or(Error::protocol(
+            ErrorClass::OBJECT,
+            ErrorCode::UNKNOWN_OBJECT,
+        ))?;
         object.set_life_safety_operation_expected_internal(operation)?;
         // Only a Life Safety Point or Zone reports the change. Another object
         // whose setter takes the operation owes no COV, as before (#1520).
@@ -934,10 +934,10 @@ fn precheck(
     write: LocalWrite<'_>,
     value: &PropertyValue,
 ) -> Result<(), Error> {
-    let object = db.get(oid).ok_or(Error::Protocol {
-        class: ErrorClass::OBJECT,
-        code: ErrorCode::UNKNOWN_OBJECT,
-    })?;
+    let object = db.get(oid).ok_or(Error::protocol(
+        ErrorClass::OBJECT,
+        ErrorCode::UNKNOWN_OBJECT,
+    ))?;
     let LocalWrite::Property {
         property,
         array_index,

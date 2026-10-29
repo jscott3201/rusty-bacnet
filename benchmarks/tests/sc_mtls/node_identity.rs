@@ -6,8 +6,8 @@ use futures_util::{FutureExt, SinkExt, StreamExt};
 use std::{future::Future, panic::AssertUnwindSafe, time::Duration};
 use tokio::{net::TcpListener, sync::mpsc};
 use tokio_tungstenite::tungstenite::{
-    handshake::server::{ErrorResponse, Request, Response},
     Message,
+    handshake::server::{ErrorResponse, Request, Response},
 };
 
 const UUID: [u8; 16] = [

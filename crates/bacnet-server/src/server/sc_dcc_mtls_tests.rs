@@ -7,7 +7,7 @@ const ENABLE: EnableDisable = EnableDisable::ENABLE;
 
 #[path = "sc_dcc_mtls_support.rs"]
 mod support;
-use support::{bounded, run, Certificates, Outcome, PASSWORD, PEERS};
+use support::{Certificates, Outcome, PASSWORD, PEERS, bounded, run};
 
 #[path = "sc_policy_principal_tests.rs"]
 mod policy_principal;

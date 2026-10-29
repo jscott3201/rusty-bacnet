@@ -2,7 +2,7 @@ use super::mutation_tests::MutationAuthorizer;
 use super::*;
 use crate::mutation::{MutationDecisionCounters, MutationServiceCounters};
 use crate::server::requests::mutation_tests::{
-    apdu, assert_denied, cases, oid, route, value, wpm, Fixture, SOURCE,
+    Fixture, SOURCE, apdu, assert_denied, cases, oid, route, value, wpm,
 };
 use crate::server::test_transport::TestTransport;
 use bacnet_network::layer::ReceivedApdu;

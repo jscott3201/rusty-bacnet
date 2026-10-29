@@ -11,6 +11,7 @@ use bacnet_encoding::constructed::{encode_destination, encode_destination_list};
 use bacnet_encoding::{primitives, tags};
 use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::error::RemoteError;
 use bytes::BytesMut;
 
 const CAP: usize = MAX_RECIPIENT_LIST_DESTINATIONS;
@@ -49,10 +50,10 @@ fn write(nc: &mut NotificationClass, value: PropertyValue) -> Result<(), Error> 
 /// Assert a plain class / code refusal, naming no element.
 fn assert_refused(result: Result<(), Error>, class: ErrorClass, code: ErrorCode) {
     match result {
-        Err(Error::Protocol {
+        Err(Error::Remote(RemoteError::Error {
             class: actual_class,
             code: actual_code,
-        }) => assert_eq!((actual_class, actual_code), (class, code)),
+        })) => assert_eq!((actual_class, actual_code), (class, code)),
         other => panic!("expected {class:?}/{code:?}, got {other:?}"),
     }
 }

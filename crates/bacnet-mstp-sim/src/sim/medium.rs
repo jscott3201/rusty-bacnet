@@ -4,7 +4,7 @@ use bacnet_mstp_codec::{DecodeEvent, FrameHeader};
 use bacnet_mstp_core::{Duration, Instant};
 
 use super::master::Input;
-use super::{describe, tie_of, Event, NodeKind, Sim, TxMeta};
+use super::{Event, NodeKind, Sim, TxMeta, describe, tie_of};
 use crate::event::Class;
 use crate::line::{Character, Driver, Next, Transmission, TxId};
 use crate::report::WireFrame;

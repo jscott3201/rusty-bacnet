@@ -103,14 +103,15 @@ fn wpm_file_resize_and_network_configuration_keep_committed_state() {
     let before = port
         .read_property(PropertyIdentifier::BACNET_IP_UDP_PORT, None)
         .unwrap();
-    assert!(port
-        .write_property(
+    assert!(
+        port.write_property(
             PropertyIdentifier::BACNET_IP_UDP_PORT,
             None,
             PropertyValue::Unsigned(65536),
             None
         )
-        .is_err());
+        .is_err()
+    );
     assert_eq!(
         port.read_property(PropertyIdentifier::BACNET_IP_UDP_PORT, None)
             .unwrap(),

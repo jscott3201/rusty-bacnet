@@ -1,5 +1,6 @@
 use super::*;
 use bacnet_encoding::constructed::encode_bacnet_property_value;
+use bacnet_types::error::RemoteError;
 
 use bacnet_objects::analog::{AnalogOutputObject, AnalogValueObject};
 use bacnet_objects::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
@@ -48,10 +49,10 @@ fn detailed(db: &mut ObjectDatabase, request: &[u8]) -> WritePropertyMultipleOut
 }
 
 fn assert_protocol(error: Error, class: ErrorClass, code: ErrorCode) {
-    let Error::Protocol {
+    let Error::Remote(RemoteError::Error {
         class: actual_class,
         code: actual_code,
-    } = error
+    }) = error
     else {
         panic!("expected protocol error, got {error:?}");
     };

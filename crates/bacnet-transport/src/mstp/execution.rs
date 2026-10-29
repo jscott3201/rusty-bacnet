@@ -137,13 +137,13 @@ impl MstpThreadConfig {
     /// at all is [`Error::Transport`] with
     /// [`std::io::ErrorKind::Unsupported`].
     pub fn validate(&self) -> Result<(), Error> {
-        if let Some(priority) = self.realtime_priority {
-            if !(MIN_REALTIME_PRIORITY..=MAX_REALTIME_PRIORITY).contains(&priority) {
-                return Err(Error::Encoding(format!(
-                    "MS/TP thread realtime_priority {priority} is outside \
+        if let Some(priority) = self.realtime_priority
+            && !(MIN_REALTIME_PRIORITY..=MAX_REALTIME_PRIORITY).contains(&priority)
+        {
+            return Err(Error::Encoding(format!(
+                "MS/TP thread realtime_priority {priority} is outside \
                      {MIN_REALTIME_PRIORITY}..={MAX_REALTIME_PRIORITY}"
-                )));
-            }
+            )));
         }
         if let Some(cpu) = self.cpu_affinity.iter().find(|cpu| **cpu >= MAX_CPUS) {
             return Err(Error::Encoding(format!(
@@ -268,7 +268,7 @@ pub(crate) fn apply(config: &MstpThreadConfig) -> Result<MstpExecutionStatus, Er
 /// what the kernel reads back, which must be the same.
 #[cfg(target_os = "linux")]
 fn set_affinity(wanted: &[usize]) -> Result<Vec<usize>, Error> {
-    use nix::sched::{sched_getaffinity, sched_setaffinity, CpuSet};
+    use nix::sched::{CpuSet, sched_getaffinity, sched_setaffinity};
     use nix::unistd::Pid;
 
     let failed = |what: &str, errno: nix::Error| {

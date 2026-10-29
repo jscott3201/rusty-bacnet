@@ -263,15 +263,17 @@ fn a_status_poll_resyncs_and_records_only_changes() {
     assert_eq!(app.sc.missed, 7);
     let gap = app.sc.timeline.back().unwrap();
     assert_eq!(gap.text, "... 7 events missed; status resynced");
-    assert!(screen(
-        &mut {
-            app.screen = Screen::Sc;
-            app
-        },
-        120,
-        40
-    )
-    .contains("Events (7 missed)"));
+    assert!(
+        screen(
+            &mut {
+                app.screen = Screen::Sc;
+                app
+            },
+            120,
+            40
+        )
+        .contains("Events (7 missed)")
+    );
 }
 
 #[test]

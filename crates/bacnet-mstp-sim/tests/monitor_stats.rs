@@ -6,7 +6,7 @@ mod common;
 
 use std::time::Duration as StdDuration;
 
-use bacnet_mstp_codec::{decode_frame_in_place, FrameType};
+use bacnet_mstp_codec::{FrameType, decode_frame_in_place};
 use bacnet_mstp_sim::{Fault, MasterSpec, Sim, SimConfig, WireFrame};
 use bacnet_transport::mstp::monitor::{LineErrorKind, LineEvent, MaxMaster, MonitorStats};
 

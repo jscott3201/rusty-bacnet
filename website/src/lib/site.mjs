@@ -5,7 +5,7 @@ export const base = '/rusty-bacnet/';
  * names every other place that must match it (plain Markdown pages and the
  * loopback lab script).
  */
-export const release = '0.14.0';
+export const release = '0.15.0';
 export const repository = 'https://github.com/jscott3201/rusty-bacnet';
 /** The download URL of one of the release's assets on its GitHub release copy. */
 export function releaseAsset(file) {
@@ -18,3 +18,8 @@ export function sitePath(path = '') {
   }
   return base + path.replace(/^\/+/, '');
 }
+/**
+ * The Pagefind weight of a page body with a generated reference region
+ * (components/DocsMarkdownContent.astro); plain text weighs 1.
+ */
+export const generatedSearchWeight = 0.4;

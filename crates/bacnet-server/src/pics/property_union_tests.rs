@@ -209,13 +209,13 @@ fn pics_property_union_required_row_wins_and_access_is_a_union() {
 
 #[test]
 fn pics_device_union_applies_execution_view_to_every_instance() {
+    use PropertyIdentifier as P;
     use bacnet_objects::{
         property_metadata::{PropertyMetadata, PropertyWriteCapability},
         traits::BACnetObject,
     };
     use bacnet_types::{error::Error, primitives::ObjectIdentifier};
     use std::borrow::Cow;
-    use PropertyIdentifier as P;
 
     struct DeclaredDevice {
         instance: u32,

@@ -67,7 +67,7 @@ use bacnet_types::enums::{
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 
-use super::{simulated_reliability, DoorStateReport};
+use super::{DoorStateReport, simulated_reliability};
 use crate::common;
 
 /// The door state a client can simulate while Out_Of_Service is TRUE.

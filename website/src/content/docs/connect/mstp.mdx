@@ -1,0 +1,66 @@
+---
+title: "Commission an MS/TP lab"
+description: "Separate the Rust state machine, serial adapter behavior, and on-wire timing."
+---
+
+import Diagram from '../../../components/Diagram.astro';
+import { release, repository } from '../../../lib/site.mjs';
+
+
+MS/TP is a token-passing serial transport. Fast protocol code is useful, but it does not by itself prove that a host, driver, and RS-485 adapter meet the required on-wire timing.
+
+**Use an isolated, authorized lab trunk first.** The included Python example is a token-participating master, not a passive serial sniffer.
+
+## Choose the supported surface
+
+The Python package supports `transport="mstp"` on `BACnetClient` and `BACnetServer`, and `MstpEndpoint` for one device that both requests and responds; every release wheel includes it. Rust has the serial transport itself. The `bacnet` CLI joins a trunk as a master station with `--mstp PORT` and `--mstp-mac` (in the Linux release executables, or a source build with the `serial` feature), and `bacnet mstp-ports` lists the ports; the <a href={`${repository}/blob/v${release}/docs/CLI.md#mstp`}>CLI reference</a> has the flags, the Linux `dialout` group and the FTDI latency timer.
+
+Treat Linux as the initial documentation/qualification lane. Serial path examples for macOS or Windows are not evidence that those platform/adapter combinations are qualified.
+
+## Prepare the trunk
+
+Use the release package, or a source build with the `serial` feature, and an adapter whose transmit-direction behavior is suitable for this deployment. The example asks for automatic transmit-direction control; adapter and driver behavior vary.
+
+Choose a unique local master MAC in `0..=127`, a suitable device instance, and a baud rate matching the existing trunk. Coordinate `Max_Master` with the actual station address plan. Check wiring, polarity, common/reference arrangements, isolation, termination, and biasing against the equipment and adapter documentation; this page is not an electrical wiring specification.
+
+<Diagram file="mstp-boundaries.svg" title="From application to RS-485 wire" description="MS/TP qualification spans host scheduling, adapter behavior, and the RS-485 wire." />
+
+## Start the repository's mini-device
+
+From a v{release} source checkout, which holds the example script, with the Python package installed:
+
+```sh
+python examples/python/mstp_mini_device.py \
+  --serial /dev/serial/by-id/usb-YOUR_ADAPTER \
+  --baud 38400 \
+  --mac 3 \
+  --max-master 127 \
+  --max-info-frames 1 \
+  --instance 123001
+```
+
+Replace the serial path, MAC, baud, and device instance before connecting. The example's default baud is `38400`; it is not a universal setting for every trunk. The Python path accepts configured rates of 9600, 19200, 38400, 57600, 76800, and 115200; acceptance of a numeric setting does not establish a tested hardware matrix.
+
+The example passes `serial_port`, `mstp_baud`, `mstp_mac`, `mstp_max_master`, and `mstp_max_info_frames` to `BACnetServer`. The <a href={`${repository}/blob/v${release}/docs/python-api.md`}>Python API</a> documents the same options for `BACnetClient` and the `MstpEndpoint` alternative, and the rest they all take: `mstp_extended_frames` (off by default) for NPDUs of up to 1497 octets, `mstp_echo` and `mstp_echo_grace_ms` for an adapter that hears its own frames, and `mstp_transmit_latency_pad_ms`, `mstp_usage_timeout_ms` and `mstp_reply_timeout_ms` for USB adapter latency (by default a 4 ms pad on Windows and none elsewhere, and 35 ms and 300 ms waits).
+
+## Observe before increasing load
+
+Confirm stable discovery and a small property read with a peer. Then qualify under representative host and bus load. Record the operating system/kernel, adapter, driver, baud rate, station count, direction-control mode, and load conditions.
+
+On-wire timing measurements are more informative than an average Rust function duration. USB buffering and host scheduling can change when bytes reach the wire or application. Do not infer full Clause 9 behavior, extended-frame coverage (off unless `mstp_extended_frames=True`), segmented MS/TP behavior, or a combined client/server endpoint from one successful mini-device demonstration.
+
+## Is a real-time kernel required?
+
+Do not make a blanket claim either way. Determine the result on the target hardware under representative load. The project's timing-qualification issue tracks the evidence needed to decide whether ordinary Linux is sufficient or whether a different adapter, native UART, a dedicated execution mode, PREEMPT_RT, or a separate serial front-end is justified.
+
+On Linux, the Rust transport's dedicated thread and the CLI (`--mstp-rt-priority`, `--mstp-cpus`) can run the MS/TP loop under `SCHED_FIFO` and pin it to CPUs; the Python bindings don't expose these settings. [Keep an MS/TP trunk reliable on Linux](/rusty-bacnet/connect/mstp-realtime/) covers the timing, these settings, privileges and how to measure the result.
+
+## Stop and investigate
+
+Repeated token loss, unstable latency, duplicate station addresses, or unexplained retries are reasons to stop expanding the test—not reasons to claim success because one read completed. Return to serial configuration, direction timing, and independent bus measurements.
+
+## Sources and release scope
+
+These instructions target **v{release}**. Source review is not a claim of hardware qualification.
+
+<a href={`${repository}/blob/v${release}/examples/python/mstp_mini_device.py`}>Mini-device source</a> · <a href={`${repository}/blob/v${release}/examples/python/README.md`}>Python example requirements</a> · [On-wire qualification work](https://github.com/jscott3201/rusty-bacnet/issues/502).

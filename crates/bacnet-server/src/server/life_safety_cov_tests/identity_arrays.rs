@@ -151,9 +151,11 @@ async fn cov_identity_multiple_array_coordinates_duplicates_and_refused_first_ch
         .cloned()
         .collect::<Vec<_>>();
     assert_eq!(retained.len(), 3);
-    assert!(retained
-        .iter()
-        .all(|s| s.monitored_property_array_index != Some(0)));
+    assert!(
+        retained
+            .iter()
+            .all(|s| s.monitored_property_array_index != Some(0))
+    );
 }
 
 #[tokio::test]
@@ -228,7 +230,9 @@ async fn cov_identity_single_array_coordinates_cancel_exactly() {
         .cloned()
         .collect::<Vec<_>>();
     assert_eq!(retained.len(), 3);
-    assert!(retained
-        .iter()
-        .all(|s| s.monitored_property_array_index != Some(1)));
+    assert!(
+        retained
+            .iter()
+            .all(|s| s.monitored_property_array_index != Some(1))
+    );
 }

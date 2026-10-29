@@ -1,9 +1,9 @@
 //! Saves that run off the database lock (#1270): staged writes, and the
 //! operation task's coalesced saves.
 
-use super::storage::{block_on, persistent, MemoryPersistence, WAIT};
+use super::storage::{MemoryPersistence, WAIT, block_on, persistent};
 use super::*;
-use crate::durable::{DurableWrites, SaveWait, StageStep, STAGED_WRITE_LIFETIME};
+use crate::durable::{DurableWrites, STAGED_WRITE_LIFETIME, SaveWait, StageStep};
 use bacnet_types::enums::PropertyIdentifier as P;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
@@ -519,8 +519,10 @@ fn settling_forgotten_writes_puts_storage_back_and_frees_the_forwarder() {
     nf.wait_for_saves();
     assert_eq!(storage.saved(), list);
     assert!(nf.settle_forgotten_writes().unwrap().is_ready());
-    assert!(NotificationForwarderObject::new(2, "NF-2")
-        .unwrap()
-        .settle_forgotten_writes()
-        .is_none());
+    assert!(
+        NotificationForwarderObject::new(2, "NF-2")
+            .unwrap()
+            .settle_forgotten_writes()
+            .is_none()
+    );
 }

@@ -316,12 +316,14 @@ fn cov_multiple_context_lifetime_refreshes_and_expires() {
         .map(|sub| (sub.expires_at, sub.max_notification_delay()))
         .collect();
     assert_eq!(multiple_terms, vec![(Some(refreshed_expiry), Some(9)); 2]);
-    assert!(table
-        .subs
-        .values()
-        .any(|sub| sub.notification_kind == CovNotificationKind::Single
-            && sub.expires_at == Some(original_expiry)
-            && sub.max_notification_delay().is_none()));
+    assert!(
+        table
+            .subs
+            .values()
+            .any(|sub| sub.notification_kind == CovNotificationKind::Single
+                && sub.expires_at == Some(original_expiry)
+                && sub.max_notification_delay().is_none())
+    );
 
     table
         .subscribe_multiple(

@@ -3,7 +3,7 @@
 //! minutes old, read through the same request paths and sampling as the
 //! Device's COV lists.
 use super::*;
-use bacnet_encoding::npdu::{encode_npdu, Npdu};
+use bacnet_encoding::npdu::{Npdu, encode_npdu};
 use bacnet_services::read_range::{RangeSpec, ReadRangeAck, ReadRangeRequest};
 use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
 

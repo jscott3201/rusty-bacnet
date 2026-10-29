@@ -1,0 +1,5 @@
+{
+  "A": "exact source verified",
+  "B": "exact source verified",
+  "wrong_revision_rejected": "A: checkout must be at 0000000000000000000000000000000000000000"
+}

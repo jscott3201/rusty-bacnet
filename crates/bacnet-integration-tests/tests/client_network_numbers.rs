@@ -5,7 +5,7 @@ use bacnet_transport::bip::BipTransport;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use tokio::{
     net::UdpSocket,
-    time::{timeout, Duration},
+    time::{Duration, timeout},
 };
 
 // The closing rebinds can lose the freed port to another process (#1419).

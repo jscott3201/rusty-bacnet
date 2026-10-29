@@ -168,15 +168,19 @@ fn corrupt_files_do_not_load() {
 #[test]
 fn the_wrong_kind_of_value_does_not_build() {
     let kelvin = Memory::holding(ColorOutputValue::Kelvin(3000));
-    assert!(ColorObject::new(1, "c")
-        .unwrap()
-        .with_output_persistence(kelvin)
-        .is_err());
+    assert!(
+        ColorObject::new(1, "c")
+            .unwrap()
+            .with_output_persistence(kelvin)
+            .is_err()
+    );
     let xy = Memory::holding(ColorOutputValue::Xy(BACnetXyColor::new(0.3, 0.3)));
-    assert!(ColorTemperatureObject::new(1, "ct")
-        .unwrap()
-        .with_output_persistence(xy)
-        .is_err());
+    assert!(
+        ColorTemperatureObject::new(1, "ct")
+            .unwrap()
+            .with_output_persistence(xy)
+            .is_err()
+    );
     assert!(FileColorOutputPersistence::new("").is_err());
 }
 
@@ -256,10 +260,12 @@ fn a_failed_save_is_tried_again_at_settle() {
     ct.wait_for_output_saves();
     assert_eq!(storage.saves.load(Ordering::SeqCst), 2);
     assert_eq!(counters.failed_saves(), 1);
-    assert!(ColorObject::new(1, "c")
-        .unwrap()
-        .output_save_counters()
-        .is_none());
+    assert!(
+        ColorObject::new(1, "c")
+            .unwrap()
+            .output_save_counters()
+            .is_none()
+    );
 }
 
 #[test]

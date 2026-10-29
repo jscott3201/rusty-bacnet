@@ -192,6 +192,7 @@ impl LogWindow {
 mod tests {
     use super::*;
     use bacnet_types::enums::{ErrorClass, ErrorCode};
+    use bacnet_types::error::RemoteError;
 
     fn at(day: u8, hour: u8) -> (Date, Time) {
         (
@@ -311,7 +312,7 @@ mod tests {
             let mut copy = span;
             let error = copy.write(P::STOP_TIME, &value).unwrap().unwrap_err();
             assert!(
-                matches!(error, Error::Protocol { class, code: c }
+                matches!(error, Error::Remote(RemoteError::Error { class, code: c })
                     if class == ErrorClass::PROPERTY
                         && c == code),
                 "{error:?}"

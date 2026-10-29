@@ -2,6 +2,8 @@
 //! app and views show: the device card, the object list, and one object's
 //! properties, health and priority array.
 
+use bacnet_ops::engine::ReadVia;
+use bacnet_ops::label::PRIORITIES;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::ObjectIdentifier;
 
@@ -48,15 +50,6 @@ pub(crate) enum ReadName {
     Refused,
     /// The device didn't answer, or the read was given up with it.
     Unreachable,
-}
-
-/// How a property list was read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ReadVia {
-    /// One ReadPropertyMultiple.
-    Rpm,
-    /// ReadProperty per property, after the device refused RPM.
-    Rp,
 }
 
 /// One property and its value, or why it could not be read.
@@ -109,9 +102,6 @@ impl Health {
     }
 }
 
-/// Number of command priorities (Clause 19.2).
-pub(crate) const PRIORITIES: usize = 16;
-
 /// A commandable object's priority array, Relinquish_Default and
 /// Present_Value, already formatted.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -130,19 +120,6 @@ impl PriorityView {
     /// relinquished and Relinquish_Default applies.
     pub(crate) fn winner(&self) -> Option<usize> {
         self.slots.iter().position(Option::is_some).map(|i| i + 1)
-    }
-}
-
-/// The standard use of each command priority, paraphrasing Table 19-1:
-/// six are assigned, and the rest are left to the site.
-pub(crate) fn priority_label(priority: usize) -> &'static str {
-    match priority {
-        1 => "life safety, manual",
-        2 => "life safety, automatic",
-        5 => "critical equipment",
-        6 => "minimum on/off time",
-        8 => "operator, manual",
-        _ => "site defined",
     }
 }
 

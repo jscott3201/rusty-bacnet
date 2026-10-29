@@ -23,7 +23,7 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc;
 
 use super::EventSink;
-use crate::tui::app::sc::{describe, Severity};
+use crate::tui::app::sc::{Severity, describe};
 use crate::tui::message::WorkerEvent;
 use crate::tui::sc::{CertSummary, LinkEvent, LinkSnapshot, ScReport};
 

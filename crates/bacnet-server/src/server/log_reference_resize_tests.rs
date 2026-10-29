@@ -8,6 +8,7 @@ use super::*;
 use bacnet_objects::trend::TrendLogMultipleObject;
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
 use bacnet_types::enums::ObjectType;
+use bacnet_types::error::RemoteError;
 
 const LDOP: PropertyIdentifier = PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY;
 
@@ -51,7 +52,7 @@ async fn total(h: &Harness) -> PropertyValue {
 
 fn assert_refused(result: Result<(), Error>, class: ErrorClass, code: ErrorCode) {
     assert!(
-        matches!(result, Err(Error::Protocol { class: c, code: e })
+        matches!(result, Err(Error::Remote(RemoteError::Error { class: c, code: e }))
             if c == class && e == code),
         "expected {class:?} / {code:?}, got {result:?}"
     );

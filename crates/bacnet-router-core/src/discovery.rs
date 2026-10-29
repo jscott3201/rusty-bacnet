@@ -16,7 +16,7 @@
 
 use core::fmt;
 
-use crate::{swap_apart, Duration, Instant};
+use crate::{Duration, Instant, swap_apart};
 
 /// When a network was last looked for.
 #[derive(Debug, Clone, Copy)]

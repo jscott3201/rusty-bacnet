@@ -4,8 +4,8 @@
 use bacnet_mstp_codec::{Frame, FrameType};
 use bacnet_mstp_core::npdu::NetworkPriority;
 use bacnet_mstp_core::{
-    Action, ConfigError, Direction, FixedQueues, Instant, MasterCore, MasterState, MstpCoreConfig,
-    TransmitError, TransmitId, MIN_RX_STORAGE,
+    Action, ConfigError, Direction, FixedQueues, Instant, MIN_RX_STORAGE, MasterCore, MasterState,
+    MstpCoreConfig, TransmitError, TransmitId,
 };
 
 type Queues = FixedQueues<4, 4>;
@@ -129,12 +129,14 @@ fn receive_storage_must_hold_a_header() {
     }
     let mut rx = [0u8; MIN_RX_STORAGE];
     let mut actions = Actions::new();
-    assert!(MasterCore::from_parts(
-        config(),
-        Queues::new(),
-        &mut rx,
-        &mut actions,
-        Instant::ZERO
-    )
-    .is_ok());
+    assert!(
+        MasterCore::from_parts(
+            config(),
+            Queues::new(),
+            &mut rx,
+            &mut actions,
+            Instant::ZERO
+        )
+        .is_ok()
+    );
 }

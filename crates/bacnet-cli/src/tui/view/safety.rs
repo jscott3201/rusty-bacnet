@@ -1,17 +1,21 @@
-//! Write session dialogs: arming, the write form, the preview with its
-//! confirmation tier, the result, the ledger and the exit guard.
+//! Write session dialogs: arming, the write form, the device management
+//! password prompt, the preview with its confirmation tier, the result,
+//! the ledger and the exit guard.
 
+use bacnet_ops::label::object_label;
+use bacnet_types::enums::EnableDisable;
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Padding, Paragraph, Wrap};
-use ratatui::Frame;
 
-use super::{centered, Theme};
-use crate::tui::app::objects::object_label;
+use super::{Theme, centered};
 use crate::tui::app::safety::{Form, Modal};
 use crate::tui::app::{App, Link};
+use crate::tui::safety::audit::Secret;
 use crate::tui::safety::ledger::{Entry, State};
-use crate::tui::safety::{Effect, Gate, Occupancy, Outcome, Planned, Preview, Tier};
+use crate::tui::safety::manage::{Action, DccTime, MAX_PASSWORD, Request};
+use crate::tui::safety::{Change, Effect, FrontEnd, Gate, Occupancy, Outcome, Planned, Tier};
 
 /// Draw `modal` over the screen.
 pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, modal: &Modal, theme: &Theme) {
@@ -34,14 +38,18 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, modal: &Modal, them
                 Line::styled("Esc closes this view.", theme.dim()),
             ],
         ),
+        Modal::Password { request, typed, .. } => (
+            format!(" {}: device {} ", request.action.service(), request.device),
+            password(request, typed, theme),
+        ),
         Modal::Confirm {
-            preview,
+            change,
             typed,
             error,
             ..
         } => (
-            format!(" Confirm ({}) ", tier_name(&preview.gate)),
-            confirm(preview, typed, error.as_deref(), theme),
+            format!(" Confirm ({}) ", tier_name(&change.gate())),
+            confirm(change, typed, error.as_deref(), theme),
         ),
         Modal::Result(outcomes) => (" Result ".to_string(), result(outcomes, theme)),
         Modal::Ledger { notice, confirm } => (
@@ -187,25 +195,97 @@ fn item_lines(item: &Planned, theme: &Theme) -> Vec<Line<'static>> {
     lines
 }
 
-fn confirm(
-    preview: &Preview,
-    typed: &str,
-    error: Option<&str>,
-    theme: &Theme,
-) -> Vec<Line<'static>> {
+/// The masked password prompt: one `*` a character, never the text.
+fn password(request: &Request, typed: &Secret, theme: &Theme) -> Vec<Line<'static>> {
+    vec![
+        Line::raw(request.label()),
+        Line::raw(""),
+        Line::styled(
+            format!("> Password  {}_", "*".repeat(typed.chars())),
+            theme.selected(),
+        ),
+        Line::styled(
+            format!(
+                "Blank sends none. At most {MAX_PASSWORD} characters; never shown, stored or logged."
+            ),
+            theme.dim(),
+        ),
+        Line::styled(
+            "Enter continues to the confirmation | Esc cancels and clears it",
+            theme.dim(),
+        ),
+    ]
+}
+
+/// What a device management request will do, for its confirmation.
+fn request_lines(request: &Request, theme: &Theme) -> Vec<Line<'static>> {
+    let warning = match request.action {
+        Action::Dcc { .. } => {
+            "The device may stop answering or initiating BACnet traffic until enabled again."
+        }
+        Action::Reinit { .. } => "The device may restart or change its backup or restore state.",
+    };
+    let password = if request.password.is_some() {
+        "given (hidden)"
+    } else {
+        "none"
+    };
+    let mut lines = vec![
+        Line::styled(request.label(), theme.accent()),
+        Line::raw(format!("  password: {password}")),
+        Line::styled(format!("  ! {warning}"), theme.warn()),
+    ];
+    if let Action::Dcc { state, time } = request.action {
+        if state == EnableDisable::DISABLE {
+            lines.push(Line::styled(
+                "  ! disable is deprecated (Clause 16.1); current devices refuse it.",
+                theme.warn(),
+            ));
+        }
+        if time == DccTime::Forever && state != EnableDisable::ENABLE {
+            lines.push(Line::styled(
+                "  ! No time limit: it lasts until a dcc enable or a restart.",
+                theme.warn(),
+            ));
+        }
+    }
+    lines.push(Line::styled(
+        "  ! Not kept in the ledger: revert can't undo it.",
+        theme.warn(),
+    ));
+    lines
+}
+
+fn confirm(change: &Change, typed: &str, error: Option<&str>, theme: &Theme) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    if preview.batch {
-        lines.push(Line::raw(format!(
-            "One WritePropertyMultiple of {} write(s) to device {}:",
-            preview.items.len(),
-            preview.device
-        )));
-    }
-    for item in &preview.items {
-        lines.extend(item_lines(item, theme));
-    }
+    let (gate, why_t3) = match change {
+        Change::Write(preview) => {
+            if preview.batch {
+                lines.push(Line::raw(format!(
+                    "One WritePropertyMultiple of {} write(s) to device {}:",
+                    preview.items.len(),
+                    preview.device
+                )));
+            }
+            for item in &preview.items {
+                lines.extend(item_lines(item, theme));
+            }
+            (
+                preview.gate.clone(),
+                "T3: this commands a life-safety, critical or reserved priority.",
+            )
+        }
+        Change::Device(request) => {
+            lines.extend(request_lines(request, theme));
+            (
+                request.gate(),
+                "T3: device management reaches the whole device.",
+            )
+        }
+    };
+    let device = change.device();
     lines.push(Line::raw(""));
-    match &preview.gate {
+    match &gate {
         Gate::Allowed(Tier::T1) => lines.push(Line::styled(
             "T1: Enter sends it | Esc cancels",
             theme.accent(),
@@ -215,13 +295,9 @@ fn confirm(
             theme.warn(),
         )),
         Gate::Allowed(Tier::T3) => {
-            lines.push(Line::styled(
-                "T3: this commands a life-safety, critical or reserved priority.",
-                theme.danger(),
-            ));
+            lines.push(Line::styled(why_t3, theme.danger()));
             lines.push(Line::raw(format!(
-                "Type the device instance ({}) and Enter to send: {typed}_",
-                preview.device
+                "Type the device instance ({device}) and Enter to send: {typed}_"
             )));
         }
         Gate::Blocked(why) => {
@@ -262,10 +338,17 @@ fn entry_line(app: &App, entry: &Entry, theme: &Theme) -> Line<'static> {
         (false, true) => " [kept, earlier run]",
         (false, false) => " [earlier run]",
     };
+    // Another front end's change (an MCP agent's, #2068), named with its
+    // principal: the TUI reverts it like its own.
+    let by = match (&entry.origin.front_end, &entry.origin.principal) {
+        (FrontEnd::Tui, _) => String::new(),
+        (front_end, Some(principal)) => format!(" [{}: {principal}]", front_end.name()),
+        (front_end, None) => format!(" [{}]", front_end.name()),
+    };
     Line::from(vec![
         Span::raw(entry.label()),
         Span::raw(format!(": {} (undo: {undo})", entry.written.text)),
-        Span::styled(format!("{state}{origin}"), theme.warn()),
+        Span::styled(format!("{state}{origin}{by}"), theme.warn()),
     ])
 }
 

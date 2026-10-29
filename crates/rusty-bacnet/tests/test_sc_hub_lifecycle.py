@@ -99,7 +99,7 @@ class HubConstructorTests(unittest.TestCase):
 
     def test_invalid_probe_unicast_and_rate_settings_fail_before_io(self):
         timing = ("probe_scan_interval_ms", "probe_idle_age_ms", "probe_ack_age_ms",
-                  "probe_send_budget_ms", "relay_send_budget_ms")
+                  "probe_send_budget_ms", "probe_liveness_bound_ms", "relay_send_budget_ms")
         rates = ("broadcast_sender_burst", "broadcast_sender_per_second",
                  "broadcast_global_burst", "broadcast_global_per_second")
         for field in timing + rates:
@@ -112,6 +112,10 @@ class HubConstructorTests(unittest.TestCase):
                 maximum = (2**63 - 1) if field in timing else (2**64 - 1) // 1_000_000_000
                 with self.assertRaises(ValueError):
                     ScHub(**hub_kwargs(**{field: maximum + 1}))
+        # The liveness bound is capped at one day (#2141).
+        ScHub(**hub_kwargs(probe_liveness_bound_ms=86_400_000))
+        with self.assertRaises(ValueError):
+            ScHub(**hub_kwargs(probe_liveness_bound_ms=86_400_001))
 
     def test_deny_uuid_replacement_is_validated_without_io(self):
         with socket.socket() as occupied:

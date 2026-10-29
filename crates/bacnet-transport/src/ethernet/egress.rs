@@ -24,7 +24,7 @@ pub(super) fn send_whole_frame(
                 return Err(io::Error::new(
                     io::ErrorKind::WriteZero,
                     format!("short Ethernet send: {sent} of {} octets", frame.len()),
-                ))
+                ));
             }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
             Err(error) => return Err(error),

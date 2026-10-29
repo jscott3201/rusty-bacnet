@@ -49,6 +49,7 @@
 //!
 //! [`ObjectDatabase::follow_event_algorithm_inhibit`]: crate::database::ObjectDatabase::follow_event_algorithm_inhibit
 
+use crate::prelude::*;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier as P};
 use bacnet_types::error::Error;
@@ -235,7 +236,7 @@ impl ReportingOptions {
                 // decodes, and is one short of three.
                 let values = match value {
                     PropertyValue::List(values) => values.as_slice(),
-                    single => std::slice::from_ref(single),
+                    single => core::slice::from_ref(single),
                 };
                 let texts = values.iter().map(label).collect::<Result<Vec<_>, _>>()?;
                 self.message_texts_config = texts

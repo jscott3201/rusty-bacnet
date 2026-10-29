@@ -10,9 +10,9 @@ use alloc::vec;
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_services::who_is::{DeviceInstanceRange, IAmRequest, WhoIsRequest};
+use bacnet_types::MacAddr;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier, RejectReason, Segmentation};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
-use bacnet_types::MacAddr;
 
 use super::{Decoded, Summary};
 

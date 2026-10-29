@@ -1,6 +1,6 @@
 [
   {
-    "label": "Start with v0.14",
+    "label": "Start with v0.15",
     "items": [
       {
         "label": "Choose your path",
@@ -33,48 +33,52 @@
     ]
   },
   {
-    "label": "Build and integrate",
+    "label": "Connect to a network",
     "items": [
       {
-        "label": "Integration overview",
-        "slug": "development/overview"
+        "label": "Choose a data link",
+        "slug": "connect/overview"
       },
       {
-        "label": "Shared endpoints",
-        "slug": "development/shared-endpoints"
+        "label": "BACnet/IP settings",
+        "slug": "connect/bacnet-ip"
       },
       {
-        "label": "Network Port & Number controls",
-        "slug": "development/network-number"
+        "label": "Across subnets (BBMD)",
+        "slug": "connect/across-subnets"
       },
       {
-        "label": "Transport evidence",
-        "slug": "development/transports"
+        "label": "BACnet/IP across NAT",
+        "slug": "connect/nat"
       },
       {
-        "label": "BACnet/SC setup",
-        "slug": "development/bacnet-sc"
+        "label": "B/IP multicast",
+        "slug": "connect/multicast"
+      },
+      {
+        "label": "BACnet/IPv6",
+        "slug": "connect/ipv6"
+      },
+      {
+        "label": "BACnet/SC & certificates",
+        "slug": "connect/bacnet-sc"
+      },
+      {
+        "label": "MS/TP & RS-485",
+        "slug": "connect/mstp"
+      },
+      {
+        "label": "MS/TP real-time",
+        "slug": "connect/mstp-realtime"
       }
     ]
   },
   {
-    "label": "Operate",
+    "label": "Discover, read and write",
     "items": [
-      {
-        "label": "Connection settings",
-        "slug": "guides/configuration"
-      },
       {
         "label": "Discovery & addressing",
         "slug": "guides/discovery"
-      },
-      {
-        "label": "BACnet/SC & certificates",
-        "slug": "guides/bacnet-sc"
-      },
-      {
-        "label": "MS/TP & RS-485",
-        "slug": "guides/mstp"
       },
       {
         "label": "Observe changes with COV",
@@ -83,6 +87,43 @@
       {
         "label": "Write & relinquish",
         "slug": "guides/safe-writes"
+      },
+      {
+        "label": "AI agents (MCP)",
+        "slug": "guides/ai-agents"
+      }
+    ]
+  },
+  {
+    "label": "Build applications",
+    "items": [
+      {
+        "label": "Integration overview",
+        "slug": "integrate/overview"
+      },
+      {
+        "label": "Shared endpoints",
+        "slug": "integrate/shared-endpoints"
+      },
+      {
+        "label": "Network Port & Number controls",
+        "slug": "integrate/network-ports"
+      },
+      {
+        "label": "Serve objects",
+        "slug": "integrate/server"
+      },
+      {
+        "label": "Route between networks",
+        "slug": "integrate/router"
+      },
+      {
+        "label": "Restrict who can change it",
+        "slug": "integrate/security"
+      },
+      {
+        "label": "Generate a PICS",
+        "slug": "integrate/pics"
       }
     ]
   },
@@ -139,21 +180,67 @@
     "label": "Reference",
     "items": [
       {
+        "label": "APIs & examples",
+        "slug": "reference/api"
+      },
+      {
+        "label": "Rust crates",
+        "slug": "reference/rust"
+      },
+      {
+        "label": "Python API",
+        "collapsed": true,
+        "items": [
+          {
+            "label": "All groups",
+            "slug": "reference/python"
+          },
+          {
+            "label": "Client",
+            "slug": "reference/python/client"
+          },
+          {
+            "label": "Server",
+            "slug": "reference/python/server"
+          },
+          {
+            "label": "Router",
+            "slug": "reference/python/router"
+          },
+          {
+            "label": "Shared endpoints",
+            "slug": "reference/python/endpoints"
+          },
+          {
+            "label": "Types and values",
+            "slug": "reference/python/types"
+          },
+          {
+            "label": "Enumerations",
+            "slug": "reference/python/enums"
+          },
+          {
+            "label": "Errors",
+            "slug": "reference/python/errors"
+          },
+          {
+            "label": "Module functions",
+            "slug": "reference/python/functions"
+          }
+        ]
+      },
+      {
         "label": "CLI commands",
         "slug": "reference/cli"
       },
       {
         "label": "Transport boundaries",
         "slug": "reference/transports"
-      },
-      {
-        "label": "APIs & examples",
-        "slug": "reference/api"
       }
     ]
   },
   {
-    "label": "Help & project",
+    "label": "Evaluate and get help",
     "items": [
       {
         "label": "Troubleshooting",
@@ -164,12 +251,41 @@
         "slug": "project/support"
       },
       {
+        "label": "Capability tables",
+        "slug": "project/conformance"
+      },
+      {
+        "label": "Sample PICS",
+        "slug": "project/sample-pics"
+      },
+      {
+        "label": "Performance",
+        "slug": "project/performance"
+      },
+      {
         "label": "Upgrade notes",
         "slug": "project/upgrading"
       },
       {
-        "label": "Contribute",
-        "slug": "project/contributing"
+        "label": "Upgrade to v0.15.0",
+        "slug": "project/upgrading/v0-15"
+      },
+      {
+        "label": "Upgrade to v0.14.0",
+        "slug": "project/upgrading/v0-14"
+      }
+    ]
+  },
+  {
+    "label": "Contribute",
+    "items": [
+      {
+        "label": "Build from source",
+        "slug": "development/build-from-source"
+      },
+      {
+        "label": "Improve the documentation",
+        "slug": "development/documentation"
       }
     ]
   }

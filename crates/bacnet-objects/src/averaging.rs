@@ -6,15 +6,16 @@
 //! when a sample falls due (`ObjectDatabase::sample_due_averaging_objects`),
 //! and the application can feed samples of its own.
 
+use crate::prelude::*;
+use alloc::borrow::Cow;
+use alloc::sync::Arc;
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetObjectPropertyReference,
 };
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
-use std::borrow::Cow;
-use std::sync::Arc;
-use std::time::Duration;
+use core::time::Duration;
 
 use crate::common::{self, read_identity_properties};
 use crate::device_reference;

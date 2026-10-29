@@ -6,11 +6,11 @@
 use std::time::Duration;
 
 use bacnet_client::client::BACnetClient;
-use bacnet_encoding::apdu::{decode_apdu, Apdu};
+use bacnet_encoding::apdu::{Apdu, decode_apdu};
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_transport::port::TransportPort;
 use bacnet_transport::sc::{ScActiveHub, ScTransport};
-use bacnet_transport::sc_frame::{decode_sc_message, ScFunction};
+use bacnet_transport::sc_frame::{ScFunction, decode_sc_message};
 use bacnet_transport::sc_hub::{ScHub, ScHubTlsConfig};
 use bacnet_transport::sc_tls::{ScNodeTlsConfig, TlsWebSocket};
 use bacnet_transport::tap::{TapDirection, TapPeer};

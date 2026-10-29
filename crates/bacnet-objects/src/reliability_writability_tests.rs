@@ -9,7 +9,7 @@ use crate::traits::BACnetObject;
 use bacnet_types::enums::{
     EngineeringUnits, ErrorClass, ErrorCode, PropertyIdentifier, Reliability,
 };
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::PropertyValue;
 
 fn assert_reliability_gate(object: &mut dyn BACnetObject) {
@@ -27,7 +27,7 @@ fn assert_reliability_gate(object: &mut dyn BACnetObject) {
         )
         .expect_err("in-service Reliability write must be refused");
     match denied {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, ErrorClass::PROPERTY);
             assert_eq!(code, ErrorCode::WRITE_ACCESS_DENIED);
         }
@@ -53,7 +53,7 @@ fn assert_reliability_gate(object: &mut dyn BACnetObject) {
             )
             .expect_err("reserved or out-of-range Reliability must be refused");
         match invalid_value {
-            Error::Protocol { class, code } => {
+            Error::Remote(RemoteError::Error { class, code }) => {
                 assert_eq!(class, ErrorClass::PROPERTY);
                 assert_eq!(code, ErrorCode::VALUE_OUT_OF_RANGE);
             }
@@ -90,7 +90,7 @@ fn assert_reliability_gate(object: &mut dyn BACnetObject) {
         .set_reliability_internal(Reliability::NO_FAULT_DETECTED)
         .expect_err("internal Reliability write must not overwrite client simulation");
     match internal_denied {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, ErrorClass::PROPERTY);
             assert_eq!(code, ErrorCode::WRITE_ACCESS_DENIED);
         }
@@ -117,7 +117,7 @@ fn assert_reliability_gate(object: &mut dyn BACnetObject) {
         .set_reliability_internal(Reliability::from_raw(65_536))
         .expect_err("internal route must enforce the Reliability datatype");
     match invalid_internal {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, ErrorClass::PROPERTY);
             assert_eq!(code, ErrorCode::VALUE_OUT_OF_RANGE);
         }
@@ -306,7 +306,7 @@ fn leaving_out_of_service_without_saved_value_falls_back_to_no_fault() {
 }
 
 macro_rules! reliability_gate_test {
-    ($name:ident, $object:expr) => {
+    ($name:ident, $object:expr_2021) => {
         #[test]
         fn $name() {
             let mut object = $object;
@@ -387,10 +387,10 @@ reliability_gate_test!(
 
 fn assert_protocol_error(error: Error, class: ErrorClass, code: ErrorCode) {
     match error {
-        Error::Protocol {
+        Error::Remote(RemoteError::Error {
             class: actual_class,
             code: actual_code,
-        } => {
+        }) => {
             assert_eq!(actual_class, class);
             assert_eq!(actual_code, code);
         }

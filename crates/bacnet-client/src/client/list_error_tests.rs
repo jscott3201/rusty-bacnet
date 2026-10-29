@@ -1,12 +1,13 @@
 //! AddListElement and RemoveListElement answer errors with a ChangeList-Error
 //! (Clause 21): the error plus the First Failed Element Number. The client
 //! surfaces it as `Error::Structured`; a plain class/code error from an older
-//! device stays `Error::Protocol`.
+//! device stays `Error::protocol`.
 
 use super::*;
 use crate::tsm::TsmResponse;
 use bacnet_encoding::apdu::ErrorPdu;
 use bacnet_transport::loopback::LoopbackTransport;
+use bacnet_types::error::RemoteError;
 use bacnet_types::{
     enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier},
     error::ErrorDetail,
@@ -77,10 +78,10 @@ fn plain_list_service_error_stays_a_protocol_error() {
     );
     assert!(matches!(
         confirmed_response_result(TsmResponse::from_error_pdu(&pdu)),
-        Err(Error::Protocol {
+        Err(Error::Remote(RemoteError::Error {
             class: ErrorClass::PROPERTY,
             code: ErrorCode::INVALID_DATA_TYPE
-        })
+        }))
     ));
     // The same body answering another service is not a ChangeList-Error.
     let pdu = decoded(
@@ -89,10 +90,10 @@ fn plain_list_service_error_stays_a_protocol_error() {
     );
     assert!(matches!(
         confirmed_response_result(TsmResponse::from_error_pdu(&pdu)),
-        Err(Error::Protocol {
+        Err(Error::Remote(RemoteError::Error {
             class: ErrorClass::SERVICES,
             code: ErrorCode::LIST_ELEMENT_NOT_FOUND
-        })
+        }))
     ));
 }
 

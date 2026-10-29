@@ -3,8 +3,8 @@
 //! another request alone (#1424).
 
 use super::test_storage::{
-    assert_refused, block_on, octets, persistent, positive_only, write, write_positive, zone_rule,
-    MemoryPersistence, WAIT,
+    MemoryPersistence, WAIT, assert_refused, block_on, octets, persistent, positive_only, write,
+    write_positive, zone_rule,
 };
 use super::*;
 use crate::durable::{DurableWrites, PendingWrite, SaveWait, StageStep};

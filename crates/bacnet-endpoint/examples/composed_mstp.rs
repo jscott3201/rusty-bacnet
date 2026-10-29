@@ -28,12 +28,16 @@ fn drain_peer(peer: LoopbackSerial) -> tokio::task::JoinHandle<()> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Addressing validates without consuming the serial owner.
-    assert!(MstpEndpointBuilder::new(LoopbackSerial::pair().0, 3)
-        .validate_only()
-        .is_ok());
-    assert!(MstpEndpointBuilder::new(LoopbackSerial::pair().0, 200)
-        .validate_only()
-        .is_err());
+    assert!(
+        MstpEndpointBuilder::new(LoopbackSerial::pair().0, 3)
+            .validate_only()
+            .is_ok()
+    );
+    assert!(
+        MstpEndpointBuilder::new(LoopbackSerial::pair().0, 200)
+            .validate_only()
+            .is_err()
+    );
 
     // One serial owner enters the session; a drain task keeps the bounded
     // loopback channel flowing while the MAC loop organizes.

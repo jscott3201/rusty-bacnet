@@ -3,15 +3,15 @@
 
 mod fixture;
 
+use bacnet_router_core::PortId;
 use bacnet_router_core::npdu::NetworkPriority;
 use bacnet_router_core::npdu::Npdu;
 use bacnet_router_core::npdu::NpduLimits;
 use bacnet_router_core::npdu::{NetworkMessageType, RejectMessageReason};
 use bacnet_router_core::router::{Cause, Discard, Event, Kind, Options};
-use bacnet_router_core::PortId;
 use fixture::{
-    addr, apdu_to, at, bytes, deliver, learn_9_via_r7, port_on, router, router_with, sent_reject,
-    two_ports, Outcome, Recorder, CONFIRMED, NODE_A, OWN_0, OWN_1, R7, UNCONFIRMED,
+    CONFIRMED, NODE_A, OWN_0, OWN_1, Outcome, R7, Recorder, UNCONFIRMED, addr, apdu_to, at, bytes,
+    deliver, learn_9_via_r7, port_on, router, router_with, sent_reject, two_ports,
 };
 
 /// Clause 6.5.4: SNET and SADR are added from the arrival network and the

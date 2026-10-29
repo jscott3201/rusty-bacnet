@@ -1,0 +1,17 @@
+[package]
+name = "rp-harness"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+bacnet-benchmarks = { path = "/wt/benchmarks" }
+bacnet-types = { path = "/wt/crates/bacnet-types" }
+bacnet-encoding = { path = "/wt/crates/bacnet-encoding" }
+bytes = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[profile.release]
+debug = "line-tables-only"

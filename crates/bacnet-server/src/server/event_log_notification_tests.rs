@@ -12,7 +12,7 @@ use super::*;
 use bacnet_encoding::constructed::{
     decode_event_log_record, decode_event_notification, encode_event_notification,
 };
-use bacnet_encoding::npdu::{encode_npdu, Npdu};
+use bacnet_encoding::npdu::{Npdu, encode_npdu};
 use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::event_log::EventLogObject;
 use bacnet_objects::notification_class::NotificationClass;

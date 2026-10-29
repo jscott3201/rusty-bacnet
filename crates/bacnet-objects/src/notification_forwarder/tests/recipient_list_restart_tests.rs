@@ -1,6 +1,6 @@
 //! Recipient_List across a restart (Clause 12.51.8, #1256).
 
-use super::storage::{persistent, MemoryPersistence};
+use super::storage::{MemoryPersistence, persistent};
 use super::*;
 use bacnet_types::enums::PropertyIdentifier as P;
 use std::sync::atomic::Ordering;

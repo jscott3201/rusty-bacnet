@@ -1,8 +1,7 @@
 //! Small atomic file store. No directory is created while browsing profiles.
 
 use super::Profile;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -80,12 +79,11 @@ impl Store {
             let path = entry
                 .map_err(|e| format!("cannot read profile entry: {e}"))?
                 .path();
-            if path.extension().is_some_and(|ext| ext == "toml") {
-                if let Some(name) = path.file_stem().and_then(|v| v.to_str()) {
-                    if validate_name(name).is_ok() {
-                        names.push(name.to_owned());
-                    }
-                }
+            if path.extension().is_some_and(|ext| ext == "toml")
+                && let Some(name) = path.file_stem().and_then(|v| v.to_str())
+                && validate_name(name).is_ok()
+            {
+                names.push(name.to_owned());
             }
         }
         names.sort();
@@ -133,36 +131,9 @@ impl Store {
     }
 }
 
-/// Cleanup only files this attempt created. A stale temporary name or another
-/// writer's collision must survive an unsuccessful create_new. The session
-/// ledger is saved the same way.
-pub(crate) fn publish(temp: &Path, path: &Path, text: &str, create: bool) -> std::io::Result<()> {
-    let mut created = false;
-    let result = (|| -> std::io::Result<()> {
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut file = options.open(temp)?;
-        created = true;
-        file.write_all(text.as_bytes())?;
-        file.sync_all()?;
-        drop(file);
-        if create {
-            fs::hard_link(temp, path)?;
-        } else {
-            fs::rename(temp, path)?;
-        }
-        Ok(())
-    })();
-    if created {
-        let _ = fs::remove_file(temp);
-    }
-    result
-}
+/// The atomic publish profiles and the session ledger share; it lives
+/// beside the ledger in `bacnet_ops::safety::file`.
+pub(crate) use bacnet_ops::safety::file::publish;
 
 #[cfg(test)]
 mod tests {

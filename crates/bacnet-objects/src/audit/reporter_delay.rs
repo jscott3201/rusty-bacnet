@@ -42,7 +42,11 @@ impl AuditReporterObject {
         if self.configuration_internal().maximum_send_delay.is_none() {
             return Err(crate::common::unknown_property_error());
         }
-        if let Some(sink) = self.change_sink.as_ref().and_then(std::sync::Weak::upgrade) {
+        if let Some(sink) = self
+            .change_sink
+            .as_ref()
+            .and_then(alloc::sync::Weak::upgrade)
+        {
             if !sink.is_active() {
                 return Err(crate::common::write_access_denied_error());
             }
@@ -111,22 +115,22 @@ impl AuditReporterStatus {
     /// Current external capture evidence; internal command reset never changes it.
     #[doc(hidden)]
     pub fn capture_revision(&self) -> u64 {
-        self.0.lock().unwrap().capture_revision
+        self.0.lock().capture_revision
     }
     /// Monotonic configuration identity, independently of summary filtering.
     #[doc(hidden)]
     pub fn configuration_epoch(&self) -> u64 {
-        self.0.lock().unwrap().configuration_epoch
+        self.0.lock().configuration_epoch
     }
     /// Object-owned command readback; FALSE also represents terminal failure quiescence.
     #[doc(hidden)]
     pub fn send_now(&self) -> bool {
-        self.0.lock().unwrap().send_now
+        self.0.lock().send_now
     }
     /// Check command identity before preparing any external consequence.
     #[doc(hidden)]
     pub fn validate_send_now(&self, captured: bool) -> Result<(), Error> {
-        let state = self.0.lock().unwrap();
+        let state = self.0.lock();
         if state.command_revision == u64::MAX || (captured && state.capture_revision == u64::MAX) {
             return Err(Error::Encoding("audit command revision exhausted".into()));
         }
@@ -135,7 +139,7 @@ impl AuditReporterStatus {
     /// Commit one validated command after resource preparation, before queue publication.
     #[doc(hidden)]
     pub fn commit_send_now(&self, value: bool, fence: u64, captured: bool) -> Result<(), Error> {
-        let mut state = self.0.lock().unwrap();
+        let mut state = self.0.lock();
         let revision = state
             .command_revision
             .checked_add(1)
@@ -159,7 +163,7 @@ impl AuditReporterStatus {
     /// Queue owns ordering: a later TRUE fence cannot be cleared by older work.
     #[doc(hidden)]
     pub fn settle_send_now(&self, first_unsent: Option<u64>) {
-        let mut state = self.0.lock().unwrap();
+        let mut state = self.0.lock();
         if first_unsent.is_none_or(|first| first > state.command_fence) {
             state.send_now = false;
         }

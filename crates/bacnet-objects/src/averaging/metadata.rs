@@ -1,5 +1,5 @@
 use super::AveragingObject;
-use std::borrow::Cow;
+use alloc::borrow::Cow;
 
 use bacnet_types::enums::PropertyIdentifier as P;
 
@@ -44,11 +44,11 @@ pub(super) fn for_object(_object: &AveragingObject) -> Cow<'_, [PropertyMetadata
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::collections::HashSet;
     use crate::traits::BACnetObject;
     use bacnet_types::enums::{ErrorClass, ErrorCode};
-    use bacnet_types::error::Error;
+    use bacnet_types::error::{Error, RemoteError};
     use bacnet_types::primitives::PropertyValue;
-    use std::collections::HashSet;
 
     /// The rows network writes reach. Every one but Description resets the
     /// sample window.
@@ -62,7 +62,7 @@ mod tests {
 
     fn assert_error(error: Error, expected: ErrorCode) {
         assert!(
-            matches!(error, Error::Protocol { class, code }
+            matches!(error, Error::Remote(RemoteError::Error { class, code })
                 if class == ErrorClass::PROPERTY
                     && code == expected),
             "expected {expected:?}, got {error:?}"

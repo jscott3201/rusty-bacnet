@@ -9,7 +9,7 @@ use bacnet_types::constructed::{BACnetEventLogRecord, BACnetLogRecord};
 use bacnet_types::enums::PropertyIdentifier as P;
 use bacnet_types::primitives::PropertyValue;
 
-use super::tests::{event_record, trend_record, HandClock, MemoryLog};
+use super::tests::{HandClock, MemoryLog, event_record, trend_record};
 use super::*;
 use crate::event_log::EventLogObject;
 use crate::log_persistence::store::DurableLog;

@@ -4,17 +4,21 @@ use super::*;
 use bacnet_encoding::constructed::{
     encode_destination_list, encode_event_notification_subscription_list, encode_port_permission,
 };
+use bacnet_types::MacAddr;
 use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
 use bacnet_types::constructed::{BACnetAddress, BACnetRecipient};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::Time;
-use bacnet_types::MacAddr;
 
+#[cfg(feature = "std")]
 mod fold_tests;
+#[cfg(feature = "std")]
 mod persistence_tests;
 mod properties;
 mod recipient_list_restart_tests;
 mod selection_tests;
+#[cfg(feature = "std")]
 mod staging_tests;
 mod storage;
 
@@ -92,10 +96,10 @@ fn port(port_id: u8, enabled: bool) -> PropertyValue {
 fn assert_refused(result: Result<(), Error>, class: ErrorClass, code: ErrorCode) {
     match result {
         Err(
-            Error::Protocol {
+            Error::Remote(RemoteError::Error {
                 class: got_class,
                 code: got_code,
-            }
+            })
             | Error::Structured {
                 class: got_class,
                 code: got_code,

@@ -41,7 +41,7 @@ profile_input!(MultiStateInputObject);
 
 fn object(kind: ObjectType, store: Option<Arc<Memory>>) -> Result<Box<dyn ProfileInput>, Error> {
     macro_rules! build {
-        ($ty:ty $(, $extra:expr)?) => {
+        ($ty:ty $(, $extra:expr_2021)?) => {
             Ok(Box::new(match store {
                 None => <$ty>::new(1, "input" $(, $extra)?)?,
                 Some(store) => <$ty>::with_tags_persistence(1, "input", $($extra,)? store)?,

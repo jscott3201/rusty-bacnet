@@ -1,3 +1,4 @@
+use bacnet_types::error::RemoteError;
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -104,7 +105,7 @@ fn encode_request(request: &AuditLogQueryRequest) -> Vec<u8> {
 fn assert_protocol(error: Error, class: ErrorClass, code: ErrorCode) {
     assert!(matches!(
         error,
-        Error::Protocol { class: actual_class, code: actual_code }
+        Error::Remote(RemoteError::Error { class: actual_class, code: actual_code })
             if actual_class == class && actual_code == code
     ));
 }
@@ -202,10 +203,10 @@ impl BACnetObject for AuditWithoutCapability {
         _property: PropertyIdentifier,
         _array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
-        Err(Error::Protocol {
-            class: ErrorClass::PROPERTY,
-            code: ErrorCode::UNKNOWN_PROPERTY,
-        })
+        Err(Error::protocol(
+            ErrorClass::PROPERTY,
+            ErrorCode::UNKNOWN_PROPERTY,
+        ))
     }
 
     fn write_property(
@@ -215,10 +216,10 @@ impl BACnetObject for AuditWithoutCapability {
         _value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
-        Err(Error::Protocol {
-            class: ErrorClass::PROPERTY,
-            code: ErrorCode::WRITE_ACCESS_DENIED,
-        })
+        Err(Error::protocol(
+            ErrorClass::PROPERTY,
+            ErrorCode::WRITE_ACCESS_DENIED,
+        ))
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {

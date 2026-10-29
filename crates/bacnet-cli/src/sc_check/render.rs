@@ -2,8 +2,8 @@
 
 use super::HUB_NAME_NOTE;
 use super::{
-    projection::{Extension, Inspection},
     Document,
+    projection::{Extension, Inspection},
 };
 use std::io::{self, Write};
 
@@ -158,6 +158,9 @@ pub(super) fn human(
         }
         writeln!(output, " {}: {}", diagnostic.code, diagnostic.message)?;
     }
-    writeln!(output, "\nNot assessed: issuer authorization by remote peers, certificate path validation, expected peer name, revocation, and remote acceptance.")?;
+    writeln!(
+        output,
+        "\nNot assessed: issuer authorization by remote peers, certificate path validation, expected peer name, revocation, and remote acceptance."
+    )?;
     writeln!(output, "{HUB_NAME_NOTE}")
 }

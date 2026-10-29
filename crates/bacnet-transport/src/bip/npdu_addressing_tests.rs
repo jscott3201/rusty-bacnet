@@ -1,8 +1,8 @@
 use super::*;
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
+use bacnet_encoding::npdu::{Npdu, NpduAddress, decode_npdu, encode_npdu};
 use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 fn encode_broadcast_npdu(network: u16, hop_count: u8, payload: &'static [u8]) -> Bytes {
     let mut npdu_buf = BytesMut::new();

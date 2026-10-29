@@ -2,6 +2,7 @@
 use super::*;
 use bacnet_objects::command_source::CommandOrigin;
 use bacnet_types::enums::ObjectType;
+use bacnet_types::error::RemoteError;
 use std::sync::Mutex;
 
 struct RecordingObject(Arc<Mutex<Vec<(PropertyIdentifier, CommandOrigin)>>>);
@@ -85,7 +86,7 @@ fn command_source_decorator_forwards_exact_origin_and_preserves_active_gate() {
             )
         };
         assert!(
-            matches!(result, Err(Error::Protocol { code, .. }) if code == ErrorCode::WRITE_ACCESS_DENIED)
+            matches!(result, Err(Error::Remote(RemoteError::Error { code, .. })) if code == ErrorCode::WRITE_ACCESS_DENIED)
         );
     }
     assert_eq!(seen.lock().unwrap().len(), 1);

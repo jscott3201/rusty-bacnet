@@ -1,7 +1,7 @@
 use super::*;
 use crate::bip::BipEndpointBuilder;
 use bacnet_encoding::apdu::{
-    decode_apdu, encode_apdu, AbortPdu, ComplexAck, ErrorPdu, RejectPdu, SimpleAck,
+    AbortPdu, ComplexAck, ErrorPdu, RejectPdu, SimpleAck, decode_apdu, encode_apdu,
 };
 use bacnet_network::layer::NetworkLayer;
 use bacnet_npdu::NetworkPriority;
@@ -10,6 +10,7 @@ use bacnet_services::audit::AuditNotificationRequest;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::bvll::{decode_bip_mac, encode_bip_mac};
+use bacnet_types::MacAddr;
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
 use bacnet_types::constructed::{BACnetAuditNotification, BACnetObjectSelector, BACnetRecipient};
 use bacnet_types::enums::{
@@ -17,10 +18,9 @@ use bacnet_types::enums::{
     RejectReason, Reliability, UnconfirmedServiceChoice,
 };
 use bacnet_types::primitives::BACnetTimeStamp;
-use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
 use std::net::{Ipv4Addr, SocketAddrV4};
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 const WAIT: Duration = Duration::from_secs(2);
 fn oid(kind: ObjectType, instance: u32) -> ObjectIdentifier {
@@ -424,9 +424,11 @@ async fn source_read_dropped_waiter_retries_once_per_logical_request() {
         record.source_timestamp,
         Some(BACnetTimeStamp::SequenceNumber(0))
     );
-    assert!(timeout(Duration::from_millis(30), records.recv())
-        .await
-        .is_err());
+    assert!(
+        timeout(Duration::from_millis(30), records.recv())
+            .await
+            .is_err()
+    );
     session.stop().await.unwrap();
     peer.stop().await.unwrap();
     sink.stop().await.unwrap();
@@ -478,16 +480,18 @@ async fn source_read_selector_preflight_is_atomic_and_adapter_rejects_mutation()
         {
             let mut db = session.database.as_ref().unwrap().write().await;
             let object = db.get_mut(&selected()).unwrap();
-            assert!(object
-                .configure_audit_reporter_internal(
-                    AuditLevel::NONE,
-                    AuditOperationFlags::empty(),
-                    true,
-                    Some(vec![]),
-                    BACnetPriorityFilter::empty(),
-                    None
-                )
-                .is_err());
+            assert!(
+                object
+                    .configure_audit_reporter_internal(
+                        AuditLevel::NONE,
+                        AuditOperationFlags::empty(),
+                        true,
+                        Some(vec![]),
+                        BACnetPriorityFilter::empty(),
+                        None
+                    )
+                    .is_err()
+            );
             assert_eq!(
                 object
                     .read_property(PropertyIdentifier::AUDIT_LEVEL, None)

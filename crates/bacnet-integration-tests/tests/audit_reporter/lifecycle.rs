@@ -1,5 +1,6 @@
 //! Audit lifecycle operations over actual UDP.
 use super::*;
+use bacnet_types::error::RemoteError;
 
 #[tokio::test]
 async fn audit_reporter_create_delete_reach_real_log_over_udp() {
@@ -60,7 +61,7 @@ async fn audit_reporter_create_delete_reach_real_log_over_udp() {
     for step in 0..4 {
         match step {
             0 => {
-                let ack = client
+                let acknowledged = client
                     .create_object(
                         target.local_mac(),
                         ObjectSpecifier::Type(ObjectType::BINARY_VALUE),
@@ -73,12 +74,7 @@ async fn audit_reporter_create_delete_reach_real_log_over_udp() {
                     )
                     .await
                     .unwrap();
-                assert_eq!(
-                    bacnet_encoding::primitives::decode_application_value(&ack, 0)
-                        .unwrap()
-                        .0,
-                    PropertyValue::ObjectIdentifier(created)
-                );
+                assert_eq!(acknowledged, created);
                 assert_eq!(
                     target
                         .database()
@@ -118,8 +114,10 @@ async fn audit_reporter_create_delete_reach_real_log_over_udp() {
                     .delete_object(target.local_mac(), created)
                     .await
                     .unwrap_err();
-                assert!(matches!(error, Error::Protocol { class, code }
-                    if class == ErrorClass::OBJECT && code == ErrorCode::UNKNOWN_OBJECT));
+                assert!(
+                    matches!(error, Error::Remote(RemoteError::Error { class, code })
+                    if class == ErrorClass::OBJECT && code == ErrorCode::UNKNOWN_OBJECT)
+                );
             }
         }
         wait_for_records(&logger, &persistence, step + 1).await;

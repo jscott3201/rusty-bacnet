@@ -18,7 +18,7 @@ bacnet tui --mstp-monitor /dev/ttyUSB0 --mstp-baud 38400
 
 The monitor opens the port to listen only. It builds no client and drops the port's write side as it opens, so it can't transmit. The status bar reads `listen only` and the level is `PASSIVE`. It takes `--mstp-baud` and `--mstp-max-info-frames`, and refuses `--mstp`, `--mstp-mac`, `--mstp-max-master`, another transport's flags and `--profile`. On Linux it also takes `--mstp-rt-priority` and `--mstp-cpus`, but the monitor itself runs normally: only a station you join from it gets them (see [Real-time scheduling](#real-time-scheduling-linux)).
 
-The MS/TP screen opens first. Tab moves between four views. `z` counts from now, Space pauses or follows, and `x` stops the monitor.
+The MS/TP screen opens first. Tab moves between five views: Stations, Token ring, Findings, Errors and Scan. `z` counts from now, Space pauses or follows, and `x` stops the monitor.
 
 ### Stations
 
@@ -61,6 +61,32 @@ Each comes with a suggestion. The two 8s are rules of thumb, not values from the
 
 Header and data CRC errors, malformed or oversize frames, partial frames, noise, lost tokens with when and who started the ring again, and extended (COBS) frames, which are decoded but not interpreted (Clause 9.10). Timestamps are only as good as the adapter: the screen shows the 16 ms a USB adapter can add.
 
+### Scan: find the baud rate
+
+When you don't know a trunk's baud rate, `:mstp scan SECS` listens at each of 9600, 19200, 38400, 57600, 76800 and 115200 baud in turn (Clause 9.2.3), for 1 to 3600 whole seconds each. It stays receive-only throughout: it closes the port before reopening it at the next rate, starts each rate with fresh counters and an emptied input buffer, and never builds a participant. The Scan view shows the progress and, for each rate, the time actually measured, the valid frames, the decoder errors and the noise. On a narrow screen Up and Down pick the row whose errors are broken down; a wide screen shows them all.
+
+![A receive-only scan measuring the first of six baud rates, with cancellation available.](../../../assets/tui/mstp-scan-progress.webp)
+
+Each rate scores `valid / (valid + header CRC + data CRC + malformed + aborted)`; noise octets are counted apart. The scan suggests the best-scoring rate only when it heard at least one valid frame there. Two rates with the same best score are reported as ambiguous, however many frames they saw, and no valid frames at all as insufficient traffic. A scan that was cut short, or whose counters saturated, suggests nothing. The counts stay on screen because a short sample is weak evidence: it doesn't prove the trunk's baud rate, and it doesn't qualify the adapter or the wiring.
+
+![The scan suggests 38400 baud from scripted traffic and restores the original 19200 baud monitor.](../../../assets/tui/mstp-scan-result.webp)
+
+When the scan finishes, or `:mstp scan cancel` stops it, the monitor goes back to the **baud rate it was started with**, with fresh counters. The suggestion stays on the Scan view to read; it is never applied, never joins a trunk and never changes a profile. Disconnecting or quitting during a scan closes the port without reopening it. If the port can't be reopened at the original rate, the monitor shows Stopped and keeps the scan's results, and it opens no other port while the old one may still be held.
+
+While a scan runs, the safe-join proposal is cleared and `J` is refused. The scan also ends the Capture screen's subscription: rows captured before it stay, frames heard during the scan are not added, and you reopen Capture once the monitor is back to start capturing again.
+
+The shots below come from tests that drive the TUI with scripted traffic. They show how the suggestion is chosen, not how a real adapter behaves at a wrong baud rate.
+
+![Two rates have equal best ratios, so the scan reports ambiguity.](../../../assets/tui/mstp-scan-ambiguous.webp)
+
+![A scan with no valid decoded frames reports insufficient traffic.](../../../assets/tui/mstp-scan-insufficient.webp)
+
+![A rejected candidate keeps the completed scan partial, with no global best.](../../../assets/tui/mstp-scan-partial.webp)
+
+![Manual cancellation retains partial evidence and restores the original monitor.](../../../assets/tui/mstp-scan-cancelled.webp)
+
+![Failed original-rate restoration leaves the monitor stopped while retaining its scan evidence.](../../../assets/tui/mstp-scan-stopped.webp)
+
 ## Safe join
 
 `J` starts the safe join from the monitor. It listens for 10 s (`:mstp listen SECS` changes that), then proposes:
@@ -91,7 +117,7 @@ Joining adds a master to the token ring, which every station notices, so the TUI
 bacnet --mstp /dev/ttyUSB0 --mstp-mac 3 --mstp-rt-priority 40 --mstp-cpus 3 tui
 ```
 
-`--mstp-rt-priority N` runs the station's token handling under `SCHED_FIFO` at priority N (1 to 99; it needs `CAP_SYS_NICE` or `ulimit -r` of at least N), and `--mstp-cpus` pins it to those CPUs. They apply to every station the session joins, from flags, a profile or the monitor, and never to the passive monitor. A setting the kernel won't apply fails the join with the reason. The MS/TP screen's `Thread` row shows what was applied, such as `FIFO 40, CPU 3`. Compare the timer lateness with and without them: they lower scheduling delay but don't guarantee timing. On macOS and Windows both flags are refused.
+`--mstp-rt-priority N` runs the station's token handling under `SCHED_FIFO` at priority N (1 to 99; it needs `CAP_SYS_NICE` or `ulimit -r` of at least N), and `--mstp-cpus` pins it to those CPUs. They apply to every station the session joins, from flags, a profile or the monitor, and never to the passive monitor. A setting the kernel won't apply fails the join with the reason. The MS/TP screen's `Thread` row shows what was applied, such as `FIFO 40, CPU 3`. Compare the timer lateness with and without them: they lower scheduling delay but don't guarantee timing. [Keep an MS/TP trunk reliable on Linux](/rusty-bacnet/connect/mstp-realtime/) shows how to compare runs. On macOS and Windows both flags are refused.
 
 ![The confirmation shown before joining a trunk with --mstp.](../../../assets/tui/mstp-participant-join.webp)
 
@@ -121,7 +147,7 @@ echo 1 | sudo tee /sys/bus/usb-serial/devices/ttyUSB0/latency_timer
 
 An FTDI adapter holds received octets for up to its latency timer, 16 ms by default, and that delay counts against the time a station has to answer a token or a poll. The setting lasts until the adapter is unplugged; a udev rule makes it permanent.
 
-The monitor and the participant have hardware evidence only on Linux. On macOS and Windows the `serial` feature builds and passes CI with pseudo-terminal tests, but no USB RS-485 adapter has been tested there yet: treat them as experimental. On-wire timing is not qualified on any adapter yet. See [MS/TP and RS-485](/rusty-bacnet/guides/mstp/) for the wider qualification picture.
+The monitor and the participant have hardware evidence only on Linux. On macOS and Windows the `serial` feature builds and passes CI with pseudo-terminal tests, but no USB RS-485 adapter has been tested there yet: treat them as experimental. On-wire timing is not qualified on any adapter yet. See [MS/TP and RS-485](/rusty-bacnet/connect/mstp/) for the wider qualification picture.
 
 ## Sources and release scope
 

@@ -7,8 +7,8 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use std::time::{Duration, Instant};
 
 use bacnet_bip_codec::BvlcResultCode;
-use bacnet_bip_core::bbmd::{DistributeRefusal, ForwardRefusal};
 use bacnet_bip_core::Arrival;
+use bacnet_bip_core::bbmd::{DistributeRefusal, ForwardRefusal};
 
 use super::*;
 

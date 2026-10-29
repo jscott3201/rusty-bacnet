@@ -5,12 +5,12 @@ use bytes::BytesMut;
 use tokio::net::UdpSocket;
 use tokio::time::timeout;
 
-use super::rate_limit::{ManagementRateLimiter, MANAGEMENT_RESPONSE_BYTES_GLOBAL};
+use super::rate_limit::{MANAGEMENT_RESPONSE_BYTES_GLOBAL, ManagementRateLimiter};
 use super::*;
 use crate::bbmd::{self, BbmdState, BdtEntry};
 use crate::bvll::{decode_bip_mac, decode_bvll, encode_bip_mac};
-use bacnet_bip_codec::{BvlcFunction, BvlcResultCode};
 use bacnet_bip_codec::{BDT_ENTRY_LENGTH as BDT_ENTRY_SIZE, FDT_ENTRY_LENGTH as FDT_ENTRY_SIZE};
+use bacnet_bip_codec::{BvlcFunction, BvlcResultCode};
 
 #[test]
 fn test_bdt_empty_and_max_response_sizes() {

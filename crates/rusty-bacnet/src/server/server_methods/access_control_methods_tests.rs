@@ -1,7 +1,7 @@
 use super::*;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
-use bacnet_types::error::ErrorDetail;
+use bacnet_types::error::{ErrorDetail, RemoteError};
 use bacnet_types::primitives::ObjectIdentifier;
 use pyo3::exceptions::PyValueError;
 
@@ -18,7 +18,7 @@ fn size(object: &dyn BACnetObject, property: PropertyIdentifier) -> PropertyValu
 }
 
 fn is_value_out_of_range(error: &Error) -> bool {
-    matches!(error, Error::Protocol { class, code }
+    matches!(error, Error::Remote(RemoteError::Error { class, code })
         if *class == ErrorClass::PROPERTY
             && *code == ErrorCode::VALUE_OUT_OF_RANGE)
 }

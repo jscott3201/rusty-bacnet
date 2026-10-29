@@ -8,11 +8,11 @@ use super::{SegKey, SegmentedReceiveState};
 use bacnet_transport::port::TransportPort;
 use bacnet_transport::port::TransportProvenance;
 use bacnet_transport::sc::{LoopbackWebSocket, ScTransport, WebSocketPort};
-use bacnet_transport::sc_frame::{decode_sc_message, encode_sc_message, ScFunction, ScMessage};
+use bacnet_transport::sc_frame::{ScFunction, ScMessage, decode_sc_message, encode_sc_message};
 use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
 use std::collections::HashMap;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 async fn verified_relayed_provenance() -> TransportProvenance {
     let (ws_client, ws_hub) = LoopbackWebSocket::pair();
@@ -87,7 +87,7 @@ async fn cross_segment_provenance_mismatch_is_detected_fail_closed() {
     let invoke_id = 7;
     // Simulate an in-progress reassembly opened unverified.
     let mut keys: HashMap<SegKey, ()> = HashMap::new();
-    keys.insert((tsm_mac.clone(), invoke_id, unverified), ());
+    keys.insert((tsm_mac.clone(), invoke_id, unverified.clone()), ());
     // Incoming verified segment for the same (mac, invoke) conflicts:
     // production aborts the session rather than merging (fail-closed).
     let conflict = keys.keys().find(|existing| {
@@ -114,8 +114,8 @@ fn routed_source_stays_a_claim_compat_mode() {
 
 #[test]
 fn state_snapshot_type_threads_provenance() {
-    // Compile-time threading proof: the snapshot field exists and is Copy.
-    fn assert_copy<T: Copy>() {}
-    assert_copy::<TransportProvenance>();
+    // Compile-time threading proof: the snapshot field exists and clones.
+    fn assert_clone<T: Clone>() {}
+    assert_clone::<TransportProvenance>();
     let _ = std::mem::size_of::<SegmentedReceiveState>();
 }

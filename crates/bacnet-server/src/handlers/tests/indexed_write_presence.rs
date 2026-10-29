@@ -7,6 +7,7 @@ use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::WriteAccessSpecification;
 use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetStageLimitValue};
 use bacnet_types::enums::EngineeringUnits;
+use bacnet_types::error::RemoteError;
 
 const VENDOR: PropertyIdentifier = PropertyIdentifier::from_raw(5555);
 
@@ -90,7 +91,7 @@ fn write(
 
 fn assert_error(result: Result<(), Error>, expected: ErrorCode) {
     assert!(
-        matches!(result, Err(Error::Protocol { class, code })
+        matches!(result, Err(Error::Remote(RemoteError::Error { class, code }))
         if class == ErrorClass::PROPERTY && code == expected),
         "expected PROPERTY/{expected:?}, got {result:?}"
     );
@@ -117,7 +118,7 @@ fn assert_absent(object: Box<dyn BACnetObject>, property: PropertyIdentifier) {
                 object
                     .read_property(*property, None)
                     .map_err(|error| match error {
-                        Error::Protocol { class, code } => (class, code),
+                        Error::Remote(RemoteError::Error { class, code }) => (class, code),
                         other => panic!("unexpected snapshot error: {other:?}"),
                     })
             })
@@ -145,7 +146,7 @@ fn assert_absent(object: Box<dyn BACnetObject>, property: PropertyIdentifier) {
     }
     assert!(
         results.iter().all(|(_, _, result)| matches!(result,
-        Err(Error::Protocol { class, code }) if *class == ErrorClass::PROPERTY
+        Err(Error::Remote(RemoteError::Error { class, code })) if *class == ErrorClass::PROPERTY
             && *code == ErrorCode::UNKNOWN_PROPERTY)),
         "WP/WPM must report UNKNOWN_PROPERTY before value decode: {results:?}"
     );

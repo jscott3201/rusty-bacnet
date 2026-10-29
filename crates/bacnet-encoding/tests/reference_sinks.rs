@@ -13,7 +13,7 @@ use bytes::BytesMut;
 
 #[path = "reference_sinks/cases.rs"]
 mod cases;
-use cases::{all_cases, compatibility_cases, wire_cases, Case};
+use cases::{Case, all_cases, compatibility_cases, wire_cases};
 
 const PREFIX: [u8; 3] = [0x12, 0x34, 0x56];
 const REFUSAL: SinkFull = SinkFull {
@@ -109,9 +109,11 @@ fn every_slice_capacity_preserves_prefix_cursor_and_unused_tail() {
                     "{}",
                     case.name
                 );
-                assert!(storage[3 + case.expected.len()..]
-                    .iter()
-                    .all(|b| *b == 0xA5));
+                assert!(
+                    storage[3 + case.expected.len()..]
+                        .iter()
+                        .all(|b| *b == 0xA5)
+                );
             } else {
                 assert_eq!(storage, before, "{}", case.name);
             }

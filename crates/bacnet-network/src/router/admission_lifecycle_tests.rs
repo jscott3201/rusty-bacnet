@@ -53,7 +53,7 @@ async fn closing_full_local_queue_counts_each_closed_arrival_and_preserves_drain
             ..Default::default()
         }
     );
-    router.stop().await;
+    router.stop().await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
@@ -76,7 +76,7 @@ async fn dropping_local_receiver_releases_queued_replies_and_keeps_dispatch_aliv
         dropped_arrival(&mut peers, LocalBranch::NoDnet, port).await;
     }
     assert_eq!(counters.snapshot().closed_drops, 2);
-    router.stop().await;
+    router.stop().await.unwrap();
     drop(router);
     assert_eq!(counters.snapshot().current_depth, 0);
 }
@@ -90,6 +90,7 @@ async fn stop_with_full_local_queue_is_bounded_and_leaves_items_drainable() {
     let mut accepted_reply = fill(&mut peers).await;
     timeout(Duration::from_secs(2), router.stop())
         .await
+        .unwrap()
         .unwrap();
     assert_eq!(
         accepted_reply.try_recv(),

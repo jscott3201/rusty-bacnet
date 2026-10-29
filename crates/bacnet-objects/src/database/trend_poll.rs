@@ -1,7 +1,8 @@
 //! Object-owned trend polling schedule. The caller owns synchronization and timers.
 
-use std::collections::{HashMap, HashSet};
-use std::time::Duration;
+use crate::collections::{HashMap, HashSet};
+use crate::prelude::*;
+use core::time::Duration;
 
 use bacnet_encoding::constructed::encode_log_multiple_record;
 use bacnet_encoding::primitives::encode_property_value;
@@ -12,10 +13,9 @@ use bacnet_types::constructed::{
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, LoggingType, ObjectType, PropertyIdentifier as P,
 };
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
 use bytes::BytesMut;
-use tracing::warn;
 
 use super::{LocalDevice, ObjectDatabase};
 use crate::device_reference::decode_reference;
@@ -312,7 +312,7 @@ impl ObjectDatabase {
             };
             inserted
                 .inspect_err(|error| {
-                    warn!(object = %oid, %error, "trend-log record insertion failed");
+                    log_warn!(object = %oid, %error, "trend-log record insertion failed");
                 })
                 .is_ok()
         });
@@ -383,9 +383,10 @@ impl ObjectDatabase {
         }
         match target.read_property(property, index) {
             Ok(value) => Ok((value, target)),
-            Err(Error::Protocol { class, code } | Error::Structured { class, code, .. }) => {
-                Err(failure(class, code))
-            }
+            Err(
+                Error::Remote(RemoteError::Error { class, code })
+                | Error::Structured { class, code, .. },
+            ) => Err(failure(class, code)),
             // An error with no BACnet class and code reports as ReadProperty
             // would answer it.
             Err(_) => Err(failure(ErrorClass::SERVICES, ErrorCode::OTHER)),

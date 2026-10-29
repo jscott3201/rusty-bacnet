@@ -6,8 +6,8 @@
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, Ordering};
 
 use bytes::{Bytes, BytesMut};
 use futures_util::SinkExt;
@@ -15,10 +15,10 @@ use tokio::sync::{Mutex, Notify};
 use tokio_tungstenite::tungstenite::{Error, Message};
 use tracing::warn;
 
-use super::timing::HubTiming;
 use super::ScHubProbePolicy;
+use super::timing::HubTiming;
 use super::{Clients, HubClient, Vmac, WsSink};
-use crate::sc_frame::{encode_sc_message, ScFunction, ScMessage};
+use crate::sc_frame::{ScFunction, ScMessage, encode_sc_message};
 
 // Private I/O boundary: tests use the real TLS/WebSocket send, but control when
 // its completion becomes visible to the sweep and supply the monotonic millisecond value.
@@ -110,6 +110,7 @@ fn decision(client: &HubClient, now: u64, policy: ScHubProbePolicy) -> HubHeartb
         client.heartbeat.pending,
         policy.idle_age().as_millis() as u64,
         policy.ack_age().as_millis() as u64,
+        policy.liveness_bound().as_millis() as u64,
     )
 }
 
@@ -295,15 +296,25 @@ pub(super) fn hub_heartbeat_sweep_decision(
     pending: Option<PendingHeartbeat>,
     idle_age_ms: u64,
     ack_age_ms: u64,
+    liveness_bound_ms: u64,
 ) -> HubHeartbeatSweepDecision {
-    if let Some(pending) = pending {
-        return if now_ms.saturating_sub(pending.published_at) > ack_age_ms {
+    // A probe stays outstanding until the connector sends anything that counts
+    // as activity. Until then it is neither repeated nor, on its own, grounds
+    // for retirement (#2141): a connector need not answer it (AB.6.3), and
+    // receiving it restarts the connector's own heartbeat timer, so silence is
+    // counted from the probe and must outlast the liveness bound too. Not
+    // repeating it keeps that count from restarting for a dead connector.
+    if let Some(pending) = pending.filter(|pending| last_activity_ms <= pending.published_at) {
+        let silence = now_ms.saturating_sub(pending.published_at);
+        return if silence > ack_age_ms && silence > liveness_bound_ms {
             HubHeartbeatSweepDecision::RemoveTimedOut
         } else {
             HubHeartbeatSweepDecision::Keep
         };
     }
 
+    // No probe, or one the connector has since shown it outlived: probe
+    // again once this idle period is long enough. Reservation replaces it.
     if now_ms.saturating_sub(last_activity_ms) > idle_age_ms {
         HubHeartbeatSweepDecision::SendRequest
     } else {
@@ -358,36 +369,72 @@ pub(super) async fn clear_matching_heartbeat_ack(
 mod tests {
     use super::*;
 
+    use HubHeartbeatSweepDecision::{Keep, RemoveTimedOut, SendRequest};
+
+    // Liveness bound no larger than the ACK age: the first unanswered probe
+    // retires, as before #2141.
+    fn ack_bound(
+        now: u64,
+        last: u64,
+        pending: Option<PendingHeartbeat>,
+    ) -> HubHeartbeatSweepDecision {
+        hub_heartbeat_sweep_decision(now, last, pending, 60, 5, 5)
+    }
+
+    // ACK age 5, liveness bound 360, probe published at 100.
+    fn live(now: u64, last: u64, pending: Option<PendingHeartbeat>) -> HubHeartbeatSweepDecision {
+        hub_heartbeat_sweep_decision(now, last, pending, 60, 5, 360)
+    }
+
     #[test]
     fn sweep_keeps_active_client_without_pending_heartbeat() {
-        assert_eq!(
-            hub_heartbeat_sweep_decision(100, 80, None, 60, 5),
-            HubHeartbeatSweepDecision::Keep
-        );
+        assert_eq!(ack_bound(100, 80, None), Keep);
     }
 
     #[test]
     fn sweep_sends_request_to_idle_client_without_pending_heartbeat() {
-        assert_eq!(
-            hub_heartbeat_sweep_decision(100, 39, None, 60, 5),
-            HubHeartbeatSweepDecision::SendRequest
-        );
+        assert_eq!(ack_bound(100, 39, None), SendRequest);
     }
 
     #[test]
     fn sweep_keeps_client_while_pending_heartbeat_is_within_ack_timeout() {
-        assert_eq!(
-            hub_heartbeat_sweep_decision(104, 30, pending(0x8000), 60, 5),
-            HubHeartbeatSweepDecision::Keep
-        );
+        assert_eq!(ack_bound(104, 30, pending(0x8000)), Keep);
     }
 
     #[test]
     fn sweep_removes_client_when_pending_heartbeat_exceeds_ack_timeout() {
+        assert_eq!(ack_bound(106, 30, pending(0x8000)), RemoveTimedOut);
+    }
+
+    #[test]
+    fn unanswered_probe_retires_only_after_silence_outlasts_the_liveness_bound() {
+        assert_eq!(live(106, 30, pending(0x8000)), Keep, "missed ACK alone");
+        assert_eq!(live(460, 30, pending(0x8000)), Keep, "strictly exceeded");
+        assert_eq!(live(461, 30, pending(0x8000)), RemoveTimedOut);
+        // Activity at the probe's own millisecond may predate it: not proof.
+        assert_eq!(live(461, 100, pending(0x8000)), RemoveTimedOut);
+        // The larger bound wins when the ACK age is the longer one.
         assert_eq!(
-            hub_heartbeat_sweep_decision(106, 30, pending(0x8000), 60, 5),
-            HubHeartbeatSweepDecision::RemoveTimedOut
+            hub_heartbeat_sweep_decision(461, 30, pending(1), 60, 500, 360),
+            Keep
         );
+    }
+
+    #[test]
+    fn unanswered_probe_is_not_repeated_while_the_connector_stays_silent() {
+        // Idle far beyond idle age, but the outstanding probe is not resent:
+        // resending would restart the silence count for a dead connector.
+        assert_eq!(live(300, 30, pending(0x8000)), Keep);
+    }
+
+    #[test]
+    fn activity_after_an_unanswered_probe_supersedes_it() {
+        // The connector spoke after the probe: never retired for that probe,
+        // and probed again only once a fresh idle period passes.
+        assert_eq!(live(1_000, 101, pending(0x8000)), SendRequest);
+        assert_eq!(live(150, 101, pending(0x8000)), Keep);
+        assert_eq!(live(162, 101, pending(0x8000)), SendRequest);
+        assert_eq!(ack_bound(106, 101, pending(0x8000)), Keep);
     }
 
     #[test]

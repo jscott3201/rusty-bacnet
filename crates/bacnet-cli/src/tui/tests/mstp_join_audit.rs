@@ -17,7 +17,7 @@ use crate::tui::profile::store::Store;
 use crate::tui::profile::{Overrides, Profile};
 use crate::tui::safety::audit::MSTP_JOIN;
 use crate::tui::worker::session::SessionOptions;
-use crate::tui::worker::{coordinator, EventSink};
+use crate::tui::worker::{EventSink, coordinator};
 
 /// A port no host has, so the session's open fails and nothing is sent.
 const PORT: &str = "/nonexistent/ttyBACnet-1862";

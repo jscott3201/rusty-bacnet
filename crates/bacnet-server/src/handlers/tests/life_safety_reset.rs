@@ -1,3 +1,4 @@
+use bacnet_types::error::RemoteError;
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -41,10 +42,10 @@ fn read(db: &ObjectDatabase, oid: ObjectIdentifier, property: PropertyIdentifier
 fn assert_protocol_error(error: Error, class: ErrorClass, code: ErrorCode) {
     assert!(matches!(
         error,
-        Error::Protocol {
+        Error::Remote(RemoteError::Error {
             class: actual_class,
             code: actual_code,
-        } if actual_class == class && actual_code == code
+        }) if actual_class == class && actual_code == code
     ));
 }
 

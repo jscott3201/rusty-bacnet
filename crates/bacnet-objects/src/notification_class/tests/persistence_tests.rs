@@ -3,14 +3,15 @@
 
 use super::super::*;
 use super::make_dest_device;
-use super::storage::{persistent, MemoryPersistence};
+use super::storage::{MemoryPersistence, persistent};
 use bacnet_encoding::constructed::encode_destination_list;
 use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::error::RemoteError;
 use bytes::BytesMut;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(super) fn framed(list: &[BACnetDestination]) -> PropertyValue {
     let mut buf = BytesMut::new();
@@ -37,10 +38,10 @@ fn address_destination(mac: &[u8]) -> BACnetDestination {
 
 pub(super) fn assert_refused(result: Result<(), Error>, class: ErrorClass, code: ErrorCode) {
     match result {
-        Err(Error::Protocol {
+        Err(Error::Remote(RemoteError::Error {
             class: got_class,
             code: got_code,
-        }) => assert_eq!(
+        })) => assert_eq!(
             (got_class, got_code),
             (class, code),
             "expected {class:?} / {code:?}"

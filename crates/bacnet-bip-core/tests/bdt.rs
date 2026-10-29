@@ -7,9 +7,9 @@ use core::net::Ipv4Addr;
 
 use bacnet_bip_codec::{BdtEntries, BdtEntry};
 use bacnet_bip_core::bbmd::{
-    canonicalize, distribution_address, validate_entry, Bdt, BdtError, EntryError, TWO_HOP_MASK,
+    Bdt, BdtError, EntryError, TWO_HOP_MASK, canonicalize, distribution_address, validate_entry,
 };
-use support::{addr, row, MASK_24, MASK_32, OWN, PORT};
+use support::{MASK_24, MASK_32, OWN, PORT, addr, row};
 
 fn set<const N: usize>(bdt: &mut Bdt<N>, rows: &[BdtEntry]) -> Result<(), BdtError> {
     bdt.set(BdtEntries::from_entries(rows))
@@ -287,15 +287,19 @@ fn errors_display_what_went_wrong() {
     };
     assert!(invalid.to_string().contains("10.0.0.6:0"));
     assert!(invalid.to_string().contains("invalid port 0"));
-    assert!(BdtError::ConflictingMasks { entry }
+    assert!(
+        BdtError::ConflictingMasks { entry }
+            .to_string()
+            .contains("conflicting masks")
+    );
+    assert!(
+        BdtError::Capacity {
+            needed: 5,
+            available: 4
+        }
         .to_string()
-        .contains("conflicting masks"));
-    assert!(BdtError::Capacity {
-        needed: 5,
-        available: 4
-    }
-    .to_string()
-    .contains('5'));
+        .contains('5')
+    );
 }
 
 #[test]

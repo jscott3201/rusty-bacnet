@@ -6,6 +6,7 @@
 //! reaching its concrete type.
 use super::*;
 use bacnet_types::enums::{EngineeringUnits, ErrorClass, ErrorCode};
+use bacnet_types::error::RemoteError;
 
 fn read(avg: &AveragingObject, property: PropertyIdentifier) -> PropertyValue {
     avg.read_property(property, None).unwrap()
@@ -24,7 +25,7 @@ fn statistics(avg: &AveragingObject) -> [PropertyValue; 5] {
 
 fn assert_error(error: Error, class: ErrorClass, code: ErrorCode) {
     assert!(
-        matches!(error, Error::Protocol { class: c, code: e }
+        matches!(error, Error::Remote(RemoteError::Error { class: c, code: e })
             if c == class && e == code),
         "expected {class:?}/{code:?}, got {error:?}"
     );

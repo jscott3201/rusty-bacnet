@@ -224,9 +224,11 @@ async fn a_change_away_from_a_device_with_no_route_is_still_refused() {
     .await
     .unwrap();
     publish(&fixture, THIS_NETWORK);
-    assert!(change_recipient(&fixture, &address(0, &NEW_STATION))
-        .await
-        .is_err());
+    assert!(
+        change_recipient(&fixture, &address(0, &NEW_STATION))
+            .await
+            .is_err()
+    );
     settle().await;
     assert!(sends(&fixture).is_empty());
     fixture.server.stop().await.unwrap();

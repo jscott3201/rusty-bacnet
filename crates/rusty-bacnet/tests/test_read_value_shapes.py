@@ -33,6 +33,7 @@ AI_1 = ObjectIdentifier(ObjectType.ANALOG_INPUT, 1)
 AI_2 = ObjectIdentifier(ObjectType.ANALOG_INPUT, 2)
 AO_1 = ObjectIdentifier(ObjectType.ANALOG_OUTPUT, 1)
 MSV_1 = ObjectIdentifier(ObjectType.MULTI_STATE_VALUE, 1)
+DTV_1 = ObjectIdentifier(ObjectType.DATETIME_VALUE, 1)
 NC_1 = ObjectIdentifier(ObjectType.NOTIFICATION_CLASS, 1)
 NF_1 = ObjectIdentifier(ObjectType.NOTIFICATION_FORWARDER, 1)
 LC_1 = ObjectIdentifier(ObjectType.LOAD_CONTROL, 1)
@@ -88,6 +89,7 @@ def make_server() -> BACnetServer:
     server.add_group(2, "Empty")
     server.add_bip_network_port(1, "NP-1", udp_port=0)
     server.add_lift(1, "Lift-1", 1)
+    server.add_date_time_value(1, "DTV-1")
     return server
 
 
@@ -98,6 +100,11 @@ async def configure(server: BACnetServer) -> None:
         )
     await server.write_property_local(
         AO_1, P.PRESENT_VALUE, PropertyValue.real(42.0), priority=8, source_object=None
+    )
+    await server.write_property_local(
+        DTV_1, P.PRESENT_VALUE,
+        PropertyValue.list([PropertyValue.date(2026, 10, 25, 7), PropertyValue.time(7, 30, 0, 0)]),
+        priority=8, source_object=None,
     )
 
 
@@ -169,6 +176,25 @@ class ClientReadShapeTests(unittest.IsolatedAsyncioTestCase):
             [PropertyValue.null()] * 7 + [PropertyValue.real(42.0)] + [PropertyValue.null()] * 8
         ))
         self.assertEqual(await self.read(AO_1, P.PRIORITY_ARRAY, 8), PropertyValue.real(42.0))
+
+    async def test_a_date_time_priority_array_has_sixteen_slots(self) -> None:
+        # A set slot is the BACnetPriorityValue date-time choice, context tag
+        # 1 around the Date and Time (#2098): one element holding its octets
+        # as read, whose value is the date and time. A Present_Value write
+        # takes the bare pair instead.
+        slot = bytes([0x1E, 0xA4, 126, 10, 25, 7, 0xB4, 7, 30, 0, 0, 0x1F])
+        when = [(2026, 10, 25, 7), (7, 30, 0, 0)]
+        value = await self.read(DTV_1, P.PRIORITY_ARRAY)
+        self.assertEqual(value, PropertyValue.list(
+            [PropertyValue.null()] * 7 + [PropertyValue.application_data(slot)]
+            + [PropertyValue.null()] * 8
+        ))
+        self.assertEqual(value.value, [None] * 7 + [when] + [None] * 8)
+        one = await self.read(DTV_1, P.PRIORITY_ARRAY, 8)
+        self.assertEqual(one, PropertyValue.application_data(slot))
+        self.assertEqual(one.value, when)
+        # Present_Value stays the bare date and time.
+        self.assertEqual((await self.read(DTV_1, P.PRESENT_VALUE)).value, when)
 
     async def test_a_one_element_array_is_still_a_list(self) -> None:
         value = await self.read(MSV_1, P.STATE_TEXT)

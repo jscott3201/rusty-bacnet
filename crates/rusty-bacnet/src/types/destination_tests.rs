@@ -1,8 +1,8 @@
 use super::*;
+use bacnet_types::MacAddr;
 use bacnet_types::constructed::{BACnetAddress, BACnetRecipient};
 use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::ObjectIdentifier;
-use bacnet_types::MacAddr;
 use pyo3::exceptions::PyValueError;
 use pyo3::types::PyDict;
 use std::ffi::CStr;

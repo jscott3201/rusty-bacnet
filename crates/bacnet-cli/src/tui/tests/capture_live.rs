@@ -12,11 +12,11 @@ use ratatui::crossterm::event::KeyCode;
 use tokio::sync::mpsc;
 
 use super::capture::capturing;
-use super::network::{plan, Net};
+use super::network::{Net, plan};
 use super::site::bounded;
 use super::*;
-use crate::tui::capture::{worker as capture_worker, CaptureCommand, CaptureEvent, Direction};
-use crate::tui::worker::{EventSink, EVENT_CHANNEL_CAPACITY};
+use crate::tui::capture::{CaptureCommand, CaptureEvent, Direction, worker as capture_worker};
+use crate::tui::worker::{EVENT_CHANNEL_CAPACITY, EventSink};
 
 /// The lab device on loopback.
 async fn lab_server(instance: u32) -> BACnetServer<BipTransport> {
@@ -81,7 +81,7 @@ async fn a_read_property_over_bip_shows_the_tapped_request_and_response() {
         directions,
         [Direction::Out, Direction::In, Direction::Out, Direction::In]
     );
-    let server_address = crate::output::format_mac(&target);
+    let server_address = bacnet_ops::target::format_mac(&target);
     assert_eq!(frames[0].destination, server_address);
     assert_eq!(frames[1].source, server_address);
     let pdus: Vec<_> = frames
@@ -119,7 +119,7 @@ async fn a_read_property_over_bip_shows_the_tapped_request_and_response() {
         labels.contains(&"Service: read-property".to_string()),
         "{labels:?}"
     );
-    assert!(labels.iter().any(|l| l == "Real: 72.5"), "{labels:?}");
+    assert!(labels.iter().any(|l| l == "Value: 72.5"), "{labels:?}");
 
     filter(&mut app, "svc:ReadProperty errors");
     assert_eq!(app.capture.visible().collect::<Vec<_>>(), [4]);
@@ -127,7 +127,7 @@ async fn a_read_property_over_bip_shows_the_tapped_request_and_response() {
     server.stop().await.unwrap();
 }
 
-fn flat_labels(fields: &[crate::decode::tree::Field]) -> Vec<String> {
+fn flat_labels(fields: &[bacnet_ops::decode::tree::Field]) -> Vec<String> {
     let mut out = Vec::new();
     for field in fields {
         out.push(field.label.clone());
@@ -175,7 +175,7 @@ async fn the_session_tap_reaches_the_screen_through_the_coordinator() {
 /// the scripted ring, and the monitor still writes nothing.
 #[tokio::test(start_paused = true)]
 async fn the_monitor_feeds_the_capture_and_still_writes_nothing() {
-    use super::mstp_monitor::{acceptance_line, Run};
+    use super::mstp_monitor::{Run, acceptance_line};
     let mut run = Run::start(acceptance_line(), None, false).await;
     run.listen_for(Duration::ZERO).await;
     run.press(KeyCode::Char('7')).await;

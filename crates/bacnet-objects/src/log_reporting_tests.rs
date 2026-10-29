@@ -10,6 +10,7 @@ use bacnet_types::constructed::{
     LogDatum,
 };
 use bacnet_types::enums::ObjectType;
+use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::{Date, Time};
 use std::sync::Arc;
 
@@ -79,7 +80,7 @@ fn add(log: &mut dyn BACnetObject) {
 /// The class and code of a protocol error.
 fn code(error: Error) -> (ErrorClass, ErrorCode) {
     match error {
-        Error::Protocol { class, code } => (class, code),
+        Error::Remote(RemoteError::Error { class, code }) => (class, code),
         other => panic!("not a protocol error: {other:?}"),
     }
 }

@@ -6,7 +6,7 @@ use std::task::{Context, Poll, Wake, Waker};
 use bacnet_npdu::NetworkPriority;
 use bytes::Bytes;
 
-use super::{channel, SendRequest, TryRecvError, TrySendError, CAPACITY};
+use super::{CAPACITY, SendRequest, TryRecvError, TrySendError, channel};
 
 fn request(priority: u8, tag: u8) -> SendRequest {
     SendRequest::Broadcast {

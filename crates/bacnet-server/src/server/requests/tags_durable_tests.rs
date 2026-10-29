@@ -2,10 +2,10 @@
 
 use super::durable_stop_tests::{send, stop_then_release};
 use super::durable_write_wire_tests::{
-    while_saving, HeldStorage, SIMPLE_ACK_WPM, SIMPLE_ACK_WRITE, WAIT,
+    HeldStorage, SIMPLE_ACK_WPM, SIMPLE_ACK_WRITE, WAIT, while_saving,
 };
 use super::mutation_list_wire_tests::wire;
-use super::mutation_tests::{apdu, wpm, Fixture};
+use super::mutation_tests::{Fixture, apdu, wpm};
 use super::*;
 use crate::server::test_transport::TestTransport;
 use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
@@ -105,14 +105,14 @@ fn object(kind: Case, storage: &Arc<Storage>) -> Box<dyn BACnetObject> {
         ..ObjectProfile::default()
     };
     macro_rules! build {
-        ($ty:ty $(, $extra:expr)?) => {{
+        ($ty:ty $(, $extra:expr_2021)?) => {{
             let mut object = <$ty>::with_tags_persistence(1, "tags", $($extra,)? storage.clone()).unwrap();
             object.set_profile(profile).unwrap();
             Box::new(object)
         }};
     }
     macro_rules! value {
-        ($ty:ty $(, $extra:expr)?) => {{
+        ($ty:ty $(, $extra:expr_2021)?) => {{
             let mut object = <$ty>::with_tags_persistence(1, "tags", $($extra,)? kind.access, storage.clone()).unwrap();
             object.set_profile(profile).unwrap();
             Box::new(object)
@@ -516,9 +516,11 @@ async fn write_local_waits_off_the_database_lock_and_survives_rebuild() {
             .await
             .unwrap()
             .unwrap();
-        assert!(tokio::time::timeout(WAIT, server.database().write())
-            .await
-            .is_ok());
+        assert!(
+            tokio::time::timeout(WAIT, server.database().write())
+                .await
+                .is_ok()
+        );
         drop(go);
         writing.await.unwrap().unwrap();
         let mut server = Arc::into_inner(server).expect("writer released server");

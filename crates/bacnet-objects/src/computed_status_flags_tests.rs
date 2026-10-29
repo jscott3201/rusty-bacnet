@@ -16,7 +16,7 @@ use crate::trend::{TrendLogMultipleObject, TrendLogObject};
 use bacnet_types::enums::{
     EngineeringUnits, ErrorClass, ErrorCode, EventState, PropertyIdentifier, Reliability,
 };
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::{PropertyValue, StatusFlags};
 
 fn read(object: &dyn BACnetObject, property: PropertyIdentifier) -> PropertyValue {
@@ -163,20 +163,23 @@ fn trend_log_flags_match_its_fixed_state() {
     // so FAULT stays FALSE and agrees with the NO_FAULT_DETECTED readback.
     let mut log = TrendLogObject::new(1, "TL-1", 10).unwrap();
     assert_flags(&log, Kind::LogFixedFalse, StatusFlags::empty());
-    assert!(log
-        .read_property(PropertyIdentifier::OUT_OF_SERVICE, None)
-        .is_err());
-    assert!(log
-        .write_property(
+    assert!(
+        log.read_property(PropertyIdentifier::OUT_OF_SERVICE, None)
+            .is_err()
+    );
+    assert!(
+        log.write_property(
             PropertyIdentifier::RELIABILITY,
             None,
             PropertyValue::Enumerated(Reliability::OPEN_LOOP.to_raw()),
             None,
         )
-        .is_err());
-    assert!(log
-        .set_reliability_internal(Reliability::OPEN_LOOP)
-        .is_err());
+        .is_err()
+    );
+    assert!(
+        log.set_reliability_internal(Reliability::OPEN_LOOP)
+            .is_err()
+    );
     assert_flags(&log, Kind::LogFixedFalse, StatusFlags::empty());
 }
 
@@ -207,7 +210,7 @@ fn calendar_has_no_status_flags_to_compute() {
         assert!(
             matches!(
                 calendar.read_property(property, None),
-                Err(Error::Protocol { class, code })
+                Err(Error::Remote(RemoteError::Error { class, code }))
                     if class == ErrorClass::PROPERTY
                         && code == ErrorCode::UNKNOWN_PROPERTY
             ),

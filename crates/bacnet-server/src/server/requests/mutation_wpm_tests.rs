@@ -1,8 +1,8 @@
-use super::mutation_tests::{apdu, assert_denied, oid, value, wpm, Fixture};
+use super::mutation_tests::{Fixture, apdu, assert_denied, oid, value, wpm};
 use super::*;
 use crate::mutation::MutationTarget;
 use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleError};
-use std::sync::{atomic::AtomicUsize, Mutex as StdMutex};
+use std::sync::{Mutex as StdMutex, atomic::AtomicUsize};
 
 fn description(object: ObjectIdentifier, text: &str) -> WriteAccessSpecification {
     WriteAccessSpecification {

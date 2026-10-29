@@ -1,13 +1,13 @@
 //! The Devices screen: the duplicate-instance banner and the live table.
 
+use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, Paragraph, Row, Table};
-use ratatui::Frame;
 
 use super::columns::{self, Column};
-use super::{ellipsize, name_marker, text_width, Names, Theme, FULL_WIDTH, MIN_NAME};
-use crate::tui::app::devices::{age_label, segmentation_label, SortKey};
+use super::{FULL_WIDTH, MIN_NAME, Names, Theme, ellipsize, name_marker, text_width};
+use crate::tui::app::devices::{SortKey, age_label, segmentation_label};
 use crate::tui::app::names::device_object;
 use crate::tui::app::{App, Link, OpState};
 use crate::tui::message::DeviceRow;
@@ -388,6 +388,9 @@ fn empty_text(app: &App) -> String {
         (Link::Picking, _) => String::new(),
         (Link::Connecting, _) => "Connecting...".to_string(),
         (Link::Failed(error), _) => format!("Connection failed: {}", error.detail),
+        (Link::Passive, _) if app.passive_listener.is_some() => {
+            "Listening: :find NAME searches overheard I-Haves; Networks shows routers.".into()
+        }
         (Link::Passive, _) => {
             "Passive: no network client; nothing is transmitted. u shows the ledger.".into()
         }

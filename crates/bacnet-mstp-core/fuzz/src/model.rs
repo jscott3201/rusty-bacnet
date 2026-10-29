@@ -4,12 +4,12 @@
 
 use bacnet_mstp_codec::crc::crc8;
 use bacnet_mstp_codec::{
-    decode_frame_in_place, Frame, FrameType, BROADCAST_MAC, MAX_EXTENDED_MPDU_DATA,
-    MAX_STANDARD_MPDU_DATA,
+    BROADCAST_MAC, Frame, FrameType, MAX_EXTENDED_MPDU_DATA, MAX_STANDARD_MPDU_DATA,
+    decode_frame_in_place,
 };
 use bacnet_mstp_core::{Duration, MstpCoreConfig};
 
-use crate::input::{fill, Address, FrameSpec, Kind};
+use crate::input::{Address, FrameSpec, Kind, fill};
 
 /// Npoll: token uses between maintenance polls (Clause 9.5.3).
 pub const N_POLL: u64 = 50;

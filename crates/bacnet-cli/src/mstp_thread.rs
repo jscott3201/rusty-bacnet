@@ -7,7 +7,7 @@
 //! Both are Linux only, and refused as they are parsed elsewhere. A setting
 //! the kernel won't apply fails the join with the reason.
 
-use bacnet_transport::mstp::{MstpExecutionMode, MstpThreadConfig, MAX_CPUS};
+use bacnet_transport::mstp::{MAX_CPUS, MstpExecutionMode, MstpThreadConfig};
 
 /// The flags' clap ids.
 pub(crate) const FLAGS: [&str; 2] = ["mstp_rt_priority", "mstp_cpus"];

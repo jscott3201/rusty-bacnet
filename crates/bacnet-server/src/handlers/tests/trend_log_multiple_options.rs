@@ -7,10 +7,11 @@ use bacnet_objects::analog::AnalogValueObject;
 use bacnet_objects::trend::TrendLogMultipleObject;
 use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, LogData, LogValue};
+use bacnet_types::error::RemoteError;
 use std::sync::Arc;
 
-use bacnet_types::enums::EngineeringUnits;
 use PropertyIdentifier as P;
+use bacnet_types::enums::EngineeringUnits;
 
 fn tlm1() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::TREND_LOG_MULTIPLE, 1).unwrap()
@@ -65,7 +66,7 @@ fn rp(db: &ObjectDatabase, property: P) -> Vec<u8> {
 
 fn assert_refused(result: Result<(), Error>, class: ErrorClass, code: ErrorCode) {
     assert!(
-        matches!(result, Err(Error::Protocol { class: c, code: e })
+        matches!(result, Err(Error::Remote(RemoteError::Error { class: c, code: e }))
             if c == class && e == code),
         "expected {class:?} / {code:?}, got {result:?}"
     );

@@ -17,19 +17,27 @@ use bacnet_endpoint::session::SessionRole;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Validation without hub I/O: good config passes, reserved VMAC and
     // zero UUID fail fast with typed errors.
-    assert!(ScEndpointBuilder::new([0x02; 6], [0x11; 16])
-        .validate_only()
-        .is_ok());
-    assert!(ScEndpointBuilder::new([0; 6], [0x11; 16])
-        .validate_only()
-        .is_err());
-    assert!(ScEndpointBuilder::new([0x02; 6], [0; 16])
-        .validate_only()
-        .is_err());
-    assert!(ScEndpointBuilder::new([0x02; 6], [0x11; 16])
-        .heartbeat(1_000, 60_000)
-        .validate_only()
-        .is_err());
+    assert!(
+        ScEndpointBuilder::new([0x02; 6], [0x11; 16])
+            .validate_only()
+            .is_ok()
+    );
+    assert!(
+        ScEndpointBuilder::new([0; 6], [0x11; 16])
+            .validate_only()
+            .is_err()
+    );
+    assert!(
+        ScEndpointBuilder::new([0x02; 6], [0; 16])
+            .validate_only()
+            .is_err()
+    );
+    assert!(
+        ScEndpointBuilder::new([0x02; 6], [0x11; 16])
+            .heartbeat(1_000, 60_000)
+            .validate_only()
+            .is_err()
+    );
     println!("SC validation OK.");
 
     // Loopback composition: no TLS, no hub dial. The caller drives the hub

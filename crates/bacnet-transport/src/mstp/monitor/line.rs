@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use bacnet_mstp_codec::{DecodeEvent, Frame, StreamDecoder, StreamPhase};
 
-use super::stats::{octet_time, LineErrorKind, LineEvent};
+use super::stats::{LineErrorKind, LineEvent, octet_time};
 
 /// The stream position and timing state that goes with a [`StreamDecoder`].
 #[derive(Debug, Clone)]

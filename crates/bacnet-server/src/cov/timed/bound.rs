@@ -11,8 +11,8 @@
 //! reference records just that one.
 
 use super::{
-    unsigned_len, CovSubscriptionKey, DropReason, MultipleContextKey, TimedChange, TimedHistories,
-    TimedHistory,
+    CovSubscriptionKey, DropReason, MultipleContextKey, TimedChange, TimedHistories, TimedHistory,
+    unsigned_len,
 };
 
 /// Octets of an unsegmented confirmed request's header: type and flags,
@@ -186,8 +186,8 @@ mod tests {
         change, context, dropped, frame, histories, key, seconds, timed_reference,
     };
     use super::super::{
-        value_len, TimedChange, CEILING_BYTES_PER_OCTET, CHANGE_MEMORY, HISTORY_NOTIFICATIONS,
-        ITEM_FRAMING, VALUE_MEMORY,
+        CEILING_BYTES_PER_OCTET, CHANGE_MEMORY, HISTORY_NOTIFICATIONS, ITEM_FRAMING, TimedChange,
+        VALUE_MEMORY, value_len,
     };
     use super::*;
     use crate::cov::{

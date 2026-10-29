@@ -9,8 +9,8 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use super::filter::Filter;
 use super::CaptureFrame;
+use super::filter::Filter;
 
 /// Frames, oldest first, at most `capacity` of them.
 #[derive(Debug)]

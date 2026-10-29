@@ -254,7 +254,7 @@ fn canonical_rows(table: BdtEntries<'_>, out: &mut [BdtEntry]) -> Result<Canonic
         };
         match earlier {
             Some(row) if row.mask != entry.mask => {
-                return Err(BdtError::ConflictingMasks { entry })
+                return Err(BdtError::ConflictingMasks { entry });
             }
             Some(_) => {}
             None => {

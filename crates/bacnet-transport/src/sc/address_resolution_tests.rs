@@ -505,7 +505,7 @@ async fn address_resolution_ack_malformed_is_always_silent() {
 
 #[tokio::test]
 async fn address_resolution_silence_and_codes_never_consult_expired_budget() {
-    use super::rejection::{reject, RejectionBudget, RejectionExpired};
+    use super::rejection::{RejectionBudget, RejectionExpired, reject};
     struct NoIo;
     impl WebSocketPort for NoIo {
         async fn send(&self, _: &[u8]) -> Result<(), Error> {

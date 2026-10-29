@@ -25,7 +25,7 @@ use bacnet_types::calendar::SpecificDate;
 use bacnet_types::primitives::{BACnetTimeStamp, Date, Time};
 
 use super::next_sequence;
-use crate::clock::{current_datetime, ClockReader};
+use crate::clock::{ClockFrame, ClockReader};
 
 /// A date and time with every field given, ordered from the year down to
 /// the hundredths.
@@ -36,7 +36,20 @@ pub(super) fn next_event_time(
     clock: Option<&dyn ClockReader>,
     previous: &BACnetTimeStamp,
 ) -> BACnetTimeStamp {
-    let Some((date, time)) = current_datetime(clock) else {
+    next_event_time_from_frame(clock.and_then(ClockReader::read_clock), previous)
+}
+
+/// Stamp from the same coherent clock observation retained for timed capture.
+pub(super) fn next_event_time_from_frame(
+    frame: Option<ClockFrame>,
+    previous: &BACnetTimeStamp,
+) -> BACnetTimeStamp {
+    let Some(ClockFrame {
+        local_date: date,
+        local_time: time,
+        ..
+    }) = frame.filter(|frame| frame.is_valid_actual_datetime())
+    else {
         let last = match previous {
             BACnetTimeStamp::SequenceNumber(number) => *number,
             _ => 0,
@@ -101,4 +114,25 @@ fn next_day(day: SpecificDate) -> Option<SpecificDate> {
     SpecificDate::new(day.year(), day.month(), day.day() + 1)
         .or_else(|| SpecificDate::new(day.year(), day.month() + 1, 1))
         .or_else(|| SpecificDate::new(day.year() + 1, 1, 1))
+}
+
+/// Automatically stamped DateTimes must advance; sequences may wrap but differ.
+/// A nonspecific initial DateTime has no previous instant to order against.
+pub(super) fn stamped_time_advances(previous: &BACnetTimeStamp, next: &BACnetTimeStamp) -> bool {
+    if previous == next {
+        return false;
+    }
+    match (previous, next) {
+        (
+            BACnetTimeStamp::DateTime {
+                date: old_date,
+                time: old_time,
+            },
+            BACnetTimeStamp::DateTime { date, time },
+        ) => match (instant(old_date, old_time), instant(date, time)) {
+            (Some(old), Some(new)) => new > old,
+            _ => true,
+        },
+        _ => true,
+    }
 }

@@ -15,15 +15,15 @@
 use std::time::Instant;
 
 use bacnet_encoding::apdu::{self, Apdu, SegmentAck as SegmentAckPdu, SimpleAck};
-use bacnet_encoding::npdu::{decode_npdu, Npdu};
+use bacnet_encoding::npdu::{Npdu, decode_npdu};
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportPort;
+use bacnet_types::MacAddr;
 use bacnet_types::enums::{ConfirmedServiceChoice, ObjectType, Segmentation};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
-use bacnet_types::MacAddr;
 use bytes::BytesMut;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 use crate::discovery::{DiscoveredDevice, RoutedDeviceConfig};
 

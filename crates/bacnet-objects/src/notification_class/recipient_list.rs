@@ -1,6 +1,7 @@
 //! Recipient_List writes, the cap on how many destinations the list holds
 //! (#1098), and the same cap on the lists routing accepts (#1124).
 
+use crate::prelude::*;
 use bacnet_encoding::constructed::decode_destination;
 use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
 use bacnet_types::enums::{ErrorClass, ErrorCode};

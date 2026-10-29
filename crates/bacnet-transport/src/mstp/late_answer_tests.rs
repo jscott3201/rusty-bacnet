@@ -8,7 +8,7 @@ use tokio::sync::oneshot;
 use tokio::time::{Duration, Instant};
 
 use super::replies::DEFERRED_REPLIES;
-use super::test_support::{config, Bus, Sent};
+use super::test_support::{Bus, Sent, config};
 
 const REQUEST: &[u8] = &[1, 0x04, 0x10];
 const ANSWER: &[u8] = &[1, 0x00, 0x30];

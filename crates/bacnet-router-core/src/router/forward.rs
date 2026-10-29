@@ -1,15 +1,15 @@
 //! Rewriting a frame for the next hop (Clause 6.5.4).
 
+use super::MIN_PORT_LIMIT;
+use super::Storage;
 use super::counters::bump;
 use super::host::{Event, Host};
 use super::ingress::{Arrival, Discard, Received};
 use super::output::{Kind, Target};
-use super::Storage;
-use super::MIN_PORT_LIMIT;
+use crate::MAX_MAC_LEN;
 use crate::npdu::{Address, Npdu};
 use crate::npdu::{NetworkMessageType, RejectMessageReason};
 use crate::table::Route;
-use crate::MAX_MAC_LEN;
 
 /// The frame's SNET and SADR, or, when it has none, the arrival network and
 /// the link source: the originator is on the arrival link.
@@ -29,14 +29,14 @@ pub(super) const LONGEST_REJECT: usize = 2 + 2 * (3 + MAX_MAC_LEN) + 1 + 1 + 3;
 const _: () = assert!(LONGEST_REJECT < MIN_PORT_LIMIT as usize);
 
 impl<
-        const P: usize,
-        const R: usize,
-        const H: usize,
-        const D: usize,
-        const N: usize,
-        G: super::GroupClassifier,
-        const B: usize,
-    > Storage<P, R, H, D, N, G, B>
+    const P: usize,
+    const R: usize,
+    const H: usize,
+    const D: usize,
+    const N: usize,
+    G: super::GroupClassifier,
+    const B: usize,
+> Storage<P, R, H, D, N, G, B>
 {
     /// Drop a relay whose hop count has run out, counting it and telling
     /// the host, which logs it as the hosted router does

@@ -1,6 +1,6 @@
-use super::rejection::{RejectionBudget, RejectionExpired};
 use super::WebSocketPort;
-use crate::sc_frame::{validate_control, ControlRecipient, ScMessage};
+use super::rejection::{RejectionBudget, RejectionExpired};
+use crate::sc_frame::{ControlRecipient, ScMessage, validate_control};
 use tracing::warn;
 
 pub(super) async fn reject_invalid_control<W: WebSocketPort>(
@@ -12,10 +12,10 @@ pub(super) async fn reject_invalid_control<W: WebSocketPort>(
     let Err(nak) = validate_control(msg, wire, ControlRecipient::HubConnector) else {
         return Ok(false);
     };
-    if let Some(nak) = nak {
-        if let Err(e) = budget.send(ws, &nak).await? {
-            warn!("BACnet/SC control NAK send error: {e}");
-        }
+    if let Some(nak) = nak
+        && let Err(e) = budget.send(ws, &nak).await?
+    {
+        warn!("BACnet/SC control NAK send error: {e}");
     }
     Ok(true)
 }

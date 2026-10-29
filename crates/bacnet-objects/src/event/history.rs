@@ -1,5 +1,6 @@
 //! Shared storage for intrinsic-reporting event history properties.
 
+use crate::prelude::*;
 use bacnet_encoding::primitives::encode_timestamp_choice;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, PropertyIdentifier};
@@ -109,7 +110,7 @@ macro_rules! impl_builtin_intrinsic_reporting {
         [$($input_field:ident),+],
         $reliability_field:ident,
         $event_detection_enable_field:ident,
-        $algorithm:expr
+        $algorithm:expr_2021
     ) => {
         fn enrollment_summary_capability_internal(
             &self,
@@ -176,10 +177,7 @@ macro_rules! impl_builtin_intrinsic_reporting {
             timestamp: &bacnet_types::primitives::BACnetTimeStamp,
         ) -> Result<Option<$crate::event::EventStateChange>, bacnet_types::error::Error> {
             if !self.$event_detection_enable_field {
-                return Err(bacnet_types::error::Error::Protocol {
-                    class: bacnet_types::enums::ErrorClass::OBJECT,
-                    code: bacnet_types::enums::ErrorCode::NO_ALARM_CONFIGURED,
-                });
+                return Err(bacnet_types::error::Error::protocol(bacnet_types::enums::ErrorClass::OBJECT, bacnet_types::enums::ErrorCode::NO_ALARM_CONFIGURED));
             }
             self.$history_field
                 .acknowledge_correlated_detailed(
@@ -243,7 +241,7 @@ impl EventHistory {
     /// Back to the starting history, as Event_Detection_Enable FALSE asks;
     /// the [`ReportingOptions`] stay as configured.
     pub(crate) fn reset(&mut self) {
-        let options = std::mem::take(&mut self.options);
+        let options = core::mem::take(&mut self.options);
         *self = Self {
             options,
             ..Self::default()
@@ -344,10 +342,7 @@ impl EventHistory {
 }
 
 fn service_error(code: ErrorCode) -> Error {
-    Error::Protocol {
-        class: ErrorClass::SERVICES,
-        code,
-    }
+    Error::protocol(ErrorClass::SERVICES, code)
 }
 
 #[cfg(test)]
@@ -363,7 +358,7 @@ fn timestamp_value(stamp: &BACnetTimeStamp) -> PropertyValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::borrow::Cow;
+    use alloc::borrow::Cow;
 
     use bacnet_types::enums::{EventState, ObjectType};
     use bacnet_types::primitives::{Date, ObjectIdentifier, Time};

@@ -171,14 +171,16 @@ fn stale_commit_does_not_mutate_committed_event_properties() {
         AnalogInputObject::new(8, "AI-8", EngineeringUnits::SQUARE_METERS).unwrap(),
     ))
     .unwrap();
-    assert!(commit(
-        &mut db,
-        oid,
-        EventState::NORMAL,
-        EventState::HIGH_LIMIT,
-        true,
-    )
-    .is_some());
+    assert!(
+        commit(
+            &mut db,
+            oid,
+            EventState::NORMAL,
+            EventState::HIGH_LIMIT,
+            true,
+        )
+        .is_some()
+    );
     let before = committed_properties(&db, oid);
 
     assert!(commit(&mut db, oid, EventState::NORMAL, EventState::FAULT, true,).is_none());

@@ -2,13 +2,13 @@ use super::*;
 use crate::property_metadata::{PropertyPresenceCondition, PropertyWriteCapability};
 use crate::traits::BACnetObject;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::PropertyValue;
 use std::collections::HashSet;
 
 fn assert_error(error: Error, expected: ErrorCode) {
     assert!(
-        matches!(error, Error::Protocol { class, code }
+        matches!(error, Error::Remote(RemoteError::Error { class, code })
             if class == ErrorClass::PROPERTY
                 && code == expected),
         "expected {expected:?}, got {error:?}"

@@ -3,6 +3,7 @@
 //! Life Safety snapshots as any other WriteProperty or WritePropertyMultiple.
 
 use super::*;
+use bacnet_types::error::RemoteError;
 
 use bacnet_objects::life_safety::LifeSafetyZoneObject;
 use bacnet_types::enums::{LifeSafetyState, Reliability};
@@ -286,9 +287,11 @@ async fn write_local_simulates_tracking_value_only_out_of_service() {
         .subscribe(subscription(Some(TRACKING), CovNotificationKind::Single, 1))
         .unwrap();
     let refused = write_tracking_value(&server).await.unwrap_err();
-    assert!(matches!(refused, Error::Protocol { class, code }
+    assert!(
+        matches!(refused, Error::Remote(RemoteError::Error { class, code })
         if class == ErrorClass::PROPERTY
-            && code == ErrorCode::WRITE_ACCESS_DENIED));
+            && code == ErrorCode::WRITE_ACCESS_DENIED)
+    );
     assert!(decode_sent(&sent).is_empty());
 
     server

@@ -1,10 +1,10 @@
 //! Transport-level behaviour that is not a Clause 9 transition: the
 //! TransportPort surface, configuration, queueing and the receive path.
 
-use bacnet_mstp_codec::{FrameType, BROADCAST_MAC, MAX_STANDARD_MPDU_DATA};
+use bacnet_mstp_codec::{BROADCAST_MAC, FrameType, MAX_STANDARD_MPDU_DATA};
 use tokio::time::{Duration, Instant};
 
-use super::test_support::{config, encode, Bus};
+use super::test_support::{Bus, config, encode};
 use super::*;
 use crate::port::TransportPort;
 
@@ -139,7 +139,17 @@ async fn transport_start_stop_and_sends_outside_a_run() {
 
 #[tokio::test]
 async fn a_failed_read_ends_the_task_and_later_sends() {
-    let mut transport = MstpTransport::new(NoSerial, config(0, 127));
+    /// A port whose every read and write fails.
+    struct FailingSerial;
+    impl SerialPort for FailingSerial {
+        async fn write(&self, _data: &[u8]) -> Result<(), Error> {
+            Err(Error::Encoding("no port".into()))
+        }
+        async fn read(&self, _buf: &mut [u8]) -> Result<usize, Error> {
+            Err(Error::Encoding("no port".into()))
+        }
+    }
+    let mut transport = MstpTransport::new(FailingSerial, config(0, 127));
     let diagnostics = transport.diagnostics();
     let mut npdus = transport.start().await.unwrap();
     assert!(npdus.recv().await.is_none(), "the task ended");
@@ -155,8 +165,8 @@ async fn a_failed_read_ends_the_task_and_later_sends() {
 /// channel closes, later sends are refused, and stopping returns.
 #[tokio::test]
 async fn three_empty_reads_in_a_row_are_the_end_of_the_port() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct Closed(Arc<AtomicUsize>);
 

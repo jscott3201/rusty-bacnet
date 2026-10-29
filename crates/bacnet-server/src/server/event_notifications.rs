@@ -1,12 +1,12 @@
 use super::event_message_policy::intrinsic_event_message_text;
-use super::event_notification_payload::{project_intrinsic_payload, CommittedNotificationPayload};
+use super::event_notification_payload::{CommittedNotificationPayload, project_intrinsic_payload};
 #[path = "event_notification_profile.rs"]
 mod profile;
 use self::profile::{CommittedHistorySnapshot, NotificationConstruction, NotificationTransition};
 pub(super) use self::profile::{CommittedIntrinsicTransition, NotificationHistorySource};
 use super::event_recipient_route::system_utc_recipient_filter_time;
 use super::event_timestamp::{
-    confirm_event_timestamp, sample_event_timestamp, stage_event_timestamp, SampledEventClock,
+    SampledEventClock, confirm_event_timestamp, sample_event_timestamp, stage_event_timestamp,
 };
 use super::*;
 use bacnet_encoding::primitives::decode_timestamp_choice;
@@ -62,10 +62,10 @@ fn read_committed_history_snapshot(
     ) {
         (Ok(PropertyValue::CharacterString(message_text)), _) => message_text,
         (
-            Err(Error::Protocol {
+            Err(Error::Remote(RemoteError::Error {
                 class: ErrorClass::PROPERTY,
                 code: ErrorCode::UNKNOWN_PROPERTY,
-            }),
+            })),
             MessageTexts::Optional,
         ) => String::new(),
         _ => return None,
@@ -235,10 +235,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         // Local transition actions commit before Event_Enable or DCC can suppress
         // external distribution (Clauses 13.2.2.1.4 and 13.2.5).
-        if let Some(resolved) = resolved {
-            if resolved.distribute && resolved.event_values.is_some() {
-                Self::build_and_send_event_notification_with_bindings(ctx, oid, resolved).await;
-            }
+        if let Some(resolved) = resolved
+            && resolved.distribute
+            && resolved.event_values.is_some()
+        {
+            Self::build_and_send_event_notification_with_bindings(ctx, oid, resolved).await;
         }
     }
 

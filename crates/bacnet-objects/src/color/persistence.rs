@@ -19,6 +19,7 @@
 //!
 //! [`NotificationClassPersistence`]: crate::notification_class::NotificationClassPersistence
 
+#[cfg(feature = "std")]
 use std::path::Path;
 
 use bacnet_types::constructed::BACnetXyColor;
@@ -26,6 +27,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 
 use super::command;
+#[cfg(feature = "std")]
 use crate::durable::file::ObjectFile;
 
 /// A colour output's Present_Value, as storage keeps it.
@@ -69,15 +71,19 @@ pub trait ColorOutputPersistence: Send + Sync {
 }
 
 /// The format's tag.
+#[cfg(feature = "std")]
 const MAGIC: &[u8; 8] = b"RBNCLR01";
 /// The body is at most a kind octet and two REALs; anything much larger is
 /// not a file this backend wrote.
+#[cfg(feature = "std")]
 const MAX_FILE_BYTES: u64 = 64;
 /// The kind octet of an xy colour, followed by x and y as big-endian IEEE
 /// 754 single-precision values.
+#[cfg(feature = "std")]
 const KIND_XY: u8 = 1;
 /// The kind octet of a colour temperature, followed by the kelvin as a
 /// big-endian 32-bit unsigned value.
+#[cfg(feature = "std")]
 const KIND_KELVIN: u8 = 2;
 
 /// A file holding one colour object's Present_Value, replaced whole on each
@@ -93,10 +99,12 @@ const KIND_KELVIN: u8 = 2;
 ///
 /// [`FileNotificationClassPersistence`]: crate::notification_class::FileNotificationClassPersistence
 #[derive(Clone, Debug)]
+#[cfg(feature = "std")]
 pub struct FileColorOutputPersistence {
     file: ObjectFile,
 }
 
+#[cfg(feature = "std")]
 impl FileColorOutputPersistence {
     /// Keep the Present_Value in the file at `path`. Refuses an empty path.
     pub fn new(path: impl AsRef<Path>) -> Result<Self, Error> {
@@ -111,6 +119,7 @@ impl FileColorOutputPersistence {
     }
 }
 
+#[cfg(feature = "std")]
 impl ColorOutputPersistence for FileColorOutputPersistence {
     fn load(&self, object: ObjectIdentifier) -> Result<Option<ColorOutputSnapshot>, Error> {
         let Some(body) = self.file.load(object)? else {

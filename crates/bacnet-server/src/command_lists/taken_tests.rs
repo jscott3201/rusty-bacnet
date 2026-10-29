@@ -111,10 +111,11 @@ fn assert_ended_unmade(db: &ObjectDatabase) {
         panic!("an encoded action list");
     };
     let (list, _) = decode_action_list(&element, 0).unwrap();
-    assert!(list
-        .commands
-        .iter()
-        .all(|command| !command.write_successful));
+    assert!(
+        list.commands
+            .iter()
+            .all(|command| !command.write_successful)
+    );
     assert_eq!(write_status(db), WriteStatus::FAILED);
     assert_eq!(
         read(db, ch1(), PropertyIdentifier::RELIABILITY),

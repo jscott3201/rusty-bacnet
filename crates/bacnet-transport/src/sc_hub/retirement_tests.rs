@@ -18,6 +18,8 @@ async fn heartbeat_retirement_interrupts_blocked_ack_and_releases_admission() {
         let mut map = hub.clients.lock().await;
         let client = map.get_mut(&[0x42; 6]).unwrap();
         client.heartbeat.generation = 1;
+        // The probe follows the connector's last frame: nothing since (#2141).
+        client.last_activity.store(0, Ordering::Release);
         client.heartbeat.pending = Some(heartbeat::PendingHeartbeat {
             message_id: 23,
             published_at: 100_000,

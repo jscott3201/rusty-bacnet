@@ -116,7 +116,7 @@ impl AuditReporterAuthority<'_> {
             .0
             .change_sink
             .as_ref()
-            .and_then(std::sync::Weak::upgrade)
+            .and_then(alloc::sync::Weak::upgrade)
             .is_some()
             || self.0.change_owner.upgrade().is_some()
         {
@@ -140,11 +140,11 @@ impl AuditReporterAuthority<'_> {
                 .0
                 .change_sink
                 .as_ref()
-                .and_then(std::sync::Weak::upgrade)
+                .and_then(alloc::sync::Weak::upgrade)
                 .is_some_and(|current| Arc::ptr_eq(&current, sink))
         {
             self.0.change_sink = None;
-            self.0.change_owner = std::sync::Weak::new();
+            self.0.change_owner = alloc::sync::Weak::new();
         }
     }
     pub fn write_description(
@@ -178,7 +178,11 @@ impl AuditReporterObject {
                 "Audit Reporter audit level must not be DEFAULT".into(),
             ));
         }
-        if let Some(sink) = self.change_sink.as_ref().and_then(std::sync::Weak::upgrade) {
+        if let Some(sink) = self
+            .change_sink
+            .as_ref()
+            .and_then(alloc::sync::Weak::upgrade)
+        {
             if !sink.is_active() {
                 return Err(crate::common::write_access_denied_error());
             }
@@ -211,7 +215,7 @@ impl AuditReporterObject {
     pub fn captures_changes_internal(&self) -> bool {
         self.change_sink
             .as_ref()
-            .and_then(std::sync::Weak::upgrade)
+            .and_then(alloc::sync::Weak::upgrade)
             .is_some_and(|sink| sink.is_active())
     }
 }

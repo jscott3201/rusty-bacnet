@@ -1,5 +1,6 @@
 use super::*;
 use crate::clock::ClockFrame;
+use bacnet_types::error::RemoteError;
 
 #[test]
 fn pulse_converter_create_and_read_defaults() {
@@ -186,7 +187,7 @@ fn pulse_converter_write_framed_indexed_input_reference_lands() {
         )
         .unwrap_err();
     assert!(
-        matches!(refusal, Error::Protocol { class, code }
+        matches!(refusal, Error::Remote(RemoteError::Error { class, code })
             if class == bacnet_types::enums::ErrorClass::PROPERTY
                 && code == bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE),
         "{refusal:?}"
@@ -225,7 +226,7 @@ fn pulse_converter_write_malformed_framed_input_reference_rejected() {
         )
         .unwrap_err()
     {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, bacnet_types::enums::ErrorClass::PROPERTY);
             assert_eq!(code, bacnet_types::enums::ErrorCode::INVALID_DATA_ENCODING);
         }
@@ -263,7 +264,7 @@ fn pulse_converter_flat_input_reference_write_is_refused_and_changes_nothing() {
             .write_property(PropertyIdentifier::INPUT_REFERENCE, None, flat, None)
             .unwrap_err()
         {
-            Error::Protocol { class, code } => {
+            Error::Remote(RemoteError::Error { class, code }) => {
                 assert_eq!(class, bacnet_types::enums::ErrorClass::PROPERTY);
                 assert_eq!(code, bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE);
             }
@@ -335,7 +336,7 @@ fn write(
 
 fn assert_value_out_of_range(result: Result<(), Error>) {
     match result {
-        Err(Error::Protocol { class, code }) => {
+        Err(Error::Remote(RemoteError::Error { class, code })) => {
             assert_eq!(class, bacnet_types::enums::ErrorClass::PROPERTY);
             assert_eq!(code, bacnet_types::enums::ErrorCode::VALUE_OUT_OF_RANGE);
         }
@@ -648,7 +649,7 @@ fn pulse_converter_count_rows_are_read_only_over_the_network() {
     ] {
         assert!(!pc.is_writable_property(property), "{property:?}");
         match write(&mut pc, property, value) {
-            Err(Error::Protocol { class, code }) => {
+            Err(Error::Remote(RemoteError::Error { class, code })) => {
                 assert_eq!(class, bacnet_types::enums::ErrorClass::PROPERTY);
                 assert_eq!(code, bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED);
             }
@@ -672,7 +673,8 @@ fn pulse_converter_cov_reports_update_time() {
         pc.cov_reported_properties(),
         [Value(PropertyIdentifier::UPDATE_TIME)]
     );
-    assert!(pc
-        .property_list()
-        .contains(&PropertyIdentifier::UPDATE_TIME));
+    assert!(
+        pc.property_list()
+            .contains(&PropertyIdentifier::UPDATE_TIME)
+    );
 }

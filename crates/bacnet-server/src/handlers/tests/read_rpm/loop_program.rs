@@ -3,10 +3,10 @@ use super::*;
 #[test]
 fn rpm_loop_program_metadata_selectors_preserve_bytes_and_budgets() {
     use super::super::property_metadata::assert_rpm_selector_bytes;
+    use PropertyIdentifier as P;
     use bacnet_objects::{loop_obj::LoopObject, program::ProgramObject, traits::BACnetObject};
     use bacnet_types::enums::EngineeringUnits;
     use bacnet_types::primitives::PropertyValue;
-    use PropertyIdentifier as P;
 
     // Independent fixtures (Loop in Table 12-20 order, Program in its legacy
     // order): classification must not be inferred from the metadata being

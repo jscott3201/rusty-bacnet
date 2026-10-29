@@ -1,4 +1,4 @@
-use super::{check_transmittable_length, LengthBoundedBy};
+use super::{LengthBoundedBy, check_transmittable_length};
 
 #[test]
 fn conformant_lengths_pass() {

@@ -4,6 +4,7 @@
 
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::enums::{PropertyIdentifier as P, Reliability};
+use bacnet_types::error::RemoteError;
 
 use super::*;
 
@@ -65,7 +66,7 @@ fn own(out_of_service: bool) -> [PropertyValue; 3] {
 
 fn assert_property_error(result: Result<(), Error>, code: ErrorCode) {
     assert!(
-        matches!(result, Err(Error::Protocol { class, code: actual })
+        matches!(result, Err(Error::Remote(RemoteError::Error { class, code: actual }))
             if class == ErrorClass::PROPERTY
                 && actual == code),
         "expected PROPERTY / {code:?}, got {result:?}"

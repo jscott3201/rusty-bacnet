@@ -88,7 +88,7 @@ async fn concurrent_ports_share_one_capacity_and_exact_depth_during_receive() {
             ..Default::default()
         }
     );
-    router.stop().await;
+    router.stop().await.unwrap();
 }
 
 #[test]

@@ -4,6 +4,7 @@
 //! dispatch, retained-storage filtering, ACK encode, and client decode —
 //! including the segmented-ACK path under a small max-APDU.
 
+use bacnet_types::error::RemoteError;
 use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
 
@@ -13,6 +14,7 @@ use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_server::server::BACnetServer;
 use bacnet_services::audit::{AuditLogQueryRequest, BACnetAuditLogQueryParameters};
+use bacnet_types::MacAddr;
 use bacnet_types::constructed::{
     BACnetAddress, BACnetAuditLogDatum, BACnetAuditLogRecord, BACnetAuditLogRecordResult,
     BACnetAuditNotification, BACnetRecipient,
@@ -22,7 +24,6 @@ use bacnet_types::enums::{
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
-use bacnet_types::MacAddr;
 
 #[derive(Default)]
 struct MemoryPersistence(Mutex<Option<AuditLogSnapshot>>);
@@ -607,7 +608,7 @@ async fn audit_query_matches_address_recipient_and_unknown_audit_log_errors() {
     assert!(
         matches!(
             error,
-            Error::Protocol { class, code }
+            Error::Remote(RemoteError::Error { class, code })
                 if class == ErrorClass::OBJECT
                     && code == ErrorCode::UNKNOWN_OBJECT
         ),

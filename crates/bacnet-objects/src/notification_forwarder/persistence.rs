@@ -9,8 +9,11 @@
 //! ([`crate::durable`] lists those paths). Each saved Subscribed_Recipients
 //! entry carries the whole minutes it had left at the save.
 
+use crate::prelude::*;
+#[cfg(feature = "std")]
 use std::path::Path;
 
+#[cfg(feature = "std")]
 use bacnet_encoding::constructed::{
     decode_destination, decode_event_notification_subscription, encode_destination_list,
     encode_event_notification_subscription_list,
@@ -18,10 +21,14 @@ use bacnet_encoding::constructed::{
 use bacnet_types::constructed::{BACnetDestination, BACnetEventNotificationSubscription};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
+#[cfg(feature = "std")]
 use bytes::BytesMut;
 
+#[cfg(feature = "std")]
 use super::MAX_RECIPIENT_LIST_DESTINATIONS;
+#[cfg(feature = "std")]
 use crate::durable::file::ObjectFile;
+#[cfg(feature = "std")]
 use crate::subscribed_recipients::MAX_SUBSCRIBED_RECIPIENTS;
 
 /// What a forwarder keeps across a restart: both of its lists.
@@ -51,14 +58,17 @@ pub trait NotificationForwarderPersistence: Send + Sync {
     fn save(&self, forwarder: ObjectIdentifier, snapshot: &ForwarderSnapshot) -> Result<(), Error>;
 }
 
+#[cfg(feature = "std")]
 const MAGIC: &[u8; 8] = b"RBNFWD01";
 /// After the shared header (the magic tag and the object identifier): one
 /// octet, 1 when the file holds a Recipient_List and 0 when not, then the
 /// Recipient_List's length.
+#[cfg(feature = "std")]
 const BODY_HEADER_LEN: usize = 1 + 4;
 /// A full Recipient_List of the longest destinations is 1,504 octets and a
 /// full Subscribed_Recipients 1,184; anything much larger is not a file this
 /// backend wrote.
+#[cfg(feature = "std")]
 pub(super) const MAX_FILE_BYTES: u64 = 64 * 1024;
 
 /// A file holding one forwarder's lists, replaced whole on each save.
@@ -73,10 +83,12 @@ pub(super) const MAX_FILE_BYTES: u64 = 64 * 1024;
 /// encoded Recipient_List with its length, and the encoded
 /// Subscribed_Recipients. It does not coordinate between processes.
 #[derive(Clone, Debug)]
+#[cfg(feature = "std")]
 pub struct FileNotificationForwarderPersistence {
     file: ObjectFile,
 }
 
+#[cfg(feature = "std")]
 impl FileNotificationForwarderPersistence {
     /// Keep the lists in the file at `path`.
     pub fn new(path: impl AsRef<Path>) -> Result<Self, Error> {
@@ -96,6 +108,7 @@ impl FileNotificationForwarderPersistence {
     }
 }
 
+#[cfg(feature = "std")]
 impl NotificationForwarderPersistence for FileNotificationForwarderPersistence {
     fn load(&self, forwarder: ObjectIdentifier) -> Result<Option<ForwarderSnapshot>, Error> {
         let Some(body) = self.file.load(forwarder)? else {

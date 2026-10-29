@@ -1,7 +1,8 @@
-//! Device management commands: DeviceCommunicationControl, ReinitializeDevice, GetEventInformation,
+//! Device management commands: DeviceCommunicationControl, ReinitializeDevice,
 //! AcknowledgeAlarm, CreateObject, DeleteObject, TimeSync.
 
 use bacnet_client::client::BACnetClient;
+use bacnet_ops::destination::Destination;
 use bacnet_services::alarm_event::AcknowledgeAlarmRequest;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{EnableDisable, EventState, ObjectType, ReinitializedState};
@@ -12,7 +13,7 @@ use crate::output::{self, OutputFormat};
 /// Synchronize time with a remote device.
 pub async fn time_sync_cmd<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
-    mac: &[u8],
+    to: &Destination,
     utc: bool,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -59,51 +60,76 @@ pub async fn time_sync_cmd<T: TransportPort + 'static>(
         hundredths,
     };
 
-    if utc {
-        client.utc_time_synchronization(mac, date, time).await?;
-    } else {
-        // For local time sync we also use UTC since we don't have
-        // a timezone library. Document this limitation.
-        client.time_synchronization(mac, date, time).await?;
-    }
+    // Both choices retain the existing UTC-derived fields; there is no
+    // timezone library here to calculate local civil time.
+    to.time_synchronization(client, date, time, utc).await?;
     output::print_success("Time synchronized", format);
     Ok(())
 }
 
-/// Parse an action string into an `EnableDisable` value.
-fn parse_enable_disable(action: &str) -> Result<EnableDisable, String> {
-    match action.to_ascii_lowercase().as_str() {
-        "enable" => Ok(EnableDisable::ENABLE),
-        "disable" => Ok(EnableDisable::DISABLE),
-        "disable-initiation" | "disable_initiation" => Ok(EnableDisable::DISABLE_INITIATION),
-        _ => Err(format!(
-            "unknown action '{action}': expected 'enable', 'disable', or 'disable-initiation'"
-        )),
+/// The DeviceCommunicationControl actions by name, as `control` (`dcc`)
+/// and the TUI's `:dcc` take them.
+pub(crate) const DCC_ACTIONS: [(&str, EnableDisable); 3] = [
+    ("enable", EnableDisable::ENABLE),
+    ("disable", EnableDisable::DISABLE),
+    ("disable-initiation", EnableDisable::DISABLE_INITIATION),
+];
+
+/// The ReinitializeDevice states by name, as `reinit` and the TUI's
+/// `:reinit` take them.
+pub(crate) const REINIT_STATES: [(&str, ReinitializedState); 8] = [
+    ("coldstart", ReinitializedState::COLDSTART),
+    ("warmstart", ReinitializedState::WARMSTART),
+    ("start-backup", ReinitializedState::START_BACKUP),
+    ("end-backup", ReinitializedState::END_BACKUP),
+    ("start-restore", ReinitializedState::START_RESTORE),
+    ("end-restore", ReinitializedState::END_RESTORE),
+    ("abort-restore", ReinitializedState::ABORT_RESTORE),
+    ("activate-changes", ReinitializedState::ACTIVATE_CHANGES),
+];
+
+/// The value named `word` in `table`, in any case, with `_` for `-`.
+fn named<T: Copy>(table: &[(&str, T)], word: &str) -> Option<T> {
+    let word = word.to_ascii_lowercase().replace('_', "-");
+    table
+        .iter()
+        .find(|(name, _)| *name == word)
+        .map(|(_, value)| *value)
+}
+
+/// `'a', 'b', or 'c'`.
+fn choices<T>(table: &[(&str, T)]) -> String {
+    let names: Vec<String> = table.iter().map(|(name, _)| format!("'{name}'")).collect();
+    match names.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{}, or {last}", rest.join(", ")),
+        _ => names.join(""),
     }
 }
 
+/// Parse an action string into an `EnableDisable` value.
+pub(crate) fn parse_enable_disable(action: &str) -> Result<EnableDisable, String> {
+    named(&DCC_ACTIONS, action).ok_or_else(|| {
+        format!(
+            "unknown action '{action}': expected {}",
+            choices(&DCC_ACTIONS)
+        )
+    })
+}
+
 /// Parse a state string into a `ReinitializedState` value.
-fn parse_reinit_state(state: &str) -> Result<ReinitializedState, String> {
-    match state.to_ascii_lowercase().as_str() {
-        "coldstart" => Ok(ReinitializedState::COLDSTART),
-        "warmstart" => Ok(ReinitializedState::WARMSTART),
-        "start-backup" | "start_backup" => Ok(ReinitializedState::START_BACKUP),
-        "end-backup" | "end_backup" => Ok(ReinitializedState::END_BACKUP),
-        "start-restore" | "start_restore" => Ok(ReinitializedState::START_RESTORE),
-        "end-restore" | "end_restore" => Ok(ReinitializedState::END_RESTORE),
-        "abort-restore" | "abort_restore" => Ok(ReinitializedState::ABORT_RESTORE),
-        "activate-changes" | "activate_changes" => Ok(ReinitializedState::ACTIVATE_CHANGES),
-        _ => Err(format!(
-            "unknown state '{state}': expected 'coldstart', 'warmstart', 'start-backup', \
-             'end-backup', 'start-restore', 'end-restore', 'abort-restore', or 'activate-changes'"
-        )),
-    }
+pub(crate) fn parse_reinit_state(state: &str) -> Result<ReinitializedState, String> {
+    named(&REINIT_STATES, state).ok_or_else(|| {
+        format!(
+            "unknown state '{state}': expected {}",
+            choices(&REINIT_STATES)
+        )
+    })
 }
 
 /// Send a DeviceCommunicationControl request.
 pub async fn control_cmd<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
-    mac: &[u8],
+    to: &Destination,
     action: &str,
     duration: Option<u16>,
     password: Option<&str>,
@@ -111,14 +137,13 @@ pub async fn control_cmd<T: TransportPort + 'static>(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let enable_disable = parse_enable_disable(action)?;
 
-    client
-        .device_communication_control(
-            mac,
-            enable_disable,
-            duration,
-            password.map(|s| s.to_string()),
-        )
-        .await?;
+    to.device_communication_control(
+        client,
+        enable_disable,
+        duration,
+        password.map(|s| s.to_string()),
+    )
+    .await?;
 
     output::print_success("OK", format);
     Ok(())
@@ -127,42 +152,17 @@ pub async fn control_cmd<T: TransportPort + 'static>(
 /// Send a ReinitializeDevice request.
 pub async fn reinit_cmd<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
-    mac: &[u8],
+    to: &Destination,
     state: &str,
     password: Option<&str>,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let reinit_state = parse_reinit_state(state)?;
 
-    client
-        .reinitialize_device(mac, reinit_state, password.map(|s| s.to_string()))
+    to.reinitialize_device(client, reinit_state, password.map(|s| s.to_string()))
         .await?;
 
     output::print_success("OK", format);
-    Ok(())
-}
-
-/// Get event/alarm information from a device.
-pub async fn alarms_cmd<T: TransportPort + 'static>(
-    client: &BACnetClient<T>,
-    mac: &[u8],
-    format: OutputFormat,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let response = client.get_event_information(mac, None).await?;
-
-    // TODO: Decode GetEventInformation-ACK properly.
-    let hex: String = response
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<Vec<_>>()
-        .join(" ");
-    output::print_success(
-        &format!(
-            "GetEventInformation response ({} bytes, raw — decoding not yet implemented):\n{hex}",
-            response.len()
-        ),
-        format,
-    );
     Ok(())
 }
 
@@ -204,7 +204,7 @@ pub struct AcknowledgeAlarmArgs<'a> {
 /// Acknowledge an alarm on a remote device with exact caller-supplied timestamps.
 pub async fn acknowledge_alarm_cmd<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
-    mac: &[u8],
+    to: &Destination,
     args: AcknowledgeAlarmArgs<'_>,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -228,7 +228,7 @@ pub async fn acknowledge_alarm_cmd<T: TransportPort + 'static>(
         time_of_acknowledgment,
     )?;
 
-    client.acknowledge_alarm_request(mac, &request).await?;
+    to.acknowledge_alarm_request(client, &request).await?;
 
     output::print_success("Alarm acknowledged", format);
     Ok(())
@@ -237,13 +237,13 @@ pub async fn acknowledge_alarm_cmd<T: TransportPort + 'static>(
 /// Delete an object on a remote device.
 pub async fn delete_object_cmd<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
-    mac: &[u8],
+    to: &Destination,
     object_type: ObjectType,
     instance: u32,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let oid = ObjectIdentifier::new(object_type, instance)?;
-    client.delete_object(mac, oid).await?;
+    to.delete_object(client, oid).await?;
     output::print_success(&format!("Deleted {}:{}", object_type, instance), format);
     Ok(())
 }
@@ -251,7 +251,7 @@ pub async fn delete_object_cmd<T: TransportPort + 'static>(
 /// Create an object on a remote device.
 pub async fn create_object_cmd<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
-    mac: &[u8],
+    to: &Destination,
     object_type: ObjectType,
     instance: u32,
     format: OutputFormat,
@@ -259,14 +259,68 @@ pub async fn create_object_cmd<T: TransportPort + 'static>(
     use bacnet_services::object_mgmt::ObjectSpecifier;
     let oid = ObjectIdentifier::new(object_type, instance)?;
     let specifier = ObjectSpecifier::Identifier(oid);
-    let response = client.create_object(mac, specifier, vec![]).await?;
-    let hex: String = response
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<Vec<_>>()
-        .join(" ");
-    output::print_success(&format!("Created object (response: {hex})"), format);
+    // The client decodes the ACK; one that doesn't decode is an error, sent
+    // after the device acted on the request.
+    let created = to.create_object(client, specifier, vec![]).await.map_err(
+        |error| -> Box<dyn std::error::Error> {
+            match error {
+                bacnet_types::error::Error::Decoding(_) => format!(
+                    "{error}; the CreateObject acknowledgment didn't decode, \
+                     but the device may have created the object"
+                )
+                .into(),
+                other => other.into(),
+            }
+        },
+    )?;
+    let (message, json) = created_object_report(created);
+    match format {
+        OutputFormat::Table => output::print_success(&message, format),
+        OutputFormat::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(&json).expect("serialize create-object result")
+        ),
+    }
     Ok(())
+}
+
+/// Render the object a CreateObject acknowledgment names as a text message
+/// and a JSON object: the identifier is what a user needs, since the server
+/// may have picked the instance.
+fn created_object_report(created: ObjectIdentifier) -> (String, serde_json::Value) {
+    let message = format!(
+        "Created {}:{}",
+        created.object_type(),
+        created.instance_number()
+    );
+    let json = serde_json::json!({
+        "status": "ok",
+        "message": message,
+        "object_type": created.object_type().to_string(),
+        "instance": created.instance_number(),
+    });
+    (message, json)
+}
+
+#[cfg(test)]
+mod create_object_report_tests {
+    use super::*;
+
+    #[test]
+    fn report_names_the_new_object() {
+        let created = ObjectIdentifier::new(ObjectType::BINARY_INPUT, 100).unwrap();
+        let (message, json) = created_object_report(created);
+        assert_eq!(message, "Created BINARY_INPUT:100");
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "status": "ok",
+                "message": "Created BINARY_INPUT:100",
+                "object_type": "BINARY_INPUT",
+                "instance": 100,
+            })
+        );
+    }
 }
 
 #[cfg(test)]

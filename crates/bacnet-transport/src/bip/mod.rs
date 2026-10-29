@@ -20,9 +20,9 @@ use tracing::{debug, warn};
 
 use crate::bbmd::{self, BbmdState, BdtEntry};
 pub use crate::bbmd::{FdtCounters, ForeignDevicePolicy};
-use crate::bvll::encode_bip_mac;
 #[cfg(test)]
 use crate::bvll::BvllMessage;
+use crate::bvll::encode_bip_mac;
 #[cfg(test)]
 use crate::bvll::{
     decode_bip_mac, decode_bvll, forwarded_message, forwarded_wire, origin_of, raw_frame,
@@ -43,6 +43,7 @@ mod bbmd_receive;
 mod bbmd_start;
 mod client_snapshot;
 mod exchange;
+pub use bacnet_bip_core::node::ExchangeRefusal;
 pub use exchange::BvlcExchangeError;
 mod foreign_device;
 mod foreign_target;
@@ -64,15 +65,21 @@ mod fanout;
 mod groups;
 mod multicast;
 pub use multicast::BipMulticast;
+mod passive;
+#[cfg(any(test, feature = "test-support"))]
+mod send_observer;
 mod socket;
 use bbmd_start::{
-    initial_bbmd_state, refresh_own_address, subnet_mask_of, warn_about_peers_on_the_group_subnet,
-    warn_if_broadcast_may_leave_another_interface, BbmdConfig, OwnAddressContext,
+    BbmdConfig, OwnAddressContext, initial_bbmd_state, refresh_own_address, subnet_mask_of,
+    warn_about_peers_on_the_group_subnet, warn_if_broadcast_may_leave_another_interface,
 };
 use client_snapshot::ClientRecord;
 #[cfg(test)]
 use exchange::{decode_bvlc_result_code, unexpected_response};
 use node::NodeHandle;
+pub use passive::PassiveBip;
+#[cfg(feature = "test-support")]
+pub use send_observer::SendAttemptObserver;
 use socket::BipSocket;
 mod ingress;
 mod io;
@@ -81,9 +88,9 @@ mod rate_limit;
 mod receive_counters;
 pub use access::AsBip;
 pub use fanout::{FanoutCounters, FanoutPolicy};
-use ingress::{broadcast_is_own_address, receive_loop, IngressAddresses, Listeners};
 #[cfg(test)]
-use ingress::{handle_datagram, Arrival};
+use ingress::{Arrival, handle_datagram};
+use ingress::{IngressAddresses, Listeners, broadcast_is_own_address, receive_loop};
 use io::RecvContext;
 use own_broadcast::OwnBroadcastForwarder;
 pub use rate_limit::ManagementCounters;
@@ -93,7 +100,7 @@ use receive_counters::ReceiveDrops;
 pub use send_counters::SendCounters;
 use send_counters::SendRefusals;
 #[cfg(test)]
-use test_support::{admitted_delivery, handle_bvll_message, Delivery};
+use test_support::{Delivery, admitted_delivery, handle_bvll_message};
 
 /// The longest datagram the transport sends: a Forwarded-NPDU carrying a
 /// 1497-octet NPDU, the largest B/IP carries (Table 6-1). Longer NPDUs are
@@ -122,10 +129,6 @@ pub struct BipTransport {
     bbmd_config: Option<BbmdConfig>,
     /// BBMD state (when acting as a BBMD, created in `start()`).
     bbmd: Option<Arc<std::sync::Mutex<BbmdState>>>,
-    /// Whether the BBMD state serves a B/IP-M group (Annex J.8.3), as last
-    /// set: a restart locks the state to change it only when the group
-    /// came or went.
-    bbmd_serves_group: bool,
     /// BBMD FDT expiry purge task.
     bbmd_fdt_purge_task: Option<JoinHandle<()>>,
     /// Foreign device registration (when registered as a foreign device),
@@ -211,7 +214,6 @@ impl BipTransport {
             recv_task: None,
             bbmd_config: None,
             bbmd: None,
-            bbmd_serves_group: false,
             bbmd_fdt_purge_task: None,
             foreign_device: None,
             node: None,
@@ -292,16 +294,6 @@ impl BipTransport {
         });
     }
 
-    /// Enable foreign device registration on this BBMD with the given policy.
-    /// Must be called after `enable_bbmd()` and before `start()`.
-    pub fn enable_foreign_device_registration(&mut self, policy: ForeignDevicePolicy) {
-        if let Some(config) = &mut self.bbmd_config {
-            config.foreign_device_policy = Some(policy);
-        } else {
-            warn!("enable_foreign_device_registration called before enable_bbmd(); policy will be ignored");
-        }
-    }
-
     /// Set foreign device registration policy on this BBMD.
     /// Must be called after `enable_bbmd()` and before `start()`.
     pub fn set_foreign_device_policy(&mut self, policy: ForeignDevicePolicy) {
@@ -364,11 +356,8 @@ impl BipTransport {
     /// FD_Subscription_Lifetime, activated by ReinitializeDevice); a later
     /// start keeps the values it moved to.
     pub fn register_as_foreign_device(&mut self, config: ForeignDeviceConfig) {
-        self.foreign_device = Some(Arc::new(foreign_target::ForeignTarget::new(
-            config,
-            self.broadcast_address,
-            self.interface,
-        )));
+        let target = foreign_target::ForeignTarget::new(config, self);
+        self.foreign_device = Some(Arc::new(target));
     }
 
     /// Get the BBMD state (if BBMD mode is enabled). It appears when
@@ -382,6 +371,12 @@ impl BipTransport {
     /// transport.
     pub fn bbmd_state(&self) -> Option<&Arc<std::sync::Mutex<BbmdState>>> {
         self.bbmd.as_ref()
+    }
+
+    /// The broadcast address this transport was configured with, which its
+    /// local broadcasts go to.
+    pub fn broadcast_address(&self) -> Ipv4Addr {
+        self.broadcast_address
     }
 
     /// Return the operational BBMD management counters.
@@ -537,6 +532,7 @@ impl TransportPort for BipTransport {
                     Arc::new(bbmd::LiveTables {
                         state: Arc::clone(state),
                         file: self.bdt_file.clone(),
+                        group: self.supports_multicast().then(|| self.group_change()),
                     }) as Arc<dyn BbmdTables>
                 }),
             },
@@ -596,7 +592,7 @@ impl TransportPort for BipTransport {
         if let Some(foreign) = &foreign_config {
             foreign.check_bbmd(self.broadcast_address, self.interface)?;
         }
-        let multicast = self.multicast.config();
+        let multicast = self.multicast.start_config();
         if let Some(group) = &multicast {
             self.check_multicast_start(group, foreign_config.is_some())?;
         }
@@ -643,7 +639,7 @@ impl TransportPort for BipTransport {
             state.set_subnet_mask(subnet_mask_of(Ipv4Addr::from(ip)).await);
             self.bbmd_config = None;
             self.bbmd = Some(Arc::new(std::sync::Mutex::new(state)));
-            self.bbmd_serves_group = multicast.is_some();
+            self.multicast.set_bbmd_serves_group(multicast.is_some());
             Some(ip)
         } else if let Some(bbmd) = self.bbmd.as_ref().filter(|_| wildcard_bind) {
             // An explicit interface keeps its IP and port, and its mask,
@@ -658,15 +654,16 @@ impl TransportPort for BipTransport {
             Some(ip)
         } else {
             // A restart may come with another group, or none: only then is
-            // the state locked.
+            // the state locked. The rule it holds is tracked beside it, a
+            // run-time activation of the group included (#1963).
             let group = multicast.is_some();
             if let Some(bbmd) = self
                 .bbmd
                 .as_ref()
-                .filter(|_| self.bbmd_serves_group != group)
+                .filter(|_| self.multicast.bbmd_serves_group() != group)
             {
                 bbmd::lock(bbmd).set_serves_group(group)?;
-                self.bbmd_serves_group = group;
+                self.multicast.set_bbmd_serves_group(group);
             }
             None
         };
@@ -730,12 +727,12 @@ impl TransportPort for BipTransport {
             }
         };
 
-        if let (Some(target), Some(used)) = (&self.foreign_device, &foreign_config) {
-            if let Err(error) = target.attach(&node, used) {
-                node.stop();
-                self.client_record.stop();
-                return Err(error);
-            }
+        if let (Some(target), Some(used)) = (&self.foreign_device, &foreign_config)
+            && let Err(error) = target.attach(&node, used)
+        {
+            node.stop();
+            self.client_record.stop();
+            return Err(error);
         }
         self.client_record.attach(&node);
         self.port = local_port;

@@ -51,8 +51,8 @@ pub(crate) fn validate_connect_request(
     wire: &[u8],
 ) -> Result<(), Option<bytes::Bytes>> {
     use super::{
-        encode_sc_message, first_must_understand_destination_option_marker, BROADCAST_VMAC,
-        UNKNOWN_VMAC,
+        BROADCAST_VMAC, UNKNOWN_VMAC, encode_sc_message,
+        first_must_understand_destination_option_marker,
     };
     use bacnet_types::enums::ErrorClass;
     use bytes::{Bytes, BytesMut};

@@ -3,6 +3,7 @@
 //! its Device member. The application fills them; both are read-only over the
 //! network.
 
+use crate::prelude::*;
 use bacnet_types::constructed::BACnetDeviceObjectReference;
 use bacnet_types::enums::ObjectType;
 use bacnet_types::error::Error;

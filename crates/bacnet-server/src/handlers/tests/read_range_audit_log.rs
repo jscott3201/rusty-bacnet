@@ -4,6 +4,7 @@
 //! one bare BACnetAuditLogRecord identified by its Unsigned64 sequence number.
 use super::read_range::*;
 use super::*;
+use bacnet_types::error::RemoteError;
 use std::sync::{Arc, Mutex};
 
 use bacnet_encoding::constructed::encode_audit_log_record;
@@ -157,7 +158,7 @@ fn at(hour: u8, count: i32) -> Option<RangeSpec> {
 
 fn assert_property_error(error: Error, expected: ErrorCode) {
     assert!(
-        matches!(error, Error::Protocol { class, code }
+        matches!(error, Error::Remote(RemoteError::Error { class, code })
             if class == ErrorClass::PROPERTY
                 && code == expected),
         "expected {expected:?}, got {error:?}"

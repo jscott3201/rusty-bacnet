@@ -4,14 +4,14 @@
 //! never made (#1363).
 
 use super::test_storage::{
-    assert_refused, block_on, octets, persistent, positive_only, write, write_positive, zone_rule,
-    MemoryPersistence, WAIT,
+    MemoryPersistence, WAIT, assert_refused, block_on, octets, persistent, positive_only, write,
+    write_positive, zone_rule,
 };
 use super::*;
-use crate::durable::{DurableWrites, SaveWait, StageStep, STAGED_WRITE_LIFETIME};
+use crate::durable::{DurableWrites, STAGED_WRITE_LIFETIME, SaveWait, StageStep};
 use bacnet_types::enums::PropertyIdentifier as P;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 fn staged(step: StageStep) -> SaveWait {

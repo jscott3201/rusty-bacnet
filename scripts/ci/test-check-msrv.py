@@ -14,7 +14,7 @@ import unittest
 SCRIPT = Path(__file__).with_name("check-msrv.sh")
 # The no_std builds' run, after the baseline (#1613).
 NO_STD_ALLOC = ["-p", "bacnet-types", "-p", "bacnet-encoding", "-p", "bacnet-services",
-                "--no-default-features", "--features", "alloc"]
+                "-p", "bacnet-objects", "--no-default-features", "--features", "alloc"]
 DRIVER = r'''
 import json, os, sys
 from pathlib import Path
@@ -26,16 +26,16 @@ if name == "uname":
     print(os.environ.get("MOCK_OS", "Linux") if args == ["-s"] else "aarch64")
 elif name == "rustup":
     if args == ["toolchain", "list"]:
-        print("1.99.0-" + host if os.environ.get("MOCK_NO_TOOLCHAIN") else "1.93-" + host)
+        print("1.99.0-" + host if os.environ.get("MOCK_NO_TOOLCHAIN") else "1.95-" + host)
     else:
-        assert args[:3] == ["which", "--toolchain", "1.93"], args
+        assert args[:3] == ["which", "--toolchain", "1.95"], args
         print(root / "bin" / args[-1])
 elif name == "rustc":
-    print("release: " + os.environ.get("MOCK_RUST_VERSION", "1.93.0"))
+    print("release: " + os.environ.get("MOCK_RUST_VERSION", "1.95.0"))
     print("host: " + os.environ.get("MOCK_HOST", host))
 elif name == "cargo":
     if args == ["--version"]:
-        print("cargo " + os.environ.get("MOCK_CARGO_VERSION", "1.93.0") + " (fixture)")
+        print("cargo " + os.environ.get("MOCK_CARGO_VERSION", "1.95.0") + " (fixture)")
     elif args[0] == "metadata":
         print(json.dumps({"packages": [
             {"name": "eligible", "publish": None},
@@ -93,7 +93,7 @@ class MsrvScriptTests(unittest.TestCase):
             tool.write_text(f"#!{sys.executable}\n" + DRIVER)
             tool.chmod(0o755)
         self.env = {"PATH": str(self.bin), "FIXTURE_ROOT": str(self.root),
-                    "RUSTUP_TOOLCHAIN": "1.93", "CARGO_TARGET_DIR": str(self.root / "custom target")}
+                    "RUSTUP_TOOLCHAIN": "1.95", "CARGO_TARGET_DIR": str(self.root / "custom target")}
 
     def run_script(self, *args, **env):
         return subprocess.run(["/bin/bash", str(self.script), *args], env=self.env | env,
@@ -142,8 +142,8 @@ class MsrvScriptTests(unittest.TestCase):
         self.assertIn("OK: Linux native MSRV", result.stdout)
 
     def test_unsupported_host(self): self.reject("requires a native Linux", MOCK_OS="Darwin")
-    def test_wrong_rust(self): self.reject("rustc must be stable 1.93", MOCK_RUST_VERSION="1.99.0")
-    def test_wrong_cargo(self): self.reject("cargo must be stable 1.93", MOCK_CARGO_VERSION="1.99.0")
+    def test_wrong_rust(self): self.reject("rustc must be stable 1.95", MOCK_RUST_VERSION="1.99.0")
+    def test_wrong_cargo(self): self.reject("cargo must be stable 1.95", MOCK_CARGO_VERSION="1.99.0")
     def test_missing_toolchain(self): self.reject("is not installed", MOCK_NO_TOOLCHAIN="1")
     def test_musl_compiler(self): self.reject("unsupported or non-native", MOCK_HOST="aarch64-unknown-linux-musl")
     def test_cross_arch_compiler(self): self.reject("unsupported or non-native", MOCK_HOST="x86_64-unknown-linux-gnu")

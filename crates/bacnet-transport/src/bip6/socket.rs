@@ -7,8 +7,8 @@ use std::{
 use tokio::net::UdpSocket;
 
 use super::{
-    link::SelectedLink, send::SelectedSender, BACNET_IPV6_MULTICAST_LINK_LOCAL,
-    BACNET_IPV6_MULTICAST_ORG_LOCAL, BACNET_IPV6_MULTICAST_SITE_LOCAL,
+    BACNET_IPV6_MULTICAST_LINK_LOCAL, BACNET_IPV6_MULTICAST_ORG_LOCAL,
+    BACNET_IPV6_MULTICAST_SITE_LOCAL, link::SelectedLink, send::SelectedSender,
 };
 use crate::tap::{FrameTap, TapDirection, TapPeer};
 use crate::udp_metadata::{DestinationReceiver, IpVersion, ReceivedDatagram};
@@ -158,10 +158,10 @@ fn classify(selection: Option<SelectedLink>, mut received: ReceivedDatagram) -> 
         if !admits(link, &received) {
             return Inbound::OffLink;
         }
-        if let SocketAddr::V6(peer) = &mut received.peer {
-            if peer.ip().is_unicast_link_local() {
-                peer.set_scope_id(link.index);
-            }
+        if let SocketAddr::V6(peer) = &mut received.peer
+            && peer.ip().is_unicast_link_local()
+        {
+            peer.set_scope_id(link.index);
         }
     }
     Inbound::Datagram(received)
@@ -233,9 +233,11 @@ mod tests {
         let ephemeral = Bip6Socket::bind(Ipv6Addr::LOCALHOST, 0, None)
             .await
             .unwrap();
-        assert!(!socket2::SockRef::from(&ephemeral.udp)
-            .reuse_address()
-            .unwrap());
+        assert!(
+            !socket2::SockRef::from(&ephemeral.udp)
+                .reuse_address()
+                .unwrap()
+        );
     }
 
     #[test]

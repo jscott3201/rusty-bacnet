@@ -10,8 +10,8 @@
 
 use bacnet_encoding::apdu::header::{ApduHeader, ConfirmedRequestHeader, MaxApdu, MaxSegments};
 use bacnet_encoding::primitives::{
-    decode_application_value_ref, encode_app_character_string_to_sink, encode_app_real_to_sink,
-    ApplicationValueRef,
+    ApplicationValueRef, decode_application_value_ref, encode_app_character_string_to_sink,
+    encode_app_real_to_sink,
 };
 use bacnet_encoding::sink::EncodeSink;
 use bacnet_services::read_property::{ReadPropertyAckRef, ReadPropertyRequest};

@@ -7,7 +7,7 @@
 //! sockets or shared port numbers.
 
 use super::*;
-use bacnet_encoding::npdu::{decode_npdu, NpduAddress};
+use bacnet_encoding::npdu::{NpduAddress, decode_npdu};
 use bacnet_npdu::RejectMessageReason;
 use bacnet_transport::port::ReceivedNpdu;
 use tokio::sync::oneshot;
@@ -386,9 +386,11 @@ pub(super) async fn dropped_arrival(peers: &mut [Peer], branch: LocalBranch, por
     peers[port].tx.send(arrival).await.unwrap();
     branch_forward(peers, branch, port, 256).await;
     forwarding_progress(peers, port).await;
-    assert!(timeout(Duration::from_secs(2), reply_rx)
-        .await
-        .expect("dropped reply sender retained")
-        .is_err());
+    assert!(
+        timeout(Duration::from_secs(2), reply_rx)
+            .await
+            .expect("dropped reply sender retained")
+            .is_err()
+    );
     assert_quiet(peers); // No wire rejection for the local admission drop.
 }

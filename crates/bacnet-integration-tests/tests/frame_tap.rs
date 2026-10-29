@@ -10,12 +10,12 @@ use std::net::Ipv4Addr;
 
 use bacnet_bip_codec::{BvlcResultCode, Bvll};
 use bacnet_client::client::BACnetClient;
-use bacnet_encoding::apdu::{decode_apdu, Apdu};
+use bacnet_encoding::apdu::{Apdu, decode_apdu};
 use bacnet_encoding::npdu::decode_npdu;
-use bacnet_mstp_codec::{decode_frame, FrameType};
+use bacnet_mstp_codec::{FrameType, decode_frame};
+use bacnet_objects::DeviceIdentity;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
-use bacnet_objects::DeviceIdentity;
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::bip::BvlcExchangeError;
 use bacnet_transport::mstp::{LoopbackSerial, MstpConfig, MstpTransport};
@@ -24,7 +24,7 @@ use bacnet_types::data_link::DataLink;
 use bacnet_types::enums::{ConfirmedServiceChoice, ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::Bytes;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 const DEVICE: u32 = 1234;
 /// Real sockets on a shared runner: generous, so load cannot fail a run
@@ -79,8 +79,10 @@ fn assert_exchange(frames: &[TappedFrame], link: DataLink, npdu: impl Fn(&[u8]) 
             Some((frame.direction, found))
         })
         .collect();
-    let [(TapDirection::Outbound, (true, sent)), (TapDirection::Inbound, (false, answered))] =
-        exchange[..]
+    let [
+        (TapDirection::Outbound, (true, sent)),
+        (TapDirection::Inbound, (false, answered)),
+    ] = exchange[..]
     else {
         panic!("one ReadProperty out and its answer in, got {exchange:?}");
     };

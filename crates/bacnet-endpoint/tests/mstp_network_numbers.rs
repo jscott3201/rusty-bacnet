@@ -7,10 +7,10 @@ mod mstp_wire;
 mod support;
 use bacnet_client::client::BACnetClient;
 use bacnet_encoding::{
-    apdu::{decode_apdu, Apdu},
+    apdu::{Apdu, decode_apdu},
     npdu::decode_npdu,
 };
-use bacnet_transport::{mstp::codec::FrameType, mstp::MstpExecutionMode, port::TransportPort};
+use bacnet_transport::{mstp::MstpExecutionMode, mstp::codec::FrameType, port::TransportPort};
 use bacnet_types::{
     enums::{ObjectType, PropertyIdentifier},
     primitives::ObjectIdentifier,
@@ -110,10 +110,11 @@ async fn responder_progress(peer: &mut Peer) {
             assert_eq!(ack.invoke_id, 42);
             assert_eq!(ack.service_choice.to_raw(), 12);
             // Encoded real value42.0 appears inside the returned property value.
-            assert!(ack
-                .service_ack
-                .windows(5)
-                .any(|bytes| bytes == [0x44, 0x42, 0x28, 0, 0]));
+            assert!(
+                ack.service_ack
+                    .windows(5)
+                    .any(|bytes| bytes == [0x44, 0x42, 0x28, 0, 0])
+            );
         }
         other => panic!("expected ReadProperty ACK, got {other:?}"),
     }
@@ -219,7 +220,7 @@ async fn mstp_number_transport_group_and_any_delegation() {
     }
 }
 macro_rules! mode_tests {
-    ($name:ident, $role:expr, $mode:expr) => {
+    ($name:ident, $role:expr_2021, $mode:expr_2021) => {
         #[tokio::test]
         async fn $name() {
             controls($role, $mode).await;

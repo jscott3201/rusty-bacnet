@@ -8,6 +8,8 @@ use rustls::ClientConnection;
 use x509_parser::nom::Parser;
 use x509_parser::prelude::*;
 
+use super::ScSubjectAltName;
+
 /// How TLS authenticated this physical connection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScHandshakeKind {
@@ -22,13 +24,18 @@ pub enum ScHandshakeKind {
 
 /// Bounded display metadata. Parsing is informational, never verification.
 ///
-/// Names and OIDs are ASCII escaped, at most 1024 bytes per field. Extensions
-/// are deliberately not interpreted. Dates are signed Unix seconds, not a
-/// current-validity or revocation verdict. No certificate text is in Debug.
+/// Names and OIDs are ASCII escaped, at most 1024 bytes per field. Of the
+/// extensions, only the Subject Alternative Names are read. Dates are signed
+/// Unix seconds, not a current-validity or revocation verdict. No
+/// certificate text is in Debug.
+///
+/// Parsing doesn't verify, but parsing a verified certificate, such as the
+/// leaf a server policy context returns, reads what its CA signed.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ScCertificateMetadata {
     subject: String,
     issuer: String,
+    subject_alt_names: Vec<ScSubjectAltName>,
     not_before_unix: i64,
     not_after_unix: i64,
     public_key_algorithm_oid: String,
@@ -44,6 +51,14 @@ impl ScCertificateMetadata {
     /// Escaped issuer distinguished name; not proof of issuer authorization.
     pub fn issuer(&self) -> &str {
         &self.issuer
+    }
+    /// The DNS, URI, email and IP Subject Alternative Names, unescaped and
+    /// in certificate order (#1965). Other name forms are left out, and a
+    /// missing, repeated or malformed extension gives none, so a rule should
+    /// allow on a name it finds rather than deny on one it misses. Match by
+    /// exact equality; see [`ScSubjectAltName`] for what that means.
+    pub fn subject_alt_names(&self) -> &[ScSubjectAltName] {
+        &self.subject_alt_names
     }
     /// Certificate not-before, in Unix seconds.
     pub fn not_before_unix(&self) -> i64 {
@@ -225,6 +240,7 @@ pub(super) fn metadata(cert: &X509Certificate<'_>) -> ScCertificateMetadata {
     ScCertificateMetadata {
         subject: escaped(&cert.subject(), &mut truncated),
         issuer: escaped(&cert.issuer(), &mut truncated),
+        subject_alt_names: super::subject_alt_name::subject_alt_names(cert),
         not_before_unix: cert.validity().not_before.timestamp(),
         not_after_unix: cert.validity().not_after.timestamp(),
         public_key_algorithm_oid: escaped(&cert.public_key().algorithm.algorithm, &mut truncated),

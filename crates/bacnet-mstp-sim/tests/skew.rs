@@ -12,8 +12,8 @@ mod common;
 use bacnet_mstp_codec::FrameType;
 use bacnet_mstp_core::{Duration, Instant, MstpCoreConfig};
 use bacnet_mstp_sim::{
-    AdapterSpec, CollisionClass, Fault, MasterSpec, ReplyPolicy, Sim, SimConfig, SimRng, Skew,
-    ViolationKind, WireFrame, WireTiming, MAX_SKEW_PPM,
+    AdapterSpec, CollisionClass, Fault, MAX_SKEW_PPM, MasterSpec, ReplyPolicy, Sim, SimConfig,
+    SimRng, Skew, ViolationKind, WireFrame, WireTiming,
 };
 
 use common::*;
@@ -170,9 +170,10 @@ fn skewed_ring(seed: u64) -> (Sim, Vec<u8>, u32) {
     (sim, stations, baud)
 }
 
-/// A seeded sweep over the band, with no adapter jitter. These seeds
-/// don't put adjacent masters at opposite clock edges at the low rates the
-/// known limit below covers (#1804). Every invariant holds (turnaround,
+/// A seeded sweep over the band, with exact timers and no adapter jitter.
+/// These seeds don't put adjacent masters at opposite clock edges at the
+/// low rates where exact timers lock step (#1804); the timer-tick sweep
+/// below covers those. Every invariant holds (turnaround,
 /// Tusage_delay, one token holder, frames that decode and are counted),
 /// and once the ring has formed nobody loses or regenerates the token,
 /// retries a pass or gives an answer up, and every request is answered in
@@ -227,34 +228,80 @@ fn rings_across_the_tolerance_band_keep_their_timing() {
     }
 }
 
-/// Stations 0 and 1 at `baud`, with clock and UART errors `slow` and
-/// `fast`, adapter timer jitter up to `jitter`, run for three seconds.
-fn opposite_edges(baud: u32, slow: i32, fast: i32, jitter: Duration, strict: bool) -> Sim {
-    let mut config = SimConfig::new(baud);
-    config.panic_on_violation = strict;
-    let mut sim = Sim::new(config);
-    for (station, ppm) in [(0, slow), (1, fast)] {
-        let adapter = AdapterSpec {
-            deadline_jitter: jitter,
-            ..AdapterSpec::default()
-        };
-        sim.add_master(
-            MasterSpec::new(station, 3, baud)
-                .skew(Skew::common(ppm))
-                .adapter(adapter),
-        );
-    }
-    sim.run_until(ms(3_000));
-    sim
+/// Two adjacent masters on one line and how their adapters keep time.
+struct Edges {
+    baud: u32,
+    seed: u64,
+    /// The lower station; the other is the next address up.
+    low: u8,
+    max_master: u8,
+    /// Clock and UART error of the lower and the upper station.
+    ppm: (i32, i32),
+    jitter: Duration,
+    tick: Duration,
+    strict: bool,
 }
 
-/// Both stations pass the token after `since`.
-fn ring_formed(sim: &Sim, since: Instant) -> bool {
-    [(0, 1), (1, 0)].into_iter().all(|(from, to)| {
-        sim.frames()
-            .iter()
-            .any(|frame| frame.start > since && frame.is(FrameType::TOKEN, from, to))
-    })
+impl Edges {
+    /// Stations 0 and 1 at `baud`, with errors `low` and `high`, exact
+    /// timers and strict checking.
+    fn new(baud: u32, low: i32, high: i32) -> Self {
+        Self {
+            baud,
+            seed: 0,
+            low: 0,
+            max_master: 3,
+            ppm: (low, high),
+            jitter: Duration::ZERO,
+            tick: Duration::ZERO,
+            strict: true,
+        }
+    }
+
+    /// Run the pair for three seconds.
+    fn run(&self) -> Sim {
+        let mut config = SimConfig::new(self.baud);
+        config.seed = self.seed;
+        config.panic_on_violation = self.strict;
+        let mut sim = Sim::new(config);
+        for (station, ppm) in [(self.low, self.ppm.0), (self.low + 1, self.ppm.1)] {
+            let adapter = AdapterSpec {
+                deadline_jitter: self.jitter,
+                timer_tick: self.tick,
+                ..AdapterSpec::default()
+            };
+            sim.add_master(
+                MasterSpec::new(station, self.max_master, self.baud)
+                    .skew(Skew::common(ppm))
+                    .adapter(adapter),
+            );
+        }
+        sim.run_until(ms(3_000));
+        sim
+    }
+
+    /// Each core serviced its deadlines late, but by less than one tick:
+    /// the tick took effect, and no lateness of the core's own hides
+    /// behind it. The simulator checks the same bound as the run goes.
+    fn assert_late_by_under_a_tick(&self, sim: &Sim, context: &str) {
+        for station in [self.low, self.low + 1] {
+            let lateness = sim.core(station).unwrap().counters().deadline_lateness;
+            assert!(
+                lateness.max < self.tick && lateness.max > Duration::ZERO,
+                "{context}, station {station}: {lateness:?}"
+            );
+        }
+    }
+
+    /// Both stations pass the token after `since`.
+    fn ring_formed(&self, sim: &Sim, since: Instant) -> bool {
+        let (low, high) = (self.low, self.low + 1);
+        [(low, high), (high, low)].into_iter().all(|(from, to)| {
+            sim.frames()
+                .iter()
+                .any(|frame| frame.start > since && frame.is(FrameType::TOKEN, from, to))
+        })
+    }
 }
 
 /// Clause 9.5.6.7 (NO_TOKEN): after a silence each master generates the
@@ -269,15 +316,16 @@ fn ring_formed(sim: &Sim, since: Instant) -> bool {
 /// once; the simulator classes it as a generation race, and the ring
 /// forms from the next slot on. At 115,200 baud a character is shorter
 /// than that tenth of a millisecond, so station 0 hears it and nothing
-/// collides. Below 38,400 baud the two lock step instead: see the next
-/// test.
+/// collides. Below 38,400 baud exact timers lock the two in step instead;
+/// see the next test.
 #[test]
 fn adjacent_masters_at_opposite_clock_edges_race_once_then_form_a_ring() {
     for baud in [38_400, 76_800, 115_200] {
-        let nominal = opposite_edges(baud, 0, 0, Duration::ZERO, true);
+        let nominal = Edges::new(baud, 0, 0).run();
         assert!(nominal.report().collisions.is_empty());
 
-        let sim = opposite_edges(baud, -MAX_SKEW_PPM, MAX_SKEW_PPM, Duration::ZERO, true);
+        let edges = Edges::new(baud, -MAX_SKEW_PPM, MAX_SKEW_PPM);
+        let sim = edges.run();
         sim.assert_no_violations();
         let collisions = &sim.report().collisions;
         assert_eq!(
@@ -297,23 +345,71 @@ fn adjacent_masters_at_opposite_clock_edges_race_once_then_form_a_ring() {
             let first = &sim.frames()[0];
             assert!(first.collided && first.source() == Some(1), "{first}");
         }
-        assert!(ring_formed(&sim, ms(600)), "{baud} baud: no ring");
+        assert!(edges.ring_formed(&sim, ms(600)), "{baud} baud: no ring");
     }
 }
 
-/// Known limit of the model, tracked in #1804. At 9,600 and 19,200 baud
-/// the same two masters, with no timer jitter, stay in lockstep after
-/// that first race: their polls collide again every Tslot or so, and the
-/// run ends in a duplicate token. Real nodes fall out of step through
-/// SilenceTimer's coarse resolution (nominally 5 ms, Clause 9.5.2) and the
-/// phase of their timers, both of which the simulator's exact deadlines
-/// leave out. With up to 5 ms of seeded deadline jitter, the ring forms.
-/// This test pins today's behaviour so a fix for #1804 has to update it.
+/// The most collisions two adjacent masters at opposite clock edges,
+/// `ppm` off either way, can have at `baud` when their timers tick at
+/// SilenceTimer's nominal resolution (#1804).
+///
+/// Once their token-generation slots meet, each Poll For Master collides
+/// and both masters wait out Tusage_timeout (Clauses 9.5.3 and 9.5.6.8)
+/// from the end of the same garbled frame, so they send their next polls
+/// at instants a gap `D` apart. They fall out of step once `D` reaches a
+/// character time `c`: the later master then hears an octet before its
+/// silence runs out, and defers. Clause 9.5.6.8 also lets a master send
+/// its next poll at once on ReceivedInvalidFrame. If that fired here, both
+/// would answer the same line event at once and no timer could part them,
+/// but it doesn't: each master's receiver is off while it drives its own
+/// poll, and the other poll outlasts it by less than a character, so
+/// neither sees an invalid frame and both wait out the timeout. With exact
+/// timers `D` is the same every cycle, a few tenths of a millisecond at
+/// one percent. A ticking timer adds each node's rounding up to its
+/// next tick, and those roundings move between cycles: each node's tick
+/// grid is fixed on its own clock, and the clocks part by `2 * ppm` of
+/// every cycle, so `D` grows by that much a cycle, or jumps by a whole
+/// tick when one rounding wraps round. A 5 ms tick is wider than the
+/// `2 * c` band in which the masters still collide (2.1 ms at 9,600 baud),
+/// so a jump leaves the band as well. So the run collides at most
+/// `2 * c` divided by the smallest step, rounded up: 4 at 9,600 baud and
+/// 3 at 19,200 at one percent. A cycle is at least the fast master's
+/// Tusage_timeout plus its 8-octet poll.
+///
+/// A tick finer than the band can wrap round inside it, which is why a
+/// 1 ms timer does not break the lockstep at 9,600 baud.
+fn tick_collision_bound(baud: u32, ppm: i32) -> usize {
+    const MILLION: u64 = 1_000_000;
+    let ppm = u64::try_from(ppm).unwrap();
+    let character = 10 * 1_000_000_000 / u64::from(baud);
+    let usage_timeout = MstpCoreConfig::for_baud_rate(baud)
+        .unwrap()
+        .t_usage_timeout
+        .as_nanos();
+    let shortest_cycle = (usage_timeout + 8 * character) * (MILLION - ppm) / MILLION;
+    let step = shortest_cycle * 2 * ppm / MILLION;
+    usize::try_from((2 * character).div_ceil(step)).unwrap()
+}
+
+/// #1804. At 9,600 and 19,200 baud the same two masters stay in lockstep
+/// after that first race if their timers are exact: their polls collide
+/// again every Tusage_timeout and poll, and the run ends in a duplicate
+/// token. Real nodes fall out of step because SilenceTimer counts in
+/// coarse ticks (a nominal 5 ms, Clause 9.5.2) that are not in step with
+/// line events. With timers that tick at that resolution, and no jitter,
+/// the masters collide no more than [`tick_collision_bound`] times and
+/// then form a ring.
 #[test]
-fn low_baud_masters_at_opposite_clock_edges_lock_step_without_jitter() {
+fn low_baud_masters_at_opposite_clock_edges_form_a_ring_on_ticking_timers() {
+    assert_eq!(tick_collision_bound(9_600, MAX_SKEW_PPM), 4);
+    assert_eq!(tick_collision_bound(19_200, MAX_SKEW_PPM), 3);
     for baud in [9_600, 19_200] {
-        let sim = opposite_edges(baud, -MAX_SKEW_PPM, MAX_SKEW_PPM, Duration::ZERO, false);
-        let report = sim.report();
+        let exact = Edges {
+            strict: false,
+            ..Edges::new(baud, -MAX_SKEW_PPM, MAX_SKEW_PPM)
+        };
+        let exact = exact.run();
+        let report = exact.report();
         assert!(
             report.collisions.len() > 10,
             "{baud} baud: {:?}",
@@ -328,13 +424,72 @@ fn low_baud_masters_at_opposite_clock_edges_lock_step_without_jitter() {
             report.violations
         );
 
-        let jitter = Duration::from_millis(5);
-        let sim = opposite_edges(baud, -MAX_SKEW_PPM, MAX_SKEW_PPM, jitter, true);
-        sim.assert_no_violations();
-        assert!(
-            ring_formed(&sim, ms(2_000)),
-            "{baud} baud with jitter: no ring\n{}",
-            log(sim.frames())
-        );
+        // The seed places each node's tick grid; some places keep the
+        // generation slots apart, others start the lockstep.
+        let mut most = 0;
+        for seed in 0..16 {
+            let ticking = Edges {
+                seed,
+                tick: AdapterSpec::NOMINAL_TIMER_TICK,
+                ..Edges::new(baud, -MAX_SKEW_PPM, MAX_SKEW_PPM)
+            };
+            let sim = ticking.run();
+            sim.assert_no_violations();
+            ticking.assert_late_by_under_a_tick(&sim, &format!("{baud} baud, seed {seed}"));
+            let collisions = &sim.report().collisions;
+            assert!(
+                collisions.len() <= tick_collision_bound(baud, MAX_SKEW_PPM),
+                "{baud} baud, seed {seed}: {collisions:?}"
+            );
+            assert!(
+                ticking.ring_formed(&sim, ms(1_000)),
+                "{baud} baud, seed {seed}: no ring\n{}",
+                log(sim.frames())
+            );
+            most = most.max(collisions.len());
+        }
+        // Some seeds collided past the first race, so the lockstep began
+        // and the ticks broke it.
+        assert!(most >= 2, "{baud} baud: at most {most} collisions");
     }
+}
+
+/// #1804's sweep: adjacent masters anywhere up to Max_Master 7, at
+/// opposite edges of a 0.9% or a 1% band either way round, at 9,600 and
+/// 19,200 baud, on timers that tick at the nominal resolution from seeded
+/// phases. Every run stays within [`tick_collision_bound`] and the
+/// invariants, and forms a ring that stops colliding well before the end.
+#[test]
+fn adjacent_masters_at_opposite_edges_on_ticking_timers_form_rings() {
+    let mut collided = 0;
+    for seed in 0..96 {
+        let mut rng = SimRng::new(seed);
+        let baud = [9_600, 19_200][rng.below(2) as usize];
+        let ppm = [9_000, MAX_SKEW_PPM][rng.below(2) as usize];
+        let sign = if rng.chance(50) { 1 } else { -1 };
+        let edges = Edges {
+            seed,
+            low: u8::try_from(rng.below(7)).unwrap(),
+            max_master: 7,
+            tick: AdapterSpec::NOMINAL_TIMER_TICK,
+            ..Edges::new(baud, -sign * ppm, sign * ppm)
+        };
+        let sim = edges.run();
+        let context = format!("seed {seed}, {baud} baud, ±{ppm} ppm, low {}", edges.low);
+        sim.assert_no_violations();
+        edges.assert_late_by_under_a_tick(&sim, &context);
+        let collisions = &sim.report().collisions;
+        assert!(
+            collisions.len() <= tick_collision_bound(baud, ppm),
+            "{context}: {collisions:?}"
+        );
+        assert!(
+            collisions.iter().all(|collision| collision.at < ms(1_000)),
+            "{context}: {collisions:?}"
+        );
+        assert!(edges.ring_formed(&sim, ms(1_000)), "{context}: no ring");
+        collided += usize::from(!collisions.is_empty());
+    }
+    // The sweep reaches the case: some of its pairs did collide.
+    assert!(collided > 10, "{collided} runs collided");
 }

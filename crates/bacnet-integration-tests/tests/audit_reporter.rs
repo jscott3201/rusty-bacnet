@@ -1,9 +1,10 @@
 //! RB-21a/b/c/d/e/f: mutation outcomes -> selected target Reporter -> Audit Log over UDP.
 
+use bacnet_types::error::RemoteError;
 use std::net::Ipv4Addr;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
 };
 use std::time::Duration;
 
@@ -242,9 +243,11 @@ async fn exercise(confirmed: bool, selected: bool, lists: bool, files: bool) {
             )
             .await
             .unwrap_err();
-        assert!(matches!(error, Error::Protocol { class, code }
+        assert!(
+            matches!(error, Error::Remote(RemoteError::Error { class, code })
             if class == ErrorClass::PROPERTY
-                && code == ErrorCode::VALUE_OUT_OF_RANGE));
+                && code == ErrorCode::VALUE_OUT_OF_RANGE)
+        );
         assert_eq!(
             target
                 .database()
@@ -342,9 +345,11 @@ async fn exercise(confirmed: bool, selected: bool, lists: bool, files: bool) {
         )
         .await
         .unwrap_err();
-    assert!(matches!(error, Error::Protocol { class, code }
+    assert!(
+        matches!(error, Error::Remote(RemoteError::Error { class, code })
         if class == ErrorClass::PROPERTY
-            && code == ErrorCode::VALUE_OUT_OF_RANGE));
+            && code == ErrorCode::VALUE_OUT_OF_RANGE)
+    );
     wait_for_records(&logger, &persistence, 2).await;
     assert_eq!(
         target
@@ -545,7 +550,7 @@ async fn exercise(confirmed: bool, selected: bool, lists: bool, files: bool) {
                 .await;
             if failure {
                 assert!(
-                    matches!(result, Err(Error::Protocol { class, code }) if class == ErrorClass::SERVICES && code == ErrorCode::INVALID_FILE_START_POSITION)
+                    matches!(result, Err(Error::Remote(RemoteError::Error { class, code })) if class == ErrorClass::SERVICES && code == ErrorCode::INVALID_FILE_START_POSITION)
                 );
             } else {
                 assert_eq!(

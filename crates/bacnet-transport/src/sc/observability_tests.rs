@@ -4,8 +4,8 @@
 //! backoff and restore timers and the tests' waits all read tokio's clock,
 //! so each step is exact and a loaded runner cannot reorder them.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use bacnet_types::enums::{ErrorClass, ErrorCode};
@@ -23,7 +23,7 @@ use super::super::{
 };
 use super::*;
 use crate::port::TransportPort;
-use crate::sc_frame::{decode_sc_message, encode_sc_message, ScFunction, ScMessage, Vmac};
+use crate::sc_frame::{ScFunction, ScMessage, Vmac, decode_sc_message, encode_sc_message};
 
 const PRIMARY: Vmac = [0x10; 6];
 const FAILOVER: Vmac = [0x20; 6];
@@ -673,7 +673,7 @@ async fn episode(
 ) -> Vec<ScEvent> {
     use super::super::recovery::Recovery;
     use super::super::{HubLimits, ScConnection};
-    use tokio::sync::{watch, Mutex};
+    use tokio::sync::{Mutex, watch};
     let (client, _hub) = LoopbackWebSocket::pair();
     let ws = Arc::new(client);
     let conn = Arc::new(Mutex::new(ScConnection::new([0x22; 6], [1; 16])));

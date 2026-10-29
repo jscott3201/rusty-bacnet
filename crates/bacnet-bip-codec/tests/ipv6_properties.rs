@@ -5,7 +5,7 @@
 use core::net::Ipv6Addr;
 
 use bacnet_bip_codec::ipv6::{
-    decode, Bip6Address, Bip6Vmac, Bvlc6ResultCode, Bvll6, Bvll6Error, Bvll6Frame,
+    Bip6Address, Bip6Vmac, Bvlc6ResultCode, Bvll6, Bvll6Error, Bvll6Frame, decode,
 };
 use proptest::prelude::*;
 

@@ -3,13 +3,13 @@
 //! refusals; and, with persistence, a written Accompaniment kept across a
 //! restart and saved off the database lock like the rule arrays (#1392).
 
-use super::test_storage::{assert_refused, block_on, persistent, write, MemoryPersistence};
+use super::test_storage::{MemoryPersistence, assert_refused, block_on, persistent, write};
 use super::*;
 use crate::durable::{DurableWrites, StageStep};
 use crate::property_metadata::{PropertyConformance, PropertyWriteCapability};
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 const UNSPECIFIED: u32 = ObjectIdentifier::MAX_INSTANCE;
 

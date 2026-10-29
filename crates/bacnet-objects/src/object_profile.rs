@@ -31,6 +31,7 @@
 //! successful writes then override configured Tags across reconstruction.
 //! Saved Tags never provision an absent row. See [`TagsPersistence`].
 
+use crate::prelude::*;
 use bacnet_encoding::constructed::{decode_name_value, encode_name_value};
 use bacnet_encoding::tags::Tag;
 use bacnet_types::constructed::BACnetNameValue;
@@ -48,9 +49,9 @@ use crate::property_metadata::{
 
 mod persistence;
 mod saving;
-pub use persistence::{
-    FileTagsPersistence, TagsPersistence, TagsSnapshot, MAX_TAGS_SNAPSHOT_BYTES,
-};
+#[cfg(feature = "std")]
+pub use persistence::FileTagsPersistence;
+pub use persistence::{MAX_TAGS_SNAPSHOT_BYTES, TagsPersistence, TagsSnapshot};
 pub(crate) use saving::ProfileState;
 
 /// Resource cap on Tags elements, the bound Exception_Schedule and a
@@ -101,7 +102,7 @@ impl ObjectProfile {
 
     /// The provisioned rows, in the tables' order: Tags, Profile_Location,
     /// Profile_Name.
-    pub(crate) fn metadata(&self) -> impl Iterator<Item = PropertyMetadata> {
+    pub(crate) fn metadata(&self) -> impl Iterator<Item = PropertyMetadata> + use<> {
         [
             (P::TAGS, self.tags.is_some(), Always),
             (
@@ -241,10 +242,10 @@ fn check_tags(tags: &[BACnetNameValue]) -> Result<(), Error> {
 
 /// Annex Y.1.4 keeps semicolons out of tag names, so names can be joined.
 fn check_tag(tag: &BACnetNameValue) -> Result<(), Error> {
-    if let Some(value) = &tag.value {
-        if !value.is_primitive() {
-            return Err(common::invalid_data_type_error());
-        }
+    if let Some(value) = &tag.value
+        && !value.is_primitive()
+    {
+        return Err(common::invalid_data_type_error());
     }
     if tag.name.contains(';') {
         return Err(common::value_out_of_range_error());
@@ -277,7 +278,7 @@ fn vendor_prefixed(name: &str) -> bool {
 #[path = "object_profile_tests.rs"]
 mod tests;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod persistence_tests;
 #[cfg(test)]
 mod saving_tests;

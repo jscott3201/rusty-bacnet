@@ -8,7 +8,7 @@ use bacnet_server::server::ServerConfig;
 use bacnet_services::who_is::IAmRequest;
 use bacnet_transport::bbmd::{BdtEntry, ForeignDevicePolicy};
 use bacnet_transport::bvll::{
-    decode_bip_mac, decode_bvll, encode_bvll, BvlcFunction, BvlcResultCode, Bvll,
+    BvlcFunction, BvlcResultCode, Bvll, decode_bip_mac, decode_bvll, encode_bvll,
 };
 use bacnet_types::enums::UnconfirmedServiceChoice;
 use std::net::SocketAddrV4;

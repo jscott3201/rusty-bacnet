@@ -1,0 +1,56 @@
+---
+title: "Capability tables"
+description: "The object types, services and data links each part of Rusty BACnet implements, generated from the code: object types, services by surface and data links by artifact, with where to read the evidence."
+---
+
+import SupportTable from '../../../components/SupportTable.astro';
+import { release, repository } from '../../../lib/site.mjs';
+
+[Evaluate and get help](/rusty-bacnet/project/support/) / Capability tables
+
+These tables list what the code implements: the object types it can construct, the services each surface executes, initiates or sends, and the data links each artifact is built with. They are generated from the code, not written by hand. A row records a capability, not tested behaviour and not interoperability with other vendors' devices: read [what a result proves](/rusty-bacnet/project/support/#understand-what-a-result-proves) before relying on one, and [generate a PICS](/rusty-bacnet/integrate/pics/) to describe a configured device. The [sample PICS](/rusty-bacnet/project/sample-pics/) shows that output for one reference configuration, a database holding one object of each type below.
+
+:::note[On `dev` after the release]
+The tables are generated on the `dev` branch and track the next release, so they can list object types, services or data links merged after v{release} that the released crates, wheel and executables don't have. The <a href={`${repository}/releases/tag/v${release}`}>v{release} release notes</a> and the <a href={`${repository}/tree/dev/changelog.d`}>changes waiting for the next release</a> say what changed.
+:::
+
+## Constructible object types
+
+Each row is a type that `bacnet-objects` can construct, one object of each from its catalogue (`bacnet_objects::catalogue::representatives`), and whether the full server's CreateObject and DeleteObject reach it, as its PICS generator reports. The count is of constructible types. It is not a count of tested behaviour: a row says the type exists and a server can hold it, not that every property behaves as a test suite expects. The caption names the standard types the crate doesn't build.
+
+<SupportTable table="objects" />
+
+## Services by surface
+
+Each surface is a different part of the stack, and a service in one column says nothing about another:
+
+- **Full server executes**: what `bacnet-server` runs when a request arrives (`bacnet_objects::device::EXECUTED_SERVICES`, which a test ties to its dispatch). Its Device object advertises the same list.
+- **Full server initiates**: the requests the server can build and send itself, its PICS initiator column (`PicsGenerator::INITIATED_SERVICES`, which a test ties to the server's outbound requests). Some go out only when configured: COV and event notifications need a subscription or a recipient, audit notifications need audit reporting, and WriteProperty, ReadProperty and Who-Is need a Command action or a Channel member in another device.
+- **Client sends**: the services a `bacnet-client` method sends (`bacnet_client::client::SENT_SERVICES`, which a test ties to the methods). `confirmed_request` and `unconfirmed_request` send any other service from octets the application encodes. An application that runs a client beside a server initiates both columns.
+- **Endpoint responder executes**: the bounded responder a shared endpoint runs instead of the full server (`bacnet_endpoint::RESPONDER_SERVICES`). An opt-in row names the `EndpointSession` method that turns it on. The column lists only what the responder executes; the endpoint also sends some services itself, such as I-Am and audit notifications.
+- **Python client sends**: the methods of the Python `BACnetClient`, matched to services by name in the type stub. Some of them, such as the VT, text message and private transfer methods, send through the Rust client's generic `confirmed_request` and `unconfirmed_request`, so Python shows Yes where the Rust client shows No. The Python `BACnetServer` wraps the full server.
+
+<SupportTable table="services-confirmed" />
+
+<SupportTable table="services-unconfirmed" />
+
+## Data links by artifact
+
+A Rust application picks the `bacnet-transport` features it builds. The Python wheel and the CLI executables are built with fixed features, which the generator resolves from their manifests and from the release build's list of CLI features for each target. [Transport boundaries](/rusty-bacnet/reference/transports/) gives each link's platform limits and evidence.
+
+<SupportTable table="links" />
+
+## Known gaps
+
+A missing object type, service or data-link behaviour is tracked as an issue with the `conformance-gap` label, where its evidence and discussion live. This page keeps no list of its own: see the <a href={`${repository}/issues?q=is%3Aissue%20is%3Aopen%20label%3Aconformance-gap`}>open gaps</a>.
+
+## How the tables are made
+
+<a href={`${repository}/blob/dev/crates/bacnet-integration-tests/support_tables.rs`}>A generator in the integration tests</a> builds the page's data file, and the [sample PICS](/rusty-bacnet/project/sample-pics/), from the object catalogue and the PICS generator, the service lists named above, the Python type stub, and the Cargo manifests and release scripts. A workspace test regenerates both and fails when a committed copy differs, so a change that adds a service, an object type or a data link has to regenerate them: run `cargo run -p bacnet-integration-tests --example support-tables`.
+
+## Next steps
+
+- [Read what a result proves](/rusty-bacnet/project/support/#understand-what-a-result-proves).
+- [Read the sample PICS](/rusty-bacnet/project/sample-pics/), or [generate one for your device](/rusty-bacnet/integrate/pics/).
+- [Choose a data link](/rusty-bacnet/connect/overview/).
+- [Serve objects from your application](/rusty-bacnet/integrate/server/).

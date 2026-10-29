@@ -1,7 +1,7 @@
 //! Shared non-recursive state transitions for BACnet log objects.
 
-use std::collections::VecDeque;
-use std::sync::Arc;
+use alloc::collections::VecDeque;
+use alloc::sync::Arc;
 
 use bacnet_types::bitstring::LogStatus;
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
@@ -333,7 +333,7 @@ impl<'a, R: ResidentLogRecord> LogLifecycle<'a, R> {
         *self.stop_when_full = snapshot.stop_when_full;
         self.restore(
             snapshot.total_record_count,
-            std::mem::take(&mut snapshot.records).into(),
+            core::mem::take(&mut snapshot.records).into(),
         )?;
         self.reporting.resume(
             snapshot.last_notify_record,

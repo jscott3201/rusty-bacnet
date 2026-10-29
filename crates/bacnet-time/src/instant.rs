@@ -119,21 +119,13 @@ impl Instant {
     /// context.
     #[must_use]
     pub const fn min(self, other: Self) -> Self {
-        if self.0 <= other.0 {
-            self
-        } else {
-            other
-        }
+        if self.0 <= other.0 { self } else { other }
     }
 
     /// The later of `self` and `other`: [`Ord::max`] for a `const` context.
     #[must_use]
     pub const fn max(self, other: Self) -> Self {
-        if self.0 >= other.0 {
-            self
-        } else {
-            other
-        }
+        if self.0 >= other.0 { self } else { other }
     }
 
     /// The time from the epoch to `self`.

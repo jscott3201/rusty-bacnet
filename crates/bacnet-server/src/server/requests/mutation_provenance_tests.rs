@@ -16,7 +16,7 @@
 //! provenance (noted gap, out of scope).
 
 use super::mutation_tests::MutationAuthorizer;
-use super::mutation_tests::{apdu, assert_denied, cases, oid, route, Fixture, SOURCE};
+use super::mutation_tests::{Fixture, SOURCE, apdu, assert_denied, cases, oid, route};
 use super::*;
 use crate::mutation::{MutationAuthorizationContext, MutationTrust};
 use crate::server::test_transport::TestTransport;
@@ -170,7 +170,7 @@ async fn wpm_elements_share_one_reassembled_snapshot() {
             ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE,
             bytes.freeze(),
             12,
-            provenance,
+            provenance.clone(),
         )
         .await
         .unwrap();
@@ -180,12 +180,16 @@ async fn wpm_elements_share_one_reassembled_snapshot() {
         // element contexts carry the identical snapshot.
         let contexts = seen.lock().unwrap();
         assert_eq!(contexts.len(), 2);
-        assert!(contexts
-            .iter()
-            .all(|context| context.provenance == provenance));
-        assert!(contexts
-            .iter()
-            .all(|context| context.trust == MutationTrust::from_provenance(provenance)));
+        assert!(
+            contexts
+                .iter()
+                .all(|context| context.provenance == provenance)
+        );
+        assert!(
+            contexts
+                .iter()
+                .all(|context| context.trust == MutationTrust::from_provenance(&provenance))
+        );
     }
 }
 
@@ -197,7 +201,7 @@ async fn verified_relay_snapshot_reaches_gate_with_relay_trust() {
     let fixture = Fixture::new(authorizer);
     let decisions = Arc::new(crate::mutation::MutationDecisions::default());
     let (service, bytes, _) = cases().remove(0);
-    let response = dispatch_admitted(&fixture, &decisions, service, bytes, 13, provenance)
+    let response = dispatch_admitted(&fixture, &decisions, service, bytes, 13, provenance.clone())
         .await
         .unwrap();
     assert!(matches!(apdu(response), Apdu::SimpleAck(_)));
@@ -343,8 +347,8 @@ async fn debug_and_counters_carry_no_secrets_or_inputs() {
 /// fixture; the relay admission evidence is the hub's, not the test's.
 async fn relayed_origin_provenance() -> TransportProvenance {
     use bacnet_transport::sc::{LoopbackWebSocket, ScTransport, WebSocketPort};
-    use bacnet_transport::sc_frame::{decode_sc_message, encode_sc_message, ScFunction, ScMessage};
-    use tokio::time::{timeout, Duration};
+    use bacnet_transport::sc_frame::{ScFunction, ScMessage, decode_sc_message, encode_sc_message};
+    use tokio::time::{Duration, timeout};
 
     let (ws_client, ws_hub) = LoopbackWebSocket::pair();
     let mut transport = ScTransport::new(ws_client, [0x01; 6]).with_device_uuid([1; 16]);

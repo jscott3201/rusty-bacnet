@@ -10,7 +10,7 @@
 use super::app::command_bar::COMMANDS;
 use super::app::watch::Screen;
 use super::app::{App, Link};
-use super::keymap::{Binding, BROWSER, CAPTURE, DEVICES, GLOBAL, MSTP, NETWORK, SC, WATCH};
+use super::keymap::{BROWSER, Binding, CAPTURE, DEVICES, GLOBAL, MSTP, NETWORK, SC, WATCH};
 
 /// One screen in the strip.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,7 +31,7 @@ pub(crate) struct Tab {
 pub(crate) fn screens(app: &App) -> Vec<Tab> {
     let serial = app.transport == "MSTP" || app.monitor.is_some();
     // The Networks tab (routers heard) works on every transport.
-    let connected = matches!(app.link, Link::Up { .. });
+    let connected = matches!(app.link, Link::Up { .. }) || app.passive_listener.is_some();
     let current = match app.screen {
         Screen::Browse => '2',
         Screen::Main => '1',
@@ -124,10 +124,12 @@ pub(crate) fn sections(app: &App) -> Vec<Section> {
         rows: COMMANDS
             .iter()
             .flat_map(|syntax| {
-                syntax
-                    .usage
-                    .iter()
-                    .map(|form| (form.to_string(), syntax.what.to_string()))
+                syntax.usage.iter().map(|form| {
+                    (
+                        form.to_string(),
+                        syntax.description(app.safety.passive).to_string(),
+                    )
+                })
             })
             .collect(),
     });

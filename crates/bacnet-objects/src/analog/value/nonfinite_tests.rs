@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_types::error::RemoteError;
 
 #[test]
 fn command_source_private_nonfinite_av_fault_state_remains_inert_until_valid_command() {
@@ -16,7 +17,7 @@ fn command_source_private_nonfinite_av_fault_state_remains_inert_until_valid_com
     object.present_value = f32::INFINITY;
     for _ in 0..2 {
         assert!(
-            matches!(object.evaluate_reliability_internal(), Err(Error::Protocol { code, .. }) if code == bacnet_types::enums::ErrorCode::VALUE_OUT_OF_RANGE)
+            matches!(object.evaluate_reliability_internal(), Err(Error::Remote(RemoteError::Error { code, .. })) if code == bacnet_types::enums::ErrorCode::VALUE_OUT_OF_RANGE)
         );
         assert_eq!(
             object

@@ -15,14 +15,14 @@ mod scenarios;
 use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};
 
-use bacnet_benchmarks::stress::output::{print_results, StressMetrics, StressResult};
+use bacnet_benchmarks::stress::output::{StressMetrics, StressResult, print_results};
 use bacnet_client::client::BACnetClient;
 use bacnet_transport::bip::BipTransport;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
 use clap::Parser;
 
-use scenarios::{discovery, foreign, run_rp_scenario, Via};
+use scenarios::{Via, discovery, foreign, run_rp_scenario};
 
 /// Every scenario, by the name `--only` and `--skip` take.
 const SCENARIOS: [&str; 4] = ["same-subnet", "router", "discovery", "foreign"];
@@ -204,6 +204,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let result = StressResult {
         scenario: "docker-cross-network".into(),
+        clients_diagnostics: None,
         transport: "bip".into(),
         parameters: serde_json::json!({
             "duration_secs": args.duration,

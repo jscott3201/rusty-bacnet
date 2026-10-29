@@ -8,16 +8,16 @@ use bacnet_bip_core::node::{
 };
 use bacnet_bip_core::{Duration, Instant};
 
-use super::{Attempt, Expected, Registration, Summary, BBMD, ORIGIN, PEER, TTL};
+use super::{Attempt, BBMD2, Expected, ORIGIN, PEER, Registration, Summary, TTL};
 use crate::tally::Sent;
 
 /// The hash over every datagram the port sends and where it goes. It was
-/// worked out apart from the codec, from the 17 datagrams written out by
-/// hand from the Annex J.2 layouts (120 octets): the six NAKs, eight
-/// Register-Foreign-Device requests, and three Distribute-Broadcast-To-
-/// Network messages. The port sends what the scenario sent by hand before
-/// it (#1766), in the same order.
-const SENT_FNV: u32 = 0x8F8B_EFDE;
+/// worked out apart from the codec, from the 18 datagrams written out by
+/// hand from the Annex J.2 layouts (126 octets): the six NAKs, nine
+/// Register-Foreign-Device requests (the last to the second BBMD, #1852),
+/// and three Distribute-Broadcast-To-Network messages. The port sends what
+/// the scenario sent by hand before it (#1766), in the same order.
+const SENT_FNV: u32 = 0xB467_EB34;
 
 const fn at(millis: u64) -> Instant {
     Instant::from_millis(millis)
@@ -30,16 +30,16 @@ const DBTN_NAK: BvlcResultCode = BvlcResultCode::DISTRIBUTE_BROADCAST_TO_NETWORK
 /// ([`Expected::last_attempt`]). The counters are `#[non_exhaustive]`, so
 /// they are built from their default.
 fn counters() -> NodeCounters {
-    // Eight attempts sent, five answered with success, three timed out.
+    // Nine attempts sent, six answered with success, three timed out.
     let mut register = ExchangeCounters::default();
-    register.sent = 8;
-    register.results = 5;
+    register.sent = 9;
+    register.results = 6;
     register.last_result = Some(SUCCESS);
     register.timeouts = 3;
     let mut counters = NodeCounters::default();
     counters.register_foreign_device = register;
-    counters.registration_attempts = 8;
-    counters.registrations_accepted = 5;
+    counters.registration_attempts = 9;
+    counters.registrations_accepted = 6;
     // The DBTN NAK, taken as the hint.
     counters.unmatched_responses = 1;
     counters.last_unmatched_result = Some(DBTN_NAK);
@@ -91,6 +91,8 @@ pub fn expected() -> Expected {
         // lease lapses, it starts the attempt that is answered. That
         // answer's lease starts at the unanswered 70 s attempt, which it
         // could also be answering, and is due for renewal at once (100.01 s).
+        // At 110 s the node moves to the second BBMD, and its first attempt
+        // there goes out at once.
         attempts: [
             Some(at(0)),
             Some(at(30_000)),
@@ -100,26 +102,28 @@ pub fn expected() -> Expected {
             Some(at(85_000)),
             Some(at(100_000)),
             Some(at(100_010)),
+            Some(at(110_000)),
         ],
         // Each lease runs one time-to-live, 60 s, from the earliest send its
         // success could answer. The three attempts in between go unanswered
         // and the lease lapses: the counters' three timeouts and one lapse.
+        // The last is the second BBMD's.
         leases: [
             Some((at(0), at(60_000))),
             Some((at(30_000), at(90_000))),
             Some((at(40_000), at(100_000))),
             Some((at(70_000), at(130_000))),
             Some((at(100_000), at(160_000))),
-            None,
+            Some((at(110_000), at(170_000))),
         ],
         // In `Expected::registration`.
         registration: None,
         counters: counters(),
-        // Six NAKs and eight registrations of 6 octets, and three
+        // Six NAKs and nine registrations of 6 octets, and three
         // Distribute-Broadcast-To-Network messages of 12.
         sent: Sent {
-            count: 17,
-            octets: 120,
+            count: 18,
+            octets: 126,
             fnv: SENT_FNV,
         },
         refused: 0,
@@ -127,21 +131,21 @@ pub fn expected() -> Expected {
     };
     Expected {
         summary,
-        // At 100.02 s: the last renewal's lease, from the 100 s attempt, and
+        // At 110.01 s: the second BBMD's lease, from the 110 s attempt, and
         // the next renewal one interval into it.
         registration: Registration {
-            lease: Some((at(100_000), at(160_000))),
+            lease: Some((at(110_000), at(170_000))),
             registered: true,
-            lease_remaining: Some(Duration::from_millis(59_980)),
+            lease_remaining: Some(Duration::from_millis(59_990)),
             attempt_in_flight: false,
-            next_attempt: Some(at(130_000)),
+            next_attempt: Some(at(140_000)),
             last_outcome: Some(AttemptOutcome::Accepted),
             consecutive_failures: 0,
             first_resolved: true,
             held: 0,
         },
         last_attempt: Attempt {
-            bbmd: BBMD,
+            bbmd: BBMD2,
             ttl: TTL,
             outcome: AttemptOutcome::Accepted,
             result: Some(SUCCESS),

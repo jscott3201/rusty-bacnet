@@ -68,7 +68,7 @@ pub(crate) fn destination(value: &Bound<'_, PyAny>, name: &str) -> PyResult<BACn
             return Err(PyTypeError::new_err(format!(
                 "{} must be a bool",
                 field("issue_confirmed_notifications")
-            )))
+            )));
         }
     };
     Ok(BACnetDestination {

@@ -7,7 +7,7 @@
 use bacnet_mstp_codec::FrameType;
 use tokio::time::{Duration, Instant};
 
-use super::test_support::{config, Bus, T_USAGE_TIMEOUT};
+use super::test_support::{Bus, T_USAGE_TIMEOUT, config};
 
 const T_NO_TOKEN: Duration = Duration::from_millis(500);
 const T_SLOT: Duration = Duration::from_millis(10);

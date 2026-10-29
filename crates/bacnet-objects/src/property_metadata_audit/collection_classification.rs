@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::traits::{standard_array_property, standard_list_property};
+use bacnet_types::error::RemoteError;
 
 #[test]
 fn every_served_property_follows_the_shared_collection_table() {
@@ -58,7 +59,8 @@ fn every_served_array_reads_its_size_at_index_zero() {
             match object.read_property(property, Some(0)) {
                 Ok(PropertyValue::Unsigned(_)) => {}
                 // A row the representative serves only once configured.
-                Err(Error::Protocol { .. }) if object.read_property(property, None).is_err() => {}
+                Err(Error::Remote(RemoteError::Error { .. }))
+                    if object.read_property(property, None).is_err() => {}
                 other => failures.push(format!("{object_type} {property}[0]: {other:?}")),
             }
         }

@@ -91,10 +91,10 @@ pub trait EncodeSink {
                 available: available.unwrap_or(usize::MAX),
             })?;
         }
-        if let Some(available) = available {
-            if needed > available {
-                return Err(SinkFull { needed, available });
-            }
+        if let Some(available) = available
+            && needed > available
+        {
+            return Err(SinkFull { needed, available });
         }
         for part in parts {
             self.write(part)?;

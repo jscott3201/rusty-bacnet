@@ -19,11 +19,12 @@ pub(in crate::server) fn confirmed_class(service: ConfirmedServiceChoice, data: 
 
 // Mirror only the decoder's borrowed field traversal, not its accepted language.
 // Its final decode remains authoritative, including optional duration, charset
-// validity and the refusal of trailing data. Every accepted password has <=20 UTF-8
-// bytes: UTF-8/Latin-1 need <=20 wire payload bytes, UCS-2 <=40 (each code point
-// produces at least one UTF-8 byte). Thus rejecting larger content loses no
-// accepted encoding, and the authoritative decode can allocate only bounded
-// password storage. There is deliberately no total-request-length cutoff.
+// validity and the refusal of trailing data. Every accepted password has <=20
+// characters (#2060), so its wire payload is at most 20 octets in Latin-1, 40 in
+// UCS-2 and 80 in UTF-8 (up to four octets a character). Thus rejecting larger
+// content loses no accepted encoding, and the authoritative decode can allocate
+// only bounded password storage. There is deliberately no total-request-length
+// cutoff.
 fn bounded_password(data: &[u8]) -> bool {
     let read = || -> Result<bool, Error> {
         let (_, offset) = decode_optional_ctx(data, 0, 0, "", decode_ctx_primitive)?;
@@ -32,7 +33,8 @@ fn bounded_password(data: &[u8]) -> bool {
         Ok(match password {
             None => true,
             Some(content) => match content.first() {
-                Some(0 | 5) => content.len() <= 21,
+                Some(0) => content.len() <= 81,
+                Some(5) => content.len() <= 21,
                 Some(4) => content.len() <= 41,
                 _ => false,
             },
@@ -95,16 +97,23 @@ mod tests {
                     Some(""),
                     Some("abcdefghijklmnopqrst"),
                     Some("éééééééééé"),
+                    Some("éééééééééééééééééééé"),
+                    Some("😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"),
                     Some("abcdefghijklmnopqrstu"),
+                    Some("😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"),
                 ] {
                     let mut data = BytesMut::new();
                     DeviceCommunicationControlRequest {
                         time_duration: duration,
                         enable_disable: mode,
-                        password: password.map(str::to_owned),
+                        password: None,
                     }
                     .encode(&mut data)
                     .unwrap();
+                    // Appended by hand: the encoder refuses 21 characters (#2085).
+                    if let Some(password) = password {
+                        primitives::encode_ctx_character_string(&mut data, 2, password).unwrap();
+                    }
                     assert_matches_decoder(&data);
                     data.extend_from_slice(&[0x39, 7, 0xff]); // Trailing octets: never recovery.
                     assert_matches_decoder(&data);
@@ -112,7 +121,7 @@ mod tests {
             }
         }
         for charset in 0..=6 {
-            for len in 0..=44 {
+            for len in 0..=84 {
                 for byte in [0, b'a', 0x80, 0xd8, 0xff] {
                     let mut data = BytesMut::from(&[0x19, 0][..]);
                     tags::encode_tag(&mut data, 2, TagClass::Context, len + 1);

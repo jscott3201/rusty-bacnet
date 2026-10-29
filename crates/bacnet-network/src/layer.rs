@@ -103,17 +103,17 @@
 //! identities or per-source totals. Its three drop totals saturate at `u64::MAX`.
 
 use crate::network_number::LocalNetworkNumber;
-use bacnet_encoding::npdu::{encode_npdu, Npdu, NpduAddress};
+use bacnet_encoding::npdu::{Npdu, NpduAddress, encode_npdu};
 use bacnet_npdu::NetworkPriority;
 use bacnet_transport::port::{
     DataAttribute, GroupDestinations, TransportPort, TransportProvenance,
 };
+use bacnet_types::MacAddr;
 use bacnet_types::enums::PduType;
 use bacnet_types::error::Error;
-use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
@@ -252,7 +252,7 @@ impl Clone for ReceivedApdu {
             is_group: self.is_group,
             global_broadcast: self.global_broadcast,
             data_attributes: self.data_attributes.clone(),
-            provenance: self.provenance,
+            provenance: self.provenance.clone(),
             direct_response: self.direct_response.clone(),
             router_response: self.router_response.clone(),
             reply_tx: None,
@@ -316,7 +316,7 @@ pub(crate) fn check_destination(network: u16, local_form: &str) -> Result<(), Er
 pub(crate) fn check_broadcast_apdu(apdu: &[u8], what: &str) -> Result<(), Error> {
     let pdu_type = match apdu.first() {
         Some(&first) if PduType::from_raw(first >> 4) == PduType::UNCONFIRMED_REQUEST => {
-            return Ok(())
+            return Ok(());
         }
         Some(&first) => format!("PDU type {}", PduType::from_raw(first >> 4)),
         None => "an empty APDU".to_string(),
@@ -878,9 +878,8 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
 /// Advance a control ingress sequence, saturating at `u64::MAX`. Shared by
 /// [`NetworkLayer`] and the router's control receiver.
 pub(crate) fn next_ingress_sequence(sequence: &AtomicU64) -> u64 {
-    #[allow(deprecated, reason = "try_update needs Rust 1.95; the MSRV is 1.93")]
     let previous = sequence
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
+        .try_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
             value.checked_add(1)
         })
         .unwrap_or(u64::MAX);
@@ -915,10 +914,10 @@ mod tests {
     use bacnet_transport::bip::BipTransport;
     use bacnet_transport::sc::{LoopbackWebSocket, ScTransport, WebSocketPort};
     use bacnet_transport::sc_frame::{
-        decode_sc_message, encode_sc_message, ScFunction, ScMessage, Vmac,
+        ScFunction, ScMessage, Vmac, decode_sc_message, encode_sc_message,
     };
     use std::net::Ipv4Addr;
-    use tokio::time::{timeout, Duration};
+    use tokio::time::{Duration, timeout};
 
     async fn sc_hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
         let data = ws_hub.recv().await.unwrap();
@@ -1056,7 +1055,7 @@ mod tests {
 
     #[tokio::test]
     async fn end_to_end_who_is() {
-        use bacnet_encoding::apdu::{decode_apdu, encode_apdu, Apdu, UnconfirmedRequest};
+        use bacnet_encoding::apdu::{Apdu, UnconfirmedRequest, decode_apdu, encode_apdu};
         use bacnet_types::enums::UnconfirmedServiceChoice;
 
         let transport_a = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);

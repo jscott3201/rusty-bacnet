@@ -1,8 +1,8 @@
 //! Table 12-63 and Coercion Rules 1 to 6, one written datatype at a time.
 use super::*;
-use bacnet_types::primitives::{Date, Time};
 use MemberDatatype as D;
 use PropertyValue as V;
+use bacnet_types::primitives::{Date, Time};
 
 const ALL: [MemberDatatype; 16] = [
     D::Unknown,

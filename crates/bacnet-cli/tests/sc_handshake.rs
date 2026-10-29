@@ -7,8 +7,8 @@ use futures_util::FutureExt;
 use rcgen::ExtendedKeyUsagePurpose::ClientAuth;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
-use support::sc::{cli, read, with_fixture, Leaf, Site};
-use support::{bounded, failure, Files, Process};
+use support::sc::{Leaf, Site, cli, read, with_fixture};
+use support::{Files, Process, bounded, failure};
 
 async fn read_value(files: &Files, url: &str, leaf: &Leaf, ca: &std::path::Path, after: bool) {
     let mut cmd = cli(files, url, leaf);
@@ -34,7 +34,8 @@ async fn read_value(files: &Files, url: &str, leaf: &Leaf, ca: &std::path::Path,
     assert_eq!(
         json,
         serde_json::json!({
-            "object": "DEVICE:123", "property": "OBJECT_NAME", "value": "\"CLI site device\""
+            "object": "DEVICE:123", "property": "OBJECT_NAME", "value": "\"CLI site device\"",
+            "decoded": "CLI site device"
         })
     );
 }
@@ -116,7 +117,8 @@ async fn read_property_with_a_vmac_target() {
             assert_eq!(
                 json,
                 serde_json::json!({
-                    "object": "DEVICE:123", "property": "OBJECT_NAME", "value": "\"CLI site device\""
+                    "object": "DEVICE:123", "property": "OBJECT_NAME", "value": "\"CLI site device\"",
+                    "decoded": "CLI site device"
                 }),
                 "{vmac}"
             );

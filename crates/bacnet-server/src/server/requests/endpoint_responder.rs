@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::mutation::{
     DeviceWriteAuthorizer, MutationAuthorizationContext, MutationTarget, MutationTrust,
@@ -18,7 +18,7 @@ fn shutdown_error() -> Error {
 }
 
 fn property_error(class: ErrorClass, code: ErrorCode) -> Error {
-    Error::Protocol { class, code }
+    Error::protocol(class, code)
 }
 
 /// Check existence, scope and typed authority under the database write guard.
@@ -198,10 +198,10 @@ impl EndpointResponder {
             device_write_target(&mut db, *device, &write)?;
         }
         if write.property_array_index.is_some() {
-            return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
-            });
+            return Err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
+            ));
         }
         // Description and Audit_Notification_Recipient, the only targets
         // `device_write_target` admits, are single values.
@@ -217,16 +217,16 @@ impl EndpointResponder {
                 PropertyValue::CharacterString(_) | PropertyValue::Null
             )
         {
-            return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::INVALID_DATA_TYPE,
-            });
+            return Err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::INVALID_DATA_TYPE,
+            ));
         }
         let context = MutationAuthorizationContext {
             source_mac: received.source_mac.clone(),
             source_network: received.source_network.clone(),
-            provenance: received.provenance,
-            trust: MutationTrust::from_provenance(received.provenance),
+            provenance: received.provenance.clone(),
+            trust: MutationTrust::from_provenance(&received.provenance),
             invoke_id: Some(request.invoke_id),
             service_choice: request.service_choice.into(),
             target: MutationTarget::WriteProperty(write),
@@ -290,7 +290,7 @@ impl EndpointResponder {
         // ingress identity and provenance so a future drop is compile-visible.
         let _link_layer_group = received.link_layer_group;
         let _ingress_network = received.ingress_network;
-        let _provenance = received.provenance;
+        let _provenance = &received.provenance;
         let preserved_attributes = received.data_attributes.clone();
         if received.is_group {
             return Ok(false);
@@ -390,29 +390,29 @@ impl EndpointResponder {
             encode_apdu(&mut encoded, &response)?;
         }
 
-        if !response_route.requires_direct_response() {
-            if let Some(reply_tx) = received.reply_tx.take() {
-                // An admitted ordinary DER request may still return its
-                // protocol refusal after role closure. Captured router replies
-                // additionally require this responder's original authority.
-                if checked_response {
-                    self.ensure_open()?;
-                }
-                if !self.egress.is_open() {
-                    return Err(shutdown_error());
-                }
-                let wrapped = response_route.encode_reply_npdu(
-                    &encoded,
-                    received.source_network.as_ref(),
-                    false,
-                    NetworkPriority::Normal,
-                )?;
-                // A ReinitializeDevice restart waits for the handoff (#1565).
-                if reply_tx.send(wrapped.freeze()).is_ok() {
-                    after_reply.run();
-                }
-                return Ok(true);
+        if !response_route.requires_direct_response()
+            && let Some(reply_tx) = received.reply_tx.take()
+        {
+            // An admitted ordinary DER request may still return its
+            // protocol refusal after role closure. Captured router replies
+            // additionally require this responder's original authority.
+            if checked_response {
+                self.ensure_open()?;
             }
+            if !self.egress.is_open() {
+                return Err(shutdown_error());
+            }
+            let wrapped = response_route.encode_reply_npdu(
+                &encoded,
+                received.source_network.as_ref(),
+                false,
+                NetworkPriority::Normal,
+            )?;
+            // A ReinitializeDevice restart waits for the handoff (#1565).
+            if reply_tx.send(wrapped.freeze()).is_ok() {
+                after_reply.run();
+            }
+            return Ok(true);
         }
 
         // Each send below completes when the transport has taken the reply;

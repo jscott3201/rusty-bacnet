@@ -153,11 +153,13 @@ async fn cov_multiple_route_admitted_confirmed_worker_may_finish_on_old_route() 
         "the move fenced an outstanding report that may have been delivered, so \
          the kept reference reports afresh (#923)"
     );
-    assert!(fixture
-        .table
-        .write()
-        .await
-        .complete_for_test(&current, observation(99.0)));
+    assert!(
+        fixture
+            .table
+            .write()
+            .await
+            .complete_for_test(&current, observation(99.0))
+    );
     assert_eq!(
         fixture.routes.lock().unwrap().as_slice(),
         std::slice::from_ref(&old.subscriber_mac)

@@ -41,9 +41,11 @@ fn object_audit_policy_independent_presence_metadata_and_scalar_writes() {
                     property == selected
                 );
                 if property != selected {
-                    assert!(object
-                        .write_property(property, None, PropertyValue::Null, None)
-                        .is_err());
+                    assert!(
+                        object
+                            .write_property(property, None, PropertyValue::Null, None)
+                            .is_err()
+                    );
                 }
             }
             let row = *object
@@ -55,22 +57,28 @@ fn object_audit_policy_independent_presence_metadata_and_scalar_writes() {
             assert!(row.write_capability.is_writable());
             let before = object.read_property(selected, None).unwrap();
             assert!(object.read_property(selected, Some(0)).is_err());
-            assert!(object
-                .write_property(selected, Some(0), PropertyValue::Null, None)
-                .is_err());
+            assert!(
+                object
+                    .write_property(selected, Some(0), PropertyValue::Null, None)
+                    .is_err()
+            );
             for invalid in [PropertyValue::Boolean(true), PropertyValue::Unsigned(3)] {
-                assert!(object
-                    .write_property(selected, None, invalid, None)
-                    .is_err());
+                assert!(
+                    object
+                        .write_property(selected, None, invalid, None)
+                        .is_err()
+                );
                 assert_eq!(object.read_property(selected, None).unwrap(), before);
             }
             object
                 .write_property(selected, None, PropertyValue::Null, Some(16))
                 .unwrap();
             assert_eq!(object.read_property(selected, None).unwrap(), before);
-            assert!(object
-                .write_property(selected, None, PropertyValue::Null, Some(0))
-                .is_err());
+            assert!(
+                object
+                    .write_property(selected, None, PropertyValue::Null, Some(0))
+                    .is_err()
+            );
         }
     }
 }
@@ -104,9 +112,11 @@ fn object_audit_policy_vectors_atomic_validation_and_null_priority() {
                 data: vec![1],
             },
         ] {
-            assert!(object
-                .write_property(P::AUDITABLE_OPERATIONS, None, invalid, None)
-                .is_err());
+            assert!(
+                object
+                    .write_property(P::AUDITABLE_OPERATIONS, None, invalid, None)
+                    .is_err()
+            );
             assert_eq!(
                 object.read_property(P::AUDITABLE_OPERATIONS, None).unwrap(),
                 operations
@@ -125,17 +135,19 @@ fn object_audit_policy_vectors_atomic_validation_and_null_priority() {
                 .unwrap(),
             filter
         );
-        assert!(object
-            .write_property(
-                P::AUDIT_PRIORITY_FILTER,
-                None,
-                PropertyValue::BitString {
-                    unused_bits: 0,
-                    data: vec![0x80]
-                },
-                None
-            )
-            .is_err());
+        assert!(
+            object
+                .write_property(
+                    P::AUDIT_PRIORITY_FILTER,
+                    None,
+                    PropertyValue::BitString {
+                        unused_bits: 0,
+                        data: vec![0x80]
+                    },
+                    None
+                )
+                .is_err()
+        );
         assert_eq!(
             object
                 .read_property(P::AUDIT_PRIORITY_FILTER, None)

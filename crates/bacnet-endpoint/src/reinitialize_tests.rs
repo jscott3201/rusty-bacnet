@@ -1,6 +1,7 @@
 use super::*;
 use bacnet_server::server::ReinitializeContext;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ReinitializedState};
+use bacnet_types::error::RemoteError;
 use std::net::Ipv4Addr;
 
 const PASSWORD: &str = "reinit-pw";
@@ -12,8 +13,11 @@ type Received = Arc<std::sync::Mutex<Vec<ReinitializeContext>>>;
 /// A handler that records the context of each request it carries out.
 fn recording(
     received: &Received,
-) -> impl Fn(&ReinitializeContext, &mut ObjectDatabase) -> Result<(), Error> + Send + Sync + 'static
-{
+) -> impl Fn(&ReinitializeContext, &mut ObjectDatabase) -> Result<(), Error>
++ Send
++ Sync
++ 'static
++ use<> {
     let recorded = Arc::clone(received);
     move |context: &ReinitializeContext, _: &mut ObjectDatabase| {
         recorded.lock().unwrap().push(context.clone());
@@ -87,7 +91,7 @@ async fn reinitialize(
 fn assert_protocol_error(result: Result<(), Error>, class: ErrorClass, code: ErrorCode) {
     let error = result.unwrap_err();
     assert!(
-        matches!(error, Error::Protocol { class: c, code: e }
+        matches!(error, Error::Remote(RemoteError::Error { class: c, code: e })
             if c == class && e == code),
         "got {error:?}"
     );
@@ -339,4 +343,81 @@ async fn a_password_without_a_handler_is_refused() {
             .contains("ReinitializeDevice and its password require build_session()"),
         "got {error}"
     );
+}
+
+/// A configured password over 20 characters could never be sent, and an
+/// empty one never matched, so startup refuses both; 20 multi-octet
+/// characters are within the limit (#2060, #2094).
+#[tokio::test]
+async fn a_password_over_twenty_characters_is_refused() {
+    let session = |password: String| {
+        let (transport, _peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
+        EndpointSession::new(transport, SessionRole::ServerOnly, SessionConfig::default())
+            .unwrap()
+            .with_database(database(&[123]))
+            .with_reinitialize(|_: &ReinitializeContext, _: &mut ObjectDatabase| Ok(()))
+            .with_reinit_password(password)
+    };
+    assert_refused(
+        &mut session("é".repeat(21)),
+        "reinit_password exceeds the 20-character limit",
+    )
+    .await;
+    // An empty one could never match, since an empty request password
+    // decodes as none (#2094).
+    assert_refused(
+        &mut session(String::new()),
+        "reinit_password is empty; leave it unset for no password",
+    )
+    .await;
+    let mut fits = session("é".repeat(20));
+    fits.start().await.unwrap();
+    fits.stop().await.unwrap();
+}
+
+/// The executed services follow the published lists, and each opt-in names
+/// the session method that enables it.
+#[test]
+fn the_responder_lists_match_what_each_session_executes() {
+    let session = |writes: bool, reinitialize: bool| {
+        let (transport, _peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
+        let mut session =
+            EndpointSession::new(transport, SessionRole::ServerOnly, SessionConfig::default())
+                .unwrap();
+        if writes {
+            session = session.with_device_writes(Arc::new(|_| true));
+        }
+        if reinitialize {
+            session =
+                session.with_reinitialize(|_: &ReinitializeContext, _: &mut ObjectDatabase| Ok(()));
+        }
+        session.executed_services()
+    };
+    assert_eq!(session(false, false), RESPONDER_SERVICES);
+    let all: Vec<_> = RESPONDER_SERVICES
+        .iter()
+        .copied()
+        .chain(
+            RESPONDER_OPT_IN_SERVICES
+                .iter()
+                .map(|opt_in| opt_in.service),
+        )
+        .collect();
+    assert_eq!(session(true, true), all);
+    assert_eq!(
+        session(true, false),
+        [
+            ServiceSupported::READ_PROPERTY,
+            ServiceSupported::WRITE_PROPERTY
+        ]
+    );
+
+    let source = include_str!("device_writes.rs");
+    for ResponderOptIn { service, method } in RESPONDER_OPT_IN_SERVICES {
+        assert!(
+            source.contains(&format!("pub fn {method}("))
+                || source.contains(&format!("pub fn {method}<")),
+            "{service:?} names an EndpointSession method that exists: {method}"
+        );
+    }
 }

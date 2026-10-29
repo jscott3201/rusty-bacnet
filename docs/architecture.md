@@ -31,6 +31,7 @@ Foundations
                         the B/IP node and BBMD via bacnet-bip-core)
   bacnet-network        Network layer, BACnetRouter, RouterTable
   bacnet-objects        BACnetObject, ObjectDatabase, object implementations
+                        (no_std + alloc where atomics allow, #1615)
 
 Runtime and application roles
   bacnet-endpoint-core  Private lifecycle, ingress, egress, coordination
@@ -38,19 +39,29 @@ Runtime and application roles
   bacnet-server         Full server dispatch, COV, events, scheduling
   bacnet-endpoint       Public shared owner composing bounded sibling roles
 
+Operations core (UI-free, for the front ends)
+  bacnet-ops            Target and value grammar, value formatting, request
+                        limits, read engine over bacnet-client, frame decoder,
+                        watch hub, write-safety core (plan, ledger, audit)
+  bacnet-mcp            MCP server over the bacnet-ops engine; read-only unless
+                        a profile offers writes (rmcp SDK; the CLI's `mcp` feature)
+
 Selected direct dependencies
   bacnet-endpoint -> bacnet-client, bacnet-server, bacnet-endpoint-core,
                      bacnet-network, bacnet-objects
-  bacnet-cli     -> bacnet-client              (CLI application)
+  bacnet-ops     -> bacnet-client, bacnet-transport, bacnet-npdu
+  bacnet-mcp     -> bacnet-ops, bacnet-client, rmcp
+  bacnet-cli     -> bacnet-ops, bacnet-client, bacnet-mcp (with `mcp`)  (CLI application)
   rusty-bacnet   -> bacnet-client, bacnet-server, bacnet-endpoint
                                               (PyO3 bindings)
 ```
 
 `bacnet-client`, `bacnet-server` and `bacnet-endpoint` are all workspace
-`default-members`, along with the foundational crates, endpoint-core,
+`default-members`, along with the foundational crates, endpoint-core, `bacnet-ops`,
 integration tests, the MS/TP bus simulator and benchmarks. The CLI
-(`bacnet-cli`) and PyO3 binding (`rusty-bacnet`) are excluded from default
-builds: the CLI pulls in heavier application dependencies, and the Python
+(`bacnet-cli`), the MCP server (`bacnet-mcp`) and PyO3 binding (`rusty-bacnet`)
+are excluded from default builds: the CLI and the MCP server pull in heavier
+application dependencies, and the Python
 extension needs its native Python build context. They remain workspace
 members and can be selected explicitly. So does the unpublished firmware link
 test, `firmware/link`, which links the MS/TP stack (`bacnet-mstp-codec`,
@@ -115,6 +126,16 @@ Loopback (local client/server) ─┘      |
 
 The router receives NPDUs from all transports, checks the destination network number in the NPDU header, and forwards to the appropriate transport. Messages for the local device (DNET matches a loopback port) are delivered to the client/server.
 
+The router retains transport ownership through startup rollback and shutdown.
+`stop().await` interrupts sends and awaits router workers plus every transport's
+async cleanup. It returns `Result<(), RouterStopError>`; repeated calls share the
+same settled result and preserve original errors by reference, without retrying.
+Cancelling a stop wait leaves the cleanup owner running. Cancelled startup and
+router Drop initiate cleanup while the runtime remains alive, but do not promise
+completed cleanup or immediate endpoint reuse. An awaited startup failure settles
+all attempted rollback stops and returns the original start error; secondary
+cleanup failures are logged with their network number.
+
 `bacnet-router-core` is the router's portable half (#1679); it publishes with 0.13.0. It is `no_std` and needs no allocator: a borrowed view of an NPDU's control information, which a property test holds equal to `bacnet-encoding`'s decoder, and a writer into caller storage; views and writers for the network-layer messages; the routing table in caller-sized arrays, with the convergence modes, busy and unreachable marks, the reject hold-down and aging; bounded route discovery; and the sans-IO `Router` engine over them, all on `bacnet-time`'s `Instant`. The engine takes each frame a port receives, with the time, returns what it means for the router's own application, and has the caller poll the sends it calls for from one output scratch; the hooks of a `Host` authorize protected network messages and observe events. A port is data to it (a network number, the router's MAC there, its group classifier and the longest NPDU it carries), so any link plugs in the same way. It follows the clause throughout, where the hosted router once departed from it too. `BACnetRouter` runs on it: its Tokio tasks hand each port's frames to the engine under one lock, drain the sends it asks for onto the port queues, and keep the local queues, the control gate, data attributes and the send warnings hosted; its `RouterTable` is the engine's table. For firmware, its `bip` and `mstp` features add the glue that joins a `bacnet-bip-core` node, in any of its three modes, and a `bacnet-mstp-core` master to the engine, with no allocator: each port hands the router what its link delivers and carries out the sends the router polls.
 
 Data attributes are carried on `ReceivedNpdu` and `ReceivedApdu`, and attribute-aware send helpers are available on `TransportPort` and `NetworkLayer`. `ReceivedApdu.link_layer_group` preserves whether the incoming data-link destination was a group address, while `ReceivedApdu.is_group` describes the effective BACnet network destination; a routed unicast can therefore have `link_layer_group == true` and `is_group == false`. `ReceivedApdu.global_broadcast` marks an NPDU addressed to the global broadcast network (DNET 65535), which `is_group` alone does not tell apart from a local or one-network broadcast. BACnet/SC maps every inbound Annex AB Data Option to these attributes and maps outbound attributes back to SC Data Options. Unknown Data Options do not block NPDU delivery. For received Encapsulated-NPDUs, an unsupported Must Understand Destination Option returns a BVLC-Result NAK with the original option marker to the unicast source through the hub and drops broadcast without a result. This message-level NAK does not close the source connection. A Destination Option without Must Understand does not block delivery. The current `DataAttribute.must_understand` field stores the Data Option bit-6 value, but Addendum 135-2020cf Every Segment behavior is not implemented. The router preserves inbound data attributes when forwarding unicast or broadcast NPDUs across attribute-capable transports, while data links that do not support attributes expose an empty list on receive and ignore attributes on send.
@@ -154,7 +175,7 @@ MAC address format varies by transport:
 - **Ethernet**: 6 bytes (IEEE 802 MAC)
 - **Loopback**: arbitrary (synthetic, e.g., `[0x00, 0x01]`)
 
-`AnyTransport<S>` is a type-erased enum wrapping all transport types, enabling mixed-transport routing (e.g., BIP + MS/TP + Loopback on the same router).
+`AnyTransport` is a type-erased enum wrapping all transport types, enabling mixed-transport routing (e.g., BIP + MS/TP + Loopback on the same router). Its MS/TP variant runs over a `BoxedSerial`, so the enum carries no serial-port type parameter, and `BACnetClient` and `BACnetServer` take it as their default transport type.
 
 The transports' OS calls that still need `unsafe` (Winsock, `GetAdaptersAddresses`, `getifaddrs`, the libc `recvmsg`/`sendmsg` fallbacks for targets nix doesn't cover, and the RS-485 ioctl) sit in one private module, `bacnet-transport`'s `sys`, behind safe wrappers. It is the only place in the crate allowed to use `unsafe`, and the crate's `unsafe_stays_in_sys` test fails on unsafe code anywhere else (#1923).
 

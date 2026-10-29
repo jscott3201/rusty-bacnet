@@ -2,6 +2,8 @@
 
 use bacnet_client::client::BACnetClient;
 use bacnet_encoding::primitives::encode_property_value;
+use bacnet_ops::destination::Destination;
+use bacnet_ops::parse;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::WriteAccessSpecification;
 use bacnet_transport::port::TransportPort;
@@ -9,9 +11,7 @@ use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use bytes::BytesMut;
 
-use crate::core::destination::Destination;
 use crate::output::{self, OutputFormat};
-use crate::parse;
 
 /// Encode a `PropertyValue` into raw application-tagged bytes.
 fn encode_value(value: &PropertyValue) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
@@ -61,7 +61,8 @@ pub fn parse_write_multiple(specs: &[String]) -> Result<Vec<ObjectWrites>, Strin
                     .split_once('=')
                     .ok_or_else(|| format!("expected 'property=value', got '{pair}'"))?;
                 let (property, index) = parse::parse_property(property)?;
-                let (value, priority) = parse::parse_value_with_priority(value)?;
+                let (value, priority) =
+                    parse::parse_value_for_with_priority(object_type, property, index, value)?;
                 Ok((property, index, value, priority))
             })
             .collect::<Result<_, String>>()?;

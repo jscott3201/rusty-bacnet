@@ -46,10 +46,11 @@ pub(super) async fn run<T: TransportPort + 'static>(
                 commit.changed(oid);
                 let resolved =
                     BACnetServer::<T>::commit_intrinsic_transition(&mut db, &oid, outcome);
-                if let Some(resolved) = resolved {
-                    if resolved.distribute && resolved.event_values.is_some() {
-                        out.push((oid, resolved));
-                    }
+                if let Some(resolved) = resolved
+                    && resolved.distribute
+                    && resolved.event_values.is_some()
+                {
+                    out.push((oid, resolved));
                 }
             }
             // Each committed transition changes Status_Flags. Timestamped

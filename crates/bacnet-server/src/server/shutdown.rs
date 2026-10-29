@@ -160,24 +160,24 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         if let Some(error) = &self.transport_cleanup_error {
             return Err(Error::Encoding(error.clone()));
         }
-        if self.transport_cleanup.is_none() {
-            if let Some(network) = self.network.take() {
-                let mut network = match Arc::try_unwrap(network) {
-                    Ok(network) => network,
-                    Err(network) => {
-                        self.network = Some(network);
-                        return Err(Error::Encoding(
-                            "server network still has an internal owner".into(),
-                        ));
-                    }
-                };
-                // Own the complete future, including cancellation-unsafe custom
-                // transport cleanup. Drop deliberately leaves this task running.
-                self.transport_cleanup = Some(tokio::spawn(async move {
-                    let result = network.stop().await;
-                    (network, result)
-                }));
-            }
+        if self.transport_cleanup.is_none()
+            && let Some(network) = self.network.take()
+        {
+            let mut network = match Arc::try_unwrap(network) {
+                Ok(network) => network,
+                Err(network) => {
+                    self.network = Some(network);
+                    return Err(Error::Encoding(
+                        "server network still has an internal owner".into(),
+                    ));
+                }
+            };
+            // Own the complete future, including cancellation-unsafe custom
+            // transport cleanup. Drop deliberately leaves this task running.
+            self.transport_cleanup = Some(tokio::spawn(async move {
+                let result = network.stop().await;
+                (network, result)
+            }));
         }
         let Some(cleanup) = self.transport_cleanup.as_mut() else {
             return Ok(());

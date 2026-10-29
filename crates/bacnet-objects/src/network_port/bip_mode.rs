@@ -15,7 +15,7 @@
 //! the stopped transport's tables as they were left, with registrations
 //! still expiring on schedule.
 
-use std::sync::Arc;
+use alloc::sync::Arc;
 
 use bacnet_encoding::constructed::{encode_bdt_entry, encode_fdt_entry, encode_host_n_port};
 use bacnet_types::bip_port::{BbmdTables, BipPortMode, ForeignRegistration};
@@ -50,7 +50,7 @@ impl LiveMode {
             BipPortMode::Bbmd { tables: None } => {
                 return Err(Error::Encoding(
                     "a registered BBMD must lend its tables once started".into(),
-                ))
+                ));
             }
         })
     }

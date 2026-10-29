@@ -140,10 +140,10 @@ async fn endpoint_records_accepted_reinitialize_requests_only() {
     let mut session = session(db, SessionRole::Both, &sink)
         .with_reinitialize(move |_, _| match answer.load(Ordering::SeqCst) {
             ACCEPT => Ok(()),
-            REFUSE => Err(Error::Protocol {
-                class: ErrorClass::DEVICE,
-                code: ErrorCode::CONFIGURATION_IN_PROGRESS,
-            }),
+            REFUSE => Err(Error::protocol(
+                ErrorClass::DEVICE,
+                ErrorCode::CONFIGURATION_IN_PROGRESS,
+            )),
             PANIC => panic!("reinitialize handler panic"),
             _ => Err(Error::Encoding("disk full".into())),
         })

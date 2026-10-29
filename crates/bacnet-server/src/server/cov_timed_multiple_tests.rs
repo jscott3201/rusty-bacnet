@@ -17,9 +17,11 @@ async fn initial_report_carries_admission_time() {
     h.subscribe(false).await;
     let initial = h.notification().await;
     assert_eq!(pv_rows(&initial), vec![(real(0.0), Some(time(1)))]);
-    assert!(rows(&initial)
-        .iter()
-        .all(|(_, _, time_of_change)| *time_of_change == Some(time(1))));
+    assert!(
+        rows(&initial)
+            .iter()
+            .all(|(_, _, time_of_change)| *time_of_change == Some(time(1)))
+    );
     assert_eq!(envelope(&initial), Some((at(1).local_date, time(1))));
     h.server.stop().await.unwrap();
 }
@@ -58,9 +60,11 @@ async fn write_property_change_reports_commit_time_not_preparation_time() {
             vec![(real(42.0), Some(time(10)))],
             "confirmed={confirmed}"
         );
-        assert!(rows(&report)
-            .iter()
-            .all(|(_, _, time_of_change)| *time_of_change == Some(time(10))));
+        assert!(
+            rows(&report)
+                .iter()
+                .all(|(_, _, time_of_change)| *time_of_change == Some(time(10)))
+        );
         assert_eq!(envelope(&report), Some((at(10).local_date, time(10))));
         assert_eq!(
             *h.clock.0.lock().unwrap(),

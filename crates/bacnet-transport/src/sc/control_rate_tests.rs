@@ -31,9 +31,11 @@ fn defaults_validate_and_bad_limits_are_refused() {
         ScControlRateLimit::new(256, 32)
     );
     for (burst, per_second) in [(0, 1), (1, 0), (4097, 1)] {
-        assert!(ScControlRateLimit::new(burst, per_second)
-            .validate()
-            .is_err());
+        assert!(
+            ScControlRateLimit::new(burst, per_second)
+                .validate()
+                .is_err()
+        );
     }
     assert!(ScControlRateLimit::new(4096, 1).validate().is_ok());
 }

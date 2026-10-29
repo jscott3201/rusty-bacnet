@@ -2,7 +2,7 @@ use super::*;
 use bacnet_encoding::apdu::UnconfirmedRequest;
 use bacnet_encoding::constructed::decode_event_notification;
 use bacnet_encoding::npdu::decode_npdu;
-use bacnet_encoding::tags::{encode_tag, TagClass};
+use bacnet_encoding::tags::{TagClass, encode_tag};
 use bacnet_services::alarm_event::NotificationParameters;
 use bacnet_transport::port::ReceivedNpdu;
 use bacnet_transport::port::TransportProvenance;

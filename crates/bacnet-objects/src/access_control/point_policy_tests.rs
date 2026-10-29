@@ -7,6 +7,7 @@
 use bacnet_encoding::constructed::encode_authentication_policy;
 use bacnet_types::constructed::{BACnetAuthenticationPolicy, BACnetAuthenticationPolicyEntry};
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
+use bacnet_types::error::RemoteError;
 
 use super::*;
 
@@ -25,7 +26,7 @@ fn write(point: &mut AccessPointObject, property: P, value: PropertyValue) -> Re
 
 fn assert_error(result: Result<(), Error>, expected: ErrorCode) {
     assert!(
-        matches!(result, Err(Error::Protocol { class, code })
+        matches!(result, Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::PROPERTY
                 && code == expected),
         "expected {expected:?}, got {result:?}"
@@ -111,7 +112,7 @@ fn access_point_serves_the_policy_arrays_once_the_application_sets_them() {
         );
         assert!(matches!(
             point.read_property(property, Some(3)),
-            Err(Error::Protocol { code, .. }) if code == ErrorCode::INVALID_ARRAY_INDEX
+            Err(Error::Remote(RemoteError::Error { code, .. })) if code == ErrorCode::INVALID_ARRAY_INDEX
         ));
     }
     assert_eq!(

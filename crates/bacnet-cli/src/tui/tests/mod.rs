@@ -36,6 +36,10 @@
 //!   the per-device gate and the rate cap, against the lab device.
 //! - `watch_rows`: watch rows' names, routed devices and column fit at
 //!   80, 120 and 200 columns, and the name read against refusing devices.
+//! - `device_mgmt`: `:dcc` and `:reinit` against the lab device: the
+//!   requests on the wire, the audit records, and the password kept out
+//!   of every file, frame and log; `device_mgmt_app`: their refusals and
+//!   the masked prompt in `update` alone.
 //!
 //! Snapshot workflow: CI runs plain `cargo nextest run -p bacnet-cli`, where a
 //! changed frame fails the test. After an intended UI change, run
@@ -54,6 +58,10 @@ mod capture_views;
 mod connections;
 #[cfg(unix)]
 mod crash;
+mod device_mgmt;
+mod device_mgmt_app;
+mod device_mgmt_capture;
+mod device_mgmt_worker;
 mod devices_layout;
 mod discovery;
 mod event_loop;
@@ -70,6 +78,13 @@ mod mstp_layout;
 mod mstp_monitor;
 #[cfg(all(target_os = "linux", feature = "serial"))]
 mod mstp_monitor_pty;
+mod mstp_release;
+mod mstp_scan;
+mod mstp_scan_capture;
+mod mstp_scan_lifecycle;
+#[cfg(all(target_os = "linux", feature = "serial"))]
+mod mstp_scan_native;
+mod mstp_scan_retirement;
 mod mstp_screen;
 mod multicast_profile;
 mod names;
@@ -78,10 +93,16 @@ mod names_filter;
 mod names_site;
 mod network;
 mod network_frames;
+mod network_notes;
+mod passive_discovery;
+mod passive_lifecycle;
+mod passive_repairs;
+mod passive_retention;
 /// Reruns a test whose freed ephemeral port another process takes (#1877).
 #[path = "../../../../bacnet-endpoint/tests/support/port_retry.rs"]
 mod port_retry;
 mod profile_ui;
+mod request_gate;
 #[cfg(feature = "sc-tls")]
 mod sc_hub;
 mod sc_layout;
@@ -93,29 +114,32 @@ mod sc_screen;
 mod site;
 mod values;
 mod watch;
+mod watch_routed;
 mod watch_rows;
 mod writes;
 mod writes_app;
 mod writes_arrays;
+mod writes_by_name;
 mod writes_indexed;
 mod writes_ledger;
+mod writes_outcomes;
 
 use std::net::Ipv4Addr;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+use bacnet_ops::target::AddressStyle;
 use bacnet_types::enums::Segmentation;
+use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::Terminal;
 
 use super::app::picker::Picker;
-use super::app::{update, Action, App, AppConfig};
+use super::app::{Action, App, AppConfig, update};
 use super::keymap::map_key;
 use super::log_layer::LogRing;
 use super::message::{Command, DeviceRow, WorkerEvent};
 use crate::core::interfaces::Ipv4Interface;
-use crate::core::target::AddressStyle;
 
 /// One fixed start time per test process, so ages are exact offsets from it.
 pub(super) fn t0() -> Instant {
@@ -179,7 +203,7 @@ pub(super) fn routed_row(
     vendor_id: u16,
     seen: u64,
 ) -> DeviceRow {
-    let address = crate::core::target::routed_station(network, station).expect("a station");
+    let address = bacnet_ops::target::routed_station(network, station).expect("a station");
     let mut row = row(instance, &address, vendor_id, seen);
     row.network = Some(network);
     row.via = Some(router.into());

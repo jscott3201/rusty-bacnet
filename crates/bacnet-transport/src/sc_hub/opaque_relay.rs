@@ -19,10 +19,11 @@ pub(super) async fn relay(
         if !registered_client_matches_sink_in_map(&map, source, source_sink) {
             return ResultRelayDisposition::CloseSource;
         }
-        if let HubRelayTarget::Unicast(destination) = target {
-            if destination != source && !map.contains_key(&destination) {
-                super::outcomes::increment(&clients.outcomes.unicast_no_target);
-            }
+        if let HubRelayTarget::Unicast(destination) = target
+            && destination != source
+            && !map.contains_key(&destination)
+        {
+            super::outcomes::increment(&clients.outcomes.unicast_no_target);
         }
         hub_relay_recipient_vmacs(target, source, map.keys().copied())
             .into_iter()

@@ -2,7 +2,8 @@
 //! object keeps its own schedule; the database reads the property a due
 //! sample names, because only it can reach the other object.
 
-use std::time::Duration;
+use crate::prelude::*;
+use core::time::Duration;
 
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::ObjectIdentifier;

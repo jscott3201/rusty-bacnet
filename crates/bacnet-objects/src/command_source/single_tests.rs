@@ -9,11 +9,11 @@ use crate::multistate::MultiStateValueObject;
 use crate::present_value_access::PresentValueAccess;
 use crate::property_metadata::{PropertyPresenceCondition, PropertyWriteCapability};
 use crate::traits::BACnetObject;
+use bacnet_types::MacAddr;
 use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::enums::{EngineeringUnits, ErrorCode, ObjectType, PropertyIdentifier as P};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
-use bacnet_types::MacAddr;
 
 fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(object_type, instance).unwrap()
@@ -75,7 +75,7 @@ fn values(
 
 fn assert_code(result: Result<impl std::fmt::Debug, Error>, expected: ErrorCode) {
     match result {
-        Err(Error::Protocol { code, .. }) => {
+        Err(Error::Remote(RemoteError::Error { code, .. })) => {
             assert_eq!(code, expected, "expected {expected:?}")
         }
         other => panic!("expected {expected:?}, got {other:?}"),

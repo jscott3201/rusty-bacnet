@@ -71,7 +71,7 @@ mod tasks;
 use core::borrow::BorrowMut;
 use core::fmt;
 
-pub use config::{ConfigError, LimitError, Options, PortConfig, MIN_PORT_LIMIT};
+pub use config::{ConfigError, LimitError, MIN_PORT_LIMIT, Options, PortConfig};
 pub use congestion::{Backlog, Congestion};
 pub use counters::Counters;
 pub use duplicates::Duplicates;
@@ -90,9 +90,9 @@ use output::Outputs;
 use tasks::Task;
 
 use crate::discovery::Discovery;
-use crate::npdu::{NpduLimits, GLOBAL_NETWORK};
+use crate::npdu::{GLOBAL_NETWORK, NpduLimits};
 use crate::table::Table;
-use crate::{Instant, PortId, MAX_NPDU};
+use crate::{Instant, MAX_NPDU, PortId};
 
 /// Everything large a [`Router`] keeps: up to `P` ports, a table of `R`
 /// routes and `H` hold-down records, `D` searches, an output scratch of
@@ -148,14 +148,14 @@ pub struct Storage<
 }
 
 impl<
-        const P: usize,
-        const R: usize,
-        const H: usize,
-        const D: usize,
-        const N: usize,
-        G: GroupClassifier,
-        const B: usize,
-    > Storage<P, R, H, D, N, G, B>
+    const P: usize,
+    const R: usize,
+    const H: usize,
+    const D: usize,
+    const N: usize,
+    G: GroupClassifier,
+    const B: usize,
+> Storage<P, R, H, D, N, G, B>
 {
     /// Empty storage: all zero bits with the default [`Groups`] rule.
     /// Custom rules supply their own unused-slot value through [`GroupClassifier::NONE`].
@@ -180,14 +180,14 @@ impl<
 }
 
 impl<
-        const P: usize,
-        const R: usize,
-        const H: usize,
-        const D: usize,
-        const N: usize,
-        G: GroupClassifier,
-        const B: usize,
-    > Default for Storage<P, R, H, D, N, G, B>
+    const P: usize,
+    const R: usize,
+    const H: usize,
+    const D: usize,
+    const N: usize,
+    G: GroupClassifier,
+    const B: usize,
+> Default for Storage<P, R, H, D, N, G, B>
 {
     fn default() -> Self {
         Self::new()
@@ -196,14 +196,14 @@ impl<
 
 /// The ports and state kept, not the scratch.
 impl<
-        const P: usize,
-        const R: usize,
-        const H: usize,
-        const D: usize,
-        const N: usize,
-        G: GroupClassifier + fmt::Debug,
-        const B: usize,
-    > fmt::Debug for Storage<P, R, H, D, N, G, B>
+    const P: usize,
+    const R: usize,
+    const H: usize,
+    const D: usize,
+    const N: usize,
+    G: GroupClassifier + fmt::Debug,
+    const B: usize,
+> fmt::Debug for Storage<P, R, H, D, N, G, B>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Storage")
@@ -269,15 +269,15 @@ pub type RouterIn<
 > = Router<&'s mut Storage<P, R, H, D, N, Groups, B>, P, R, H, D, N, Groups, B>;
 
 impl<
-        S,
-        const P: usize,
-        const R: usize,
-        const H: usize,
-        const D: usize,
-        const N: usize,
-        G: GroupClassifier + fmt::Debug,
-        const B: usize,
-    > fmt::Debug for Router<S, P, R, H, D, N, G, B>
+    S,
+    const P: usize,
+    const R: usize,
+    const H: usize,
+    const D: usize,
+    const N: usize,
+    G: GroupClassifier + fmt::Debug,
+    const B: usize,
+> fmt::Debug for Router<S, P, R, H, D, N, G, B>
 where
     S: BorrowMut<Storage<P, R, H, D, N, G, B>>,
 {
@@ -290,15 +290,15 @@ where
 }
 
 impl<
-        S,
-        const P: usize,
-        const R: usize,
-        const H: usize,
-        const D: usize,
-        const N: usize,
-        G: GroupClassifier,
-        const B: usize,
-    > Router<S, P, R, H, D, N, G, B>
+    S,
+    const P: usize,
+    const R: usize,
+    const H: usize,
+    const D: usize,
+    const N: usize,
+    G: GroupClassifier,
+    const B: usize,
+> Router<S, P, R, H, D, N, G, B>
 where
     S: BorrowMut<Storage<P, R, H, D, N, G, B>>,
 {
@@ -347,10 +347,10 @@ where
                 return Err(ConfigError::Limit(id));
             }
         }
-        if let Some(cap) = options.route_cap {
-            if usize::from(cap) > R {
-                return Err(ConfigError::RouteCap { cap, capacity: R });
-            }
+        if let Some(cap) = options.route_cap
+            && usize::from(cap) > R
+        {
+            return Err(ConfigError::RouteCap { cap, capacity: R });
         }
         if options.sweep.as_nanos() == 0 {
             return Err(ConfigError::ZeroSweep);
@@ -440,11 +440,11 @@ where
     /// [`receive`](Self::receive), it drops what an earlier call left
     /// unpolled.
     ///
-    /// A global broadcast (DNET 0xFFFF) is refused as
-    /// [`OriginateError::ReservedNetwork`]: there is no engine path for one
-    /// yet. To reach every network, send a remote broadcast (an empty
-    /// DADR) to each network in the table, the attached ones included,
-    /// where it leaves as that port's local broadcast.
+    /// A global broadcast (DNET 0xFFFF, an empty DADR; #1809) has no route
+    /// to look up: it is polled as one send per port, each that link's
+    /// broadcast, still global with a hop count of 255 so the routers there
+    /// pass it on, from the address [`Request::source`] selects on each
+    /// (Clauses 6.3.2, 6.5.3). It must fit every port's broadcast limit.
     pub fn originate(&mut self, request: &Request<'_>, now: Instant) -> Result<(), OriginateError> {
         let now = self.clock(now);
         let options = self.options;

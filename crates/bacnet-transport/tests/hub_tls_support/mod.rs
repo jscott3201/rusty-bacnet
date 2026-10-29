@@ -6,7 +6,7 @@ use rcgen::{CertificateParams, Issuer, KeyPair};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
-use tokio_tungstenite::{tungstenite::Message, WebSocketStream};
+use tokio_tungstenite::{WebSocketStream, tungstenite::Message};
 
 pub type Peer = WebSocketStream<tokio_rustls::client::TlsStream<TcpStream>>;
 pub const HUB_VMAC: [u8; 6] = [0x10; 6];

@@ -2,17 +2,17 @@
 //! [`WIDE_WIDTH`] columns when both fit at their content widths, beside it
 //! (#1915). Every state is marked by text as well as colour.
 
+use bacnet_ops::label::object_label;
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Paragraph, Row, Table};
-use ratatui::Frame;
 
 use super::columns::{self, Column};
-use super::{ellipsize, sanitize, text_width, Theme, FULL_WIDTH, WIDE_WIDTH};
-use crate::tui::app::devices::age_label;
-use crate::tui::app::objects::object_label;
-use crate::tui::app::who_has::WhoHasSearch;
+use super::{FULL_WIDTH, Theme, WIDE_WIDTH, ellipsize, sanitize, text_width};
 use crate::tui::app::App;
+use crate::tui::app::devices::age_label;
+use crate::tui::app::who_has::WhoHasSearch;
 use crate::tui::network::discovery::FoundRow;
 
 /// The most result rows the Who-Has panel takes room for.
@@ -56,16 +56,28 @@ fn beside(width: u16, app: &App, search: &WhoHasSearch) -> Option<u16> {
         return None;
     }
     let (least, content) = super::devices::widths(width, app);
-    let room = usize::from(width).checked_sub(content_width(search))?;
+    let room = usize::from(width).checked_sub(content_width(search, app.passive_listening()))?;
     (least <= room).then_some(content.min(room) as u16)
 }
 
 /// The panel's title: what was searched for, how many answered, when.
-fn title(search: &WhoHasSearch, age: &str) -> String {
+fn title(search: &WhoHasSearch, age: &str, listening: bool) -> String {
     let found = match search.found.len() {
         1 => "1 found".to_string(),
         n => format!("{n} found"),
     };
+    if search.passive {
+        if !listening {
+            return format!(
+                " Stopped \"{}\" | {found} overheard | no live input | :find closes ",
+                search.name
+            );
+        }
+        return format!(
+            " Listening for \"{}\" | {found} overheard | :find closes ",
+            search.name
+        );
+    }
     format!(
         " Who-Has \"{}\" | {found} | sent {age} ago | :find closes ",
         search.name
@@ -84,7 +96,7 @@ fn empty_text(search: &WhoHasSearch) -> String {
 /// every name in full and its title, but not the Via column, which goes
 /// in only when the room is there. The age in the title is counted at
 /// [`WIDEST_AGE`], so the panes don't move as it counts.
-fn content_width(search: &WhoHasSearch) -> usize {
+fn content_width(search: &WhoHasSearch, listening: bool) -> usize {
     let body = if search.found.is_empty() {
         text_width(&empty_text(search))
     } else {
@@ -92,7 +104,7 @@ fn content_width(search: &WhoHasSearch) -> usize {
         columns.retain(|column| column.kind != Field::Via);
         columns::total(&columns)
     };
-    body.max(text_width(&title(search, WIDEST_AGE))) + 2
+    body.max(text_width(&title(search, WIDEST_AGE, listening))) + 2
 }
 
 /// The bordered panel of results in `area`.
@@ -104,7 +116,11 @@ fn panel(
     theme: &Theme,
     full: bool,
 ) {
-    let title = title(search, &age_label(app.now, search.sent));
+    let title = title(
+        search,
+        &age_label(app.now, search.sent),
+        app.passive_listening(),
+    );
     let block = Block::bordered()
         .title(Line::styled(title, theme.accent()))
         .border_style(theme.dim());
@@ -232,6 +248,7 @@ mod tests {
         let search = WhoHasSearch {
             name: name.into(),
             sent: app.now,
+            passive: false,
             found: vec![FoundRow {
                 device: 1001,
                 object: ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 3).unwrap(),
@@ -243,7 +260,7 @@ mod tests {
             failed: None,
         };
         let (least, _) = crate::tui::view::devices::widths(200, &app);
-        let need = (least + content_width(&search)) as u16;
+        let need = (least + content_width(&search, false)) as u16;
         assert!(need >= WIDE_WIDTH, "{need}");
         assert!(beside(need, &app, &search).is_some());
         assert_eq!(beside(need - 1, &app, &search), None);

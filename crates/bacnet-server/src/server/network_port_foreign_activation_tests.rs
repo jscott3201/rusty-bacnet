@@ -4,7 +4,7 @@
 //! wait with Changes_Pending set while the device keeps registering where
 //! it did, and activation moves its next registration.
 
-use super::network_port_activation_tests::{reinitialize, wp, FALSE, TRUE};
+use super::network_port_activation_tests::{FALSE, TRUE, reinitialize, wp};
 use super::network_port_mode_tests::{host, port_oid, rp};
 use super::*;
 use bacnet_encoding::constructed::encode_host_n_port;

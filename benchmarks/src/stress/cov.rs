@@ -9,8 +9,8 @@
 //! Notifications are unconfirmed, or confirmed and acknowledged by each
 //! subscriber with `--confirmed`.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use bacnet_objects::analog::AnalogOutputObject;
@@ -20,7 +20,7 @@ use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
 
 use crate::stress::harness::{make_bip_server_with_db, make_stress_client};
-use crate::stress::output::{rate, DegradationPoint};
+use crate::stress::output::{DegradationPoint, rate};
 
 /// The server's default limit of subscriptions from one subscriber
 /// (`CovPolicy::max_subscriptions_per_peer`).

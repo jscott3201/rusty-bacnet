@@ -24,6 +24,7 @@ use bacnet_services::file::{
     FileAccessMethod, FileReadAckMethod, FileWriteAccessMethod,
 };
 use bacnet_types::enums::{EngineeringUnits, FileAccessMethod as ObjectFileAccessMethod};
+use bacnet_types::error::RemoteError;
 
 pub(super) const SENTINEL: &[u8] = &[0xDE, 0xAD, 0xBE, 0xEF];
 
@@ -78,7 +79,7 @@ fn write_wire(access: FileWriteAccessMethod) -> Vec<u8> {
 
 pub(super) fn assert_invalid_access(result: Result<(), Error>, context: &str) {
     match result.expect_err(&format!("{context}: request must be refused")) {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, ErrorClass::SERVICES, "{context}: wrong error class");
             assert_eq!(
                 code,
@@ -92,7 +93,7 @@ pub(super) fn assert_invalid_access(result: Result<(), Error>, context: &str) {
 
 pub(super) fn assert_file_access_denied(result: Result<(), Error>, context: &str) {
     match result.expect_err(&format!("{context}: request must be refused")) {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, ErrorClass::SERVICES, "{context}: wrong error class");
             assert_eq!(
                 code,
@@ -106,7 +107,7 @@ pub(super) fn assert_file_access_denied(result: Result<(), Error>, context: &str
 
 fn assert_inconsistent_object_type(result: Result<(), Error>, context: &str) {
     match result.expect_err(&format!("{context}: request must be refused")) {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, ErrorClass::SERVICES, "{context}: wrong error class");
             assert_eq!(
                 code,
@@ -120,7 +121,7 @@ fn assert_inconsistent_object_type(result: Result<(), Error>, context: &str) {
 
 fn assert_unknown_object(result: Result<(), Error>, context: &str) {
     match result.expect_err(&format!("{context}: request must be refused")) {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, ErrorClass::OBJECT, "{context}: wrong error class");
             assert_eq!(
                 code,

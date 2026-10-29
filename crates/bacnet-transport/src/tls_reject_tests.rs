@@ -6,7 +6,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::Instant;
 
-use super::{close_after_alert, ALERT_LINGER, DRAIN_LIMIT};
+use super::{ALERT_LINGER, DRAIN_LIMIT, close_after_alert};
 use crate::port_ownership::connect_loopback;
 
 /// A connected pair: (the refusing side, the peer).

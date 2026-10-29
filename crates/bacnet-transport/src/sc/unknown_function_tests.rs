@@ -112,7 +112,7 @@ async fn unknown_function_all_wire_codes_and_address_option_payload_matrix() {
 
 #[tokio::test]
 async fn unknown_function_silence_and_known_codes_never_consult_expired_budget() {
-    use super::rejection::{reject, RejectionBudget, RejectionExpired};
+    use super::rejection::{RejectionBudget, RejectionExpired, reject};
     struct NoIo;
     impl WebSocketPort for NoIo {
         async fn send(&self, _: &[u8]) -> Result<(), Error> {
@@ -381,9 +381,11 @@ async fn unknown_function_original_ack_and_valid_npdu_resume_activity() {
         hub.send(&wire(0xFF, 0, None, None, 0, &[])).await.unwrap();
         assert_eq!(recv(&hub).await, nak(0xFF, 0, None));
     }
-    assert!(timeout(Duration::from_millis(100), hub.recv())
-        .await
-        .is_err());
+    assert!(
+        timeout(Duration::from_millis(100), hub.recv())
+            .await
+            .is_err()
+    );
     assert!(rx.try_recv().is_err());
     // Positive controls only AFTER the unknown accounting window.
     hub.send(&[0x0B, 0, probe[2], probe[3]]).await.unwrap();

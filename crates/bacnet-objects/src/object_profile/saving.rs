@@ -1,7 +1,8 @@
 //! One shared Tags owner for profile-bearing objects.
 
-use std::sync::Arc;
-use std::time::Duration;
+use crate::prelude::*;
+use alloc::sync::Arc;
+use core::time::Duration;
 
 use bacnet_types::constructed::BACnetNameValue;
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
@@ -9,7 +10,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::persistence::encode_snapshot;
-use super::{write_tags, ObjectProfile, TagsPersistence, TagsSnapshot};
+use super::{ObjectProfile, TagsPersistence, TagsSnapshot, write_tags};
 use crate::common;
 use crate::durable::staged::{self, StagedSaves};
 use crate::durable::{DurableWrites, PendingWrite, SaveWait, SaveWriter, StageStep};
@@ -49,7 +50,7 @@ impl ProfileState {
             move |snapshot: &TagsSnapshot| persistence.save(oid, snapshot),
             move |_, result| {
                 if let Err(error) = result {
-                    tracing::warn!(object = %oid, %error, "Failed to save object Tags");
+                    log_warn!(object = %oid, %error, "Failed to save object Tags");
                 }
             },
         );
@@ -64,10 +65,10 @@ impl ProfileState {
         profile.check()?;
         // Validate first: refusal must not release another request's stage.
         self.with_storage(Storage::drop_staged);
-        if profile.tags.is_some() {
-            if let Some(saved) = &self.saved {
-                profile.tags = Some(saved.clone());
-            }
+        if profile.tags.is_some()
+            && let Some(saved) = &self.saved
+        {
+            profile.tags = Some(saved.clone());
         }
         self.profile = profile;
         self.writes = self.writes.wrapping_add(1);
@@ -78,7 +79,7 @@ impl ProfileState {
         &self.profile
     }
 
-    pub(crate) fn metadata(&self) -> impl Iterator<Item = PropertyMetadata> {
+    pub(crate) fn metadata(&self) -> impl Iterator<Item = PropertyMetadata> + use<> {
         self.profile.metadata()
     }
 

@@ -1,0 +1,97 @@
+---
+title: "Performance: what to expect"
+description: "Request latency, throughput, MS/TP efficiency and scale figures for each transport, the conditions they were measured under, what they mean for polling and COV, what isn't measured, and how to reproduce them."
+---
+
+import { release, repository } from '../../../lib/site.mjs';
+
+[Evaluate and get help](/rusty-bacnet/project/support/) / Performance
+
+This page summarizes what the stack costs per request on each transport, how far one server scales, and how close MS/TP gets to the serial line's limit. It quotes a few headline figures; the full tables, with every step and its method, are in <a href={`${repository}/blob/v${release}/Benchmarks.md`}>Benchmarks.md</a>. Each figure below names the section it comes from.
+
+The page describes **v{release}**, using Benchmarks.md as tagged for that release. Its main tables were measured before this release and not re-run for it; a later repeated comparison of a few results has [its own section](#a-later-repeated-comparison).
+
+**These are measurements of the stack on one machine, not capacity guarantees.** Nearly every figure was taken over the loopback interface, which has no wire delay and almost no loss. On a building network, the network's round trip and the remote device's own processing time will usually dominate.
+
+## How the figures were measured
+
+The <a href={`${repository}/blob/v${release}/Benchmarks.md#2-test-environment`}>test environment</a> was one Apple M5 laptop (10 cores, 16 gigabytes of memory) running macOS, with Rust 1.99.0 and rustls with aws-lc-rs for TLS. The stress scenarios ran as release builds and the Criterion suites under Cargo's `bench` profile. The main tables were measured on 2026-10-21, on the development branch of the previous release after its performance pass.
+
+- Client and server ran in one process and talked over loopback (127.0.0.1 or ::1). The figures show the stack's own cost, not a network's.
+- Criterion figures are medians over 100 samples. Stress figures are a single run of each step, usually 10 seconds long, and vary by a few percent between runs.
+- Each suite ran alone on an idle machine. A laptop changes its clock speed with temperature, so a server-class machine should give steadier numbers, not necessarily faster ones.
+- macOS has a slow datagram path. In the report's Docker comparison, the same binaries in a Linux container on Docker Desktop, given 4 of the laptop's processors, answered 20% to 70% more requests than on macOS (<a href={`${repository}/blob/v${release}/Benchmarks.md#72-stress-scenarios-inside-a-container`}>section 7.2</a>). Treat a Linux host as the better guide to production. That Docker run is from an earlier edition of the report and was not repeated since.
+
+## Latency and throughput on the IP transports
+
+One ReadProperty round trip, client to server and back, took a median of 29 microseconds over BACnet/IP, 25 microseconds over BACnet/IPv6, and 48 microseconds over BACnet/SC with mutual TLS through a hub in the same process (<a href={`${repository}/blob/v${release}/Benchmarks.md#1-summary`}>section 1</a>, with the exact medians in <a href={`${repository}/blob/v${release}/Benchmarks.md#42-latency`}>section 4.2</a>). BACnet/SC pays for the TLS record layer and the hub's extra hop.
+
+A ReadPropertyMultiple of 10 values cost only 2 to 8 microseconds more than one ReadProperty (section 4.2): the round trip is the cost, not the property reads. One client sending requests one after another, each waiting for its answer, reached about 38,600 requests per second over BACnet/IP (<a href={`${repository}/blob/v${release}/Benchmarks.md#43-sequential-throughput`}>section 4.3</a> has the other transports and WriteProperty).
+
+## Many clients against one server
+
+With concurrent clients, one BACnet/IP server answered about 82,000 ReadProperty requests per second from 10 clients (section 1). Throughput peaks at 5 to 10 clients on BACnet/IP and BACnet/IPv6; beyond that, more clients only lengthen the queue and the latency of each request. BACnet/SC peaks later, at 50 clients, and passes BACnet/IP from 25 clients on (<a href={`${repository}/blob/v${release}/Benchmarks.md#61-concurrent-clients`}>section 6.1</a>).
+
+No request failed up to 50 clients. At 100 clients some did: 0.5% on BACnet/IP, 0.3% on BACnet/IPv6 and 0.03% on BACnet/SC (an earlier edition of the report counted 0.06% on BACnet/IP at that step). Peak resident memory over the BACnet/IP run was 49 megabytes.
+
+A weighted mix of reads, writes, ReadPropertyMultiple, COV subscriptions and Who-Is from 10 clients reached 85,400 operations per second with no errors (<a href={`${repository}/blob/v${release}/Benchmarks.md#65-mixed-workload`}>section 6.5</a>).
+
+## MS/TP against the wire limit
+
+On MS/TP the serial line, not the processor, sets the rate. The stress scenario runs two real MS/TP stations over a simulated RS-485 line that delivers bytes no faster than a UART at the baud rate would, and compares the rate achieved with the most the line could carry for the same frames (<a href={`${repository}/blob/v${release}/Benchmarks.md#44-mstp`}>section 4.4</a>).
+
+- For large replies, the stack reached 90% to 100% of the wire limit at every baud rate from 9,600 to 115,200.
+- For a small reply, a fixed host overhead of about 7 milliseconds per request matters more: 93% of the wire limit at 9,600 baud, 52% at 115,200 (section 1). Section 4.4 attributes the overhead mostly to the host's millisecond timer resolution, which the stations wait on before each frame.
+- The simulated line has no noise, no other stations and no adapter latency. A USB serial adapter adds receive latency of its own (16 milliseconds by default on FTDI parts), so real hardware sits further below the limit. [MS/TP real-time](/rusty-bacnet/connect/mstp-realtime/) covers how to reduce it.
+
+## Routing
+
+With one idle client, a request routed through `BACnetRouter` from one BACnet/IP network to another took a median of 43 microseconds against 22 direct, so the router hop added about 21 microseconds on loopback. Under load, the routed path delivered 57,000 requests per second, 88% of the direct path's rate at 50 clients (<a href={`${repository}/blob/v${release}/Benchmarks.md#5-routing`}>section 5</a>).
+
+Routed from BACnet/IP to an MS/TP network at 115,200 baud, one client got 67 requests per second; the BACnet/IP side and the router add about 1.4 milliseconds to a request the serial line already holds for 14 milliseconds. More clients only queue behind the token.
+
+## What the numbers mean in practice
+
+The figures above are stack costs. The arithmetic below applies them to common jobs; it is reasoning from the measurements, not a further measurement.
+
+- **Polling over IP.** A client that waits for each answer before sending the next is limited by the round trip, not the stack. On a network with a 1 millisecond round trip that is about 1,000 requests per second, whatever the stack. To poll many points, group them in ReadPropertyMultiple and keep several requests in flight. The server accepts 16 confirmed requests in flight per client by default (section 1).
+- **Polling over MS/TP.** Over the simulated line, two stations managed between 10.7 small requests per second at 9,600 baud and 71.8 at 115,200 (section 4.4). Every station on a trunk shares that, and each sends one information frame per token by default. ReadPropertyMultiple, or COV where the devices support it, matters far more here than on IP.
+- **Database size.** ReadProperty latency stayed at a median of 24 microseconds from 100 to 10,000 objects, and resident memory grew by about 1.3 kilobytes per Analog Input (<a href={`${repository}/blob/v${release}/Benchmarks.md#62-object-database-size`}>section 6.2</a>). 10,000 objects is the server's default limit.
+- **COV fan-out.** With 1,024 subscriptions spread over 16 subscribers and a writer changing values at 10 writes per second, every expected notification arrived, confirmed or not. The server admits at most 64 subscriptions from one subscriber and refuses the rest (<a href={`${repository}/blob/v${release}/Benchmarks.md#63-cov-subscriptions`}>section 6.3</a>). The scenario doesn't test high change rates.
+- **Segmentation.** A ReadPropertyMultiple of 250 objects in 3 segments took about three and a half times as long as one of 50 values in a single APDU, with no failures. By default a server answers at most 256 results or 16,384 bytes in one ReadPropertyMultiple and aborts a larger request (<a href={`${repository}/blob/v${release}/Benchmarks.md#64-segmentation`}>section 6.4</a>).
+- **Python.** A request through the Python package takes 70 to 100 microseconds, and one Python client reaches about 34,000 requests per second with 10 requests in flight and 36,000 with 16 (<a href={`${repository}/blob/v${release}/Benchmarks.md#9-python-bindings`}>section 9</a>). The asyncio event loop and the crossing between Python and Rust account for the difference from Rust.
+- **Firmware.** Without an allocator, the MS/TP master node links into 17.9 kilobytes of flash on a Cortex-M3. <a href={`${repository}/blob/v${release}/Benchmarks.md#8-embedded-footprint`}>Section 8</a> lists every image and target, and [Run on a microcontroller](/rusty-bacnet/start/embedded/) shows how to start.
+
+## What isn't measured
+
+- **Building networks and other vendors' devices.** Every figure is the stack talking to itself, over loopback or Docker's virtual bridges. Interoperability is a separate question; see [support status and evidence](/rusty-bacnet/project/support/).
+- **Real RS-485 hardware.** MS/TP figures come from a simulated line. No adapter or host is qualified for on-wire timing; the <a href={`${repository}/blob/v${release}/docs/mstp-qualification.md`}>qualification method</a> describes how to measure it.
+- **Linux and Windows hosts directly.** The figures are from macOS, apart from the earlier comparison in a Linux container on Docker Desktop. Windows was not measured.
+- **Ethernet.** The BACnet Ethernet transport has no benchmark.
+- **BBMD capacity and Who-Is discovery.** The report's BBMD table is from an older, paced form of the scenario, so it shows that forwarding and its limits work, not how much a BBMD carries; the capacity scenario and the Docker discovery scenario are still to be run (<a href={`${repository}/blob/v${release}/Benchmarks.md#10-guidance-for-future-work`}>section 10</a>).
+- **Long runs.** The steps last seconds, not days; there is no soak test of memory or latency over time.
+
+## Reproduce the figures
+
+The benchmarks live in the `benchmarks/` crate. Run one suite at a time on an idle machine; parallel runs make both numbers wrong. For example, from a checkout of the release tag:
+
+```sh
+cargo bench -p bacnet-benchmarks --bench bip_latency
+cargo bench -p bacnet-benchmarks --bench sc_mtls_latency
+cargo build --release -p bacnet-benchmarks --bins
+./target/release/stress-test clients --steps 1,5,10,25,50,100 --duration 10
+./target/release/stress-test mstp --reply small --duration 10
+```
+
+There are nine Criterion suites (encoding, the portable codecs, ReadRange, and latency and throughput for BACnet/IP, BACnet/IPv6 and BACnet/SC) and a `stress-test` binary with scenarios for concurrent clients, database size, COV, segmentation, a mixed workload, routing, MS/TP, BBMD and device scans. <a href={`${repository}/blob/v${release}/Benchmarks.md#11-how-to-reproduce`}>Section 11</a> lists the exact command for every figure; the Docker and Python runs have their own sections.
+
+## A later repeated comparison
+
+Later the same day, a repeated comparison on the same machine, against the development stack of the time, looked again at the 100-client step and at two encoding differences, NPDU decoding and building a whole request ([#1979](https://github.com/jscott3201/rusty-bacnet/issues/1979)). With failures now classified, every failed request was the server refusing it for lack of capacity (an Abort from its request admission control), not a request that timed out. Both encoding differences held up, a few nanoseconds each against a round trip of microseconds, and part of the decode difference was traced to an earlier change in how the owned NPDU decoder is built. The main tables had called them timeouts; the cause of the higher refusal rate is still open. An experiment to copy fewer MAC addresses per request ([#1978](https://github.com/jscott3201/rusty-bacnet/issues/1978)) cut instruction counts but missed its latency target and was not adopted. The headline figures above are unchanged. <a href={`${repository}/blob/v${release}/Benchmarks.md#101-repeated-comparison-for-1979`}>Section 10.1</a> has the data.
+
+## Next steps
+
+- Read the full <a href={`${repository}/blob/v${release}/Benchmarks.md`}>Benchmarks.md</a> for v{release}, including its guidance for future work.
+- [Choose a data link and its owner](/rusty-bacnet/connect/overview/).
+- [Keep an MS/TP trunk reliable on Linux](/rusty-bacnet/connect/mstp-realtime/).
+- [Understand support status and evidence](/rusty-bacnet/project/support/).

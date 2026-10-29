@@ -89,11 +89,11 @@ mod table;
 
 pub use error::BvllError;
 pub use function::{BvlcFunction, BvlcResultCode, PayloadShape};
-pub use message::{decode, Bvll, BvllFrame};
+pub use message::{Bvll, BvllFrame, decode};
 pub use sink::{BvllSink, SinkFull};
 pub use table::{
-    address_from_octets, address_from_slice, address_to_octets, BdtEntries, BdtEntry, Entries,
-    EntryIter, FdtEntries, FdtEntry, TableEntry,
+    BdtEntries, BdtEntry, Entries, EntryIter, FdtEntries, FdtEntry, TableEntry,
+    address_from_octets, address_from_slice, address_to_octets,
 };
 
 /// The BVLC Type octet of a B/IP message (Annex J.2).

@@ -21,7 +21,7 @@ use bytes::BytesMut;
 use bacnet_encoding::constructed::tagged::{
     decode_ctx_object_id, decode_ctx_unsigned, decode_optional_ctx, expect_end, expect_opening,
 };
-use bacnet_encoding::constructed::{extract_property_value, PropertyValueBoundary};
+use bacnet_encoding::constructed::{PropertyValueBoundary, extract_property_value};
 
 use crate::who_is::staged;
 

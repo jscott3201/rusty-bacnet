@@ -563,26 +563,13 @@ async fn audit_reporter_list_unknown_outcomes_are_silent_and_errors_match_respon
     for service in SERVICES {
         for (error, report) in [
             (
-                Error::Protocol {
-                    class: ErrorClass::from_raw(128),
-                    code: ErrorCode::from_raw(512),
-                },
+                Error::protocol(ErrorClass::from_raw(128), ErrorCode::from_raw(512)),
                 true,
             ),
             (Error::OutOfRange("execution failure".into()), true),
             (Error::Timeout(Duration::from_secs(1)), false),
-            (
-                Error::Reject {
-                    reason: RejectReason::OTHER,
-                },
-                false,
-            ),
-            (
-                Error::Abort {
-                    reason: AbortReason::OTHER,
-                },
-                false,
-            ),
+            (Error::reject(RejectReason::OTHER), false),
+            (Error::abort(AbortReason::OTHER), false),
         ] {
             // The list itself must reach its write for the scripted error to fire.
             let mut fixture = server(reporter()).await;

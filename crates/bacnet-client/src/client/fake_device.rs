@@ -2,8 +2,8 @@
 //! from a closure, for client tests that need whole exchanges.
 use std::sync::{Arc, Mutex as StdMutex};
 
-use bacnet_encoding::apdu::{self, encode_apdu, Apdu, ComplexAck, ErrorPdu};
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
+use bacnet_encoding::apdu::{self, Apdu, ComplexAck, ErrorPdu, encode_apdu};
+use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{ConfirmedServiceChoice, ErrorClass, ErrorCode};

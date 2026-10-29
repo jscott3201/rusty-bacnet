@@ -101,10 +101,10 @@ impl HostState {
     }
 
     pub(crate) fn next(&self) -> Option<Instant> {
-        if let Some(write) = &self.write {
-            if !write.hunting {
-                return Some(write.ended);
-            }
+        if let Some(write) = &self.write
+            && !write.hunting
+        {
+            return Some(write.ended);
         }
         self.ready
             .into_iter()

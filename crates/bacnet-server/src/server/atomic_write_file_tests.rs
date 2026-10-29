@@ -241,14 +241,10 @@ async fn atomic_write_file_opaque_abort_keeps_legacy_service_mapping() {
             unreachable!()
         }
         fn write_stream(&mut self, _: FileWriteStart, _: &[u8]) -> Result<u64, Error> {
-            Err(Error::Abort {
-                reason: AbortReason::OUT_OF_RESOURCES,
-            })
+            Err(Error::abort(AbortReason::OUT_OF_RESOURCES))
         }
         fn write_records(&mut self, _: FileWriteStart, _: &[Vec<u8>]) -> Result<u64, Error> {
-            Err(Error::Abort {
-                reason: AbortReason::OUT_OF_RESOURCES,
-            })
+            Err(Error::abort(AbortReason::OUT_OF_RESOURCES))
         }
     }
     for record in [false, true] {

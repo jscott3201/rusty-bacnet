@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use super::network_port_mode_tests::port_oid;
 use super::*;
-use crate::server::reinitialize::{response, AfterReply, Requester};
+use crate::server::reinitialize::{AfterReply, Requester, response};
 use bacnet_services::device_mgmt::ReinitializeDeviceRequest;
 use bacnet_transport::port::TransportProvenance;
 use bacnet_types::bip_port::{BbmdChanges, BbmdTables, BipPortMode};
@@ -23,10 +23,7 @@ struct Tables {
 }
 
 fn refusal() -> Error {
-    Error::Protocol {
-        class: ErrorClass::PROPERTY,
-        code: ErrorCode::VALUE_OUT_OF_RANGE,
-    }
+    Error::protocol(ErrorClass::PROPERTY, ErrorCode::VALUE_OUT_OF_RANGE)
 }
 
 impl BbmdTables for Tables {

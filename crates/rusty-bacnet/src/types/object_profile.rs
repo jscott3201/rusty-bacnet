@@ -14,8 +14,8 @@ use bacnet_types::constructed::BACnetNameValue;
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 
-use super::mapping::{mapping, optional_item, required_item, string, validate_keys};
 use super::PyPropertyValue;
+use super::mapping::{mapping, optional_item, required_item, string, validate_keys};
 
 /// The rows the three keywords provision, or `None` when all three are
 /// absent, so that an object built without them serves none of the rows.

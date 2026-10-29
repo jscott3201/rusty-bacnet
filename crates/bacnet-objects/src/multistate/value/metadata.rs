@@ -1,5 +1,5 @@
 use super::MultiStateValueObject;
-use std::borrow::Cow;
+use alloc::borrow::Cow;
 
 use bacnet_types::enums::PropertyIdentifier as P;
 
@@ -157,7 +157,7 @@ mod tests {
     use crate::multistate::MultiStateOutputObject;
     use crate::traits::BACnetObject;
     use bacnet_types::enums::{ErrorClass, ErrorCode};
-    use bacnet_types::error::Error;
+    use bacnet_types::error::{Error, RemoteError};
     use bacnet_types::primitives::PropertyValue;
 
     #[test]
@@ -175,7 +175,7 @@ mod tests {
                     let before = object.read_property(p, index).unwrap();
                     assert!(
                         matches!(object.write_property_from(p, index, PropertyValue::Unsigned(invalid), Some(8), &crate::command_source::test_origin()),
-                        Err(Error::Protocol { class, code }) if class == ErrorClass::PROPERTY
+                        Err(Error::Remote(RemoteError::Error { class, code })) if class == ErrorClass::PROPERTY
                             && code == ErrorCode::VALUE_OUT_OF_RANGE)
                     );
                     assert_eq!(object.read_property(p, index).unwrap(), before);
@@ -192,7 +192,7 @@ mod tests {
             }
             assert!(
                 matches!(object.write_property(P::PRIORITY_ARRAY, None, PropertyValue::Null, None),
-                Err(Error::Protocol { class, code }) if class == ErrorClass::PROPERTY
+                Err(Error::Remote(RemoteError::Error { class, code })) if class == ErrorClass::PROPERTY
                     && code == ErrorCode::WRITE_ACCESS_DENIED)
             );
             object

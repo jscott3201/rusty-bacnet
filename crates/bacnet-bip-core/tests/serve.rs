@@ -7,12 +7,12 @@ mod support;
 use core::net::{Ipv4Addr, SocketAddrV4};
 
 use bacnet_bip_codec::{BdtEntry, BvlcResultCode, Bvll, FdtEntry};
+use bacnet_bip_core::Instant;
 use bacnet_bip_core::bbmd::{
     Answer, DeleteRefusal, Registered, RegistrationLimits, RegistrationRefusal, Request,
-    Reservation, Rules, Served, StorageFull, Tables, TWO_HOP_MASK,
+    Reservation, Rules, Served, StorageFull, TWO_HOP_MASK, Tables,
 };
 use bacnet_bip_core::node::Permissive;
-use bacnet_bip_core::Instant;
 use support::*;
 
 /// A foreign device.

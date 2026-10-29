@@ -382,13 +382,14 @@ fn unavailable_input_collisions_remain_reported_failures() {
         assert_eq!(evidence.start, collision.at);
         assert!(evidence.readable_at > evidence.start);
         assert!(evidence.start - evidence.wire_activity < evidence.turnaround);
-        assert!(plan
-            .sim
-            .report()
-            .violations
-            .iter()
-            .any(|violation| violation.kind == ViolationKind::Collision
-                && violation.host_timing == Some(evidence)));
+        assert!(
+            plan.sim
+                .report()
+                .violations
+                .iter()
+                .any(|violation| violation.kind == ViolationKind::Collision
+                    && violation.host_timing == Some(evidence))
+        );
     }
     println!("{}", plan.sim.dump(120));
 }

@@ -252,11 +252,12 @@ fn overload_reports_failure_without_growing_buffers() {
     assert_eq!(host.expected.len(), 513);
     assert_eq!(host.stats.max_buffered, 4096);
     assert_eq!(sim.report().violations.len(), 33);
-    assert!(sim
-        .report()
-        .violations
-        .iter()
-        .all(|v| v.kind == crate::ViolationKind::EventGrowth));
+    assert!(
+        sim.report()
+            .violations
+            .iter()
+            .all(|v| v.kind == crate::ViolationKind::EventGrowth)
+    );
 }
 
 /// A previous application's delayed decision cannot answer a new core's

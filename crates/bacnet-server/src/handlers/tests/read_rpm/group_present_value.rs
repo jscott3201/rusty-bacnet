@@ -2,8 +2,9 @@
 //! read (#1134), through ReadProperty, both ReadPropertyMultiple builders
 //! and ReadRange.
 
-use super::group::{assert_cases, ExpectedRead};
+use super::group::{ExpectedRead, assert_cases};
 use super::*;
+use PropertyIdentifier as P;
 use bacnet_objects::analog::{AnalogInputObject, AnalogValueObject};
 use bacnet_objects::group::GroupObject;
 use bacnet_objects::traits::BACnetObject;
@@ -11,7 +12,6 @@ use bacnet_services::read_range::{RangeSpec, ReadRangeAck, ReadRangeRequest};
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::enums::EngineeringUnits;
 use bacnet_types::primitives::PropertyValue;
-use PropertyIdentifier as P;
 
 fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(object_type, instance).unwrap()
@@ -248,7 +248,7 @@ fn expanded_rows(db: &ObjectDatabase, specs: Vec<ReadAccessSpecification>) -> us
 
 #[test]
 fn member_rows_are_charged_to_the_rpm_work_budget_and_shared_between_groups() {
-    use crate::handlers::{rpm_budget::handle_rpm_budgeted_observed, ReadFailure};
+    use crate::handlers::{ReadFailure, rpm_budget::handle_rpm_budgeted_observed};
     let input = oid(ObjectType::ANALOG_INPUT, 1);
     let value = oid(ObjectType::ANALOG_VALUE, 2);
     // Group 7 expands ALL on AV-2; Group 8 is two explicit rows.

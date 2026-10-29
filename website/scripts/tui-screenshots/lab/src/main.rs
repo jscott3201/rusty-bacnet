@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use bacnet_network::router::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
+use bacnet_objects::DeviceIdentity;
 use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use bacnet_objects::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use bacnet_objects::command_source::CommandOrigin;
@@ -34,7 +35,6 @@ use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::schedule::{CalendarObject, ScheduleObject};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_objects::trend::TrendLogObject;
-use bacnet_objects::DeviceIdentity;
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::bbmd::{BdtEntry, ForeignDevicePolicy};
 use bacnet_transport::bip::{BipTransport, ForeignDeviceConfig};
@@ -543,7 +543,7 @@ async fn main() -> Res<()> {
     }
     eprintln!("tui-lab: stopping");
     macro_rules! stop {
-        ($name:literal, $fut:expr) => {{
+        ($name:literal, $fut:expr_2021) => {{
             let t = std::time::Instant::now();
             let r = tokio::time::timeout(Duration::from_secs(2), $fut).await;
             eprintln!(

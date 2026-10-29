@@ -2,7 +2,7 @@ use super::*;
 
 use std::collections::BTreeMap;
 
-use super::super::cov_counters::tests::{stub_class_members, STUB};
+use super::super::cov_counters::tests::{STUB, stub_class_members};
 
 #[test]
 fn every_event_notification_counter_reaches_python_under_its_rust_name() {

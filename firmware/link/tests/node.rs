@@ -5,7 +5,7 @@
 
 use core::mem::size_of;
 
-use firmware_link::node::{expected, run, ForeignNode, ForeignPort, Memory, Summary};
+use firmware_link::node::{ForeignNode, ForeignPort, Memory, Summary, expected, run};
 
 /// The whole summary against the one the emulation build checks too
 /// (`firmware_link::node::expected`, which explains each value).

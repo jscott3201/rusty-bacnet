@@ -1,15 +1,15 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
+use bacnet_encoding::npdu::{Npdu, NpduAddress, decode_npdu, encode_npdu};
 use bacnet_npdu::NetworkPriority;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::{DataAttribute, ReceivedNpdu, TransportPort, TransportProvenance};
-use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
+use bacnet_types::error::Error;
 use bytes::{Bytes, BytesMut};
-use tokio::sync::{mpsc, oneshot, Notify};
-use tokio::time::{timeout, Duration};
+use tokio::sync::{Notify, mpsc, oneshot};
+use tokio::time::{Duration, timeout};
 
 use super::*;
 
@@ -533,10 +533,12 @@ async fn full_policy_route_returns_the_unrouted_envelope_on_reclaim() {
     inject(&handle, &[0x00, 0x05, 0x02, 0x0c]).await;
     inject(&handle, &[0x00, 0x05, 0x03, 0x0c]).await;
 
-    assert!(timeout(WAIT, ingress.terminal_or_segment.recv())
-        .await
-        .expect("classifier did not stop when its policy route filled")
-        .is_none());
+    assert!(
+        timeout(WAIT, ingress.terminal_or_segment.recv())
+            .await
+            .expect("classifier did not stop when its policy route filled")
+            .is_none()
+    );
 
     let exit = timeout(WAIT, endpoint.stop()).await.unwrap().unwrap();
     match exit {

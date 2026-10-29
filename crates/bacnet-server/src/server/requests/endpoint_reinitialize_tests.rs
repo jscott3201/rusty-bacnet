@@ -208,7 +208,7 @@ fn watching(
     inbox: &Inbox,
     seen: &Seen,
     answer: Answer,
-) -> impl Fn(&ReinitializeContext) -> Result<(), Error> + Send + Sync + 'static {
+) -> impl Fn(&ReinitializeContext) -> Result<(), Error> + Send + Sync + 'static + use<> {
     let (inbox, seen) = (Arc::clone(inbox), Arc::clone(seen));
     move |context| {
         let (inbox, seen) = (Arc::clone(&inbox), Arc::clone(&seen));
@@ -277,10 +277,10 @@ async fn endpoint_after_reply_hook_follows_the_reply_channel_handoff() {
 #[tokio::test]
 async fn endpoint_after_reply_hook_never_runs_for_a_refusal() {
     let refusal = || {
-        Err(Error::Protocol {
-            class: ErrorClass::DEVICE,
-            code: ErrorCode::CONFIGURATION_IN_PROGRESS,
-        })
+        Err(Error::protocol(
+            ErrorClass::DEVICE,
+            ErrorCode::CONFIGURATION_IN_PROGRESS,
+        ))
     };
     let cases: [(&str, Option<&str>, Answer); 5] = [
         ("refusal", None, refusal),

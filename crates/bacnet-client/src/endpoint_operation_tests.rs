@@ -1,6 +1,6 @@
 use super::*;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{Semaphore, mpsc};
 
 struct FailingTransport {
     inner: LoopbackTransport,

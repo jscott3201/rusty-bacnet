@@ -1,7 +1,7 @@
 //! A BBMD forwards its own broadcasts to BDT peers and foreign devices (#937).
 
 use super::*;
-use crate::port_ownership::{restart, ATTEMPTS};
+use crate::port_ownership::{ATTEMPTS, restart};
 use tokio::time::timeout;
 
 /// A global-broadcast Who-Is NPDU.

@@ -1,6 +1,6 @@
 use super::*;
-use bacnet_encoding::apdu::{encode_apdu, UnconfirmedRequest};
-use bacnet_encoding::npdu::{encode_npdu, Npdu};
+use bacnet_encoding::apdu::{UnconfirmedRequest, encode_apdu};
+use bacnet_encoding::npdu::{Npdu, encode_npdu};
 use bacnet_services::who_is::IAmRequest;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportPort;

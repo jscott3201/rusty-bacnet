@@ -17,10 +17,10 @@
 
 use super::direct_discovery::parse_ack_uris;
 use super::*;
-use crate::sc_frame::{decode_sc_message, encode_sc_message, ScFunction, ScMessage};
+use crate::sc_frame::{ScFunction, ScMessage, decode_sc_message, encode_sc_message};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tokio::time::timeout;
 
 const TARGET: Vmac = [0x22; 6];
@@ -318,10 +318,12 @@ async fn direct_handshake_wrong_peer_vmac_never_receives_destination_npdu() {
         ))
         .await
         .unwrap();
-        assert!(timeout(Duration::from_secs(2), peer.recv())
-            .await
-            .unwrap()
-            .is_err());
+        assert!(
+            timeout(Duration::from_secs(2), peer.recv())
+                .await
+                .unwrap()
+                .is_err()
+        );
     });
     send_res.unwrap();
     let fallback = decode_sc_message(&hub_recv(&hub).await).unwrap();

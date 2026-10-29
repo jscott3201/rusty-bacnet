@@ -24,15 +24,15 @@ fn monitored_object_selectors(
         .map(|(index, selector)| {
             if selector.is_none() {
                 Ok(BACnetObjectSelector::None)
-            } else if let Ok(object) = selector.extract::<PyObjectIdentifier>() {
+            } else { match selector.extract::<PyObjectIdentifier>() { Ok(object) => {
                 Ok(BACnetObjectSelector::Object(object.to_rust()))
-            } else if let Ok(kind) = selector.extract::<PyObjectType>() {
+            } _ => { match selector.extract::<PyObjectType>() { Ok(kind) => {
                 Ok(BACnetObjectSelector::ObjectType(kind.to_rust()))
-            } else {
+            } _ => {
                 Err(PyTypeError::new_err(format!(
                     "monitored_objects[{index}] must be ObjectIdentifier, ObjectType, or None"
                 )))
-            }
+            }}}}}
         })
         .collect::<PyResult<Vec<_>>>()
         .map(Some)
@@ -327,22 +327,40 @@ impl BACnetServer {
     ) -> PyResult<()> {
         use bacnet_types::constructed::BACnetRecipient;
         match recipient {
-            BACnetRecipient::Device(device) if device.object_type() == ObjectType::DEVICE
-                && device.instance_number() < ObjectIdentifier::MAX_INSTANCE
-                && device.instance_number() != self.device_instance => Ok(()),
+            BACnetRecipient::Device(device)
+                if device.object_type() == ObjectType::DEVICE
+                    && device.instance_number() < ObjectIdentifier::MAX_INSTANCE
+                    && device.instance_number() != self.device_instance =>
+            {
+                Ok(())
+            }
             // Network zero, or a network numbered 1 to 65534: the server
             // takes an address on its own network's number as local once it
             // knows that number, and one it does not name yet starts
             // unresolved (#1460).
-            BACnetRecipient::Address(address) if self.transport_type == "bip"
-                && address.network_number != u16::MAX
-                && server::valid_bip_audit_address(&bacnet_types::constructed::BACnetAddress {
-                    network_number: 0,
-                    mac_address: address.mac_address.clone(),
-                })
-                && address.mac_address.as_slice()[..4] != self.broadcast_address.parse::<std::net::Ipv4Addr>()
-                    .map_err(|_| PyValueError::new_err("invalid configured broadcast address"))?.octets() => Ok(()),
-            _ => Err(PyValueError::new_err("recipient must be a concrete remote Device or a supported direct unicast B/IP address")),
+            BACnetRecipient::Address(address)
+                if self.transport_type == "bip"
+                    && address.network_number != u16::MAX
+                    && server::valid_bip_audit_address(
+                        &bacnet_types::constructed::BACnetAddress {
+                            network_number: 0,
+                            mac_address: address.mac_address.clone(),
+                        },
+                    )
+                    && address.mac_address.as_slice()[..4]
+                        != self
+                            .broadcast_address
+                            .parse::<std::net::Ipv4Addr>()
+                            .map_err(|_| {
+                                PyValueError::new_err("invalid configured broadcast address")
+                            })?
+                            .octets() =>
+            {
+                Ok(())
+            }
+            _ => Err(PyValueError::new_err(
+                "recipient must be a concrete remote Device or a supported direct unicast B/IP address",
+            )),
         }
     }
 }
@@ -409,7 +427,7 @@ fn parse_reporters(value: &Bound<'_, PyAny>) -> PyResult<Vec<ReporterConfigurati
             _ => {
                 return Err(PyValueError::new_err(
                     "audit_level must be 'none', 'audit_config', or 'audit_all'",
-                ))
+                ));
             }
         };
         let operations = required("auditable_operations")?;

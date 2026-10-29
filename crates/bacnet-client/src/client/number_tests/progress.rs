@@ -1,6 +1,6 @@
 use super::*;
 use bacnet_encoding::{
-    apdu::{decode_apdu, Apdu},
+    apdu::{Apdu, decode_apdu},
     npdu::decode_npdu,
 };
 use bacnet_types::{enums::ConfirmedServiceChoice, error::Error};

@@ -1,21 +1,25 @@
 //! Real transport -> network -> public consumer intake on an outbound socket.
 use super::*;
 use bacnet_encoding::{
-    apdu::{decode_apdu, encode_apdu, ComplexAck},
-    npdu::{decode_npdu, encode_npdu, Npdu},
+    apdu::{ComplexAck, decode_apdu, encode_apdu},
+    npdu::{Npdu, decode_npdu, encode_npdu},
 };
 use bacnet_services::read_property::ReadPropertyACK;
 use bacnet_transport::{
     port::{DirectResponse, DirectResponseScope, ReceivedNpdu, TransportPort},
     sc::{LoopbackWebSocket, ScTransport, WebSocketPort},
-    sc_frame::{decode_sc_message, encode_sc_message, ScFunction, ScMessage},
-    sc_tls::{DirectAcceptConfig, DirectListener},
+    sc_frame::{ScFunction, ScMessage, decode_sc_message, encode_sc_message},
+    sc_tls::{DirectAcceptConfig, DirectListener, ScNodeTlsConfig},
 };
 use bacnet_types::{
     enums::{ConfirmedServiceChoice, PropertyIdentifier},
     error::Error,
 };
 use bytes::{Bytes, BytesMut};
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 use tokio::sync::mpsc;
 const LOCAL: [u8; 6] = [0xaa; 6];
 const REMOTE: [u8; 6] = [0x22; 6];
@@ -25,6 +29,7 @@ const REMOTE: [u8; 6] = [0x22; 6];
 struct StartedSc {
     transport: ScTransport<LoopbackWebSocket>,
     rx: Option<mpsc::Receiver<ReceivedNpdu>>,
+    ordinary_sends: Arc<AtomicUsize>,
 }
 impl TransportPort for StartedSc {
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
@@ -37,9 +42,11 @@ impl TransportPort for StartedSc {
         self.transport.abort();
     }
     async fn send_unicast(&self, bytes: &[u8], mac: &[u8]) -> Result<(), Error> {
+        self.ordinary_sends.fetch_add(1, Ordering::AcqRel);
         self.transport.send_unicast(bytes, mac).await
     }
     async fn send_broadcast(&self, bytes: &[u8]) -> Result<(), Error> {
+        self.ordinary_sends.fetch_add(1, Ordering::AcqRel);
         self.transport.send_broadcast(bytes).await
     }
     fn local_receive_apdu_capacity(&self) -> u16 {
@@ -59,6 +66,7 @@ struct Peer {
     received: mpsc::Receiver<ReceivedNpdu>,
     route: DirectResponse,
     hub: LoopbackWebSocket,
+    tls: ScNodeTlsConfig,
 }
 async fn hub_accept(hub: &LoopbackWebSocket) {
     let request = decode_sc_message(&hub.recv().await.unwrap()).unwrap();
@@ -120,12 +128,9 @@ fn ack(invoke: u8) -> Apdu {
 }
 impl Peer {
     async fn start(ca: &TestCa) -> (Self, StartedSc) {
-        let config = DirectAcceptConfig::new(
-            "127.0.0.1:0".parse().unwrap(),
-            REMOTE,
-            [2; 16],
-            ca.tls("localhost"),
-        );
+        let tls = ca.tls("localhost");
+        let config =
+            DirectAcceptConfig::new("127.0.0.1:0".parse().unwrap(), REMOTE, [2; 16], tls.clone());
         let (listener, mut received) = DirectListener::start(config).await.unwrap();
         let uri = format!(
             "wss://localhost:{}/.bacnet/sc",
@@ -144,6 +149,7 @@ impl Peer {
                 received,
                 route,
                 hub,
+                tls,
             },
             port,
         )
@@ -222,6 +228,7 @@ async fn start_port(ca: &TestCa, uri: String) -> (StartedSc, DirectListener, Loo
         StartedSc {
             transport,
             rx: Some(rx),
+            ordinary_sends: Arc::new(AtomicUsize::new(0)),
         },
         local,
         hub,

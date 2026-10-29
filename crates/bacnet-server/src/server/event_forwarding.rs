@@ -37,13 +37,13 @@
 //! route naming it into a local route ([`RecipientRoute::localize`]). The loop
 //! rules see that local route, and the copy goes with no DNET.
 
-use super::event_recipient_route::{system_utc_recipient_filter_time, RecipientRoute};
+use super::event_recipient_route::{RecipientRoute, system_utc_recipient_filter_time};
 use super::event_send::OutboundNotification;
 use super::event_suppression::EventSuppression;
 use super::*;
 use bacnet_encoding::constructed::encode_event_notification;
 use bacnet_objects::notification_class::MAX_RECIPIENT_LIST_DESTINATIONS;
-use bacnet_objects::notification_forwarder::{forwarding_targets, ForwardingInput};
+use bacnet_objects::notification_forwarder::{ForwardingInput, forwarding_targets};
 use bacnet_objects::subscribed_recipients::MAX_SUBSCRIBED_RECIPIENTS;
 use bacnet_services::alarm_event::ForwardedEventNotification;
 use bacnet_types::constructed::BACnetRecipient;
@@ -87,10 +87,9 @@ impl ForwardingBudget {
     /// that waited for its device's I-Am taking room from its own task
     /// included (#1368).
     pub(super) fn take(&self) -> bool {
-        #[allow(deprecated, reason = "try_update needs Rust 1.95; the MSRV is 1.93")]
         let taken = self
             .remaining
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
             .is_ok();
         if !taken {
             self.dropped.fetch_add(1, Ordering::Relaxed);

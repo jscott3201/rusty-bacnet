@@ -17,8 +17,8 @@
 use bacnet_mstp_codec::FrameType;
 use tokio::time::{Duration, Instant};
 
-use super::test_support::{config, Bus, Sent, T_REPLY_TIMEOUT, T_USAGE_TIMEOUT};
 use super::MstpConfig;
+use super::test_support::{Bus, Sent, T_REPLY_TIMEOUT, T_USAGE_TIMEOUT, config};
 use crate::port::TransportPort;
 
 /// How late the station hears a frame: FTDI's default latency timer plus one

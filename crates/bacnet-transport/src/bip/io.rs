@@ -20,12 +20,12 @@ use crate::bvll::{encode_bip_mac, encode_bvll};
 use crate::npdu_channel::{self, Refused};
 use crate::port::ReceivedNpdu;
 
+use super::BipSocket;
 use super::fanout::FanoutDispatcher;
 use super::groups::GroupDrops;
 use super::node::{HostPolicy, NodeHandle};
 use super::rate_limit::ManagementRateLimiter;
 use super::receive_counters::{DropReason, ReceiveDrops};
-use super::BipSocket;
 
 /// Context for the BIP receive loop — holds all shared state needed to
 /// process incoming BVLL messages.

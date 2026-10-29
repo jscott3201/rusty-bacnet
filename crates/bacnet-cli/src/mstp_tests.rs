@@ -2,13 +2,13 @@
 
 use std::time::Duration;
 
+use bacnet_ops::destination::{self, Destination};
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::mstp::{LoopbackSerial, MstpTransport};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::*;
-use crate::core::destination::{self, Destination};
 
 /// A device with one object, AI:2 at 51, and the APDU limit of a
 /// standard-frame MS/TP port.
@@ -623,8 +623,8 @@ async fn the_cli_client_discovers_and_reads_a_server_on_the_trunk() {
             .await
             .unwrap();
     assert_eq!(client.local_mac(), [CLIENT_MAC]);
-    let style = crate::core::target::AddressStyle::of(client.transport());
-    assert_eq!(style, crate::core::target::AddressStyle::Mstp);
+    let style = bacnet_ops::target::AddressStyle::of(client.transport());
+    assert_eq!(style, bacnet_ops::target::AddressStyle::Mstp);
 
     let deadline = Duration::from_secs(30);
     let device = tokio::time::timeout(deadline, async {

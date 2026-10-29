@@ -5,13 +5,13 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph, Row, Table};
-use ratatui::Frame;
 use tui_tree_widget::Tree;
 
-use super::{Theme, FULL_WIDTH};
+use super::{FULL_WIDTH, Theme};
 use crate::tui::app::capture::{CaptureState, Focus};
 use crate::tui::app::{App, Link};
 use crate::tui::capture::CaptureFrame;
@@ -332,7 +332,7 @@ fn tree(
     theme: &Theme,
 ) {
     let title = match &capture.detail {
-        Some(detail) => format!(" Frame {} ", detail.number),
+        Some(detail) => format!(" Frame {}{} ", detail.number, redaction(capture)),
         None => " Frame ".to_string(),
     };
     let block = Block::bordered()
@@ -365,6 +365,17 @@ fn tree(
     }
 }
 
+/// `(password redacted)` after a title when the frame shown had its
+/// password masked before it was kept (#1799).
+fn redaction(capture: &CaptureState) -> &'static str {
+    let redacted = capture
+        .detail
+        .as_ref()
+        .and_then(|d| capture.ring.get(d.number))
+        .is_some_and(|f| f.redacted);
+    if redacted { " (password redacted)" } else { "" }
+}
+
 fn hex(
     frame: &mut Frame,
     area: Rect,
@@ -373,12 +384,13 @@ fn hex(
     theme: &Theme,
 ) {
     let field = capture.selected_field();
+    let note = redaction(capture);
     let title = match field {
-        Some(f) if f.range.len() == 1 => format!(" Hex: octet {} ", f.range.start),
+        Some(f) if f.range.len() == 1 => format!(" Hex: octet {}{note} ", f.range.start),
         Some(f) if !f.range.is_empty() => {
-            format!(" Hex: octets {}-{} ", f.range.start, f.range.end - 1)
+            format!(" Hex: octets {}-{}{note} ", f.range.start, f.range.end - 1)
         }
-        _ => " Hex ".to_string(),
+        _ => format!(" Hex{note} "),
     };
     let block = Block::bordered()
         .title(Line::styled(title, theme.accent()))

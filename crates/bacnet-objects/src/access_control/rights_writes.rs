@@ -26,6 +26,7 @@
 //!
 //! [`MAX_ACCESS_RULES`]: super::MAX_ACCESS_RULES
 
+use crate::prelude::*;
 use bacnet_encoding::constructed::decode_access_rule;
 use bacnet_encoding::tags::Tag;
 use bacnet_types::constructed::BACnetAccessRule;

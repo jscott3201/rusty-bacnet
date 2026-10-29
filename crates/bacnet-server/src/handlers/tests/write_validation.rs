@@ -18,6 +18,7 @@ use bacnet_objects::multistate::MultiStateOutputObject;
 use bacnet_objects::schedule::ScheduleObject;
 use bacnet_objects::trend::TrendLogObject;
 use bacnet_types::enums::EngineeringUnits;
+use bacnet_types::error::RemoteError;
 
 fn encode_value(value: PropertyValue) -> Vec<u8> {
     let mut buf = BytesMut::new();
@@ -77,7 +78,7 @@ fn assert_refused(
     match write_wire(db, target_oid, property, value)
         .expect_err(&format!("{context}: write must be refused"))
     {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, ErrorClass::PROPERTY, "{context}: wrong error class");
             assert_eq!(code, expected_code, "{context}: wrong error code");
         }
@@ -204,7 +205,7 @@ fn trend_log_reliability_write_is_denied_over_write_property() {
             PropertyIdentifier::OUT_OF_SERVICE,
             PropertyValue::Boolean(true),
         ),
-        Err(Error::Protocol { class, code })
+        Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::PROPERTY
                 && code == ErrorCode::UNKNOWN_PROPERTY
     ));
@@ -274,7 +275,7 @@ fn enumerated_overflow_is_invalid_data_encoding_without_mutation() {
     request.encode(&mut request_bytes).unwrap();
 
     match sourced_wp(&mut db, &request_bytes).unwrap_err() {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, ErrorClass::PROPERTY);
             assert_eq!(code, ErrorCode::INVALID_DATA_ENCODING);
         }
@@ -583,7 +584,7 @@ fn write_property_rejects_overwide_color_temperature_without_mutation() {
     match sourced_wp(&mut db, &request_bytes)
         .expect_err("over-wide Color Temperature Present_Value must be rejected")
     {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, ErrorClass::PROPERTY);
             assert_eq!(code, ErrorCode::VALUE_OUT_OF_RANGE);
         }

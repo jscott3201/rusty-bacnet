@@ -38,17 +38,17 @@ impl BACnetObject for LookupTestNotificationClass {
         match property {
             p if p == PropertyIdentifier::NOTIFICATION_CLASS => Ok(PropertyValue::Unsigned(1)),
             p if p == PropertyIdentifier::RECIPIENT_LIST => match self.behavior {
-                RecipientListBehavior::Unavailable => Err(Error::Protocol {
-                    class: bacnet_types::enums::ErrorClass::PROPERTY,
-                    code: bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY,
-                }),
+                RecipientListBehavior::Unavailable => Err(Error::protocol(
+                    bacnet_types::enums::ErrorClass::PROPERTY,
+                    bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY,
+                )),
                 // A malformed complete list with no valid destination prefix.
                 RecipientListBehavior::Invalid => Ok(PropertyValue::ApplicationData(vec![0x5E])),
             },
-            _ => Err(Error::Protocol {
-                class: bacnet_types::enums::ErrorClass::PROPERTY,
-                code: bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY,
-            }),
+            _ => Err(Error::protocol(
+                bacnet_types::enums::ErrorClass::PROPERTY,
+                bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY,
+            )),
         }
     }
 
@@ -59,10 +59,10 @@ impl BACnetObject for LookupTestNotificationClass {
         _value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
-        Err(Error::Protocol {
-            class: bacnet_types::enums::ErrorClass::PROPERTY,
-            code: bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED,
-        })
+        Err(Error::protocol(
+            bacnet_types::enums::ErrorClass::PROPERTY,
+            bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED,
+        ))
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
@@ -91,14 +91,16 @@ fn lookup_distinguishes_missing_notification_class_and_wrappers_remain_empty() {
         lookup(&db),
         RecipientLookupOutcome::NotificationClassMissing
     ));
-    assert!(get_notification_recipients(
-        &db,
-        1,
-        EventTransition::ToOffnormal,
-        DaysOfWeek::MONDAY,
-        &make_time(12, 0),
-    )
-    .is_empty());
+    assert!(
+        get_notification_recipients(
+            &db,
+            1,
+            EventTransition::ToOffnormal,
+            DaysOfWeek::MONDAY,
+            &make_time(12, 0),
+        )
+        .is_empty()
+    );
     assert_eq!(
         get_notification_recipients_strict(
             &db,
@@ -123,14 +125,16 @@ fn lookup_distinguishes_unavailable_recipient_list_and_preserves_strict_mapping(
         lookup(&db),
         RecipientLookupOutcome::RecipientListUnavailable
     ));
-    assert!(get_notification_recipients(
-        &db,
-        1,
-        EventTransition::ToOffnormal,
-        DaysOfWeek::MONDAY,
-        &make_time(12, 0),
-    )
-    .is_empty());
+    assert!(
+        get_notification_recipients(
+            &db,
+            1,
+            EventTransition::ToOffnormal,
+            DaysOfWeek::MONDAY,
+            &make_time(12, 0),
+        )
+        .is_empty()
+    );
     assert_eq!(
         get_notification_recipients_strict(
             &db,
@@ -155,14 +159,16 @@ fn lookup_distinguishes_invalid_full_list_without_delivering_a_prefix() {
         lookup(&db),
         RecipientLookupOutcome::RecipientListInvalid
     ));
-    assert!(get_notification_recipients(
-        &db,
-        1,
-        EventTransition::ToOffnormal,
-        DaysOfWeek::MONDAY,
-        &make_time(12, 0),
-    )
-    .is_empty());
+    assert!(
+        get_notification_recipients(
+            &db,
+            1,
+            EventTransition::ToOffnormal,
+            DaysOfWeek::MONDAY,
+            &make_time(12, 0),
+        )
+        .is_empty()
+    );
     assert_eq!(
         get_notification_recipients_strict(
             &db,
@@ -185,14 +191,16 @@ fn lookup_distinguishes_zero_configured_destinations_and_wrappers_remain_empty()
         lookup(&db),
         RecipientLookupOutcome::NoConfiguredDestinations
     ));
-    assert!(get_notification_recipients(
-        &db,
-        1,
-        EventTransition::ToOffnormal,
-        DaysOfWeek::MONDAY,
-        &make_time(12, 0),
-    )
-    .is_empty());
+    assert!(
+        get_notification_recipients(
+            &db,
+            1,
+            EventTransition::ToOffnormal,
+            DaysOfWeek::MONDAY,
+            &make_time(12, 0),
+        )
+        .is_empty()
+    );
     assert_eq!(
         get_notification_recipients_strict(
             &db,
@@ -218,14 +226,16 @@ fn lookup_distinguishes_configured_but_ineligible_destinations() {
         lookup(&db),
         RecipientLookupOutcome::NoMatchingDestinations
     ));
-    assert!(get_notification_recipients(
-        &db,
-        1,
-        EventTransition::ToOffnormal,
-        DaysOfWeek::MONDAY,
-        &make_time(12, 0),
-    )
-    .is_empty());
+    assert!(
+        get_notification_recipients(
+            &db,
+            1,
+            EventTransition::ToOffnormal,
+            DaysOfWeek::MONDAY,
+            &make_time(12, 0),
+        )
+        .is_empty()
+    );
     assert_eq!(
         get_notification_recipients_strict(
             &db,

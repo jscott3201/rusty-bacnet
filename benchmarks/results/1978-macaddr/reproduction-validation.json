@@ -1,0 +1,45 @@
+{
+  "scope": "single consolidated review repair; new-reproduction tooling only",
+  "initial_reviewed_head": "481536608bfe1a8df09479172826c14a3595c644",
+  "red": {
+    "command": [
+      "python3",
+      "/tmp/rusty-batch10-macaddr-repair-red.py"
+    ],
+    "exit_code": 1,
+    "expected_failing_cases": 2,
+    "source_sha256": {
+      "capture.py": "e13c177afaf25c070b801c71d74843fdb9a5da6256e0eb37de84503d81775b3c",
+      "callgrind_matrix.py": "e8c2a8fa964ad62187c96098e51e4f0affc8d806c2954c06106a18f849a6f1bd",
+      "native_matrix.py": "11a8443095ca7960e8228a2fe7fec97821119f01f6e53dfadc782a6f33667c96",
+      "README.md": "b1f0d453831c1984defd7a0f1f74e6fc8785f7cc9099a838fef3ccf45436f112",
+      "sha256.json": "c58116c0aafa41f8f9bf1e63b6b0814341dba4cbebdcb2e9d586f01218f852b9",
+      "provenance.json": "94f4a33baf90d8dcccab4042e7f57fe3869d43d3a839b2d64ade6e7d31ad31af"
+    },
+    "test_sha256": "2f813511e357dc49043dc389094a5d824c67a92f5ea511f26abfe6ee306a622c",
+    "external_commands": "mocked; no Cargo/Docker build or timing",
+    "observed": [
+      "B clean source accepted A successful artifact under the old CLI",
+      "matrix used mutable tag despite a different recorded immutable image ID"
+    ],
+    "expected_result": "two intentional failing causal controls before repair; original measurement outcome unchanged"
+  },
+  "green": {
+    "command": [
+      "python3",
+      "-B",
+      "benchmarks/results/1978-macaddr/test_capture.py"
+    ],
+    "tests": 21,
+    "exit_code": 0,
+    "stderr": "test_cross_label_linux_volume_refused_even_if_removed (__main__.CaptureTests.test_cross_label_linux_volume_refused_even_if_removed) ... ok\ntest_cross_label_native_target_refused_even_if_removed (__main__.CaptureTests.test_cross_label_native_target_refused_even_if_removed) ... ok\ntest_existing_linux_volume_refused_before_build (__main__.CaptureTests.test_existing_linux_volume_refused_before_build) ... ok\ntest_existing_native_target_refused_before_build (__main__.CaptureTests.test_existing_native_target_refused_before_build) ... ok\ntest_failed_linux_build_leaves_valid_A_and_no_B (__main__.CaptureTests.test_failed_linux_build_leaves_valid_A_and_no_B) ... ok\ntest_failed_native_build_never_hashes_or_runs_fallback (__main__.CaptureTests.test_failed_native_build_never_hashes_or_runs_fallback) ... ok\ntest_matrix_after_tag_rebind_uses_frozen_ID (__main__.CaptureTests.test_matrix_after_tag_rebind_uses_frozen_ID) ... ok\ntest_matrix_rejects_changed_receipt (__main__.CaptureTests.test_matrix_rejects_changed_receipt) ... ok\ntest_matrix_rejects_unbound_old_capture (__main__.CaptureTests.test_matrix_rejects_unbound_old_capture) ... ok\ntest_same_label_and_failed_attempt_cannot_be_reused (__main__.CaptureTests.test_same_label_and_failed_attempt_cannot_be_reused) ... ok\ntest_source_drift_during_linux_build_refused (__main__.CaptureTests.test_source_drift_during_linux_build_refused) ... ok\ntest_source_drift_during_native_build_refused (__main__.CaptureTests.test_source_drift_during_native_build_refused) ... ok\ntest_stale_metadata_from_same_root_refused (__main__.CaptureTests.test_stale_metadata_from_same_root_refused) ... ok\ntest_tag_rebind_between_captures_executes_frozen_ID (__main__.CaptureTests.test_tag_rebind_between_captures_executes_frozen_ID) ... ok\ntest_tools_changed_between_captures_refused (__main__.CaptureTests.test_tools_changed_between_captures_refused) ... ok\ntest_valid_A_B_independent_equal_binaries_and_receipts (__main__.CaptureTests.test_valid_A_B_independent_equal_binaries_and_receipts) ... ok\ntest_volume_create_race_refused (__main__.CaptureTests.test_volume_create_race_refused) ... ok\ntest_wrong_A_root_successful_metadata_refused_for_B (__main__.CaptureTests.test_wrong_A_root_successful_metadata_refused_for_B) ... ok\ntest_wrong_linux_artifact_root_refused (__main__.CaptureTests.test_wrong_linux_artifact_root_refused) ... ok\ntest_wrong_revision_refused_before_build (__main__.CaptureTests.test_wrong_revision_refused_before_build) ... ok\ntest_zero_exit_without_success_marker_refused (__main__.CaptureTests.test_zero_exit_without_success_marker_refused) ... ok\n\n----------------------------------------------------------------------\nRan 21 tests in 0.230s\n\nOK\n"
+  },
+  "qualification": "Git/compiler/Docker subprocesses and platform string mocked; real source hashing, JSON parsing, artifact admission, exclusive target reservation, receipt writing, command construction and variant publication. Fixture executables are inert bytes and never execute. No actual Cargo/Docker build or benchmark run.",
+  "test_sha256": "c1d1b1c1e1a0178ac7cf7682f3265fe10bdab6159139dbef20cdcd59f15b11d5",
+  "repaired_tools_sha256": {
+    "capture.py": "ae1af1f46b5319b9cddda2d963e0eade17a60d7c2d1a26d68a111be48af5cc56",
+    "callgrind_matrix.py": "00c62f49501e19b3310176fd58fa473fafa6a7b624e8f54bdf3d5603270200fc",
+    "native_matrix.py": "6c513a6faf0f4c3473e1da902d09de6a41c95520f33e4324aa7fab0d250d4c35"
+  },
+  "unchanged": "all original measured/ scripts, inputs, observations, thresholds, rejected decision and seven restored baseline production files"
+}

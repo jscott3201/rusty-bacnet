@@ -1,8 +1,8 @@
 //! One-shot decoding, and the checks the stream decoder shares with it.
 
 use crate::cobs;
-use crate::crc::{crc16_valid, crc8_valid};
-use crate::frame::{check_header_fields, wire_length, DATA_OFFSET};
+use crate::crc::{crc8_valid, crc16_valid};
+use crate::frame::{DATA_OFFSET, check_header_fields, wire_length};
 use crate::{Frame, FrameError, FrameHeader, FrameType, PREAMBLE};
 
 /// The header of a candidate that passed the header CRC and the header

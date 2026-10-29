@@ -8,9 +8,9 @@ use bacnet_mstp_core::{
 use super::Driver;
 use crate::checker::Decided;
 use crate::input::{
-    fill, priority, Address, Decision, Echo, Path, Step, TransmitEvent, MAX_OCTETS,
+    Address, Decision, Echo, MAX_OCTETS, Path, Step, TransmitEvent, fill, priority,
 };
-use crate::model::{encode, Seen};
+use crate::model::{Seen, encode};
 
 /// How often a deadline may be serviced at one instant before it counts as
 /// stuck.
@@ -222,10 +222,10 @@ impl Driver<'_> {
         let octet_time = self.params().octet_time;
         for (index, &octet) in octets.iter().enumerate() {
             self.now += octet_time;
-            if let Some((at, micros)) = gap {
-                if index == at % octets.len() {
-                    self.now += u64::from(micros);
-                }
+            if let Some((at, micros)) = gap
+                && index == at % octets.len()
+            {
+                self.now += u64::from(micros);
             }
             self.octet(core, octet);
         }

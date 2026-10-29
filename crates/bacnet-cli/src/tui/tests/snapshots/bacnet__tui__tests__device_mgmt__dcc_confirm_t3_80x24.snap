@@ -1,0 +1,28 @@
+---
+source: crates/bacnet-cli/src/tui/tests/device_mgmt.rs
+expression: t3
+---
+" 1 [2 Browse] 3 4 7 | BIP | up | WRITE+DANGER 14:59 | COV 0 | drop 0     ? help "
+" Device 100   Card   [Objects]   Properties    Tab switches                     "
+"┌ Objects (11) ────────────────────────────────────────────────────────────────┐"
+"│ analog-input (2)                                                             │"
+"│>  analog-input 1        …                                                    │"
+"│   analog-input 2        …                                                    │"
+"│ analog-output (1)                                                            │"
+"│ ┌ Confirm (T3) ────────────────────────────────────────────────────────────┐ │"
+"│ │ DeviceCommunicationControl to device 100: disable-initiation for 30 min  │ │"
+"│ │   password: given (hidden)                                               │ │"
+"│ │   ! The device may stop answering or initiating BACnet traffic until     │ │"
+"│ │ enabled again.                                                           │ │"
+"│ │   ! Not kept in the ledger: revert can't undo it.                        │ │"
+"│ │                                                                          │ │"
+"│ │ T3: device management reaches the whole device.                          │ │"
+"│ │ Type the device instance (100) and Enter to send: _                      │ │"
+"│ └──────────────────────────────────────────────────────────────────────────┘ │"
+"│   device 100            Lab device 100                                       │"
+"│ notification-class (1)                                                       │"
+"│   notification-class 1  …                                                    │"
+"│ multi-state-value (1)                                                        │"
+"│   multi-state-value 1   …                                                    │"
+"└──────────────────────────────────────────────────────────────────────────────┘"
+"                                                                                "

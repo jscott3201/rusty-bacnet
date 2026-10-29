@@ -97,7 +97,8 @@ class EndpointStubParityTests(unittest.TestCase):
                            "apdu_timeout_ms", "apdu_retries", "registered_network_port",
                            "read_work_limit", "share_port_by_address",
                            "min_request_interval_ms", "bbmd", "foreign_device", "multicast",
-                           "on_reinitialize", "after_reinitialize", "reinit_password"]),
+                           "on_reinitialize", "after_reinitialize", "reinit_password",
+                           "device_write_policy"]),
             (ScEndpoint, ["device_instance", "sc_hub", "sc_vmac", "sc_ca_cert",
                           "sc_client_cert", "sc_client_key", "sc_device_uuid",
                           "device_name", "vendor_id", "sc_heartbeat_interval_ms",
@@ -105,7 +106,8 @@ class EndpointStubParityTests(unittest.TestCase):
                           "network_port_instance", "max_apdu", "segmentation",
                           "services", "queue_capacity", "read_work_limit",
                           "min_request_interval_ms", "on_reinitialize",
-                          "after_reinitialize", "reinit_password"]),
+                          "after_reinitialize", "reinit_password",
+                          "device_write_policy"]),
             (MstpEndpoint, ["device_instance", "serial_port", "device_name", "vendor_id",
                             "mstp_baud", "mstp_mac", "mstp_max_master",
                             "mstp_max_info_frames", "max_apdu", "segmentation",
@@ -115,7 +117,8 @@ class EndpointStubParityTests(unittest.TestCase):
                             "mstp_echo", "mstp_echo_grace_ms",
                             "mstp_transmit_latency_pad_ms", "mstp_usage_timeout_ms",
                             "mstp_reply_timeout_ms", "on_reinitialize",
-                            "after_reinitialize", "reinit_password"]),
+                            "after_reinitialize", "reinit_password",
+                            "device_write_policy"]),
         ]
         for cls, expected in cases:
             with self.subTest(cls=cls.__name__):

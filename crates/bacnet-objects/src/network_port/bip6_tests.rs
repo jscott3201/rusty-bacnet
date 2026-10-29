@@ -6,6 +6,7 @@ use crate::database::ObjectDatabase;
 use crate::property_metadata::{PropertyConformance, PropertyWriteCapability};
 use bacnet_types::bip_port::BipPortMode;
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
+use bacnet_types::error::RemoteError;
 use std::net::Ipv6Addr;
 
 // Independent oracle from Tables 12-71 and 12-72, not copied from production
@@ -70,7 +71,9 @@ fn octets(value: &[u8]) -> PropertyValue {
 
 fn error_code(result: Result<impl std::fmt::Debug, Error>) -> ErrorCode {
     match result {
-        Err(Error::Protocol { class, code }) if class == ErrorClass::PROPERTY => code,
+        Err(Error::Remote(RemoteError::Error { class, code })) if class == ErrorClass::PROPERTY => {
+            code
+        }
         other => panic!("expected a property error: {other:?}"),
     }
 }
@@ -213,9 +216,10 @@ fn database() -> ObjectDatabase {
 fn registration_publishes_the_bound_port_vmac_and_group() {
     let mut db = database();
     // The other IP version, or another address, is refused.
-    assert!(db
-        .reserve_bip_port_internal(oid(), [127, 0, 0, 1], 0)
-        .is_err());
+    assert!(
+        db.reserve_bip_port_internal(oid(), [127, 0, 0, 1], 0)
+            .is_err()
+    );
     assert!(db.reserve_bip6_port_internal(oid(), ip(6), 0).is_err());
     assert!(db.reserve_bip6_port_internal(oid(), ip(5), 47808).is_err());
     let (configured, lease) = db.reserve_bip6_port_internal(oid(), ip(5), 0).unwrap();
@@ -229,8 +233,8 @@ fn registration_publishes_the_bound_port_vmac_and_group() {
     };
     // Port zero, another address and a B/IP bind can't be published.
     for refused in [Bip6Bind { udp: 0, ..bind }, Bip6Bind { ip: ip(6), ..bind }] {
-        assert!(db
-            .publish_bip6_port_internal(
+        assert!(
+            db.publish_bip6_port_internal(
                 oid(),
                 refused.ip,
                 refused.udp,
@@ -239,11 +243,13 @@ fn registration_publishes_the_bound_port_vmac_and_group() {
                 1476,
                 BipPortMode::Normal
             )
-            .is_err());
+            .is_err()
+        );
     }
-    assert!(db
-        .publish_bip_port_internal(oid(), [127, 0, 0, 1], 47809, 1476, BipPortMode::Normal)
-        .is_err());
+    assert!(
+        db.publish_bip_port_internal(oid(), [127, 0, 0, 1], 47809, 1476, BipPortMode::Normal)
+            .is_err()
+    );
     db.publish_bip6_port_internal(
         oid(),
         bind.ip,
@@ -275,8 +281,8 @@ fn registration_publishes_the_bound_port_vmac_and_group() {
     );
     assert_eq!(read(object, P::NETWORK_NUMBER), PropertyValue::Unsigned(12));
     // Published once only.
-    assert!(db
-        .publish_bip6_port_internal(
+    assert!(
+        db.publish_bip6_port_internal(
             oid(),
             bind.ip,
             bind.udp,
@@ -285,7 +291,8 @@ fn registration_publishes_the_bound_port_vmac_and_group() {
             1476,
             BipPortMode::Normal
         )
-        .is_err());
+        .is_err()
+    );
     drop(lease);
     assert_eq!(db.registered_port_internal(), None);
 }

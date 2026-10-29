@@ -8,12 +8,12 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 
 use bacnet_bip_codec::{BdtEntries, BdtEntry};
 use bacnet_bip_core::bbmd::{
-    canonicalize, distribution_address, validate_entry, Context, Reservation, Tables, Target, Via,
-    TWO_HOP_MASK,
+    Context, Reservation, TWO_HOP_MASK, Tables, Target, Via, canonicalize, distribution_address,
+    validate_entry,
 };
 use bacnet_bip_core::{Arrival, Instant, LocalSubnet};
 use proptest::prelude::*;
-use support::{target, OPEN};
+use support::{OPEN, target};
 
 type Site = Tables<16, 16>;
 

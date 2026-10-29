@@ -3,7 +3,7 @@
 use std::future::Future;
 use std::pin::pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::task::{Context, Wake, Waker};
 use std::time::{Duration, Instant};
 
@@ -178,9 +178,10 @@ fn a_staged_batch_commits_while_the_log_serves_its_committed_state() {
     assert!(!batch.saved().is_ready());
     assert!(log.records().is_empty());
     assert_eq!(log.generation(), generation);
-    assert!(!log
-        .has_completed_confirmed_receipt(b"first", 1_725_000_000_000)
-        .unwrap());
+    assert!(
+        !log.has_completed_confirmed_receipt(b"first", 1_725_000_000_000)
+            .unwrap()
+    );
     assert_eq!(
         log.read_property(PropertyIdentifier::RECORD_COUNT, None)
             .unwrap(),
@@ -200,9 +201,10 @@ fn a_staged_batch_commits_while_the_log_serves_its_committed_state() {
     );
     assert_eq!(log.records().len(), 1);
     assert_eq!(log.generation(), generation + 1);
-    assert!(log
-        .has_completed_confirmed_receipt(b"first", 1_725_000_000_000)
-        .unwrap());
+    assert!(
+        log.has_completed_confirmed_receipt(b"first", 1_725_000_000_000)
+            .unwrap()
+    );
 }
 
 #[test]
@@ -216,9 +218,10 @@ fn a_staged_batch_whose_commit_fails_leaves_the_log_as_it_was() {
     assert!(log.finish_notification_batch(batch).is_err());
     assert!(log.records().is_empty());
     assert_eq!(log.generation(), generation);
-    assert!(!log
-        .has_completed_confirmed_receipt(b"lost", 1_725_000_000_000)
-        .unwrap());
+    assert!(
+        !log.has_completed_confirmed_receipt(b"lost", 1_725_000_000_000)
+            .unwrap()
+    );
     // The retransmission commits once storage is back.
     storage.fail.store(false, Ordering::SeqCst);
     let retry =

@@ -1,4 +1,4 @@
-use std::fmt;
+use core::fmt;
 
 use bacnet_types::constructed::BACnetRecipient;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};

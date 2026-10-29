@@ -2,8 +2,8 @@
 use super::*;
 use bacnet_client::client::{COVNotificationDelivery, ConfirmedCOVNotificationResponse};
 use bacnet_encoding::{
-    apdu::{decode_apdu, encode_apdu, Apdu, ConfirmedRequest},
-    npdu::{decode_npdu, encode_npdu, Npdu},
+    apdu::{Apdu, ConfirmedRequest, decode_apdu, encode_apdu},
+    npdu::{Npdu, decode_npdu, encode_npdu},
 };
 use bacnet_services::cov::COVNotificationRequest;
 use bacnet_transport::{
@@ -20,7 +20,7 @@ use bytes::{Bytes, BytesMut};
 use tokio::sync::{broadcast::error::RecvError, mpsc};
 
 macro_rules! configured {
-    ($builder:expr) => {
+    ($builder:expr_2021) => {
         $builder
             .apdu_timeout_ms(2_000)
             .apdu_retries(0)
@@ -182,16 +182,13 @@ async fn bip_builders_keep_custom_cov_policy_and_independent_channel_capacities(
     for erased in [false, true] {
         let mut peer = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
         let mut rx = peer.start().await.unwrap();
-        let builder = configured!(BACnetClient::bip_builder()
-            .interface(Ipv4Addr::LOCALHOST)
-            .port(0));
+        let builder = configured!(
+            BACnetClient::bip_builder()
+                .interface(Ipv4Addr::LOCALHOST)
+                .port(0)
+        );
         if erased {
-            options(
-                builder.build_any::<NoSerial>().await.unwrap(),
-                &peer,
-                &mut rx,
-            )
-            .await;
+            options(builder.build_any().await.unwrap(), &peer, &mut rx).await;
         } else {
             options(builder.build().await.unwrap(), &peer, &mut rx).await;
         }
@@ -204,12 +201,14 @@ async fn bip6_builders_keep_custom_cov_policy_and_independent_channel_capacities
     for erased in [false, true] {
         let mut peer = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(234));
         let mut rx = peer.start().await.unwrap();
-        let builder = configured!(BACnetClient::bip6_builder()
-            .interface(Ipv6Addr::LOCALHOST)
-            .port(0)
-            .device_instance(123));
+        let builder = configured!(
+            BACnetClient::bip6_builder()
+                .interface(Ipv6Addr::LOCALHOST)
+                .port(0)
+                .device_instance(123)
+        );
         if erased {
-            let client = builder.build_any::<NoSerial>().await.unwrap();
+            let client = builder.build_any().await.unwrap();
             let AnyTransport::Bip6(transport) = client.transport() else {
                 panic!("expected B/IPv6");
             };
@@ -246,13 +245,15 @@ async fn sc_builders_keep_custom_cov_policy_and_independent_channel_capacities()
             .unwrap();
         let mut peer = ScTransport::new(ws, [8; 6]).with_device_uuid([8; 16]);
         let mut rx = peer.start().await.unwrap();
-        let builder = configured!(BACnetClient::sc_builder()
-            .hub_url(&url)
-            .tls_config(try_make_node_tls_config(&certs).unwrap())
-            .vmac([2; 6])
-            .device_uuid([3; 16]));
+        let builder = configured!(
+            BACnetClient::sc_builder()
+                .hub_url(&url)
+                .tls_config(try_make_node_tls_config(&certs).unwrap())
+                .vmac([2; 6])
+                .device_uuid([3; 16])
+        );
         if erased {
-            let client = Box::pin(builder.build_any::<NoSerial>()).await.unwrap();
+            let client = Box::pin(builder.build_any()).await.unwrap();
             let AnyTransport::Sc(transport) = client.transport() else {
                 panic!("expected SC");
             };

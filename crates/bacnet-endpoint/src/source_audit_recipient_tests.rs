@@ -62,25 +62,33 @@ fn source_bindings_validate_all_entries_and_cannot_be_discarded() {
         (destination(), SocketAddrV4::new(Ipv4Addr::BROADCAST, 47808)),
         (destination(), SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)),
     ] {
-        assert!(builder()
-            .source_audit_device_binding(device, endpoint)
-            .build_session()
-            .is_err());
+        assert!(
+            builder()
+                .source_audit_device_binding(device, endpoint)
+                .build_session()
+                .is_err()
+        );
     }
-    assert!(builder()
-        .source_audit_device_binding(destination(), address())
-        .source_audit_device_binding(destination(), address())
-        .build_session()
-        .is_err());
-    assert!(builder()
-        .source_audit_device_binding(destination(), address())
-        .build_transport()
-        .is_err());
-    for instance in [0, ObjectIdentifier::MAX_INSTANCE - 1] {
-        assert!(builder()
-            .source_audit_device_binding(oid(ObjectType::DEVICE, instance), address())
+    assert!(
+        builder()
+            .source_audit_device_binding(destination(), address())
+            .source_audit_device_binding(destination(), address())
             .build_session()
-            .is_ok());
+            .is_err()
+    );
+    assert!(
+        builder()
+            .source_audit_device_binding(destination(), address())
+            .build_transport()
+            .is_err()
+    );
+    for instance in [0, ObjectIdentifier::MAX_INSTANCE - 1] {
+        assert!(
+            builder()
+                .source_audit_device_binding(oid(ObjectType::DEVICE, instance), address())
+                .build_session()
+                .is_ok()
+        );
     }
 }
 
@@ -89,16 +97,18 @@ async fn provision_and_bindings_without_source_selection_remain_inert() {
     let (session, _peer, observed) = configured_session(SessionRole::ClientOnly);
     let mut session = session.with_database(database());
     session.start().await.unwrap();
-    assert!(!session
-        .database
-        .as_ref()
-        .unwrap()
-        .read()
-        .await
-        .get(&oid(ObjectType::DEVICE, 123))
-        .unwrap()
-        .property_list()
-        .contains(&PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT));
+    assert!(
+        !session
+            .database
+            .as_ref()
+            .unwrap()
+            .read()
+            .await
+            .get(&oid(ObjectType::DEVICE, 123))
+            .unwrap()
+            .property_list()
+            .contains(&PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT)
+    );
     assert_eq!(observed.sends.load(Ordering::SeqCst), 0);
     session.stop().await.unwrap();
 }
@@ -340,24 +350,34 @@ async fn direct_bip_ipv4_client_only_and_both_start_stop_silently() {
                     PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw())
                 );
                 let device = db.get(&oid(ObjectType::DEVICE, 123)).unwrap();
-                assert!(device
-                    .property_list()
-                    .contains(&PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT));
-                assert!(device
-                    .read_property(PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT, None)
-                    .is_ok());
-                assert!(device
-                    .required_properties()
-                    .contains(&PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT));
+                assert!(
+                    device
+                        .property_list()
+                        .contains(&PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT)
+                );
+                assert!(
+                    device
+                        .read_property(PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT, None)
+                        .is_ok()
+                );
+                assert!(
+                    device
+                        .required_properties()
+                        .contains(&PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT)
+                );
                 assert!(
                     device.is_writable_property(PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT)
                 );
-                assert!(!device
-                    .required_properties()
-                    .contains(&PropertyIdentifier::AUDIT_LEVEL));
-                assert!(!device
-                    .required_properties()
-                    .contains(&PropertyIdentifier::AUDITABLE_OPERATIONS));
+                assert!(
+                    !device
+                        .required_properties()
+                        .contains(&PropertyIdentifier::AUDIT_LEVEL)
+                );
+                assert!(
+                    !device
+                        .required_properties()
+                        .contains(&PropertyIdentifier::AUDITABLE_OPERATIONS)
+                );
             }
             let mut bytes = [0; 2048];
             assert!(
@@ -410,16 +430,17 @@ async fn source_post_start_broadcast_fact_invalidates_device_route_without_callb
             ),
         )
         .unwrap();
-        assert!(db
-            .get_mut(&oid(ObjectType::DEVICE, 123))
-            .unwrap()
-            .write_property(
-                PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT,
-                None,
-                PropertyValue::ApplicationData(bytes.to_vec()),
-                None
-            )
-            .is_err());
+        assert!(
+            db.get_mut(&oid(ObjectType::DEVICE, 123))
+                .unwrap()
+                .write_property(
+                    PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT,
+                    None,
+                    PropertyValue::ApplicationData(bytes.to_vec()),
+                    None
+                )
+                .is_err()
+        );
     }
     assert_eq!(observed.bip_reads.load(Ordering::SeqCst), 2);
     assert_eq!(observed.sends.load(Ordering::SeqCst), 0);

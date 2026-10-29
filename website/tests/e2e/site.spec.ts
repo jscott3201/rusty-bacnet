@@ -3,7 +3,9 @@ import AxeBuilder from '@axe-core/playwright';
 import navigation from '../../src/data/navigation.json' with { type: 'json' };
 import { selectTheme, expectContainedPage } from './helpers';
 const base = '/rusty-bacnet/';
-const routes = ['', ...navigation.flatMap(group => group.items.map(item => `${item.slug}/`))];
+// A sidebar entry: a page, or a nested group of pages.
+type NavItem = { slug?: string; items?: NavItem[] };
+const routes = ['', ...navigation.flatMap(group => (group.items as NavItem[]).flatMap((item): NavItem[] => item.items ?? [item]).map(item => `${item.slug}/`))];
 
 test('all pages load directly under the project prefix without page overflow', async ({ page }) => {
   const errors: string[] = [];
@@ -76,10 +78,32 @@ test.describe('light and dark themes have no automated WCAG A/AA violations', ()
   for (const route of routes) {
     test(`on ${base}${route}`, async ({ page }) => {
       await page.goto(base + route);
+      // Every tab, nested ones too, so each panel is scanned while shown.
+      const tabs = await page.locator('[role="tab"]').count();
       for (const theme of ['light', 'dark'] as const) {
         await selectTheme(page, theme);
         const scan = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
         expect(scan.violations, `${route} / ${theme}`).toEqual([]);
+        for (let index = 0; index < tabs; index++) {
+          const tab = page.locator('[role="tab"]').nth(index);
+          // Show the panels that hold a nested tab first, through their own tabs.
+          for (const control of await tab.evaluate(node => {
+            const ids: string[] = [];
+            for (let at = node.parentElement; at; at = at.parentElement) {
+              if (at.getAttribute('role') === 'tabpanel') ids.unshift(at.getAttribute('aria-labelledby') || '');
+            }
+            return ids;
+          })) await page.locator(`[id="${control}"]`).click();
+          await tab.click();
+          await expect(tab).toHaveAttribute('aria-selected', 'true');
+          await expectContainedPage(page);
+          // A block in a newly shown panel gets its tabindex back
+          // (src/scripts/tab-code-focus.js) on the next frame.
+          await expect.poll(() => page.locator('pre:visible').evaluateAll(blocks =>
+            blocks.filter(block => block.scrollWidth > block.clientWidth && !block.hasAttribute('tabindex')).length)).toBe(0);
+          const panel = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
+          expect(panel.violations, `${route} / ${theme} / tab ${await tab.textContent()}`).toEqual([]);
+        }
       }
     });
   }
@@ -98,4 +122,25 @@ test('local navigation and source links are not accidentally rooted outside the 
     const bad = await page.locator('a[href^="/"]').evaluateAll(links => links.map(a => a.getAttribute('href') || '').filter(href => !href.startsWith('/rusty-bacnet/')));
     expect(bad, route).toEqual([]);
   }
+});
+
+// Generated reference pages (DocsMarkdownContent.astro) weigh less in search:
+// a task phrase ranks the guides first, and an API name still finds its page.
+test('search ranks guides above generated reference pages but still finds API names', async ({ page }) => {
+  await page.goto(base);
+  const ranked = await page.evaluate(async ({ bundle, queries }) => {
+    const pagefind = await import(bundle);
+    await pagefind.init();
+    const out: Record<string, string[]> = {};
+    for (const query of queries) {
+      const { results } = await pagefind.search(query);
+      out[query] = await Promise.all(results.slice(0, 8).map(async (result: { data: () => Promise<{ url: string }> }) => (await result.data()).url));
+    }
+    return out;
+  }, { bundle: base + 'pagefind/pagefind.js', queries: ['read property', 'subscribe', 'write priority', 'cov_counters'] });
+  const generated = /\/reference\/(cli|rust|python)\b/;
+  for (const query of ['read property', 'subscribe', 'write priority']) {
+    expect(ranked[query].slice(0, 3).filter(url => generated.test(url)), query).toEqual([]);
+  }
+  expect(ranked.cov_counters).toContain(base + 'reference/python/server/');
 });

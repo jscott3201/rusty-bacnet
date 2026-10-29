@@ -17,9 +17,9 @@ use bacnet_types::constructed::{
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
 use bytes::BytesMut;
+use pyo3::IntoPyObjectExt;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
-use pyo3::IntoPyObjectExt;
 
 use super::audit_projection::recipient_to_py;
 use super::date::date_value;
@@ -27,8 +27,7 @@ use super::read_value::decode_read_value;
 use super::rpm_wpm::read_access_result_to_py;
 use super::timestamp::time_value;
 use super::{
-    PyBACnetTimeStamp, PyErrorClass, PyErrorCode, PyObjectIdentifier, PyPropertyIdentifier,
-    PyPropertyValue,
+    IntEnumValue, PyBACnetTimeStamp, PyObjectIdentifier, PyPropertyIdentifier, PyPropertyValue,
 };
 
 /// One element, decoded.
@@ -311,7 +310,7 @@ fn action_command_to_py<'py>(
 
 /// An object reference: an `ObjectIdentifier`, or a `(device, object)` pair
 /// when it names a device, the forms `door_members` takes.
-fn object_reference_to_py(
+pub(super) fn object_reference_to_py(
     py: Python<'_>,
     reference: &BACnetDeviceObjectReference,
 ) -> PyResult<Py<PyAny>> {
@@ -411,10 +410,7 @@ fn property_access_result_to_py(
         }
         AccessResult::Error { class, code } => {
             dict.set_item("value", py.None())?;
-            dict.set_item(
-                "error",
-                (PyErrorClass { inner: *class }, PyErrorCode { inner: *code }),
-            )?;
+            dict.set_item("error", (IntEnumValue(*class), IntEnumValue(*code)))?;
         }
     }
     Ok(dict)

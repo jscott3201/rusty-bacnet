@@ -119,7 +119,7 @@ impl<'a> Networks<'a> {
     }
 
     /// The networks, in the order listed.
-    pub fn iter(&self) -> impl Iterator<Item = u16> + 'a {
+    pub fn iter(&self) -> impl Iterator<Item = u16> + 'a + use<'a> {
         self.octets
             .as_chunks::<2>()
             .0
@@ -327,7 +327,7 @@ impl<'a> RoutingEntries<'a> {
     }
 
     /// The entries, in order.
-    pub fn iter(&self) -> impl Iterator<Item = RoutingEntry<'a>> + 'a {
+    pub fn iter(&self) -> impl Iterator<Item = RoutingEntry<'a>> + 'a + use<'a> {
         let mut rest = self.entries;
         core::iter::from_fn(move || {
             let (entry, after) = split_entry(rest)?;

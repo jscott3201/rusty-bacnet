@@ -469,23 +469,22 @@ fn a_reference_to_the_reserved_instance_is_unset() {
     let object = oid(ObjectType::ANALOG_INPUT, 7);
     let local = BACnetDeviceObjectPropertyReference::new_local(object, 85);
     assert!(!local.is_unset());
-    assert!(!BACnetDeviceObjectPropertyReference::new_remote(
-        object,
-        85,
-        oid(ObjectType::DEVICE, 9)
-    )
-    .is_unset());
-    assert!(BACnetDeviceObjectPropertyReference::new_remote(
-        object,
-        85,
-        oid(ObjectType::DEVICE, reserved)
-    )
-    .is_unset());
-    assert!(BACnetDeviceObjectPropertyReference::new_local(
-        oid(ObjectType::ANALOG_INPUT, reserved),
-        85
-    )
-    .is_unset());
+    assert!(
+        !BACnetDeviceObjectPropertyReference::new_remote(object, 85, oid(ObjectType::DEVICE, 9))
+            .is_unset()
+    );
+    assert!(
+        BACnetDeviceObjectPropertyReference::new_remote(
+            object,
+            85,
+            oid(ObjectType::DEVICE, reserved)
+        )
+        .is_unset()
+    );
+    assert!(
+        BACnetDeviceObjectPropertyReference::new_local(oid(ObjectType::ANALOG_INPUT, reserved), 85)
+            .is_unset()
+    );
 }
 
 #[test]

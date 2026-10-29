@@ -2,6 +2,7 @@ use super::*;
 use bacnet_objects::life_safety::LifeSafetyPointObject;
 use bacnet_objects::traits::LifeSafetyOperationEffect;
 use bacnet_types::enums::{EngineeringUnits, LifeSafetyOperation, LifeSafetyState};
+use bacnet_types::error::RemoteError;
 
 #[test]
 fn life_safety_outcome_and_error_forward_without_losing_deltas() {
@@ -29,7 +30,7 @@ fn life_safety_outcome_and_error_forward_without_losing_deltas() {
         read(object.as_ref(), PropertyIdentifier::OPERATION_EXPECTED),
     ];
     assert!(
-        matches!(object.apply_life_safety_operation(LifeSafetyOperation::SILENCE), Err(Error::Protocol {class,code}) if class == ErrorClass::OBJECT && code == ErrorCode::INVALID_OPERATION_IN_THIS_STATE)
+        matches!(object.apply_life_safety_operation(LifeSafetyOperation::SILENCE), Err(Error::Remote(RemoteError::Error {class,code})) if class == ErrorClass::OBJECT && code == ErrorCode::INVALID_OPERATION_IN_THIS_STATE)
     );
     assert_eq!(
         [
@@ -52,7 +53,7 @@ fn absent_life_safety_capability_remains_explicitly_unsupported() {
     );
     source_reporter::install(&mut object, &owner).unwrap();
     assert!(
-        matches!(object.apply_life_safety_operation(LifeSafetyOperation::SILENCE), Err(Error::Protocol {class,code}) if class == ErrorClass::OBJECT && code == ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED)
+        matches!(object.apply_life_safety_operation(LifeSafetyOperation::SILENCE), Err(Error::Remote(RemoteError::Error {class,code})) if class == ErrorClass::OBJECT && code == ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED)
     );
 }
 
@@ -81,7 +82,7 @@ fn life_safety_application_values_forward_through_the_wrapper() {
     );
     // The wrapped object's range check answers, not the trait default.
     assert!(
-        matches!(object.set_tracking_value_internal(PropertyValue::Enumerated(35)), Err(Error::Protocol {class,code}) if class == ErrorClass::PROPERTY && code == ErrorCode::VALUE_OUT_OF_RANGE)
+        matches!(object.set_tracking_value_internal(PropertyValue::Enumerated(35)), Err(Error::Remote(RemoteError::Error {class,code})) if class == ErrorClass::PROPERTY && code == ErrorCode::VALUE_OUT_OF_RANGE)
     );
     assert_eq!(
         read(object.as_ref(), PropertyIdentifier::TRACKING_VALUE),

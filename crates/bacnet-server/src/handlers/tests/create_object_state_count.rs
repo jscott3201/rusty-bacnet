@@ -9,8 +9,8 @@
 
 use super::create_object_initial_values::{create, initial, read, text};
 use super::*;
-use bacnet_services::common::BACnetPropertyValue;
 use PropertyIdentifier as P;
+use bacnet_services::common::BACnetPropertyValue;
 
 fn unsigned(value: u64) -> PropertyValue {
     PropertyValue::Unsigned(value)

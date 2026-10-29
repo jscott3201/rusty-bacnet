@@ -13,7 +13,7 @@ use super::receive_counters::ReceiveDrops;
 use super::*;
 use crate::udp_metadata::ReceivedDatagram;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 /// An NPDU carrying I-Am for Device 7.
 const I_AM: &[u8] = &[

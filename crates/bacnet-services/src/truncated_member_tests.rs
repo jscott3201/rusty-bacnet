@@ -8,7 +8,7 @@
 //! gives that member.
 
 use bacnet_types::enums::RejectReason;
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 
 use crate::alarm_event::{
     AcknowledgeAlarmRequest, GetEventInformationAck, GetEventInformationRequest,
@@ -159,7 +159,7 @@ fn reals_and_times_check_their_length_before_their_contents() {
     let [wrong, cut] = wrong_and_right_length_cut(&notification, 3);
     let wrong = COVNotificationMultipleRequest::decode(&wrong);
     assert!(
-        matches!(wrong, Err(Error::Reject { reason })
+        matches!(wrong, Err(Error::Remote(RemoteError::Reject { reason }))
             if reason == RejectReason::INVALID_DATA_ENCODING),
         "{wrong:?}"
     );

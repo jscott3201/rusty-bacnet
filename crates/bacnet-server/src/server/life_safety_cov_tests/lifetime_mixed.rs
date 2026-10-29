@@ -30,10 +30,10 @@ impl BACnetObject for ReadProbe {
             self.selected_reads.fetch_add(1, Ordering::Relaxed);
         }
         if property == PropertyIdentifier::OPERATION_EXPECTED && self.fail.load(Ordering::Acquire) {
-            return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::READ_ACCESS_DENIED,
-            });
+            return Err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::READ_ACCESS_DENIED,
+            ));
         }
         self.inner.read_property(property, index)
     }
@@ -127,14 +127,16 @@ async fn mixed_case(initial: bool, confirmed: bool, retain_value: bool) {
     let fixture = DispatchFixture::new(db, [a, b]).await;
     // Both selected reads succeed initially. The later failure is not a fixture
     // that was already invalid when accepted by the table.
-    assert!(fixture
-        .db
-        .read()
-        .await
-        .get(&second_oid)
-        .unwrap()
-        .read_property(PropertyIdentifier::OPERATION_EXPECTED, None)
-        .is_ok());
+    assert!(
+        fixture
+            .db
+            .read()
+            .await
+            .get(&second_oid)
+            .unwrap()
+            .read_property(PropertyIdentifier::OPERATION_EXPECTED, None)
+            .is_ok()
+    );
     let snapshots = {
         let table = fixture.cov_table.read().await;
         // Put the soon-stale timestamped candidate first, testing representative selection.
@@ -203,21 +205,27 @@ async fn mixed_case(initial: bool, confirmed: bool, retain_value: bool) {
                 PropertyIdentifier::STATUS_FLAGS
             ]
         );
-        assert!(item
-            .list_of_values
-            .iter()
-            .all(|value| value.time_of_change.is_none()));
+        assert!(
+            item.list_of_values
+                .iter()
+                .all(|value| value.time_of_change.is_none())
+        );
     } else {
-        assert!(fixture.take_apdus().is_empty(), "a live failed read cannot authorize the stale successful value or a companion-only payload");
+        assert!(
+            fixture.take_apdus().is_empty(),
+            "a live failed read cannot authorize the stale successful value or a companion-only payload"
+        );
         assert_eq!(fixture.transactions.active_count(), 0);
         let table = fixture.cov_table.read().await;
         assert_eq!(table.counters().snapshot().notifications_sent, 0);
         assert_eq!(table.counters().snapshot().notification_bytes_sent, 0);
-        assert!(table
-            .get_subscription(&b_key)
-            .unwrap()
-            .last_notified_observation
-            .is_none());
+        assert!(
+            table
+                .get_subscription(&b_key)
+                .unwrap()
+                .last_notified_observation
+                .is_none()
+        );
     }
     fixture.transactions.close();
     while fixture.transactions.join_next().await.is_some() {}

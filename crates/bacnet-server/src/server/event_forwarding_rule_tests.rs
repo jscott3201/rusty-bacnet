@@ -4,8 +4,8 @@
 
 use super::event_forwarding::Reception;
 use super::event_forwarding_tests::{
-    database, destination, notification, unconfirmed, Copy, Forwarding, To, LOCAL_DEVICE, PEER_A,
-    PEER_B,
+    Copy, Forwarding, LOCAL_DEVICE, PEER_A, PEER_B, To, database, destination, notification,
+    unconfirmed,
 };
 use super::event_recipient_routing_tests::address_recipient;
 use super::*;
@@ -64,10 +64,12 @@ async fn a_received_notification_no_forwarder_takes_is_counted() {
         .add_destination(destination(address_recipient(0, &PEER_A), 40, false))
         .unwrap();
     let forwarding = Forwarding::new(database(vec![only_seven]));
-    assert!(forwarding
-        .receive(&notification(5), Reception::UNICAST)
-        .await
-        .is_empty());
+    assert!(
+        forwarding
+            .receive(&notification(5), Reception::UNICAST)
+            .await
+            .is_empty()
+    );
     assert_eq!(forwarding.counters().received_not_forwarded, 1);
     // Taken notifications, and global broadcasts forwarders ignore, are not
     // counted.
@@ -82,10 +84,12 @@ async fn a_received_notification_no_forwarder_takes_is_counted() {
         group: true,
         global: true,
     };
-    assert!(forwarding
-        .receive(&notification(5), global)
-        .await
-        .is_empty());
+    assert!(
+        forwarding
+            .receive(&notification(5), global)
+            .await
+            .is_empty()
+    );
     assert_eq!(
         forwarding.counters(),
         EventNotificationCounters {
@@ -144,10 +148,12 @@ async fn a_bound_device_on_the_receiving_network_gets_no_copy_of_a_broadcast() {
             .await,
         [unconfirmed(To::Local(PEER_A.to_vec()), 40)]
     );
-    assert!(forwarding
-        .receive(&notification(5), BROADCAST)
-        .await
-        .is_empty());
+    assert!(
+        forwarding
+            .receive(&notification(5), BROADCAST)
+            .await
+            .is_empty()
+    );
 }
 
 #[tokio::test]

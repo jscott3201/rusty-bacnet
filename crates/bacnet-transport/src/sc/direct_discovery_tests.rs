@@ -8,13 +8,13 @@
 //! production-answer interoperability registers a real accepting TLS listener.
 
 use super::direct_discovery::{
-    parse_ack_uris, DirectUriCache, DIRECT_URI_CACHE_MAX_ENTRIES, DIRECT_URI_CACHE_TTL,
+    DIRECT_URI_CACHE_MAX_ENTRIES, DIRECT_URI_CACHE_TTL, DirectUriCache, parse_ack_uris,
 };
 use super::*;
-use crate::sc_frame::{decode_sc_message, encode_sc_message, ScFunction, ScMessage};
+use crate::sc_frame::{ScFunction, ScMessage, decode_sc_message, encode_sc_message};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tokio::time::timeout;
 
 const TARGET: Vmac = [0x22; 6];
@@ -42,8 +42,8 @@ fn fake_dialer(
 ) -> std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<LoopbackWebSocket, Error>> + Send>,
 > + Send
-       + Sync
-       + 'static {
++ Sync
++ 'static {
     move |uri: String| {
         let attempted = attempted.clone();
         let peers = peers.clone();
@@ -385,9 +385,11 @@ async fn empty_ack_falls_back_to_hub_without_dial() {
     });
     send_res.unwrap();
     assert!(attempted.lock().await.is_empty());
-    assert!(timeout(Duration::from_millis(100), peers.recv())
-        .await
-        .is_err());
+    assert!(
+        timeout(Duration::from_millis(100), peers.recv())
+            .await
+            .is_err()
+    );
     let npdu_bytes = hub_recv(&hub).await;
     assert_eq!(
         decode_sc_message(&npdu_bytes).unwrap().destination_vmac,
@@ -425,9 +427,11 @@ async fn ar_nak_falls_back_to_hub_without_dial() {
     });
     send_res.unwrap();
     assert!(attempted.lock().await.is_empty());
-    assert!(timeout(Duration::from_millis(100), peers.recv())
-        .await
-        .is_err());
+    assert!(
+        timeout(Duration::from_millis(100), peers.recv())
+            .await
+            .is_err()
+    );
     let npdu_bytes = hub_recv(&hub).await;
     assert_eq!(
         decode_sc_message(&npdu_bytes).unwrap().destination_vmac,
@@ -456,9 +460,11 @@ async fn mismatched_ack_id_is_ignored_then_hub_fallback() {
         Some(TARGET)
     );
     assert!(attempted.lock().await.is_empty());
-    assert!(timeout(Duration::from_millis(50), peers.recv())
-        .await
-        .is_err());
+    assert!(
+        timeout(Duration::from_millis(50), peers.recv())
+            .await
+            .is_err()
+    );
     transport.stop().await.unwrap();
 }
 
@@ -566,9 +572,11 @@ async fn broadcast_never_uses_direct_even_when_enabled() {
     let msg = decode_sc_message(&bytes).unwrap();
     assert_eq!(msg.destination_vmac, Some(BROADCAST_VMAC));
     assert!(attempted.lock().await.is_empty());
-    assert!(timeout(Duration::from_millis(100), peers.recv())
-        .await
-        .is_err());
+    assert!(
+        timeout(Duration::from_millis(100), peers.recv())
+            .await
+            .is_err()
+    );
     transport.stop().await.unwrap();
 }
 
@@ -638,9 +646,11 @@ async fn interop_repeated_send_uses_cache_without_stall() {
     assert!(hub_try_recv(&sender_hub).await.is_none());
     // Pooled reuse: the second send reuses the handshaked connection, so no
     // new dial occurs and the first peer receives the second NPDU.
-    assert!(timeout(Duration::from_millis(100), peers.recv())
-        .await
-        .is_err());
+    assert!(
+        timeout(Duration::from_millis(100), peers.recv())
+            .await
+            .is_err()
+    );
     let second = decode_sc_message(
         &timeout(Duration::from_secs(2), first_peer.recv())
             .await

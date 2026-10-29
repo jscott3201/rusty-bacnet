@@ -3,8 +3,8 @@ use std::sync::Mutex;
 
 use bacnet_encoding::apdu::Apdu;
 use bacnet_encoding::npdu::NpduAddress;
-use bacnet_types::enums::ConfirmedServiceChoice;
 use bacnet_types::MacAddr;
+use bacnet_types::enums::ConfirmedServiceChoice;
 
 const INVOKE_ID_COUNT: usize = 256;
 

@@ -69,10 +69,12 @@ async fn a_bbmd_transport_lends_its_own_tables_to_the_registered_port() {
         rp(&server, P::BBMD_ACCEPT_FD_REGISTRATIONS).await.unwrap(),
         [0x10]
     );
-    assert!(rp(&server, P::BBMD_FOREIGN_DEVICE_TABLE)
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        rp(&server, P::BBMD_FOREIGN_DEVICE_TABLE)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 
     {
         let mut state = server

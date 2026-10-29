@@ -484,8 +484,10 @@ fn corrected_variants_preserve_event_values_framing() {
 
     let mut without_values = BytesMut::new();
     encode_event_notification(&event_request(None), &mut without_values).unwrap();
-    assert!(decode_event_notification(&without_values)
-        .unwrap()
-        .event_values
-        .is_none());
+    assert!(
+        decode_event_notification(&without_values)
+            .unwrap()
+            .event_values
+            .is_none()
+    );
 }

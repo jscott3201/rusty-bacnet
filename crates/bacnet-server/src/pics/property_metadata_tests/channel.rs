@@ -1,6 +1,6 @@
 use super::*;
-use bacnet_objects::{channel::ChannelObject, traits::BACnetObject};
 use PropertyIdentifier as P;
+use bacnet_objects::{channel::ChannelObject, traits::BACnetObject};
 
 #[test]
 fn pics_channel_property_metadata_is_exact() {

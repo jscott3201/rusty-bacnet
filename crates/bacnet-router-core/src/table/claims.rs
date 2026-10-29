@@ -2,7 +2,7 @@
 
 use core::fmt;
 
-use super::{is_reserved, Convergence, Pending, Route, Table, Timing};
+use super::{Convergence, Pending, Route, Table, Timing, is_reserved};
 use crate::{Duration, Instant, Mac, PortId};
 
 /// A route that moves port again within this long of its last move counts

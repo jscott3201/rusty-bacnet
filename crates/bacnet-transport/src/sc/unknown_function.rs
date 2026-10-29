@@ -4,10 +4,10 @@ use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bytes::BytesMut;
 use tracing::warn;
 
+use super::WebSocketPort;
 use super::data_attributes::build_bvlc_result_nak;
 use super::rejection::{RejectionBudget, RejectionExpired};
-use super::WebSocketPort;
-use crate::sc_frame::{encode_sc_message, ScFunction, ScMessage, BROADCAST_VMAC};
+use crate::sc_frame::{BROADCAST_VMAC, ScFunction, ScMessage, encode_sc_message};
 
 pub(super) async fn reject<W: WebSocketPort>(
     msg: &ScMessage,

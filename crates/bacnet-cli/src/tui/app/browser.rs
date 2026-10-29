@@ -13,7 +13,7 @@ use bacnet_types::primitives::ObjectIdentifier;
 use super::devices::Movement;
 use super::objects::ObjectList;
 use super::watch::Screen;
-use super::{App, Link, FLASH_FOR};
+use super::{App, FLASH_FOR, Link};
 use crate::tui::message::Command;
 use crate::tui::point::{BrowseRead, BrowseResult, DeviceCard, ObjectView, ReqId};
 
@@ -175,11 +175,7 @@ impl Browser {
     /// has one.
     pub(crate) fn panes(&self) -> &'static [Pane] {
         const ALL: [Pane; 4] = [Pane::Card, Pane::Objects, Pane::Properties, Pane::Priority];
-        if self.has_priority() {
-            &ALL
-        } else {
-            &ALL[..3]
-        }
+        if self.has_priority() { &ALL } else { &ALL[..3] }
     }
 
     /// The focused pane as drawn: the priority pane falls back to the
@@ -335,10 +331,10 @@ impl App {
 
 #[cfg(test)]
 mod tests {
+    use bacnet_ops::engine::ReadVia;
     use bacnet_types::enums::ObjectType;
 
     use super::*;
-    use crate::tui::point::ReadVia;
 
     fn view(instance: u32) -> BrowseResult {
         BrowseResult::Object(Box::new(ObjectView {
@@ -386,7 +382,7 @@ mod tests {
     /// it is reading.
     #[test]
     fn a_device_refresh_releases_a_waiting_object_read() {
-        use crate::tui::app::{update, Action};
+        use crate::tui::app::{Action, update};
         let ai = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
         let mut app = crate::tui::tests::connected_app();
         let mut browser = Browser::new(7, "10.0.0.7:47808".into(), 1);
@@ -395,9 +391,11 @@ mod tests {
         app.screen = Screen::Browse;
         app.settle();
         let read = update(&mut app, Action::Open);
-        let [Command::Browse {
-            req: object_req, ..
-        }] = read.as_slice()
+        let [
+            Command::Browse {
+                req: object_req, ..
+            },
+        ] = read.as_slice()
         else {
             panic!("expected one object read, got {read:?}");
         };

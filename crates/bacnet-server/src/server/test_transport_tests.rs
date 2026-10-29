@@ -1,6 +1,6 @@
 //! Contract of the shared test transport itself.
 use super::*;
-use bacnet_encoding::apdu::{encode_apdu, SimpleAck};
+use bacnet_encoding::apdu::{SimpleAck, encode_apdu};
 use bacnet_encoding::npdu::encode_npdu;
 use bacnet_transport::port::DataAttribute;
 use bacnet_types::enums::ConfirmedServiceChoice;

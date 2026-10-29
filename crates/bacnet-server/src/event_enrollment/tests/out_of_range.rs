@@ -9,7 +9,7 @@ use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetEventParameter};
 use bacnet_types::enums::{EngineeringUnits, ErrorCode};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 
 // ---- OUT_OF_RANGE tests ----
 
@@ -304,7 +304,7 @@ fn out_of_range_enrollment_has_no_out_of_service_gate() {
             PropertyValue::Boolean(true),
             None,
         ),
-        Err(Error::Protocol { code, .. }) if code == ErrorCode::UNKNOWN_PROPERTY
+        Err(Error::Remote(RemoteError::Error { code, .. })) if code == ErrorCode::UNKNOWN_PROPERTY
     ));
 
     let transitions = evaluate_event_enrollments(&mut db, 1);

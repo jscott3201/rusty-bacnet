@@ -16,11 +16,11 @@
 use std::net::SocketAddrV4;
 
 use bacnet_bip_codec::BdtEntries;
-use bacnet_bip_core::bbmd::{BdtError, Nat, MAX_PRIVATE_RANGES};
+use bacnet_bip_core::bbmd::{BdtError, MAX_PRIVATE_RANGES, Nat};
 pub use bacnet_bip_core::bbmd::{NatError, PrivateRange};
 use bacnet_types::error::Error;
 
-use super::{bdt_error, BbmdState};
+use super::{BbmdState, bdt_error};
 
 /// How a BBMD behind a NAT router is reached: [`BbmdOptions::nat`](crate::bip::BbmdOptions::nat).
 ///

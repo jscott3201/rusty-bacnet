@@ -100,7 +100,7 @@ use bacnet_types::primitives::PropertyValue;
 #[cfg(feature = "alloc")]
 use super::MAX_FRAMED_ITEMS;
 use crate::primitives;
-use crate::tags::{self, Tag, TagClass, MAX_CONTEXT_NESTING_DEPTH};
+use crate::tags::{self, MAX_CONTEXT_NESTING_DEPTH, Tag, TagClass};
 
 // ---------------------------------------------------------------------------
 // Peeking at the next tag

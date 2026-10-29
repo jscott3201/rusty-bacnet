@@ -1,18 +1,18 @@
 //! Turn values as read or notified into watch samples.
 //!
-//! A read or a notification first becomes a [`Reading`], the value still
+//! A sample from the hub first becomes a [`Reading`], the value still
 //! encoded. The row's [`RowFormat`], made from its first read, then writes
 //! it out twice: for the screen (floats rounded, the state texts, a unit
 //! symbol) and exactly, for the CSV log (every digit, no state texts).
 
-use bacnet_client::client::ReceivedCOVNotification;
+use bacnet_ops::format::{Floats, RawRow, StateTexts, ValueFormat, decode_all, units};
+use bacnet_ops::label::kebab;
 use bacnet_types::enums::{EngineeringUnits, PropertyIdentifier};
 use bacnet_types::primitives::{PropertyValue, StatusFlags};
 use tokio::time::Instant;
 
-use crate::tui::app::objects::kebab;
-use crate::tui::format::{decode_all, units, Floats, RawRow, StateTexts, ValueFormat};
 use crate::tui::point::Health;
+use crate::tui::row_error::row_error_text;
 use crate::tui::watched::{Point, Sample};
 
 /// One value of a point, as read or notified, not yet written out.
@@ -139,32 +139,10 @@ pub(crate) fn from_rows(property: PropertyIdentifier, rows: &[RawRow]) -> Option
         .and_then(|(_, value)| value.as_deref().ok())
         .and_then(flags);
     Some(Reading {
-        value: value.clone(),
+        value: value.clone().map_err(|error| row_error_text(&error)),
         flags: status,
         at: Instant::now().into_std(),
     })
-}
-
-/// The reading a COV notification carries for `point`, when it is about
-/// it: the same object of the same device, with the watched property among
-/// its values.
-pub(crate) fn from_notification(
-    point: &Point,
-    received: &ReceivedCOVNotification,
-) -> Option<Reading> {
-    let notification = &received.notification;
-    if notification.monitored_object_identifier != point.object
-        || notification.initiating_device_identifier.instance_number() != point.device
-    {
-        return None;
-    }
-    let rows: Vec<RawRow> = notification
-        .list_of_values
-        .iter()
-        .filter(|value| value.property_array_index.is_none())
-        .map(|value| (value.property_identifier, Ok(value.value.clone())))
-        .collect();
-    from_rows(point.property, &rows)
 }
 
 #[cfg(test)]

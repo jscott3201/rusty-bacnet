@@ -31,9 +31,11 @@ fn a_full_queue_refuses_npdus_and_the_token_keeps_moving() {
     sim.run_until(ms(3_000));
     let rejects = sim.rejects(3);
     assert_eq!(rejects.len(), 16);
-    assert!(rejects
-        .iter()
-        .all(|&(_, reason)| reason == QueueRefusal::Full));
+    assert!(
+        rejects
+            .iter()
+            .all(|&(_, reason)| reason == QueueRefusal::Full)
+    );
     assert_eq!(
         sent_by(sim.frames(), 3, FrameType::BACNET_DATA_NOT_EXPECTING_REPLY).len(),
         4
@@ -68,10 +70,11 @@ fn an_oversized_npdu_is_refused_and_the_token_keeps_moving() {
     let sent = sent_by(sim.frames(), 3, FrameType::BACNET_DATA_NOT_EXPECTING_REPLY);
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].octets.len(), MAX_STANDARD_FRAME_LENGTH);
-    assert!(sim
-        .deliveries(10)
-        .iter()
-        .any(|delivery| delivery.data == largest));
+    assert!(
+        sim.deliveries(10)
+            .iter()
+            .any(|delivery| delivery.data == largest)
+    );
     assert_eq!(sim.core(3).unwrap().counters().unicast.drops_oversize, 1);
     assert_eq!(
         token_users(sim.frames(), ms(2_000))
@@ -133,10 +136,11 @@ fn the_largest_standard_frame_goes_out_whole_at_4800_baud() {
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].octets.len(), MAX_STANDARD_FRAME_LENGTH);
     assert!(sent[0].end - sent[0].start > millis(1_000));
-    assert!(sim
-        .deliveries(0)
-        .iter()
-        .any(|delivery| delivery.data == largest));
+    assert!(
+        sim.deliveries(0)
+            .iter()
+            .any(|delivery| delivery.data == largest)
+    );
     let counters = sim.core(3).unwrap().counters();
     assert_eq!(counters.cancelled_sends, 0);
     assert_eq!(counters.frames_transmitted, sent_by_count(sim.frames(), 3));

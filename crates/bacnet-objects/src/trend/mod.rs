@@ -1,8 +1,9 @@
 //! TrendLog (type 20) and TrendLogMultiple (type 27) objects per ASHRAE 135-2020.
 
-use std::borrow::Cow;
-use std::collections::VecDeque;
-use std::sync::Arc;
+use crate::prelude::*;
+use alloc::borrow::Cow;
+use alloc::collections::VecDeque;
+use alloc::sync::Arc;
 
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetLogRecord};
@@ -15,11 +16,11 @@ use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlag
 use crate::clock::ClockReader;
 use crate::common::{self, read_property_list_property};
 use crate::log_buffer::{
-    log_buffer_read_denied, LogBufferRecords, LogRecordBuffer, LogRecordIdentity,
+    LogBufferRecords, LogRecordBuffer, LogRecordIdentity, log_buffer_read_denied,
 };
 use crate::log_lifecycle::LogLifecycle;
 use crate::log_persistence::store::{DurableLog, LogStore};
-use crate::log_reporting::{impl_buffer_ready_reporting, BufferReadyReporting};
+use crate::log_reporting::{BufferReadyReporting, impl_buffer_ready_reporting};
 use crate::log_window::LogWindow;
 use crate::traits::BACnetObject;
 use acquisition::{Acquisition, Rules};
@@ -435,10 +436,10 @@ impl BACnetObject for TrendLogObject {
             p if p == PropertyIdentifier::PROPERTY_LIST => {
                 read_property_list_property(&self.property_list(), array_index)
             }
-            _ => Err(Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::UNKNOWN_PROPERTY,
-            }),
+            _ => Err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::UNKNOWN_PROPERTY,
+            )),
         }
     }
 
@@ -453,10 +454,10 @@ impl BACnetObject for TrendLogObject {
             if let PropertyValue::Boolean(v) = value {
                 return self.lifecycle().write_enable(v);
             }
-            return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::INVALID_DATA_TYPE,
-            });
+            return Err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::INVALID_DATA_TYPE,
+            ));
         }
         if let Some(result) = self
             .acquisition
@@ -475,19 +476,19 @@ impl BACnetObject for TrendLogObject {
             if let PropertyValue::Boolean(v) = value {
                 return self.lifecycle().write_stop_when_full(v);
             }
-            return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::INVALID_DATA_TYPE,
-            });
+            return Err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::INVALID_DATA_TYPE,
+            ));
         }
         if property == PropertyIdentifier::RECORD_COUNT {
             if let PropertyValue::Unsigned(0) = value {
                 return self.lifecycle().purge();
             }
-            return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::INVALID_DATA_TYPE,
-            });
+            return Err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::INVALID_DATA_TYPE,
+            ));
         }
         // Clause 12.25 Table 12-29 lists Reliability as plain O with no
         // writability footnote, and unlike the intrinsic-reporting objects the
@@ -498,10 +499,10 @@ impl BACnetObject for TrendLogObject {
         // network client this property: the log owns it (logging status and
         // fault indication), so every write is refused.
         if property == PropertyIdentifier::RELIABILITY {
-            return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::WRITE_ACCESS_DENIED,
-            });
+            return Err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::WRITE_ACCESS_DENIED,
+            ));
         }
         if property == PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY {
             return self.write_log_device_object_property(value);
@@ -537,7 +538,7 @@ impl BACnetObject for TrendLogObject {
         self.store.is_some().then_some(self as _)
     }
 
-    fn advance_monotonic_time_internal(&mut self, now: std::time::Duration) -> bool {
+    fn advance_monotonic_time_internal(&mut self, now: core::time::Duration) -> bool {
         self.commit_if_interval(now);
         false
     }

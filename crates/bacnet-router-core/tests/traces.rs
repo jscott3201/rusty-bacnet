@@ -14,9 +14,9 @@ use bacnet_router_core::router::{Cause, ControlClass, Counters, Event, Kind, Opt
 use bacnet_router_core::table::{Convergence, Reachability, RejectEffect};
 use bacnet_router_core::{Instant, PortId};
 use fixture::{
-    addr, apdu_to, at, at_ms, bytes, claim_counts, deliver, deliver_broadcast, drain, i_am,
-    learn_9_via_r7, message, networks, options, reject_data, router, router_counts, router_with,
-    sent_reject, two_ports, Outcome, Recorder, Sent, TestRouter, CONFIRMED, NODE_A, OWN_0, R7,
+    CONFIRMED, NODE_A, OWN_0, Outcome, R7, Recorder, Sent, TestRouter, addr, apdu_to, at, at_ms,
+    bytes, claim_counts, deliver, deliver_broadcast, drain, i_am, learn_9_via_r7, message,
+    networks, options, reject_data, router, router_counts, router_with, sent_reject, two_ports,
 };
 
 /// A confirmed request from A for node 5 on network 9.
@@ -102,9 +102,10 @@ fn a_discovery_learning_and_aging() {
         message(NetworkMessageType::NETWORK_NUMBER_IS, &[0, 2, 1])
     );
     list_broadcast(&sent[3], 1, announce, i_am_type, &[1]);
-    assert!(sent
-        .iter()
-        .all(|sent| sent.is_broadcast() && sent.cause == Cause::Local));
+    assert!(
+        sent.iter()
+            .all(|sent| sent.is_broadcast() && sent.cause == Cause::Local)
+    );
     assert_eq!(router.next_deadline(), Some(at(60)));
     assert_eq!(router.counters(), counts(0, 0));
 

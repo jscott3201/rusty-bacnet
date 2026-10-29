@@ -9,6 +9,7 @@
 
 use super::*;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::error::RemoteError;
 
 const PV: PropertyIdentifier = PropertyIdentifier::PRESENT_VALUE;
 const PA: PropertyIdentifier = PropertyIdentifier::PRIORITY_ARRAY;
@@ -49,7 +50,7 @@ fn command(object: &mut LightingOutputObject, value: PropertyValue, priority: u8
 
 fn assert_out_of_range(result: Result<(), Error>) {
     match result {
-        Err(Error::Protocol { class, code }) => {
+        Err(Error::Remote(RemoteError::Error { class, code })) => {
             assert_eq!(class, ErrorClass::PROPERTY);
             assert_eq!(code, ErrorCode::VALUE_OUT_OF_RANGE);
         }

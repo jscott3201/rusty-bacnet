@@ -1,5 +1,6 @@
 use super::super::*;
 use bacnet_types::enums::{ErrorCode, Reliability};
+use bacnet_types::error::RemoteError;
 
 #[test]
 fn event_enrollment_status_flags_follow_event_state_and_force_out_of_service_false() {
@@ -13,7 +14,7 @@ fn event_enrollment_status_flags_follow_event_state_and_force_out_of_service_fal
             PropertyValue::Boolean(true),
             None,
         ),
-        Err(Error::Protocol { code, .. }) if code == ErrorCode::UNKNOWN_PROPERTY
+        Err(Error::Remote(RemoteError::Error { code, .. })) if code == ErrorCode::UNKNOWN_PROPERTY
     ));
     enrollment.set_event_state(EventState::HIGH_LIMIT);
 

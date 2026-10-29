@@ -2,6 +2,7 @@
 //! `read_work_limit` (#1215): a Group's Present_Value counts its own row plus
 //! each member row, and a read past the limit is aborted with
 //! OUT_OF_RESOURCES, as the full server aborts it.
+use bacnet_types::error::RemoteError;
 use std::net::Ipv4Addr;
 
 use bacnet_objects::group::GroupObject;
@@ -98,7 +99,7 @@ async fn endpoint_group_read_past_the_read_work_limit_aborts_out_of_resources() 
     assert!(
         matches!(
             results[0],
-            Err(Error::Abort { reason }) if reason == AbortReason::OUT_OF_RESOURCES
+            Err(Error::Remote(RemoteError::Abort { reason })) if reason == AbortReason::OUT_OF_RESOURCES
         ),
         "{results:?}"
     );

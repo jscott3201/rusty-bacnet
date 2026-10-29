@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fmt;
-use std::future::{poll_fn, Future};
+use std::future::{Future, poll_fn};
 use std::sync::{Arc, Mutex};
 use std::task::{Poll, Waker};
 
@@ -12,19 +12,19 @@ use bacnet_endpoint_core::coordinator::{
 };
 use bacnet_objects::audit::AuditReporterStatus;
 use bacnet_types::enums::ConfirmedServiceChoice;
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier};
 use tokio::sync::oneshot;
 use tokio::task::{JoinError, JoinSet};
 
 use super::event_recipient_route::ConfirmedRecipientRoute;
-use super::{CommState, CovAckResult, Refusal};
+use super::{CommState, CovAckResult};
 
 #[path = "notification_attempts.rs"]
 mod attempts;
 pub use attempts::run_notification_worker;
 pub(super) use attempts::{
-    run_attempts, run_notification_under_dcc, Attempt, AttemptsEnd, InitiationRestricted,
+    Attempt, AttemptsEnd, InitiationRestricted, run_attempts, run_notification_under_dcc,
 };
 
 #[cfg(test)]
@@ -56,7 +56,7 @@ impl fmt::Display for NotificationReserveError {
 pub enum NotificationWorkerResult {
     Ack,
     /// The peer's Error, Reject or Abort, with what it said.
-    Error(Refusal),
+    Error(RemoteError),
     Exhausted,
     Closed,
 }
@@ -340,10 +340,10 @@ impl NotificationTransactions {
 
     #[doc(hidden)]
     pub fn observe(result: Option<Result<(), JoinError>>) {
-        if let Some(Err(error)) = result {
-            if !error.is_cancelled() {
-                tracing::warn!(%error, "Confirmed notification worker failed");
-            }
+        if let Some(Err(error)) = result
+            && !error.is_cancelled()
+        {
+            tracing::warn!(%error, "Confirmed notification worker failed");
         }
     }
 
@@ -537,16 +537,13 @@ impl NotificationCore {
             }
             // What the refusal said goes to the waiting worker (#1323).
             Apdu::Error(pdu) if pdu.invoke_id == token.invoke_id() => {
-                CovAckResult::Error(Refusal::Error {
-                    class: pdu.error_class,
-                    code: pdu.error_code,
-                })
+                CovAckResult::Error(pdu.remote_error())
             }
             Apdu::Reject(pdu) if pdu.invoke_id == token.invoke_id() => {
-                CovAckResult::Error(Refusal::Reject(pdu.reject_reason))
+                CovAckResult::Error(pdu.remote_error())
             }
             Apdu::Abort(pdu) if pdu.invoke_id == token.invoke_id() => {
-                CovAckResult::Error(Refusal::Abort(pdu.abort_reason))
+                CovAckResult::Error(pdu.remote_error())
             }
             _ => return false,
         };

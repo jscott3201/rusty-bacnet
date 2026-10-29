@@ -2,7 +2,7 @@ use super::*;
 use crate::cov::active::{LiveCovSelection, LiveDeviceCov};
 use crate::device_view::{DeviceExecution, DeviceReadContext};
 use bacnet_services::read_property::ReadPropertyRequest;
-use bacnet_types::error::ErrorDetail;
+use bacnet_types::error::{ErrorDetail, RemoteError};
 
 /// ReadProperty under the narrow responder's actual RP[/WP/ReinitializeDevice] execution
 /// profile, within the responder's configured read work limit.
@@ -221,7 +221,7 @@ pub(super) async fn read_property_response_observed(
 
 /// The reply to a confirmed request `error` refused.
 ///
-/// An [`Error::Reject`] draws a Reject PDU with its reason, for every
+/// An [`Error::reject`] draws a Reject PDU with its reason, for every
 /// service, the formal-error ones included: a Reject has no
 /// service-specific body. Each handler turns the error from decoding the
 /// request into one with [`Error::into_request_reject`], so a syntax fault
@@ -235,7 +235,7 @@ pub(in crate::server) fn error_apdu_from_error(
     service_choice: ConfirmedServiceChoice,
     error: &Error,
 ) -> Apdu {
-    if let Error::Reject { reason } = error {
+    if let Error::Remote(RemoteError::Reject { reason }) = error {
         return Apdu::Reject(RejectPdu {
             invoke_id,
             reject_reason: *reason,
@@ -304,7 +304,8 @@ pub(in crate::server) fn error_apdu_from_error(
 
 pub(in crate::server) fn error_fields(error: &Error) -> (ErrorClass, ErrorCode) {
     match error {
-        Error::Protocol { class, code } | Error::Structured { class, code, .. } => (*class, *code),
+        Error::Remote(RemoteError::Error { class, code })
+        | Error::Structured { class, code, .. } => (*class, *code),
         _ => (ErrorClass::SERVICES, ErrorCode::OTHER),
     }
 }
@@ -484,10 +485,10 @@ fn send_response<'a, T: TransportPort + 'static>(
             ),
         }
         .await;
-        if let Err(error) = &sent {
-            if log_errors {
-                warn!(%error, "Failed to send response");
-            }
+        if let Err(error) = &sent
+            && log_errors
+        {
+            warn!(%error, "Failed to send response");
         }
         sent.is_ok()
     }
@@ -586,10 +587,7 @@ mod encoded_apdu_tests {
             error_apdu_from_error(
                 7,
                 ConfirmedServiceChoice::READ_PROPERTY,
-                &Error::Protocol {
-                    class: ErrorClass::OBJECT,
-                    code: ErrorCode::UNKNOWN_OBJECT,
-                },
+                &Error::protocol(ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT),
             ),
             Apdu::Reject(RejectPdu {
                 invoke_id: 7,

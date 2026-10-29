@@ -73,17 +73,22 @@
 //!
 //! [`TrendLogObject::with_persistence`]: crate::trend::TrendLogObject::with_persistence
 
-use std::time::Duration;
+use crate::prelude::*;
+use core::time::Duration;
 
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
 use bacnet_types::enums::LoggingType;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 
+// The snapshot format: only the file backend reads and writes it whole.
+#[cfg_attr(not(feature = "std"), allow(dead_code))]
 mod codec;
+#[cfg(feature = "std")]
 mod file;
 pub(crate) mod store;
 
+#[cfg(feature = "std")]
 pub use file::FileLogPersistence;
 
 /// The settings that say how a Trend Log or Trend Log Multiple acquires its
@@ -186,14 +191,14 @@ impl Default for LogCommitCadence {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod reopen_tests;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod cadence_tests;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod reopen_fit_tests;

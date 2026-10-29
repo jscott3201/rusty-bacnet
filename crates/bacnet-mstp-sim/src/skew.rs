@@ -24,12 +24,15 @@ const MILLION: i128 = 1_000_000;
 /// is within about 100 ppm; it is what an RC oscillator or a fractional
 /// baud divider can reach.
 ///
-/// Known limit (#1804): the simulator's deadlines are exact, so two nodes
-/// can stay in lockstep where real ones fall out of step through
-/// SilenceTimer's coarse resolution and their timers' phase. At 9,600 and
-/// 19,200 baud, adjacent masters at opposite clock edges keep colliding
-/// at token generation unless their adapters add deadline jitter; at
-/// 38,400 baud and above they collide once, then form a ring.
+/// Timers are exact unless the adapter sets a
+/// [`timer_tick`](crate::AdapterSpec::timer_tick), and exact timers can
+/// hold two nodes in lockstep where real ones fall out of step through
+/// SilenceTimer's coarse resolution and their timers' phase (#1804). At
+/// 9,600 and 19,200 baud, adjacent masters at opposite clock edges on
+/// exact timers keep colliding after token generation; on timers that
+/// tick at the nominal resolution they collide a bounded few times, then
+/// form a ring. At 38,400 baud and above exact timers let them collide
+/// once, then form a ring.
 ///
 /// Only the core's clock is skewed. A [`HostSpec`](crate::HostSpec)
 /// adapter's own timers (read latency, drain, echo grace) stay on the
@@ -73,22 +76,40 @@ impl Skew {
 }
 
 /// A node's local clock: it reads the line's time at boot, then runs at its
-/// own rate.
+/// own rate. A timer process on it ticks from a phase past that boot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Clock {
     origin: Instant,
     ppm: i32,
+    /// Where the timer's ticks fall past the origin, before it is taken
+    /// modulo the tick.
+    tick_phase: u64,
 }
 
 impl Clock {
     pub(crate) const PERFECT: Self = Self {
         origin: Instant::ZERO,
         ppm: 0,
+        tick_phase: 0,
     };
 
-    /// A clock that reads `origin` at `origin` and runs `ppm` fast.
+    /// A clock that reads `origin` at `origin` and runs `ppm` fast. Its
+    /// timer ticks from the origin.
     pub(crate) fn starting(origin: Instant, ppm: i32) -> Self {
-        Self { origin, ppm }
+        Self {
+            origin,
+            ppm,
+            tick_phase: 0,
+        }
+    }
+
+    /// The same clock, with its timer ticking `phase` past the origin
+    /// (taken modulo the tick).
+    pub(crate) fn ticking_from(self, phase: u64) -> Self {
+        Self {
+            tick_phase: phase,
+            ..self
+        }
     }
 
     /// What the clock reads at line time `at`, rounded down. Never earlier
@@ -118,12 +139,53 @@ impl Clock {
     pub(crate) fn span(self, from: Instant, to: Instant) -> Duration {
         self.local(to) - self.local(from)
     }
+
+    /// The first tick of the clock's timer at or after `local`, when it
+    /// ticks every `tick` from its phase. A zero `tick` is an exact timer:
+    /// `local` itself.
+    pub(crate) fn next_tick(self, local: Instant, tick: Duration) -> Instant {
+        let tick = tick.as_nanos();
+        if tick == 0 {
+            return local;
+        }
+        let first = self.origin + Duration::from_nanos(self.tick_phase % tick);
+        if local <= first {
+            return first;
+        }
+        let ticks = (local - first).as_nanos().div_ceil(tick);
+        first + Duration::from_nanos(ticks.saturating_mul(tick))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::SimRng;
+
+    /// A ticking timer services a deadline on its first tick at or after
+    /// it: never early, and less than one tick late.
+    #[test]
+    fn next_tick_rounds_up_to_the_phased_grid() {
+        let origin = Instant::from_millis(3);
+        // 1 ms once taken modulo the tick.
+        let clock = Clock::starting(origin, 0).ticking_from(1_000_000 + 5_000_000 * 7);
+        let tick = Duration::from_millis(5);
+        let at = |ms: u64| origin + Duration::from_millis(ms);
+        assert_eq!(clock.next_tick(at(0), tick), at(1));
+        assert_eq!(clock.next_tick(at(1), tick), at(1));
+        let just_after = at(1) + Duration::from_nanos(1);
+        assert_eq!(clock.next_tick(just_after, tick), at(6));
+        assert_eq!(clock.next_tick(at(500), tick), at(501));
+        assert_eq!(clock.next_tick(at(500), Duration::ZERO), at(500));
+        let mut rng = SimRng::new(1804);
+        for _ in 0..10_000 {
+            let clock = Clock::starting(origin, 0).ticking_from(rng.next_u64());
+            let tick = Duration::from_nanos(rng.range(1, 10_000_000));
+            let local = origin + Duration::from_nanos(rng.range(0, 1 << 40));
+            let due = clock.next_tick(local, tick);
+            assert!(due >= local && due - local < tick, "{local:?} {tick:?}");
+        }
+    }
 
     #[test]
     fn a_perfect_clock_reads_the_line() {

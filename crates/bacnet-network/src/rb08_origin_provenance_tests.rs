@@ -9,12 +9,12 @@
 //! In-memory Loopback only, no sleeps, no site scans.
 
 use super::layer::NetworkLayer;
-use bacnet_encoding::npdu::{encode_npdu, Npdu};
+use bacnet_encoding::npdu::{Npdu, encode_npdu};
 use bacnet_npdu::NetworkPriority;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportPort;
 use bytes::{Bytes, BytesMut};
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 #[tokio::test]
 async fn legacy_loopback_traffic_reaches_apdu_as_unverified() {

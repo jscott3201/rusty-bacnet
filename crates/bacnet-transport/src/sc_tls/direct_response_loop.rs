@@ -16,7 +16,7 @@ pub(super) async fn serve_npdu_loop<W>(
     let AdmittedDirectPeer {
         address: peer_addr,
         member,
-        identity,
+        provenance,
         response,
         warnings,
     } = peer;
@@ -64,6 +64,10 @@ pub(super) async fn serve_npdu_loop<W>(
                 if failed {
                     return;
                 }
+                // The initiator's AB.6.3 timer restarts on any BVLC it
+                // receives, so a peer we keep sending to has no reason to
+                // probe; what we send counts as activity too (#2133).
+                idle_deadline = tokio::time::Instant::now() + config.idle_timeout;
                 continue;
             }
             Event::Write(None) => return,
@@ -137,7 +141,7 @@ pub(super) async fn serve_npdu_loop<W>(
                             DirectPeer {
                                 vmac: member.vmac,
                                 addr: peer_addr,
-                                identity,
+                                provenance: provenance.clone(),
                                 response: Some(response.clone()),
                             },
                         )
@@ -161,6 +165,33 @@ pub(super) async fn serve_npdu_loop<W>(
                 return;
             }
             ScFunction::DisconnectAck => return,
+            // AB.6.3: the initiating peer probes an idle connection and the
+            // accepting peer answers (#2127). The frame already refreshed
+            // the idle deadline above, so a probing initiator keeps the
+            // socket open. A malformed probe gets the shared control NAK or
+            // silence instead of an ACK.
+            ScFunction::HeartbeatRequest => {
+                let reply = match crate::sc_frame::validate_control(
+                    &msg,
+                    &data,
+                    crate::sc_frame::ControlRecipient::HubConnector,
+                ) {
+                    Ok(()) => crate::sc::direct_membership::bare_control(
+                        ScFunction::HeartbeatAck,
+                        msg.message_id,
+                    )
+                    .freeze(),
+                    Err(Some(nak)) => nak,
+                    Err(None) => continue,
+                };
+                if !matches!(
+                    tokio::time::timeout(config.connect_timeout, write.send_data(&reply)).await,
+                    Ok(Ok(()))
+                ) {
+                    warn!("direct heartbeat reply send error for {peer_addr}");
+                    return;
+                }
+            }
             _ => continue,
         }
     }
@@ -198,3 +229,7 @@ async fn next_event<R: DirectWsRead>(
 #[cfg(test)]
 #[path = "direct_response_worker_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "direct_accept_idle_tests.rs"]
+mod idle_tests;

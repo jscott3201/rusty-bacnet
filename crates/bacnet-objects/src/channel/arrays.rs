@@ -29,6 +29,7 @@
 //! check. The members are decoded and checked by the shared helpers in
 //! `device_reference.rs` (#1313).
 
+use crate::prelude::*;
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
 use bacnet_types::error::Error;

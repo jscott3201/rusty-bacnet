@@ -17,8 +17,8 @@ use bacnet_types::{
     enums::{AuditLevel, AuditOperation},
 };
 use std::borrow::Cow;
-use std::sync::atomic::{AtomicU8, AtomicUsize};
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::{AtomicU8, AtomicUsize};
 
 pub(super) const LOGGER: &[u8] = &[2];
 pub(super) const NEW_LOGGER: &[u8] = &[4];

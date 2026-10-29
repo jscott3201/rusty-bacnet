@@ -57,7 +57,7 @@ async fn send_raw_apdu(
 /// and return a correct ReadPropertyACK.
 #[tokio::test]
 async fn server_handles_segmented_request() {
-    use bacnet_encoding::apdu::{self, encode_apdu, Apdu, ConfirmedRequest as ConfirmedRequestPdu};
+    use bacnet_encoding::apdu::{self, Apdu, ConfirmedRequest as ConfirmedRequestPdu, encode_apdu};
     use bacnet_network::layer::NetworkLayer;
     use bacnet_services::read_property::ReadPropertyRequest;
     use bacnet_types::enums::ConfirmedServiceChoice;

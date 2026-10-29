@@ -1,10 +1,14 @@
 //! Storage stand-ins for the forwarder's persistence tests.
 
+// Without std the tests that hold a save open on the writer's thread are
+// left out, and the helpers only they use with them.
+#![cfg_attr(not(feature = "std"), allow(dead_code))]
+
 use super::*;
 use std::future::Future;
 use std::pin::pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Mutex};
+use std::sync::{Mutex, mpsc};
 use std::task::{Context, Poll, Wake, Waker};
 use std::time::Duration;
 

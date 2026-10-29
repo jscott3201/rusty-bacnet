@@ -113,6 +113,19 @@ pub struct ForeignRegistrationSnapshot {
     pub broadcasts_hold_full: u64,
     /// Broadcasts sent while no lease was live, which the BBMD may refuse.
     pub broadcasts_unregistered: u64,
+    /// Requests to delete this device's entry from a BBMD it moved away
+    /// from, made because
+    /// [`set_release_previous_bbmd`](super::BipTransport::set_release_previous_bbmd)
+    /// is on (#1852).
+    pub previous_releases: u64,
+    /// Of those, the ones the old BBMD answered with success.
+    pub previous_released: u64,
+    /// Of those, the ones the old BBMD refused with a NAK.
+    pub previous_release_refused: u64,
+    /// Of those, the ones that went unanswered, or failed or were refused
+    /// on this side before they were sent. The old entry then stays until
+    /// its time-to-live runs out.
+    pub previous_release_unanswered: u64,
 }
 
 impl ForeignRegistrationSnapshot {
@@ -254,6 +267,48 @@ impl ClientRecord {
             node.fill_registration(&mut snapshot.foreign_registration);
         }
         snapshot
+    }
+
+    /// A request to delete this device's entry from the BBMD it left was
+    /// made.
+    pub(super) fn release_started(&self) {
+        let mut snapshot = self.lock();
+        let foreign = &mut snapshot.foreign_registration;
+        foreign.previous_releases = foreign.previous_releases.saturating_add(1);
+    }
+
+    /// What came of a request [`release_started`](Self::release_started)
+    /// counted, sent to `bbmd`: counted, and logged.
+    pub(super) fn release_ended(
+        &self,
+        bbmd: SocketAddrV4,
+        result: &Result<(), super::BvlcExchangeError>,
+    ) {
+        let mut snapshot = self.lock();
+        let foreign = &mut snapshot.foreign_registration;
+        let count = match result {
+            Ok(()) => {
+                tracing::debug!(%bbmd, "The BBMD this foreign device left deleted its entry");
+                &mut foreign.previous_released
+            }
+            Err(super::BvlcExchangeError::Nak(code)) => {
+                tracing::info!(
+                    %bbmd,
+                    %code,
+                    "The BBMD this foreign device left refused to delete its entry; it lapses on its own"
+                );
+                &mut foreign.previous_release_refused
+            }
+            Err(error) => {
+                tracing::info!(
+                    %bbmd,
+                    %error,
+                    "The BBMD this foreign device left did not confirm deleting its entry; it lapses on its own"
+                );
+                &mut foreign.previous_release_unanswered
+            }
+        };
+        *count = count.saturating_add(1);
     }
 
     /// Add what the node counted since it last reported.

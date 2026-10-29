@@ -6,7 +6,7 @@
 use bacnet_mstp_codec::FrameType;
 use bacnet_mstp_core::MasterState;
 
-use super::{Summary, REPLY_LENGTH};
+use super::{REPLY_LENGTH, Summary};
 
 /// The peer station.
 const PEER: u8 = 2;

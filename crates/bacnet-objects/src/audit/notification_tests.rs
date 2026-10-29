@@ -5,7 +5,7 @@ use bacnet_types::constructed::{
     AuditPropertyReference, BACnetAuditLogDatum, BACnetAuditNotification, BACnetRecipient,
 };
 use bacnet_types::enums::{AuditOperation, ObjectType, PropertyIdentifier};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::{BACnetTimeStamp, Date, ObjectIdentifier, Time};
 
 use crate::clock::{ClockFrame, ClockReader};
@@ -139,12 +139,14 @@ fn forwarding_change_outcome_requires_record_change_and_durable_commit() {
         Some(BACnetTimeStamp::Time(time(0))),
         Some(BACnetTimeStamp::Time(time(0))),
     );
-    assert!(log
-        .store_notifications_with_change(std::slice::from_ref(&notification), 2_000)
-        .unwrap());
-    assert!(!log
-        .store_notifications_with_change(std::slice::from_ref(&notification), 2_000)
-        .unwrap());
+    assert!(
+        log.store_notifications_with_change(std::slice::from_ref(&notification), 2_000)
+            .unwrap()
+    );
+    assert!(
+        !log.store_notifications_with_change(std::slice::from_ref(&notification), 2_000)
+            .unwrap()
+    );
     assert_eq!(
         log.store_confirmed_notifications_with_change(
             std::slice::from_ref(&notification),
@@ -167,9 +169,10 @@ fn forwarding_change_outcome_requires_record_change_and_durable_commit() {
     let mut different = notification.clone();
     different.invoke_id = Some(8);
     persistence.fail.store(true, Ordering::Release);
-    assert!(log
-        .store_confirmed_notifications_with_change(&[different], 2_000, receipt(b"second", 3),)
-        .is_err());
+    assert!(
+        log.store_confirmed_notifications_with_change(&[different], 2_000, receipt(b"second", 3),)
+            .is_err()
+    );
     assert_eq!(log.current_snapshot(), before);
 }
 
@@ -263,9 +266,14 @@ fn confirmed_commit_failure_is_atomic_and_exact_retry_can_succeed() {
     let before = persistence.snapshot.lock().unwrap().clone().unwrap();
     persistence.fail.store(true, Ordering::Release);
 
-    assert!(log
-        .store_confirmed_notifications(std::slice::from_ref(&incoming), 2_000, completed.clone(),)
-        .is_err());
+    assert!(
+        log.store_confirmed_notifications(
+            std::slice::from_ref(&incoming),
+            2_000,
+            completed.clone(),
+        )
+        .is_err()
+    );
     assert_eq!(log.generation(), before.generation);
     assert!(log.records().is_empty());
     assert_eq!(persistence.snapshot.lock().unwrap().as_ref(), Some(&before));
@@ -390,14 +398,16 @@ fn forwarding_window_is_inclusive_at_wire_tick_and_timeout_edges() {
                 }
             };
             let (mut log, persistence) = log(2);
-            assert!(log
-                .store_notifications_with_change(&[notification(Some(stamp(0)), None)], timeout)
-                .unwrap());
+            assert!(
+                log.store_notifications_with_change(&[notification(Some(stamp(0)), None)], timeout)
+                    .unwrap()
+            );
             let before = log.records().front().unwrap().clone();
             let target = notification(None, Some(stamp(distance)));
-            assert!(log
-                .store_notifications_with_change(std::slice::from_ref(&target), timeout)
-                .unwrap());
+            assert!(
+                log.store_notifications_with_change(std::slice::from_ref(&target), timeout)
+                    .unwrap()
+            );
             assert_eq!(log.records().len(), if complements { 1 } else { 2 });
             assert_eq!(log.total_record_count(), if complements { 1 } else { 2 });
             assert_eq!(log.records()[0].sequence_number, before.sequence_number);
@@ -410,9 +420,10 @@ fn forwarding_window_is_inclusive_at_wire_tick_and_timeout_edges() {
             assert_eq!(stored.target_timestamp.is_some(), complements);
             if complements {
                 let before = log.current_snapshot();
-                assert!(!log
-                    .store_notifications_with_change(&[target], timeout)
-                    .unwrap());
+                assert!(
+                    !log.store_notifications_with_change(&[target], timeout)
+                        .unwrap()
+                );
                 assert_eq!(log.current_snapshot(), before);
                 assert_eq!(persistence.commits.load(Ordering::Acquire), 3);
             }
@@ -436,19 +447,21 @@ fn forwarding_mixed_timestamp_variants_never_complement_in_either_direction() {
                 continue;
             }
             let (mut log, persistence) = log(2);
-            assert!(log
-                .store_notifications_with_change(
+            assert!(
+                log.store_notifications_with_change(
                     &[notification(Some(source.clone()), None)],
                     60_000
                 )
-                .unwrap());
+                .unwrap()
+            );
             let first = log.records()[0].clone();
-            assert!(log
-                .store_notifications_with_change(
+            assert!(
+                log.store_notifications_with_change(
                     &[notification(None, Some(target.clone()))],
                     60_000
                 )
-                .unwrap());
+                .unwrap()
+            );
             assert_eq!(log.total_record_count(), 2);
             assert_eq!(log.records().len(), 2);
             assert_eq!(log.records()[0], first);
@@ -463,12 +476,13 @@ fn commit_and_clock_failures_leave_memory_and_durable_snapshot_unchanged() {
     let (mut log, persistence) = log(10);
     let before = persistence.snapshot.lock().unwrap().clone().unwrap();
     persistence.fail.store(true, Ordering::Release);
-    assert!(log
-        .store_notifications(
+    assert!(
+        log.store_notifications(
             &[notification(Some(BACnetTimeStamp::Time(time(0))), None)],
             2_000
         )
-        .is_err());
+        .is_err()
+    );
     assert_eq!(log.total_record_count(), 0);
     assert_eq!(*persistence.snapshot.lock().unwrap(), Some(before));
 
@@ -482,9 +496,11 @@ fn commit_and_clock_failures_leave_memory_and_durable_snapshot_unchanged() {
                 2_000,
             )
             .unwrap_err();
-        assert!(matches!(error, Error::Protocol { class, code }
+        assert!(
+            matches!(error, Error::Remote(RemoteError::Error { class, code })
             if class == bacnet_types::enums::ErrorClass::DEVICE
-                && code == bacnet_types::enums::ErrorCode::OPERATIONAL_PROBLEM));
+                && code == bacnet_types::enums::ErrorCode::OPERATIONAL_PROBLEM)
+        );
         assert_eq!(log.total_record_count(), 0);
         assert_eq!(*persistence.snapshot.lock().unwrap(), durable);
     }
@@ -504,9 +520,11 @@ fn disabled_sink_denies_before_clock_or_persistence_change() {
     let error = log
         .store_notifications(&[notification(None, None)], 2_000)
         .unwrap_err();
-    assert!(matches!(error, Error::Protocol { class, code }
+    assert!(
+        matches!(error, Error::Remote(RemoteError::Error { class, code })
         if class == bacnet_types::enums::ErrorClass::SERVICES
-            && code == bacnet_types::enums::ErrorCode::SERVICE_REQUEST_DENIED));
+            && code == bacnet_types::enums::ErrorCode::SERVICE_REQUEST_DENIED)
+    );
     assert_eq!(log.generation(), generation);
     assert_eq!(
         persistence

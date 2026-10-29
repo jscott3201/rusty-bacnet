@@ -1,7 +1,7 @@
 //! Windows adapter discovery, from the shared `GetAdaptersAddresses` walk.
 
 use std::{io, net::IpAddr};
-use windows_sys::Win32::Networking::WinSock::{IpDadStatePreferred, AF_INET6};
+use windows_sys::Win32::Networking::WinSock::{AF_INET6, IpDadStatePreferred};
 
 use super::{Candidate, SelectedLink};
 

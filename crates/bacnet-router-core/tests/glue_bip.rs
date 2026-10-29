@@ -12,12 +12,12 @@ use bacnet_bip_core::bbmd::{
 use bacnet_bip_core::codec::{BdtEntries, BdtEntry, BvlcFunction, BvlcResultCode, Bvll, FdtEntry};
 use bacnet_bip_core::node::{self, Discard, Mode, Permissive};
 use bacnet_bip_core::port::{BbmdPort, HeldBroadcast, Ingress, NodePort};
+use bacnet_router_core::Instant;
 use bacnet_router_core::bip::BipPort;
 use bacnet_router_core::npdu::NpduLimits;
 use bacnet_router_core::router::{
     Group, GroupClassifier, Options, PortConfig, Received, SendRefusal,
 };
-use bacnet_router_core::Instant;
 
 use fixture::*;
 use glue::*;

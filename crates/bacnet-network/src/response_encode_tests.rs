@@ -1,8 +1,8 @@
 //! The reply NPDU encoder and the header size the APDU budget subtracts
 //! (#1713) match the owned NPDU encoder octet for octet, and refuse what it
 //! refuses with its error.
-use super::{encode_checked_response_npdu, ResponseRoute};
-use bacnet_encoding::npdu::{encode_npdu, Npdu, NpduAddress};
+use super::{ResponseRoute, encode_checked_response_npdu};
+use bacnet_encoding::npdu::{Npdu, NpduAddress, encode_npdu};
 use bacnet_npdu::NetworkPriority;
 use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
@@ -90,8 +90,10 @@ fn apdu_budget_header_is_the_header_the_reply_carries() {
     assert!(route.header_len(Some(&long)).is_err());
     assert!(route.max_apdu_length(480, Some(&long)).is_err());
     for network in [0, 0xffff] {
-        assert!(route
-            .max_apdu_length(480, Some(&address(network, &[1])))
-            .is_err());
+        assert!(
+            route
+                .max_apdu_length(480, Some(&address(network, &[1])))
+                .is_err()
+        );
     }
 }

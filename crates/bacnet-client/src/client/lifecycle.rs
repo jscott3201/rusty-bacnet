@@ -56,12 +56,16 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
     /// Start the client with additional startup options.
     pub async fn start_with_options(
-        mut config: ClientConfig,
+        config: ClientConfig,
         transport: T,
         options: ClientOptions,
     ) -> Result<Self, Error> {
         config.validate_request_settings()?;
-        config.max_apdu_length =
+        // `config.max_apdu_length` stays the configured maximum: each request
+        // takes the minimum with the transport's live limit, so it follows a
+        // limit that rises after start as well as one that falls (#2086).
+        // These checks only refuse a transport that leaves no APDU bucket.
+        let _bucket =
             cap_max_apdu_to_transport(config.max_apdu_length, transport.egress_apdu_limit())?;
         config.validate_window()?;
         options.validate()?;
@@ -69,7 +73,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let mut network = NetworkLayer::new(transport);
         let mut network_control_rx = network.enable_network_control_receiver()?;
         let mut apdu_rx = network.start().await?;
-        config.max_apdu_length = cap_max_apdu_to_transport(
+        let _bucket = cap_max_apdu_to_transport(
             config.max_apdu_length,
             network.transport().egress_apdu_limit(),
         )?;
@@ -259,7 +263,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                     InboundApdu {
                                         source_mac: &received.source_mac,
                                         source_network: &received.source_network,
-                                        provenance: received.provenance,
+                                        provenance: received.provenance.clone(),
                                         response_route: received.response_route(),
                                         is_group: received.is_group,
                                         reply_tx: received.reply_tx,

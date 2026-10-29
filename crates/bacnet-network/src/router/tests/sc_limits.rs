@@ -12,9 +12,9 @@ use super::*;
 use bacnet_npdu::NpduLimits;
 use bacnet_transport::sc::{LoopbackWebSocket, ScReconnectConfig, ScTransport, WebSocketPort};
 use bacnet_transport::sc_frame::{
-    decode_sc_message, encode_sc_message, ScFunction, ScMessage, ScOption, Vmac,
+    ScFunction, ScMessage, ScOption, Vmac, decode_sc_message, encode_sc_message,
 };
-use tokio::time::{sleep, timeout, Instant};
+use tokio::time::{Instant, sleep, timeout};
 
 /// The node on network 1000 that sends, and the one on 2000 it sends to.
 const NODE: Vmac = [0x0A; 6];
@@ -188,7 +188,7 @@ async fn a_hub_that_carries_less_draws_reason_4() {
     send_to_peer(&hub_a, 590).await;
     assert!(is_reason_4(next_npdu_to(&hub_a, NODE).await));
     assert_eq!(router.counters().egress_too_long, 1);
-    router.stop().await;
+    router.stop().await.unwrap();
 }
 
 /// From a hub that carries 480 octets to one that carries 1,497: the
@@ -202,7 +202,7 @@ async fn a_hub_that_carries_more_takes_what_the_old_one_refused() {
     send_to_peer(&hub_a, 590).await;
     assert_eq!(next_npdu_to(&failover, PEER).await.len(), 601);
     assert_eq!(router.counters().egress_too_long, 1);
-    router.stop().await;
+    router.stop().await.unwrap();
 }
 
 /// The NPDU fits, but forwarded attributes push its encoded SC frame over
@@ -228,7 +228,7 @@ async fn forwarded_attributes_beyond_max_bvlc_return_reason_4() {
         (1, 1, 1)
     );
     assert!(is_reason_4(next_npdu_to(&hubs.hub_a, NODE).await));
-    hubs.router.stop().await;
+    hubs.router.stop().await.unwrap();
 }
 
 #[tokio::test]
@@ -255,5 +255,5 @@ async fn forwarded_reject_attributes_beyond_max_bvlc_do_not_make_feedback() {
         (counts.egress_too_long, counts.refused, counts.rejects),
         (1, 1, 0)
     );
-    hubs.router.stop().await;
+    hubs.router.stop().await.unwrap();
 }

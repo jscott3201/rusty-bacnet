@@ -1,5 +1,5 @@
 use super::*;
-use std::future::{poll_fn, Future};
+use std::future::{Future, poll_fn};
 use std::task::Poll;
 
 #[derive(Clone, Copy)]

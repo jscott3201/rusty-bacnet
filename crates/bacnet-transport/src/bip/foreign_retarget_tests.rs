@@ -5,6 +5,7 @@ use super::*;
 use bacnet_types::bip_port::ForeignDeviceChanges;
 use bacnet_types::constructed::{BACnetHostAddress, BACnetHostNPort};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::error::RemoteError;
 use std::net::SocketAddrV4;
 
 /// Real loopback: generous, since nothing in these tests waits on a timer
@@ -72,7 +73,7 @@ fn changes(bbmd: Option<BACnetHostNPort>, ttl: Option<u16>) -> ForeignDeviceChan
 }
 
 fn is_out_of_range(error: &Error) -> bool {
-    matches!(error, Error::Protocol { class, code }
+    matches!(error, Error::Remote(RemoteError::Error { class, code })
         if *class == ErrorClass::PROPERTY && *code == ErrorCode::VALUE_OUT_OF_RANGE)
 }
 
@@ -252,7 +253,7 @@ async fn a_change_needs_a_running_transport() {
     let moved = changes(Some(address_of(&second)), Some(90));
     let refused = |error: Error| {
         assert!(
-            matches!(error, Error::Protocol { class, code }
+            matches!(error, Error::Remote(RemoteError::Error { class, code })
                 if class == ErrorClass::PROPERTY && code == ErrorCode::WRITE_ACCESS_DENIED),
             "{error:?}"
         );
@@ -329,4 +330,135 @@ async fn a_broadcast_racing_a_move_goes_to_the_new_bbmd() {
         .find(|sent| sent.bytes.get(1) == Some(&0x09))
         .expect("the broadcast");
     assert_eq!(broadcast.to, SocketAddrV4::new(Ipv4Addr::LOCALHOST, 47902));
+}
+
+/// The address `transport` is bound to.
+fn own_address(transport: &BipTransport) -> ([u8; 4], u16) {
+    decode_bip_mac(transport.local_mac()).unwrap()
+}
+
+/// With the release on, a move asks the BBMD the device left to delete its
+/// entry: a real BBMD's FDT no longer lists the device, the success is
+/// counted, and the device registers with the new BBMD as it would without
+/// the release (#1852). With its access list empty, the default, the same
+/// BBMD would refuse the deletion: one reason the release is off by default.
+#[tokio::test]
+async fn a_move_releases_the_old_bbmds_entry_when_asked() {
+    let mut old = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOST);
+    old.enable_bbmd(vec![]);
+    old.enable_foreign_device_registration(ForeignDevicePolicy::default());
+    // This stack's BBMD lets only the senders its access list names delete
+    // a registration.
+    old.set_bbmd_management_acl(vec![Ipv4Addr::LOCALHOST.octets()]);
+    let _old_rx = old.start().await.unwrap();
+    let (_, old_port) = own_address(&old);
+    let second = bbmd().await;
+    let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+    transport.register_as_foreign_device(ForeignDeviceConfig {
+        bbmd_ip: Ipv4Addr::LOCALHOST,
+        bbmd_port: old_port,
+        ttl: 60,
+        renewal_interval: None,
+    });
+    transport.set_release_previous_bbmd(true);
+    let _rx = transport.start().await.unwrap();
+    observed(&transport, |s| s.registered).await;
+    let (ip, port) = own_address(&transport);
+    let listed = || {
+        old.bbmd_state()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .is_registered_foreign_device(ip, port)
+    };
+    assert!(listed());
+
+    lent(&transport)
+        .activate(&changes(Some(address_of(&second)), None))
+        .unwrap();
+    registration(&second).await;
+    let released = observed(&transport, |s| s.previous_released == 1).await;
+    assert_eq!(released.previous_releases, 1);
+    assert_eq!(
+        (
+            released.previous_release_refused,
+            released.previous_release_unanswered
+        ),
+        (0, 0)
+    );
+    assert!(!listed(), "the old BBMD still lists the device");
+    transport.stop().await.unwrap();
+    old.stop().await.unwrap();
+}
+
+/// A NAK, or silence, from the BBMD the device left is counted and fails
+/// nothing: the device still registers with the new BBMD. A lifetime-only
+/// change moves nowhere, so it asks nothing, and with the release off a
+/// move asks nothing either.
+#[tokio::test]
+async fn a_refused_or_unanswered_release_is_counted_and_the_move_stands() {
+    for nak in [true, false] {
+        let (first, second) = (bbmd().await, bbmd().await);
+        let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+        transport.register_as_foreign_device(foreign_to(&first, 60));
+        transport.set_release_previous_bbmd(true);
+        let _rx = transport.start().await.unwrap();
+        let (_, source) = registration(&first).await;
+        first.send_to(&[0x81, 0, 0, 6, 0, 0], source).await.unwrap();
+        observed(&transport, |s| s.registered).await;
+        lent(&transport).activate(&changes(None, Some(90))).unwrap();
+        lent(&transport)
+            .activate(&changes(Some(address_of(&second)), None))
+            .unwrap();
+
+        // The old BBMD is asked to delete the device's own entry; a
+        // registration the lifetime change sent may come first.
+        let (ip, port) = own_address(&transport);
+        let mut packet = [0; 64];
+        let from = tokio::time::timeout(WAIT, async {
+            loop {
+                let (len, from) = first.recv_from(&mut packet).await.unwrap();
+                if packet[1] == 0x08 {
+                    assert_eq!(len, 10);
+                    return from;
+                }
+            }
+        })
+        .await
+        .expect("a Delete-Foreign-Device-Table-Entry");
+        assert_eq!(&packet[..4], &[0x81, 0x08, 0, 10]);
+        assert_eq!(packet[4..8], ip);
+        assert_eq!(packet[8..10], port.to_be_bytes());
+        let counted = if nak {
+            first
+                .send_to(&[0x81, 0, 0, 6, 0, 0x50], from)
+                .await
+                .unwrap();
+            observed(&transport, |s| s.previous_release_refused == 1).await
+        } else {
+            tokio::time::pause();
+            let counted = observed(&transport, |s| s.previous_release_unanswered == 1).await;
+            tokio::time::resume();
+            counted
+        };
+        assert_eq!(
+            (counted.previous_releases, counted.previous_released),
+            (1, 0)
+        );
+        assert_eq!(registration(&second).await.0, 90, "nak: {nak}");
+        transport.stop().await.unwrap();
+    }
+
+    let (first, second) = (bbmd().await, bbmd().await);
+    let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+    transport.register_as_foreign_device(foreign_to(&first, 60));
+    let _rx = transport.start().await.unwrap();
+    lent(&transport)
+        .activate(&changes(Some(address_of(&second)), None))
+        .unwrap();
+    registration(&second).await;
+    let snapshot = transport.bvlc_client_snapshot();
+    assert_eq!(snapshot.foreign_registration.previous_releases, 0);
+    assert_eq!(snapshot.delete_fdt_entry.sent, 0);
+    transport.stop().await.unwrap();
 }

@@ -2,14 +2,17 @@
 
 An Astro/Starlight task guide for the release named in `src/lib/site.mjs`:
 installation, the local lab and first reads (`start/`), integration guides for
-shared endpoints, Network Port/Number controls, transport evidence and SC setup
-(`development/`), and operating guides (`guides/`). [Engineering
+serving objects, routing, shared endpoints, Network Port/Number controls and
+server authorization (`integrate/`), data-link setup for BACnet/IP, BACnet/SC
+and MS/TP (`connect/`), contributor source builds
+and documentation work (`development/`), and discovery, subscription and write
+guides (`guides/`). [Engineering
 docs](../docs/README.md) remain the contract authority.
 
-This content refresh is local-only. A successful build or browser check does not
-publish it or establish that a hosted site contains these changes. Historical
-publication machinery below is reference material; invoking it requires separate
-explicit authority.
+The site is published to GitHub Pages by a manual dispatch of `docs-pages.yml`
+from a reviewed `dev` commit. A successful local build or browser check does not
+publish anything or show that the hosted site contains a change; publishing
+requires separate explicit authority.
 
 ## Local build and validation
 
@@ -22,7 +25,8 @@ npm run verify
 ```
 
 `verify` runs Astro checking, Node unit tests, the production build, and local
-Playwright/axe tests at 320, 390, 768, and 1440 CSS pixels. It does not run Python
+Playwright/axe tests at 320, 360, 768, 1024 and 1440 CSS pixels, each page
+in the light and dark themes. It does not run Python
 tests or publish anything. The `Docs validation` CI job runs the same command on
 native Ubuntu with Node 24 and Chromium. Local results do not prove that a GitHub
 Actions run or Pages deployment succeeded.
@@ -92,8 +96,28 @@ workflow `34003656261`, artifact `9980479931`, tag `v0.11.0` at
 The release `bacnet-macos-arm64` executable also read value 72.5 and units 64
 from a 30-second loopback server that then stopped. This is bounded tutorial
 evidence, not PyPI, general wheel/platform, or physical-network qualification.
-That evidence is for v0.11.0; the lab has not yet run against a later
-release's wheels.
+That evidence is for v0.11.0.
+
+## Displayed Python first-read verification
+
+The binding unittest suite also extracts the sole Python code block from
+`src/content/docs/start/python.md` and executes those exact bytes in a subprocess.
+It uses the installed extension and an ephemeral loopback server to check typed
+values, instance selection, unknown-object errors and argument bounds. Missing,
+ambiguous, empty or unclosed Python blocks fail instead of silently selecting a
+different sample. Run this check from the repository root:
+
+```sh
+python -m unittest discover -s crates/rusty-bacnet/tests -p test_website_first_read.py -v
+```
+
+The existing binding CI jobs discover this test against their development
+extension. To validate a published release, run the same test in a separate
+virtual environment containing its published wheel and record the wheel's source,
+hash and installation report. A development package can report the release's
+version, so the version string alone is insufficient provenance. This check does
+not execute other website snippets or qualify discovery, COV, writes or physical
+networks. `npm run verify` remains separate from native Python execution.
 
 ## TUI screenshots
 
@@ -141,11 +165,18 @@ the Screen Recording permission if macOS asks.
   another). Shots are scaled to at most 1440 pixels wide (`--width`).
 - **Checking the driving logic** without a Terminal window:
   `capture.py --reuse --tmux-only DIR` writes each shot's text to `DIR/NAME.txt`
-  and leaves the PNGs alone.
+  and leaves the images alone.
 
-Rerun it after a TUI change that the pages show, and review the new PNGs before
+Rerun it after a TUI change that the pages show, and review the new WebP images before
 committing them. A new shot needs an entry in `SHOTS` in `capture.py`, a step
 in one of its scenarios, and a page that uses it.
+
+**Known gap (#2110):** the scenarios match `dev`'s TUI again, and a full run
+takes every shot in the manifest. The committed images still date from before
+many TUI changes; they are to be retaken from the published 0.15.0 release
+build, so the site shows what users install. When a wait times out, the script names the
+scenario, the text it waited for and the last shot taken, then prints the
+pane.
 
 ## Retained CI and publication reference
 
@@ -221,8 +252,6 @@ Actions artifacts retained for seven days, with hidden files excluded.
 5. Verify the **returned deployment URL** in a browser: homepage, direct nested
    route/reload, native search, theme/tabs, assets, raw Markdown, example download,
    original SVGs, sitemap/canonical URLs and 404 recovery under `/rusty-bacnet/`.
-   Only after deployment and live checks may a **separate** follow-up add public
-   repository README/package links or replace the unpublished status above.
 
 Future deployments remain manual with the same sequence and reviewed SHA.
 PR runs may cancel older checks for that PR, never a publication. Manual publish
@@ -242,6 +271,17 @@ artifact or fetch a mutable branch in the deployment job.
 - `ec.config.mjs` applies static keyboard focusability to native code blocks;
   Sätteri wraps tables in focusable scroll regions without replacing table
   semantics. No client-side renderer or extra UI framework is used.
+  Expressive Code drops a hidden block's tabindex, so `src/scripts/tab-code-focus.js`
+  restores it on the overflowing blocks of a tab panel when the panel is shown.
+- A task shown in more than one language uses `<Tabs syncKey="lang">` with the
+  labels `CLI`, `Python` and `Rust`; operating-system tabs use `syncKey="os"`.
+  A reader's choice then follows them from page to page. The sample harness
+  finds fences inside tabs as anywhere else. The axe test selects every tab
+  of each page in both themes.
+- Search: `src/components/DocsMarkdownContent.astro` lowers the Pagefind weight
+  of every page with a generated reference region (`generatedSearchWeight` in
+  `src/lib/site.mjs`), so task phrases rank the guides first while API names
+  still find their reference page; `tests/e2e/site.spec.ts` checks both.
 - Diagram enhancement leaves the original SVG and text available without JS.
   Current pages use each diagram once; add distinct IDs before repeating one
   diagram on a page.
@@ -249,31 +289,58 @@ artifact or fetch a mutable branch in the deployment job.
   dependency trees, screenshots and browser reports untracked.
 - The docs workflow is approved for CI and manual publication only. Pages
   settings and actual publication remain owner-operated; the workflow's presence
-  does not mean this site is live. Repository README/package public links remain
-  deferred until verified deployment. Do not introduce a support-status database.
+  does not mean a given change is live. Do not introduce a support-status database.
 
 ## Content organization
 
-- `start/`, `development/` and `guides/`: release tasks for the version in
+- `start/`, `connect/`, `integrate/` and `guides/`: release tasks for the version in
   `src/lib/site.mjs`, linked to the canonical repository docs at that release's
-  tag. `development/overview` keeps the source-build path for unreleased changes.
+  tag. `development/build-from-source` and `development/documentation` cover repository contributions and unreleased work.
 - `src/lib/site.mjs`: `release`, which MDX pages, the download list, the footer
   and the llms index read. To move to another release, change it and run
   `npm test`: `tests/unit/release.test.mjs` names every page, the lab script,
   the sidebar label and the home banner that still carry another version
-  (`project/upgrading.md` and the lab's recorded evidence may name the previous
-  one). It also checks the installation page's asset list against
+  (the upgrade guide from it, `project/upgrading/v0-15.md`, and the lab's
+  recorded evidence may name the previous one). It also checks the installation page's asset list against
   `.github/workflows/release.yml`.
-- `tui/`: the terminal UI on the `dev` branch, which ships after the release in
-  `src/lib/site.mjs`. Its screenshots come from `scripts/tui-screenshots/`
+- `tui/`: the terminal UI as it is on `dev`. It shipped in the release in
+  `src/lib/site.mjs`; later changes land in the next release. Its screenshots come from `scripts/tui-screenshots/`
   (see "TUI screenshots" above).
-- `reference/` and `project/`: reference entry points, support scope and the
-  upgrade guide from the previous release.
+- `reference/` and `project/`: reference entry points, support scope, and the
+  upgrade hub (`project/upgrading`) with one guide per release under it.
+- `reference/cli.md`, `reference/python.md` and `reference/rust.mdx` are
+  generated between their `generated:start` and `generated:end` markers by
+  `scripts/reference-cli.mjs` (the clap definitions, through a bacnet-cli
+  test), `scripts/reference-python.py` (the `.pyi` stub) and
+  `scripts/reference-rust.mjs` (`cargo metadata`); the text around the
+  markers is authored. The Python script also writes one page per group under
+  `reference/python/`, all generated. They track `dev`, so each page says so
+  above its generated part. Each script takes `--check`. The release runs them
+  (`docs/ci.md`, "Release"); PR CI doesn't, so a PR that adds an option or a
+  method needn't regenerate them, but one that adds a `bacnet` command or a
+  published crate must. `tests/unit/reference.test.mjs` checks that they
+  parse and link correctly. The sidebar nests the Python pages in a
+  collapsed group, so tests that walk `navigation.json` flatten an item's
+  `items`.
+- `src/data/support.json`: the capability tables on `project/conformance`
+  (#1496), generated from the code by
+  `crates/bacnet-integration-tests/support_tables.rs`; don't edit it. Run
+  `cargo run -p bacnet-integration-tests --example support-tables` to
+  regenerate it. A workspace test fails when it is stale, so a PR that adds
+  an object type, a listed service or a transport feature regenerates it.
+  `src/lib/support.mjs` turns it into the page's tables, for the
+  `SupportTable` component and the plain-text export alike.
+- `src/content/docs/project/sample-pics.md`: the sample PICS (#1496), a
+  generated page; don't edit it. `crates/bacnet-integration-tests/sample_pics.rs`
+  writes it, banner and all, with the same command, and the same workspace
+  test fails when it is stale. A change to an object's property metadata or
+  to the PICS generator's output regenerates it.
 - `src/data/navigation.json`: sidebar and test route inventory.
+- `src/data/legacy-routes.json`: retained routes and section destinations. Compatibility pages keep old bookmarks and raw URLs usable, stay out of Pagefind, and are omitted from the canonical llms guide list.
 - `scripts/prepare.mjs`: source-derived raw Markdown and version-aware llms index.
 
 Preserve the loopback lab's single source, generated download and recorded release
 native provenance. Tests automatically sweep navigation routes and additionally
-check development routing, search, scope in exports and representative screenshots.
+check integration/contributor routing, compatibility links, search, scope in exports and representative screenshots.
 Do not turn a docs refresh into a new support database, dependency upgrade, site/base
 change or publication workflow change.

@@ -32,16 +32,15 @@ use bacnet_server::server::{BACnetServer, ServerConfig};
 use bacnet_transport::{
     any::AnyTransport,
     bip6::{Bip6ForeignDeviceConfig, Bip6Transport},
-    mstp::LoopbackSerial,
 };
 use std::net::{Ipv6Addr, SocketAddrV6};
-use support::{fixture, udp, DEADLINE, GROUP};
+use support::{DEADLINE, GROUP, fixture, udp};
 use tokio::net::UdpSocket;
 
 const NODE: [u8; 3] = [0x12, 0x34, 0x56];
 const PEER: [u8; 3] = [0x40, 0x87, 0x09];
 const QUERY: &[u8] = &[1, 0x80, 0x12];
-type Server = BACnetServer<AnyTransport<LoopbackSerial>>;
+type Server = BACnetServer<AnyTransport>;
 
 async fn bounded<T>(f: impl std::future::Future<Output = T>) -> T {
     tokio::time::timeout(DEADLINE, f)

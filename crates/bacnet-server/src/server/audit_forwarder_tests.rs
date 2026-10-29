@@ -1,5 +1,5 @@
 use super::audit_notification_tests::{
-    confirmed_request, notification, oid, request_bytes, MemoryPersistence,
+    MemoryPersistence, confirmed_request, notification, oid, request_bytes,
 };
 use super::*;
 use crate::server::test_transport::{SendMode, SentFrame, TestTransport};
@@ -362,15 +362,16 @@ async fn audit_forwarding_unconfirmed_merge_failure_and_no_receipt() {
     f.unconfirmed(data.clone()).await;
     settle().await;
     assert_eq!(f.requests()[0].service_request, data);
-    assert!(f
-        .store
-        .snapshot
-        .lock()
-        .unwrap()
-        .as_ref()
-        .unwrap()
-        .completed_receipts
-        .is_empty());
+    assert!(
+        f.store
+            .snapshot
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .completed_receipts
+            .is_empty()
+    );
     let mut target = notification(AuditOperation::WRITE);
     target.target_timestamp = target.source_timestamp.take();
     f.unconfirmed(request_bytes(vec![target])).await;

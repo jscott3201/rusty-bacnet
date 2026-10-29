@@ -4,8 +4,8 @@
 //! second.
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bacnet_encoding::apdu::Apdu;
@@ -15,13 +15,13 @@ use ratatui::crossterm::event::KeyCode;
 use tokio::sync::mpsc;
 
 use super::*;
-use crate::decode::frame::summarize_frame;
-use crate::decode::testing;
 use crate::tui::app::capture::{CaptureKey, CaptureState, Focus};
 use crate::tui::app::watch::Screen;
-use crate::tui::capture::worker::{pump, route, Source};
+use crate::tui::capture::worker::{Source, pump, route};
 use crate::tui::capture::{Batch, CaptureCommand, CaptureEvent, CaptureFrame, Direction, Framing};
 use crate::tui::worker::EventSink;
+use bacnet_ops::decode::frame::summarize_frame;
+use bacnet_ops::decode::testing;
 
 /// A fixed wall-clock time, `ms` after 2025-10-09 08:53:20 UTC.
 pub(super) fn wall(ms: u64) -> SystemTime {
@@ -55,6 +55,7 @@ pub(super) fn raw_bip(ms: u64, out: bool, bytes: Vec<u8>) -> CaptureFrame {
         destination,
         via,
         summary,
+        redacted: false,
         bytes: Bytes::from(bytes),
     }
 }
@@ -180,12 +181,13 @@ fn every_filter_term_narrows_the_list() {
     // A bad number is refused, and the list stays as it was.
     filter(&mut app, "net:x");
     assert_eq!(shown(&app).len(), 7);
-    assert!(app
-        .flash
-        .as_ref()
-        .unwrap()
-        .text
-        .contains("net takes a number"));
+    assert!(
+        app.flash
+            .as_ref()
+            .unwrap()
+            .text
+            .contains("net takes a number")
+    );
 }
 
 #[test]
@@ -295,29 +297,32 @@ fn the_tree_selects_a_field_and_the_hex_view_marks_its_octets() {
     // Left closes the APDU's node, or climbs to it.
     press(&mut app, KeyCode::BackTab);
     press(&mut app, KeyCode::Left);
-    assert!(app
-        .capture
-        .selected_field()
-        .unwrap()
-        .label
-        .starts_with("APDU"));
+    assert!(
+        app.capture
+            .selected_field()
+            .unwrap()
+            .label
+            .starts_with("APDU")
+    );
     // Closed, it hides its fields: it is the last row.
     press(&mut app, KeyCode::Left);
     press(&mut app, KeyCode::End);
-    assert!(app
-        .capture
-        .selected_field()
-        .unwrap()
-        .label
-        .starts_with("APDU"));
+    assert!(
+        app.capture
+            .selected_field()
+            .unwrap()
+            .label
+            .starts_with("APDU")
+    );
     press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::End);
-    assert!(app
-        .capture
-        .selected_field()
-        .unwrap()
-        .label
-        .starts_with("[1] 55"));
+    assert!(
+        app.capture
+            .selected_field()
+            .unwrap()
+            .label
+            .starts_with("Property: present-value")
+    );
 }
 
 #[test]

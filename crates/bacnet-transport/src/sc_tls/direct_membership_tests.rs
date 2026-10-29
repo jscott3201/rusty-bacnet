@@ -272,10 +272,12 @@ async fn incumbent_plus_pending_reaches_physical_cap_and_connect_timeout_recover
     )
     .await;
     assert!(refused.is_err());
-    assert!(tokio::time::timeout(Duration::from_secs(3), pending.recv())
-        .await
-        .unwrap()
-        .is_err());
+    assert!(
+        tokio::time::timeout(Duration::from_secs(3), pending.recv())
+            .await
+            .unwrap()
+            .is_err()
+    );
     wait_counts(&listener, 1, 0).await;
     assert_routable(&old, &mut rx, DIAL_VMAC).await;
     listener.stop().await;

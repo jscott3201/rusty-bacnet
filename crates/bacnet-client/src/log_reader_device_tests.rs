@@ -10,7 +10,7 @@ use bacnet_types::enums::{ConfirmedServiceChoice, ErrorClass, ErrorCode};
 use bytes::BytesMut;
 
 use super::*;
-use crate::client::fake_device::{client_with_device, Answer, FakeDevice, DEVICE_MAC};
+use crate::client::fake_device::{Answer, DEVICE_MAC, FakeDevice, client_with_device};
 
 const TOP: u64 = u32::MAX as u64;
 
@@ -561,14 +561,18 @@ async fn by_time_reads_records_newer_than_the_reference_then_by_sequence() {
 async fn a_log_reader_refuses_a_non_log_object_and_a_bad_page_size_before_sending() {
     let (mut client, device, _log) = device(FakeLog::new(0, 1, 1)).await;
     let analog = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-    assert!(client
-        .read_log_page(&DEVICE_MAC, analog, LogCursor::Oldest, 10)
-        .await
-        .is_err());
-    assert!(client
-        .read_log_page(&DEVICE_MAC, trend_log(), LogCursor::Oldest, 0)
-        .await
-        .is_err());
+    assert!(
+        client
+            .read_log_page(&DEVICE_MAC, analog, LogCursor::Oldest, 10)
+            .await
+            .is_err()
+    );
+    assert!(
+        client
+            .read_log_page(&DEVICE_MAC, trend_log(), LogCursor::Oldest, 0)
+            .await
+            .is_err()
+    );
     assert!(device.requests.lock().unwrap().is_empty());
     client.stop().await.unwrap();
 }

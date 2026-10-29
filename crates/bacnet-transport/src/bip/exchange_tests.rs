@@ -100,9 +100,12 @@ async fn the_same_request_or_a_second_one_a_success_answers_is_busy() {
     let ctx = node_ctx().await;
     let timeout = Duration::from_secs(3);
     let begin = |peer, request| ctx.node.begin(peer, request, timeout);
-    let refused = |result: Result<_, Error>, why: &str| {
-        let error = result.map(drop).unwrap_err();
-        assert!(error.to_string().contains(why), "{error}");
+    let refused = |result: Result<_, BvlcExchangeError>, why: ExchangeRefusal| match result
+        .map(drop)
+        .unwrap_err()
+    {
+        BvlcExchangeError::Refused(refusal) => assert_eq!(refusal, why),
+        other => panic!("not refused: {other}"),
     };
     let entry = at(99);
     let mut held = vec![
@@ -113,11 +116,11 @@ async fn the_same_request_or_a_second_one_a_success_answers_is_busy() {
     ];
     refused(
         begin(at(1), Bvll::ReadBroadcastDistributionTable),
-        "already in flight",
+        ExchangeRefusal::SameExchange,
     );
     refused(
         begin(at(1), Bvll::DeleteForeignDeviceTableEntry(entry)),
-        "already in flight",
+        ExchangeRefusal::ResultClass,
     );
     for last in 3..7 {
         held.push(begin(at(last), Bvll::DeleteForeignDeviceTableEntry(entry)).unwrap());
@@ -125,7 +128,7 @@ async fn the_same_request_or_a_second_one_a_success_answers_is_busy() {
     // Eight are in flight.
     refused(
         begin(at(7), Bvll::ReadBroadcastDistributionTable),
-        "every BVLC exchange slot is in use",
+        ExchangeRefusal::Full,
     );
     let snapshot = ctx.node.snapshot();
     assert_eq!(snapshot.read_bdt.busy, 2);

@@ -13,14 +13,14 @@
 
 use bacnet_npdu::{NetworkMessageType, RejectMessageReason};
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
-use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
+use bacnet_types::error::Error;
 use bytes::Bytes;
 use tokio::sync::mpsc;
 
 use crate::layer::NetworkLayer;
 use crate::loopback_fixture::{
-    next_from_router, pump, recv, reject_of, wire, FromRouter, LONGEST, REMOTE, TOO_LONG,
+    FromRouter, LONGEST, REMOTE, TOO_LONG, next_from_router, pump, recv, reject_of, wire,
 };
 use crate::router::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
 
@@ -78,10 +78,10 @@ impl Injector {
             Vec::new(),
             None,
         );
-        if self.sent.try_send(frame).is_ok() {
-            if let Some(mac) = unicast {
-                let _ = self.unicast_macs.send(MacAddr::from_slice(mac));
-            }
+        if self.sent.try_send(frame).is_ok()
+            && let Some(mac) = unicast
+        {
+            let _ = self.unicast_macs.send(MacAddr::from_slice(mac));
         }
     }
 }
@@ -202,5 +202,5 @@ async fn router_drops_and_counts_a_frame_from_an_over_long_source_mac() {
     assert!(local.try_recv().is_err());
     assert_eq!(router.address_length_drops(), 3);
 
-    router.stop().await;
+    router.stop().await.unwrap();
 }

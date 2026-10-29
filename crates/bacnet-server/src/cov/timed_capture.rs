@@ -15,6 +15,7 @@
 //! successful attempt as it commits, through [`TimedWriteCapture`].
 use bacnet_objects::clock::ClockFrame;
 use bacnet_objects::database::ObjectDatabase;
+use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
@@ -25,7 +26,7 @@ use super::{
     CovNotificationKind, CovSubscriptionKey, CovSubscriptionSnapshot, CovSubscriptionTable,
 };
 use crate::handlers::{WriteCommitObserver, WriteTarget};
-use crate::life_safety_cov::{is_life_safety_object, LifeSafetyCovChange, LifeSafetyCovSnapshots};
+use crate::life_safety_cov::{LifeSafetyCovChange, LifeSafetyCovSnapshots, is_life_safety_object};
 
 /// Live timestamped references whose changes a producer must capture.
 pub(crate) struct TimedCapture {
@@ -152,9 +153,32 @@ impl TimedCapture {
         }) else {
             return Vec::new();
         };
+        self.run_from_source(frame, |oid| db.get(&oid))
+    }
+
+    /// Capture an intermediate event state and the exact Device-clock observation
+    /// retained with it. No clockless snapshot falls back to a later live read.
+    pub(crate) fn run_from_snapshot(
+        self,
+        snapshot: &dyn BACnetObject,
+        frame: Option<ClockFrame>,
+    ) -> Vec<CovSubscriptionKey> {
+        let Some(frame) = frame.filter(|frame| frame.is_valid_actual_datetime()) else {
+            return Vec::new();
+        };
+        self.run_from_source(frame, |oid| {
+            (snapshot.object_identifier() == oid).then_some(snapshot)
+        })
+    }
+
+    fn run_from_source<'a>(
+        self,
+        frame: ClockFrame,
+        source: impl Fn(ObjectIdentifier) -> Option<&'a dyn BACnetObject>,
+    ) -> Vec<CovSubscriptionKey> {
         let mut reads = MultipleReads::default();
         for sub in &self.refs {
-            if let Some(object) = db.get(&sub.monitored_object_identifier) {
+            if let Some(object) = source(sub.monitored_object_identifier) {
                 reads.capture_source(object, sub);
             }
         }
@@ -162,7 +186,7 @@ impl TimedCapture {
             .refs
             .iter()
             .filter_map(|sub| {
-                let object = db.get(&sub.monitored_object_identifier)?;
+                let object = source(sub.monitored_object_identifier)?;
                 Some((sub, reads.read(object, sub)?))
             })
             .collect();

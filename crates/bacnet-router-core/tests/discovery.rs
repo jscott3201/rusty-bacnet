@@ -1,7 +1,7 @@
 //! Route discovery's bounds: cooldown, cap, expiry and cancel. The first
 //! case is ported from `bacnet-network`'s `router/rb06_convergence_tests.rs`.
 
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use bacnet_router_core::discovery::Discovery;
 use bacnet_router_core::router::Options;

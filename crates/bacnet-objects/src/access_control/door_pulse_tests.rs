@@ -2,8 +2,9 @@
 //! Door_Pulse_Time, Door_Extended_Pulse_Time, Door_Open_Too_Long_Time and
 //! Current_Command_Priority.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use bacnet_types::error::RemoteError;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use bacnet_types::enums::{ErrorClass, ErrorCode};
@@ -217,7 +218,7 @@ fn access_door_times_are_unsigned32_tenths() {
             (PropertyValue::Null, ErrorCode::INVALID_DATA_TYPE),
         ] {
             match door.write_property(property, None, value, None) {
-                Err(Error::Protocol { class, code: c }) => {
+                Err(Error::Remote(RemoteError::Error { class, code: c })) => {
                     assert_eq!(class, ErrorClass::PROPERTY);
                     assert_eq!(c, code, "{property:?}");
                 }
@@ -231,7 +232,8 @@ fn access_door_times_are_unsigned32_tenths() {
     }
     // Current_Command_Priority is derived and read-only.
     assert!(!door.is_writable_property(CCP));
-    assert!(door
-        .write_property(CCP, None, PropertyValue::Unsigned(8), None)
-        .is_err());
+    assert!(
+        door.write_property(CCP, None, PropertyValue::Unsigned(8), None)
+            .is_err()
+    );
 }

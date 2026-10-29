@@ -16,7 +16,7 @@ use core::net::SocketAddrV4;
 
 use bacnet_bip_codec::{BdtEntries, BdtEntry};
 use bacnet_bip_core::bbmd::{
-    BdtError, Context, EntryError, ForwardRefusal, Reservation, Tables, Target, Via, TWO_HOP_MASK,
+    BdtError, Context, EntryError, ForwardRefusal, Reservation, TWO_HOP_MASK, Tables, Target, Via,
 };
 use bacnet_bip_core::{Arrival, Instant, LocalSubnet};
 use support::{addr, destinations, target};

@@ -8,13 +8,14 @@ use bacnet_types::constructed::{BACnetAuthenticationFactor, BACnetAuthentication
 use bacnet_types::enums::{
     AuthenticationFactorType, EngineeringUnits, ErrorClass, ErrorCode, PropertyIdentifier as P,
 };
+use bacnet_types::error::RemoteError;
 
 use super::*;
 use crate::analog::AnalogValueObject;
 
 fn assert_error(result: Result<(), Error>, class: ErrorClass, code: ErrorCode) {
     assert!(
-        matches!(result, Err(Error::Protocol { class: c, code: e })
+        matches!(result, Err(Error::Remote(RemoteError::Error { class: c, code: e }))
             if c == class && e == code),
         "expected {class:?} / {code:?}, got {result:?}"
     );

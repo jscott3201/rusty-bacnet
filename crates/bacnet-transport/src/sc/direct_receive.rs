@@ -1,6 +1,6 @@
 //! Shared direct-connection wire admission for accepted and initiated peers.
 use crate::sc_frame::{
-    first_must_understand_destination_option_marker, ScFunction, ScMessage, Vmac, BROADCAST_VMAC,
+    BROADCAST_VMAC, ScFunction, ScMessage, Vmac, first_must_understand_destination_option_marker,
 };
 use bytes::Bytes;
 use tracing::warn;

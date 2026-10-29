@@ -8,8 +8,8 @@ use bacnet_router_core::npdu::{NetworkMessageType, RejectMessageReason};
 use bacnet_router_core::router::{ControlClass, Discard, Event, Kind};
 use bacnet_router_core::table::{Reachability, RejectEffect};
 use fixture::{
-    addr, apdu_to, at, bytes, deliver, learn_9_via_r7, reject_data, router, sent_reject, Outcome,
-    Recorder, CONFIRMED, NODE_A, OWN_1, R7,
+    CONFIRMED, NODE_A, OWN_1, Outcome, R7, Recorder, addr, apdu_to, at, bytes, deliver,
+    learn_9_via_r7, reject_data, router, sent_reject,
 };
 
 /// A request for unknown network 44, with `source` as its SNET and SADR.

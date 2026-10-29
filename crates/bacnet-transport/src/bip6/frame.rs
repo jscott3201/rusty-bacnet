@@ -1,7 +1,7 @@
 //! The B/IPv6 transport's side of the BVLL codec: decoding and encoding with
 //! the transport's [`Error`].
 
-use bacnet_bip_codec::ipv6::{decode, Bvlc6Function, Bvll6, Bvll6Error};
+use bacnet_bip_codec::ipv6::{Bvlc6Function, Bvll6, Bvll6Error, decode};
 use bacnet_types::error::{DecodeError, DecodingKind, Error};
 use bytes::BytesMut;
 

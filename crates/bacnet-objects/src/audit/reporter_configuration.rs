@@ -49,16 +49,18 @@ mod tests {
         let status = reporter.status_internal();
         status.set_configured(true);
         let original = status.begin_delivery();
-        assert!(reporter
-            .configure_audit_reporter_internal(
-                AuditLevel::DEFAULT,
-                AuditOperationFlags::empty(),
-                true,
-                Some(vec![]),
-                BACnetPriorityFilter::empty(),
-                None
-            )
-            .is_err());
+        assert!(
+            reporter
+                .configure_audit_reporter_internal(
+                    AuditLevel::DEFAULT,
+                    AuditOperationFlags::empty(),
+                    true,
+                    Some(vec![]),
+                    BACnetPriorityFilter::empty(),
+                    None
+                )
+                .is_err()
+        );
         assert_eq!(
             status.begin_delivery(),
             original,

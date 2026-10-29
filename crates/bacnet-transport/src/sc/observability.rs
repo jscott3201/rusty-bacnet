@@ -11,10 +11,10 @@ use std::time::Duration;
 
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
-use tokio::sync::{broadcast, watch, Mutex};
+use tokio::sync::{Mutex, broadcast, watch};
 use tokio::time::Instant;
 
-use crate::sc_frame::{decode_sc_bvlc_result, ScBvlcResult, ScFunction, ScMessage, Vmac};
+use crate::sc_frame::{ScBvlcResult, ScFunction, ScMessage, Vmac, decode_sc_bvlc_result};
 
 use super::{
     ScConnectError, ScConnection, ScConnectionState, ScDialStage, ScTlsFailure, ScTransport,

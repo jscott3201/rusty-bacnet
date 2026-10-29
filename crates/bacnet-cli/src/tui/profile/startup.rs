@@ -1,6 +1,6 @@
 //! Profile entry decisions happen before any filesystem or network effects.
 
-use super::{overrides::has_transport_flags, service::Service, store::Store, Overrides};
+use super::{Overrides, overrides::has_transport_flags, service::Service, store::Store};
 use crate::args::{Cli, Command};
 use crate::tui::app::connection::Connection;
 

@@ -290,12 +290,9 @@ async fn active_snapshot_follows_failover_failed_candidate_and_primary_restorati
     let mut failover = fixture.hub(2).await;
     let mut replacement = fixture.hub(3).await;
     let rejected = fixture.hub_config(1).with_certificate_bindings(
-        ScHubCertificateBindings::new(vec![ScHubCertificateBinding::new(
-            [0x55; 16],
-            vec![[0x55; 6]],
-            vec![[0x55; 32]],
-        )
-        .unwrap()])
+        ScHubCertificateBindings::new(vec![
+            ScHubCertificateBinding::new([0x55; 16], vec![[0x55; 6]], vec![[0x55; 32]]).unwrap(),
+        ])
         .unwrap(),
     );
     let mut rejected = ScHub::start("127.0.0.1:0", rejected, [0x10; 6], [0x10; 16])

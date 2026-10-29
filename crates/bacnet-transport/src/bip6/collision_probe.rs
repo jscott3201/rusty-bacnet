@@ -12,7 +12,7 @@ use tokio::time::Instant;
 use tracing::debug;
 
 use super::frame::encoded;
-use super::ingress::{is_local_unicast_delivery, LocalBinding};
+use super::ingress::{LocalBinding, is_local_unicast_delivery};
 use super::socket::{Bip6Socket, Inbound};
 use super::{Bip6Vmac, Bvll6};
 
@@ -93,25 +93,24 @@ impl Probe<'_> {
                         && (*peer.ip() == self.local_ip
                             || self.local_unicast_ips.contains(peer.ip()))
             );
-            if let Bvll6::AddressResolution { source, target } = message {
-                if target == self.vmac
-                    && matches!(received.destination, IpAddr::V6(ip) if ip == self.group)
-                    && received.os_group_delivery != Some(false)
-                    && !is_self_loop
-                {
-                    let ack = encoded(&Bvll6::AddressResolutionAck {
-                        source: self.vmac,
-                        destination: source,
-                    })?;
-                    if let Err(error) = socket.send_to(&ack, received.peer).await {
-                        if self.required {
-                            return Err(Error::Transport(error));
-                        }
-                        debug!(error = %error, "Configured-VMAC AR-Ack send failed");
+            if let Bvll6::AddressResolution { source, target } = message
+                && target == self.vmac
+                && matches!(received.destination, IpAddr::V6(ip) if ip == self.group)
+                && received.os_group_delivery != Some(false)
+                && !is_self_loop
+            {
+                let ack = encoded(&Bvll6::AddressResolutionAck {
+                    source: self.vmac,
+                    destination: source,
+                })?;
+                if let Err(error) = socket.send_to(&ack, received.peer).await {
+                    if self.required {
+                        return Err(Error::Transport(error));
                     }
-                    if source == self.vmac {
-                        return Ok(true);
-                    }
+                    debug!(error = %error, "Configured-VMAC AR-Ack send failed");
+                }
+                if source == self.vmac {
+                    return Ok(true);
                 }
             }
             // AR-ACK from another node using our VMAC.

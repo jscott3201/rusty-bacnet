@@ -208,9 +208,11 @@ fn connect_result_duplicate_vmac_wrong_message_id_does_not_reseed() {
     ))
     .unwrap();
 
-    assert!(!conn
-        .handle_connect_result(wrong_message_id, &result)
-        .unwrap());
+    assert!(
+        !conn
+            .handle_connect_result(wrong_message_id, &result)
+            .unwrap()
+    );
     assert_eq!(conn.state, ScConnectionState::Disconnected);
     assert_eq!(conn.local_vmac, original_vmac);
 

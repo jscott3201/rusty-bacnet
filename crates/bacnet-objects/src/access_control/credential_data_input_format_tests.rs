@@ -8,8 +8,8 @@ use bacnet_types::constructed::{BACnetAuthenticationFactor, BACnetAuthentication
 use bacnet_types::enums::{AuthenticationFactorType as F, ErrorCode, PropertyIdentifier as P};
 
 use super::credential_data_input_out_of_service_tests::{
-    assert_property_error, card, data, factor, read, reader, sequence, set_out_of_service, stamp,
-    stamped, write, FixedClock,
+    FixedClock, assert_property_error, card, data, factor, read, reader, sequence,
+    set_out_of_service, stamp, stamped, write,
 };
 use super::*;
 

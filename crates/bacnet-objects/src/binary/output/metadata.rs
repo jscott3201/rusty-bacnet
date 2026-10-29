@@ -1,5 +1,5 @@
 use super::BinaryOutputObject;
-use std::borrow::Cow;
+use alloc::borrow::Cow;
 
 use bacnet_types::enums::PropertyIdentifier as P;
 
@@ -133,7 +133,7 @@ mod tests {
     use super::*;
     use crate::traits::BACnetObject;
     use bacnet_types::enums::{ErrorClass, ErrorCode};
-    use bacnet_types::error::Error;
+    use bacnet_types::error::{Error, RemoteError};
     use bacnet_types::primitives::PropertyValue;
 
     #[test]
@@ -183,7 +183,7 @@ mod tests {
             );
             assert!(
                 matches!(object.write_property(P::FEEDBACK_VALUE, None, PropertyValue::Enumerated(2), None),
-                Err(Error::Protocol { class, code })
+                Err(Error::Remote(RemoteError::Error { class, code }))
                     if class == ErrorClass::PROPERTY
                         && code == ErrorCode::VALUE_OUT_OF_RANGE)
             );

@@ -1,8 +1,9 @@
 //! EventLog (type 25) object per ASHRAE 135-2020 Clause 12.27.
 
-use std::borrow::Cow;
-use std::collections::VecDeque;
-use std::sync::Arc;
+use crate::prelude::*;
+use alloc::borrow::Cow;
+use alloc::collections::VecDeque;
+use alloc::sync::Arc;
 
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::constructed::BACnetEventLogRecord;
@@ -13,11 +14,11 @@ use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlag
 use crate::clock::ClockReader;
 use crate::common::{self, read_common_properties};
 use crate::log_buffer::{
-    log_buffer_read_denied, LogBufferRecords, LogRecordBuffer, LogRecordIdentity,
+    LogBufferRecords, LogRecordBuffer, LogRecordIdentity, log_buffer_read_denied,
 };
 use crate::log_lifecycle::LogLifecycle;
 use crate::log_persistence::store::{DurableLog, LogStore};
-use crate::log_reporting::{impl_buffer_ready_reporting, BufferReadyReporting};
+use crate::log_reporting::{BufferReadyReporting, impl_buffer_ready_reporting};
 use crate::log_window::LogWindow;
 use crate::traits::BACnetObject;
 
@@ -337,7 +338,7 @@ impl BACnetObject for EventLogObject {
         self.store.is_some().then_some(self as _)
     }
 
-    fn advance_monotonic_time_internal(&mut self, now: std::time::Duration) -> bool {
+    fn advance_monotonic_time_internal(&mut self, now: core::time::Duration) -> bool {
         self.commit_if_interval(now);
         false
     }

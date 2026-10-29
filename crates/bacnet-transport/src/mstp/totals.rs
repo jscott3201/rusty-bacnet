@@ -7,8 +7,8 @@
 //! into `u64`s that saturate.
 
 use bacnet_mstp_core::{
-    Duration, LatenessHistogram as CoreLateness, MstpCounters as CoreCounters,
-    QueueCounters as CoreQueueCounters, LATENESS_BUCKETS,
+    Duration, LATENESS_BUCKETS, LatenessHistogram as CoreLateness, MstpCounters as CoreCounters,
+    QueueCounters as CoreQueueCounters,
 };
 
 /// One transmit queue's counts since the transport started: the core's

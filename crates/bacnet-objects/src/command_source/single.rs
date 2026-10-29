@@ -13,7 +13,7 @@
 //! Tracking is off until the object provisions it. Off, the object serves
 //! no Value_Source row and every method here leaves its behaviour alone.
 
-use super::{tracking::decode_claim, CommandOrigin};
+use super::{CommandOrigin, tracking::decode_claim};
 use crate::common;
 use crate::property_metadata::{
     PropertyConformance, PropertyMetadata, PropertyPresenceCondition, PropertyWriteCapability,

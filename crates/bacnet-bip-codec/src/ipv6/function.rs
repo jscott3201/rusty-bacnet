@@ -2,8 +2,8 @@
 //! function has.
 
 use super::{BIP6_ADDRESS_LENGTH, VMAC_LENGTH};
-use crate::function::named_codes;
 use crate::PayloadShape;
+use crate::function::named_codes;
 
 named_codes! {
     /// A B/IPv6 BVLC function code: the second octet of every B/IPv6 BVLL

@@ -10,7 +10,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 use tokio_serial::{SerialPort as _, SerialStream};
 
-use super::mstp_monitor::{join_and_discover, peer_server, propose, Run};
+use super::mstp_monitor::{Run, join_and_discover, peer_server, propose};
 use super::*;
 use crate::tui::monitor::Lines;
 

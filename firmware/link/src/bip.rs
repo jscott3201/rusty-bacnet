@@ -35,11 +35,11 @@ pub use expected::EXPECTED;
 use core::net::{Ipv4Addr, SocketAddrV4};
 
 use bacnet_bip_codec::{
-    decode, BdtEntries, BdtEntry, BvlcFunction, BvlcResultCode, Bvll, BvllError, Entries,
-    FdtEntries, FdtEntry, PayloadShape, TableEntry,
+    BdtEntries, BdtEntry, BvlcFunction, BvlcResultCode, Bvll, BvllError, Entries, FdtEntries,
+    FdtEntry, PayloadShape, TableEntry, decode,
 };
 
-use crate::tally::{fnv1a, FNV_OFFSET};
+use crate::tally::{FNV_OFFSET, fnv1a};
 
 /// Octets the scenario encodes into at once; its longest message, the
 /// B/IPv6 Forwarded-NPDU, takes 33.

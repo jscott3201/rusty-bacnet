@@ -15,9 +15,9 @@
 //!   confirmation, one-shots log them and go on.
 //! - Notices only record what was not assessed.
 
-use super::{projection, Diagnostic};
+use super::{Diagnostic, projection};
 use bacnet_transport::sc_tls::inspection::{
-    inspect_sc_pem_files, ScInputErrorKind, ScInspectionError, ScPemInspection,
+    ScInputErrorKind, ScInspectionError, ScPemInspection, inspect_sc_pem_files,
 };
 use std::path::Path;
 
@@ -228,10 +228,11 @@ mod tests {
         ] {
             let lint = Lint::run(&cert, Some(&cert), Some(&key), Some(at)).unwrap();
             assert_eq!(codes(&lint, Weight::Hard), [code]);
-            assert!(lint
-                .refusal()
-                .unwrap()
-                .contains("Operational certificate [0]"));
+            assert!(
+                lint.refusal()
+                    .unwrap()
+                    .contains("Operational certificate [0]")
+            );
         }
     }
 

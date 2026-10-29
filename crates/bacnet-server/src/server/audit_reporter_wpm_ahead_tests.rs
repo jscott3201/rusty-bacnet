@@ -1,7 +1,7 @@
-//! Deciding a WritePropertyMultiple's durable attempts before staging them
-//! (#1321) leaves the decision counters and the Audit records as the
-//! handler alone made them: an attempt the request never reaches may be put
-//! to the authorizer, but it is neither counted nor audited.
+//! Deciding a WritePropertyMultiple's attempts before the handler runs
+//! (#1321, #2032) leaves the decision counters and the Audit records as the
+//! handler alone made them: an attempt decided ahead that the request never
+//! reaches is neither counted nor audited.
 
 use super::*;
 use crate::mutation::{MutationDecisionCounters, MutationServiceCounters};
@@ -121,7 +121,8 @@ async fn deciding_attempts_ahead_counts_and_audits_only_the_attempts_reached() {
     );
     // Enable FALSE, then an element of a property the object lacks, which
     // fails before the authorizer would see it, then a rules write the
-    // request never reaches. The first and last were decided ahead.
+    // request never reaches. Deciding ahead stops at the failing element, as
+    // the handler does, so only the first is decided (#2032).
     let mut bytes = BytesMut::new();
     WritePropertyMultipleRequest {
         list_of_write_access_specs: vec![WriteAccessSpecification {
@@ -144,9 +145,9 @@ async fn deciding_attempts_ahead_counts_and_audits_only_the_attempts_reached() {
     };
     assert_eq!(error.error_code, ErrorCode::UNKNOWN_PROPERTY);
     completed(&fixture).await;
-    // Both attempts the objects save first were put to the authorizer ahead
-    // of the handler, the one the request never reached included.
-    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    // The rules write after the failing element was never put to the
+    // authorizer; before #2032 it was, as an attempt the object saves first.
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
     // Only the attempt the handler reached is counted and audited.
     assert_eq!(
         fixture.server.mutation_decision_counters(),
@@ -172,9 +173,8 @@ async fn deciding_attempts_ahead_counts_and_audits_only_the_attempts_reached() {
             property_array_index: None
         })
     );
-    // Storage holds what the object serves: Enable, and no rules. The
-    // request released its staged rules itself, so settling, which would
-    // put storage back too, finds nothing staged.
+    // Storage holds what the object serves: Enable, and no rules, which
+    // were never staged. Settling finds nothing staged.
     let mut db = fixture.server.db.write().await;
     let writes = db
         .get_mut(&target)

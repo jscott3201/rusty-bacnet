@@ -2,8 +2,8 @@ use super::*;
 use bacnet_types::error::Error;
 use std::borrow::Cow;
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Condvar;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 #[tokio::test(start_paused = true)]
 async fn loop_observes_hundredths_reconciles_changes_and_aborts_sleep() {

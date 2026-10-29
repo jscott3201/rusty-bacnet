@@ -2,7 +2,7 @@
 //! drives it, with the client's side of the line played from frames
 //! written by hand.
 
-use bacnet_mstp_codec::{decode_frame, Frame, FrameType};
+use bacnet_mstp_codec::{Frame, FrameType, decode_frame};
 use bacnet_mstp_core::npdu::NetworkPriority;
 use bacnet_mstp_core::{
     Action, Duration, Instant, MasterCore, ReplyDecision, RequestId, TransmitId,
@@ -10,10 +10,10 @@ use bacnet_mstp_core::{
 
 use super::app::{self, Answer, Scratch};
 use super::{
-    read_answer, Core, Reply, Storage, Summary, CLIENT, CONFIG, GLOBAL_READ_PROPERTY, REQUESTS,
-    STATION, WHO_IS_EVERY_DEVICE, WHO_IS_OTHERS,
+    CLIENT, CONFIG, Core, GLOBAL_READ_PROPERTY, REQUESTS, Reply, STATION, Storage, Summary,
+    WHO_IS_EVERY_DEVICE, WHO_IS_OTHERS, read_answer,
 };
-use crate::tally::{fnv1a, FNV_OFFSET};
+use crate::tally::{FNV_OFFSET, fnv1a};
 
 /// The MS/TP broadcast address.
 const BROADCAST: u8 = 0xFF;

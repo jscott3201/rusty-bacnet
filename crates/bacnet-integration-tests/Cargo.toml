@@ -9,24 +9,32 @@ publish = false
 [features]
 ipv6 = ["bacnet-transport/ipv6"]
 ethernet = ["bacnet-transport/ethernet"]
+# Builds the website's BACnet/SC policy program (guide-sc-operator-policy).
+sc-tls = ["bacnet-server/sc-tls", "bacnet-transport/sc-tls"]
+
+[dependencies]
+bacnet-endpoint.workspace = true
+bacnet-client.workspace = true
+bacnet-types = { workspace = true, features = ["std"] }
+bacnet-encoding = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-std", "io-util", "time", "signal"] }
+# The website's guide programs (the [[bin]] targets below).
+bacnet-network.workspace = true
+bacnet-objects.workspace = true
+bacnet-server.workspace = true
+bacnet-services = { workspace = true, features = ["std"] }
+bacnet-transport.workspace = true
 
 [dev-dependencies]
 bacnet-bip-codec.workspace = true
 bacnet-mstp-codec.workspace = true
 bacnet-npdu = { workspace = true }
-bacnet-types = { workspace = true, features = ["std"] }
-bacnet-encoding = { workspace = true, features = ["std"] }
-bacnet-services = { workspace = true, features = ["std"] }
-bacnet-transport.workspace = true
-bacnet-network.workspace = true
-bacnet-objects.workspace = true
-bacnet-client.workspace = true
-bacnet-server.workspace = true
 bytes = { workspace = true, features = ["std"] }
 serde_json = "1"
+toml = "1.1"
 socket2 = { workspace = true, features = ["all"] }
 libc.workspace = true
-tokio = { workspace = true, features = ["net", "rt-multi-thread", "sync", "macros", "time", "test-util", "io-util"] }
+tokio = { workspace = true, features = ["net", "rt-multi-thread", "sync", "macros", "time", "test-util", "io-util", "process"] }
 
 # Interface indexes and the B/IPv6 packet-info oracle (#1881).
 [target.'cfg(unix)'.dev-dependencies]
@@ -47,6 +55,49 @@ path = "../../examples/rust/cov_subscriptions.rs"
 [[example]]
 name = "multi_object_server"
 path = "../../examples/rust/multi_object_server.rs"
+
+# The root README's Rust blocks (#2105): each file is a short header, then
+# the README block byte for byte, which website/tests/python checks.
+[[example]]
+name = "readme_read"
+path = "../../examples/rust/readme_read.rs"
+
+[[example]]
+name = "readme_server"
+path = "../../examples/rust/readme_server.rs"
+
+# The website's PICS task page block (#1496), checked the same way.
+[[example]]
+name = "generate_pics"
+path = "../../examples/rust/generate_pics.rs"
+
+# Rewrites the website's capability tables, website/src/data/support.json,
+# and its sample PICS, website/src/content/docs/project/sample-pics.md
+# (#1496); tests/support_tables.rs fails when either committed file is stale.
+[[example]]
+name = "support-tables"
+path = "support_tables_write.rs"
+
+# Compile the canonical displayed source directly, without a maintained copy.
+[[bin]]
+name = "guide-shared-endpoint"
+path = "../../website/examples/rust/shared-endpoint/src/main.rs"
+
+# The security guide's policy program; it needs the certificate accessors.
+[[bin]]
+name = "guide-sc-operator-policy"
+path = "../../website/examples/rust/sc-operator-policy/src/main.rs"
+required-features = ["sc-tls"]
+
+# The server guide's device: an input the application supplies, a commanded output.
+[[bin]]
+name = "guide-server-device"
+path = "../../website/examples/rust/server-device/src/main.rs"
+
+# The router guide's two-network B/IP router; it uses the dev router lifecycle.
+[[bin]]
+name = "guide-bip-router"
+path = "../../website/examples/rust/bip-router/src/main.rs"
 
 [lints]
 workspace = true

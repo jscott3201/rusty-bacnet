@@ -13,6 +13,7 @@
 //! destination exceeds an Unsigned8, or whose direction lies outside
 //! BACnetLiftCarDirection, is VALUE_OUT_OF_RANGE.
 
+use crate::prelude::*;
 use bacnet_encoding::constructed::{decode_landing_call_status, encode_landing_call_status};
 use bacnet_types::constructed::{BACnetLandingCallStatus, LandingCallCommand};
 use bacnet_types::enums::LiftCarDirection;

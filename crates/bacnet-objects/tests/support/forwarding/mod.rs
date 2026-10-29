@@ -19,8 +19,8 @@ pub mod rows;
 
 use bacnet_types::enums::ObjectType;
 use defaults::Defaults;
-use probe::{take, CallLog, Probe};
-use rows::{rows, COMMANDS, QUERIES};
+use probe::{CallLog, Probe, take};
+use rows::{COMMANDS, QUERIES, rows};
 use std::collections::BTreeSet;
 
 const TRAIT_SOURCE: &str = include_str!("../../../src/traits.rs");

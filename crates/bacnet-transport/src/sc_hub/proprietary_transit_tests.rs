@@ -6,7 +6,8 @@ use super::deadline_test_support::*;
 use super::response_silence_tests::Snapshot;
 use super::shutdown_blocked_tests::ControlledPeer;
 use super::unknown_transit_tests::{
-    barrier, connect_limits, matrix_barrier, matrix_pair, matrix_receive, raw, recv, send, stopped,
+    barrier, connect_limits, matrix_barrier, matrix_pair, matrix_receive, raw, recv, retired, send,
+    stopped,
 };
 use super::*;
 use crate::sc_frame::BROADCAST_VMAC;
@@ -157,7 +158,7 @@ async fn proprietary_transit_local_preregistered_silence_and_state_matrix() {
                     if registered && origin.is_none() && matches!(dest, Some(v) if v != [0x42; 6]) {
                         continue;
                     }
-                    let (mut hub, mut a, mut b) = matrix_pair(&tls, registered, 0x42, 0x43).await;
+                    let (hub, mut a, mut b) = matrix_pair(&tls, registered, 0x42, 0x43).await;
                     let expires = a.deadline.expires();
                     let before: Vec<_> = hub
                         .clients
@@ -174,7 +175,9 @@ async fn proprietary_transit_local_preregistered_silence_and_state_matrix() {
                         (0, vec![], 149),
                         (0, vec![0x00, 0x2B], 147),
                     ] {
-                        let case = format!("proprietary registered={registered} id={id} origin={origin:02x?} dest={dest:02x?} flags={flags} body={body:02x?}");
+                        let case = format!(
+                            "proprietary registered={registered} id={id} origin={origin:02x?} dest={dest:02x?} flags={flags} body={body:02x?}"
+                        );
                         send(&mut a, raw(12, id, origin, dest, flags, &body)).await;
                         if (!registered || dest.is_none())
                             && dest != Some(BROADCAST_VMAC)
@@ -205,7 +208,8 @@ async fn proprietary_transit_local_preregistered_silence_and_state_matrix() {
                         assert!(a.deadline.is_committed());
                         assert_eq!(a.deadline.expires(), expires);
                     }
-                    stopped(&mut hub).await;
+                    drop(before); // its snapshots hold the peers' sinks
+                    retired(hub, [a, b]).await;
                 }
             }
         }
@@ -230,7 +234,7 @@ async fn proprietary_transit_result_for_12_relay_and_others_drop() {
                     Some([0; 6]),
                     Some(BROADCAST_VMAC),
                 ] {
-                    let (mut hub, mut b, mut a) = matrix_pair(&tls, registered, 0x43, 0x42).await;
+                    let (hub, mut b, mut a) = matrix_pair(&tls, registered, 0x43, 0x42).await;
                     let expires = b.deadline.expires();
                     for result in [
                         vec![12, 0],
@@ -238,7 +242,9 @@ async fn proprietary_transit_result_for_12_relay_and_others_drop() {
                     ] {
                         let mut body = vec![0xFE, 0, 0, 0x1F];
                         body.extend_from_slice(&result);
-                        let case = format!("ResultFor=12 registered={registered} id={id} origin={origin:02x?} dest={dest:02x?} result={result:02x?}");
+                        let case = format!(
+                            "ResultFor=12 registered={registered} id={id} origin={origin:02x?} dest={dest:02x?} result={result:02x?}"
+                        );
                         send(&mut b, raw(0, id, origin, dest, 2, &body)).await;
                         if registered && origin.is_none() && dest == Some([0x42; 6]) {
                             matrix_receive(
@@ -258,7 +264,7 @@ async fn proprietary_transit_result_for_12_relay_and_others_drop() {
                         );
                         cases[usize::from(registered)] += 1;
                     }
-                    stopped(&mut hub).await;
+                    retired(hub, [a, b]).await;
                 }
             }
         }

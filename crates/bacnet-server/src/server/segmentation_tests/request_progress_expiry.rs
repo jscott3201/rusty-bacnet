@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::server::segmented_receive::{
-    expire_segmented_requests, tests::observe_payload_drops, RequestPayload,
+    RequestPayload, expire_segmented_requests, tests::observe_payload_drops,
 };
 use bacnet_transport::port::TransportProvenance;
 use std::sync::atomic::AtomicUsize;

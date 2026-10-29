@@ -36,9 +36,10 @@
 //!
 //! [`NotificationForwarderPersistence`]: crate::notification_forwarder::NotificationForwarderPersistence
 
-use std::fmt;
-use std::sync::Arc;
-use std::time::Duration;
+use crate::prelude::*;
+use alloc::sync::Arc;
+use core::fmt;
+use core::time::Duration;
 
 use bacnet_encoding::constructed::{
     decode_event_notification_subscription, encode_event_notification_subscription_list,

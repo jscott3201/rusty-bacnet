@@ -6,8 +6,8 @@ use bacnet_services::device_mgmt::TimeSynchronizationRequest;
 use bacnet_transport::port::TransportProvenance;
 use bacnet_types::primitives::{Date, Time};
 use bytes::{Bytes, BytesMut};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn date(year: u16, month: u8, day: u8, day_of_week: u8) -> Date {
     Date {
@@ -100,43 +100,49 @@ fn invalid_and_clockless_requests_do_not_notify() {
     let callbacks = Arc::new(AtomicUsize::new(0));
     let config = config_with_counter(Arc::clone(&callbacks));
 
-    assert!(apply_time_sync_request(
-        Some(&clock),
-        &config,
-        &TimeSyncLimiter::new(TimeSyncPolicy::default()),
-        Bytes::from_static(&[0xff]),
-        false,
-        &received(),
-        None,
-    )
-    .is_err());
-    assert!(apply_time_sync_request(
-        Some(&clock),
-        &config,
-        &TimeSyncLimiter::new(TimeSyncPolicy::default()),
-        encoded(
-            Date {
-                year: Date::UNSPECIFIED,
-                month: 1,
-                day: 1,
-                day_of_week: 1,
-            },
-            time(0, 0),
-        ),
-        false,
-        &received(),
-        None,
-    )
-    .is_err());
-    assert!(apply_time_sync_request(
-        None,
-        &config,
-        &TimeSyncLimiter::new(TimeSyncPolicy::default()),
-        encoded(date(2024, 7, 4, 4), time(9, 15)),
-        false,
-        &received(),
-        None,
-    )
-    .is_err());
+    assert!(
+        apply_time_sync_request(
+            Some(&clock),
+            &config,
+            &TimeSyncLimiter::new(TimeSyncPolicy::default()),
+            Bytes::from_static(&[0xff]),
+            false,
+            &received(),
+            None,
+        )
+        .is_err()
+    );
+    assert!(
+        apply_time_sync_request(
+            Some(&clock),
+            &config,
+            &TimeSyncLimiter::new(TimeSyncPolicy::default()),
+            encoded(
+                Date {
+                    year: Date::UNSPECIFIED,
+                    month: 1,
+                    day: 1,
+                    day_of_week: 1,
+                },
+                time(0, 0),
+            ),
+            false,
+            &received(),
+            None,
+        )
+        .is_err()
+    );
+    assert!(
+        apply_time_sync_request(
+            None,
+            &config,
+            &TimeSyncLimiter::new(TimeSyncPolicy::default()),
+            encoded(date(2024, 7, 4, 4), time(9, 15)),
+            false,
+            &received(),
+            None,
+        )
+        .is_err()
+    );
     assert_eq!(callbacks.load(Ordering::SeqCst), 0);
 }

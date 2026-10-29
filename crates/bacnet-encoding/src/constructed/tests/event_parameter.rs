@@ -280,19 +280,19 @@ fn extended_reference_parameter_round_trip() {
 }
 
 #[test]
-fn opaque_unmodeled_alternatives_preserved() {
-    // change-of-life-safety [8] — a valid but unmodeled SEQUENCE alternative:
-    // body bytes preserved verbatim through decode->encode.
+fn opaque_unassigned_alternatives_preserved() {
+    // Tag 30, which the 2020 production doesn't assign: its body bytes are
+    // preserved verbatim through decode->encode.
     let wire_body = [0x09, 0x2A]; // one ctx-0 field standing in for the body
-    let mut wire = vec![0x8E]; // opening [8]
+    let mut wire = vec![0xFE, 30]; // opening [30], extended tag number
     wire.extend_from_slice(&wire_body);
-    wire.push(0x8F); // closing [8]
+    wire.extend_from_slice(&[0xFF, 30]); // closing [30]
     let (decoded, end) = decode_event_parameter(&wire, 0).unwrap();
     assert_eq!(end, wire.len());
     assert_eq!(
         decoded,
         BACnetEventParameter::Opaque {
-            tag: 8,
+            tag: 30,
             data: wire_body.to_vec()
         }
     );
@@ -304,8 +304,8 @@ fn opaque_unmodeled_alternatives_preserved() {
         "byte-identical preservation"
     );
 
-    // buffer-ready [10], change-of-timer [22], vendor tag 200
-    for tag in [10u8, 22, 200] {
+    // Unassigned tags 23 and 63, and vendor tag 200.
+    for tag in [23u8, 63, 200] {
         round_trip(&BACnetEventParameter::Opaque {
             tag,
             data: vec![0x21, 0x03],
@@ -562,10 +562,14 @@ fn members_cut_short_are_a_short_buffer() {
             parameters: vec![0x73, 0x01, 0x03, 0x52],
         },
         BACnetEventParameter::Opaque {
-            tag: 8,
+            tag: 30,
             data: vec![0x09, 0x2A],
         },
-    ] {
+    ]
+    .into_iter()
+    .chain(super::event_parameter_more::every_new_algorithm())
+    .filter(|value| *value != BACnetEventParameter::None)
+    {
         let mut octets = BytesMut::new();
         encode_event_parameter(&mut octets, &value).unwrap();
         let framed = assert_members_cut_short("BACnetEventParameter", &octets, |data| {

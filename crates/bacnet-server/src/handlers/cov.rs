@@ -3,10 +3,7 @@ use crate::cov::MultipleRefusal;
 use crate::runtime_clock;
 
 fn cov_property_error(code: ErrorCode) -> Error {
-    Error::Protocol {
-        class: ErrorClass::PROPERTY,
-        code,
-    }
+    Error::protocol(ErrorClass::PROPERTY, code)
 }
 
 /// A refusal of one COV reference of a SubscribeCOVPropertyMultiple request,
@@ -18,7 +15,8 @@ fn subscription_error(
     reference: &bacnet_types::constructed::PropertyReference,
 ) -> Error {
     match error {
-        Error::Protocol { class, code } | Error::Structured { class, code, .. } => Error::protocol(
+        Error::Remote(RemoteError::Error { class, code })
+        | Error::Structured { class, code, .. } => Error::with_detail(
             class,
             code,
             Some(ErrorDetail::FirstFailedSubscription(
@@ -82,9 +80,7 @@ pub(crate) fn handle_subscribe_cov_with_initial_endpoint(
     // Service consistency is distinct from structural parsing. Validate before
     // lookup, expiry purge or subscription replacement/initial notification.
     if request.lifetime.is_some() && request.issue_confirmed_notifications.is_none() {
-        return Err(Error::Reject {
-            reason: RejectReason::INCONSISTENT_PARAMETERS,
-        });
+        return Err(Error::reject(RejectReason::INCONSISTENT_PARAMETERS));
     }
 
     if request.is_cancellation() {
@@ -98,16 +94,16 @@ pub(crate) fn handle_subscribe_cov_with_initial_endpoint(
 
     match db.get(&request.monitored_object_identifier) {
         None => {
-            return Err(Error::Protocol {
-                class: ErrorClass::OBJECT,
-                code: ErrorCode::UNKNOWN_OBJECT,
-            });
+            return Err(Error::protocol(
+                ErrorClass::OBJECT,
+                ErrorCode::UNKNOWN_OBJECT,
+            ));
         }
         Some(obj) if !obj.supports_cov() => {
-            return Err(Error::Protocol {
-                class: ErrorClass::OBJECT,
-                code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-            });
+            return Err(Error::protocol(
+                ErrorClass::OBJECT,
+                ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+            ));
         }
         _ => {}
     }
@@ -175,16 +171,14 @@ pub(crate) fn handle_subscribe_cov_property_with_initial_endpoint(
     let lifetime = match (request.issue_confirmed_notifications, request.lifetime) {
         (None, None) => None,
         (Some(_), Some(0)) => {
-            return Err(Error::Protocol {
-                class: ErrorClass::SERVICES,
-                code: ErrorCode::VALUE_OUT_OF_RANGE,
-            })
+            return Err(Error::protocol(
+                ErrorClass::SERVICES,
+                ErrorCode::VALUE_OUT_OF_RANGE,
+            ));
         }
         (Some(_), Some(lifetime)) => Some(lifetime),
         _ => {
-            return Err(Error::Reject {
-                reason: RejectReason::INCONSISTENT_PARAMETERS,
-            })
+            return Err(Error::reject(RejectReason::INCONSISTENT_PARAMETERS));
         }
     };
 
@@ -201,18 +195,18 @@ pub(crate) fn handle_subscribe_cov_property_with_initial_endpoint(
 
     let object = db
         .get(&request.monitored_object_identifier)
-        .ok_or(Error::Protocol {
-            class: ErrorClass::OBJECT,
-            code: ErrorCode::UNKNOWN_OBJECT,
-        })?;
+        .ok_or(Error::protocol(
+            ErrorClass::OBJECT,
+            ErrorCode::UNKNOWN_OBJECT,
+        ))?;
 
     // An object can take property subscriptions without supporting
     // SubscribeCOV (Averaging, which Table 13-1 doesn't list).
     if !object.supports_subscribe_cov_property() {
-        return Err(Error::Protocol {
-            class: ErrorClass::OBJECT,
-            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        });
+        return Err(Error::protocol(
+            ErrorClass::OBJECT,
+            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+        ));
     }
 
     validate_cov_property(
@@ -322,10 +316,7 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
         (None, None) => true,
         (Some(_), Some(_)) => false,
         _ => {
-            return Err(Error::Reject {
-                reason: RejectReason::INCONSISTENT_PARAMETERS,
-            }
-            .into());
+            return Err(Error::reject(RejectReason::INCONSISTENT_PARAMETERS).into());
         }
     };
 
@@ -367,11 +358,7 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
         || max_notification_delay > 3600
         || u64::from(max_notification_delay) >= u64::from(lifetime)
     {
-        return Err(Error::Protocol {
-            class: ErrorClass::SERVICES,
-            code: ErrorCode::VALUE_OUT_OF_RANGE,
-        }
-        .into());
+        return Err(Error::protocol(ErrorClass::SERVICES, ErrorCode::VALUE_OUT_OF_RANGE).into());
     }
     let expires_at = runtime_clock::now() + Duration::from_secs(u64::from(lifetime));
     let subscriber_mac = MacAddr::from_slice(source_mac);
@@ -390,10 +377,7 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
                     None => ErrorCode::UNKNOWN_OBJECT,
                     Some(_) => ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
                 };
-                let error = Error::Protocol {
-                    class: ErrorClass::OBJECT,
-                    code,
-                };
+                let error = Error::protocol(ErrorClass::OBJECT, code);
                 // A refusal of the object is a refusal of its first COV
                 // reference, the first one that could not be processed.
                 failure = Some(match spec.list_of_cov_references.first() {
@@ -418,10 +402,10 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
             let refused = validate_cov_property(object, property_identifier, property_array_index)
                 .and_then(|()| {
                     if cov_ref.timestamped && admission_clock.is_none() {
-                        Err(Error::Protocol {
-                            class: ErrorClass::SERVICES,
-                            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-                        })
+                        Err(Error::protocol(
+                            ErrorClass::SERVICES,
+                            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+                        ))
                     } else {
                         Ok(())
                     }
@@ -456,14 +440,14 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
     // A failed first reference leaves nothing processed, so nothing changes;
     // not even an existing context's lifetime is renewed.
     let validated = subscriptions.len();
-    if validated == 0 {
-        if let Some(error) = failure {
-            return Err(MultipleRefusal {
-                error,
-                refused: Some(0),
-                committed: Vec::new(),
-            });
-        }
+    if validated == 0
+        && let Some(error) = failure
+    {
+        return Err(MultipleRefusal {
+            error,
+            refused: Some(0),
+            committed: Vec::new(),
+        });
     }
     let (accepted, refusal) = match table.subscribe_multiple(
         &context,

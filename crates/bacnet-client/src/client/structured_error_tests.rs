@@ -2,7 +2,7 @@
 //! ConfirmedPrivateTransfer and VT-Close answer errors with their own Clause
 //! 21 bodies instead of the plain class/code pair. A peer puts each exact
 //! body on the wire; the client must report it as `Error::Structured` with
-//! its detail (or `Error::Protocol` when the body has none) instead of
+//! its detail (or `Error::protocol` when the body has none) instead of
 //! failing to decode it and timing out.
 
 use super::*;
@@ -18,7 +18,7 @@ use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::ReceivedNpdu;
 use bacnet_types::constructed::{BACnetObjectPropertyReference, PropertyReference};
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
-use bacnet_types::error::ErrorDetail;
+use bacnet_types::error::{ErrorDetail, RemoteError};
 use bacnet_types::primitives::ObjectIdentifier;
 use std::future::Future;
 
@@ -211,10 +211,10 @@ async fn subscribe_cov_property_multiple_error_surfaces_the_failed_subscription(
     assert!(
         matches!(
             result,
-            Err(Error::Protocol {
+            Err(Error::Remote(RemoteError::Error {
                 class: ErrorClass::SERVICES,
                 code: ErrorCode::VALUE_OUT_OF_RANGE
-            })
+            }))
         ),
         "{result:?}"
     );
@@ -291,10 +291,10 @@ async fn vt_close_error_surfaces_the_sessions_not_closed() {
     assert!(
         matches!(
             result,
-            Err(Error::Protocol {
+            Err(Error::Remote(RemoteError::Error {
                 class: ErrorClass::SERVICES,
                 code: ErrorCode::UNKNOWN_VT_SESSION
-            })
+            }))
         ),
         "{result:?}"
     );

@@ -19,6 +19,7 @@ use bacnet_server::server::{
 };
 use bacnet_transport::bvll::decode_bip_mac;
 use bacnet_transport::port::DataAttribute;
+use bacnet_types::MacAddr;
 use bacnet_types::bitstring::AuditOperationFlags;
 use bacnet_types::constructed::{
     AuditPropertyReference, BACnetAddress, BACnetAuditNotification, BACnetRecipient,
@@ -26,8 +27,7 @@ use bacnet_types::constructed::{
 use bacnet_types::enums::{AuditLevel, AuditOperation, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue};
-use bacnet_types::MacAddr;
-use tokio::sync::{oneshot, RwLock, Semaphore};
+use tokio::sync::{RwLock, Semaphore, oneshot};
 
 #[path = "source_recipient.rs"]
 pub(crate) mod recipient;

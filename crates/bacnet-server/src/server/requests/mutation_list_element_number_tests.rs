@@ -10,15 +10,15 @@
 //! 19, NO_SPACE_TO_WRITE_PROPERTY 20, VALUE_OUT_OF_RANGE 37.
 
 use super::mutation_list_wire_tests::{
-    change_list_error, fill_msi_alarm_values, list_request, wire, ADD, REMOVE,
+    ADD, REMOVE, change_list_error, fill_msi_alarm_values, list_request, wire,
 };
-use super::mutation_tests::{oid, Fixture};
+use super::mutation_tests::{Fixture, oid};
 use super::*;
 use bacnet_encoding::constructed::{
     decode_destination_list, encode_destination, encode_destination_list,
 };
 use bacnet_objects::elevator::EscalatorObject;
-use bacnet_objects::notification_class::{NotificationClass, MAX_RECIPIENT_LIST_DESTINATIONS};
+use bacnet_objects::notification_class::{MAX_RECIPIENT_LIST_DESTINATIONS, NotificationClass};
 use bacnet_objects::schedule::CalendarObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::write_property::WritePropertyRequest;
@@ -237,7 +237,7 @@ struct Recipients {
 }
 
 fn protocol(class: ErrorClass, code: ErrorCode, element: Option<usize>) -> Error {
-    Error::protocol(
+    Error::with_detail(
         class,
         code,
         element.map(|index| ErrorDetail::FirstFailedElementNumber(index as u32 + 1)),
@@ -293,14 +293,14 @@ impl BACnetObject for Recipients {
                         ErrorClass::PROPERTY,
                         ErrorCode::VALUE_OUT_OF_RANGE,
                         None,
-                    ))
+                    ));
                 }
                 1001.. => {
                     return Err(protocol(
                         ErrorClass::PROPERTY,
                         ErrorCode::VALUE_OUT_OF_RANGE,
                         Some(index),
-                    ))
+                    ));
                 }
                 _ => {}
             }

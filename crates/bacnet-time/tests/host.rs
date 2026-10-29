@@ -120,7 +120,9 @@ fn now_reads_the_std_clock_by_default() {
     let now = clock.now();
     let after = StdInstant::now();
     assert!(now <= clock.instant(after));
-    assert!(clock
-        .to_std(now)
-        .is_some_and(|at| at >= origin && at <= after));
+    assert!(
+        clock
+            .to_std(now)
+            .is_some_and(|at| at >= origin && at <= after)
+    );
 }

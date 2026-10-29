@@ -1,6 +1,6 @@
 //! Raw local declaration is distinct from the ConfirmedRequest header bucket.
 use bacnet_encoding::{
-    apdu::{decode_apdu, Apdu},
+    apdu::{Apdu, decode_apdu},
     npdu::decode_npdu,
 };
 use bacnet_objects::{
@@ -63,10 +63,10 @@ async fn raw_1474_device_and_server_declaration_emit_iam_1474() {
 use bacnet_transport::port::ReceivedNpdu;
 use bacnet_types::{enums::ObjectType, error::Error, primitives::ObjectIdentifier};
 use std::{
-    future::{poll_fn, Future},
+    future::{Future, poll_fn},
     sync::{
-        atomic::{AtomicU16, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicU16, AtomicUsize, Ordering},
     },
     task::Poll,
 };
@@ -184,25 +184,29 @@ async fn local_capacity_clamps_ceiling_and_never_tracks_remote_egress() {
 
 #[tokio::test]
 async fn invalid_raw_and_mismatched_device_fail_before_transport_start() {
-    assert!(bacnet_objects::DeviceIdentity::default()
-        .with_max_apdu(49)
-        .is_err());
+    assert!(
+        bacnet_objects::DeviceIdentity::default()
+            .with_max_apdu(49)
+            .is_err()
+    );
     for (local, ceiling, declared) in [(49, 1476, 1476), (480, 1476, 1476), (1476, 1474, 1476)] {
         let (transport, _peer) = port(local);
         let starts = Arc::clone(&transport.starts);
-        assert!(BACnetServer::start(
-            ServerConfig {
-                device: bacnet_objects::DeviceIdentity::new(893, 0)
-                    .unwrap()
-                    .with_max_apdu(u16::try_from(ceiling).expect("Device APDU fits u16"))
-                    .expect("valid Device APDU"),
-                ..Default::default()
-            },
-            database(Some(declared)),
-            transport
-        )
-        .await
-        .is_err());
+        assert!(
+            BACnetServer::start(
+                ServerConfig {
+                    device: bacnet_objects::DeviceIdentity::new(893, 0)
+                        .unwrap()
+                        .with_max_apdu(u16::try_from(ceiling).expect("Device APDU fits u16"))
+                        .expect("valid Device APDU"),
+                    ..Default::default()
+                },
+                database(Some(declared)),
+                transport
+            )
+            .await
+            .is_err()
+        );
         assert_eq!(starts.load(Ordering::SeqCst), 0);
     }
 }
@@ -229,9 +233,11 @@ async fn queued_iam_projects_replacement_and_checks_membership_before_accounting
     let mut guard = db.write().await;
     let mut send = Box::pin(server.broadcast_i_am());
     // Poll through synchronous queue admission while the worker cannot read DB.
-    assert!(poll_fn(|cx| Poll::Ready(send.as_mut().poll(cx)))
-        .await
-        .is_pending());
+    assert!(
+        poll_fn(|cx| Poll::Ready(send.as_mut().poll(cx)))
+            .await
+            .is_pending()
+    );
     guard.remove(&oid).unwrap();
     guard.add(Box::new(device(1476))).unwrap();
     drop(guard);

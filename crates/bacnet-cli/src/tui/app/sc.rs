@@ -22,8 +22,8 @@ use super::App;
 use crate::tui::sc::credentials::{Credentials, Level};
 use crate::tui::sc::doctor::{self, Diagnosis};
 use crate::tui::sc::{
-    hub_name, vmac_text, CertSummary, Fault, LinkEvent, LinkSnapshot, ScFailure, ScIdentity,
-    ScReport,
+    CertSummary, Fault, LinkEvent, LinkSnapshot, ScFailure, ScIdentity, ScReport, hub_name,
+    vmac_text,
 };
 
 /// Timeline entries kept.

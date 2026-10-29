@@ -9,8 +9,9 @@
 
 use super::create_object_initial_values::{create, initial, read, text};
 use super::*;
-use bacnet_types::enums::EngineeringUnits;
 use PropertyIdentifier as P;
+use bacnet_types::enums::EngineeringUnits;
+use bacnet_types::error::RemoteError;
 
 const MULTI_STATE: [ObjectType; 3] = [
     ObjectType::MULTI_STATE_INPUT,
@@ -51,7 +52,7 @@ fn wp(
 fn denied(result: Result<(), Error>) -> bool {
     matches!(
         result,
-        Err(Error::Protocol { class, code })
+        Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::PROPERTY
                 && code == ErrorCode::WRITE_ACCESS_DENIED
     )

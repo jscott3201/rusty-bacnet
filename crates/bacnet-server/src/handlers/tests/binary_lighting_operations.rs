@@ -4,6 +4,7 @@ use super::*;
 use bacnet_encoding::constructed::encode_bacnet_property_value;
 use bacnet_objects::lighting::BinaryLightingOutputObject;
 use bacnet_services::common::BACnetPropertyValue;
+use bacnet_types::error::RemoteError;
 use std::time::Duration;
 
 fn encode_value(value: PropertyValue) -> Vec<u8> {
@@ -87,7 +88,7 @@ fn advance(db: &mut ObjectDatabase, oid: ObjectIdentifier, elapsed: Duration) ->
 
 fn assert_property_error(error: Error, expected: ErrorCode) {
     match error {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, ErrorClass::PROPERTY);
             assert_eq!(code, expected);
         }
@@ -97,7 +98,7 @@ fn assert_property_error(error: Error, expected: ErrorCode) {
 
 fn assert_priority_range_error(error: Error) {
     assert!(
-        matches!(error, Error::Protocol { class, code }
+        matches!(error, Error::Remote(RemoteError::Error { class, code })
         if class == ErrorClass::SERVICES
             && code == ErrorCode::PARAMETER_OUT_OF_RANGE),
         "{error:?}"

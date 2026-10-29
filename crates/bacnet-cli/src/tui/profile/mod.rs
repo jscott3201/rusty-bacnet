@@ -2,6 +2,7 @@
 //! never performs I/O; [`checks`] does the file checks before connecting.
 
 pub(crate) mod checks;
+pub(crate) mod mcp;
 pub(crate) mod mstp;
 #[cfg(test)]
 mod mstp_tests;
@@ -19,6 +20,7 @@ pub(crate) mod tests;
 
 use crate::transport::TransportArgs;
 use crate::tui::worker::session::TransportKind;
+pub(crate) use mcp::McpSection;
 pub(crate) use mstp::Mstp;
 pub(crate) use overrides::Overrides;
 pub(crate) use sc::Sc;
@@ -46,7 +48,8 @@ pub(crate) struct Profile {
     /// MS/TP settings, present for `transport = "mstp"` (#969).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) mstp: Option<Box<Mstp>>,
-    /// Recorded policy. The current TUI always remains read-only.
+    /// Recorded write policy: the TUI stays read-only until a write session
+    /// is armed, and only on a profile whose policy allows one.
     pub(crate) safety: Safety,
     /// Explicit first-use authorization, persisted before connecting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -55,6 +58,10 @@ pub(crate) struct Profile {
     /// it (or a file from before this was recorded) needs authorizing again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) authorized_safety: Option<Safety>,
+    /// What `bacnet mcp serve` may reach on this profile, and the consent
+    /// to serve it (#2066).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) mcp: Option<Box<McpSection>>,
 }
 
 /// Profile transport discriminator.
@@ -145,8 +152,9 @@ pub(crate) enum Writes {
 pub(crate) struct Safety {
     /// Whether a write session may be armed.
     pub(crate) writes: Writes,
-    /// Allow dangerous operations (today, commanding priority 6) inside an
-    /// armed write session.
+    /// Allow dangerous operations inside an armed write session: commanding
+    /// priority 6, and device management (DeviceCommunicationControl and
+    /// ReinitializeDevice).
     pub(crate) dangerous: bool,
 }
 
@@ -188,6 +196,7 @@ impl Default for Profile {
             safety: Safety::default(),
             authorized_at_unix: None,
             authorized_safety: None,
+            mcp: None,
         }
     }
 }
@@ -224,6 +233,22 @@ impl Profile {
             self.authorized_at_unix = None;
             self.authorized_safety = None;
         }
+        let link = self.link();
+        if let Some(mcp) = &mut self.mcp {
+            mcp.revoke_if_raised(&link);
+        }
+    }
+
+    /// The transport settings as one string, which MCP consent records:
+    /// the transport and its table, in JSON. Any change to them changes it.
+    pub(crate) fn link(&self) -> String {
+        serde_json::json!({
+            "transport": self.transport,
+            "bip": self.bip,
+            "sc": self.sc,
+            "mstp": self.mstp,
+        })
+        .to_string()
     }
 
     /// Deterministic validation before any bind, probe, or registration.
@@ -233,6 +258,9 @@ impl Profile {
         }
         if self.safety.dangerous && self.safety.writes == Writes::Never {
             return Err("dangerous = true needs writes = \"session\"".into());
+        }
+        if let Some(mcp) = &self.mcp {
+            mcp.validate()?;
         }
         match (self.transport, &self.bip, &self.sc, &self.mstp) {
             (Transport::Bip, Some(bip), None, None) => bip.validate(),

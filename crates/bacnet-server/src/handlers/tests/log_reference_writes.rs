@@ -15,6 +15,7 @@ use bacnet_types::constructed::{
     LogData, LogDatum, LogValue, PropertyReference, ReadAccessSpecification,
 };
 use bacnet_types::enums::EngineeringUnits;
+use bacnet_types::error::RemoteError;
 use std::sync::Arc;
 
 const LDOP: PropertyIdentifier = PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY;
@@ -170,7 +171,7 @@ type IndexedRefusal = (Option<u32>, Vec<u8>, ErrorClass, ErrorCode, &'static str
 
 fn assert_refused(result: Result<(), Error>, class: ErrorClass, code: ErrorCode, what: &str) {
     assert!(
-        matches!(result, Err(Error::Protocol { class: c, code: e })
+        matches!(result, Err(Error::Remote(RemoteError::Error { class: c, code: e }))
             if c == class && e == code),
         "{what}: expected {class:?} / {code:?}, got {result:?}"
     );

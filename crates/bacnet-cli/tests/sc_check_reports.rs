@@ -65,9 +65,10 @@ async fn complete_json_preserves_inventory_and_native_paths_without_runtime_cons
             assert_eq!(entry["index"], 0);
             let hash = entry["sha256"].as_str().unwrap();
             assert_eq!(hash.len(), 64);
-            assert!(hash
-                .bytes()
-                .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)));
+            assert!(
+                hash.bytes()
+                    .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+            );
             assert_eq!(entry["metadata"]["subject"], "CN=CLI offline fixture");
             assert_eq!(entry["metadata"]["issuer"], "CN=CLI offline fixture");
             assert_eq!(entry["metadata"]["not_before_unix"].as_i64(), Some(NOW));
@@ -238,8 +239,10 @@ async fn human_pipe_output_and_json_precedence_preserve_the_same_decision() {
         .output()
         .await;
     assert_eq!(extreme.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&extreme.stdout)
-        .contains("Unix 9223372036854775807 (UTC calendar display unavailable)"));
+    assert!(
+        String::from_utf8_lossy(&extreme.stdout)
+            .contains("Unix 9223372036854775807 (UTC calendar display unavailable)")
+    );
 }
 
 #[tokio::test]

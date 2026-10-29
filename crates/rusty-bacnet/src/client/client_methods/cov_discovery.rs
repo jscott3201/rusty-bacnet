@@ -178,7 +178,7 @@ impl BACnetClient {
         crate::py_async::future_into_py(py, async move {
             let peer = parse_bip6_address(&address)?;
             let c = started(&inner).await?;
-            let AnyTransport::Bip6(transport) = c.transport() else {
+            let Some(AnyTransport::Bip6(transport)) = c.transport().link() else {
                 return Err(PyRuntimeError::new_err(
                     "resolve_vmac needs a client with transport='ipv6'",
                 ));

@@ -27,9 +27,9 @@ mod decode;
 
 #[cfg(feature = "alloc")]
 pub use decode::{
+    PropertyValueDecodeError, PropertyValueDecodeFailure, PropertyValueDecodeStage,
     decode_bacnet_property_value, decode_bacnet_property_value_in_list,
-    decode_bacnet_property_value_in_list_detailed, PropertyValueDecodeError,
-    PropertyValueDecodeFailure, PropertyValueDecodeStage,
+    decode_bacnet_property_value_in_list_detailed,
 };
 
 /// Append the encoding of one property value to `buf`.

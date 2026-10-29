@@ -2,13 +2,13 @@
 //! initial value sets although WriteProperty can't change them (#1429).
 
 use super::*;
+use PropertyIdentifier as P;
 use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use bacnet_objects::binary::BinaryValueObject;
 use bacnet_objects::multistate::{
     MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject,
 };
 use bacnet_types::enums::EngineeringUnits;
-use PropertyIdentifier as P;
 
 fn pics() -> Pics {
     let mut db = ObjectDatabase::new();

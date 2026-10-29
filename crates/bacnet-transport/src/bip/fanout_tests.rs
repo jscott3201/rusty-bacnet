@@ -11,7 +11,7 @@ use tokio::time::timeout;
 use super::fanout::{FanoutPolicy, FanoutRateLimiter};
 use super::*;
 use crate::bbmd::{BdtEntry, ForeignDevicePolicy};
-use crate::bvll::{decode_bip_mac, decode_bvll, BvllMessage};
+use crate::bvll::{BvllMessage, decode_bip_mac, decode_bvll};
 use crate::port::TransportPort;
 use bacnet_bip_codec::{BvlcFunction, BvlcResultCode};
 
@@ -226,11 +226,11 @@ async fn sustained_broadcast_input_does_not_starve_concurrent_unicast() {
     // Loop until we find our unicast NPDU (broadcasts also deliver to npdu_rx)
     let mut found_unicast = false;
     while start_time.elapsed() < Duration::from_secs(2) {
-        if let Ok(Some(received)) = timeout(Duration::from_millis(100), bbmd_rx.recv()).await {
-            if received.npdu == unicast_npdu {
-                found_unicast = true;
-                break;
-            }
+        if let Ok(Some(received)) = timeout(Duration::from_millis(100), bbmd_rx.recv()).await
+            && received.npdu == unicast_npdu
+        {
+            found_unicast = true;
+            break;
         }
     }
 

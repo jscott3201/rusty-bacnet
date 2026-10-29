@@ -54,9 +54,11 @@ async fn list_validation_invalid_requests_do_not_admit_or_send() {
             assert!(received.try_recv().is_err());
         }
     }
-    assert!(timeout(Duration::from_millis(25), received.recv())
-        .await
-        .is_err());
+    assert!(
+        timeout(Duration::from_millis(25), received.recv())
+            .await
+            .is_err()
+    );
     client.stop().await.unwrap();
     peer.stop().await.unwrap();
 }

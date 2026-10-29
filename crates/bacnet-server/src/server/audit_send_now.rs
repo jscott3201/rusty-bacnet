@@ -1,5 +1,5 @@
 //! External command capture and the queue's locally-unsent prefix fence.
-use super::audit_reporter::{deliver, encode_notification, small_value, DeliveryCompletion};
+use super::audit_reporter::{DeliveryCompletion, deliver, encode_notification, small_value};
 use super::*;
 use bacnet_objects::{audit::AuditReporterStatus, clock::ClockFrame, device::AuditWriteSource};
 use bacnet_types::{

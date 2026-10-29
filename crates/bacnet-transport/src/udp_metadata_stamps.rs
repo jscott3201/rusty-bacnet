@@ -33,7 +33,7 @@ use nix::sys::socket::ControlMessageOwned;
 pub(crate) fn request_arrival_stamps(udp_socket: &Socket) -> io::Result<()> {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
-        use nix::sys::socket::{setsockopt, sockopt, TimestampingFlag};
+        use nix::sys::socket::{TimestampingFlag, setsockopt, sockopt};
         let flags = TimestampingFlag::SOF_TIMESTAMPING_RX_SOFTWARE
             | TimestampingFlag::SOF_TIMESTAMPING_SOFTWARE;
         Ok(setsockopt(udp_socket, sockopt::Timestamping, &flags)?)

@@ -2,7 +2,7 @@
 use super::*;
 use bacnet_transport::{
     sc::{LoopbackWebSocket, ScConnectionState, ScReconnectConfig, ScTransport, WebSocketPort},
-    sc_frame::{decode_sc_message, encode_sc_message, ScFunction, ScMessage},
+    sc_frame::{ScFunction, ScMessage, decode_sc_message, encode_sc_message},
 };
 use bytes::{Bytes, BytesMut};
 

@@ -3,9 +3,9 @@
 //! loop rules, expiry and chains within the device.
 
 use super::event_forwarding::Reception;
-use super::event_recipient_routing_tests::{address_recipient, LITERAL_BROADCAST_MAC};
+use super::event_recipient_routing_tests::{LITERAL_BROADCAST_MAC, address_recipient};
 use super::*;
-use crate::server::test_transport::{SendLog, TestTransport, TestTransportHandle, BIP_LOCAL_MAC};
+use crate::server::test_transport::{BIP_LOCAL_MAC, SendLog, TestTransport, TestTransportHandle};
 use bacnet_encoding::constructed::{
     encode_event_notification, encode_event_notification_subscription_list,
 };
@@ -404,10 +404,12 @@ async fn process_identifier_filter_and_out_of_service_gate_forwarding() {
     nf.add_destination(destination(address_recipient(0, &PEER_A), 40, false))
         .unwrap();
     let forwarding = Forwarding::new(database(vec![nf]));
-    assert!(forwarding
-        .receive(&notification(5), Reception::UNICAST)
-        .await
-        .is_empty());
+    assert!(
+        forwarding
+            .receive(&notification(5), Reception::UNICAST)
+            .await
+            .is_empty()
+    );
     assert_eq!(
         forwarding
             .receive(&notification(7), Reception::UNICAST)
@@ -428,10 +430,12 @@ async fn process_identifier_filter_and_out_of_service_gate_forwarding() {
             None,
         )
         .unwrap();
-    assert!(forwarding
-        .receive(&notification(7), Reception::UNICAST)
-        .await
-        .is_empty());
+    assert!(
+        forwarding
+            .receive(&notification(7), Reception::UNICAST)
+            .await
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -441,10 +445,12 @@ async fn local_forwarding_only_ignores_received_notifications() {
     nf.add_destination(destination(address_recipient(0, &PEER_A), 40, false))
         .unwrap();
     let forwarding = Forwarding::new(database(vec![nf]));
-    assert!(forwarding
-        .receive(&notification(5), Reception::UNICAST)
-        .await
-        .is_empty());
+    assert!(
+        forwarding
+            .receive(&notification(5), Reception::UNICAST)
+            .await
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -479,10 +485,12 @@ async fn loop_rules_keep_copies_off_the_receiving_network_and_global_broadcast()
         group: true,
         global: true,
     };
-    assert!(forwarding
-        .receive(&notification(9), global)
-        .await
-        .is_empty());
+    assert!(
+        forwarding
+            .receive(&notification(9), global)
+            .await
+            .is_empty()
+    );
     assert_eq!(
         forwarding.counters(),
         EventNotificationCounters::default(),
@@ -498,10 +506,12 @@ async fn port_filter_disabling_port_zero_stops_received_notifications() {
         enabled: false,
     }]));
     let forwarding = Forwarding::new(database(vec![nf]));
-    assert!(forwarding
-        .receive(&notification(9), Reception::UNICAST)
-        .await
-        .is_empty());
+    assert!(
+        forwarding
+            .receive(&notification(9), Reception::UNICAST)
+            .await
+            .is_empty()
+    );
     let forwarder = ObjectIdentifier::new(ObjectType::NOTIFICATION_FORWARDER, 1).unwrap();
     let mut buf = BytesMut::new();
     bacnet_encoding::constructed::encode_port_permission(

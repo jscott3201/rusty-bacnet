@@ -31,7 +31,7 @@ impl LifeSafetyOperationAuthorizationContext {
     /// carries no routed source. `None` for other ingress, hub-relayed and
     /// routed requests included (see [`crate::policy`]).
     pub fn principal(&self) -> Option<bacnet_transport::port::ScPrincipal> {
-        crate::policy::originating_principal(self.provenance, self.source_network.as_ref())
+        crate::policy::originating_principal(&self.provenance, self.source_network.as_ref())
     }
 
     /// The principal of the direct BACnet/SC peer that handed this request
@@ -41,6 +41,8 @@ impl LifeSafetyOperationAuthorizationContext {
     pub fn forwarding_peer_principal(&self) -> Option<bacnet_transport::port::ScPrincipal> {
         self.provenance.principal()
     }
+
+    crate::policy::certificate_accessors!();
 
     /// The immediate direct-SC hop's verified leaf and connection incarnation:
     /// for a routed request, the router that forwarded it. Absent off a

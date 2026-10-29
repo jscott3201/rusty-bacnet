@@ -10,9 +10,9 @@
 //! with trailing octets is dropped, since nothing can answer it: a Who-Is
 //! gets no I-Am, a Who-Has no I-Have, and an I-Am binds no device.
 use super::*;
-use crate::server::cov_wire_test_support::{av1, Harness};
+use crate::server::cov_wire_test_support::{Harness, av1};
 use crate::server::mistagged_request_wire_tests::{
-    contents, harness, request, FILE_1, FILE_2, READ, WRITE,
+    FILE_1, FILE_2, READ, WRITE, contents, harness, request,
 };
 use crate::server::truncated_request_wire_tests::{answer_to, reject_case, reject_for};
 use bacnet_services::device_mgmt::{DeviceCommunicationControlRequest, ReinitializeDeviceRequest};

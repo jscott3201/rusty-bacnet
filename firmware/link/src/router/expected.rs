@@ -11,8 +11,8 @@ use bacnet_router_core::router::{Counters, Discard, Event, Kind};
 use bacnet_router_core::{Duration, PortId};
 
 use super::{
-    Outcome, SentDatagram, SentFrame, Summary, DATAGRAMS, EVENTS, FRAMES, NODE, PEER_BBMD,
-    PEER_STATION, RECEIVES, SENDS, TARGET_STATION,
+    DATAGRAMS, EVENTS, FRAMES, NODE, Outcome, PEER_BBMD, PEER_STATION, RECEIVES, SENDS,
+    SentDatagram, SentFrame, Summary, TARGET_STATION,
 };
 use crate::tally::Sent;
 

@@ -13,11 +13,11 @@ use core::net::{Ipv4Addr, SocketAddrV4};
 
 use bacnet_bip_codec::{BdtEntries, BdtEntry};
 use bacnet_bip_core::bbmd::{
-    is_rfc1918, BdtError, Context, EntryError, Nat, NatError, PrivateRange, Reservation, Tables,
-    Target, Via, MAX_PRIVATE_RANGES, TWO_HOP_MASK,
+    BdtError, Context, EntryError, MAX_PRIVATE_RANGES, Nat, NatError, PrivateRange, Reservation,
+    TWO_HOP_MASK, Tables, Target, Via, is_rfc1918,
 };
 use bacnet_bip_core::{Arrival, Instant, LocalSubnet};
-use support::{addr, destinations, target, MASK_24};
+use support::{MASK_24, addr, destinations, target};
 
 const NAT_PORT: u16 = 47809;
 const NAT_A: SocketAddrV4 = addr(201, 1, 1, 1, NAT_PORT);

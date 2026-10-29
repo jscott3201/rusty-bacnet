@@ -9,10 +9,11 @@
     allow(dead_code, unused_imports)
 )]
 
-use super::ingress::{handle_datagram, Arrival as SocketArrival, IngressAddresses};
+use super::ingress::{Arrival as SocketArrival, IngressAddresses, handle_datagram};
 use super::*;
 use crate::udp_metadata::ReceivedDatagram;
 use bacnet_types::enums::ErrorCode;
+use bacnet_types::error::RemoteError;
 use tokio::time::timeout;
 
 /// A global Who-Is.
@@ -31,7 +32,7 @@ fn group(port: u16) -> BipMulticast {
 
 fn error_code(error: Error) -> ErrorCode {
     match error {
-        Error::Protocol { code, .. } => code,
+        Error::Remote(RemoteError::Error { code, .. }) => code,
         other => panic!("expected a protocol error, got {other:?}"),
     }
 }

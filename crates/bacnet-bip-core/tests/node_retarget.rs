@@ -5,12 +5,12 @@
 mod node_support;
 
 use bacnet_bip_codec::Bvll;
+use bacnet_bip_core::Instant;
 use bacnet_bip_core::node::{
     Action, Admission, AttemptOutcome, ConfigError, ExchangeId, Foreign, Inbound, Mode, Node,
     Permissive,
 };
 use bacnet_bip_core::port::{HeldBroadcast, NodePort, PortError};
-use bacnet_bip_core::Instant;
 use node_support::*;
 
 /// The BBMD the device moves to.
@@ -151,11 +151,12 @@ fn an_unpolled_attempt_for_the_old_bbmd_is_never_handed_out() {
         .filter(|action| matches!(action, Action::Register { .. }))
         .collect();
     assert!(registers.is_empty(), "{registers:?} after {attempt:?}");
-    assert!(node
-        .registration(at(30_000))
-        .unwrap()
-        .next_attempt
-        .is_some());
+    assert!(
+        node.registration(at(30_000))
+            .unwrap()
+            .next_attempt
+            .is_some()
+    );
 }
 
 #[test]

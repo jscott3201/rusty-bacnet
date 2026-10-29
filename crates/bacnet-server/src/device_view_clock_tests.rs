@@ -7,8 +7,8 @@ use bacnet_types::bitstring::ServicesSupported;
 use bacnet_types::enums::EngineeringUnits;
 use bacnet_types::primitives::{Date, Time};
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
     Mutex,
+    atomic::{AtomicUsize, Ordering},
 };
 
 struct CountingClock {

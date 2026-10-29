@@ -6,7 +6,7 @@ use crate::present_value_access::PresentValueAccess;
 use crate::property_metadata::PropertyWriteCapability;
 use crate::traits::BACnetObject;
 use bacnet_types::enums::{EngineeringUnits, ErrorClass, ErrorCode, PropertyIdentifier as P};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::PropertyValue;
 
 const LOWER_PRIORITY: u8 = 8;
@@ -82,10 +82,10 @@ fn assert_protocol<T: std::fmt::Debug>(
     code: ErrorCode,
 ) {
     match result {
-        Err(Error::Protocol {
+        Err(Error::Remote(RemoteError::Error {
             class: actual_class,
             code: actual_code,
-        }) => {
+        })) => {
             assert_eq!(actual_class, class);
             assert_eq!(actual_code, code);
         }

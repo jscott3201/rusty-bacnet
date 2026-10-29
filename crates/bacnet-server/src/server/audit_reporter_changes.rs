@@ -1,5 +1,5 @@
 //! Atomic local Reporter-property changes through the existing notification owner.
-use super::audit_reporter::{deliver, encode_notification, small_value, DeliveryCompletion};
+use super::audit_reporter::{DeliveryCompletion, deliver, encode_notification, small_value};
 use super::*;
 use bacnet_objects::{
     audit::{AuditReporterChangeSink, AuditReporterConfiguration, AuditReporterStatus},
@@ -13,10 +13,7 @@ use bacnet_types::{
 };
 
 fn denied() -> Error {
-    Error::Protocol {
-        class: ErrorClass::SERVICES,
-        code: ErrorCode::SERVICE_REQUEST_DENIED,
-    }
+    Error::protocol(ErrorClass::SERVICES, ErrorCode::SERVICE_REQUEST_DENIED)
 }
 
 impl<T: TransportPort + 'static> AuditReporterChangeSink

@@ -9,6 +9,7 @@
 //! Device member, and they give the same answers through the same
 //! single-reference decoder (#1395).
 
+use bacnet_types::error::RemoteError;
 use std::sync::Arc;
 
 use bacnet_types::constructed::BACnetStageLimitValue;
@@ -63,7 +64,8 @@ impl ClockReader for FixedClock {
 /// The class and code of a refusal, whether or not it names an element.
 fn class_and_code(error: &Error) -> (ErrorClass, ErrorCode) {
     match error {
-        Error::Protocol { class, code } | Error::Structured { class, code, .. } => (*class, *code),
+        Error::Remote(RemoteError::Error { class, code })
+        | Error::Structured { class, code, .. } => (*class, *code),
         other => panic!("expected a protocol error, got {other:?}"),
     }
 }

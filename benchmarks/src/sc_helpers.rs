@@ -3,16 +3,16 @@
 use std::io;
 use std::sync::Arc;
 
-use rcgen::{date_time_ymd, CertificateParams, Issuer, KeyPair};
+use rcgen::{CertificateParams, Issuer, KeyPair, date_time_ymd};
 use tokio::net::TcpStream;
+use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls;
 use tokio_rustls::rustls::pki_types::pem::PemObject;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
-use tokio_rustls::TlsConnector;
+use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::handshake::client::Response;
-use tokio_tungstenite::tungstenite::Error as WsError;
-use tokio_tungstenite::WebSocketStream;
 
 use bacnet_transport::sc::ScTransport;
 use bacnet_transport::sc_frame::Vmac;

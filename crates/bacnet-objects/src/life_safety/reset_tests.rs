@@ -1,10 +1,10 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, LifeSafetyOperation, LifeSafetyState, PropertyIdentifier, SilencedState,
 };
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::PropertyValue;
 
 use crate::traits::{BACnetObject, LifeSafetyOperationEffect};
@@ -39,10 +39,10 @@ fn zone_state(zone: &LifeSafetyZoneObject) -> (u32, u32, u32, u32) {
 fn assert_error(error: Error, class: ErrorClass, code: ErrorCode) {
     assert!(matches!(
         error,
-        Error::Protocol {
+        Error::Remote(RemoteError::Error {
             class: actual_class,
             code: actual_code,
-        } if actual_class == class && actual_code == code
+        }) if actual_class == class && actual_code == code
     ));
 }
 
@@ -363,18 +363,22 @@ fn executor_failures_and_panics_map_exactly_without_mutation() {
         assert_eq!(point_state(&point), before);
     }
 
-    let mut zone = LifeSafetyZoneObject::new(1, "zone").unwrap();
-    zone.set_present_value(LifeSafetyState::ALARM);
-    zone.set_operation_expected(LifeSafetyOperation::RESET);
-    zone.set_reset_executor(Arc::new(|_| panic!("executor bug")));
-    let before = zone_state(&zone);
-    assert_error(
-        zone.apply_life_safety_operation(LifeSafetyOperation::RESET)
-            .unwrap_err(),
-        ErrorClass::SERVICES,
-        ErrorCode::SERVICE_REQUEST_DENIED,
-    );
-    assert_eq!(zone_state(&zone), before);
+    // Only std catches the executor's panic.
+    #[cfg(feature = "std")]
+    {
+        let mut zone = LifeSafetyZoneObject::new(1, "zone").unwrap();
+        zone.set_present_value(LifeSafetyState::ALARM);
+        zone.set_operation_expected(LifeSafetyOperation::RESET);
+        zone.set_reset_executor(Arc::new(|_| panic!("executor bug")));
+        let before = zone_state(&zone);
+        assert_error(
+            zone.apply_life_safety_operation(LifeSafetyOperation::RESET)
+                .unwrap_err(),
+            ErrorClass::SERVICES,
+            ErrorCode::SERVICE_REQUEST_DENIED,
+        );
+        assert_eq!(zone_state(&zone), before);
+    }
 }
 
 #[test]

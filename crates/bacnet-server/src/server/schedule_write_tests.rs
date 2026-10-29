@@ -18,6 +18,7 @@ use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleReques
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::ObjectType;
+use bacnet_types::error::RemoteError;
 
 pub(super) fn sch5() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::SCHEDULE, 5).unwrap()
@@ -334,7 +335,7 @@ async fn write_local_of_present_value_follows_out_of_service() {
     };
     let refused = write(PV, PropertyValue::Real(18.0)).await.unwrap_err();
     assert!(
-        matches!(refused, Error::Protocol { code, .. }
+        matches!(refused, Error::Remote(RemoteError::Error { code, .. })
             if code == ErrorCode::WRITE_ACCESS_DENIED),
         "{refused:?}"
     );

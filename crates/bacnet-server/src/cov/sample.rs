@@ -44,10 +44,10 @@ impl PartialEq for CovSample {
 }
 impl Eq for CovSample {}
 fn capacity_error() -> Error {
-    Error::Protocol {
-        class: ErrorClass::RESOURCES,
-        code: ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT,
-    }
+    Error::protocol(
+        ErrorClass::RESOURCES,
+        ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT,
+    )
 }
 fn validate(
     v: &PropertyValue,

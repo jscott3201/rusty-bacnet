@@ -32,8 +32,10 @@ Use the [result template](mstp-qualification-result.json) for each campaign.
   either application's serial device a second time.
   `bacnet_transport::mstp::monitor::MstpMonitor` over a
   `mstp_serial::ReceiveOnlyPort` on a second adapter is such an analyzer: it
-  only reads, and its statistics carry the timestamp resolution to quote with
-  any interval it reports.
+  uses native read-only access, and its statistics carry the timestamp resolution
+  to quote with any interval it reports. Driver/open transitions can still affect
+  modem lines; qualify electrical behavior for the chosen adapter. Await the
+  monitor's `stop(&mut self)` before reopening its device; Drop is not that barrier.
 
 ## Host counters: obtain before moving the transport
 

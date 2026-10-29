@@ -43,8 +43,8 @@ pub mod property_element;
 mod property_value;
 pub mod tagged;
 
-pub use property_element::{property_element, ConstructedElement, ElementShape};
-pub use property_value::{extract_property_value, PropertyValueBoundary};
+pub use property_element::{ConstructedElement, ElementShape, property_element};
+pub use property_value::{PropertyValueBoundary, extract_property_value};
 
 alloc_only! {
     pub mod access_credential;
@@ -203,17 +203,17 @@ pub fn encode_property_state(
     state: &BACnetPropertyStates,
 ) -> Result<(), Error> {
     use BACnetPropertyStates as S;
-    if let S::Other(value) = state {
-        if value.is_constructed() {
-            validate_tlv_sequence(value.data(), "proprietary property-state body")?;
-            let mut framed = BytesMut::new();
-            tags::encode_opening_tag(&mut framed, value.tag());
-            let (_, body_start) = tags::decode_tag(&framed, 0)?;
-            framed.extend_from_slice(value.data());
-            tags::encode_closing_tag(&mut framed, value.tag());
-            let (_, end) = tags::extract_context_value(&framed, body_start, value.tag())?;
-            expect_end(&framed, end, end, "proprietary property-state body")?;
-        }
+    if let S::Other(value) = state
+        && value.is_constructed()
+    {
+        validate_tlv_sequence(value.data(), "proprietary property-state body")?;
+        let mut framed = BytesMut::new();
+        tags::encode_opening_tag(&mut framed, value.tag());
+        let (_, body_start) = tags::decode_tag(&framed, 0)?;
+        framed.extend_from_slice(value.data());
+        tags::encode_closing_tag(&mut framed, value.tag());
+        let (_, end) = tags::extract_context_value(&framed, body_start, value.tag())?;
+        expect_end(&framed, end, end, "proprietary property-state body")?;
     }
     match state {
         S::BooleanValue(v) => primitives::encode_ctx_boolean(buf, 0, *v),

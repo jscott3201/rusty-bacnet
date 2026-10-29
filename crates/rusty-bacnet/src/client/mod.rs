@@ -36,19 +36,20 @@ use bacnet_transport::any::AnyTransport;
 use bacnet_types::enums::{AcknowledgmentFilter, ConfirmedServiceChoice, UnconfirmedServiceChoice};
 use bacnet_types::primitives::BACnetTimeStamp;
 
+use crate::app_transport::AppTransport;
 use crate::errors::to_py_err;
 use crate::types::{
-    audit_log_query_ack_to_py, audit_log_query_request_from_py, audit_notification_request_from_py,
-    decode_read_ack, parse_bip6_address, py_to_rpm_specs, py_to_wpm_specs, rpm_ack_to_py,
     PeerAddresses, PyAcknowledgmentFilter, PyBACnetTimeStamp, PyCovNotificationIterator,
     PyDeviceWrite, PyDiscoveredDevice, PyEnableDisable, PyEnrollmentSummaryEventStateFilter,
     PyEventState, PyEventType, PyLifeSafetyOperation, PyMessagePriority, PyObjectIdentifier,
     PyObjectType, PyPropertyIdentifier, PyPropertyValue, PyPropertyWrite, PyReadAccessSpec,
-    PyReinitializedState, PyWriteAccessSpec,
+    PyReinitializedState, PyWriteAccessSpec, audit_log_query_ack_to_py,
+    audit_log_query_request_from_py, audit_notification_request_from_py, decode_read_ack,
+    parse_bip6_address, py_to_rpm_specs, py_to_wpm_specs, rpm_ack_to_py,
 };
 use state::started;
 
-type CoreClient = client::BACnetClient<AnyTransport<crate::mstp_py::PySerial>>;
+type CoreClient = client::BACnetClient<AppTransport>;
 type ClientInner = Arc<state::ClientState>;
 
 fn validate_write_priority(priority: Option<u8>) -> PyResult<()> {
@@ -100,9 +101,15 @@ fn device_range(
 /// - `"bip"` (default): BACnet/IP over UDP
 /// - `"ipv6"`: BACnet/IPv6 over UDP multicast. Peers are named by VMAC
 ///   (`"bip6:1234"`); `resolve_vmac` finds the VMAC at an `"[ip]:port"`.
+///   `foreign_device=` with a B/IPv6 BBMD, and `ipv6_device_instance`,
+///   registers it as a foreign device (#1941).
 /// - `"sc"`: BACnet/SC over TLS WebSocket (requires `sc_hub`, `sc_vmac`,
 ///   `sc_ca_cert`, `sc_client_cert`, `sc_client_key`, and persistent `sc_device_uuid`)
 /// - `"mstp"`: BACnet MS/TP over RS-485 (requires `serial_port`)
+/// - `"router"`: the application entity of `router=`, a `BACnetRouter`
+///   built with `application=` (#2071). Address devices by network, through
+///   discovery and the `_from_device`/`_to_device` methods: an `ip:port`
+///   names no network, so a send to one fails.
 ///
 /// SC credential paths must be nonempty at construction (ValueError otherwise).
 /// Files are loaded on async entry; invalid TLS configuration raises RuntimeError
@@ -119,6 +126,9 @@ pub struct BACnetClient {
     share_port_by_address: bool,
     /// The B/IP mode `bbmd=` or `foreign_device=` asked for (#938).
     bip_mode: bacnet_transport::bip::BipMode,
+    /// The B/IPv6 foreign-device registration `foreign_device=` asked for
+    /// (#1941).
+    bip6_foreign: Option<bacnet_transport::bip6::Bip6ForeignDeviceConfig>,
     /// The B/IP multicast group `multicast=` asked for (#941).
     multicast: Option<bacnet_transport::bip::BipMulticast>,
     apdu_timeout_ms: u64,
@@ -144,6 +154,9 @@ pub struct BACnetClient {
     ipv6_device_instance: Option<u32>,
     /// The MS/TP keywords, `serial_port` included.
     mstp: crate::mstp_py::MstpOptions,
+    /// The router whose application entity `transport="router"` runs on
+    /// (#2071).
+    router: Option<crate::router::application::RouterApplication>,
     /// Least time between confirmed requests to one destination (#1535).
     min_request_interval_ms: u64,
 }

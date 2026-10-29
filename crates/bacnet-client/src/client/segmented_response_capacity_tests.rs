@@ -4,18 +4,18 @@ use std::sync::Arc;
 use bacnet_encoding::apdu::{AbortPdu, Apdu};
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort, TransportProvenance};
-use bacnet_types::enums::{AbortReason, ConfirmedServiceChoice};
-use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
+use bacnet_types::enums::{AbortReason, ConfirmedServiceChoice};
+use bacnet_types::error::{Error, RemoteError};
 use bytes::Bytes;
 use tokio::sync::mpsc;
 
 use super::segmentation_context::InboundSegmentSource;
 use tokio::task::JoinHandle;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 use super::segmented_receive_lifecycle_tests::{
-    expect_segment_ack, recv_apdu, response_segment, send_to_client, CLIENT_MAC, SERVER_MAC,
+    CLIENT_MAC, SERVER_MAC, expect_segment_ack, recv_apdu, response_segment, send_to_client,
 };
 use super::{
     BACnetClient, ClientConfig, ResponseLimits, SegKey, SegmentReceiver, SegmentedReceiveState,
@@ -190,7 +190,7 @@ async fn expect_abort_result(task: RequestTask, expected_reason: AbortReason) {
         .expect("request remained pending")
         .expect("request task panicked")
     {
-        Err(Error::Abort { reason }) => assert_eq!(reason, expected_reason),
+        Err(Error::Remote(RemoteError::Abort { reason })) => assert_eq!(reason, expected_reason),
         other => panic!("expected local Abort indication, got {other:?}"),
     }
 }

@@ -58,9 +58,11 @@ async fn source_read_filters_priority_independence_and_unsupported_destinations(
         if reports {
             notification(&receive(&mut records).await, false);
         } else {
-            assert!(timeout(Duration::from_millis(20), records.recv())
-                .await
-                .is_err());
+            assert!(
+                timeout(Duration::from_millis(20), records.recv())
+                    .await
+                    .is_err()
+            );
         }
     }
     let client = session.cloned_client_handle().unwrap();
@@ -84,16 +86,18 @@ async fn source_read_filters_priority_independence_and_unsupported_destinations(
             destination_mac: MacAddr::from_slice(&[2]),
         },
     ] {
-        assert!(client
-            .read_property_with_destination(
-                destination,
-                Vec::new(),
-                target(),
-                PropertyIdentifier::PRESENT_VALUE,
-                None
-            )
-            .await
-            .is_err());
+        assert!(
+            client
+                .read_property_with_destination(
+                    destination,
+                    Vec::new(),
+                    target(),
+                    PropertyIdentifier::PRESENT_VALUE,
+                    None
+                )
+                .await
+                .is_err()
+        );
     }
     assert!(requests.try_recv().is_err());
     assert!(records.try_recv().is_err());
@@ -134,15 +138,17 @@ async fn source_read_whole_operation_capacity_bounds_prelease_waiters_and_stop()
     .await
     .unwrap();
     assert_eq!(session.coordinator.active_count().unwrap(), 0);
-    assert!(start_read(
-        &session,
-        peer.local_mac(),
-        PropertyIdentifier::PRESENT_VALUE,
-        None
-    )
-    .await
-    .unwrap()
-    .is_err());
+    assert!(
+        start_read(
+            &session,
+            peer.local_mac(),
+            PropertyIdentifier::PRESENT_VALUE,
+            None
+        )
+        .await
+        .unwrap()
+        .is_err()
+    );
     // Seal while admitted caller futures wait on the DB: no task/lease/egress yet.
     let token = session.shared.token.clone();
     let stop = session.stop();
@@ -201,9 +207,11 @@ async fn source_read_audit_capacity_deadline_health_and_later_recovery() {
         reliability(&session).await,
         Reliability::COMMUNICATION_FAILURE.to_raw()
     );
-    assert!(timeout(Duration::from_millis(20), records.recv())
-        .await
-        .is_err());
+    assert!(
+        timeout(Duration::from_millis(20), records.recv())
+            .await
+            .is_err()
+    );
     let envelope = first_notification.unwrap();
     let (_, invoke) = notification(&envelope, true);
     send(
@@ -294,15 +302,17 @@ async fn source_read_stop_and_drop_cancel_owned_work_with_held_client_clones() {
         drop(session);
         assert!(timeout(WAIT, pending).await.unwrap().unwrap().is_err());
         send(&peer, &request.source_mac, ack(invoke, &rp)).await;
-        assert!(client
-            .read_property(
-                peer.local_mac(),
-                target(),
-                PropertyIdentifier::PRESENT_VALUE,
-                None
-            )
-            .await
-            .is_err());
+        assert!(
+            client
+                .read_property(
+                    peer.local_mac(),
+                    target(),
+                    PropertyIdentifier::PRESENT_VALUE,
+                    None
+                )
+                .await
+                .is_err()
+        );
         timeout(WAIT, async {
             while coordinator.active_count().unwrap() != 0 || weak_db.upgrade().is_some() {
                 tokio::task::yield_now().await;
@@ -372,17 +382,19 @@ async fn source_read_and_target_reporting_remain_independent_over_bip() {
         .unwrap();
     let mut session = session(database(false), SessionRole::Both, &sink);
     session.start().await.unwrap();
-    assert!(session
-        .client()
-        .unwrap()
-        .read_property(
-            target_server.local_mac(),
-            target(),
-            PropertyIdentifier::PRESENT_VALUE,
-            None
-        )
-        .await
-        .is_ok());
+    assert!(
+        session
+            .client()
+            .unwrap()
+            .read_property(
+                target_server.local_mac(),
+                target(),
+                PropertyIdentifier::PRESENT_VALUE,
+                None
+            )
+            .await
+            .is_ok()
+    );
     let (first, _) = notification(&receive(&mut records).await, false);
     let (second, _) = notification(&receive(&mut records).await, false);
     let (source, target_record) = if first.source_timestamp.is_some() {

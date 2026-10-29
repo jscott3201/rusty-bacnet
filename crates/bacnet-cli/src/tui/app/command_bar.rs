@@ -14,12 +14,19 @@
 //! - `bbmd [ADDRESS]`: show and read that BBMD's tables on the Network screen
 //!   (`ip` or `ip:port`, port 47808 by default); `bbmd` alone goes back to
 //!   the tables of the BBMD the session registers with.
-//! - `find NAME`: broadcast a Who-Has for the object named NAME, the rest
+//! - `find NAME`: in active mode broadcast Who-Has; in passive mode search
+//!   local observed names. NAME is the rest
 //!   of the line as typed (one quoted word is unwrapped), and list the
 //!   answers below the device table; `find` alone, or `find ""`, closes the
 //!   list.
 //! - `mstp rotation MS`, `mstp hold MS`, `mstp listen SECS`: the MS/TP
 //!   monitor's thresholds, and how long its join wizard listens.
+//! - `dcc ACTION [MINUTES]` (or `control`) and `reinit STATE`:
+//!   DeviceCommunicationControl and ReinitializeDevice to the selected
+//!   device, the action and state named as the one-shot `control` and
+//!   `reinit` name them. A masked password prompt and the T3 confirmation
+//!   follow; both need an armed write session on a profile with
+//!   `dangerous = true`.
 //!
 //! Every command but `find` is split into words by [`words::split`]: quotes
 //! group words and a backslash escapes a quote, a whitespace character or a
@@ -29,17 +36,19 @@ mod words;
 
 use std::time::Duration;
 
-use bacnet_types::enums::PropertyIdentifier;
+use bacnet_ops::parse::{parse_object_specifier, parse_property, parse_value_for_with_priority};
+use bacnet_ops::target::{Target, parse_target};
+use bacnet_types::enums::{EnableDisable, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
 
 use self::words::Word;
 use super::devices::DeviceTable;
 use super::monitor::Setting;
-use super::{App, FilterKey, Overlay, FLASH_FOR};
-use crate::core::target::{parse_target, Target};
-use crate::parse::{parse_object_specifier, parse_property, parse_value_with_priority};
+use super::{App, FLASH_FOR, FilterKey, Overlay};
+use crate::commands::device::{parse_enable_disable, parse_reinit_state};
 use crate::tui::message::Command;
 use crate::tui::safety::WriteSpec;
+use crate::tui::safety::manage::{Action, DccTime};
 use crate::tui::watched::{Point, WatchCommand};
 
 /// One command: its name, a short alias, its forms and what it does. The
@@ -56,6 +65,17 @@ pub(crate) struct Syntax {
     pub(crate) usage: &'static [&'static str],
     /// What it does, in a few words.
     pub(crate) what: &'static str,
+}
+
+impl Syntax {
+    /// The command description for the session policy.
+    pub(crate) fn description(&self, passive: bool) -> &'static str {
+        if passive && self.name == "find" {
+            "Search local observed object names; alone, close the list"
+        } else {
+            self.what
+        }
+    }
 }
 
 /// Every command the bar takes.
@@ -93,8 +113,28 @@ pub(crate) const COMMANDS: &[Syntax] = &[
     Syntax {
         name: "mstp",
         alias: None,
-        usage: &["mstp rotation|hold MS", "mstp listen SECS"],
-        what: "The MS/TP monitor's thresholds; how long a safe join listens",
+        usage: &[
+            "mstp rotation|hold MS",
+            "mstp listen SECS",
+            "mstp scan SECS|cancel",
+        ],
+        what: "Monitor thresholds, safe-join window, or receive-only baud scan",
+    },
+    Syntax {
+        name: "dcc",
+        alias: Some("control"),
+        usage: &[
+            "dcc enable",
+            "dcc disable-initiation|disable [MINUTES]",
+            "dcc disable-initiation|disable forever",
+        ],
+        what: "DeviceCommunicationControl, selected device (T3)",
+    },
+    Syntax {
+        name: "reinit",
+        alias: None,
+        usage: &["reinit coldstart|warmstart|STATE"],
+        what: "ReinitializeDevice, selected device (T3)",
     },
 ];
 
@@ -147,6 +187,36 @@ pub(crate) enum Line {
     Find(String),
     /// An MS/TP monitor setting.
     Mstp(Setting),
+    /// Start a baud scan, or cancel when no window is supplied.
+    Scan(Option<Duration>),
+    /// DeviceCommunicationControl or ReinitializeDevice to the selected
+    /// device.
+    Manage(Action),
+}
+
+/// `dcc ACTION [MINUTES|forever]`. A disable without a duration lasts
+/// [`DEFAULT_DCC_MINUTES`](crate::tui::safety::manage::DEFAULT_DCC_MINUTES);
+/// `forever` sends none. `enable` takes none,
+/// since the device ignores one.
+fn dcc(action: &str, duration: Option<&str>) -> Result<Action, String> {
+    let state = parse_enable_disable(action)?;
+    let time = match duration {
+        _ if state == EnableDisable::ENABLE => match duration {
+            None => DccTime::Forever,
+            Some(_) => return Err("usage: dcc enable (it takes no duration)".into()),
+        },
+        None => DccTime::Default,
+        Some("forever") => DccTime::Forever,
+        Some(word) => DccTime::Minutes(
+            word.parse::<u16>()
+                .ok()
+                .filter(|minutes| *minutes > 0)
+                .ok_or_else(|| {
+                    format!("'{word}': dcc takes 1 to 65535 whole minutes, or forever")
+                })?,
+        ),
+    };
+    Ok(Action::Dcc { state, time })
 }
 
 /// `mstp rotation|hold MS` or `mstp listen SECS`, each at least 1.
@@ -219,10 +289,16 @@ fn object(word: &str) -> Result<ObjectIdentifier, String> {
 /// A `VALUE[@P]` word as the value grammar's text and the priority. A word
 /// with a quoted or escaped part is a CharacterString, its priority an `@P`
 /// after the last such part; any other word is read by the one-shot value
-/// grammar.
-fn value(word: &Word) -> Result<(String, Option<u8>), String> {
+/// grammar for the property written, which knows its names.
+fn value(
+    word: &Word,
+    object: ObjectIdentifier,
+    property: PropertyIdentifier,
+    index: Option<u32>,
+) -> Result<(String, Option<u8>), String> {
     let Some(literal_to) = word.literal_to else {
-        let (_, priority) = parse_value_with_priority(&word.text)?;
+        let (_, priority) =
+            parse_value_for_with_priority(object.object_type(), property, index, &word.text)?;
         let text = match priority {
             Some(_) => word.text.rsplit_once('@').map_or(&*word.text, |(v, _)| v),
             None => &word.text,
@@ -250,10 +326,8 @@ fn value(word: &Word) -> Result<(String, Option<u8>), String> {
 fn find_name(rest: &str) -> String {
     let quoted = matches!(rest.chars().next(), Some(q @ ('"' | '\''))
         if rest.len() >= 2 && rest.ends_with(q));
-    if quoted {
-        if let Ok([word]) = words::split(rest).as_deref() {
-            return word.text.clone();
-        }
+    if quoted && let Ok([word]) = words::split(rest).as_deref() {
+        return word.text.clone();
     }
     rest.to_string()
 }
@@ -267,10 +341,11 @@ fn writes(device: u32, words: &[Word]) -> Result<Vec<WriteSpec>, String> {
         .chunks(3)
         .map(|group| {
             let (property, index) = parse_property(&group[1].text)?;
-            let (value, priority) = value(&group[2])?;
+            let object = object(&group[0].text)?;
+            let (value, priority) = value(&group[2], object, property, index)?;
             Ok(WriteSpec {
                 device,
-                object: object(&group[0].text)?,
+                object,
                 property,
                 index,
                 value: Some(value),
@@ -327,7 +402,22 @@ pub(crate) fn parse(text: &str, devices: &DeviceTable) -> Result<Line, String> {
         ("csv", ["off"]) => Ok(Line::Csv(false)),
         ("bbmd", []) => Ok(Line::Bbmd(None)),
         ("bbmd", [address]) => Ok(Line::Bbmd(Some(crate::foreign::parse_bbmd_arg(address)?))),
+        ("mstp", ["scan", "cancel"]) => Ok(Line::Scan(None)),
+        ("mstp", ["scan", value]) => {
+            let seconds = value
+                .parse::<u64>()
+                .ok()
+                .filter(|n| (1..=3600).contains(n))
+                .ok_or_else(|| "mstp scan takes 1 to 3600 whole seconds, or cancel".to_string())?;
+            Ok(Line::Scan(Some(Duration::from_secs(seconds))))
+        }
         ("mstp", [which, value]) => Ok(Line::Mstp(mstp_setting(which, value)?)),
+        ("dcc", [action, rest @ ..]) if rest.len() <= 1 => {
+            Ok(Line::Manage(dcc(action, rest.first().copied())?))
+        }
+        ("reinit", [state]) => Ok(Line::Manage(Action::Reinit {
+            state: parse_reinit_state(state)?,
+        })),
         // A quoted first word, `"find"`, is still find.
         ("find", _) => Ok(Line::Find(find_name(rest.trim()))),
         _ => Err(wrong()),
@@ -361,6 +451,8 @@ impl App {
                     Ok(Line::Bbmd(bbmd)) => self.show_bbmd(bbmd, out),
                     Ok(Line::Find(name)) => self.find(name, out),
                     Ok(Line::Mstp(setting)) => self.mstp_setting(setting),
+                    Ok(Line::Scan(window)) => self.mstp_scan(window, out),
+                    Ok(Line::Manage(action)) => self.open_manage(action),
                     Err(error) => self.flash(error, FLASH_FOR),
                 }
             }
@@ -370,10 +462,10 @@ impl App {
 
 #[cfg(test)]
 mod tests {
+    use bacnet_ops::target::routed_station;
     use bacnet_types::enums::{ObjectType, Segmentation};
 
     use super::*;
-    use crate::core::target::routed_station;
     use crate::tui::message::DeviceRow;
 
     /// A line read with an empty device table.
@@ -522,26 +614,32 @@ mod tests {
         );
         assert!(parse(r"writem 100 av:1 description Zone\ 2@17").is_err());
         // A backslash that escapes nothing is plain text, not a string.
-        assert!(parse(r"writem 100 av:1 description C:\temp")
-            .unwrap_err()
-            .contains("cannot parse value"));
+        assert!(
+            parse(r"writem 100 av:1 description C:\temp")
+                .unwrap_err()
+                .contains("cannot parse value")
+        );
         // Each value reads back as the string typed.
         let Some(text) = string("two words") else {
             unreachable!()
         };
         assert_eq!(
-            crate::parse::parse_value(&text),
+            bacnet_ops::parse::parse_value(&text),
             Ok(bacnet_types::primitives::PropertyValue::CharacterString(
                 "two words".into()
             ))
         );
-        assert!(parse(r#"writem 100 av:1 description "x"@17"#)
-            .unwrap_err()
-            .contains("priority"));
+        assert!(
+            parse(r#"writem 100 av:1 description "x"@17"#)
+                .unwrap_err()
+                .contains("priority")
+        );
         assert!(parse(r#"writem 100 av:1 description "x"@"#).is_err());
-        assert!(parse(r#"writem 100 av:1 description "x"@0"#)
-            .unwrap_err()
-            .contains("priority"));
+        assert!(
+            parse(r#"writem 100 av:1 description "x"@0"#)
+                .unwrap_err()
+                .contains("priority")
+        );
         let open = parse(r#"writem 100 av:1 description "two words"#).unwrap_err();
         assert!(open.contains("unclosed \" quote"), "{open}");
         // Unquoted, a space still splits the value from the next group.
@@ -576,9 +674,11 @@ mod tests {
         );
         assert!(parse("bbmd 10.0.0").is_err());
         assert_eq!(parse("bbmd"), Ok(Line::Bbmd(None)));
-        assert!(parse("watch 10.0.0.5 ai:1")
-            .unwrap_err()
-            .contains("a device from the device table"));
+        assert!(
+            parse("watch 10.0.0.5 ai:1")
+                .unwrap_err()
+                .contains("a device from the device table")
+        );
         assert!(parse("watch 100 ai:1 object-list[2]").is_err());
         assert!(parse("watch 100 ai:x").is_err());
         assert_eq!(parse("find"), Ok(Line::Find(String::new())));
@@ -599,9 +699,28 @@ mod tests {
         assert!(parse("mstp listen 4000").is_err());
         assert!(parse("mstp poll 5").is_err());
         assert!(parse("finder x").unwrap_err().contains("unknown command"));
-        assert!(parse("read 100 ai:1")
-            .unwrap_err()
-            .contains("unknown command"));
+        assert!(
+            parse("read 100 ai:1")
+                .unwrap_err()
+                .contains("unknown command")
+        );
+    }
+
+    #[test]
+    fn mstp_scan_commands_require_an_explicit_bounded_window() {
+        for text in ["mstp scan 1", "mstp scan 3600", "mstp scan cancel"] {
+            assert!(parse(text).is_ok(), "{text}: {:?}", parse(text));
+        }
+        for text in [
+            "mstp scan",
+            "mstp scan 0",
+            "mstp scan 3601",
+            "mstp scan -1",
+            "mstp scan 1.5",
+            "mstp scan cancel now",
+        ] {
+            assert!(parse(text).is_err(), "{text}");
+        }
     }
 
     #[test]
@@ -629,7 +748,9 @@ mod tests {
             Line::Writem(_) => "writem",
             Line::Bbmd(_) => "bbmd",
             Line::Find(_) => "find",
-            Line::Mstp(_) => "mstp",
+            Line::Mstp(_) | Line::Scan(_) => "mstp",
+            Line::Manage(Action::Dcc { .. }) => "dcc",
+            Line::Manage(Action::Reinit { .. }) => "reinit",
         }
     }
 
@@ -647,6 +768,9 @@ mod tests {
             "find Supply Temp",
             "mstp hold 250",
             "mstp listen 30",
+            "dcc disable-initiation 30",
+            "control enable",
+            "reinit warmstart",
         ];
         let mut rows = std::collections::BTreeSet::new();
         for sample in samples {

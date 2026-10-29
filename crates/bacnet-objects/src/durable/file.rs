@@ -6,6 +6,7 @@
 //! version, then the four-octet object identifier it belongs to. What
 //! follows is the format's own body.
 
+use crate::prelude::*;
 use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};

@@ -3,7 +3,7 @@
 //! The UI tells the browser which objects of a device it shows without a
 //! name; that set replaces the device's [`NameQueue`], so a row scrolled
 //! off before its turn is never read. A name job (the [`Scheduler`]'s
-//! lowest priority, under the same per-device gate and [`RateCap`] as
+//! lowest priority, under the same per-device gate and [`RequestLimits`] as
 //! every other read) waits for a free slot in the cap before it takes a
 //! batch from the queue, so a row withdrawn while it waited costs neither
 //! a request nor a slot. It reads the batch with one ReadPropertyMultiple
@@ -20,19 +20,19 @@
 //! reported unreachable; those are read again once the UI says the device
 //! answered (an I-Am, [`NameQueue::retry`]).
 //!
-//! [`Scheduler`]: super::limits::Scheduler
-//! [`RateCap`]: super::limits::RateCap
+//! [`Scheduler`]: super::schedule::Scheduler
+//! [`RequestLimits`]: bacnet_ops::limits::RequestLimits
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, PoisonError};
 
+use bacnet_ops::engine::{Halt, Reader, RpmFailure, rpm_failure, unreachable};
+use bacnet_ops::format::{MAX_NAME_CHARS, name_text};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::ObjectIdentifier;
 
-use super::read::{rpm_failure, unreachable, Halt, Reader, RpmFailure};
-use crate::tui::format::{name_text, MAX_NAME_CHARS};
 use crate::tui::point::{ReadName, ReqId};
 
 /// The most names one ReadPropertyMultiple asks for, however large the
@@ -284,7 +284,10 @@ fn lock(queue: &Mutex<NameQueue>) -> std::sync::MutexGuard<'_, NameQueue> {
 /// one the request books, and a row withdrawn during the wait is never
 /// read. An await there (an async lock in `take`, say) would let other
 /// jobs book that slot, and this batch would wait a slot more for rows
-/// that may be gone by then.
+/// that may be gone by then. The device's gate is the one exception: a
+/// watch-list request or a renewal can take it between the free turn and
+/// the turn (#1791), so the RPM path filters the batch again once its turn
+/// comes.
 pub(crate) async fn read_names<T, F, R>(
     reader: &mut Reader<'_, T>,
     queue: &Mutex<NameQueue>,
@@ -356,7 +359,7 @@ async fn read_batch<T: TransportPort + 'static>(
                     reader.rpm = false;
                 }
                 RpmFailure::Other if unreachable(&error) => {
-                    return (Vec::new(), Some(Halt::Device(error)))
+                    return (Vec::new(), Some(Halt::Device(error)));
                 }
                 // Too large: later batches ask for fewer, and this one is
                 // read a name at a time.
@@ -378,7 +381,7 @@ async fn read_batch<T: TransportPort + 'static>(
         {
             Ok(data) => read.push((object, named(name_text(&data)))),
             Err(Halt::Device(error)) if unreachable(&error) => {
-                return (read, Some(Halt::Device(error)))
+                return (read, Some(Halt::Device(error)));
             }
             Err(Halt::Device(_)) => read.push((object, ReadName::Refused)),
             Err(Halt::Cancelled) => return (read, Some(Halt::Cancelled)),
@@ -394,14 +397,15 @@ fn named(name: Option<String>) -> ReadName {
 
 /// Object_Name of the objects in `batch` the UI still wants once the
 /// request's slot comes, with one RPM. An object the answer leaves out,
-/// or answers with an error, has no name.
+/// or answers with an error, has no name. A batch the UI no longer wants
+/// at all takes no turn; one it gave up on while the turn was coming is
+/// dropped then.
 async fn rpm_names<T: TransportPort + 'static>(
     reader: &Reader<'_, T>,
     queue: &Mutex<NameQueue>,
     batch: &[ObjectIdentifier],
 ) -> Result<Vec<NameRead>, Halt> {
-    reader.turn().await?;
-    let batch: Vec<ObjectIdentifier> = {
+    let wanted = |batch: &[ObjectIdentifier]| -> Vec<ObjectIdentifier> {
         let queue = lock(queue);
         batch
             .iter()
@@ -409,6 +413,11 @@ async fn rpm_names<T: TransportPort + 'static>(
             .filter(|object| queue.still_wanted(*object))
             .collect()
     };
+    if wanted(batch).is_empty() {
+        return Ok(Vec::new());
+    }
+    let _turn = reader.turn().await?;
+    let batch = wanted(batch);
     if batch.is_empty() {
         return Ok(Vec::new());
     }

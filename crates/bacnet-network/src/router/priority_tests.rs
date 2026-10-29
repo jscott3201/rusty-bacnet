@@ -80,7 +80,7 @@ async fn queued_routed_traffic_uses_priority_then_arrival_order() {
         assert_eq!(sent.attributes, attributes(tag));
         sent.complete.send(Ok(())).unwrap();
     }
-    router.stop().await;
+    router.stop().await.unwrap();
 }
 
 #[tokio::test]
@@ -117,7 +117,8 @@ async fn full_held_port_refuses_new_work_without_stalling_another_port_or_shutdo
 
     tokio::time::timeout(std::time::Duration::from_secs(2), router.stop())
         .await
-        .expect("stop must cancel in-flight I/O without draining the queue");
+        .expect("stop must cancel in-flight I/O without draining the queue")
+        .unwrap();
     assert!(
         in_flight.complete.is_closed(),
         "the send future was dropped"

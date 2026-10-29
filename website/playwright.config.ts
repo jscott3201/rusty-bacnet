@@ -16,8 +16,9 @@ export default defineConfig({
   },
   projects: [
     { name: 'desktop', use: { browserName: 'chromium', viewport: { width: 1440, height: 1000 } } },
+    { name: 'laptop', use: { browserName: 'chromium', viewport: { width: 1024, height: 768 } } },
     { name: 'tablet', use: { browserName: 'chromium', viewport: { width: 768, height: 1024 } } },
-    { name: 'phone', use: { browserName: 'chromium', viewport: { width: 390, height: 844 }, hasTouch: true } },
+    { name: 'phone', use: { browserName: 'chromium', viewport: { width: 360, height: 800 }, hasTouch: true } },
     { name: 'narrow', use: { browserName: 'chromium', viewport: { width: 320, height: 800 }, hasTouch: true } },
     ...(process.env.DOCS_WEBKIT ? [{ name: 'webkit', testMatch: '**/smoke.spec.ts', use: { browserName: 'webkit' as const, viewport: { width: 390, height: 844 } } }] : []),
   ],

@@ -8,9 +8,9 @@ use bacnet_router_core::npdu::{AddressField, Malformed, Npdu};
 use bacnet_router_core::npdu::{NetworkMessageType, RejectMessageReason};
 use bacnet_router_core::router::{Discard, Kind, Options};
 use fixture::{
-    addr, apdu_to, at, bytes, deliver, deliver_broadcast, learn_9_via_r7, port_on, router,
-    router_counts, router_with, sent_reject, Outcome, Recorder, CONFIRMED, NODE_A, OWN_0, OWN_1,
-    R7, UNCONFIRMED,
+    CONFIRMED, NODE_A, OWN_0, OWN_1, Outcome, R7, Recorder, UNCONFIRMED, addr, apdu_to, at, bytes,
+    deliver, deliver_broadcast, learn_9_via_r7, port_on, router, router_counts, router_with,
+    sent_reject,
 };
 
 /// An NPDU with a DLEN or SLEN of 19, one past the bound, for DNET `dnet`

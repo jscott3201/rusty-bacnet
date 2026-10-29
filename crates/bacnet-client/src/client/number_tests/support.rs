@@ -1,12 +1,12 @@
 use super::super::{BACnetClient, ClientConfig};
 use bacnet_transport::port::{ReceivedNpdu, TransportPort, TransportProvenance};
-use bacnet_types::{error::Error, MacAddr};
+use bacnet_types::{MacAddr, error::Error};
 use bytes::Bytes;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{Semaphore, mpsc};
 
 pub const QUERY: &[u8] = &[1, 0x80, 0x12];
 pub async fn bounded<T>(f: impl std::future::Future<Output = T>) -> T {

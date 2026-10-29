@@ -11,6 +11,7 @@ use bacnet_objects::analog::AnalogInputObject;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
 use bacnet_types::enums::{EngineeringUnits, Reliability};
+use bacnet_types::error::RemoteError;
 
 const INPUT: PropertyIdentifier = PropertyIdentifier::INPUT_REFERENCE;
 /// [0] accumulator 1, [1] present-value: an Unsigned.
@@ -166,7 +167,7 @@ fn write_to(
 
 fn refused_with(result: Result<ObjectIdentifier, Error>, expected: ErrorCode) {
     assert!(
-        matches!(result, Err(Error::Protocol { class, code })
+        matches!(result, Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::PROPERTY
                 && code == expected),
         "expected PROPERTY / {expected:?}, got {result:?}"
@@ -222,9 +223,11 @@ fn an_accumulator_serves_prescale_only_once_set() {
         ErrorCode::UNKNOWN_PROPERTY,
     );
     let list = read(&db, PropertyIdentifier::PROPERTY_LIST).unwrap();
-    assert!(!list
-        .chunks(2)
-        .any(|enumerated| enumerated == [0x91, prescale.to_raw() as u8]));
+    assert!(
+        !list
+            .chunks(2)
+            .any(|enumerated| enumerated == [0x91, prescale.to_raw() as u8])
+    );
     refused_with(
         write_to(&mut db, acc, prescale, &[0x00]),
         ErrorCode::UNKNOWN_PROPERTY,

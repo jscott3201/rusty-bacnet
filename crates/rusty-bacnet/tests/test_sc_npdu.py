@@ -44,6 +44,34 @@ class ScNpduOptionsTests(unittest.TestCase):
                         sc_ca_cert="/not/a/ca", sc_client_cert="/not/a/cert",
                         sc_client_key="/not/a/key", sc_device_uuid=b"a" * 16)
 
+    def test_control_rate_limit_is_sc_only_and_checked_before_io(self):
+        # #1969: (burst, per_second), validated with the native rules.
+        for api, args in [(BACnetClient, ()), (BACnetServer, (3000,))]:
+            with self.subTest(api=api.__name__):
+                parameter = inspect.signature(api).parameters["sc_control_rate_limit"]
+                self.assertEqual(parameter.kind, inspect.Parameter.KEYWORD_ONLY)
+                self.assertIsNone(parameter.default)
+                api(*args, sc_control_rate_limit=None)
+                for value in [(0, 1), (1, 0), (4097, 1), (0, 0)]:
+                    with self.assertRaisesRegex(ValueError, "control-message rate"):
+                        api(*args, transport="sc", sc_control_rate_limit=value)
+                for value in [(-1, 1), (1, 1 << 40)]:
+                    with self.assertRaises(OverflowError):
+                        api(*args, transport="sc", sc_control_rate_limit=value)
+                for value in [5, ("1", 1)]:
+                    with self.assertRaises(TypeError):
+                        api(*args, transport="sc", sc_control_rate_limit=value)
+                for value in [(1,), (1, 2, 3)]:
+                    with self.assertRaisesRegex(ValueError, "length 2"):
+                        api(*args, transport="sc", sc_control_rate_limit=value)
+                for transport in ["bip", "ipv6", "mstp"]:
+                    with self.assertRaisesRegex(ValueError, "sc_control_rate_limit.*only.*sc"):
+                        api(*args, transport=transport, sc_control_rate_limit=(1, 1))
+                for value in [(1, 1), (256, 32), (4096, 1 << 31)]:
+                    api(*args, transport="sc", sc_control_rate_limit=value,
+                        sc_ca_cert="/not/a/ca", sc_client_cert="/not/a/cert",
+                        sc_client_key="/not/a/key", sc_device_uuid=b"a" * 16)
+
     def test_installed_stub_required_shape_and_future_signatures(self):
         path = Path(rusty_bacnet.__file__).with_suffix(".pyi")
         ast.parse(path.read_text(), feature_version=(3, 11))
@@ -66,6 +94,9 @@ class ScNpduOptionsTests(unittest.TestCase):
             arg = next(arg for arg in method.args.kwonlyargs
                        if arg.arg == "sc_npdu_per_origin_limit")
             self.assertEqual(ast.unparse(arg.annotation), "int | None")
+            arg = next(arg for arg in method.args.kwonlyargs
+                       if arg.arg == "sc_control_rate_limit")
+            self.assertEqual(ast.unparse(arg.annotation), "tuple[int, int] | None")
 
     def test_real_tls_bursts_in_fresh_single_worker_runtime(self):
         # The native bridge initializes once per process. Set Tokio's worker
@@ -75,6 +106,52 @@ class ScNpduOptionsTests(unittest.TestCase):
             env={**os.environ, "TOKIO_WORKER_THREADS": "1"},
             capture_output=True, text=True, timeout=90)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+class ScControlRateWireTests(ClientScFixture):
+    async def control_flood(self, options, count):
+        """Hand the client `count` hub-relayed network-layer requests (message
+        type 0x00) from one origin, then a heartbeat whose ack
+        shows they all arrived; return the drop counts."""
+        done = asyncio.Event()
+
+        async def peer(reader, writer, connect):
+            await self.accept_sc(writer, connect)
+            origin = b"\x02\0\0\0\0\4"
+            frames = b"".join(
+                self.ws_frame(b"\x01\x08" + (i + 10).to_bytes(2, "big") + origin + b"\x01\x80\x00")
+                for i in range(count))
+            writer.write(frames + self.ws_frame(b"\x0a\0\x44\x55"))
+            await asyncio.wait_for(writer.drain(), 3)
+            for _ in range(40):
+                _, value = await self.frame(reader, True)
+                if value == b"\x0b\0\x44\x55":
+                    break
+            done.set()
+            await asyncio.Event().wait()
+
+        client = self.client(await self.raw_peer(peer), **options)
+        await asyncio.wait_for(client.__aenter__(), 5)
+        await asyncio.wait_for(done.wait(), 5)
+        counts = await client.sc_npdu_drop_counts()
+        await asyncio.wait_for(client.stop(), 5)
+        return counts
+
+    @staticmethod
+    def ws_frame(payload):
+        assert len(payload) < 126
+        return bytes([0x82, len(payload)]) + payload
+
+    async def test_a_small_limit_drops_and_counts_excess_control_messages(self):
+        default = await self.control_flood({}, 12)
+        self.assertEqual(default["control_rate_drops"], 0)
+        # A burst of 2 refilling at 1 a second. The 12 frames go out in one
+        # write and are processed promptly, so 10 are over budget, 9 if a
+        # refill lands while they are read.
+        limited = await self.control_flood({"sc_control_rate_limit": (2, 1)}, 12)
+        self.assertGreaterEqual(limited["control_rate_drops"], 9, limited)
+        self.assertLessEqual(limited["control_rate_drops"], 10, limited)
+        self.assertEqual((limited["fairness_drops"], limited["full_drops"]), (0, 0))
 
 
 class ScNpduLifecycleTests(ClientScFixture):

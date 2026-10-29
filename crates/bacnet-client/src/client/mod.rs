@@ -16,37 +16,39 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use bytes::{Bytes, BytesMut};
-use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
+use tokio::sync::{Mutex, broadcast, mpsc, oneshot};
 use tokio::task::JoinHandle;
+use tokio::time::Duration;
 #[cfg(test)]
 use tokio::time::timeout;
-use tokio::time::Duration;
 use tracing::{debug, warn};
 
 use bacnet_encoding::apdu::{
-    self, encode_apdu, validate_max_apdu_length, validate_max_segments, AbortPdu, Apdu,
-    ConfirmedRequest as ConfirmedRequestPdu, RejectPdu, SegmentAck as SegmentAckPdu, SimpleAck,
+    self, AbortPdu, Apdu, ConfirmedRequest as ConfirmedRequestPdu, RejectPdu,
+    SegmentAck as SegmentAckPdu, SimpleAck, encode_apdu, validate_max_apdu_length,
+    validate_max_segments,
 };
 use bacnet_encoding::npdu::NpduAddress;
 #[cfg(test)]
-use bacnet_encoding::npdu::{encode_npdu, Npdu};
+use bacnet_encoding::npdu::{Npdu, encode_npdu};
 use bacnet_endpoint_core::coordinator::{CanonicalPeer, OutboundTransactionCoordinator};
 use bacnet_network::layer::NetworkLayer;
 use bacnet_npdu::NetworkPriority;
 use bacnet_services::cov::COVNotificationRequest;
+use bacnet_transport::any::AnyTransport;
 use bacnet_transport::bip::{BipMode, BipMulticast, BipTransport};
 #[cfg(feature = "ipv6")]
-use bacnet_transport::bip6::Bip6Transport;
+use bacnet_transport::bip6::{Bip6ForeignDeviceConfig, Bip6Transport};
 use bacnet_transport::port::{TransportPort, TransportProvenance};
 use bacnet_transport::warn_throttle::WarnThrottle;
 use bacnet_transport::warn_throttled;
-use bacnet_types::enums::{ConfirmedServiceChoice, RejectReason, UnconfirmedServiceChoice};
-use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
+use bacnet_types::enums::{ConfirmedServiceChoice, RejectReason, UnconfirmedServiceChoice};
+use bacnet_types::error::{Error, RemoteError};
 
 use crate::discovery::{DeviceTable, DeviceUpsertResult, DiscoveredDevice, RoutedDeviceConfig};
 use crate::segmentation::{
-    duplicate_in_window, max_segment_payload, split_payload, SegmentReceiver, SegmentedPduType,
+    SegmentReceiver, SegmentedPduType, duplicate_in_window, max_segment_payload, split_payload,
 };
 use crate::tsm::{
     ProgressReceiver, RequestTimerExpiration, SegmentAckPhase, SegmentTimerExpiration,
@@ -55,6 +57,9 @@ use crate::tsm::{
 #[cfg(test)]
 use transaction_cleanup::{SegmentedCleanupHook, SegmentedPostWaitCleanupHook};
 use transaction_cleanup::{TransactionCleanup, TransactionGuard};
+
+mod sent_services;
+pub use sent_services::SENT_SERVICES;
 
 /// Default COV notification broadcast channel capacity.
 pub const DEFAULT_COV_CHANNEL_CAPACITY: usize = 64;
@@ -113,7 +118,10 @@ pub struct ClientConfig {
     pub apdu_timeout_ms: u64,
     /// Number of APDU retries.
     pub apdu_retries: u8,
-    /// Maximum APDU length this client accepts.
+    /// Maximum APDU length this client accepts. Each confirmed request
+    /// advertises the largest valid bucket at or below both this and the
+    /// transport's limit at that moment, so it follows a limit that changes
+    /// after start (#2086).
     pub max_apdu_length: u16,
     /// Maximum segments this client accepts (`None` = unspecified).
     ///
@@ -202,13 +210,11 @@ pub(crate) fn confirmed_response_result(response: TsmResponse) -> Result<Bytes, 
     match response {
         TsmResponse::SimpleAck => Ok(Bytes::new()),
         TsmResponse::ComplexAck { service_data } => Ok(service_data),
-        TsmResponse::Error {
-            class,
-            code,
+        TsmResponse::Remote {
+            error: RemoteError::Error { class, code },
             detail,
-        } => Err(Error::protocol(class, code, detail)),
-        TsmResponse::Reject { reason } => Err(Error::Reject { reason }),
-        TsmResponse::Abort { reason } => Err(Error::Abort { reason }),
+        } => Err(Error::with_detail(class, code, detail)),
+        TsmResponse::Remote { error, .. } => Err(Error::Remote(error)),
         TsmResponse::NetworkPathTooLong { dnet } => Err(Error::RoutedPathTooLong { dnet }),
     }
 }
@@ -237,8 +243,9 @@ impl ClientOptions {
     }
 }
 
-/// Generic builder for BACnetClient with a pre-built transport.
-pub struct ClientBuilder<T: TransportPort> {
+/// Generic builder for BACnetClient with a pre-built transport. The
+/// transport type defaults to [`AnyTransport`], as [`BACnetClient`]'s does.
+pub struct ClientBuilder<T: TransportPort = AnyTransport> {
     config: ClientConfig,
     options: ClientOptions,
     transport: Option<T>,
@@ -542,7 +549,13 @@ struct SegmentAckRoute {
 }
 
 /// BACnet client with low-level and high-level request APIs.
-pub struct BACnetClient<T: TransportPort> {
+///
+/// `T` is the transport the client runs over. It defaults to
+/// [`AnyTransport`], the type the builders' `build_any()` methods return,
+/// so `BACnetClient` alone names a client over any built-in transport;
+/// `BACnetClient<BipTransport>` and the like name one over a concrete
+/// transport.
+pub struct BACnetClient<T: TransportPort = AnyTransport> {
     config: ClientConfig,
     network: Arc<NetworkLayer<T>>,
     tsm: Arc<Mutex<Tsm>>,
@@ -588,69 +601,6 @@ impl BACnetClient<BipTransport> {
             mode: BipMode::Normal,
             multicast: None,
         }
-    }
-}
-
-#[cfg(feature = "ipv6")]
-impl BACnetClient<Bip6Transport> {
-    /// Create a BIP6-specific builder for BACnet/IPv6 transport.
-    #[cfg_attr(docsrs, doc(cfg(feature = "ipv6")))]
-    pub fn bip6_builder() -> Bip6ClientBuilder {
-        Bip6ClientBuilder {
-            config: ClientConfig::default(),
-            options: ClientOptions::default(),
-            interface: Ipv6Addr::UNSPECIFIED,
-            device_instance: None,
-        }
-    }
-}
-
-/// BIP6-specific builder that constructs `Bip6Transport` from IPv6 interface/port/device-instance.
-#[cfg(feature = "ipv6")]
-#[cfg_attr(docsrs, doc(cfg(feature = "ipv6")))]
-pub struct Bip6ClientBuilder {
-    config: ClientConfig,
-    options: ClientOptions,
-    interface: Ipv6Addr,
-    device_instance: Option<u32>,
-}
-
-#[cfg(feature = "ipv6")]
-impl Bip6ClientBuilder {
-    /// Set the local IPv6 interface address.
-    pub fn interface(mut self, ip: Ipv6Addr) -> Self {
-        self.interface = ip;
-        self
-    }
-
-    /// Set the UDP port (0 for ephemeral).
-    pub fn port(mut self, port: u16) -> Self {
-        self.config.port = port;
-        self
-    }
-
-    /// Set the device instance for VMAC derivation (Annex U.5).
-    pub fn device_instance(mut self, instance: u32) -> Self {
-        self.device_instance = Some(instance);
-        self
-    }
-
-    /// Set APDU timeout in milliseconds.
-    pub fn apdu_timeout_ms(mut self, ms: u64) -> Self {
-        self.config.apdu_timeout_ms = ms;
-        self
-    }
-
-    /// Set the maximum APDU length this client accepts.
-    pub fn max_apdu_length(mut self, len: u16) -> Self {
-        self.config.max_apdu_length = len;
-        self
-    }
-
-    /// Set the COV notification broadcast channel capacity.
-    pub fn cov_channel_capacity(mut self, capacity: usize) -> Self {
-        self.options.cov_channel_capacity = capacity;
-        self
     }
 }
 
@@ -779,6 +729,16 @@ impl ScClientBuilder {
         self
     }
 
+    /// Set the per-source limit on inbound network-layer messages (default
+    /// [`ScControlRateLimit::default`](bacnet_transport::sc::ScControlRateLimit::default),
+    /// #518, #1969); see
+    /// [`ScTransport::with_control_rate_limit`](bacnet_transport::sc::ScTransport::with_control_rate_limit).
+    /// Checked with the NPDU quota before TLS lookup or dialing.
+    pub fn control_rate_limit(mut self, limit: bacnet_transport::sc::ScControlRateLimit) -> Self {
+        self.npdu_admission_policy.control_rate = limit;
+        self
+    }
+
     /// Set the failover hub WebSocket URL, dialled with the same TLS policy
     /// when the primary hub cannot be reached (Annex AB.5.2).
     ///
@@ -831,6 +791,7 @@ impl ScClientBuilder {
         bacnet_transport::sc::ScTransport::new(ws, self.vmac)
             .with_device_uuid(self.device_uuid)
             .with_npdu_per_origin_limit(self.npdu_admission_policy.per_origin_limit)
+            .with_control_rate_limit(self.npdu_admission_policy.control_rate)
             .with_heartbeat_interval_ms(self.heartbeat_interval_ms)
             .with_heartbeat_timeout_ms(self.heartbeat_timeout_ms)
             .with_connect_timeout_ms(self.connect_timeout_ms)
@@ -887,11 +848,16 @@ fn cap_max_apdu_to_transport(configured: u16, transport_limit: u16) -> Result<u1
 }
 
 mod audit;
+#[cfg(feature = "ipv6")]
+mod builder_bip6;
+#[cfg(feature = "ipv6")]
+pub use builder_bip6::Bip6ClientBuilder;
 mod builder_build;
 mod builder_options;
 mod cov;
 mod cov_notifications;
 mod cov_renewal;
+mod cov_target;
 mod device_events;
 mod device_mgmt;
 mod discovery;
@@ -915,13 +881,14 @@ mod segmentation;
 mod segmentation_abort;
 mod segmentation_context;
 mod segmented_request;
+mod summaries;
 mod transaction_cleanup;
 mod transaction_peer;
 mod transport_access;
 mod write_group;
 pub(crate) use routed_path_limits::check_routed_unicast;
 use routed_path_limits::{
-    forwarded_npci_len, routed_path_quarantine_horizon, RoutedPathLease, RoutedPathLimits,
+    RoutedPathLease, RoutedPathLimits, forwarded_npci_len, routed_path_quarantine_horizon,
 };
 pub(crate) use transaction_peer::TransactionPeer;
 
@@ -933,11 +900,12 @@ pub use cov_notifications::{
 pub use cov_renewal::{
     ManagedCOVSubscription, ManagedCOVSubscriptionEvent, ManagedCOVSubscriptionOptions,
 };
+pub use cov_target::CovTarget;
 pub use event_notifications::{
-    EventNotificationDelivery, ReceivedEventNotification, DEFAULT_EVENT_CHANNEL_CAPACITY,
-    MAX_EVENT_CHANNEL_CAPACITY,
+    DEFAULT_EVENT_CHANNEL_CAPACITY, EventNotificationDelivery, MAX_EVENT_CHANNEL_CAPACITY,
+    ReceivedEventNotification,
 };
-pub use i_have::{ReceivedIHave, I_HAVE_CHANNEL_CAPACITY};
+pub use i_have::{I_HAVE_CHANNEL_CAPACITY, ReceivedIHave};
 pub use network_reports::{DiscoveredRouter, NETWORK_REPORT_CHANNEL_CAPACITY};
 pub use pacing::MAX_MIN_REQUEST_INTERVAL_MS;
 pub use write_group::WriteGroupDestination;
@@ -958,6 +926,10 @@ mod confirmed_request_dispatch_tests;
 mod coordinator_tests;
 #[cfg(test)]
 mod cov_notification_tests;
+#[cfg(test)]
+mod cov_renewal_gate_tests;
+#[cfg(test)]
+mod cov_renewal_routed_tests;
 #[cfg(test)]
 mod cov_renewal_tests;
 #[cfg(test)]
@@ -1014,6 +986,8 @@ mod segmented_response_admission_tests;
 mod segmented_response_capacity_tests;
 #[cfg(test)]
 mod segmented_timeout_tests;
+#[cfg(test)]
+mod sent_services_tests;
 #[cfg(test)]
 mod structured_error_tests;
 #[cfg(test)]

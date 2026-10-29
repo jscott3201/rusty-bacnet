@@ -2,8 +2,9 @@
 
 use crate::sc_peer::PyScCertificateMetadata;
 use bacnet_transport::sc_tls::inspection::{
-    self, ScExtensionInspection, ScInputErrorKind, ScInputRole, ScInspectedCertificate,
-    ScInspectionError, ScInspectionFinding, ScKeyFilePermissions, ScPemInspection, MAX_INPUT_BYTES,
+    self, MAX_INPUT_BYTES, ScExtensionInspection, ScInputErrorKind, ScInputRole,
+    ScInspectedCertificate, ScInspectionError, ScInspectionFinding, ScKeyFilePermissions,
+    ScPemInspection,
 };
 use pyo3::{
     buffer::PyBuffer,
@@ -218,30 +219,34 @@ enum PemInput<'a, 'py> {
 }
 impl<'a, 'py> PemInput<'a, 'py> {
     fn pin(value: &'a Bound<'py, PyAny>) -> PyResult<Self> {
-        if let Ok(value) = value.cast::<PyBytes>() {
-            Ok(Self::Bytes(value.as_bytes()))
-        } else if let Ok(value) = value.cast::<PyByteArray>() {
-            let buffer = if !value.is_exact_instance_of::<PyByteArray>()
-                && value.py().version_info() >= (3, 12)
-            {
-                // Python 3.12 introduced subclass buffer hooks. Invoke the
-                // built-in descriptor so the export pins the same bytearray
-                // storage we lock below, without calling an override that can
-                // redirect the input to unrelated mutable storage.
-                let view = value
-                    .py()
-                    .get_type::<PyByteArray>()
-                    .getattr("__buffer__")?
-                    .call1((value, pyo3::ffi::PyBUF_FULL_RO))?;
-                PyBuffer::get(&view)?
-            } else {
-                PyBuffer::get(value.as_any())?
-            };
-            Ok(Self::Mutable { value, buffer })
-        } else {
-            Err(PyTypeError::new_err(
-                "PEM content must be bytes or bytearray",
-            ))
+        match value.cast::<PyBytes>() {
+            Ok(value) => Ok(Self::Bytes(value.as_bytes())),
+            _ => {
+                match value.cast::<PyByteArray>() {
+                    Ok(value) => {
+                        let buffer = if !value.is_exact_instance_of::<PyByteArray>()
+                            && value.py().version_info() >= (3, 12)
+                        {
+                            // Python 3.12 introduced subclass buffer hooks. Invoke the
+                            // built-in descriptor so the export pins the same bytearray
+                            // storage we lock below, without calling an override that can
+                            // redirect the input to unrelated mutable storage.
+                            let view = value
+                                .py()
+                                .get_type::<PyByteArray>()
+                                .getattr("__buffer__")?
+                                .call1((value, pyo3::ffi::PyBUF_FULL_RO))?;
+                            PyBuffer::get(&view)?
+                        } else {
+                            PyBuffer::get(value.as_any())?
+                        };
+                        Ok(Self::Mutable { value, buffer })
+                    }
+                    _ => Err(PyTypeError::new_err(
+                        "PEM content must be bytes or bytearray",
+                    )),
+                }
+            }
         }
     }
 

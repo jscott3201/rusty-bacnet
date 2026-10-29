@@ -1,7 +1,7 @@
 //! The invariants checked continuously while a scenario runs.
 
 use bacnet_mstp_codec::FrameType;
-use bacnet_mstp_core::MasterState;
+use bacnet_mstp_core::{Duration, MasterState, MstpCounters};
 
 use super::master::PendingTx;
 use super::{NodeKind, Sim};
@@ -25,6 +25,59 @@ pub(crate) fn holds_token(state: MasterState) -> bool {
 }
 
 impl Sim {
+    /// Counters that must not move: adapter errors, delivery drops and
+    /// frames from the station's own address ever, and late deadlines while
+    /// the adapter is punctual. An adapter that may service deadlines late
+    /// must still do so within `bound`, as the core measures it, so lateness
+    /// of the core's own making can't hide behind the adapter's.
+    pub(super) fn check_counters(
+        &mut self,
+        node: usize,
+        counters: &MstpCounters,
+        punctual: bool,
+        bound: Option<Duration>,
+    ) {
+        let station = self.nodes[node].station;
+        let master = self.master_mut(node).expect("a master");
+        let new_late = counters.late_deadlines - master.late_seen;
+        master.late_seen = counters.late_deadlines;
+        let lateness = counters.deadline_lateness.max;
+        let new_lateness = lateness > master.lateness_seen;
+        master.lateness_seen = lateness;
+        let mut wrong = Vec::new();
+        if counters.adapter_errors != 0 {
+            wrong.push(format!("adapter_errors {}", counters.adapter_errors));
+        }
+        if counters.internal_errors != 0 {
+            wrong.push(format!("internal_errors {}", counters.internal_errors));
+        }
+        if counters.delivery_drops != 0 {
+            wrong.push(format!("delivery_drops {}", counters.delivery_drops));
+        }
+        // Every simulated station has its own address, so a frame from this
+        // one's is its own echo leaking past the adapter.
+        if counters.own_address_frames != 0 {
+            wrong.push(format!(
+                "own_address_frames {}",
+                counters.own_address_frames
+            ));
+        }
+        if punctual && new_late != 0 {
+            wrong.push(format!("{new_late} more late_deadlines"));
+        }
+        if let Some(bound) = bound.filter(|&bound| new_lateness && lateness >= bound) {
+            wrong.push(format!(
+                "a deadline serviced {lateness:?} late, past the adapter's {bound:?}"
+            ));
+        }
+        if !wrong.is_empty() {
+            self.violation(
+                ViolationKind::CoreCounter,
+                format!("station {station}: {}", wrong.join(", ")),
+            );
+        }
+    }
+
     /// Every frame decodes unless a fault touched it, and, until the run is
     /// perturbed, every master that heard a clean frame whole counted it.
     /// A master without extended frames counts no extended frame as
@@ -212,9 +265,10 @@ impl Sim {
             .host
             .as_ref()
             .and_then(super::host::HostState::unread_until);
-        if let Some(before) = pending.activity_at_dispatch {
-            if clock.span(before, pending.dispatched) < turnaround {
-                self.violation(
+        if let Some(before) = pending.activity_at_dispatch
+            && clock.span(before, pending.dispatched) < turnaround
+        {
+            self.violation(
                     ViolationKind::Turnaround,
                     format!(
                         "station {station}'s core handed a frame over {} us after line activity at {}, Tturnaround {} us",
@@ -223,8 +277,7 @@ impl Sim {
                         turnaround.as_micros()
                     ),
                 );
-                return;
-            }
+            return;
         }
         let Some(last) = self.line.last_activity() else {
             return;

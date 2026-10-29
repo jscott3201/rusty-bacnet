@@ -3,7 +3,7 @@ use std::sync::Arc;
 use bacnet_npdu::{RejectMessageReason, RejectMessageToNetwork};
 
 use super::super::routed_path_limit_tests::{
-    confirmed_request, harness, inject_reason_4, routed_request, DNET,
+    DNET, confirmed_request, harness, inject_reason_4, routed_request,
 };
 use super::*;
 

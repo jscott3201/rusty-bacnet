@@ -94,7 +94,7 @@ async fn replacement_controls(same_leaf: bool) {
     let tls = ca.tls("a");
     let mut a = f.peer(tls.clone()).await;
     let request = f.capture(&mut a, &segmented_read(12)).await;
-    let provenance_a = request.provenance;
+    let provenance_a = request.provenance.clone();
     f.feed(request).await;
     segment(socket_response(&mut f, &a).await, 12, 0);
     let own_ack = f.capture(&mut a, &segment_ack(12, 0, false)).await;
@@ -105,7 +105,7 @@ async fn replacement_controls(same_leaf: bool) {
             mac_address: MacAddr::from_slice(&[3]),
         }),
         12,
-        provenance_a,
+        provenance_a.clone(),
     );
     let handle = f.server.seg_ack_senders.lock().get(&key).unwrap().clone();
     let mut b = f.peer(if same_leaf { tls } else { ca.tls("b") }).await;

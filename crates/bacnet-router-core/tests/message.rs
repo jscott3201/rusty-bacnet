@@ -203,9 +203,11 @@ fn fixed_payloads_take_exactly_their_length() {
     let number = NetworkNumberIs::parse(&[0x00, 0x05, 1]).unwrap();
     assert_eq!((number.network, number.is_configured()), (5, true));
     assert_eq!(number.to_bytes(), [0x00, 0x05, 1]);
-    assert!(!NetworkNumberIs::parse(&[0x00, 0x05, 0])
-        .unwrap()
-        .is_configured());
+    assert!(
+        !NetworkNumberIs::parse(&[0x00, 0x05, 0])
+            .unwrap()
+            .is_configured()
+    );
 
     for short in [&[][..], &[0x0B], &[0x0B, 0xB8], &[0x0B, 0xB8, 1, 2]] {
         let refused = wrong(short);

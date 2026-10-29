@@ -75,10 +75,10 @@ impl AuditRoutes {
             self.devices.retain(|_, route| {
                 // A routed binding's final MAC is its next hop once the route
                 // is taken as local, so its group fact is kept too.
-                if let RecipientRoute::BoundRoutedUnicast { mac, .. } = route {
-                    if transport.is_group_destination(mac) {
-                        groups.insert(mac.clone());
-                    }
+                if let RecipientRoute::BoundRoutedUnicast { mac, .. } = route
+                    && transport.is_group_destination(mac)
+                {
+                    groups.insert(mac.clone());
                 }
                 next_hop(route).is_some_and(|mac| {
                     if transport.is_group_destination(mac) {

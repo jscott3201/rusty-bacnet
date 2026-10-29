@@ -1,0 +1,19 @@
+[package]
+name = "bip-router"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+
+[workspace]
+
+[dependencies]
+bacnet-client = "=0.15.0"
+bacnet-encoding = "=0.15.0"
+bacnet-network = "=0.15.0"
+bacnet-objects = "=0.15.0"
+bacnet-server = "=0.15.0"
+bacnet-services = "=0.15.0"
+bacnet-transport = "=0.15.0"
+bacnet-types = "=0.15.0"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

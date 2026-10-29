@@ -88,13 +88,12 @@ fn encode_into(request: &EventNotificationRequest, buf: &mut BytesMut) -> Result
     // [11] toState
     primitives::encode_ctx_enumerated(buf, 11, request.to_state.to_raw());
     // [12] eventValues — optional
-    if request.notify_type != NotifyType::ACK_NOTIFICATION {
-        if let Some(ref params) = request.event_values {
+    if request.notify_type != NotifyType::ACK_NOTIFICATION
+        && let Some(ref params) = request.event_values {
             tags::encode_opening_tag(buf, 12);
             encode_notification_parameters(params, buf)?;
             tags::encode_closing_tag(buf, 12);
         }
-    }
     Ok(())
 }
 

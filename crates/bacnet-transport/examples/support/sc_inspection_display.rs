@@ -1,6 +1,6 @@
 //! Package-local example helper, exercised by the public-boundary integration test.
 
-use bacnet_transport::sc_tls::inspection::{inspect_sc_pem_files, ScPemInspection};
+use bacnet_transport::sc_tls::inspection::{ScPemInspection, inspect_sc_pem_files};
 use std::{io::Write, path::Path};
 
 pub fn inspect_and_write(

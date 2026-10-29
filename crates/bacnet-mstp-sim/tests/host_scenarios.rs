@@ -101,10 +101,11 @@ fn maintenance_join_leave_and_slow_start_recover() {
             sim.inject(ms(6_000), Fault::PowerOff { station: 2 });
             sim.inject(ms(7_000), Fault::PowerOn { station: 2 });
             sim.run_until(ms(12_000));
-            assert!(sim
-                .frames()
-                .iter()
-                .any(|frame| frame.is(FrameType::POLL_FOR_MASTER, 2, 3)));
+            assert!(
+                sim.frames()
+                    .iter()
+                    .any(|frame| frame.is(FrameType::POLL_FOR_MASTER, 2, 3))
+            );
             assert_eq!(
                 token_users(sim.frames(), ms(10_000))
                     .into_iter()
@@ -159,9 +160,11 @@ fn bounded_queues_and_oversize_refusal_keep_the_ring_moving() {
             sim.run_until(ms(2_500));
             assert_eq!(sim.rejects(0).len(), 9);
             assert_eq!(sim.rejects(0)[0].1, QueueRefusal::Oversize);
-            assert!(sim.rejects(0)[1..]
-                .iter()
-                .all(|(_, reason)| *reason == QueueRefusal::Full));
+            assert!(
+                sim.rejects(0)[1..]
+                    .iter()
+                    .all(|(_, reason)| *reason == QueueRefusal::Full)
+            );
             assert_eq!(sim.deliveries(3).len(), 2);
             assert_eq!(
                 token_users(sim.frames(), ms(2_000))

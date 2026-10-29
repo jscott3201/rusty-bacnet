@@ -4,6 +4,7 @@
 //! list samples nothing, and neither does a read past its work limit.
 use super::group_present_value::{abort, add_group, group, read_property, read_range};
 use super::*;
+use bacnet_types::error::RemoteError;
 
 const ALL: PropertyIdentifier = PropertyIdentifier::ALL;
 const REQUIRED: PropertyIdentifier = PropertyIdentifier::REQUIRED;
@@ -105,7 +106,7 @@ async fn a_read_past_its_work_limit_aborts_before_sampling_the_cov_table() {
     }
     assert!(matches!(
         wire.server.read_local(&group(3), PV, None).await,
-        Err(Error::Abort { reason }) if reason == AbortReason::OUT_OF_RESOURCES
+        Err(Error::Remote(RemoteError::Abort { reason })) if reason == AbortReason::OUT_OF_RESOURCES
     ));
     assert_eq!(samples(&wire).await, before);
     // Within the limit the same lists take their one sample.

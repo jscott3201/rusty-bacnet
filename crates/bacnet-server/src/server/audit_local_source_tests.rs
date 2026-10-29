@@ -11,10 +11,10 @@
 //! Device 30 writes from `SOURCE`; requests reach the server as NPDUs on its
 //! link and its answers are read back from there. Device 20 is the Audit
 //! recipient, bound at `LOGGER`.
-use super::local_network::{publish, REMOTE_NETWORK, THIS_NETWORK};
+use super::local_network::{REMOTE_NETWORK, THIS_NETWORK, publish};
 use super::*;
 use bacnet_encoding::constructed::decode_value_source;
-use bacnet_encoding::npdu::{encode_npdu, Npdu};
+use bacnet_encoding::npdu::{Npdu, encode_npdu};
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_transport::port::ReceivedNpdu;
 use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetValueSource};

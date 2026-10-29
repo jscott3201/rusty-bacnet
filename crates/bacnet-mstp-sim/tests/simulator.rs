@@ -99,10 +99,11 @@ fn the_trace_records_octets_actions_and_state_changes() {
     assert!(has("    500.000ms st000  octet[0] 55"));
     assert!(has("    500.261ms st000  octet[1] FF"));
     assert!(has("st003  state Idle -> NoToken"));
-    assert!(sim
-        .trace()
-        .entries()
-        .any(|entry| matches!(entry.kind, TraceKind::FrameEnd(_))));
+    assert!(
+        sim.trace()
+            .entries()
+            .any(|entry| matches!(entry.kind, TraceKind::FrameEnd(_)))
+    );
     let dump = sim.dump(5);
     assert!(dump.starts_with("trace at     560.000ms:\n"), "{dump}");
     assert_eq!(dump.lines().count(), 7);
@@ -155,11 +156,12 @@ fn a_slow_adapter_collision_fails_a_strict_run() {
     config.tolerance.slow_adapter_collisions = true;
     let sim = collide_with_the_second_token(config, slow);
     assert_eq!(sim.report().collisions_of(CollisionClass::SlowAdapter), 1);
-    assert!(sim
-        .report()
-        .violations
-        .iter()
-        .all(|violation| violation.kind != ViolationKind::Collision));
+    assert!(
+        sim.report()
+            .violations
+            .iter()
+            .all(|violation| violation.kind != ViolationKind::Collision)
+    );
 }
 
 /// Station 3's adapter serves deadlines 19 ms late, so its core hands its
@@ -184,11 +186,12 @@ fn a_late_core_that_dispatches_before_hearing_the_frame_is_the_adapters() {
     config.tolerance.slow_adapter_collisions = true;
     let sim = collide_with_the_second_token(config, late);
     assert_eq!(sim.report().collisions_of(CollisionClass::SlowAdapter), 1);
-    assert!(sim
-        .report()
-        .violations
-        .iter()
-        .all(|violation| violation.kind != ViolationKind::Collision));
+    assert!(
+        sim.report()
+            .violations
+            .iter()
+            .all(|violation| violation.kind != ViolationKind::Collision)
+    );
 }
 
 /// Every adapter here starts frames 4 ms after its core hands them over,

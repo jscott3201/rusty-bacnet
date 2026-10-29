@@ -143,11 +143,12 @@ fn real_delayed_copy_inside_probe_is_dropped_but_expiry_equality_is_not() {
         if own == 0 {
             sim.assert_no_violations();
         } else {
-            assert!(sim
-                .report
-                .violations
-                .iter()
-                .any(|v| v.kind == ViolationKind::CoreCounter));
+            assert!(
+                sim.report
+                    .violations
+                    .iter()
+                    .any(|v| v.kind == ViolationKind::CoreCounter)
+            );
         }
     }
 }
@@ -241,11 +242,12 @@ fn interleaved_local_echo_does_not_hide_a_missed_peer_receipt() {
     sim.run_until(ms(180));
     assert!(sim.deliveries(0).is_empty());
     assert!(sim.frames.iter().all(|frame| frame.is_clean()));
-    assert!(sim
-        .report
-        .violations
-        .iter()
-        .any(|v| v.kind == ViolationKind::ListenerMissedFrame));
+    assert!(
+        sim.report
+            .violations
+            .iter()
+            .any(|v| v.kind == ViolationKind::ListenerMissedFrame)
+    );
     assert!(sim.core(0).unwrap().counters().parser_errors > 0);
 }
 

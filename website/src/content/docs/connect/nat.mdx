@@ -1,0 +1,80 @@
+---
+title: "BACnet/IP across NAT"
+description: "Run a BBMD behind a NAT router at a global address you configure, keep that setting across restarts, and register foreign devices from behind NAT."
+---
+
+import { release, repository } from '../../../lib/site.mjs';
+
+[Connect to a network](/rusty-bacnet/connect/overview/) / Across NAT
+
+Sites on private address ranges can join one BACnet/IP network through NAT routers (Annex J.7.5). This page shows the layout the stack expects, how to configure a BBMD behind NAT in Python and Rust, how the setting is kept across restarts, and what a foreign device behind NAT needs. Read [Reach devices on other subnets](/rusty-bacnet/connect/across-subnets/) first: everything there still applies.
+
+The page describes **v{release}**.
+
+**Prefer BACnet/SC for linking sites across the internet.** A BBMD reachable from the internet answers anyone who can send it a datagram. B/IP has no authentication, so only the BBMD's [access list, foreign-device policy and fan-out budgets](/rusty-bacnet/connect/across-subnets/#limit-who-can-change-a-bbmd) protect it. [BACnet/SC](/rusty-bacnet/connect/bacnet-sc/) authenticates every connection.
+
+## Lay out each site
+
+- Each site exposes one device to the other sites: a BBMD, usually a BBMD and BACnet router in one.
+- The site's NAT router port-forwards one public UDP port to that BBMD. The public address and port are the BBMD's *global address*.
+- Every other device at the site sits on its own BACnet network behind that router-BBMD.
+- Each BBMD's BDT lists the global address of every site, its own included, and every row has the all-ones mask, which makes it *two-hop*: a peer BBMD sends the network's broadcasts to that BBMD by unicast, and that BBMD rebroadcasts them on its own subnet. A *one-hop* row's mask lets peers send straight to the subnet's directed broadcast address, which can't cross a NAT router.
+
+The stack can't check this layout from one node, so set it up that way. Nothing discovers the global address either: you configure it, as an IPv4 address, never a host name.
+
+## Configure the BBMD
+
+In Python, pass the global address as `nat_global_address`. This BBMD is site A, at 203.0.113.1:47809; site B's BBMD is at 198.51.100.2:47809:
+
+```python
+from rusty_bacnet import Bbmd
+
+bbmd = Bbmd(["203.0.113.1:47809", "198.51.100.2:47809"],
+            accept_foreign_devices=True, alone_on_subnet=True,
+            nat_global_address="203.0.113.1:47809",
+            bdt_persist_path="/var/lib/bacnet/bdt.bin")
+```
+
+Give it to a `BACnetServer`, `BACnetClient` or `BipEndpoint` as `bbmd=`, bound to the BBMD's private address. `Bbmd` checks the rules when it is built and raises `ValueError` when the BDT doesn't list the global address as its own row, when a row isn't two-hop (plain `"ip:port"` rows have the all-ones mask), or when the global address is loopback. An empty BDT is accepted: a BBMD with no peers that serves only foreign devices.
+
+`alone_on_subnet=True` fits most NAT sites: the BBMD is then the only device of its B/IP network on its subnet, and it skips the local rebroadcast of forwarded and distributed broadcasts.
+
+In Rust, set `BbmdOptions::nat` to `Some(NatTraversal::new(global))`, or call `BipTransport::set_bbmd_nat_traversal`. `start()` fails with an error naming the rule a BDT breaks. The Rust API accepts a loopback global address so tests can run on one host; Python and a Network Port write refuse one. The <a href={`${repository}/blob/v${release}/docs/rust-api.md#a-bbmd-behind-a-nat-router`}>A BBMD behind a NAT router</a> section has the complete example.
+
+## What the BBMD does differently
+
+- When it forwards a broadcast to other BBMDs (a Forwarded-NPDU, which carries the address of the device that first sent it), a broadcast of its own or from a device on its subnet names the global address as that origin, so devices at other sites can answer. A forwarded broadcast it passes on from another BBMD keeps its origin.
+- A foreign device that registered from a private address has its broadcasts forwarded from the global address too. Private means RFC 1918, or one of up to four extra ranges: `nat_private_ranges` in Python (such as `"100.64.0.0/10"`), `NatTraversal::with_private_range` in Rust. A device that registered from a public address keeps its own.
+- The socket, its subnet lookup and its echo filter stay on the private side.
+- Turning NAT off drops the BDT row of the old global address and adds the local own row.
+
+## Change and keep the setting
+
+A registered [Network Port](/rusty-bacnet/integrate/network-ports/) serves the setting as BACnet_IP_NAT_Traversal and BACnet_IP_Global_Address. On a server or endpoint with a ReinitializeDevice handler both are writable, in any order, beside the BDT. The values wait until ReinitializeDevice activates them, and are checked together then: NAT on needs a global address, and a BDT that lists it with two-hop rows only. So moving the global address takes a new address and a BDT that lists it, activated together.
+
+With `bdt_persist_path` set, an activation that changed either property saves the NAT setting with the BDT, and every later save carries it. A restart loads the three together, and the saved setting wins over the configured one, with a warning when the two differ. Until such an activation, a save holds the BDT alone, so a NAT setting changed in your configuration still applies at the next start.
+
+A pending set that doesn't fit together makes every ReinitializeDevice activation on the device fail with INVALID_CONFIGURATION_DATA, since the check covers all pending Network Port values. To clear it, write BACnet_IP_NAT_Traversal FALSE, or write back the BDT and global address the BBMD runs with, then activate. The <a href={`${repository}/blob/v${release}/docs/rust-api.md#registered-bip-network-port`}>Registered B/IP Network Port</a> section has every rule.
+
+## Register a foreign device from behind NAT
+
+Behind a NAT router, a foreign device needs no NAT setting. Its BBMD records it under the router's address, and the device only has to register often enough to keep the router's UDP mapping open. Keep the renewal below the router's mapping timeout, 30 seconds or less on many routers, and the TTL long:
+
+```sh
+bacnet --foreign-bbmd 203.0.113.1:47809 --ttl 600 --renewal 20 discover
+```
+
+In Python, that is `ForeignDevice("203.0.113.1:47809", ttl=600, renewal=20)`; in Rust, `ForeignDeviceConfig::renewal_interval`.
+
+Such a device hears only what comes back through its own BBMD. A router that forwards nothing inbound drops a unicast reply that another site sends it directly, such as an I-Am answering its Who-Is, and servers answer a Who-Is with a directed I-Am by default. To reach it, have the remote devices answer with a broadcast I-Am, which travels back through the BBMDs (`DiscoveryPolicy::prefer_directed_responses` set to false, in Rust), or give the device a port forward of its own.
+
+## What is tested
+
+The automated tests emulate NAT on one host's loopback interface: two sites and a foreign device talking through their BBMDs, a foreign device that needs a short renewal, and a BDT without the global address failing to start. A topology with real NAT routers is a manual check in Docker, <a href={`${repository}/tree/v${release}/examples/docker/nat`}>examples/docker/nat</a>, which CI runs only on request. Neither is a qualification of a particular router.
+
+## Next steps
+
+- [Reach devices on other subnets](/rusty-bacnet/connect/across-subnets/).
+- [Configure BACnet/SC](/rusty-bacnet/connect/bacnet-sc/) for links across the internet.
+- [Network Port and Number controls](/rusty-bacnet/integrate/network-ports/).
+- Read the <a href={`${repository}/blob/v${release}/docs/python-api.md#bbmd-and-foreign-device-modes`}>Python</a> and <a href={`${repository}/blob/v${release}/docs/rust-api.md#a-bbmd-behind-a-nat-router`}>Rust</a> contracts.

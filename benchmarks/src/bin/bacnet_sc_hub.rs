@@ -8,7 +8,7 @@ mod credentials;
 use bacnet_transport::sc_hub::{ScHub, ScHubHandshakeTimeouts, ScHubTlsConfig};
 use bacnet_types::error::Error;
 use clap::Parser;
-use credentials::{required, Credentials};
+use credentials::{Credentials, required};
 
 #[derive(Parser)]
 #[command(
@@ -92,7 +92,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 args.listen,
                 err.kind()
             )
-            .into())
+            .into());
         }
         Err(err) => return Err(err.into()),
     };

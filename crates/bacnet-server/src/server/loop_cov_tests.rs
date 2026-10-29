@@ -16,6 +16,7 @@ use bacnet_objects::traits::BACnetObject;
 use bacnet_services::cov::{COVNotificationRequest, SubscribeCOVRequest};
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::enums::{EngineeringUnits, ObjectType, Reliability};
+use bacnet_types::error::RemoteError;
 
 const FAULT: u8 = 0x40;
 const OUT_OF_SERVICE: u8 = 0x10;
@@ -323,7 +324,7 @@ async fn loop_present_value_write_property_follows_out_of_service() {
         .await
         .unwrap_err();
     assert!(
-        matches!(refused, Error::Protocol { code, .. }
+        matches!(refused, Error::Remote(RemoteError::Error { code, .. })
             if code == ErrorCode::WRITE_ACCESS_DENIED),
         "{refused:?}"
     );

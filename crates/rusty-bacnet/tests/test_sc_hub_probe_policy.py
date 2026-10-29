@@ -36,9 +36,11 @@ class HubProbePolicyTests(mtls.MtlsFixture):
     async def test_configured_probe_emits_ack_refreshes_then_wrong_ack_expires(self):
         # The ack age must cover Python reading the probe and answering it; 80 ms
         # was too tight for a debug extension on a shared CI runner (#918).
+        # A liveness bound equal to the ack age retires on the first unanswered
+        # probe; the default 360 s bound would wait for silence (#2141).
         hub = await self.start(probe_scan_interval_ms=20, probe_idle_age_ms=50,
                                probe_ack_age_ms=400, probe_send_budget_ms=40,
-                               relay_send_budget_ms=30)
+                               probe_liveness_bound_ms=400, relay_send_budget_ms=30)
         endpoint = await self.register(hub, 0x42)
         # These observed probes arrive within one second; the default first idle
         # probe would require over 60s. Exact ms boundaries are paused Rust tests.
@@ -54,6 +56,33 @@ class HubProbePolicyTests(mtls.MtlsFixture):
         header = await asyncio.wait_for(endpoint[0].readexactly(2), 2)
         self.assertEqual(header[0], 0x88)
         self.assertEqual((await hub.status())["client_count"], 0)
+        await self.stop_hub(hub)
+
+    async def test_ignored_probes_keep_a_heartbeating_connector_until_it_goes_silent(self):
+        # A connector need not ACK hub probes (#2141). Its own Heartbeat-Request
+        # after each probe keeps it registered; once silent, it is retired after
+        # the liveness bound. Exact boundaries are paused Rust tests.
+        hub = await self.start(probe_scan_interval_ms=20, probe_idle_age_ms=100,
+                               probe_ack_age_ms=50, probe_send_budget_ms=40,
+                               probe_liveness_bound_ms=1500)
+        endpoint = await self.register(hub, 0x42)
+        probes = set()
+        for ident in range(3):
+            probe = await asyncio.wait_for(self.binary(endpoint[0]), 2)
+            self.assertEqual(probe[:2], b"\x0a\0")
+            probes.add(probe[2:4])
+            await asyncio.sleep(0.2)  # past the ack age, the probe unanswered
+            await self.send(endpoint[1], bytes([0x0a, 0, 0x55, ident]))
+            self.assertEqual(await self.binary(endpoint[0]), bytes([0x0b, 0, 0x55, ident]))
+        self.assertEqual(len(probes), 3)
+        self.assertEqual((await hub.status())["client_count"], 1)
+        # Silent from here: one more probe, never repeated, then retirement.
+        probe = await asyncio.wait_for(self.binary(endpoint[0]), 2)
+        self.assertEqual(probe[:2], b"\x0a\0")
+        header = await asyncio.wait_for(endpoint[0].readexactly(2), 5)
+        self.assertEqual(header[0], 0x88)
+        self.assertEqual((await hub.status())["client_count"], 0)
+        self.assertEqual((await hub.status())["outcomes"]["heartbeat_retirements"], 1)
         await self.stop_hub(hub)
 
     async def test_configured_sender_and_global_buckets_drop_and_count_wire_requests(self):

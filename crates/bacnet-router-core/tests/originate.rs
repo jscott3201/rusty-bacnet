@@ -9,8 +9,8 @@ use bacnet_router_core::router::{
 };
 use bacnet_router_core::{Duration, Instant, PortId};
 use fixture::{
-    addr, at, bytes, deliver, drain, learn_9_via_r7, router, Outcome, Sent, TestRouter, CONFIRMED,
-    OWN_0, OWN_1, R7, UNCONFIRMED,
+    CONFIRMED, OWN_0, OWN_1, Outcome, R7, Sent, TestRouter, UNCONFIRMED, addr, at, bytes, deliver,
+    drain, learn_9_via_r7, router,
 };
 
 /// The standard router with network 9 beyond R7 on port 1.
@@ -120,8 +120,8 @@ fn what_it_refuses_sends_nothing() {
         ),
         (
             &mut with_9(),
-            request(0xFFFF, &[], UNCONFIRMED),
-            OriginateError::ReservedNetwork,
+            request(0xFFFF, &[5], UNCONFIRMED),
+            OriginateError::GlobalWithDadr,
         ),
         (
             &mut with_9(),

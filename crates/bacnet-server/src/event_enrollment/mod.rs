@@ -45,7 +45,8 @@
 //! read the monitored value at all is an observation gap and changes no
 //! state, inhibited or not, so a forced return to NORMAL waits for the next
 //! readable pass: its notification carries that value. An enrollment whose
-//! parameters this evaluator doesn't model (Opaque or Extended) still gets
+//! parameters this evaluator doesn't run (Opaque, Extended, or another
+//! algorithm without an evaluator here) still gets
 //! the forced NORMAL, since leaving the OffNormal state under the inhibit
 //! doesn't depend on the algorithm (Clause 13.2.2.1.2). With
 //! `Event_Algorithm_Inhibit_Ref` set, the value is the referenced property's
@@ -68,7 +69,7 @@ pub use algorithms::{
     encode_change_of_value_params, encode_floating_limit_params, encode_out_of_range_params,
 };
 pub use api::{
-    evaluate_event_enrollments, evaluate_event_enrollments_report, EventEnrollmentTransition,
+    EventEnrollmentTransition, evaluate_event_enrollments, evaluate_event_enrollments_report,
 };
 pub use commit::{
     EventEnrollmentEvaluationDiagnostic, EventEnrollmentEvaluationOutcome,
@@ -77,26 +78,27 @@ pub use commit::{
 };
 
 use algorithms::{
-    eval_change_of_bitstring_struct, eval_change_of_state_struct, eval_change_of_value_struct,
-    eval_floating_limit_struct, eval_legacy_le_arm, eval_none_arm, eval_out_of_range_struct,
-    extract_bitstring, extract_property_state_value, extract_real, inhibited_arm, ArmEvaluation,
+    ArmEvaluation, eval_change_of_bitstring_struct, eval_change_of_state_struct,
+    eval_change_of_value_struct, eval_floating_limit_struct, eval_legacy_le_arm, eval_none_arm,
+    eval_out_of_range_struct, extract_bitstring, extract_property_state_value, extract_real,
+    inhibited_arm,
 };
 #[cfg(test)]
 use commit::apply_updates;
 pub(crate) use commit::log_evaluation_report;
-use commit::{apply_updates_for_delivery, EnrollmentUpdate, FiredTransition};
 pub(crate) use commit::{
     CommittedEventEnrollmentDelivery, CommittedEventEnrollmentResult,
     EventEnrollmentEvaluationBatch,
 };
+use commit::{EnrollmentUpdate, FiredTransition, apply_updates_for_delivery};
 use fault::{
+    FaultAlgorithmEvaluation, MonitoredReliability, SupportedFaultAlgorithm,
     evaluate_fault_algorithm, read_event_parameters, read_fault_algorithm,
-    read_monitored_reliability, FaultAlgorithmEvaluation, MonitoredReliability,
-    SupportedFaultAlgorithm,
+    read_monitored_reliability,
 };
-pub(crate) use reference::decode_reference_value;
 #[cfg(test)]
 use reference::MonitoredReference;
+pub(crate) use reference::decode_reference_value;
 use reference::{params_fingerprint, read_object_property_ref};
 use support::*;
 
@@ -107,7 +109,7 @@ enum LocalConfigurationReadError {
 }
 
 use crate::server::event_notification_payload::{
-    capture_status_flags, CapturedReferencedValue, EventEnrollmentProjectionSnapshot,
+    CapturedReferencedValue, EventEnrollmentProjectionSnapshot, capture_status_flags,
 };
 use bacnet_objects::database::ObjectDatabase;
 #[cfg(test)]
@@ -556,12 +558,10 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
                 if let BACnetEventParameter::FloatingLimit {
                     setpoint_reference, ..
                 } = &params
-                {
-                    if let SetpointRead::Value(setpoint) =
+                    && let SetpointRead::Value(setpoint) =
                         read_setpoint(db, local_device, setpoint_reference)
-                    {
-                        projection_setpoint = Some(setpoint);
-                    }
+                {
+                    projection_setpoint = Some(setpoint);
                 }
                 (0, inhibited_arm(&params, &monitored_value, current_state))
             }
@@ -705,13 +705,13 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
             }
             // Legacy raw-octet writes are stored under the sentinel tag 0xFF
             // with the private little-endian payload — only those route to
-            // the byte-layout evaluator. A framed write of an UNMODELED spec
-            // alternative (e.g. access-event [13]) decodes to `Opaque` too,
-            // but its payload is a context-tagged TLV body: feeding tag
-            // bytes to the LE evaluator would reinterpret them as IEEE-754
-            // limits and fabricate spurious HIGH/LOW_LIMIT transitions from
-            // a conformant peer's configuration. Unmodeled alternatives are
-            // preserved for read-back but never evaluated.
+            // the byte-layout evaluator. A framed write of an alternative
+            // under an unassigned tag decodes to `Opaque` too, but its
+            // payload is a context-tagged TLV body: feeding tag bytes to the
+            // LE evaluator would reinterpret them as IEEE-754 limits and
+            // fabricate spurious HIGH/LOW_LIMIT transitions from a peer's
+            // configuration. Such alternatives are preserved for read-back
+            // but never evaluated.
             //
             // The LE layouts carry no Time_Delay field: delay 0 keeps this
             // path's historical immediate-transition behavior.
@@ -720,12 +720,14 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
                 eval_legacy_le_arm(data, &monitored_value, current_state, event_type),
             ),
             // `none` [20] has no offnormal states (#1868).
-            BACnetEventParameter::Opaque { tag: 20, data } if data.is_empty() => {
-                (0, eval_none_arm(current_state))
-            }
+            BACnetEventParameter::None => (0, eval_none_arm(current_state)),
             BACnetEventParameter::Opaque { .. } => continue,
-            // Extended [9] and any other modeled-but-unmodeled-for-evaluation
-            // alternatives produce no transition here.
+            // Extended [9] and the algorithms this evaluator doesn't run
+            // (command-failure, change-of-life-safety, buffer-ready,
+            // unsigned-range, access-event, the typed out-of-range forms,
+            // change-of-characterstring, change-of-status-flags,
+            // change-of-discrete-value, change-of-timer) produce no
+            // transition here, as when they were kept as `Opaque` (#2090).
             _ => continue,
         };
 

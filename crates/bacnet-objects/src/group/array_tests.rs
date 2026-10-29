@@ -7,6 +7,7 @@
 use super::*;
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::error::RemoteError;
 
 fn oid(kind: ObjectType, instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(kind, instance).unwrap()
@@ -104,7 +105,7 @@ fn assert_invalid_index(group: &GlobalGroupObject, property: PropertyIdentifier,
     assert!(
         matches!(
             group.read_property(property, Some(index)),
-            Err(Error::Protocol { class, code })
+            Err(Error::Remote(RemoteError::Error { class, code }))
                 if class == ErrorClass::PROPERTY
                     && code == ErrorCode::INVALID_ARRAY_INDEX
         ),

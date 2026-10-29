@@ -690,7 +690,7 @@ fn fixed_size_application_items_check_their_length_first() {
 /// which still refuses the input, and nothing panics.
 #[test]
 fn a_frame_walk_past_its_depth_answers_safely() {
-    use crate::tags::{decode_tag, MAX_CONTEXT_NESTING_DEPTH};
+    use crate::tags::{MAX_CONTEXT_NESTING_DEPTH, decode_tag};
     use bacnet_types::error::DecodingKind;
 
     let kind_at = |depth: usize| {

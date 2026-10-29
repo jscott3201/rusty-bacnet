@@ -16,12 +16,11 @@ use bacnet_network::router::{BACnetRouter, RouterOptions, RouterPort, StartedRou
 use bacnet_transport::any::AnyTransport;
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::loopback::LoopbackTransport;
-use bacnet_transport::mstp::NoSerial;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::MacAddr;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 /// The B/IP network, and the one behind the router.
 const BIP_NET: u16 = 1;
@@ -55,7 +54,7 @@ async fn start() -> (
         let unicast_to = router_end.record_unicast_destinations();
         let ports = vec![
             RouterPort {
-                transport: AnyTransport::<NoSerial>::Bip(Box::new(bip)),
+                transport: AnyTransport::Bip(Box::new(bip)),
                 network_number: BIP_NET,
             },
             RouterPort {
@@ -112,6 +111,6 @@ async fn forwarded_origin_and_priority_survive_routing() {
         .unwrap();
     assert_eq!(to.as_slice(), [0x05]);
 
-    router.stop().await;
+    router.stop().await.unwrap();
     station.stop().await.unwrap();
 }

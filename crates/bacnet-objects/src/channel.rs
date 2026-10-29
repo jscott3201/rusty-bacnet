@@ -36,8 +36,9 @@
 //! for it too: the object only stores the flag, and the server reads it to
 //! decide whether a WriteGroup asking for no delays gets them.
 
-use std::borrow::Cow;
-use std::sync::Arc;
+use crate::prelude::*;
+use alloc::borrow::Cow;
+use alloc::sync::Arc;
 
 use bacnet_encoding::constructed::constructed_channel_value;
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
@@ -47,9 +48,9 @@ use bacnet_types::enums::{
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 
-use crate::command::{next_generation, CommandRun, RunPlan, WriteFailure};
+use crate::command::{CommandRun, RunPlan, WriteFailure, next_generation};
 use crate::common::{self, read_identity_properties};
-use crate::property_metadata::{property_list_from_metadata, PropertyMetadata};
+use crate::property_metadata::{PropertyMetadata, property_list_from_metadata};
 use crate::traits::BACnetObject;
 
 mod arrays;
@@ -57,7 +58,7 @@ mod coercion;
 mod metadata;
 
 pub use arrays::{MAX_CHANNEL_MEMBERS, MAX_CONTROL_GROUPS};
-pub use coercion::{coerce_channel_value, CoercionFailure, MemberDatatype};
+pub use coercion::{CoercionFailure, MemberDatatype, coerce_channel_value};
 
 /// The priority Last_Priority holds when a write carried none, and its
 /// initial value (Clause 12.53.6).

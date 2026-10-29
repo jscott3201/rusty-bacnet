@@ -6,7 +6,7 @@
 //! the list walk are FFI; [`unicast_addresses`] is the safe way in.
 
 use std::io;
-use std::mem::{size_of, MaybeUninit};
+use std::mem::{MaybeUninit, size_of};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::ptr::{addr_of, read_unaligned};
 
@@ -14,8 +14,8 @@ use windows_sys::Win32::{
     Foundation::{ERROR_BUFFER_OVERFLOW, ERROR_NO_DATA, NO_ERROR},
     NetworkManagement::{
         IpHelper::{
-            GetAdaptersAddresses, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER,
-            GAA_FLAG_SKIP_FRIENDLY_NAME, GAA_FLAG_SKIP_MULTICAST, IF_TYPE_SOFTWARE_LOOPBACK,
+            GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_FRIENDLY_NAME,
+            GAA_FLAG_SKIP_MULTICAST, GetAdaptersAddresses, IF_TYPE_SOFTWARE_LOOPBACK,
             IP_ADAPTER_ADDRESSES_LH, IP_ADAPTER_NO_MULTICAST,
         },
         Ndis::IfOperStatusUp,

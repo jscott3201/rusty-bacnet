@@ -38,6 +38,18 @@ async fn direct_principal_different_leaf_replacement_has_distinct_snapshot() {
     let (_a, a) = snapshot(&url, ca.node_config(vec!["a".into()]), &mut rx).await;
     let (_b, b) = snapshot(&url, ca.node_config(vec!["b".into()]), &mut rx).await;
     assert_ne!(a, b, "same UUID/VMAC must not erase verified leaf identity");
+    // Each snapshot holds its own accepted leaf, the one its identity hashes.
+    for (provenance, name) in [(&a, "a"), (&b, "b")] {
+        let leaf = provenance.leaf_certificate().unwrap();
+        assert_eq!(
+            super::super::verified_leaf_sha256(Some(&[leaf.der().to_vec().into()])),
+            provenance.direct_sc_identity().map(|id| id.leaf_sha256())
+        );
+        assert_eq!(
+            leaf.metadata().unwrap().subject_alt_names(),
+            [crate::sc_tls::ScSubjectAltName::Dns(name.into())]
+        );
+    }
     let a = a.direct_sc_identity().unwrap();
     let b = b.direct_sc_identity().unwrap();
     assert_ne!(a.leaf_sha256(), b.leaf_sha256());

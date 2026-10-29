@@ -1,25 +1,28 @@
 //! Write sessions in the app: arming (`W`), the write and relinquish forms
 //! (`w`, `n` on an open object), the preview and its confirmation tier,
-//! the ledger (`u`) and the exit guard.
+//! the ledger (`u`) and the exit guard. The device management requests of
+//! `:dcc` and `:reinit` (in [`super::manage`]) share the confirmation.
 //!
 //! The app decides what the user may ask for; the write worker checks the
 //! same rules again before it sends anything and records every outcome.
 
 use std::time::{Duration, Instant};
 
+use bacnet_ops::class::Class;
+use bacnet_ops::parse::{parse_property, parse_value_for};
 use bacnet_types::enums::PropertyIdentifier;
 
 use super::browser::ViewState;
-use super::{App, Link, Overlay, FLASH_FOR};
-use crate::core::class::Class;
-use crate::parse::{parse_property, parse_value};
+use super::{App, FLASH_FOR, Link, Overlay};
 use crate::tui::message::Command;
 use crate::tui::point::BrowseRead;
 use crate::tui::profile::{Safety, Writes};
+use crate::tui::safety::audit::Secret;
 use crate::tui::safety::ledger::Entry;
+use crate::tui::safety::manage::Request;
 use crate::tui::safety::{
-    Gate, Level, Outcome, Preview, SafetyCommand, SafetyEvent, Tier, WriteSpec, DEFAULT_MINUTES,
-    MAX_MINUTES,
+    Change, DEFAULT_MINUTES, Gate, Level, MAX_MINUTES, Outcome, SafetyCommand, SafetyEvent, Tier,
+    WriteSpec,
 };
 
 /// How long after a preview opens its confirmation is ignored, so a
@@ -180,12 +183,22 @@ pub(crate) enum Modal {
         /// What for.
         what: &'static str,
     },
-    /// A preview to confirm at its tier.
+    /// The masked password prompt of a device management request.
+    Password {
+        /// The request, its password not yet set.
+        request: Box<Request>,
+        /// What has been typed, shown only as a mask.
+        typed: Secret,
+        /// When it opened: like a preview, it closes after
+        /// [`PREVIEW_LIFETIME`], and what was typed goes with it.
+        opened: Instant,
+    },
+    /// A change to confirm at its tier.
     Confirm {
         /// The request.
         req: u64,
-        /// The preview.
-        preview: Box<Preview>,
+        /// The write preview or the device management request.
+        change: Change,
         /// The device instance typed for T3.
         typed: String,
         /// Why the last confirm failed.
@@ -207,7 +220,7 @@ pub(crate) enum Modal {
     ExitGuard(Option<String>),
 }
 
-fn modal(modal: Modal) -> Overlay {
+pub(super) fn modal(modal: Modal) -> Overlay {
     Overlay::Safety(Box::new(modal))
 }
 
@@ -217,7 +230,7 @@ impl App {
         self.safety.level()
     }
 
-    fn safety_req(&mut self) -> u64 {
+    pub(super) fn safety_req(&mut self) -> u64 {
         self.safety.next_req += 1;
         self.safety.next_req
     }
@@ -350,9 +363,20 @@ impl App {
         });
     }
 
-    /// Once a second: decline a preview left too long, disarm at expiry,
+    /// Once a second: decline a preview left too long, close a password
+    /// prompt left too long (dropping what was typed), disarm at expiry,
     /// and redraw the countdown.
     pub(super) fn safety_tick(&mut self, out: &mut Vec<Command>) {
+        let prompt = matches!(&self.overlay, Overlay::Safety(m)
+            if matches!(**m, Modal::Password { opened, .. }
+                if self.now.saturating_duration_since(opened) >= PREVIEW_LIFETIME));
+        if prompt {
+            self.overlay = Overlay::None;
+            self.flash(
+                "The password prompt expired: nothing was sent, and the password was cleared.",
+                FLASH_FOR,
+            );
+        }
         let stale = matches!(&self.overlay, Overlay::Safety(m)
             if matches!(**m, Modal::Confirm { opened, .. }
                 if self.now.saturating_duration_since(opened) >= PREVIEW_LIFETIME));
@@ -433,13 +457,18 @@ impl App {
                     form,
                 }),
             },
+            Modal::Password {
+                request,
+                typed,
+                opened,
+            } => self.password_key(key, request, typed, opened),
             Modal::Confirm {
                 req,
-                preview,
+                change,
                 typed,
                 error,
                 opened,
-            } => self.confirm_key(key, req, preview, (typed, error, opened), out),
+            } => self.confirm_key(key, req, change, (typed, error, opened), out),
             Modal::Ledger { confirm, notice } => match key {
                 ModalKey::Char('R') if !self.safety.ledger.is_empty() => Some(Modal::Ledger {
                     notice,
@@ -492,14 +521,15 @@ impl App {
         &mut self,
         key: ModalKey,
         req: u64,
-        preview: Box<Preview>,
+        change: Change,
         (mut typed, error, opened): (String, Option<String>, Instant),
         out: &mut Vec<Command>,
     ) -> Option<Modal> {
         let fresh = self.now.saturating_duration_since(opened) < CONFIRM_GUARD;
-        let confirmed = match (&preview.gate, key) {
+        let device = change.device();
+        let confirmed = match (&change.gate(), key) {
             (_, ModalKey::Esc) => {
-                out.push(Command::Safety(SafetyCommand::Declined { preview }));
+                declined(change, out);
                 self.flash("Declined: nothing was sent.", FLASH_FOR);
                 return None;
             }
@@ -516,14 +546,13 @@ impl App {
                 false
             }
             (Gate::Allowed(Tier::T3), ModalKey::Enter) => {
-                if typed == preview.device.to_string() {
+                if typed == device.to_string() {
                     true
                 } else {
-                    let error =
-                        format!("Type the device instance, {}, to confirm.", preview.device);
+                    let error = format!("Type the device instance, {device}, to confirm.");
                     return Some(Modal::Confirm {
                         req,
-                        preview,
+                        change,
                         typed: String::new(),
                         error: Some(error),
                         opened,
@@ -535,7 +564,7 @@ impl App {
         if !confirmed {
             return Some(Modal::Confirm {
                 req,
-                preview,
+                change,
                 typed,
                 error,
                 opened,
@@ -546,15 +575,16 @@ impl App {
                 "The write session has expired; nothing was sent.",
                 FLASH_FOR,
             );
-            out.push(Command::Safety(SafetyCommand::Declined { preview }));
+            declined(change, out);
             return None;
         }
         self.safety.pending = Some(req);
-        out.push(Command::Safety(SafetyCommand::Execute { req, preview }));
-        Some(Modal::Waiting {
-            req,
-            what: "Writing...",
-        })
+        let (command, what) = match change {
+            Change::Write(preview) => (SafetyCommand::Execute { req, preview }, "Writing..."),
+            Change::Device(request) => (SafetyCommand::Manage { req, request }, "Sending..."),
+        };
+        out.push(Command::Safety(command));
+        Some(Modal::Waiting { req, what })
     }
 
     /// A write session report.
@@ -615,7 +645,7 @@ impl App {
                 if waiting(self, req) {
                     self.overlay = modal(Modal::Confirm {
                         req,
-                        preview,
+                        change: Change::Write(preview),
                         typed: String::new(),
                         error: None,
                         opened: self.now,
@@ -658,18 +688,27 @@ impl App {
     /// Read the open object again, so its priority pane shows the change.
     fn reread_object(&mut self, out: &mut Vec<Command>) {
         let req = self.next_req();
-        if let Some(browser) = self.browser.as_deref_mut() {
-            if let ViewState::Ready(view) = &browser.view {
-                let object = view.object;
-                browser.reading(req, object);
-                out.push(Command::Browse {
-                    req,
-                    device: browser.device,
-                    read: BrowseRead::Object(object),
-                });
-            }
+        if let Some(browser) = self.browser.as_deref_mut()
+            && let ViewState::Ready(view) = &browser.view
+        {
+            let object = view.object;
+            browser.reading(req, object);
+            out.push(Command::Browse {
+                req,
+                device: browser.device,
+                read: BrowseRead::Object(object),
+            });
         }
     }
+}
+
+/// Record a declined change, a device management request without its
+/// password: the password goes no further than the dialog.
+fn declined(mut change: Change, out: &mut Vec<Command>) {
+    if let Change::Device(request) = &mut change {
+        request.forget_password();
+    }
+    out.push(Command::Safety(SafetyCommand::Declined { change }));
 }
 
 /// The form's write, checked with the one-shot CLI's parsers.
@@ -688,7 +727,7 @@ fn write_spec(
         None
     } else {
         let text = form.get("Value");
-        parse_value(text)?;
+        parse_value_for(object.object_type(), property, index, text)?;
         Some(text.to_string())
     };
     let priority = match form.get("Priority") {
@@ -699,7 +738,7 @@ fn write_spec(
             _ => {
                 return Err(
                     "Priority: 1-16, or blank for a property that isn't commandable.".into(),
-                )
+                );
             }
         },
     };

@@ -2,7 +2,7 @@ use super::*;
 use crate::server::dcc_outcomes::trace_tests::Capture;
 use bacnet_services::device_mgmt::DeviceCommunicationControlRequest;
 use bacnet_types::enums::EnableDisable;
-use std::future::{poll_fn, Future};
+use std::future::{Future, poll_fn};
 use std::task::Poll;
 use tracing::instrument::WithSubscriber;
 

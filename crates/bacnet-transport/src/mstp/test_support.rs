@@ -10,9 +10,9 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
-use bacnet_mstp_codec::{decode_frame_in_place, Frame, FrameType};
+use bacnet_mstp_codec::{Frame, FrameType, decode_frame_in_place};
 use bacnet_types::error::Error;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tokio::time::{Duration, Instant};
 
 use super::{Echo, MstpConfig, MstpTransport, SerialPort};

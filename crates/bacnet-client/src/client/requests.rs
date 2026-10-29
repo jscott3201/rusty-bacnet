@@ -164,15 +164,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let target = named.localized(self.network.local_network_number().get());
         // With no DNET, a group destination is a local broadcast, which
         // carries no confirmed request (Clause 6.3, #1479).
-        if let ConfirmedTarget::Local { mac } = target {
-            if self.network.transport().is_group_destination(mac) {
-                return Err(Error::Encoding(
-                    "a confirmed request goes to one device, not to a broadcast or group \
+        if let ConfirmedTarget::Local { mac } = target
+            && self.network.transport().is_group_destination(mac)
+        {
+            return Err(Error::Encoding(
+                "a confirmed request goes to one device, not to a broadcast or group \
                      address (a local broadcast carries only an UNCONFIRMED_REQUEST APDU, \
                      Clause 6.3)"
-                        .into(),
-                ));
-            }
+                    .into(),
+            ));
         }
         let routed_forwarded_npci_len = match target {
             ConfirmedTarget::Local { .. } => None,
@@ -260,17 +260,16 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             // placeholder row stays unknown and keeps today's behavior.
             if let Some(crate::discovery::PeerSegmentation::Authoritative(capability)) =
                 peer_segmentation
-            {
-                if matches!(
+                && matches!(
                     capability,
                     bacnet_types::enums::Segmentation::NONE
                         | bacnet_types::enums::Segmentation::TRANSMIT
-                ) {
-                    return Err(bacnet_types::error::SegmentationError::PeerCannotReceive {
-                        capability,
-                    }
-                    .into());
+                )
+            {
+                return Err(bacnet_types::error::SegmentationError::PeerCannotReceive {
+                    capability,
                 }
+                .into());
             }
             return self
                 .segmented_confirmed_request(
@@ -375,10 +374,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 registration.progress,
             )
             .await;
-        if response.is_ok() {
-            if let Some(lease) = path_lease.as_ref() {
-                lease.mark_terminal_observed();
-            }
+        if response.is_ok()
+            && let Some(lease) = path_lease.as_ref()
+        {
+            lease.mark_terminal_observed();
         }
         guard.mark_completed();
         response.and_then(Self::confirmed_response_result)
@@ -515,9 +514,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                         false,
                                         None,
                                     );
-                                    return Err(Error::Abort {
-                                        reason: bacnet_types::enums::AbortReason::TSM_TIMEOUT,
-                                    });
+                                    return Err(Error::abort(bacnet_types::enums::AbortReason::TSM_TIMEOUT));
                                 }
                                 RequestTimerExpiration::NoTransaction => {
                                     drop(tsm);
@@ -547,9 +544,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                         false,
                                         None,
                                     );
-                                    return Err(Error::Abort {
-                                        reason: bacnet_types::enums::AbortReason::TSM_TIMEOUT,
-                                    });
+                                    return Err(Error::abort(bacnet_types::enums::AbortReason::TSM_TIMEOUT));
                                 }
                                 SegmentTimerExpiration::NoTransaction => {
                                     drop(tsm);

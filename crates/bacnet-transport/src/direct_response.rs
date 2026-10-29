@@ -1,12 +1,12 @@
 //! A bounded response capability for one verified direct connection.
 use crate::port::DirectScIdentity;
 use crate::sc::direct_membership::Membership;
-use crate::sc_frame::{encode_sc_message, ScFunction, ScMessage};
+use crate::sc_frame::{ScFunction, ScMessage, encode_sc_message};
 use bacnet_types::error::Error;
 use bytes::{Bytes, BytesMut};
 use std::sync::{
-    atomic::{AtomicBool, AtomicU16, Ordering},
     Arc, Weak,
+    atomic::{AtomicBool, AtomicU16, Ordering},
 };
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};

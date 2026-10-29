@@ -686,12 +686,14 @@ fn generation_overflow_and_poisoning_fail_closed() {
 
     let poisoned = Arc::new(OutboundTransactionCoordinator::new());
     let panic_owner = Arc::clone(&poisoned);
-    assert!(thread::spawn(move || {
-        let _guard = panic_owner.state.lock().unwrap();
-        panic!("poison coordinator for explicit failure-path coverage");
-    })
-    .join()
-    .is_err());
+    assert!(
+        thread::spawn(move || {
+            let _guard = panic_owner.state.lock().unwrap();
+            panic!("poison coordinator for explicit failure-path coverage");
+        })
+        .join()
+        .is_err()
+    );
     assert_eq!(
         poisoned.reserve(requester(peer(11), TerminalPolicy::SimpleAck)),
         Err(ReserveError::StatePoisoned)

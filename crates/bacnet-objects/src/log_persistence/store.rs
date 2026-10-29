@@ -1,10 +1,14 @@
 //! How a durable log keeps its storage: the cadence bookkeeping, the writer
 //! thread its commits run on, and the hooks the three log objects share.
 
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
+use crate::prelude::*;
+use alloc::collections::VecDeque;
+use core::sync::atomic::{AtomicBool, Ordering};
+
+use alloc::sync::Arc;
+
+use crate::sync::{AtomicU64, Mutex};
+use core::time::Duration;
 
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
 use bacnet_types::error::Error;
@@ -14,7 +18,7 @@ use super::codec::{self, SnapshotRecord};
 use super::{LogAcquisitionSettings, LogCommitCadence, LogPersistence, LogSnapshot};
 use crate::durable::{SaveWait, SaveWriter};
 use crate::log_buffer::{LogRecordBuffer, ResidentLogRecord};
-use crate::log_reporting::{records_between, BufferReadyReporting};
+use crate::log_reporting::{BufferReadyReporting, records_between};
 use crate::log_window::LogWindow;
 
 /// Everything a snapshot holds but the records themselves, plus how many
@@ -132,7 +136,7 @@ impl<R: SnapshotRecord> LogStore<R> {
     /// `buffer_size` is the log's configured Buffer_Size; one whose
     /// worst-case snapshot could outgrow a slot is refused before anything
     /// is loaded. The loaded snapshot is checked again here, as a guard for
-    /// backends other than [`FileLogPersistence`](super::FileLogPersistence),
+    /// backends other than `FileLogPersistence`, the `std` file backend,
     /// which checks it as it reads each slot.
     pub(crate) fn open(
         oid: ObjectIdentifier,
@@ -162,7 +166,7 @@ impl<R: SnapshotRecord> LogStore<R> {
                 oid.instance_number()
             ),
             move |pending: &Mutex<LogSnapshot<R>>| {
-                let mut snapshot = pending.lock().unwrap_or_else(PoisonError::into_inner);
+                let mut snapshot = pending.lock();
                 snapshot.generation = committed
                     .load(Ordering::Acquire)
                     .checked_add(1)
@@ -174,7 +178,7 @@ impl<R: SnapshotRecord> LogStore<R> {
             move |_, result| {
                 failed.store(result.is_err(), Ordering::Release);
                 if let Err(error) = result {
-                    tracing::warn!(
+                    log_warn!(
                         log = %oid,
                         %error,
                         "Failed to commit a log snapshot; the next pass or stop tries again"
@@ -304,7 +308,7 @@ pub(crate) fn fit_to_buffer_size<R>(snapshot: &mut LogSnapshot<R>, buffer_size: 
         buffer_size as usize
     };
     let dropped = snapshot.records.len().saturating_sub(room);
-    tracing::warn!(
+    log_warn!(
         log = %snapshot.object_identifier,
         saved = snapshot.buffer_size,
         configured = buffer_size,
@@ -384,10 +388,10 @@ pub(crate) trait DurableLog {
             return;
         }
         let state = self.log_state();
-        if let (Some(store), buffer) = self.durable_parts() {
-            if store.changed(&state) {
-                store.queue(state, buffer.records());
-            }
+        if let (Some(store), buffer) = self.durable_parts()
+            && store.changed(&state)
+        {
+            store.queue(state, buffer.records());
         }
     }
 

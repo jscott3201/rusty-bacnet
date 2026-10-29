@@ -8,17 +8,17 @@
 use super::device_bindings::{DeviceBinding, DeviceBindingTable};
 use super::event_forwarding::Reception;
 use super::event_forwarding_tests::{
-    copies, database, destination, encoded, notification, unconfirmed, Copy, To, LOCAL_DEVICE,
-    PEER_A, PEER_B,
+    Copy, LOCAL_DEVICE, PEER_A, PEER_B, To, copies, database, destination, encoded, notification,
+    unconfirmed,
 };
 use super::event_recipient_routing_tests::{
-    address_recipient, distribute_counted_through, LITERAL_BROADCAST_MAC,
+    LITERAL_BROADCAST_MAC, address_recipient, distribute_counted_through,
 };
-use super::test_transport::{SendLog, SentFrame, TestTransport, BIP_LOCAL_MAC};
+use super::test_transport::{BIP_LOCAL_MAC, SendLog, SentFrame, TestTransport};
 use super::*;
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::constructed::decode_event_notification;
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
+use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
 use bacnet_objects::network_port::{BipPortConfig, NetworkPortObject};
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::notification_forwarder::NotificationForwarderObject;
@@ -136,11 +136,13 @@ impl Started {
         bounded(self.sent.wait_for_len(1)).await;
         let frames = self.sent.take();
         match &frames[..] {
-            [SentFrame {
-                npdu,
-                broadcast: true,
-                ..
-            }] if npdu.len() == 6 && npdu[..3] == [1, 0x80, 0x13] => {
+            [
+                SentFrame {
+                    npdu,
+                    broadcast: true,
+                    ..
+                },
+            ] if npdu.len() == 6 && npdu[..3] == [1, 0x80, 0x13] => {
                 u16::from_be_bytes([npdu[3], npdu[4]])
             }
             _ => panic!("expected one Network-Number-Is broadcast, got {frames:?}"),

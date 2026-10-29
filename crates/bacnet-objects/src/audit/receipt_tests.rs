@@ -1,6 +1,6 @@
 use super::receipt::{
-    contains, insert, CompletedAuditReceipt, ConfirmedAuditNotificationOutcome,
-    COMPLETED_AUDIT_RECEIPT_RETENTION_MILLIS, MAX_COMPLETED_AUDIT_RECEIPTS,
+    COMPLETED_AUDIT_RECEIPT_RETENTION_MILLIS, CompletedAuditReceipt,
+    ConfirmedAuditNotificationOutcome, MAX_COMPLETED_AUDIT_RECEIPTS, contains, insert,
 };
 
 fn completed(index: usize, at: u64) -> CompletedAuditReceipt {
@@ -11,18 +11,22 @@ fn completed(index: usize, at: u64) -> CompletedAuditReceipt {
 fn retention_boundary_and_future_timestamp_fail_open() {
     let retained = completed(1, 10_000);
     let mut receipts = vec![retained.clone(), completed(2, 80_000)];
-    assert!(contains(
-        &receipts,
-        retained.key(),
-        10_000 + COMPLETED_AUDIT_RECEIPT_RETENTION_MILLIS - 1
-    )
-    .unwrap());
-    assert!(!contains(
-        &receipts,
-        retained.key(),
-        10_000 + COMPLETED_AUDIT_RECEIPT_RETENTION_MILLIS
-    )
-    .unwrap());
+    assert!(
+        contains(
+            &receipts,
+            retained.key(),
+            10_000 + COMPLETED_AUDIT_RECEIPT_RETENTION_MILLIS - 1
+        )
+        .unwrap()
+    );
+    assert!(
+        !contains(
+            &receipts,
+            retained.key(),
+            10_000 + COMPLETED_AUDIT_RECEIPT_RETENTION_MILLIS
+        )
+        .unwrap()
+    );
     assert!(!contains(&receipts, completed(2, 0).key(), 70_000).unwrap());
 
     assert_eq!(

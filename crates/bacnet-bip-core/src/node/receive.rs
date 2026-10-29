@@ -8,8 +8,8 @@ use bacnet_time::Instant;
 
 use super::addressing::Addressed;
 use super::config::{ForwardedTrust, Link, Mode};
-use crate::bbmd::Request;
 use crate::Arrival;
+use crate::bbmd::Request;
 
 /// One received datagram, as the host's socket reported it.
 ///
@@ -254,7 +254,7 @@ impl<'d> ForBbmd<'d> {
     fn of_request(message: Bvll<'d>, sender: SocketAddrV4) -> Option<Self> {
         let request = match message {
             Bvll::DistributeBroadcastToNetwork(npdu) => {
-                return Some(Self::Distribute { sender, npdu })
+                return Some(Self::Distribute { sender, npdu });
             }
             Bvll::RegisterForeignDevice { ttl } => Request::Register { sender, ttl },
             Bvll::ReadBroadcastDistributionTable => Request::ReadBdt { sender },
@@ -319,31 +319,18 @@ impl Link {
             return Received::Discarded(Discard::UnknownDestination);
         };
         let listener = matches!(datagram.path, Path::Listener { .. });
-        if let Path::Listener { other_interface } = datagram.path {
-            if !to.broadcast {
-                return listener_mismatch(false);
-            }
-            if other_interface {
-                return listener_mismatch(true);
-            }
+        if let Path::Listener { other_interface } = datagram.path
+            && let Some(discard) = listener_address_mismatch(to, other_interface)
+        {
+            return Received::Discarded(discard);
         }
         let frame = match BvllFrame::decode(datagram.payload) {
             Ok(frame) => frame,
             Err(error) => return Received::Discarded(Discard::of_decode_error(&error)),
         };
-        let Some(mut arrival) = to.arrival(frame.function) else {
+        let Some(arrival) = self.arrival(to, frame.function) else {
             return Received::Discarded(Discard::DestinationMismatch);
         };
-        // A foreign device's BBMD sends it Forwarded-NPDUs by unicast. Where
-        // its broadcast address is also its own, as in a loopback test, each
-        // of them is flagged as both, and counts as the unicast it was
-        // (#1851). The trust rule still asks that the BBMD sent it.
-        if to.node
-            && frame.function == BvlcFunction::FORWARDED_NPDU
-            && matches!(self.mode, Mode::Foreign(_))
-        {
-            arrival = Arrival::Unicast;
-        }
         // Where the broadcast address is also the node's own, as in a
         // loopback test, a unicast function passes both checks above.
         if listener && arrival != Arrival::Broadcast {
@@ -464,10 +451,10 @@ impl Link {
         if function == BvlcFunction::DISTRIBUTE_BROADCAST_TO_NETWORK && self.is_own(source) {
             return Received::Discarded(Discard::OwnEcho);
         }
-        if self.mode == Mode::Bbmd {
-            if let Some(share) = ForBbmd::of_request(message, source) {
-                return Received::Bbmd(share);
-            }
+        if self.mode == Mode::Bbmd
+            && let Some(share) = ForBbmd::of_request(message, source)
+        {
+            return Received::Bbmd(share);
         }
         if !self.is_answerable(source) {
             return Received::Discarded(Discard::UnanswerableSource);
@@ -511,6 +498,62 @@ impl Link {
             _ => Received::Discarded(Discard::of_decode_error(&error)),
         }
     }
+}
+
+impl Link {
+    /// Whether [`receive`](Self::receive) would get past its broadcast
+    /// listener rules (4 and 7) with `datagram`: `false` exactly when it
+    /// would drop it as [`Discard::ListenerMismatch`]. A datagram another
+    /// socket read, or one with no reported destination, passes. A host
+    /// that reports a listener's datagrams somewhere before the node acts
+    /// on them, as a frame tap does, asks this so that it reports only what
+    /// the node keeps (#1856). It reads the frame's header only; a frame
+    /// that doesn't decode passes, for `receive` to count as malformed.
+    #[must_use]
+    pub fn listener_keeps(&self, datagram: &Datagram<'_>) -> bool {
+        let (Some(to), Path::Listener { other_interface }) = (datagram.to, datagram.path) else {
+            return true;
+        };
+        if listener_address_mismatch(to, other_interface).is_some() {
+            return false;
+        }
+        match BvllFrame::decode(datagram.payload) {
+            Ok(frame) => self
+                .arrival(to, frame.function)
+                .is_none_or(|arrival| arrival == Arrival::Broadcast),
+            Err(_) => true,
+        }
+    }
+
+    /// How a frame of `function` sent to `to` arrived, or `None` when the
+    /// destination doesn't fit the function (rule 6).
+    fn arrival(&self, to: Addressed, function: BvlcFunction) -> Option<Arrival> {
+        let arrival = to.arrival(function)?;
+        // A foreign device's BBMD sends it Forwarded-NPDUs by unicast. Where
+        // its broadcast address is also its own, as in a loopback test, each
+        // of them is flagged as both, and counts as the unicast it was
+        // (#1851). The trust rule still asks that the BBMD sent it.
+        if to.node
+            && function == BvlcFunction::FORWARDED_NPDU
+            && matches!(self.mode, Mode::Foreign(_))
+        {
+            return Some(Arrival::Unicast);
+        }
+        Some(arrival)
+    }
+}
+
+/// A broadcast listener's address rule (rule 4): what it read must have been
+/// sent to the broadcast address, on the node's own interface.
+fn listener_address_mismatch(to: Addressed, other_interface: bool) -> Option<Discard> {
+    if !to.broadcast {
+        return Some(Discard::ListenerMismatch {
+            other_interface: false,
+        });
+    }
+    other_interface.then_some(Discard::ListenerMismatch {
+        other_interface: true,
+    })
 }
 
 fn listener_mismatch<'d>(other_interface: bool) -> Received<'d> {

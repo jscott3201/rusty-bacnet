@@ -7,6 +7,7 @@ use crate::network_port::NetworkPortObject;
 use crate::schedule::ScheduleObject;
 use crate::traits::BACnetObject;
 use bacnet_types::enums::{EngineeringUnits, ErrorCode, PropertyIdentifier as P, Reliability};
+use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::PropertyValue as V;
 
 fn read(object: &dyn BACnetObject, property: P) -> V {
@@ -81,7 +82,7 @@ fn scalar_null_relinquishment_preserves_common_description_and_oos_state() {
                 (P::OUT_OF_SERVICE, V::CharacterString("invalid".into())),
             ] {
                 assert!(
-                    matches!(object.write_property_from(property,None,value,None, &crate::command_source::test_origin()),Err(bacnet_types::error::Error::Protocol{code,..}) if code == ErrorCode::INVALID_DATA_TYPE)
+                    matches!(object.write_property_from(property,None,value,None, &crate::command_source::test_origin()),Err(bacnet_types::error::Error::Remote(RemoteError::Error {code,..})) if code == ErrorCode::INVALID_DATA_TYPE)
                 );
                 assert_eq!(snapshot(&*object), before);
             }

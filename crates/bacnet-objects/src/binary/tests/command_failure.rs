@@ -49,18 +49,20 @@ fn bo_feedback_value_round_trips_and_is_advertised_writable() {
             .unwrap(),
         PropertyValue::Enumerated(1)
     );
-    assert!(bo
-        .property_list()
-        .contains(&PropertyIdentifier::FEEDBACK_VALUE));
+    assert!(
+        bo.property_list()
+            .contains(&PropertyIdentifier::FEEDBACK_VALUE)
+    );
     assert!(bo.is_writable_property(PropertyIdentifier::FEEDBACK_VALUE));
-    assert!(bo
-        .write_property(
+    assert!(
+        bo.write_property(
             PropertyIdentifier::FEEDBACK_VALUE,
             None,
             PropertyValue::Unsigned(1),
             None,
         )
-        .is_err());
+        .is_err()
+    );
 }
 
 /// `BACnetBinaryPV` is a two-valued enumeration, so 2 is not a member of the datatype rather
@@ -71,14 +73,15 @@ fn bo_feedback_value_round_trips_and_is_advertised_writable() {
 fn bo_feedback_value_rejects_a_value_outside_the_binary_enumeration() {
     let mut bo = BinaryOutputObject::new(1, "BO-1").unwrap();
 
-    assert!(bo
-        .write_property(
+    assert!(
+        bo.write_property(
             PropertyIdentifier::FEEDBACK_VALUE,
             None,
             PropertyValue::Enumerated(2),
             None,
         )
-        .is_err());
+        .is_err()
+    );
     assert_eq!(
         bo.read_property(PropertyIdentifier::FEEDBACK_VALUE, None)
             .unwrap(),
@@ -334,9 +337,10 @@ fn bo_detection_enable_is_a_disabled_by_default_invariant() {
             .unwrap(),
         PropertyValue::Boolean(false)
     );
-    assert!(bo
-        .property_list()
-        .contains(&PropertyIdentifier::EVENT_DETECTION_ENABLE));
+    assert!(
+        bo.property_list()
+            .contains(&PropertyIdentifier::EVENT_DETECTION_ENABLE)
+    );
     assert!(bo.is_writable_property(PropertyIdentifier::EVENT_DETECTION_ENABLE));
 }
 
@@ -369,8 +373,8 @@ fn bo_generic_event_properties_round_trip_and_match_pics() {
     // change it. A property write would assign where the service ORs, so it could both
     // fabricate and erase acknowledgments, and it would break the Clause 12.7 requirement
     // that the field sit at its initial condition while Event_Detection_Enable is FALSE.
-    assert!(bo
-        .write_property(
+    assert!(
+        bo.write_property(
             PropertyIdentifier::ACKED_TRANSITIONS,
             None,
             PropertyValue::BitString {
@@ -379,7 +383,8 @@ fn bo_generic_event_properties_round_trip_and_match_pics() {
             },
             None,
         )
-        .is_err());
+        .is_err()
+    );
     assert!(!bo.is_writable_property(PropertyIdentifier::ACKED_TRANSITIONS));
 
     for property in [
@@ -391,13 +396,14 @@ fn bo_generic_event_properties_round_trip_and_match_pics() {
         assert!(bo.property_list().contains(&property));
         assert!(bo.is_writable_property(property));
     }
-    assert!(bo
-        .write_property(
+    assert!(
+        bo.write_property(
             PropertyIdentifier::EVENT_STATE,
             None,
             PropertyValue::Enumerated(EventState::NORMAL.to_raw()),
             None,
         )
-        .is_err());
+        .is_err()
+    );
     assert!(!bo.is_writable_property(PropertyIdentifier::EVENT_STATE));
 }

@@ -60,9 +60,11 @@ async fn graceful_stop_finishes_after_failed_correction_without_claiming_storage
     let go = stage_held_save(&db, &storage).await;
     let expected = served_snapshot(&db).await;
     let (progress, watchdog) = watchdog(go);
-    assert!(timeout(Duration::from_millis(20), endpoint.session.stop())
-        .await
-        .is_err());
+    assert!(
+        timeout(Duration::from_millis(20), endpoint.session.stop())
+            .await
+            .is_err()
+    );
     progress.send(()).unwrap();
     assert!(
         !tokio::task::spawn_blocking(move || watchdog.join().unwrap())
@@ -109,9 +111,11 @@ async fn canceled_stop_waits_for_database_and_rejoins_one_settlement_task() {
             let _ = released.await;
         });
         when_locked.await.unwrap();
-        assert!(timeout(Duration::from_millis(20), endpoint.session.stop())
-            .await
-            .is_err());
+        assert!(
+            timeout(Duration::from_millis(20), endpoint.session.stop())
+                .await
+                .is_err()
+        );
         assert_eq!(
             endpoint.session.lifecycle.load(Ordering::Acquire),
             Lifecycle::Stopping as u8
@@ -122,9 +126,11 @@ async fn canceled_stop_waits_for_database_and_rejoins_one_settlement_task() {
         release.send(()).unwrap();
         holder.await.unwrap();
 
-        assert!(timeout(Duration::from_millis(20), endpoint.session.stop())
-            .await
-            .is_err());
+        assert!(
+            timeout(Duration::from_millis(20), endpoint.session.stop())
+                .await
+                .is_err()
+        );
         let owner = endpoint.session.durable_settlement.as_ref().unwrap().id();
         assert!(endpoint.session.source_recipient.is_none());
         assert!(
@@ -136,9 +142,11 @@ async fn canceled_stop_waits_for_database_and_rejoins_one_settlement_task() {
             endpoint.session.database.as_ref().unwrap()
         ));
         for _ in 0..3 {
-            assert!(timeout(Duration::from_millis(10), endpoint.session.stop())
-                .await
-                .is_err());
+            assert!(
+                timeout(Duration::from_millis(10), endpoint.session.stop())
+                    .await
+                    .is_err()
+            );
             assert_eq!(
                 endpoint.session.durable_settlement.as_ref().unwrap().id(),
                 owner
@@ -198,9 +206,11 @@ async fn retained_dispatch_and_ingress_errors_still_wait_for_settlement() {
         let go = stage_held_save(&db, &storage).await;
         let expected = served_snapshot(&db).await;
         let (progress, watchdog) = watchdog(go);
-        assert!(timeout(Duration::from_millis(20), endpoint.session.stop())
-            .await
-            .is_err());
+        assert!(
+            timeout(Duration::from_millis(20), endpoint.session.stop())
+                .await
+                .is_err()
+        );
         let saved = endpoint
             .session
             .stop_exit
@@ -244,9 +254,11 @@ async fn dropping_a_canceled_stop_settlement_keeps_database_drop_off_runtime() {
     let weak = Arc::downgrade(&db);
     drop(db);
     let (progress, watchdog) = watchdog(go);
-    assert!(timeout(Duration::from_millis(20), endpoint.session.stop())
-        .await
-        .is_err());
+    assert!(
+        timeout(Duration::from_millis(20), endpoint.session.stop())
+            .await
+            .is_err()
+    );
     assert!(endpoint.session.durable_settlement.is_some());
     drop(endpoint);
     assert!(thread_was_free(weak, progress, watchdog).await);

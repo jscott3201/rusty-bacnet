@@ -4,8 +4,8 @@
 
 use super::test_support::config;
 use super::{
-    LoopbackSerial, MstpExecutionMode, MstpExecutionStatus, MstpThreadConfig, MstpTransport,
-    MAX_CPUS, MAX_REALTIME_PRIORITY, MIN_REALTIME_PRIORITY,
+    LoopbackSerial, MAX_CPUS, MAX_REALTIME_PRIORITY, MIN_REALTIME_PRIORITY, MstpExecutionMode,
+    MstpExecutionStatus, MstpThreadConfig, MstpTransport,
 };
 use crate::port::TransportPort;
 
@@ -132,7 +132,7 @@ async fn a_refused_realtime_priority_fails_start() {
 /// The CPUs this process may run on.
 #[cfg(target_os = "linux")]
 fn allowed_cpus() -> Vec<usize> {
-    use nix::sched::{sched_getaffinity, CpuSet};
+    use nix::sched::{CpuSet, sched_getaffinity};
     let set = sched_getaffinity(nix::unistd::Pid::from_raw(0)).unwrap();
     (0..CpuSet::count())
         .filter(|cpu| set.is_set(*cpu).unwrap())

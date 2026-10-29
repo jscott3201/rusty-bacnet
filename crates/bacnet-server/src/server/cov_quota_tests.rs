@@ -1,3 +1,4 @@
+use bacnet_types::error::RemoteError;
 use std::time::{Duration, Instant};
 
 use bytes::BytesMut;
@@ -9,13 +10,13 @@ use bacnet_services::cov::SubscribeCOVRequest;
 use bacnet_services::cov_multiple::{
     COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
 };
+use bacnet_types::MacAddr;
 use bacnet_types::constructed::PropertyReference;
 use bacnet_types::enums::{
     EngineeringUnits, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
-use bacnet_types::MacAddr;
 
 use super::cov_notifications_tests::recording_transport;
 use super::*;
@@ -103,7 +104,7 @@ async fn peer_quota_isolation() {
         let db = server.db.read().await;
         let err = handle_subscribe_cov(&mut table, &db, &peer_a, &buf).unwrap_err();
         match err {
-            Error::Protocol { class, code } => {
+            Error::Remote(RemoteError::Error { class, code }) => {
                 assert_eq!(class, ErrorClass::RESOURCES);
                 assert_eq!(code, ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT);
             }
@@ -190,7 +191,7 @@ async fn reserved_capacity_preservation() {
         let db = server.db.read().await;
         let err = handle_subscribe_cov(&mut table, &db, &unreserved_peer, &buf).unwrap_err();
         match err {
-            Error::Protocol { class, code } => {
+            Error::Remote(RemoteError::Error { class, code }) => {
                 assert_eq!(class, ErrorClass::RESOURCES);
                 assert_eq!(code, ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT);
             }
@@ -229,7 +230,7 @@ async fn reserved_capacity_preservation() {
         let db = server.db.read().await;
         let err = handle_subscribe_cov(&mut table, &db, reserved_mac.as_slice(), &buf).unwrap_err();
         match err {
-            Error::Protocol { class, code } => {
+            Error::Remote(RemoteError::Error { class, code }) => {
                 assert_eq!(class, ErrorClass::RESOURCES);
                 assert_eq!(code, ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT);
             }
@@ -275,7 +276,7 @@ async fn indefinite_subscription_policy() {
         let db = server.db.read().await;
         let err = handle_subscribe_cov(&mut table, &db, &peer, &buf).unwrap_err();
         match err {
-            Error::Protocol { class, code } => {
+            Error::Remote(RemoteError::Error { class, code }) => {
                 assert_eq!(class, ErrorClass::SERVICES);
                 assert_eq!(code, ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED);
             }
@@ -347,7 +348,7 @@ async fn indefinite_subscription_policy() {
         let db = server2.db.read().await;
         let err = handle_subscribe_cov(&mut table, &db, &peer, &buf).unwrap_err();
         match err {
-            Error::Protocol { class, code } => {
+            Error::Remote(RemoteError::Error { class, code }) => {
                 assert_eq!(class, ErrorClass::RESOURCES);
                 assert_eq!(code, ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT);
             }

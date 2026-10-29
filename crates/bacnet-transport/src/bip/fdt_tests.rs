@@ -1,5 +1,5 @@
 use super::*;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 async fn wait_for_fdt_len(transport: &BipTransport, expected: usize) {
     let state = transport.bbmd_state().unwrap().clone();

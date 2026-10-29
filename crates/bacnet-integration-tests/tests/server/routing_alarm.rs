@@ -10,8 +10,8 @@ use super::*;
 /// matching the original SNET/SADR, and be sent as unicast to the router MAC.
 #[tokio::test]
 async fn iam_routed_back_to_remote_whois_requester() {
-    use bacnet_encoding::apdu::{self, encode_apdu, Apdu, UnconfirmedRequest};
-    use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
+    use bacnet_encoding::apdu::{self, Apdu, UnconfirmedRequest, encode_apdu};
+    use bacnet_encoding::npdu::{Npdu, NpduAddress, decode_npdu, encode_npdu};
     use bacnet_npdu::NetworkPriority;
     use bacnet_transport::port::TransportPort;
     use bacnet_types::enums::UnconfirmedServiceChoice;
@@ -105,8 +105,8 @@ async fn iam_routed_back_to_remote_whois_requester() {
 /// info. This is a best-effort test (same caveat as `who_is_through_server`).
 #[tokio::test]
 async fn iam_broadcast_for_local_whois() {
-    use bacnet_encoding::apdu::{self, encode_apdu, Apdu, UnconfirmedRequest};
-    use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
+    use bacnet_encoding::apdu::{self, Apdu, UnconfirmedRequest, encode_apdu};
+    use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
     use bacnet_npdu::NetworkPriority;
     use bacnet_transport::port::TransportPort;
     use bacnet_types::enums::UnconfirmedServiceChoice;
@@ -183,8 +183,8 @@ async fn iam_broadcast_for_local_whois() {
 /// original SNET/SADR through the router MAC.
 #[tokio::test]
 async fn subscribe_cov_routed_ack_and_initial_notification_return_to_remote_subscriber() {
-    use bacnet_encoding::apdu::{self, encode_apdu, Apdu, ConfirmedRequest};
-    use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
+    use bacnet_encoding::apdu::{self, Apdu, ConfirmedRequest, encode_apdu};
+    use bacnet_encoding::npdu::{Npdu, NpduAddress, decode_npdu, encode_npdu};
     use bacnet_npdu::NetworkPriority;
     use bacnet_services::cov::SubscribeCOVRequest;
     use bacnet_transport::port::TransportPort;

@@ -287,10 +287,12 @@ fn set_bdt_auto_inserts_self() {
     }];
     state.set_bdt(entries).unwrap();
     assert_eq!(state.bdt().len(), 2);
-    assert!(state
-        .bdt()
-        .iter()
-        .any(|e| e.ip == [192, 168, 1, 1] && e.port == 47808));
+    assert!(
+        state
+            .bdt()
+            .iter()
+            .any(|e| e.ip == [192, 168, 1, 1] && e.port == 47808)
+    );
 }
 
 #[test]

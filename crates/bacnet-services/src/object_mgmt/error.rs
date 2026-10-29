@@ -77,7 +77,7 @@ impl TryFrom<&ErrorPdu> for CreateObjectError {
 
 impl From<CreateObjectError> for Error {
     fn from(error: CreateObjectError) -> Self {
-        Error::protocol(
+        Error::with_detail(
             error.error_class,
             error.error_code,
             Some(ErrorDetail::FirstFailedElementNumber(

@@ -1,6 +1,6 @@
 //! `earliest`: optional deadlines merged with `None` as no deadline.
 
-use bacnet_time::{earliest, Instant};
+use bacnet_time::{Instant, earliest};
 
 const AT: Option<Instant> = Some(Instant::from_millis(5));
 

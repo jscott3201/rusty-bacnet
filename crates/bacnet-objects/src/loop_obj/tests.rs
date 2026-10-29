@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_types::error::RemoteError;
 
 #[test]
 fn loop_read_defaults() {
@@ -110,7 +111,7 @@ fn loop_write_wrong_type_rejected() {
 
 fn assert_property_error(error: Error, expected: ErrorCode) {
     assert!(
-        matches!(error, Error::Protocol { class, code }
+        matches!(error, Error::Remote(RemoteError::Error { class, code })
             if class == ErrorClass::PROPERTY && code == expected),
         "expected PROPERTY/{expected:?}, got {error:?}"
     );
@@ -348,7 +349,7 @@ fn controlled_variable_value_hook_is_refused_by_other_objects() {
         .set_controlled_variable_value_internal(PropertyValue::Real(1.0))
         .unwrap_err();
     assert!(
-        matches!(error, Error::Protocol { class, code }
+        matches!(error, Error::Remote(RemoteError::Error { class, code })
             if class == ErrorClass::OBJECT
                 && code == ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED),
         "{error:?}"

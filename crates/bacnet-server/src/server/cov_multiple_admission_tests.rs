@@ -203,13 +203,14 @@ async fn a_failure_at_the_second_or_third_reference_keeps_and_reports_the_ones_b
     assert_eq!(reported(&initial), [(1, OOS), (1, PV), (1, SF)]);
     h.no_notification().await;
     assert_eq!(kept(&h, 62).await, [(1, OOS), (1, PV)]);
-    assert!(h
-        .server
-        .cov_table
-        .write()
-        .await
-        .subscriptions_for(&av(2))
-        .is_empty());
+    assert!(
+        h.server
+            .cov_table
+            .write()
+            .await
+            .subscriptions_for(&av(2))
+            .is_empty()
+    );
     h.server.stop().await.unwrap();
 }
 

@@ -1,11 +1,11 @@
-use bacnet_encoding::apdu::{self, encode_apdu, Apdu, ConfirmedRequest, SegmentAck, SimpleAck};
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
+use bacnet_encoding::apdu::{self, Apdu, ConfirmedRequest, SegmentAck, SimpleAck, encode_apdu};
+use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
 use bacnet_types::enums::ConfirmedServiceChoice;
 use bytes::BytesMut;
 use tokio::sync::mpsc;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 use super::{BACnetClient, ClientConfig};
 

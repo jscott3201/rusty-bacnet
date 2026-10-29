@@ -2,7 +2,7 @@
 //! It reads IPV6_PKTINFO through nix rather than the transport's own
 //! receive code, so the two can't share a fault.
 
-use nix::sys::socket::{recvmsg, setsockopt, sockopt, ControlMessageOwned, MsgFlags, SockaddrIn6};
+use nix::sys::socket::{ControlMessageOwned, MsgFlags, SockaddrIn6, recvmsg, setsockopt, sockopt};
 use std::{
     io,
     io::IoSliceMut,
@@ -35,9 +35,11 @@ pub(super) async fn receive(socket: &UdpSocket) -> io::Result<Frame> {
                 Some(&mut control),
                 MsgFlags::empty(),
             )?;
-            assert!(!message
-                .flags
-                .intersects(MsgFlags::MSG_TRUNC | MsgFlags::MSG_CTRUNC));
+            assert!(
+                !message
+                    .flags
+                    .intersects(MsgFlags::MSG_TRUNC | MsgFlags::MSG_CTRUNC)
+            );
             let peer = message.address.expect("wire oracle requires an IPv6 peer");
             let mut info = None;
             for control in message.cmsgs()? {

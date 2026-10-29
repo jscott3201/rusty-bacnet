@@ -4,6 +4,7 @@
 
 use super::super::*;
 use bacnet_types::enums::{ErrorClass, ErrorCode, NotifyType};
+use bacnet_types::error::RemoteError;
 
 fn alert_source(instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::ANALOG_INPUT, instance).unwrap()
@@ -15,7 +16,7 @@ fn assert_property_error<T: std::fmt::Debug>(
     context: &str,
 ) {
     match result.expect_err(context) {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, ErrorClass::PROPERTY, "{context}");
             assert_eq!(code, expected, "{context}");
         }
@@ -228,9 +229,10 @@ fn alert_enrollment_disabled_state_rejects_internal_transition_updates() {
     ae.set_event_detection_enable(false);
 
     assert!(ae.set_event_state_internal(EventState::OFFNORMAL).is_err());
-    assert!(ae
-        .set_acked_transitions_internal(EventTransitionBits::TO_OFFNORMAL, false)
-        .is_err());
+    assert!(
+        ae.set_acked_transitions_internal(EventTransitionBits::TO_OFFNORMAL, false)
+            .is_err()
+    );
     assert_eq!(
         ae.read_property(PropertyIdentifier::EVENT_STATE, None)
             .unwrap(),

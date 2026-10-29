@@ -34,7 +34,7 @@ mod rb17_harness;
 
 use std::time::Duration;
 
-use bacnet_encoding::apdu::{decode_apdu, Apdu};
+use bacnet_encoding::apdu::{Apdu, decode_apdu};
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_endpoint::identity::DeviceIdentity;
 use bacnet_endpoint::mstp::MstpEndpointBuilder;
@@ -349,15 +349,19 @@ fn mstp_builder_timing_setters_reach_the_transport() {
 async fn mstp_builder_bounds_reject() {
     // Addressing validation fails fast at composition (MstpConfig::validate).
     let (serial, _peer) = LoopbackSerial::pair();
-    assert!(MstpEndpointBuilder::new(serial, 9)
-        .max_master(7)
-        .validate_only()
-        .is_err());
+    assert!(
+        MstpEndpointBuilder::new(serial, 9)
+            .max_master(7)
+            .validate_only()
+            .is_err()
+    );
     let (serial, _peer) = LoopbackSerial::pair();
-    assert!(MstpEndpointBuilder::new(serial, SESSION_MAC)
-        .max_master(200)
-        .validate_only()
-        .is_err());
+    assert!(
+        MstpEndpointBuilder::new(serial, SESSION_MAC)
+            .max_master(200)
+            .validate_only()
+            .is_err()
+    );
     // A port declaring an echo with no grace is rejected.
     let (serial, _peer) = LoopbackSerial::pair();
     let zero = bacnet_transport::mstp::Echo::Full {
@@ -372,8 +376,10 @@ async fn mstp_builder_bounds_reject() {
     let (serial, _peer) = LoopbackSerial::pair();
     let big = DeviceIdentity::new(2002, 42).unwrap();
     assert_eq!(big.max_apdu_length(), 1476);
-    assert!(MstpEndpointBuilder::new(serial, SESSION_MAC)
-        .device(big)
-        .build_session()
-        .is_ok());
+    assert!(
+        MstpEndpointBuilder::new(serial, SESSION_MAC)
+            .device(big)
+            .build_session()
+            .is_ok()
+    );
 }

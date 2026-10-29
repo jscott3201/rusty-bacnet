@@ -8,11 +8,12 @@ use bacnet_types::enums::PropertyIdentifier as P;
 use bacnet_types::enums::{
     AccessZoneOccupancyState as S, ErrorClass, ErrorCode, EventType, Reliability,
 };
+use bacnet_types::error::RemoteError;
 
 use super::*;
 use crate::event::{
-    commit_test_proposal, EventStateChange, EventTransition, EventTransitionCommit,
-    TransitionOutcome,
+    EventStateChange, EventTransition, EventTransitionCommit, TransitionOutcome,
+    commit_test_proposal,
 };
 
 fn read(zone: &AccessZoneObject, property: P) -> PropertyValue {
@@ -78,7 +79,7 @@ fn change(from: EventState, to: EventState) -> EventStateChange {
 
 fn assert_protocol_error(result: Result<(), Error>, class: ErrorClass, code: ErrorCode) {
     assert!(
-        matches!(result, Err(Error::Protocol { class: c, code: e })
+        matches!(result, Err(Error::Remote(RemoteError::Error { class: c, code: e }))
             if c == class && e == code),
         "expected {class:?} / {code:?}, got {result:?}"
     );
@@ -464,12 +465,13 @@ fn access_zone_acknowledges_its_latest_offnormal_transition() {
     })
     .unwrap();
     // A stale time stamp is refused and changes nothing.
-    assert!(zone
-        .acknowledge_alarm_correlated_detailed_internal(
+    assert!(
+        zone.acknowledge_alarm_correlated_detailed_internal(
             EventState::OFFNORMAL,
             &BACnetTimeStamp::SequenceNumber(40),
         )
-        .is_err());
+        .is_err()
+    );
     assert_eq!(
         zone.acknowledge_alarm_correlated_detailed_internal(EventState::OFFNORMAL, &stamp)
             .unwrap(),

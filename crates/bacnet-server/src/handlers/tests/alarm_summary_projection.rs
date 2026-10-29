@@ -1,3 +1,4 @@
+use bacnet_types::error::RemoteError;
 use std::borrow::Cow;
 
 use bacnet_services::alarm_summary::GetAlarmSummaryAck;
@@ -77,10 +78,10 @@ impl BACnetObject for AlarmSummaryFixture {
             .iter()
             .find(|(candidate, _)| *candidate == property)
             .map(|(_, value)| value.clone())
-            .ok_or(Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::UNKNOWN_PROPERTY,
-            })
+            .ok_or(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::UNKNOWN_PROPERTY,
+            ))
     }
 
     fn write_property(
@@ -90,10 +91,10 @@ impl BACnetObject for AlarmSummaryFixture {
         _value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
-        Err(Error::Protocol {
-            class: ErrorClass::PROPERTY,
-            code: ErrorCode::WRITE_ACCESS_DENIED,
-        })
+        Err(Error::protocol(
+            ErrorClass::PROPERTY,
+            ErrorCode::WRITE_ACCESS_DENIED,
+        ))
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
@@ -131,7 +132,7 @@ fn response(db: &ObjectDatabase) -> Result<GetAlarmSummaryAck, Error> {
 fn assert_operational_problem(error: Error) {
     assert!(matches!(
         error,
-        Error::Protocol { class, code }
+        Error::Remote(RemoteError::Error { class, code })
             if class == ErrorClass::DEVICE
                 && code == ErrorCode::OPERATIONAL_PROBLEM
     ));
@@ -254,10 +255,12 @@ fn excluded_state_and_notify_types_short_circuit_malformed_later_fields() {
     let mut encoded = BytesMut::new();
     handle_get_alarm_summary(&db, &mut encoded).unwrap();
     assert!(encoded.is_empty());
-    assert!(GetAlarmSummaryAck::decode(&encoded)
-        .unwrap()
-        .entries
-        .is_empty());
+    assert!(
+        GetAlarmSummaryAck::decode(&encoded)
+            .unwrap()
+            .entries
+            .is_empty()
+    );
 }
 
 #[test]

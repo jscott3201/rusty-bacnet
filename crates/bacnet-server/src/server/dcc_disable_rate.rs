@@ -1,4 +1,4 @@
-use super::{runtime_clock, BipServerBuilder, ServerBuilder, TransportPort};
+use super::{BipServerBuilder, ServerBuilder, TransportPort, runtime_clock};
 use bacnet_types::error::Error;
 use std::sync::Mutex;
 use std::time::Instant;
@@ -104,7 +104,7 @@ impl BipServerBuilder {
 mod tests {
     use super::*;
     use std::sync::{Arc, Barrier};
-    use tokio::time::{advance, Duration};
+    use tokio::time::{Duration, advance};
 
     #[tokio::test(start_paused = true)]
     async fn dcc_disable_rate_fractional_boundaries_and_idle_cap() {

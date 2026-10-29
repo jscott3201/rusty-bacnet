@@ -1,5 +1,5 @@
 //! Public endpoint correlation against the bundled server over real B/IP.
-use bacnet_endpoint::{bip::BipEndpointBuilder, DeviceIdentity, SessionRole};
+use bacnet_endpoint::{DeviceIdentity, SessionRole, bip::BipEndpointBuilder};
 use bacnet_server::server::{BACnetServer, ServerConfig};
 use bacnet_transport::bip::BipTransport;
 use bacnet_types::{
@@ -51,15 +51,15 @@ async fn endpoint_device_wildcard_accepts_bundled_server_concrete_ack() {
 
 use bacnet_client::client::BACnetClient;
 use bacnet_encoding::{
-    apdu::{decode_apdu, encode_apdu, Apdu, ComplexAck},
-    npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress},
+    apdu::{Apdu, ComplexAck, decode_apdu, encode_apdu},
+    npdu::{Npdu, NpduAddress, decode_npdu, encode_npdu},
 };
 use bacnet_endpoint::{EndpointApduDestination, EndpointSession, SessionConfig};
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_transport::{loopback::LoopbackTransport, port::TransportPort};
-use bacnet_types::{enums::ConfirmedServiceChoice, error::Error, MacAddr};
+use bacnet_types::{MacAddr, enums::ConfirmedServiceChoice, error::Error};
 use bytes::BytesMut;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 fn oid(kind: ObjectType, instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(kind, instance).unwrap()

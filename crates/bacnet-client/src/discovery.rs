@@ -3,9 +3,9 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+use bacnet_types::MacAddr;
 use bacnet_types::enums::Segmentation;
 use bacnet_types::primitives::ObjectIdentifier;
-use bacnet_types::MacAddr;
 
 /// Information about a discovered BACnet device.
 #[derive(Debug, Clone)]
@@ -604,9 +604,11 @@ mod tests {
         table.upsert(partial);
 
         assert!(table.get_by_mac(&[192, 168, 1, 100, 0xBA, 0xC0]).is_none());
-        assert!(table
-            .get_by_network_address(100, &[192, 168, 1, 100, 0xBA, 0xC0])
-            .is_none());
+        assert!(
+            table
+                .get_by_network_address(100, &[192, 168, 1, 100, 0xBA, 0xC0])
+                .is_none()
+        );
     }
 
     #[test]

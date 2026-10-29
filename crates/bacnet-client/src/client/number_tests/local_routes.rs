@@ -14,14 +14,14 @@ use super::*;
 use crate::client::BACnetClient;
 use crate::discovery::RoutedDeviceConfig;
 use bacnet_encoding::{
-    apdu::{decode_apdu, encode_apdu, Apdu, ConfirmedRequest, SegmentAck, SimpleAck},
-    npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress},
+    apdu::{Apdu, ConfirmedRequest, SegmentAck, SimpleAck, decode_apdu, encode_apdu},
+    npdu::{Npdu, NpduAddress, decode_npdu, encode_npdu},
 };
 use bacnet_transport::port::ReceivedNpdu;
+use bacnet_types::MacAddr;
 use bacnet_types::enums::{ConfirmedServiceChoice, ObjectType, PropertyIdentifier, Segmentation};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
-use bacnet_types::MacAddr;
 use bytes::BytesMut;
 use tokio::sync::mpsc;
 use tokio::time::Duration;

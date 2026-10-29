@@ -1,7 +1,8 @@
 //! Calendar (type 6), Clause 12.9.
 
-use std::borrow::Cow;
-use std::sync::Arc;
+use crate::prelude::*;
+use alloc::borrow::Cow;
+use alloc::sync::Arc;
 
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::constructed::BACnetCalendarEntry;
@@ -135,10 +136,10 @@ impl BACnetObject for CalendarObject {
             p if p == PropertyIdentifier::PROPERTY_LIST => {
                 read_property_list_property(&self.property_list(), array_index)
             }
-            _ => Err(Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::UNKNOWN_PROPERTY,
-            }),
+            _ => Err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::UNKNOWN_PROPERTY,
+            )),
         }
     }
 

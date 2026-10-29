@@ -1,5 +1,5 @@
 //! Table 13-1a-2 Value_Source capture, shared by Single and Multiple.
-use super::{flags::PreparedFlags, prepare::PreparedCovValue, CovObservation, CovSample};
+use super::{CovObservation, CovSample, flags::PreparedFlags, prepare::PreparedCovValue};
 use bacnet_encoding::{constructed::decode_value_source, primitives::decode_timestamp_choice};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::common::BACnetPropertyValue;
@@ -174,9 +174,5 @@ fn validate(object: O, property: P, value: &V) -> Result<(), Error> {
         P::STATUS_FLAGS => super::observation::validate_flags(value).is_ok(),
         _ => false,
     };
-    if valid {
-        Ok(())
-    } else {
-        Err(invalid())
-    }
+    if valid { Ok(()) } else { Err(invalid()) }
 }

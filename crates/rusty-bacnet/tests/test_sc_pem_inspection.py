@@ -2,6 +2,7 @@
 import errno
 import hashlib
 import importlib.util
+import ipaddress
 import io
 import math
 import os
@@ -88,6 +89,36 @@ class ScPemInspectionTests(unittest.TestCase):
         self.assertEqual(cert.key_usage.values, ("digital_signature",))
         self.assertEqual(cert.extended_key_usage.values, ("server_auth", "client_auth"))
         self.assertEqual(cert.findings, ())
+
+    def test_subject_alt_names_keep_the_certificate_text(self):
+        # #2022: exact text, no case folding, wildcards as written; reprs
+        # name the kind only.
+        self.openssl(
+            "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1",
+            "-nodes", "-days", "25", "-subj", "/CN=sans",
+            "-keyout", "sans.key", "-out", "sans.pem",
+            "-addext", "subjectAltName=DNS:*.Example.COM,URI:urn:site:ahu-1,"
+                       "email:ops@example.com,IP:10.0.0.7,IP:2001:db8::1,DNS:localhost")
+        report = inspect_sc_pem((self.root / "sans.pem").read_bytes(),
+                                private_key_pem=(self.root / "sans.key").read_bytes(),
+                                inspected_at_unix=self.before)
+        names = report.certificates[0].metadata.subject_alt_names
+        self.assertIsInstance(names, tuple)
+        self.assertEqual([(name.kind, name.value) for name in names], [
+            ("dns", "*.Example.COM"), ("uri", "urn:site:ahu-1"), ("email", "ops@example.com"),
+            ("ip", ipaddress.IPv4Address("10.0.0.7")), ("ip", ipaddress.IPv6Address("2001:db8::1")),
+            ("dns", "localhost"),
+        ])
+        self.assertEqual(repr(names[0]), "ScSubjectAltName(kind='dns')")
+        for name in names:
+            self.assertNotIn(str(name.value), repr(name))
+            with self.assertRaises(AttributeError):
+                name.value = "changed"
+            with self.assertRaises(TypeError):
+                pickle.dumps(name)
+        identity = self.report().certificates[0].metadata.subject_alt_names
+        self.assertEqual([(name.kind, name.value) for name in identity],
+                         [("dns", "localhost"), ("ip", ipaddress.IPv4Address("127.0.0.1"))])
 
     def test_nested_values_are_frozen_independent_and_reprs_omit_credentials(self):
         source, key = bytearray(self.identity), bytearray(self.key)

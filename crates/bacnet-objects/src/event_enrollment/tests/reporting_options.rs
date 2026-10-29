@@ -10,6 +10,7 @@ use crate::event::{EventStateChange, EventTransition};
 use bacnet_encoding::constructed::encode_object_property_reference;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::BinaryPV;
+use bacnet_types::error::RemoteError;
 use bytes::BytesMut;
 
 fn enrollment() -> EventEnrollmentObject {
@@ -36,7 +37,7 @@ fn inhibit(ee: &dyn BACnetObject) -> PropertyValue {
 
 fn code(result: Result<(), Error>) -> ErrorCode {
     match result {
-        Err(Error::Protocol { code, .. }) => code,
+        Err(Error::Remote(RemoteError::Error { code, .. })) => code,
         other => panic!("expected a refusal, got {other:?}"),
     }
 }

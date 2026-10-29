@@ -34,6 +34,10 @@
 //! - **Loss and lapse:** the BBMD stops answering. The attempts time out
 //!   and back off until the lease lapses; then a success registers the node
 //!   again, and the renewal that lease makes due follows at once.
+//! - **A move:** the node moves to a second BBMD ([`NodePort::retarget`]),
+//!   as a Network Port activation moves the hosted transport (#1825), so
+//!   the image links and measures it (#1852). The first attempt there goes
+//!   out at once, and its success registers the node with it.
 //!
 //! `tests/node.rs` runs it natively and compares the whole summary with
 //! [`expected()`]; the `node` image (`src/bin/node.rs`) links it, and its
@@ -59,8 +63,8 @@ use core::net::{Ipv4Addr, SocketAddrV4};
 use bacnet_bip_codec::{BdtEntries, BdtEntry, BvlcResultCode, Bvll, HEADER_LENGTH};
 use bacnet_bip_core::node::{
     Addressed, Admission, AttemptOutcome, Cast, Datagram, Discard, Foreign, ForwardedTrust, Link,
-    Mode, Node, NodeCounters, Permissive, RegisterAttempt, RegistrationSnapshot, Retry,
-    SendRefusal, MIN_BUDGET,
+    MIN_BUDGET, Mode, Node, NodeCounters, Permissive, RegisterAttempt, RegistrationSnapshot, Retry,
+    SendRefusal,
 };
 use bacnet_bip_core::port::{Datagrams, HeldBroadcast, Ingress, NodePort};
 use bacnet_bip_core::{Duration, Instant, LocalSubnet};
@@ -105,6 +109,8 @@ pub const SUBNET: LocalSubnet =
     LocalSubnet::new(SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 255), 0xBAC0));
 /// Its BBMD, on another subnet.
 pub const BBMD: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 1), 0xBAC0);
+/// The BBMD it moves to at the end.
+pub const BBMD2: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 2), 0xBAC0);
 /// A peer on its subnet, which sends it the requests only a BBMD serves.
 pub const PEER: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 20), 0xBAC0);
 /// A sender that isn't its BBMD.
@@ -196,7 +202,7 @@ impl Default for Memory {
 }
 
 /// Room for the registration attempts the scenario makes.
-pub const ATTEMPTS: usize = 8;
+pub const ATTEMPTS: usize = 9;
 /// Room for the leases the BBMD's successes prove.
 pub const LEASES: usize = 6;
 /// Room for the broadcasts it asks to send.
@@ -437,7 +443,7 @@ impl Datagrams for Socket<'_> {
             return Err(SendRefusal::SocketError);
         }
         match *message {
-            Bvll::RegisterForeignDevice { ttl: TTL } if to == BBMD => {
+            Bvll::RegisterForeignDevice { ttl: TTL } if to == BBMD || to == BBMD2 => {
                 record(&mut summary.attempts, self.now, &mut summary.errors);
             }
             Bvll::BvlcResult(code) => self.result = Some((to, code)),
@@ -535,6 +541,18 @@ impl Device<'_, '_> {
         self.answer();
         self.answer();
 
+        // It moves to the second BBMD: the first attempt there goes out at
+        // once, and that BBMD's success registers it.
+        self.at(110_000);
+        let mut moved = FOREIGN;
+        moved.bbmd = BBMD2;
+        let now = self.socket.now;
+        if self.port.retarget(moved, now, &mut self.socket).is_err() {
+            self.socket.summary.error();
+        }
+        self.socket.now += ROUND_TRIP;
+        self.success_from(BBMD2);
+
         let now = self.socket.now;
         let registration = self.port.node().registration(now);
         let counters = self.port.node_mut().take_counters();
@@ -560,7 +578,12 @@ impl Device<'_, '_> {
     /// The BBMD's success arrives now and settles the attempt in flight:
     /// note the lease it proves.
     fn success(&mut self) {
-        if self.receive(&Bvll::BvlcResult(SUCCESS), BBMD) != Seen::Handled {
+        self.success_from(BBMD);
+    }
+
+    /// The success from `bbmd`, as [`success`](Self::success).
+    fn success_from(&mut self, bbmd: SocketAddrV4) {
+        if self.receive(&Bvll::BvlcResult(SUCCESS), bbmd) != Seen::Handled {
             self.socket.summary.error();
         }
         let now = self.socket.now;

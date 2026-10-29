@@ -9,7 +9,7 @@ use std::time::Duration;
 use bacnet_types::bip_port::{BipPortMode, ForeignDeviceChanges, ForeignRegistration};
 use bacnet_types::constructed::{BACnetHostAddress, BACnetHostNPort};
 use bacnet_types::enums::ErrorCode;
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 use bytes::BytesMut;
 use tokio::net::UdpSocket;
 use tokio::time::timeout;
@@ -85,7 +85,7 @@ fn changes(bbmd: Option<BACnetHostNPort>, ttl: Option<u16>) -> ForeignDeviceChan
 
 fn code(error: Error) -> ErrorCode {
     match error {
-        Error::Protocol { code, .. } => code,
+        Error::Remote(RemoteError::Error { code, .. }) => code,
         other => panic!("a protocol error: {other:?}"),
     }
 }

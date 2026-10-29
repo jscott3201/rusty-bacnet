@@ -58,14 +58,12 @@ fn detect_enp3s0_address() -> Option<Ipv4Addr> {
     let text = String::from_utf8_lossy(&output.stdout);
     for line in text.lines() {
         let line = line.trim();
-        if let Some(rest) = line.strip_prefix("inet ") {
-            if let Some(ip_str) = rest.split_whitespace().next() {
-                if let Some(base) = ip_str.split('/').next() {
-                    if let Ok(ip) = base.parse::<Ipv4Addr>() {
-                        return Some(ip);
-                    }
-                }
-            }
+        if let Some(rest) = line.strip_prefix("inet ")
+            && let Some(ip_str) = rest.split_whitespace().next()
+            && let Some(base) = ip_str.split('/').next()
+            && let Ok(ip) = base.parse::<Ipv4Addr>()
+        {
+            return Some(ip);
         }
     }
     None

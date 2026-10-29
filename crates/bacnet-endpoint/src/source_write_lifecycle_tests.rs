@@ -30,15 +30,17 @@ async fn source_write_whole_operation_capacity_bounds_prelease_waiters_and_stop(
     .await
     .unwrap();
     assert_eq!(session.coordinator.active_count().unwrap(), 0);
-    assert!(start_write(
-        &session,
-        peer.local_mac(),
-        PropertyIdentifier::PRESENT_VALUE,
-        None
-    )
-    .await
-    .unwrap()
-    .is_err());
+    assert!(
+        start_write(
+            &session,
+            peer.local_mac(),
+            PropertyIdentifier::PRESENT_VALUE,
+            None
+        )
+        .await
+        .unwrap()
+        .is_err()
+    );
     // Seal while admitted caller futures wait on the DB: no task/lease/egress yet.
     let token = session.shared.token.clone();
     let stop = session.stop();
@@ -97,9 +99,11 @@ async fn source_write_audit_capacity_deadline_health_and_later_recovery() {
         reliability(&session).await,
         Reliability::COMMUNICATION_FAILURE.to_raw()
     );
-    assert!(timeout(Duration::from_millis(20), records.recv())
-        .await
-        .is_err());
+    assert!(
+        timeout(Duration::from_millis(20), records.recv())
+            .await
+            .is_err()
+    );
     let envelope = first_notification.unwrap();
     let (_, invoke) = notification(&envelope, true);
     send(
@@ -190,20 +194,22 @@ async fn source_write_stop_and_drop_cancel_owned_work_with_held_client_clones() 
         drop(session);
         assert!(timeout(WAIT, pending).await.unwrap().unwrap().is_err());
         send(&peer, &request.source_mac, write_ack(invoke, &rp)).await;
-        assert!(client
-            .write_property(
-                peer.local_mac(),
-                WritePropertyRequest {
-                    object_identifier: target(),
-                    property_identifier: PropertyIdentifier::PRESENT_VALUE,
-                    property_array_index: None,
-                    property_value: vec![0],
-                    priority: None,
-                },
-                Commandability::Commandable,
-            )
-            .await
-            .is_err());
+        assert!(
+            client
+                .write_property(
+                    peer.local_mac(),
+                    WritePropertyRequest {
+                        object_identifier: target(),
+                        property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                        property_array_index: None,
+                        property_value: vec![0],
+                        priority: None,
+                    },
+                    Commandability::Commandable,
+                )
+                .await
+                .is_err()
+        );
         timeout(WAIT, async {
             while coordinator.active_count().unwrap() != 0 || weak_db.upgrade().is_some() {
                 tokio::task::yield_now().await;
@@ -276,9 +282,11 @@ async fn source_write_captures_recipient_and_policy_before_peer_completion() {
     let (invoke, wp) = write_request(&envelope);
     send(&peer, &envelope.source_mac, write_ack(invoke, &wp)).await;
     pending.await.unwrap().unwrap();
-    assert!(timeout(Duration::from_millis(30), new_records.recv())
-        .await
-        .is_err());
+    assert!(
+        timeout(Duration::from_millis(30), new_records.recv())
+            .await
+            .is_err()
+    );
     assert!(old_records.try_recv().is_err());
     session.stop().await.unwrap();
     peer.stop().await.unwrap();

@@ -11,10 +11,10 @@ mod glue;
 use bacnet_bip_core::codec::{BvlcFunction, BvlcResultCode, Bvll};
 use bacnet_bip_core::node::{self, Cast, Node, Permissive};
 use bacnet_bip_core::port::{HeldBroadcast, Ingress, NodePort, PortCounters};
+use bacnet_router_core::Instant;
 use bacnet_router_core::bip::BipPort;
 use bacnet_router_core::npdu::NetworkMessageType;
 use bacnet_router_core::router::{Options, PortConfig, SendRefusal};
-use bacnet_router_core::Instant;
 
 use fixture::*;
 use glue::*;
@@ -202,9 +202,10 @@ fn held_broadcasts_leave_before_a_later_one() {
     assert_eq!(results, [(0, Ok(()))]);
     let sent = out.take();
     let dbtn = BvlcFunction::DISTRIBUTE_BROADCAST_TO_NETWORK;
-    assert!(sent
-        .iter()
-        .all(|sent| (sent.to, sent.function) == (BBMD, dbtn)));
+    assert!(
+        sent.iter()
+            .all(|sent| (sent.to, sent.function) == (BBMD, dbtn))
+    );
     let controls: Vec<u8> = sent.iter().map(|sent| sent.npdu[1]).collect();
     assert_eq!(
         controls,

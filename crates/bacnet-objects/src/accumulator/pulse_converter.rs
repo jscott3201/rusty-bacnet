@@ -32,16 +32,17 @@
 //! source such a reading, a reset or a wrap whose bound is unknown, only
 //! sets the baseline again.
 
+use crate::prelude::*;
+use alloc::borrow::Cow;
+use alloc::sync::Arc;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::{
     EngineeringUnits, EventState, ObjectType, PropertyIdentifier, Reliability,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
-use std::borrow::Cow;
-use std::sync::Arc;
 
-use crate::clock::{stamp_datetime, ClockReader, UNSPECIFIED_DATETIME};
+use crate::clock::{ClockReader, UNSPECIFIED_DATETIME, stamp_datetime};
 use crate::common::{self, read_common_properties};
 use crate::reference::{self, ReferenceFrame};
 use crate::traits::BACnetObject;
@@ -216,7 +217,7 @@ impl PulseConverterObject {
     /// changes.
     fn adjust(&mut self, adjust_value: f32) -> Result<(), Error> {
         common::reject_non_finite(adjust_value)?;
-        let quotient = (f64::from(adjust_value) / f64::from(self.scale_factor)).trunc();
+        let quotient = crate::float::trunc(f64::from(adjust_value) / f64::from(self.scale_factor));
         // Any quotient this large moves Count out of the u64 range anyway.
         if !quotient.is_finite() || quotient.abs() > u64::MAX as f64 {
             return Err(common::value_out_of_range_error());
@@ -433,7 +434,7 @@ impl BACnetObject for PulseConverterObject {
             return false;
         }
         let reliability = self.evaluated_reliability();
-        std::mem::replace(&mut self.reliability, reliability) != reliability
+        core::mem::replace(&mut self.reliability, reliability) != reliability
     }
 
     fn take_input_reading_internal(&mut self, reading: Option<InputReading>) -> bool {

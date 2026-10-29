@@ -3,16 +3,16 @@
 //! route keeps forwarding. Three ports on 1000, 2000 and 4000, on the
 //! router's engine through [`super::envelope_harness`].
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use bacnet_encoding::npdu::{decode_npdu, Npdu, NpduAddress};
+use bacnet_encoding::npdu::{Npdu, NpduAddress, decode_npdu};
 use bacnet_npdu::NetworkMessageType;
 use bacnet_types::MacAddr;
 use bytes::Bytes;
 
-use super::envelope_harness::*;
 use super::SendRequest;
+use super::envelope_harness::*;
 use crate::router_table::{ClaimCounters, Convergence, PortId, Reachability};
 
 const I_AM: NetworkMessageType = NetworkMessageType::I_AM_ROUTER_TO_NETWORK;

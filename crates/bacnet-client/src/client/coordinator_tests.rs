@@ -6,12 +6,12 @@ use bacnet_encoding::npdu::decode_npdu;
 use bacnet_endpoint_core::coordinator::CanonicalPeer;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportPort;
+use bacnet_types::MacAddr;
 use bacnet_types::enums::ConfirmedServiceChoice;
 use bacnet_types::error::Error;
-use bacnet_types::MacAddr;
 use bytes::Bytes;
 use tokio::task::JoinHandle;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 use super::{BACnetClient, ClientConfig};
 
@@ -97,10 +97,12 @@ async fn initial_send_failure_cancels_the_exact_coordinated_lease() {
         .await
         .unwrap();
 
-    assert!(client
-        .confirmed_request(ROUTER_MAC, ConfirmedServiceChoice::READ_PROPERTY, &[0x0C],)
-        .await
-        .is_err());
+    assert!(
+        client
+            .confirmed_request(ROUTER_MAC, ConfirmedServiceChoice::READ_PROPERTY, &[0x0C],)
+            .await
+            .is_err()
+    );
     assert_eq!(client.tsm.lock().await.pending_count(), 0);
     assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
 
@@ -167,9 +169,11 @@ async fn client_uses_one_global_generation_safe_pool_across_direct_and_routed_pe
         exhausted,
         Err(Error::Encoding(message)) if message == "all invoke IDs exhausted for destination"
     ));
-    assert!(timeout(Duration::from_millis(50), peer_rx.recv())
-        .await
-        .is_err());
+    assert!(
+        timeout(Duration::from_millis(50), peer_rx.recv())
+            .await
+            .is_err()
+    );
 
     let released_invoke_id = 0;
     let first = requests.remove(0);

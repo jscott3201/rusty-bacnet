@@ -6,8 +6,8 @@
 use core::net::{Ipv4Addr, SocketAddrV4};
 
 use bacnet_bip_codec::{
-    decode, BdtEntries, BdtEntry, BvlcFunction, BvlcResultCode, Bvll, BvllFrame, FdtEntries,
-    FdtEntry,
+    BdtEntries, BdtEntry, BvlcFunction, BvlcResultCode, Bvll, BvllFrame, FdtEntries, FdtEntry,
+    decode,
 };
 
 const ALL_ONES: Ipv4Addr = Ipv4Addr::new(255, 255, 255, 255);

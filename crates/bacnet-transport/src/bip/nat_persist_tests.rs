@@ -1,7 +1,7 @@
 //! A NAT setting activated through the Network Port is saved with the BDT,
 //! and a restart loads the two together, over the configured ones (#940).
 
-use super::bdt_activation_persist_tests::{row, saved, tables, TempDir};
+use super::bdt_activation_persist_tests::{TempDir, row, saved, tables};
 use super::*;
 use crate::bbmd::NatTraversal;
 use bacnet_types::bip_port::BbmdChanges;

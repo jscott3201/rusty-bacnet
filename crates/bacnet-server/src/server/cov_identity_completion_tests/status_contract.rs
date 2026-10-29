@@ -268,9 +268,11 @@ async fn cov_status_multiple_one_read_per_context_and_independent_baselines() {
         CovNotificationKind::Multiple,
     );
     assert_eq!(payload.len(), 2);
-    assert!(!payload
-        .iter()
-        .any(|v| v.0 == PropertyIdentifier::RELINQUISH_DEFAULT));
+    assert!(
+        !payload
+            .iter()
+            .any(|v| v.0 == PropertyIdentifier::RELINQUISH_DEFAULT)
+    );
     assert_eq!(baseline(&f, &first).await, Some(o.clone()));
     assert_eq!(baseline(&f, &sibling).await, Some(o));
     f.finish(false).await;

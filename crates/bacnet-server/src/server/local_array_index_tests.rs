@@ -23,6 +23,7 @@ use bacnet_types::constructed::{
     BACnetActionCommand, BACnetActionList, BACnetDeviceObjectPropertyReference,
 };
 use bacnet_types::enums::{EngineeringUnits, ObjectType, Reliability, WriteStatus};
+use bacnet_types::error::RemoteError;
 
 use PropertyIdentifier as P;
 
@@ -200,7 +201,7 @@ async fn write_local_checks_an_array_index_before_the_object_sees_the_value() {
             .await
             .unwrap_err();
         assert!(
-            matches!(error, Error::Protocol { class: c, code: e }
+            matches!(error, Error::Remote(RemoteError::Error { class: c, code: e })
                 if c == class && e == code),
             "{object} {property:?} {index:?}: {error:?}"
         );

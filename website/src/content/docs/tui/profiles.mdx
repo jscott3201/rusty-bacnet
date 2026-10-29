@@ -61,7 +61,7 @@ The status bar always shows the level:
 |---|---|
 | `READ-ONLY` | The default. Discovery, reads, COV subscriptions with a finite lifetime, and a foreign-device registration. No writes |
 | `WRITE mm:ss` | A write session is armed, shown in red with its countdown. Writes are allowed, each one previewed and confirmed |
-| `PASSIVE` | Nothing at all. No client is built |
+| `PASSIVE` | Nothing at all. A B/IP profile only listens, on a receive-only socket, and so does the MS/TP monitor |
 
 ### Passive sessions
 
@@ -69,18 +69,22 @@ The status bar always shows the level:
 bacnet tui --profile plant-a --passive
 ```
 
-`--passive` builds no client, so nothing is transmitted: no discovery, reads, subscriptions, registrations or writes. Those keys show a notice instead. You can still open the profile dialog and read the session ledger with `u`. Use it to check a profile, or to look at what an earlier session left behind, without touching the network.
+`--passive` only listens. On a B/IP profile it binds a receive-only socket, with no BACnet client behind it, and decodes what arrives: `:find NAME` searches the I-Haves it has overheard, and the Networks tab shows the routers it has heard. Nothing is transmitted: no Who-Is, reads, subscriptions, writes or replies. Foreign-device settings are ignored, so no registration is sent either. Keys that would transmit show a notice instead. You can still open the profile dialog and read the session ledger with `u`. Other transports and B/IP multicast can't listen passively; the connection fails and says why. Use it to check a profile, to see what is on the network, or to look at what an earlier session left behind, without sending anything.
 
-![A passive session: the status bar reads PASSIVE and the device list says nothing is transmitted.](../../../assets/tui/profiles-passive.webp)
+![A passive B/IP session: the status bar reads listening and PASSIVE, and the footer says foreign-device settings are ignored.](../../../assets/tui/profiles-passive.webp)
 
 ### The safety policy
 
 Each profile has a `[safety]` table:
 
 - `writes = "session"`, the default, lets `W` arm a write session. `writes = "never"` makes `W` say why and arm nothing.
-- `dangerous = true` allows a write at priority 6 inside an armed session. It needs `writes = "session"`.
+- `dangerous = true` allows a write at priority 6 inside an armed session. It needs `writes = "session"`. It also allows [`:dcc` and `:reinit`](/rusty-bacnet/tui/writes/#dcc-and-reinitialize).
 
 [Write safely](/rusty-bacnet/tui/writes/) explains arming, the confirmation tiers and the ledger.
+
+### The MCP table
+
+A profile may also hold an `[mcp]` table for `bacnet mcp serve`, the [MCP server for AI agent hosts](/rusty-bacnet/guides/ai-agents/), which connects through the same profiles. It limits the networks and devices an agent may reach, how fast it may send, whether it may send a broad Who-Is, and whether it is offered writes. The TUI keeps the table when it saves the profile but doesn't use it, and its `writes` and `dangerous` settings don't apply to the server. The server needs its own first-use authorization, `bacnet mcp authorize --profile NAME`, which is recorded in the table and cleared when the table widens what an agent may reach. [Use rusty-bacnet with AI agents](/rusty-bacnet/guides/ai-agents/#authorize-a-profile) shows an example table and links the reference that lists every key, its default and its limits.
 
 ## Connect, disconnect and reconnect
 

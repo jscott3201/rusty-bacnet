@@ -7,7 +7,7 @@
 use insta::assert_snapshot;
 
 use super::sc_lint::credentials;
-use super::sc_screen::{connected, hub_chain, identity, refused, sc, sc_app, PRIMARY_VMAC};
+use super::sc_screen::{PRIMARY_VMAC, connected, hub_chain, identity, refused, sc, sc_app};
 use super::*;
 use crate::tui::app::sc::View;
 use crate::tui::app::watch::Screen;

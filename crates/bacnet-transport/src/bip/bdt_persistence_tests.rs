@@ -1,6 +1,6 @@
 use super::*;
 use bytes::BytesMut;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -53,8 +53,8 @@ async fn raw_bvlc_request(target: &[u8], function: BvlcFunction, payload: &[u8])
 }
 
 #[tokio::test]
-async fn seeded_persisted_bdt_loads_on_startup_and_network_write_bdt_mutates_neither_memory_nor_disk(
-) {
+async fn seeded_persisted_bdt_loads_on_startup_and_network_write_bdt_mutates_neither_memory_nor_disk()
+ {
     let persist = TempBdtFile::new("bdt-restart");
     let fallback_entry = BdtEntry {
         ip: [10, 20, 30, 40],

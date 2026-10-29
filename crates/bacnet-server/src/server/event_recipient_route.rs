@@ -235,7 +235,7 @@ impl RecipientRoute {
             Self::LocalBroadcast | Self::RemoteBroadcast(_) | Self::GlobalBroadcast
                 if !confirmed =>
             {
-                return None
+                return None;
             }
             // Clause 6.3 restricts broadcast to Unconfirmed-Request-PDUs, and
             // downgrading would drop the acknowledgment the recipient was

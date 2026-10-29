@@ -93,7 +93,8 @@ impl BACnetClient {
 
     /// Get alarm summary from a remote device (deprecated service).
     ///
-    /// Returns a list of dicts with `object_id`, `alarm_state`, `acknowledged_transitions`.
+    /// Returns a list of dicts with `object_id`, `alarm_state` (an `EventState`) and
+    /// `acknowledged_transitions` (a `BitString` naming `TO_OFFNORMAL`, `TO_FAULT`, `TO_NORMAL`).
     #[pyo3(signature = (address,))]
     fn get_alarm_summary<'py>(
         &self,
@@ -124,14 +125,12 @@ impl BACnetClient {
                             inner: entry.alarm_state,
                         },
                     )?;
-                    // Keep the raw bit-string shape: three defined bits, five unused.
-                    let trans_dict = PyDict::new(py);
-                    trans_dict.set_item("unused_bits", 5u8)?;
-                    trans_dict.set_item(
-                        "data",
-                        PyBytes::new(py, &[entry.acknowledged_transitions.to_bacnet()]),
+                    dict.set_item(
+                        "acknowledged_transitions",
+                        crate::types::PyBitString::event_transitions(
+                            entry.acknowledged_transitions,
+                        ),
                     )?;
-                    dict.set_item("acknowledged_transitions", trans_dict)?;
                     list.append(dict)?;
                 }
                 Ok(list.into_any().unbind())

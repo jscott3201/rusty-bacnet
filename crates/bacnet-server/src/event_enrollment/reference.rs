@@ -4,8 +4,8 @@ use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetEvent
 use bacnet_types::enums::{EventType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
-use super::support::classify_required_property_read_error;
 use super::LocalConfigurationReadError;
+use super::support::classify_required_property_read_error;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct MonitoredReference {

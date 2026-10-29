@@ -428,11 +428,7 @@ pub async fn read_log_page<R: LogRequester + ?Sized>(
                 // Either way the record asked for next is one the counts
                 // say the log holds.
                 asked_while_held = true;
-                if held {
-                    asked
-                } else {
-                    oldest
-                }
+                if held { asked } else { oldest }
             }
             _ => return page(space, LogCursor::Sequence(asked), reply, None),
         };
@@ -497,7 +493,7 @@ pub(crate) fn page(
         None => {
             return Err(Error::ReadRangeViolation(
                 ReadRangeViolation::PropertyMismatch,
-            ))
+            ));
         }
     };
     let returned = u64::from(ack.item_count);

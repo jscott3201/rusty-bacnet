@@ -10,7 +10,7 @@ import { release, repository } from '../../../lib/site.mjs';
 
 The `bacnet` command has a full-screen terminal UI (TUI). It discovers devices, browses their objects, watches values, and shows the B/IP, BACnet/SC and MS/TP diagnostics the one-shot commands can't. It is read-only until you arm a write session.
 
-**These pages describe v{release}.** From this release the TUI is built by default, plain `bacnet` on a terminal opens it, and the old interactive shell is gone; the [upgrade guide](/rusty-bacnet/project/upgrading/#cli-and-tui) lists what that changes for scripts. The screenshots come from a loopback lab, not a real site.
+**These pages describe v{release}.** The TUI is built by default and plain `bacnet` on a terminal opens it. It replaced the old interactive shell a release ago, and [that release's upgrade guide](/rusty-bacnet/project/upgrading/v0-14/#cli-and-tui) lists what the change meant for scripts; [this release's](/rusty-bacnet/project/upgrading/v0-15/#cli-and-tui) lists what has changed since. The screenshots come from a loopback lab, not a real site.
 
 ## Install it
 
@@ -65,7 +65,7 @@ Number keys switch screens. The strip shows Network once a session is connected 
 
 ## The command bar, help and the log
 
-- `:` opens the command bar on the footer line. It runs `watch`, `csv`, `writem`, `bbmd`, `find` and `mstp` commands, and shows the syntax of the ones that match what you type. Enter runs the line; Esc closes it. The [key reference](/rusty-bacnet/tui/keys/#command-bar) lists every command.
+- `:` opens the command bar on the footer line. It runs `watch`, `csv`, `writem`, `bbmd`, `find`, `mstp`, `dcc` and `reinit` commands, and shows the syntax of the ones that match what you type. Enter runs the line; Esc closes it. The [key reference](/rusty-bacnet/tui/keys/#command-bar) lists every command.
 - `?` opens the help overlay: the keys that work everywhere, then the current screen's keys, then the command bar's commands. The movement keys scroll it when it doesn't fit; `?` or Esc closes it.
 - `L` shows or hides the log pane. It holds the latest log lines: connects, Who-Is requests, subscriptions and errors. `--log-file FILE` also appends them to a file, and `-v` or `-vv` raises the level to debug or trace.
 

@@ -5,7 +5,7 @@
 
 use core::mem::size_of;
 
-use firmware_link::bbmd::{run, BbmdTables, Memory, Summary, EXPECTED};
+use firmware_link::bbmd::{BbmdTables, EXPECTED, Memory, Summary, run};
 
 /// The whole summary against the one the emulation build checks too
 /// (`firmware_link::bbmd::EXPECTED`, which explains each value).

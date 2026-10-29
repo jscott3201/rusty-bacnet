@@ -1,0 +1,1772 @@
+[
+  {
+    "phase": "acceptance",
+    "name": "encoding-A-01",
+    "label": "A",
+    "kind": "encoding",
+    "started": "2026-10-21T18:34:09.582936+00:00",
+    "ended": "2026-10-21T18:34:26.674224+00:00",
+    "exit_code": 0,
+    "load_before": [
+      0.919921875,
+      1.3525390625,
+      1.9228515625
+    ],
+    "load_after": [
+      1.009765625,
+      1.34521484375,
+      1.90576171875
+    ],
+    "free_bytes_before": 158127448064,
+    "out_sha256": "d056b22418b9db179ad445817bdf0b9646938439cc22fb16b5d650298e012e47",
+    "err_sha256": "047dec3bcca6b227c1f2cee924b7b9da8ff46b869f3ed2bfb3ce0e7dde46335f",
+    "artifact": "A-encoding",
+    "arguments": [
+      "--bench",
+      "^(decode_npdu_100b_payload|full_stack_encode_rp)$",
+      "--sample-size",
+      "100",
+      "--warm-up-time",
+      "3",
+      "--measurement-time",
+      "5",
+      "--noplot",
+      "--save-baseline",
+      "1979-encoding-A-01"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "encoding-C-01",
+    "label": "C",
+    "kind": "encoding",
+    "started": "2026-10-21T18:34:26.677991+00:00",
+    "ended": "2026-10-21T18:34:44.999675+00:00",
+    "exit_code": 0,
+    "load_before": [
+      1.009765625,
+      1.34521484375,
+      1.90576171875
+    ],
+    "load_after": [
+      1.5673828125,
+      1.44384765625,
+      1.9306640625
+    ],
+    "free_bytes_before": 158127292416,
+    "out_sha256": "77edacc3b3c9824e7a6229bdd44b37df2599c127d23c76d1f78582f0930edd7e",
+    "err_sha256": "7f6760dde0757b144fcf59f4f87be0e072a3b423efbaa51685a9969696a1c072",
+    "artifact": "C-encoding",
+    "arguments": [
+      "--bench",
+      "^(decode_npdu_100b_payload|full_stack_encode_rp)$",
+      "--sample-size",
+      "100",
+      "--warm-up-time",
+      "3",
+      "--measurement-time",
+      "5",
+      "--noplot",
+      "--save-baseline",
+      "1979-encoding-C-01"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "encoding-C-02",
+    "label": "C",
+    "kind": "encoding",
+    "started": "2026-10-21T18:34:45.003169+00:00",
+    "ended": "2026-10-21T18:35:03.297312+00:00",
+    "exit_code": 0,
+    "load_before": [
+      1.5673828125,
+      1.44384765625,
+      1.9306640625
+    ],
+    "load_after": [
+      1.4052734375,
+      1.4140625,
+      1.90771484375
+    ],
+    "free_bytes_before": 158127751168,
+    "out_sha256": "612012c4c60264e61d6b356501d7a2fecb0b4f537fe347f5ed8fcdd5c06d6de4",
+    "err_sha256": "c035b6d5705df79e5a4a24b09e5bd8aa86212e9a37cd366b270a4936bc22807b",
+    "artifact": "C-encoding",
+    "arguments": [
+      "--bench",
+      "^(decode_npdu_100b_payload|full_stack_encode_rp)$",
+      "--sample-size",
+      "100",
+      "--warm-up-time",
+      "3",
+      "--measurement-time",
+      "5",
+      "--noplot",
+      "--save-baseline",
+      "1979-encoding-C-02"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "encoding-A-02",
+    "label": "A",
+    "kind": "encoding",
+    "started": "2026-10-21T18:35:03.301184+00:00",
+    "ended": "2026-10-21T18:35:20.234947+00:00",
+    "exit_code": 0,
+    "load_before": [
+      1.4052734375,
+      1.4140625,
+      1.90771484375
+    ],
+    "load_after": [
+      2.19873046875,
+      1.5888671875,
+      1.96142578125
+    ],
+    "free_bytes_before": 158127198208,
+    "out_sha256": "b4592b6b01b450c1298130b63a93f947c0e4e4e13046c330a6e68240e007ff0a",
+    "err_sha256": "06600c9c6d09de6d2be7d01ab3ddef7f66ebccd8d4602d4cc54224114a2fd912",
+    "artifact": "A-encoding",
+    "arguments": [
+      "--bench",
+      "^(decode_npdu_100b_payload|full_stack_encode_rp)$",
+      "--sample-size",
+      "100",
+      "--warm-up-time",
+      "3",
+      "--measurement-time",
+      "5",
+      "--noplot",
+      "--save-baseline",
+      "1979-encoding-A-02"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "encoding-A-03",
+    "label": "A",
+    "kind": "encoding",
+    "started": "2026-10-21T18:35:20.238844+00:00",
+    "ended": "2026-10-21T18:35:37.162157+00:00",
+    "exit_code": 0,
+    "load_before": [
+      2.19873046875,
+      1.5888671875,
+      1.96142578125
+    ],
+    "load_after": [
+      1.92529296875,
+      1.56591796875,
+      1.94384765625
+    ],
+    "free_bytes_before": 158126436352,
+    "out_sha256": "df894398511dc5400b848c35502aecc2c5fa47ebf4ed702f37955858033870ed",
+    "err_sha256": "b6160ce3a04da4ac158644b2844767d302a700c19536f1205e3c450731dcc6ce",
+    "artifact": "A-encoding",
+    "arguments": [
+      "--bench",
+      "^(decode_npdu_100b_payload|full_stack_encode_rp)$",
+      "--sample-size",
+      "100",
+      "--warm-up-time",
+      "3",
+      "--measurement-time",
+      "5",
+      "--noplot",
+      "--save-baseline",
+      "1979-encoding-A-03"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "encoding-C-03",
+    "label": "C",
+    "kind": "encoding",
+    "started": "2026-10-21T18:35:37.166148+00:00",
+    "ended": "2026-10-21T18:35:55.456117+00:00",
+    "exit_code": 0,
+    "load_before": [
+      1.92529296875,
+      1.56591796875,
+      1.94384765625
+    ],
+    "load_after": [
+      2.45654296875,
+      1.70068359375,
+      1.98486328125
+    ],
+    "free_bytes_before": 158126243840,
+    "out_sha256": "fcb58a3a00e9bf8e36870abc348b81ded420ee7d0c3a15744b01e1be52420fb3",
+    "err_sha256": "f0b95b9ed1cdce09227853cc2a85e3f29832468827e6729aba7cc52b5540c9b9",
+    "artifact": "C-encoding",
+    "arguments": [
+      "--bench",
+      "^(decode_npdu_100b_payload|full_stack_encode_rp)$",
+      "--sample-size",
+      "100",
+      "--warm-up-time",
+      "3",
+      "--measurement-time",
+      "5",
+      "--noplot",
+      "--save-baseline",
+      "1979-encoding-C-03"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "encoding-C-04",
+    "label": "C",
+    "kind": "encoding",
+    "started": "2026-10-21T18:35:55.459888+00:00",
+    "ended": "2026-10-21T18:36:13.943997+00:00",
+    "exit_code": 0,
+    "load_before": [
+      2.45654296875,
+      1.70068359375,
+      1.98486328125
+    ],
+    "load_after": [
+      2.10498046875,
+      1.67041015625,
+      1.96728515625
+    ],
+    "free_bytes_before": 158125969408,
+    "out_sha256": "2ffaec540c1c32c5a044f4294111769cbad7857f4a17ec514db5ef93c90f1ad6",
+    "err_sha256": "6723c3d35dc0bdd35966d561710173b307d47bc85ca210b3f9f7ba828bc36f11",
+    "artifact": "C-encoding",
+    "arguments": [
+      "--bench",
+      "^(decode_npdu_100b_payload|full_stack_encode_rp)$",
+      "--sample-size",
+      "100",
+      "--warm-up-time",
+      "3",
+      "--measurement-time",
+      "5",
+      "--noplot",
+      "--save-baseline",
+      "1979-encoding-C-04"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "encoding-A-04",
+    "label": "A",
+    "kind": "encoding",
+    "started": "2026-10-21T18:36:13.947768+00:00",
+    "ended": "2026-10-21T18:36:30.881701+00:00",
+    "exit_code": 0,
+    "load_before": [
+      2.10498046875,
+      1.67041015625,
+      1.96728515625
+    ],
+    "load_after": [
+      1.859375,
+      1.63671875,
+      1.94970703125
+    ],
+    "free_bytes_before": 158112346112,
+    "out_sha256": "7098812611d436a624c26a8e1d12a45b099c46c18f319b4fda593628ccfc69bc",
+    "err_sha256": "bf511c1bf604cff9c06f490d5a8b57a5c8c4dcbf0d3aa52501799e4b336e3587",
+    "artifact": "A-encoding",
+    "arguments": [
+      "--bench",
+      "^(decode_npdu_100b_payload|full_stack_encode_rp)$",
+      "--sample-size",
+      "100",
+      "--warm-up-time",
+      "3",
+      "--measurement-time",
+      "5",
+      "--noplot",
+      "--save-baseline",
+      "1979-encoding-A-04"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "encoding-A-05",
+    "label": "A",
+    "kind": "encoding",
+    "started": "2026-10-21T18:36:30.885568+00:00",
+    "ended": "2026-10-21T18:36:47.831112+00:00",
+    "exit_code": 0,
+    "load_before": [
+      1.859375,
+      1.63671875,
+      1.94970703125
+    ],
+    "load_after": [
+      1.61474609375,
+      1.5947265625,
+      1.92626953125
+    ],
+    "free_bytes_before": 158081277952,
+    "out_sha256": "6000791d527a1547552006da310c41da338048cc6cfa79c5fbad5f96ffa417ce",
+    "err_sha256": "7af19f007e9d2c27cc1cbc5f0e9f0d2c7301e8afb3fb2e8d750c17e304dcf6b4",
+    "artifact": "A-encoding",
+    "arguments": [
+      "--bench",
+      "^(decode_npdu_100b_payload|full_stack_encode_rp)$",
+      "--sample-size",
+      "100",
+      "--warm-up-time",
+      "3",
+      "--measurement-time",
+      "5",
+      "--noplot",
+      "--save-baseline",
+      "1979-encoding-A-05"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "encoding-C-05",
+    "label": "C",
+    "kind": "encoding",
+    "started": "2026-10-21T18:36:47.835280+00:00",
+    "ended": "2026-10-21T18:37:05.996995+00:00",
+    "exit_code": 0,
+    "load_before": [
+      1.61474609375,
+      1.5947265625,
+      1.92626953125
+    ],
+    "load_after": [
+      1.47802734375,
+      1.56494140625,
+      1.9091796875
+    ],
+    "free_bytes_before": 158079815680,
+    "out_sha256": "056a3db85de8feb09ad10a8714e601dee017fada1350c11c99b491cbbd1b28f8",
+    "err_sha256": "24728a47d155837dcd05ebbc29dc8e2169da83e3a1808956ccd6e1c9603fb22e",
+    "artifact": "C-encoding",
+    "arguments": [
+      "--bench",
+      "^(decode_npdu_100b_payload|full_stack_encode_rp)$",
+      "--sample-size",
+      "100",
+      "--warm-up-time",
+      "3",
+      "--measurement-time",
+      "5",
+      "--noplot",
+      "--save-baseline",
+      "1979-encoding-C-05"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "encoding-C-06",
+    "label": "C",
+    "kind": "encoding",
+    "started": "2026-10-21T18:37:06.000985+00:00",
+    "ended": "2026-10-21T18:37:24.141545+00:00",
+    "exit_code": 0,
+    "load_before": [
+      1.47802734375,
+      1.56494140625,
+      1.9091796875
+    ],
+    "load_after": [
+      1.34130859375,
+      1.52734375,
+      1.8876953125
+    ],
+    "free_bytes_before": 158079385600,
+    "out_sha256": "ceb036d4626a9a987ff1583b3b1be20299f919016d3f78e852cdcb53d6fc54fe",
+    "err_sha256": "01d8a9adc1eef6e9c192def76383a8f7b63fecdd3f508064156b9db73e34d507",
+    "artifact": "C-encoding",
+    "arguments": [
+      "--bench",
+      "^(decode_npdu_100b_payload|full_stack_encode_rp)$",
+      "--sample-size",
+      "100",
+      "--warm-up-time",
+      "3",
+      "--measurement-time",
+      "5",
+      "--noplot",
+      "--save-baseline",
+      "1979-encoding-C-06"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "encoding-A-06",
+    "label": "A",
+    "kind": "encoding",
+    "started": "2026-10-21T18:37:24.146015+00:00",
+    "ended": "2026-10-21T18:37:41.227447+00:00",
+    "exit_code": 0,
+    "load_before": [
+      1.34130859375,
+      1.52734375,
+      1.8876953125
+    ],
+    "load_after": [
+      1.42529296875,
+      1.5341796875,
+      1.88330078125
+    ],
+    "free_bytes_before": 158080856064,
+    "out_sha256": "3022544ac40d6fa8d1be9d60189f5b81a0f92d6b4db23a78e43f4ead36488edf",
+    "err_sha256": "8205e45da7eda0b53304c96c364a4d2edc52d53998f2e33fc2ff1df6ee9a8d43",
+    "artifact": "A-encoding",
+    "arguments": [
+      "--bench",
+      "^(decode_npdu_100b_payload|full_stack_encode_rp)$",
+      "--sample-size",
+      "100",
+      "--warm-up-time",
+      "3",
+      "--measurement-time",
+      "5",
+      "--noplot",
+      "--save-baseline",
+      "1979-encoding-A-06"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "curve-A",
+    "label": "A",
+    "kind": "curve",
+    "started": "2026-10-21T18:37:41.234446+00:00",
+    "ended": "2026-10-21T18:38:23.010458+00:00",
+    "exit_code": 0,
+    "load_before": [
+      1.42529296875,
+      1.5341796875,
+      1.88330078125
+    ],
+    "load_after": [
+      4.48046875,
+      2.3037109375,
+      2.14599609375
+    ],
+    "free_bytes_before": 158081163264,
+    "out_sha256": "97791001d67caa14f3d9aed46b794a1e070759bacfe027d11d572b9d1271f4f5",
+    "err_sha256": "f201a0d61b05a75244f54f3909da392ca4ae9cd8f8ee02ca032d86bf99e83aca",
+    "artifact": "A-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "1,10,50,100"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "curve-B",
+    "label": "B",
+    "kind": "curve",
+    "started": "2026-10-21T18:38:23.019881+00:00",
+    "ended": "2026-10-21T18:39:06.490215+00:00",
+    "exit_code": 0,
+    "load_before": [
+      4.48046875,
+      2.3037109375,
+      2.14599609375
+    ],
+    "load_after": [
+      5.75439453125,
+      2.86865234375,
+      2.35693359375
+    ],
+    "free_bytes_before": 158080380928,
+    "out_sha256": "868e936a1fe53b6979a42c0680f0a4f27b1b53646662489da00163d5477ff2e7",
+    "err_sha256": "f99a46965e1dc382a3b9c06e6338fc5bc89c5496570ee7bc30d4b09c3da5407a",
+    "artifact": "B-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "1,10,50,100"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "curve-C",
+    "label": "C",
+    "kind": "curve",
+    "started": "2026-10-21T18:39:06.499853+00:00",
+    "ended": "2026-10-21T18:39:50.801262+00:00",
+    "exit_code": 0,
+    "load_before": [
+      5.75439453125,
+      2.86865234375,
+      2.35693359375
+    ],
+    "load_after": [
+      6.5751953125,
+      3.46630859375,
+      2.60009765625
+    ],
+    "free_bytes_before": 158079434752,
+    "out_sha256": "8417ffa53d9cbf373a7eeba4e2ceae081dbb396a09ce63b52b41621d6e029264",
+    "err_sha256": "821f95f48dcd65ddd0942b0c8d77c8b538563b286c867a35c441f66a9bbd1137",
+    "artifact": "C-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "1,10,50,100"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "clients-A-01",
+    "label": "A",
+    "kind": "stress",
+    "started": "2026-10-21T18:39:50.810848+00:00",
+    "ended": "2026-10-21T18:40:04.944771+00:00",
+    "exit_code": 0,
+    "load_before": [
+      6.5751953125,
+      3.46630859375,
+      2.60009765625
+    ],
+    "load_after": [
+      6.44677734375,
+      3.60302734375,
+      2.6640625
+    ],
+    "free_bytes_before": 158089039872,
+    "out_sha256": "153b1fd9bf9743ffb607622b82d5ae373335ca34d292cc5c022d213c78fb2e4a",
+    "err_sha256": "36cb18ad84d9705b8172760ff3f86c585f443e403e05d7ce4b25981f5189315a",
+    "artifact": "A-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "100"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "clients-B-01",
+    "label": "B",
+    "kind": "stress",
+    "started": "2026-10-21T18:40:04.954107+00:00",
+    "ended": "2026-10-21T18:40:18.735564+00:00",
+    "exit_code": 0,
+    "load_before": [
+      6.44677734375,
+      3.60302734375,
+      2.6640625
+    ],
+    "load_after": [
+      6.580078125,
+      3.7822265625,
+      2.74462890625
+    ],
+    "free_bytes_before": 158089289728,
+    "out_sha256": "e6721b742b31e4a9afdf6060a92ee666260a43c09bfbc30387f4eb8e55d5e568",
+    "err_sha256": "990cfb5593785399f56e5143135ca78afd9574d04504a95f535fb27dccbd3f96",
+    "artifact": "B-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "100"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "clients-C-01",
+    "label": "C",
+    "kind": "stress",
+    "started": "2026-10-21T18:40:18.744931+00:00",
+    "ended": "2026-10-21T18:40:32.475418+00:00",
+    "exit_code": 0,
+    "load_before": [
+      6.580078125,
+      3.7822265625,
+      2.74462890625
+    ],
+    "load_after": [
+      6.5478515625,
+      3.9208984375,
+      2.8125
+    ],
+    "free_bytes_before": 158089003008,
+    "out_sha256": "b3e372c5550cf69b785a53f7dfb90deff2165fabe13902d615975a4a339eae28",
+    "err_sha256": "163641cf538af45a3c71dbba20c1410d7a588f6b48548e44656c5f1306eb1b04",
+    "artifact": "C-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "100"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "clients-C-02",
+    "label": "C",
+    "kind": "stress",
+    "started": "2026-10-21T18:40:32.484877+00:00",
+    "ended": "2026-10-21T18:40:45.846598+00:00",
+    "exit_code": 0,
+    "load_before": [
+      6.5478515625,
+      3.9208984375,
+      2.8125
+    ],
+    "load_after": [
+      6.77734375,
+      4.0546875,
+      2.87255859375
+    ],
+    "free_bytes_before": 158088843264,
+    "out_sha256": "e7267b22303895e64e4820f5c95051324ce2988a36b2fae03f8bb2ce6dd6ba55",
+    "err_sha256": "92bd545e701b580314b6770c3387df418cbbf5f269153ec2eed48381abdf27a5",
+    "artifact": "C-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "100"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "clients-B-02",
+    "label": "B",
+    "kind": "stress",
+    "started": "2026-10-21T18:40:45.856295+00:00",
+    "ended": "2026-10-21T18:40:58.372997+00:00",
+    "exit_code": 0,
+    "load_before": [
+      6.77734375,
+      4.0546875,
+      2.87255859375
+    ],
+    "load_after": [
+      6.83740234375,
+      4.2119140625,
+      2.94970703125
+    ],
+    "free_bytes_before": 158088650752,
+    "out_sha256": "43d291435fd45ac405c4e0b84af2e65a81b6d10afa9ffb2ab85e5e28ed5e833f",
+    "err_sha256": "4f943df50271a7b7a196a33d20673d06be5d9a7d990af0075e34afb558e64891",
+    "artifact": "B-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "100"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "clients-A-02",
+    "label": "A",
+    "kind": "stress",
+    "started": "2026-10-21T18:40:58.381647+00:00",
+    "ended": "2026-10-21T18:41:11.954596+00:00",
+    "exit_code": 0,
+    "load_before": [
+      6.83740234375,
+      4.2119140625,
+      2.94970703125
+    ],
+    "load_after": [
+      6.81591796875,
+      4.34521484375,
+      3.01953125
+    ],
+    "free_bytes_before": 158087462912,
+    "out_sha256": "bb97c5bfe2916fc0b3449b06d18e20b0e15bf52626bdccb931ec3038d56d47f7",
+    "err_sha256": "e58b44e49e68d45958c4fe2e42fb9c1e18336f2798e8dd9446c0f2ba30ae77dc",
+    "artifact": "A-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "100"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "clients-A-03",
+    "label": "A",
+    "kind": "stress",
+    "started": "2026-10-21T18:41:11.964083+00:00",
+    "ended": "2026-10-21T18:41:24.646924+00:00",
+    "exit_code": 0,
+    "load_before": [
+      6.81591796875,
+      4.34521484375,
+      3.01953125
+    ],
+    "load_after": [
+      7.14501953125,
+      4.498046875,
+      3.0888671875
+    ],
+    "free_bytes_before": 158087311360,
+    "out_sha256": "39e61b08a366e5d1a54c1fd7bd532839241eb6f5eb0764373d79db1288062278",
+    "err_sha256": "51dab0c12933c70b2908391d2becd0fe7aad8dd16bd6d3d1bce553a5456b9e99",
+    "artifact": "A-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "100"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "clients-B-03",
+    "label": "B",
+    "kind": "stress",
+    "started": "2026-10-21T18:41:24.656405+00:00",
+    "ended": "2026-10-21T18:41:35.374315+00:00",
+    "exit_code": 0,
+    "load_before": [
+      7.14501953125,
+      4.498046875,
+      3.0888671875
+    ],
+    "load_after": [
+      7.509765625,
+      4.66259765625,
+      3.1630859375
+    ],
+    "free_bytes_before": 158087307264,
+    "out_sha256": "966f674316235cf04b59cc665623142f270e3c5d1fdbb320a775e496bda0b2a7",
+    "err_sha256": "7a4634157b6ce78061644b728c4af8567af0b8dd52d4f17ca679a469e6deac63",
+    "artifact": "B-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "100"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "clients-C-03",
+    "label": "C",
+    "kind": "stress",
+    "started": "2026-10-21T18:41:35.383463+00:00",
+    "ended": "2026-10-21T18:41:48.283474+00:00",
+    "exit_code": 0,
+    "load_before": [
+      7.509765625,
+      4.66259765625,
+      3.1630859375
+    ],
+    "load_after": [
+      7.45751953125,
+      4.80517578125,
+      3.24072265625
+    ],
+    "free_bytes_before": 158086377472,
+    "out_sha256": "a3d1d1f55b167d71b5e33dcc21dcf5d75b5a284eb52d804333b7137b80369648",
+    "err_sha256": "2e39f8321e0d19bccde2336bea3fe6d47a085fba318cc4ca0c18225c87a3e1b1",
+    "artifact": "C-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "100"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "clients-C-04",
+    "label": "C",
+    "kind": "stress",
+    "started": "2026-10-21T18:41:48.293521+00:00",
+    "ended": "2026-10-21T18:42:01.917528+00:00",
+    "exit_code": 0,
+    "load_before": [
+      7.45751953125,
+      4.80517578125,
+      3.24072265625
+    ],
+    "load_after": [
+      7.3603515625,
+      4.92529296875,
+      3.3115234375
+    ],
+    "free_bytes_before": 158086053888,
+    "out_sha256": "9fd057027583839f6f4d27ab8de7c86a43446743e79070278d692fe5db092257",
+    "err_sha256": "64d14a990630ff5f8f0479e8bed04dffc3811e302ecf1c2b8845525382e9fe32",
+    "artifact": "C-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "100"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "clients-B-04",
+    "label": "B",
+    "kind": "stress",
+    "started": "2026-10-21T18:42:01.926925+00:00",
+    "ended": "2026-10-21T18:42:13.425271+00:00",
+    "exit_code": 0,
+    "load_before": [
+      7.3603515625,
+      4.92529296875,
+      3.3115234375
+    ],
+    "load_after": [
+      6.93603515625,
+      4.91162109375,
+      3.3251953125
+    ],
+    "free_bytes_before": 158084055040,
+    "out_sha256": "25691f124d5f73b8bae2a7b10fd77b6f6c1cfe62f8d2c1dbf0e6c3392c509727",
+    "err_sha256": "f60b761c749d7088e6785d90e912e0730a01847972a20f3b26ffb2d1a0eb6c6c",
+    "artifact": "B-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "100"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "clients-A-04",
+    "label": "A",
+    "kind": "stress",
+    "started": "2026-10-21T18:42:13.434559+00:00",
+    "ended": "2026-10-21T18:42:25.510410+00:00",
+    "exit_code": 0,
+    "load_before": [
+      6.93603515625,
+      4.91162109375,
+      3.3251953125
+    ],
+    "load_after": [
+      7.14697265625,
+      5.0283203125,
+      3.38525390625
+    ],
+    "free_bytes_before": 158084001792,
+    "out_sha256": "f1fd7ecfcd89a8ea6ec538fda0b7fc03caa6014a569b02a2aa41fe618e63eaba",
+    "err_sha256": "8027a28bc413734fdd341163a7cc6f3893ddf65714387aaa1030aae9ebfec15f",
+    "artifact": "A-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "100"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "clients-A-05",
+    "label": "A",
+    "kind": "stress",
+    "started": "2026-10-21T18:42:25.519989+00:00",
+    "ended": "2026-10-21T18:42:40.378012+00:00",
+    "exit_code": 0,
+    "load_before": [
+      7.14697265625,
+      5.0283203125,
+      3.38525390625
+    ],
+    "load_after": [
+      6.830078125,
+      5.07275390625,
+      3.4296875
+    ],
+    "free_bytes_before": 158086852608,
+    "out_sha256": "a02fa63374ebed0aadeeed109f7b966a46f57a8cc7933d50543fd1af160bde99",
+    "err_sha256": "b4fb9d8e470d177d41e3b77cc7e1bcaeb98e71b8fb461d1290535758c323fb4e",
+    "artifact": "A-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "100"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "clients-B-05",
+    "label": "B",
+    "kind": "stress",
+    "started": "2026-10-21T18:42:40.387355+00:00",
+    "ended": "2026-10-21T18:42:51.686016+00:00",
+    "exit_code": 0,
+    "load_before": [
+      6.830078125,
+      5.07275390625,
+      3.4296875
+    ],
+    "load_after": [
+      6.66943359375,
+      5.1318359375,
+      3.4794921875
+    ],
+    "free_bytes_before": 158085140480,
+    "out_sha256": "2b8a76c3b43dd1c7b5cce74abd04eafbe72369fa523c037f8db0d3f41b422c3b",
+    "err_sha256": "af86c766794a59b600aa93765919fc98c3229284376742ce807038e980ca738c",
+    "artifact": "B-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "100"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "clients-C-05",
+    "label": "C",
+    "kind": "stress",
+    "started": "2026-10-21T18:42:51.695125+00:00",
+    "ended": "2026-10-21T18:43:04.366871+00:00",
+    "exit_code": 0,
+    "load_before": [
+      6.66943359375,
+      5.1318359375,
+      3.4794921875
+    ],
+    "load_after": [
+      7.02099609375,
+      5.25830078125,
+      3.54345703125
+    ],
+    "free_bytes_before": 158084911104,
+    "out_sha256": "5043153b2985fc742b4990b403732fbcc4cd3ec8f109561e8f36c5dc5c06607c",
+    "err_sha256": "dade9692c5d4cc25ceddac7f04c37aa89d5c754fcc40ba1f3b8702976114c569",
+    "artifact": "C-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "100"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "clients-C-06",
+    "label": "C",
+    "kind": "stress",
+    "started": "2026-10-21T18:43:04.375887+00:00",
+    "ended": "2026-10-21T18:43:16.514364+00:00",
+    "exit_code": 0,
+    "load_before": [
+      7.02099609375,
+      5.25830078125,
+      3.54345703125
+    ],
+    "load_after": [
+      6.99169921875,
+      5.31396484375,
+      3.5830078125
+    ],
+    "free_bytes_before": 158084784128,
+    "out_sha256": "4d42ded703304ccaec759ca1a402292b38f76899881181cbe7f0ab375d1eb9e7",
+    "err_sha256": "df25f9e4c14af0d4d6b67b46a8277a9aea3f081729e8ec063545035d150861b0",
+    "artifact": "C-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "100"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "clients-B-06",
+    "label": "B",
+    "kind": "stress",
+    "started": "2026-10-21T18:43:16.524425+00:00",
+    "ended": "2026-10-21T18:43:28.284193+00:00",
+    "exit_code": 0,
+    "load_before": [
+      6.99169921875,
+      5.31396484375,
+      3.5830078125
+    ],
+    "load_after": [
+      7.00390625,
+      5.4091796875,
+      3.6474609375
+    ],
+    "free_bytes_before": 158084562944,
+    "out_sha256": "59a104809a5a5e95db7b9b884dafa8619886a3d2cd734eb878f1f8dccc78d340",
+    "err_sha256": "56061a84cbf13eb23070a6ab35639f53c0e669fed6de0b81281f7e874e890bca",
+    "artifact": "B-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "100"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "clients-A-06",
+    "label": "A",
+    "kind": "stress",
+    "started": "2026-10-21T18:43:28.293574+00:00",
+    "ended": "2026-10-21T18:43:41.949950+00:00",
+    "exit_code": 0,
+    "load_before": [
+      7.00390625,
+      5.4091796875,
+      3.6474609375
+    ],
+    "load_after": [
+      7.013671875,
+      5.5,
+      3.7109375
+    ],
+    "free_bytes_before": 158082273280,
+    "out_sha256": "1bfd69d1263a34bcbe24f6e037851925a2537df4c7abf123d3d0ba0dafcb9c76",
+    "err_sha256": "be5faf973401299224b01fdfd79b05f41ad4ab0e7e2299cd1df2ae4464ae0daa",
+    "artifact": "A-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "100"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "clients-A-07",
+    "label": "A",
+    "kind": "stress",
+    "started": "2026-10-21T18:43:41.959034+00:00",
+    "ended": "2026-10-21T18:43:52.723042+00:00",
+    "exit_code": 0,
+    "load_before": [
+      7.013671875,
+      5.5,
+      3.7109375
+    ],
+    "load_after": [
+      7.55224609375,
+      5.66455078125,
+      3.7900390625
+    ],
+    "free_bytes_before": 158084780032,
+    "out_sha256": "51aa5712f843fe15000fbc5c82bb2175416f82d494739f2ac51c6b588ecf7940",
+    "err_sha256": "a6e88f888a6351cc0cd7a842842a33ed01106dc6eb753855aea0e37120071d6a",
+    "artifact": "A-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "100"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "clients-B-07",
+    "label": "B",
+    "kind": "stress",
+    "started": "2026-10-21T18:43:52.732678+00:00",
+    "ended": "2026-10-21T18:44:06.975844+00:00",
+    "exit_code": 0,
+    "load_before": [
+      7.55224609375,
+      5.66455078125,
+      3.7900390625
+    ],
+    "load_after": [
+      8.296875,
+      5.92431640625,
+      3.9150390625
+    ],
+    "free_bytes_before": 158084579328,
+    "out_sha256": "e442902bf34c0225bc24505ca480a0ffbb96a43276a8d9928dcd8f9d3e8a9086",
+    "err_sha256": "71b8a0ea449432dac0082e4f374c50be1b87eb66625846e398e38cdc01861e12",
+    "artifact": "B-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "100"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "clients-C-07",
+    "label": "C",
+    "kind": "stress",
+    "started": "2026-10-21T18:44:06.984151+00:00",
+    "ended": "2026-10-21T18:44:19.356377+00:00",
+    "exit_code": 0,
+    "load_before": [
+      8.296875,
+      5.92431640625,
+      3.9150390625
+    ],
+    "load_after": [
+      9.6025390625,
+      6.287109375,
+      4.0673828125
+    ],
+    "free_bytes_before": 158084521984,
+    "out_sha256": "d12fe3c5e46f721b32a5f758b3fb2e7df86f0a82706363009f58be7a80c2f1f8",
+    "err_sha256": "e2d847a40fd754546afb941835b97bb0866ae4487237ae08dab3375c3b453597",
+    "artifact": "C-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "100"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "clients-C-08",
+    "label": "C",
+    "kind": "stress",
+    "started": "2026-10-21T18:44:19.365724+00:00",
+    "ended": "2026-10-21T18:44:30.963866+00:00",
+    "exit_code": 0,
+    "load_before": [
+      9.6025390625,
+      6.287109375,
+      4.0673828125
+    ],
+    "load_after": [
+      9.490234375,
+      6.37548828125,
+      4.12451171875
+    ],
+    "free_bytes_before": 158085251072,
+    "out_sha256": "149ebe23636a3d5f980ad796b0a08e7b4d6f39ca8f14b97c48e1918d2bf159d9",
+    "err_sha256": "fa092afd8c9462d860af2e3db873b6578687283ce1cd7733ce2f558ec62b2ad7",
+    "artifact": "C-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "100"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "clients-B-08",
+    "label": "B",
+    "kind": "stress",
+    "started": "2026-10-21T18:44:30.973230+00:00",
+    "ended": "2026-10-21T18:44:43.291823+00:00",
+    "exit_code": 0,
+    "load_before": [
+      9.490234375,
+      6.37548828125,
+      4.12451171875
+    ],
+    "load_after": [
+      8.8134765625,
+      6.38720703125,
+      4.16796875
+    ],
+    "free_bytes_before": 158084833280,
+    "out_sha256": "cebab7ac6de320f08935f0acce8f4231a393447df1a50ecc0d31a64b977a815f",
+    "err_sha256": "1ea116423c0caf5cf05c3b34a0d8dd719b92cc4020685fdd28bc4957d3604747",
+    "artifact": "B-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "100"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "clients-A-08",
+    "label": "A",
+    "kind": "stress",
+    "started": "2026-10-21T18:44:43.300240+00:00",
+    "ended": "2026-10-21T18:44:58.317129+00:00",
+    "exit_code": 0,
+    "load_before": [
+      8.8134765625,
+      6.38720703125,
+      4.16796875
+    ],
+    "load_after": [
+      8.34228515625,
+      6.41357421875,
+      4.21630859375
+    ],
+    "free_bytes_before": 158083522560,
+    "out_sha256": "f581ac196b9db4554aa79fdba47470f0c161cb1795bc5add702de1eec3084e7f",
+    "err_sha256": "1a5cd090e73f40f339fc9312debee2835229cfbee1acf0e5bc23679ccb69e149",
+    "artifact": "A-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "100"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "clients-A-09",
+    "label": "A",
+    "kind": "stress",
+    "started": "2026-10-21T18:44:58.326825+00:00",
+    "ended": "2026-10-21T18:45:10.703929+00:00",
+    "exit_code": 0,
+    "load_before": [
+      8.34228515625,
+      6.41357421875,
+      4.21630859375
+    ],
+    "load_after": [
+      8.98388671875,
+      6.61328125,
+      4.3125
+    ],
+    "free_bytes_before": 158082838528,
+    "out_sha256": "ad44f545df5287adca12ba6df9ff375863437e7de4e288cfffbad55678af2485",
+    "err_sha256": "17a19b8eb87a2dbb168ab2316953872e69c54f9379395513ce5cd70371c1f633",
+    "artifact": "A-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "100"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "clients-B-09",
+    "label": "B",
+    "kind": "stress",
+    "started": "2026-10-21T18:45:10.712801+00:00",
+    "ended": "2026-10-21T18:45:23.838109+00:00",
+    "exit_code": 0,
+    "load_before": [
+      8.98388671875,
+      6.61328125,
+      4.3125
+    ],
+    "load_after": [
+      8.62841796875,
+      6.66162109375,
+      4.3701171875
+    ],
+    "free_bytes_before": 158080499712,
+    "out_sha256": "2d3b7df5873d3d65867b59312ff25440ba0574dacca374d4a0bce0b60e3ec1c0",
+    "err_sha256": "660d227800c7bdd62d81ae7209cba662ef1edeae017761794dd0b31d3e805926",
+    "artifact": "B-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "100"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "clients-C-09",
+    "label": "C",
+    "kind": "stress",
+    "started": "2026-10-21T18:45:23.848564+00:00",
+    "ended": "2026-10-21T18:45:37.267713+00:00",
+    "exit_code": 0,
+    "load_before": [
+      8.62841796875,
+      6.66162109375,
+      4.3701171875
+    ],
+    "load_after": [
+      8.130859375,
+      6.658203125,
+      4.4091796875
+    ],
+    "free_bytes_before": 158080405504,
+    "out_sha256": "1d54d5d67f4b51095e93cd50febe43b5e144651c7498077cc0fab56e5f1a05c4",
+    "err_sha256": "b3c472aac6b7d40c0b5df537a0e2b8c23b67cb4bce70eab209129cfc3445cd7f",
+    "artifact": "C-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "100"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "clients-C-10",
+    "label": "C",
+    "kind": "stress",
+    "started": "2026-10-21T18:45:37.277007+00:00",
+    "ended": "2026-10-21T18:45:49.817453+00:00",
+    "exit_code": 0,
+    "load_before": [
+      8.130859375,
+      6.658203125,
+      4.4091796875
+    ],
+    "load_after": [
+      8.41796875,
+      6.767578125,
+      4.47412109375
+    ],
+    "free_bytes_before": 158083317760,
+    "out_sha256": "e263d98099d2eec27123595491047e236264d8f6308d93c5c99274555cee6374",
+    "err_sha256": "26403bfe5186edcb8c900054068e29349458f940aee1e007817382571127f8ec",
+    "artifact": "C-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "100"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "clients-B-10",
+    "label": "B",
+    "kind": "stress",
+    "started": "2026-10-21T18:45:49.827721+00:00",
+    "ended": "2026-10-21T18:46:03.812321+00:00",
+    "exit_code": 0,
+    "load_before": [
+      8.41796875,
+      6.767578125,
+      4.47412109375
+    ],
+    "load_after": [
+      7.966796875,
+      6.75927734375,
+      4.51123046875
+    ],
+    "free_bytes_before": 158082981888,
+    "out_sha256": "0e4440da2c7c12ac69abc38bfa731056a739ebf2a49520675022bbb91add874d",
+    "err_sha256": "99f54a4cc31f91339d17aa441e9ea435cc954f3c5a864f7ed07443cd5c398062",
+    "artifact": "B-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "100"
+    ]
+  },
+  {
+    "phase": "acceptance",
+    "name": "clients-A-10",
+    "label": "A",
+    "kind": "stress",
+    "started": "2026-10-21T18:46:03.822652+00:00",
+    "ended": "2026-10-21T18:46:17.448596+00:00",
+    "exit_code": 0,
+    "load_before": [
+      7.966796875,
+      6.75927734375,
+      4.51123046875
+    ],
+    "load_after": [
+      7.82470703125,
+      6.7998046875,
+      4.56494140625
+    ],
+    "free_bytes_before": 158082916352,
+    "out_sha256": "6978b3c7684ae2f0e91b95c0b717fed0aa1ab0fc9d8394b7a90c37b42a81e3fa",
+    "err_sha256": "73159f23c0d14b8e7aac82c5d7fceb7c889b7a4ba93971f5718792c18e442a55",
+    "artifact": "A-normalized",
+    "arguments": [
+      "clients",
+      "--transport",
+      "bip",
+      "--objects",
+      "100",
+      "--duration",
+      "10",
+      "--steps",
+      "100"
+    ]
+  },
+  {
+    "phase": "constituents",
+    "name": "constituent-A-01",
+    "label": "A",
+    "kind": "encoding",
+    "started": "2026-10-21T18:47:49.290130+00:00",
+    "ended": "2026-10-21T18:48:16.293378+00:00",
+    "exit_code": 0,
+    "load_before": [
+      2.23046875,
+      5.2099609375,
+      4.17431640625
+    ],
+    "load_after": [
+      2.54150390625,
+      5.0341796875,
+      4.1396484375
+    ],
+    "free_bytes_before": 158089551872,
+    "out_sha256": "5c42eb9055bb11053e288fa1e12de9bbbce9c96aa5f145dc8f427205aafbd49d",
+    "err_sha256": "5824d63ed06980b5f5dd79409fab74332e665491ff8bde702e13b326c10a18a4",
+    "artifact": "A-encoding",
+    "arguments": [
+      "--bench",
+      "^(encode_read_property_request|encode_apdu_confirmed_request|encode_npdu_100b_payload)$",
+      "--sample-size",
+      "100",
+      "--warm-up-time",
+      "3",
+      "--measurement-time",
+      "5",
+      "--noplot",
+      "--save-baseline",
+      "1979-constituent-A-01"
+    ]
+  },
+  {
+    "phase": "constituents",
+    "name": "constituent-C-01",
+    "label": "C",
+    "kind": "encoding",
+    "started": "2026-10-21T18:48:16.298000+00:00",
+    "ended": "2026-10-21T18:48:41.562946+00:00",
+    "exit_code": 0,
+    "load_before": [
+      2.54150390625,
+      5.0341796875,
+      4.1396484375
+    ],
+    "load_after": [
+      2.01513671875,
+      4.708984375,
+      4.04736328125
+    ],
+    "free_bytes_before": 158088355840,
+    "out_sha256": "6edd228520cfb7e590774c4d71be1f9dd0d00c523a9380551b16ad403924e1ac",
+    "err_sha256": "6349dbeeab20ad92523be0f59dfe1a49262c02aacfce3d73fc0050bd9b386a82",
+    "artifact": "C-encoding",
+    "arguments": [
+      "--bench",
+      "^(encode_read_property_request|encode_apdu_confirmed_request|encode_npdu_100b_payload)$",
+      "--sample-size",
+      "100",
+      "--warm-up-time",
+      "3",
+      "--measurement-time",
+      "5",
+      "--noplot",
+      "--save-baseline",
+      "1979-constituent-C-01"
+    ]
+  },
+  {
+    "phase": "constituents",
+    "name": "constituent-C-02",
+    "label": "C",
+    "kind": "encoding",
+    "started": "2026-10-21T18:48:41.567396+00:00",
+    "ended": "2026-10-21T18:49:07.654649+00:00",
+    "exit_code": 0,
+    "load_before": [
+      2.01513671875,
+      4.708984375,
+      4.04736328125
+    ],
+    "load_after": [
+      1.61376953125,
+      4.35400390625,
+      3.9404296875
+    ],
+    "free_bytes_before": 158091096064,
+    "out_sha256": "5c2e8ef4de625250777fdb61e926154bece64cc8921874a01b1689a84eea80df",
+    "err_sha256": "fcb974ea573e970202ccae141fde6088eb1275ce1eff7eb78ba82f5a57afd093",
+    "artifact": "C-encoding",
+    "arguments": [
+      "--bench",
+      "^(encode_read_property_request|encode_apdu_confirmed_request|encode_npdu_100b_payload)$",
+      "--sample-size",
+      "100",
+      "--warm-up-time",
+      "3",
+      "--measurement-time",
+      "5",
+      "--noplot",
+      "--save-baseline",
+      "1979-constituent-C-02"
+    ]
+  },
+  {
+    "phase": "constituents",
+    "name": "constituent-A-02",
+    "label": "A",
+    "kind": "encoding",
+    "started": "2026-10-21T18:49:07.659607+00:00",
+    "ended": "2026-10-21T18:49:34.552156+00:00",
+    "exit_code": 0,
+    "load_before": [
+      1.61376953125,
+      4.35400390625,
+      3.9404296875
+    ],
+    "load_after": [
+      1.84814453125,
+      4.18115234375,
+      3.888671875
+    ],
+    "free_bytes_before": 158090649600,
+    "out_sha256": "820777265638cff637d47adc37df03d93154f7487b9c7573fad181ae2ead9eec",
+    "err_sha256": "53e4eb0ca4313d2c31b9105b5184b9134ecfcfc676b09e15eb1bcb0825120a73",
+    "artifact": "A-encoding",
+    "arguments": [
+      "--bench",
+      "^(encode_read_property_request|encode_apdu_confirmed_request|encode_npdu_100b_payload)$",
+      "--sample-size",
+      "100",
+      "--warm-up-time",
+      "3",
+      "--measurement-time",
+      "5",
+      "--noplot",
+      "--save-baseline",
+      "1979-constituent-A-02"
+    ]
+  },
+  {
+    "phase": "constituents",
+    "name": "constituent-A-03",
+    "label": "A",
+    "kind": "encoding",
+    "started": "2026-10-21T18:49:34.557013+00:00",
+    "ended": "2026-10-21T18:50:01.620622+00:00",
+    "exit_code": 0,
+    "load_before": [
+      1.84814453125,
+      4.18115234375,
+      3.888671875
+    ],
+    "load_after": [
+      1.5576171875,
+      3.92431640625,
+      3.8037109375
+    ],
+    "free_bytes_before": 158090698752,
+    "out_sha256": "28109a3398338136f2872fb5d7fb8df76eb2d82fcec6a8b4d2067a37aaf222dc",
+    "err_sha256": "dfd6a0e70ca0e556e59dbb4c7cb83bc4d443067de40da950066d7dac6f6b2c65",
+    "artifact": "A-encoding",
+    "arguments": [
+      "--bench",
+      "^(encode_read_property_request|encode_apdu_confirmed_request|encode_npdu_100b_payload)$",
+      "--sample-size",
+      "100",
+      "--warm-up-time",
+      "3",
+      "--measurement-time",
+      "5",
+      "--noplot",
+      "--save-baseline",
+      "1979-constituent-A-03"
+    ]
+  },
+  {
+    "phase": "constituents",
+    "name": "constituent-C-03",
+    "label": "C",
+    "kind": "encoding",
+    "started": "2026-10-21T18:50:01.625493+00:00",
+    "ended": "2026-10-21T18:50:29.834957+00:00",
+    "exit_code": 0,
+    "load_before": [
+      1.5576171875,
+      3.92431640625,
+      3.8037109375
+    ],
+    "load_after": [
+      1.56689453125,
+      3.70556640625,
+      3.72802734375
+    ],
+    "free_bytes_before": 158088777728,
+    "out_sha256": "ea4dd37818d9ce48ac77815ddc01e7e539f0a5557cc4aa29e1c7847ab9cfb71d",
+    "err_sha256": "a81239aede4d3240110dc187d6d00fab0f4e69c19db79a1deccb1a3ca458f250",
+    "artifact": "C-encoding",
+    "arguments": [
+      "--bench",
+      "^(encode_read_property_request|encode_apdu_confirmed_request|encode_npdu_100b_payload)$",
+      "--sample-size",
+      "100",
+      "--warm-up-time",
+      "3",
+      "--measurement-time",
+      "5",
+      "--noplot",
+      "--save-baseline",
+      "1979-constituent-C-03"
+    ]
+  }
+]

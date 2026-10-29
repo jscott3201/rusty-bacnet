@@ -156,6 +156,45 @@ class ScConnectionEventTests(ClientScFixture):
         with self.assertRaises(RuntimeError):
             await client.connection_events()
 
+    async def test_a_nak_cause_carries_int_enum_members(self):
+        # #2025: the hub accepts once, drops the link, then answers every
+        # Connect-Request with a NAK whose class is COMMUNICATION (7) and
+        # whose code, 600, has no name.
+        connections = []
+        subscribed = asyncio.Event()
+
+        async def peer(reader, writer, connect):
+            connections.append(connect)
+            if len(connections) == 1:
+                await self.accept_sc(writer, connect)
+                await subscribed.wait()
+                return
+            await self.send_frame(
+                writer, b"\x00\0" + connect[2:4] + b"\x06\x01\x00\x00\x07\x02\x58")
+            try:
+                while await reader.read(4096):
+                    pass
+            except ConnectionError:
+                pass
+
+        client = self.client(await self.raw_peer(peer), reconnect=ScReconnect(
+            initial_delay_ms=20, max_delay_ms=20, max_retries=1))
+        await asyncio.wait_for(client.__aenter__(), 5)
+        events = await client.connection_events()
+        subscribed.set()
+
+        async def first_nak():
+            async for event in events:
+                if event.cause == "nak":
+                    return event
+        event = await asyncio.wait_for(first_nak(), 15)
+        self.assertEqual(event.kind, "connect_failed")
+        self.assertIs(event.error_class, rusty_bacnet.ErrorClass.COMMUNICATION)
+        self.assertIsInstance(event.error_code, rusty_bacnet.ErrorCode)
+        self.assertIsNone(event.error_code.name)
+        self.assertEqual((event.error_class, event.error_code), (7, 600))
+        await asyncio.wait_for(client.stop(), 10)
+
     async def test_the_first_subscriber_sees_the_first_connected(self):
         """The first connection_events() call gets the events since the
         build, from the first connected (#1908); a later call is a late

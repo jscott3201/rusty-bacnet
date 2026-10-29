@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use super::registration_schedule_tests::{Device, BBMD};
+use super::registration_schedule_tests::{BBMD, Device};
 use super::*;
 
 /// A device elsewhere, whose broadcast the Forwarded-NPDU carries.

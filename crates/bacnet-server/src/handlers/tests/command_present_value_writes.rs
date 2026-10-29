@@ -11,6 +11,7 @@ use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::WriteAccessSpecification;
 use bacnet_types::constructed::{BACnetActionCommand, BACnetActionList};
 use bacnet_types::enums::EngineeringUnits;
+use bacnet_types::error::RemoteError;
 
 fn cmd1() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::COMMAND, 1).unwrap()
@@ -154,7 +155,7 @@ fn bare_write_property_multiple_ends_the_runs_its_committed_prefix_started() {
     .unwrap();
     let error = handle_write_property_multiple(&mut db, &request).unwrap_err();
     assert!(
-        matches!(error, Error::Structured { class, code, .. } | Error::Protocol { class, code }
+        matches!(error, Error::Structured { class, code, .. } | Error::Remote(RemoteError::Error { class, code })
             if class == ErrorClass::OBJECT
                 && code == ErrorCode::BUSY),
         "{error:?}"

@@ -1,12 +1,12 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use bacnet_encoding::apdu::{decode_apdu, Apdu};
+use bacnet_encoding::apdu::{Apdu, decode_apdu};
 use bacnet_network::layer::{IssuedApdu, NetworkLayer, ReceivedApdu, RoutedTarget};
 use bacnet_npdu::NetworkPriority;
 use bacnet_transport::port::{DataAttribute, TransportPort};
-use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
+use bacnet_types::error::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
@@ -111,6 +111,10 @@ pub struct IngressReceivers {
     /// independently supported port capacity.
     #[doc(hidden)]
     pub bip_port: Option<(bacnet_transport::port::BipPort, u16)>,
+    /// The same for a B/IPv6 link: its bound address, VMAC, group and mode,
+    /// with the port capacity.
+    #[doc(hidden)]
+    pub bip6_port: Option<(bacnet_transport::port::Bip6Port, u16)>,
     /// Actual announced IPv4 address and bound UDP port, when this is B/IP.
     #[doc(hidden)]
     pub bip_local_address: Option<std::net::SocketAddrV4>,
@@ -184,6 +188,12 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
     pub fn bip_port(&self) -> Option<bacnet_transport::port::BipPort> {
         self.network.as_ref()?.transport().bip_port()
     }
+
+    /// Pre-bind B/IPv6 registration capability, with the configured mode.
+    #[doc(hidden)]
+    pub fn bip6_port(&self) -> Option<bacnet_transport::port::Bip6Port> {
+        self.network.as_ref()?.transport().bip6_port()
+    }
     /// Attach selected-object protection before starting the transport.
     #[doc(hidden)]
     pub fn retain_network_port_lease_internal(&mut self, lease: Arc<()>) -> Result<(), Error> {
@@ -228,10 +238,9 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             .supports_local_nonrouter_number_controls()
             .then_some(controls)
             .flatten();
-        let bip_port = network
-            .transport()
-            .bip_port()
-            .map(|port| (port, network.transport().local_receive_apdu_capacity()));
+        let capacity = network.transport().local_receive_apdu_capacity();
+        let bip_port = network.transport().bip_port().map(|port| (port, capacity));
+        let bip6_port = network.transport().bip6_port().map(|port| (port, capacity));
         let bip_broadcast_endpoint = network.transport().bip_broadcast_endpoint();
         let bip_local_address = bip_broadcast_endpoint.and_then(|_| {
             bacnet_transport::bvll::decode_bip_mac(network.local_mac())
@@ -277,6 +286,7 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
         Ok(IngressReceivers {
             network_controls: controls,
             bip_port,
+            bip6_port,
             bip_local_address,
             bip_broadcast_endpoint,
             inbound_requests,
@@ -294,13 +304,13 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
         ) {
             return Err(Error::Encoding("endpoint ingress is not running".into()));
         }
-        if self.lifecycle == Lifecycle::Starting {
-            if let Some(mut network) = self.network.take() {
-                self.session_task = Some(tokio::spawn(async move {
-                    network.stop().await?;
-                    Ok(ClassifierExit::Cancelled)
-                }));
-            }
+        if self.lifecycle == Lifecycle::Starting
+            && let Some(mut network) = self.network.take()
+        {
+            self.session_task = Some(tokio::spawn(async move {
+                network.stop().await?;
+                Ok(ClassifierExit::Cancelled)
+            }));
         }
         self.lifecycle = Lifecycle::Stopping;
         if let Some(open) = self.egress_open.take() {
@@ -498,7 +508,7 @@ async fn drive_network_service<T: TransportPort + 'static>(
                             _ => {
                                 return Err(Error::Encoding(
                                     "response requires a unicast destination".into(),
-                                ))
+                                ));
                             }
                         };
                         network

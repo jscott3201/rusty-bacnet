@@ -124,14 +124,16 @@ async fn heartbeat_envelopes_obey_nak_precedence_addressing_and_silence() {
     timeout(Duration::from_secs(2), live.ack_observed.notified())
         .await
         .unwrap();
-    assert!(clients
-        .lock()
-        .await
-        .get(&live.vmac)
-        .unwrap()
-        .heartbeat
-        .pending
-        .is_none());
+    assert!(
+        clients
+            .lock()
+            .await
+            .get(&live.vmac)
+            .unwrap()
+            .heartbeat
+            .pending
+            .is_none()
+    );
     send_raw(&mut live, &[0x0A, 2, 0x44, 0x55, 0x9E, 0x1E]).await;
     assert_eq!(recv_raw(&mut live).await, [0x0B, 0, 0x44, 0x55]);
 }

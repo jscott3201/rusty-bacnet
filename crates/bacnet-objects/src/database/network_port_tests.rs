@@ -31,18 +31,22 @@ fn registered_port_reservation_publication_and_final_release() {
         .reserve_bip_port_internal(oid(2), [127, 0, 0, 1], 0)
         .unwrap();
     assert_eq!(db.registered_port_internal(), None);
-    assert!(db
-        .reserve_bip_port_internal(oid(1), [127, 0, 0, 1], 0)
-        .is_err());
+    assert!(
+        db.reserve_bip_port_internal(oid(1), [127, 0, 0, 1], 0)
+            .is_err()
+    );
     assert!(db.remove(&oid(2)).is_err());
     assert!(db.add(Box::new(object(2))).is_err());
-    assert!(db
-        .with_object_adapter(&oid(2), |_| panic!("must refuse before callback"))
-        .is_err());
+    assert!(
+        db.with_object_adapter(&oid(2), |_| panic!("must refuse before callback"))
+            .is_err()
+    );
     let selected = db.get_mut(&oid(2)).unwrap();
-    assert!(selected
-        .write_property(P::OUT_OF_SERVICE, None, PropertyValue::Boolean(true), None)
-        .is_err());
+    assert!(
+        selected
+            .write_property(P::OUT_OF_SERVICE, None, PropertyValue::Boolean(true), None)
+            .is_err()
+    );
     assert_eq!(
         selected.read_property(P::OUT_OF_SERVICE, None).unwrap(),
         PropertyValue::Boolean(false)
@@ -57,9 +61,10 @@ fn registered_port_reservation_publication_and_final_release() {
         PropertyWriteCapability::ReadOnly
     );
     assert!(db.remove(&oid(1)).unwrap().is_some());
-    assert!(db
-        .publish_bip_port_internal(oid(2), [127, 0, 0, 2], 1234, 1476, BipPortMode::Normal)
-        .is_err());
+    assert!(
+        db.publish_bip_port_internal(oid(2), [127, 0, 0, 2], 1234, 1476, BipPortMode::Normal)
+            .is_err()
+    );
     assert_eq!(db.registered_port_internal(), None);
     db.publish_bip_port_internal(oid(2), [127, 0, 0, 1], 1234, 1476, BipPortMode::Normal)
         .unwrap();
@@ -101,9 +106,10 @@ fn mismatched_or_unavailable_port_is_not_reserved() {
         .unwrap()
         .write_property(P::OUT_OF_SERVICE, None, PropertyValue::Boolean(true), None)
         .unwrap();
-    assert!(db
-        .reserve_bip_port_internal(oid(1), [127, 0, 0, 1], 0)
-        .is_err());
+    assert!(
+        db.reserve_bip_port_internal(oid(1), [127, 0, 0, 1], 0)
+            .is_err()
+    );
     assert!(db.remove(&oid(1)).unwrap().is_some());
 }
 
@@ -162,9 +168,10 @@ fn registered_port_rejects_actual_identifier_different_from_selected_key() {
     // precondition. This is defensive admission, not a supported mutation path.
     db.with_object_adapter(&oid(1), |slot| *slot = Box::new(object(2)))
         .unwrap();
-    assert!(db
-        .reserve_bip_port_internal(oid(1), [127, 0, 0, 1], 0)
-        .is_err());
+    assert!(
+        db.reserve_bip_port_internal(oid(1), [127, 0, 0, 1], 0)
+            .is_err()
+    );
     assert_eq!(db.registered_port_internal(), None);
     assert_eq!(db.get(&oid(1)).unwrap().object_identifier(), oid(2));
     // Failed admission neither takes a lease nor changes the object's state.

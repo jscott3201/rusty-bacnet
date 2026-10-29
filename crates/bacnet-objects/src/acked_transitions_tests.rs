@@ -12,7 +12,7 @@ use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
 use bacnet_types::enums::{
     EngineeringUnits, ErrorClass, ErrorCode, EventState, EventType, ObjectType, PropertyIdentifier,
 };
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue};
 
 fn objects() -> Vec<Box<dyn BACnetObject>> {
@@ -73,7 +73,7 @@ fn assert_denied(object: &mut dyn BACnetObject, value: PropertyValue, priority: 
         .write_property(PropertyIdentifier::ACKED_TRANSITIONS, None, value, priority)
         .unwrap_err();
     assert!(
-        matches!(error, Error::Protocol { class, code }
+        matches!(error, Error::Remote(RemoteError::Error { class, code })
             if class == ErrorClass::PROPERTY
                 && code == ErrorCode::WRITE_ACCESS_DENIED),
         "{}: {error:?}",

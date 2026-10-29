@@ -227,37 +227,43 @@ async fn target_reporter_overlap_follows_actual_subject_membership_and_protects_
         );
     }
     for instance in [3, 8] {
-        assert!(fixture
+        assert!(
+            fixture
+                .server
+                .db
+                .write()
+                .await
+                .remove(&oid(ObjectType::AUDIT_REPORTER, instance))
+                .is_err()
+        );
+    }
+    assert!(
+        fixture
             .server
             .db
             .write()
             .await
-            .remove(&oid(ObjectType::AUDIT_REPORTER, instance))
-            .is_err());
-    }
-    assert!(fixture
-        .server
-        .db
-        .write()
-        .await
-        .add(Box::new(
-            DeviceObject::new(DeviceConfig {
-                identity: bacnet_objects::DeviceIdentity::new(11, 0)
-                    .expect("valid Device identity"),
-                ..Default::default()
-            })
-            .unwrap()
-        ))
-        .is_err());
+            .add(Box::new(
+                DeviceObject::new(DeviceConfig {
+                    identity: bacnet_objects::DeviceIdentity::new(11, 0)
+                        .expect("valid Device identity"),
+                    ..Default::default()
+                })
+                .unwrap()
+            ))
+            .is_err()
+    );
     let retained = Arc::clone(fixture.server.database());
     fixture.server.stop().await.unwrap();
     for instance in [3, 8] {
-        assert!(retained
-            .write()
-            .await
-            .remove(&oid(ObjectType::AUDIT_REPORTER, instance))
-            .unwrap()
-            .is_some());
+        assert!(
+            retained
+                .write()
+                .await
+                .remove(&oid(ObjectType::AUDIT_REPORTER, instance))
+                .unwrap()
+                .is_some()
+        );
     }
 }
 
@@ -526,18 +532,20 @@ async fn target_reporter_plural_drop_keeps_all_memberships_until_task_frames_end
     let mut held = db.write().await;
     drop(fixture);
     for instance in [1, 2] {
-        assert!(held
-            .remove(&oid(ObjectType::AUDIT_REPORTER, instance))
-            .is_err());
+        assert!(
+            held.remove(&oid(ObjectType::AUDIT_REPORTER, instance))
+                .is_err()
+        );
     }
     drop(held);
     settle().await;
     let mut held = db.write().await;
     for instance in [1, 2] {
-        assert!(held
-            .remove(&oid(ObjectType::AUDIT_REPORTER, instance))
-            .unwrap()
-            .is_some());
+        assert!(
+            held.remove(&oid(ObjectType::AUDIT_REPORTER, instance))
+                .unwrap()
+                .is_some()
+        );
     }
 }
 
@@ -572,24 +580,27 @@ async fn target_reporter_plural_cancelled_stop_rejects_changes_until_joined_unin
     for instance in [1, 2] {
         let target = oid(ObjectType::AUDIT_REPORTER, instance);
         assert!(held.remove(&target).is_err());
-        assert!(held
-            .get_mut(&target)
-            .unwrap()
-            .write_property(
-                PropertyIdentifier::DESCRIPTION,
-                None,
-                PropertyValue::CharacterString("after seal".into()),
-                None
-            )
-            .is_err());
+        assert!(
+            held.get_mut(&target)
+                .unwrap()
+                .write_property(
+                    PropertyIdentifier::DESCRIPTION,
+                    None,
+                    PropertyValue::CharacterString("after seal".into()),
+                    None
+                )
+                .is_err()
+        );
     }
     drop(held);
     fixture.server.stop().await.unwrap();
     fixture.server.stop().await.unwrap();
-    assert!(fixture
-        .server
-        .notification_transactions
-        .delivery_workers_idle());
+    assert!(
+        fixture
+            .server
+            .notification_transactions
+            .delivery_workers_idle()
+    );
     let mut held = database.write().await;
     for instance in [1, 2] {
         let target = oid(ObjectType::AUDIT_REPORTER, instance);

@@ -31,16 +31,16 @@
 use std::net::{Ipv4Addr, SocketAddrV4};
 
 use bacnet_router_core::bip::BipPort;
-use bacnet_router_core::bip_core::bbmd::{Tables, Target, TWO_HOP_MASK};
+use bacnet_router_core::bip_core::LocalSubnet;
+use bacnet_router_core::bip_core::bbmd::{TWO_HOP_MASK, Tables, Target};
 use bacnet_router_core::bip_core::codec::{BdtEntries, BdtEntry, Bvll, FdtEntry};
 use bacnet_router_core::bip_core::node::{
-    self, Addressed, Datagram, Link, Mode, SendRefusal, MAX_DATAGRAM,
+    self, Addressed, Datagram, Link, MAX_DATAGRAM, Mode, SendRefusal,
 };
 use bacnet_router_core::bip_core::port::{BbmdPort, Datagrams, Ingress};
-use bacnet_router_core::bip_core::LocalSubnet;
 use bacnet_router_core::mstp::{MstpPort, PortAction};
 use bacnet_router_core::mstp_core::codec::{
-    decode_frame, Frame, FrameType, MAX_EXTENDED_MPDU_DATA,
+    Frame, FrameType, MAX_EXTENDED_MPDU_DATA, decode_frame,
 };
 use bacnet_router_core::mstp_core::{
     Action as MstpAction, ExtendedStorage, FixedQueues, MasterCore, MstpCoreConfig,
@@ -195,10 +195,10 @@ impl World<'_> {
                 break;
             };
             self.now = self.now.max(next);
-            if step_at.is_some_and(|at| at <= self.now) {
-                if let Some((_, step)) = script.next() {
-                    self.step(step);
-                }
+            if step_at.is_some_and(|at| at <= self.now)
+                && let Some((_, step)) = script.next()
+            {
+                self.step(step);
             }
             if self.station_2.next.is_some_and(|(at, ..)| at <= self.now) {
                 self.station_2_sends();

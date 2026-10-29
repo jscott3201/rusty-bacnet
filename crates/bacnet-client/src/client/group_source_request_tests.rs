@@ -4,8 +4,8 @@
 //! The built-in transports hand up no such source, so a custom link does.
 
 use super::*;
-use bacnet_encoding::apdu::{decode_apdu, ConfirmedRequest};
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
+use bacnet_encoding::apdu::{ConfirmedRequest, decode_apdu};
+use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
 use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
 use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::ObjectIdentifier;

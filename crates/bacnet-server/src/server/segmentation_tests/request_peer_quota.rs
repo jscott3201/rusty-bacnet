@@ -161,9 +161,11 @@ async fn request_peer_quota_denial_is_stateless_and_active_transfers_complete() 
             AbortReason::OUT_OF_RESOURCES,
         );
     }
-    assert!(tokio::time::timeout(Duration::from_millis(100), rx.recv())
-        .await
-        .is_err());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), rx.recv())
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -263,9 +265,11 @@ async fn request_peer_quota_abort_and_save_failure_release_only_owned_slots() {
         AbortReason::OUT_OF_RESOURCES,
     );
     assert_eq!(present_value(&server).await, "");
-    assert!(tokio::time::timeout(Duration::from_millis(100), rx.recv())
-        .await
-        .is_err());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), rx.recv())
+            .await
+            .is_err()
+    );
 }
 
 async fn send_initial_with_raw_window(
@@ -273,7 +277,7 @@ async fn send_initial_with_raw_window(
     invoke_id: u8,
     window: u8,
 ) {
-    use bacnet_encoding::npdu::{encode_npdu, Npdu};
+    use bacnet_encoding::npdu::{Npdu, encode_npdu};
     let mut buf = BytesMut::new();
     encode_apdu(
         &mut buf,

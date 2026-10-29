@@ -7,7 +7,7 @@ use bytes::Bytes;
 use tokio::time::Duration;
 
 use super::echo_tests::ECHOING;
-use super::test_support::{config, encode, Bus};
+use super::test_support::{Bus, config, encode};
 use super::*;
 use crate::any::AnyTransport;
 use crate::port::TransportPort;
@@ -60,8 +60,7 @@ fn the_ports_limits_follow_the_flag() {
 #[tokio::test]
 async fn preparing_for_routing_turns_extended_frames_on() {
     let (serial, _peer) = LoopbackSerial::pair();
-    let mut any: AnyTransport<LoopbackSerial> =
-        AnyTransport::Mstp(MstpTransport::new(serial, MstpConfig::default()));
+    let mut any: AnyTransport = MstpTransport::new(serial, MstpConfig::default()).into();
     assert_eq!(any.local_receive_apdu_capacity(), 480);
     any.prepare_for_routing();
     assert_eq!(any.local_receive_apdu_capacity(), 1476);

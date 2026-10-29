@@ -1,5 +1,5 @@
 use super::*;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 async fn recv_bvll(socket: &UdpSocket) -> BvllMessage {
     let mut recv_buf = [0u8; 2048];

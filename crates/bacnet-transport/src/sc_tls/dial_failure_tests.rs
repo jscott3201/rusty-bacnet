@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::port::TransportPort;
-use crate::sc::{dial_within, ScDialStage, ScDisconnectCause, ScTransport};
+use crate::sc::{ScDialStage, ScDisconnectCause, ScTransport, dial_within};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Short, since each fixture stalls on purpose and never answers.

@@ -1,14 +1,21 @@
 //! Application-owned storage of written Tags, independent of row provisioning.
 
+use crate::prelude::*;
+#[cfg(feature = "std")]
 use std::path::Path;
 
-use bacnet_encoding::constructed::{decode_name_value, encode_name_value};
+#[cfg(feature = "std")]
+use bacnet_encoding::constructed::decode_name_value;
+use bacnet_encoding::constructed::encode_name_value;
 use bacnet_types::constructed::BACnetNameValue;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
-use super::{check_tags, no_space_error, MAX_TAGS};
+#[cfg(feature = "std")]
+use super::MAX_TAGS;
+use super::{check_tags, no_space_error};
+#[cfg(feature = "std")]
 use crate::durable::file::ObjectFile;
 
 /// Maximum complete persisted Tags representation, including its 12-byte
@@ -16,6 +23,7 @@ use crate::durable::file::ObjectFile;
 /// bound does not apply to memory-only objects and is not a BACnet limit.
 pub const MAX_TAGS_SNAPSHOT_BYTES: usize = 1024 * 1024;
 const HEADER_BYTES: usize = 12;
+#[cfg(feature = "std")]
 const MAGIC: &[u8; 8] = b"RBNTAG01";
 
 /// The last successfully written Tags array, independent of whether the
@@ -54,10 +62,12 @@ pub trait TagsPersistence: Send + Sync {
 /// concatenated BACnetNameValue elements. Both reads and writes enforce
 /// [`MAX_TAGS_SNAPSHOT_BYTES`] and [`MAX_TAGS`].
 #[derive(Clone, Debug)]
+#[cfg(feature = "std")]
 pub struct FileTagsPersistence {
     file: ObjectFile,
 }
 
+#[cfg(feature = "std")]
 impl FileTagsPersistence {
     /// Use the explicit `path` for this object's snapshot.
     pub fn new(path: impl AsRef<Path>) -> Result<Self, Error> {
@@ -89,6 +99,7 @@ pub(super) fn encode_snapshot(snapshot: &TagsSnapshot) -> Result<BytesMut, Error
     Ok(body)
 }
 
+#[cfg(feature = "std")]
 impl TagsPersistence for FileTagsPersistence {
     fn load(&self, object: ObjectIdentifier) -> Result<Option<TagsSnapshot>, Error> {
         let Some(body) = self.file.load(object)? else {

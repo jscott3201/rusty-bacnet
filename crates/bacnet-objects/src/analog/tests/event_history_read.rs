@@ -3,6 +3,7 @@
 use super::super::*;
 use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::{Date, Time};
 
 fn assert_timestamp_value(actual: PropertyValue, expected: &BACnetTimeStamp, context: &str) {
@@ -25,7 +26,7 @@ fn assert_timestamp_array(actual: PropertyValue, expected: &[BACnetTimeStamp; 3]
 }
 
 macro_rules! assert_seeded_event_history {
-    ($object:expr, $label:literal) => {{
+    ($object:expr_2021, $label:literal) => {{
         let mut object = $object;
         let expected_timestamps = [
             BACnetTimeStamp::Time(Time {
@@ -112,7 +113,7 @@ macro_rules! assert_seeded_event_history {
         ] {
             for index in [4, u32::MAX] {
                 match object.read_property(property, Some(index)).unwrap_err() {
-                    Error::Protocol { class, code } => {
+                    Error::Remote(RemoteError::Error { class, code }) => {
                         assert_eq!(class, ErrorClass::PROPERTY, "{} class", $label);
                         assert_eq!(code, ErrorCode::INVALID_ARRAY_INDEX, "{} code", $label);
                     }

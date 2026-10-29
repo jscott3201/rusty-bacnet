@@ -5,6 +5,7 @@ use super::*;
 use crate::clock::{ClockFrame, ClockReader};
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::constructed::{BACnetCalendarEntry, BACnetDateRange, BACnetWeekNDay};
+use bacnet_types::error::RemoteError;
 use std::sync::{Arc, Mutex};
 
 const DATE_LIST: PropertyIdentifier = PropertyIdentifier::DATE_LIST;
@@ -102,7 +103,7 @@ fn present_value(cal: &CalendarObject) -> PropertyValue {
 
 fn assert_error(result: Result<(), Error>, class: ErrorClass, code: ErrorCode, what: &str) {
     match result {
-        Err(Error::Protocol { class: c, code: e }) => {
+        Err(Error::Remote(RemoteError::Error { class: c, code: e })) => {
             assert_eq!(c, class, "{what}");
             assert_eq!(e, code, "{what}: expected {code:?}");
         }

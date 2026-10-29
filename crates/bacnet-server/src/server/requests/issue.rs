@@ -75,13 +75,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ) -> impl std::future::Future<Output = Issued> + Send + 'a {
         async move {
             let encoded = confirmed_response::encoded_apdu(response);
-            if let Apdu::ComplexAck(ack) = response {
-                if encoded.len() > plan.ack.client_max_apdu as usize {
-                    // Rare, so boxed: this future stays the size of the
-                    // unsegmented send.
-                    Box::pin(Self::issue_oversized_ack(plan, ack, pending)).await;
-                    return Issued::Segmented;
-                }
+            if let Apdu::ComplexAck(ack) = response
+                && encoded.len() > plan.ack.client_max_apdu as usize
+            {
+                // Rare, so boxed: this future stays the size of the
+                // unsegmented send.
+                Box::pin(Self::issue_oversized_ack(plan, ack, pending)).await;
+                return Issued::Segmented;
             }
 
             // Read execution is observed under the DB read guard, but admission is

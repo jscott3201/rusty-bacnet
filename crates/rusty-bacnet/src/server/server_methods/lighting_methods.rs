@@ -7,8 +7,8 @@ use bacnet_objects::color::{ColorObject, ColorTemperatureObject, FileColorOutput
 use bacnet_objects::lighting::{ColorLink, ColorOverride, OutputColor};
 use bacnet_types::constructed::BACnetXyColor;
 use bacnet_types::error::Error;
-use pyo3::exceptions::PyValueError;
 use pyo3::IntoPyObjectExt;
+use pyo3::exceptions::PyValueError;
 
 #[pymethods]
 impl BACnetServer {
@@ -185,7 +185,7 @@ impl BACnetServer {
             _ => {
                 return Err(PyValueError::new_err(
                     "give min_pres_value and max_pres_value together",
-                ))
+                ));
             }
         };
         let output = ColorOutput {
@@ -282,7 +282,7 @@ fn color_link(
         (None, Some(true)) => {
             return Err(PyValueError::new_err(
                 "color_override=True needs an override_color_reference",
-            ))
+            ));
         }
         (None, Some(false) | None) => None,
     };

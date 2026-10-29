@@ -15,8 +15,10 @@ async fn full_inner_queue_reports_cancel_refusal_after_outer_admission() {
     let (release, held) = tokio::sync::oneshot::channel::<()>();
     let task = tokio::spawn(async move {
         held.await.unwrap();
+        Ok(())
     });
     let active = Active {
+        scan: Default::default(),
         cancel,
         commands,
         task,
@@ -140,7 +142,7 @@ async fn full_inner_queue_reports_cancel_refusal_after_outer_admission() {
         "admitted retry must not produce a rejection"
     );
     release.send(()).unwrap();
-    active.task.await.unwrap();
+    active.task.await.unwrap().unwrap();
 }
 
 #[test]
@@ -197,6 +199,33 @@ async fn a_browse_read_without_a_session_fails_under_its_request() {
     ));
 }
 
+/// A device management request no session takes is refused under its
+/// request id, so the app's "Sending..." view closes (#1799).
+#[tokio::test]
+async fn a_manage_request_without_a_session_is_refused_under_its_request() {
+    use crate::tui::safety::manage::{Action, Request};
+    let (sink, mut events) = EventSink::channel(4);
+    let request = SafetyCommand::Manage {
+        req: 7,
+        request: Box::new(Request {
+            device: 100,
+            action: Action::Reinit {
+                state: bacnet_types::enums::ReinitializedState::WARMSTART,
+            },
+            password: Some(crate::tui::safety::audit::Secret::new("s3cret")),
+        }),
+    };
+    forward_safety(None, request, 2, &sink, &SafetyOptions::default()).await;
+    let WorkerEvent::Session { generation, event } = events.recv().await.unwrap() else {
+        panic!("unscoped event");
+    };
+    assert_eq!(generation, 2);
+    assert!(matches!(
+        *event,
+        WorkerEvent::Safety(SafetyEvent::Refused { req: Some(7), .. })
+    ));
+}
+
 /// A watch command waits for room in a full session queue rather than
 /// being dropped: a lost remove would leave a renewed subscription on the
 /// device. One that still finds no room after the wait fails its row.
@@ -210,9 +239,10 @@ async fn a_watch_command_waits_for_room_in_a_full_session_queue() {
     let (commands, mut held) = mpsc::channel(1);
     let (cancel, _) = watch::channel(false);
     let active = Active {
+        scan: Default::default(),
         cancel,
         commands,
-        task: tokio::spawn(std::future::pending::<()>()),
+        task: tokio::spawn(std::future::pending::<Result<(), String>>()),
     };
     active.commands.try_send(Command::Reconnect).unwrap();
     assert_eq!(active.commands.capacity(), 0, "the session queue is full");

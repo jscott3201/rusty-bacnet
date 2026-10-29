@@ -7,8 +7,8 @@ use tokio::net::UdpSocket;
 use super::frame::encoded;
 use super::vmac_from_device_instance;
 use super::{
-    format_vmac_text, generate_random_vmac, parse_vmac_text, Bip6ForeignDeviceConfig,
-    Bip6Transport, Bip6Vmac, Bvll6, MAX_VMAC_RETRIES,
+    Bip6ForeignDeviceConfig, Bip6Transport, Bip6Vmac, Bvll6, MAX_VMAC_RETRIES, format_vmac_text,
+    generate_random_vmac, parse_vmac_text,
 };
 use crate::port::TransportPort;
 use crate::port_ownership::lost_port;

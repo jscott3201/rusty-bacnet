@@ -6,7 +6,7 @@ mod support;
 #[path = "../../bacnet-endpoint/tests/support/port_retry.rs"]
 mod port_retry;
 use bacnet_encoding::{
-    apdu::{decode_apdu, Apdu},
+    apdu::{Apdu, decode_apdu},
     npdu::decode_npdu,
 };
 use bacnet_transport::bip::{BipTransport, ForeignDeviceConfig};

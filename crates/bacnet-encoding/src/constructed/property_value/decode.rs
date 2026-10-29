@@ -5,7 +5,7 @@ use bacnet_types::constructed::BACnetPropertyValue;
 use bacnet_types::enums::{PropertyIdentifier, RejectReason};
 use bacnet_types::error::{DecodeError, DecodingKind, Error};
 
-use super::{extract_property_value, matches_property_boundary, PropertyValueBoundary};
+use super::{PropertyValueBoundary, extract_property_value, matches_property_boundary};
 use crate::constructed::tagged::misplaced_kind;
 use crate::{primitives, tags};
 

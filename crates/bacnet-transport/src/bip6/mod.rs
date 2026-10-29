@@ -45,10 +45,10 @@
 //! ```
 
 pub use bacnet_bip_codec::ipv6::{
-    Bip6Address, Bip6Vmac, Bvlc6Function, Bvlc6ResultCode, Bvll6, Bvll6Error, Bvll6Frame,
-    BIP6_ADDRESS_LENGTH, BVLC_TYPE_BIP6, VMAC_LENGTH,
+    BIP6_ADDRESS_LENGTH, BVLC_TYPE_BIP6, Bip6Address, Bip6Vmac, Bvlc6Function, Bvlc6ResultCode,
+    Bvll6, Bvll6Error, Bvll6Frame, VMAC_LENGTH,
 };
-pub use bacnet_bip_codec::{BvllSink, PayloadShape, SinkFull, HEADER_LENGTH, MAX_BVLL_LENGTH};
+pub use bacnet_bip_codec::{BvllSink, HEADER_LENGTH, MAX_BVLL_LENGTH, PayloadShape, SinkFull};
 
 /// Maximum number of random VMAC regenerations before startup fails (Annex U.5/H.7.2).
 pub const MAX_VMAC_RETRIES: u32 = 3;
@@ -56,6 +56,7 @@ pub const MAX_VMAC_RETRIES: u32 = 3;
 mod addressing;
 mod collision_probe;
 mod foreign_target;
+pub use foreign_target::Bip6ForeignDeviceRefusal;
 mod frame;
 pub use frame::{bvll6_error, decode_bvll6, encode_bvll6};
 mod ingress;
@@ -71,16 +72,16 @@ mod send;
 mod socket;
 mod vmac_table;
 pub use port::{
-    Bip6BroadcastScope, Bip6ForeignDeviceConfig, Bip6Transport, BACNET_IPV6_MULTICAST,
-    BACNET_IPV6_MULTICAST_LINK_LOCAL, BACNET_IPV6_MULTICAST_ORG_LOCAL,
-    BACNET_IPV6_MULTICAST_SITE_LOCAL, DEFAULT_BACNET6_PORT,
+    BACNET_IPV6_MULTICAST, BACNET_IPV6_MULTICAST_LINK_LOCAL, BACNET_IPV6_MULTICAST_ORG_LOCAL,
+    BACNET_IPV6_MULTICAST_SITE_LOCAL, Bip6BroadcastScope, Bip6ForeignDeviceConfig, Bip6Transport,
+    DEFAULT_BACNET6_PORT,
 };
 pub use receive_counters::Bip6ReceiveCounters;
 pub use resolve_counters::Bip6ResolutionCounters;
 pub use resolver::UnresolvedSend;
 pub use vmac_table::{
-    format_vmac_text, generate_random_vmac, parse_vmac_text, vmac_from_device_instance,
-    VMAC_TEXT_PREFIX,
+    VMAC_TEXT_PREFIX, format_vmac_text, generate_random_vmac, parse_vmac_text,
+    vmac_from_device_instance,
 };
 
 #[cfg(test)]

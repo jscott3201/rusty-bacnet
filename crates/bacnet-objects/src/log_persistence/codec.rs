@@ -12,6 +12,7 @@
 //! followed by length-prefixed Clause 21 encodings. Every integer is
 //! big-endian.
 
+use crate::prelude::*;
 use bacnet_encoding::constructed::{
     decode_device_object_property_reference, decode_event_log_record, decode_log_multiple_record,
     decode_log_record, encode_device_object_property_reference,
@@ -108,7 +109,7 @@ pub(crate) fn check_buffer_size<R: SnapshotRecord>(buffer_size: u32) -> Result<(
     Ok(())
 }
 
-fn corrupt(reason: impl std::fmt::Display) -> Error {
+fn corrupt(reason: impl core::fmt::Display) -> Error {
     Error::Encoding(format!("log snapshot {reason}"))
 }
 

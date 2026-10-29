@@ -3,7 +3,7 @@ use super::tls;
 use bacnet_client::client::{BACnetClient, ClientConfig};
 use bacnet_transport::{
     sc::{ScConnection, ScConnectionState, ScTransport, WebSocketPort},
-    sc_frame::{decode_sc_message, encode_sc_message, ScFunction, ScMessage, BROADCAST_VMAC},
+    sc_frame::{BROADCAST_VMAC, ScFunction, ScMessage, decode_sc_message, encode_sc_message},
     sc_hub::ScHub,
     sc_tls::{DirectAcceptConfig, DirectListener, TlsWebSocket},
 };

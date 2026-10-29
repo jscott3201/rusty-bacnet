@@ -9,7 +9,7 @@ use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStat
 use bacnet_types::enums::{
     EngineeringUnits, ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier,
 };
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
 
 #[test]
@@ -120,10 +120,10 @@ impl BACnetObject for TestObject {
         if property == PropertyIdentifier::OBJECT_NAME {
             Ok(PropertyValue::CharacterString(self.name.clone()))
         } else {
-            Err(Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::UNKNOWN_PROPERTY,
-            })
+            Err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::UNKNOWN_PROPERTY,
+            ))
         }
     }
 
@@ -134,10 +134,10 @@ impl BACnetObject for TestObject {
         _value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
-        Err(Error::Protocol {
-            class: ErrorClass::PROPERTY,
-            code: ErrorCode::WRITE_ACCESS_DENIED,
-        })
+        Err(Error::protocol(
+            ErrorClass::PROPERTY,
+            ErrorCode::WRITE_ACCESS_DENIED,
+        ))
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
@@ -302,7 +302,7 @@ fn duplicate_name_rejected() {
         assert!(
             matches!(
                 result,
-                Err(Error::Protocol { class, code })
+                Err(Error::Remote(RemoteError::Error { class, code }))
                     if class == ErrorClass::PROPERTY
                         && code == ErrorCode::DUPLICATE_NAME
             ),

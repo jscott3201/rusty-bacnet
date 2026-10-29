@@ -17,7 +17,7 @@
 //! under way: when the value was last sampled for COV and when it is next
 //! due, which a finer sample step can bring forward (#1510).
 
-use std::time::Duration;
+use core::time::Duration;
 
 use bacnet_types::constructed::BACnetXyColor;
 
@@ -65,7 +65,7 @@ impl TransitionLevel for BACnetXyColor {
     }
 
     fn distance(from: Self, to: Self) -> f64 {
-        f32::distance(from.x, to.x).hypot(f32::distance(from.y, to.y))
+        crate::float::hypot(f32::distance(from.x, to.x), f32::distance(from.y, to.y))
     }
 }
 
@@ -76,7 +76,7 @@ impl TransitionLevel for BACnetXyColor {
 impl TransitionLevel for u32 {
     fn interpolate(from: u32, to: u32, fraction: f64) -> u32 {
         let (from, to) = (f64::from(from), f64::from(to));
-        (from + (to - from) * fraction).round() as u32
+        crate::float::round(from + (to - from) * fraction) as u32
     }
 
     fn distance(from: u32, to: u32) -> f64 {

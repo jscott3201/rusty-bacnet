@@ -84,14 +84,16 @@ fn intrinsic_rejected_detection_write_preserves_summary_transition_coordinate() 
         Some(EventTransition::ToOffnormal)
     );
 
-    assert!(object
-        .write_property(
-            PropertyIdentifier::EVENT_DETECTION_ENABLE,
-            None,
-            PropertyValue::Unsigned(0),
-            None
-        )
-        .is_err());
+    assert!(
+        object
+            .write_property(
+                PropertyIdentifier::EVENT_DETECTION_ENABLE,
+                None,
+                PropertyValue::Unsigned(0),
+                None
+            )
+            .is_err()
+    );
 
     assert_eq!(
         object

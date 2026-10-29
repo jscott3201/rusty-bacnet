@@ -1,7 +1,7 @@
 //! The shared save writer (#1270).
 
 use super::*;
-use std::sync::mpsc;
+use std::sync::{Mutex, mpsc};
 use std::task::Wake;
 use std::thread::ThreadId;
 use std::time::{Duration, Instant};

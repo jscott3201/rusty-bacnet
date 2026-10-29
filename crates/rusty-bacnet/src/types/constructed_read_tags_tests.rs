@@ -32,13 +32,15 @@ fn tags_typed_mapping_preserves_none_null_original_bytes_and_local_read_parity()
         let mappings = value.getattr("value").unwrap();
         let mappings = mappings.cast::<PyList>().unwrap();
         let first = mappings.get_item(0).unwrap();
-        assert!(first
-            .cast::<PyDict>()
-            .unwrap()
-            .get_item("value")
-            .unwrap()
-            .unwrap()
-            .is_none());
+        assert!(
+            first
+                .cast::<PyDict>()
+                .unwrap()
+                .get_item("value")
+                .unwrap()
+                .unwrap()
+                .is_none()
+        );
         let second = mappings.get_item(1).unwrap();
         let primitive = second
             .cast::<PyDict>()

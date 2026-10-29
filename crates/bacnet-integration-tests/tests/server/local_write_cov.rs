@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_types::error::RemoteError;
 
 // ---------------------------------------------------------------------------
 // Local-write COV/event integration tests (#117)
@@ -178,7 +179,7 @@ async fn local_object_name_write_refreshes_name_index() {
     assert!(
         matches!(
             dup,
-            Err(bacnet_types::error::Error::Protocol { class, code })
+            Err(bacnet_types::error::Error::Remote(RemoteError::Error { class, code }))
                 if class == bacnet_types::enums::ErrorClass::PROPERTY
                     && code == bacnet_types::enums::ErrorCode::DUPLICATE_NAME
         ),

@@ -10,7 +10,7 @@ use futures_util::SinkExt;
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::sc_frame::{ScFunction, ScMessage, Vmac, BACNET_SC_HUB_SUBPROTOCOL, BROADCAST_VMAC};
+use crate::sc_frame::{BACNET_SC_HUB_SUBPROTOCOL, BROADCAST_VMAC, ScFunction, ScMessage, Vmac};
 
 use super::{
     Clients, ConnectRequestVmacDisposition, DeviceUuid, HubClient, HubClientRegistrationDecision,
@@ -51,8 +51,8 @@ pub(super) fn offers_websocket_subprotocol(
         .unwrap_or(false)
 }
 
-pub(super) fn websocket_subprotocol_error_response(
-) -> tokio_tungstenite::tungstenite::handshake::server::ErrorResponse {
+pub(super) fn websocket_subprotocol_error_response()
+-> tokio_tungstenite::tungstenite::handshake::server::ErrorResponse {
     tokio_tungstenite::tungstenite::http::Response::builder()
         .status(tokio_tungstenite::tungstenite::http::StatusCode::BAD_REQUEST)
         .body(Some(format!(

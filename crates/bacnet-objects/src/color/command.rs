@@ -28,7 +28,7 @@
 //! - A missing target is refused as out of range, as Lighting Output refuses
 //!   a FADE_TO without its target level.
 
-use std::ops::RangeInclusive;
+use core::ops::RangeInclusive;
 
 use bacnet_encoding::constructed::{decode_color_command_value, encode_color_command};
 use bacnet_types::constructed::{BACnetColorCommand, BACnetXyColor};

@@ -168,11 +168,10 @@ impl YouAreRequest {
         if self.device_identifier.is_none() && self.device_mac_address.is_none() {
             return Err(Error::encode("YouAre needs a device identifier, a device MAC address, or both"));
         }
-        if let Some(oid) = &self.device_identifier {
-            if oid.object_type() != ObjectType::DEVICE {
+        if let Some(oid) = &self.device_identifier
+            && oid.object_type() != ObjectType::DEVICE {
                 return Err(Error::encode("YouAre device identifier must name a Device object"));
             }
-        }
         if let Some(mac) = &self.device_mac_address {
             check_encoded_mac_len(mac, "YouAre device-mac-address")?;
         }

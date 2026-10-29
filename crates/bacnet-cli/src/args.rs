@@ -13,6 +13,10 @@ use bacnet_types::primitives::BACnetTimeStamp;
 use clap::builder::{OsStringValueParser, TypedValueParser};
 use clap::{Parser, Subcommand, ValueEnum};
 
+mod mcp;
+
+pub(crate) use mcp::McpAction;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum FileReadAccess {
     Stream,
@@ -27,7 +31,7 @@ pub(crate) struct Cli {
     pub(crate) explicit_args: Vec<String>,
 
     /// The subcommand's canonical name, captured before extraction, for the
-    /// write guard's classification (`core::class`).
+    /// write guard's classification (`bacnet_ops::class`).
     #[arg(skip)]
     pub(crate) command_name: Option<String>,
 
@@ -276,8 +280,8 @@ pub(crate) enum Command {
         /// connecting.
         #[arg(long, value_name = "NAME", conflicts_with = "no_profile")]
         profile: Option<String>,
-        /// Transmit nothing: no client is built, so no discovery, reads,
-        /// subscriptions, registrations or writes.
+        /// Listen for B/IP announcements without sending. :find searches
+        /// overheard I-Haves locally. No reads, registrations or writes.
         #[arg(long)]
         passive: bool,
         /// Listen to an MS/TP trunk on this serial port without transmitting:
@@ -319,6 +323,17 @@ pub(crate) enum Command {
         /// capture rights).
         #[arg(long, value_name = "DEVICE")]
         capture_device: Option<String>,
+    },
+
+    /// Serve an MCP server to an AI agent host (needs the `mcp`
+    /// feature).
+    ///
+    /// `bacnet mcp serve --stdio --profile NAME` is what an agent host's
+    /// configuration launches; `bacnet mcp authorize --profile NAME`, run
+    /// once in a terminal, records the person's consent first.
+    Mcp {
+        #[command(subcommand)]
+        action: McpAction,
     },
 
     /// Discover BACnet devices (WhoIs).
@@ -436,8 +451,8 @@ pub(crate) enum Command {
         /// Duration in minutes.
         #[arg(long)]
         duration: Option<u16>,
-        /// Password.
-        #[arg(long)]
+        /// Password, at most 20 characters.
+        #[arg(long, value_parser = DevicePassword)]
         password: Option<String>,
     },
 
@@ -447,15 +462,35 @@ pub(crate) enum Command {
         target: String,
         /// State: coldstart, warmstart.
         state: String,
-        /// Password.
-        #[arg(long)]
+        /// Password, at most 20 characters.
+        #[arg(long, value_parser = DevicePassword)]
         password: Option<String>,
     },
 
-    /// Get event/alarm information.
+    /// List the objects with an active event or an unacknowledged
+    /// transition (GetEventInformation), following the device's pages.
     Alarms {
         /// Target device.
         target: String,
+        /// Stop after this many objects.
+        #[arg(long, default_value_t = crate::commands::alarms::DEFAULT_MAX_EVENTS,
+              value_parser = clap::value_parser!(u32).range(1..))]
+        max: u32,
+    },
+
+    /// List the objects in alarm (GetAlarmSummary).
+    AlarmSummary {
+        /// Target device.
+        target: String,
+    },
+
+    /// List the event-initiating objects that match the filters
+    /// (GetEnrollmentSummary).
+    EnrollmentSummary {
+        /// Target device.
+        target: String,
+        #[command(flatten)]
+        filters: crate::commands::alarms::EnrollmentFilters,
     },
 
     /// Read a file from a device.
@@ -621,6 +656,38 @@ pub(crate) enum Command {
     },
 }
 
+/// The `--password` of `control` and `reinit`: refused at parse time when
+/// longer than the requests carry (#2085) or empty (#2094), so nothing is
+/// resolved or sent.
+/// Its error names the limit but never echoes the password, which clap's
+/// mapped parsers would.
+#[derive(Clone, Copy)]
+struct DevicePassword;
+
+impl TypedValueParser for DevicePassword {
+    type Value = String;
+
+    fn parse_ref(
+        &self,
+        cmd: &clap::Command,
+        arg: Option<&clap::Arg>,
+        value: &std::ffi::OsStr,
+    ) -> Result<String, clap::Error> {
+        use bacnet_services::device_mgmt::{MAX_PASSWORD_CHARS, password_valid};
+        let password = clap::builder::StringValueParser::new().parse_ref(cmd, arg, value)?;
+        if password_valid(&password) {
+            return Ok(password);
+        }
+        let name = arg.map_or_else(|| "--password".to_owned(), ToString::to_string);
+        let why = if password.is_empty() {
+            format!("{name} is empty; leave it out to send no password\n")
+        } else {
+            format!("{name} exceeds the {MAX_PASSWORD_CHARS}-character limit\n")
+        };
+        Err(clap::Error::raw(clap::error::ErrorKind::ValueValidation, why).with_cmd(cmd))
+    }
+}
+
 /// Capture global argument provenance and validate cross-command requirements.
 pub(crate) fn capture_sources(matches: &clap::ArgMatches) -> Result<Vec<String>, clap::Error> {
     let explicit: Vec<String> = matches
@@ -649,302 +716,7 @@ pub(crate) fn capture_sources(matches: &clap::ArgMatches) -> Result<Vec<String>,
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use bacnet_types::primitives::{Date, Time};
-    use clap::error::ErrorKind;
+mod reference;
 
-    // The derived parser's debug-build frames nearly fill a 1 MiB test thread,
-    // so parse where `main` does: on a thread with a larger stack (#953).
-    fn parse<const N: usize>(args: [&'static str; N]) -> Result<Cli, clap::Error> {
-        crate::parse_on_large_stack(move || {
-            use clap::{CommandFactory, FromArgMatches};
-            let mut matches = Cli::command().try_get_matches_from(args)?;
-            let explicit_args = capture_sources(&matches)?;
-            let command_name = matches.subcommand_name().map(str::to_owned);
-            let mut cli = Cli::from_arg_matches_mut(&mut matches)?;
-            cli.explicit_args = explicit_args;
-            cli.command_name = command_name;
-            Ok(cli)
-        })
-    }
-
-    /// `--foreign-bbmd`, `--ttl` and `--renewal` reach the transport's
-    /// foreign-device configuration (#938); `--ttl` also serves `register`,
-    /// given before or after it.
-    #[test]
-    fn the_foreign_device_flags_reach_the_transport() {
-        let cli = parse([
-            "bacnet",
-            "--foreign-bbmd",
-            "192.0.2.10",
-            "--renewal",
-            "20",
-            "discover",
-            "--ttl",
-            "60",
-        ])
-        .unwrap();
-        let args = crate::transport::TransportArgs::from_cli(
-            &cli,
-            Ipv4Addr::UNSPECIFIED,
-            Ipv4Addr::BROADCAST,
-        )
-        .unwrap();
-        let foreign = args.foreign_device.unwrap();
-        assert_eq!(
-            (foreign.bbmd_ip, foreign.bbmd_port, foreign.ttl),
-            (Ipv4Addr::new(192, 0, 2, 10), 0xBAC0, 60)
-        );
-        assert_eq!(
-            foreign.renewal_interval,
-            Some(std::time::Duration::from_secs(20))
-        );
-
-        let cli = parse(["bacnet", "register", "192.0.2.10"]).unwrap();
-        assert_eq!((cli.ttl, cli.foreign_bbmd), (300, None));
-        let args = crate::transport::TransportArgs::from_cli(
-            &cli,
-            Ipv4Addr::UNSPECIFIED,
-            Ipv4Addr::BROADCAST,
-        )
-        .unwrap();
-        assert!(args.foreign_device.is_none());
-        let cli = parse(["bacnet", "register", "192.0.2.10", "--ttl", "45"]).unwrap();
-        assert_eq!(cli.ttl, 45);
-    }
-
-    /// The SC reconnect flags (#1831): `--sc-failover-url` brings the
-    /// default reconnect policy, as `--sc-reconnect` does alone; neither
-    /// leaves reconnect off; the connect timeout is checked at parse time.
-    #[test]
-    fn the_sc_reconnect_flags_reach_the_transport() {
-        let args = |cli: &Cli| {
-            crate::transport::TransportArgs::from_cli(
-                cli,
-                Ipv4Addr::UNSPECIFIED,
-                Ipv4Addr::BROADCAST,
-            )
-        };
-        let cli = parse([
-            "bacnet",
-            "--sc",
-            "--sc-url",
-            "wss://hub.example",
-            "--sc-failover-url",
-            "wss://hub2.example",
-            "--sc-connect-timeout",
-            "2500",
-            "discover",
-        ])
-        .unwrap();
-        let sc = args(&cli).unwrap();
-        assert_eq!(sc.sc_failover_url.as_deref(), Some("wss://hub2.example"));
-        assert_eq!(
-            sc.sc_reconnect.map(|p| p.max_retries),
-            Some(bacnet_transport::sc::ScReconnectConfig::default().max_retries)
-        );
-        assert_eq!(sc.sc_connect_timeout_ms, Some(2500));
-        let cli = parse(["bacnet", "--sc", "--sc-reconnect", "discover"]).unwrap();
-        assert!(args(&cli).unwrap().sc_reconnect.is_some());
-        let cli = parse(["bacnet", "--sc", "discover"]).unwrap();
-        let plain = args(&cli).unwrap();
-        assert!(plain.sc_reconnect.is_none() && plain.sc_connect_timeout_ms.is_none());
-        let same = parse([
-            "bacnet",
-            "--sc-url",
-            "wss://hub.example",
-            "--sc-failover-url",
-            "WSS://Hub.Example/",
-            "discover",
-        ])
-        .unwrap();
-        assert!(args(&same).err().unwrap().contains("differ"), "normalized");
-        for bad in ["0", "600001", "soon"] {
-            let error = parse(["bacnet", "--sc-connect-timeout", bad, "discover"]).unwrap_err();
-            assert_eq!(error.kind(), ErrorKind::ValueValidation, "{bad}");
-        }
-    }
-
-    /// `find` takes the name as a word or with `--name`, never both and
-    /// never neither, each a usage error (#1872).
-    #[test]
-    fn find_takes_its_name_as_a_word_or_a_flag() {
-        let name = |cli: Cli| match cli.command {
-            Some(Command::Find {
-                name, name_flag, ..
-            }) => name.or(name_flag),
-            other => panic!("{other:?}"),
-        };
-        assert_eq!(
-            name(parse(["bacnet", "find", "AHU-1"]).unwrap()).as_deref(),
-            Some("AHU-1")
-        );
-        assert_eq!(
-            name(parse(["bacnet", "find", "--name", "AHU-1"]).unwrap()).as_deref(),
-            Some("AHU-1")
-        );
-        assert_eq!(
-            name(parse(["bacnet", "whohas", "Zone Temp", "--wait", "5"]).unwrap()).as_deref(),
-            Some("Zone Temp")
-        );
-        let both = parse(["bacnet", "find", "AHU-1", "--name", "AHU-2"]).unwrap_err();
-        assert_eq!(both.kind(), ErrorKind::ArgumentConflict);
-        assert_eq!(both.exit_code(), 2);
-        let neither = parse(["bacnet", "find"]).unwrap_err();
-        assert_eq!(neither.kind(), ErrorKind::MissingRequiredArgument);
-        assert_eq!(neither.exit_code(), 2);
-    }
-
-    /// The guard classifies by canonical name, so an alias resolves to it;
-    /// the guard flags go on either side of the subcommand (#972).
-    #[test]
-    fn aliases_give_the_canonical_name_and_guard_flags_are_global() {
-        let cli = parse(["bacnet", "wp", "10.0.0.1", "av:1", "pv", "1"]).unwrap();
-        assert_eq!(cli.command_name.as_deref(), Some("write"));
-        assert_eq!(cli.policy(), crate::core::guard::Policy::default());
-        let cli = parse([
-            "bacnet",
-            "--allow-write",
-            "dcc",
-            "10.0.0.1",
-            "enable",
-            "--yes",
-        ])
-        .unwrap();
-        assert_eq!(cli.command_name.as_deref(), Some("control"));
-        assert!(cli.allow_write && cli.yes);
-        assert_eq!(parse(["bacnet"]).unwrap().command_name, None);
-    }
-
-    #[test]
-    fn tui_takes_fps_and_log_file_and_global_flags() {
-        let cli = parse([
-            "bacnet",
-            "tui",
-            "--fps",
-            "5",
-            "--log-file",
-            "tui.log",
-            "-i",
-            "10.0.0.5",
-        ])
-        .unwrap();
-        assert_eq!(cli.interface, Some(Ipv4Addr::new(10, 0, 0, 5)));
-        let Some(Command::Tui { fps, log_file, .. }) = cli.command else {
-            panic!("expected Tui");
-        };
-        assert_eq!(fps, 5);
-        assert_eq!(log_file, Some(PathBuf::from("tui.log")));
-
-        let Some(Command::Tui { fps, log_file, .. }) = parse(["bacnet", "tui"]).unwrap().command
-        else {
-            panic!("expected Tui");
-        };
-        assert_eq!((fps, log_file), (20, None));
-        for bad in ["0", "61"] {
-            let error = parse(["bacnet", "tui", "--fps", bad]).unwrap_err();
-            assert_eq!(error.kind(), ErrorKind::ValueValidation);
-        }
-    }
-
-    #[test]
-    fn ack_alarm_and_alias_require_both_timestamp_flags() {
-        for command in ["ack-alarm", "ack"] {
-            let missing_both =
-                parse(["bacnet", command, "127.0.0.1", "ai:1", "--state", "1"]).unwrap_err();
-            assert_eq!(missing_both.kind(), ErrorKind::MissingRequiredArgument);
-
-            let missing_ack_time = parse([
-                "bacnet",
-                command,
-                "127.0.0.1",
-                "ai:1",
-                "--state",
-                "1",
-                "--timestamp",
-                "sequence:9",
-            ])
-            .unwrap_err();
-            assert_eq!(missing_ack_time.kind(), ErrorKind::MissingRequiredArgument);
-        }
-    }
-
-    #[test]
-    fn ack_alarm_clap_uses_lossless_shared_timestamp_parser() {
-        let cli = parse([
-            "bacnet",
-            "ack",
-            "127.0.0.1",
-            "ai:1",
-            "--state",
-            "3",
-            "--source",
-            "operator",
-            "--timestamp",
-            "time:1,2,3,4",
-            "--ack-time",
-            "datetime:2026,9,2,3;5,6,7,8",
-        ])
-        .unwrap();
-        let Some(Command::AckAlarm {
-            state,
-            source,
-            timestamp,
-            ack_time,
-            ..
-        }) = cli.command
-        else {
-            panic!("expected AckAlarm");
-        };
-        assert_eq!(state, 3);
-        assert_eq!(source, "operator");
-        assert_eq!(
-            timestamp,
-            BACnetTimeStamp::Time(Time {
-                hour: 1,
-                minute: 2,
-                second: 3,
-                hundredths: 4,
-            })
-        );
-        assert_eq!(
-            ack_time,
-            BACnetTimeStamp::DateTime {
-                date: Date {
-                    year: 126,
-                    month: 9,
-                    day: 2,
-                    day_of_week: 3,
-                },
-                time: Time {
-                    hour: 5,
-                    minute: 6,
-                    second: 7,
-                    hundredths: 8,
-                },
-            }
-        );
-    }
-
-    #[test]
-    fn ack_alarm_clap_reports_shared_parser_error_before_execution() {
-        let error = parse([
-            "bacnet",
-            "ack-alarm",
-            "127.0.0.1",
-            "ai:1",
-            "--state",
-            "1",
-            "--timestamp",
-            "time:24,0,0,0",
-            "--ack-time",
-            "sequence:1",
-        ])
-        .unwrap_err();
-        assert_eq!(error.kind(), ErrorKind::ValueValidation);
-        assert!(error
-            .to_string()
-            .contains("BACnetTimeStamp hour must be 0..=23 or 255 (unspecified), got 24"));
-    }
-}
+#[cfg(test)]
+mod tests;

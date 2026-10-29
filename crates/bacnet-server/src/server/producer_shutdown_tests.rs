@@ -1,7 +1,7 @@
 use super::request_tasks_tests::fixture;
 use super::*;
 use crate::server::test_transport::TestTransport;
-use std::future::{pending, poll_fn, Future};
+use std::future::{Future, pending, poll_fn};
 use std::task::Poll;
 use tokio::sync::oneshot;
 
@@ -103,7 +103,7 @@ async fn cancelled_at(position: usize) {
 }
 
 macro_rules! cancellation_test {
-    ($name:ident, $position:expr) => {
+    ($name:ident, $position:expr_2021) => {
         #[tokio::test(start_paused = true)]
         async fn $name() {
             cancelled_at($position).await;

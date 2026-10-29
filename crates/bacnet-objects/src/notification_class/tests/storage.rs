@@ -3,7 +3,7 @@
 use super::super::*;
 use crate::durable::SaveWait;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 /// Storage in memory. A save can be made to fail, or to wait until the test

@@ -68,7 +68,7 @@
 //! return to service restores the saved value and evaluates again. Refusals
 //! reported meanwhile are kept for that evaluation.
 
-use std::mem::discriminant;
+use core::mem::discriminant;
 
 use bacnet_types::enums::Reliability;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
@@ -88,7 +88,7 @@ impl ScheduleObject {
         weekly
             .chain(exceptions)
             .map(|time_value| &time_value.value)
-            .chain(std::iter::once(&self.schedule_default))
+            .chain(core::iter::once(&self.schedule_default))
             .filter(|value| **value != PropertyValue::Null)
     }
 
@@ -209,7 +209,7 @@ impl ScheduleObject {
         if new_reliability == self.reliability {
             return ReliabilityEvaluation::Unchanged;
         }
-        let old_reliability = std::mem::replace(&mut self.reliability, new_reliability);
+        let old_reliability = core::mem::replace(&mut self.reliability, new_reliability);
         ReliabilityEvaluation::Changed {
             old_reliability,
             new_reliability,

@@ -3,8 +3,8 @@
 //! that gives back the form the keyword takes.
 
 use super::*;
-use crate::types::read_value::decode_read_value;
 use crate::types::PyObjectIdentifier;
+use crate::types::read_value::decode_read_value;
 use bacnet_encoding::constructed::encode_authentication_policy;
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_types::constructed::BACnetDeviceObjectReference;
@@ -174,11 +174,12 @@ fn a_policy_list_reads_back_as_the_keyword_takes_it() {
                 one.getattr("tag").unwrap().extract::<String>().unwrap(),
                 "authentication_policy"
             );
-            assert!(one
-                .getattr("value")
-                .unwrap()
-                .eq(policies.get_item(index).unwrap())
-                .unwrap());
+            assert!(
+                one.getattr("value")
+                    .unwrap()
+                    .eq(policies.get_item(index).unwrap())
+                    .unwrap()
+            );
             start = end;
         }
         // Another property's octets, or a policy cut short, stay generic.

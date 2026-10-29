@@ -204,8 +204,8 @@ async fn accepted_direct_shared_fifo_saturation_never_uses_hub_and_cancelled_wor
 async fn outbound_direct_frame_adapter_yields_every_ready_websocket_control() {
     use futures_util::StreamExt;
     use std::sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     };
     use tokio_tungstenite::tungstenite::Message;
     let consumed = Arc::new(AtomicUsize::new(0));

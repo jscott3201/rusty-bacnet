@@ -10,20 +10,20 @@
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
-use bacnet_encoding::apdu::{decode_apdu, encode_apdu, Apdu, ConfirmedRequest as ConfirmedPdu};
+use bacnet_encoding::apdu::{Apdu, ConfirmedRequest as ConfirmedPdu, decode_apdu, encode_apdu};
 use bacnet_endpoint::bip::BipEndpointBuilder;
-use bacnet_endpoint::identity::{build_database_with_extra, DeviceIdentity};
+use bacnet_endpoint::identity::{DeviceIdentity, build_database_with_extra};
 use bacnet_endpoint::session::SessionRole;
 use bacnet_network::layer::NetworkLayer;
 use bacnet_npdu::NetworkPriority;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_transport::bip::BipTransport;
+use bacnet_types::MacAddr;
 use bacnet_types::enums::{
     ConfirmedServiceChoice, EngineeringUnits, ObjectType, PropertyIdentifier,
 };
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
-use bacnet_types::MacAddr;
 use bytes::BytesMut;
 
 const WAIT: Duration = Duration::from_secs(5);

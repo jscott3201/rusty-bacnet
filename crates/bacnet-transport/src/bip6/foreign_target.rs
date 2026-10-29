@@ -51,11 +51,82 @@ pub(crate) struct ForeignTarget {
     pub(super) reached: Notify,
 }
 
-fn property_error(code: ErrorCode) -> Error {
-    Error::Protocol {
-        class: ErrorClass::PROPERTY,
-        code,
+/// Why a [`Bip6ForeignDeviceConfig`] can't register: see
+/// [`Bip6ForeignDeviceConfig::check`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Bip6ForeignDeviceRefusal {
+    /// The BBMD address is `::`.
+    Unspecified,
+    /// The BBMD address is a multicast group.
+    Multicast,
+    /// The BBMD address is link-local (`fe80::/10`).
+    LinkLocal,
+    /// The BBMD address is IPv4-mapped (`::ffff:a.b.c.d`).
+    Ipv4Mapped,
+    /// The BBMD address is the deprecated IPv4-compatible form
+    /// (`::a.b.c.d`, other than `::` and `::1`).
+    Ipv4Compatible,
+    /// The BBMD port is 0.
+    ZeroPort,
+    /// The time-to-live is 0.
+    ZeroTtl,
+}
+
+impl std::fmt::Display for Bip6ForeignDeviceRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Unspecified => "the BBMD address is unspecified (::)",
+            Self::Multicast => "the BBMD address is a multicast group",
+            Self::LinkLocal => "the BBMD address is link-local",
+            Self::Ipv4Mapped => "the BBMD address is IPv4-mapped; B/IP serves IPv4 hosts",
+            Self::Ipv4Compatible => {
+                "the BBMD address is IPv4-compatible (::a.b.c.d); B/IP serves IPv4 hosts"
+            }
+            Self::ZeroPort => "the BBMD port is 0",
+            Self::ZeroTtl => "the time-to-live is 0",
+        })
     }
+}
+
+impl std::error::Error for Bip6ForeignDeviceRefusal {}
+
+impl Bip6ForeignDeviceConfig {
+    /// Check that this registration can work: the BBMD is an IPv6 unicast
+    /// host (loopback, unique local or global unicast) with a nonzero port,
+    /// and the time-to-live is nonzero.
+    ///
+    /// A link-local BBMD is refused: no zone index travels with an address,
+    /// so its Forwarded-NPDUs could never be trusted. The IPv4-mapped and
+    /// IPv4-compatible forms name IPv4 hosts, which B/IP serves. The
+    /// transport's start refuses a registration that fails this check, and
+    /// so does a Network Port activation.
+    pub fn check(&self) -> Result<(), Bip6ForeignDeviceRefusal> {
+        let ip = self.bbmd_ip;
+        let ipv4_compatible = ip.segments()[..6] == [0; 6] && ip.segments()[6] != 0;
+        let refusal = if ip.is_unspecified() {
+            Bip6ForeignDeviceRefusal::Unspecified
+        } else if ip.is_multicast() {
+            Bip6ForeignDeviceRefusal::Multicast
+        } else if ip.is_unicast_link_local() {
+            Bip6ForeignDeviceRefusal::LinkLocal
+        } else if ip.to_ipv4_mapped().is_some() {
+            Bip6ForeignDeviceRefusal::Ipv4Mapped
+        } else if ipv4_compatible {
+            Bip6ForeignDeviceRefusal::Ipv4Compatible
+        } else if self.bbmd_port == 0 {
+            Bip6ForeignDeviceRefusal::ZeroPort
+        } else if self.ttl == 0 {
+            Bip6ForeignDeviceRefusal::ZeroTtl
+        } else {
+            return Ok(());
+        };
+        Err(refusal)
+    }
+}
+
+fn property_error(code: ErrorCode) -> Error {
+    Error::protocol(ErrorClass::PROPERTY, code)
 }
 
 impl ForeignTarget {
@@ -132,12 +203,10 @@ impl ForeignTarget {
     /// The registration `changes` would make, checked against this node's
     /// own address. Changes nothing.
     ///
-    /// A BBMD passes when it is an IPv6 unicast host (loopback, unique local
-    /// or global unicast) other than this node, with a nonzero port, that
-    /// this host's routes reach from the socket's bound address; and the
-    /// time-to-live is nonzero. The unspecified, multicast, link-local,
-    /// IPv4-mapped and IPv4-compatible forms are refused, as are IPv4
-    /// hosts and host names.
+    /// A registration passes [`Bip6ForeignDeviceConfig::check`] when its
+    /// BBMD is an IPv6 unicast host; that BBMD must also be other than this
+    /// node and one this host's routes reach from the socket's bound
+    /// address. IPv4 hosts and host names are refused.
     fn changed_config(
         state: &State,
         changes: &ForeignDeviceChanges,
@@ -159,26 +228,13 @@ impl ForeignTarget {
         if let Some(ttl) = changes.subscription_lifetime {
             config.ttl = ttl;
         }
-        let ip = config.bbmd_ip;
-        // A link-local BBMD is never trusted as the sender of a
-        // Forwarded-NPDU (no zone index travels with it), so it can't
-        // serve as one. The deprecated IPv4-compatible form (::/96, other
-        // than :: and ::1) names an IPv4 host, which B/IP serves.
-        let ipv4_compatible = ip.segments()[..6] == [0; 6] && ip.segments()[6] != 0;
-        if ip.is_unspecified()
-            || ip.is_multicast()
-            || ip.is_unicast_link_local()
-            || ip.to_ipv4_mapped().is_some()
-            || ipv4_compatible
-            || config.bbmd_port == 0
-            || config.ttl == 0
-            || (ip == *own.ip() && config.bbmd_port == own.port())
-        {
+        let own_address = config.bbmd_ip == *own.ip() && config.bbmd_port == own.port();
+        if config.check().is_err() || own_address {
             return Err(out_of_range());
         }
         // The socket stays bound to its address, so the new BBMD must be one
         // this host reaches from it: a local probe, nothing is sent.
-        let bbmd = SocketAddrV6::new(ip, config.bbmd_port, 0, 0);
+        let bbmd = SocketAddrV6::new(config.bbmd_ip, config.bbmd_port, 0, 0);
         match super::socket::route_source(bbmd) {
             Ok(source) if source == *own.ip() => Ok(config),
             _ => Err(out_of_range()),

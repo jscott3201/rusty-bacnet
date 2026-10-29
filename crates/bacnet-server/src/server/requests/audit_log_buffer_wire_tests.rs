@@ -5,7 +5,7 @@
 //! so no write purges the log.
 
 use super::mutation_list_wire_tests::wire;
-use super::mutation_tests::{apdu, assert_denied, oid, value, wpm, Fixture};
+use super::mutation_tests::{Fixture, apdu, assert_denied, oid, value, wpm};
 use super::*;
 use bacnet_objects::audit::{AuditLogObject, AuditLogPersistence, AuditLogSnapshot};
 use bacnet_objects::clock::{ClockFrame, ClockReader};
@@ -14,7 +14,7 @@ use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleError}
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::primitives::{Date, Time};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{mpsc, Mutex as StdMutex};
+use std::sync::{Mutex as StdMutex, mpsc};
 use std::time::Duration;
 
 const WAIT: Duration = Duration::from_secs(10);

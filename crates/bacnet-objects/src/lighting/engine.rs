@@ -42,14 +42,14 @@
 //! reported is the engine's value held between them, and a trim change runs
 //! alongside whatever operation is in progress.
 
-use std::time::Duration;
+use core::time::Duration;
 
 use bacnet_types::constructed::BACnetLightingCommand;
 use bacnet_types::enums::{LightingInProgress, LightingOperation as Op};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 
-use super::{normalized_level, LightingOutputObject};
+use super::{LightingOutputObject, normalized_level};
 use crate::common;
 use crate::transition::{Progress, Run, Transition, TransitionKind};
 

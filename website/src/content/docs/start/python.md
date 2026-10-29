@@ -3,7 +3,7 @@ title: "Read with Python"
 description: "Use the asynchronous Python client for a small, read-only integration."
 ---
 
-Install `rusty-bacnet==0.14.0` in a virtual environment first. The distribution name uses a hyphen; the import name uses an underscore.
+Install `rusty-bacnet==0.15.0` in a virtual environment first. The distribution name uses a hyphen; the import name uses an underscore.
 
 For a self-contained first run with no external target, use the [local client/server lab](/rusty-bacnet/start/local-lab/). Continue here when you have a known device address and object.
 
@@ -86,10 +86,10 @@ The async context manager starts the client and stops it when the block exits. T
 
 ## Next steps
 
-Use [the API entry points](/rusty-bacnet/reference/api/) for complete signatures and type stubs. The repository also includes a client/server example, but review its binds and writes before running it: a demonstration server is not automatically an isolated or production-ready deployment.
+Use the [Python reference](/rusty-bacnet/reference/python/) for complete signatures and keyword defaults. Python and Rust expose different configuration surfaces, and the bindings don't wrap every Rust API, so check the Python reference before assuming that a Rust option exists in Python. The repository also includes a client/server example, but review its binds and writes before running it: a demonstration server is not automatically an isolated or production-ready deployment.
 
 ## Sources and release scope
 
-These instructions target **v0.14.0**. Source review is not a claim of hardware qualification.
+These instructions target **v0.15.0**. Source review is not a claim of hardware qualification.
 
-[Python API](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/python-api.md) · [Release client/server example](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/examples/python/bip_client_server.py) · [Type stubs](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/crates/rusty-bacnet/rusty_bacnet.pyi).
+[Python API](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/docs/python-api.md) · [Release client/server example](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/examples/python/bip_client_server.py) · [Type stubs](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/crates/rusty-bacnet/rusty_bacnet.pyi).

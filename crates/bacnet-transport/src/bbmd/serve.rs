@@ -12,10 +12,10 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use std::time::Instant;
 
 use bacnet_bip_codec::{self as codec, BdtEntries, BvlcResultCode, Bvll, FdtEntries};
+use bacnet_bip_core::Instant as CoreInstant;
 use bacnet_bip_core::bbmd::{
     RegistrationLimits, RegistrationRefusal, Request, Reservation, Rules, Served,
 };
-use bacnet_bip_core::Instant as CoreInstant;
 
 use super::policy::ForeignDeviceRateTracker;
 use super::{BbmdState, ForeignDevicePolicy, MAX_FDT};

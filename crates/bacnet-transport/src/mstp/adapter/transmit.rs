@@ -51,7 +51,7 @@ use bacnet_types::error::Error;
 use tokio::time::Instant;
 use tracing::{debug, warn};
 
-use super::{increment, poll_once, Core, Echo, Mac, Outgoing, ReadFailed, SentKind, SerialPort};
+use super::{Core, Echo, Mac, Outgoing, ReadFailed, SentKind, SerialPort, increment, poll_once};
 
 /// Reads at most in the non-blocking drain before a start, so a line that
 /// never falls quiet cannot hold the task there.

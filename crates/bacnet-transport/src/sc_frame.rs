@@ -27,7 +27,7 @@ pub(crate) use proprietary::proprietary_message_error;
 pub(crate) use connect::connect_message_error;
 #[cfg(feature = "sc-tls")]
 pub(crate) use connect::validate_connect_request;
-pub(crate) use control::{control_envelope_error, validate_control, ControlRecipient};
+pub(crate) use control::{ControlRecipient, control_envelope_error, validate_control};
 pub(crate) use npdu::missing_npdu_payload;
 
 #[cfg(test)]
@@ -36,7 +36,7 @@ pub(crate) mod heartbeat_test_support;
 #[cfg(test)]
 pub(crate) mod connect_test_support;
 
-pub use result::{decode_sc_bvlc_result, ScBvlcResult};
+pub use result::{ScBvlcResult, decode_sc_bvlc_result};
 
 /// BACnet/SC hub WebSocket subprotocol (Annex AB.7.1).
 pub const BACNET_SC_HUB_SUBPROTOCOL: &str = "hub.bsc.bacnet.org";

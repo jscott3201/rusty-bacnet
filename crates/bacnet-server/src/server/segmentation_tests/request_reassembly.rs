@@ -12,7 +12,7 @@
 //! The paused request-progress fixtures instead advance after dispatch replies.
 
 use super::*;
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
+use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
 use bacnet_objects::value_types::CharacterStringValueObject;
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_transport::loopback::LoopbackTransport;

@@ -3,14 +3,32 @@
 //! Supports table (human-readable) and JSON output formats with automatic
 //! TTY detection.
 
-use std::net::Ipv4Addr;
-
 use bacnet_client::discovery::DiscoveredDevice;
-use bacnet_types::primitives::PropertyValue;
 use owo_colors::OwoColorize;
 use serde::Serialize;
 
-use crate::core::target::{routed_station, AddressStyle};
+use bacnet_ops::format::{Datum, StateTexts};
+use bacnet_ops::target::{AddressStyle, routed_station};
+
+/// No state texts: a binary object's state shows as `active` or
+/// `inactive` and a multi-state one as its number. `read` names states
+/// with texts it reads (#2132); the other one-shot commands use this.
+pub static NO_STATE_TEXTS: StateTexts = StateTexts {
+    active: None,
+    inactive: None,
+    states: Vec::new(),
+};
+
+/// Text that may hold device strings (a value, a name, a message) as the
+/// table and text output prints it (#2144): each control character and
+/// line or paragraph separator as a space and each invisible format
+/// character dropped ([`clean_text`](bacnet_ops::format::clean_text)), as
+/// the TUI shows them, so a device can't move the cursor, break a row,
+/// send an escape sequence or reorder what follows. Applied as the text is
+/// printed, before any colour; JSON output keeps the device's text exactly.
+pub fn screen(text: &str) -> String {
+    bacnet_ops::format::clean_text(text)
+}
 
 /// Output format for CLI results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,26 +59,6 @@ pub struct DeviceInfo {
     /// CLI reads back: `2:0x05`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub station: Option<String>,
-}
-
-/// Format a MAC address as a target the CLI reads back: a BIP MAC (6 bytes:
-/// 4 IP + 2 port) as `ip:port`, and a B/IPv6 VMAC (3 bytes, the only
-/// 3-byte MAC the CLI's transports use) as `bip6:0x0004D2`. Falls back to
-/// hex display for other MACs. A routed station is written with its network
-/// by [`crate::core::target::routed_station`] instead.
-pub fn format_mac(mac: &[u8]) -> String {
-    if mac.len() == 6 {
-        let ip = Ipv4Addr::new(mac[0], mac[1], mac[2], mac[3]);
-        let port = u16::from_be_bytes([mac[4], mac[5]]);
-        format!("{ip}:{port}")
-    } else if let Ok(vmac) = <[u8; 3]>::try_from(mac) {
-        bacnet_transport::bip6::format_vmac_text(bacnet_transport::bip6::Bip6Vmac::new(vmac))
-    } else {
-        mac.iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<Vec<_>>()
-            .join(":")
-    }
 }
 
 /// Convert a `DiscoveredDevice` into a `DeviceInfo` for display, its
@@ -147,96 +145,14 @@ pub fn print_devices(devices: &[DeviceInfo], format: OutputFormat) {
     }
 }
 
-/// Format a `PropertyValue` as a human-readable string.
-pub fn format_property_value(value: &PropertyValue) -> String {
-    match value {
-        PropertyValue::Null => "null".to_string(),
-        PropertyValue::Boolean(b) => b.to_string(),
-        PropertyValue::Unsigned(v) => v.to_string(),
-        PropertyValue::Signed(v) => v.to_string(),
-        PropertyValue::Real(v) => format!("{v}"),
-        PropertyValue::Double(v) => format!("{v}"),
-        PropertyValue::OctetString(bytes) => {
-            let hex: Vec<String> = bytes.iter().map(|b| format!("{b:02x}")).collect();
-            format!("[{}]", hex.join(" "))
-        }
-        PropertyValue::CharacterString(s) => format!("\"{s}\""),
-        PropertyValue::BitString { unused_bits, data } => {
-            let total_bits = (data.len() * 8).saturating_sub(*unused_bits as usize);
-            let mut bits = String::with_capacity(total_bits);
-            for i in 0..total_bits {
-                let byte_idx = i / 8;
-                let bit_idx = 7 - (i % 8);
-                if data[byte_idx] & (1 << bit_idx) != 0 {
-                    bits.push('1');
-                } else {
-                    bits.push('0');
-                }
-            }
-            format!("bits({bits})")
-        }
-        PropertyValue::Enumerated(v) => format!("enumerated({v})"),
-        PropertyValue::Date(d) => {
-            let year_str = if d.year == 0xFF {
-                "*".to_string()
-            } else {
-                format!("{}", d.year as u16 + 1900)
-            };
-            let month_str = if d.month == 0xFF {
-                "*".to_string()
-            } else {
-                format!("{:02}", d.month)
-            };
-            let day_str = if d.day == 0xFF {
-                "*".to_string()
-            } else {
-                format!("{:02}", d.day)
-            };
-            format!("{year_str}-{month_str}-{day_str}")
-        }
-        PropertyValue::Time(t) => {
-            let hour_str = if t.hour == 0xFF {
-                "*".to_string()
-            } else {
-                format!("{:02}", t.hour)
-            };
-            let minute_str = if t.minute == 0xFF {
-                "*".to_string()
-            } else {
-                format!("{:02}", t.minute)
-            };
-            let second_str = if t.second == 0xFF {
-                "*".to_string()
-            } else {
-                format!("{:02}", t.second)
-            };
-            let hundredths_str = if t.hundredths == 0xFF {
-                "*".to_string()
-            } else {
-                format!("{:02}", t.hundredths)
-            };
-            format!("{hour_str}:{minute_str}:{second_str}.{hundredths_str}")
-        }
-        PropertyValue::ObjectIdentifier(oid) => {
-            format!("{}:{}", oid.object_type(), oid.instance_number())
-        }
-        PropertyValue::List(items) => {
-            let formatted: Vec<String> = items.iter().map(format_property_value).collect();
-            format!("[{}]", formatted.join(", "))
-        }
-        PropertyValue::ApplicationData(bytes) => {
-            let hex: Vec<String> = bytes.iter().map(|b| format!("{b:02x}")).collect();
-            format!("application-data([{}])", hex.join(" "))
-        }
-    }
-}
-
-/// Print a single read result.
+/// Print a single read result: the value as text, and in JSON its typed
+/// form under `decoded` as well.
 pub fn print_read_result(
     object: &str,
     property: &str,
     array_index: Option<u32>,
     value: &str,
+    decoded: &Datum,
     format: OutputFormat,
 ) {
     let prop_display = match array_index {
@@ -247,7 +163,11 @@ pub fn print_read_result(
         OutputFormat::Table => {
             let mut table = comfy_table::Table::new();
             table.set_header(vec!["Object", "Property", "Value"]);
-            table.add_row(vec![object, &prop_display, &format!("{}", value.green())]);
+            table.add_row(vec![
+                object,
+                &prop_display,
+                &format!("{}", screen(value).green()),
+            ]);
             println!("{table}");
         }
         OutputFormat::Json => {
@@ -255,6 +175,7 @@ pub fn print_read_result(
                 "object": object,
                 "property": prop_display,
                 "value": value,
+                "decoded": decoded,
             });
             println!(
                 "{}",
@@ -264,41 +185,56 @@ pub fn print_read_result(
     }
 }
 
-/// Print RPM results as a table.
-///
-/// Each entry is (object_str, property_str, array_index, value_str).
-pub fn print_rpm_table(entries: &[(String, String, Option<u32>, String)], format: OutputFormat) {
+/// One property of a ReadPropertyMultiple result.
+#[derive(Debug, Clone)]
+pub struct RpmEntry {
+    /// The object, `ANALOG_INPUT:1`.
+    pub object: String,
+    /// The property, `PRESENT_VALUE`.
+    pub property: String,
+    /// The array index read, if any.
+    pub index: Option<u32>,
+    /// The value as text, or `ERROR: CLASS:CODE`.
+    pub value: String,
+    /// The value as typed data; `None` for an error.
+    pub data: Option<Datum>,
+}
+
+/// Print RPM results: a table, or in JSON one object per property with
+/// its text `value` and, for a value, its typed form under `decoded`.
+pub fn print_rpm_table(entries: &[RpmEntry], format: OutputFormat) {
+    let property = |entry: &RpmEntry| match entry.index {
+        Some(i) => format!("{}[{i}]", entry.property),
+        None => entry.property.clone(),
+    };
     match format {
         OutputFormat::Table => {
             let mut table = comfy_table::Table::new();
             table.set_header(vec!["Object", "Property", "Value"]);
-            for (obj, prop, idx, val) in entries {
-                let prop_display = match idx {
-                    Some(i) => format!("{prop}[{i}]"),
-                    None => prop.clone(),
-                };
-                let colored_val = if val.starts_with("ERROR") {
-                    format!("{}", val.red())
+            for entry in entries {
+                let value = screen(&entry.value);
+                let colored_val = if entry.data.is_none() {
+                    format!("{}", value.red())
                 } else {
-                    format!("{}", val.green())
+                    format!("{}", value.green())
                 };
-                table.add_row(vec![obj.as_str(), &prop_display, &colored_val]);
+                table.add_row(vec![entry.object.as_str(), &property(entry), &colored_val]);
             }
             println!("{table}");
         }
         OutputFormat::Json => {
             let json_results: Vec<serde_json::Value> = entries
                 .iter()
-                .map(|(obj, prop, idx, val)| {
-                    let prop_display = match idx {
-                        Some(i) => format!("{prop}[{i}]"),
-                        None => prop.clone(),
-                    };
-                    serde_json::json!({
-                        "object": obj,
-                        "property": prop_display,
-                        "value": val,
-                    })
+                .map(|entry| {
+                    let mut json = serde_json::json!({
+                        "object": entry.object,
+                        "property": property(entry),
+                        "value": entry.value,
+                    });
+                    if let Some(data) = &entry.data {
+                        json["decoded"] = serde_json::to_value(data).unwrap_or_default();
+                    }
+                    json
                 })
                 .collect();
             println!(
@@ -338,104 +274,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn format_null() {
-        assert_eq!(format_property_value(&PropertyValue::Null), "null");
-    }
-
-    #[test]
-    fn format_boolean() {
-        assert_eq!(format_property_value(&PropertyValue::Boolean(true)), "true");
-    }
-
-    #[test]
-    fn format_unsigned() {
-        assert_eq!(format_property_value(&PropertyValue::Unsigned(42)), "42");
-    }
-
-    #[test]
-    fn format_string() {
-        assert_eq!(
-            format_property_value(&PropertyValue::CharacterString("hello".to_string())),
-            "\"hello\""
-        );
-    }
-
-    #[test]
-    fn format_enumerated() {
-        assert_eq!(
-            format_property_value(&PropertyValue::Enumerated(3)),
-            "enumerated(3)"
-        );
-    }
-
-    #[test]
     fn output_format_equality() {
         assert_eq!(OutputFormat::Table, OutputFormat::Table);
         assert_ne!(OutputFormat::Table, OutputFormat::Json);
-    }
-
-    #[test]
-    fn format_bitstring_empty_data() {
-        // B4: empty data with unused_bits > 0 should not panic.
-        let val = PropertyValue::BitString {
-            unused_bits: 3,
-            data: vec![],
-        };
-        assert_eq!(format_property_value(&val), "bits()");
-    }
-
-    #[test]
-    fn format_date_human_readable() {
-        use bacnet_types::primitives::Date;
-        let d = Date {
-            year: 124,
-            month: 3,
-            day: 15,
-            day_of_week: 5,
-        };
-        assert_eq!(format_property_value(&PropertyValue::Date(d)), "2024-03-15");
-    }
-
-    #[test]
-    fn format_date_unspecified() {
-        use bacnet_types::primitives::Date;
-        let d = Date {
-            year: 0xFF,
-            month: 12,
-            day: 0xFF,
-            day_of_week: 0xFF,
-        };
-        assert_eq!(format_property_value(&PropertyValue::Date(d)), "*-12-*");
-    }
-
-    #[test]
-    fn format_time_human_readable() {
-        use bacnet_types::primitives::Time;
-        let t = Time {
-            hour: 14,
-            minute: 30,
-            second: 0,
-            hundredths: 0,
-        };
-        assert_eq!(
-            format_property_value(&PropertyValue::Time(t)),
-            "14:30:00.00"
-        );
-    }
-
-    /// Each MAC prints as a target the CLI reads back: a B/IPv6 VMAC as
-    /// `bip6:0x……`, not as hex, which no target form takes.
-    #[test]
-    fn macs_print_as_targets() {
-        assert_eq!(format_mac(&[10, 0, 0, 1, 0xBA, 0xC0]), "10.0.0.1:47808");
-        assert_eq!(format_mac(&[0x00, 0x04, 0xD2]), "bip6:0x0004D2");
-        assert_eq!(format_mac(&[7]), "07");
-        for mac in [vec![10, 0, 0, 1, 0xBA, 0xC0], vec![0x40, 0xAB, 0xCD]] {
-            match crate::core::target::parse_target(&format_mac(&mac)) {
-                Ok(crate::core::target::Target::Mac(parsed)) => assert_eq!(parsed, mac),
-                _ => panic!("{} does not read back", format_mac(&mac)),
-            }
-        }
     }
 
     #[test]
@@ -459,11 +300,11 @@ mod tests {
     /// same station (#1916).
     #[test]
     fn whois_prints_routed_stations_as_targets() {
+        use bacnet_types::MacAddr;
         use bacnet_types::enums::{ObjectType, Segmentation};
         use bacnet_types::primitives::ObjectIdentifier;
-        use bacnet_types::MacAddr;
 
-        use crate::core::target::{parse_target, Target};
+        use bacnet_ops::target::{Target, parse_target};
 
         let found = |instance: u32, routed: Option<(u16, &[u8])>| DiscoveredDevice {
             object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap(),

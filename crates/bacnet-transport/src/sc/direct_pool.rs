@@ -1,26 +1,28 @@
 //! Bounded outbound socket ownership, generation-aware reuse and retirement.
+use super::WebSocketPort;
 use super::direct_discovery::{DIRECT_POOL_IDLE_TTL, DIRECT_POOL_MAX_ENTRIES};
 #[cfg(all(test, feature = "sc-tls"))]
 use super::direct_egress::DirectSendError;
 use super::direct_egress::DirectWrite;
-use super::direct_membership::{disconnect_request, Membership};
+use super::direct_membership::{Membership, bare_control, disconnect_request};
 #[cfg(feature = "sc-tls")]
 use super::direct_receive::direct_npdu;
-use super::direct_receive::{direct_must_understand_decision, DirectMuDecision};
+use super::direct_receive::{DirectMuDecision, direct_must_understand_decision};
 use super::direct_socket::{DirectFrame, DirectSocket};
+use super::heartbeat;
 #[cfg(feature = "sc-tls")]
 use super::npdu_admission::DirectPeer;
-use super::WebSocketPort;
 use crate::sc_frame::{
-    decode_sc_message, encode_sc_message, validate_control, ControlRecipient, ScFunction,
-    ScMessage, Vmac,
+    ControlRecipient, ScFunction, ScMessage, Vmac, decode_sc_message, encode_sc_message,
+    validate_control,
 };
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 #[cfg(test)]
 use std::time::Duration;
 use std::time::Instant;
-use tokio::sync::{mpsc, OwnedSemaphorePermit};
+use tokio::sync::{OwnedSemaphorePermit, mpsc};
 
 #[cfg(feature = "sc-tls")]
 #[derive(Clone)]
@@ -46,6 +48,7 @@ impl PooledDirect {
         physical: OwnedSemaphorePermit,
         #[cfg(feature = "sc-tls")] intake: Option<DirectIntake>,
         local_limits: (u16, u16),
+        heartbeat_ms: (u64, u64),
     ) -> (Self, tokio::task::JoinHandle<()>) {
         #[cfg(feature = "sc-tls")]
         let identity = ws
@@ -53,6 +56,10 @@ impl PooledDirect {
             .map(|leaf| crate::port::DirectScIdentity::verified(leaf, member.generation));
         #[cfg(feature = "sc-tls")]
         let response = identity.map(|identity| crate::port::DirectResponse::new(&member, identity));
+        #[cfg(feature = "sc-tls")]
+        let provenance = identity.map(|identity| {
+            crate::port::TransportProvenance::verified_direct_peer(identity, ws.leaf_certificate())
+        });
         let wait = member.egress.wait;
         let mut recv = member.take_writes();
         let owner = member.clone();
@@ -63,12 +70,57 @@ impl PooledDirect {
         let task = tokio::spawn(async move {
             let (_physical, _retirement) = (physical, retirement);
             let mut prefer_send = true;
+            // Two separate timers (#2127). The idle TTL reclaims a link nobody
+            // uses: traffic in either direction refreshes it, heartbeats do
+            // not, so probing alone cannot pin an unused socket. The worker
+            // owns it on tokio's clock; the pool's copy only feeds `prune`.
+            // Liveness is AB.6.3 keep-alive on the #2124 deadline: probe one
+            // interval after the last BVLC received, give up one timeout after.
+            let mut idle_deadline = tokio::time::Instant::now() + DIRECT_POOL_IDLE_TTL;
+            let touch = |idle_deadline: &mut tokio::time::Instant| {
+                *idle_deadline = tokio::time::Instant::now() + DIRECT_POOL_IDLE_TTL;
+                *activity.lock().unwrap() = Instant::now() + DIRECT_POOL_IDLE_TTL;
+            };
+            let mut last_received = tokio::time::Instant::now();
+            let mut pending_heartbeat = None;
+            // Both armed for real at the top of the loop.
+            let idle_sleep = tokio::time::sleep_until(idle_deadline);
+            let heartbeat_sleep = tokio::time::sleep_until(last_received);
+            tokio::pin!(idle_sleep, heartbeat_sleep);
             let locally_retired = loop {
-                let deadline = tokio::time::Instant::from_std(*activity.lock().unwrap());
+                if idle_sleep.deadline() != idle_deadline {
+                    idle_sleep.as_mut().reset(idle_deadline);
+                }
+                let heartbeat_deadline =
+                    heartbeat::deadline(last_received, pending_heartbeat.is_some(), heartbeat_ms);
+                if heartbeat_sleep.deadline() != heartbeat_deadline {
+                    heartbeat_sleep.as_mut().reset(heartbeat_deadline);
+                }
                 let event = tokio::select! {
                     biased;
                     _ = async { if !*retired.borrow_and_update() { let _ = retired.changed().await; } } => break true,
-                    _ = tokio::time::sleep_until(deadline) => break true,
+                    _ = &mut idle_sleep => break true,
+                    _ = &mut heartbeat_sleep => {
+                        // An unanswered probe means the peer is gone: close
+                        // without a Disconnect-Request it cannot answer.
+                        if pending_heartbeat.is_some() {
+                            break false;
+                        }
+                        let id = owner.egress.next_message.fetch_add(1, Ordering::Relaxed);
+                        let request = bare_control(ScFunction::HeartbeatRequest, id);
+                        // Retirement mid-write ends the worker the way a
+                        // DirectWrite does.
+                        let sent = tokio::select! {
+                            biased;
+                            _ = retired.changed() => break true,
+                            sent = tokio::time::timeout(wait, ws.send(&request)) => sent,
+                        };
+                        if !matches!(sent, Ok(Ok(()))) {
+                            break false;
+                        }
+                        pending_heartbeat = Some(id);
+                        continue;
+                    }
                     event = next_event(&ws, &mut recv, prefer_send) => event,
                 };
                 match event {
@@ -91,7 +143,7 @@ impl PooledDirect {
                         if failed {
                             break true;
                         }
-                        *activity.lock().unwrap() = Instant::now() + DIRECT_POOL_IDLE_TTL;
+                        touch(&mut idle_deadline);
                     }
                     WorkerEvent::Send(None) => break true,
                     WorkerEvent::Received(received) => {
@@ -111,7 +163,54 @@ impl PooledDirect {
                         let Ok(message) = decode_sc_message(&wire) else {
                             continue;
                         };
-                        *activity.lock().unwrap() = Instant::now() + DIRECT_POOL_IDLE_TTL;
+                        match message.function {
+                            ScFunction::HeartbeatAck => {
+                                // Only the ACK to the outstanding probe proves
+                                // liveness; it never counts as use.
+                                if heartbeat::ack_matches_outstanding(&message, pending_heartbeat) {
+                                    last_received = tokio::time::Instant::now();
+                                    pending_heartbeat = None;
+                                }
+                                continue;
+                            }
+                            // AB.6.3 assigns probing to the initiator, but a
+                            // peer that probes anyway gets an answer. Like an
+                            // ACK, it shows the peer is alive, not in use.
+                            ScFunction::HeartbeatRequest => {
+                                // A rejected probe is not liveness, as on the hub.
+                                let reply = match validate_control(
+                                    &message,
+                                    &wire,
+                                    ControlRecipient::HubConnector,
+                                ) {
+                                    Ok(()) => {
+                                        last_received = tokio::time::Instant::now();
+                                        pending_heartbeat = None;
+                                        bare_control(ScFunction::HeartbeatAck, message.message_id)
+                                            .freeze()
+                                    }
+                                    Err(Some(nak)) => nak,
+                                    Err(None) => continue,
+                                };
+                                if !matches!(
+                                    tokio::time::timeout(wait, ws.send(&reply)).await,
+                                    Ok(Ok(()))
+                                ) {
+                                    break false;
+                                }
+                                continue;
+                            }
+                            // Both refresh below only once admitted (a valid
+                            // Disconnect-Request ends the link anyway).
+                            ScFunction::EncapsulatedNpdu | ScFunction::DisconnectRequest => {}
+                            // Anything else, a BVLC-Result included, shows the
+                            // peer is alive but is not use of the link, so a
+                            // peer NAKing every probe cannot pin it open.
+                            _ => {
+                                last_received = tokio::time::Instant::now();
+                                pending_heartbeat = None;
+                            }
+                        }
                         if message.function == ScFunction::EncapsulatedNpdu {
                             match direct_must_understand_decision(&message, &wire) {
                                 DirectMuDecision::Drop => continue,
@@ -126,16 +225,21 @@ impl PooledDirect {
                                     }
                                 }
                                 DirectMuDecision::Pass => {
+                                    // As on the hub, only admitted traffic
+                                    // counts; a dropped or NAKed NPDU doesn't.
+                                    last_received = tokio::time::Instant::now();
+                                    pending_heartbeat = None;
+                                    touch(&mut idle_deadline);
                                     #[cfg(feature = "sc-tls")]
                                     if let (
                                         Some(intake),
-                                        Some(identity),
+                                        Some(provenance),
                                         Some(response),
                                         Some(address),
                                         Some(npdu),
                                     ) = (
                                         &intake,
-                                        identity,
+                                        &provenance,
                                         &response,
                                         ws.peer_address(),
                                         direct_npdu(&message, local_limits.1),
@@ -148,7 +252,7 @@ impl PooledDirect {
                                                 DirectPeer {
                                                     vmac: owner.vmac,
                                                     addr: address,
-                                                    identity,
+                                                    provenance: provenance.clone(),
                                                     response: Some(response.clone()),
                                                 },
                                             )
@@ -329,3 +433,7 @@ impl Drop for DirectPool {
 #[cfg(test)]
 #[path = "direct_worker_tests.rs"]
 mod direct_worker_tests;
+
+#[cfg(test)]
+#[path = "direct_heartbeat_tests.rs"]
+mod direct_heartbeat_tests;

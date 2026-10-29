@@ -9,6 +9,7 @@ use super::*;
 use bacnet_objects::loop_obj::LoopObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::EngineeringUnits;
+use bacnet_types::error::RemoteError;
 
 fn encode_value(value: PropertyValue) -> Vec<u8> {
     let mut buf = BytesMut::new();
@@ -79,7 +80,7 @@ fn assert_refused(
     context: &str,
 ) {
     match write_raw(db, oid, property, None, raw_value).expect_err(context) {
-        Error::Protocol { class, code } => {
+        Error::Remote(RemoteError::Error { class, code }) => {
             assert_eq!(class, ErrorClass::PROPERTY, "{context}: wrong error class");
             assert_eq!(code, expected_code, "{context}: wrong error code");
         }
@@ -194,7 +195,7 @@ fn list_write_with_tlv_truncated_tail_is_refused_before_the_value_decode() {
     )
     .unwrap_err();
     assert!(
-        !matches!(err, Error::Protocol { .. }),
+        !matches!(err, Error::Remote(RemoteError::Error { .. })),
         "a framing-level truncation is not an object-level protocol error: {err:?}"
     );
     assert_eq!(
@@ -304,7 +305,7 @@ fn datetime_value_present_value_and_priority_array_over_the_wire() {
     )
     .unwrap_err();
     assert!(
-        matches!(error, Error::Protocol { class, code } if class == ErrorClass::PROPERTY && code == ErrorCode::WRITE_ACCESS_DENIED)
+        matches!(error, Error::Remote(RemoteError::Error { class, code }) if class == ErrorClass::PROPERTY && code == ErrorCode::WRITE_ACCESS_DENIED)
     );
     assert_eq!(
         read_prop(&db, oid, PropertyIdentifier::PRESENT_VALUE),

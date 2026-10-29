@@ -4,11 +4,11 @@
 
 mod fixture;
 
+use bacnet_router_core::PortId;
 use bacnet_router_core::node::{Apdu, Counters, Node, Received};
 use bacnet_router_core::npdu::{AddressField, Malformed, NetworkMessageType, Npdu};
 use bacnet_router_core::router::{Discard, Frame, Permissive, Received as RouterReceived};
-use bacnet_router_core::PortId;
-use fixture::{addr, apdu_to, at, bytes, drain, message, router, CONFIRMED, NODE_A, UNCONFIRMED};
+use fixture::{CONFIRMED, NODE_A, UNCONFIRMED, addr, apdu_to, at, bytes, drain, message, router};
 use proptest::prelude::*;
 
 /// A node's counts, from zero, with `set` applied.

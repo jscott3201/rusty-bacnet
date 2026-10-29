@@ -3,9 +3,10 @@
 //! 12.31.30).
 
 use bacnet_types::enums::{ErrorCode, PropertyIdentifier as P};
+use bacnet_types::error::RemoteError;
 
 use super::credential_data_input_out_of_service_tests::stamp;
-use super::point_out_of_service_tests::{credential, CREDENTIAL_3, NO_CREDENTIAL};
+use super::point_out_of_service_tests::{CREDENTIAL_3, NO_CREDENTIAL, credential};
 use super::*;
 
 fn status(point: &AccessPointObject) -> PropertyValue {
@@ -29,7 +30,7 @@ fn set_out_of_service(point: &mut AccessPointObject, out_of_service: bool) {
 
 fn assert_value_out_of_range(result: Result<(), Error>) {
     assert!(
-        matches!(result, Err(Error::Protocol { code, .. })
+        matches!(result, Err(Error::Remote(RemoteError::Error { code, .. }))
             if code == ErrorCode::VALUE_OUT_OF_RANGE),
         "expected VALUE_OUT_OF_RANGE, got {result:?}"
     );

@@ -2,8 +2,8 @@
 
 use std::time::SystemTime;
 
-use pyo3::prelude::*;
 use pyo3::IntoPyObjectExt;
+use pyo3::prelude::*;
 use tracing::field::{Field, Visit};
 use tracing::{Event, Metadata};
 

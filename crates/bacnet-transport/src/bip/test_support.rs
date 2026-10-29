@@ -11,13 +11,13 @@ use bacnet_bip_core::node::{
 use bacnet_bip_core::{Instant as CoreInstant, LocalSubnet};
 use tokio::sync::mpsc;
 
+use super::BipSocket;
 use super::client_snapshot::ClientRecord;
 use super::io::{self, RecvContext};
 use super::node::NodeHandle;
 use super::rate_limit::ManagementRateLimiter;
-use super::BipSocket;
 use crate::bbmd::BbmdState;
-use crate::bvll::{raw_frame, BvllMessage};
+use crate::bvll::{BvllMessage, raw_frame};
 use crate::port::ReceivedNpdu;
 
 /// Where a test's message was sent: to the node's own address, or to the

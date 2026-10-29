@@ -3,8 +3,8 @@
 
 use bacnet_mstp_codec::crc::crc8;
 use bacnet_mstp_codec::{
-    DecodeEvent, Frame, FrameError, FrameType, StreamDecoder, StreamPhase, MAX_COBS_FRAME_LENGTH,
-    MAX_EXTENDED_FRAME_LENGTH, MAX_STANDARD_FRAME_LENGTH, PREAMBLE,
+    DecodeEvent, Frame, FrameError, FrameType, MAX_COBS_FRAME_LENGTH, MAX_EXTENDED_FRAME_LENGTH,
+    MAX_STANDARD_FRAME_LENGTH, PREAMBLE, StreamDecoder, StreamPhase,
 };
 use proptest::prelude::*;
 

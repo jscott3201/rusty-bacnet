@@ -10,7 +10,7 @@ use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 use std::net::Ipv4Addr;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 #[tokio::test]
 async fn cov_subscribe_and_notification() {
@@ -72,11 +72,13 @@ async fn cov_subscribe_and_notification() {
             .monitored_object_identifier,
         ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap()
     );
-    assert!(initial_notification
-        .notification
-        .list_of_values
-        .iter()
-        .any(|pv| pv.property_identifier == PropertyIdentifier::PRESENT_VALUE));
+    assert!(
+        initial_notification
+            .notification
+            .list_of_values
+            .iter()
+            .any(|pv| pv.property_identifier == PropertyIdentifier::PRESENT_VALUE)
+    );
 
     // Write a new value to AO:1 — this should trigger a COV notification
     let mut value_buf = BytesMut::new();
@@ -108,11 +110,13 @@ async fn cov_subscribe_and_notification() {
         ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap()
     );
     // Should contain at least Present_Value
-    assert!(received
-        .notification
-        .list_of_values
-        .iter()
-        .any(|pv| pv.property_identifier == PropertyIdentifier::PRESENT_VALUE));
+    assert!(
+        received
+            .notification
+            .list_of_values
+            .iter()
+            .any(|pv| pv.property_identifier == PropertyIdentifier::PRESENT_VALUE)
+    );
 
     // Cleanup
     server.stop().await.unwrap();

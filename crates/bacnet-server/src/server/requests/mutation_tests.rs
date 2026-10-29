@@ -27,7 +27,7 @@ use bacnet_services::wpm::{
 };
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::constructed::{BACnetObjectPropertyReference, PropertyReference};
-use std::sync::{atomic::AtomicUsize, Mutex as StdMutex};
+use std::sync::{Mutex as StdMutex, atomic::AtomicUsize};
 
 pub(super) fn oid(kind: ObjectType, instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(kind, instance).unwrap()
@@ -99,6 +99,17 @@ impl Fixture {
         bytes: Bytes,
         id: u8,
     ) -> Option<Bytes> {
+        self.dispatch_from(SOURCE, service, bytes, id).await
+    }
+
+    /// [`dispatch`](Self::dispatch) from the client at `source`.
+    pub async fn dispatch_from(
+        &self,
+        source: &[u8],
+        service: ConfirmedServiceChoice,
+        bytes: Bytes,
+        id: u8,
+    ) -> Option<Bytes> {
         let (tx, rx) = oneshot::channel();
         BACnetServer::<TestTransport>::handle_confirmed_request(
             &RequestServices {
@@ -110,7 +121,7 @@ impl Fixture {
             },
             &self.tracker,
             &Arc::new(crate::server::request_tasks::RequestTasks::default()).spawner(),
-            SOURCE,
+            source,
             route(),
             ConfirmedRequestPdu {
                 segmented: false,
@@ -201,7 +212,7 @@ pub(super) fn assert_denied(bytes: Bytes, service: ConfirmedServiceChoice, id: u
 pub(super) fn cases() -> Vec<(ConfirmedServiceChoice, Bytes, MutationTarget)> {
     let mut cases = Vec::new();
     macro_rules! case {
-        ($service:ident, $target:ident, $request:expr) => {{
+        ($service:ident, $target:ident, $request:expr_2021) => {{
             let request = $request;
             let mut bytes = BytesMut::new();
             request.encode(&mut bytes);
@@ -406,7 +417,7 @@ async fn denial_case(index: usize) {
 }
 
 macro_rules! denial_test {
-    ($name:ident, $index:expr) => {
+    ($name:ident, $index:expr_2021) => {
         #[tokio::test]
         async fn $name() {
             denial_case($index).await;
@@ -532,20 +543,24 @@ async fn malformed_final_field_is_decoded_before_policy_for_non_wpm_services() {
 
 #[test]
 fn builders_install_mutation_policy_and_debug_redacts_callbacks() {
-    assert!(BACnetServer::<BipTransport>::generic_builder()
-        .policy(crate::FnPolicy::new().mutation(|_| false))
-        .config
-        .policy
-        .is_some());
+    assert!(
+        BACnetServer::<BipTransport>::generic_builder()
+            .policy(crate::FnPolicy::new().mutation(|_| false))
+            .config
+            .policy
+            .is_some()
+    );
     let config = BACnetServer::bip_builder()
         .policy(crate::FnPolicy::new().mutation(|_| true))
         .config;
     assert!(config.policy.is_some());
     assert!(format!("{config:?}").contains("policy: Some(\"<policy>\")"));
     #[cfg(feature = "sc-tls")]
-    assert!(BACnetServer::sc_builder()
-        .policy(crate::FnPolicy::new().mutation(|_| false))
-        .config
-        .policy
-        .is_some());
+    assert!(
+        BACnetServer::sc_builder()
+            .policy(crate::FnPolicy::new().mutation(|_| false))
+            .config
+            .policy
+            .is_some()
+    );
 }

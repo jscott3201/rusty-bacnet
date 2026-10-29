@@ -30,16 +30,16 @@ impl GroupClassifier for PortGroups {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicU8, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU8, Ordering};
 
     use bacnet_npdu::Mac;
     use bacnet_npdu::NpduLimits;
-    use bacnet_router_core::router::{Action, Dest, Discard, Frame, Permissive, Received};
     use bacnet_router_core::PortId;
+    use bacnet_router_core::router::{Action, Dest, Discard, Frame, Permissive, Received};
 
     use super::*;
-    use crate::router::engine::{tokio_clock, Engine};
+    use crate::router::engine::{Engine, tokio_clock};
 
     #[tokio::test]
     async fn engine_keeps_custom_transport_predicates_live_after_installation() {

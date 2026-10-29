@@ -1,12 +1,12 @@
 //! The `?` overlay (#1895): the sections of [`crate::tui::help`] for the
 //! screen shown, scrolled with the movement keys when they don't fit.
 
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph};
-use ratatui::Frame;
 
-use super::{centered, text_width, Theme};
+use super::{Theme, centered, text_width};
 use crate::tui::app::App;
 use crate::tui::help::sections;
 

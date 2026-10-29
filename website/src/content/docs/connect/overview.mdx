@@ -1,0 +1,49 @@
+---
+title: "Connect to a network"
+description: "Choose a data link and the owner that runs it, then open the setup guide for that link."
+---
+
+import Diagram from '../../../components/Diagram.astro';
+import { release, repository } from '../../../lib/site.mjs';
+
+
+Pick the data link your devices use, then the program that owns it: the CLI, a Python client or server, or a Rust owner. The guides in this section set up each link; [transport boundaries](/rusty-bacnet/reference/transports/) keeps the evidence behind each one.
+
+## Choose a path
+
+| Path | How to start | Important boundary |
+|---|---|---|
+| BACnet/IP | CLI, Python client, or Rust client | Direct reads, discovery, and routed traffic are distinct tests; [settings](/rusty-bacnet/connect/bacnet-ip/), [other subnets](/rusty-bacnet/connect/across-subnets/), [NAT](/rusty-bacnet/connect/nat/), [multicast](/rusty-bacnet/connect/multicast/) |
+| BACnet/IPv6 | CLI `--ipv6`, Python, or Rust feature path | Requires appropriate IPv6 addressing/interface and network validation; targets are VMACs (`bip6:<instance>`), which the CLI resolves from `[ip]:port` and Python from `resolve_vmac`; [setup](/rusty-bacnet/connect/ipv6/) |
+| BACnet/SC | SC-enabled CLI, Python, or Rust | Certificate trust, local identities, and hub behavior must be configured; [setup](/rusty-bacnet/connect/bacnet-sc/) |
+| MS/TP | Rust serial path, or Python `transport="mstp"` and `MstpEndpoint` | The CLI joins with `--mstp` in the Linux release executables, or a source build with the `serial` feature. Qualify the actual serial hardware; [setup](/rusty-bacnet/connect/mstp/), [real-time on Linux](/rusty-bacnet/connect/mstp-realtime/) |
+| Ethernet/802.3 | Advanced Rust transport path | Platform/privilege evidence is incomplete; not a general CLI tutorial |
+
+This is a guide to entry points, not a formal supported-platform or conformance matrix.
+
+<Diagram file="transport-topologies.svg" title="Different transports, different topologies" description="Separate BACnet/IP, BACnet/SC, and MS/TP topology examples." />
+
+## Match the link to an owner
+
+| Data link | Entry points | Setup and important boundary |
+|---|---|---|
+| B/IP, NORMAL | Rust/Python standalone client and server; shared endpoint | Explicit local IPv4 interface and UDP port; selected Network Port registration is a separate opt-in |
+| B/IP, BBMD or foreign | Rust client, server and endpoint builders (`.mode(BipMode::…)`); Python `bbmd=` and `foreign_device=`; CLI `--foreign-bbmd` | BDT/FDT or configured BBMD; one transport is never both; shared-endpoint Number evidence does not qualify every administrative operation. [Reach devices on other subnets](/rusty-bacnet/connect/across-subnets/) |
+| B/IP, BBMD behind NAT | `BbmdOptions::nat` (Rust); Python `Bbmd(nat_global_address=…)` | Configured global address and a port-forwarding router; two-hop BDT listing every site's global address; loopback NAT emulation in tests, real routers only in the manual Docker check (`examples/docker/nat`). [BACnet/IP across NAT](/rusty-bacnet/connect/nat/) |
+| B/IP multicast (B/IP-M) node | Rust client, server and endpoint builders (`.multicast(…)`); Python `multicast=Multicast(…)`; CLI `--bip-multicast` | Explicit interface (no `0.0.0.0`), class D group, TTL 1 unless the group spans routers; broadcasts only from the group; NORMAL mode, or a BBMD that serves the group (J.8.3) with an all-ones own BDT row; not a foreign device; loopback evidence on Linux and macOS, Windows untested. [Join a B/IP multicast group](/rusty-bacnet/connect/multicast/) |
+| B/IPv6 | Standalone Rust/Python client and server; Rust shared endpoint composed over a `Bip6Transport`; Rust and Python configured foreign-device mode (`foreign_device=` in Python) | Select one usable interface/address; peers are named by 3-octet VMAC (`bip6:<instance>`); a registered Network Port needs the transport's VMAC built from the served Device's instance; no endpoint builder and no Python endpoint. [Connect over BACnet/IPv6](/rusty-bacnet/connect/ipv6/) |
+| BACnet/SC | Rust/Python standalone owners and shared endpoint | Operational credentials, explicit CA and durable UUID/VMAC configuration; Rust TLS paths require `sc-tls` |
+| MS/TP | Rust transport/server/endpoint; Python standalone and endpoint paths | Serial adapter, station, baud and token participation; do not infer physical timing from simulation |
+| Ethernet | Linux Rust standalone client and server | AF_PACKET raw socket permissions; no shared endpoint builder or Python Ethernet API |
+
+The CLI has its own <a href={`${repository}/blob/v${release}/docs/CLI.md`}>configuration surface</a>. A Rust transport does not imply a matching CLI command or Python constructor. For exact feature gates, use the crate manifests and <a href={`${repository}/blob/v${release}/docs/rust-api.md#bacnet-transport`}>Rust API</a>; do not enable every feature merely to discover which one you need.
+
+## Next steps
+
+- [Configure a BACnet/IP connection](/rusty-bacnet/connect/bacnet-ip/).
+- [Reach devices on other subnets](/rusty-bacnet/connect/across-subnets/), [across NAT](/rusty-bacnet/connect/nat/) or [through a multicast group](/rusty-bacnet/connect/multicast/).
+- [Connect over BACnet/IPv6](/rusty-bacnet/connect/ipv6/).
+- [Configure BACnet/SC](/rusty-bacnet/connect/bacnet-sc/).
+- [Commission an MS/TP lab](/rusty-bacnet/connect/mstp/).
+- [Keep an MS/TP trunk reliable on Linux](/rusty-bacnet/connect/mstp-realtime/).
+- [Read the evidence for each transport](/rusty-bacnet/reference/transports/).

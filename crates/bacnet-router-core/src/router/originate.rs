@@ -8,6 +8,12 @@
 //! source address ([`SourceSelection`]). Replies come back to that address,
 //! which the router delivers to its application as its own.
 //!
+//! A global broadcast (DNET 0xFFFF) has no route to look up: the router is
+//! the originating device on each of its networks at once, so it goes out
+//! on every port as that link's broadcast, keeping DNET 0xFFFF, DLEN 0 and
+//! a full hop count, so the other routers there pass it on (Clauses 6.2.3,
+//! 6.3.2 and 6.5.3).
+//!
 //! [`Router::originate`](super::Router::originate) writes the request as the
 //! call's output, polled as any send is. It doesn't touch local delivery:
 //! APDUs for the router's application are still handed over in place, from
@@ -20,7 +26,7 @@ use super::ingress::is_unconfirmed;
 use super::output::{Cause, Current, Kind, Target};
 use super::tasks::Task;
 use super::{Group, Storage};
-use crate::npdu::{Address, NetworkPriority, Npdu, GLOBAL_NETWORK};
+use crate::npdu::{Address, GLOBAL_NETWORK, NetworkPriority, Npdu};
 use crate::table::Reachability;
 use crate::{Instant, PortId};
 
@@ -31,13 +37,24 @@ pub enum SourceSelection {
     /// The router's address on the port the request leaves by: no SNET or
     /// SADR, so the next router adds that port's network and the router's
     /// MAC there, as it does for any node on that network (Clause 6.5.4).
-    /// The default.
+    /// A global broadcast leaves by every port, so each copy is from that
+    /// port's address. The default.
+    ///
+    /// In a site with a loop of routers, each port's bare copy is a
+    /// different origin to the routers that relay it, so another router
+    /// may deliver this router's global broadcast to its own application
+    /// once per port, duplicate suppression or not
+    /// ([`Options::duplicates`](super::Options::duplicates) keys by
+    /// origin). Use [`SourceSelection::Port`] there: every copy then names
+    /// one origin.
     #[default]
     EgressPort,
     /// The router's address on this port's network: SNET and SADR naming
     /// it, whichever port the request leaves by, or none when it leaves by
-    /// this port, where the link source already says so. For an
-    /// application that answers to one address.
+    /// this port, where the link source already says so. A global
+    /// broadcast leaves by every port: with SNET and SADR on the others,
+    /// and without them on this one. For an application that answers to one
+    /// address.
     Port(PortId),
 }
 
@@ -49,7 +66,8 @@ pub enum SourceSelection {
 #[non_exhaustive]
 pub struct Request<'a> {
     /// DNET and DADR: one node, or with an empty DADR every node on that
-    /// network. Never 0 or 0xFFFF.
+    /// network; or DNET 0xFFFF with an empty DADR, a global broadcast.
+    /// Never 0.
     pub destination: Address<'a>,
     /// The APDU.
     pub apdu: &'a [u8],
@@ -83,9 +101,10 @@ impl<'a> Request<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum OriginateError {
-    /// DNET 0 or 0xFFFF: no network, or every one. Neither is routed
-    /// here.
+    /// DNET 0, which names no network.
     ReservedNetwork,
+    /// A DADR beside DNET 0xFFFF: a global broadcast names no node.
+    GlobalWithDadr,
     /// The router's own address: its application, not a wire.
     OwnAddress,
     /// A broadcast destination for an APDU other than an
@@ -119,7 +138,8 @@ pub enum OriginateError {
 impl fmt::Display for OriginateError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ReservedNetwork => f.write_str("a request can't be for network 0 or 0xFFFF"),
+            Self::ReservedNetwork => f.write_str("a request can't be for network 0"),
+            Self::GlobalWithDadr => f.write_str("a global broadcast can't name a DADR"),
             Self::OwnAddress => f.write_str("a request for the router's own address"),
             Self::BroadcastNotUnconfirmed => {
                 f.write_str("only an Unconfirmed-Request may go to a broadcast address")
@@ -145,14 +165,14 @@ impl core::error::Error for OriginateError {}
 const NO_PORT: PortId = PortId(u8::MAX);
 
 impl<
-        const P: usize,
-        const R: usize,
-        const H: usize,
-        const D: usize,
-        const N: usize,
-        G: super::GroupClassifier,
-        const B: usize,
-    > Storage<P, R, H, D, N, G, B>
+    const P: usize,
+    const R: usize,
+    const H: usize,
+    const D: usize,
+    const N: usize,
+    G: super::GroupClassifier,
+    const B: usize,
+> Storage<P, R, H, D, N, G, B>
 {
     /// [`Router::originate`](super::Router::originate).
     pub(super) fn originate(
@@ -163,8 +183,12 @@ impl<
     ) -> Result<(), OriginateError> {
         self.drop_undrained();
         let destination = request.destination;
-        if matches!(destination.network, 0 | GLOBAL_NETWORK) {
+        let global = destination.network == GLOBAL_NETWORK;
+        if destination.network == 0 {
             return Err(OriginateError::ReservedNetwork);
+        }
+        if global && !destination.mac.is_empty() {
+            return Err(OriginateError::GlobalWithDadr);
         }
         let broadcast = destination.mac.is_empty();
         if !broadcast && self.is_own(destination) {
@@ -181,6 +205,9 @@ impl<
                 None => return Err(OriginateError::UnknownPort),
             },
         };
+        if global {
+            return self.originate_global(request, from);
+        }
         let dnet = destination.network;
         let Some(route) = self.table.lookup(dnet) else {
             if self
@@ -253,5 +280,79 @@ impl<
                 Err(OriginateError::Unwritable)
             }
         }
+    }
+
+    /// A global broadcast from the router's own application: on every port,
+    /// as that link's broadcast, with DNET 0xFFFF, DLEN 0 and a hop count
+    /// of 255 (Clauses 6.2.3, 6.3.2, 6.5.3). With
+    /// [`SourceSelection::Port`], the copies on the other ports carry SNET
+    /// and SADR naming the router there, as a relay of a broadcast from that
+    /// network would (Clause 6.5.4), and the copy on that port carries none;
+    /// they are one NPDU in the scratch ([`Current::with_tail`]). It must
+    /// fit every port's broadcast limit: one that doesn't is refused whole.
+    fn originate_global(
+        &mut self,
+        request: &Request<'_>,
+        from: Option<PortId>,
+    ) -> Result<(), OriginateError> {
+        let mut npdu = Npdu {
+            expecting_reply: request.expecting_reply,
+            priority: request.priority,
+            destination: Some(Address {
+                network: GLOBAL_NETWORK,
+                mac: &[],
+            }),
+            ..Npdu::apdu(request.apdu)
+        };
+        let bare = npdu.encoded_len();
+        let ports = &self.ports[..self.port_count];
+        // Only another port needs the source fields.
+        let named = from.filter(|_| ports.len() > 1);
+        let source = named.map(|port| {
+            let config = &ports[usize::from(port.0)];
+            (config.network, config.mac)
+        });
+        npdu.source = source.as_ref().map(|(network, mac)| Address {
+            network: *network,
+            mac: mac.as_slice(),
+        });
+        let sourced = npdu.encoded_len();
+        for (index, config) in ports.iter().enumerate() {
+            // At most 255 ports, so the index fits in a u8.
+            let octets = if named == Some(PortId(index as u8)) {
+                bare
+            } else {
+                sourced
+            };
+            let limit = config.max_npdu.get(true);
+            if octets > limit {
+                bump(&mut self.counters.egress_too_long);
+                return Err(OriginateError::TooLong { octets, limit });
+            }
+        }
+        let Ok(len) = npdu.encode_into(&mut self.scratch) else {
+            bump(&mut self.counters.write_failures);
+            return Err(OriginateError::Unwritable);
+        };
+        let target = Target::AllBut(named.unwrap_or(NO_PORT));
+        let mut current =
+            Current::new(len, Kind::Originate, Cause::Local, request.priority, target);
+        if named.is_some() {
+            // The bare copy's control octet, from the encoder: its first
+            // two octets of the six its NPCI takes before the APDU.
+            let mut header = [0; 6];
+            let header_written = Npdu {
+                source: None,
+                payload: &[],
+                ..npdu
+            }
+            .encode_into(&mut header);
+            debug_assert_eq!(header_written, Ok(6));
+            // Under the scratch's length, so it fits a u16.
+            current = current.with_tail((sourced - bare) as u16, header[1]);
+        }
+        self.out.current = current;
+        bump(&mut self.counters.originated);
+        Ok(())
     }
 }

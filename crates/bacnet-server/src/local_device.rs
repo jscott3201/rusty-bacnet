@@ -1,5 +1,5 @@
 //! Startup identity resolution and the frozen announcement target.
-use bacnet_objects::{database::ObjectDatabase, DeviceIdentity};
+use bacnet_objects::{DeviceIdentity, database::ObjectDatabase};
 use bacnet_types::{error::Error, primitives::ObjectIdentifier};
 
 /// Only an absent database requests generation. An explicitly empty database

@@ -12,22 +12,23 @@ pub(crate) mod coordinator;
 pub(crate) mod discovery;
 pub(crate) mod network;
 pub(crate) mod passive;
+mod passive_decode;
 #[cfg_attr(not(feature = "sc-tls"), allow(dead_code))]
 pub(crate) mod sc;
 pub(crate) mod session;
 pub(crate) mod watch;
 pub(crate) mod write;
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use bacnet_client::client::{DeviceCollisionEvent, DeviceEvent, DeviceEventKind};
 use bacnet_client::discovery::DiscoveredDevice;
+use bacnet_ops::target::AddressStyle;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc;
 
 use super::message::{DeviceRow, WorkerEvent};
-use crate::core::target::AddressStyle;
 
 /// Capacity of the worker-to-UI channel.
 pub(crate) const EVENT_CHANNEL_CAPACITY: usize = 1_024;

@@ -7,16 +7,16 @@ use std::time::Duration;
 
 use bacnet_types::error::Error;
 use bytes::BytesMut;
-use tokio::sync::{watch, Mutex};
+use tokio::sync::{Mutex, watch};
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, Interval, MissedTickBehavior};
 use tracing::warn;
 
-use crate::sc_frame::{encode_sc_message, ScMessage};
+use crate::sc_frame::{ScMessage, encode_sc_message};
 
 use super::{
-    connector::dial_connector, handshake::perform_handshake, observability::ScObserver, HubLimits,
-    ScActiveHub, ScConnection, ScConnectionState, WebSocketConnector, WebSocketPort,
+    HubLimits, ScActiveHub, ScConnection, ScConnectionState, WebSocketConnector, WebSocketPort,
+    connector::dial_connector, handshake::perform_handshake, observability::ScObserver,
 };
 
 /// The cadence of primary-restore attempts while the failover hub is active,

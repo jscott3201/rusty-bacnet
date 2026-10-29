@@ -8,43 +8,14 @@ use std::fmt;
 
 use bacnet_encoding::primitives::charset;
 use bacnet_objects::database::ObjectDatabase;
+use bacnet_objects::traits::BACnetObject;
 use bacnet_types::bitstring::ServicesSupported;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier, ServiceSupported};
 use bacnet_types::primitives::PropertyValue;
+use bacnet_types::{PROTOCOL_REVISION, PROTOCOL_VERSION};
 
+use crate::local_device::announcement_device;
 use crate::server::ServerConfig;
-
-const PROPERTY_CAPABILITIES_EXPLANATION: &str = "Property rows aggregate configured instances: a row or access flag means at least one instance supports it. Actual availability and access depend on the concrete object. Optional is the metadata conformance classification; a required declaration wins, and absent rows do not vote.";
-
-/// How the text and Markdown PICS introduce a type's
-/// [`ObjectTypeSupport::creation_only_properties`]: read-only to
-/// WriteProperty as a whole, but a CreateObject initial value sets them.
-const CREATION_ONLY_LABEL: &str = "Whole value set only by CreateObject";
-
-/// A row's access as the text and Markdown PICS print it: the flags, and for
-/// a row writes of another property change
-/// ([`PropertySupport::written_through`]) a note saying so, since no write
-/// naming the row itself is taken (#1443).
-fn access_text(row: &PropertySupport) -> String {
-    match row.written_through {
-        Some(through) => format!(
-            "{} (resized through {through}: a whole write or its size at index 0)",
-            row.access
-        ),
-        None => row.access.to_string(),
-    }
-}
-
-/// The type's creation-only properties, comma-separated, or `None` if it
-/// has none.
-fn creation_only_names(support: &ObjectTypeSupport) -> Option<String> {
-    let names: Vec<_> = support
-        .creation_only_properties
-        .iter()
-        .map(ToString::to_string)
-        .collect();
-    (!names.is_empty()).then(|| names.join(", "))
-}
 
 // ───────────────────────────── Data model ──────────────────────────────────
 
@@ -72,19 +43,22 @@ pub struct Pics {
 /// Vendor and device identification.
 #[derive(Debug, Clone)]
 pub struct VendorInfo {
-    /// Vendor identifier assigned by ASHRAE.
+    /// Vendor identifier assigned by ASHRAE: the Device object's
+    /// Vendor_Identifier (see [`PicsGenerator::generate`]).
     pub vendor_id: u16,
-    /// Vendor name.
+    /// The Device object's Vendor_Name, as read (see [`PicsGenerator::generate`]).
     pub vendor_name: String,
-    /// Product model name.
+    /// The Device object's Model_Name, as read.
     pub model_name: String,
-    /// Firmware revision string.
+    /// The Device object's Firmware_Revision, as read.
     pub firmware_revision: String,
-    /// Application software version string.
+    /// The Device object's Application_Software_Version, as read.
     pub application_software_version: String,
-    /// BACnet protocol version implemented.
+    /// BACnet protocol version implemented: the Device object's
+    /// Protocol_Version (see [`PicsGenerator::generate`]).
     pub protocol_version: u16,
-    /// BACnet protocol revision implemented.
+    /// BACnet protocol revision implemented: the Device object's
+    /// Protocol_Revision (see [`PicsGenerator::generate`]).
     pub protocol_revision: u16,
 }
 
@@ -297,18 +271,6 @@ impl fmt::Display for CharacterSet {
 /// Configuration for PICS generation that cannot be inferred from the database.
 #[derive(Debug, Clone)]
 pub struct PicsConfig {
-    /// Vendor name.
-    pub vendor_name: String,
-    /// Product model name.
-    pub model_name: String,
-    /// Firmware revision string.
-    pub firmware_revision: String,
-    /// Application software version string.
-    pub application_software_version: String,
-    /// BACnet protocol version implemented (default 1).
-    pub protocol_version: u16,
-    /// BACnet protocol revision implemented (default 24).
-    pub protocol_revision: u16,
     /// Device profile claimed.
     pub device_profile: DeviceProfile,
     /// Data-link layers the device supports.
@@ -324,12 +286,6 @@ pub struct PicsConfig {
 impl Default for PicsConfig {
     fn default() -> Self {
         Self {
-            vendor_name: String::new(),
-            model_name: String::new(),
-            firmware_revision: String::new(),
-            application_software_version: String::new(),
-            protocol_version: 1,
-            protocol_revision: 24,
             device_profile: DeviceProfile::BAsc,
             data_link_layers: vec![DataLinkSupport::BipV4],
             network_layer: NetworkLayerSupport {
@@ -376,6 +332,22 @@ impl<'a> PicsGenerator<'a> {
     }
 
     /// Generate the complete PICS document.
+    ///
+    /// The vendor block comes from the Device object, so the PICS states what
+    /// the device reports: for the server, the Device at its identity;
+    /// otherwise, or when the database lacks that one, the selected Device.
+    /// Vendor_Name, Model_Name, Firmware_Revision and
+    /// Application_Software_Version are its values at the time of the call,
+    /// or empty without a Device or when one isn't a character string. The
+    /// protocol version and revision are its Protocol_Version and
+    /// Protocol_Revision; without a Device, or when either property isn't an
+    /// unsigned value that fits in a `u16`, the stack's own
+    /// [`bacnet_types::PROTOCOL_VERSION`] and
+    /// [`bacnet_types::PROTOCOL_REVISION`] stand in. The vendor ID is the
+    /// same Device's Vendor_Identifier, which for the server's identity
+    /// Device is the [`ServerConfig`] identity's vendor ID; without a Device,
+    /// or when the value isn't an unsigned that fits in a `u16`, that
+    /// identity's vendor ID stands in.
     pub fn generate(&self) -> Pics {
         Pics {
             vendor_info: self.build_vendor_info(),
@@ -390,14 +362,41 @@ impl<'a> PicsGenerator<'a> {
     }
 
     fn build_vendor_info(&self) -> VendorInfo {
+        // The server reads the Device at its identity, as wildcard reads and
+        // announcements do; otherwise the selected (lowest) one. Reads go
+        // through the server's view, which for the identity Device serves
+        // the identity's Vendor_Identifier; the standalone view has no
+        // identity and passes every property read here through raw.
+        let device = (self.served)
+            .then(|| announcement_device(self.db, &self.server_config.device))
+            .flatten()
+            .or_else(|| self.db.selected_device())
+            .and_then(|oid| self.db.get(&oid));
+        let view = crate::device_view::DeviceReadContext::new(
+            self.db,
+            crate::device_view::DeviceExecution::FullServer,
+        )
+        .with_identity(self.served.then_some(&self.server_config.device));
+        let read = |property| device.map(|d| view.object(d).read_property(property, None));
+        let unsigned = |property, fallback| match read(property) {
+            Some(Ok(PropertyValue::Unsigned(raw))) => u16::try_from(raw).unwrap_or(fallback),
+            _ => fallback,
+        };
+        let text = |property| match read(property) {
+            Some(Ok(PropertyValue::CharacterString(value))) => value,
+            _ => String::new(),
+        };
         VendorInfo {
-            vendor_id: self.server_config.device.vendor_id(),
-            vendor_name: self.pics_config.vendor_name.clone(),
-            model_name: self.pics_config.model_name.clone(),
-            firmware_revision: self.pics_config.firmware_revision.clone(),
-            application_software_version: self.pics_config.application_software_version.clone(),
-            protocol_version: self.pics_config.protocol_version,
-            protocol_revision: self.pics_config.protocol_revision,
+            vendor_id: unsigned(
+                PropertyIdentifier::VENDOR_IDENTIFIER,
+                self.server_config.device.vendor_id(),
+            ),
+            vendor_name: text(PropertyIdentifier::VENDOR_NAME),
+            model_name: text(PropertyIdentifier::MODEL_NAME),
+            firmware_revision: text(PropertyIdentifier::FIRMWARE_REVISION),
+            application_software_version: text(PropertyIdentifier::APPLICATION_SOFTWARE_VERSION),
+            protocol_version: unsigned(PropertyIdentifier::PROTOCOL_VERSION, PROTOCOL_VERSION),
+            protocol_revision: unsigned(PropertyIdentifier::PROTOCOL_REVISION, PROTOCOL_REVISION),
         }
     }
 
@@ -516,11 +515,20 @@ impl<'a> PicsGenerator<'a> {
         properties.into_values().collect()
     }
 
-    /// Build the service support list based on what the server actually handles.
-    /// Services this server initiates (the PICS initiator column): replies
-    /// and notifications constructed outbound by `bacnet-server`. Distinct
-    /// from [`EXECUTED_SERVICES`](bacnet_objects::device::EXECUTED_SERVICES), which Clause 12.11 ties to execution.
-    const INITIATED_SERVICES: &'static [ServiceSupported] = &[
+    /// The services the PICS marks as initiated (its initiator column): the
+    /// requests `bacnet-server` can build and send itself, in some
+    /// configuration. Distinct from
+    /// [`EXECUTED_SERVICES`](bacnet_objects::device::EXECUTED_SERVICES), which
+    /// Clause 12.11 ties to execution.
+    ///
+    /// Some go out only when configured: COV and event notifications need a
+    /// subscription or a recipient, audit notifications need audit reporting,
+    /// and WriteProperty, ReadProperty and Who-Is need a Command action or a
+    /// Channel member in another device (Who-Is finds that device). The server
+    /// sends them through its own outbound paths, not through `bacnet-client`.
+    /// A test scans the server's source and fails on an outbound service this
+    /// list leaves out.
+    pub const INITIATED_SERVICES: &'static [ServiceSupported] = &[
         ServiceSupported::I_AM,
         ServiceSupported::I_HAVE,
         ServiceSupported::CONFIRMED_COV_NOTIFICATION,
@@ -529,6 +537,11 @@ impl<'a> PicsGenerator<'a> {
         ServiceSupported::UNCONFIRMED_EVENT_NOTIFICATION,
         ServiceSupported::CONFIRMED_COV_NOTIFICATION_MULTIPLE,
         ServiceSupported::UNCONFIRMED_COV_NOTIFICATION_MULTIPLE,
+        ServiceSupported::CONFIRMED_AUDIT_NOTIFICATION,
+        ServiceSupported::UNCONFIRMED_AUDIT_NOTIFICATION,
+        ServiceSupported::READ_PROPERTY,
+        ServiceSupported::WRITE_PROPERTY,
+        ServiceSupported::WHO_IS,
     ];
 
     fn build_services(&self) -> Vec<ServiceSupport> {
@@ -560,13 +573,13 @@ impl<'a> PicsGenerator<'a> {
         };
         for service in executed {
             service_map
-                .entry(service_display_name(service))
+                .entry(service_display_name(service).unwrap_or("Unknown"))
                 .or_default()
                 .1 = true;
         }
         for service in Self::INITIATED_SERVICES {
             service_map
-                .entry(service_display_name(*service))
+                .entry(service_display_name(*service).unwrap_or("Unknown"))
                 .or_default()
                 .0 = true;
         }
@@ -579,228 +592,6 @@ impl<'a> PicsGenerator<'a> {
                 executor,
             })
             .collect()
-    }
-}
-
-// ─────────────────────────── Text output ───────────────────────────────────
-
-impl Pics {
-    /// Render the PICS as human-readable text per Annex A layout.
-    pub fn generate_text(&self) -> String {
-        let mut out = String::with_capacity(4096);
-
-        out.push_str("=== BACnet Protocol Implementation Conformance Statement (PICS) ===\n");
-        out.push_str("    Per ASHRAE 135-2020 Annex A\n\n");
-
-        out.push_str("--- Vendor Information ---\n");
-        out.push_str(&format!(
-            "Vendor ID:                      {}\n",
-            self.vendor_info.vendor_id
-        ));
-        out.push_str(&format!(
-            "Vendor Name:                    {}\n",
-            self.vendor_info.vendor_name
-        ));
-        out.push_str(&format!(
-            "Model Name:                     {}\n",
-            self.vendor_info.model_name
-        ));
-        out.push_str(&format!(
-            "Firmware Revision:              {}\n",
-            self.vendor_info.firmware_revision
-        ));
-        out.push_str(&format!(
-            "Application Software Version:   {}\n",
-            self.vendor_info.application_software_version
-        ));
-        out.push_str(&format!(
-            "Protocol Version:               {}\n",
-            self.vendor_info.protocol_version
-        ));
-        out.push_str(&format!(
-            "Protocol Revision:              {}\n\n",
-            self.vendor_info.protocol_revision
-        ));
-
-        out.push_str("--- BACnet Device Profile ---\n");
-        out.push_str(&format!("Profile: {}\n\n", self.device_profile));
-
-        out.push_str("--- Supported Object Types ---\n");
-        out.push_str(PROPERTY_CAPABILITIES_EXPLANATION);
-        out.push('\n');
-        for ot in &self.supported_object_types {
-            out.push_str(&format!(
-                "\n  Object Type: {} (createable={}, deleteable={})\n",
-                ot.object_type, ot.createable, ot.deleteable
-            ));
-            if let Some(names) = creation_only_names(ot) {
-                out.push_str(&format!("  {CREATION_ONLY_LABEL}: {names}\n"));
-            }
-            out.push_str("  Properties:\n");
-            for prop in &ot.supported_properties {
-                out.push_str(&format!(
-                    "    {:<40} {}\n",
-                    prop.property_id.to_string(),
-                    access_text(prop)
-                ));
-            }
-        }
-        out.push('\n');
-
-        out.push_str("--- Supported Services ---\n");
-        out.push_str(&format!(
-            "  {:<45} {:>9} {:>9}\n",
-            "Service", "Initiator", "Executor"
-        ));
-        out.push_str(&format!("  {:-<45} {:-<9} {:-<9}\n", "", "", ""));
-        for svc in &self.supported_services {
-            let init = if svc.initiator { "Yes" } else { "No" };
-            let exec = if svc.executor { "Yes" } else { "No" };
-            out.push_str(&format!(
-                "  {:<45} {:>9} {:>9}\n",
-                svc.service_name, init, exec
-            ));
-        }
-        out.push('\n');
-
-        out.push_str("--- Data Link Layer Support ---\n");
-        for dl in &self.data_link_layers {
-            out.push_str(&format!("  {dl}\n"));
-        }
-        out.push('\n');
-
-        out.push_str("--- Network Layer Options ---\n");
-        out.push_str(&format!(
-            "  Router:         {}\n",
-            self.network_layer.router
-        ));
-        out.push_str(&format!("  BBMD:           {}\n", self.network_layer.bbmd));
-        out.push_str(&format!(
-            "  Foreign Device: {}\n\n",
-            self.network_layer.foreign_device
-        ));
-
-        out.push_str("--- Character Sets Supported ---\n");
-        for cs in &self.character_sets {
-            out.push_str(&format!("  {cs}\n"));
-        }
-        out.push('\n');
-
-        if !self.special_functionality.is_empty() {
-            out.push_str("--- Special Functionality ---\n");
-            for sf in &self.special_functionality {
-                out.push_str(&format!("  {sf}\n"));
-            }
-            out.push('\n');
-        }
-
-        out
-    }
-
-    /// Render the PICS as Markdown for documentation.
-    pub fn generate_markdown(&self) -> String {
-        let mut out = String::with_capacity(4096);
-
-        out.push_str("# BACnet Protocol Implementation Conformance Statement (PICS)\n\n");
-        out.push_str("*Per ASHRAE 135-2020 Annex A*\n\n");
-
-        out.push_str("## Vendor Information\n\n");
-        out.push_str("| Field | Value |\n");
-        out.push_str("|-------|-------|\n");
-        out.push_str(&format!("| Vendor ID | {} |\n", self.vendor_info.vendor_id));
-        out.push_str(&format!(
-            "| Vendor Name | {} |\n",
-            self.vendor_info.vendor_name
-        ));
-        out.push_str(&format!(
-            "| Model Name | {} |\n",
-            self.vendor_info.model_name
-        ));
-        out.push_str(&format!(
-            "| Firmware Revision | {} |\n",
-            self.vendor_info.firmware_revision
-        ));
-        out.push_str(&format!(
-            "| Application Software Version | {} |\n",
-            self.vendor_info.application_software_version
-        ));
-        out.push_str(&format!(
-            "| Protocol Version | {} |\n",
-            self.vendor_info.protocol_version
-        ));
-        out.push_str(&format!(
-            "| Protocol Revision | {} |\n\n",
-            self.vendor_info.protocol_revision
-        ));
-
-        out.push_str("## BACnet Device Profile\n\n");
-        out.push_str(&format!("**{}**\n\n", self.device_profile));
-
-        out.push_str("## Supported Object Types\n\n");
-        out.push_str(PROPERTY_CAPABILITIES_EXPLANATION);
-        out.push_str("\n\n");
-        for ot in &self.supported_object_types {
-            out.push_str(&format!(
-                "### {}\n\n- Createable: {}\n- Deleteable: {}\n",
-                ot.object_type, ot.createable, ot.deleteable
-            ));
-            if let Some(names) = creation_only_names(ot) {
-                out.push_str(&format!("- {CREATION_ONLY_LABEL}: {names}\n"));
-            }
-            out.push('\n');
-            out.push_str("| Property | Access |\n");
-            out.push_str("|----------|--------|\n");
-            for prop in &ot.supported_properties {
-                out.push_str(&format!(
-                    "| {} | {} |\n",
-                    prop.property_id,
-                    access_text(prop)
-                ));
-            }
-            out.push('\n');
-        }
-
-        out.push_str("## Supported Services\n\n");
-        out.push_str("| Service | Initiator | Executor |\n");
-        out.push_str("|---------|-----------|----------|\n");
-        for svc in &self.supported_services {
-            let init = if svc.initiator { "Yes" } else { "No" };
-            let exec = if svc.executor { "Yes" } else { "No" };
-            out.push_str(&format!("| {} | {} | {} |\n", svc.service_name, init, exec));
-        }
-        out.push('\n');
-
-        out.push_str("## Data Link Layer Support\n\n");
-        for dl in &self.data_link_layers {
-            out.push_str(&format!("- {dl}\n"));
-        }
-        out.push('\n');
-
-        out.push_str("## Network Layer Options\n\n");
-        out.push_str("| Feature | Supported |\n");
-        out.push_str("|---------|-----------|\n");
-        out.push_str(&format!("| Router | {} |\n", self.network_layer.router));
-        out.push_str(&format!("| BBMD | {} |\n", self.network_layer.bbmd));
-        out.push_str(&format!(
-            "| Foreign Device | {} |\n\n",
-            self.network_layer.foreign_device
-        ));
-
-        out.push_str("## Character Sets Supported\n\n");
-        for cs in &self.character_sets {
-            out.push_str(&format!("- {cs}\n"));
-        }
-        out.push('\n');
-
-        if !self.special_functionality.is_empty() {
-            out.push_str("## Special Functionality\n\n");
-            for sf in &self.special_functionality {
-                out.push_str(&format!("- {sf}\n"));
-            }
-            out.push('\n');
-        }
-
-        out
     }
 }
 
@@ -817,11 +608,11 @@ pub fn generate_pics(
     PicsGenerator::new(db, server_config, pics_config).generate()
 }
 
-// ─────────────────────────────── Tests ─────────────────────────────────────
-
-/// PICS display name for a `BACnetServicesSupported` bit position.
-fn service_display_name(service: ServiceSupported) -> &'static str {
-    match service.to_raw() {
+/// The name the PICS prints for a `BACnetServicesSupported` bit position,
+/// such as `ReadProperty` or `I-Am`, or `None` for a reserved bit. The PICS
+/// prints `Unknown` for a reserved bit a Device declares.
+pub fn service_display_name(service: ServiceSupported) -> Option<&'static str> {
+    Some(match service.to_raw() {
         0 => "AcknowledgeAlarm",
         1 => "ConfirmedCOVNotification",
         2 => "ConfirmedEventNotification",
@@ -868,9 +659,14 @@ fn service_display_name(service: ServiceSupported) -> &'static str {
         46 => "UnconfirmedAuditNotification",
         47 => "Who-Am-I",
         48 => "You-Are",
-        _ => "Unknown",
-    }
+        _ => return None,
+    })
 }
+
+mod device_text;
+mod render;
+
+// ─────────────────────────────── Tests ─────────────────────────────────────
 
 #[cfg(test)]
 mod tests;
@@ -883,6 +679,12 @@ mod acked_transitions_policy_tests;
 
 #[cfg(test)]
 mod truth_source_tests;
+
+#[cfg(test)]
+mod protocol_revision_tests;
+
+#[cfg(test)]
+mod identity_text_tests;
 
 #[cfg(test)]
 mod property_union_tests;
@@ -898,3 +700,6 @@ mod creation_only_tests;
 
 #[cfg(test)]
 mod data_link_tests;
+
+#[cfg(test)]
+mod initiated_tests;

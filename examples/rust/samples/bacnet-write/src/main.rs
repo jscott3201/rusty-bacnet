@@ -79,14 +79,12 @@ fn detect_enp3s0_address() -> Option<Ipv4Addr> {
         .ok()?;
     for line in String::from_utf8_lossy(&output.stdout).lines() {
         let line = line.trim();
-        if let Some(rest) = line.strip_prefix("inet ") {
-            if let Some(ip_str) = rest.split_whitespace().next() {
-                if let Some(base) = ip_str.split('/').next() {
-                    if let Ok(ip) = base.parse::<Ipv4Addr>() {
-                        return Some(ip);
-                    }
-                }
-            }
+        if let Some(rest) = line.strip_prefix("inet ")
+            && let Some(ip_str) = rest.split_whitespace().next()
+            && let Some(base) = ip_str.split('/').next()
+            && let Ok(ip) = base.parse::<Ipv4Addr>()
+        {
+            return Some(ip);
         }
     }
     None
@@ -118,12 +116,11 @@ fn resolve_interface(args: &Args) -> Ipv4Addr {
 }
 
 fn parse_device_endpoint(s: &str) -> Result<(Ipv4Addr, u16), String> {
-    if let Some((host, port_str)) = s.rsplit_once(':') {
-        if let Ok(port) = port_str.parse::<u16>() {
-            if let Ok(ip) = host.parse::<Ipv4Addr>() {
-                return Ok((ip, port));
-            }
-        }
+    if let Some((host, port_str)) = s.rsplit_once(':')
+        && let Ok(port) = port_str.parse::<u16>()
+        && let Ok(ip) = host.parse::<Ipv4Addr>()
+    {
+        return Ok((ip, port));
     }
     s.parse::<Ipv4Addr>()
         .map(|ip| (ip, DEFAULT_BACNET_PORT))

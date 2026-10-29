@@ -14,7 +14,7 @@
 //! grid, and the ones a backward jump repeats are logged again as the clock
 //! reaches them.
 
-use std::time::Duration;
+use core::time::Duration;
 
 use bacnet_types::calendar::SpecificDate;
 

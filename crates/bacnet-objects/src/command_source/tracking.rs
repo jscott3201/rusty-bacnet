@@ -25,8 +25,8 @@ pub(crate) struct ValueSourceTracking {
 impl Default for ValueSourceTracking {
     fn default() -> Self {
         Self {
-            sources: std::array::from_fn(|_| BACnetValueSource::None),
-            owners: std::array::from_fn(|_| None),
+            sources: core::array::from_fn(|_| BACnetValueSource::None),
+            owners: core::array::from_fn(|_| None),
             sequence: 0,
         }
     }
@@ -184,7 +184,7 @@ impl ValueSourceTracking {
 
 // Family-specific extraction validates the value before the shared state changes.
 macro_rules! write_sourced_priority {
-    ($self:expr, $value:expr, $priority:expr, $origin:expr, $extract:expr) => {{
+    ($self:expr_2021, $value:expr_2021, $priority:expr_2021, $origin:expr_2021, $extract:expr_2021) => {{
         let prio = $priority.unwrap_or(16);
         if !(1..=16).contains(&prio) {
             return Err($crate::common::value_out_of_range_error());

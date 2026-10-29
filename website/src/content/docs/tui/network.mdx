@@ -29,7 +29,7 @@ A BBMD that never answers leaves the status at `not registered`, with the attemp
 Below the panel, tabs show one BBMD's tables. Tab and Shift-Tab move between BDT, FDT, Matrix and Networks; `r` reads the tables again. The title names the BBMD and how long ago it was read.
 
 - **BDT**, the broadcast distribution table: each peer BBMD with its mask, and what that mask means for forwarding. An all-ones mask means peers send to that BBMD, which then rebroadcasts on its own subnet (two hops). Other masks mean a directed broadcast (Annex J.4.5).
-- **FDT**, the foreign-device table: each registered foreign device with its TTL and the seconds left. This client's own entry is marked.
+- **FDT**, the foreign-device table: each registered foreign device with its TTL and the seconds left. This client's own entry is marked. An entry with under 30 seconds left has outlived its TTL without registering again: `!` comes before its seconds, and `expiring` after them.
 
 ![The Network screen's FDT tab with this client's own entry.](../../../assets/tui/network-fdt.webp)
 
@@ -48,6 +48,8 @@ Each cell says how the row BBMD lists the column BBMD: `uni` for an all-ones mas
 - a BBMD listed with different masks;
 - BBMDs that refuse the read or don't answer.
 
+Some BDT entries are never read: unresolved or unspecified addresses, broadcast, directed broadcast and multicast addresses, loopback, and this client's own address. They take no row or column; a list under the findings names each one, the BBMD that listed it and the reason, as not read on purpose rather than as a failure. When a survey finds more than 32 BBMDs, the screen says how many the grid leaves out.
+
 The matrix matches BBMDs by address. A BBMD reached at an address other than its own BDT entry, behind NAT for example, shows as two rows, one flagged with no entry for itself.
 
 ## Routers and networks
@@ -62,6 +64,6 @@ A network number that more than one router claims is flagged `DUPLICATE`: two ne
 
 These pages describe **v{release}**. Source review is not a claim of hardware qualification. BBMD and foreign-device behaviour is in ASHRAE 135 Annex J.
 
-<a href={`${repository}/blob/v${release}/docs/CLI.md#plain-bacnet`}>Network screen reference</a> · <a href={`${repository}/blob/v${release}/crates/bacnet-cli/src/tui/network/matrix.rs`}>Consistency matrix</a> · <a href={`${repository}/blob/v${release}/crates/bacnet-cli/src/tui/network/routers.rs`}>Router map</a>.
+<a href={`${repository}/blob/v${release}/docs/CLI.md#plain-bacnet`}>Network screen reference</a> · <a href={`${repository}/blob/v${release}/crates/bacnet-ops/src/bbmd/matrix.rs`}>Consistency matrix</a> · <a href={`${repository}/blob/v${release}/crates/bacnet-cli/src/tui/network/routers.rs`}>Router map</a>.
 
 <NextStep href="/rusty-bacnet/tui/bacnet-sc/" label="Diagnose BACnet/SC" description="Check the hub connection, certificates and the connection doctor." />

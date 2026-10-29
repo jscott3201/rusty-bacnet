@@ -1,4 +1,4 @@
-use std::borrow::Cow;
+use alloc::borrow::Cow;
 
 use bacnet_types::enums::PropertyIdentifier as P;
 
@@ -56,11 +56,11 @@ pub(super) fn for_object(object: &AuditLogObject) -> Cow<'_, [PropertyMetadata]>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
+    use crate::collections::HashSet;
     use std::sync::{Arc, Mutex};
 
     use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
-    use bacnet_types::error::Error;
+    use bacnet_types::error::{Error, RemoteError};
     use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
 
     use crate::clock::{ClockFrame, ClockReader};
@@ -196,7 +196,7 @@ mod tests {
 
     fn assert_error(error: Error, expected: ErrorCode) {
         assert!(
-            matches!(error, Error::Protocol { class, code }
+            matches!(error, Error::Remote(RemoteError::Error { class, code })
                 if class == ErrorClass::PROPERTY
                     && code == expected),
             "expected {expected:?}, got {error:?}"
@@ -228,7 +228,7 @@ mod tests {
             Box::new(crate::binary::BinaryValueObject::new(1, "Other").unwrap());
         assert!(matches!(
             other.set_audit_log_parent_internal(parent),
-            Err(Error::Protocol { class, code })
+            Err(Error::Remote(RemoteError::Error { class, code }))
                 if class == ErrorClass::OBJECT
                     && code == ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED
         ));
@@ -432,7 +432,7 @@ mod tests {
             .write_property(P::LOG_ENABLE, None, PropertyValue::Boolean(false), None)
             .unwrap_err();
         assert!(
-            matches!(error, Error::Protocol { class, code }
+            matches!(error, Error::Remote(RemoteError::Error { class, code })
                 if class == ErrorClass::DEVICE
                     && code == ErrorCode::OPERATIONAL_PROBLEM),
             "expected DEVICE/OPERATIONAL_PROBLEM, got {error:?}"

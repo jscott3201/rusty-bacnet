@@ -3,7 +3,7 @@
 use super::*;
 use crate::cov::{CovNotificationKind, CovSample, CovSubscription};
 use crate::server::cov_notify_context::CovNotifyContext;
-use crate::server::test_transport::{SendLog, SendMode, TestTransport, BIP_LOCAL_MAC};
+use crate::server::test_transport::{BIP_LOCAL_MAC, SendLog, SendMode, TestTransport};
 use bacnet_objects::analog::AnalogValueObject;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_types::enums::EngineeringUnits;
@@ -380,10 +380,10 @@ impl bacnet_objects::traits::BACnetObject for PanicsOnce {
         _array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
         if property != PropertyIdentifier::PRESENT_VALUE {
-            return Err(Error::Protocol {
-                class: bacnet_types::enums::ErrorClass::PROPERTY,
-                code: bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY,
-            });
+            return Err(Error::protocol(
+                bacnet_types::enums::ErrorClass::PROPERTY,
+                bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY,
+            ));
         }
         assert!(
             self.panicked.swap(true, Ordering::SeqCst),
@@ -399,10 +399,10 @@ impl bacnet_objects::traits::BACnetObject for PanicsOnce {
         _value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
-        Err(Error::Protocol {
-            class: bacnet_types::enums::ErrorClass::PROPERTY,
-            code: bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED,
-        })
+        Err(Error::protocol(
+            bacnet_types::enums::ErrorClass::PROPERTY,
+            bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED,
+        ))
     }
 }
 

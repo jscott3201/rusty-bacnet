@@ -3,8 +3,8 @@
 
 use std::io;
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_types::MacAddr;
@@ -18,9 +18,9 @@ use crate::udp_metadata::ReceivedDatagram;
 
 use super::frame::encoded;
 use super::ingress::{
-    destination_vmac_matches, forwarded_address_resolution_is_trusted, forwarded_npdu_is_trusted,
-    forwarded_source_is_usable, group_destination, is_answerable_source, is_configured_bbmd,
-    original_destination_matches, own_frame, source_drop, LocalBinding,
+    LocalBinding, destination_vmac_matches, forwarded_address_resolution_is_trusted,
+    forwarded_npdu_is_trusted, forwarded_source_is_usable, group_destination, is_answerable_source,
+    is_configured_bbmd, original_destination_matches, own_frame, source_drop,
 };
 use super::receive_counters::{DropReason, ReceiveDrops};
 use super::reply_limit::ReplyLimiter;

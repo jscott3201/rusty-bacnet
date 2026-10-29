@@ -7,21 +7,32 @@
 
 use std::sync::{Arc, Weak};
 
-use bacnet_router_core::router::{RejectOrigin, SendRefusal};
 use bacnet_router_core::PortId;
+use bacnet_router_core::router::{RejectOrigin, SendRefusal};
 use bacnet_transport::port::{DataAttribute, TransportPort};
 use bacnet_types::error::Error;
 
+use super::SendRequest;
 use super::actions::{drain, report_backlog};
 use super::dispatch::{Outputs, Shared};
 use super::send_queue;
 use super::send_warning::SendWarnings;
-use super::SendRequest;
 
 /// Carry out every send until the queue closes. Weak feedback ownership
 /// lets dispatch closure release the queues and local consumers normally.
+#[cfg(test)]
 pub(super) async fn run<T: TransportPort>(
     transport: T,
+    port: PortId,
+    queue: send_queue::Receiver,
+    shared: Arc<Shared>,
+    outputs: Weak<Outputs>,
+) {
+    run_loop(&transport, port, queue, shared, outputs).await;
+}
+
+async fn run_loop<T: TransportPort>(
+    transport: &T,
     port: PortId,
     mut queue: send_queue::Receiver,
     shared: Arc<Shared>,
@@ -99,3 +110,54 @@ fn refused(
 #[cfg(test)]
 #[path = "sender_ready_tests.rs"]
 mod tests;
+
+/// The transport outlives cancellation or panic of its borrowed send loop.
+pub(super) fn owned<T: TransportPort>(
+    transport: T,
+    port: PortId,
+    queue: send_queue::Receiver,
+    shared: Arc<Shared>,
+    outputs: Weak<Outputs>,
+    mut stop: tokio::sync::watch::Receiver<bool>,
+    network_number: u16,
+) -> impl std::future::Future<Output = Vec<super::RouterStopFailure>> + Send {
+    use super::shutdown::{RouterStopFailure, TransportOwner, observe};
+    let mut owner = TransportOwner {
+        transport,
+        stopped: false,
+    };
+    // Construct the fallback owner before spawning, even if the task is never polled.
+    async move {
+        let mut failures = Vec::new();
+        let send_result = tokio::select! {
+            biased;
+            _ = async {
+                if !*stop.borrow_and_update() { let _ = stop.changed().await; }
+            } => Ok(()),
+            result = observe(run_loop(&owner.transport, port, queue, shared, outputs)) => result,
+        };
+        if let Err(detail) = send_result {
+            failures.push(RouterStopFailure::Worker {
+                network_number: Some(network_number),
+                worker: "sender",
+                detail,
+            });
+        }
+        match observe(owner.transport.stop()).await {
+            Ok(Ok(())) => owner.stopped = true,
+            Ok(Err(error)) => failures.push(RouterStopFailure::Transport {
+                network_number,
+                error,
+            }),
+            Err(detail) => failures.push(RouterStopFailure::Worker {
+                network_number: Some(network_number),
+                worker: "transport stop",
+                detail,
+            }),
+        }
+        // Keep the guard captured as one owner, then run its fallback only
+        // after the cleanup outcome has been recorded.
+        drop(owner);
+        failures
+    }
+}

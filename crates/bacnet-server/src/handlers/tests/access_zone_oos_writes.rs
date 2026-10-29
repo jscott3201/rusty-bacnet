@@ -9,6 +9,7 @@ use bacnet_objects::access_control::AccessZoneObject;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
 use bacnet_types::enums::Reliability;
+use bacnet_types::error::RemoteError;
 
 const COUNT: PropertyIdentifier = PropertyIdentifier::OCCUPANCY_COUNT;
 const RELIABILITY: PropertyIdentifier = PropertyIdentifier::RELIABILITY;
@@ -128,7 +129,7 @@ fn out_of_service(value: bool) -> (PropertyIdentifier, Vec<u8>) {
 
 fn assert_property_error(result: Result<(), Error>, expected: ErrorCode) {
     assert!(
-        matches!(result, Err(Error::Protocol { class, code })
+        matches!(result, Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::PROPERTY
                 && code == expected),
         "expected PROPERTY / {expected:?}, got {result:?}"

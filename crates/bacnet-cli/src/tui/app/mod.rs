@@ -11,7 +11,9 @@ pub(crate) mod command_bar;
 pub(crate) mod connection;
 pub(crate) mod devices;
 mod filter;
+mod manage;
 pub(crate) mod monitor;
+mod monitor_scan;
 pub(crate) mod mstp;
 pub(crate) mod names;
 pub(crate) mod network;
@@ -26,6 +28,8 @@ mod worker_events;
 
 use std::time::{Duration, Instant};
 
+use bacnet_ops::target::AddressStyle;
+
 use self::browser::Browser;
 use self::devices::{DeviceTable, Duplicates, Movement};
 use self::picker::{Picker, PickerKey};
@@ -33,7 +37,6 @@ use self::watch::{Screen, WatchList};
 use self::whois::{FormKey, FormOutcome, WhoIsForm};
 use super::log_layer::LogRing;
 use super::message::{Command, Failure, OpId, OpOutcome, WhoIsSpec, WorkerEvent};
-use crate::core::target::AddressStyle;
 
 /// A second Ctrl-C within this window quits.
 pub(crate) const CTRL_C_WINDOW: Duration = Duration::from_secs(2);
@@ -310,6 +313,11 @@ pub(crate) struct App {
     pub(crate) capture: capture::CaptureState,
     /// The `:find` search shown below the device table.
     pub(crate) who_has: Option<who_has::WhoHasSearch>,
+    /// Last successful receive-only B/IP bind, retained after failure until reset.
+    /// Only `passive_listening()` means this endpoint still supplies input.
+    pub(crate) passive_listener: Option<String>,
+    /// Recent I-Haves, bounded and refreshed by station/object identity.
+    pub(crate) overheard: who_has::Observations,
     /// Object and device names learned this session (#1896).
     pub(crate) names: names::NameCache,
     /// The screen in the body.
@@ -383,6 +391,8 @@ impl App {
             monitor: None,
             capture: capture::CaptureState::default(),
             who_has: None,
+            passive_listener: None,
+            overheard: Default::default(),
             names: names::NameCache::default(),
             screen: Screen::Main,
             next_req: 0,
@@ -658,6 +668,16 @@ impl App {
     }
 
     fn reset_session(&mut self) {
+        if let Some(monitor) = self.monitor.as_deref_mut() {
+            monitor.live = false;
+            monitor.wizard = None;
+            monitor.joining = None;
+            if let Some(scan) = monitor.scan.as_deref_mut().filter(|scan| scan.active()) {
+                scan.phase = crate::tui::monitor::scan::ScanPhase::Stopped(
+                    "session ended without restoration".into(),
+                );
+            }
+        }
         self.devices = DeviceTable::default();
         self.browser = None;
         if self.screen == Screen::Browse {
@@ -669,6 +689,8 @@ impl App {
         self.sc = sc::ScState::default();
         self.mstp = mstp::MstpState::default();
         self.who_has = None;
+        self.passive_listener = None;
+        self.overheard = Default::default();
         self.names = names::NameCache::default();
         // Captured frames stay; the session's tap went with it.
         self.capture.sources.retain(|(_, session)| !session);
@@ -687,7 +709,8 @@ impl App {
     }
 
     fn disconnect(&mut self, out: &mut Vec<Command>) {
-        let monitoring = self.link == Link::Passive && self.monitor.is_some();
+        let monitoring = self.link == Link::Passive
+            && (self.monitor.is_some() || self.passive_listener.is_some());
         if monitoring
             || matches!(
                 self.link,
@@ -716,23 +739,22 @@ impl App {
             self.flash("Disconnect (x) before changing profiles.", FLASH_FOR);
             return;
         }
-        if let Some(connection) = &mut self.connection {
-            if let Some(command) = connection.key(key) {
-                // Joining an MS/TP trunk is confirmed first (T2).
-                let command = match self.hold_for_join(command) {
-                    Some(command) => command,
-                    None => return,
-                };
-                if let Command::Profile(super::profile::service::Request::Connect {
-                    profile, ..
-                }) = &command
-                {
-                    let kind = profile.transport.kind();
-                    (self.transport, self.style) = (kind.label(), kind.style());
-                    self.link = Link::Connecting;
-                }
-                out.push(command);
+        if let Some(connection) = &mut self.connection
+            && let Some(command) = connection.key(key)
+        {
+            // Joining an MS/TP trunk is confirmed first (T2).
+            let command = match self.hold_for_join(command) {
+                Some(command) => command,
+                None => return,
+            };
+            if let Command::Profile(super::profile::service::Request::Connect { profile, .. }) =
+                &command
+            {
+                let kind = profile.transport.kind();
+                (self.transport, self.style) = (kind.label(), kind.style());
+                self.link = Link::Connecting;
             }
+            out.push(command);
         }
     }
 }
@@ -803,12 +825,17 @@ fn apply(app: &mut App, action: Action, out: &mut Vec<Command>) {
             if matches!(app.link, Link::Down | Link::Failed(_)) {
                 if app.connection.is_some() {
                     app.open_connection();
-                } else if let Some(join) = app.join_again.clone() {
-                    // Joining again is confirmed again (T2).
-                    app.overlay = Overlay::Join(join);
                 } else {
-                    app.link = Link::Connecting;
-                    out.push(Command::Reconnect);
+                    match app.join_again.clone() {
+                        Some(join) => {
+                            // Joining again is confirmed again (T2).
+                            app.overlay = Overlay::Join(join);
+                        }
+                        _ => {
+                            app.link = Link::Connecting;
+                            out.push(Command::Reconnect);
+                        }
+                    }
                 }
             }
         }

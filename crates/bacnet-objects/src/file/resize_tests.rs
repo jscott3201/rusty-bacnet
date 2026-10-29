@@ -2,11 +2,12 @@
 
 use super::*;
 use crate::clock::{ClockFrame, ClockReader};
+use bacnet_types::error::RemoteError;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn protocol_pair(error: Error) -> (ErrorClass, ErrorCode) {
     match error {
-        Error::Protocol { class, code } => (class, code),
+        Error::Remote(RemoteError::Error { class, code }) => (class, code),
         other => panic!("expected protocol error, got {other:?}"),
     }
 }

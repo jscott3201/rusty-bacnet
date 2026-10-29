@@ -4,11 +4,11 @@
 
 use bacnet_objects::group::GroupObject;
 use bacnet_types::constructed::ReadAccessSpecification;
-use pyo3::exceptions::PyValueError;
 use pyo3::PyResult;
+use pyo3::exceptions::PyValueError;
 
 use crate::errors::to_py_err;
-use crate::types::{py_to_rpm_specs, PyReadAccessSpec};
+use crate::types::{PyReadAccessSpec, py_to_rpm_specs};
 
 /// Convert `members`, reusing the `read_property_multiple` spec conversion;
 /// `None` is a Group with no members.

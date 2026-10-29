@@ -4,7 +4,7 @@
 use super::super::*;
 use super::make_dest_device;
 use super::persistence_tests::{assert_refused, framed, write};
-use super::storage::{block_on, persistent, MemoryPersistence, WAIT};
+use super::storage::{MemoryPersistence, WAIT, block_on, persistent};
 use crate::durable::{DurableWrites, PendingWrite, SaveWait, StageStep};
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
 use std::sync::Arc;

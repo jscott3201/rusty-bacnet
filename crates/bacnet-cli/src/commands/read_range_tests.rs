@@ -1,10 +1,11 @@
 use super::*;
 use bacnet_encoding::constructed::{
-    encode_audit_log_record, encode_event_log_record, encode_log_multiple_record, encode_log_record,
+    encode_audit_log_record, encode_device_object_property_reference, encode_event_log_record,
+    encode_log_multiple_record, encode_log_record,
 };
 use bacnet_types::constructed::{
-    AuditPropertyReference, BACnetAuditLogRecord, BACnetEventLogRecord, BACnetLogMultipleRecord,
-    BACnetLogRecord, LogValue,
+    AuditPropertyReference, BACnetAuditLogRecord, BACnetDeviceObjectPropertyReference,
+    BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord, LogValue,
 };
 use bacnet_types::enums::{AuditOperation, ErrorClass, ErrorCode, EventState, EventType};
 use bacnet_types::primitives::BACnetTimeStamp;
@@ -35,6 +36,7 @@ fn row(hour: u8, datum: &str, status_flags: Option<&str>) -> LogRecordRow {
         timestamp: format!("2026-10-03 {hour:02}:15:30.05"),
         datum: datum.to_string(),
         status_flags: status_flags.map(str::to_string),
+        event_values: None,
     }
 }
 
@@ -53,7 +55,7 @@ fn ack(object_type: ObjectType, item_count: u32, data: &[u8]) -> ReadRangeAck {
 /// Decode `data`, said to hold `item_count` records, as the log buffer of
 /// `object_type`.
 fn rows(object_type: ObjectType, item_count: u32, data: &[u8]) -> LogRows {
-    log_rows(&ack(object_type, item_count, data)).unwrap()
+    log_rows(&ack(object_type, item_count, data), &LogColumns::default()).unwrap()
 }
 
 #[test]
@@ -65,19 +67,19 @@ fn only_a_log_objects_log_buffer_shows_records() {
         ObjectType::AUDIT_LOG,
     ] {
         assert!(
-            log_rows(&ack(object_type, 0, &[])).is_some(),
+            log_rows(&ack(object_type, 0, &[]), &LogColumns::default()).is_some(),
             "{object_type}"
         );
     }
     for object_type in [ObjectType::DEVICE, ObjectType::ANALOG_INPUT] {
         assert!(
-            log_rows(&ack(object_type, 0, &[])).is_none(),
+            log_rows(&ack(object_type, 0, &[]), &LogColumns::default()).is_none(),
             "{object_type}"
         );
     }
     let mut other = ack(ObjectType::TREND_LOG, 0, &[]);
     other.property_identifier = PropertyIdentifier::EVENT_TIME_STAMPS;
-    assert!(log_rows(&other).is_none());
+    assert!(log_rows(&other, &LogColumns::default()).is_none());
 }
 
 #[test]
@@ -200,7 +202,7 @@ fn trend_log_multiple_records_show_every_value() {
     assert_eq!(
         rows(ObjectType::TREND_LOG_MULTIPLE, 2, &data).rows,
         [
-            row(8, "[21.5, true, null, enumerated(3)]", None),
+            row(8, "[21.5, true, null, enum 3]", None),
             row(9, "log-status LOG_INTERRUPTED", None),
         ]
     );
@@ -276,4 +278,94 @@ fn records_after_an_undecodable_one_fall_back_to_hex() {
     let records = rows(ObjectType::TREND_LOG_MULTIPLE, 1, &data[..data.len() - 2]);
     assert!(records.rows.is_empty());
     assert!(records.undecoded.unwrap().starts_with("0e a4 7e 0a 03"));
+}
+
+/// The columns a Log_DeviceObjectProperty naming `references` gives, each
+/// `(object type, instance, property)`.
+fn columns(references: &[(ObjectType, u32, PropertyIdentifier)]) -> LogColumns {
+    let mut data = BytesMut::new();
+    for (object_type, instance, property) in references {
+        encode_device_object_property_reference(
+            &mut data,
+            &BACnetDeviceObjectPropertyReference::new_local(
+                oid(*object_type, *instance),
+                property.to_raw(),
+            ),
+        );
+    }
+    LogColumns::decode(&data)
+}
+
+/// A Trend Log's enumerations and bits are named by the property it
+/// samples, and a value the property doesn't name prints as logged (#2091).
+#[test]
+fn trend_log_values_are_named_by_the_monitored_property() {
+    let mut data = BytesMut::new();
+    for (hour, log_datum) in [
+        (8, LogDatum::EnumValue(2)),
+        (9, LogDatum::RealValue(1.5)),
+        (10, LogDatum::EnumValue(1 << 40)),
+    ] {
+        let record = BACnetLogRecord {
+            date: DATE,
+            time: time(hour),
+            log_datum,
+            status_flags: None,
+        };
+        encode_log_record(&record, &mut data).unwrap();
+    }
+    let event_state = columns(&[(ObjectType::ANALOG_INPUT, 1, PropertyIdentifier::EVENT_STATE)]);
+    let named = log_rows(&ack(ObjectType::TREND_LOG, 3, &data), &event_state).unwrap();
+    assert_eq!(
+        named.rows,
+        [
+            row(8, "offnormal", None),
+            row(9, "1.5", None),
+            row(10, "enum 1099511627776", None),
+        ]
+    );
+}
+
+/// Each Trend Log Multiple member is named by its own element; a member
+/// past the array, or an empty element, prints as logged.
+#[test]
+fn trend_log_multiple_members_are_named_by_their_own_reference() {
+    let record = BACnetLogMultipleRecord {
+        date: DATE,
+        time: time(8),
+        log_data: LogData::Values(vec![
+            LogValue::EnumValue(2),
+            LogValue::BitstringValue {
+                unused_bits: 4,
+                data: vec![0b1000_0000],
+            },
+            LogValue::EnumValue(1),
+            LogValue::EnumValue(2),
+        ]),
+    };
+    let mut data = BytesMut::new();
+    encode_log_multiple_record(&record, &mut data).unwrap();
+    let members = columns(&[
+        (ObjectType::ANALOG_INPUT, 1, PropertyIdentifier::EVENT_STATE),
+        (
+            ObjectType::ANALOG_INPUT,
+            1,
+            PropertyIdentifier::STATUS_FLAGS,
+        ),
+        (
+            ObjectType::BINARY_INPUT,
+            2,
+            PropertyIdentifier::PRESENT_VALUE,
+        ),
+    ]);
+    let named = log_rows(&ack(ObjectType::TREND_LOG_MULTIPLE, 1, &data), &members).unwrap();
+    assert_eq!(
+        named.rows,
+        [row(8, "[offnormal, in-alarm, active, enum 2]", None)]
+    );
+    let unnamed = rows(ObjectType::TREND_LOG_MULTIPLE, 1, &data);
+    assert_eq!(
+        unnamed.rows,
+        [row(8, "[enum 2, bits(1000), enum 1, enum 2]", None)]
+    );
 }

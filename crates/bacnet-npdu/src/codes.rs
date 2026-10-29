@@ -12,7 +12,7 @@ macro_rules! named_codes {
         pub struct $Name:ident($inner:ty);
         $(
             $(#[$vmeta:meta])*
-            const $VARIANT:ident = $val:expr;
+            const $VARIANT:ident = $val:expr_2021;
         )*
     ) => {
         $(#[$meta])*

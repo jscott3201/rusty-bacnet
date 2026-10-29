@@ -128,10 +128,10 @@ impl BACnetObject for IndexedReadProbe {
             return Err(Error::Encoding("transient indexed read".into()));
         }
         if array_index == Some(17) {
-            return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::INVALID_ARRAY_INDEX,
-            });
+            return Err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::INVALID_ARRAY_INDEX,
+            ));
         }
         Ok(PropertyValue::Real(90.0))
     }
@@ -439,13 +439,14 @@ fn null_indexed_element_interrupts_the_pending_delay() {
         )
         .unwrap();
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
-    assert!(db
-        .get(&enrollment_oid)
-        .unwrap()
-        .enrollment_eval_state_internal()
-        .unwrap()
-        .pending
-        .is_none());
+    assert!(
+        db.get(&enrollment_oid)
+            .unwrap()
+            .enrollment_eval_state_internal()
+            .unwrap()
+            .pending
+            .is_none()
+    );
 
     db.get_mut(&value_oid)
         .unwrap()
@@ -575,13 +576,14 @@ fn null_indexed_floating_setpoint_interrupts_the_pending_delay() {
         )
         .unwrap();
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
-    assert!(db
-        .get(&enrollment_oid)
-        .unwrap()
-        .enrollment_eval_state_internal()
-        .unwrap()
-        .pending
-        .is_none());
+    assert!(
+        db.get(&enrollment_oid)
+            .unwrap()
+            .enrollment_eval_state_internal()
+            .unwrap()
+            .pending
+            .is_none()
+    );
 
     db.get_mut(&setpoint_oid)
         .unwrap()

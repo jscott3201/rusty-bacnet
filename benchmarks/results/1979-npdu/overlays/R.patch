@@ -1,0 +1,268 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 691f4ce10..3dae9dcc4 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -236,6 +236,7 @@ dependencies = [
+ name = "bacnet-benchmarks"
+ version = "0.9.0"
+ dependencies = [
++ "bacnet-npdu",
+  "bacnet-bip-codec",
+  "bacnet-client",
+  "bacnet-encoding",
+diff --git a/benchmarks/Cargo.toml b/benchmarks/Cargo.toml
+index 1239f86e5..2659bf39d 100644
+--- a/benchmarks/Cargo.toml
++++ b/benchmarks/Cargo.toml
+@@ -5,6 +5,7 @@ edition = "2021"
+ publish = false
+ 
+ [dependencies]
++bacnet-npdu = { path = "../crates/bacnet-npdu" }
+ bacnet-types = { path = "../crates/bacnet-types" }
+ bacnet-bip-codec = { path = "../crates/bacnet-bip-codec" }
+ bacnet-mstp-codec = { path = "../crates/bacnet-mstp-codec" }
+diff --git a/benchmarks/benches/encoding.rs b/benchmarks/benches/encoding.rs
+index 400dcdf59..ef6d44165 100644
+--- a/benchmarks/benches/encoding.rs
++++ b/benchmarks/benches/encoding.rs
+@@ -1,4 +1,7 @@
+ //! Criterion suite: encode and decode cost of ReadProperty requests, NPDUs and APDUs.
++#[path = "../compat/npdu_attribution.rs"]
++mod npdu_attribution;
++
+ use bytes::BytesMut;
+ use criterion::{criterion_group, criterion_main, Criterion};
+ use std::hint::black_box;
+@@ -69,6 +72,8 @@ fn bench_decode_npdu(c: &mut Criterion) {
+     encode_npdu(&mut buf, &npdu).unwrap();
+     let data = Bytes::from(buf.to_vec());
+ 
++    npdu_attribution::assert_anchor(&data);
++
+     c.bench_function("decode_npdu_100b_payload", |b| {
+         b.iter(|| {
+             black_box(decode_npdu(data.clone()).unwrap());
+@@ -164,6 +169,7 @@ fn bench_full_stack_encode(c: &mut Criterion) {
+ 
+ criterion_group!(
+     benches,
++    npdu_attribution::diagnostics,
+     bench_encode_read_property_request,
+     bench_decode_read_property_request,
+     bench_encode_npdu,
+diff --git a/crates/bacnet-encoding/src/npdu.rs b/crates/bacnet-encoding/src/npdu.rs
+index 2fc6fcf6f..a06f44e4a 100644
+--- a/crates/bacnet-encoding/src/npdu.rs
++++ b/crates/bacnet-encoding/src/npdu.rs
+@@ -12,7 +12,8 @@
+ //! network layer only ever sees an address that some data link could carry.
+ 
+ use bacnet_npdu::{
+-    Address, EncodeError, NetworkMessageType, NetworkPriority, RejectMessageReason, MAX_MAC_LEN,
++    Address, EncodeError, Malformed, NetworkMessageType, NetworkPriority, RejectMessageReason,
++    MAX_MAC_LEN,
+ };
+ use bacnet_types::error::{DecodeError, DecodingKind, Error};
+ use bacnet_types::MacAddr;
+@@ -215,34 +216,176 @@ pub fn decode_npdu(data: Bytes) -> Result<Npdu, NpduDecodeError> {
+             );
+         }
+     }
+-    let view = match bacnet_npdu::Npdu::decode(&data) {
+-        Ok(view) => view,
+-        Err(bacnet_npdu::DecodeError::AddressTooLong {
+-            field,
+-            length,
++
++    if data.len() < 2 {
++        return Err(NpduDecodeError::Malformed(Malformed::Truncated));
++    }
++
++    let version = data[0];
++    if version != bacnet_npdu::VERSION {
++        return Err(NpduDecodeError::Malformed(Malformed::Version));
++    }
++
++    let control = data[1];
++    let is_network_message = control & 0x80 != 0;
++    let has_destination = control & 0x20 != 0;
++    let has_source = control & 0x08 != 0;
++    let expecting_reply = control & 0x04 != 0;
++    let priority = NetworkPriority::from_control(control);
++
++    let mut offset = 2;
++    let mut destination = None;
++    let mut source = None;
++    let mut hop_count: u8 = 255;
++
++    if has_destination {
++        if offset + 3 > data.len() {
++            return Err(NpduDecodeError::Malformed(Malformed::Truncated));
++        }
++        let dnet = u16::from_be_bytes([data[offset], data[offset + 1]]);
++        if dnet == 0 {
++            return Err(NpduDecodeError::Malformed(Malformed::ReservedNetwork));
++        }
++        offset += 2;
++        let dlen = data[offset];
++        offset += 1;
++        let dadr = match decode_address(
++            &data,
++            offset,
++            bacnet_npdu::AddressField::Destination,
++            dlen,
+             dnet,
+-            source,
+-        }) => {
+-            return Err(NpduDecodeError::AddressTooLong {
+-                field,
+-                length,
+-                dnet,
+-                source: source.map(NpduAddress::owned),
+-            })
++        ) {
++            Ok(dadr) => dadr,
++            Err(mut refused) => {
++                if let NpduDecodeError::AddressTooLong { source, .. } = &mut refused {
++                    *source = has_source
++                        .then(|| source_behind(&data, offset + usize::from(dlen)))
++                        .flatten();
++                }
++                return Err(refused);
++            }
++        };
++        offset += dadr.len();
++
++        destination = Some(NpduAddress {
++            network: dnet,
++            mac_address: dadr,
++        });
++    }
++
++    if has_source {
++        if offset + 3 > data.len() {
++            return Err(NpduDecodeError::Malformed(Malformed::Truncated));
++        }
++        let snet = u16::from_be_bytes([data[offset], data[offset + 1]]);
++        if snet == 0 {
++            return Err(NpduDecodeError::Malformed(Malformed::ReservedNetwork));
++        }
++        if snet == 0xFFFF {
++            return Err(NpduDecodeError::Malformed(Malformed::ReservedNetwork));
++        }
++        offset += 2;
++        let slen = data[offset];
++        offset += 1;
++
++        if slen == 0 {
++            return Err(NpduDecodeError::Malformed(Malformed::EmptySource));
++        }
++        let dnet = destination.as_ref().map(|d| d.network);
++        let sadr = decode_address(&data, offset, bacnet_npdu::AddressField::Source, slen, dnet)?;
++        offset += sadr.len();
++
++        source = Some(NpduAddress {
++            network: snet,
++            mac_address: sadr,
++        });
++    }
++
++    if has_destination {
++        if offset >= data.len() {
++            return Err(NpduDecodeError::Malformed(Malformed::Truncated));
+         }
+-        Err(bacnet_npdu::DecodeError::Malformed(fault)) => {
+-            return Err(NpduDecodeError::Malformed(fault))
++        hop_count = data[offset];
++        offset += 1;
++    }
++
++    let mut message_type = None;
++    let mut vendor_id = None;
++
++    if is_network_message {
++        if offset >= data.len() {
++            return Err(NpduDecodeError::Malformed(Malformed::Truncated));
+         }
+-    };
++        let msg_type = data[offset];
++        offset += 1;
++        message_type = Some(NetworkMessageType::from_raw(msg_type));
++
++        if msg_type >= 0x80 {
++            if offset + 2 > data.len() {
++                return Err(NpduDecodeError::Malformed(Malformed::Truncated));
++            }
++            vendor_id = Some(u16::from_be_bytes([data[offset], data[offset + 1]]));
++            offset += 2;
++        }
++    }
++
++    let payload = data.slice(offset..);
++
+     Ok(Npdu {
+-        expecting_reply: view.expecting_reply,
+-        priority: view.priority,
+-        destination: view.destination.map(NpduAddress::owned),
+-        source: view.source.map(NpduAddress::owned),
+-        hop_count: view.hop_count,
+-        message_type: view.message_type,
+-        vendor_id: view.vendor_id,
+-        payload: data.slice(view.payload_offset..),
++        expecting_reply,
++        priority,
++        destination,
++        source,
++        hop_count,
++        message_type,
++        vendor_id,
++        payload,
++    })
++}
++
++/// Read the `length`-octet DADR or SADR at `offset`. A length past
++/// [`MAX_MAC_LEN`] is refused before any address octet is read,
++/// whether or not the frame holds that many (#1141).
++fn decode_address(
++    data: &[u8],
++    offset: usize,
++    field: bacnet_npdu::AddressField,
++    length: u8,
++    dnet: impl Into<Option<u16>>,
++) -> Result<MacAddr, NpduDecodeError> {
++    if usize::from(length) > MAX_MAC_LEN {
++        return Err(NpduDecodeError::AddressTooLong {
++            field,
++            length,
++            dnet: dnet.into(),
++            source: None,
++        });
++    }
++    let end = offset + usize::from(length);
++    if end > data.len() {
++        return Err(NpduDecodeError::Malformed(Malformed::Truncated));
++    }
++    Ok(MacAddr::from_slice(&data[offset..end]))
++}
++
++/// The SNET/SADR that starts at `offset`, behind a DADR too long to decode.
++///
++/// A router answers such an NPDU with a reject addressed to its original
++/// source (#1158), so the source is read past the DLEN octets the frame
++/// announces. Only a source the decoder would accept counts: a usable SNET, an
++/// SLEN within the bound and every SADR octet present.
++fn source_behind(data: &[u8], offset: usize) -> Option<NpduAddress> {
++    let header = data.get(offset..offset + 3)?;
++    let network = u16::from_be_bytes([header[0], header[1]]);
++    let length = usize::from(header[2]);
++    if network == 0 || network == 0xFFFF || length == 0 || length > MAX_MAC_LEN {
++        return None;
++    }
++    let sadr = data.get(offset + 3..offset + 3 + length)?;
++    Some(NpduAddress {
++        network,
++        mac_address: MacAddr::from_slice(sadr),
+     })
+ }
+ 

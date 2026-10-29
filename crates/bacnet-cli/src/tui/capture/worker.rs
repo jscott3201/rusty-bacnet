@@ -1,7 +1,7 @@
 //! The capture pumps: read a source, summarise each frame, and offer them
 //! to the UI in batches.
 //!
-//! Nothing here waits for the UI. Frames go out when a batch is full or
+//! Steady capture never waits for the UI. Frames go out when a batch is full or
 //! every [`REPORT_EVERY`], whichever is first, so capture shares the UI's
 //! event channel with a few events a second. A batch the channel can't
 //! take is dropped and its frames counted, beside what the source itself
@@ -9,31 +9,32 @@
 //! source runs the Capture screen's dropped counter is exact: every frame
 //! the source offered is in the ring or in that count. Counts the UI
 //! hasn't heard of ride on the next batch that gets through. No lock is
-//! held across an await.
+//! held across an await. Final accounting waits for the live UI after the
+//! monitor producer stops; shutdown keeps that delivery and input release polled
+//! together.
 
 use std::any::Any;
 use std::net::SocketAddr;
 use std::time::{Duration, SystemTime};
 
 use bacnet_client::client::BACnetClient;
+use bacnet_ops::target::AddressStyle;
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::bip6::Bip6Transport;
-use bacnet_transport::mstp::codec::Frame;
-use bacnet_transport::mstp::monitor::{
-    LineErrorKind, LineEvent, MonitorFrames, MonitorRecord, MstpMonitor,
-};
 use bacnet_transport::mstp::MstpTransport;
+use bacnet_transport::mstp::codec::Frame;
+use bacnet_transport::mstp::monitor::{LineErrorKind, LineEvent, MonitorFrames, MonitorRecord};
 use bacnet_transport::port::TransportPort;
 use bacnet_transport::tap::{FrameTap, FrameTapReceiver, TapDirection, TapPeer, TappedFrame};
 use bytes::Bytes;
 use tokio::sync::mpsc;
 
+use super::redact::scrub;
 use super::{Batch, CaptureCommand, CaptureEvent, CaptureFrame, Direction, FrameSummary, Framing};
-use crate::core::target::AddressStyle;
-use crate::decode::frame::summarize_frame;
 use crate::tui::message::WorkerEvent;
 use crate::tui::monitor::lines::CliSerial;
 use crate::tui::worker::{EventSink, Offer};
+use bacnet_ops::decode::frame::summarize_frame;
 
 /// What a session's capture is called before its tap is known.
 pub(crate) const TAP: &str = "the session's frame tap";
@@ -102,7 +103,10 @@ impl Source {
             } => (rx.recv().await).map(|frame| convert(frame, *framing, *local, local_text)),
             Self::Monitor { frames, epoch } => {
                 let epoch = *epoch;
-                frames.recv().await.map(|record| from_record(record, epoch))
+                return frames.recv().await.map_or_else(
+                    || Next::End("the monitor capture retired".into()),
+                    |record| Next::Frame(from_record(record, epoch)),
+                );
             }
             #[cfg(feature = "pcap")]
             Self::Pcap(feed) => return feed.recv().await,
@@ -197,6 +201,7 @@ fn convert(
         via,
         bytes: frame.bytes,
         summary,
+        redacted: false,
     }
 }
 
@@ -290,6 +295,7 @@ fn from_record(record: MonitorRecord, epoch: SystemTime) -> CaptureFrame {
         via,
         bytes,
         summary,
+        redacted: false,
     }
 }
 
@@ -361,28 +367,26 @@ pub(crate) async fn run<T: TransportPort + 'static>(
     }
 }
 
-/// The monitor session's capture: as [`run`], on the monitor's stream.
+/// An owned monitor subscription. The session initiates producer shutdown
+/// alongside this pump, so draining to EOF has a finite cutoff and includes
+/// unread records and broadcast lag. Final UI delivery cannot delay input stop.
 pub(crate) async fn run_monitor(
-    monitor: &MstpMonitor,
     sink: &EventSink,
-    mut commands: mpsc::Receiver<CaptureCommand>,
+    mut subscriptions: mpsc::Receiver<MonitorFrames>,
     started: tokio::time::Instant,
 ) {
-    if let Some(CaptureCommand::Start) = commands.recv().await {
+    if let Some(frames) = subscriptions.recv().await {
         let epoch = SystemTime::now()
             .checked_sub(started.elapsed())
             .unwrap_or_else(SystemTime::now);
-        let source = Source::Monitor {
-            frames: monitor.frames(),
-            epoch,
-        };
+        let source = Source::Monitor { frames, epoch };
         let what = "MS/TP monitor, every frame on the line".to_string();
         let started = CaptureEvent::Started {
             what: what.clone(),
             session: true,
         };
         if sink.deliver(WorkerEvent::Capture(started)).await {
-            pump(source, sink, Some(&mut commands), what).await;
+            pump(source, sink, None, what).await;
         }
     }
 }
@@ -439,15 +443,27 @@ pub(crate) async fn pump(
             received = command(&mut commands) => {
                 // Another Start is a no-op: this capture already runs.
                 if received.is_none() {
+                    if matches!(source, Source::Monitor { .. }) {
+                        // The owner must stop the monitor concurrently, not
+                        // await this pump first. Its closed producer bounds
+                        // the drain and lets recv observe unreported lag.
+                        commands = None;
+                        continue;
+                    }
+                    counts.finish(batch, &source, sink).await;
+                    sink.deliver(WorkerEvent::Capture(CaptureEvent::Ended {
+                        what, why: "the monitor or capture session retired".into(),
+                    })).await;
                     return;
                 }
             }
             next = source.next() => match next {
+                // A password leaves no frame before the ring sees it.
                 Next::Frame(frame) => {
-                    batch.push(frame);
+                    batch.push(scrub(frame));
                     while batch.len() < BATCH {
                         match source.try_next() {
-                            Some(frame) => batch.push(frame),
+                            Some(frame) => batch.push(scrub(frame)),
                             None => break,
                         }
                     }

@@ -1,9 +1,9 @@
 use bacnet_objects::event::EventTransition;
 use bacnet_services::enrollment_summary::{GetEnrollmentSummaryRequest, RecipientProcess};
+use bacnet_types::MacAddr;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::constructed::{BACnetAddress, BACnetRecipient};
 use bacnet_types::enums::EventType;
-use bacnet_types::MacAddr;
 
 use super::enrollment_summary_support::*;
 use super::*;
@@ -63,14 +63,18 @@ fn enrollment_membership_matches_exact_device_or_address_and_process() {
             .len(),
         1
     );
-    assert!(response(&db, &filtered(device, 9))
-        .unwrap()
-        .entries
-        .is_empty());
-    assert!(response(&db, &filtered(address, 8))
-        .unwrap()
-        .entries
-        .is_empty());
+    assert!(
+        response(&db, &filtered(device, 9))
+            .unwrap()
+            .entries
+            .is_empty()
+    );
+    assert!(
+        response(&db, &filtered(address, 8))
+            .unwrap()
+            .entries
+            .is_empty()
+    );
 }
 
 #[test]

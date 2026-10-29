@@ -1,6 +1,6 @@
 use super::unix::{ipv6_packet_info, packet_info};
 use super::*;
-use nix::sys::socket::{setsockopt, sockopt, ControlMessageOwned};
+use nix::sys::socket::{ControlMessageOwned, setsockopt, sockopt};
 use std::mem::{offset_of, size_of};
 
 fn destination() -> Ipv6Addr {

@@ -194,10 +194,10 @@ impl Replies {
     /// request comes first.
     pub(super) fn resolved(&mut self) -> impl Future<Output = Resolved> + '_ {
         std::future::poll_fn(move |cx| {
-            if let Some(current) = self.current.as_mut() {
-                if let Poll::Ready(result) = Pin::new(&mut current.rx).poll(cx) {
-                    return Poll::Ready(Resolved::Current(result.ok()));
-                }
+            if let Some(current) = self.current.as_mut()
+                && let Poll::Ready(result) = Pin::new(&mut current.rx).poll(cx)
+            {
+                return Poll::Ready(Resolved::Current(result.ok()));
             }
             let ready = self
                 .deferred

@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use crate::access_control::{
@@ -42,7 +42,7 @@ pub(crate) fn metadata_row_reads(object: &dyn BACnetObject, property: PropertyId
             | ObjectType::TREND_LOG_MULTIPLE
     ) && property == PropertyIdentifier::LOG_BUFFER
     {
-        return matches!(result, Err(Error::Protocol { class, code })
+        return matches!(result, Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::PROPERTY
                 && code == ErrorCode::READ_ACCESS_DENIED);
     }
@@ -177,9 +177,11 @@ fn metadata_row(
 fn assert_unique_and_canonical(object: &dyn BACnetObject) {
     let metadata = object.property_metadata();
     assert!(!metadata.is_empty());
-    assert!(metadata
-        .iter()
-        .any(|row| row.property_identifier == PropertyIdentifier::PROPERTY_LIST));
+    assert!(
+        metadata
+            .iter()
+            .any(|row| row.property_identifier == PropertyIdentifier::PROPERTY_LIST)
+    );
     let unique: HashSet<_> = metadata.iter().map(|row| row.property_identifier).collect();
     assert_eq!(
         unique.len(),
@@ -430,9 +432,11 @@ fn property_metadata_contract_property_list_projection_excludes_property_list() 
             .collect();
         assert_eq!(projected, expected_projection);
         assert_eq!(object.property_list().as_ref(), expected_projection);
-        assert!(!object
-            .property_list()
-            .contains(&PropertyIdentifier::PROPERTY_LIST));
+        assert!(
+            !object
+                .property_list()
+                .contains(&PropertyIdentifier::PROPERTY_LIST)
+        );
 
         let wire_list = object
             .read_property(PropertyIdentifier::PROPERTY_LIST, None)
@@ -474,26 +478,30 @@ fn property_metadata_contract_write_capabilities_match_dispatch() {
         metadata_row(&time_value, PropertyIdentifier::OBJECT_NAME).write_capability,
         PropertyWriteCapability::Always
     );
-    assert!(time_value
-        .write_property(
-            PropertyIdentifier::OBJECT_NAME,
-            None,
-            PropertyValue::CharacterString("TV-2".into()),
-            None,
-        )
-        .is_ok());
+    assert!(
+        time_value
+            .write_property(
+                PropertyIdentifier::OBJECT_NAME,
+                None,
+                PropertyValue::CharacterString("TV-2".into()),
+                None,
+            )
+            .is_ok()
+    );
     assert_eq!(
         metadata_row(&time_value, PropertyIdentifier::STATUS_FLAGS).write_capability,
         PropertyWriteCapability::ReadOnly
     );
-    assert!(time_value
-        .write_property(
-            PropertyIdentifier::STATUS_FLAGS,
-            None,
-            PropertyValue::Boolean(true),
-            None,
-        )
-        .is_err());
+    assert!(
+        time_value
+            .write_property(
+                PropertyIdentifier::STATUS_FLAGS,
+                None,
+                PropertyValue::Boolean(true),
+                None,
+            )
+            .is_err()
+    );
 
     let mut binary_input = BinaryInputObject::new(1, "BI-1").unwrap();
     for property_identifier in [
@@ -505,23 +513,27 @@ fn property_metadata_contract_write_capabilities_match_dispatch() {
             PropertyWriteCapability::WhenOutOfService
         );
     }
-    assert!(binary_input
-        .write_property_from(
-            PropertyIdentifier::PRESENT_VALUE,
-            None,
-            PropertyValue::Enumerated(1),
-            None,
-            &crate::command_source::test_origin(),
-        )
-        .is_err());
-    assert!(binary_input
-        .write_property(
-            PropertyIdentifier::RELIABILITY,
-            None,
-            PropertyValue::Enumerated(1),
-            None,
-        )
-        .is_err());
+    assert!(
+        binary_input
+            .write_property_from(
+                PropertyIdentifier::PRESENT_VALUE,
+                None,
+                PropertyValue::Enumerated(1),
+                None,
+                &crate::command_source::test_origin(),
+            )
+            .is_err()
+    );
+    assert!(
+        binary_input
+            .write_property(
+                PropertyIdentifier::RELIABILITY,
+                None,
+                PropertyValue::Enumerated(1),
+                None,
+            )
+            .is_err()
+    );
     binary_input
         .write_property(
             PropertyIdentifier::OUT_OF_SERVICE,

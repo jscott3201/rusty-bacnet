@@ -8,7 +8,7 @@ use bacnet_types::constructed::{
     BACnetRecipient,
 };
 use bacnet_types::enums::{AuditOperation, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
 
 use crate::clock::{ClockFrame, ClockReader};
@@ -100,7 +100,7 @@ fn frame(minute: u8) -> ClockFrame {
 fn assert_operational_problem(error: Error) {
     assert!(matches!(
         error,
-        Error::Protocol { class, code }
+        Error::Remote(RemoteError::Error { class, code })
             if class == ErrorClass::DEVICE
                 && code == ErrorCode::OPERATIONAL_PROBLEM
     ));
@@ -448,12 +448,13 @@ fn oversized_record_is_rejected_before_durable_or_memory_mutation() {
         current_value: None,
         result: None,
     };
-    assert!(log
-        .add_record(record(
+    assert!(
+        log.add_record(record(
             1,
             BACnetAuditLogDatum::AuditNotification(notification),
         ))
-        .is_err());
+        .is_err()
+    );
     assert!(log.records().is_empty());
     assert_eq!(log.total_record_count(), 0);
 
@@ -536,9 +537,10 @@ fn custom_backend_cannot_bypass_record_or_snapshot_validation() {
         current_value: None,
         result: None,
     };
-    assert!(log
-        .add_record(record(1, BACnetAuditLogDatum::AuditNotification(oversized),))
-        .is_err());
+    assert!(
+        log.add_record(record(1, BACnetAuditLogDatum::AuditNotification(oversized),))
+            .is_err()
+    );
     assert_matches_snapshot(&log, &before);
     assert_eq!(persistence.snapshot.lock().unwrap().as_ref(), Some(&before));
 }
@@ -555,9 +557,10 @@ fn write_and_sync_failures_preserve_memory_and_prior_snapshot() {
             persistence.fail_write.store(true, Ordering::Release);
         }
 
-        assert!(log
-            .add_record(record(1, BACnetAuditLogDatum::TimeChange(1.0)))
-            .is_err());
+        assert!(
+            log.add_record(record(1, BACnetAuditLogDatum::TimeChange(1.0)))
+                .is_err()
+        );
         assert!(log.records().is_empty());
         assert_eq!(log.total_record_count(), 0);
         assert_eq!(persistence.snapshot.lock().unwrap().as_ref(), Some(&before));
@@ -580,24 +583,26 @@ fn log_enable_commit_failure_preserves_persistent_generation_and_retries() {
     )
     .unwrap();
     assert_matches_snapshot(&log, &before);
-    assert!(log
-        .write_property(
+    assert!(
+        log.write_property(
             PropertyIdentifier::LOG_ENABLE,
             None,
             PropertyValue::Unsigned(0),
             None
         )
-        .is_err());
+        .is_err()
+    );
     assert_matches_snapshot(&log, &before);
     persistence.fail_sync.store(true, Ordering::Release);
-    assert!(log
-        .write_property(
+    assert!(
+        log.write_property(
             PropertyIdentifier::LOG_ENABLE,
             None,
             PropertyValue::Boolean(false),
             None
         )
-        .is_err());
+        .is_err()
+    );
     assert_matches_snapshot(&log, &before);
     assert_eq!(persistence.snapshot.lock().unwrap().as_ref(), Some(&before));
     persistence.fail_sync.store(false, Ordering::Release);
@@ -688,14 +693,15 @@ fn clocked_enable_and_purge_statuses_persist_and_record_count_is_read_only() {
     );
 
     let count_before = log.records().len();
-    assert!(log
-        .write_property(
+    assert!(
+        log.write_property(
             PropertyIdentifier::RECORD_COUNT,
             None,
             PropertyValue::Unsigned(0),
             None,
         )
-        .is_err());
+        .is_err()
+    );
     assert_eq!(log.records().len(), count_before);
 }
 

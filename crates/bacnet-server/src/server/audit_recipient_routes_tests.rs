@@ -161,17 +161,19 @@ async fn audit_target_routes_use_actual_bound_bip_broadcast_port() {
     let mut bytes = BytesMut::new();
     bacnet_encoding::constructed::encode_recipient(&mut bytes, &recipient(endpoint.port()))
         .unwrap();
-    assert!(server
-        .write_local(
-            &target,
-            PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT,
-            None,
-            PropertyValue::ApplicationData(bytes.to_vec()),
-            None,
-            crate::LocalCommandSource::ServerDevice,
-        )
-        .await
-        .is_err());
+    assert!(
+        server
+            .write_local(
+                &target,
+                PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT,
+                None,
+                PropertyValue::ApplicationData(bytes.to_vec()),
+                None,
+                crate::LocalCommandSource::ServerDevice,
+            )
+            .await
+            .is_err()
+    );
     assert_eq!(
         server
             .db
@@ -256,12 +258,14 @@ async fn audit_target_routes_revalidate_generic_next_hops_after_startup() {
                 notifications(&transport.sent).len(),
                 usize::from(!initially_unresolved)
             );
-            assert!(transport
-                .destinations
-                .lock()
-                .unwrap()
-                .iter()
-                .all(|mac| mac.as_slice() == NEW_LOGGER));
+            assert!(
+                transport
+                    .destinations
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .all(|mac| mac.as_slice() == NEW_LOGGER)
+            );
             let sequence = server
                 .db
                 .read()
@@ -275,17 +279,19 @@ async fn audit_target_routes_revalidate_generic_next_hops_after_startup() {
             )
             .unwrap();
             if initially_unresolved {
-                assert!(server
-                    .write_local(
-                        &target,
-                        PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT,
-                        None,
-                        PropertyValue::ApplicationData(bytes.to_vec()),
-                        None,
-                        crate::LocalCommandSource::ServerDevice,
-                    )
-                    .await
-                    .is_err());
+                assert!(
+                    server
+                        .write_local(
+                            &target,
+                            PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT,
+                            None,
+                            PropertyValue::ApplicationData(bytes.to_vec()),
+                            None,
+                            crate::LocalCommandSource::ServerDevice,
+                        )
+                        .await
+                        .is_err()
+                );
             } else {
                 assert!(matches!(
                     dispatch(

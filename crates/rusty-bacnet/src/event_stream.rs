@@ -29,8 +29,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use pyo3::prelude::*;
 use pyo3::IntoPyObjectExt;
+use pyo3::prelude::*;
 use tokio::sync::broadcast::{self, error::RecvError};
 use tokio::sync::{Mutex, Notify};
 
@@ -279,7 +279,7 @@ impl<T: Clone + Send + 'static> LossyReceiver<T> {
     pub(crate) fn next(
         &self,
     ) -> (
-        impl std::future::Future<Output = Option<Next<T>>> + Send + 'static,
+        impl std::future::Future<Output = Option<Next<T>>> + Send + 'static + use<T>,
         Arc<dyn PutBack>,
     ) {
         let rx = Arc::clone(&self.rx);

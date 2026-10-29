@@ -475,10 +475,10 @@ impl DeviceBindingTable {
     /// where it was last seen drew nothing, so its next one goes global. A
     /// configured binding, or an observation an I-Am refreshed, stays.
     pub(super) fn forget_stale(&mut self, device: &ObjectIdentifier, now: Instant) {
-        if let Some(BindingEntry::Observed { observed_at, .. }) = self.entries.get(device) {
-            if now.saturating_duration_since(*observed_at) >= OBSERVED_BINDING_TTL {
-                self.entries.remove(device);
-            }
+        if let Some(BindingEntry::Observed { observed_at, .. }) = self.entries.get(device)
+            && now.saturating_duration_since(*observed_at) >= OBSERVED_BINDING_TTL
+        {
+            self.entries.remove(device);
         }
     }
 

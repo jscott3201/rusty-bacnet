@@ -3,8 +3,8 @@
 use core::net::{Ipv4Addr, SocketAddrV4};
 
 use bacnet_bip_codec::{
-    address_from_slice, decode, BdtEntries, BdtEntry, BvlcFunction, BvlcResultCode, Bvll,
-    BvllError, BvllFrame, BvllSink, FdtEntries, PayloadShape, SinkFull, MAX_BVLL_LENGTH,
+    BdtEntries, BdtEntry, BvlcFunction, BvlcResultCode, Bvll, BvllError, BvllFrame, BvllSink,
+    FdtEntries, MAX_BVLL_LENGTH, PayloadShape, SinkFull, address_from_slice, decode,
 };
 
 /// A header with `function` and a Length field counting `payload`, then the

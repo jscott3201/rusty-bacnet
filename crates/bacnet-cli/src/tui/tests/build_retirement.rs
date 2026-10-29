@@ -1,14 +1,14 @@
 //! An in-progress build and its non-cancel-safe stop remain owned to completion.
 
-use crate::tui::worker::{session, EventSink};
+use crate::tui::worker::{EventSink, session};
 use bacnet_client::client::BACnetClient;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
 use bacnet_types::error::Error;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
-use tokio::sync::{mpsc, watch, Notify};
+use tokio::sync::{Notify, mpsc, watch};
 
 struct ControlledPort {
     starting: Arc<Notify>,
@@ -62,9 +62,11 @@ async fn cancelled_partial_build_is_finished_and_stopped_without_publishing() {
     let sink = sink.for_session(1, cancelled);
     let task = tokio::spawn(async move {
         let builder = BACnetClient::generic_builder().transport(port).build();
-        assert!(session::finish_build(Box::pin(builder), &sink)
-            .await
-            .is_none());
+        assert!(
+            session::finish_build(Box::pin(builder), &sink)
+                .await
+                .is_none()
+        );
     });
     starting.notified().await;
     cancel.send_replace(true);

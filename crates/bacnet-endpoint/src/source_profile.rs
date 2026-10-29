@@ -129,12 +129,12 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                     Ok(PropertyValue::Boolean(true)) => {
                         return Err(Error::Encoding(
                             "database already contains a conflicting source Audit Reporter".into(),
-                        ))
+                        ));
                     }
                     _ => {
                         return Err(Error::Encoding(
                             "cannot determine another Audit Reporter's source ownership".into(),
-                        ))
+                        ));
                     }
                 }
             }

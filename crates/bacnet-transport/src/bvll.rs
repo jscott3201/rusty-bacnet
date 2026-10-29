@@ -59,17 +59,17 @@ use bacnet_types::error::{DecodeError, DecodingKind, Error};
 use bytes::{Bytes, BytesMut};
 
 pub use bacnet_bip_codec::{
-    address_from_octets, address_from_slice, address_to_octets, BdtEntries, BdtEntry, BvlcFunction,
-    BvlcResultCode, Bvll, BvllError, BvllFrame, BvllSink, Entries, EntryIter, FdtEntries, FdtEntry,
-    PayloadShape, SinkFull, TableEntry, BDT_ENTRY_LENGTH, BIP_ADDRESS_LENGTH, BVLC_TYPE_BIP,
-    DEFAULT_PORT, FDT_ENTRY_LENGTH, HEADER_LENGTH, MAX_BVLL_LENGTH,
+    BDT_ENTRY_LENGTH, BIP_ADDRESS_LENGTH, BVLC_TYPE_BIP, BdtEntries, BdtEntry, BvlcFunction,
+    BvlcResultCode, Bvll, BvllError, BvllFrame, BvllSink, DEFAULT_PORT, Entries, EntryIter,
+    FDT_ENTRY_LENGTH, FdtEntries, FdtEntry, HEADER_LENGTH, MAX_BVLL_LENGTH, PayloadShape, SinkFull,
+    TableEntry, address_from_octets, address_from_slice, address_to_octets,
 };
 
 /// The static label `NAME cannot carry a {}-octet payload` for each named
 /// function of `$Type` listed, or `None` for another value, so a payload
 /// refusal reads as the codec's does without formatting (#1776).
 macro_rules! payload_label {
-    ($function:expr, $Type:ident: $($name:ident),+ $(,)?) => {
+    ($function:expr_2021, $Type:ident: $($name:ident),+ $(,)?) => {
         match $function {
             $( $Type::$name => Some(concat!(stringify!($name), " cannot carry a {}-octet payload")), )+
             _ => None,

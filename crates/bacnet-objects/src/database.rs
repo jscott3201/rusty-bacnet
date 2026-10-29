@@ -1,7 +1,8 @@
 //! ObjectDatabase — stores and retrieves BACnet objects by identifier.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use crate::collections::{HashMap, HashSet};
+use crate::prelude::*;
+use alloc::sync::Arc;
 
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
 use bacnet_types::error::Error;
@@ -29,7 +30,7 @@ use trend_poll::TrendPollSchedule;
 /// Enforces Object_Name uniqueness within a device.
 /// Maintains secondary indexes for O(1) name lookup and O(1) type lookup.
 pub struct ObjectDatabase {
-    audit_owner: Option<std::sync::Weak<AuditOwnership>>,
+    audit_owner: Option<alloc::sync::Weak<AuditOwnership>>,
     network_port: Option<network_port::NetworkPortRegistration>,
     objects: HashMap<ObjectIdentifier, Box<dyn BACnetObject>>,
     trend_poll: TrendPollSchedule,
@@ -172,13 +173,13 @@ impl ObjectDatabase {
         oid: &ObjectIdentifier,
         new_name: &str,
     ) -> Result<(), Error> {
-        if let Some(&owner) = self.name_index.get(new_name) {
-            if owner != *oid {
-                return Err(Error::Protocol {
-                    class: ErrorClass::PROPERTY,
-                    code: ErrorCode::DUPLICATE_NAME,
-                });
-            }
+        if let Some(&owner) = self.name_index.get(new_name)
+            && owner != *oid
+        {
+            return Err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::DUPLICATE_NAME,
+            ));
         }
         Ok(())
     }
@@ -313,33 +314,34 @@ impl ObjectDatabase {
         if self.objects.contains_key(oid) {
             self.invalidate_enrollments_monitoring(oid);
         }
-        if let Some(mut obj) = self.objects.remove(oid) {
-            if let Some(reporter) = obj.audit_reporter_internal() {
-                reporter.status_internal().configuration_changed();
-            }
-            self.enrollment_eval_sources.remove(oid);
-            if obj.enrollment_eval_state_internal().is_some() {
-                if obj
-                    .set_enrollment_eval_state_internal(Default::default())
-                    .is_err()
-                {
-                    self.invalid_enrollment_eval_state.insert(*oid);
+        match self.objects.remove(oid) {
+            Some(mut obj) => {
+                if let Some(reporter) = obj.audit_reporter_internal() {
+                    reporter.status_internal().configuration_changed();
+                }
+                self.enrollment_eval_sources.remove(oid);
+                if obj.enrollment_eval_state_internal().is_some() {
+                    if obj
+                        .set_enrollment_eval_state_internal(Default::default())
+                        .is_err()
+                    {
+                        self.invalid_enrollment_eval_state.insert(*oid);
+                    } else {
+                        self.invalid_enrollment_eval_state.remove(oid);
+                    }
+                    let _ = obj.set_enrollment_eval_source_internal(None);
                 } else {
                     self.invalid_enrollment_eval_state.remove(oid);
                 }
-                let _ = obj.set_enrollment_eval_source_internal(None);
-            } else {
-                self.invalid_enrollment_eval_state.remove(oid);
+                self.name_index.remove(obj.object_name());
+                if let Some(type_set) = self.type_index.get_mut(&oid.object_type()) {
+                    type_set.retain(|o| o != oid);
+                }
+                self.audit_membership_changed(*oid, false);
+                self.membership_changed(*oid, false);
+                Ok(Some(obj))
             }
-            self.name_index.remove(obj.object_name());
-            if let Some(type_set) = self.type_index.get_mut(&oid.object_type()) {
-                type_set.retain(|o| o != oid);
-            }
-            self.audit_membership_changed(*oid, false);
-            self.membership_changed(*oid, false);
-            Ok(Some(obj))
-        } else {
-            Ok(None)
+            _ => Ok(None),
         }
     }
 

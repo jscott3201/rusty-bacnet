@@ -85,10 +85,11 @@ fn gaps_follow_the_captured_character_schedule() {
     assert_eq!(sim.frames[0].end, us(6_800));
     assert_eq!(sim.report.driver_releases[0].at, us(8_200));
     assert_eq!(sim.line.last_activity(), Some(us(6_800)));
-    assert!(!sim
-        .trace
-        .entries()
-        .any(|entry| matches!(entry.kind, TraceKind::Garbled)));
+    assert!(
+        !sim.trace
+            .entries()
+            .any(|entry| matches!(entry.kind, TraceKind::Garbled))
+    );
 }
 
 /// A stuck octet adapter is not the host await policy. Remove the UART's
@@ -197,10 +198,11 @@ fn valid_but_insufficient_budget_aborts_once_and_recovers_without_reboot() {
     assert_eq!(sim.master_mut(0).unwrap().incarnation, incarnation);
     assert_eq!(sim.core(0).unwrap().counters().transmit_timeouts, 1);
     assert_eq!(sim.frames.iter().filter(|frame| frame.truncated).count(), 1);
-    assert!(sim
-        .frames
-        .iter()
-        .any(|frame| frame.is_clean() && frame.data == [1, 0, 0x42]));
+    assert!(
+        sim.frames
+            .iter()
+            .any(|frame| frame.is_clean() && frame.data == [1, 0, 0x42])
+    );
     assert_eq!(
         sim.report
             .driver_releases
@@ -442,10 +444,11 @@ fn reboot_in_a_gap_fences_the_old_octet_and_end_events() {
     assert_eq!(sim.line.last_activity(), Some(us(3_500)));
     assert!(sim.meta.is_empty());
     assert_eq!(sim.line.live_count(), 0);
-    assert!(!sim
-        .trace
-        .entries()
-        .any(|entry| matches!(entry.kind, TraceKind::Garbled)));
+    assert!(
+        !sim.trace
+            .entries()
+            .any(|entry| matches!(entry.kind, TraceKind::Garbled))
+    );
     sim.assert_no_violations();
 }
 

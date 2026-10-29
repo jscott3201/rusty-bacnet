@@ -19,6 +19,9 @@ members = [
     "crates/bacnet-objects",
     "crates/bacnet-server",
     "crates/bacnet-endpoint",
+    "crates/bacnet-ops",
+    # The MCP server (#2066): out of default-members, with the CLI.
+    "crates/bacnet-mcp",
     "crates/bacnet-integration-tests",
     "crates/rusty-bacnet",
     "crates/bacnet-cli",
@@ -41,7 +44,8 @@ members = [
     "examples/rust/samples/whois-scan",
 ]
 # rusty-bacnet's tests link libpython, so they need a Python with its shared library.
-# bacnet-cli has heavy deps (clap, ratatui) — excluded from default builds.
+# bacnet-cli has heavy deps (clap, ratatui) — excluded from default builds, as is
+# bacnet-mcp, which brings the MCP SDK (rmcp) and only the CLI's `mcp` feature uses.
 # Use `cargo nextest run -p rusty-bacnet`. The samples, the firmware link test
 # and the no_std harness are left out too: `--workspace` runs build them, and
 # `-p` picks one.
@@ -64,14 +68,15 @@ default-members = [
     "crates/bacnet-objects",
     "crates/bacnet-server",
     "crates/bacnet-endpoint",
+    "crates/bacnet-ops",
     "crates/bacnet-integration-tests",
     "benchmarks",
 ]
 
 [workspace.package]
-version = "0.14.0"
-edition = "2021"
-rust-version = "1.93"
+version = "0.15.0"
+edition = "2024"
+rust-version = "1.95"
 license = "MIT"
 authors = ["Justin Scott <jscott3201@gmail.com>"]
 repository = "https://github.com/jscott3201/rusty-bacnet"
@@ -89,27 +94,29 @@ categories = ["network-programming", "embedded"]
 # bacnet-time versions on its own (#1768): this is its version, which moves
 # only when its API changes, not the workspace version below it.
 bacnet-time = { version = "0.13.1", path = "crates/bacnet-time" }
-bacnet-npdu = { version = "0.14.0", path = "crates/bacnet-npdu" }
-bacnet-types = { version = "0.14.0", path = "crates/bacnet-types", default-features = false }
-bacnet-encoding = { version = "0.14.0", path = "crates/bacnet-encoding", default-features = false }
-bacnet-services = { version = "0.14.0", path = "crates/bacnet-services", default-features = false }
-bacnet-mstp-codec = { version = "0.14.0", path = "crates/bacnet-mstp-codec", default-features = false }
-bacnet-mstp-core = { version = "0.14.0", path = "crates/bacnet-mstp-core", default-features = false }
-bacnet-bip-codec = { version = "0.14.0", path = "crates/bacnet-bip-codec", default-features = false }
-bacnet-bip-core = { version = "0.14.0", path = "crates/bacnet-bip-core" }
-bacnet-router-core = { version = "0.14.0", path = "crates/bacnet-router-core" }
-bacnet-transport = { version = "0.14.0", path = "crates/bacnet-transport" }
-bacnet-network = { version = "0.14.0", path = "crates/bacnet-network" }
-bacnet-endpoint-core = { version = "0.14.0", path = "crates/bacnet-endpoint-core" }
-bacnet-client = { version = "0.14.0", path = "crates/bacnet-client" }
-bacnet-objects = { version = "0.14.0", path = "crates/bacnet-objects" }
-bacnet-server = { version = "0.14.0", path = "crates/bacnet-server" }
-bacnet-endpoint = { version = "0.14.0", path = "crates/bacnet-endpoint" }
+bacnet-npdu = { version = "0.15.0", path = "crates/bacnet-npdu" }
+bacnet-types = { version = "0.15.0", path = "crates/bacnet-types", default-features = false }
+bacnet-encoding = { version = "0.15.0", path = "crates/bacnet-encoding", default-features = false }
+bacnet-services = { version = "0.15.0", path = "crates/bacnet-services", default-features = false }
+bacnet-mstp-codec = { version = "0.15.0", path = "crates/bacnet-mstp-codec", default-features = false }
+bacnet-mstp-core = { version = "0.15.0", path = "crates/bacnet-mstp-core", default-features = false }
+bacnet-bip-codec = { version = "0.15.0", path = "crates/bacnet-bip-codec", default-features = false }
+bacnet-bip-core = { version = "0.15.0", path = "crates/bacnet-bip-core" }
+bacnet-router-core = { version = "0.15.0", path = "crates/bacnet-router-core" }
+bacnet-transport = { version = "0.15.0", path = "crates/bacnet-transport" }
+bacnet-network = { version = "0.15.0", path = "crates/bacnet-network" }
+bacnet-endpoint-core = { version = "0.15.0", path = "crates/bacnet-endpoint-core" }
+bacnet-client = { version = "0.15.0", path = "crates/bacnet-client" }
+bacnet-objects = { version = "0.15.0", path = "crates/bacnet-objects" }
+bacnet-server = { version = "0.15.0", path = "crates/bacnet-server" }
+bacnet-endpoint = { version = "0.15.0", path = "crates/bacnet-endpoint" }
+bacnet-ops = { version = "0.15.0", path = "crates/bacnet-ops" }
+bacnet-mcp = { version = "0.15.0", path = "crates/bacnet-mcp", default-features = false }
 thiserror = { version = "2", default-features = false }
 bitflags = "2"
 bytes = { version = "1", default-features = false }
 tracing = "0.1"
-tokio = "1.47"
+tokio = "1.53.3"
 socket2 = "0.6"
 # maturin turns on extension-module for wheel builds (crates/rusty-bacnet/pyproject.toml);
 # without it, cargo links libpython so the crate's own tests can run (#919).
@@ -158,6 +165,13 @@ riscv = "0.16.1"
 # The host test of the apdu image's arena (#1635): the allocator
 # embedded-alloc's `llff` heap wraps, here with its own spin lock.
 linked_list_allocator = "0.10.6"
+# bacnet-objects without std (#1615): the hash maps, and the lock its objects
+# share between threads, in place of std's. Both are no_std, and neither picks
+# an atomics backend: they need compare-and-swap, as alloc::sync::Arc does.
+hashbrown = { version = "0.17.1", default-features = false, features = ["default-hasher"] }
+# And the float rounding core lacks (f64::trunc, ceil, round, hypot).
+libm = "0.2.16"
+spinning_top = "0.2.5"
 # The firmware link test's emulation build (#1651): its images print and
 # exit under QEMU through semihosting, on Cortex-M and RISC-V alike, without
 # cortex-m and the unmaintained bare-metal crate it depends on.

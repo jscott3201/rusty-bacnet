@@ -192,6 +192,7 @@ mod tests {
             broadcast_address: "255.255.255.255".into(),
             share_port_by_address: false,
             bip_mode: Default::default(),
+            bip6_foreign: None,
             multicast: None,
             sc_hub: None,
             sc_vmac: None,
@@ -216,6 +217,7 @@ mod tests {
             },
             dcc_password: None,
             mutation_policy: bacnet_server::mutation::MutationPolicy::default(),
+            mutation_callback: None,
             dcc_policy: server::DccPolicy::default(),
             dcc_source_restriction: None,
             dcc_disable_rate_limit: None,
@@ -240,6 +242,7 @@ mod tests {
             pending_objects: std::sync::Mutex::new(Vec::new()),
             pending_forwarder_save_counters: std::sync::Mutex::new(Vec::new()),
             forwarder_save_counters: Arc::new(std::sync::Mutex::new(Vec::new())),
+            router: None,
         }
     }
 

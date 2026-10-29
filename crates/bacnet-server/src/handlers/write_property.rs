@@ -95,7 +95,7 @@ pub fn handle_write_property_multiple(
             crate::command_lists::end_unmade(db, &committed_oids);
             Err(error)
         }
-        WritePropertyMultipleOutcome::Reject { reason } => Err(Error::Reject { reason }),
+        WritePropertyMultipleOutcome::Reject { reason } => Err(Error::reject(reason)),
     }
 }
 
@@ -195,41 +195,39 @@ pub(crate) fn handle_write_property_multiple_observed(
             Ok(value) => crate::local_references::localize(db, oid, property, value),
             Err(error) => return semantic_failure(error, reference, committed_oids),
         };
-        if property == PropertyIdentifier::OBJECT_NAME {
-            if let Err(error) = check_and_prepare_name_write(db, &oid, &value) {
-                return semantic_failure(error, reference, committed_oids);
-            }
+        if property == PropertyIdentifier::OBJECT_NAME
+            && let Err(error) = check_and_prepare_name_write(db, &oid, &value)
+        {
+            return semantic_failure(error, reference, committed_oids);
         }
 
-        if let Some(authorize) = authorize {
-            if let Err(error) = authorize(&attempt) {
-                return semantic_failure(error, reference, committed_oids);
-            }
+        if let Some(authorize) = authorize
+            && let Err(error) = authorize(&attempt)
+        {
+            return semantic_failure(error, reference, committed_oids);
         }
-        if property == PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT {
-            if let Some(mut device) = db
+        if property == PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT
+            && let Some(mut device) = db
                 .get_mut(&oid)
                 .and_then(|object| object.device_authority_internal())
-            {
-                if device.object_identifier() == oid {
-                    if let Err(error) = device.write_audit_recipient(
-                        reference.property_array_index,
-                        value,
-                        attempt.priority,
-                        source,
-                    ) {
-                        return semantic_failure(error, reference, committed_oids);
-                    }
-                    if let Some(observer) = observer.as_deref_mut() {
-                        observer.applied(db, oid);
-                    }
-                    wrote = true;
-                    if !committed_oids.contains(&oid) {
-                        committed_oids.push(oid);
-                    }
-                    continue;
-                }
+            && device.object_identifier() == oid
+        {
+            if let Err(error) = device.write_audit_recipient(
+                reference.property_array_index,
+                value,
+                attempt.priority,
+                source,
+            ) {
+                return semantic_failure(error, reference, committed_oids);
             }
+            if let Some(observer) = observer.as_deref_mut() {
+                observer.applied(db, oid);
+            }
+            wrote = true;
+            if !committed_oids.contains(&oid) {
+                committed_oids.push(oid);
+            }
+            continue;
         }
         snapshots.capture_before_write(db, oid);
         let target = WriteTarget {
@@ -347,7 +345,7 @@ fn semantic_failure(
 }
 
 fn protocol_error(class: ErrorClass, code: ErrorCode) -> Error {
-    Error::Protocol { class, code }
+    Error::protocol(class, code)
 }
 
 /// At the existing indexed-write gate, effective absence takes precedence over
@@ -504,14 +502,13 @@ pub(crate) fn decode_write_property_value(
 
         // Clause 15.9/15.10 relinquishment is an operation, not a Recipient
         // value or disabled sentinel. The object owner must leave state intact.
-        if let Ok((tag, end)) = bacnet_encoding::tags::decode_tag(bytes, 0) {
-            if tag.class == bacnet_encoding::tags::TagClass::Application
-                && tag.number == bacnet_encoding::tags::app_tag::NULL
-                && tag.length == 0
-                && end == bytes.len()
-            {
-                return Ok(PropertyValue::Null);
-            }
+        if let Ok((tag, end)) = bacnet_encoding::tags::decode_tag(bytes, 0)
+            && tag.class == bacnet_encoding::tags::TagClass::Application
+            && tag.number == bacnet_encoding::tags::app_tag::NULL
+            && tag.length == 0
+            && end == bytes.len()
+        {
+            return Ok(PropertyValue::Null);
         }
         // An address MAC past the bound does not decode, so it is refused
         // with the other undecodable values (#1124).
@@ -520,12 +517,11 @@ pub(crate) fn decode_write_property_value(
         if consumed != bytes.len() {
             return Err(invalid_data_encoding_error());
         }
-        if let BACnetRecipient::Device(oid) = recipient {
-            if oid.object_type() != ObjectType::DEVICE
-                || oid.instance_number() == ObjectIdentifier::MAX_INSTANCE
-            {
-                return Err(invalid_data_encoding_error());
-            }
+        if let BACnetRecipient::Device(oid) = recipient
+            && (oid.object_type() != ObjectType::DEVICE
+                || oid.instance_number() == ObjectIdentifier::MAX_INSTANCE)
+        {
+            return Err(invalid_data_encoding_error());
         }
         // This validates the single Recipient value, not its deliverability.
         // Address routing and broadcast policy belong to the mutation owner.
@@ -692,24 +688,22 @@ pub(crate) fn handle_write_property_observed(
     if request.property_identifier == PropertyIdentifier::OBJECT_NAME {
         check_and_prepare_name_write(db, &oid, &value)?;
     }
-    if request.property_identifier == PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT {
-        if let Some(mut device) = db
+    if request.property_identifier == PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT
+        && let Some(mut device) = db
             .get_mut(&oid)
             .and_then(|object| object.device_authority_internal())
-        {
-            if device.object_identifier() == oid {
-                device.write_audit_recipient(
-                    request.property_array_index,
-                    value,
-                    request.priority,
-                    source,
-                )?;
-                if let Some(observer) = observer {
-                    observer.applied(db, oid);
-                }
-                return Ok((oid, Applied::Written));
-            }
+        && device.object_identifier() == oid
+    {
+        device.write_audit_recipient(
+            request.property_array_index,
+            value,
+            request.priority,
+            source,
+        )?;
+        if let Some(observer) = observer {
+            observer.applied(db, oid);
         }
+        return Ok((oid, Applied::Written));
     }
     let target = WriteTarget {
         oid,
@@ -739,10 +733,9 @@ fn write_with_source(
         PropertyIdentifier::DESCRIPTION
             | PropertyIdentifier::MAXIMUM_SEND_DELAY
             | PropertyIdentifier::SEND_NOW
-    ) {
-        if let Some(mut reporter) = object.audit_reporter_authority_internal() {
-            return reporter.write_property(property, value, index, source);
-        }
+    ) && let Some(mut reporter) = object.audit_reporter_authority_internal()
+    {
+        return reporter.write_property(property, value, index, source);
     }
     match command_origin {
         Some(origin) => object.write_property_from(property, index, value, priority, origin),

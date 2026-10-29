@@ -5,7 +5,7 @@
 
 mod support;
 
-use bacnet_mstp_codec::{FrameType, BROADCAST_MAC};
+use bacnet_mstp_codec::{BROADCAST_MAC, FrameType};
 use bacnet_mstp_core::{Action, Direction, Duration, Instant, MasterState, TransmitError};
 
 use support::*;

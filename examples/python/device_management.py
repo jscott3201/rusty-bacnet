@@ -57,10 +57,10 @@ async def main():
         # Output is one of them. The server refuses a Units initial value
         # (WRITE_ACCESS_DENIED), so only the name is given.
         print("\n=== CreateObject ===")
-        created = ObjectIdentifier(ObjectType.ANALOG_OUTPUT, 100)
-        raw = await client.create_object(
+        requested = ObjectIdentifier(ObjectType.ANALOG_OUTPUT, 100)
+        created = await client.create_object(
             addr,
-            created,
+            requested,
             initial_values=[
                 (
                     PropertyIdentifier.OBJECT_NAME,
@@ -70,7 +70,7 @@ async def main():
                 ),
             ],
         )
-        print(f"Created object (raw ACK: {len(raw)} bytes)")
+        print(f"Created {created}")
 
         # --- DeviceCommunicationControl ---
         print("\n=== DeviceCommunicationControl ===")

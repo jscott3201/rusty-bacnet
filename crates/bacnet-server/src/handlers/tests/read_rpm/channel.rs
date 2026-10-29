@@ -1,10 +1,10 @@
 //! Channel's three arrays read one element per index through ReadProperty
 //! and ReadPropertyMultiple (Table 12-62, Clause 12.1.5.1; #1151).
-use super::group::{assert_cases, ExpectedRead};
+use super::group::{ExpectedRead, assert_cases};
 use super::*;
+use PropertyIdentifier as P;
 use bacnet_objects::channel::ChannelObject;
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
-use PropertyIdentifier as P;
 
 /// AO-1's Present_Value: [0] object identifier, [1] property.
 const MEMBER_1: &[u8] = &[0x0C, 0x00, 0x40, 0x00, 0x01, 0x19, 0x55];

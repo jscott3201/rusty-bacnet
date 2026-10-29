@@ -57,10 +57,11 @@ fn check(notification: &COVNotificationMultipleRequest, confirmed: bool) {
             "{:?}",
             item.monitored_object_identifier
         );
-        assert!(item
-            .list_of_values
-            .iter()
-            .all(|v| v.time_of_change.is_none()));
+        assert!(
+            item.list_of_values
+                .iter()
+                .all(|v| v.time_of_change.is_none())
+        );
     }
     assert_eq!(notification.timestamp, None);
 }

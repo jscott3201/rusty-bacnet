@@ -172,15 +172,14 @@ impl MultipleReads {
         if values
             .iter()
             .all(|v| v.property_identifier != PropertyIdentifier::STATUS_FLAGS)
+            && let Some(encoded) = self.encoded_flags(oid)
         {
-            if let Some(encoded) = self.encoded_flags(oid) {
-                values.push(COVNotificationValue {
-                    property_identifier: PropertyIdentifier::STATUS_FLAGS,
-                    property_array_index: None,
-                    value: encoded.to_vec(),
-                    time_of_change: None,
-                });
-            }
+            values.push(COVNotificationValue {
+                property_identifier: PropertyIdentifier::STATUS_FLAGS,
+                property_array_index: None,
+                value: encoded.to_vec(),
+                time_of_change: None,
+            });
         }
         values
     }

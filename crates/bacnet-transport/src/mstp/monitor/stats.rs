@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use bacnet_mstp_codec::{FrameError, FrameHeader, FrameType, BROADCAST_MAC};
+use bacnet_mstp_codec::{BROADCAST_MAC, FrameError, FrameHeader, FrameType};
 
 /// How long the line may stay silent before a master takes the token as
 /// lost: T_no_token, 500 ms (Clause 9.5.3). A silence at least this long
@@ -317,10 +317,10 @@ impl MaxMaster {
 
 impl StationStats {
     fn record_poll(&mut self, source: u8, destination: u8) {
-        if destination == 0 {
-            if let Some(previous) = self.last_polled.filter(|previous| *previous > source) {
-                self.wrapped_at = Some(previous);
-            }
+        if destination == 0
+            && let Some(previous) = self.last_polled.filter(|previous| *previous > source)
+        {
+            self.wrapped_at = Some(previous);
         }
         self.last_polled = Some(destination);
         let highest = self

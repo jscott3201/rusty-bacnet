@@ -2,12 +2,12 @@
 
 use super::super::{Tsm, TsmConfig, TsmResponse};
 use super::TransactionProgress;
-use bacnet_types::enums::ConfirmedServiceChoice;
 use bacnet_types::MacAddr;
+use bacnet_types::enums::ConfirmedServiceChoice;
 use std::future::Future;
 use std::pin::pin;
 use std::task::{Context, Waker};
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 fn polls_ready<F: Future>(future: F) -> bool {
     let mut future = pin!(future);

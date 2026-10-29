@@ -1,6 +1,6 @@
 use bacnet_types::enums::AccessZoneOccupancyState;
 
-use super::zone_occupancy::{adjusted, Occupancy};
+use super::zone_occupancy::{Occupancy, adjusted};
 use super::zone_out_of_service::ZoneState;
 use super::*;
 use crate::event::state_reporting::{ChangeOfStateReporting, ListedStates};

@@ -107,8 +107,8 @@ async fn rejection_deadline_fresh_redial_validates_probe_identity_limits_and_pub
 }
 
 #[tokio::test(start_paused = true)]
-async fn empty_npdu_rejection_deadline_fresh_redial_validates_probe_identity_limits_and_publication(
-) {
+async fn empty_npdu_rejection_deadline_fresh_redial_validates_probe_identity_limits_and_publication()
+ {
     fresh_redial_validates_probe(3).await;
 }
 
@@ -206,8 +206,8 @@ async fn fresh_redial_validates_probe(wire_index: usize) {
 }
 
 #[tokio::test(start_paused = true)]
-async fn unknown_function_rejection_deadline_fresh_redial_validates_probe_identity_limits_and_publication(
-) {
+async fn unknown_function_rejection_deadline_fresh_redial_validates_probe_identity_limits_and_publication()
+ {
     fresh_redial_validates_probe(4).await;
 }
 

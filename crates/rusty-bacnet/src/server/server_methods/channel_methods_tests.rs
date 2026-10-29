@@ -1,6 +1,7 @@
 use super::*;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
+use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::ObjectIdentifier;
 
 const LIST: PropertyIdentifier = PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES;
@@ -21,7 +22,7 @@ fn read(object: &dyn BACnetObject, property: PropertyIdentifier) -> PropertyValu
 }
 
 fn is_error(error: &Error, class: ErrorClass, code: ErrorCode) -> bool {
-    matches!(error, Error::Protocol { class: c, code: e }
+    matches!(error, Error::Remote(RemoteError::Error { class: c, code: e })
         if *c == class && *e == code)
 }
 

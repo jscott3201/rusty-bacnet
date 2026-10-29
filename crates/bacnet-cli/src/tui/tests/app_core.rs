@@ -143,11 +143,12 @@ fn who_is_flow_warns_sends_listens_and_counts_replies() {
     let Overlay::WhoIs(form) = &app.overlay else {
         panic!("form closed");
     };
-    assert!(form
-        .warning
-        .as_deref()
-        .unwrap()
-        .contains("(1 device known)"));
+    assert!(
+        form.warning
+            .as_deref()
+            .unwrap()
+            .contains("(1 device known)")
+    );
     let commands = press(&mut app, KeyCode::Enter);
     let [Command::WhoIs { op, spec }] = commands.as_slice() else {
         panic!("expected one WhoIs, got {commands:?}");

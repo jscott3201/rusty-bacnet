@@ -4,10 +4,10 @@ use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bytes::BytesMut;
 use tracing::warn;
 
-use crate::sc_frame::{encode_sc_message, ScFunction, ScMessage, Vmac, BROADCAST_VMAC};
+use crate::sc_frame::{BROADCAST_VMAC, ScFunction, ScMessage, Vmac, encode_sc_message};
 
 use super::rejection::{RejectionBudget, RejectionExpired};
-use super::{data_attributes::build_bvlc_result_nak, WebSocketPort};
+use super::{WebSocketPort, data_attributes::build_bvlc_result_nak};
 
 pub(super) fn hub_source(msg: &ScMessage) -> Option<Vmac> {
     msg.originating_vmac

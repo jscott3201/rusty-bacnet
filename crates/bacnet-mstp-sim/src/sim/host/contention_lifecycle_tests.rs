@@ -92,9 +92,11 @@ fn terminal_counter_check_detects_core_loss_before_later_valid_input() {
         .filter(|v| v.kind == ViolationKind::ListenerMissedFrame)
         .collect();
     assert_eq!(missed.len(), 1);
-    assert!(missed[0]
-        .detail
-        .contains("terminal input counted 0, expected 1"));
+    assert!(
+        missed[0]
+            .detail
+            .contains("terminal input counted 0, expected 1")
+    );
     assert_eq!(missed[0].at, us(13_000));
 }
 
@@ -108,16 +110,18 @@ fn own_source_after_filtering_is_still_a_receipt_and_a_diagnostic() {
     assert_eq!(sim.core(10).unwrap().counters().frames_received, 1);
     assert_eq!(sim.core(10).unwrap().counters().own_address_frames, 1);
     assert_eq!(sim.contention_stats(10).matched, 1);
-    assert!(sim
-        .report()
-        .violations
-        .iter()
-        .any(|v| v.kind == ViolationKind::CoreCounter));
-    assert!(!sim
-        .report()
-        .violations
-        .iter()
-        .any(|v| v.kind == ViolationKind::ListenerMissedFrame));
+    assert!(
+        sim.report()
+            .violations
+            .iter()
+            .any(|v| v.kind == ViolationKind::CoreCounter)
+    );
+    assert!(
+        !sim.report()
+            .violations
+            .iter()
+            .any(|v| v.kind == ViolationKind::ListenerMissedFrame)
+    );
 }
 
 fn replay(
@@ -305,11 +309,12 @@ fn stalled_host_bounds_receipts_and_reboot_cancels_them() {
             .count(),
         1
     );
-    assert!(sim
-        .report()
-        .violations
-        .iter()
-        .all(|v| v.kind == ViolationKind::EventGrowth));
+    assert!(
+        sim.report()
+            .violations
+            .iter()
+            .all(|v| v.kind == ViolationKind::EventGrowth)
+    );
     assert!(sim.report().max_pending_events <= 12);
     assert_eq!(sim.trace().entries().count(), 64);
     let failures = sim.report().violations.len();

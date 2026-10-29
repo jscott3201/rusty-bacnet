@@ -5,7 +5,7 @@
 //! the broadcasts sent to its subnet.
 
 use super::*;
-use crate::port_ownership::{lost_port, ATTEMPTS};
+use crate::port_ownership::{ATTEMPTS, lost_port};
 use socket::udp_socket;
 use tokio::time::timeout;
 
@@ -397,5 +397,63 @@ async fn a_broadcast_from_another_interface_is_dropped() {
     fence.send_to(&unicast, node.address()).await.unwrap();
     assert_eq!(node.next().await.npdu.as_ref(), npdu(9));
     eprintln!("ran: a broadcast from {route} did not reach the transport on {loopback}");
+    node.transport.stop().await.unwrap();
+}
+
+/// A broadcast that a per-address transport's listener keeps reaches its
+/// frame tap exactly once: the listener reports it as the node keeps it
+/// (#1856), and the address socket never reads it. Linux sends it to
+/// loopback's 127.255.255.255; macOS and the BSDs give loopback no
+/// broadcast address, so there it goes to the default-route subnet's, and
+/// the test is skipped without one or where the host can't send it.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_kept_broadcast_reaches_the_tap_once() {
+    use crate::tap::TapDirection;
+    let (ip, subnet) = if cfg!(target_os = "linux") {
+        (
+            Ipv4Addr::new(127, 0, 0, 2),
+            Ipv4Addr::new(127, 255, 255, 255),
+        )
+    } else {
+        let Some(route) = crate::local_addresses::route_ipv4().filter(|ip| !ip.is_loopback())
+        else {
+            return eprintln!("skipped: no default-route IPv4 address");
+        };
+        let Some(subnet) = crate::local_addresses::subnet_broadcast(route) else {
+            return eprintln!("skipped: {route} has no subnet broadcast address");
+        };
+        (route, subnet)
+    };
+    let [mut node] = start_on_one_port([ip], [subnet], |_, _, _| {}).await;
+    let mut frames = node.transport.frame_tap().subscribe();
+    let peer = UdpSocket::bind(SocketAddrV4::new(ip, 0)).await.unwrap();
+    peer.set_broadcast(true).unwrap();
+    let broadcast = frame(BvlcFunction::ORIGINAL_BROADCAST_NPDU, &npdu(10));
+    let to = SocketAddrV4::new(subnet, node.address().port());
+    if let Err(e) = peer.send_to(&broadcast, to).await {
+        node.transport.stop().await.unwrap();
+        return eprintln!("skipped: this host can't send to {to}: {e}");
+    }
+    let received = node.next().await;
+    assert_eq!(received.npdu.as_ref(), npdu(10));
+    assert!(received.link_layer_group);
+    // The unicast after it is tapped as it is read, before it is handed up,
+    // so once it is handed up every copy of the broadcast is in the tap.
+    let unicast = frame(BvlcFunction::ORIGINAL_UNICAST_NPDU, &npdu(11));
+    peer.send_to(&unicast, node.address()).await.unwrap();
+    assert_eq!(node.next().await.npdu.as_ref(), npdu(11));
+    let inbound: Vec<_> = std::iter::from_fn(|| frames.try_recv())
+        .filter(|tapped| tapped.direction == TapDirection::Inbound)
+        .collect();
+    let copies = |datagram: &[u8]| {
+        inbound
+            .iter()
+            .filter(|tapped| tapped.bytes[..] == *datagram)
+            .count()
+    };
+    assert_eq!(copies(&broadcast), 1, "{inbound:?}");
+    assert_eq!(copies(&unicast), 1, "{inbound:?}");
+    eprintln!("ran: a broadcast to {to} reached the tap of the transport on {ip} once");
     node.transport.stop().await.unwrap();
 }

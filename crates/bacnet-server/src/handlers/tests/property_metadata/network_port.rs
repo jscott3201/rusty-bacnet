@@ -1,7 +1,8 @@
 use super::*;
-use bacnet_objects::{network_port::NetworkPortObject, traits::BACnetObject};
-use bacnet_types::primitives::PropertyValue;
 use PropertyIdentifier as P;
+use bacnet_objects::{network_port::NetworkPortObject, traits::BACnetObject};
+use bacnet_types::error::RemoteError;
+use bacnet_types::primitives::PropertyValue;
 
 fn network_port_object(configured: bool) -> NetworkPortObject {
     let mut object = NetworkPortObject::new_bip(
@@ -115,9 +116,11 @@ fn rpm_network_port_metadata_does_not_enable_create_object() {
         .encode(&mut request);
         let mut response = BytesMut::new();
         let result = handle_create_object(&mut db, &request, &mut response);
-        assert!(matches!(result, Err(Error::Protocol { class, code })
+        assert!(
+            matches!(result, Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::OBJECT
-                && code == ErrorCode::UNSUPPORTED_OBJECT_TYPE));
+                && code == ErrorCode::UNSUPPORTED_OBJECT_TYPE)
+        );
         assert!(response.is_empty());
         assert!(db.is_empty());
     }
@@ -144,7 +147,7 @@ fn network_port_delete_object_is_denied() {
     .encode(&mut request);
     let result = handle_delete_object(&mut db, &request).map(|_removed| ());
     assert!(
-        matches!(result, Err(Error::Protocol { class, code })
+        matches!(result, Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::OBJECT
                 && code == ErrorCode::OBJECT_DELETION_NOT_PERMITTED),
         "DeleteObject must reject NETWORK_PORT, got {result:?}"

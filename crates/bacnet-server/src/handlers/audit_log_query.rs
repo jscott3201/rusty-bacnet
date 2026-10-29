@@ -8,17 +8,14 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 
 fn unknown_object() -> Error {
-    Error::Protocol {
-        class: ErrorClass::OBJECT,
-        code: ErrorCode::UNKNOWN_OBJECT,
-    }
+    Error::protocol(ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT)
 }
 
 fn optional_functionality_not_supported() -> Error {
-    Error::Protocol {
-        class: ErrorClass::SERVICES,
-        code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-    }
+    Error::protocol(
+        ErrorClass::SERVICES,
+        ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+    )
 }
 
 /// Decode and execute one AuditLogQuery against the object's retained state.

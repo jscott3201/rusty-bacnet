@@ -1,14 +1,14 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bacnet_encoding::npdu::NpduAddress;
-use bacnet_types::enums::AuditOperation;
 use bacnet_types::MacAddr;
+use bacnet_types::enums::AuditOperation;
 
 use super::super::*;
 use super::{
-    confirmed_request, count, database, dispatch, dispatch_confirmed, notification, oid,
-    request_bytes, MemoryPersistence,
+    MemoryPersistence, confirmed_request, count, database, dispatch, dispatch_confirmed,
+    notification, oid, request_bytes,
 };
 
 #[tokio::test]
@@ -47,17 +47,19 @@ async fn durable_duplicate_is_silent_after_reopen_with_fresh_tracker() {
     drop(db);
 
     let reopened = database(Arc::clone(&persistence), 7);
-    assert!(dispatch(
-        &reopened,
-        &config,
-        &Arc::new(ConfirmedRequestTracker::default()),
-        9,
-        &[0x10],
-        None,
-        bytes,
-    )
-    .await
-    .is_err());
+    assert!(
+        dispatch(
+            &reopened,
+            &config,
+            &Arc::new(ConfirmedRequestTracker::default()),
+            9,
+            &[0x10],
+            None,
+            bytes,
+        )
+        .await
+        .is_err()
+    );
 
     assert_eq!(authorizations.load(Ordering::Acquire), 1);
     assert_eq!(count(&reopened, sink).await, (1, 1));

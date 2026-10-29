@@ -18,7 +18,7 @@ use crate::tui::profile::Safety;
 use crate::tui::safety::ledger::{Entry, Ledger, State};
 use crate::tui::safety::{Outcome, SafetyCommand, SafetyEvent, Stored};
 use crate::tui::worker::write::STALE;
-use crate::tui::worker::{EventSink, EVENT_CHANNEL_CAPACITY};
+use crate::tui::worker::{EVENT_CHANNEL_CAPACITY, EventSink};
 
 /// A ledger file holding `entries`, as an earlier run left it.
 fn leave_ledger(dir: &Path, entries: &[Entry]) {
@@ -47,6 +47,7 @@ fn earlier(state: State) -> Entry {
         state,
         kept: false,
         seq: 1,
+        origin: Default::default(),
     }
 }
 
@@ -76,7 +77,7 @@ async fn a_batch_failing_part_way_tracks_only_the_writes_before_the_failure() {
     finished(&mut site).await;
     let outcomes = outcomes(&site.app);
     assert_eq!(outcomes[0], Outcome::Ack, "{outcomes:?}");
-    assert!(matches!(outcomes[1], Outcome::Error { .. }), "{outcomes:?}");
+    assert!(matches!(outcomes[1], Outcome::Refused(_)), "{outcomes:?}");
     assert!(matches!(outcomes[2], Outcome::NotSent(_)), "{outcomes:?}");
     assert_eq!(slot(&site, 12).await, PropertyValue::Real(41.0));
     let ledger = Ledger::open(dir.path()).unwrap();
@@ -167,26 +168,23 @@ fn the_exit_guard_waits_for_a_pending_request() {
 /// Keep in a passive session flags the entries and records it.
 #[tokio::test(start_paused = true)]
 async fn keep_in_a_passive_session_flags_and_records() {
-    use crate::tui::worker::session::{spawn, ConnectPlan, TransportKind};
+    use crate::tui::worker::session::spawn;
     let dir = tempfile::tempdir().unwrap();
     leave_ledger(dir.path(), &[earlier(State::Applied)]);
-    let plan = ConnectPlan {
-        kind: TransportKind::Bip,
-        args: crate::tui::profile::Profile::default()
-            .transport_args()
-            .unwrap(),
-        await_interface: false,
-    };
+    let plan = super::network::plan(None);
     let (sink, mut events_rx) = EventSink::channel(EVENT_CHANNEL_CAPACITY);
     let (commands, rx) = tokio::sync::mpsc::channel(16);
     let task = spawn(plan, sink, rx, options(dir.path(), Safety::default(), true));
-    assert_eq!(events_rx.recv().await, Some(WorkerEvent::Passive));
+    assert!(matches!(
+        events_rx.recv().await,
+        Some(WorkerEvent::PassiveListening { .. })
+    ));
     commands
         .send(Command::Safety(SafetyCommand::Keep))
         .await
         .unwrap();
     drop(commands);
-    super::site::bounded(task).await.unwrap();
+    super::site::bounded(task).await.unwrap().unwrap();
     assert!(Ledger::open(dir.path()).unwrap().entries()[0].kept);
     let records = audit(dir.path());
     assert_eq!(records[0]["event"], "kept");
@@ -314,10 +312,12 @@ async fn a_second_session_on_the_profile_cannot_arm() {
         .filter(|r| r["event"] == "arm")
         .find(|r| r["outcome"]["result"] == "refused")
         .expect("the refusal is recorded");
-    assert!(refused["outcome"]["why"]
-        .as_str()
-        .unwrap()
-        .contains("in use"));
+    assert!(
+        refused["outcome"]["why"]
+            .as_str()
+            .unwrap()
+            .contains("in use")
+    );
     second.stop().await;
     first.stop().await;
 }

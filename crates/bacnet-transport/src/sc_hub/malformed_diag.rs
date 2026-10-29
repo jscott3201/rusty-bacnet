@@ -25,9 +25,13 @@ pub(super) fn emit(diag: &mut DiagnosticThrottle, log: impl FnOnce(u64)) {
 pub(super) fn oversize(diag: &mut DiagnosticThrottle, peer_addr: SocketAddr, len: usize) {
     emit(diag, |suppressed| {
         if suppressed > 0 {
-            warn!("Hub: frame from {peer_addr} is {len} bytes, exceeds hub Max-BVLC-Length {HUB_MAX_BVLC_LENGTH}, dropping (suppressed {suppressed} similar diagnostics)");
+            warn!(
+                "Hub: frame from {peer_addr} is {len} bytes, exceeds hub Max-BVLC-Length {HUB_MAX_BVLC_LENGTH}, dropping (suppressed {suppressed} similar diagnostics)"
+            );
         } else {
-            warn!("Hub: frame from {peer_addr} is {len} bytes, exceeds hub Max-BVLC-Length {HUB_MAX_BVLC_LENGTH}, dropping");
+            warn!(
+                "Hub: frame from {peer_addr} is {len} bytes, exceeds hub Max-BVLC-Length {HUB_MAX_BVLC_LENGTH}, dropping"
+            );
         }
     });
 }
@@ -39,7 +43,9 @@ pub(super) fn decode_error(
 ) {
     emit(diag, |suppressed| {
         if suppressed > 0 {
-            warn!("Hub: decode error from {peer_addr}: {e} (suppressed {suppressed} similar diagnostics)");
+            warn!(
+                "Hub: decode error from {peer_addr}: {e} (suppressed {suppressed} similar diagnostics)"
+            );
         } else {
             warn!("Hub: decode error from {peer_addr}: {e}");
         }
@@ -49,7 +55,9 @@ pub(super) fn decode_error(
 pub(super) fn npdu_exceeds(diag: &mut DiagnosticThrottle) {
     emit(diag, |suppressed| {
         if suppressed > 0 {
-            warn!("Hub: NPDU exceeds local Max-NPDU-Length, dropping (suppressed {suppressed} similar diagnostics)");
+            warn!(
+                "Hub: NPDU exceeds local Max-NPDU-Length, dropping (suppressed {suppressed} similar diagnostics)"
+            );
         } else {
             warn!("Hub: NPDU exceeds local Max-NPDU-Length, dropping");
         }
@@ -59,7 +67,9 @@ pub(super) fn npdu_exceeds(diag: &mut DiagnosticThrottle) {
 pub(super) fn result_before_connect(diag: &mut DiagnosticThrottle, peer_addr: SocketAddr) {
     emit(diag, |suppressed| {
         if suppressed > 0 {
-            debug!("Hub: Result before ConnectRequest from {peer_addr}, dropping (suppressed {suppressed} similar diagnostics)");
+            debug!(
+                "Hub: Result before ConnectRequest from {peer_addr}, dropping (suppressed {suppressed} similar diagnostics)"
+            );
         } else {
             debug!("Hub: Result before ConnectRequest from {peer_addr}, dropping");
         }
@@ -69,7 +79,9 @@ pub(super) fn result_before_connect(diag: &mut DiagnosticThrottle, peer_addr: So
 pub(super) fn npdu_before_connect(diag: &mut DiagnosticThrottle, peer_addr: SocketAddr) {
     emit(diag, |suppressed| {
         if suppressed > 0 {
-            warn!("Hub: EncapsulatedNpdu before ConnectRequest from {peer_addr} — sending NAK (suppressed {suppressed} similar diagnostics)");
+            warn!(
+                "Hub: EncapsulatedNpdu before ConnectRequest from {peer_addr} — sending NAK (suppressed {suppressed} similar diagnostics)"
+            );
         } else {
             warn!("Hub: EncapsulatedNpdu before ConnectRequest from {peer_addr} — sending NAK");
         }
@@ -79,7 +91,9 @@ pub(super) fn npdu_before_connect(diag: &mut DiagnosticThrottle, peer_addr: Sock
 pub(super) fn originating_vmac(diag: &mut DiagnosticThrottle, peer_addr: SocketAddr) {
     emit(diag, |suppressed| {
         if suppressed > 0 {
-            warn!("Hub: EncapsulatedNpdu from {peer_addr} had Originating VMAC, dropping (suppressed {suppressed} similar diagnostics)");
+            warn!(
+                "Hub: EncapsulatedNpdu from {peer_addr} had Originating VMAC, dropping (suppressed {suppressed} similar diagnostics)"
+            );
         } else {
             warn!("Hub: EncapsulatedNpdu from {peer_addr} had Originating VMAC, dropping");
         }
@@ -89,7 +103,9 @@ pub(super) fn originating_vmac(diag: &mut DiagnosticThrottle, peer_addr: SocketA
 pub(super) fn missing_destination(diag: &mut DiagnosticThrottle, peer_addr: SocketAddr) {
     emit(diag, |suppressed| {
         if suppressed > 0 {
-            warn!("Hub: EncapsulatedNpdu from {peer_addr} missing Destination VMAC, dropping (suppressed {suppressed} similar diagnostics)");
+            warn!(
+                "Hub: EncapsulatedNpdu from {peer_addr} missing Destination VMAC, dropping (suppressed {suppressed} similar diagnostics)"
+            );
         } else {
             warn!("Hub: EncapsulatedNpdu from {peer_addr} missing Destination VMAC, dropping");
         }
@@ -99,7 +115,9 @@ pub(super) fn missing_destination(diag: &mut DiagnosticThrottle, peer_addr: Sock
 pub(super) fn preserve_failure(diag: &mut DiagnosticThrottle, peer_addr: SocketAddr) {
     emit(diag, |suppressed| {
         if suppressed > 0 {
-            warn!("Hub: failed to preserve EncapsulatedNpdu frame from {peer_addr} (suppressed {suppressed} similar diagnostics)");
+            warn!(
+                "Hub: failed to preserve EncapsulatedNpdu frame from {peer_addr} (suppressed {suppressed} similar diagnostics)"
+            );
         } else {
             warn!("Hub: failed to preserve EncapsulatedNpdu frame from {peer_addr}");
         }
@@ -114,9 +132,13 @@ pub(super) fn broadcast_npdu_drop(
 ) {
     emit(diag, |suppressed| {
         if suppressed > 0 {
-            warn!("Hub: broadcast NPDU ({npdu_len} bytes) exceeds target max_npdu ({max_npdu}) for {vmac:02x?}, dropping for target (suppressed {suppressed} similar diagnostics)");
+            warn!(
+                "Hub: broadcast NPDU ({npdu_len} bytes) exceeds target max_npdu ({max_npdu}) for {vmac:02x?}, dropping for target (suppressed {suppressed} similar diagnostics)"
+            );
         } else {
-            warn!("Hub: broadcast NPDU ({npdu_len} bytes) exceeds target max_npdu ({max_npdu}) for {vmac:02x?}, dropping for target");
+            warn!(
+                "Hub: broadcast NPDU ({npdu_len} bytes) exceeds target max_npdu ({max_npdu}) for {vmac:02x?}, dropping for target"
+            );
         }
     });
 }
@@ -129,9 +151,13 @@ pub(super) fn broadcast_bvlc_drop(
 ) {
     emit(diag, |suppressed| {
         if suppressed > 0 {
-            warn!("Hub: broadcast BVLC ({relay_len} bytes) exceeds target max_bvlc ({max_bvlc}) for {vmac:02x?}, dropping for target (suppressed {suppressed} similar diagnostics)");
+            warn!(
+                "Hub: broadcast BVLC ({relay_len} bytes) exceeds target max_bvlc ({max_bvlc}) for {vmac:02x?}, dropping for target (suppressed {suppressed} similar diagnostics)"
+            );
         } else {
-            warn!("Hub: broadcast BVLC ({relay_len} bytes) exceeds target max_bvlc ({max_bvlc}) for {vmac:02x?}, dropping for target");
+            warn!(
+                "Hub: broadcast BVLC ({relay_len} bytes) exceeds target max_bvlc ({max_bvlc}) for {vmac:02x?}, dropping for target"
+            );
         }
     });
 }
@@ -144,9 +170,13 @@ pub(super) fn unicast_npdu_drop(
 ) {
     emit(diag, |suppressed| {
         if suppressed > 0 {
-            warn!("Hub: NPDU ({npdu_len} bytes) exceeds target max_npdu ({max_npdu}) for {dest:02x?}, dropping (suppressed {suppressed} similar diagnostics)");
+            warn!(
+                "Hub: NPDU ({npdu_len} bytes) exceeds target max_npdu ({max_npdu}) for {dest:02x?}, dropping (suppressed {suppressed} similar diagnostics)"
+            );
         } else {
-            warn!("Hub: NPDU ({npdu_len} bytes) exceeds target max_npdu ({max_npdu}) for {dest:02x?}, dropping");
+            warn!(
+                "Hub: NPDU ({npdu_len} bytes) exceeds target max_npdu ({max_npdu}) for {dest:02x?}, dropping"
+            );
         }
     });
 }
@@ -159,9 +189,13 @@ pub(super) fn unicast_bvlc_drop(
 ) {
     emit(diag, |suppressed| {
         if suppressed > 0 {
-            warn!("Hub: BVLC ({relay_len} bytes) exceeds target max_bvlc ({max_bvlc}) for {dest:02x?}, dropping (suppressed {suppressed} similar diagnostics)");
+            warn!(
+                "Hub: BVLC ({relay_len} bytes) exceeds target max_bvlc ({max_bvlc}) for {dest:02x?}, dropping (suppressed {suppressed} similar diagnostics)"
+            );
         } else {
-            warn!("Hub: BVLC ({relay_len} bytes) exceeds target max_bvlc ({max_bvlc}) for {dest:02x?}, dropping");
+            warn!(
+                "Hub: BVLC ({relay_len} bytes) exceeds target max_bvlc ({max_bvlc}) for {dest:02x?}, dropping"
+            );
         }
     });
 }
@@ -169,7 +203,9 @@ pub(super) fn unicast_bvlc_drop(
 pub(super) fn no_unicast_target(diag: &mut DiagnosticThrottle, dest: Vmac) {
     emit(diag, |suppressed| {
         if suppressed > 0 {
-            debug!("Hub: no client with vmac {dest:02x?} for unicast relay (suppressed {suppressed} similar diagnostics)");
+            debug!(
+                "Hub: no client with vmac {dest:02x?} for unicast relay (suppressed {suppressed} similar diagnostics)"
+            );
         } else {
             debug!("Hub: no client with vmac {dest:02x?} for unicast relay");
         }
@@ -183,7 +219,9 @@ pub(super) fn unknown_function(
 ) {
     emit(diag, |suppressed| {
         if suppressed > 0 {
-            debug!("Hub: unknown function {other:?} from {peer_addr}, sending NAK (suppressed {suppressed} similar diagnostics)");
+            debug!(
+                "Hub: unknown function {other:?} from {peer_addr}, sending NAK (suppressed {suppressed} similar diagnostics)"
+            );
         } else {
             debug!("Hub: unknown function {other:?} from {peer_addr}, sending NAK");
         }

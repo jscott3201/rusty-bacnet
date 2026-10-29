@@ -162,14 +162,13 @@ fn stage_and_write<S: EncodeSink + ?Sized, const N: usize>(
     let mut tail = &mut encoded[..];
     stage(&mut tail).expect("each reference fits its bounded staging buffer");
     let used = N - tail.len();
-    if let Some(available) = sink.remaining_capacity() {
-        if available < used {
+    if let Some(available) = sink.remaining_capacity()
+        && available < used {
             return Err(SinkFull {
                 needed: used,
                 available,
             });
         }
-    }
     sink.write(&encoded[..used])?;
     Ok(used)
 }

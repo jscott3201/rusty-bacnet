@@ -1,11 +1,11 @@
 use super::*;
 use crate::server::test_transport::{SentFrame, TestTransport};
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
+use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
 use bacnet_objects::device::DeviceObject;
 use bacnet_transport::port::ReceivedNpdu;
 use bacnet_transport::port::TransportProvenance;
 use bytes::Bytes;
-use tokio::sync::{mpsc, oneshot, Notify};
+use tokio::sync::{Notify, mpsc, oneshot};
 
 #[path = "segmented_worker_tests.rs"]
 mod segmented_worker_tests;

@@ -9,6 +9,7 @@ use bacnet_services::read_property::ReadPropertyRequest;
 use bacnet_services::read_range::{ReadRangeAck, ReadRangeRequest};
 use bacnet_services::rpm::{ReadPropertyMultipleACK, ReadResultElement};
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
+use bacnet_types::error::RemoteError;
 
 const ALL: PropertyIdentifier = PropertyIdentifier::ALL;
 const STATUS_FLAGS: PropertyIdentifier = PropertyIdentifier::STATUS_FLAGS;
@@ -249,7 +250,7 @@ async fn group_present_value_past_the_work_limit_aborts_as_any_rpm_does() {
     );
     assert!(matches!(
         wire.server.read_local(&group(7), PV, None).await,
-        Err(Error::Abort { reason }) if reason == AbortReason::OUT_OF_RESOURCES
+        Err(Error::Remote(RemoteError::Abort { reason })) if reason == AbortReason::OUT_OF_RESOURCES
     ));
 
     for (instance, member_count) in [(8, 3), (9, 4)] {

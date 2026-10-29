@@ -105,7 +105,7 @@ pub(crate) fn signature_algorithm(oid: &str) -> &str {
 #[cfg(feature = "sc-tls")]
 mod build {
     use super::*;
-    use crate::sc_check::lint::{Lint, Weight, SKEW_ALLOWANCE};
+    use crate::sc_check::lint::{Lint, SKEW_ALLOWANCE, Weight};
     use bacnet_transport::sc_tls::inspection::{
         ScDirectIssuer, ScExpiry, ScExtensionInspection, ScInputRole, ScInspectedCertificate,
         ScKeyConsistency, ScValidity,
@@ -293,10 +293,11 @@ mod tests {
             view.issuer,
             (Level::Ok, "issued directly by bundle CA 0".into())
         );
-        assert!(view
-            .findings
-            .iter()
-            .any(|(level, text)| *level == Level::Warning && text.contains("thirty days")));
+        assert!(
+            view.findings
+                .iter()
+                .any(|(level, text)| *level == Level::Warning && text.contains("thirty days"))
+        );
         // Past the end: the leaf fails.
         let late = Lint::run(&cert, Some(&cert), Some(&key), Some(NOW + 27 * 86_400)).unwrap();
         let late = Credentials::from_lint(&late);

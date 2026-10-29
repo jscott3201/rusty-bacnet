@@ -2,6 +2,7 @@
 use super::*;
 use crate::mutation::MutationTarget;
 use bacnet_services::wpm::WritePropertyMultipleError;
+use bacnet_types::error::RemoteError;
 
 async fn completed(fixture: &Fixture) {
     tokio::time::timeout(Duration::from_secs(2), async {
@@ -221,7 +222,7 @@ async fn local_index_refusal_reaches_no_audit_record() {
     };
     let error = write(Some(1)).await.unwrap_err();
     assert!(
-        matches!(error, Error::Protocol { class, code }
+        matches!(error, Error::Remote(RemoteError::Error { class, code })
             if class == ErrorClass::PROPERTY
                 && code == ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
         "{error:?}"

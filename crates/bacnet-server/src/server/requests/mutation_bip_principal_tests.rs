@@ -1,10 +1,22 @@
-//! B/IP requests carry no principal (#524), over a real UDP socket.
+//! B/IP requests carry no principal (#524) and no certificate (#1965),
+//! over a real UDP socket.
 use super::*;
 use crate::mutation::MutationAuthorizationContext;
 use bacnet_objects::value_types::CharacterStringValueObject;
 use bacnet_transport::port::{ScPrincipal, TransportProvenance};
 use bacnet_types::enums::ObjectType;
 use std::sync::Mutex as StdMutex;
+
+/// Whether either certificate accessor returns one; none can without `sc-tls`.
+fn any_certificate(context: &MutationAuthorizationContext) -> bool {
+    #[cfg(feature = "sc-tls")]
+    return context.certificate().is_some() || context.forwarding_peer_certificate().is_some();
+    #[cfg(not(feature = "sc-tls"))]
+    {
+        let _ = context;
+        false
+    }
+}
 
 #[tokio::test]
 async fn bip_mutation_has_no_principal_and_a_denial_changes_nothing() {
@@ -17,6 +29,7 @@ async fn bip_mutation_has_no_principal_and_a_denial_changes_nothing() {
     let seen = Arc::new(StdMutex::new(Vec::<(
         Option<ScPrincipal>,
         TransportProvenance,
+        bool,
     )>::new()));
     let record = seen.clone();
     let mut server = BACnetServer::<BipTransport>::bip_builder()
@@ -26,10 +39,11 @@ async fn bip_mutation_has_no_principal_and_a_denial_changes_nothing() {
         .enable_event_enrollment(false)
         .policy(
             crate::FnPolicy::new().mutation(move |context: &MutationAuthorizationContext| {
-                record
-                    .lock()
-                    .unwrap()
-                    .push((context.principal(), context.provenance));
+                record.lock().unwrap().push((
+                    context.principal(),
+                    context.provenance.clone(),
+                    any_certificate(context),
+                ));
                 context.principal().is_some()
             }),
         )
@@ -107,6 +121,7 @@ async fn bip_mutation_has_no_principal_and_a_denial_changes_nothing() {
     assert_eq!(seen.len(), 1);
     assert_eq!(seen[0].0, None);
     assert!(seen[0].1.is_unverified());
+    assert!(!seen[0].2, "a B/IP request has no certificate");
     let after = server
         .database()
         .read()

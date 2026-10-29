@@ -1,5 +1,6 @@
 use super::*;
 use bacnet_types::enums::ObjectType;
+use bacnet_types::error::RemoteError;
 use std::time::Duration;
 
 fn proposal(index: Option<u32>, confirmed: bool) -> CovSubscription {
@@ -31,9 +32,11 @@ fn context(sub: &CovSubscription) -> MultipleContextKey {
 }
 
 fn resource_error(error: Error) {
-    assert!(matches!(error, Error::Protocol { class, code }
+    assert!(
+        matches!(error, Error::Remote(RemoteError::Error { class, code })
         if class == ErrorClass::RESOURCES
-        && code == ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT));
+        && code == ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT)
+    );
 }
 
 #[test]
@@ -42,44 +45,52 @@ fn cov_identity_generations_never_reuse_across_renew_cancel_or_foreign_table() {
     let sub = proposal(None, false);
     let first = table.admit_for_test(sub.clone(), 0).unwrap();
     let second = table.admit_for_test(sub.clone(), 0).unwrap();
-    assert!(!table.complete_for_test(
-        &first,
-        crate::cov::CovObservation::new(
-            crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(7.0))
-                .unwrap(),
-            None
+    assert!(
+        !table.complete_for_test(
+            &first,
+            crate::cov::CovObservation::new(
+                crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(7.0))
+                    .unwrap(),
+                None
+            )
+            .unwrap()
         )
-        .unwrap()
-    ));
-    assert!(table.complete_for_test(
-        &second,
-        crate::cov::CovObservation::new(
-            crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(8.0))
-                .unwrap(),
-            None
+    );
+    assert!(
+        table.complete_for_test(
+            &second,
+            crate::cov::CovObservation::new(
+                crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(8.0))
+                    .unwrap(),
+                None
+            )
+            .unwrap()
         )
-        .unwrap()
-    ));
+    );
     assert!(table.unsubscribe(second.key()));
-    assert!(!table.complete_for_test(
-        &second,
-        crate::cov::CovObservation::new(
-            crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(9.0))
-                .unwrap(),
-            None
+    assert!(
+        !table.complete_for_test(
+            &second,
+            crate::cov::CovObservation::new(
+                crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(9.0))
+                    .unwrap(),
+                None
+            )
+            .unwrap()
         )
-        .unwrap()
-    ));
+    );
     let third = table.admit_for_test(sub.clone(), 0).unwrap();
-    assert!(!table.complete_for_test(
-        &second,
-        crate::cov::CovObservation::new(
-            crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(9.0))
-                .unwrap(),
-            None
+    assert!(
+        !table.complete_for_test(
+            &second,
+            crate::cov::CovObservation::new(
+                crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(9.0))
+                    .unwrap(),
+                None
+            )
+            .unwrap()
         )
-        .unwrap()
-    ));
+    );
     assert_eq!(
         table
             .get_subscription(third.key())
@@ -95,15 +106,17 @@ fn cov_identity_generations_never_reuse_across_renew_cancel_or_foreign_table() {
         )
     );
     let foreign = CovSubscriptionTable::new().admit_for_test(sub, 0).unwrap();
-    assert!(!table.complete_for_test(
-        &foreign,
-        crate::cov::CovObservation::new(
-            crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(99.0))
-                .unwrap(),
-            None
+    assert!(
+        !table.complete_for_test(
+            &foreign,
+            crate::cov::CovObservation::new(
+                crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(99.0))
+                    .unwrap(),
+                None
+            )
+            .unwrap()
         )
-        .unwrap()
-    ));
+    );
     assert!(first.generation < second.generation && second.generation < third.generation);
 }
 
@@ -181,15 +194,17 @@ fn cov_identity_batch_reserves_only_final_duplicates_and_exhaustion_is_atomic() 
     assert_eq!(accepted.len(), 1);
     assert_eq!(accepted[0].generation, u64::MAX);
     assert_eq!(accepted[0].cov_increment, Some(3.0));
-    assert!(!table.complete_for_test(
-        &before,
-        crate::cov::CovObservation::new(
-            crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(100.0))
-                .unwrap(),
-            None
+    assert!(
+        !table.complete_for_test(
+            &before,
+            crate::cov::CovObservation::new(
+                crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(100.0))
+                    .unwrap(),
+                None
+            )
+            .unwrap()
         )
-        .unwrap()
-    ));
+    );
     resource_error(table.admit_for_test(existing, 9).unwrap_err());
     let entry = table.get_subscription(accepted[0].key()).unwrap();
     assert_eq!(

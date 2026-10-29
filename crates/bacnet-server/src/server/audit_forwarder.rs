@@ -2,7 +2,7 @@
 
 use super::device_bindings::BindingFreshness;
 use super::event_recipient_route::{ConfirmedRecipientRoute, RecipientRoute};
-use super::notification_transactions::{run_notification_worker, NotificationWorkerResult};
+use super::notification_transactions::{NotificationWorkerResult, run_notification_worker};
 use super::*;
 use bacnet_objects::audit::AuditLogForwarding;
 use bacnet_objects::database::LocalDevice;

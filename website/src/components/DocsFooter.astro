@@ -7,8 +7,8 @@ import { sitePath, release } from '../lib/site.mjs';
 {!Astro.locals.starlightRoute.hasSidebar && <div class="md:sl-hidden rb-splash-theme"><ThemeSelect /></div>}
 <p class="rb-doc-scope" data-pagefind-ignore>
   <a href={sitePath('start/installation/')}>Release v{release}</a> ·
-  <a href={sitePath('development/overview/')}>Build and integrate</a>.
+  <a href={sitePath('integrate/overview/')}>Build and integrate</a>.
   Pre-1.0 APIs; partial conformance.
   <a href={sitePath('project/support/')}>Support &amp; limitations</a>
 </p>
-<script>import '../scripts/reveal-hash.js';</script>
+<script>import '../scripts/reveal-hash.js'; import '../scripts/tab-code-focus.js';</script>

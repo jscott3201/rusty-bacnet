@@ -11,8 +11,8 @@
 pub use crate::direct_response::{DirectResponse, DirectResponseScope, ResponseScopeGuard};
 pub use crate::principal::ScPrincipal;
 use bacnet_npdu::NpduLimits;
-use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
+use bacnet_types::error::Error;
 use bytes::Bytes;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -137,23 +137,66 @@ impl std::fmt::Debug for DirectScIdentity {
 /// transport that forwards a verified envelope is part of that trust boundary.
 /// Data attributes remain wire values and cannot upgrade provenance.
 ///
+/// With `sc-tls`, direct SC provenance also holds the verified leaf
+/// certificate (`leaf_certificate()`). A connection's direct provenance is
+/// built once and shared, so a clone is a reference count. Equality and
+/// hashing follow the [`DirectScIdentity`], whose SHA-256 already names that
+/// certificate.
+///
 /// ```compile_fail
 /// use bacnet_transport::port::TransportProvenance;
 /// let forged = TransportProvenance::verified_hub_channel();
 /// ```
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct TransportProvenance {
     kind: ProvenanceKind,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 enum ProvenanceKind {
     Unverified,
     // Constructed only by sc-tls direct ingress.
     #[cfg_attr(not(feature = "sc-tls"), allow(dead_code))]
-    DirectPeer(DirectScIdentity),
+    DirectPeer(Arc<VerifiedDirectPeer>),
     HubChannel,
     RelayedOrigin,
+}
+
+/// One direct connection's verified identity and leaf certificate, shared by
+/// every NPDU it admits. Equality and hashing use the identity alone: its
+/// SHA-256 names the certificate.
+struct VerifiedDirectPeer {
+    identity: DirectScIdentity,
+    // Read only through `leaf_certificate()`, with `sc-tls`.
+    #[cfg_attr(not(feature = "sc-tls"), allow(dead_code))]
+    certificate: LeafCertificate,
+}
+
+impl PartialEq for VerifiedDirectPeer {
+    fn eq(&self, other: &Self) -> bool {
+        self.identity == other.identity
+    }
+}
+impl Eq for VerifiedDirectPeer {}
+impl std::hash::Hash for VerifiedDirectPeer {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.identity.hash(state);
+    }
+}
+
+/// The verified leaf certificate direct SC provenance carries (#1965):
+/// present with `sc-tls` when the TLS layer supplied it, empty otherwise.
+#[derive(Default)]
+pub(crate) struct LeafCertificate(
+    #[cfg(feature = "sc-tls")] Option<Arc<crate::sc_tls::ScPeerCertificate>>,
+);
+
+impl LeafCertificate {
+    /// The verified leaf `certificate` of a direct SC connection.
+    #[cfg(feature = "sc-tls")]
+    pub(crate) fn verified(certificate: Arc<crate::sc_tls::ScPeerCertificate>) -> Self {
+        Self(Some(certificate))
+    }
 }
 
 impl TransportProvenance {
@@ -164,11 +207,18 @@ impl TransportProvenance {
         }
     }
 
-    /// Only built-in verified direct TLS ingress may mint this principal-bearing value.
+    /// Only built-in verified direct TLS ingress may mint this principal-bearing
+    /// value, once per connection: clones share it.
     #[cfg(any(test, feature = "sc-tls"))]
-    pub(crate) fn verified_direct_peer(identity: DirectScIdentity) -> Self {
+    pub(crate) fn verified_direct_peer(
+        identity: DirectScIdentity,
+        certificate: LeafCertificate,
+    ) -> Self {
         Self {
-            kind: ProvenanceKind::DirectPeer(identity),
+            kind: ProvenanceKind::DirectPeer(Arc::new(VerifiedDirectPeer {
+                identity,
+                certificate,
+            })),
         }
     }
 
@@ -188,9 +238,22 @@ impl TransportProvenance {
     }
 
     /// Verified direct identity, absent on unverified and both Hub scopes.
-    pub fn direct_sc_identity(self) -> Option<DirectScIdentity> {
-        match self.kind {
-            ProvenanceKind::DirectPeer(identity) => Some(identity),
+    pub fn direct_sc_identity(&self) -> Option<DirectScIdentity> {
+        match &self.kind {
+            ProvenanceKind::DirectPeer(peer) => Some(peer.identity),
+            _ => None,
+        }
+    }
+
+    /// The immediate direct-SC hop's verified leaf certificate, the one
+    /// [`Self::principal`] fingerprints: for a routed request, the router
+    /// that forwarded it. `None` for every other ingress, a hub's relayed
+    /// origins and its own channel included. The server's policy contexts
+    /// withhold it for routed requests, as they do the principal.
+    #[cfg(feature = "sc-tls")]
+    pub fn leaf_certificate(&self) -> Option<&crate::sc_tls::ScPeerCertificate> {
+        match &self.kind {
+            ProvenanceKind::DirectPeer(peer) => peer.certificate.0.as_deref(),
             _ => None,
         }
     }
@@ -199,42 +262,48 @@ impl TransportProvenance {
     /// request, the router that forwarded it. `None` for every other ingress,
     /// a hub's relayed origins and its own channel included. The server's
     /// policy contexts withhold it from `principal()` for routed requests.
-    pub fn principal(self) -> Option<ScPrincipal> {
+    pub fn principal(&self) -> Option<ScPrincipal> {
         self.direct_sc_identity().map(DirectScIdentity::principal)
     }
 
     /// True only for the unverified legacy variant.
-    pub fn is_unverified(self) -> bool {
+    pub fn is_unverified(&self) -> bool {
         self.kind == ProvenanceKind::Unverified
     }
 
     /// True only for direct-SC ingress with a verified identity.
-    pub fn is_direct_peer(self) -> bool {
-        matches!(self.kind, ProvenanceKind::DirectPeer(_))
+    pub fn is_direct_peer(&self) -> bool {
+        matches!(self.kind, ProvenanceKind::DirectPeer(..))
     }
 
     /// True only for the Hub admission callback's own TLS-client channel.
-    pub fn is_hub_channel(self) -> bool {
+    pub fn is_hub_channel(&self) -> bool {
         self.kind == ProvenanceKind::HubChannel
     }
 
     /// True only for the verified relayed-origin variant.
-    pub fn is_relayed_origin(self) -> bool {
+    pub fn is_relayed_origin(&self) -> bool {
         self.kind == ProvenanceKind::RelayedOrigin
     }
 
     /// True for any verified scope; this does not imply a direct principal.
-    pub fn is_verified(self) -> bool {
+    pub fn is_verified(&self) -> bool {
         self.kind != ProvenanceKind::Unverified
     }
 
     /// Human-readable scope, with no identity material.
-    pub fn scope(self) -> &'static str {
+    pub fn scope(&self) -> &'static str {
         match self.kind {
             ProvenanceKind::Unverified => "unverified legacy origin (no assertion)",
-            ProvenanceKind::DirectPeer(_) => "authenticated immediate direct SC-TLS peer and connection incarnation",
-            ProvenanceKind::HubChannel => "authenticated Hub admission TLS-client channel (scope only)",
-            ProvenanceKind::RelayedOrigin => "independently validated SC-hub relayed origin (post source_admission; hub peer is not the leaf)",
+            ProvenanceKind::DirectPeer(..) => {
+                "authenticated immediate direct SC-TLS peer and connection incarnation"
+            }
+            ProvenanceKind::HubChannel => {
+                "authenticated Hub admission TLS-client channel (scope only)"
+            }
+            ProvenanceKind::RelayedOrigin => {
+                "independently validated SC-hub relayed origin (post source_admission; hub peer is not the leaf)"
+            }
         }
     }
 }
@@ -247,7 +316,7 @@ impl std::fmt::Debug for TransportProvenance {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let label = match self.kind {
             ProvenanceKind::Unverified => "unverified",
-            ProvenanceKind::DirectPeer(_) => "verified-direct-peer",
+            ProvenanceKind::DirectPeer(..) => "verified-direct-peer",
             ProvenanceKind::HubChannel => "verified-hub-channel",
             ProvenanceKind::RelayedOrigin => "verified-relayed-origin",
         };
@@ -317,7 +386,7 @@ impl Clone for ReceivedNpdu {
             source_mac: self.source_mac.clone(),
             link_layer_group: self.link_layer_group,
             data_attributes: self.data_attributes.clone(),
-            provenance: self.provenance,
+            provenance: self.provenance.clone(),
             direct_response: self.direct_response.clone(),
             reply_tx: None, // oneshot::Sender is not Clone; clones lose the reply channel
         }
@@ -569,6 +638,11 @@ pub trait TransportPort: Send + Sync {
     ///
     /// Implementations and wrappers must report their actual local capacity.
     /// Negotiation, reconnects and failover must not change this declaration.
+    /// A stack reads it once, at start (a server fixes its Device's
+    /// Max_APDU_Length_Accepted from it, #2093). A transport whose paths can
+    /// shrink later, such as a router's application port, keeps the value it
+    /// was made with and lets the path refuse what no longer fits (#2087);
+    /// [`Self::egress_apdu_limit`] is the limit that follows such changes.
     fn local_receive_apdu_capacity(&self) -> u16;
 
     /// Current outgoing APDU limit for the transport's ordinary send path.

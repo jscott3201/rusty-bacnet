@@ -20,7 +20,7 @@ use bacnet_transport::port::TransportPort;
 
 use crate::layer::NetworkLayer;
 use crate::loopback_fixture::{
-    next_from_router, recv, reject_of, wire, RouterFixture, APDU, REMOTE,
+    APDU, REMOTE, RouterFixture, next_from_router, recv, reject_of, wire,
 };
 use bacnet_npdu::RejectMessageToNetwork;
 

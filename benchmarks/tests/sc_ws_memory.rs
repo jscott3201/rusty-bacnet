@@ -7,7 +7,7 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)] // this opt-in experiment prints its measurements
 
 use bacnet_benchmarks::sc_helpers::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};

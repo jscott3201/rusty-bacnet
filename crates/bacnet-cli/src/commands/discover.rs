@@ -1,13 +1,13 @@
 //! Discovery commands: WhoIs and WhoHas.
 
 use bacnet_client::client::{BACnetClient, ReceivedIHave};
+use bacnet_ops::target::AddressStyle;
 use bacnet_services::who_has::WhoHasObject;
 use bacnet_services::who_is::DeviceInstanceRange;
 use bacnet_transport::port::TransportPort;
 use serde::Serialize;
 
-use crate::core::target::AddressStyle;
-use crate::output::{self, device_info, DeviceInfo, OutputFormat};
+use crate::output::{self, DeviceInfo, OutputFormat, device_info};
 
 /// Collect device infos from the client's discovered device table,
 /// optionally filtering by instance range.
@@ -121,7 +121,11 @@ fn print_found(found: &[FoundObject], format: OutputFormat) {
             let mut table = comfy_table::Table::new();
             table.set_header(vec!["Device", "Object", "Name"]);
             for f in found {
-                table.add_row(vec![f.device.to_string(), f.object.clone(), f.name.clone()]);
+                table.add_row(vec![
+                    f.device.to_string(),
+                    f.object.clone(),
+                    output::screen(&f.name),
+                ]);
             }
             println!("{table}");
         }

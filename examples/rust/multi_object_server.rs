@@ -136,10 +136,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for result in &rpm_ack.list_of_read_access_results {
         print!("  {:?}: ", result.object_identifier);
         for prop in &result.list_of_results {
-            if let Some(ref bytes) = prop.property_value {
-                if let Ok((val, _)) = decode_application_value(bytes, 0) {
-                    print!("{:?}={:?}  ", prop.property_identifier, val);
-                }
+            if let Some(ref bytes) = prop.property_value
+                && let Ok((val, _)) = decode_application_value(bytes, 0)
+            {
+                print!("{:?}={:?}  ", prop.property_identifier, val);
             }
         }
         println!();

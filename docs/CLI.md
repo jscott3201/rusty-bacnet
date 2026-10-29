@@ -33,9 +33,12 @@ cargo install --path crates/bacnet-cli --locked --features sc-tls
 
 # With MS/TP over a serial port
 cargo install --path crates/bacnet-cli --locked --features serial
+
+# With the MCP server for AI agent hosts (`bacnet mcp`)
+cargo install --path crates/bacnet-cli --locked --features mcp
 ```
 
-The features combine (`--features sc-tls,pcap,serial`). Packet capture needs libpcap
+The features combine (`--features sc-tls,pcap,serial,mcp`). Packet capture needs libpcap
 and its headers (`libpcap-dev` on Debian and Ubuntu). The `serial` feature
 builds on Linux, macOS and Windows; the Linux release binary has it, and the
 macOS and Windows ones don't yet (see [MS/TP](#mstp)).
@@ -84,6 +87,17 @@ macOS and Windows ones don't yet (see [MS/TP](#mstp)).
 
 Output auto-detects: tables in TTY, JSON when piped.
 
+**Device text:** strings a device supplies (values, object names, state
+texts, event messages) are cleaned in table and text output, as the terminal
+UI shows them: control characters (an escape sequence, a bell, a tab, a
+newline) and line or paragraph separators print as spaces, and invisible
+format characters (a bidirectional override, a zero-width space) are
+dropped, so a device can't move the cursor, break a row or reorder what
+follows. A zero width joiner stays, keeping an emoji sequence one picture.
+Nothing marks a cleaned string. JSON output keeps the device's exact text,
+with control characters escaped as JSON requires; a script that prints a
+JSON string to a terminal should clean it first.
+
 **Interface selection:** A one-shot command without `--interface` binds `0.0.0.0`. The terminal UI on BACnet/IP without `-i` lists the available network interfaces in a dialog; named B/IP profiles use their saved interface.
 
 ## Target Resolution
@@ -106,13 +120,23 @@ Commands that take a `<target>` argument accept several formats:
 
 When using a device instance number, the device must have been previously found via `discover` in the same process. A one-shot command starts with an empty device table, so give it an address, a `bip6:` or `mstp:` target, or a routed `DNET:instance` target, which it looks up itself.
 
-**Routed targets.** `read`, `readm`, `write`, `writem` and `subscribe` take
+**Routed targets.** `read`, `readm`, `read-range`, `alarms`, `alarm-summary`,
+`enrollment-summary`, `file-read`, `file-write`, `write`, `writem`, `subscribe`, `control`, `reinit`, `time-sync`,
+`create-object`, `delete-object` and `ack-alarm` (`ack`) take
 `DNET:instance` and `DNET:0xMAC`. When the device isn't in the discovery table
 yet, the CLI sends a Who-Is to that network and waits up to three seconds for
 the device to answer, then sends the request through the router that answered
-for it. Other commands refuse a routed target, since the client has routed
-calls only for those services. On BACnet/SC, device tables show a VMAC as hex
-octets (`02:00:00:00:00:01`), which every target argument takes back.
+for it. `read-range --all` keeps every metadata read and range request routed
+to that device while paging its log. `file-read` routes every stream or record
+window; `file-write` retains stream access and requires `--allow-write`.
+`control` and `reinit` retain their write and confirmation guards. `time-sync`
+requires `--allow-write`; its success reports local send completion, not remote
+clock acceptance. Both local and `--utc` choices retain the existing UTC-derived
+calendar fields. Object creation/deletion and alarm acknowledgment require
+`--allow-write`; acknowledgment retains both caller-supplied timestamps. The
+BVLC commands `bdt`, `fdt`, `register` and `unregister` address local B/IP peers
+and refuse routed targets. On BACnet/SC, device
+tables show a VMAC as hex octets (`02:00:00:00:00:01`), which every target argument takes back.
 
 **B/IPv6 targets are VMACs.** A B/IPv6 node is addressed by its 3-octet VMAC,
 not its IPv6 address (Clause U.1.3), and a device's VMAC is its device instance
@@ -141,7 +165,7 @@ before the CLI binds a socket.
 
 | Class | Commands (aliases) | Needs |
 |---|---|---|
-| read | `discover` (`whois`), `find` (`whohas`), `read` (`rp`), `readm` (`rpm`), `read-range` (`rr`), `alarms`, `file-read`, `bdt`, `fdt`, `whois-router`, `subscribe` (`cov`) with a finite lifetime (the default), `register`, `mstp-ports`, `capture`, `sc-check`, `tui`, `help` | nothing |
+| read | `discover` (`whois`), `find` (`whohas`), `read` (`rp`), `readm` (`rpm`), `read-range` (`rr`), `alarms`, `alarm-summary`, `enrollment-summary`, `file-read`, `bdt`, `fdt`, `whois-router`, `subscribe` (`cov`) with a finite lifetime (the default), `register`, `mstp-ports`, `capture`, `sc-check`, `tui`, `mcp`, `help` | nothing |
 | write | `write` (`wp`), `writem` (`wpm`), `create-object`, `delete-object`, `file-write`, `ack-alarm` (`ack`), `time-sync` (`ts`), `unregister`, `subscribe --lifetime 0` | `--allow-write` |
 | device management | `control` (`dcc`), `reinit` | `--allow-write`, plus `--yes` or the typed confirmation |
 
@@ -156,7 +180,9 @@ it is a write. `unregister` is a write: the BBMD drops whichever foreign-device
 entry has the address the request names (the CLI gives its own, but the BBMD
 can't tell). The TUI's session levels use the same classes: a read-only
 session runs reads, an armed write session runs writes, and device management
-will need a session the profile marks `dangerous`.
+needs an armed session on a profile marked `dangerous`. `tui` and `mcp` are
+read commands to the guard because each guards its own writes one by one (see
+[Write sessions](#write-sessions) and [MCP server](#mcp-server)).
 
 A refused one-shot exits with status 4 and prints nothing on stdout. With
 table output the reason goes to stderr as `ERROR: ...`. With JSON output
@@ -177,8 +203,8 @@ JSON in this shape, which scripts can rely on:
 | `message` | the same reason as a sentence, for people; its wording may change |
 
 **The TUI** ignores both flags: its writes need an armed write session (see
-[Write sessions](#write-sessions)). Profiles apply only to the TUI, so there
-is no profile setting for one-shot commands.
+[Write sessions](#write-sessions)). Profiles apply only to the TUI and
+`bacnet mcp serve`, so there is no profile setting for one-shot commands.
 
 ### Exit status
 
@@ -234,7 +260,8 @@ it shows a picker. `--profile NAME` selects one directly. The Devices screen is
 a live table of I-Am answers, with a Who-Is form. The status bar shows the
 session level: `READ-ONLY` by default (discovery, reads, finite COV
 subscriptions and foreign-device registrations), a red `WRITE mm:ss` while a
-write session is armed (see [Write sessions](#write-sessions)), or `PASSIVE`.
+write session is armed (`WRITE+DANGER mm:ss` on a profile with
+`dangerous = true`; see [Write sessions](#write-sessions)), or `PASSIVE`.
 Screens: `1` devices, `3` watch list, `4` network, `5` SC, `6` MS/TP and `7`
 [capture](#capture-screen). The design is in
 [docs/design/tui.md](design/tui.md).
@@ -251,7 +278,7 @@ flag for the other transport (say `--port` on an SC profile) is an error.
 |------|---------|-------------|
 | `--profile <NAME>` | | Preview a named B/IP, SC or MS/TP profile; explicit global flags override saved values |
 | `--no-profile` | | Use flags only, without profile/workspace I/O; conflicts with `--profile` |
-| `--passive` | | Transmit nothing: no client is built, so no discovery, reads, subscriptions, registrations or writes. The ledger can still be viewed |
+| `--passive` | | Transmit nothing: no client is built, so no discovery, reads, subscriptions, registrations or writes. On B/IP it listens for announcements instead (see [Passive](#passive-listening)). The ledger can still be viewed |
 | `--mstp-monitor <PORT>` | | Listen to an MS/TP trunk on this serial port without transmitting (the `serial` feature). Takes `--mstp-baud` and `--mstp-max-info-frames`, and on Linux `--mstp-rt-priority` and `--mstp-cpus`, which only a station joined from it gets (the monitor itself runs normally); not `--mstp`, `--mstp-mac`, `--mstp-max-master`, another transport's flags or `--profile`. See [MS/TP monitor](#mstp-monitor-and-safe-join) |
 | `--fps <N>` | `20` | Redraws per second, 1 to 60. Idle screens are not redrawn |
 | `--log-file <FILE>` | | Append log lines to this file as well as the in-app log pane |
@@ -365,7 +392,7 @@ or `c`; editing saved network settings clears the old attestation. The safety
 policy is `writes = "session"` (the default: `W` may arm a write session) or
 `"never"` (`W` says why and arms nothing), and `dangerous = true`, which needs
 `writes = "session"`, allows dangerous operations inside an armed session
-(today, commanding priority 6).
+(commanding priority 6, and `:dcc` and `:reinit`).
 
 The config root is the platform directory returned by
 `directories::ProjectDirs::from("", "", "bacnet").config_dir()`. The dialog
@@ -488,7 +515,7 @@ table is refreshed from the client's discovery table afterwards.
 | `/` | Filter rows by instance, address, network or vendor; Enter keeps the filter, Esc clears it |
 | `Enter` | Browse the selected device |
 | `1` / `2` / `3` / `4` / `5` / `6` / `7` | The devices / Browse, the open device's browser / the watch list / the Network screen (BBMD tables on B/IP; the Networks tab on every transport) / the SC screen / the MS/TP screen / Capture. The status bar's strip numbers those that apply to the session (Network once connected, SC on SC, MS/TP with a serial port), with the one shown in brackets. `1` keeps an open browser as it was, and `2` shows it again; with no device open, `2` stays on the devices and says so |
-| `:` | Command bar: `watch DEVICE OBJECT [PROPERTY]`, `csv on`, `csv off`, `writem DEVICE OBJECT PROPERTY VALUE[@P] ...`, `bbmd [ADDRESS]`, `find NAME`, `mstp rotation MS`, `mstp hold MS`, `mstp listen SECS`; the footer shows the syntax of the commands matching what is typed |
+| `:` | Command bar: `watch DEVICE OBJECT [PROPERTY]`, `csv on`, `csv off`, `writem DEVICE OBJECT PROPERTY VALUE[@P] ...`, `bbmd [ADDRESS]`, `find NAME`, `mstp rotation MS`, `mstp hold MS`, `mstp listen SECS`, `mstp scan SECS`, `mstp scan cancel`, `dcc enable`, `dcc ACTION [MINUTES|forever]`, `reinit STATE`; the footer shows the syntax of the commands matching what is typed |
 | `W` | Arm a write session, or disarm the armed one |
 | `w` / `n` | On an open object, in a write session: write a property / relinquish a priority slot |
 | `u` | The session ledger |
@@ -537,8 +564,9 @@ SubscribeCOVProperty for anything else. Removing a row, and quitting, cancel
 its subscription on the device; the status bar's `COV` counter is how many
 subscriptions the session holds. A renewal that fails turns the row to
 polling and it subscribes again later, waiting longer each time it fails.
-A device that refuses COV, or a routed one, is polled instead: one
-ReadPropertyMultiple per device for up to 16 rows, a point at most every
+Routed rows subscribe too (#1790). A device that refuses COV is polled instead: one
+ReadPropertyMultiple per device for up to 16 rows (asked again a row at a
+time when the answer would be too large), a point at most every
 `--poll-interval` seconds (default 10) counted from the end of its last
 poll, and within the shared `--max-rate`; a device that stops answering is
 polled again after a wait that doubles up to a minute. The watch list keeps
@@ -551,10 +579,11 @@ keep up with count in the `drop` counter. With a profile, `:csv on` logs every
 value to `watch-<time>.csv` in the profile's workspace and `:csv off` stops.
 Its columns are `unix_ms,device,object,property,value,status_flags,source,network`:
 `device` is the plain instance and `network` a routed device's network,
-empty on the local network.
+empty on the local network. The list runs on the same watch hub as the MCP server
+(`bacnet_ops::watch`).
 
-**Network screen.** Its BBMD tabs are for B/IP, and its Networks tab
-(below) works on every transport. `4` shows the foreign-device panel and one BBMD's
+**Network screen.** Its BBMD tabs are for B/IP, and its Networks tab (below)
+works on every transport. `4` shows the foreign-device panel and one BBMD's
 tables. With `--foreign-bbmd` (or a profile with a BBMD) the panel shows the
 BBMD, the TTL, the last BVLC-Result, a countdown to the next registration and
 the lease left; a refused registration raises a red banner on every screen.
@@ -562,16 +591,19 @@ Once the BBMD accepts, the TUI reads its FDT and shows the entry the BBMD
 recorded for us, the address it forwards broadcasts to; when no entry has our
 address, a NAT router may have rewritten it. `:bbmd ADDRESS` reads any other
 BBMD, and `:bbmd` alone goes back to ours, as the footer says meanwhile. Tab
-switches between the BDT, with what each entry's mask means for
-forwarding, the FDT, with each entry's seconds left, and the consistency
-matrix; `r` reads again. `m` reads the BDT of every BBMD the tables lead to (up
-to 16) and shows which lists which: a peer listed one way only, a BDT without
-its own entry, a BBMD listed with different masks, and BBMDs that refuse the
-read or don't answer are flagged. Every read is a BVLC request; nothing is
-written. The matrix matches BBMDs by address, so a BBMD reached at an address
-other than its own BDT entry (behind NAT, its global address in peers' tables
-and its private one in its own) shows as two rows, one flagged with no entry
-for itself.
+switches between the BDT, with what each entry's mask means for forwarding,
+the FDT, with each entry's seconds left (`!` and `expiring` under 30 s), and
+the consistency matrix; `r` reads again. `m` reads the BDT of every BBMD the
+tables lead to (up to 16) and shows which lists which: a peer listed one way
+only, a BDT without its own entry, a BBMD listed with different masks, and
+BBMDs that refuse the read or don't answer are flagged. Entries the survey
+never reads (unresolved, unspecified, broadcast, directed broadcast,
+multicast, loopback or our own address) are listed under the findings with the
+BBMD that listed them and the reason, and BBMDs past the grid's limit of 32
+are counted. Every read is a BVLC request; nothing is written. The matrix
+matches BBMDs by address, so a BBMD reached at an address other than its own
+BDT entry (behind NAT, its global address in peers' tables and its private one
+in its own) shows as two rows, one flagged with no entry for itself.
 
 **Who-Has and the Networks tab.** `:find NAME` broadcasts a Who-Has for the
 object named NAME (the rest of the line, exactly as typed, apostrophes and
@@ -658,7 +690,7 @@ Frames themselves are on the Capture screen (`7`).
 opens, and the status bar reads `listen only`. The MS/TP screen (`6`, shown
 first) opens with a summary (port, baud rate, uptime, stations heard, timestamp
 resolution), which goes on to a second line on a narrow terminal rather than
-being cut, and has four views, Tab to change:
+being cut, and has five views, Tab to change:
 
 - **Stations**: a map of every address, masters 0 to 127 and slaves 128 to
   254, each marked `M` master (passes the token or polls), `S` slave (only
@@ -683,6 +715,38 @@ being cut, and has four views, Tab to change:
   and extended (COBS, Clause 9.10) frames, which are decoded but not
   interpreted. `z` counts from now and Space pauses. The timestamps are only
   as good as the adapter: the screen shows the 16 ms a USB adapter adds.
+
+- **Scan**: explicit receive-only baud measurements, described below. Up and
+  Down (or `+` and `-`) select a row's detailed decoder errors on a narrow
+  screen; wide screens show the components together.
+
+**Baud scan.** `:mstp scan SECS` measures 9600, 19200, 38400, 57600, 76800
+and 115200 baud (the rates in Clause 9.2.3), for 1 to 3600 whole seconds per
+rate. Start from a live monitor; a participant cannot scan. The worker waits
+for the previous input to close, opens a fresh receive-only input at each
+rate, purges pending input, and starts fresh decoder counters. The displayed
+seconds are actual measurement time, excluding the wait for close.
+
+The score is valid frames divided by valid frames plus header-CRC, data-CRC,
+malformed and aborted-frame events. Noise octets are shown separately. A rate
+needs at least one valid frame to be suggested. Equal best ratios stay
+ambiguous, even when their frame counts differ; all-zero valid counts mean
+insufficient traffic. Failed, incomplete or cancelled scans cannot identify
+a global best, and saturated counters withhold ranking. This is a sampling
+heuristic: sparse traffic and decoder errors do not establish UART framing,
+electrical quality or confidence that a physical trunk uses the suggested rate.
+
+`:mstp scan cancel` retains partial evidence. Completion and manual cancellation
+restore the **original configured rate**, with fresh ordinary monitor counters,
+while retaining the scan report. A suggestion never changes the selected rate,
+joins the trunk or writes a profile. Disconnect, quit and session replacement
+close the current input without restoration. A safe restoration failure shows
+Stopped; failed or unproven release ends the session and prohibits another open.
+
+Scanning clears join proposals and refuses joins until the original monitor
+is live again. It ends the ordinary capture subscription, finishes pending
+capture accounting and keeps historical rows; candidate traffic stays out of
+that ring. Reopen Capture explicitly after restoration to start a new subscription.
 
 `J` starts the safe join: the monitor listens for 10 s (`:mstp listen SECS`
 changes that), then proposes a free MAC that a master polls and that is within
@@ -839,8 +903,37 @@ or a slot's holder changed since the preview, nothing is sent and the result
 says to review it again. A priority array that was read but isn't 16 values
 refuses the write. Esc declines; nothing is sent and the audit log records it.
 The result shows
-each write's outcome; a device whose write policy refuses it
-(SERVICE_REQUEST_DENIED) is shown as `DENIED`, apart from other errors.
+each write's outcome; one the device's policy refuses
+(SERVICE_REQUEST_DENIED) is shown as `DENIED by the device's policy`, apart
+from other errors.
+
+**Device management.** `:dcc enable`, `:dcc disable-initiation|disable
+[MINUTES|forever]` (also `:control`) send DeviceCommunicationControl, and
+`:reinit STATE` sends ReinitializeDevice, with the one-shot `control` and
+`reinit` names for the action and state. A disable without MINUTES (1 to
+65535) lasts 15 minutes; `forever` sends no duration, so it lasts until
+enabled again or a restart; `enable` takes no duration. The one-shot
+`control` is unchanged. Both go to the device open on the Browse screen, or the
+selected row on the Devices screen; anywhere else, or with nothing
+selected, they are refused and say so. They need an armed write session on
+a profile with `dangerous = true`; without it, and in a passive or
+monitor-only session, they are refused with the reason, and the write worker
+checks the same rules again before sending. A masked prompt takes the
+password: each character shows as `*`, a blank one sends none, at most 20
+characters (Clauses 16.1.1.1.3 and 16.4.1.1.2), and Esc cancels and clears
+it. The password is held only as `audit::Secret`, which never prints its
+text, and it is dropped once the request is sent or declined. The T3
+confirmation follows: type the device instance, then Enter. The result shows
+the device's acknowledgement or error; a refusal by the device's policy
+(SERVICE_REQUEST_DENIED) shows as `DENIED by the device's policy`, as a
+refused write does. Neither request is kept in the
+ledger, because revert can't undo it. The audit record (event `dcc` or
+`reinit`) names the service, the device, the state, the duration, the tier
+and the outcome, with a `password` field written as `[redacted]` when one was
+sent; the password reaches only the request on the wire. The capture masks
+it with `*` (same length) in any frame this node sent or heard on the wire
+before the frame enters the ring, marks the frame "password redacted", and
+exports it masked.
 
 **Ledger.** Every change still in effect is kept with its pre-image in
 `ledger.json`, saved before each request goes out and after each answer, so it
@@ -860,22 +953,41 @@ ledger, or with a write session request still out, opens the exit guard: `r`
 reverts all and quits, `k` keeps them, records that in the audit log and quits
 (also when passive or disconnected), Esc cancels. Entries left by an earlier
 run, whether kept or left by a crash, are listed when the next session on the
-profile starts; one a crash cut off mid-request is recorded as unknown.
+profile starts; one a crash cut off mid-request is recorded as unknown. Changes
+an AI agent made through [`bacnet mcp serve`](#mcp-server) on the same profile
+are in the same ledger, marked `[mcp: NAME]` with the OS user who ran the
+server, and revert like the TUI's own.
 
 **Audit log.** `audit.jsonl` in the workspace gets one JSON object a line,
-flushed and synced: UTC time, OS user, host, profile, transport and local
+flushed and synced: UTC time, OS user, host, the front end (`front_end`:
+`tui`, or `mcp` with the agent's `principal`), profile, transport and local
 address, session level, the event, and for a write its target, service,
 parameters, priority, pre-image and outcome (ack, error class and code,
-denied, reject, abort, timeout or not sent). A `sending` record goes in before
+denied, reject, abort, timeout or not sent). An outcome's `class`, `code` and
+`reason` are strings: the name, or the decimal number for a value without one
+(`"WRITE_ACCESS_DENIED"`, `"300"`). A `sending` record goes in before
 each request. Arming, disarming, refusals, declined confirmations, reverts and
 kept entries are recorded too; a session that ran out shows as
 `write-session (expired)`. Fields
-named like passwords are written as `[redacted]`. Reads are not logged. This
+named for a secret (`password`, `token`, `authorization`, `secret`, `key`) are
+written as `[redacted]`. Reads are not logged. This
 is a client-side record, separate from BACnet's own audit reporting.
 
-**Passive.** `--passive` builds no client at all, so nothing is transmitted;
+<a id="passive-listening"></a>**Passive.** `--passive` builds no client at all, so nothing is transmitted;
 discovery, browsing, watching and arming are refused with a notice. The
-status bar shows `PASSIVE`.
+status bar shows `PASSIVE`. On B/IP (broadcast or unicast, not multicast) it
+binds a receive-only UDP listener on the chosen interface and port, and the
+link state reads `listening` once the bind succeeds. Router announcements
+fill the Networks tab, and `:find NAME` filters the I-Haves overheard so far,
+and new ones, by exact name without sending a Who-Has; object names are
+learned from those I-Haves. Foreign-device settings are
+ignored: there is no registration, renewal, responder or send path. B/IPv6,
+BACnet/SC, B/IP multicast and participant MS/TP sessions are refused in this
+mode; the MS/TP monitor (`--mstp-monitor`) still works. The listener sees only
+UDP traffic delivered to this host, not other switched unicast traffic, so it
+is not a packet capture. It keeps at most 4,096 recent I-Have observations and
+4 MiB of their strings, and at most 128 routers with 128 networks each,
+evicting the least recently heard first.
 
 **Footprint.** The status bar's `COV n` and `FD` show the state this session
 holds on other devices: COV subscriptions, and our entry in a BBMD's
@@ -904,6 +1016,72 @@ builds a lean CLI without it (add back what you need, such as
 `bacnet tui` prints rebuild advice, and plain `bacnet` prints the usage. The
 one-shot commands and their JSON output are the same with or without the
 feature.
+
+### MCP server
+
+```bash
+bacnet mcp authorize --profile plant-a          # once, in a terminal: review and consent
+bacnet mcp serve --stdio --profile plant-a      # what an agent host's configuration launches
+bacnet mcp serve --stdio --passive              # decode and list only; sends nothing
+```
+
+`bacnet mcp serve --stdio` runs a [Model Context Protocol](https://modelcontextprotocol.io)
+server for an AI agent host on stdin and stdout until the host closes them.
+From 0.15.0 the prebuilt release binaries include it. A source build enables
+it with the `mcp` cargo feature, which brings `tui` along for its profiles;
+a build without it prints rebuild advice for `bacnet mcp`. Stdout carries only JSON-RPC; logs go to stderr (`-v` or `RUST_LOG`
+set their level), with one line per read call and a summary at shutdown
+always on. SIGINT or SIGTERM (Ctrl-C on Windows) shuts it down gracefully.
+Experimental in 0.15.
+
+**mcp serve flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--stdio` | Serve on stdin and stdout, the transport an agent host launches (required) |
+| `--profile <NAME>` | Named B/IP, BACnet/SC or MS/TP profile to connect with; its `[mcp]` table limits what the agent may reach. Needed unless `--passive`; global transport flags are refused with it, since they would change the transport that was authorized |
+| `--passive` | Build no client and send nothing: only the tools that need no network are offered (`bacnet_decode`, and `bacnet_discover`, which only lists) |
+
+Live traffic needs an authorized profile. `bacnet mcp authorize --profile
+NAME` shows what the profile's `[mcp]` table lets an agent reach (networks,
+devices, broad discovery, and any writes or plan grant), and records consent
+in that table when you type the profile's name. It needs a terminal, so an
+agent can't run it. Widening the table later (more networks or devices, broad
+discovery, a higher rate or cap, a network taken off `slow_networks` or
+`fast_networks`), offering writes, letting the client arm, adding or changing
+a plan, or changing the profile's transport clears the authorization; dropping
+a plan doesn't.
+
+The `[mcp]` table is optional; every key in it is too. Left out, the server
+may reach every network and device at the default rates, with no broad
+discovery and no writes:
+
+```toml
+[mcp]
+networks = [0, 2001]          # 0 is the local network
+devices = ["1000-1999", "5"]
+slow_networks = [2001]        # MS/TP behind a router: 2 requests a second
+broad_discovery = false
+mcp_writes = "elicit"         # offer bacnet_write and bacnet_revert (default "never")
+mcp_arm = "elicit"            # the host's confirmation may arm a session (default "never")
+
+[mcp.plan]                    # writes approved in advance, without a prompt
+devices = ["1201"]
+properties = ["present-value"]
+priority_min = 8              # 8 and 16 by default
+max_writes = 50
+hours = 4                     # 1 to 8, counted from `bacnet mcp authorize`
+```
+
+Writes go through the same planner, tiers, ledger and audit log as the TUI's
+[write sessions](#write-sessions), in the profile's workspace. Without a plan,
+the agent host's own confirmation can approve only T1 writes (priorities 9 to
+16, or a property that isn't commandable); priority 6 is always refused, and
+device management (`dcc`, `reinit`) isn't offered. The TUI's ledger lists the
+agent's changes, and `R` reverts them like its own. The tools, resources,
+limits and every key are in [docs/mcp.md](mcp.md); the website's
+[AI agents](https://jscott3201.github.io/rusty-bacnet/guides/ai-agents/) guide
+walks through setting up an agent host.
 
 ### Device Discovery
 
@@ -968,14 +1146,128 @@ bacnet read-range 192.168.1.100 trend-log:1 --all --count 100            # the w
 bacnet --min-interval-ms 50 read-range 192.168.1.100 trend-log:1 --all --sequence 1201
 ```
 
+`read`, `readm`, `read-range` and `subscribe` show values decoded for the
+object and property they belong to, the same way the terminal UI does; see
+[Value output](#value-output) below.
+
 `read` and `readm` interpret Tags as named values: a whole array looks like
 `["exhaust", "floor"=3]`, an indexed element like `"floor"=3`, and index zero
 prints the count. An empty array prints `[]`. Names and text values are quoted
 and escaped; a semantic tag has no equals sign, while a valued NULL prints
-`"name"=null`. Invalid Tags bytes produce one `[invalid Tags; raw: ...]`
-marker for the complete payload. JSON keeps the existing `object`, `property`
-and string `value` fields, with an array index included in the property name.
-Other properties and `read-range` retain their existing formatting.
+`"name"=null`. Invalid Tags bytes produce one `[invalid Tags] [raw ...]`
+marker for the complete payload. JSON keeps the `object`, `property` and
+string `value` fields, with an array index included in the property name, and
+adds the typed `decoded` form.
+
+#### Value output
+
+Text output names what the device sent:
+
+- enumerations by name in kebab case: `offnormal`, `open-loop`,
+  `degrees-fahrenheit`; a binary object's state as `active` or `inactive`. A
+  number the property's enumeration doesn't name prints as the number;
+- with `read` and `readm`, a binary or multi-state object's state (its
+  Present_Value, Relinquish_Default, a Priority_Array slot and the like)
+  followed by the object's own text: `active (Running)`, `2 (Low)`. The
+  texts are the object's Active_Text and Inactive_Text, or its State_Text,
+  read once the value has been read with one more request an object (a
+  ReadPropertyMultiple for a binary object's pair), unless the read already
+  holds them (`read bv:1 all`). On a device without ReadPropertyMultiple,
+  after one refused RPM a command, each text goes by its own ReadProperty.
+  A refused read, an empty text or a state past the end of State_Text keeps
+  the plain form, `active` or `2`, and a device that stops answering then
+  keeps it for the rest of the command without failing it. The texts come
+  from the device: control characters in them print as spaces and
+  invisible format characters are dropped. The JSON `value` text changes
+  for every such state (`inactive` becomes `inactive (Inactive)`); scripts
+  should read `decoded`, unchanged: the number for a multi-state state,
+  `{"value": 0, "name": "inactive"}` for a binary one. A single state
+  printed this way writes back unchanged, whatever its text holds;
+- bit strings with names as the set bits, `in-alarm | fault`, or `none`;
+  other bit strings as their bits, `bits(0101)`;
+- objects as `analog-input 1`, dates as `2026-10-19`, times as `07:00`
+  (seconds and hundredths when they aren't zero), REALs with every digit;
+- constructed values decoded: timestamps, Weekly_Schedule days (`Mon 07:00 =
+  72.5, 18:00 = null`), exception schedules, Date_List entries, references,
+  Recipient_List destinations (`device 99 process 7: Mon-Fri 08:00-17:00,
+  confirmed, to-offnormal | to-fault | to-normal`), Event_Parameters,
+  Active_COV_Subscriptions, Device_Address_Binding, a Command's actions,
+  Group and Global Group members, shed levels, Scale and Prescale, and the
+  access control lists. Event_Parameters name the algorithm and its
+  fields, `unsigned-range: delay 30 s, low 10, high 300`; a value under a tag
+  the standard doesn't assign lists its fields by context tag, each field's
+  octets as `[raw …]` since their datatype isn't known: `30: [0] [raw 1e],
+  [1] [raw 0a]`;
+- a list or array whole, every element, in brackets; an indexed read of an
+  array as its one element (`weekly-schedule[3]` is Wednesday), and index 0
+  as the array's size;
+- anything that doesn't decode as hex, `[raw 0e 0f]`, the one spelling every
+  command uses for undecoded octets.
+
+Names follow one rule: identifiers the command echoes back, the `object` and
+`property` columns and fields, keep their canonical UPPER_SNAKE form
+(`ANALOG_INPUT:1`, `PRESENT_VALUE`), the form the arguments and the Python
+bindings use; values are written in kebab case, as the terminal UI writes
+them. A property that `readm` couldn't read is such an echoed outcome and
+prints in the canonical form, `ERROR: PROPERTY:UNKNOWN_PROPERTY`; an error
+inside a value, such as a Group member's, is part of the value and prints in
+kebab case, `error property:unknown-property`.
+
+JSON keeps each value's text in `value` and adds its typed form under
+`decoded`; `subscribe` puts the texts in a `values` map and the typed forms
+in a `decoded` map, both keyed by property. Enumerations, bit strings,
+objects and numbers carry their numbers, so scripts needn't depend on the
+names' spelling:
+
+| Value | `decoded` |
+|-------|-----------|
+| NULL, BOOLEAN | `null`, `true`, `false` |
+| Unsigned, Signed, REAL, Double | a number (`{"float": "NaN"}` for a non-finite one); JSON doesn't say which of the four it was |
+| CharacterString | a string |
+| OCTET STRING | `{"octets": "0a0b"}` |
+| ENUMERATED | `{"value": 2, "name": "offnormal"}`; no `name` when the enumeration isn't known |
+| BIT STRING | `{"bits": "0100", "names": ["fault"]}`, first bit first; no `names` when the bits have none |
+| Date, Time | `{"date": "2026-10-19"}`, `{"time": "07:00"}` |
+| Object identifier | `{"type": "analog-input", "type_number": 0, "instance": 1}` |
+| Constructed element | `{"element": "daily-schedule", "text": "Mon 07:00 = 72.5"}`: its kind and the text form |
+| Several values, a list or array | an array of the above |
+| Octets that don't decode | `{"raw": "0e0f"}` |
+
+A constructed element's `text` is for display, like the table: its wording
+may change, so don't parse it. Branch on `element`; structured fields may
+join it later without removing `text`. The kinds are `access-rule`,
+`action-list`, `address-binding`, `authentication-factor`,
+`authentication-factor-format`, `authentication-policy`, `calendar-entry`,
+`cov-subscription`, `daily-schedule`, `date-range`, `destination`,
+`device-object-property-reference`, `device-object-reference`,
+`event-parameter`, `name-value`, `object-property-reference`,
+`port-permission`, `prescale`, `property-access-result`,
+`read-access-result`, `read-access-specification`, `recipient`, `scale`,
+`shed-level`, `special-event`, `stage-limit-value`, `time-stamp` and
+`value-source`.
+
+An `event-parameter` element also has `fields`, an object of the value's
+members by their snake-case names in wire order, each in the forms above:
+`algorithm` first (an enumerated named as its event type), then the
+algorithm's members, references as `device-object-property-reference`
+elements and change-of-state values as `property-state` elements:
+
+```json
+{
+  "element": "event-parameter",
+  "text": "unsigned-range: delay 30 s, low 10, high 300",
+  "fields": {
+    "algorithm": {"value": 11, "name": "unsigned-range"},
+    "time_delay": 30,
+    "low_limit": 10,
+    "high_limit": 300
+  }
+}
+```
+
+An error result (`readm`) has no `decoded`. `read-range` adds `decoded` beside
+`items` for a list that isn't a log; log records keep their text form, and an
+Event Log notification adds its typed `event_values`.
 
 `--position`, `--sequence` and `--time` pick the range, each with `--count`
 (default 100; negative reads backward). `--time` takes the device's local time
@@ -997,9 +1289,63 @@ Multiple or Audit Log record by record, showing each record's timestamp, datum
 and, for a Trend Log, status flags (blank when none is set). JSON output
 lists them under `records`, with `result_flags` and `first_sequence_number`,
 and the hex of anything from the first record that doesn't decode under
-`undecoded`. Other properties decode as application
-values under `items`, where anything that doesn't decode ends the list as
-`[raw: ..]` hex.
+`undecoded`. A logged value prints as a value does. A log record doesn't say
+which property it came from, so once the device has answered the first
+ReadRange of a Trend Log or Trend Log Multiple's Log_Buffer, `read-range`
+reads its Log_DeviceObjectProperty once (one request more per command,
+however many pages `--all` reads, and none for a device that doesn't
+answer) and names
+each value by the property it samples: an Event_State log prints
+`offnormal`, a Status_Flags log `in-alarm`, and a binary object's
+Present_Value `active`. A Trend Log Multiple names each member's value by
+its own reference. When that read fails or names nothing, when a member's
+reference is empty, or when a value's type doesn't fit the property (a REAL
+where an enumeration was expected), the value prints as logged: an
+enumeration as `enum 3` and a bit string as its bits. When a column samples
+the state of a binary or multi-state object on the same device (its
+Present_Value, Relinquish_Default, a Priority_Array slot and the like),
+`read-range` then reads that object's Active_Text and Inactive_Text, or its
+State_Text, and shows each state with its text: `active (Running)`, `2
+(Low)`. That is one request more an object, once per command, for at most 8
+objects (the rest of a large Trend Log Multiple keeps plain states). A
+refused read, an empty text or a state past the end of State_Text keeps the
+plain form, `active` or `2`. The texts come from the device: control
+characters in them print as spaces, and invisible format characters
+(bidirectional overrides and isolates, zero-width characters) are dropped,
+as they are from object names. An Event Log
+notification ends with its event values in braces, each named for its event
+type:
+
+```text
+ALARM OUT_OF_RANGE ANALOG_INPUT:3 NORMAL -> HIGH_LIMIT "too hot" {exceeding value 101.5, flags in-alarm, deadband 1, limit 100}
+ALARM CHANGE_OF_STATE ANALOG_INPUT:3 NORMAL -> OFFNORMAL {state active, flags in-alarm | out-of-service}
+```
+
+Its JSON record adds `event_values`, a `notification-parameters` element
+whose `fields` hold `event_type` (an enumerated) and each value by its
+snake-case name in the [Value output](#value-output) forms:
+
+```json
+{
+  "element": "notification-parameters",
+  "text": "out-of-range: exceeding value 101.5, flags in-alarm, deadband 1, limit 100",
+  "fields": {
+    "event_type": {"value": 5, "name": "out-of-range"},
+    "exceeding_value": 101.5,
+    "status_flags": {"bits": "1000", "names": ["in-alarm"]},
+    "deadband": 1.0,
+    "exceeded_limit": 100.0
+  }
+}
+```
+
+Every event type the stack decodes has its fields, from
+`change-of-bitstring` to `change-of-timer`. A value the standard leaves open,
+such as a command failure's feedback, is decoded as application values, and
+kept as `{"raw": ...}` when it isn't one; an optional value the device left
+out is `null`. Other
+properties list their elements under `items`, each decoded as above, where
+anything that doesn't decode ends the list as `[raw ..]`.
 
 **Aliases:** `rp` = read, `rpm` = readm, `rr` = read-range
 
@@ -1017,6 +1363,9 @@ bacnet --allow-write write 192.168.1.100 av:1 pv enumerated:3       # explicit e
 bacnet --allow-write write 192.168.1.100 sc:1 pv date:2024-03-15    # date value
 bacnet --allow-write write 192.168.1.100 sc:1 pv time:14:30:00      # time value
 bacnet --allow-write write 192.168.1.100 nc:1 pv object:ai:1        # object identifier value
+bacnet --allow-write write 192.168.1.100 ai:1 reliability open-loop  # enumeration by name
+bacnet --allow-write write 192.168.1.100 ai:1 event-enable "to-offnormal | to-normal"  # named bits
+bacnet --allow-write write 192.168.1.100 trend-log:1 start-time "2026-10-25 14:30"   # date-time
 ```
 
 Every `write` needs `--allow-write` (see [Write guard](#write-guard)).
@@ -1051,6 +1400,81 @@ bacnet --allow-write writem 192.168.1.100 av:1 pv=72.5@8,desc='"Zone Temp"' av:2
 
 Inline priority: append `@N` to any value (e.g., `72.5@8`, `null@16`).
 
+**Values by name.** `write` and `writem` know the property they write, so
+a value can be typed as [Value output](#value-output) prints it, and a value
+read pastes back as a write:
+
+- a plain number for an analog or integer object's value (Present_Value,
+  Relinquish_Default, a Priority_Array slot, COV_Increment, High_Limit,
+  Low_Limit, Deadband) is sent as the property's datatype: `72` for an
+  Analog Value is REAL 72.0, Double for a Large Analog Value, INTEGER or
+  Unsigned for the integer objects. A number past the datatype's range is
+  refused. A REAL holds whole numbers exactly only up to 16,777,216 (2^24);
+  past that it keeps about seven significant digits. A number for an
+  enumerated property is sent as ENUMERATED;
+
+- an enumeration by name, in kebab case, UPPER_SNAKE or any case
+  (`open-loop`, `OPEN_LOOP`), or by number; a binary object's state as
+  `active` or `inactive`, with or without the object's text after it
+  (`active (On)`); a multi-state state by number, its text allowed after
+  it (`2 (Heat)`);
+- a named bit string by its set bits, `in-alarm,fault` or `in-alarm |
+  fault` (quote a `|` for the shell; `writem` needs the `|` form, since a
+  comma separates its writes), as 0/1 digits first bit first (`1100`), or
+  `none` for no bit set (an empty value is refused, so a blank field never
+  clears every bit); a bit string without names as `bits(0101)`;
+- a date as `2026-10-19`, with a weekday (`2026-10-19 Mon`), `*` for any
+  field, the special months and days by name (`*-even-months-last-day`),
+  or `any date`; a time as `07:00`, `14:30:05` or `14:30:05.25`, `*` for any
+  field, or `any time`; hundredths are two digits (`.05`, `.50`). The
+  `date:` and `time:` prefixes take the same forms;
+- a date-time as a date then a time, `2026-10-19 Mon 07:00`, or
+  `unspecified`; for a property that holds one (Start_Time, Stop_Time,
+  Modification_Date, a DateTime Value's Present_Value and similar), a date
+  alone leaves the time unspecified;
+- a timestamp (Last_Restore_Time, an `event-time-stamps[N]` element) as
+  `seq 42`, a time, or a date and time.
+
+A mistyped name is refused with the valid names, or the nearest few when
+the enumeration is long:
+
+```text
+Error: unknown BinaryPV 'actve'; expected one of: inactive, active (or a number)
+```
+
+The explicit forms (`enumerated:N`, `date:`, `time:`, `object:`, a quoted
+string, `null`, `true`/`false`) keep their meaning for every property.
+
+**Constructed values as JSON.** A Weekly_Schedule day, an
+Exception_Schedule special event, a Date_List calendar entry and a
+Recipient_List destination are typed as JSON: one element for an indexed
+write (`weekly-schedule[2]`, `exception-schedule[1]`), a JSON list of them
+for the whole property (a Weekly_Schedule is seven days, Monday first). The
+shapes follow the Python bindings' typed constructors, with dates and times
+written as above:
+
+| Element | JSON |
+|---------|------|
+| Day | `[["07:00", 72.5], ["18:00", null]]`; an entry may also be `{"time": "07:00", "value": 72.5}` |
+| Calendar entry | `{"kind": "date", "date": "2026-12-25"}`, `{"kind": "date_range", "start_date": "2026-07-01", "end_date": "2026-07-04"}` or `{"kind": "week_n_day", "month": 12, "week_of_month": 1, "day_of_week": 1}` (`null` or 255 for any) |
+| Special event | `{"period": <calendar entry or "calendar:1">, "time_values": <day>, "priority": 10}` |
+| Destination | `{"recipient": "device:99", "process_identifier": 7}`, optionally with `valid_days` (`["mon", "tue"]` or Python's bit number), `from_time`, `to_time`, `issue_confirmed_notifications` and `transitions` (`["to-offnormal"]` or a number); left out, a destination covers every day, all day, every transition, unconfirmed. A recipient may also be `{"kind": "device", "object_identifier": "device:99"}` or `{"kind": "address", "network_number": 5, "mac_address": "0a:00:00:64:ba:c0"}` |
+
+An entry's value is a JSON null, boolean or number (a whole number is
+Unsigned, or Signed when negative; one with a decimal point or an
+exponent, or too large for either, is a REAL, refused past a REAL's range) or a
+string in the value grammar above (`"active"`, `"enumerated:3"`; a
+CharacterString keeps its inner quotes, `"\"Occupied\""`). A field the
+shape doesn't know is refused, and every error names where it is:
+
+```bash
+bacnet --allow-write write 192.168.1.100 schedule:1 weekly-schedule[2] '[["07:00", 72.5], ["18:00", null]]'
+bacnet --allow-write write 192.168.1.100 calendar:1 date-list '[{"kind": "date", "date": "2026-12-25"}]'
+```
+
+In the TUI, type JSON in the write form's Value field; the `:writem` bar
+splits on spaces and reads a quoted word as a string.
+
 ### COV Subscriptions
 
 ```bash
@@ -1071,12 +1495,20 @@ or cancelled, it stays after the CLI exits, and it needs `--allow-write`. A
 process killed outright (SIGKILL) can't cancel; its subscription runs out with
 its lifetime.
 
+Each notification's values are decoded for the monitored object, as `read`
+decodes them; JSON adds their typed forms under `decoded`, keyed by property.
+
 **Alias:** `cov` = subscribe
 
 ### Alarms and Events
 
 ```bash
-bacnet alarms 192.168.1.100                              # get event/alarm summary
+bacnet alarms 192.168.1.100                              # active events and unacknowledged transitions
+bacnet alarms 192.168.1.100 --max 50                     # stop after 50 objects
+bacnet alarm-summary 192.168.1.100                       # objects in alarm (GetAlarmSummary)
+bacnet enrollment-summary 192.168.1.100                  # event-initiating objects (GetEnrollmentSummary)
+bacnet enrollment-summary 192.168.1.100 --acked not-acked --state active
+bacnet enrollment-summary 192.168.1.100 --event-type out-of-range --priority 1-100 --class 5
 
 bacnet --allow-write ack-alarm 192.168.1.100 ai:1 --state 1 \
   --timestamp sequence:417 --ack-time time:14,30,00,00
@@ -1084,6 +1516,61 @@ bacnet --allow-write ack-alarm 192.168.1.100 ai:1 --state 1 --source "operator" 
   --timestamp time:14,29,58,25 \
   --ack-time "datetime:2026,9,2,3;14,30,00,00"
 ```
+
+`alarms` lists every object with an event state other than normal or a
+transition not yet acknowledged (GetEventInformation). A device can answer
+in pages; `alarms` asks for the next page, from the last object, until the
+device says there are no more or `--max` objects (default 10000) have
+arrived. The table shows each object, its event state, the transitions
+acknowledged (`Acked`) and enabled, the notify type, the time of each
+transition's last event (to-offnormal, to-fault, to-normal) and their
+notification priorities (`3/5/200`, in the same order). When `--max` stops
+the reading early, a last line says the device holds more.
+
+`alarm-summary` lists the objects in alarm with their state and
+acknowledged transitions (GetAlarmSummary). `enrollment-summary` lists
+event-initiating objects with their event type, state, notification
+priority and notification class (GetEnrollmentSummary); a device returns
+only the objects that match all the filters given. The standard keeps both
+services only so clients can reach older devices, and advises newer ones
+not to serve them (Clauses 13.10 and 13.11), so a current device may reject
+them; `alarms` works everywhere. The `enrollment-summary` filters:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--acked <F>` | `all` | `all`, `acked`, or `not-acked` (an unacknowledged transition) |
+| `--state <S>` | (any) | `offnormal`, `fault`, `normal`, `all`, or `active` (not normal) |
+| `--event-type <T>` | (any) | An event type by name: `out-of-range`, `change-of-state`, ... |
+| `--priority <P>` | (any) | Notification priority, `MIN-MAX` (0 to 255) or one value |
+| `--class <N>` | (any) | Notification class number |
+
+Names take either spelling, `not-acked` or `NOT_ACKED`. All three commands
+take routed targets.
+
+In JSON, `alarms` prints `{"summaries": [...], "more_events": false}`, and
+`alarm-summary` and `enrollment-summary` print an array. Each field is a
+value in the [Value output](#value-output) forms, keyed in snake case:
+
+```json
+{
+  "object": {"type": "analog-value", "type_number": 2, "instance": 1},
+  "event_state": {"value": 3, "name": "high-limit"},
+  "acknowledged_transitions": {"bits": "011", "names": ["to-fault", "to-normal"]},
+  "event_enable": {"bits": "111", "names": ["to-offnormal", "to-fault", "to-normal"]},
+  "notify_type": {"value": 0, "name": "alarm"},
+  "event_timestamps": {
+    "to_offnormal": {"element": "time-stamp", "text": "2026-10-25 Sun 14:30:05"},
+    "to_fault": {"element": "time-stamp", "text": "seq 42"},
+    "to_normal": {"element": "time-stamp", "text": "07:00"}
+  },
+  "event_priorities": {"to_offnormal": 3, "to_fault": 5, "to_normal": 200}
+}
+```
+
+An `alarm-summary` entry has `object`, `alarm_state` and
+`acknowledged_transitions`; an `enrollment-summary` entry has `object`,
+`event_type`, `event_state`, `priority` and `notification_class` (`null`
+when the device left it out).
 
 **ack-alarm flags:**
 
@@ -1094,10 +1581,15 @@ bacnet --allow-write ack-alarm 192.168.1.100 ai:1 --state 1 --source "operator" 
 | `--ack-time <SPEC>` | (required) | Caller-selected time of acknowledgment |
 | `--source <S>` | `bacnet-cli` | Acknowledgment source string |
 
-Both timestamp flags use the same strict grammar:
+Both timestamp flags take a timestamp as the CLI prints one, so a printed
+timestamp pastes back: `seq 417`, a time (`14:29:58.25`), or a date and time
+(`"2026-10-25 Sun 14:30:05"`; a date alone leaves the time unspecified), with
+the date and time forms of [Writing Properties](#writing-properties). They
+also take the strict grammar:
 
 - `sequence:<0..65535>`
-- `time:<hour>,<minute>,<second>,<hundredths>`
+- `time:<hour>,<minute>,<second>,<hundredths>`, or `time:HH:MM[:SS[.hh]]`
+  as `write` takes it
 - `datetime:<full-year>,<month>,<day>,<day-of-week>;<hour>,<minute>,<second>,<hundredths>`
 
 Date years are `1900..2154`; months are `1..14`, days are `1..34`,
@@ -1107,8 +1599,9 @@ when BACnet's unspecified value is intended (use full-year `255` for an
 unspecified year). Values are preserved exactly and neither timestamp is
 inferred from a clock. Quote `datetime:` values in command shells because the
 grammar contains a semicolon. `--timestamp` must come from the original event
-notification; `--ack-time` is explicitly chosen by the caller. The current
-raw `alarms` response is not a guided source for these values.
+notification; `--ack-time` is explicitly chosen by the caller. `alarms`
+shows each transition's last event time in the printed form, which
+`--timestamp` takes as shown (quote it for the shell).
 
 **Alias:** `ack` = ack-alarm
 
@@ -1141,7 +1634,7 @@ deprecated, and a rusty-bacnet server refuses it under every DCC policy.
 | Flag | Description |
 |------|-------------|
 | `--duration <M>` | Duration in minutes |
-| `--password <P>` | Password string |
+| `--password <P>` | Password, 1 to 20 characters; leave the flag out to send none |
 
 **Aliases:** `dcc` = control
 
@@ -1151,7 +1644,7 @@ deprecated, and a rusty-bacnet server refuses it under every DCC policy.
 
 | Flag | Description |
 |------|-------------|
-| `--password <P>` | Password string |
+| `--password <P>` | Password, 1 to 20 characters; leave the flag out to send none |
 
 ```bash
 # Time synchronization
@@ -1569,7 +2062,9 @@ Available from [GitHub Releases](https://github.com/jscott3201/rusty-bacnet/rele
 Rename the downloaded file to `bacnet` (`bacnet.exe` on Windows), make it
 executable and put it on your `PATH`. Linux binaries include packet capture
 support out of the box. macOS/Windows users who need capture can build from
-source with `--features pcap`.
+source with `--features pcap`. From 0.15.0 every release binary also includes
+the MCP server (`mcp`, see [MCP server](#mcp-server)); a source build enables
+it with `--features mcp`.
 
 The Linux binaries need glibc 2.17 or newer, so they run on RHEL/CentOS 7,
 Debian 8, Ubuntu 14.04 and later. They link libpcap statically, so no libpcap

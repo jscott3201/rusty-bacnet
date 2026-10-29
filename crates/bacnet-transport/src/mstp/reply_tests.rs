@@ -5,7 +5,7 @@ use bacnet_mstp_codec::{FrameType, MAX_STANDARD_MPDU_DATA};
 use bytes::Bytes;
 use tokio::time::{Duration, Instant};
 
-use super::test_support::{config, Bus};
+use super::test_support::{Bus, config};
 
 /// T_reply_delay less the core's default reply transmit margin (25 ms):
 /// when the core stops waiting for the application.

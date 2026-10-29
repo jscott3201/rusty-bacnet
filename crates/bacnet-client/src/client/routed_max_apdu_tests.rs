@@ -14,15 +14,15 @@ use bacnet_encoding::apdu::{self, Apdu, SegmentAck as SegmentAckPdu, SimpleAck};
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportPort;
+use bacnet_types::MacAddr;
 use bacnet_types::enums::{ConfirmedServiceChoice, ObjectType, Segmentation};
 use bacnet_types::primitives::ObjectIdentifier;
-use bacnet_types::MacAddr;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 use crate::discovery::{DiscoveredDevice, RoutedDeviceConfig};
 
-use super::tests::send_routed_response;
 use super::BACnetClient;
+use super::tests::send_routed_response;
 
 fn routed_peer(
     max_apdu_length: u32,

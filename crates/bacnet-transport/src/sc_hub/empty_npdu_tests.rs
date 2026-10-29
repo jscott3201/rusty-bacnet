@@ -148,14 +148,16 @@ async fn empty_npdu_hub_routing_options_no_fanout_or_activity_then_healthy_relay
         barrier(target).await;
     }
     source.ack(0x2233).await;
-    assert!(clients
-        .lock()
-        .await
-        .get(&source.vmac)
-        .unwrap()
-        .heartbeat
-        .pending
-        .is_none());
+    assert!(
+        clients
+            .lock()
+            .await
+            .get(&source.vmac)
+            .unwrap()
+            .heartbeat
+            .pending
+            .is_none()
+    );
     // The hub still forwards positive payloads and raw option markers exactly,
     // including MU which the final destination, not this hub, interprets.
     for payload in [&[0x42][..], &[1, 0, 0x10, 8][..]] {

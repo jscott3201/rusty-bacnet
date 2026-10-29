@@ -1,13 +1,13 @@
 //! The rejects this router sends, and the ones it passes on.
 
+use super::Group;
+use super::Storage;
 use super::counters::bump;
 use super::host::{Event, Host};
 use super::ingress::{Arrival, Discard, Received};
 use super::tasks::Task;
-use super::Group;
-use super::Storage;
 use crate::npdu::RejectMessageReason;
-use crate::npdu::{Address, Npdu, GLOBAL_NETWORK};
+use crate::npdu::{Address, GLOBAL_NETWORK, Npdu};
 use crate::{Mac, PortId};
 
 /// The owned return path for a routed send that can draw a length reject.
@@ -70,14 +70,14 @@ impl RejectOrigin {
 }
 
 impl<
-        const P: usize,
-        const R: usize,
-        const H: usize,
-        const D: usize,
-        const N: usize,
-        G: super::GroupClassifier,
-        const B: usize,
-    > Storage<P, R, H, D, N, G, B>
+    const P: usize,
+    const R: usize,
+    const H: usize,
+    const D: usize,
+    const N: usize,
+    G: super::GroupClassifier,
+    const B: usize,
+> Storage<P, R, H, D, N, G, B>
 {
     /// Whether `address` is this router: a port's network with the
     /// router's MAC on that port.

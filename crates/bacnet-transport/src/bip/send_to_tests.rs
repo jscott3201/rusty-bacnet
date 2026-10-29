@@ -2,14 +2,14 @@
 //! sends at once, and the boxed wait when the socket would block.
 
 use std::net::{Ipv4Addr, SocketAddrV4};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use bytes::Bytes;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 
-use super::fanout::{run_fanout_worker, AtomicFanoutCounters, FanoutJob};
+use super::fanout::{AtomicFanoutCounters, FanoutJob, run_fanout_worker};
 use super::socket::BipSocket;
 
 async fn udp() -> UdpSocket {

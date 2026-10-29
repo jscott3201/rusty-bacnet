@@ -6,6 +6,7 @@ use bacnet_objects::{
     traits::BACnetObject,
 };
 use bacnet_types::enums::EngineeringUnits;
+use bacnet_types::error::RemoteError;
 
 #[test]
 fn six_family_initial_command_source_wire_values_are_typed_and_paired() {
@@ -73,7 +74,7 @@ fn command_source_context_free_handlers_cannot_invent_a_writer() {
     .encode(&mut bytes)
     .unwrap();
     assert!(
-        matches!(handle_write_property(&mut db, &bytes), Err(Error::Protocol { code, .. }) if code == ErrorCode::WRITE_ACCESS_DENIED)
+        matches!(handle_write_property(&mut db, &bytes), Err(Error::Remote(RemoteError::Error { code, .. })) if code == ErrorCode::WRITE_ACCESS_DENIED)
     );
     assert_eq!(
         db.get(&oid)

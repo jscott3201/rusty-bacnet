@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use bytes::{BufMut, BytesMut};
 use tokio::sync::Mutex;
@@ -7,8 +7,8 @@ use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, warn};
 
 use crate::sc_frame::{
-    decode_sc_bvlc_result, is_broadcast_vmac, ScBvlcResult, ScFunction, ScMessage, Vmac,
-    BROADCAST_VMAC,
+    BROADCAST_VMAC, ScBvlcResult, ScFunction, ScMessage, Vmac, decode_sc_bvlc_result,
+    is_broadcast_vmac,
 };
 
 use super::helpers::registered_client_matches_sink_in_map;
@@ -138,7 +138,9 @@ pub(super) async fn relay_result(
         Err(e) => {
             emit_result_diagnostic(diag, |suppressed| {
                 if suppressed > 0 {
-                    debug!("Hub: malformed peer Result from {registered_vmac:02x?}, dropping: {e} (suppressed {suppressed} similar diagnostics)");
+                    debug!(
+                        "Hub: malformed peer Result from {registered_vmac:02x?}, dropping: {e} (suppressed {suppressed} similar diagnostics)"
+                    );
                 } else {
                     debug!("Hub: malformed peer Result from {registered_vmac:02x?}, dropping: {e}");
                 }
@@ -190,7 +192,9 @@ pub(super) async fn relay_result(
         Ok(HubRelayTarget::Broadcast) => {
             emit_result_diagnostic(diag, |suppressed| {
                 if suppressed > 0 {
-                    debug!("Hub: broadcast Result from {registered_vmac:02x?}, dropping (suppressed {suppressed} similar diagnostics)");
+                    debug!(
+                        "Hub: broadcast Result from {registered_vmac:02x?}, dropping (suppressed {suppressed} similar diagnostics)"
+                    );
                 } else {
                     debug!("Hub: broadcast Result from {registered_vmac:02x?}, dropping");
                 }
@@ -200,7 +204,9 @@ pub(super) async fn relay_result(
         Err(HubRelayReject::OriginatingVmacPresent) => {
             emit_result_diagnostic(diag, |suppressed| {
                 if suppressed > 0 {
-                    debug!("Hub: Result from {registered_vmac:02x?} had Originating VMAC, dropping (suppressed {suppressed} similar diagnostics)");
+                    debug!(
+                        "Hub: Result from {registered_vmac:02x?} had Originating VMAC, dropping (suppressed {suppressed} similar diagnostics)"
+                    );
                 } else {
                     debug!(
                         "Hub: Result from {registered_vmac:02x?} had Originating VMAC, dropping"
@@ -212,9 +218,13 @@ pub(super) async fn relay_result(
         Err(HubRelayReject::MissingDestinationVmac) => {
             emit_result_diagnostic(diag, |suppressed| {
                 if suppressed > 0 {
-                    debug!("Hub: Result from {registered_vmac:02x?} had no relay destination, dropping (suppressed {suppressed} similar diagnostics)");
+                    debug!(
+                        "Hub: Result from {registered_vmac:02x?} had no relay destination, dropping (suppressed {suppressed} similar diagnostics)"
+                    );
                 } else {
-                    debug!("Hub: Result from {registered_vmac:02x?} had no relay destination, dropping");
+                    debug!(
+                        "Hub: Result from {registered_vmac:02x?} had no relay destination, dropping"
+                    );
                 }
             });
             return ResultRelayDisposition::Continue;
@@ -246,7 +256,9 @@ pub(super) async fn relay_result(
     ) else {
         emit_result_diagnostic(diag, |suppressed| {
             if suppressed > 0 {
-                warn!("Hub: failed to preserve peer Result frame from {registered_vmac:02x?} (suppressed {suppressed} similar diagnostics)");
+                warn!(
+                    "Hub: failed to preserve peer Result frame from {registered_vmac:02x?} (suppressed {suppressed} similar diagnostics)"
+                );
             } else {
                 warn!("Hub: failed to preserve peer Result frame from {registered_vmac:02x?}");
             }
@@ -271,7 +283,9 @@ pub(super) async fn relay_result(
     let Some((target, max_bvlc)) = target else {
         emit_result_diagnostic(diag, |suppressed| {
             if suppressed > 0 {
-                debug!("Hub: no client with vmac {destination:02x?} for Result relay (suppressed {suppressed} similar diagnostics)");
+                debug!(
+                    "Hub: no client with vmac {destination:02x?} for Result relay (suppressed {suppressed} similar diagnostics)"
+                );
             } else {
                 debug!("Hub: no client with vmac {destination:02x?} for Result relay");
             }

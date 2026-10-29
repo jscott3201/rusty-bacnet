@@ -14,8 +14,8 @@ use bacnet_types::constructed::{
 };
 use bacnet_types::error::Error;
 
-use super::persist::BdtFile;
 use super::BbmdState;
+use super::persist::BdtFile;
 
 /// Lock shared BBMD state. Every holder keeps the guard for a short,
 /// synchronous critical section and never across an await. A panic inside
@@ -79,13 +79,92 @@ impl BbmdState {
     }
 }
 
+/// A BBMD's B/IP-M group as its tables view changes it (#1963). The B/IP
+/// transport's multicast control implements it.
+pub(crate) trait GroupChange: Send + Sync {
+    /// Check a written group (0.0.0.0 for none) on its own, as a
+    /// WriteProperty takes it: `Ok` with whether the BBMD would then serve a
+    /// group.
+    fn check_group(&self, group: [u8; 4]) -> Result<bool, Error>;
+
+    /// Move the running BBMD to `group`, with its tables: what can fail
+    /// about the group is checked and readied first, then `apply` puts the
+    /// tables in, told whether the BBMD serves a group from then on, then
+    /// the link moves. When the link refuses, `undo` takes the tables back
+    /// out; when anything fails, nothing is left changed.
+    fn change_group(
+        &self,
+        group: [u8; 4],
+        apply: &mut dyn FnMut(bool) -> Result<(), Error>,
+        undo: &mut dyn FnMut(),
+    ) -> Result<(), Error>;
+}
+
 /// The live view a B/IP transport lends a Network Port object in BBMD mode:
 /// the transport's own shared state, not a copy. Each read takes the lock
 /// for one copy of a table and releases it. With a persisted-BDT file, an
-/// activated BDT is saved there too (#1826).
+/// activated BDT is saved there too (#1826). A transport that can use B/IP
+/// multicast lends its group with it, which then changes only together
+/// with the tables (#1963).
 pub(crate) struct LiveTables {
     pub(crate) state: Arc<Mutex<BbmdState>>,
     pub(crate) file: Option<Arc<BdtFile>>,
+    pub(crate) group: Option<Arc<dyn GroupChange>>,
+}
+
+impl LiveTables {
+    /// The group view, for a written group; refused without one.
+    fn group(&self) -> Result<&Arc<dyn GroupChange>, Error> {
+        self.group.as_ref().ok_or(Error::protocol(
+            bacnet_types::enums::ErrorClass::PROPERTY,
+            bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED,
+        ))
+    }
+
+    /// Activate `changes`, a new group among them, as one step (#1963).
+    fn activate_with_group(&self, changes: &BbmdChanges, group: [u8; 4]) -> Result<(), Error> {
+        let undo = std::cell::RefCell::new(None);
+        let saved = std::cell::RefCell::new(None);
+        self.group()?.change_group(
+            group,
+            &mut |serves| {
+                let mut state = lock(&self.state);
+                *undo.borrow_mut() = Some(state.activate_serving(changes, Some(serves))?);
+                *saved.borrow_mut() = self.to_save(changes, &mut state);
+                Ok(())
+            },
+            &mut || {
+                if let Some(undo) = undo.borrow_mut().take() {
+                    lock(&self.state).restore(undo);
+                }
+                saved.borrow_mut().take();
+            },
+        )?;
+        if let (Some(file), Some((generation, rows, nat))) = (&self.file, saved.into_inner()) {
+            file.save_later(generation, rows, nat);
+        }
+        Ok(())
+    }
+
+    /// What a save of the persisted-BDT file takes after `changes` went in
+    /// to `state`, when there is a file and they touched the BDT or NAT.
+    #[allow(clippy::type_complexity)]
+    fn to_save(
+        &self,
+        changes: &BbmdChanges,
+        state: &mut BbmdState,
+    ) -> Option<(u64, Vec<crate::bbmd::BdtEntry>, Option<super::PersistedNat>)> {
+        let nat_changed = changes.nat_traversal.is_some() || changes.global_address.is_some();
+        let file = self
+            .file
+            .as_ref()
+            .filter(|_| changes.broadcast_distribution_table.is_some() || nat_changed)?;
+        Some((
+            file.next_generation(),
+            state.configured_bdt(),
+            state.nat_to_persist(nat_changed),
+        ))
+    }
 }
 
 impl BbmdTables for LiveTables {
@@ -115,11 +194,20 @@ impl BbmdTables for LiveTables {
     }
 
     fn check_value(&self, changes: &BbmdChanges) -> Result<(), Error> {
+        if let Some(group) = changes.multicast_group {
+            self.group()?.check_group(group)?;
+        }
         lock(&self.state).check_value(changes)
     }
 
+    /// A written group is checked with the rows waiting beside it, under
+    /// the own-row rule the group would set (#1963).
     fn check(&self, changes: &BbmdChanges) -> Result<(), Error> {
-        lock(&self.state).check_changes(changes)
+        let serves = match changes.multicast_group {
+            Some(group) => Some(self.group()?.check_group(group)?),
+            None => None,
+        };
+        lock(&self.state).check_serving(changes, serves)
     }
 
     /// A new BDT or NAT setting is saved to the persisted-BDT file once it
@@ -133,6 +221,9 @@ impl BbmdTables for LiveTables {
     /// own afterwards (`BdtFile::save_later`). A failed save is logged and counted and doesn't undo the
     /// activation.
     fn activate(&self, changes: &BbmdChanges) -> Result<(), Error> {
+        if let Some(group) = changes.multicast_group {
+            return self.activate_with_group(changes, group);
+        }
         let file = self.file.as_ref().filter(|_| {
             changes.broadcast_distribution_table.is_some()
                 || changes.nat_traversal.is_some()
@@ -157,5 +248,9 @@ impl BbmdTables for LiveTables {
 
     fn can_change(&self) -> bool {
         true
+    }
+
+    fn changes_multicast_group(&self) -> bool {
+        self.group.is_some()
     }
 }

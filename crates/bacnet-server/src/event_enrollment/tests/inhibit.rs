@@ -140,10 +140,10 @@ impl BACnetObject for Variable {
         match property {
             PropertyIdentifier::PRESENT_VALUE => Ok(self.value.clone()),
             PropertyIdentifier::OBJECT_IDENTIFIER => Ok(PropertyValue::ObjectIdentifier(self.oid)),
-            _ => Err(bacnet_types::error::Error::Protocol {
-                class: bacnet_types::enums::ErrorClass::PROPERTY,
-                code: bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY,
-            }),
+            _ => Err(bacnet_types::error::Error::protocol(
+                bacnet_types::enums::ErrorClass::PROPERTY,
+                bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY,
+            )),
         }
     }
 

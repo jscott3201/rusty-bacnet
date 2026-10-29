@@ -3,11 +3,10 @@
 //! Tracks in-flight confirmed requests. Each request gets a unique invoke_id
 //! (0-255) scoped per destination MAC. Responses are delivered via oneshot channels.
 
-use bacnet_types::enums::{
-    AbortReason, ConfirmedServiceChoice, ErrorClass, ErrorCode, RejectReason,
-};
-use bacnet_types::map_hash::BuildMapHasher;
 use bacnet_types::MacAddr;
+use bacnet_types::enums::{AbortReason, ConfirmedServiceChoice};
+use bacnet_types::error::RemoteError;
+use bacnet_types::map_hash::BuildMapHasher;
 use bytes::Bytes;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -64,26 +63,14 @@ pub enum TsmResponse {
         /// Encoded service ACK parameters, without the APDU header.
         service_data: Bytes,
     },
-    /// Error PDU.
-    Error {
-        /// Error class the PDU reports.
-        class: ErrorClass,
-        /// Error code the PDU reports.
-        code: ErrorCode,
-        /// What the PDU's structured Clause 21 body adds to the class and
-        /// code (ChangeList-Error, CreateObject-Error, WPM-Error and the
-        /// others); `None` for a plain error.
+    /// An Error, Reject or Abort PDU: the peer turned the request down.
+    Remote {
+        /// What the PDU reports.
+        error: RemoteError,
+        /// What an Error PDU's structured Clause 21 body adds to the class
+        /// and code (ChangeList-Error, CreateObject-Error, WPM-Error and the
+        /// others); `None` for a plain error, a Reject or an Abort.
         detail: Option<bacnet_types::error::ErrorDetail>,
-    },
-    /// Reject PDU.
-    Reject {
-        /// Reject reason the PDU reports.
-        reason: RejectReason,
-    },
-    /// Abort PDU.
-    Abort {
-        /// Abort reason the PDU reports.
-        reason: AbortReason,
     },
     /// A router rejected the active message as too long for its routed path.
     NetworkPathTooLong {
@@ -97,10 +84,18 @@ impl TsmResponse {
     /// detail, such as a ChangeList-Error's First Failed Element Number or
     /// WritePropertyMultiple's first failed write attempt.
     pub(crate) fn from_error_pdu(pdu: &bacnet_encoding::apdu::ErrorPdu) -> Self {
-        Self::Error {
-            class: pdu.error_class,
-            code: pdu.error_code,
+        Self::Remote {
+            error: pdu.remote_error(),
             detail: bacnet_services::structured_error::detail(pdu),
+        }
+    }
+
+    /// The completion a Reject or Abort PDU produces, or an Error PDU
+    /// without a structured body: `error` without a detail.
+    pub const fn remote(error: RemoteError) -> Self {
+        Self::Remote {
+            error,
+            detail: None,
         }
     }
 }
@@ -704,9 +699,9 @@ impl Tsm {
             invoke_id,
             owner,
             None,
-            TsmResponse::Abort {
+            TsmResponse::remote(RemoteError::Abort {
                 reason: AbortReason::INVALID_APDU_IN_THIS_STATE,
-            },
+            }),
         );
     }
 
@@ -738,11 +733,12 @@ impl Tsm {
         }) {
             return false;
         }
-        if let Some(pending) = self.pending.remove(&key) {
-            self.release_pending(destination_mac, invoke_id, pending, PendingRelease::Cancel);
-            true
-        } else {
-            false
+        match self.pending.remove(&key) {
+            Some(pending) => {
+                self.release_pending(destination_mac, invoke_id, pending, PendingRelease::Cancel);
+                true
+            }
+            _ => false,
         }
     }
 

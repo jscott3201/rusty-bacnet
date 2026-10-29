@@ -10,8 +10,8 @@ use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetEventParameter};
 use bacnet_types::enums::EngineeringUnits;
 use std::borrow::Cow;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 // ---- Integration: multiple enrollments ----
 
@@ -263,10 +263,10 @@ impl BACnetObject for ReferenceValueObject {
         } else if property == PropertyIdentifier::FAULT_PARAMETERS
             && !self.fault_parameters_supported
         {
-            Err(bacnet_types::error::Error::Protocol {
-                class: bacnet_types::enums::ErrorClass::PROPERTY,
-                code: bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY,
-            })
+            Err(bacnet_types::error::Error::protocol(
+                bacnet_types::enums::ErrorClass::PROPERTY,
+                bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY,
+            ))
         } else if property == PropertyIdentifier::EVENT_PARAMETERS
             && !self.event_parameters_readable.load(Ordering::SeqCst)
         {

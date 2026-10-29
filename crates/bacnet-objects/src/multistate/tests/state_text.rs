@@ -39,12 +39,14 @@ fn msi_state_text_valid_index() {
 #[test]
 fn msi_state_text_invalid_index_error() {
     let msi = MultiStateInputObject::new(1, "MSI-1", 3).unwrap();
-    assert!(msi
-        .read_property(PropertyIdentifier::STATE_TEXT, Some(4))
-        .is_err());
-    assert!(msi
-        .read_property(PropertyIdentifier::STATE_TEXT, Some(100))
-        .is_err());
+    assert!(
+        msi.read_property(PropertyIdentifier::STATE_TEXT, Some(4))
+            .is_err()
+    );
+    assert!(
+        msi.read_property(PropertyIdentifier::STATE_TEXT, Some(100))
+            .is_err()
+    );
 }
 
 #[test]
@@ -66,47 +68,51 @@ fn msi_state_text_write_at_index() {
 #[test]
 fn msi_state_text_write_wrong_type_rejected() {
     let mut msi = MultiStateInputObject::new(1, "MSI-1", 3).unwrap();
-    assert!(msi
-        .write_property(
+    assert!(
+        msi.write_property(
             PropertyIdentifier::STATE_TEXT,
             Some(1),
             PropertyValue::Unsigned(42),
             None,
         )
-        .is_err());
+        .is_err()
+    );
 }
 
 #[test]
 fn msi_state_text_write_bad_index_rejected() {
     let mut msi = MultiStateInputObject::new(1, "MSI-1", 3).unwrap();
     // index 0 is invalid for write
-    assert!(msi
-        .write_property(
+    assert!(
+        msi.write_property(
             PropertyIdentifier::STATE_TEXT,
             Some(0),
             PropertyValue::CharacterString("X".into()),
             None,
         )
-        .is_err());
+        .is_err()
+    );
     // out-of-range index
-    assert!(msi
-        .write_property(
+    assert!(
+        msi.write_property(
             PropertyIdentifier::STATE_TEXT,
             Some(4),
             PropertyValue::CharacterString("X".into()),
             None,
         )
-        .is_err());
+        .is_err()
+    );
     // Without an index the value is the whole array (#1443): a label of
     // another datatype is refused, and nothing changes.
-    assert!(msi
-        .write_property(
+    assert!(
+        msi.write_property(
             PropertyIdentifier::STATE_TEXT,
             None,
             PropertyValue::Unsigned(1),
             None,
         )
-        .is_err());
+        .is_err()
+    );
     assert_eq!(
         msi.read_property(PropertyIdentifier::STATE_TEXT, Some(0))
             .unwrap(),
@@ -117,9 +123,10 @@ fn msi_state_text_write_bad_index_rejected() {
 #[test]
 fn msi_state_text_in_property_list() {
     let msi = MultiStateInputObject::new(1, "MSI-1", 3).unwrap();
-    assert!(msi
-        .property_list()
-        .contains(&PropertyIdentifier::STATE_TEXT));
+    assert!(
+        msi.property_list()
+            .contains(&PropertyIdentifier::STATE_TEXT)
+    );
 }
 
 #[test]
@@ -158,9 +165,10 @@ fn mso_state_text_valid_index() {
 #[test]
 fn mso_state_text_invalid_index_error() {
     let mso = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();
-    assert!(mso
-        .read_property(PropertyIdentifier::STATE_TEXT, Some(4))
-        .is_err());
+    assert!(
+        mso.read_property(PropertyIdentifier::STATE_TEXT, Some(4))
+            .is_err()
+    );
 }
 
 #[test]
@@ -183,9 +191,10 @@ fn mso_state_text_write_at_index() {
 #[test]
 fn mso_state_text_in_property_list() {
     let mso = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();
-    assert!(mso
-        .property_list()
-        .contains(&PropertyIdentifier::STATE_TEXT));
+    assert!(
+        mso.property_list()
+            .contains(&PropertyIdentifier::STATE_TEXT)
+    );
 }
 
 #[test]
@@ -225,12 +234,14 @@ fn msv_state_text_valid_index() {
 #[test]
 fn msv_state_text_invalid_index_error() {
     let msv = MultiStateValueObject::new(1, "MSV-1", 3).unwrap();
-    assert!(msv
-        .read_property(PropertyIdentifier::STATE_TEXT, Some(4))
-        .is_err());
-    assert!(msv
-        .read_property(PropertyIdentifier::STATE_TEXT, Some(0xFF))
-        .is_err());
+    assert!(
+        msv.read_property(PropertyIdentifier::STATE_TEXT, Some(4))
+            .is_err()
+    );
+    assert!(
+        msv.read_property(PropertyIdentifier::STATE_TEXT, Some(0xFF))
+            .is_err()
+    );
 }
 
 #[test]
@@ -254,49 +265,54 @@ fn msv_state_text_write_at_index() {
 fn msv_state_text_write_bad_index_rejected() {
     let mut msv = MultiStateValueObject::new(1, "MSV-1", 3).unwrap();
     // Without an index the value is the whole array (#1443).
-    assert!(msv
-        .write_property(
+    assert!(
+        msv.write_property(
             PropertyIdentifier::STATE_TEXT,
             None,
             PropertyValue::Unsigned(1),
             None,
         )
-        .is_err());
-    assert!(msv
-        .write_property(
+        .is_err()
+    );
+    assert!(
+        msv.write_property(
             PropertyIdentifier::STATE_TEXT,
             Some(0),
             PropertyValue::CharacterString("X".into()),
             None,
         )
-        .is_err());
-    assert!(msv
-        .write_property(
+        .is_err()
+    );
+    assert!(
+        msv.write_property(
             PropertyIdentifier::STATE_TEXT,
             Some(4),
             PropertyValue::CharacterString("X".into()),
             None,
         )
-        .is_err());
+        .is_err()
+    );
 }
 
 #[test]
 fn msv_state_text_write_wrong_type_rejected() {
     let mut msv = MultiStateValueObject::new(1, "MSV-1", 3).unwrap();
-    assert!(msv
-        .write_property(
+    assert!(
+        msv.write_property(
             PropertyIdentifier::STATE_TEXT,
             Some(1),
             PropertyValue::Unsigned(1),
             None,
         )
-        .is_err());
+        .is_err()
+    );
 }
 
 #[test]
 fn msv_state_text_in_property_list() {
     let msv = MultiStateValueObject::new(1, "MSV-1", 3).unwrap();
-    assert!(msv
-        .property_list()
-        .contains(&PropertyIdentifier::STATE_TEXT));
+    assert!(
+        msv.property_list()
+            .contains(&PropertyIdentifier::STATE_TEXT)
+    );
 }

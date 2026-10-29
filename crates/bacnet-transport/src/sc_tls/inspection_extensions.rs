@@ -165,10 +165,10 @@ fn ku(bytes: &[u8], output: &mut ScExtensionInspection, findings: &mut Vec<ScIns
         finding(findings, Area::KeyUsage, Kind::Malformed);
         return;
     };
-    if let Ok(bits) = bits.as_bitstring() {
-        if bits.data.len() > 2 || usage.flags & !0x01ff != 0 {
-            finding(findings, Area::KeyUsage, Kind::Unsupported);
-        }
+    if let Ok(bits) = bits.as_bitstring()
+        && (bits.data.len() > 2 || usage.flags & !0x01ff != 0)
+    {
+        finding(findings, Area::KeyUsage, Kind::Unsupported);
     }
     if usage.flags == 0 {
         finding(findings, Area::KeyUsage, Kind::Malformed);

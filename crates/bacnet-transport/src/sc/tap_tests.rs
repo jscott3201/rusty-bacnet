@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use bacnet_encoding::apdu::{decode_apdu, Apdu};
+use bacnet_encoding::apdu::{Apdu, decode_apdu};
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_types::enums::ConfirmedServiceChoice;
 use bytes::{Bytes, BytesMut};
@@ -12,7 +12,7 @@ use bytes::{Bytes, BytesMut};
 use super::*;
 use crate::port::TransportPort;
 use crate::sc::LoopbackWebSocket;
-use crate::sc_frame::{decode_sc_message, encode_sc_message, ScFunction, ScMessage, Vmac};
+use crate::sc_frame::{ScFunction, ScMessage, Vmac, decode_sc_message, encode_sc_message};
 use crate::tap::{FrameTapReceiver, TappedFrame};
 
 const NODE: Vmac = [0x01; 6];
@@ -90,7 +90,7 @@ async fn the_hub_connection_is_tapped_from_connect_to_disconnect() {
 
     // Idle for a heartbeat interval: the node sends a Heartbeat-Request.
     let interval = crate::sc::heartbeat::DEFAULT_HEARTBEAT_INTERVAL_MS;
-    tokio::time::sleep(Duration::from_millis(interval * 2)).await;
+    tokio::time::sleep(Duration::from_millis(interval + 1)).await;
     let heartbeat = decode_sc_message(&hub.recv().await.unwrap()).unwrap();
     assert_eq!(heartbeat.function, ScFunction::HeartbeatRequest);
     let ack = message(ScFunction::HeartbeatAck, heartbeat.message_id, None, &[]);

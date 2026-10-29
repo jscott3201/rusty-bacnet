@@ -11,9 +11,9 @@ mod common;
 use bacnet_mstp_codec::FrameType;
 use bacnet_mstp_core::Duration;
 use bacnet_mstp_sim::{
-    Answer, Application, MasterSpec, Outbox, Received, Sim, SimConfig, WireFrame, BROADCAST,
+    Answer, Application, BROADCAST, MasterSpec, Outbox, Received, Sim, SimConfig, WireFrame,
 };
-use firmware_link::device::app::{self, Scratch, ANSWER_LENGTH};
+use firmware_link::device::app::{self, ANSWER_LENGTH, Scratch};
 use firmware_link::device::{
     BROADCAST_SLOTS, CONFIG, REQUESTS, STATION, UNICAST_SLOTS, WHO_IS_EVERY_DEVICE,
 };
@@ -123,14 +123,16 @@ fn the_device_answers_a_read_property_in_the_reply_window() {
     // A ComplexACK (0x30) for invoke ID 1, of a ReadProperty (0x0C).
     assert_eq!(reply.data[2..5], [0x30, 0x01, 0x0C]);
 
-    assert!(sim
-        .deliveries(STATION)
-        .iter()
-        .any(|delivery| delivery.request && delivery.data == request));
-    assert!(sim
-        .deliveries(CLIENT)
-        .iter()
-        .any(|delivery| delivery.source == STATION && delivery.data == reply.data));
+    assert!(
+        sim.deliveries(STATION)
+            .iter()
+            .any(|delivery| delivery.request && delivery.data == request)
+    );
+    assert!(
+        sim.deliveries(CLIENT)
+            .iter()
+            .any(|delivery| delivery.source == STATION && delivery.data == reply.data)
+    );
 }
 
 /// Clause 16.10: a Who-Is for every device, broadcast by a master, gets an

@@ -4,8 +4,8 @@
 
 use super::confirmed_request_tracker::ConfirmedRequestTracker;
 use super::event_forwarding_tests::{
-    copies, database, destination, encoded, forwarding_transport, notification, unconfirmed, Copy,
-    To, LOCAL_DEVICE, PEER_A, PEER_B,
+    Copy, LOCAL_DEVICE, PEER_A, PEER_B, To, copies, database, destination, encoded,
+    forwarding_transport, notification, unconfirmed,
 };
 use super::event_recipient_routing_tests::{address_recipient, distribute_counted};
 use super::*;

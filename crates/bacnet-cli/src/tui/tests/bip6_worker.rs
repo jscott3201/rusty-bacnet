@@ -10,14 +10,14 @@ use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6, UdpSocket};
 use std::time::{Duration, Instant};
 
 use bacnet_client::client::BACnetClient;
+use bacnet_ops::target::AddressStyle;
 use bacnet_transport::bip6::Bip6Transport;
 use bacnet_transport::port::TransportPort;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
-use crate::core::target::AddressStyle;
 use crate::tui::message::{Command, DirectedTo, OpOutcome, WhoIsScope, WhoIsSpec, WorkerEvent};
-use crate::tui::worker::{session, EventSink, EVENT_CHANNEL_CAPACITY};
+use crate::tui::worker::{EVENT_CHANNEL_CAPACITY, EventSink, session};
 
 /// Long enough for any step here, short of a hang.
 const STEP: Duration = Duration::from_secs(10);

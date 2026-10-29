@@ -9,15 +9,21 @@
 //! guard dropped; a write nobody staged waits where it is ([`crate::durable`]
 //! lists those paths).
 
+use crate::prelude::*;
+#[cfg(feature = "std")]
 use std::path::Path;
 
+#[cfg(feature = "std")]
 use bacnet_encoding::constructed::{decode_destination, encode_destination_list};
 use bacnet_types::constructed::BACnetDestination;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
+#[cfg(feature = "std")]
 use bytes::BytesMut;
 
+#[cfg(feature = "std")]
 use super::MAX_RECIPIENT_LIST_DESTINATIONS;
+#[cfg(feature = "std")]
 use crate::durable::file::ObjectFile;
 
 /// What a Notification Class keeps across a restart.
@@ -48,10 +54,12 @@ pub trait NotificationClassPersistence: Send + Sync {
 
 /// The format's tag. The Notification Forwarder's file (`RBNFWD01`) is a
 /// sibling: the same header, then both of a forwarder's lists.
+#[cfg(feature = "std")]
 const MAGIC: &[u8; 8] = b"RBNNCL01";
 /// The Notification Forwarder's cap: a full Recipient_List of the longest
 /// destinations is 1,504 octets, so anything much larger is not a file this
 /// backend wrote.
+#[cfg(feature = "std")]
 pub(super) const MAX_FILE_BYTES: u64 = 64 * 1024;
 
 /// A file holding one Notification Class's Recipient_List, replaced whole on
@@ -65,10 +73,12 @@ pub(super) const MAX_FILE_BYTES: u64 = 64 * 1024;
 ///
 /// [`FileNotificationForwarderPersistence`]: crate::notification_forwarder::FileNotificationForwarderPersistence
 #[derive(Clone, Debug)]
+#[cfg(feature = "std")]
 pub struct FileNotificationClassPersistence {
     file: ObjectFile,
 }
 
+#[cfg(feature = "std")]
 impl FileNotificationClassPersistence {
     /// Keep the Recipient_List in the file at `path`.
     pub fn new(path: impl AsRef<Path>) -> Result<Self, Error> {
@@ -83,6 +93,7 @@ impl FileNotificationClassPersistence {
     }
 }
 
+#[cfg(feature = "std")]
 impl NotificationClassPersistence for FileNotificationClassPersistence {
     fn load(&self, class: ObjectIdentifier) -> Result<Option<NotificationClassSnapshot>, Error> {
         let Some(body) = self.file.load(class)? else {

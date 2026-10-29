@@ -9,7 +9,7 @@
 //! while the frame is extracted) are [`Error::Decoding`].
 
 use bacnet_types::enums::{ErrorClass, ErrorCode, RejectReason};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 
 mod device;
 mod discovery;
@@ -26,9 +26,9 @@ enum Kind {
     Malformed,
     /// [`Error::BufferTooShort`].
     Short,
-    /// [`Error::Reject`] with this reason.
+    /// [`Error::reject`] with this reason.
     Reject(RejectReason),
-    /// [`Error::Protocol`] with this class and code.
+    /// [`Error::protocol`] with this class and code.
     Protocol(ErrorClass, ErrorCode),
     /// Any other error.
     Other,
@@ -42,8 +42,8 @@ impl Kind {
             Ok(()) => Decodes,
             Err(Error::Decoding(_)) => Malformed,
             Err(Error::BufferTooShort { .. }) => Short,
-            Err(Error::Reject { reason }) => Kind::Reject(*reason),
-            Err(Error::Protocol { class, code }) => Kind::Protocol(*class, *code),
+            Err(Error::Remote(RemoteError::Reject { reason })) => Kind::Reject(*reason),
+            Err(Error::Remote(RemoteError::Error { class, code })) => Kind::Protocol(*class, *code),
             Err(_) => Kind::Other,
         }
     }

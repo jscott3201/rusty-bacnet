@@ -32,6 +32,8 @@ use crate::tags;
 #[cfg(feature = "alloc")]
 mod formal_error;
 pub mod header;
+#[cfg(feature = "alloc")]
+mod remote_error;
 
 use header::{MaxApdu, MaxSegments};
 
@@ -487,12 +489,12 @@ fn encode_error(buf: &mut BytesMut, pdu: &ErrorPdu) -> Result<(), Error> {
     // structurally valid formal body of a service that defines one.
     let formal =
         formal_error::decode_formal_body(pdu.service_choice, &pdu.error_data).unwrap_or(None);
-    if let Some((error_class, error_code)) = formal {
-        if error_class != pdu.error_class || error_code != pdu.error_code {
-            return Err(Error::encode(
-                "formal Error body disagrees with ErrorPdu class/code",
-            ));
-        }
+    if let Some((error_class, error_code)) = formal
+        && (error_class != pdu.error_class || error_code != pdu.error_code)
+    {
+        return Err(Error::encode(
+            "formal Error body disagrees with ErrorPdu class/code",
+        ));
     }
 
     buf.put_u8(PduType::ERROR.to_raw() << 4);
@@ -846,6 +848,8 @@ fn decode_abort(data: Bytes) -> Result<AbortPdu, Error> {
 mod change_list_error_tests;
 #[cfg(all(test, feature = "alloc"))]
 mod encode_refusal_tests;
+#[cfg(all(test, feature = "alloc"))]
+mod remote_error_tests;
 #[cfg(all(test, feature = "alloc"))]
 mod structured_error_tests;
 #[cfg(all(test, feature = "alloc"))]

@@ -2,8 +2,9 @@ use super::{
     CompletionOutcome, PendingRelease, PendingTransaction, TransactionOwner, TransactionPhase, Tsm,
     TsmResponse,
 };
-use bacnet_types::enums::{AbortReason, ConfirmedServiceChoice};
 use bacnet_types::MacAddr;
+use bacnet_types::enums::{AbortReason, ConfirmedServiceChoice};
+use bacnet_types::error::RemoteError;
 use std::collections::hash_map::Entry;
 
 impl Tsm {
@@ -106,7 +107,12 @@ impl Tsm {
         }
         let requires_sent_all_segments = matches!(
             &response,
-            TsmResponse::SimpleAck | TsmResponse::ComplexAck { .. } | TsmResponse::Error { .. }
+            TsmResponse::SimpleAck
+                | TsmResponse::ComplexAck { .. }
+                | TsmResponse::Remote {
+                    error: RemoteError::Error { .. },
+                    ..
+                }
         );
         if requires_sent_all_segments
             && matches!(
@@ -121,10 +127,10 @@ impl Tsm {
             return CompletionOutcome::Delivered;
         }
         let expected = entry.get().expected_service_choice;
-        if let Some(observed) = observed_service_choice {
-            if observed != expected {
-                return CompletionOutcome::ServiceChoiceMismatch { expected, observed };
-            }
+        if let Some(observed) = observed_service_choice
+            && observed != expected
+        {
+            return CompletionOutcome::ServiceChoiceMismatch { expected, observed };
         }
         let pending = entry.remove();
         let responder = pending.responder;
@@ -146,8 +152,8 @@ impl Tsm {
             pending.lease,
             PendingRelease::Release,
         );
-        let _ = responder.send(TsmResponse::Abort {
+        let _ = responder.send(TsmResponse::remote(RemoteError::Abort {
             reason: AbortReason::INVALID_APDU_IN_THIS_STATE,
-        });
+        }));
     }
 }

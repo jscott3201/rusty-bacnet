@@ -1,7 +1,7 @@
 //! B/IPv6 BVLL frames and messages: one-shot decode, and checked encode.
 
-use super::{Bip6Address, Bip6Vmac, Bvlc6Function, Bvlc6ResultCode, Bvll6Error, BVLC_TYPE_BIP6};
-use crate::{BvllSink, PayloadShape, HEADER_LENGTH, MAX_BVLL_LENGTH};
+use super::{BVLC_TYPE_BIP6, Bip6Address, Bip6Vmac, Bvlc6Function, Bvlc6ResultCode, Bvll6Error};
+use crate::{BvllSink, HEADER_LENGTH, MAX_BVLL_LENGTH, PayloadShape};
 
 /// A B/IPv6 BVLL message whose header checks out, before its payload is
 /// read.
@@ -148,7 +148,7 @@ fn read(function: Bvlc6Function, payload: &[u8]) -> Option<Bvll6<'_>> {
             return Some(Bvll6::OriginalBroadcastNpdu {
                 source,
                 npdu: fields.npdu(),
-            })
+            });
         }
         Bvlc6Function::ADDRESS_RESOLUTION => Bvll6::AddressResolution {
             source,
@@ -191,7 +191,7 @@ fn read(function: Bvlc6Function, payload: &[u8]) -> Option<Bvll6<'_>> {
             return Some(Bvll6::DistributeBroadcastToNetwork {
                 original_source: source,
                 npdu: fields.npdu(),
-            })
+            });
         }
         _ => return None,
     };
@@ -457,12 +457,12 @@ impl<'a> Bvll6<'a> {
     /// other shape the standard forbids can't be built: each variant holds
     /// exactly its function's fields.
     pub fn encoded_len(&self) -> Result<usize, Bvll6Error> {
-        if let Self::BvlcResult { code, .. } = self {
-            if !code.is_defined() {
-                return Err(Bvll6Error::UndefinedResultCode {
-                    code: code.to_raw(),
-                });
-            }
+        if let Self::BvlcResult { code, .. } = self
+            && !code.is_defined()
+        {
+            return Err(Bvll6Error::UndefinedResultCode {
+                code: code.to_raw(),
+            });
         }
         let length = HEADER_LENGTH + self.payload_length();
         if length > MAX_BVLL_LENGTH {
@@ -509,13 +509,13 @@ impl<'a> Bvll6<'a> {
     /// [`BvllSink`].
     pub fn encode_to_sink<S: BvllSink + ?Sized>(&self, sink: &mut S) -> Result<usize, Bvll6Error> {
         let length = self.encoded_len()?;
-        if let Some(available) = sink.remaining_capacity() {
-            if available < length {
-                return Err(Bvll6Error::BufferExhausted {
-                    needed: length,
-                    available,
-                });
-            }
+        if let Some(available) = sink.remaining_capacity()
+            && available < length
+        {
+            return Err(Bvll6Error::BufferExhausted {
+                needed: length,
+                available,
+            });
         }
         // `encoded_len` capped the length at 0xFFFF.
         let [high, low] = (length as u16).to_be_bytes();

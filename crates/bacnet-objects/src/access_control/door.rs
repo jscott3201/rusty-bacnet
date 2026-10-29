@@ -1,5 +1,5 @@
-use std::sync::Arc;
-use std::time::Duration;
+use alloc::sync::Arc;
+use core::time::Duration;
 
 use super::door_alarm::{DoorAlarmLists, LISTED_STATES};
 use super::door_out_of_service::DoorState;
@@ -270,7 +270,7 @@ impl AccessDoorObject {
     /// service.
     fn settle_door_alarm_state(&mut self) {
         let (lists, alarm_values) = (&self.alarm_lists, self.reporting.alarm_values());
-        for state in std::iter::once(&mut self.state).chain(self.device_state.as_mut()) {
+        for state in core::iter::once(&mut self.state).chain(self.device_state.as_mut()) {
             if !lists.admits(alarm_values, state.door_alarm_state) {
                 state.door_alarm_state = DoorAlarmState::NORMAL;
             }

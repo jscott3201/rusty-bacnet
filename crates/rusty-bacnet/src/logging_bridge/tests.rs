@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 
 use pyo3::types::PyDict;
 
-use super::levels::{logger_name, Levels, LoggerLevel, TRACE_LEVEL};
-use super::record::{message_text, Value};
+use super::levels::{Levels, LoggerLevel, TRACE_LEVEL, logger_name};
+use super::record::{Value, message_text};
 use super::*;
 
 fn snapshot(root: i32, disable: i32, loggers: &[(&str, i32, bool)]) -> Levels {

@@ -5,10 +5,9 @@ use super::*;
 use bacnet_transport::any::AnyTransport;
 use bacnet_transport::bbmd::{BdtEntry, ForeignDevicePolicy};
 use bacnet_transport::bip::{AsBip, BvlcExchangeError, ManagementCounters};
-use bacnet_transport::bvll::decode_bip_mac;
 use bacnet_transport::bvll::BvlcResultCode;
+use bacnet_transport::bvll::decode_bip_mac;
 use bacnet_transport::loopback::LoopbackTransport;
-use bacnet_transport::mstp::NoSerial;
 use bacnet_types::data_link::DataLink;
 
 /// A remote BBMD row the in-process BBMD starts with.
@@ -87,7 +86,7 @@ async fn any_transport_bip_variant_runs_the_bbmd_helpers_against_an_in_process_b
     let bbmd_mac = bbmd.local_mac().to_vec();
     let transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     let mut client = BACnetClient::generic_builder()
-        .transport(AnyTransport::<NoSerial>::from(transport))
+        .transport(AnyTransport::from(transport))
         .apdu_timeout_ms(2000)
         .build()
         .await
@@ -131,7 +130,7 @@ async fn bbmd_helpers_on_a_non_bip_any_transport_fail_typed_before_sending() {
     let (ours, mut peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut peer_rx = peer.start().await.unwrap();
     let mut client = BACnetClient::generic_builder()
-        .transport(AnyTransport::<NoSerial>::Loopback(ours))
+        .transport(AnyTransport::Loopback(ours))
         .build()
         .await
         .unwrap();
@@ -163,5 +162,36 @@ async fn bbmd_helpers_on_a_non_bip_any_transport_fail_typed_before_sending() {
         "a refused helper must not send anything"
     );
 
+    client.stop().await.unwrap();
+}
+
+/// A B/IPv6 client built with a foreign registration registers with its
+/// BBMD at start (#1941).
+#[cfg(feature = "ipv6")]
+#[tokio::test]
+async fn a_bip6_client_with_a_foreign_registration_registers_at_start() {
+    use bacnet_transport::bip6::Bip6ForeignDeviceConfig;
+    let bbmd = tokio::net::UdpSocket::bind((Ipv6Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let mut client = BACnetClient::bip6_builder()
+        .interface(Ipv6Addr::LOCALHOST)
+        .port(0)
+        .device_instance(0x12_3456)
+        .foreign_device(Bip6ForeignDeviceConfig {
+            bbmd_ip: Ipv6Addr::LOCALHOST,
+            bbmd_port: bbmd.local_addr().unwrap().port(),
+            ttl: 90,
+        })
+        .build_any()
+        .await
+        .unwrap();
+    let mut buf = [0u8; 64];
+    let (len, _) = tokio::time::timeout(Duration::from_secs(5), bbmd.recv_from(&mut buf))
+        .await
+        .unwrap()
+        .unwrap();
+    // Register-Foreign-Device from the instance's VMAC, for 90 s.
+    assert_eq!(&buf[..len], [0x82, 0x09, 0, 9, 0x12, 0x34, 0x56, 0, 90]);
     client.stop().await.unwrap();
 }

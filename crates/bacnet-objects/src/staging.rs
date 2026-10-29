@@ -4,7 +4,8 @@
 //! local target-write plans for the server, which executes them after releasing
 //! the source-object database mutation lock.
 
-use std::borrow::Cow;
+use crate::prelude::*;
+use alloc::borrow::Cow;
 
 use bacnet_encoding::constructed::{decode_stage_limit_value, encode_stage_limit_value};
 use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetStageLimitValue};
@@ -19,7 +20,7 @@ use bytes::BytesMut;
 use crate::common::{self, read_common_properties};
 use crate::device_reference;
 use crate::property_metadata::{
-    property_list_from_metadata, PropertyConformance, PropertyMetadata, PropertyWriteCapability,
+    PropertyConformance, PropertyMetadata, PropertyWriteCapability, property_list_from_metadata,
 };
 use crate::traits::BACnetObject;
 
@@ -585,10 +586,10 @@ fn validate_config(config: &StagingConfig) -> Result<(), Error> {
     if !(1..=16).contains(&config.priority_for_writing) {
         return Err(common::value_out_of_range_error());
     }
-    if let Some(names) = &config.stage_names {
-        if names.len() != config.stages.len() {
-            return Err(common::value_out_of_range_error());
-        }
+    if let Some(names) = &config.stage_names
+        && names.len() != config.stages.len()
+    {
+        return Err(common::value_out_of_range_error());
     }
     validate_target_references(&config.target_references)?;
     validate_ladder(
@@ -655,7 +656,7 @@ fn validate_min_present_value(
 }
 
 fn protocol_error(class: ErrorClass, code: ErrorCode) -> Error {
-    Error::Protocol { class, code }
+    Error::protocol(class, code)
 }
 
 #[cfg(test)]

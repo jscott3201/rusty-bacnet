@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_types::error::RemoteError;
 
 // ---------------------------------------------------------------------------
 // Error-path integration tests (Task #71 - Tier 4R)
@@ -27,7 +28,7 @@ async fn read_nonexistent_object_returns_unknown_object_error() {
         .await;
 
     match result {
-        Err(Error::Protocol { class, code }) => {
+        Err(Error::Remote(RemoteError::Error { class, code })) => {
             assert_eq!(class, ErrorClass::OBJECT, "Expected OBJECT error class");
             assert_eq!(
                 code,
@@ -69,7 +70,7 @@ async fn read_nonexistent_property_returns_unknown_property_error() {
         .await;
 
     match result {
-        Err(Error::Protocol { class, code }) => {
+        Err(Error::Remote(RemoteError::Error { class, code })) => {
             assert_eq!(class, ErrorClass::PROPERTY, "Expected PROPERTY error class");
             assert_eq!(
                 code,
@@ -118,7 +119,7 @@ async fn write_read_only_property_returns_write_access_denied() {
         .await;
 
     match result {
-        Err(Error::Protocol { class, code }) => {
+        Err(Error::Remote(RemoteError::Error { class, code })) => {
             assert_eq!(class, ErrorClass::PROPERTY, "Expected PROPERTY error class");
             assert_eq!(
                 code,
@@ -166,7 +167,7 @@ async fn write_invalid_value_type_returns_invalid_data_type() {
         .await;
 
     match result {
-        Err(Error::Protocol { class, code }) => {
+        Err(Error::Remote(RemoteError::Error { class, code })) => {
             assert_eq!(class, ErrorClass::PROPERTY, "Expected PROPERTY error class");
             assert_eq!(
                 code,

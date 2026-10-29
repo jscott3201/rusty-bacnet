@@ -15,15 +15,27 @@ impl App {
             self.dirty = true;
             return;
         }
+        if let Command::MonitorScan(request) = command {
+            self.scan_report(crate::tui::monitor::scan::ScanReport::Rejected {
+                id: request.id(),
+                cancel: matches!(
+                    request,
+                    crate::tui::monitor::scan::ScanCommand::Cancel { .. }
+                ),
+                reason: error,
+            });
+            self.dirty = true;
+            return;
+        }
         // A name request is asked again on the next tick, without a notice.
         if let Command::Names { req, .. } = command {
             self.names.refused(req);
             return;
         }
-        if let Command::Profile(_) = command {
-            if let Some(connection) = &mut self.connection {
-                connection.reply(Err(error.clone()));
-            }
+        if let Command::Profile(_) = command
+            && let Some(connection) = &mut self.connection
+        {
+            connection.reply(Err(error.clone()));
         }
         if let Command::WhoIs { op, .. } | Command::Cancel { op } = command {
             self.operation_rejected(op, matches!(command, Command::Cancel { .. }), error);
@@ -90,10 +102,10 @@ impl App {
             if card {
                 self.names.forget_failures(device, address);
             }
-            if let Some((object, name)) = free {
-                if let Some(object) = object.or_else(|| names::device_object(device)) {
-                    self.names.learn_name(device, address, object, name);
-                }
+            if let Some((object, name)) = free
+                && let Some(object) = object.or_else(|| names::device_object(device))
+            {
+                self.names.learn_name(device, address, object, name);
             }
             self.settle_objects();
         }
@@ -109,6 +121,9 @@ impl App {
             }
             WorkerEvent::SessionStarted { generation } => {
                 self.generation = generation;
+                if let Some(monitor) = self.monitor.as_deref_mut() {
+                    monitor.scan = None;
+                }
                 self.monitor_joined();
                 self.reset_session();
                 if self.link != Link::Disconnecting {
@@ -124,10 +139,10 @@ impl App {
                 }
             }
             WorkerEvent::Profile(result) => {
-                if let Err(error) = &result {
-                    if self.link == Link::Connecting {
-                        self.link = Link::Failed(Failure::text(error.clone()));
-                    }
+                if let Err(error) = &result
+                    && self.link == Link::Connecting
+                {
+                    self.link = Link::Failed(Failure::text(error.clone()));
                 }
                 if let Some(connection) = &mut self.connection {
                     connection.reply(result);
@@ -149,7 +164,11 @@ impl App {
             }
             // The footer shows its summary with the recovery keys; the
             // device screen and the log have the whole error.
-            WorkerEvent::ConnectFailed { error } => self.link = Link::Failed(error),
+            WorkerEvent::ConnectFailed { error } => {
+                // Keep the last listener address and observations for inspection.
+                // Link::Failed means they have no live input; reset_session clears them.
+                self.link = Link::Failed(error);
+            }
             WorkerEvent::Discovered(row) | WorkerEvent::Updated(row) => {
                 if let Some(op) = self.op.as_mut().filter(|op| op.running()) {
                     op.replies += usize::from(op.spec.wants(row.instance));
@@ -219,12 +238,23 @@ impl App {
                 // The monitor's session captures; a plain passive one can't.
                 self.start_capture(out);
             }
+            WorkerEvent::PassiveListening {
+                local,
+                foreign_ignored,
+            } => {
+                self.link = Link::Passive;
+                self.passive_listener = Some(local);
+                if foreign_ignored {
+                    self.flash("Listening only: foreign-device settings ignored; no registration or renewal.", FLASH_FOR);
+                }
+            }
             WorkerEvent::ForeignDevice(foreign) => self.network.foreign_device(foreign),
             WorkerEvent::Network(event) => self.network_event(event),
             WorkerEvent::Discovery(event) => self.discovery_event(event),
             WorkerEvent::Sc(report) => self.sc_report(report),
             WorkerEvent::Mstp(report) => self.mstp.report(report),
             WorkerEvent::Monitor(report) => self.monitor_report(report),
+            WorkerEvent::MonitorScan(report) => self.scan_report(report),
             WorkerEvent::Capture(event) => {
                 if let Some(text) = self.capture.event(event) {
                     self.flash(text, FLASH_FOR);

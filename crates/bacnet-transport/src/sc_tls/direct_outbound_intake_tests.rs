@@ -138,12 +138,14 @@ async fn outbound_wire_shapes_options_and_saturated_npdu_intake_preserve_control
             received.direct_response.as_ref().unwrap().identity(),
             received.provenance.direct_sc_identity().unwrap()
         );
-        assert!(received
-            .direct_response
-            .unwrap()
-            .send(NPDU, &DirectResponseScope::default())
-            .await
-            .is_err());
+        assert!(
+            received
+                .direct_response
+                .unwrap()
+                .send(NPDU, &DirectResponseScope::default())
+                .await
+                .is_err()
+        );
     }
     assert!(rx.try_recv().is_err());
     assert!(transport.direct_route_for_test(&LISTENER_VMAC).is_none());

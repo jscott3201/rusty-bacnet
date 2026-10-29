@@ -1,0 +1,53 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 8ce2fc301..5e492a41d 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -236,6 +236,7 @@ dependencies = [
+ name = "bacnet-benchmarks"
+ version = "0.9.0"
+ dependencies = [
++ "bacnet-npdu",
+  "bacnet-bip-codec",
+  "bacnet-client",
+  "bacnet-encoding",
+diff --git a/benchmarks/Cargo.toml b/benchmarks/Cargo.toml
+index 1239f86e5..2659bf39d 100644
+--- a/benchmarks/Cargo.toml
++++ b/benchmarks/Cargo.toml
+@@ -5,6 +5,7 @@ edition = "2021"
+ publish = false
+ 
+ [dependencies]
++bacnet-npdu = { path = "../crates/bacnet-npdu" }
+ bacnet-types = { path = "../crates/bacnet-types" }
+ bacnet-bip-codec = { path = "../crates/bacnet-bip-codec" }
+ bacnet-mstp-codec = { path = "../crates/bacnet-mstp-codec" }
+diff --git a/benchmarks/benches/encoding.rs b/benchmarks/benches/encoding.rs
+index 400dcdf59..ef6d44165 100644
+--- a/benchmarks/benches/encoding.rs
++++ b/benchmarks/benches/encoding.rs
+@@ -1,4 +1,7 @@
+ //! Criterion suite: encode and decode cost of ReadProperty requests, NPDUs and APDUs.
++#[path = "../compat/npdu_attribution.rs"]
++mod npdu_attribution;
++
+ use bytes::BytesMut;
+ use criterion::{criterion_group, criterion_main, Criterion};
+ use std::hint::black_box;
+@@ -69,6 +72,8 @@ fn bench_decode_npdu(c: &mut Criterion) {
+     encode_npdu(&mut buf, &npdu).unwrap();
+     let data = Bytes::from(buf.to_vec());
+ 
++    npdu_attribution::assert_anchor(&data);
++
+     c.bench_function("decode_npdu_100b_payload", |b| {
+         b.iter(|| {
+             black_box(decode_npdu(data.clone()).unwrap());
+@@ -164,6 +169,7 @@ fn bench_full_stack_encode(c: &mut Criterion) {
+ 
+ criterion_group!(
+     benches,
++    npdu_attribution::diagnostics,
+     bench_encode_read_property_request,
+     bench_decode_read_property_request,
+     bench_encode_npdu,

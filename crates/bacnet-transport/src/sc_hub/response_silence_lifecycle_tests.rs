@@ -1,7 +1,7 @@
 //! Real authenticated WebSockets with controlled accepting-peer deadlines.
 use super::deadline_test_support::*;
 use super::heartbeat_test_support::clients;
-use super::response_silence_tests::{response, Snapshot};
+use super::response_silence_tests::{Snapshot, response};
 use super::*;
 use std::time::Duration;
 

@@ -62,7 +62,7 @@ pub(crate) fn advertisement_message_error(msg: &ScMessage) -> Option<ErrorCode> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sc_frame::{decode_sc_message, encode_sc_message, ScOption};
+    use crate::sc_frame::{ScOption, decode_sc_message, encode_sc_message};
     use bytes::{Bytes, BytesMut};
 
     fn message(function: ScFunction, payload: &[u8]) -> ScMessage {

@@ -4,15 +4,15 @@
 //! The router answers an NPDU too long for an MS/TP port with reject reason
 //! 4, by the limit the port reports (#1665).
 
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, Ordering};
 
 use bacnet_npdu::NpduLimits;
 use bacnet_transport::mstp::{LoopbackSerial, MstpConfig, MstpTransport};
 use bacnet_transport::port::{GroupDestinations, ReceivedNpdu, TransportPort};
 use bacnet_types::error::Error;
 use tokio::sync::mpsc;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 use super::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
 use crate::router_table::PortId;
@@ -75,7 +75,7 @@ async fn a_routers_mstp_ports_take_extended_frames() {
     assert_eq!(received.apdu.as_ref(), &npdu[2..]);
     assert_eq!(received.ingress_network, Some(1));
     assert_eq!(received.source_mac.as_slice(), &[1]);
-    router.stop().await;
+    router.stop().await.unwrap();
     peer.stop().await.unwrap();
 }
 
@@ -207,7 +207,7 @@ async fn a_routers_mstp_port_sends_extended_frames() {
     assert!(forwarded.npdu.len() > 501, "{}", forwarded.npdu.len());
     assert!(forwarded.npdu.ends_with(&apdu));
     assert_eq!(forwarded.source_mac.as_slice(), &[0]);
-    router.stop().await;
+    router.stop().await.unwrap();
     destination.stop().await.unwrap();
     source.stop().await.unwrap();
 }
@@ -357,7 +357,7 @@ async fn an_npdu_too_long_for_an_mstp_port_draws_reason_4() {
     let forwarded = next_npdu(&mut at_next).await;
     assert_eq!(forwarded.len(), 1497, "the 1,498-octet rewrite never went");
     assert_eq!(forwarded[..6], [0x01, 0x28, 0x00, 0x09, 0x01, 0x05]);
-    router.stop().await;
+    router.stop().await.unwrap();
     next_router.stop().await.unwrap();
     source.stop().await.unwrap();
 }
@@ -368,8 +368,13 @@ async fn an_npdu_too_long_for_an_mstp_port_draws_reason_4() {
 /// network 1, and one at 501 goes out.
 #[tokio::test(start_paused = true)]
 async fn a_standard_frame_mstp_port_refuses_502_octets() {
-    let (mut router, [(mut destination, mut at_destination), (mut source, mut at_source)]) =
-        two_links([false, true]).await;
+    let (
+        mut router,
+        [
+            (mut destination, mut at_destination),
+            (mut source, mut at_source),
+        ],
+    ) = two_links([false, true]).await;
 
     let too_long = npdu_of(503, 1, 1);
     source.send_unicast(&too_long, &[0]).await.unwrap();
@@ -381,7 +386,7 @@ async fn a_standard_frame_mstp_port_refuses_502_octets() {
     let delivered = next_npdu(&mut at_destination).await;
     assert_eq!(delivered.len(), 501, "the 502-octet rewrite never went");
     assert_eq!(delivered[..6], [0x01, 0x08, 0x00, 0x02, 0x01, 0x01]);
-    router.stop().await;
+    router.stop().await.unwrap();
     destination.stop().await.unwrap();
     source.stop().await.unwrap();
 }

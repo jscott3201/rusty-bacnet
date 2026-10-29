@@ -8,14 +8,14 @@
 //! didn't wait for the monitor to close the port fails in tests too.
 
 use bacnet_client::client::BACnetClient;
+use bacnet_transport::mstp::monitor::{MonitorAdmissionError, MonitorRead};
 use bacnet_transport::mstp::{Echo, MstpDiagnostics, MstpThreadConfig, MstpTransport, SerialPort};
 use bacnet_types::error::Error;
-use tokio::io::AsyncRead;
 
 use crate::transport::TransportArgs;
 
 /// What the monitor reads from: a reader and nothing else.
-pub(crate) type MonitorReader = Box<dyn AsyncRead + Unpin + Send>;
+pub(crate) type MonitorReader = Box<dyn MonitorRead>;
 
 /// The serial port of a participant session.
 pub(crate) enum CliSerial {
@@ -73,6 +73,9 @@ pub(crate) enum Lines {
     /// The system's serial ports (the `serial` feature).
     #[default]
     System,
+    /// Reopenable rate-aware scripted scanner input.
+    #[cfg(test)]
+    Scan(std::sync::Arc<super::scan_fixture::ScanLine>),
     /// An in-memory line.
     #[cfg(test)]
     Test(std::sync::Arc<test_line::TestLine>),
@@ -83,6 +86,8 @@ impl std::fmt::Debug for Lines {
         match self {
             Self::System => f.write_str("System"),
             #[cfg(test)]
+            Self::Scan(_) => f.write_str("Scan"),
+            #[cfg(test)]
             Self::Test(_) => f.write_str("Test"),
         }
     }
@@ -90,9 +95,15 @@ impl std::fmt::Debug for Lines {
 
 impl Lines {
     /// Open `port` at `baud` to listen only.
-    pub(crate) fn open_monitor(&self, port: &str, baud: u32) -> Result<MonitorReader, Error> {
+    pub(crate) fn open_monitor(
+        &self,
+        port: &str,
+        baud: u32,
+    ) -> Result<MonitorReader, MonitorAdmissionError> {
         match self {
             Self::System => system_monitor(port, baud),
+            #[cfg(test)]
+            Self::Scan(line) => line.monitor(baud),
             #[cfg(test)]
             Self::Test(line) => line.monitor(),
         }
@@ -113,6 +124,11 @@ impl Lines {
         let (serial, mode) = match self {
             Self::System => (system_serial(mstp)?, crate::mstp_thread::mode(thread)),
             #[cfg(test)]
+            Self::Scan(line) => (
+                line.participant()?,
+                bacnet_transport::mstp::MstpExecutionMode::Tokio,
+            ),
+            #[cfg(test)]
             Self::Test(line) => {
                 // Paused time needs the loop on the test's runtime; the
                 // thread settings must still be ones the platform takes.
@@ -127,7 +143,7 @@ impl Lines {
 }
 
 #[cfg(feature = "serial")]
-fn system_monitor(port: &str, baud: u32) -> Result<MonitorReader, Error> {
+fn system_monitor(port: &str, baud: u32) -> Result<MonitorReader, MonitorAdmissionError> {
     use bacnet_transport::mstp_serial::{ReceiveOnlyPort, SerialConfig};
     let config = SerialConfig {
         port_name: port.to_string(),
@@ -137,8 +153,10 @@ fn system_monitor(port: &str, baud: u32) -> Result<MonitorReader, Error> {
 }
 
 #[cfg(not(feature = "serial"))]
-fn system_monitor(_port: &str, _baud: u32) -> Result<MonitorReader, Error> {
-    Err(Error::Encoding(crate::mstp::NO_SERIAL.into()))
+fn system_monitor(_port: &str, _baud: u32) -> Result<MonitorReader, MonitorAdmissionError> {
+    Err(MonitorAdmissionError::without_input(Error::Encoding(
+        crate::mstp::NO_SERIAL.into(),
+    )))
 }
 
 #[cfg(feature = "serial")]
@@ -156,7 +174,7 @@ pub(crate) mod test_line {
     //! An in-memory serial port for the monitor and then a participant.
 
     use std::pin::Pin;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::task::{Context, Poll};
 
@@ -164,35 +182,49 @@ pub(crate) mod test_line {
     use bacnet_types::error::Error;
     use tokio::io::{AsyncRead, DuplexStream, ReadBuf};
 
-    use super::{CliSerial, MonitorReader};
+    use super::{CliSerial, MonitorAdmissionError, MonitorReader};
 
     /// One port: the monitor's end of a scripted line, then the
     /// participant's end of a loopback pair. Each is handed out once.
     pub(crate) struct TestLine {
-        monitor: Mutex<Option<DuplexStream>>,
+        monitor: Mutex<Option<MonitorReader>>,
         participant: Mutex<Option<LoopbackSerial>>,
         /// The monitor's reader is alive: the port is taken.
         held: Arc<AtomicBool>,
+        pub(crate) opens: AtomicUsize,
     }
 
     impl TestLine {
         pub(crate) fn new(monitor: DuplexStream, participant: Option<LoopbackSerial>) -> Arc<Self> {
+            let held = Arc::new(AtomicBool::new(false));
+            let reader = Box::new(bacnet_transport::mstp::monitor::DropOnClose::new(Held {
+                stream: monitor,
+                held: Arc::clone(&held),
+            }));
+            Self::with_reader(Some(reader), held, participant)
+        }
+
+        pub(crate) fn with_reader(
+            reader: Option<MonitorReader>,
+            held: Arc<AtomicBool>,
+            participant: Option<LoopbackSerial>,
+        ) -> Arc<Self> {
             Arc::new(Self {
-                monitor: Mutex::new(Some(monitor)),
+                monitor: Mutex::new(reader),
                 participant: Mutex::new(participant),
-                held: Arc::new(AtomicBool::new(false)),
+                held,
+                opens: AtomicUsize::new(0),
             })
         }
 
-        pub(super) fn monitor(&self) -> Result<MonitorReader, Error> {
-            let stream = self.monitor.lock().unwrap().take();
-            let stream =
-                stream.ok_or_else(|| Error::Encoding("test line: no monitor end".into()))?;
+        pub(super) fn monitor(&self) -> Result<MonitorReader, MonitorAdmissionError> {
+            let reader = self.monitor.lock().unwrap().take().ok_or_else(|| {
+                MonitorAdmissionError::without_input(Error::Encoding(
+                    "test line: no monitor end".into(),
+                ))
+            })?;
             self.held.store(true, Ordering::SeqCst);
-            Ok(Box::new(Held {
-                stream,
-                held: Arc::clone(&self.held),
-            }))
+            Ok(reader)
         }
 
         /// Whether the monitor's reader is still alive.
@@ -203,6 +235,7 @@ pub(crate) mod test_line {
         /// Busy while the monitor's reader is alive, as an exclusive open
         /// of a real port would be.
         pub(super) fn participant(&self) -> Result<CliSerial, Error> {
+            self.opens.fetch_add(1, Ordering::SeqCst);
             if self.held.load(Ordering::SeqCst) {
                 return Err(Error::Transport(std::io::Error::new(
                     std::io::ErrorKind::ResourceBusy,

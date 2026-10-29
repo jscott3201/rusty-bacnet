@@ -2,24 +2,23 @@
 //! what the UI asks the network worker to read from a BBMD, and what comes
 //! back, as plain data with no transport type.
 //!
-//! - [`matrix`]: the BDT consistency matrix, a pure function of the tables
-//!   a survey read.
 //! - [`discovery`]: Who-Has and router discovery messages, for every
 //!   transport (#960).
 //! - [`routers`]: the Networks tab's router map, a pure function of the
 //!   router announcements heard.
+//!
+//! The table rows, the survey and the BDT consistency matrix are
+//! [`bacnet_ops::bbmd`]'s, shared with the MCP server's network map.
 
 pub(crate) mod discovery;
-pub(crate) mod matrix;
 pub(crate) mod routers;
 
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::SocketAddrV4;
 use std::time::Duration;
 
-use bacnet_transport::bbmd::{BdtEntry, FdtEntryWire};
+pub(crate) use bacnet_ops::bbmd::{BdtRow, FdtRow, address_of, mac, probe_error};
+use bacnet_ops::bbmd::{Probe, Unfollowed, unreachable_reason};
 use bacnet_transport::bip::{BvlcExchangeError, ForeignRegistrationSnapshot};
-
-use self::matrix::Probe;
 
 /// UI to the network worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,75 +47,6 @@ pub(crate) struct Foreign {
     pub(crate) renewal: Duration,
 }
 
-/// One BDT entry: a BBMD and the mask its peers forward to it with.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct BdtRow {
-    /// The BBMD's B/IP address.
-    pub(crate) address: SocketAddrV4,
-    /// Its broadcast distribution mask.
-    pub(crate) mask: Ipv4Addr,
-}
-
-impl BdtRow {
-    /// True for an all-ones mask: peers send forwarded broadcasts to the
-    /// BBMD itself, which broadcasts them on its own subnet (Annex J.4.3.1,
-    /// the two-hop method).
-    pub(crate) fn is_unicast(&self) -> bool {
-        self.mask == Ipv4Addr::BROADCAST
-    }
-
-    /// Where a peer sends a forwarded broadcast for this entry: the address
-    /// with every bit the mask clears set (Annex J.4.5). With an all-ones
-    /// mask that is the BBMD itself.
-    pub(crate) fn forward_to(&self) -> Ipv4Addr {
-        Ipv4Addr::from(self.address.ip().to_bits() | !self.mask.to_bits())
-    }
-
-    /// One line on what the mask means for forwarding.
-    pub(crate) fn explain(&self) -> String {
-        if self.is_unicast() {
-            "peers unicast to it, and it rebroadcasts on its subnet (two-hop)".into()
-        } else {
-            format!(
-                "peers send a directed broadcast to {} (one-hop; routers must pass it)",
-                self.forward_to()
-            )
-        }
-    }
-}
-
-impl From<&BdtEntry> for BdtRow {
-    fn from(entry: &BdtEntry) -> Self {
-        Self {
-            address: SocketAddrV4::new(Ipv4Addr::from(entry.ip), entry.port),
-            mask: Ipv4Addr::from(entry.broadcast_mask),
-        }
-    }
-}
-
-/// One FDT entry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct FdtRow {
-    /// The address the BBMD recorded for the foreign device, which is the
-    /// source address its registration arrived from.
-    pub(crate) address: SocketAddrV4,
-    /// The time-to-live the device asked for, in seconds.
-    pub(crate) ttl: u16,
-    /// Seconds left before the BBMD drops the entry, as of the read. The
-    /// BBMD adds a grace period to the time-to-live (Annex J.5.2.3).
-    pub(crate) remaining: u16,
-}
-
-impl From<&FdtEntryWire> for FdtRow {
-    fn from(entry: &FdtEntryWire) -> Self {
-        Self {
-            address: SocketAddrV4::new(Ipv4Addr::from(entry.ip), entry.port),
-            ttl: entry.ttl,
-            remaining: entry.seconds_remaining,
-        }
-    }
-}
-
 /// The FDT entry that is this client's own: the one recorded at our local
 /// address. A client bound to `0.0.0.0` matches on the port alone. `None`
 /// when no entry has our address, as when a NAT router rewrote the source
@@ -126,40 +56,6 @@ pub(crate) fn own_entry(entries: &[FdtRow], local: SocketAddrV4) -> Option<usize
         entry.address.port() == local.port()
             && (local.ip().is_unspecified() || entry.address.ip() == local.ip())
     })
-}
-
-/// The 6-octet B/IP MAC of `address`.
-pub(crate) fn mac(address: SocketAddrV4) -> [u8; 6] {
-    let [a, b, c, d] = address.ip().octets();
-    let [high, low] = address.port().to_be_bytes();
-    [a, b, c, d, high, low]
-}
-
-/// The address in a 6-octet B/IP MAC.
-pub(crate) fn address_of(mac: &[u8]) -> Option<SocketAddrV4> {
-    let [a, b, c, d, high, low] = <[u8; 6]>::try_from(mac).ok()?;
-    Some(SocketAddrV4::new(
-        Ipv4Addr::new(a, b, c, d),
-        u16::from_be_bytes([high, low]),
-    ))
-}
-
-/// Why a BBMD gave no table, as text: no answer in time, or what failed.
-fn unreachable_reason(error: &BvlcExchangeError) -> String {
-    match error {
-        BvlcExchangeError::NoReply(_) => "no answer".into(),
-        other => other.to_string(),
-    }
-}
-
-/// Sort a failed table read into a refusal or no answer (#1822): a NAK is a
-/// refusal, while anything else (no answer, a reply the read does not take,
-/// a send failure, a malformed reply) means the BBMD could not be read.
-pub(crate) fn probe_error(error: &BvlcExchangeError) -> Probe {
-    match error {
-        BvlcExchangeError::Nak(code) => Probe::Nak(*code),
-        other => Probe::Unreachable(unreachable_reason(other)),
-    }
 }
 
 /// A table read's outcome as text for the UI.
@@ -193,6 +89,8 @@ pub(crate) enum NetworkEvent {
         seed: SocketAddrV4,
         /// What it read.
         probes: Vec<(SocketAddrV4, Probe)>,
+        /// The BDT entries it did not follow, and why (#2130).
+        not_followed: Vec<Unfollowed>,
     },
     /// The command was not carried out.
     Refused {
@@ -206,25 +104,6 @@ pub(crate) enum NetworkEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn row(address: &str, mask: [u8; 4]) -> BdtRow {
-        BdtRow {
-            address: address.parse().unwrap(),
-            mask: Ipv4Addr::from(mask),
-        }
-    }
-
-    #[test]
-    fn a_mask_says_how_peers_forward() {
-        let unicast = row("10.0.1.1:47808", [255; 4]);
-        assert!(unicast.is_unicast());
-        assert_eq!(unicast.forward_to(), Ipv4Addr::new(10, 0, 1, 1));
-        assert!(unicast.explain().contains("two-hop"));
-        let directed = row("10.0.2.1:47808", [255, 255, 255, 0]);
-        assert!(!directed.is_unicast());
-        assert_eq!(directed.forward_to(), Ipv4Addr::new(10, 0, 2, 255));
-        assert!(directed.explain().contains("10.0.2.255"));
-    }
 
     #[test]
     fn our_entry_is_the_one_at_our_address() {

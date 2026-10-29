@@ -195,9 +195,11 @@ impl<R> AuditFailureQueue<R> {
     ) -> Result<ContextReservation<R>, Error> {
         let mut state = self.state.lock().unwrap();
         state.prune();
-        let denied = || Error::Protocol {
-            class: bacnet_types::enums::ErrorClass::SERVICES,
-            code: bacnet_types::enums::ErrorCode::SERVICE_REQUEST_DENIED,
+        let denied = || {
+            Error::protocol(
+                bacnet_types::enums::ErrorClass::SERVICES,
+                bacnet_types::enums::ErrorCode::SERVICE_REQUEST_DENIED,
+            )
         };
         if state.entries.len() + state.reserved >= 8
             || state.entries.iter().any(|entry| entry.epoch == epoch)

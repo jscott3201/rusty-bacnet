@@ -38,192 +38,20 @@
 //! do not "fix" a pin failure by editing the pins.
 
 use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
 
-use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetStageLimitValue};
-use bacnet_types::enums::{EngineeringUnits, EventType, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bacnet_types::primitives::PropertyValue;
 
-use crate::access_control::{
-    AccessCredentialObject, AccessDoorObject, AccessPointObject, AccessRightsObject,
-    AccessUserObject, AccessZoneObject, CredentialDataInputObject,
-};
-use crate::accumulator::{AccumulatorObject, PulseConverterObject};
-use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
-use crate::audit::{AuditLogObject, AuditLogPersistence, AuditLogSnapshot, AuditReporterObject};
-use crate::averaging::AveragingObject;
-use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
-use crate::channel::ChannelObject;
-use crate::color::{ColorObject, ColorTemperatureObject};
-use crate::command::CommandObject;
-use crate::device::DeviceObject;
-use crate::elevator::{ElevatorGroupObject, EscalatorObject, LiftObject};
-use crate::event_enrollment::{AlertEnrollmentObject, EventEnrollmentObject};
-use crate::event_log::EventLogObject;
+// The submodules build their own objects from these.
+use crate::catalogue::{representatives as supported_representatives, staging_config};
 use crate::file::FileObject;
-use crate::group::{GlobalGroupObject, GroupObject, StructuredViewObject};
-use crate::life_safety::{LifeSafetyPointObject, LifeSafetyZoneObject};
-use crate::lighting::{BinaryLightingOutputObject, LightingOutputObject};
-use crate::load_control::LoadControlObject;
-use crate::loop_obj::LoopObject;
-use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject};
 use crate::network_port::NetworkPortObject;
-use crate::notification_class::NotificationClass;
-use crate::notification_forwarder::NotificationForwarderObject;
-use crate::program::ProgramObject;
 use crate::property_metadata::{
-    required_properties_from_metadata, PropertyConformance, PropertyPresenceCondition,
+    PropertyConformance, PropertyPresenceCondition, required_properties_from_metadata,
 };
-use crate::schedule::{CalendarObject, ScheduleObject};
-use crate::staging::{StagingConfig, StagingObject};
-use crate::timer::TimerObject;
+use crate::staging::StagingObject;
 use crate::traits::BACnetObject;
-use crate::trend::{TrendLogMultipleObject, TrendLogObject};
-use crate::value_types::{
-    BitStringValueObject, CharacterStringValueObject, DatePatternValueObject,
-    DateTimePatternValueObject, DateTimeValueObject, DateValueObject, IntegerValueObject,
-    LargeAnalogValueObject, OctetStringValueObject, PositiveIntegerValueObject,
-    TimePatternValueObject, TimeValueObject,
-};
-
-#[derive(Default)]
-struct MemoryAuditLogPersistence(Mutex<Option<AuditLogSnapshot>>);
-
-impl AuditLogPersistence for MemoryAuditLogPersistence {
-    fn load(&self, _expected_object: ObjectIdentifier) -> Result<Option<AuditLogSnapshot>, Error> {
-        Ok(self.0.lock().unwrap().clone())
-    }
-
-    fn commit(&self, snapshot: &AuditLogSnapshot) -> Result<(), Error> {
-        *self.0.lock().unwrap() = Some(snapshot.clone());
-        Ok(())
-    }
-}
-
-fn staging_config() -> StagingConfig {
-    StagingConfig {
-        present_value: 5.0,
-        min_present_value: -1.0,
-        units: EngineeringUnits::DEGREES_CELSIUS,
-        priority_for_writing: 8,
-        stages: vec![
-            BACnetStageLimitValue {
-                limit: 10.0,
-                values: vec![false, true],
-                deadband: 1.0,
-            },
-            BACnetStageLimitValue {
-                limit: 20.0,
-                values: vec![true, false],
-                deadband: 2.0,
-            },
-            BACnetStageLimitValue {
-                limit: 30.0,
-                values: vec![true, true],
-                deadband: 1.0,
-            },
-        ],
-        target_references: vec![
-            BACnetDeviceObjectReference {
-                device_identifier: None,
-                object_identifier: ObjectIdentifier::new(ObjectType::BINARY_OUTPUT, 1).unwrap(),
-            },
-            BACnetDeviceObjectReference {
-                device_identifier: None,
-                object_identifier: ObjectIdentifier::new(ObjectType::BINARY_VALUE, 2).unwrap(),
-            },
-        ],
-        stage_names: Some(vec!["Low".into(), "Middle".into(), "High".into()]),
-    }
-}
-
-/// One representative per supported `ObjectType`: 64 total.
-///
-/// Excluded by design (see module docs): 38 NETWORK_SECURITY.
-fn supported_representatives() -> Vec<Box<dyn BACnetObject>> {
-    let alert_source = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-    vec![
-        Box::new(AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap()),
-        Box::new(AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap()),
-        Box::new(AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap()),
-        Box::new(BinaryInputObject::new(1, "BI-1").unwrap()),
-        Box::new(BinaryOutputObject::new(1, "BO-1").unwrap()),
-        Box::new(BinaryValueObject::new(1, "BV-1").unwrap()),
-        Box::new(CalendarObject::new(1, "CAL-1").unwrap()),
-        Box::new(CommandObject::new(1, "CMD-1").unwrap()),
-        Box::new(DeviceObject::new(Default::default()).unwrap()),
-        Box::new(EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap()),
-        Box::new(FileObject::new(1, "FILE-1", "raw").unwrap()),
-        Box::new(GroupObject::new(1, "GRP-1").unwrap()),
-        Box::new(LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap()),
-        Box::new(MultiStateInputObject::new(1, "MSI-1", 3).unwrap()),
-        Box::new(MultiStateOutputObject::new(1, "MSO-1", 3).unwrap()),
-        Box::new(NotificationClass::new(1, "NC-1").unwrap()),
-        Box::new(ProgramObject::new(1, "PRG-1").unwrap()),
-        Box::new(ScheduleObject::new(1, "SCH-1", PropertyValue::Null).unwrap()),
-        Box::new(AveragingObject::new(1, "AVG-1").unwrap()),
-        Box::new(MultiStateValueObject::new(1, "MSV-1", 3).unwrap()),
-        Box::new(TrendLogObject::new(1, "TL-1", 3).unwrap()),
-        Box::new(LifeSafetyPointObject::new(1, "LSP-1").unwrap()),
-        Box::new(LifeSafetyZoneObject::new(1, "LSZ-1").unwrap()),
-        Box::new(AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS).unwrap()),
-        Box::new(PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap()),
-        Box::new(EventLogObject::new(1, "EL-1", 3).unwrap()),
-        Box::new(GlobalGroupObject::new(1, "GG-1").unwrap()),
-        Box::new(TrendLogMultipleObject::new(1, "TLM-1", 3).unwrap()),
-        Box::new(LoadControlObject::new(1, "LC-1").unwrap()),
-        Box::new(StructuredViewObject::new(1, "SV-1").unwrap()),
-        Box::new(AccessDoorObject::new(1, "DOOR-1").unwrap()),
-        Box::new(TimerObject::new(1, "TMR-1").unwrap()),
-        Box::new(AccessCredentialObject::new(1, "CRED-1").unwrap()),
-        Box::new(AccessPointObject::new(1, "AP-1").unwrap()),
-        Box::new(AccessRightsObject::new(1, "AR-1").unwrap()),
-        Box::new(AccessUserObject::new(1, "USER-1").unwrap()),
-        Box::new(AccessZoneObject::new(1, "ZONE-1").unwrap()),
-        Box::new(CredentialDataInputObject::new(1, "CDI-1").unwrap()),
-        // 38 NETWORK_SECURITY: deprecated, no impl — excluded.
-        Box::new(BitStringValueObject::new(1, "BSV-1").unwrap()),
-        Box::new(CharacterStringValueObject::new(1, "CSV-1").unwrap()),
-        Box::new(DatePatternValueObject::new(1, "DPV-1").unwrap()),
-        Box::new(DateValueObject::new(1, "DV-1").unwrap()),
-        Box::new(DateTimePatternValueObject::new(1, "DTPV-1").unwrap()),
-        Box::new(DateTimeValueObject::new(1, "DTV-1").unwrap()),
-        Box::new(IntegerValueObject::new(1, "IV-1").unwrap()),
-        Box::new(LargeAnalogValueObject::new(1, "LAV-1").unwrap()),
-        Box::new(OctetStringValueObject::new(1, "OSV-1").unwrap()),
-        Box::new(PositiveIntegerValueObject::new(1, "PIV-1").unwrap()),
-        Box::new(TimePatternValueObject::new(1, "TPV-1").unwrap()),
-        Box::new(TimeValueObject::new(1, "TV-1").unwrap()),
-        Box::new(NotificationForwarderObject::new(1, "NF-1").unwrap()),
-        Box::new(AlertEnrollmentObject::new(1, "AE-1", alert_source).unwrap()),
-        Box::new(ChannelObject::new(1, "CH-1", 1).unwrap()),
-        Box::new(LightingOutputObject::new(1, "LO-1").unwrap()),
-        Box::new(BinaryLightingOutputObject::new(1, "BLO-1").unwrap()),
-        Box::new(
-            NetworkPortObject::new_non_bip(
-                1,
-                "NP-1",
-                bacnet_types::enums::NetworkType::from_raw(0),
-                0,
-                Default::default(),
-                1476,
-            )
-            .unwrap(),
-        ),
-        Box::new(ElevatorGroupObject::new(1, "EG-1").unwrap()),
-        Box::new(EscalatorObject::new(1, "ESC-1").unwrap()),
-        Box::new(LiftObject::new(1, "LIFT-1", 3).unwrap()),
-        Box::new(StagingObject::new(1, "STG-1", staging_config()).unwrap()),
-        Box::new(
-            AuditLogObject::new(1, "AL-1", 3, Arc::new(MemoryAuditLogPersistence::default()))
-                .unwrap(),
-        ),
-        Box::new(AuditReporterObject::new(1, "AR-1").unwrap()),
-        Box::new(ColorObject::new(1, "CLR-1").unwrap()),
-        Box::new(ColorTemperatureObject::new(1, "CT-1").unwrap()),
-    ]
-}
 
 fn audit_object_type_coverage(objects: &[Box<dyn BACnetObject>]) {
     let mut raws: Vec<u32> = objects

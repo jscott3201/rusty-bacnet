@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use bacnet_encoding::apdu::{decode_apdu, encode_apdu, Apdu, ConfirmedRequest};
+use bacnet_encoding::apdu::{Apdu, ConfirmedRequest, decode_apdu, encode_apdu};
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_endpoint::session::{EndpointSession, SessionConfig, SessionRole};
 use bacnet_endpoint_core::coordinator::{CanonicalPeer, LeaseMetadata, TerminalPolicy};
@@ -65,13 +65,15 @@ async fn lease_exhaustion_release_reuse() {
             .expect("reserve must succeed below 256");
         tokens.push(token);
     }
-    assert!(coordinator
-        .reserve(LeaseMetadata::requester(
-            CanonicalPeer::direct(&[0x02]),
-            ConfirmedServiceChoice::READ_PROPERTY,
-            TerminalPolicy::ComplexAck,
-        ))
-        .is_err());
+    assert!(
+        coordinator
+            .reserve(LeaseMetadata::requester(
+                CanonicalPeer::direct(&[0x02]),
+                ConfirmedServiceChoice::READ_PROPERTY,
+                TerminalPolicy::ComplexAck,
+            ))
+            .is_err()
+    );
     assert_eq!(coordinator.active_count().unwrap(), 256);
 
     // Release one lease → reuse succeeds with the same numeric ID eventually.

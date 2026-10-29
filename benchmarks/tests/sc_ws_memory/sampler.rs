@@ -1,8 +1,8 @@
 use super::*;
 use std::io::Write;
 use std::sync::{
-    atomic::{AtomicBool, AtomicU8, Ordering},
     Arc,
+    atomic::{AtomicBool, AtomicU8, Ordering},
 };
 
 pub struct Sampler {

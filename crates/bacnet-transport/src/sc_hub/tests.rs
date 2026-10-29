@@ -1,6 +1,6 @@
 use super::*;
 use crate::sc_frame::{
-    decode_sc_bvlc_result, ScBvlcResult, ScOption, BACNET_SC_HUB_SUBPROTOCOL, BROADCAST_VMAC,
+    BACNET_SC_HUB_SUBPROTOCOL, BROADCAST_VMAC, ScBvlcResult, ScOption, decode_sc_bvlc_result,
 };
 
 #[test]
@@ -421,11 +421,13 @@ fn websocket_subprotocol_error_response_is_bad_request() {
         response.status(),
         tokio_tungstenite::tungstenite::http::StatusCode::BAD_REQUEST
     );
-    assert!(response
-        .body()
-        .as_ref()
-        .unwrap()
-        .contains(BACNET_SC_HUB_SUBPROTOCOL));
+    assert!(
+        response
+            .body()
+            .as_ref()
+            .unwrap()
+            .contains(BACNET_SC_HUB_SUBPROTOCOL)
+    );
 }
 
 fn minimum_size_options(count: usize) -> Vec<ScOption> {

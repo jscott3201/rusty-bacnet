@@ -1,4 +1,4 @@
-use super::integration::{indexed_reference_value, ReferenceValueObject};
+use super::integration::{ReferenceValueObject, indexed_reference_value};
 use super::*;
 use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_objects::analog::{AnalogInputObject, AnalogValueObject};
@@ -11,8 +11,8 @@ use bacnet_types::constructed::{
 };
 use bacnet_types::enums::EngineeringUnits;
 use bacnet_types::primitives::{BACnetTimeStamp, Date, Time};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 struct FixedClock(ClockFrame);
 
@@ -183,9 +183,11 @@ fn same_state_transition_still_commits_ack_and_history() {
     notification_class.ack_required = EventTransitionBits::TO_NORMAL;
     db.add(Box::new(notification_class)).unwrap();
 
-    assert!(evaluate_event_enrollments_report(&mut db, 1)
-        .transitions
-        .is_empty());
+    assert!(
+        evaluate_event_enrollments_report(&mut db, 1)
+            .transitions
+            .is_empty()
+    );
     let monitored = db.get_mut(&monitored_oid).unwrap();
     monitored
         .write_property(
@@ -305,20 +307,23 @@ fn later_unusable_input_commits_cancellation_once() {
 
     assert!(report.transitions.is_empty());
     assert_eq!(state_write_count.load(Ordering::SeqCst), 1);
-    assert!(db
-        .get(&enrollment_oid)
-        .unwrap()
-        .enrollment_eval_state_internal()
-        .unwrap()
-        .pending
-        .is_none());
-    assert!(report
-        .diagnostics
-        .contains(&EventEnrollmentEvaluationDiagnostic {
-            enrollment_oid,
-            stage: EventEnrollmentEvaluationStage::EvaluationState,
-            outcome: EventEnrollmentEvaluationOutcome::CancellationCommitted,
-        }));
+    assert!(
+        db.get(&enrollment_oid)
+            .unwrap()
+            .enrollment_eval_state_internal()
+            .unwrap()
+            .pending
+            .is_none()
+    );
+    assert!(
+        report
+            .diagnostics
+            .contains(&EventEnrollmentEvaluationDiagnostic {
+                enrollment_oid,
+                stage: EventEnrollmentEvaluationStage::EvaluationState,
+                outcome: EventEnrollmentEvaluationOutcome::CancellationCommitted,
+            })
+    );
 }
 
 #[test]
@@ -350,20 +355,24 @@ fn source_and_state_rejection_never_claims_cancellation_committed() {
 
     assert!(report.transitions.is_empty());
     assert_eq!(state_write_count.load(Ordering::SeqCst), 1);
-    assert!(report
-        .diagnostics
-        .contains(&EventEnrollmentEvaluationDiagnostic {
-            enrollment_oid,
-            stage: EventEnrollmentEvaluationStage::EvaluationSource,
-            outcome: EventEnrollmentEvaluationOutcome::Rejected,
-        }));
-    assert!(report
-        .diagnostics
-        .contains(&EventEnrollmentEvaluationDiagnostic {
-            enrollment_oid,
-            stage: EventEnrollmentEvaluationStage::EvaluationState,
-            outcome: EventEnrollmentEvaluationOutcome::Rejected,
-        }));
+    assert!(
+        report
+            .diagnostics
+            .contains(&EventEnrollmentEvaluationDiagnostic {
+                enrollment_oid,
+                stage: EventEnrollmentEvaluationStage::EvaluationSource,
+                outcome: EventEnrollmentEvaluationOutcome::Rejected,
+            })
+    );
+    assert!(
+        report
+            .diagnostics
+            .contains(&EventEnrollmentEvaluationDiagnostic {
+                enrollment_oid,
+                stage: EventEnrollmentEvaluationStage::EvaluationState,
+                outcome: EventEnrollmentEvaluationOutcome::Rejected,
+            })
+    );
     assert!(!report.diagnostics.iter().any(|diagnostic| {
         diagnostic.outcome == EventEnrollmentEvaluationOutcome::CancellationCommitted
     }));
@@ -393,13 +402,15 @@ fn private_state_failure_is_reported_and_suppresses_transition() {
 
     let report = evaluate_event_enrollments_report(&mut db, 1);
     assert!(report.transitions.is_empty());
-    assert!(report
-        .diagnostics
-        .contains(&EventEnrollmentEvaluationDiagnostic {
-            enrollment_oid,
-            stage: EventEnrollmentEvaluationStage::EvaluationState,
-            outcome: EventEnrollmentEvaluationOutcome::Rejected,
-        }));
+    assert!(
+        report
+            .diagnostics
+            .contains(&EventEnrollmentEvaluationDiagnostic {
+                enrollment_oid,
+                stage: EventEnrollmentEvaluationStage::EvaluationState,
+                outcome: EventEnrollmentEvaluationOutcome::Rejected,
+            })
+    );
     assert!(db.enrollment_eval_state_invalidated(&enrollment_oid));
 }
 
@@ -435,13 +446,15 @@ fn unsupported_atomic_hook_fails_closed_without_consuming_sequence() {
 
     let report = evaluate_event_enrollments_report(&mut db, 1);
     assert!(report.transitions.is_empty());
-    assert!(report
-        .diagnostics
-        .contains(&EventEnrollmentEvaluationDiagnostic {
-            enrollment_oid,
-            stage: EventEnrollmentEvaluationStage::EventTransition,
-            outcome: EventEnrollmentEvaluationOutcome::Rejected,
-        }));
+    assert!(
+        report
+            .diagnostics
+            .contains(&EventEnrollmentEvaluationDiagnostic {
+                enrollment_oid,
+                stage: EventEnrollmentEvaluationStage::EventTransition,
+                outcome: EventEnrollmentEvaluationOutcome::Rejected,
+            })
+    );
     assert!(db.enrollment_eval_state_invalidated(&enrollment_oid));
     assert_eq!(db.reserve_event_sequence_number().number(), 0);
     assert_eq!(

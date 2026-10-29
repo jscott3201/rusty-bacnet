@@ -3,7 +3,6 @@
 
 use bacnet_client::client::BACnetClient;
 use bacnet_transport::any::AnyTransport;
-use bacnet_transport::mstp::NoSerial;
 use bacnet_transport::sc::{ScConnectError, ScWebSocketErrorKind};
 use bacnet_transport::sc_hub::{ScHub, ScHubTlsConfig};
 use bacnet_transport::sc_tls::ScNodeTlsConfig;
@@ -56,7 +55,7 @@ async fn configured_concrete_and_erased_clients_observe_their_accepted_hub() {
         .tls_config(tls.clone())
         .vmac([0x33; 6])
         .device_uuid([0x33; 16])
-        .build_any::<NoSerial>()
+        .build_any()
         .await
         .err()
         .expect("wrong name must be rejected");
@@ -91,7 +90,7 @@ async fn configured_concrete_and_erased_clients_observe_their_accepted_hub() {
         .tls_config(tls)
         .vmac([0x33; 6])
         .device_uuid([0x33; 16])
-        .build_any::<NoSerial>()
+        .build_any()
         .await
         .unwrap();
     let concrete_peer = concrete.transport().hub_peer_info().await.unwrap();
@@ -130,9 +129,11 @@ async fn configured_concrete_and_erased_clients_observe_their_accepted_hub() {
     concrete.stop().await.unwrap();
     erased.stop().await.unwrap();
     assert!(concrete.transport().hub_peer_info().await.is_none());
-    assert!(certificate_example::show_accepted(&concrete)
-        .await
-        .is_none());
+    assert!(
+        certificate_example::show_accepted(&concrete)
+            .await
+            .is_none()
+    );
     drop(concrete);
     drop(erased);
     assert_eq!(

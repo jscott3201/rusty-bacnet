@@ -11,8 +11,7 @@ use pyo3::types::{PyAny, PyBytes, PyDict, PyList};
 use super::date::date_value;
 use super::timestamp::time_value;
 use super::{
-    PyAuditOperation, PyBACnetTimeStamp, PyErrorClass, PyErrorCode, PyObjectIdentifier,
-    PyPropertyIdentifier,
+    IntEnumValue, PyAuditOperation, PyBACnetTimeStamp, PyObjectIdentifier, PyPropertyIdentifier,
 };
 
 pub(super) fn recipient_to_py<'py>(
@@ -119,12 +118,9 @@ fn notification_to_py<'py>(
     }
     result.set_item(
         "result",
-        notification.result.map(|(error_class, error_code)| {
-            (
-                PyErrorClass { inner: error_class },
-                PyErrorCode { inner: error_code },
-            )
-        }),
+        notification
+            .result
+            .map(|(error_class, error_code)| (IntEnumValue(error_class), IntEnumValue(error_code))),
     )?;
     Ok(result)
 }
@@ -134,8 +130,7 @@ fn datum_to_py<'py>(py: Python<'py>, datum: &BACnetAuditLogDatum) -> PyResult<Bo
     match datum {
         BACnetAuditLogDatum::LogStatus(status) => {
             result.set_item("kind", "log_status")?;
-            // Bit 0 log-disabled, bit 1 buffer-purged, bit 2 log-interrupted.
-            result.set_item("log_status", status.bits())?;
+            result.set_item("log_status", super::PyBitString::log_status(*status))?;
         }
         BACnetAuditLogDatum::AuditNotification(notification) => {
             result.set_item("kind", "audit_notification")?;

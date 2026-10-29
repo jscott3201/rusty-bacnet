@@ -38,12 +38,9 @@ async fn claim(peer: &mut Peer, vmac: u8, uuid: u8) -> Vec<u8> {
 async fn unauthorized_same_ca_leaf_cannot_claim_offline_identity() {
     let f = Fixture::new();
     let config = tls(&f).with_certificate_bindings(
-        ScHubCertificateBindings::new(vec![ScHubCertificateBinding::new(
-            [1; 16],
-            vec![[1; 6]],
-            vec![digest(&f.good)],
-        )
-        .unwrap()])
+        ScHubCertificateBindings::new(vec![
+            ScHubCertificateBinding::new([1; 16], vec![[1; 6]], vec![digest(&f.good)]).unwrap(),
+        ])
         .unwrap(),
     );
     let hub = bounded(ScHub::start("127.0.0.1:0", config, HUB_VMAC, HUB_UUID))
@@ -139,8 +136,8 @@ fn certificate_bindings_validate_whole_map_and_redact() {
 #[tokio::test]
 async fn certificate_bindings_reserve_offline_and_live_identity_before_callback_or_replacement() {
     use std::sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     };
     let f = Fixture::new();
     let calls = Arc::new(AtomicUsize::new(0));

@@ -13,14 +13,14 @@ use super::mstp::codec::{Frame, FrameType};
 use super::mstp::{LoopbackSerial, MstpConfig, MstpTransport, SerialPort};
 use super::port::{ReceivedNpdu, TransportPort, TransportProvenance};
 use super::sc::{LoopbackWebSocket, ScTransport, WebSocketPort};
-use super::sc_frame::{decode_sc_message, encode_sc_message, ScFunction, ScMessage};
+use super::sc_frame::{ScFunction, ScMessage, decode_sc_message, encode_sc_message};
 #[cfg(feature = "sc-tls")]
 use super::sc_tls::{DirectAcceptConfig, DirectListener, ScNodeTlsConfig};
 use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
 use std::net::Ipv4Addr;
 use tokio::sync::mpsc;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 #[test]
 fn provenance_variants_and_scope() {
@@ -34,6 +34,7 @@ fn provenance_variants_and_scope() {
 
     let direct = TransportProvenance::verified_direct_peer(
         crate::port::DirectScIdentity::verified([1; 32], 1),
+        Default::default(),
     );
     assert!(direct.is_direct_peer());
     assert!(direct.is_verified());
@@ -54,9 +55,11 @@ fn provenance_variants_and_scope() {
     assert_ne!(hub, direct);
     assert_ne!(hub, relayed);
 
-    fn value_traits<T: Copy + Eq + std::hash::Hash>() {}
+    fn value_traits<T: Clone + Eq + std::hash::Hash>() {}
+    fn copy_traits<T: Copy>() {}
     value_traits::<TransportProvenance>();
     value_traits::<crate::port::DirectScIdentity>();
+    copy_traits::<crate::port::DirectScIdentity>();
 
     // Snapshots compare by value; conflicting contexts fail closed elsewhere.
     assert_ne!(unverified, direct);
@@ -148,7 +151,7 @@ async fn caller_provided_untrusted_option_stays_untrusted() {
     );
     assert!(envelope.provenance.is_unverified());
     let (loopback, _peer) = LoopbackTransport::pair(vec![0xFE], vec![0xFD]);
-    let any = super::any::AnyTransport::<LoopbackSerial>::Loopback(loopback);
+    let any = super::any::AnyTransport::Loopback(loopback);
     // Delegation preserves inner provenance (unverified here); no data-link
     // implementation is forced to pretend auth support.
     assert_eq!(any.egress_apdu_limit(), 1476);
@@ -356,9 +359,10 @@ async fn queueing_cannot_change_provenance_meaning() {
     let (tx, mut rx) = mpsc::channel(4);
     for provenance in [
         TransportProvenance::unverified(),
-        TransportProvenance::verified_direct_peer(crate::port::DirectScIdentity::verified(
-            [1; 32], 1,
-        )),
+        TransportProvenance::verified_direct_peer(
+            crate::port::DirectScIdentity::verified([1; 32], 1),
+            Default::default(),
+        ),
         TransportProvenance::verified_relayed_origin(),
     ] {
         tx.send(ReceivedNpdu {
@@ -367,7 +371,7 @@ async fn queueing_cannot_change_provenance_meaning() {
             source_mac: MacAddr::from_slice(&[0x09]),
             link_layer_group: false,
             data_attributes: Vec::new(),
-            provenance,
+            provenance: provenance.clone(),
             reply_tx: None,
         })
         .await
@@ -388,6 +392,7 @@ fn debug_is_redacted_no_key_material() {
         data_attributes: Vec::new(),
         provenance: TransportProvenance::verified_direct_peer(
             crate::port::DirectScIdentity::verified([1; 32], 1),
+            Default::default(),
         ),
         reply_tx: None,
     };

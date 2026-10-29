@@ -181,8 +181,7 @@ impl EventSuppressions {
     pub(crate) fn record(&self, suppression: EventSuppression) {
         // Relaxed and independent, like the other server counters: no
         // ordering with the send path is promised.
-        #[allow(deprecated, reason = "try_update needs Rust 1.95; the MSRV is 1.93")]
-        let _ = self.counts[suppression as usize].fetch_update(
+        let _ = self.counts[suppression as usize].try_update(
             Ordering::Relaxed,
             Ordering::Relaxed,
             |n| Some(n.saturating_add(1)),
@@ -190,8 +189,23 @@ impl EventSuppressions {
     }
 
     pub(crate) fn snapshot(&self) -> EventNotificationCounters {
-        let [notification_class_missing, recipient_list_unavailable, recipient_list_invalid, recipient_list_too_long, device_recipient_unbound, recipient_unroutable, confirmed_broadcast_recipient, confirmed_no_invoke_id, confirmed_rejected, confirmed_unanswered, unconfirmed_send_failed, apdu_too_large, received_not_forwarded, forwarding_cap_dropped, received_not_logged] =
-            self.counts.each_ref().map(|n| n.load(Ordering::Relaxed));
+        let [
+            notification_class_missing,
+            recipient_list_unavailable,
+            recipient_list_invalid,
+            recipient_list_too_long,
+            device_recipient_unbound,
+            recipient_unroutable,
+            confirmed_broadcast_recipient,
+            confirmed_no_invoke_id,
+            confirmed_rejected,
+            confirmed_unanswered,
+            unconfirmed_send_failed,
+            apdu_too_large,
+            received_not_forwarded,
+            forwarding_cap_dropped,
+            received_not_logged,
+        ] = self.counts.each_ref().map(|n| n.load(Ordering::Relaxed));
         EventNotificationCounters {
             notification_class_missing,
             recipient_list_unavailable,
@@ -284,9 +298,11 @@ mod tests {
                 counters.record(suppression);
             }
         }
-        assert!(counters
-            .counts
-            .iter()
-            .all(|counter| counter.load(Ordering::Relaxed) == u64::MAX));
+        assert!(
+            counters
+                .counts
+                .iter()
+                .all(|counter| counter.load(Ordering::Relaxed) == u64::MAX)
+        );
     }
 }

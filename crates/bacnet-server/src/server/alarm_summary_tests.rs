@@ -1,3 +1,4 @@
+use bacnet_types::error::RemoteError;
 use std::borrow::Cow;
 
 use bacnet_encoding::apdu::decode_apdu;
@@ -39,10 +40,10 @@ impl BACnetObject for MalformedAlarmObject {
                 unused_bits: 5,
                 data: vec![0xe0],
             }),
-            _ => Err(Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::UNKNOWN_PROPERTY,
-            }),
+            _ => Err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::UNKNOWN_PROPERTY,
+            )),
         }
     }
 
@@ -53,10 +54,10 @@ impl BACnetObject for MalformedAlarmObject {
         _value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
-        Err(Error::Protocol {
-            class: ErrorClass::PROPERTY,
-            code: ErrorCode::WRITE_ACCESS_DENIED,
-        })
+        Err(Error::protocol(
+            ErrorClass::PROPERTY,
+            ErrorCode::WRITE_ACCESS_DENIED,
+        ))
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
@@ -296,7 +297,9 @@ async fn alarm_summary_within_budget_segmented_bip_roundtrip() {
         server.stop().await.unwrap();
         match expected {
             Some(reason) => {
-                assert!(matches!(result, Err(Error::Abort { reason: actual }) if actual == reason))
+                assert!(
+                    matches!(result, Err(Error::Remote(RemoteError::Abort { reason: actual })) if actual == reason)
+                )
             }
             None => {
                 let response = result.unwrap();

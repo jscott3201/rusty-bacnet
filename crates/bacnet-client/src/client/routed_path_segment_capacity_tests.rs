@@ -40,9 +40,11 @@ async fn reason_4_during_segmented_send_prevents_window_retransmission() {
             .unwrap(),
         Err(Error::RoutedPathTooLong { dnet: DNET })
     ));
-    assert!(timeout(Duration::from_millis(150), outbound.recv())
-        .await
-        .is_err());
+    assert!(
+        timeout(Duration::from_millis(150), outbound.recv())
+            .await
+            .is_err()
+    );
 
     let mut client = Arc::try_unwrap(client).ok().unwrap();
     client.stop().await.unwrap();

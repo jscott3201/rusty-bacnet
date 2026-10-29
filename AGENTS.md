@@ -1,69 +1,106 @@
 # Rusty BACnet agent guidance
 
-This repository uses focused skills and subagents for research and review. Prefer the installed skills under `.agents/skills/` and configured agents when available; use the running harness's advertised agent and model controls when repository-local agent definitions are absent.
+Rusty BACnet is a BACnet protocol stack (ASHRAE 135-2020) in Rust, with Python (PyO3) bindings, a CLI, a TUI and an MCP server. This file is the entry point for coding agents.
 
-Use local Codebase Memory as the first structural code-intelligence layer. The canonical project is `Users-justin-Development-rusty-bacnet`, rooted at `/Users/justin/Development/rusty-bacnet`; verify it once with `list_projects` and `index_status` when entering a fresh repository source context, then use focused graph tools and check coverage for cited scopes. Codebase Memory is not a durable work ledger. Long-running compliance continuity lives in the ignored `_spec/rusty-bacnet-compliance-execution-plan/{Handoff.md,CURRENT_STATUS.md,NEXT_HANDOFF.md}` documents, with `codex-overnight-status.md` retained as an additional local historical log. Refresh live Git/GitHub state before acting on those snapshots. No external memory service, agent identity, namespace, or team assertion is a prerequisite.
+## Start here
 
-## Repository hosting
+1. **Read the local handoff.** It lives at `_spec/roadmap-0.15/README.md` (gitignored, local-only). It holds:
+   - project state after 0.14.0;
+   - the 0.15.0 roadmap;
+   - the open-issue map;
+   - pending and taken decisions;
+   - gates, gotchas, working patterns and the release process.
+2. **Refresh live state before acting on any snapshot:** `git fetch`, `gh run list --branch dev`, `gh issue list --milestone 0.15.0`.
+3. **Confirm this session's permissions with the maintainer** (jscott3201). Merge permission is per session. It never authorizes tagging or publishing a release.
 
-- `origin` is [GitHub](https://github.com/jscott3201/rusty-bacnet), the project's host for branches, issues, pull requests, CI and development tracking. Push branches to `origin` and open PRs there, targeting `dev` (or `main` for releases). Keep public-facing links (README, docs, website) pointed at GitHub.
-- The self-hosted Forgejo that hosted the project before is retired and its repository archived; the `forgejo` remote is fetch-only.
-- CI runs on GitHub-hosted runners for every PR to `dev` or `main` and every push to them: Linux in `.github/workflows/ci.yml`, and the tests, clippy and rustdoc natively on macOS and Windows in `.github/workflows/native-tests.yml`. Before merge, follow [the merge-evidence policy](docs/ci.md): the required checks `CI OK` and `Native OK` green on the PR for the exact head SHA. `scripts/ci/local-macos.sh` is optional local verification before pushing, not merge evidence. Existing review and merge-authorization rules still apply.
-- Run tests with cargo-nextest 0.9.145 or later (`cargo nextest run`, configured in `.config/nextest.toml`) plus `cargo test --doc` for doctests, which nextest skips; see [docs/ci.md](docs/ci.md).
-- Historical `GitLab #NNN` references in docs and evidence refer to the retired GitLab tracker.
+The older `_spec/rusty-bacnet-compliance-execution-plan/` documents are historical evidence, not current instructions.
 
-Default behavior:
+
+## Repository hosting and CI
+
+- **Hosting:** `origin` is [GitHub](https://github.com/jscott3201/rusty-bacnet), the home for branches, issues, PRs, CI and the project board (users/jscott3201/projects/4).
+  - Branch from `dev` and target PRs at `dev`; `main` takes only release merges.
+  - The old Forgejo is retired, and its remote is fetch-only.
+  - Historical `GitLab #NNN` references refer to a retired tracker.
+- **CI on PRs and pushes to `dev`/`main`:**
+  - `.github/workflows/ci.yml` runs Linux; its aggregate check is `CI OK`.
+  - `.github/workflows/native-tests.yml` runs macOS and Windows; its aggregate check is `Native OK`.
+  - **Merge evidence:** both checks green on the PR's exact head SHA ([docs/ci.md](docs/ci.md)).
+  - **Skipped dev runs:** on a dev merge that could have been a fast-forward, with no cache-key change, a Plan job skips the heavy jobs (#1466).
+- **Checks that run only for `main`:** `Cargo Audit + Deny` and `MSRV` run only on PRs into `main` and on `main` pushes. Run `cargo audit` and `cargo deny check` locally before any release.
+- **Tests:** use cargo-nextest 0.9.145 or later (`cargo nextest run`, configured in `.config/nextest.toml`), plus `cargo test --doc`, since nextest skips doctests. `scripts/ci/local-macos.sh` is optional local verification, not merge evidence.
+
+## Project rules that are easy to miss
+
+- **Licensed standard.** The ASHRAE 135 PDFs (standard, addendum, errata) are in `_spec/`.
+  - Find pages with `.claude/skills/bacnet-spec-check/scripts/spec_overlap.py find <phrase>`.
+  - Paraphrase only, and cite clause or table numbers. Never copy text into code, docs, commits, PRs or issues.
+  - Before posting any diff or body, run `spec_overlap.py check --diff <range>`, `check --words 6 …` and `sentences …`. File arguments are positional.
+  - Never infer a missing source.
+- **Changelog.** Every change adds a `changelog.d/<issue>-<slug>.md` fragment (format in `changelog.d/README.md`). Never edit `CHANGELOG.md`'s `[Unreleased]`. Breaking changes carry a label and a migration fragment.
+- **Merge order.** Wait for dev's post-merge `CI OK` and `Native OK` on the previous merge before merging the next PR. Twice in 0.14, dev failed after a green PR. A dev failure is a bug to triage and fix forward, not a re-run.
+- **Closing keywords.** "Closes/Fixes #N" anywhere in a PR body closes the issue. Write "Part of #N" for partial work.
+- **Hard limits.**
+  - Every `.rs` file stays under 700 lines (`scripts/ci/check-file-size.sh`).
+  - `missing_docs` is deny, and clippy warnings are errors.
+  - `bacnet-server` in-crate tests share one `TestTransport`.
+- **Timing tests.** Use Tokio's paused clock, not real sleeps or short real-time budgets.
+- **Async review checklist.**
+  - Server lock order: `ObjectDatabase` before `COVTable`.
+  - No lock held across an await.
+  - No unpolled sibling future holding a queued lock waiter (#1494).
+  - Futures used in `select!` must be cancel-safe.
+- **Releases.** Tagging publishes irreversibly to crates.io, PyPI and GitHub Releases, and needs the maintainer's explicit approval for each release. The flow is in `_spec/roadmap-0.15/09-release-process.md`.
+- **Local-only files.** `_spec/` and `CLAUDE.md` are gitignored. Never commit them.
+
+## Default behavior
 
 - Use read-only exploration first.
-- Delegate independent research or verification questions in parallel when they materially improve speed or confidence and useful root work can proceed. Handle small, coupled tasks locally; the available roles are a menu, not a required panel.
-- Keep subagent prompts scoped and evidence-led.
-- Reuse a completed review for its exact immutable target. If the head changes, follow `pr-gate-loop`: both required reviewers acknowledge the new target in the permitted final cycle, reusing unchanged evidence and focusing inspection on repair impact. A clean informational review does not reopen a stopped delivery gate.
-- Synthesize findings into a single decision or plan.
-- Record commands, files, symbols, and sources used as evidence.
-- Keep PRs small: one BACnet layer, state-machine family, or measured hotspot per PR.
-- Do not add new CI unless explicitly requested.
-- Do not broaden README or public support claims without tests and evidence.
-- Use `_spec/rusty-bacnet-compliance-execution-plan/` for the current roadmap: read the current block of `NEXT_HANDOFF.md`, then relevant `CURRENT_STATUS.md`, `WORK_QUEUE.md`, `DECISIONS.md`, and packet/gate files. Historical blocks preserve evidence, not current instructions. The older `_spec/rusty_bacnet_compliance_specs_v1/` path is absent in this checkout. Locate the licensed Standard through `STANDARD_NAVIGATION.md` before protocol work; never infer a missing source.
+- **Delegation:** run independent research or verification questions in parallel when that materially improves speed or confidence and useful root work can proceed. Handle small, coupled tasks locally; the available roles are a menu, not a required panel. Keep subagent prompts scoped and evidence-led.
+- **Reviews:** reuse a completed review for its exact immutable target. If the head changes, follow `pr-gate-loop`:
+  - both required reviewers acknowledge the new target in the permitted final cycle;
+  - unchanged evidence is reused, and inspection focuses on the repair's impact.
 
+  A clean informational review does not reopen a stopped delivery gate.
+- Synthesize findings into a single decision or plan, and record the commands, files, symbols and sources used as evidence.
+- **PR size:** keep PRs bounded. Group closely related issues (one BACnet layer, state-machine family or measured hotspot) when one review can cover them.
+- **CI and claims:** don't add new CI unless asked, and don't broaden README or public support claims without tests and evidence.
 
 ## Pre-1.0 design and cleanup
 
-- Before 1.0.0, treat APIs as unfrozen. Prefer a coherent greenfield design and remove obsolete paths instead of adding compatibility shims, deprecated aliases, duplicate configuration hooks or speculative extension layers solely to preserve pre-1.0 callers.
-- Include related cleanup in each PR when it strengthens the same bounded outcome. Update all in-repository Rust/Python callers, tests, examples and documentation affected by an API change together, and describe the break in the PR. Protocol correctness, required platform support, persisted-data integrity and security boundaries still apply.
-- Avoid unrelated rewrites. File deduplicated issues for follow-up defects, API cleanup and necessary research that cannot fit coherently in the current PR; include evidence, dependencies and testable acceptance criteria. Keep the relevant `_spec` roadmap packet linked to those issues.
-- Freeze public APIs for the 1.0.0 release and preserve compatibility thereafter under the release policy. Historical pre-1.0 compatibility decisions in roadmap snapshots do not override this policy.
-- Session-specific merge permission remains subject to review and required checks; it does not authorize release publication or become permanent standing permission.
+- **APIs are unfrozen before 1.0.0.**
+  - Prefer a coherent greenfield design, and remove obsolete paths. Don't add compatibility shims, deprecated aliases, duplicate configuration hooks or speculative extension layers just to preserve pre-1.0 callers.
+  - Update every in-repository Rust and Python caller, test, example and doc affected by an API change together, and describe the break in the PR.
+  - Protocol correctness, required platform support, persisted-data integrity and security boundaries still apply.
+- **Scope of each PR:**
+  - Include related cleanup in a PR when it strengthens the same bounded outcome. Avoid unrelated rewrites.
+  - File deduplicated issues for follow-ups that don't fit, with evidence, dependencies and testable acceptance.
+  - Link them from the relevant `_spec/roadmap-0.15/` file.
+- **At 1.0.0,** freeze public APIs, and preserve compatibility after that under the release policy. Historical pre-1.0 compatibility decisions in roadmap snapshots don't override this.
 
-## Codex agents and models
+## Resources on the shared machine
 
-- Reserve code implementation and repairs for GPT-6 Astra agents, including root implementation only when the root is Astra. Use GPT-6 Sol subagents as needed for bounded read-only exploration, specification research and review. Select the advertised runtime model explicitly when needed; a named role pinned to another model is not an Astra implementation route. Do not silently substitute a different model.
-- Keep durable model and effort settings in the active harness configuration or named-agent definitions when present; use supported runtime controls for this session without inventing `.codex` files or changing another active session. Choose effort for the task rather than raising every task to maximum effort.
-- Batch independent tool reads; keep dependent operations and Git/GitHub mutations sequential. Use the collaboration tools and context controls actually exposed by the running CLI. Supply a compact task packet instead of full history when supported.
-- Each packet names the objective, exact revision, paths/symbols, ownership, constraints, acceptance evidence, and expected result. Children do not delegate or rediscover the Codebase Memory project. The root resolves conflicting evidence and retains delivery authority.
-- Keep a small active team, usually two or three independent readers. The configured limit is a ceiling, not a target. Reuse compatible agents; release finished agents with the available lifecycle tool. Coordinate builds and tests to avoid duplicate Cargo work, shared fixtures, and port conflicts. Run performance measurements without competing workloads.
-- Run `cargo clean` between PRs. The root owns this boundary step: finish validation/review work, ensure no Cargo or rustc job is using the shared target directory, then clean that target before the next PR's build work. Preserve Cargo registry/download caches and never clean during another agent's build or tests.
-- Ordinary product delivery uses one Astra implementation owner; use an appropriate configurable agent when the named `implementer` role is pinned to a different model. This repository permits up to two product writers only after an explicit `$parallel-portfolio` invocation and that skill's admission gate: disjoint ownership and contracts, isolated worktrees from one base, and root-owned integration. General requests for speed or parallel research do not admit a portfolio. If the skill is unavailable, continue serially.
-- Use the existing `pr-gate-loop` for delivery review; specialist reviews supply bounded evidence, not an extra approval cycle. Keep its repair limits and stopped-gate history intact. Standing merge authority applies only after the current delivery gate passes.
-- Validate configuration changes against the installed CLI and start a fresh CLI session to load changed settings and agent definitions. Do not restart another session or assume this running thread has reloaded them.
+- **Disk.** A full workspace gate builds 30–80 GB of `target/`.
+  - Run one full workspace gate at a time, and keep at least 50 GB free.
+  - Use `CARGO_INCREMENTAL=0` for gate runs.
+  - Never share a target directory across worktrees.
+- **`cargo clean`.** Run it between PRs. The root owns this step: finish validation and review, make sure no Cargo or rustc job is using the target, then clean it before the next PR's build. Keep the registry and download caches, and never clean during another agent's build or tests.
+- **Measurements.** Run performance measurements with no competing workload, one benchmark suite at a time.
+- **Linux-only code** (MS/TP real-time, AF_PACKET Ethernet, kernel RS-485) is checked in local Docker. See `_spec/roadmap-0.15/06-gates-ci-and-commands.md`.
 
-Recommended skills:
+## Skills
 
-- `$codebase-research-pass`
-- `$external-source-research`
-- `$spec-contract-compliance-review`
-- `$architecture-design-review`
-- `$multi-agent-pr-review`
-- `$performance-ab-benchmark-review`
-- `$release-readiness-review`
+Repository skills live in `.claude/skills/` (gitignored, local-only) and read fine as plain docs:
+- `group-pr-workflow` has templates for implementer, reviewer and fix briefs and PR bodies;
+- `bacnet-spec-check` has the spec_overlap checker.
 
-BACnet compliance reviewer panel:
-
-- `bacnet-reference-researcher`
-- `bacnet-ip-bvll-reviewer`
-- `bacnet-sc-security-reviewer`
-- `bacnet-tsm-network-reviewer`
-- `bacnet-services-objects-reviewer`
-- `bacnet-data-link-reviewer`
-- `bacnet-performance-reviewer`
-- `bacnet-safety-interop-reviewer`
-- `bacnet-pr-packager`
+**Review lenses.** If your harness defines BACnet specialist reviewer agents, use them by name. Otherwise apply the same lenses with general reviewers:
+- reference research;
+- B/IP and BVLL;
+- BACnet/SC security;
+- TSM and the network layer;
+- services and objects;
+- data links;
+- performance;
+- safety and interoperability;
+- PR packaging.

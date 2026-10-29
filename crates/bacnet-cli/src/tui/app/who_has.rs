@@ -1,7 +1,8 @@
 //! Who-Has and router discovery in the UI (#960).
 //!
-//! - `:find NAME` broadcasts a Who-Has; the I-Haves that name the object
-//!   fill a panel below the device table, one row per device and object.
+//! - `:find NAME` broadcasts a Who-Has in an active session, or filters
+//!   retained/live observations in a listening passive session. Results
+//!   distinguish device, object and station address.
 //!   `:find` alone closes it.
 //! - The Network screen's Networks tab maps routers to the networks they
 //!   reach: every I-Am-Router-To-Network heard adds to it, and `r` there
@@ -12,10 +13,49 @@ use std::time::Instant;
 
 use super::network::View;
 use super::watch::Screen;
-use super::{App, Link, FLASH_FOR};
+use super::{App, FLASH_FOR, Link};
 use crate::tui::message::Command;
 use crate::tui::network::discovery::{DiscoveryCommand, DiscoveryEvent, FoundRow};
 use crate::tui::network::routers::RouterMap;
+
+/// Maximum I-Have observations and search results retained per session.
+pub(crate) const MAX_OBSERVATIONS: usize = 4_096;
+/// Additional aggregate string-byte bound on each observation/result collection.
+pub(crate) const MAX_OBSERVATION_BYTES: usize = 4 * 1024 * 1024;
+
+/// Bounded most-recent observations; repeats refresh their place and name.
+#[derive(Debug, Default)]
+pub(crate) struct Observations(pub(crate) Vec<FoundRow>);
+impl Observations {
+    pub(crate) fn record(&mut self, row: FoundRow) {
+        retain_row(&mut self.0, row);
+    }
+}
+fn same_station_object(a: &FoundRow, b: &FoundRow) -> bool {
+    a.device == b.device
+        && a.object == b.object
+        && a.address == b.address
+        && a.via == b.via
+        && a.network == b.network
+}
+fn row_bytes(row: &FoundRow) -> usize {
+    row.name.len() + row.address.len() + row.via.as_ref().map_or(0, String::len)
+}
+fn retain_row(rows: &mut Vec<FoundRow>, row: FoundRow) -> bool {
+    let bytes = row_bytes(&row);
+    if bytes > MAX_OBSERVATION_BYTES {
+        return false;
+    }
+    if let Some(index) = rows.iter().position(|kept| same_station_object(kept, &row)) {
+        rows.remove(index);
+    }
+    let mut retained: usize = rows.iter().map(row_bytes).sum();
+    while rows.len() >= MAX_OBSERVATIONS || retained + bytes > MAX_OBSERVATION_BYTES {
+        retained -= row_bytes(&rows.remove(0));
+    }
+    rows.push(row);
+    true
+}
 
 /// The running or last Who-Has search.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,6 +64,8 @@ pub(crate) struct WhoHasSearch {
     pub(crate) name: String,
     /// When the Who-Has went.
     pub(crate) sent: Instant,
+    /// This search filters overheard observations without sending.
+    pub(crate) passive: bool,
     /// The objects found, in the order their I-Haves arrived.
     pub(crate) found: Vec<FoundRow>,
     /// Why the Who-Has could not be sent.
@@ -31,22 +73,28 @@ pub(crate) struct WhoHasSearch {
 }
 
 impl WhoHasSearch {
-    /// Keep `row` if it names the object searched for, once per device and
-    /// object. Returns whether it was kept.
+    /// Refresh a matching station/object, evicting oldest rows within the count
+    /// and byte limits. A renamed observation removes the obsolete match.
+    /// Returns whether a new matching identity was kept.
     pub(crate) fn accept(&mut self, row: FoundRow) -> bool {
-        let seen = self
-            .found
-            .iter()
-            .any(|kept| kept.device == row.device && kept.object == row.object);
-        if seen || row.name != self.name {
+        if row.name != self.name {
+            self.found.retain(|kept| !same_station_object(kept, &row));
             return false;
         }
-        self.found.push(row);
-        true
+        let fresh = !self
+            .found
+            .iter()
+            .any(|kept| same_station_object(kept, &row));
+        retain_row(&mut self.found, row) && fresh
     }
 }
 
 impl App {
+    /// A bound passive listener is still supplying observations.
+    pub(crate) fn passive_listening(&self) -> bool {
+        self.passive_listener.is_some() && self.link == Link::Passive
+    }
+
     /// `:find NAME`: search for the object, or with no name close the
     /// search panel.
     pub(super) fn find(&mut self, name: String, out: &mut Vec<Command>) {
@@ -54,17 +102,26 @@ impl App {
             self.who_has = None;
             return;
         }
-        if !self.discovery_ready() {
+        let passive = self.passive_listening();
+        if !passive && !self.discovery_ready() {
             return;
         }
         self.who_has = Some(WhoHasSearch {
             name: name.clone(),
             sent: self.now,
+            passive,
             found: Vec::new(),
             failed: None,
         });
         self.screen = Screen::Main;
-        out.push(Command::Discovery(DiscoveryCommand::WhoHas { name }));
+        if passive {
+            let search = self.who_has.as_mut().unwrap();
+            for row in &self.overheard.0 {
+                search.accept(row.clone());
+            }
+        } else {
+            out.push(Command::Discovery(DiscoveryCommand::WhoHas { name }));
+        }
     }
 
     /// `r` on the Networks tab: ask every router for its networks.
@@ -98,6 +155,9 @@ impl App {
                 // Every I-Have names an object, asked for or not.
                 self.names
                     .learn_name(row.device, &row.address, row.object, row.name.clone());
+                if self.passive_listening() {
+                    self.overheard.record(row.clone());
+                }
                 if let Some(search) = &mut self.who_has {
                     search.accept(row);
                 }
@@ -120,7 +180,11 @@ impl App {
             DiscoveryEvent::Refused { command, reason } => {
                 match command {
                     DiscoveryCommand::WhoHas { name } => {
-                        if let Some(search) = self.who_has.as_mut().filter(|s| s.name == name) {
+                        if let Some(search) = self
+                            .who_has
+                            .as_mut()
+                            .filter(|s| !s.passive && s.name == name)
+                        {
                             search.failed = Some(reason.clone());
                         }
                     }

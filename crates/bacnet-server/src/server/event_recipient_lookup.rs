@@ -1,5 +1,5 @@
 use bacnet_objects::event::EventTransition;
-use bacnet_objects::notification_class::{RecipientLookupOutcome, MAX_RECIPIENT_LIST_DESTINATIONS};
+use bacnet_objects::notification_class::{MAX_RECIPIENT_LIST_DESTINATIONS, RecipientLookupOutcome};
 use bacnet_types::constructed::BACnetRecipient;
 use tracing::{debug, warn};
 

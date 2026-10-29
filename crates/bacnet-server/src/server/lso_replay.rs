@@ -49,7 +49,7 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 
-use super::request_peer::{canonical_requester, CanonicalRequester};
+use super::request_peer::{CanonicalRequester, canonical_requester};
 use crate::runtime_clock;
 use bacnet_encoding::apdu::ConfirmedRequest;
 use bacnet_encoding::npdu::NpduAddress;
@@ -259,11 +259,11 @@ impl Drop for PendingLsoReplay {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Barrier;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use bacnet_types::enums::ConfirmedServiceChoice;
     use bacnet_types::MacAddr;
+    use bacnet_types::enums::ConfirmedServiceChoice;
     use bytes::Bytes;
 
     use super::*;

@@ -29,10 +29,11 @@ fn host_and_mixed_rings_deliver_without_echo_leaks() {
             sim.enqueue(ms(1_000), 1, 0, &extended);
             sim.run_until(ms(3_000));
             sim.assert_no_violations();
-            assert!(sim
-                .deliveries(1)
-                .iter()
-                .any(|d| d.data == npdu(false, 0x42)));
+            assert!(
+                sim.deliveries(1)
+                    .iter()
+                    .any(|d| d.data == npdu(false, 0x42))
+            );
             assert!(sim.deliveries(0).iter().any(|d| d.data == extended));
             assert!(sim.host_stats(0).unwrap().reads > 0);
             assert_eq!(sim.core(0).unwrap().counters().own_address_frames, 0);

@@ -5,12 +5,14 @@ Run from website/: python -m unittest discover -s tests/python -v
 import contextlib
 import importlib.util
 import io
+import os
 from pathlib import Path
 import subprocess
 from queue import Queue
 from threading import Thread
 import sys
 import unittest
+from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parents[2] / "examples/python/loopback_lab.py"
 spec = importlib.util.spec_from_file_location("loopback_lab", SCRIPT)
@@ -43,6 +45,27 @@ class LabGuards(unittest.TestCase):
         for bad in ["0.0.0.0:47809", "192.0.2.1:47809", "127.0.0.1:0", "127.0.0.1:65536", "::1:47809"]:
             with self.subTest(bad=bad), self.assertRaises(RuntimeError):
                 lab.require_local_address(bad)
+
+
+class VersionCheck(unittest.TestCase):
+    KEY = "BACNET_LAB_EXPECTED_VERSION"
+
+    def check(self, installed, override=None):
+        with mock.patch.dict(os.environ), mock.patch.object(lab, "version", return_value=installed):
+            os.environ.pop(self.KEY, None)
+            if override is not None:
+                os.environ[self.KEY] = override
+            lab.check_version()
+
+    def test_default_is_the_documented_release(self):
+        self.check(lab.EXPECTED_VERSION)
+        with self.assertRaisesRegex(RuntimeError, "targets " + lab.EXPECTED_VERSION):
+            self.check("9.9.9")
+
+    def test_override_names_the_wheel_under_test(self):
+        self.check("9.9.9", override="9.9.9")
+        with self.assertRaisesRegex(RuntimeError, "targets 9.9.9; installed package is " + lab.EXPECTED_VERSION):
+            self.check(lab.EXPECTED_VERSION, override="9.9.9")
 
 
 class RealExtensionLab(unittest.TestCase):

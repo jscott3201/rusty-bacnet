@@ -4,14 +4,14 @@ use std::time::Duration;
 
 use bacnet_client::client::{BACnetClient, DeviceEventKind};
 use bacnet_encoding::{
-    apdu::{decode_apdu, encode_apdu, Apdu, UnconfirmedRequest},
-    npdu::{decode_npdu, encode_npdu, Npdu},
+    apdu::{Apdu, UnconfirmedRequest, decode_apdu, encode_apdu},
+    npdu::{Npdu, decode_npdu, encode_npdu},
 };
 use bacnet_services::who_is::IAmRequest;
 use bacnet_transport::{
     bbmd::{BdtEntry, ForeignDevicePolicy},
     bip::{BipMode, BipTransport, ForeignDeviceConfig, ForeignRegistrationOutcome},
-    bvll::{decode_bvll, BvlcFunction},
+    bvll::{BvlcFunction, decode_bvll},
     port::TransportPort,
 };
 use bacnet_types::{

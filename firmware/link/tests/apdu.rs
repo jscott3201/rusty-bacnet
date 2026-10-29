@@ -11,7 +11,7 @@ use std::mem::MaybeUninit;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use firmware_link::apdu::{expected, run, ARENA, DATAGRAMS};
+use firmware_link::apdu::{ARENA, DATAGRAMS, expected, run};
 use linked_list_allocator::LockedHeap;
 
 /// The whole summary, against the one the emulation build checks too

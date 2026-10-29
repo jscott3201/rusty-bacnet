@@ -46,13 +46,12 @@ pub struct WritePropertyRequest {
 /// Omission is allowed; every supplied priority must be in 1..=16, including
 /// NULL writes. Returns a local encoding error for invalid typed input.
 pub fn validate_priority(priority: Option<u8>) -> Result<(), Error> {
-    if let Some(priority) = priority {
-        if !(1..=16).contains(&priority) {
+    if let Some(priority) = priority
+        && !(1..=16).contains(&priority) {
             return Err(EncodeError::new("WriteProperty priority must be 1-16, got {}")
                 .with_value(priority.into())
                 .into());
         }
-    }
     Ok(())
 }
 
@@ -121,10 +120,7 @@ impl WritePropertyRequest {
         let mut priority = None;
         if let Some(prio) = prio {
             if !(1..=16).contains(&prio) {
-                return Err(Error::Protocol {
-                    class: ErrorClass::SERVICES,
-                    code: ErrorCode::PARAMETER_OUT_OF_RANGE,
-                });
+                return Err(Error::protocol(ErrorClass::SERVICES, ErrorCode::PARAMETER_OUT_OF_RANGE));
             }
             priority = Some(prio as u8);
         }
@@ -141,6 +137,7 @@ impl WritePropertyRequest {
 
 #[cfg(test)]
 mod tests {
+    use bacnet_types::error::RemoteError;
     use super::*;
     use bacnet_encoding::tags::TagClass;
     use bacnet_types::enums::ObjectType;
@@ -394,7 +391,7 @@ mod tests {
             let buf = encode_fields(0, 1, 85, None, Some((4, value)), false);
             let error = WritePropertyRequest::decode(&buf).unwrap_err();
             assert!(
-                matches!(error, Error::Protocol { class, code }
+                matches!(error, Error::Remote(RemoteError::Error { class, code })
                     if class == ErrorClass::SERVICES
                         && code == ErrorCode::PARAMETER_OUT_OF_RANGE),
                 "priority {value} must fail semantic range validation, got {error:?}"

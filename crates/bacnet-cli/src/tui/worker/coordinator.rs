@@ -1,13 +1,13 @@
 //! One retained owner for connection attempts, commands and complete retirement.
 
 use super::session::{ConnectPlan, SessionOptions, TransportKind};
-use super::write::{keep_offline, SafetyOptions};
-use super::{session, EventSink, COMMAND_CHANNEL_CAPACITY};
+use super::write::{SafetyOptions, keep_offline};
+use super::{COMMAND_CHANNEL_CAPACITY, EventSink, session};
 use crate::tui::capture::worker::TAP;
-use crate::tui::capture::{pcap, CaptureEvent, ExportJob};
+use crate::tui::capture::{CaptureEvent, ExportJob, pcap};
 use crate::tui::message::{Command, OpId, WorkerEvent};
-use crate::tui::network::discovery::DiscoveryEvent;
 use crate::tui::network::NetworkEvent;
+use crate::tui::network::discovery::DiscoveryEvent;
 use crate::tui::point::{BrowseResult, ReqId};
 use crate::tui::profile::service::{Reply, Request, Service};
 use crate::tui::safety::{Level, SafetyCommand, SafetyEvent};
@@ -18,9 +18,10 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
 struct Active {
+    scan: crate::tui::monitor::scan::ScanGate,
     cancel: watch::Sender<bool>,
     commands: mpsc::Sender<Command>,
-    task: JoinHandle<()>,
+    task: JoinHandle<Result<(), String>>,
 }
 
 /// The coordinator lives until the UI drops its command channel. It never
@@ -51,8 +52,12 @@ async fn start(
         return None;
     }
     let scoped = sink.for_session(generation, cancelled);
-    let task = session::spawn(plan.clone(), scoped, command_rx, options.clone());
+    let mut options = options.clone();
+    options.mstp.scan = Default::default();
+    let scan = options.mstp.scan.clone();
+    let task = session::spawn(plan.clone(), scoped, command_rx, options);
     Some(Active {
+        scan,
         cancel,
         commands,
         task,
@@ -64,17 +69,20 @@ async fn retire(active: &mut Option<Active>) -> Result<(), String> {
         cancel,
         commands,
         task,
+        ..
     }) = active.take()
     {
         cancel.send_replace(true);
         drop(commands);
         task.await
-            .map_err(|error| format!("network session panicked: {error}"))?;
+            .map_err(|error| format!("network session panicked: {error}"))??;
     }
     Ok(())
 }
 
-async fn completed(active: &mut Option<Active>) -> Result<(), tokio::task::JoinError> {
+async fn completed(
+    active: &mut Option<Active>,
+) -> Result<Result<(), String>, tokio::task::JoinError> {
     match active {
         Some(active) => (&mut active.task).await,
         None => std::future::pending().await,
@@ -91,18 +99,19 @@ async fn run(
     let mut generation = 0;
     let mut active = None;
     let mut exports: Vec<JoinHandle<()>> = Vec::new();
-    if let Some(plan) = &plan {
-        if !plan.await_interface {
-            generation += 1;
-            active = start(plan, generation, &sink, &options).await;
-        }
+    if let Some(plan) = &plan
+        && !plan.await_interface
+    {
+        generation += 1;
+        active = start(plan, generation, &sink, &options).await;
     }
     loop {
         tokio::select! {
             done = completed(&mut active), if active.is_some() => {
                 active = None;
-                if let Err(error) = done {
-                    sink.deliver(WorkerEvent::Fatal { error: format!("network worker failed: {error}") }).await;
+                let result = done.map_err(|error| format!("network worker failed: {error}")).and_then(|result| result);
+                if let Err(error) = result {
+                    sink.deliver(WorkerEvent::Fatal { error }).await;
                     break;
                 }
                 // A failed attempt already reported its error. Keep the
@@ -110,12 +119,11 @@ async fn run(
             }
             command = commands.recv() => {
                 let Some(command) = command else { break; };
-                if active.as_ref().is_some_and(|active| active.task.is_finished()) {
-                    if let Err(error) = retire(&mut active).await {
+                if active.as_ref().is_some_and(|active| active.task.is_finished())
+                    && let Err(error) = retire(&mut active).await {
                         sink.deliver(WorkerEvent::Fatal { error }).await;
                         break;
                     }
-                }
                 match command {
                     Command::Disconnect => {
                         if let Err(error) = retire(&mut active).await {
@@ -147,6 +155,9 @@ async fn run(
                         let refused = move |reason| WorkerEvent::Discovery(refused(reason));
                         forward_or_refuse(active.as_ref(), command, generation, &sink, refused).await;
                     }
+                    Command::MonitorScan(request) => {
+                        forward_scan(active.as_ref(), plan.as_ref(), request, generation, &sink).await;
+                    }
                     Command::Capture(_) => {
                         let refused = |why| WorkerEvent::Capture(CaptureEvent::Ended { what: TAP.into(), why });
                         forward_or_refuse(active.as_ref(), command, generation, &sink, refused).await;
@@ -159,11 +170,10 @@ async fn run(
                     }
                     Command::StopBrowse { .. } => {
                         // Best effort: a stale browse result is dropped by the UI anyway.
-                        if let Some(active) = &active {
-                            if let Err(error) = active.commands.try_send(command) {
+                        if let Some(active) = &active
+                            && let Err(error) = active.commands.try_send(command) {
                                 tracing::debug!("browse stop not admitted: {error}");
                             }
-                        }
                     }
                     Command::Profile(request) => {
                         let Some(profiles) = &profiles else {
@@ -234,6 +244,7 @@ async fn run(
                         } else { reject(&sink, "select a profile before connecting").await; }
                     }
                     Command::JoinTrunk { settings } => {
+                        if active.as_ref().is_some_and(|active| active.scan.busy()) { reject(&sink, "finish or cancel the baud scan before joining").await; continue; }
                         // A profile joins through its reviewed preview and its own confirmation.
                         if profiles.is_some() { reject(&sink, "review the profile before joining").await; continue; }
                         if let Err(error) = settings.validate() { reject(&sink, &error).await; continue; }
@@ -449,7 +460,9 @@ async fn forward_watch(
             source: Source::Failed("the session did not take the request".into()),
         },
         WatchCommand::Remove { row } => {
-            tracing::warn!("watch row {row}: the session did not take the remove; its subscription ends with the session");
+            tracing::warn!(
+                "watch row {row}: the session did not take the remove; its subscription ends with the session"
+            );
             return;
         }
         WatchCommand::Csv(_) => WatchEvent::Notice("The session did not take the request.".into()),
@@ -497,6 +510,7 @@ async fn forward_safety(
     let req = match request {
         SafetyCommand::Prepare { req, .. }
         | SafetyCommand::Execute { req, .. }
+        | SafetyCommand::Manage { req, .. }
         | SafetyCommand::Revert { req } => Some(req),
         _ => None,
     };
@@ -512,3 +526,56 @@ async fn forward_safety(
 #[cfg(test)]
 #[path = "coordinator_tests.rs"]
 mod tests;
+
+/// Reserve at the coordinator boundary before another queued join can retire it.
+async fn forward_scan(
+    active: Option<&Active>,
+    plan: Option<&ConnectPlan>,
+    request: crate::tui::monitor::scan::ScanCommand,
+    generation: u64,
+    sink: &EventSink,
+) {
+    use crate::tui::monitor::{
+        scan::{ScanCommand, ScanReport},
+        scan_worker::valid_window,
+    };
+    let id = request.id();
+    let cancel = matches!(request, ScanCommand::Cancel { .. });
+    let reason = match active.filter(|_| plan.is_some_and(|p| p.kind == TransportKind::MstpMonitor))
+    {
+        None => Some("a scan needs a live receive-only MS/TP monitor".to_string()),
+        Some(active) => {
+            // Repeated delivery of the same Start is idempotent.
+            if !cancel && active.scan.owns(id) {
+                return;
+            }
+            let admitted = match request {
+                ScanCommand::Start { id, window } => {
+                    valid_window(window) && active.scan.reserve(id)
+                }
+                ScanCommand::Cancel { id } => active.scan.owns(id),
+            };
+            if !admitted {
+                Some("another scan owns the monitor, or the window is invalid".into())
+            } else if let Err(error) = active.commands.try_send(Command::MonitorScan(request)) {
+                if !cancel {
+                    active.scan.release(id);
+                }
+                Some(format!("scan command was not admitted: {error}"))
+            } else {
+                None
+            }
+        }
+    };
+    if let Some(reason) = reason {
+        sink.deliver(WorkerEvent::Session {
+            generation,
+            event: Box::new(WorkerEvent::MonitorScan(ScanReport::Rejected {
+                id,
+                cancel,
+                reason,
+            })),
+        })
+        .await;
+    }
+}

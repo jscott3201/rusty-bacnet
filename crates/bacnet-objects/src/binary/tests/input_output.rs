@@ -285,9 +285,10 @@ fn bi_detection_enable_resets_and_gates_intrinsic_reporting() {
         bi.event_detector.pending.is_none(),
         "evaluate/tick re-armed a countdown while detection is disabled"
     );
-    assert!(bi
-        .property_list()
-        .contains(&PropertyIdentifier::EVENT_DETECTION_ENABLE));
+    assert!(
+        bi.property_list()
+            .contains(&PropertyIdentifier::EVENT_DETECTION_ENABLE)
+    );
     assert!(bi.is_writable_property(PropertyIdentifier::EVENT_DETECTION_ENABLE));
 }
 
@@ -644,9 +645,10 @@ fn bo_relinquish_default_write_recaptures_present_value() {
     );
 
     for value in [PropertyValue::Enumerated(5), PropertyValue::Unsigned(1)] {
-        assert!(bo
-            .write_property(PropertyIdentifier::RELINQUISH_DEFAULT, None, value, None)
-            .is_err());
+        assert!(
+            bo.write_property(PropertyIdentifier::RELINQUISH_DEFAULT, None, value, None)
+                .is_err()
+        );
         assert_eq!(
             bo.read_property(PropertyIdentifier::RELINQUISH_DEFAULT, None)
                 .unwrap(),

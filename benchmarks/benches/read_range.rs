@@ -6,7 +6,7 @@
 //! log is the cost of finding the window. `by_time_clock_back` reads a log
 //! whose clock stepped back once, which the time search can't bisect.
 use bytes::BytesMut;
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
 use bacnet_objects::database::ObjectDatabase;

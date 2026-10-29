@@ -35,8 +35,9 @@
 //! checks a destination without adding it. The configured destinations are
 //! never saved.
 
-use std::sync::Arc;
-use std::time::Duration;
+use crate::prelude::*;
+use alloc::sync::Arc;
+use core::time::Duration;
 
 use bacnet_types::constructed::BACnetDestination;
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
@@ -44,7 +45,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 
 use super::persistence::{NotificationClassPersistence, NotificationClassSnapshot};
-use super::{recipient_list, NotificationClass, MAX_RECIPIENT_LIST_DESTINATIONS};
+use super::{MAX_RECIPIENT_LIST_DESTINATIONS, NotificationClass, recipient_list};
 use crate::common;
 use crate::durable::staged::{self, StagedSaves};
 use crate::durable::{DurableWrites, PendingWrite, SaveWait, SaveWriter, StageStep};
@@ -86,7 +87,7 @@ impl NotificationClass {
             move |snapshot: &NotificationClassSnapshot| persistence.save(oid, snapshot),
             move |_, result| {
                 if let Err(error) = result {
-                    tracing::warn!(
+                    log_warn!(
                         class = %oid,
                         %error,
                         "Failed to save a Notification Class Recipient_List"

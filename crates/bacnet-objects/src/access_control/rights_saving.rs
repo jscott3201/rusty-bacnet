@@ -31,8 +31,9 @@
 //! whole array it leaves, so an element or index-0 write to an array no
 //! write has set yet also saves the configured rules it didn't touch.
 
-use std::sync::Arc;
-use std::time::Duration;
+use crate::prelude::*;
+use alloc::sync::Arc;
+use core::time::Duration;
 
 use bacnet_types::constructed::{BACnetAccessRule, BACnetDeviceObjectReference};
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
@@ -40,7 +41,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 
 use super::persistence::{AccessRightsPersistence, AccessRightsSnapshot};
-use super::{check_accompaniment, checked_rules, AccessRightsObject};
+use super::{AccessRightsObject, check_accompaniment, checked_rules};
 use crate::common;
 use crate::durable::staged::{self, StagedSaves, Step};
 use crate::durable::{DurableWrites, PendingWrite, SaveWait, SaveWriter, StageStep};
@@ -120,7 +121,7 @@ impl AccessRightsObject {
             move |snapshot: &AccessRightsSnapshot| persistence.save(oid, snapshot),
             move |_, result| {
                 if let Err(error) = result {
-                    tracing::warn!(rights = %oid, %error, "Failed to save Access Rights state");
+                    log_warn!(rights = %oid, %error, "Failed to save Access Rights state");
                 }
             },
         );
@@ -157,7 +158,7 @@ impl AccessRightsObject {
     pub(super) fn keeps_saved(&self, property: PropertyIdentifier) -> bool {
         let kept = self.property_saved(property);
         if kept {
-            tracing::debug!(
+            log_debug!(
                 rights = %self.oid,
                 ?property,
                 "Saved Access Rights value kept over a configured one"
@@ -209,7 +210,7 @@ impl AccessRightsObject {
             }
             // Only the application adds the optional row.
             PropertyIdentifier::ACCOMPANIMENT if self.accompaniment.is_none() => {
-                return Err(common::unknown_property_error())
+                return Err(common::unknown_property_error());
             }
             // Enable and Accompaniment are no arrays: the handlers refuse an
             // index before the object sees it, and so does a direct call.
@@ -224,7 +225,7 @@ impl AccessRightsObject {
                 return match value {
                     PropertyValue::Boolean(enable) => Ok(NextState::Enable(enable)),
                     _ => Err(common::invalid_data_type_error()),
-                }
+                };
             }
         };
         // An indexed write edits the array the object serves; a whole write

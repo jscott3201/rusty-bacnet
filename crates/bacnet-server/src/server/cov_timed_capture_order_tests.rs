@@ -387,9 +387,10 @@ async fn untimestamped_values_too_large_for_one_apdu_follow_every_change_in_part
     let mut objects = Vec::new();
     for notification in untimed_parts {
         let rows = pv_rows_by_time(notification);
-        assert!(rows
-            .iter()
-            .all(|(object, _, time)| { object.instance_number() > OBJECTS && time.is_none() }));
+        assert!(
+            rows.iter()
+                .all(|(object, _, time)| { object.instance_number() > OBJECTS && time.is_none() })
+        );
         assert_eq!(notification.timestamp, None, "nothing in it is timestamped");
         objects.extend(rows.into_iter().map(|(object, _, _)| object));
     }

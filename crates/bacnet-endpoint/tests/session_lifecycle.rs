@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use bacnet_encoding::apdu::{decode_apdu, encode_apdu, Apdu, ComplexAck};
+use bacnet_encoding::apdu::{Apdu, ComplexAck, decode_apdu, encode_apdu};
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_endpoint::session::{EndpointSession, SessionConfig, SessionRole};
 use bacnet_network::layer::ReceivedApdu;
@@ -14,10 +14,10 @@ use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportProvenance;
+use bacnet_types::MacAddr;
 use bacnet_types::enums::{
     ConfirmedServiceChoice, EngineeringUnits, ObjectType, PropertyIdentifier,
 };
-use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
 use tokio::sync::oneshot;
 
@@ -294,15 +294,17 @@ async fn no_detached_role_outlives_session() {
     // closed, no orphaned task keeps the lease pool alive.
     drop(session_a);
     assert!(!detached_server.is_session_alive());
-    assert!(detached_client
-        .read_property(
-            &[0x02],
-            object_id(1),
-            PropertyIdentifier::PRESENT_VALUE,
-            None
-        )
-        .await
-        .is_err());
+    assert!(
+        detached_client
+            .read_property(
+                &[0x02],
+                object_id(1),
+                PropertyIdentifier::PRESENT_VALUE,
+                None
+            )
+            .await
+            .is_err()
+    );
 
     session_b.stop().await.unwrap();
 }

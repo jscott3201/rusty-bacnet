@@ -9,12 +9,12 @@ impl BACnetClient {
         crate::py_async::future_into_py(py, async move {
             let counts = {
                 let client = started(&inner).await?;
-                match client.transport() {
-                    AnyTransport::Sc(transport) => transport.npdu_drop_counts(),
+                match client.transport().link() {
+                    Some(AnyTransport::Sc(transport)) => transport.npdu_drop_counts(),
                     _ => {
                         return Err(PyRuntimeError::new_err(
                             "sc_npdu_drop_counts requires an SC client",
-                        ))
+                        ));
                     }
                 }
             };
@@ -30,12 +30,12 @@ impl BACnetClient {
         crate::py_async::future_into_py(py, async move {
             let info = {
                 let client = started(&inner).await?;
-                match client.transport() {
-                    AnyTransport::Sc(transport) => transport.hub_peer_info().await,
+                match client.transport().link() {
+                    Some(AnyTransport::Sc(transport)) => transport.hub_peer_info().await,
                     _ => {
                         return Err(PyRuntimeError::new_err(
                             "sc_peer_info requires an SC client",
-                        ))
+                        ));
                     }
                 }
             };
@@ -56,8 +56,8 @@ impl BACnetClient {
         let inner = self.inner.clone();
         crate::py_async::future_into_py(py, async move {
             let client = started(&inner).await?;
-            match client.transport() {
-                AnyTransport::Sc(transport) => Ok(crate::sc_events::PyScEventIterator::new(
+            match client.transport().link() {
+                Some(AnyTransport::Sc(transport)) => Ok(crate::sc_events::PyScEventIterator::new(
                     inner
                         .take_first_sc_events()
                         .unwrap_or_else(|| transport.connection_events()),
@@ -76,8 +76,8 @@ impl BACnetClient {
         let inner = self.inner.clone();
         crate::py_async::future_into_py(py, async move {
             let client = started(&inner).await?;
-            match client.transport() {
-                AnyTransport::Sc(transport) => Ok(crate::sc_events::PyScLinkStatus(
+            match client.transport().link() {
+                Some(AnyTransport::Sc(transport)) => Ok(crate::sc_events::PyScLinkStatus(
                     transport.connection_status(),
                 )),
                 _ => Err(PyRuntimeError::new_err(

@@ -106,10 +106,11 @@ fn a_notice_goes_when_a_dialog_opens_but_one_the_dialog_sets_stays() {
     // Ctrl-C closes the form and says so; that notice is this action's.
     press_with(&mut app, KeyCode::Char('c'), KeyModifiers::CONTROL);
     assert_eq!(app.overlay, Overlay::None);
-    assert!(app
-        .flash
-        .as_ref()
-        .is_some_and(|f| f.text.starts_with("Closed")));
+    assert!(
+        app.flash
+            .as_ref()
+            .is_some_and(|f| f.text.starts_with("Closed"))
+    );
     // The help overlay is a dialog too.
     flash(&mut app);
     press(&mut app, KeyCode::Char('?'));
@@ -357,16 +358,16 @@ fn failures_keep_what_identifies_them() {
 #[test]
 fn a_declined_preview_says_so_in_the_footer() {
     use crate::tui::app::safety::Modal;
-    use crate::tui::safety::{Gate, Preview, Tier};
+    use crate::tui::safety::{Change, Gate, Preview, Tier};
     let mut app = connected_app();
     app.overlay = Overlay::Safety(Box::new(Modal::Confirm {
         req: 1,
-        preview: Box::new(Preview {
+        change: Change::Write(Box::new(Preview {
             device: 100,
             items: Vec::new(),
             batch: false,
             gate: Gate::Allowed(Tier::T1),
-        }),
+        })),
         typed: String::new(),
         error: None,
         opened: app.now,

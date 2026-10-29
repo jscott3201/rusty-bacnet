@@ -2,8 +2,8 @@
 //! that one undoes the other.
 
 use bacnet_npdu::{
-    Address, AddressField, DecodeError, EncodeError, Malformed, NetworkMessageType,
-    NetworkPriority, Npdu, MAX_MAC_LEN,
+    Address, AddressField, DecodeError, EncodeError, MAX_MAC_LEN, Malformed, NetworkMessageType,
+    NetworkPriority, Npdu,
 };
 use proptest::prelude::*;
 use proptest::sample::Index;

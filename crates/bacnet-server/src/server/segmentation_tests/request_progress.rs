@@ -7,7 +7,7 @@ use request_reassembly::{
     expect_positive_ack, inject_routed_segment, present_value, recv_apdu, send_segment_with_window,
     split_into, start_reassembly_server, start_routed_reassembly_server, write_property_payload,
 };
-use tokio::time::{advance, timeout, Instant as TokioInstant};
+use tokio::time::{Instant as TokioInstant, advance, timeout};
 
 #[tokio::test(start_paused = true)]
 async fn request_progress_reclaims_128_stalled_slots_before_admission() {

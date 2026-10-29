@@ -20,14 +20,14 @@
 
 use std::sync::Arc;
 
-use bacnet_encoding::npdu::{decode_npdu, NpduAddress};
+use bacnet_encoding::npdu::{NpduAddress, decode_npdu};
 use bacnet_npdu::NetworkMessageType;
 use bacnet_types::MacAddr;
 use bytes::Bytes;
 
+use super::SendRequest;
 use super::control_policy::ControlGate;
 use super::envelope_harness::*;
-use super::SendRequest;
 use crate::router_table::Reachability;
 
 const BUSY: NetworkMessageType = NetworkMessageType::ROUTER_BUSY_TO_NETWORK;

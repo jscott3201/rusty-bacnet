@@ -256,11 +256,13 @@ fn malformed_san_members_unsupported_purposes_and_hostile_text_are_bounded() {
             .push(extension(&[2, 5, 29, 17], tlv(0x30, &member)));
         let entry = inspect(&certificate(p).0);
         assert!(has(&entry, ScFindingArea::San, ScFindingKind::Malformed));
-        assert!(entry
-            .san
-            .values
-            .iter()
-            .all(|s| s.is_ascii() && !s.contains('\n') && !s.contains('\x1b')));
+        assert!(
+            entry
+                .san
+                .values
+                .iter()
+                .all(|s| s.is_ascii() && !s.contains('\n') && !s.contains('\x1b'))
+        );
     }
     let mut p = params();
     p.custom_extensions

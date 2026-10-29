@@ -1,9 +1,10 @@
 use super::test_support::*;
 use super::*;
 use crate::durable::{DurableWrites, StageStep};
+#[cfg(feature = "std")]
 use crate::traits::BACnetObject;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 #[test]
@@ -195,6 +196,8 @@ fn invalid_middle_stops_staging_but_a_null_noop_does_not() {
     }
 }
 
+// Holds a save open on the writer's thread, which only std has.
+#[cfg(feature = "std")]
 #[test]
 fn refused_or_unrelated_write_does_not_steal_another_stage() {
     let store = Arc::new(Memory::default());
@@ -204,13 +207,15 @@ fn refused_or_unrelated_write_does_not_steal_another_stage() {
     let wait = staged(state.stage_writes(std::slice::from_ref(&wanted)));
     started.recv_timeout(WAIT).unwrap();
     assert!(apply(&mut state, &whole("bad;name")).is_err());
-    assert!(state
-        .write(
-            P::DESCRIPTION,
-            None,
-            &PropertyValue::CharacterString("name".into())
-        )
-        .is_none());
+    assert!(
+        state
+            .write(
+                P::DESCRIPTION,
+                None,
+                &PropertyValue::CharacterString("name".into())
+            )
+            .is_none()
+    );
     assert!(state.provision(profile("bad;name")).is_err());
     assert!(state.has_staged_write());
     assert!(matches!(
@@ -283,6 +288,7 @@ fn failed_staged_save_never_publishes_or_needs_a_correction() {
     assert_eq!(store.saved(), None);
 }
 
+#[cfg(feature = "std")]
 fn detached_clones<T: BACnetObject + Clone>(mut object: T, store: &Arc<Memory>) {
     let old = object.read_property(P::TAGS, None).unwrap();
     let (started, go) = store.hold();
@@ -314,6 +320,8 @@ fn detached_clones<T: BACnetObject + Clone>(mut object: T, store: &Arc<Memory>) 
     assert_eq!(store.attempts(), 1);
 }
 
+// Holds a save open on the writer's thread, which only std has.
+#[cfg(feature = "std")]
 #[test]
 fn all_four_application_clones_and_cov_snapshots_detach_a_held_writer() {
     macro_rules! check {
@@ -330,6 +338,8 @@ fn all_four_application_clones_and_cov_snapshots_detach_a_held_writer() {
     check!(crate::lighting::BinaryLightingOutputObject);
 }
 
+// Holds a save open on the writer's thread, which only std has.
+#[cfg(feature = "std")]
 #[test]
 fn provisioning_supersedes_a_stage_without_publishing_it_or_detaching_storage() {
     let store = Arc::new(Memory::default());

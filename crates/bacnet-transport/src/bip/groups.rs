@@ -3,12 +3,12 @@
 //! source (#1504) or a Forwarded-NPDU's originating address (#1493).
 
 use std::net::{Ipv4Addr, SocketAddrV4};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use bacnet_bip_codec::address_from_slice;
-use bacnet_bip_core::node::Groups;
 use bacnet_bip_core::LocalSubnet;
+use bacnet_bip_core::node::Groups;
 
 use super::BipTransport;
 

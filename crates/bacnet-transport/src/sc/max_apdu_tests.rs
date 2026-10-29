@@ -2,7 +2,7 @@ use bytes::{Bytes, BytesMut};
 use tokio::time::{Duration, Instant};
 
 use crate::port::TransportPort;
-use crate::sc_frame::{decode_sc_message, encode_sc_message, ScFunction, ScMessage, Vmac};
+use crate::sc_frame::{ScFunction, ScMessage, Vmac, decode_sc_message, encode_sc_message};
 
 use super::{LoopbackWebSocket, ScReconnectConfig, ScTransport, WebSocketPort};
 

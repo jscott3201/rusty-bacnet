@@ -42,10 +42,10 @@ pub fn handle_acknowledge_alarm(
 
     let object = db
         .get_mut(&request.event_object_identifier)
-        .ok_or(Error::Protocol {
-            class: ErrorClass::OBJECT,
-            code: ErrorCode::UNKNOWN_OBJECT,
-        })?;
+        .ok_or(Error::protocol(
+            ErrorClass::OBJECT,
+            ErrorCode::UNKNOWN_OBJECT,
+        ))?;
 
     let change = object.acknowledge_alarm_correlated_detailed_internal(
         request.event_state_acknowledged,

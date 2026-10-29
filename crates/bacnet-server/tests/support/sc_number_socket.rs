@@ -1,13 +1,13 @@
 //! Deterministic single-writer SC boundary; this is not TLS/backpressure proof.
 use bacnet_transport::{
     sc::{LoopbackWebSocket, ScTransport, WebSocketPort},
-    sc_frame::{decode_sc_message, encode_sc_message, ScFunction, ScMessage, BROADCAST_VMAC},
+    sc_frame::{BROADCAST_VMAC, ScFunction, ScMessage, decode_sc_message, encode_sc_message},
 };
 use bacnet_types::{error::Error, primitives::ObjectIdentifier};
 use bytes::{Bytes, BytesMut};
 use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use tokio::sync::{Mutex, Semaphore};
 
@@ -189,7 +189,7 @@ pub fn database() -> bacnet_objects::database::ObjectDatabase {
     db
 }
 pub fn write_npdu() -> Vec<u8> {
-    use bacnet_encoding::apdu::{encode_apdu, Apdu, ConfirmedRequest};
+    use bacnet_encoding::apdu::{Apdu, ConfirmedRequest, encode_apdu};
     use bacnet_types::enums::{ConfirmedServiceChoice, PropertyIdentifier};
     let mut value = BytesMut::new();
     bacnet_encoding::primitives::encode_app_character_string(&mut value, "handled while held")

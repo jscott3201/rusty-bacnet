@@ -23,13 +23,13 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
+use bacnet_ops::format::clean_name;
 use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::ObjectIdentifier;
 
 use super::objects::ListRow;
 use super::watch::Screen;
 use super::{App, Link};
-use crate::tui::format::clean_name;
 use crate::tui::message::Command;
 use crate::tui::point::{NameAsk, ReadName, ReqId};
 

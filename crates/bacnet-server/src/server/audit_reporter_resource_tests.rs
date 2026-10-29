@@ -104,10 +104,12 @@ async fn stop(fixture: &mut Fixture) {
         .await
         .unwrap()
         .unwrap();
-    assert!(fixture
-        .server
-        .notification_transactions
-        .delivery_workers_idle());
+    assert!(
+        fixture
+            .server
+            .notification_transactions
+            .delivery_workers_idle()
+    );
     assert_eq!(fixture.server.notification_transactions.active_count(), 0);
     assert_eq!(
         fixture.server.notification_transactions.audit_resources(),
@@ -133,9 +135,11 @@ async fn audit_reporter_auditing_failure_unconfirmed_coalesces_64_active_drops()
     let records = records(&fixture);
     assert_eq!(records.len(), 65);
     assert_eq!(records[64], expected(7, 64));
-    assert!(records[..64]
-        .iter()
-        .all(|record| record.operation == AuditOperation::WRITE && record.result.is_none()));
+    assert!(
+        records[..64]
+            .iter()
+            .all(|record| record.operation == AuditOperation::WRITE && record.result.is_none())
+    );
     assert_eq!(
         fixture.server.notification_transactions.audit_resources(),
         (false, 0, 1)
@@ -368,10 +372,12 @@ async fn audit_reporter_auditing_failure_stop_cancels_waiters_and_inflight() {
             .unwrap();
         drop(permits);
         drop(held);
-        assert!(fixture
-            .server
-            .notification_transactions
-            .delivery_workers_idle());
+        assert!(
+            fixture
+                .server
+                .notification_transactions
+                .delivery_workers_idle()
+        );
         assert_eq!(fixture.server.notification_transactions.active_count(), 0);
         assert_eq!(
             fixture.server.notification_transactions.audit_resources(),
@@ -406,13 +412,15 @@ async fn audit_reporter_auditing_failure_late_completion_does_not_update_replace
         .unwrap()
         .status_internal();
     let token = old.begin_delivery();
-    assert!(fixture
-        .server
-        .db
-        .write()
-        .await
-        .add(Box::new(enabled(true)))
-        .is_err());
+    assert!(
+        fixture
+            .server
+            .db
+            .write()
+            .await
+            .add(Box::new(enabled(true)))
+            .is_err()
+    );
     fixture.server.stop().await.unwrap();
     let replacement = enabled(true);
     let status = replacement.status_internal();
@@ -446,9 +454,11 @@ async fn audit_reporter_auditing_failure_excludes_nonresource_failures_under_loa
         .collect();
     // An invalid receive ceiling is rejected while constructing the identity,
     // before a running reporter or its admission budget can observe it.
-    assert!(bacnet_objects::DeviceIdentity::default()
-        .with_max_apdu(1)
-        .is_err());
+    assert!(
+        bacnet_objects::DeviceIdentity::default()
+            .with_max_apdu(1)
+            .is_err()
+    );
     fixture.server.config_mut().mutation_policy = crate::mutation::MutationPolicy::DenyAll;
     assert!(matches!(
         write_value(&fixture.server, None).await,
@@ -541,10 +551,10 @@ async fn audit_reporter_auditing_failure_counts_execution_error_but_not_normal_a
                 .unwrap()
         })
         .collect();
-    *fixture.execution_error.lock().unwrap() = Some(Error::Protocol {
-        class: ErrorClass::PROPERTY,
-        code: ErrorCode::WRITE_ACCESS_DENIED,
-    });
+    *fixture.execution_error.lock().unwrap() = Some(Error::protocol(
+        ErrorClass::PROPERTY,
+        ErrorCode::WRITE_ACCESS_DENIED,
+    ));
     assert!(matches!(
         write_value(&fixture.server, None).await,
         Apdu::Error(_)

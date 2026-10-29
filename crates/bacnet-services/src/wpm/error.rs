@@ -87,7 +87,7 @@ impl TryFrom<&ErrorPdu> for WritePropertyMultipleError {
 
 impl From<WritePropertyMultipleError> for Error {
     fn from(error: WritePropertyMultipleError) -> Self {
-        Error::protocol(
+        Error::with_detail(
             error.error_class,
             error.error_code,
             Some(ErrorDetail::FirstFailedWriteAttempt(

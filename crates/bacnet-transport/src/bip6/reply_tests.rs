@@ -206,7 +206,9 @@ async fn each_bbmd_request_gets_its_nak_at_its_source() {
             let wire = encoded(&expected.message).unwrap();
             assert_eq!(
                 wire[..],
-                [0x82, 0x00, 0x00, 0x09, 0x00, 0x06, 0x32, octets[0], octets[1]]
+                [
+                    0x82, 0x00, 0x00, 0x09, 0x00, 0x06, 0x32, octets[0], octets[1]
+                ]
             );
         }
     }
@@ -442,9 +444,11 @@ async fn replies_go_only_to_the_sender_or_a_trusted_askers_address() {
 async fn the_nak_quota_caps_naks_per_address_and_in_total() {
     let receiver = receiver(true).await;
     for _ in 0..REPLIES_PER_DESTINATION {
-        assert!(reply(&receiver, register(), sender(), local_ip())
-            .await
-            .is_some());
+        assert!(
+            reply(&receiver, register(), sender(), local_ip())
+                .await
+                .is_some()
+        );
     }
     assert_eq!(
         reply(&receiver, register(), sender(), local_ip()).await,
@@ -456,9 +460,11 @@ async fn the_nak_quota_caps_naks_per_address_and_in_total() {
         Some(ack_to(sender())),
         "a collision probe is still answered"
     );
-    assert!(reply(&receiver, virtual_resolution(), sender(), local_ip())
-        .await
-        .is_some());
+    assert!(
+        reply(&receiver, virtual_resolution(), sender(), local_ip())
+            .await
+            .is_some()
+    );
     assert!(
         reply(&receiver, register(), asker(), local_ip())
             .await
@@ -467,9 +473,11 @@ async fn the_nak_quota_caps_naks_per_address_and_in_total() {
     );
 
     tokio::time::advance(REPLY_WINDOW).await;
-    assert!(reply(&receiver, register(), sender(), local_ip())
-        .await
-        .is_some());
+    assert!(
+        reply(&receiver, register(), sender(), local_ip())
+            .await
+            .is_some()
+    );
 
     tokio::time::advance(REPLY_WINDOW).await;
     let mut admitted = 0;

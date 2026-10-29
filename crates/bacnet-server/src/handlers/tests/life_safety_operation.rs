@@ -1,5 +1,6 @@
 use super::*;
 use crate::life_safety_cov::LifeSafetyCovChange;
+use bacnet_types::error::RemoteError;
 
 use bacnet_objects::life_safety::{LifeSafetyPointObject, LifeSafetyZoneObject};
 use bacnet_services::life_safety::LifeSafetyOperationRequest;
@@ -35,10 +36,10 @@ fn read_enumerated(
 fn assert_protocol_error(error: Error, class: ErrorClass, code: ErrorCode) {
     assert!(matches!(
         error,
-        Error::Protocol {
+        Error::Remote(RemoteError::Error {
             class: actual_class,
             code: actual_code,
-        } if actual_class == class && actual_code == code
+        }) if actual_class == class && actual_code == code
     ));
 }
 

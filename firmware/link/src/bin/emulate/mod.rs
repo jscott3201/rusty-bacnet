@@ -109,7 +109,7 @@ impl Stack {
         // statics, cortex-m-rt's `_stack_end` or riscv-rt's `__estack`. Only
         // their addresses are used: each is a word boundary, not a word of
         // data.
-        extern "C" {
+        unsafe extern "C" {
             #[cfg_attr(target_arch = "arm", link_name = "_stack_end")]
             #[cfg_attr(target_arch = "riscv32", link_name = "__estack")]
             static STACK_BOTTOM: u32;
@@ -168,7 +168,7 @@ unsafe fn HardFault(frame: &cortex_m_rt::ExceptionFrame) -> ! {
 /// exception without a handler of its own, and this image has none.
 #[cfg(target_arch = "riscv32")]
 #[allow(unsafe_code)]
-#[export_name = "ExceptionHandler"]
+#[unsafe(export_name = "ExceptionHandler")]
 extern "C" fn exception(_frame: &riscv_rt::TrapFrame) -> ! {
     let (cause, pc): (usize, usize);
     // SAFETY: reads two machine-mode CSRs, the trap's cause and the address

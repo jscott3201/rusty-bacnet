@@ -1,7 +1,7 @@
 //! Controlled send completions test return paths and feedback ownership.
 
-use super::priority_harness::*;
 use super::BACnetRouter;
+use super::priority_harness::*;
 use bacnet_types::error::Error;
 use std::sync::atomic::Ordering;
 
@@ -69,7 +69,7 @@ async fn late_refusal_returns_to_local_routed_and_attached_origins_after_limit_c
         reply.complete.send(Ok(())).unwrap();
         counts(&router, (1, 1, 1)).await;
         assert_eq!(router.counters().undrained, 0);
-        router.stop().await;
+        router.stop().await.unwrap();
     }
 }
 
@@ -91,7 +91,7 @@ async fn an_io_failure_is_not_reclassified_by_a_smaller_current_limit() {
     following.complete.send(Ok(())).unwrap();
     counts(&router, (0, 0, 0)).await;
     assert!(peers[0].sent.try_recv().is_err());
-    router.stop().await;
+    router.stop().await.unwrap();
 }
 
 #[tokio::test]
@@ -116,7 +116,7 @@ async fn forwarded_rejects_and_global_or_control_fanouts_are_silent_when_refused
         following.complete.send(Ok(())).unwrap();
         counts(&router, (1, 1, 0)).await;
         assert!(peers[0].sent.try_recv().is_err());
-        router.stop().await;
+        router.stop().await.unwrap();
     }
 }
 
@@ -144,7 +144,7 @@ async fn refusing_the_generated_reject_ends_without_another_reply() {
     counts(&router, (2, 2, 1)).await;
     assert!(peers[0].sent.try_recv().is_err());
     assert!(peers[1].sent.try_recv().is_err());
-    router.stop().await;
+    router.stop().await.unwrap();
 }
 
 #[tokio::test]
@@ -174,7 +174,7 @@ async fn a_late_reject_respects_the_existing_shared_queue_capacity_and_shutdown(
     // generated reject. Neither admission evicts an existing queued send.
     counts(&router, (1, 2, 1)).await;
     assert!(peers[0].sent.try_recv().is_err());
-    router.stop().await;
+    router.stop().await.unwrap();
     assert!(held.complete.is_closed());
     for peer in &mut peers {
         assert!(peer.frames.is_closed());
@@ -195,13 +195,17 @@ async fn feedback_owners_do_not_keep_closed_ingress_consumers_or_senders_alive()
             .unwrap()
             .is_none()
     );
-    for sender in router.sender_tasks.drain(..) {
-        tokio::time::timeout(std::time::Duration::from_secs(2), sender)
-            .await
-            .unwrap()
-            .unwrap();
+    for (_, sender) in &mut router.lifecycle.workers.as_mut().unwrap().senders {
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), sender)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_empty()
+        );
     }
-    router.stop().await;
+    router.lifecycle.workers.as_mut().unwrap().senders.clear();
+    router.stop().await.unwrap();
 }
 
 #[tokio::test]
@@ -240,5 +244,5 @@ async fn a_late_reject_joins_the_existing_priority_queue_in_fifo_order() {
         assert_eq!(send.attributes, attributes(tag));
         send.complete.send(Ok(())).unwrap();
     }
-    router.stop().await;
+    router.stop().await.unwrap();
 }

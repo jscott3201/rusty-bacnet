@@ -10,6 +10,7 @@ use super::*;
 use bacnet_objects::elevator::{ElevatorGroupObject, EscalatorObject, LiftObject};
 use bacnet_types::constructed::BACnetDeviceObjectReference;
 use bacnet_types::enums::{DoorStatus, LiftCarDirection, LiftFault};
+use bacnet_types::error::RemoteError;
 
 mod lift_simulation;
 
@@ -77,7 +78,7 @@ fn read_wire_at(
 
 fn assert_property_error(result: Result<(), Error>, expected: ErrorCode, context: &str) {
     assert!(
-        matches!(result, Err(Error::Protocol { class, code })
+        matches!(result, Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::PROPERTY
                 && code == expected),
         "{context}: expected PROPERTY/{expected:?}, got {result:?}"

@@ -22,7 +22,7 @@
 
 use super::charset;
 use crate::sink::{EncodeSink, SinkFull};
-use crate::tags::{app_tag, encode_tag_to_sink, TagClass};
+use crate::tags::{TagClass, app_tag, encode_tag_to_sink};
 
 /// The longest tag header [`encode_tag_to_sink`] writes.
 const MAX_HEADER: usize = 7;

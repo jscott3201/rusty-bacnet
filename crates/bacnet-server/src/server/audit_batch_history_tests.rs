@@ -2,8 +2,8 @@ use super::batching::delayed;
 use super::*;
 
 #[tokio::test(start_paused = true)]
-async fn delayed_target_audit_historical_aba_summaries_use_captured_routes_without_current_health_authority(
-) {
+async fn delayed_target_audit_historical_aba_summaries_use_captured_routes_without_current_health_authority()
+ {
     let mut reporter = delayed(10);
     let mut flags = AuditOperationFlags::empty();
     flags.insert(AuditOperation::WRITE);
@@ -119,16 +119,18 @@ async fn delayed_target_audit_active_presence_and_off_runtime_silent_commands_pr
                 None,
             )
             .unwrap();
-        assert!(object
-            .configure_audit_reporter_internal(
-                AuditLevel::NONE,
-                AuditOperationFlags::empty(),
-                false,
-                None,
-                BACnetPriorityFilter::all(),
-                None
-            )
-            .is_err());
+        assert!(
+            object
+                .configure_audit_reporter_internal(
+                    AuditLevel::NONE,
+                    AuditOperationFlags::empty(),
+                    false,
+                    None,
+                    BACnetPriorityFilter::all(),
+                    None
+                )
+                .is_err()
+        );
         assert_eq!(
             object
                 .read_property(PropertyIdentifier::MAXIMUM_SEND_DELAY, None)

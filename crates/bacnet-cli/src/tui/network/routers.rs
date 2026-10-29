@@ -8,6 +8,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
+/// Maximum routers retained; least recently heard is evicted first.
+pub(crate) const MAX_ROUTERS: usize = 128;
+/// Maximum networks per router; at most 16,384 router/network edges in total.
+pub(crate) const MAX_ROUTER_NETWORKS: usize = 128;
+
 /// One network on the map.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NetworkRow {
@@ -39,8 +44,25 @@ impl RouterMap {
     /// A router's networks add up across its messages: one answering a
     /// question about a single network lists only that one.
     pub(crate) fn record(&mut self, router: &str, networks: &[u16], at: Instant) {
+        if !self.routers.contains_key(router) && self.routers.len() == MAX_ROUTERS {
+            let oldest = self
+                .routers
+                .iter()
+                .min_by_key(|(address, networks)| (networks.values().max().copied(), *address))
+                .map(|(address, _)| address.clone())
+                .unwrap();
+            self.routers.remove(&oldest);
+        }
         let entry = self.routers.entry(router.to_string()).or_default();
         for &network in networks {
+            if !entry.contains_key(&network) && entry.len() == MAX_ROUTER_NETWORKS {
+                let oldest = *entry
+                    .iter()
+                    .min_by_key(|(network, at)| (*at, *network))
+                    .unwrap()
+                    .0;
+                entry.remove(&oldest);
+            }
             entry.insert(network, at);
         }
     }

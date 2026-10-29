@@ -214,14 +214,16 @@ async fn unsolicited_response_matrix_preserves_lease_activity_and_probe_then_rec
         }
     }
     live.ack(0x2233).await;
-    assert!(clients
-        .lock()
-        .await
-        .get(&live.vmac)
-        .unwrap()
-        .heartbeat
-        .pending
-        .is_none());
+    assert!(
+        clients
+            .lock()
+            .await
+            .get(&live.vmac)
+            .unwrap()
+            .heartbeat
+            .pending
+            .is_none()
+    );
     send_raw(&mut live, vec![0x0a, 0, 0x44, 0x55]).await;
     assert_eq!(recv_raw(&mut live).await, [0x0b, 0, 0x44, 0x55]);
 

@@ -61,15 +61,15 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use bacnet_objects::channel::{
-    coerce_channel_value, ChannelDistribution, ChannelMember, MemberDatatype,
+    ChannelDistribution, ChannelMember, MemberDatatype, coerce_channel_value,
 };
 use bacnet_objects::command::{CommandRun, WriteFailure};
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_types::constructed::BACnetActionCommand;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
-use futures_util::stream::{self, FuturesUnordered};
 use futures_util::StreamExt;
+use futures_util::stream::{self, FuturesUnordered};
 use tokio::time::Instant;
 use tracing::debug;
 

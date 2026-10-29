@@ -7,9 +7,9 @@ use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::Duration;
 
-use tokio::time::{sleep, Instant};
+use tokio::time::{Instant, sleep};
 
-use super::{interleave, race, CONNECTION_ATTEMPT_DELAY};
+use super::{CONNECTION_ATTEMPT_DELAY, interleave, race};
 
 const V6_A: &str = "[::1]:47808";
 const V6_B: &str = "[2001:db8::1]:47808";

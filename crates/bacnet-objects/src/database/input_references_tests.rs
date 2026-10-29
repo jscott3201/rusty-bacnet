@@ -9,8 +9,8 @@ use crate::analog::AnalogInputObject;
 use crate::value_types::IntegerValueObject;
 use bacnet_types::enums::{EngineeringUnits, Reliability};
 use bacnet_types::primitives::StatusFlags;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use PropertyIdentifier as P;
 

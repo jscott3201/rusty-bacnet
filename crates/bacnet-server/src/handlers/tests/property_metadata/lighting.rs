@@ -1,10 +1,11 @@
 use super::*;
+use PropertyIdentifier as P;
 use bacnet_objects::{
     lighting::{BinaryLightingOutputObject, LightingOutputObject},
     traits::BACnetObject,
 };
+use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::PropertyValue;
-use PropertyIdentifier as P;
 
 fn lighting_objects(configured: bool) -> [Box<dyn BACnetObject>; 2] {
     let mut lo = LightingOutputObject::new(7, "LO-7").unwrap();
@@ -205,9 +206,11 @@ fn rpm_lighting_metadata_does_not_enable_create_object() {
             .encode(&mut request);
             let mut response = BytesMut::new();
             let result = handle_create_object(&mut db, &request, &mut response);
-            assert!(matches!(result, Err(Error::Protocol { class, code })
+            assert!(
+                matches!(result, Err(Error::Remote(RemoteError::Error { class, code }))
                 if class == ErrorClass::OBJECT
-                    && code == ErrorCode::UNSUPPORTED_OBJECT_TYPE));
+                    && code == ErrorCode::UNSUPPORTED_OBJECT_TYPE)
+            );
             assert!(response.is_empty());
             assert!(db.is_empty());
         }

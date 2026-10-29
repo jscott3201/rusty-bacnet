@@ -2,11 +2,11 @@ use bacnet_objects::database::{LocalDevice, ObjectDatabase};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{BACnetEventParameter, FaultParameters};
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier, Reliability};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
-use super::support::classify_required_property_read_error;
 use super::LocalConfigurationReadError;
+use super::support::classify_required_property_read_error;
 
 /// Fault algorithms intentionally implemented by the Event Enrollment core.
 ///
@@ -171,7 +171,7 @@ fn numeric_f64(value: &PropertyValue) -> Option<f64> {
 fn optional_property_absent(error: &Error) -> bool {
     matches!(
         error,
-        Error::Protocol { class, code }
+        Error::Remote(RemoteError::Error { class, code })
             if *class == ErrorClass::PROPERTY
                 && *code == ErrorCode::UNKNOWN_PROPERTY
     )

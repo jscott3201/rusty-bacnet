@@ -1,7 +1,7 @@
 use super::super::*;
 use bacnet_encoding::constructed::decode_event_notification;
 
-use crate::server::test_transport::{SendLog, TestTransport, BIP_LOCAL_MAC};
+use crate::server::test_transport::{BIP_LOCAL_MAC, SendLog, TestTransport};
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_objects::analog::AnalogInputObject;

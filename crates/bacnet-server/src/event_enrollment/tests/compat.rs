@@ -1,4 +1,5 @@
-//! Extended and Opaque (legacy raw-octet) compatibility tests.
+//! Extended, Opaque (legacy raw-octet) and unevaluated-algorithm
+//! compatibility tests.
 //!
 //! Split out of `tests.rs` to keep every file under the 700-LOC cap.
 
@@ -108,21 +109,23 @@ fn legacy_le_change_of_state_fallback() {
     assert_eq!(transitions[0].change.to, EventState::OFFNORMAL);
 }
 
-/// A conformant framed write of an UNMODELED spec alternative (access-event
-/// [13]) lands as `Opaque` for read-back preservation, but must NEVER route
-/// to the legacy little-endian evaluator: the TLV body is not an LE limits
-/// payload, and reinterpreting it as one fabricates spurious transitions.
-/// (Review blocker: pre-fix, this test produced a HIGH_LIMIT transition.)
+/// A conformant framed write of an algorithm the evaluator doesn't run
+/// (access-event [13]) is stored and read back, but must NEVER route to the
+/// legacy little-endian evaluator: the TLV body is not an LE limits payload,
+/// and reinterpreting it as one fabricates spurious transitions. (Review
+/// blocker: pre-fix, an opaque access-event produced a HIGH_LIMIT
+/// transition.) Since #2090 the alternative decodes to its own variant, and
+/// it still produces no transition.
 #[test]
-fn framed_unmodeled_alternative_is_never_le_evaluated() {
+fn framed_unevaluated_alternative_is_never_le_evaluated() {
     let mut db = ObjectDatabase::new();
 
     let mut ai = AnalogInputObject::new(96, "AI-96", EngineeringUnits::DEGREES_CELSIUS).unwrap();
-    ai.set_present_value(85.0); // would exceed a 0.0/0.0 LE-decoded band
+    ai.set_present_value(85.0); // would exceed a band decoded from the octets
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();
 
-    let mut ee = EventEnrollmentObject::new(96, "EE-unmodeled", EventType::OUT_OF_RANGE).unwrap();
+    let mut ee = EventEnrollmentObject::new(96, "EE-unevaluated", EventType::OUT_OF_RANGE).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
@@ -132,15 +135,12 @@ fn framed_unmodeled_alternative_is_never_le_evaluated() {
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
-    // Hand-built access-event alternative (tag 13): member [0] is the event
-    // list (twelve NULL octets here) and member [1] the time-reference
-    // property reference. The TLV body's first 12 bytes, if misread as
-    // little-endian f32s, are all 0.0 (a band that 85.0 exceeds, so
-    // misrouting WOULD fire HIGH_LIMIT).
+    // Hand-built access-event alternative (tag 13): member [0] lists six
+    // access events, member [1] is the time-reference property reference.
     let framed: Vec<u8> = vec![
         0xDE, // opening tag [13]
-        0x0E, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x0F, // [0] list-of-access-events = twelve NULL octets
+        0x0E, 0x91, 0x01, 0x91, 0x02, 0x91, 0x03, 0x91, 0x04, 0x91, 0x05, 0x91, 0x06,
+        0x0F, // [0] list-of-access-events
         0x1E, 0x0C, 0x00, 0x00, 0x00, 0x01, 0x19, 0x55, 0x1F, // [1] time reference
         0xDF, // closing tag [13]
     ];
@@ -153,7 +153,7 @@ fn framed_unmodeled_alternative_is_never_le_evaluated() {
     )
     .unwrap();
 
-    // The value READS BACK byte-identical (store-but-preserve)…
+    // The value READS BACK byte-identical…
     let val = db
         .get(&ee_oid)
         .unwrap()
@@ -161,16 +161,139 @@ fn framed_unmodeled_alternative_is_never_le_evaluated() {
         .unwrap();
     assert_eq!(
         val,
-        PropertyValue::ApplicationData(framed),
-        "unmodeled framed alternative must round-trip verbatim"
+        PropertyValue::ApplicationData(framed.clone()),
+        "the framed alternative must round-trip verbatim"
     );
+    assert!(matches!(
+        bacnet_encoding::constructed::decode_event_parameter(&framed, 0)
+            .unwrap()
+            .0,
+        BACnetEventParameter::AccessEvent { .. }
+    ));
 
     // …but produces NO event transition: it is not evaluated as LE limits.
     let transitions = evaluate_event_enrollments(&mut db, 1);
     assert!(
         transitions.is_empty(),
-        "unmodeled spec alternative must not be fed to eval_legacy_le: {transitions:?}"
+        "an unevaluated alternative must not be fed to eval_legacy_le: {transitions:?}"
     );
+}
+
+/// Every algorithm #2090 decoded that the evaluator doesn't run behaves as
+/// it did while it was opaque: stored, no transition, the state left NORMAL.
+/// Its unset Time_Delay_Normal reads back its own time delay, or 0 for the
+/// two with none (buffer-ready, access-event).
+#[test]
+fn newly_decoded_algorithms_stay_unevaluated() {
+    use bacnet_types::enums::{AccessEvent, LifeSafetyState, TimerState};
+    use bacnet_types::primitives::StatusFlags;
+    let reference = |instance| {
+        BACnetDeviceObjectPropertyReference::new_local(
+            ObjectIdentifier::new(ObjectType::ANALOG_VALUE, instance).unwrap(),
+            PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        )
+    };
+    use BACnetEventParameter as EP;
+    let algorithms = [
+        EP::CommandFailure {
+            time_delay: 7,
+            feedback_property_reference: reference(1),
+        },
+        EP::ChangeOfLifeSafety {
+            time_delay: 7,
+            list_of_life_safety_alarm_values: vec![LifeSafetyState::ALARM],
+            list_of_alarm_values: vec![LifeSafetyState::PRE_ALARM],
+            mode_property_reference: reference(2),
+        },
+        EP::BufferReady {
+            notification_threshold: 1,
+            previous_notification_count: 0,
+        },
+        EP::UnsignedRange {
+            time_delay: 7,
+            low_limit: 0,
+            high_limit: 1,
+        },
+        EP::AccessEvent {
+            list_of_access_events: vec![AccessEvent::GRANTED],
+            access_event_time_reference: reference(3),
+        },
+        EP::DoubleOutOfRange {
+            time_delay: 7,
+            low_limit: 0.0,
+            high_limit: 1.0,
+            deadband: 0.0,
+        },
+        EP::SignedOutOfRange {
+            time_delay: 7,
+            low_limit: 0,
+            high_limit: 1,
+            deadband: 0,
+        },
+        EP::UnsignedOutOfRange {
+            time_delay: 7,
+            low_limit: 0,
+            high_limit: 1,
+            deadband: 0,
+        },
+        EP::ChangeOfCharacterstring {
+            time_delay: 7,
+            list_of_alarm_values: vec!["85".into()],
+        },
+        EP::ChangeOfStatusFlags {
+            time_delay: 7,
+            selected_flags: StatusFlags::all(),
+        },
+        EP::ChangeOfDiscreteValue { time_delay: 7 },
+        EP::ChangeOfTimer {
+            time_delay: 7,
+            alarm_values: vec![TimerState::EXPIRED],
+            update_time_reference: reference(4),
+        },
+    ];
+    for algorithm in algorithms {
+        let mut db = ObjectDatabase::new();
+        let mut ai =
+            AnalogInputObject::new(97, "AI-97", EngineeringUnits::DEGREES_CELSIUS).unwrap();
+        ai.set_present_value(85.0); // outside every band above
+        let ai_oid = ai.object_identifier();
+        db.add(Box::new(ai)).unwrap();
+        let mut ee = EventEnrollmentObject::new(97, "EE-97", EventType::OUT_OF_RANGE).unwrap();
+        ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+            ai_oid,
+            PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        )))
+        .unwrap();
+        ee.set_event_parameters(algorithm.clone());
+        ee.set_event_enable(EventTransitionBits::all());
+        let ee_oid = ee.object_identifier();
+        db.add(Box::new(ee)).unwrap();
+
+        for tick in 1..=3 {
+            let transitions = evaluate_event_enrollments(&mut db, tick);
+            assert!(transitions.is_empty(), "{algorithm:?}: {transitions:?}");
+        }
+        let state = db
+            .get(&ee_oid)
+            .unwrap()
+            .read_property(PropertyIdentifier::EVENT_STATE, None)
+            .unwrap();
+        assert_eq!(
+            state,
+            PropertyValue::Enumerated(EventState::NORMAL.to_raw()),
+            "{algorithm:?}"
+        );
+        let expected = match algorithm {
+            EP::BufferReady { .. } | EP::AccessEvent { .. } => 0,
+            _ => 7,
+        };
+        let delay = db
+            .get(&ee_oid)
+            .unwrap()
+            .read_property(PropertyIdentifier::TIME_DELAY_NORMAL, None)
+            .unwrap();
+        assert_eq!(delay, PropertyValue::Unsigned(expected), "{algorithm:?}");
+    }
 }
 
 /// CHANGE_OF_VALUE with a `bitmask` criteria indicates NORMAL→NORMAL when any

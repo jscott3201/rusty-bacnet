@@ -17,8 +17,8 @@ use bacnet_transport::port::TransportPort;
 
 use crate::layer::NetworkLayer;
 use crate::loopback_fixture::{
-    next_from_router, pump, recv, reject_of, wire, RouterFixture, APDU, LONGEST, ORIGIN, REMOTE,
-    TOO_LONG,
+    APDU, LONGEST, ORIGIN, REMOTE, RouterFixture, TOO_LONG, next_from_router, pump, recv,
+    reject_of, wire,
 };
 
 const FIELDS: [AddressField; 2] = [AddressField::Destination, AddressField::Source];

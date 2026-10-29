@@ -11,8 +11,8 @@ use bacnet_npdu::NetworkMessageType;
 use bacnet_types::MacAddr;
 use bytes::Bytes;
 
-use super::envelope_harness::*;
 use super::SendRequest;
+use super::envelope_harness::*;
 use crate::router_table::{ClaimCounters, PortId};
 
 /// Independent-peer entry walk: count + `DNET(2) + Port ID(1) + Port Info(N)`
@@ -340,9 +340,11 @@ async fn large_table_query_splits_into_bounded_acks() {
     sorted.dedup();
     assert_eq!(sorted.len(), expected_total);
     assert_eq!(stream, sorted);
-    assert!(stream
-        .iter()
-        .all(|(_, port_id)| *port_id == 1 || *port_id == 2));
+    assert!(
+        stream
+            .iter()
+            .all(|(_, port_id)| *port_id == 1 || *port_id == 2)
+    );
     assert!(stream.contains(&(1000, 1)));
     assert!(stream.contains(&(2000, 2)));
     // Even learned nets sit on port 0 (wire 1), odd on port 1 (wire 2).

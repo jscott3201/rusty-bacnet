@@ -75,11 +75,11 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
                 DecodeEvent::Error(error) => Some((error, None)),
             };
             input = &[];
-            if let Some((error, destination)) = dropped {
-                if self.dropped_candidate_is_invalid(error, destination) {
-                    self.counters.record_parser_error();
-                    self.invalid_frame_event(now);
-                }
+            if let Some((error, destination)) = dropped
+                && self.dropped_candidate_is_invalid(error, destination)
+            {
+                self.counters.record_parser_error();
+                self.invalid_frame_event(now);
             }
         }
     }

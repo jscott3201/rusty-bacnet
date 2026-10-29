@@ -49,8 +49,41 @@ pub(super) struct Request<'a> {
     pub command_origin: Option<&'a bacnet_objects::command_source::CommandOrigin>,
 }
 
+/// Ask `policy` about each of `contexts` in turn, up to and including the
+/// first it denies, and return its answers (#2032).
+///
+/// The calls run on Tokio's blocking pool while the request task awaits
+/// them, holding no database guard. A policy that blocks (a Python callable
+/// waiting on another thread, say) then holds no runtime worker, and the
+/// request task can still be aborted: `stop()`, which joins every admitted
+/// request, ends without waiting for the call. An abandoned call finishes on
+/// its own thread and its answer is dropped. A panic denies, as in
+/// [`fail_closed_authorize`](audit_notification::fail_closed_authorize), and
+/// so does a call that never reports back.
+pub(in crate::server) async fn ask_mutation_policy(
+    policy: &Arc<dyn crate::ServerPolicy>,
+    contexts: Vec<MutationAuthorizationContext>,
+) -> Vec<bool> {
+    let policy = Arc::clone(policy);
+    let asked = contexts.len().min(1);
+    tokio::task::spawn_blocking(move || {
+        let mut answers = Vec::with_capacity(contexts.len());
+        for context in &contexts {
+            let allowed =
+                audit_notification::fail_closed_authorize(|| policy.authorize_mutation(context));
+            answers.push(allowed);
+            if !allowed {
+                break;
+            }
+        }
+        answers
+    })
+    .await
+    .unwrap_or_else(|_| vec![false; asked])
+}
+
 impl Request<'_> {
-    fn authorize(
+    async fn authorize(
         &self,
         decode: impl FnOnce() -> Result<MutationTarget, Error>,
     ) -> Result<(), Error> {
@@ -60,33 +93,59 @@ impl Request<'_> {
             return self.record(MutationDecision::Allow);
         }
         let target = decode().map_err(Error::into_request_reject)?;
-        self.record(self.decide(target))
+        let decision = self.decide(vec![target]).await[0];
+        self.record(decision)
     }
 
-    /// What policy decides on `target`, asking the installed
-    /// [`ServerPolicy`](crate::ServerPolicy) unless `DenyAll` answers first.
-    /// Nothing is recorded.
-    fn decide(&self, target: MutationTarget) -> MutationDecision {
+    /// The mode's answer when no policy is asked: `DenyAll` denies, and
+    /// without a policy that decides mutations everything is allowed.
+    fn decide_without_policy(&self) -> Option<MutationDecision> {
         if self.config.mutation_policy == MutationPolicy::DenyAll {
-            return MutationDecision::PolicyDeny;
+            return Some(MutationDecision::PolicyDeny);
         }
-        let Some(policy) = self.config.mutation_decider() else {
-            return MutationDecision::Allow;
-        };
-        let context = MutationAuthorizationContext {
-            source_mac: MacAddr::from_slice(self.source_mac),
-            source_network: self.source_network.cloned(),
-            provenance: self.provenance,
-            trust: MutationTrust::from_provenance(self.provenance),
-            invoke_id: Some(self.req.invoke_id),
-            service_choice: self.req.service_choice.into(),
-            target,
-        };
-        if audit_notification::fail_closed_authorize(|| policy.authorize_mutation(&context)) {
-            MutationDecision::Allow
-        } else {
-            MutationDecision::Deny
+        self.config
+            .mutation_decider()
+            .is_none()
+            .then_some(MutationDecision::Allow)
+    }
+
+    /// What policy decides on each of `targets` in turn, up to and including
+    /// the first it denies, asking the installed
+    /// [`ServerPolicy`](crate::ServerPolicy) unless the mode answers first
+    /// ([`ask_mutation_policy`]). Never empty when `targets` isn't. Nothing
+    /// is recorded.
+    async fn decide(&self, targets: Vec<MutationTarget>) -> Vec<MutationDecision> {
+        if let Some(decision) = self.decide_without_policy() {
+            return if decision == MutationDecision::Allow {
+                vec![decision; targets.len()]
+            } else {
+                vec![decision; targets.len().min(1)]
+            };
         }
+        let policy = self.config.mutation_decider().expect("asked above");
+        let contexts = targets
+            .into_iter()
+            .map(|target| MutationAuthorizationContext {
+                source_mac: MacAddr::from_slice(self.source_mac),
+                source_network: self.source_network.cloned(),
+                provenance: self.provenance.clone(),
+                trust: MutationTrust::from_provenance(&self.provenance),
+                invoke_id: Some(self.req.invoke_id),
+                service_choice: self.req.service_choice.into(),
+                target,
+            })
+            .collect();
+        ask_mutation_policy(policy, contexts)
+            .await
+            .into_iter()
+            .map(|allowed| {
+                if allowed {
+                    MutationDecision::Allow
+                } else {
+                    MutationDecision::Deny
+                }
+            })
+            .collect()
     }
 
     /// Count `decision` and answer the request with it.
@@ -138,10 +197,13 @@ impl Request<'_> {
             command_runs,
             ..
         } = effects;
-        if let Err(error) = self.authorize(|| {
-            WritePropertyRequest::decode(&self.req.service_request)
-                .map(MutationTarget::WriteProperty)
-        }) {
+        if let Err(error) = self
+            .authorize(|| {
+                WritePropertyRequest::decode(&self.req.service_request)
+                    .map(MutationTarget::WriteProperty)
+            })
+            .await
+        {
             return self.error::<T>(&error);
         }
         // A write the object saves first saves here, without the guard.
@@ -242,9 +304,10 @@ impl Request<'_> {
             command_runs,
             timed_revisits,
         } = effects;
-        // Attempts the objects save first save here, without the guard. Each
-        // is decided before it is staged, and the handler takes the decision
-        // made here when it reaches the attempt (#1321).
+        // A policy decides every attempt here, with no database guard held,
+        // and the handler takes those decisions as it reaches each attempt
+        // under the write lock (#2032). Attempts the objects save first are
+        // staged here too, without the guard, once decided (#1321).
         let mut ahead = wpm_ahead::DecidedAhead::default();
         let targets = ahead.targets(self, db).await;
         let staged = durable_writes::stage(db, targets).await;
@@ -255,12 +318,15 @@ impl Request<'_> {
             // captured as it commits, under this guard (#856).
             let capture = cov_table.read().await.timed_capture_all();
             let mut snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::default();
-            let authorize =
-                |attempt: &bacnet_services::wpm::WritePropertyAttempt| match ahead.take(attempt) {
-                    Some(decision) => self.record(decision),
-                    None => self
-                        .authorize(|| Ok(MutationTarget::WritePropertyMultiple(attempt.clone()))),
-                };
+            // Nothing is asked under this guard: `take` answers when a policy
+            // was asked ahead, and the mode answers otherwise.
+            let authorize = |attempt: &bacnet_services::wpm::WritePropertyAttempt| {
+                let decision = ahead
+                    .take(attempt)
+                    .or_else(|| self.decide_without_policy())
+                    .unwrap_or(MutationDecision::Deny);
+                self.record(decision)
+            };
             let source = audit.write_source();
             let mut observer = crate::cov::TimedWriteCapture::new(capture, Some(audit));
             let outcome = handlers::handle_write_property_multiple_observed(
@@ -334,9 +400,13 @@ impl Request<'_> {
         cov_table: &Arc<RwLock<CovSubscriptionTable>>,
         initial_cov_notifications: &mut Vec<InitialCovNotification>,
     ) -> Apdu {
-        if let Err(error) = self.authorize(|| {
-            SubscribeCOVRequest::decode(&self.req.service_request).map(MutationTarget::SubscribeCov)
-        }) {
+        if let Err(error) = self
+            .authorize(|| {
+                SubscribeCOVRequest::decode(&self.req.service_request)
+                    .map(MutationTarget::SubscribeCov)
+            })
+            .await
+        {
             return self.error::<T>(&error);
         }
         let db = db.read().await;
@@ -367,10 +437,13 @@ impl Request<'_> {
         cov_table: &Arc<RwLock<CovSubscriptionTable>>,
         initial_cov_notifications: &mut Vec<InitialCovNotification>,
     ) -> Apdu {
-        if let Err(error) = self.authorize(|| {
-            SubscribeCOVPropertyRequest::decode(&self.req.service_request)
-                .map(MutationTarget::SubscribeCovProperty)
-        }) {
+        if let Err(error) = self
+            .authorize(|| {
+                SubscribeCOVPropertyRequest::decode(&self.req.service_request)
+                    .map(MutationTarget::SubscribeCovProperty)
+            })
+            .await
+        {
             return self.error::<T>(&error);
         }
         let db = db.read().await;
@@ -406,9 +479,13 @@ impl Request<'_> {
         mut ack_buf: BytesMut,
         audit: &mut super::super::audit_reporter::WriteAudit<'_, T>,
     ) -> Apdu {
-        if let Err(error) = self.authorize(|| {
-            CreateObjectRequest::decode(&self.req.service_request).map(MutationTarget::CreateObject)
-        }) {
+        if let Err(error) = self
+            .authorize(|| {
+                CreateObjectRequest::decode(&self.req.service_request)
+                    .map(MutationTarget::CreateObject)
+            })
+            .await
+        {
             return self.error::<T>(&error);
         }
         let database = db;
@@ -428,7 +505,7 @@ impl Request<'_> {
             let result = match result {
                 Ok(()) => Ok(()),
                 Err(handlers::CreateObjectRefusal::Malformed(error)) => {
-                    return self.error::<T>(&error)
+                    return self.error::<T>(&error);
                 }
                 Err(handlers::CreateObjectRefusal::Failed(error)) => Err(error),
             };
@@ -474,9 +551,13 @@ impl Request<'_> {
         effects: &mut MutationEffects,
         audit: &mut super::super::audit_reporter::WriteAudit<'_, T>,
     ) -> Apdu {
-        if let Err(error) = self.authorize(|| {
-            DeleteObjectRequest::decode(&self.req.service_request).map(MutationTarget::DeleteObject)
-        }) {
+        if let Err(error) = self
+            .authorize(|| {
+                DeleteObjectRequest::decode(&self.req.service_request)
+                    .map(MutationTarget::DeleteObject)
+            })
+            .await
+        {
             return self.error::<T>(&error);
         }
         let deleted_oid = DeleteObjectRequest::decode(&self.req.service_request)
@@ -504,10 +585,10 @@ impl Request<'_> {
                     Ok(removed) => (Ok(()), Some(removed)),
                     Err(error) => (Err(error), None),
                 };
-            if result.is_ok() {
-                if let Some(status) = removed_status {
-                    status.set_configured(false);
-                }
+            if result.is_ok()
+                && let Some(status) = removed_status
+            {
+                status.set_configured(false);
             }
             audit.lifecycle_completed(&mut db, &result);
             let membership = crate::membership::settle(database, &mut db, cov_table).await;
@@ -541,10 +622,13 @@ impl Request<'_> {
         db: &Arc<RwLock<ObjectDatabase>>,
         audit: &mut super::super::audit_reporter::WriteAudit<'_, T>,
     ) -> Apdu {
-        if let Err(error) = self.authorize(|| {
-            AtomicWriteFileRequest::decode(&self.req.service_request)
-                .map(MutationTarget::AtomicWriteFile)
-        }) {
+        if let Err(error) = self
+            .authorize(|| {
+                AtomicWriteFileRequest::decode(&self.req.service_request)
+                    .map(MutationTarget::AtomicWriteFile)
+            })
+            .await
+        {
             return self.error::<T>(&error);
         }
         let mut db = db.write().await;
@@ -576,13 +660,16 @@ impl Request<'_> {
         audit: &mut super::super::audit_reporter::WriteAudit<'_, T>,
         remove: bool,
     ) -> Apdu {
-        if let Err(error) = self.authorize(|| {
-            ListElementRequest::decode(&self.req.service_request).map(if remove {
-                MutationTarget::RemoveListElement
-            } else {
-                MutationTarget::AddListElement
+        if let Err(error) = self
+            .authorize(|| {
+                ListElementRequest::decode(&self.req.service_request).map(if remove {
+                    MutationTarget::RemoveListElement
+                } else {
+                    MutationTarget::AddListElement
+                })
             })
-        }) {
+            .await
+        {
             return self.error::<T>(&error);
         }
         // A list the object saves first saves here, without the guard.
@@ -647,11 +734,14 @@ impl Request<'_> {
         match decoded {
             Err(e) => self.error::<T>(&e),
             Ok(request) => {
-                if let Err(error) = self.authorize(|| {
-                    Ok(MutationTarget::SubscribeCovPropertyMultiple(
-                        request.clone(),
-                    ))
-                }) {
+                if let Err(error) = self
+                    .authorize(|| {
+                        Ok(MutationTarget::SubscribeCovPropertyMultiple(
+                            request.clone(),
+                        ))
+                    })
+                    .await
+                {
                     return self.error::<T>(&error);
                 }
                 let db = db.read().await;

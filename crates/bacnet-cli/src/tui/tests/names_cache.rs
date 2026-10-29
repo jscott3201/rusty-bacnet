@@ -8,7 +8,7 @@ use ratatui::style::Modifier;
 
 use super::names::{asks, device, frame_commands, named, names, table};
 use super::*;
-use crate::tui::app::names::{Name, MAX_NAMES};
+use crate::tui::app::names::{MAX_NAMES, Name};
 use crate::tui::network::discovery::{DiscoveryEvent, FoundRow};
 use crate::tui::point::ReadName;
 

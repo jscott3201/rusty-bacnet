@@ -9,7 +9,7 @@ use super::{ClaimCounters, Convergence, Reachability, Table};
 use crate::npdu::RejectMessageReason;
 use crate::{Duration, Instant, Mac, PortId};
 
-use support::{Hosted, BASE, TIMING};
+use support::{BASE, Hosted, TIMING};
 
 const MAX: u64 = u64::MAX;
 

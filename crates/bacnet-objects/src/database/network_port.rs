@@ -5,8 +5,8 @@ use super::*;
 use crate::network_port::{
     Bip6Bind, Bip6PortConfig, BipPortConfig, NetworkPortObject, PortAddress, PortBind,
 };
+use alloc::sync::Weak;
 use bacnet_types::bip_port::BipPortMode;
-use std::sync::Weak;
 
 pub(super) struct NetworkPortRegistration {
     oid: ObjectIdentifier,
@@ -42,7 +42,11 @@ impl ObjectDatabase {
     }
 
     /// Snapshot only the concrete built-in B/IPv6 object.
-    fn configured_bip6_port_internal(&mut self, oid: &ObjectIdentifier) -> Option<Bip6PortConfig> {
+    #[doc(hidden)]
+    pub fn configured_bip6_port_internal(
+        &mut self,
+        oid: &ObjectIdentifier,
+    ) -> Option<Bip6PortConfig> {
         self.builtin_network_port_mut(oid)?
             .bip6_configuration_internal()
             .cloned()
@@ -107,13 +111,13 @@ impl ObjectDatabase {
             Some(configured) if configured.same_family(address) => {
                 return Err(invalid(
                     "Network Port configuration differs from transport interface/UDP",
-                ))
+                ));
             }
             _ => {
                 return Err(invalid(match address {
                     PortAddress::V4(..) => "registration requires an IPV4 port",
                     PortAddress::V6(..) => "registration requires an IPV6 port",
-                }))
+                }));
             }
         };
         let lease = Arc::new(());
@@ -253,7 +257,7 @@ impl ObjectDatabase {
     pub fn set_network_port_multicast_internal(
         &mut self,
         oid: ObjectIdentifier,
-        multicast: Option<std::sync::Arc<dyn bacnet_types::bip_port::IpMulticast>>,
+        multicast: Option<alloc::sync::Arc<dyn bacnet_types::bip_port::IpMulticast>>,
     ) -> Result<(), Error> {
         self.builtin_network_port_mut(&oid)
             .ok_or_else(|| invalid("selected Network Port authority disappeared"))?
@@ -318,10 +322,10 @@ impl ObjectDatabase {
             .as_ref()
             .is_some_and(|port| port.oid == *oid && port.lease.strong_count() != 0)
         {
-            return Err(Error::Protocol {
-                class: ErrorClass::OBJECT,
-                code: ErrorCode::OBJECT_DELETION_NOT_PERMITTED,
-            });
+            return Err(Error::protocol(
+                ErrorClass::OBJECT,
+                ErrorCode::OBJECT_DELETION_NOT_PERMITTED,
+            ));
         }
         Ok(())
     }

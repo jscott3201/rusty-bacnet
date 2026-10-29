@@ -86,8 +86,14 @@ class ClientLifecycleTests(ClientScFixture):
             initial_delay_ms=100, max_delay_ms=100, max_retries=2))
         entering = asyncio.ensure_future(client.__aenter__())
         connection = await relay.next_connection()
+        # Started before stop(): its native task may queue behind the held
+        # entry before the close is admitted. It must still see the close at
+        # once rather than wait for the entry (#2030).
+        early = asyncio.ensure_future(client.discovered_devices())
         closing = asyncio.ensure_future(client.stop())
         try:
+            with self.assertRaisesRegex(RuntimeError, "closing"):
+                await asyncio.wait_for(early, 3)
             await self.wait_for_closing(client)
             self.assertFalse(closing.done(), "close waits for exclusive pending entry")
             if cancel_entry:
@@ -106,7 +112,8 @@ class ClientLifecycleTests(ClientScFixture):
             await self.read_value(client)
         finally:
             entering.cancel()
-            await asyncio.gather(entering, return_exceptions=True)
+            early.cancel()
+            await asyncio.gather(entering, early, return_exceptions=True)
             await client.stop()
             await asyncio.gather(closing, return_exceptions=True)
 

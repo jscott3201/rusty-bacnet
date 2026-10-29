@@ -297,8 +297,8 @@ async fn direct_principal_reinitialize_context_carries_the_admitted_identity() {
 /// connection's verified identity, not a default provenance.
 #[tokio::test]
 async fn direct_principal_endpoint_reinitialize_context_keeps_the_provenance() {
-    use crate::server::requests::endpoint_responder::EndpointResponder;
     use crate::server::ReinitializeContext;
+    use crate::server::requests::endpoint_responder::EndpointResponder;
     use bacnet_endpoint_core::endpoint_ingress::EndpointIngress;
     use bacnet_network::layer::ReceivedApdu;
     use bacnet_services::device_mgmt::ReinitializeDeviceRequest;
@@ -355,7 +355,7 @@ async fn direct_principal_endpoint_reinitialize_context_keeps_the_provenance() {
             is_group: false,
             global_broadcast: false,
             data_attributes: Vec::new(),
-            provenance: admitted.provenance,
+            provenance: admitted.provenance.clone(),
             reply_tx: None,
         })
         .await;

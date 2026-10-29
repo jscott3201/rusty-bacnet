@@ -37,7 +37,7 @@ use tokio::sync::mpsc;
 #[cfg(windows)]
 pub(crate) fn claim_exclusive(socket: &socket2::Socket) -> io::Result<()> {
     use std::os::windows::io::AsSocket;
-    use windows_sys::Win32::Networking::WinSock::{SOL_SOCKET, SO_EXCLUSIVEADDRUSE};
+    use windows_sys::Win32::Networking::WinSock::{SO_EXCLUSIVEADDRUSE, SOL_SOCKET};
 
     crate::sys::winsock::set_int_option(socket.as_socket(), SOL_SOCKET, SO_EXCLUSIVEADDRUSE, 1)
 }
@@ -213,7 +213,7 @@ mod tests {
 
 #[cfg(test)]
 mod connect_loopback_tests {
-    use super::{connect_loopback, local_port_collision, retry_local_port, CONNECT_ATTEMPTS};
+    use super::{CONNECT_ATTEMPTS, connect_loopback, local_port_collision, retry_local_port};
     use std::io::{Error, ErrorKind};
     use std::sync::atomic::{AtomicUsize, Ordering};
 

@@ -13,10 +13,10 @@
 use super::test_waits::until;
 use super::*;
 use bacnet_types::error::Error;
-use std::future::{pending, Future};
+use std::future::{Future, pending};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 struct GateSendWebSocket {
     inner: LoopbackWebSocket,
@@ -57,9 +57,9 @@ fn loopback_redial_connector(
     dial_count: Arc<AtomicUsize>,
     hub_tx: tokio::sync::mpsc::UnboundedSender<LoopbackWebSocket>,
 ) -> impl Fn() -> Pin<Box<dyn Future<Output = Result<LoopbackWebSocket, Error>> + Send>>
-       + Send
-       + Sync
-       + 'static {
++ Send
++ Sync
++ 'static {
     move || {
         let dial_count = dial_count.clone();
         let hub_tx = hub_tx.clone();
@@ -77,9 +77,9 @@ fn loopback_redial_connector(
 fn hanging_redial_connector(
     dial_count: Arc<AtomicUsize>,
 ) -> impl Fn() -> Pin<Box<dyn Future<Output = Result<LoopbackWebSocket, Error>> + Send>>
-       + Send
-       + Sync
-       + 'static {
++ Send
++ Sync
++ 'static {
     move || {
         let dial_count = dial_count.clone();
         Box::pin(async move {
@@ -96,9 +96,9 @@ fn hanging_redial_connector(
 fn hanging_reporting_connector(
     dials: tokio::sync::mpsc::UnboundedSender<tokio::time::Instant>,
 ) -> impl Fn() -> Pin<Box<dyn Future<Output = Result<LoopbackWebSocket, Error>> + Send>>
-       + Send
-       + Sync
-       + 'static {
++ Send
++ Sync
++ 'static {
     move || {
         let dials = dials.clone();
         Box::pin(async move {
@@ -112,9 +112,9 @@ fn loopback_first_success_then_error_connector(
     dial_count: Arc<AtomicUsize>,
     hub_tx: tokio::sync::mpsc::UnboundedSender<LoopbackWebSocket>,
 ) -> impl Fn() -> Pin<Box<dyn Future<Output = Result<LoopbackWebSocket, Error>> + Send>>
-       + Send
-       + Sync
-       + 'static {
++ Send
++ Sync
++ 'static {
     move || {
         let dial_count = dial_count.clone();
         let hub_tx = hub_tx.clone();
@@ -138,9 +138,9 @@ fn gate_send_redial_connector(
     dial_count: Arc<AtomicUsize>,
     hub_tx: tokio::sync::mpsc::UnboundedSender<GateSendWebSocket>,
 ) -> impl Fn() -> Pin<Box<dyn Future<Output = Result<GateSendWebSocket, Error>> + Send>>
-       + Send
-       + Sync
-       + 'static {
++ Send
++ Sync
++ 'static {
     move || {
         let dial_count = dial_count.clone();
         let hub_tx = hub_tx.clone();
@@ -155,11 +155,11 @@ fn gate_send_redial_connector(
     }
 }
 
-fn failing_loopback_connector(
-) -> impl Fn() -> Pin<Box<dyn Future<Output = Result<LoopbackWebSocket, Error>> + Send>>
-       + Send
-       + Sync
-       + 'static {
+fn failing_loopback_connector()
+-> impl Fn() -> Pin<Box<dyn Future<Output = Result<LoopbackWebSocket, Error>> + Send>>
++ Send
++ Sync
++ 'static {
     move || {
         Box::pin(async {
             Err(Error::Encoding(

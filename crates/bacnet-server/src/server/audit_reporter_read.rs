@@ -1,5 +1,6 @@
 //! Value-free read intents. No delivery admission occurs under a read guard.
 use super::*;
+use bacnet_types::error::RemoteError;
 
 pub(in crate::server) struct ReadAuditIntent(PendingWrite);
 
@@ -26,7 +27,11 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
     ) -> Option<ReadAuditIntent> {
         let result = match result {
             Ok(_) => None,
-            Err(Error::Timeout(_) | Error::Reject { .. } | Error::Abort { .. }) => return None,
+            Err(
+                Error::Timeout(_)
+                | Error::Remote(RemoteError::Reject { .. })
+                | Error::Remote(RemoteError::Abort { .. }),
+            ) => return None,
             Err(error) => Some(super::super::requests::confirmed_response::error_fields(
                 error,
             )),

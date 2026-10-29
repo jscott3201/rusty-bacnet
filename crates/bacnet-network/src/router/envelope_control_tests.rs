@@ -6,13 +6,13 @@
 //!
 //! Shares [`super::envelope_harness`] with the discovery module.
 
-use bacnet_encoding::npdu::{decode_npdu, Npdu, NpduAddress};
+use bacnet_encoding::npdu::{Npdu, NpduAddress, decode_npdu};
 use bacnet_npdu::{NetworkMessageType, RejectMessageReason};
 use bacnet_types::MacAddr;
 use bytes::Bytes;
 
-use super::envelope_harness::*;
 use super::SendRequest;
+use super::envelope_harness::*;
 use crate::router_table::Reachability;
 
 // --- I-Am / Busy / Available complete-list validation ---

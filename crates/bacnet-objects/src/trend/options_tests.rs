@@ -6,6 +6,7 @@
 use super::*;
 use crate::clock::ClockFrame;
 use bacnet_types::constructed::LogDatum;
+use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::{Date, Time};
 
 fn read(log: &TrendLogObject, property: PropertyIdentifier) -> PropertyValue {
@@ -22,7 +23,7 @@ fn write(
 
 fn assert_refused(result: Result<(), Error>, class: ErrorClass, code: ErrorCode) {
     assert!(
-        matches!(result, Err(Error::Protocol { class: c, code: e })
+        matches!(result, Err(Error::Remote(RemoteError::Error { class: c, code: e }))
             if c == class && e == code),
         "expected {class:?} / {code:?}, got {result:?}"
     );
@@ -405,10 +406,11 @@ fn a_record_the_log_ignores_still_serves_the_trigger() {
     log.trigger().unwrap();
     log.add_record(record()).unwrap();
     assert_eq!(trigger(&log), PropertyValue::Boolean(false));
-    assert!(log
-        .records()
-        .iter()
-        .all(|r| matches!(r.log_datum, LogDatum::LogStatus(_))));
+    assert!(
+        log.records()
+            .iter()
+            .all(|r| matches!(r.log_datum, LogDatum::LogStatus(_)))
+    );
 
     // Outside the window, the same.
     write(
@@ -422,10 +424,11 @@ fn a_record_the_log_ignores_still_serves_the_trigger() {
     log.trigger().unwrap();
     log.add_record(record()).unwrap();
     assert_eq!(trigger(&log), PropertyValue::Boolean(false));
-    assert!(log
-        .records()
-        .iter()
-        .all(|r| matches!(r.log_datum, LogDatum::LogStatus(_))));
+    assert!(
+        log.records()
+            .iter()
+            .all(|r| matches!(r.log_datum, LogDatum::LogStatus(_)))
+    );
 }
 
 #[test]

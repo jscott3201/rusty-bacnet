@@ -132,13 +132,7 @@ fn unset_event_parameters_serve_the_none_alternative() {
     };
     assert_eq!(
         bacnet_encoding::constructed::decode_event_parameter(bytes, 0).unwrap(),
-        (
-            BACnetEventParameter::Opaque {
-                tag: 20,
-                data: Vec::new()
-            },
-            2
-        )
+        (BACnetEventParameter::None, 2)
     );
     assert_eq!(
         ee.enrollment_summary_capability_internal()

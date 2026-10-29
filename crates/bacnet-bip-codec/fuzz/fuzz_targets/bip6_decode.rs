@@ -1,6 +1,6 @@
 #![no_main]
 
-use bacnet_bip_codec::ipv6::{decode, Bvll6Error, Bvll6Frame};
+use bacnet_bip_codec::ipv6::{Bvll6Error, Bvll6Frame, decode};
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|input: &[u8]| {

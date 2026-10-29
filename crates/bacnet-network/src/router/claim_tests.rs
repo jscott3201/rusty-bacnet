@@ -3,13 +3,13 @@
 //! tails, on the router's engine through [`super::envelope_harness`]. The
 //! harness router has direct routes to 1000 on port 0 and 2000 on port 1.
 
-use bacnet_encoding::npdu::{decode_npdu, Npdu, NpduAddress};
+use bacnet_encoding::npdu::{Npdu, NpduAddress, decode_npdu};
 use bacnet_npdu::NetworkMessageType;
 use bacnet_types::MacAddr;
 use bytes::Bytes;
 
-use super::envelope_harness::*;
 use super::SendRequest;
+use super::envelope_harness::*;
 use crate::router_table::{ClaimCounters, PortId, Reachability};
 
 // Invoke the real dispatch with in-memory port queues; no sleeps, sockets or

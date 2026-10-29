@@ -13,8 +13,8 @@ use bacnet_types::primitives::ObjectIdentifier;
 mod single;
 mod tracking;
 pub(crate) use single::SingleValueSource;
-pub(crate) use tracking::write_sourced_priority;
 pub(crate) use tracking::ValueSourceTracking;
+pub(crate) use tracking::write_sourced_priority;
 
 /// Address-to-Device correlation, never authentication of a principal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

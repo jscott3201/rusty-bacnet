@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::net::SocketAddrV6;
 use std::time::Duration;
 
+use bacnet_types::bip6_vmac::{VmacHex, device_instance_vmac};
 use bacnet_types::error::Error;
 use tokio::time::Instant;
 
@@ -28,12 +29,9 @@ pub(super) const MAX_UNREACHABLE: usize = 256;
 /// How long a peer may stay silent before a send to it asks again whether
 /// it is still there, and the least time between two such checks.
 pub(super) const REVALIDATE_AFTER: Duration = Duration::from_secs(300);
-/// Highest device instance, whose 22 bits make a VMAC (H.7.2).
-const MAX_DEVICE_INSTANCE: u32 = 0x3F_FFFF;
-
-/// The VMAC that device instance `instance` gives a B/IPv6 node: the
-/// instance's 22 bits, high octet first, which leaves the top two bits 00
-/// (H.7.2). Fails for an instance above 4194303.
+/// The VMAC that device instance `instance` gives a B/IPv6 node, as
+/// [`device_instance_vmac`] derives it (H.7.2). Fails for an instance above
+/// 4194303.
 ///
 /// ```
 /// use bacnet_transport::bip6::{vmac_from_device_instance, Bip6Vmac};
@@ -43,13 +41,9 @@ const MAX_DEVICE_INSTANCE: u32 = 0x3F_FFFF;
 /// # Ok::<(), bacnet_types::error::Error>(())
 /// ```
 pub fn vmac_from_device_instance(instance: u32) -> Result<Bip6Vmac, Error> {
-    if instance > MAX_DEVICE_INSTANCE {
-        return Err(Error::Encoding(
-            "BACnet Device instance must be in 0..=4194303".to_string(),
-        ));
-    }
-    let [_, high, middle, low] = instance.to_be_bytes();
-    Ok(Bip6Vmac::new([high, middle, low]))
+    device_instance_vmac(instance)
+        .map(Bip6Vmac::new)
+        .ok_or_else(|| Error::Encoding("BACnet Device instance must be in 0..=4194303".to_string()))
 }
 
 /// What starts a B/IPv6 VMAC written as text: see [`parse_vmac_text`].
@@ -107,8 +101,7 @@ pub fn parse_vmac_text(text: &str) -> Result<Bip6Vmac, Error> {
 /// A B/IPv6 VMAC as text, `bip6:0x0004D2`, which [`parse_vmac_text`] reads
 /// back.
 pub fn format_vmac_text(vmac: Bip6Vmac) -> String {
-    let [high, middle, low] = vmac.octets();
-    format!("{VMAC_TEXT_PREFIX}0x{high:02X}{middle:02X}{low:02X}")
+    format!("{VMAC_TEXT_PREFIX}{}", VmacHex(vmac.octets()))
 }
 
 /// Generate a Random Device Instance VMAC for collision resolution (Clause H.7.2).
@@ -237,10 +230,10 @@ impl VmacTable {
             };
             self.entries.insert(vmac, entry);
         }
-        if let Some(entry) = self.entries.get_mut(&vmac) {
-            if heard == Heard::Direct {
-                entry.direct = Some(now);
-            }
+        if let Some(entry) = self.entries.get_mut(&vmac)
+            && heard == Heard::Direct
+        {
+            entry.direct = Some(now);
         }
         self.owners.insert(addr, vmac);
         true
@@ -259,10 +252,10 @@ impl VmacTable {
 
     /// Drop `vmac`'s entry, if there is one.
     pub(super) fn forget(&mut self, vmac: Bip6Vmac) {
-        if let Some(entry) = self.entries.remove(&vmac) {
-            if self.owners.get(&entry.addr) == Some(&vmac) {
-                self.owners.remove(&entry.addr);
-            }
+        if let Some(entry) = self.entries.remove(&vmac)
+            && self.owners.get(&entry.addr) == Some(&vmac)
+        {
+            self.owners.remove(&entry.addr);
         }
     }
 

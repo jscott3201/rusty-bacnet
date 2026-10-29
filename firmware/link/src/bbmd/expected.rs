@@ -8,7 +8,7 @@ use bacnet_bip_codec::{BdtEntry, BvlcResultCode, FdtEntry};
 use bacnet_bip_core::bbmd::{DeleteRefusal, ForwardRefusal, Registered, TWO_HOP_MASK};
 
 use super::{
-    Fan, Summary, FOREIGN, LOCAL, MAX_TARGETS, OWN, PEERS, REMOTE, STRANGER, TTL, TWO_HOP_PEER,
+    FOREIGN, Fan, LOCAL, MAX_TARGETS, OWN, PEERS, REMOTE, STRANGER, Summary, TTL, TWO_HOP_PEER,
 };
 use crate::tally::Sent;
 

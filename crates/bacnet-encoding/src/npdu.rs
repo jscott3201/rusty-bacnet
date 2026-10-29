@@ -11,9 +11,9 @@
 //! DADR and SADR to [`MAX_MAC_LEN`] octets (#1141), so everything above the
 //! network layer only ever sees an address that some data link could carry.
 
-use bacnet_npdu::{Address, EncodeError, NetworkMessageType, NetworkPriority, MAX_MAC_LEN};
-use bacnet_types::error::{Error, RangeError};
+use bacnet_npdu::{Address, EncodeError, MAX_MAC_LEN, NetworkMessageType, NetworkPriority};
 use bacnet_types::MacAddr;
+use bacnet_types::error::{Error, RangeError};
 use bytes::{Bytes, BytesMut};
 
 mod decode_error;
@@ -218,13 +218,13 @@ fn encode_error(npdu: &Npdu, refused: EncodeError) -> Error {
 pub fn decode_npdu(data: Bytes) -> Result<Npdu, NpduDecodeError> {
     // Only hosted builds log; tracing is a std-only dependency.
     #[cfg(feature = "std")]
-    if let Some(&control) = data.get(1) {
-        if control & 0x50 != 0 {
-            tracing::warn!(
-                control_byte = control,
-                "NPDU control byte has reserved bits set (bits 4 or 6)"
-            );
-        }
+    if let Some(&control) = data.get(1)
+        && control & 0x50 != 0
+    {
+        tracing::warn!(
+            control_byte = control,
+            "NPDU control byte has reserved bits set (bits 4 or 6)"
+        );
     }
     let view = match bacnet_npdu::Npdu::decode(&data) {
         Ok(view) => view,
@@ -239,10 +239,10 @@ pub fn decode_npdu(data: Bytes) -> Result<Npdu, NpduDecodeError> {
                 length,
                 dnet,
                 source: source.map(NpduAddress::from),
-            })
+            });
         }
         Err(bacnet_npdu::DecodeError::Malformed(fault)) => {
-            return Err(NpduDecodeError::Malformed(fault))
+            return Err(NpduDecodeError::Malformed(fault));
         }
     };
     let mut npdu = Npdu::header_from(&view);

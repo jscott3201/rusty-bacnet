@@ -10,7 +10,7 @@
 # remembers to add is simply never checked.
 #
 # Run with RUSTUP_TOOLCHAIN set to the MSRV, which overrides rust-toolchain.toml:
-#   RUSTUP_TOOLCHAIN=1.93 bash scripts/ci/check-msrv.sh
+#   RUSTUP_TOOLCHAIN=1.95 bash scripts/ci/check-msrv.sh
 # Add --linux-native for the required local Linux GNU optional-feature/link gate.
 set -euo pipefail
 
@@ -32,22 +32,22 @@ if "$native"; then
     command -v "$tool" >/dev/null || fail "missing prerequisite: $tool"
   done
   # Resolve only an installed toolchain; never install or update one here.
-  toolchain=${RUSTUP_TOOLCHAIN:-1.93}
+  toolchain=${RUSTUP_TOOLCHAIN:-1.95}
   installed=false
   while read -r name _; do
     case "$name" in "$toolchain"|"$toolchain"-*) installed=true ;; esac
   done <<< "$(rustup toolchain list)"
-  "$installed" || fail "toolchain $toolchain is not installed; provide Rust/Cargo 1.93"
+  "$installed" || fail "toolchain $toolchain is not installed; provide Rust/Cargo 1.95"
   compiler=$(rustup which --toolchain "$toolchain" rustc) || fail 'cannot resolve installed rustc'
   cargo_bin=$(rustup which --toolchain "$toolchain" cargo) || fail 'cannot resolve installed cargo'
   compiler_info=$("$compiler" -vV)
   cargo_version=$("$cargo_bin" --version)
-  grep -Eq '^release: 1[.]93[.][0-9]+$' <<< "$compiler_info" || fail 'rustc must be stable 1.93.x'
-  grep -Eq '^cargo 1[.]93[.][0-9]+ ' <<< "$cargo_version" || fail 'cargo must be stable 1.93.x'
+  grep -Eq '^release: 1[.]95[.][0-9]+$' <<< "$compiler_info" || fail 'rustc must be stable 1.95.x'
+  grep -Eq '^cargo 1[.]95[.][0-9]+ ' <<< "$cargo_version" || fail 'cargo must be stable 1.95.x'
   host=$(sed -n 's/^host: //p' <<< "$compiler_info")
   [ "$host" = "$(uname -m)-unknown-linux-gnu" ] || fail "unsupported or non-native compiler host: $host"
   for key in RUSTC CARGO_BUILD_RUSTC; do
-    [ -z "${!key:-}" ] || [ "${!key}" = "$compiler" ] || fail "conflicting $key; use the resolved 1.93 compiler"
+    [ -z "${!key:-}" ] || [ "${!key}" = "$compiler" ] || fail "conflicting $key; use the resolved 1.95 compiler"
   done
   for key in RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER CARGO_BUILD_RUSTC_WRAPPER CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER; do
     [ -z "${!key:-}" ] || fail "compiler wrapper $key is not allowed in --linux-native"
@@ -104,12 +104,12 @@ FEATURES="$FEATURES,bacnet-router-core/bip,bacnet-router-core/mstp"
 # The no_std builds (std off, alloc on) of the crates that have one (#1613).
 # In the run above, the hosted crates turn std back on for them, so these get
 # a run of their own.
-NO_STD_ARGS=(-p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --features alloc)
+NO_STD_ARGS=(-p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects --no-default-features --features alloc)
 
 echo "MSRV gate covers:"
 for p in $PKGS; do echo "  - $p"; done
 echo "with features: $FEATURES"
-echo "and bacnet-types, bacnet-encoding and bacnet-services without std, with alloc"
+echo "and bacnet-types, bacnet-encoding, bacnet-services and bacnet-objects without std, with alloc"
 echo
 
 run() { printf '+ ' >&2; printf '%q ' "$@" >&2; printf '\n' >&2; "$@"; }

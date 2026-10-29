@@ -63,14 +63,16 @@ async fn target_historical_loss_survives_disable_aba_and_restores_by_original_or
         .unwrap();
     reporter.set_audit_level(AuditLevel::NONE).unwrap();
     reservation.publish();
-    assert!(queue
-        .record_drop(
-            &owner,
-            first.clone(),
-            BACnetTimeStamp::SequenceNumber(65535),
-            1
-        )
-        .is_none());
+    assert!(
+        queue
+            .record_drop(
+                &owner,
+                first.clone(),
+                BACnetTimeStamp::SequenceNumber(65535),
+                1
+            )
+            .is_none()
+    );
     worker.restore(batch);
     drop((permit, reserved));
     let (batch, permit, reserved) = worker.next().await.unwrap();
@@ -95,12 +97,16 @@ async fn target_historical_loss_survives_disable_aba_and_restores_by_original_or
         .observe(context(&status, status.configuration_epoch(), 1))
         .unwrap();
     assert!(!Arc::ptr_eq(&first.context, &new.context));
-    assert!(queue
-        .record_drop(&owner, new, BACnetTimeStamp::SequenceNumber(0), 1)
-        .is_none());
-    assert!(queue
-        .record_drop(&owner, first, BACnetTimeStamp::SequenceNumber(65535), 1)
-        .is_none());
+    assert!(
+        queue
+            .record_drop(&owner, new, BACnetTimeStamp::SequenceNumber(0), 1)
+            .is_none()
+    );
+    assert!(
+        queue
+            .record_drop(&owner, first, BACnetTimeStamp::SequenceNumber(65535), 1)
+            .is_none()
+    );
     let (old, _, _) = worker.next().await.unwrap();
     assert_eq!(old.earliest, BACnetTimeStamp::SequenceNumber(65535));
     let (new, _, _) = worker.next().await.unwrap();

@@ -4,8 +4,8 @@
 
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::Serialize;
 
@@ -340,10 +340,10 @@ pub fn run_capture(opts: CaptureOpts) -> Result<(), Box<dyn std::error::Error>> 
         if !running.load(Ordering::Relaxed) {
             break;
         }
-        if let Some(limit) = opts.count {
-            if packet_count >= limit {
-                break;
-            }
+        if let Some(limit) = opts.count
+            && packet_count >= limit
+        {
+            break;
         }
 
         // Get next packet
@@ -545,12 +545,12 @@ mod tests {
     fn extract_ip_addrs_ethernet() {
         // Build a minimal Ethernet + IP + UDP frame
         let mut frame = vec![0u8; 14 + 20 + 8]; // Ethernet(14) + IP(20) + UDP(8)
-                                                // Ethernet header: 12 bytes dst+src, 2 bytes ethertype (0x0800 = IPv4)
+        // Ethernet header: 12 bytes dst+src, 2 bytes ethertype (0x0800 = IPv4)
         frame[12] = 0x08;
         frame[13] = 0x00;
         // IP header at offset 14
         frame[14] = 0x45; // version=4, IHL=5 (20 bytes)
-                          // Source IP: 10.0.0.1 at bytes 12-15 of IP header
+        // Source IP: 10.0.0.1 at bytes 12-15 of IP header
         frame[14 + 12] = 10;
         frame[14 + 13] = 0;
         frame[14 + 14] = 0;
@@ -586,7 +586,7 @@ mod tests {
         frame[12] = 0x08;
         frame[13] = 0x00;
         frame[14] = 0x45; // IHL=5
-                          // UDP length = 8 (header) + 4 (payload) = 12
+        // UDP length = 8 (header) + 4 (payload) = 12
         frame[34 + 4] = 0x00;
         frame[34 + 5] = 0x0C;
         // Payload bytes
@@ -607,7 +607,7 @@ mod tests {
         // DLT_RAW: no link-layer header, starts at IP
         let mut frame = vec![0u8; 20 + 8 + 2];
         frame[0] = 0x45; // IHL=5
-                         // UDP length = 10
+        // UDP length = 10
         frame[20 + 4] = 0x00;
         frame[20 + 5] = 0x0A;
         frame[28] = 0xAA;

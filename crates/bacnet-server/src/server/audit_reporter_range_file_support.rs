@@ -155,10 +155,10 @@ impl BACnetObject for Probe {
             PropertyIdentifier::OBJECT_NAME => {
                 Ok(PropertyValue::CharacterString("not a list".into()))
             }
-            _ => Err(Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::UNKNOWN_PROPERTY,
-            }),
+            _ => Err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::UNKNOWN_PROPERTY,
+            )),
         }
     }
     fn write_property(

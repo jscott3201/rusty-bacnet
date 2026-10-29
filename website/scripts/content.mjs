@@ -3,6 +3,8 @@
 import { readFile } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
 import { release, repository, releaseAsset } from '../src/lib/site.mjs';
+import { supportTableMarkdown } from '../src/lib/support.mjs';
+import support from '../src/data/support.json' with { type: 'json' };
 export function frontmatter(source) {
   const match = source.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
   if (!match) throw new Error('Missing frontmatter');
@@ -42,6 +44,18 @@ export async function plainBody(body, file, downloads) {
     raws.set(match[1], await readFile(resolve(dirname(file), match[2].slice(0, -4)), 'utf8'));
   }
   let text = body.replace(/^import .*?;?\r?\n/gm, '');
+  // Comments, such as a generated reference page's markers, stay out of the export.
+  // Repeat until nothing changes, so removing one comment can't join the
+  // text around it into another.
+  const comment = mdx ? /\{\/\*[\s\S]*?\*\/\}\r?\n?/g : /<!--[\s\S]*?--!?>\r?\n?/g;
+  text = outsideFences(text, part => {
+    let previous;
+    do {
+      previous = part;
+      part = part.replace(comment, '');
+    } while (part !== previous);
+    return part;
+  });
   if (mdx) {
     text = text.replace(/<Code\b[^`>]*code=\{(String\.raw)?`([^`]*)`\}[^`>]*\/>/g, (tag, raw, code) =>
       `\n\n\`\`\`${attr(tag, 'lang')}\n${expandTemplate(code, raw, file).trim()}\n\`\`\`\n\n`);
@@ -51,6 +65,8 @@ export async function plainBody(body, file, downloads) {
     if (!raws.has(name)) throw new Error(`Unknown raw code import in ${file}`);
     return `\n\n\`\`\`${attr(tag, 'lang')}\n${raws.get(name).trim()}\n\`\`\`\n\n`;
   });
+  // The capability tables (project/conformance), from the same rows the page renders.
+  text = text.replace(/<SupportTable\s+table="([a-z-]+)"\s*\/>/g, (_, id) => `\n\n${supportTableMarkdown(id, support)}\n\n`);
   text = text.replace(/<DownloadList\s*\/>/g, () => downloads.map(item => `- [${item.os} · ${item.architecture}](${releaseAsset(item.file)}) — \`${item.file}\`; ${item.features}; ${item.runtime}.`).join('\n'));
   // Screenshots under src/assets are built to hashed URLs the export can't
   // name, so the export keeps their alt text.
@@ -67,8 +83,9 @@ export async function plainBody(body, file, downloads) {
       .replace(/\{(\w+)\}/g, (_, name) => constant(name, file))
       .replace(/<code>([^<`]*)<\/code>/g, '`$1`')));
   }
-  // Test remaining component tags and expressions only outside code fences.
-  const outsideCode = text.replace(fence, '');
+  // Test remaining component tags and expressions only outside code.
+  // A code span is literal text too, such as the CLI reference's `<TARGET>`.
+  const outsideCode = text.replace(fence, '').replace(/`[^`\n]*`/g, '');
   if (/<\/?[A-Z][A-Za-z]*\b/.test(outsideCode)) throw new Error(`Unknown component in ${file}; update the plain-text projection.`);
   if (mdx && /=\{|<\/?(?:a|code)\b/.test(outsideCode)) throw new Error(`Unprojected expression or element in ${file}; update the plain-text projection.`);
   return text.replace(/\]\(\/rusty-bacnet\//g, '](https://jscott3201.github.io/rusty-bacnet/').trim();

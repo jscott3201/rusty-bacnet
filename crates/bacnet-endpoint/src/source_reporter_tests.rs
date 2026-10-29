@@ -383,10 +383,10 @@ impl BACnetObject for ForeignReporter {
             .map_or("Foreign Reporter", |reporter| reporter.object_name())
     }
     fn read_property(&self, p: PropertyIdentifier, _: Option<u32>) -> Result<PropertyValue, Error> {
-        if p == PropertyIdentifier::AUDIT_SOURCE_REPORTER {
-            if let Some(source) = self.source {
-                return Ok(PropertyValue::Boolean(source));
-            }
+        if p == PropertyIdentifier::AUDIT_SOURCE_REPORTER
+            && let Some(source) = self.source
+        {
+            return Ok(PropertyValue::Boolean(source));
         }
         Err(Error::Encoding("unsupported property".into()))
     }

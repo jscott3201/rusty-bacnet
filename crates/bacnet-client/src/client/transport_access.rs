@@ -99,9 +99,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 /// BBMD management helpers (Annex J), for a client whose transport is B/IP.
 ///
 /// They work on a client over [`BipTransport`], and on one over
-/// [`AnyTransport`](bacnet_transport::any::AnyTransport) when its variant is
-/// `Bip`. Each request fails with a [`BvlcExchangeError`]: a NAK, no reply,
-/// or a local failure. On any other variant each returns
+/// [`AnyTransport`] when its variant is `Bip`. Each request fails with a
+/// [`BvlcExchangeError`]: a NAK, no reply, or a local failure. On any other
+/// variant each returns
 /// [`Error::UnsupportedTransport`], as [`BvlcExchangeError::Transport`],
 /// before sending anything.
 ///
@@ -110,7 +110,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 /// use bacnet_transport::any::AnyTransport;
 /// use bacnet_transport::bip::BvlcExchangeError;
 /// use bacnet_transport::loopback::LoopbackTransport;
-/// use bacnet_transport::mstp::NoSerial;
 /// use bacnet_types::data_link::DataLink;
 /// use bacnet_types::error::Error;
 ///
@@ -119,7 +118,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 /// runtime.block_on(Box::pin(async {
 ///     let (ours, _peer) = LoopbackTransport::pair(vec![1], vec![2]);
 ///     let mut client = BACnetClient::generic_builder()
-///         .transport(AnyTransport::<NoSerial>::Loopback(ours))
+///         .transport(AnyTransport::Loopback(ours))
 ///         .build()
 ///         .await?;
 ///     let bbmd = [127, 0, 0, 1, 0xBA, 0xC0];

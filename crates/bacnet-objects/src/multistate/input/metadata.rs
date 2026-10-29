@@ -1,5 +1,5 @@
 use super::MultiStateInputObject;
-use std::borrow::Cow;
+use alloc::borrow::Cow;
 
 use bacnet_types::enums::PropertyIdentifier as P;
 
@@ -117,7 +117,7 @@ mod tests {
     };
     use crate::traits::BACnetObject;
     use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
-    use bacnet_types::error::Error;
+    use bacnet_types::error::{Error, RemoteError};
     use bacnet_types::primitives::PropertyValue;
 
     fn objects() -> [Box<dyn BACnetObject>; 3] {
@@ -130,7 +130,7 @@ mod tests {
 
     fn assert_error(error: Error, expected: ErrorCode) {
         assert!(
-            matches!(error, Error::Protocol { class, code }
+            matches!(error, Error::Remote(RemoteError::Error { class, code })
             if class == ErrorClass::PROPERTY && code == expected),
             "expected {expected:?}, got {error:?}"
         );
@@ -540,7 +540,7 @@ mod tests {
                         &format!("{code:?}"),
                     ),
                     None => assert!(
-                        matches!(result, Err(Error::Protocol { class: actual_class, code: actual_code })
+                        matches!(result, Err(Error::Remote(RemoteError::Error { class: actual_class, code: actual_code }))
                         if actual_class == class && actual_code == code)
                     ),
                 }

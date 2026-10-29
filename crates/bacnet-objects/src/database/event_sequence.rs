@@ -1,5 +1,5 @@
 //! Shared database-local timestamp ordering authority.
-use std::sync::Mutex;
+use crate::sync::Mutex;
 
 /// One database's clockless timestamp source, also borrowed by its Device sink.
 #[doc(hidden)]
@@ -13,7 +13,7 @@ impl EventSequence {
         &self,
         prepare_commit: impl FnOnce(u16) -> Result<R, E>,
     ) -> Result<R, E> {
-        let mut number = self.0.lock().unwrap();
+        let mut number = self.0.lock();
         let value = prepare_commit(*number)?;
         *number = number.wrapping_add(1);
         Ok(value)
@@ -24,16 +24,16 @@ impl EventSequence {
         count: u16,
         prepare_commit: impl FnOnce(u16) -> Result<R, E>,
     ) -> Result<R, E> {
-        let mut number = self.0.lock().unwrap();
+        let mut number = self.0.lock();
         let result = prepare_commit(*number)?;
         *number = number.wrapping_add(count);
         Ok(result)
     }
     pub(super) fn current(&self) -> u16 {
-        *self.0.lock().unwrap()
+        *self.0.lock()
     }
     pub(super) fn confirm(&self, expected: u16) -> bool {
-        let mut number = self.0.lock().unwrap();
+        let mut number = self.0.lock();
         if *number != expected {
             return false;
         }

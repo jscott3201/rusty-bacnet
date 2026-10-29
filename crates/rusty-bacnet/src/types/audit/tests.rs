@@ -8,12 +8,12 @@ use bacnet_types::enums::{
     BACnetSuccessFilter, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier,
 };
 use bacnet_types::primitives::{BACnetTimeStamp, Date, Time};
+use pyo3::PyTypeInfo;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::types::{PyBytes, PyDict, PyList};
-use pyo3::PyTypeInfo;
 
 use crate::types::audit_projection::audit_log_query_ack_to_py;
-use crate::types::PyObjectIdentifier;
+use crate::types::{IntEnumValue, PyObjectIdentifier};
 
 fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(object_type, instance).unwrap()
@@ -133,12 +133,8 @@ fn notification_mapping_preserves_every_field_and_native_unsigned_bounds() {
             .set_item(
                 "result",
                 (
-                    PyErrorClass {
-                        inner: ErrorClass::PROPERTY,
-                    },
-                    PyErrorCode {
-                        inner: ErrorCode::WRITE_ACCESS_DENIED,
-                    },
+                    IntEnumValue(ErrorClass::PROPERTY),
+                    IntEnumValue(ErrorCode::WRITE_ACCESS_DENIED),
                 ),
             )
             .unwrap();
@@ -478,12 +474,14 @@ fn ack_projection_covers_every_datum_and_nested_optional_field() {
                 .to_rust(),
             oid(ObjectType::AUDIT_LOG, 9)
         );
-        assert!(projected
-            .get_item("no_more_items")
-            .unwrap()
-            .unwrap()
-            .is_truthy()
-            .unwrap());
+        assert!(
+            projected
+                .get_item("no_more_items")
+                .unwrap()
+                .unwrap()
+                .is_truthy()
+                .unwrap()
+        );
         let records = projected
             .get_item("records")
             .unwrap()
@@ -534,15 +532,26 @@ fn ack_projection_covers_every_datum_and_nested_optional_field() {
                     .unwrap(),
             );
             match index {
-                0 => assert_eq!(
-                    datum
-                        .get_item("log_status")
-                        .unwrap()
-                        .unwrap()
-                        .extract::<u8>()
-                        .unwrap(),
-                    0b101
-                ),
+                0 => {
+                    // LOG_DISABLED and LOG_INTERRUPTED: wire bits 0 and 2.
+                    let status = datum.get_item("log_status").unwrap().unwrap();
+                    assert_eq!(
+                        status
+                            .getattr("data")
+                            .unwrap()
+                            .extract::<Vec<u8>>()
+                            .unwrap(),
+                        vec![0xa0]
+                    );
+                    assert_eq!(
+                        status
+                            .getattr("names")
+                            .unwrap()
+                            .extract::<Vec<String>>()
+                            .unwrap(),
+                        ["LOG_DISABLED", "LOG_INTERRUPTED"]
+                    );
+                }
                 3 => assert_eq!(
                     datum
                         .get_item("time_change")

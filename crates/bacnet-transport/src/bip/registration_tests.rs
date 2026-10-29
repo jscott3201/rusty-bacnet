@@ -1,5 +1,5 @@
 use super::*;
-use crate::port_ownership::{lost_port, ATTEMPTS};
+use crate::port_ownership::{ATTEMPTS, lost_port};
 use bacnet_types::constructed::BACnetHostNPort;
 
 /// The worker that holds the socket last also holds the lease to the end. Its
@@ -21,9 +21,11 @@ async fn token_follows_last_socket_worker() -> std::io::Result<()> {
     let weak = Arc::downgrade(&token);
     let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     transport.retain_network_port_lease_internal(token).unwrap();
-    assert!(transport
-        .retain_network_port_lease_internal(Arc::new(()))
-        .is_err());
+    assert!(
+        transport
+            .retain_network_port_lease_internal(Arc::new(()))
+            .is_err()
+    );
     let _received = transport.start().await.unwrap();
     let address = transport.bip_port().unwrap().endpoint;
     assert_ne!(address.port(), 0);
@@ -61,14 +63,18 @@ async fn normal_capability_and_joined_stop_release_are_explicit() {
     transport.retain_network_port_lease_internal(token).unwrap();
     let _received = transport.start().await.unwrap();
     assert!(transport.supports_local_nonrouter_number_controls());
-    assert!(transport
-        .retain_network_port_lease_internal(Arc::new(()))
-        .is_err());
+    assert!(
+        transport
+            .retain_network_port_lease_internal(Arc::new(()))
+            .is_err()
+    );
     transport.stop().await.unwrap();
     assert!(weak.upgrade().is_none());
-    assert!(transport
-        .retain_network_port_lease_internal(Arc::new(()))
-        .is_err());
+    assert!(
+        transport
+            .retain_network_port_lease_internal(Arc::new(()))
+            .is_err()
+    );
 }
 
 /// A BBMD reports its mode before start, takes the lease, and lends its own
@@ -132,9 +138,10 @@ async fn bbmd_reports_its_mode_and_lends_its_live_tables_once_started() {
 
     bbmd.stop().await.unwrap();
     assert!(weak.upgrade().is_none());
-    assert!(bbmd
-        .retain_network_port_lease_internal(Arc::new(()))
-        .is_err());
+    assert!(
+        bbmd.retain_network_port_lease_internal(Arc::new(()))
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -171,9 +178,10 @@ fn a_bbmd_that_also_registers_as_a_foreign_device_has_no_single_mode() {
         ttl: 60,
     });
     assert!(both.bip_port().is_none());
-    assert!(both
-        .retain_network_port_lease_internal(Arc::new(()))
-        .is_err());
+    assert!(
+        both.retain_network_port_lease_internal(Arc::new(()))
+            .is_err()
+    );
 }
 
 fn foreign_config() -> ForeignDeviceConfig {

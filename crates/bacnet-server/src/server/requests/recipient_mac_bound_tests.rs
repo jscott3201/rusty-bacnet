@@ -7,8 +7,8 @@
 //!
 //! PROPERTY 2; INVALID_DATA_TYPE 9.
 
-use super::mutation_list_wire_tests::{change_list_error, list_request, wire, ADD};
-use super::mutation_tests::{oid, Fixture};
+use super::mutation_list_wire_tests::{ADD, change_list_error, list_request, wire};
+use super::mutation_tests::{Fixture, oid};
 use super::*;
 use bacnet_encoding::constructed::encode_destination_list;
 use bacnet_encoding::{primitives, tags};

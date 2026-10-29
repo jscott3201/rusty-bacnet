@@ -2,7 +2,7 @@
 //! undelivered-notification counter once, and a delivered one moves none
 //! (#1160).
 
-use super::super::device_bindings::{DeviceBindingTable, ObservationOutcome, OBSERVED_BINDING_TTL};
+use super::super::device_bindings::{DeviceBindingTable, OBSERVED_BINDING_TTL, ObservationOutcome};
 use super::*;
 
 const PEER: [u8; 6] = [127, 0, 0, 1, 0xBA, 0xC1];

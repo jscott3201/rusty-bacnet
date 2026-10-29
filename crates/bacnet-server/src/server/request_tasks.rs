@@ -2,7 +2,7 @@ use super::request_admission::{Admission, Class, Rejection};
 use super::{RequestAdmissionCounters, RequestAdmissionPolicy};
 use crate::command_lists::Unfinished;
 use bacnet_types::primitives::ObjectIdentifier;
-use std::future::{poll_fn, Future};
+use std::future::{Future, poll_fn};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
@@ -246,10 +246,10 @@ impl RequestTasks {
     }
 
     pub(super) fn observe(result: Option<Result<(), JoinError>>) {
-        if let Some(Err(error)) = result {
-            if !error.is_cancelled() {
-                tracing::warn!(%error, "Inbound request handler failed");
-            }
+        if let Some(Err(error)) = result
+            && !error.is_cancelled()
+        {
+            tracing::warn!(%error, "Inbound request handler failed");
         }
     }
 }

@@ -2,8 +2,8 @@
 use super::*;
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::{
-    handshake::server::{ErrorResponse, Request, Response},
     Message,
+    handshake::server::{ErrorResponse, Request, Response},
 };
 #[allow(clippy::result_large_err)]
 fn direct(request: &Request, mut response: Response) -> Result<Response, ErrorResponse> {

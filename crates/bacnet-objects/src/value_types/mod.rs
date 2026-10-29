@@ -5,10 +5,11 @@
 //!
 //! A `define_value_object!` macro generates the struct + BACnetObject impl for each type.
 
+use crate::prelude::*;
+use alloc::borrow::Cow;
 use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
-use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
 use crate::property_metadata::{
@@ -51,19 +52,19 @@ mod metadata;
 macro_rules! define_value_object_commandable {
     (
         name: $struct_name:ident,
-        doc: $doc:expr,
-        object_type: $obj_type:expr,
+        doc: $doc:expr_2021,
+        object_type: $obj_type:expr_2021,
         value_type: $val_type:ty,
-        default_value: $default:expr,
-        pv_to_property: $pv_to_prop:expr,
-        property_to_pv: $prop_to_pv:expr,
-        pa_wrap: $pa_wrap:expr,
-        rd_wrap: $rd_wrap:expr,
-        rd_validate: $rd_validate:expr,
+        default_value: $default:expr_2021,
+        pv_to_property: $pv_to_prop:expr_2021,
+        property_to_pv: $prop_to_pv:expr_2021,
+        pa_wrap: $pa_wrap:expr_2021,
+        rd_wrap: $rd_wrap:expr_2021,
+        rd_validate: $rd_validate:expr_2021,
         copy_type: $is_copy:tt,
         $(units: $units_ty:ty,)?
         $(cov_increment: $cov_ty:ty,)?
-        property_metadata: $property_metadata:expr
+        property_metadata: $property_metadata:expr_2021
         $(,)?
     ) => {
         #[doc = $doc]
@@ -307,11 +308,11 @@ macro_rules! define_value_object_commandable {
     };
 
     // Read priority array for Copy types: use the common macro.
-    (@read_pa $self:ident, $array_index:ident, $wrap:expr, copy) => {{
+    (@read_pa $self:ident, $array_index:ident, $wrap:expr_2021, copy) => {{
         common::read_priority_array!($self, $array_index, $wrap)
     }};
     // Read priority array for Clone (non-Copy) types.
-    (@read_pa $self:ident, $array_index:ident, $wrap:expr, clone) => {{
+    (@read_pa $self:ident, $array_index:ident, $wrap:expr_2021, clone) => {{
         let wrap_fn = $wrap;
         match $array_index {
             None => {
@@ -356,8 +357,14 @@ fn clone_bitstring_to_pv(v: &(u8, Vec<u8>)) -> PropertyValue {
     }
 }
 
-fn datetime_copy_to_pv(v: (Date, Time)) -> PropertyValue {
-    PropertyValue::List(vec![PropertyValue::Date(v.0), PropertyValue::Time(v.1)])
+/// A set Priority_Array slot of a date-time value type: the date-time choice
+/// of BACnetPriorityValue, context tag 1 around the Date and Time (#2098).
+/// Present_Value and Relinquish_Default stay a bare BACnetDateTime; only the
+/// array element is the CHOICE.
+fn datetime_priority_value(v: (Date, Time)) -> PropertyValue {
+    let mut buf = bytes::BytesMut::with_capacity(12);
+    bacnet_encoding::primitives::encode_priority_date_time(&mut buf, &v.0, &v.1);
+    PropertyValue::ApplicationData(buf.to_vec())
 }
 
 fn datetime_to_pv(dt: &(Date, Time)) -> PropertyValue {
@@ -648,7 +655,7 @@ define_value_object_commandable! {
     ),
     pv_to_property: (|v: &(Date, Time)| datetime_to_pv(v)),
     property_to_pv: pv_to_datetime,
-    pa_wrap: datetime_copy_to_pv,
+    pa_wrap: datetime_priority_value,
     rd_wrap: (|v: &(Date, Time)| datetime_to_pv(v)),
     rd_validate: (|_: &(Date, Time)| -> Result<(), Error> { Ok(()) }),
     copy_type: copy,
@@ -700,7 +707,7 @@ define_value_object_commandable! {
     ),
     pv_to_property: (|v: &(Date, Time)| datetime_to_pv(v)),
     property_to_pv: pv_to_datetime,
-    pa_wrap: datetime_copy_to_pv,
+    pa_wrap: datetime_priority_value,
     rd_wrap: (|v: &(Date, Time)| datetime_to_pv(v)),
     rd_validate: (|_: &(Date, Time)| -> Result<(), Error> { Ok(()) }),
     copy_type: copy,

@@ -120,13 +120,15 @@ fn custom_class_past_the_cap_routes_none_of_its_list() {
         );
         assert!(plain.is_empty(), "{count}");
         assert_eq!(strict, None, "{count}");
-        assert!(filter_recipient_list(
-            &served,
-            EventTransition::ToOffnormal,
-            DaysOfWeek::MONDAY,
-            &make_time(12, 0),
-        )
-        .is_empty());
+        assert!(
+            filter_recipient_list(
+                &served,
+                EventTransition::ToOffnormal,
+                DaysOfWeek::MONDAY,
+                &make_time(12, 0),
+            )
+            .is_empty()
+        );
     }
 }
 

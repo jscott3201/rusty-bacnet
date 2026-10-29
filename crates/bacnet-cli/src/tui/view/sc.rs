@@ -12,21 +12,21 @@ mod layout;
 
 use std::time::Instant;
 
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph, Wrap};
-use ratatui::Frame;
 
 use bacnet_transport::sc::ScConnectionState;
 
 use super::{Theme, WIDE_WIDTH};
+use crate::tui::app::App;
 use crate::tui::app::devices::age_label;
 use crate::tui::app::sc::{ScState, Severity, View};
-use crate::tui::app::App;
 use crate::tui::sc::credentials::signature_algorithm;
-use crate::tui::sc::doctor::{Diagnosis, Mark, CONNECTED, PHASES};
-use crate::tui::sc::{hub_name, uuid_text, vmac_text, CertSummary};
+use crate::tui::sc::doctor::{CONNECTED, Diagnosis, Mark, PHASES};
+use crate::tui::sc::{CertSummary, hub_name, uuid_text, vmac_text};
 pub(super) use layout::Row;
 
 /// The timeline's least height, borders included: one event line.

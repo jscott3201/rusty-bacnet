@@ -51,11 +51,11 @@
 //! lifecycle mutation is owner-exclusive (`&mut`) or via atomics/async
 //! mutexes; role handles synchronize through the shared session token.
 
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 
-use bacnet_client::client::ClientConfig;
 use bacnet_client::EndpointRequester;
+use bacnet_client::client::ClientConfig;
 use bacnet_encoding::apdu::Apdu;
 use bacnet_endpoint_core::coordinator::{
     AdmissionOutcome, CoordinatorError, OutboundTransactionCoordinator,
@@ -71,7 +71,7 @@ use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
-use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 #[path = "source_profile.rs"]
@@ -83,12 +83,13 @@ mod startup;
 
 #[path = "device_writes.rs"]
 mod device_writes;
+pub use device_writes::{RESPONDER_OPT_IN_SERVICES, RESPONDER_SERVICES, ResponderOptIn};
 #[path = "registered_port.rs"]
 mod registered_port;
 
 use crate::roles::{
-    admit_once, decode_terminal, inbound_canonical_peer, is_requester_lease, ClientRoleHandle,
-    ServerRoleHandle, SessionToken,
+    ClientRoleHandle, ServerRoleHandle, SessionToken, admit_once, decode_terminal,
+    inbound_canonical_peer, is_requester_lease,
 };
 use bacnet_server::server::{
     __endpoint_EndpointResponder as EndpointResponder,
@@ -262,7 +263,12 @@ struct SessionShared {
 /// # Ok(())
 /// # }
 /// ```
-pub struct EndpointSession<T: TransportPort + 'static> {
+///
+/// `T` defaults to [`AnyTransport`](bacnet_transport::any::AnyTransport), so
+/// `EndpointSession` alone names a session over any built-in transport;
+/// `EndpointSession<BipTransport>` and the like name one over a concrete
+/// transport, as the builders return.
+pub struct EndpointSession<T: TransportPort + 'static = bacnet_transport::any::AnyTransport> {
     shared: Arc<SessionShared>,
     coordinator: Arc<OutboundTransactionCoordinator>,
     ingress: Option<EndpointIngress<T>>,
@@ -558,7 +564,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         };
         if let Err(error) = self
             .publish_registered_port(
-                receivers.bip_port.clone(),
+                (receivers.bip_port.clone(), receivers.bip6_port.clone()),
                 receivers.egress.local_network_number(),
             )
             .await
@@ -634,12 +640,11 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             }
         }
         if !self.ingress_stopped {
-            if let Some(ingress) = self.ingress.as_mut() {
-                if let Err(error) = ingress.stop().await {
-                    if self.stop_exit.as_ref().is_some_and(Result::is_ok) {
-                        self.stop_exit = Some(Err(error));
-                    }
-                }
+            if let Some(ingress) = self.ingress.as_mut()
+                && let Err(error) = ingress.stop().await
+                && self.stop_exit.as_ref().is_some_and(Result::is_ok)
+            {
+                self.stop_exit = Some(Err(error));
             }
             self.ingress_stopped = true;
         }
@@ -663,10 +668,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         self.responder.take();
         self.client_handle = None;
         self.server_handle = None;
-        if self.durable_settlement.is_none() {
-            if let Some(db) = &self.database {
-                self.durable_settlement = Some(tokio::spawn(settle_durable_writes(Arc::clone(db))));
-            }
+        if self.durable_settlement.is_none()
+            && let Some(db) = &self.database
+        {
+            self.durable_settlement = Some(tokio::spawn(settle_durable_writes(Arc::clone(db))));
         }
         if let Some(task) = self.durable_settlement.as_mut() {
             // Keep the one settlement owner across canceled stop waiters.
@@ -905,7 +910,7 @@ struct DispatchParts {
 
 #[path = "session_dispatch.rs"]
 mod dispatch;
-use dispatch::{next_event, DispatchEvent};
+use dispatch::{DispatchEvent, next_event};
 
 async fn dispatch_loop(mut parts: DispatchParts, mut cancel: oneshot::Receiver<()>) -> SessionExit {
     // One consumer retains all receivers and joins; cancellation stays first.
@@ -934,7 +939,7 @@ async fn handle_inbound(parts: &mut DispatchParts, received: ReceivedApdu) {
     let _link_group = received.link_layer_group;
     let _is_group = received.is_group;
     let _attributes = received.data_attributes.clone();
-    let _provenance = received.provenance;
+    let _provenance = &received.provenance;
     let _ingress = received.ingress_network;
     let Some(responder) = parts.responder.as_ref() else {
         let mut counters = parts.shared.counters.lock().await;
@@ -1081,6 +1086,9 @@ async fn handle_ingress_policy(shared: &Arc<SessionShared>, outcome: PolicyOutco
 #[path = "source_read_tests.rs"]
 mod source_read_tests;
 
+#[cfg(test)]
+#[path = "registered_port_bip6_tests.rs"]
+mod registered_port_bip6_tests;
 #[cfg(test)]
 #[path = "registered_port_lifetime_tests.rs"]
 mod registered_port_lifetime_tests;

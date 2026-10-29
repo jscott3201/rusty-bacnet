@@ -57,15 +57,14 @@ fn select(requested: Ipv6Addr, candidates: &[Candidate]) -> io::Result<SelectedL
         if viable.iter().any(|candidate| !candidate.loopback) {
             viable.retain(|candidate| !candidate.loopback);
         }
-        if let Some(first) = viable.first() {
-            if viable
+        if let Some(first) = viable.first()
+            && viable
                 .iter()
                 .any(|candidate| candidate.link.index != first.link.index)
-            {
-                return Err(selection_error(
-                    "multiple usable IPv6 interfaces; configure a concrete local IPv6 address",
-                ));
-            }
+        {
+            return Err(selection_error(
+                "multiple usable IPv6 interfaces; configure a concrete local IPv6 address",
+            ));
         }
         if viable
             .iter()

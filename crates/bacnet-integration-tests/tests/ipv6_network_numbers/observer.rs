@@ -1,5 +1,5 @@
 //! Test-only client for the independently isolated raw multicast observer.
-use super::{bounded, wire, NODE};
+use super::{NODE, bounded, wire};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::TcpStream,

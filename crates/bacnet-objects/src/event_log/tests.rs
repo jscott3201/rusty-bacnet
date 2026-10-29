@@ -6,6 +6,7 @@ use bacnet_types::constructed::{
     BACnetPropertyValue, EventLogDatum, EventNotificationRequest, NotificationParameters,
 };
 use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, EventType, NotifyType};
+use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::{BACnetTimeStamp, Date, StatusFlags, Time};
 use bytes::BytesMut;
 use std::sync::Arc;
@@ -97,7 +98,7 @@ fn served(el: &EventLogObject) -> Vec<Vec<u8>> {
 
 fn assert_read_access_denied(result: Result<PropertyValue, Error>) {
     match result {
-        Err(Error::Protocol { class, code }) => {
+        Err(Error::Remote(RemoteError::Error { class, code })) => {
             assert_eq!(class, ErrorClass::PROPERTY);
             assert_eq!(code, ErrorCode::READ_ACCESS_DENIED);
         }
@@ -378,7 +379,7 @@ fn event_log_has_no_out_of_service_or_log_interval() {
         let write = el.write_property(property, None, value, None);
         for result in [read, write] {
             match result {
-                Err(Error::Protocol { class, code }) => {
+                Err(Error::Remote(RemoteError::Error { class, code })) => {
                     assert_eq!(class, ErrorClass::PROPERTY);
                     assert_eq!(code, ErrorCode::UNKNOWN_PROPERTY);
                 }
@@ -406,7 +407,7 @@ fn write_absent_property_is_unknown() {
         None,
     );
     assert!(
-        matches!(result, Err(Error::Protocol { class, code }) if class == ErrorClass::PROPERTY && code == ErrorCode::UNKNOWN_PROPERTY)
+        matches!(result, Err(Error::Remote(RemoteError::Error { class, code })) if class == ErrorClass::PROPERTY && code == ErrorCode::UNKNOWN_PROPERTY)
     );
 }
 

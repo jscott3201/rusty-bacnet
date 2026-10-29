@@ -84,15 +84,17 @@ async fn endpoint_number_bbmd_both_roles_progress_stop_and_drop() {
                     Err(_) => tokio::task::yield_now().await,
                 }
             }
-            assert!(client
-                .read_property(
-                    &peer_mac,
-                    ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
-                    PropertyIdentifier::PRESENT_VALUE,
-                    None
-                )
-                .await
-                .is_err());
+            assert!(
+                client
+                    .read_property(
+                        &peer_mac,
+                        ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
+                        PropertyIdentifier::PRESENT_VALUE,
+                        None
+                    )
+                    .await
+                    .is_err()
+            );
             Ok(())
         })
         .await;

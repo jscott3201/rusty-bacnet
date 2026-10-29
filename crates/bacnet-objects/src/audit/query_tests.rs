@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 
+use bacnet_types::MacAddr;
 use bacnet_types::bitstring::{AuditOperationFlags, LogStatus};
 use bacnet_types::constructed::{
     AuditPropertyReference, BACnetAddress, BACnetAuditLogDatum, BACnetAuditLogQueryParameters,
@@ -10,7 +11,6 @@ use bacnet_types::enums::{
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
-use bacnet_types::MacAddr;
 
 use crate::traits::BACnetObject;
 
@@ -338,14 +338,16 @@ fn source_filter_and_success_filter_follow_the_wire_contract() {
         );
     }
     // The reserved raw domain matches nothing rather than widening the query.
-    assert!(query(
-        &log,
-        &query_parameters(BACnetSuccessFilter::from_raw(3)),
-        None,
-        10
-    )
-    .records
-    .is_empty());
+    assert!(
+        query(
+            &log,
+            &query_parameters(BACnetSuccessFilter::from_raw(3)),
+            None,
+            10
+        )
+        .records
+        .is_empty()
+    );
 
     let wrong_source = BACnetAuditLogQueryParameters::BySource {
         source_device_identifier: device(98),
@@ -363,9 +365,11 @@ fn source_filter_and_success_filter_follow_the_wire_contract() {
         operations: Some(operations),
         successful_actions_only: BACnetSuccessFilter::ALL,
     };
-    assert!(query(&log, &wrong_source_object, None, 10)
-        .records
-        .is_empty());
+    assert!(
+        query(&log, &wrong_source_object, None, 10)
+            .records
+            .is_empty()
+    );
 }
 
 #[test]

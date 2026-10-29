@@ -17,8 +17,8 @@ use super::rejection::{RejectionBudget, RejectionExpired};
 use super::{ScConnection, WebSocketPort};
 use crate::port::ReceivedNpdu;
 use crate::sc_frame::{
-    advertisement_message_error, encode_sc_message,
-    first_must_understand_destination_option_marker, ScFunction, ScMessage, Vmac, BROADCAST_VMAC,
+    BROADCAST_VMAC, ScFunction, ScMessage, Vmac, advertisement_message_error, encode_sc_message,
+    first_must_understand_destination_option_marker,
 };
 
 /// Minimum spacing between solicited Advertisements answered by this node.

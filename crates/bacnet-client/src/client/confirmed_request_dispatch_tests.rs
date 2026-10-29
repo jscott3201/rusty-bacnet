@@ -1,8 +1,8 @@
 //! Responding-client behavior for inbound ConfirmedRequest APDUs (issue #374).
 
 use super::*;
-use bacnet_encoding::apdu::{decode_apdu, ConfirmedRequest};
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
+use bacnet_encoding::apdu::{ConfirmedRequest, decode_apdu};
+use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort, TransportProvenance};
 use bacnet_types::enums::AbortReason;
@@ -293,9 +293,11 @@ async fn malformed_confirmed_cov_receives_reject_without_delivery() {
         reject.reject_reason,
         RejectReason::MISSING_REQUIRED_PARAMETER
     );
-    assert!(timeout(Duration::from_millis(100), cov_rx.recv())
-        .await
-        .is_err());
+    assert!(
+        timeout(Duration::from_millis(100), cov_rx.recv())
+            .await
+            .is_err()
+    );
 
     client.stop().await.unwrap();
     peer_transport.stop().await.unwrap();
@@ -337,9 +339,11 @@ async fn partial_confirmed_cov_reports_missing_required_parameter() {
         reject.reject_reason,
         RejectReason::MISSING_REQUIRED_PARAMETER
     );
-    assert!(timeout(Duration::from_millis(100), cov_rx.recv())
-        .await
-        .is_err());
+    assert!(
+        timeout(Duration::from_millis(100), cov_rx.recv())
+            .await
+            .is_err()
+    );
 
     client.stop().await.unwrap();
     peer_transport.stop().await.unwrap();
@@ -378,9 +382,11 @@ async fn invalid_confirmed_cov_representation_reports_invalid_data_encoding() {
     };
     assert_eq!(reject.invoke_id, 0x3A);
     assert_eq!(reject.reject_reason, RejectReason::INVALID_DATA_ENCODING);
-    assert!(timeout(Duration::from_millis(100), cov_rx.recv())
-        .await
-        .is_err());
+    assert!(
+        timeout(Duration::from_millis(100), cov_rx.recv())
+            .await
+            .is_err()
+    );
 
     client.stop().await.unwrap();
     peer_transport.stop().await.unwrap();
@@ -408,9 +414,11 @@ async fn unsupported_confirmed_group_delivery_remains_silent() {
     );
     peer_transport.send_broadcast(&request).await.unwrap();
 
-    assert!(timeout(Duration::from_millis(100), peer_rx.recv())
-        .await
-        .is_err());
+    assert!(
+        timeout(Duration::from_millis(100), peer_rx.recv())
+            .await
+            .is_err()
+    );
 
     client.stop().await.unwrap();
     peer_transport.stop().await.unwrap();
@@ -504,9 +512,11 @@ async fn global_broadcast_confirmed_request_remains_silent() {
         .await
         .unwrap();
 
-    assert!(timeout(Duration::from_millis(100), peer_rx.recv())
-        .await
-        .is_err());
+    assert!(
+        timeout(Duration::from_millis(100), peer_rx.recv())
+            .await
+            .is_err()
+    );
 
     client.stop().await.unwrap();
     peer_transport.stop().await.unwrap();

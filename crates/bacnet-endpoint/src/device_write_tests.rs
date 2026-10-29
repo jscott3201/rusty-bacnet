@@ -1,11 +1,12 @@
 use super::*;
-use bacnet_encoding::apdu::{decode_apdu, encode_apdu, ConfirmedRequest};
-use bacnet_encoding::npdu::{encode_npdu, Npdu};
+use bacnet_encoding::apdu::{ConfirmedRequest, decode_apdu, encode_apdu};
+use bacnet_encoding::npdu::{Npdu, encode_npdu};
 use bacnet_npdu::NetworkPriority;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::ReceivedNpdu;
 use bacnet_types::enums::{ConfirmedServiceChoice, ServiceSupported};
+use bacnet_types::error::RemoteError;
 use bytes::BytesMut;
 use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
@@ -325,14 +326,16 @@ async fn endpoint_device_write_actual_ingress_rejects_source_reporter_and_stops(
 
 #[test]
 fn bip_device_writes_cannot_be_discarded_by_bare_transport_build() {
-    assert!(crate::bip::BipEndpointBuilder::new(
-        std::net::Ipv4Addr::LOCALHOST,
-        0,
-        std::net::Ipv4Addr::BROADCAST
-    )
-    .device_writes(Arc::new(|_| true))
-    .build_transport()
-    .is_err());
+    assert!(
+        crate::bip::BipEndpointBuilder::new(
+            std::net::Ipv4Addr::LOCALHOST,
+            0,
+            std::net::Ipv4Addr::BROADCAST
+        )
+        .device_writes(Arc::new(|_| true))
+        .build_transport()
+        .is_err()
+    );
 }
 
 #[tokio::test]
@@ -506,7 +509,7 @@ async fn bip_device_writes_reach_the_lowest_of_several_devices() {
     assert!(
         matches!(
             refused,
-            Error::Protocol { code, .. }
+            Error::Remote(RemoteError::Error { code, .. })
                 if code == bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED
         ),
         "{refused:?}"

@@ -9,7 +9,7 @@
 use std::time::Duration;
 
 use super::mstp::{JoinDialog, MstpKey};
-use super::{App, Overlay, FLASH_FOR};
+use super::{App, FLASH_FOR, Overlay};
 use crate::mstp::MstpArgs;
 use crate::tui::monitor::analysis::{self, Proposal, Thresholds};
 use crate::tui::monitor::{MonitorPlan, MonitorReport, MonitorSample};
@@ -29,6 +29,8 @@ pub(crate) enum MonitorTab {
     Findings,
     /// Error counters and lost-token events.
     Errors,
+    /// Baud scan progress and retained evidence.
+    Scan,
 }
 
 impl MonitorTab {
@@ -39,11 +41,18 @@ impl MonitorTab {
             Self::Ring => "Token ring",
             Self::Findings => "Findings",
             Self::Errors => "Errors",
+            Self::Scan => "Scan",
         }
     }
 
     /// Every tab, in order.
-    pub(crate) const ALL: [Self; 4] = [Self::Stations, Self::Ring, Self::Findings, Self::Errors];
+    pub(crate) const ALL: [Self; 5] = [
+        Self::Stations,
+        Self::Ring,
+        Self::Findings,
+        Self::Errors,
+        Self::Scan,
+    ];
 
     fn cycle(self, back: bool) -> Self {
         let at = Self::ALL.iter().position(|tab| *tab == self).unwrap_or(0);
@@ -77,6 +86,12 @@ pub(crate) type ErrorRows = [(&'static str, u64); 7];
 /// The monitor screen.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MonitorState {
+    /// Whether the ordinary monitor is currently admitted.
+    pub(crate) live: bool,
+    /// Separate scan evidence, retained across original-rate restoration.
+    pub(crate) scan: Option<Box<crate::tui::monitor::scan::Scan>>,
+    /// Candidate whose component counters are shown on narrow screens.
+    pub(crate) scan_selected: usize,
     /// The port listened to.
     pub(crate) port: String,
     /// Its baud rate.
@@ -110,6 +125,9 @@ impl MonitorState {
     /// A monitor on `port` at `baud`, before its first reading.
     pub(crate) fn new(port: String, baud: u32, max_info_frames: u8, join_allowed: bool) -> Self {
         Self {
+            live: false,
+            scan: None,
+            scan_selected: 0,
             port,
             baud,
             max_info_frames,
@@ -130,18 +148,27 @@ impl MonitorState {
     pub(crate) fn report(&mut self, report: MonitorReport) -> Option<String> {
         match report {
             MonitorReport::Started { port, baud } => {
+                self.live = true;
                 (self.port, self.baud) = (port, baud);
                 (self.shown, self.latest, self.baseline) = (None, None, None);
                 self.wizard = None;
             }
             MonitorReport::Sample(sample) => {
+                if self.scan.as_ref().is_some_and(|scan| scan.active()) {
+                    return None;
+                }
                 if !self.paused {
                     self.shown = Some(sample.clone());
                 }
                 self.latest = Some(sample);
                 self.advance_wizard();
             }
-            MonitorReport::Ended(error) => return Some(error),
+            MonitorReport::Ended(error) => {
+                self.live = false;
+                self.wizard = None;
+                self.joining = None;
+                return Some(error);
+            }
         }
         None
     }
@@ -177,6 +204,9 @@ impl MonitorState {
     /// settings returned. Otherwise the wizard proposes again from that
     /// reading, and the error says why.
     pub(crate) fn recheck(&mut self) -> Result<MstpArgs, String> {
+        if !self.live || self.scan.as_ref().is_some_and(|scan| scan.active()) {
+            return Err("No live ordinary monitor to join from.".into());
+        }
         let (Some(Wizard::Proposed { proposal, selected }), Some(latest)) =
             (&self.wizard, self.latest.as_deref())
         else {
@@ -205,6 +235,9 @@ impl MonitorState {
 
     /// The settings the proposal joins with, on the monitor's port.
     pub(crate) fn join_settings(&self) -> Option<MstpArgs> {
+        if !self.live || self.scan.as_ref().is_some_and(|scan| scan.active()) {
+            return None;
+        }
         let Some(Wizard::Proposed { proposal, selected }) = &self.wizard else {
             return None;
         };
@@ -278,6 +311,14 @@ impl App {
                 }
             }
             MstpKey::Cycle { back } => monitor.tab = monitor.tab.cycle(back),
+            MstpKey::Join
+                if !monitor.live || monitor.scan.as_ref().is_some_and(|scan| scan.active()) =>
+            {
+                self.flash(
+                    "Join needs a live ordinary monitor; finish the baud scan first.",
+                    FLASH_FOR,
+                );
+            }
             MstpKey::Join => {
                 let since = monitor
                     .latest
@@ -287,6 +328,13 @@ impl App {
                 monitor.wizard = Some(Wizard::Listening { since });
                 monitor.tab = MonitorTab::Findings;
                 monitor.advance_wizard();
+            }
+            MstpKey::Pick { back } if monitor.tab == MonitorTab::Scan => {
+                monitor.scan_selected = if back {
+                    monitor.scan_selected.saturating_sub(1)
+                } else {
+                    (monitor.scan_selected + 1).min(crate::mstp::BAUD_RATES.len() - 1)
+                };
             }
             MstpKey::Pick { back } => {
                 if let Some(Wizard::Proposed { proposal, selected }) = &mut monitor.wizard {

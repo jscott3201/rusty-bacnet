@@ -1,9 +1,9 @@
 //! The log pane.
 
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Padding, Paragraph};
-use ratatui::Frame;
 use tracing::Level;
 
 use super::Theme;

@@ -76,8 +76,23 @@ impl ReceivedNetworkReport {
         control: &ReceivedNetworkControl,
         number: Option<NumberControl>,
     ) -> Option<Self> {
-        let npdu = &control.npdu;
-        let report = match npdu.message_type? {
+        Some(Self {
+            source_mac: control.source_mac.clone(),
+            source_network: control.npdu.source.clone(),
+            report: NetworkReport::parse_with(&control.npdu, number)?,
+        })
+    }
+}
+
+impl NetworkReport {
+    /// Parse an overheard NPDU using its logical broadcast/unicast delivery,
+    /// without manufacturing transport provenance or starting a network layer.
+    pub fn parse_npdu(npdu: &Npdu, link_layer_group: bool) -> Option<Self> {
+        Self::parse_with(npdu, NumberControl::parse_npdu(npdu, link_layer_group))
+    }
+
+    fn parse_with(npdu: &Npdu, number: Option<NumberControl>) -> Option<Self> {
+        Some(match npdu.message_type? {
             NetworkMessageType::I_AM_ROUTER_TO_NETWORK => {
                 let networks = Networks::parse(&npdu.payload).ok()?;
                 let listed: Vec<u16> = networks.iter().filter(|&n| !is_reserved(n)).collect();
@@ -97,11 +112,6 @@ impl ReceivedNetworkReport {
                 RejectMessageToNetwork::decode(&npdu.payload).ok()?,
             ),
             _ => return None,
-        };
-        Some(Self {
-            source_mac: control.source_mac.clone(),
-            source_network: npdu.source.clone(),
-            report,
         })
     }
 }

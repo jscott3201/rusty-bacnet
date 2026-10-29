@@ -1,5 +1,6 @@
 use super::*;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::error::RemoteError;
 
 // --- AccessDoorObject ---
 
@@ -590,7 +591,7 @@ fn access_door_relinquish_default_write_recaptures_present_value() {
             .write_property(PropertyIdentifier::RELINQUISH_DEFAULT, None, value, None)
             .expect_err("out-of-production Relinquish_Default must refuse")
         {
-            Error::Protocol { class, code: c } => {
+            Error::Remote(RemoteError::Error { class, code: c }) => {
                 assert_eq!(class, ErrorClass::PROPERTY);
                 assert_eq!(c, code);
             }
@@ -611,9 +612,10 @@ fn access_door_relinquish_default_write_recaptures_present_value() {
 
     // The local setter shares the validation domain.
     assert!(door.set_relinquish_default(DoorValue::from_raw(4)).is_err());
-    assert!(door
-        .set_relinquish_default(DoorValue::EXTENDED_PULSE_UNLOCK)
-        .is_err());
+    assert!(
+        door.set_relinquish_default(DoorValue::EXTENDED_PULSE_UNLOCK)
+            .is_err()
+    );
     door.set_relinquish_default(DoorValue::LOCK).unwrap();
     assert_eq!(
         door.read_property(PropertyIdentifier::PRESENT_VALUE, None)

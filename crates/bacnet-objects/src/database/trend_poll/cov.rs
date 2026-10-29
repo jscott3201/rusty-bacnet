@@ -26,9 +26,8 @@ use bacnet_types::bitstring::status_flags_from_bacnet;
 use bacnet_types::constructed::{BACnetLogRecord, LogDatum, LogValue};
 use bacnet_types::enums::PropertyIdentifier as P;
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
-use tracing::warn;
 
-use super::{property_value_to_log_value, LocalDevice, Member, ObjectDatabase, RECONCILE};
+use super::{LocalDevice, Member, ObjectDatabase, RECONCILE, property_value_to_log_value};
 use crate::cov_change::{effective_increment, is_numeric, reports_change};
 use crate::traits::{BACnetObject, MonotonicClock};
 
@@ -159,7 +158,7 @@ impl ObjectDatabase {
                 .unwrap()
                 .add_trend_record(record)
                 .inspect_err(|error| {
-                    warn!(object = %oid, %error, "trend-log COV record insertion failed");
+                    log_warn!(object = %oid, %error, "trend-log COV record insertion failed");
                 })
                 .is_ok()
         });

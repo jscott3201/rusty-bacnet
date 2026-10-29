@@ -29,9 +29,11 @@ async fn audit_reporter_identity_startup_requires_a_concrete_local_device() {
                 .is_err()
         );
     }
-    assert!(try_server(reporter(), &[10], None, bindings())
-        .await
-        .is_err());
+    assert!(
+        try_server(reporter(), &[10], None, bindings())
+            .await
+            .is_err()
+    );
     let mut fixture = try_server(reporter(), &[10], Some(recipient()), bindings())
         .await
         .unwrap();
@@ -95,9 +97,10 @@ async fn audit_reporter_identity_active_membership_rejects_mutation_before_callb
         oid(ObjectType::AUDIT_REPORTER, 1),
     ] {
         assert!(db.remove(&target).is_err());
-        assert!(db
-            .with_object_adapter(&target, |_| panic!("protected callback ran"))
-            .is_err());
+        assert!(
+            db.with_object_adapter(&target, |_| panic!("protected callback ran"))
+                .is_err()
+        );
     }
     assert!(db.add(device(10)).is_err());
     assert!(db.add(device(11)).is_err());
@@ -116,10 +119,11 @@ async fn audit_reporter_identity_active_membership_rejects_mutation_before_callb
     assert_eq!(notifications(&fixture.transport.sent).len(), 1);
     fixture.server.stop().await.unwrap();
     let mut db = fixture.server.db.write().await;
-    assert!(db
-        .remove(&oid(ObjectType::AUDIT_REPORTER, 1))
-        .unwrap()
-        .is_some());
+    assert!(
+        db.remove(&oid(ObjectType::AUDIT_REPORTER, 1))
+            .unwrap()
+            .is_some()
+    );
     assert!(db.remove(&oid(ObjectType::DEVICE, 10)).unwrap().is_some());
     db.add(device(11)).unwrap();
 }
@@ -139,15 +143,17 @@ async fn audit_reporter_identity_drop_releases_membership_after_task_frames_end(
     settle().await;
     let mut db = database.write().await;
     db.add(device(11)).unwrap();
-    assert!(db
-        .remove(&oid(ObjectType::AUDIT_REPORTER, 1))
-        .unwrap()
-        .is_some());
-    assert!(!db
-        .get(&oid(ObjectType::DEVICE, 10))
-        .unwrap()
-        .property_list()
-        .contains(&PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT));
+    assert!(
+        db.remove(&oid(ObjectType::AUDIT_REPORTER, 1))
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        !db.get(&oid(ObjectType::DEVICE, 10))
+            .unwrap()
+            .property_list()
+            .contains(&PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT)
+    );
 }
 
 #[tokio::test]

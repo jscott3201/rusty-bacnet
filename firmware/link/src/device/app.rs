@@ -447,9 +447,12 @@ fn device_property(
         P::FIRMWARE_REVISION | P::APPLICATION_SOFTWARE_VERSION => {
             encode_app_character_string_to_sink(out, env!("CARGO_PKG_VERSION"))?
         }
-        P::PROTOCOL_VERSION => encode_app_unsigned_to_sink(out, 1)?,
-        // Revision 22, the 2020 edition's.
-        P::PROTOCOL_REVISION => encode_app_unsigned_to_sink(out, 22)?,
+        P::PROTOCOL_VERSION => {
+            encode_app_unsigned_to_sink(out, u64::from(bacnet_types::PROTOCOL_VERSION))?
+        }
+        P::PROTOCOL_REVISION => {
+            encode_app_unsigned_to_sink(out, u64::from(bacnet_types::PROTOCOL_REVISION))?
+        }
         P::PROTOCOL_SERVICES_SUPPORTED => {
             encode_app_bit_string_to_sink(out, 7, &SERVICES_SUPPORTED)?
         }

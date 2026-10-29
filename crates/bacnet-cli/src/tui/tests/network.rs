@@ -10,9 +10,9 @@
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::time::Duration;
 
+use bacnet_objects::DeviceIdentity;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
-use bacnet_objects::DeviceIdentity;
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::bbmd::{BdtEntry, ForeignDevicePolicy};
 use bacnet_transport::bip::{BbmdOptions, BipMode, BipTransport};
@@ -22,15 +22,15 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use super::*;
+use crate::tui::app::Link;
 use crate::tui::app::network::View;
 use crate::tui::app::watch::Screen;
-use crate::tui::app::Link;
 use crate::tui::message::{WhoIsScope, WhoIsSpec};
 use crate::tui::network::address_of;
-use crate::tui::network::matrix::{Cell, Finding};
 use crate::tui::profile::Profile;
 use crate::tui::worker::session::{ConnectPlan, TransportKind};
-use crate::tui::worker::{coordinator, EventSink, EVENT_CHANNEL_CAPACITY};
+use crate::tui::worker::{EVENT_CHANNEL_CAPACITY, EventSink, coordinator};
+use bacnet_ops::bbmd::{Cell, Finding};
 
 /// Long enough for any step here, short of a hang.
 const STEP: Duration = Duration::from_secs(10);
@@ -197,7 +197,7 @@ fn local(app: &App) -> SocketAddrV4 {
 }
 
 /// Survey from `a` and return the matrix the app built.
-async fn survey(a: SocketAddrV4) -> crate::tui::network::matrix::Matrix {
+async fn survey(a: SocketAddrV4) -> bacnet_ops::bbmd::Matrix {
     let mut net = Net::start(plan(None)).await;
     net.press(KeyCode::Char('4')).await;
     assert_eq!(net.app.screen, Screen::Network);
@@ -290,14 +290,18 @@ async fn silent_and_refusing_peers_are_named() {
     net.stop().await;
     set_bdt(&a, &[a_at, silent_at, plain_at]);
     let matrix = survey(a_at).await;
-    assert!(matrix
-        .findings
-        .iter()
-        .any(|f| matches!(f, Finding::Unreachable { bbmd, .. } if *bbmd == silent_at)));
-    assert!(matrix
-        .findings
-        .iter()
-        .any(|f| matches!(f, Finding::Nak { bbmd, .. } if *bbmd == plain_at)));
+    assert!(
+        matrix
+            .findings
+            .iter()
+            .any(|f| matches!(f, Finding::Unreachable { bbmd, .. } if *bbmd == silent_at))
+    );
+    assert!(
+        matrix
+            .findings
+            .iter()
+            .any(|f| matches!(f, Finding::Nak { bbmd, .. } if *bbmd == plain_at))
+    );
     a.stop().await.unwrap();
     plain.stop().await.unwrap();
 }

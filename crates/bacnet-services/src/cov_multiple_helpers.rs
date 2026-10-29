@@ -2,14 +2,12 @@ use bacnet_encoding::constructed::tagged::{decode_ctx_boolean, misplaced_kind};
 use bacnet_encoding::tags;
 use bacnet_types::enums::{PropertyIdentifier, RejectReason};
 use crate::common::refused_value;
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::{Date, Time};
 use bytes::BytesMut;
 
 pub(super) fn reject(reason: RejectReason, _message: &'static str) -> Error {
-    Error::Reject {
-        reason,
-    }
+    Error::reject(reason)
 }
 
 /// The required context-tagged BOOLEAN `context_tag` at `offset`. A missing
@@ -29,11 +27,11 @@ pub(super) fn decode_required_bool(
             "required Boolean is missing",
         ));
     }
-    let (tag, _) = tags::decode_tag(data, offset).map_err(|error| Error::Reject {
+    let (tag, _) = tags::decode_tag(data, offset).map_err(|error| Error::Remote(RemoteError::Reject {
         reason: error
             .reject_reason()
             .unwrap_or(RejectReason::INVALID_DATA_ENCODING),
-    })?;
+    }))?;
     if !tag.is_context(context_tag) {
         return Err(reject(
             misplaced_kind(data, offset, &tag, Some(context_tag)).reject_reason(),

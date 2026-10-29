@@ -2,12 +2,12 @@
 
 use std::path::PathBuf;
 
-use super::bbmd_start::{select_wildcard_bbmd_ip, BdtSource};
+use super::bbmd_start::{BdtSource, select_wildcard_bbmd_ip};
 use super::own_broadcast_tests::{
-    assert_no_bvll, assert_own_forwarded, port_of, recv_bvll, udp, NPDU,
+    NPDU, assert_no_bvll, assert_own_forwarded, port_of, recv_bvll, udp,
 };
 use super::*;
-use crate::port_ownership::{lost_port, restart, ATTEMPTS};
+use crate::port_ownership::{ATTEMPTS, lost_port, restart};
 
 const PORT: u16 = 47808;
 /// Stand-ins for the host's LAN addresses; tests only inject them.

@@ -1,8 +1,8 @@
 use super::deadline_test_support::{poll_io, until};
 use super::tasks::Tasks;
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 
 struct Capture(Arc<AtomicUsize>);

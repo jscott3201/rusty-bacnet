@@ -8,7 +8,7 @@ import unittest
 
 import rusty_bacnet
 from rusty_bacnet import (
-    BACnetClient, BACnetServer, BipEndpoint, EndpointClient, BacnetError,
+    BACnetClient, BACnetServer, BipEndpoint, BitString, EndpointClient, BacnetError,
     BacnetProtocolError, ObjectIdentifier, ObjectType, PropertyIdentifier,
 )
 
@@ -42,9 +42,9 @@ class EndpointReadRangeTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(actual, expected)
                     self.assertEqual(actual["item_count"], count)
                     self.assertIsInstance(actual["item_data"], bytes)
-                    self.assertIsInstance(actual["result_flags"], tuple)
+                    self.assertIsInstance(actual["result_flags"], BitString)
                     self.assertEqual(len(actual["result_flags"]), 3)
-                    self.assertTrue(all(type(flag) is bool for flag in actual["result_flags"]))
+                    self.assertTrue(all(type(flag) is bool for flag in actual["result_flags"].bits))
                     self.assertIsNone(actual["first_sequence_number"])
                     if count == 4:
                         self.assertEqual(actual["item_data"], entries)
@@ -116,5 +116,5 @@ class EndpointReadRangeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(ast.unparse(method.returns), "Awaitable[ReadRangeResult]")
         shape = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "ReadRangeResult")
         annotations = {n.target.id: ast.unparse(n.annotation) for n in shape.body if isinstance(n, ast.AnnAssign)}
-        self.assertEqual(annotations["result_flags"], "tuple[bool, bool, bool]")
+        self.assertEqual(annotations["result_flags"], "BitString")
         self.assertEqual(annotations["first_sequence_number"], "int | None")

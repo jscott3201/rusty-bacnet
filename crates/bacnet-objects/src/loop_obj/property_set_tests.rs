@@ -4,6 +4,7 @@
 
 use super::*;
 use bacnet_types::enums::{Action, EngineeringUnits};
+use bacnet_types::error::RemoteError;
 
 const UNITS_ROWS: [PropertyIdentifier; 4] = [
     PropertyIdentifier::CONTROLLED_VARIABLE_UNITS,
@@ -22,7 +23,7 @@ fn read(lo: &LoopObject, property: PropertyIdentifier) -> PropertyValue {
 
 fn assert_property_error(result: Result<(), Error>, expected: ErrorCode) {
     assert!(
-        matches!(result, Err(Error::Protocol { class, code })
+        matches!(result, Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::PROPERTY && code == expected),
         "expected PROPERTY/{expected:?}, got {result:?}"
     );
@@ -239,7 +240,9 @@ fn loop_priority_for_writing_is_application_set_in_one_to_sixteen() {
 fn loop_action_is_a_single_value_not_an_array() {
     // ACTION is BACnetARRAY[N] only on Command (Table 12-12).
     assert!(!new_loop().is_array_property(PropertyIdentifier::ACTION));
-    assert!(crate::command::CommandObject::new(1, "CMD-1")
-        .unwrap()
-        .is_array_property(PropertyIdentifier::ACTION));
+    assert!(
+        crate::command::CommandObject::new(1, "CMD-1")
+            .unwrap()
+            .is_array_property(PropertyIdentifier::ACTION)
+    );
 }

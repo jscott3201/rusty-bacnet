@@ -153,22 +153,14 @@ impl Duration {
     /// context.
     #[must_use]
     pub const fn min(self, other: Self) -> Self {
-        if self.0 <= other.0 {
-            self
-        } else {
-            other
-        }
+        if self.0 <= other.0 { self } else { other }
     }
 
     /// The longer of `self` and `other`: [`Ord::max`] for a `const`
     /// context.
     #[must_use]
     pub const fn max(self, other: Self) -> Self {
-        if self.0 >= other.0 {
-            self
-        } else {
-            other
-        }
+        if self.0 >= other.0 { self } else { other }
     }
 
     /// What is left of `self` after taking out as many whole `divisor`s as

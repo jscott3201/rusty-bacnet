@@ -1,5 +1,5 @@
 //! Independent file fixtures and literal process-output assertions.
-use super::support::{command, Files, Process};
+use super::support::{Files, Process, command};
 use rcgen::{CertificateParams, KeyPair};
 use serde_json::Value;
 use std::{

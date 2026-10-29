@@ -5,8 +5,8 @@
 
 use super::create_object_initial_values::{create, initial, read, text};
 use super::*;
-use bacnet_objects::binary::BinaryInputObject;
 use PropertyIdentifier as P;
+use bacnet_objects::binary::BinaryInputObject;
 
 fn ai_1() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap()

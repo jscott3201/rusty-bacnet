@@ -13,6 +13,7 @@
 use std::borrow::Cow;
 use std::sync::Mutex;
 
+use ScheduleTargetOutcome::{Accepted, Failed, ReferenceRefused};
 use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject};
 use bacnet_objects::binary::BinaryValueObject;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
@@ -21,7 +22,6 @@ use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
-use ScheduleTargetOutcome::{Accepted, Failed, ReferenceRefused};
 
 use super::*;
 
@@ -75,10 +75,10 @@ impl BACnetObject for OwingSchedule {
             p if p == PropertyIdentifier::OBJECT_TYPE => {
                 Ok(PropertyValue::Enumerated(ObjectType::SCHEDULE.to_raw()))
             }
-            _ => Err(Error::Protocol {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::UNKNOWN_PROPERTY,
-            }),
+            _ => Err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::UNKNOWN_PROPERTY,
+            )),
         }
     }
 
@@ -89,10 +89,10 @@ impl BACnetObject for OwingSchedule {
         _value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
-        Err(Error::Protocol {
-            class: ErrorClass::PROPERTY,
-            code: ErrorCode::WRITE_ACCESS_DENIED,
-        })
+        Err(Error::protocol(
+            ErrorClass::PROPERTY,
+            ErrorCode::WRITE_ACCESS_DENIED,
+        ))
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
@@ -134,8 +134,8 @@ fn read(
 
 #[tokio::test]
 async fn a_schedule_null_relinquishes_a_commandable_target_and_leaves_the_others_as_they_are() {
-    use bacnet_types::enums::EngineeringUnits;
     use PropertyIdentifier as P;
+    use bacnet_types::enums::EngineeringUnits;
     let outcomes = Outcomes::default();
     // Both writes are owed ones, which go out without a clock: a Real at
     // priority 9, then the NULL that relinquishes it.
@@ -220,8 +220,8 @@ fn indexed(
 
 #[tokio::test]
 async fn a_schedule_target_index_is_checked_as_write_property_checks_it() {
-    use bacnet_types::enums::EngineeringUnits;
     use PropertyIdentifier as P;
+    use bacnet_types::enums::EngineeringUnits;
     let outcomes = Outcomes::default();
     let msv = oid(ObjectType::MULTI_STATE_VALUE, 1);
     let bv = oid(ObjectType::BINARY_VALUE, 1);

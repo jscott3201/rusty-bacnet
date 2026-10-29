@@ -65,10 +65,10 @@ impl TransportArgs {
             );
         }
         let multicast = crate::multicast::from_cli(cli, interface)?;
-        if let (Some(failover), Some(primary)) = (&cli.sc_failover_url, &cli.sc_url) {
-            if same_hub_url(failover, primary) {
-                return Err("--sc-failover-url must differ from --sc-url".into());
-            }
+        if let (Some(failover), Some(primary)) = (&cli.sc_failover_url, &cli.sc_url)
+            && same_hub_url(failover, primary)
+        {
+            return Err("--sc-failover-url must differ from --sc-url".into());
         }
         Ok(Self {
             interface,
@@ -187,8 +187,8 @@ pub async fn build_sc_client(
 pub fn sc_client_builder(
     args: &TransportArgs,
 ) -> Result<bacnet_client::client::ScClientBuilder, Error> {
-    use bacnet_transport::sc_tls::pem;
     use bacnet_transport::sc_tls::ScNodeTlsConfig;
+    use bacnet_transport::sc_tls::pem;
     use rustls::RootCertStore;
     use rustls_pki_types::pem::Error as PemError;
     use std::fs::File;

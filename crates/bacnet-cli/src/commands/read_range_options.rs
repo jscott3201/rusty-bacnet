@@ -61,7 +61,7 @@ impl RangeOptions {
                 count: count()?,
             }),
             (None, None, None) if self.count.is_some() => {
-                return Err("--count needs --position, --sequence, --time or --all".into())
+                return Err("--count needs --position, --sequence, --time or --all".into());
             }
             (None, None, None) => None,
         })

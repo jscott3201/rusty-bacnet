@@ -163,12 +163,16 @@ fn unavailable_observation_is_not_an_ordinary_no_transition() {
     let restored = bacnet_server::event_enrollment::evaluate_event_enrollments_report(&mut db, 1);
     assert!(restored.transitions.is_empty());
     assert!(restored.reliability_results.is_empty());
-    assert!(restored
-        .diagnostics
-        .iter()
-        .any(|d| d.outcome == EventEnrollmentEvaluationOutcome::NoTransition));
-    assert!(!restored
-        .diagnostics
-        .iter()
-        .any(|d| d.outcome == EventEnrollmentEvaluationOutcome::ObservationUnavailable));
+    assert!(
+        restored
+            .diagnostics
+            .iter()
+            .any(|d| d.outcome == EventEnrollmentEvaluationOutcome::NoTransition)
+    );
+    assert!(
+        !restored
+            .diagnostics
+            .iter()
+            .any(|d| d.outcome == EventEnrollmentEvaluationOutcome::ObservationUnavailable)
+    );
 }

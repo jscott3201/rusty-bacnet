@@ -3,9 +3,13 @@
 use bacnet_mstp_codec::FrameType;
 
 use super::{NodeKind, Sim};
+use crate::SimRng;
 use crate::line::Driver;
 use crate::spec::{Corruption, Fault};
 use crate::trace::{TraceKind, Who};
+
+/// Separates each node's timer-phase draw from the run's other streams.
+const TIMER_PHASE_STREAM: u64 = 0x3C6E_F372_FE94_F82B;
 
 /// A fault waiting for the transmission it applies to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,7 +102,16 @@ impl Sim {
                 if master.core.is_some() {
                     return;
                 }
-                master.boot(now);
+                // From the seed, the station and the boot count alone, so
+                // no other draw shifts it and each boot lands elsewhere.
+                let phase = SimRng::new(
+                    self.config.seed
+                        ^ TIMER_PHASE_STREAM
+                        ^ (u64::from(station) << 48)
+                        ^ (master.incarnation + 1),
+                )
+                .next_u64();
+                master.boot(now, phase);
             }
             NodeKind::Scripted(scripted) => scripted.decoder.reset(),
         }

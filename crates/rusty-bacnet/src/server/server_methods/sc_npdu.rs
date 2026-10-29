@@ -12,12 +12,12 @@ impl BACnetServer {
                 let server = guard
                     .as_ref()
                     .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
-                match server.transport() {
+                match server.transport().and_then(AppTransport::link) {
                     Some(AnyTransport::Sc(transport)) => transport.npdu_drop_counts(),
                     _ => {
                         return Err(PyRuntimeError::new_err(
                             "sc_npdu_drop_counts requires an SC server",
-                        ))
+                        ));
                     }
                 }
             };

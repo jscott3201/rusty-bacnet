@@ -6,14 +6,14 @@
 //! where both fit (#1915). Frames at 80x24, 120x40 and 200x50.
 
 use bacnet_client::discovery::DiscoveredDevice;
+use bacnet_ops::target::{Target, parse_target};
+use bacnet_types::MacAddr;
 use bacnet_types::enums::{ObjectType, Segmentation};
 use bacnet_types::primitives::ObjectIdentifier;
-use bacnet_types::MacAddr;
 use insta::assert_snapshot;
 use ratatui::crossterm::event::KeyCode;
 
 use super::*;
-use crate::core::target::{parse_target, Target};
 use crate::tui::network::discovery::{DiscoveryEvent, FoundRow};
 use crate::tui::worker::DeviceFeed;
 
@@ -336,9 +336,10 @@ fn who_has_shows_the_name_and_the_object_label() {
         let named = rows.clone().filter(|line| line.contains(LONG_NAME)).count();
         assert_eq!(named, if width >= 120 { 2 } else { 0 }, "{width}:\n{panel}");
         if width < 120 {
-            assert!(rows
-                .take(2)
-                .all(|line| line.contains("Building 4 ") && line.contains('…')));
+            assert!(
+                rows.take(2)
+                    .all(|line| line.contains("Building 4 ") && line.contains('…'))
+            );
         }
         assert_eq!(panel.contains(ROUTER), width >= 200, "{width}:\n{panel}");
     }
@@ -354,4 +355,16 @@ fn control_characters_in_a_found_name_are_spaces() {
     let frame = screen(&mut app, 120, 40);
     assert!(panel(&frame).contains("Fan 1 [2J"), "{frame}");
     assert!(!frame.contains(['\t', '\u{1b}']));
+}
+
+/// A right-to-left override or an isolate in a found name is dropped, so
+/// it can't reverse the rest of the row (#2122).
+#[test]
+fn bidi_overrides_in_a_found_name_are_dropped() {
+    let mut app = who_has_app();
+    let search = app.who_has.as_mut().unwrap();
+    search.found[0].name = "Fan\u{202E}1\u{2066}2\u{2069}".into();
+    let frame = screen(&mut app, 120, 40);
+    assert!(panel(&frame).contains("Fan12"), "{frame}");
+    assert!(!frame.contains(['\u{202E}', '\u{2066}', '\u{2069}']));
 }

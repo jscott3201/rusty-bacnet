@@ -1,6 +1,6 @@
 //! Retention Aborts keep the verified original direct response capability.
 use super::*;
-use crate::server::segmented_receive::{initial_state, RequestPayload};
+use crate::server::segmented_receive::{RequestPayload, initial_state};
 use bacnet_transport::sc::WebSocketPort;
 
 #[tokio::test]
@@ -29,7 +29,7 @@ async fn progress_abort_uses_original_direct_capability_and_retirement_never_fal
         let source = MacAddr::from_slice(SOURCE);
         let (mut state, _) = initial_state(
             payload,
-            bacnet_network::response_route::ResponseRoute::new(provenance, Some(response)),
+            bacnet_network::response_route::ResponseRoute::new(provenance.clone(), Some(response)),
             source.clone(),
             None,
             &request,

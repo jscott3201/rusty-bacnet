@@ -4,6 +4,8 @@
 //! - GlobalGroupObject (type 26) — Clause 12.50
 //! - StructuredViewObject (type 29) — Clause 12.29
 
+use crate::prelude::*;
+use alloc::borrow::Cow;
 use bacnet_encoding::constructed::{
     encode_property_access_result, encode_read_access_specification,
 };
@@ -16,7 +18,6 @@ use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier, Reliabilit
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use bytes::BytesMut;
-use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties, read_identity_properties};
 use crate::device_reference;
@@ -38,8 +39,8 @@ pub enum GroupMemberRefusal {
     NestsGroupPresentValue,
 }
 
-impl std::fmt::Display for GroupMemberRefusal {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for GroupMemberRefusal {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::NoProperties => f.write_str("the member lists no properties"),
             Self::NestsGroupPresentValue => f.write_str(
@@ -50,7 +51,7 @@ impl std::fmt::Display for GroupMemberRefusal {
     }
 }
 
-impl std::error::Error for GroupMemberRefusal {}
+impl core::error::Error for GroupMemberRefusal {}
 
 impl From<GroupMemberRefusal> for Error {
     fn from(_: GroupMemberRefusal) -> Self {

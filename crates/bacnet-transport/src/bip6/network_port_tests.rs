@@ -8,7 +8,7 @@ use std::sync::Arc;
 use bacnet_types::bip_port::BipPortMode;
 use bacnet_types::constructed::BACnetHostNPort;
 use bacnet_types::enums::ErrorCode;
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RemoteError};
 
 use super::*;
 use crate::port::TransportPort;
@@ -59,10 +59,10 @@ fn a_foreign_device_lends_a_registration_that_takes_changes_while_running() {
     assert!(
         matches!(
             error,
-            Error::Protocol {
+            Error::Remote(RemoteError::Error {
                 code: ErrorCode::WRITE_ACCESS_DENIED,
                 ..
-            }
+            })
         ),
         "{error:?}"
     );
@@ -75,9 +75,11 @@ async fn the_lease_is_retained_once_before_start_and_released_by_stop() {
     transport
         .retain_network_port_lease_internal(Arc::clone(&lease))
         .unwrap();
-    assert!(transport
-        .retain_network_port_lease_internal(Arc::new(()))
-        .is_err());
+    assert!(
+        transport
+            .retain_network_port_lease_internal(Arc::new(()))
+            .is_err()
+    );
     let _rx = transport.start().await.unwrap();
     // The started transport reports its bind and VMAC.
     let port = transport.bip6_port().unwrap();
@@ -93,9 +95,11 @@ async fn the_lease_is_retained_once_before_start_and_released_by_stop() {
     transport.stop().await.unwrap();
     assert_eq!(Arc::strong_count(&lease), 1);
     // A transport that has started takes no lease.
-    assert!(transport
-        .retain_network_port_lease_internal(Arc::new(()))
-        .is_err());
+    assert!(
+        transport
+            .retain_network_port_lease_internal(Arc::new(()))
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -115,4 +119,43 @@ async fn a_dropped_transport_releases_the_lease_once_its_tasks_end() {
         tokio::task::yield_now().await;
     }
     panic!("lease still held: {}", Arc::strong_count(&lease));
+}
+
+#[test]
+fn a_registration_names_an_ipv6_unicast_bbmd_and_a_lifetime() {
+    let config = |bbmd_ip: &str, bbmd_port, ttl| Bip6ForeignDeviceConfig {
+        bbmd_ip: bbmd_ip.parse().unwrap(),
+        bbmd_port,
+        ttl,
+    };
+    for ip in ["::1", "2001:db8::bb", "fd00::bb"] {
+        assert_eq!(config(ip, 47808, 60).check(), Ok(()), "{ip}");
+    }
+    use Bip6ForeignDeviceRefusal as R;
+    for (ip, port, ttl, refusal) in [
+        ("::", 47808, 60, R::Unspecified),
+        ("ff05::bac0", 47808, 60, R::Multicast),
+        ("fe80::1", 47808, 60, R::LinkLocal),
+        ("::ffff:192.0.2.1", 47808, 60, R::Ipv4Mapped),
+        ("::192.0.2.1", 47808, 60, R::Ipv4Compatible),
+        ("::1", 0, 60, R::ZeroPort),
+        ("::1", 47808, 0, R::ZeroTtl),
+    ] {
+        assert_eq!(config(ip, port, ttl).check(), Err(refusal), "{ip}");
+    }
+}
+
+#[tokio::test]
+async fn start_refuses_a_registration_that_cannot_work() {
+    let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(79));
+    transport.register_as_foreign_device(Bip6ForeignDeviceConfig {
+        bbmd_ip: "fe80::1".parse().unwrap(),
+        bbmd_port: 47808,
+        ttl: 60,
+    });
+    let Err(Error::Transport(error)) = transport.start().await else {
+        panic!("a link-local BBMD must be refused");
+    };
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(error.to_string().contains("link-local"), "{error}");
 }

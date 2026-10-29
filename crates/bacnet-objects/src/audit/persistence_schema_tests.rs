@@ -3,8 +3,8 @@
 //! intended statuses, and the next commit saves schema v3.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{

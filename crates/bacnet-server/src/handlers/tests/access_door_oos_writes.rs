@@ -11,6 +11,7 @@ use bacnet_objects::access_control::AccessDoorObject;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
 use bacnet_types::enums::{DoorAlarmState, DoorStatus, DoorValue, LockStatus};
+use bacnet_types::error::RemoteError;
 
 /// An in-service door whose device reports it open, unlocked and held open
 /// too long. Its Alarm_Values admit every alarm state these tests simulate.
@@ -108,7 +109,7 @@ fn served(db: &ObjectDatabase, oid: ObjectIdentifier) -> [Vec<u8>; 3] {
 
 fn assert_property_error(result: Result<(), Error>, expected: ErrorCode) {
     assert!(
-        matches!(result, Err(Error::Protocol { class, code })
+        matches!(result, Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::PROPERTY
                 && code == expected),
         "expected PROPERTY / {expected:?}, got {result:?}"

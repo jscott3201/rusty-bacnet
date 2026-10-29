@@ -2,7 +2,7 @@
 //! 12.54.13), written to Lighting_Command or as the Present_Value special
 //! values -1.0, -2.0 and -3.0 (Table 12-65): both ways behave alike.
 
-use super::engine_tests::{op, Fixture};
+use super::engine_tests::{Fixture, op};
 use super::*;
 use bacnet_types::enums::LightingOperation as Op;
 

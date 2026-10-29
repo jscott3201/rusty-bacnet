@@ -8,7 +8,7 @@ use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportPort;
 
 use crate::layer::{Counters, NetworkLayer};
-use crate::loopback_fixture::{pump, recv, wire, APDU};
+use crate::loopback_fixture::{APDU, pump, recv, wire};
 use bacnet_router_core::node::Node;
 
 #[tokio::test]
@@ -102,7 +102,7 @@ async fn malformed_npdus_are_counted() {
 /// the payload of an APDU.
 #[test]
 fn records_from_the_view_match_the_owned_decoder() {
-    use crate::layer::receive::{admit, Inbound, NodeTotals};
+    use crate::layer::receive::{Inbound, NodeTotals, admit};
     use bacnet_encoding::npdu::decode_npdu;
     use bacnet_transport::warn_throttle::WarnThrottle;
     use bytes::Bytes;
@@ -143,8 +143,8 @@ fn records_from_the_view_match_the_owned_decoder() {
 /// through the layer's throttle, which holds the later ones back.
 #[tokio::test(start_paused = true)]
 async fn dropped_npdus_share_one_warning_throttle() {
-    use crate::layer::receive::{admit, Inbound, NodeTotals};
-    use bacnet_transport::warn_throttle::{WarnThrottle, WARNING_INTERVAL};
+    use crate::layer::receive::{Inbound, NodeTotals, admit};
+    use bacnet_transport::warn_throttle::{WARNING_INTERVAL, WarnThrottle};
     use bytes::Bytes;
 
     // NPDU version 2: malformed.

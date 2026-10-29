@@ -1,9 +1,38 @@
 use bacnet_types::error::Error;
 
-use crate::sc_frame::{ScFunction, ScMessage};
+use bytes::BytesMut;
+use tokio::sync::Mutex;
+use tokio::time::{Duration, Instant};
+
+use super::{ScConnection, WebSocketPort};
+use crate::sc_frame::{ScFunction, ScMessage, encode_sc_message};
 
 pub(super) const DEFAULT_HEARTBEAT_INTERVAL_MS: u64 = 30_000;
 pub(super) const DEFAULT_HEARTBEAT_TIMEOUT_MS: u64 = 60_000;
+
+/// When the node's heartbeat timer next fires, from the last accepted inbound
+/// BVLC (#2124): one interval after it while no heartbeat is outstanding (send
+/// one), or one timeout after it while one is (the link is dead). Measuring
+/// both from the same instant gives an ACK the full timeout minus interval.
+pub(super) fn deadline(
+    last_bvlc: Instant,
+    outstanding: bool,
+    (interval_ms, timeout_ms): (u64, u64),
+) -> Instant {
+    last_bvlc + Duration::from_millis(if outstanding { timeout_ms } else { interval_ms })
+}
+
+/// Builds the next Heartbeat-Request under the connection lock, releases the
+/// lock, sends it and returns its message ID for ACK matching.
+pub(super) async fn send_request<W: WebSocketPort>(
+    conn: &Mutex<ScConnection>,
+    ws: &W,
+) -> Result<u16, Error> {
+    let request = conn.lock().await.build_heartbeat();
+    let mut buf = BytesMut::new();
+    encode_sc_message(&mut buf, &request);
+    ws.send(&buf).await.map(|()| request.message_id)
+}
 
 pub(super) fn is_bvlc_result_wire(data: &[u8]) -> bool {
     data.first()

@@ -1,5 +1,5 @@
-use bacnet_types::enums::AbortReason;
 use bacnet_types::MacAddr;
+use bacnet_types::enums::AbortReason;
 
 use super::{FinalSegmentIssue, TransactionOwner, TransactionPhase, Tsm};
 

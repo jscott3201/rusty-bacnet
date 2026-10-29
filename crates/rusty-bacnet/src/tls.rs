@@ -1,7 +1,7 @@
 //! TLS configuration helpers for Python bindings.
 
 use bacnet_transport::sc_hub::ScHubTlsConfig;
-use bacnet_transport::sc_tls::{pem, ScNodeTlsConfig};
+use bacnet_transport::sc_tls::{ScNodeTlsConfig, pem};
 use bacnet_types::error::Error;
 use tokio_rustls::rustls::pki_types::CertificateDer;
 
@@ -114,11 +114,13 @@ mod tests {
                 Some("missing-identity.pem"),
                 Some("missing-key.pem"),
             );
-            assert!(error
-                .err()
-                .unwrap()
-                .to_string()
-                .contains("failed to parse CA cert"));
+            assert!(
+                error
+                    .err()
+                    .unwrap()
+                    .to_string()
+                    .contains("failed to parse CA cert")
+            );
         }
         std::fs::write(&path.0, bad_der).unwrap();
         let error = build_client_tls_config(
@@ -126,10 +128,12 @@ mod tests {
             Some("missing-identity.pem"),
             Some("missing-key.pem"),
         );
-        assert!(error
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("failed to add CA cert"));
+        assert!(
+            error
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("failed to add CA cert")
+        );
     }
 }

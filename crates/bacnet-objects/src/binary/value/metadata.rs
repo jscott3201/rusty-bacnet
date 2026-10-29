@@ -1,5 +1,5 @@
 use super::BinaryValueObject;
-use std::borrow::Cow;
+use alloc::borrow::Cow;
 
 use bacnet_types::enums::PropertyIdentifier as P;
 
@@ -159,7 +159,7 @@ mod tests {
     use crate::property_metadata::PropertyConformance::RequiredWrite;
     use crate::traits::BACnetObject;
     use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
-    use bacnet_types::error::Error;
+    use bacnet_types::error::{Error, RemoteError};
     use bacnet_types::primitives::PropertyValue;
 
     fn objects() -> [Box<dyn BACnetObject>; 2] {
@@ -171,7 +171,7 @@ mod tests {
 
     fn assert_error(error: Error, expected: ErrorCode) {
         assert!(
-            matches!(error, Error::Protocol { class, code }
+            matches!(error, Error::Remote(RemoteError::Error { class, code })
             if class == ErrorClass::PROPERTY && code == expected),
             "expected {expected:?}, got {error:?}"
         );

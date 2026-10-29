@@ -6,6 +6,7 @@ use super::*;
 use crate::common::assert_list_element_refused;
 use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::enums::ObjectType;
+use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::ObjectIdentifier;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -270,7 +271,7 @@ fn only_a_framed_list_of_whole_entries_is_written() {
         assert!(
             matches!(
                 result,
-                Err(Error::Protocol { class, code })
+                Err(Error::Remote(RemoteError::Error { class, code }))
                     if class == ErrorClass::PROPERTY
                         && code == ErrorCode::INVALID_DATA_TYPE
             ),

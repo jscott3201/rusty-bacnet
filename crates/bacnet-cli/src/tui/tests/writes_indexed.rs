@@ -14,8 +14,8 @@ use super::writes::*;
 use super::*;
 use crate::tui::app::safety::Modal;
 use crate::tui::profile::Safety;
-use crate::tui::safety::ledger::{Entry, Ledger, State};
 use crate::tui::safety::Stored;
+use crate::tui::safety::ledger::{Entry, Ledger, State};
 use crate::tui::worker::write::UNKNOWN_PRE_IMAGE;
 
 fn msv1() -> ObjectIdentifier {
@@ -101,6 +101,7 @@ fn unknown() -> Entry {
         state: State::Applied,
         kept: false,
         seq: 1,
+        origin: Default::default(),
     }
 }
 

@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand};
 use bacnet_benchmarks::stress::clients::ClientTransport;
 use bacnet_benchmarks::stress::harness::current_rss_kb;
 use bacnet_benchmarks::stress::mstp::Reply;
-use bacnet_benchmarks::stress::output::{print_results, StressMetrics, StressResult};
+use bacnet_benchmarks::stress::output::{StressMetrics, StressResult, print_results};
 use bacnet_benchmarks::stress::router::Path;
 
 #[derive(Parser)]
@@ -141,9 +141,10 @@ fn main() {
         tokio::runtime::Runtime::new().unwrap()
     };
 
-    rt.block_on(async {
+    let valid = rt.block_on(async {
         let rss_before = current_rss_kb();
 
+        let mut clients_diagnostics = None;
         let (scenario, transport, params, curve) = match cli.command {
             Command::Clients {
                 transport,
@@ -155,8 +156,10 @@ fn main() {
                     eprintln!("Error: --transport must be bip, bip6 or sc");
                     std::process::exit(2);
                 };
-                let curve =
+                let run =
                     bacnet_benchmarks::stress::clients::run(kind, objects, duration, &steps).await;
+                clients_diagnostics = Some(run.diagnostics);
+                let curve = run.curve;
                 let params = serde_json::json!({
                     "objects": objects,
                     "duration_secs": duration,
@@ -281,8 +284,16 @@ fn main() {
             transport,
             parameters: params,
             results: StressMetrics::from_curve(curve, rss_after.max(rss_before)),
+            clients_diagnostics,
         };
 
         print_results(&result);
+        result
+            .clients_diagnostics
+            .as_ref()
+            .is_none_or(|diagnostics| diagnostics.valid)
     });
+    if !valid {
+        std::process::exit(1);
+    }
 }

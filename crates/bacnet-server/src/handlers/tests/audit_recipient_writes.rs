@@ -4,9 +4,10 @@
 use super::*;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::WriteAccessSpecification;
+use bacnet_types::error::RemoteError;
 use std::borrow::Cow;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 const PROPERTY: PropertyIdentifier = PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT;
 // Independent Clause 21 vectors: context [0], Device instance 42/43.
@@ -178,7 +179,7 @@ fn invalid_values() -> Vec<Vec<u8>> {
 
 fn assert_invalid_encoding(error: Error) {
     assert!(
-        matches!(error, Error::Protocol { class, code }
+        matches!(error, Error::Remote(RemoteError::Error { class, code })
             if class == ErrorClass::PROPERTY
                 && code == ErrorCode::INVALID_DATA_ENCODING),
         "{error:?}"

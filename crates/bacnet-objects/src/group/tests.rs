@@ -2,6 +2,7 @@
 
 use super::*;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::error::RemoteError;
 
 // -----------------------------------------------------------------------
 // GroupObject tests
@@ -188,7 +189,7 @@ fn structured_view_add_subordinates() {
         for index in [3, u32::MAX] {
             let error = sv.read_property(property, Some(index)).unwrap_err();
             assert!(
-                matches!(error, Error::Protocol { class, code }
+                matches!(error, Error::Remote(RemoteError::Error { class, code })
                     if class == ErrorClass::PROPERTY
                         && code == ErrorCode::INVALID_ARRAY_INDEX),
                 "{property:?}[{index}]: {error:?}"
@@ -200,7 +201,7 @@ fn structured_view_add_subordinates() {
                 .write_property(property, index, elements[0].clone(), None)
                 .unwrap_err();
             assert!(
-                matches!(error, Error::Protocol { class, code }
+                matches!(error, Error::Remote(RemoteError::Error { class, code })
                     if class == ErrorClass::PROPERTY
                         && code == ErrorCode::WRITE_ACCESS_DENIED),
                 "{property:?}[{index:?}] write: {error:?}"
@@ -229,7 +230,7 @@ fn structured_view_add_subordinate_refuses_a_non_device_device_identifier() {
             "Elsewhere",
         );
         assert!(
-            matches!(result, Err(Error::Protocol { class, code })
+            matches!(result, Err(Error::Remote(RemoteError::Error { class, code }))
                 if class == ErrorClass::PROPERTY
                     && code == ErrorCode::VALUE_OUT_OF_RANGE),
             "{object_type:?}: {result:?}"
@@ -297,7 +298,7 @@ fn structured_view_set_subordinates_replaces_both_arrays_or_nothing() {
         (not_a_device, "Elsewhere".to_string()),
     ]);
     assert!(
-        matches!(result, Err(Error::Protocol { class, code })
+        matches!(result, Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::PROPERTY
                 && code == ErrorCode::VALUE_OUT_OF_RANGE),
         "{result:?}"

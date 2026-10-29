@@ -351,6 +351,13 @@
 # written into, room for a DADR as long as any data link's, and 64 octets
 # where the scenario encodes the client's frames. It links no core::fmt,
 # 64-bit division or memmove.
+#
+# The node image's scenario ends with a move to a second BBMD since
+# 2026-10-25 (#1852), so the image links NodePort::retarget and
+# Node::retarget. Measured with Rust 1.99.0 against dev at d7df2c95, node
+# .text grew by 728 / 820 / 996 / 748 octets and flash by 736 / 860 /
+# 1,036 / 756 on thumbv7m / thumbv6m / riscv32imc / thumbv7em; RAM is
+# unchanged. Every image stays within its budget; no budget changed.
 
 [thumbv7m-none-eabi.mstp]
 text = 18320

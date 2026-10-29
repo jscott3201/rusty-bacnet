@@ -3,7 +3,7 @@
 use core::fmt;
 
 use crate::decode::{check_frame, decode_extended_in_place};
-use crate::frame::{wire_length, DATA_OFFSET};
+use crate::frame::{DATA_OFFSET, wire_length};
 use crate::{Frame, FrameError, FrameHeader, PREAMBLE};
 
 /// The outcome of one [`StreamDecoder::push_slice`] call.

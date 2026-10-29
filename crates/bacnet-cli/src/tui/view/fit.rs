@@ -6,7 +6,7 @@
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
-use super::{text_width, Theme};
+use super::{Theme, text_width};
 
 /// The priority of a part that is never dropped.
 pub(super) const ALWAYS: u8 = u8::MAX;
