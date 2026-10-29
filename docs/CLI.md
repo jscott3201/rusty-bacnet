@@ -987,7 +987,7 @@ mode; the MS/TP monitor (`--mstp-monitor`) still works. The listener sees only
 UDP traffic delivered to this host, not other switched unicast traffic, so it
 is not a packet capture. It keeps at most 4,096 recent I-Have observations and
 4 MiB of their strings, and at most 128 routers with 128 networks each,
-evicting the oldest first.
+evicting the least recently heard first.
 
 **Footprint.** The status bar's `COV n` and `FD` show the state this session
 holds on other devices: COV subscriptions, and our entry in a BBMD's
@@ -1047,8 +1047,10 @@ NAME` shows what the profile's `[mcp]` table lets an agent reach (networks,
 devices, broad discovery, and any writes or plan grant), and records consent
 in that table when you type the profile's name. It needs a terminal, so an
 agent can't run it. Widening the table later (more networks or devices, broad
-discovery, a higher rate or cap), offering writes, letting the client arm,
-changing a plan, or changing the profile's transport clears the authorization.
+discovery, a higher rate or cap, a network taken off `slow_networks` or
+`fast_networks`), offering writes, letting the client arm, adding or changing
+a plan, or changing the profile's transport clears the authorization; dropping
+a plan doesn't.
 
 The `[mcp]` table is optional; every key in it is too. Left out, the server
 may reach every network and device at the default rates, with no broad

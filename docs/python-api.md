@@ -1992,6 +1992,11 @@ await client.delete_object(
 
 ### Device Management
 
+`device_communication_control` and `reinitialize_device` take an optional
+`password` of 1 to 20 characters. An empty one, or one over 20 characters,
+raises `ValueError` before anything is sent; pass `None` to send no password
+(#2085, #2094).
+
 #### `device_communication_control(address, enable_disable, time_duration=None, password=None)`
 
 ```python
@@ -2004,9 +2009,6 @@ await client.device_communication_control(
 ```
 
 #### `reinitialize_device(address, reinitialized_state, password=None)`
-
-Both calls raise `ValueError` before anything is sent for a `password` over 20
-characters or an empty one; pass `None` to send no password (#2085, #2094).
 
 ```python
 await client.reinitialize_device(

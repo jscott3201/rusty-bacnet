@@ -454,7 +454,7 @@ model that device-reported strings are data and that writes need approval.
 | Read-only (default) | the default for every deployment: the read tools and resources |
 | Armed write session | needed before `bacnet_write`; who may arm is §7.3 |
 | Armed with `dangerous` | local and attached only |
-| Expired | read-only; as built (#2068) there is no `session-expired` reason: with `mcp_arm = "elicit"` the next confirmed write arms again, with `never` a write is refused `not-armed`, and a session that runs out between the confirmation and the send is refused there, nothing sent |
+| Expired | read-only; as built (#2068) there is no `session-expired` reason: with `mcp_arm = "elicit"` the next confirmed write arms again, with `never` a write is refused `not-armed` unless a plan grant covers it, and a session that runs out between the confirmation and the send is refused there, nothing sent |
 
 | Tier | Changes (from the TUI's planner) | stdio (phase 3) | attached TUI (phase 4) | HTTP (phase 5) |
 |---|---|---|---|---|

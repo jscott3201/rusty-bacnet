@@ -649,7 +649,8 @@ it accepts and refuses exactly the frames the router core does. Its
 
 ## bacnet-services
 
-25 BACnet service modules with request/response encoding and decoding.
+23 BACnet service modules with request/response encoding and decoding, plus
+`common` and `structured_error` for the types they share.
 
 ### ReadProperty / WriteProperty
 
@@ -4436,7 +4437,7 @@ framing, through the shared `bacnet-encoding` codecs.
 use bacnet_objects::database::ObjectDatabase;
 
 let mut db = ObjectDatabase::new();
-db.add(Box::new(analog_input))?; // Err on a name another object holds; same OID replaces
+db.add(Box::new(analog_input))?; // Err on a duplicate name or a protected membership; same OID replaces
 
 let obj = db.get(&oid);                // Option<&dyn BACnetObject>
 let obj = db.get_mut(&oid);            // Option<&mut dyn BACnetObject>

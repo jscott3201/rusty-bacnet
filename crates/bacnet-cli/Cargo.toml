@@ -118,8 +118,8 @@ sc-tls = [
 ]
 pcap = ["dep:pcap", "dep:ctrlc", "dep:libc"]
 # `bacnet mcp serve --stdio`: an MCP server for AI agent hosts (#2066),
-# read-only unless a profile opts in to writes (#2068), off by default. It reads TUI profiles (their [mcp] table), so it
-# brings the TUI along.
+# read-only unless a profile opts in to writes (#2068), off by default. It
+# reads TUI profiles (their [mcp] table), so it brings the TUI along.
 mcp = ["tui", "dep:bacnet-mcp"]
 # MS/TP over a serial port (`--mstp`, `mstp-ports`). Released in the Linux
 # CLI; built and tested on macOS and Windows as experimental (#969).
