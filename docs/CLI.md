@@ -33,9 +33,12 @@ cargo install --path crates/bacnet-cli --locked --features sc-tls
 
 # With MS/TP over a serial port
 cargo install --path crates/bacnet-cli --locked --features serial
+
+# With the MCP server for AI agent hosts (`bacnet mcp`)
+cargo install --path crates/bacnet-cli --locked --features mcp
 ```
 
-The features combine (`--features sc-tls,pcap,serial`). Packet capture needs libpcap
+The features combine (`--features sc-tls,pcap,serial,mcp`). Packet capture needs libpcap
 and its headers (`libpcap-dev` on Debian and Ubuntu). The `serial` feature
 builds on Linux, macOS and Windows; the Linux release binary has it, and the
 macOS and Windows ones don't yet (see [MS/TP](#mstp)).
@@ -162,7 +165,7 @@ before the CLI binds a socket.
 
 | Class | Commands (aliases) | Needs |
 |---|---|---|
-| read | `discover` (`whois`), `find` (`whohas`), `read` (`rp`), `readm` (`rpm`), `read-range` (`rr`), `alarms`, `alarm-summary`, `enrollment-summary`, `file-read`, `bdt`, `fdt`, `whois-router`, `subscribe` (`cov`) with a finite lifetime (the default), `register`, `mstp-ports`, `capture`, `sc-check`, `tui`, `help` | nothing |
+| read | `discover` (`whois`), `find` (`whohas`), `read` (`rp`), `readm` (`rpm`), `read-range` (`rr`), `alarms`, `alarm-summary`, `enrollment-summary`, `file-read`, `bdt`, `fdt`, `whois-router`, `subscribe` (`cov`) with a finite lifetime (the default), `register`, `mstp-ports`, `capture`, `sc-check`, `tui`, `mcp`, `help` | nothing |
 | write | `write` (`wp`), `writem` (`wpm`), `create-object`, `delete-object`, `file-write`, `ack-alarm` (`ack`), `time-sync` (`ts`), `unregister`, `subscribe --lifetime 0` | `--allow-write` |
 | device management | `control` (`dcc`), `reinit` | `--allow-write`, plus `--yes` or the typed confirmation |
 
@@ -177,7 +180,9 @@ it is a write. `unregister` is a write: the BBMD drops whichever foreign-device
 entry has the address the request names (the CLI gives its own, but the BBMD
 can't tell). The TUI's session levels use the same classes: a read-only
 session runs reads, an armed write session runs writes, and device management
-will need a session the profile marks `dangerous`.
+needs an armed session on a profile marked `dangerous`. `tui` and `mcp` are
+read commands to the guard because each guards its own writes one by one (see
+[Write sessions](#write-sessions) and [MCP server](#mcp-server)).
 
 A refused one-shot exits with status 4 and prints nothing on stdout. With
 table output the reason goes to stderr as `ERROR: ...`. With JSON output
@@ -198,8 +203,8 @@ JSON in this shape, which scripts can rely on:
 | `message` | the same reason as a sentence, for people; its wording may change |
 
 **The TUI** ignores both flags: its writes need an armed write session (see
-[Write sessions](#write-sessions)). Profiles apply only to the TUI, so there
-is no profile setting for one-shot commands.
+[Write sessions](#write-sessions)). Profiles apply only to the TUI and
+`bacnet mcp serve`, so there is no profile setting for one-shot commands.
 
 ### Exit status
 
@@ -255,7 +260,8 @@ it shows a picker. `--profile NAME` selects one directly. The Devices screen is
 a live table of I-Am answers, with a Who-Is form. The status bar shows the
 session level: `READ-ONLY` by default (discovery, reads, finite COV
 subscriptions and foreign-device registrations), a red `WRITE mm:ss` while a
-write session is armed (see [Write sessions](#write-sessions)), or `PASSIVE`.
+write session is armed (`WRITE+DANGER mm:ss` on a profile with
+`dangerous = true`; see [Write sessions](#write-sessions)), or `PASSIVE`.
 Screens: `1` devices, `3` watch list, `4` network, `5` SC, `6` MS/TP and `7`
 [capture](#capture-screen). The design is in
 [docs/design/tui.md](design/tui.md).
@@ -272,7 +278,7 @@ flag for the other transport (say `--port` on an SC profile) is an error.
 |------|---------|-------------|
 | `--profile <NAME>` | | Preview a named B/IP, SC or MS/TP profile; explicit global flags override saved values |
 | `--no-profile` | | Use flags only, without profile/workspace I/O; conflicts with `--profile` |
-| `--passive` | | Transmit nothing: no client is built, so no discovery, reads, subscriptions, registrations or writes. The ledger can still be viewed |
+| `--passive` | | Transmit nothing: no client is built, so no discovery, reads, subscriptions, registrations or writes. On B/IP it listens for announcements instead (see [Passive](#passive-listening)). The ledger can still be viewed |
 | `--mstp-monitor <PORT>` | | Listen to an MS/TP trunk on this serial port without transmitting (the `serial` feature). Takes `--mstp-baud` and `--mstp-max-info-frames`, and on Linux `--mstp-rt-priority` and `--mstp-cpus`, which only a station joined from it gets (the monitor itself runs normally); not `--mstp`, `--mstp-mac`, `--mstp-max-master`, another transport's flags or `--profile`. See [MS/TP monitor](#mstp-monitor-and-safe-join) |
 | `--fps <N>` | `20` | Redraws per second, 1 to 60. Idle screens are not redrawn |
 | `--log-file <FILE>` | | Append log lines to this file as well as the in-app log pane |
@@ -948,8 +954,9 @@ reverts all and quits, `k` keeps them, records that in the audit log and quits
 (also when passive or disconnected), Esc cancels. Entries left by an earlier
 run, whether kept or left by a crash, are listed when the next session on the
 profile starts; one a crash cut off mid-request is recorded as unknown. Changes
-an AI agent made through `bacnet mcp serve` on the same profile are in the same
-ledger, marked `[mcp: user]`, and revert like the TUI's own.
+an AI agent made through [`bacnet mcp serve`](#mcp-server) on the same profile
+are in the same ledger, marked `[mcp: NAME]` with the OS user who ran the
+server, and revert like the TUI's own.
 
 **Audit log.** `audit.jsonl` in the workspace gets one JSON object a line,
 flushed and synced: UTC time, OS user, host, the front end (`front_end`:
@@ -966,9 +973,21 @@ named for a secret (`password`, `token`, `authorization`, `secret`, `key`) are
 written as `[redacted]`. Reads are not logged. This
 is a client-side record, separate from BACnet's own audit reporting.
 
-**Passive.** `--passive` builds no client at all, so nothing is transmitted;
+<a id="passive-listening"></a>**Passive.** `--passive` builds no client at all, so nothing is transmitted;
 discovery, browsing, watching and arming are refused with a notice. The
-status bar shows `PASSIVE`.
+status bar shows `PASSIVE`. On B/IP (broadcast or unicast, not multicast) it
+binds a receive-only UDP listener on the chosen interface and port, and the
+link state reads `listening` once the bind succeeds. Router announcements
+fill the Networks tab, and `:find NAME` filters the I-Haves overheard so far,
+and new ones, by exact name without sending a Who-Has; object names are
+learned from those I-Haves. Foreign-device settings are
+ignored: there is no registration, renewal, responder or send path. B/IPv6,
+BACnet/SC, B/IP multicast and participant MS/TP sessions are refused in this
+mode; the MS/TP monitor (`--mstp-monitor`) still works. The listener sees only
+UDP traffic delivered to this host, not other switched unicast traffic, so it
+is not a packet capture. It keeps at most 4,096 recent I-Have observations and
+4 MiB of their strings, and at most 128 routers with 128 networks each,
+evicting the oldest first.
 
 **Footprint.** The status bar's `COV n` and `FD` show the state this session
 holds on other devices: COV subscriptions, and our entry in a BBMD's
@@ -997,6 +1016,70 @@ builds a lean CLI without it (add back what you need, such as
 `bacnet tui` prints rebuild advice, and plain `bacnet` prints the usage. The
 one-shot commands and their JSON output are the same with or without the
 feature.
+
+### MCP server
+
+```bash
+bacnet mcp authorize --profile plant-a          # once, in a terminal: review and consent
+bacnet mcp serve --stdio --profile plant-a      # what an agent host's configuration launches
+bacnet mcp serve --stdio --passive              # decode and list only; sends nothing
+```
+
+`bacnet mcp serve --stdio` runs a [Model Context Protocol](https://modelcontextprotocol.io)
+server for an AI agent host on stdin and stdout until the host closes them.
+From 0.15.0 the prebuilt release binaries include it. A source build enables
+it with the `mcp` cargo feature, which brings `tui` along for its profiles;
+a build without it prints rebuild advice for `bacnet mcp`. Stdout carries only JSON-RPC; logs go to stderr (`-v` or `RUST_LOG`
+set their level), with one line per read call and a summary at shutdown
+always on. SIGINT or SIGTERM (Ctrl-C on Windows) shuts it down gracefully.
+Experimental in 0.15.
+
+**mcp serve flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--stdio` | Serve on stdin and stdout, the transport an agent host launches (required) |
+| `--profile <NAME>` | Named B/IP, BACnet/SC or MS/TP profile to connect with; its `[mcp]` table limits what the agent may reach. Needed unless `--passive`; global transport flags are refused with it, since they would change the transport that was authorized |
+| `--passive` | Build no client and send nothing: only the tools that need no network are offered (`bacnet_decode`, and `bacnet_discover`, which only lists) |
+
+Live traffic needs an authorized profile. `bacnet mcp authorize --profile
+NAME` shows what the profile's `[mcp]` table lets an agent reach (networks,
+devices, broad discovery, and any writes or plan grant), and records consent
+in that table when you type the profile's name. It needs a terminal, so an
+agent can't run it. Widening the table later (more networks or devices, broad
+discovery, a higher rate or cap), offering writes, letting the client arm,
+changing a plan, or changing the profile's transport clears the authorization.
+
+The `[mcp]` table is optional; every key in it is too. Left out, the server
+may reach every network and device at the default rates, with no broad
+discovery and no writes:
+
+```toml
+[mcp]
+networks = [0, 2001]          # 0 is the local network
+devices = ["1000-1999", "5"]
+slow_networks = [2001]        # MS/TP behind a router: 2 requests a second
+broad_discovery = false
+mcp_writes = "elicit"         # offer bacnet_write and bacnet_revert (default "never")
+mcp_arm = "elicit"            # the host's confirmation may arm a session (default "never")
+
+[mcp.plan]                    # writes approved in advance, without a prompt
+devices = ["1201"]
+properties = ["present-value"]
+priority_min = 8              # 8 and 16 by default
+max_writes = 50
+hours = 4                     # 1 to 8, counted from `bacnet mcp authorize`
+```
+
+Writes go through the same planner, tiers, ledger and audit log as the TUI's
+[write sessions](#write-sessions), in the profile's workspace. Without a plan,
+the agent host's own confirmation can approve only T1 writes (priorities 9 to
+16, or a property that isn't commandable); priority 6 is always refused, and
+device management (`dcc`, `reinit`) isn't offered. The TUI's ledger lists the
+agent's changes, and `R` reverts them like its own. The tools, resources,
+limits and every key are in [docs/mcp.md](mcp.md); the website's
+[AI agents](https://jscott3201.github.io/rusty-bacnet/guides/ai-agents/) guide
+walks through setting up an agent host.
 
 ### Device Discovery
 
@@ -1977,7 +2060,9 @@ Available from [GitHub Releases](https://github.com/jscott3201/rusty-bacnet/rele
 Rename the downloaded file to `bacnet` (`bacnet.exe` on Windows), make it
 executable and put it on your `PATH`. Linux binaries include packet capture
 support out of the box. macOS/Windows users who need capture can build from
-source with `--features pcap`.
+source with `--features pcap`. From 0.15.0 every release binary also includes
+the MCP server (`mcp`, see [MCP server](#mcp-server)); a source build enables
+it with `--features mcp`.
 
 The Linux binaries need glibc 2.17 or newer, so they run on RHEL/CentOS 7,
 Debian 8, Ubuntu 14.04 and later. They link libpcap statically, so no libpcap

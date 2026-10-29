@@ -31,7 +31,9 @@ and ReinitializeDevice arguments retain their positions. Exact lower-case values
 above are accepted; unknown strings raise `ValueError`, nonstrings `TypeError`.
 RequirePassword with absent or empty configuration fails before startup/dial
 (Python constructor: `ValueError`; Rust startup/build: configuration error).
-DenyAll and LegacyPermissive introduce no password-length restrictions.
+Under every policy, a configured `dcc_password` (or `reinit_password`) that is
+empty or longer than 20 characters fails the same way, since no request could
+match it; leave it unset for no password (#2060, #2094).
 
 ReinitializeDevice's separate password and handler are unchanged.
 
@@ -127,7 +129,8 @@ this policy. It does not authenticate sources, provide fair allocation, or compl
 Existing admission, duplicate handling and DCC ingress discards are unchanged.
 After admission: decode, existing constant-time password check, deprecated DISABLE
 rejection, then local policy and optional source restriction for ENABLE/DISABLE_INITIATION,
-then optional rate admission for DISABLE_INITIATION, then live state/timer
+then an installed `ServerPolicy`'s `authorize_device_communication_control`
+([server authorization policy](mutation-policy.md), #1964), then optional rate admission for DISABLE_INITIATION, then live state/timer
 commit. Missing/wrong configured passwords return SECURITY/PASSWORD_FAILURE even
 under DenyAll or for DISABLE. Otherwise denied valid requests return
 SERVICES/SERVICE_REQUEST_DENIED. Unknown-mode decoding/encoding errors retain

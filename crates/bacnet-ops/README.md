@@ -42,7 +42,8 @@ targets, values and devices the same way and obey the same request limits.
 
 It is a hosted crate: it needs `std` and Tokio, and has no terminal or MCP
 dependency. Its `sc-tls` feature lets the address formatter recognise a
-BACnet/SC link.
+BACnet/SC link; `test-support` adds frame builders for the CLI's decode
+tests and is not a stable API.
 
 The API follows the needs of the `bacnet` tool and changes with it before
 1.0.

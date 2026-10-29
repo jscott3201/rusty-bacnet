@@ -6,8 +6,9 @@ BACnet sites, read-only unless a profile offers writes, in the
 agent host (Claude Code, Codex and others) launches it as `bacnet mcp serve
 --stdio` (the `bacnet-cli` feature `mcp`) and calls its tools to discover
 devices, describe them, find, list and read their objects, read and
-summarise trend logs, list alarms, map networks and routers, decode
-frames, and follow points as they change.
+summarise trend logs, event logs and audit logs, list alarms, map
+networks, routers and BBMD tables, decode frames, follow points as they
+change, and, when a profile allows it, write and revert values.
 
 - Built on the official `rmcp` SDK; targets the 2026-07-28 revision of MCP
   and still answers the older `initialize` handshake.
@@ -18,13 +19,12 @@ frames, and follow points as they change.
   control and bidirectional characters, defanged and capped.
 - Results are paged with cursors signed by a per-process key.
 - Passive mode builds no client and sends nothing.
-- Resources for devices, points, properties, alarms and the session, with
-  `subscriptions/listen` (2026-07-28), or `resources/subscribe` from hosts
-  on older revisions, on a shared watch hub: one COV
-  subscription per point however many listeners, polling when a device
+- Resources for devices, points, properties, alarms, the session and the
+  write ledger, with `subscriptions/listen` (2026-07-28), or
+  `resources/subscribe` from hosts on older revisions, on a shared watch
+  hub: one COV subscription per point however many listeners, polling when a device
   refuses COV, 32 points per principal and 256 per process. `bacnet_watch`
   gives hosts without subscriptions the same through a tool.
-
 - Writes are off by default. A policy that offers them lists
   `bacnet_write` and `bacnet_revert`, which go through the TUI's preview
   tiers, ledger and audit log (`bacnet-ops::safety`): the client's

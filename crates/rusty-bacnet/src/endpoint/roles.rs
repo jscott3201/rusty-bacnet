@@ -166,8 +166,8 @@ impl PyEndpointClient {
     }
 
     /// Read a list/log range; supports all-items, position, sequence and time
-    /// forms, checked strictly or leniently. Returns raw item_data bytes, a
-    /// three-boolean result_flags tuple and the rules a lenient read kept.
+    /// forms, checked strictly or leniently. Returns raw item_data bytes, the
+    /// result_flags as a BitString and the rules a lenient read kept.
     #[pyo3(signature = (address, object_id, property_id, array_index=None, range_type=None, reference_index=None, reference_seq=None, count=None, *, reference_time=None, validation="strict"))]
     fn read_range<'py>(
         &self,

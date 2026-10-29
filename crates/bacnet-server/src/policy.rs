@@ -59,10 +59,11 @@
 //!
 //! ## Calling rules
 //!
-//! Every method must be fast, nonblocking and free of side effects. The
-//! server calls them on its dispatch tasks, sometimes with the object
-//! database locked (each method says when); calling back into the server
-//! from one can deadlock. Calls may run concurrently. Returning `false`, or
+//! Every method should be quick and free of side effects. For a received
+//! request the server calls them on Tokio's blocking pool with no object
+//! database guard held (#2032; each method says when it asks), so a slow
+//! policy delays only its own request, but a call that never returns keeps
+//! the process from exiting. Calls may run concurrently. Returning `false`, or
 //! panicking, denies, and the request changes nothing.
 //!
 //! ```

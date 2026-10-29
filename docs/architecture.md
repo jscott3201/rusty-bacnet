@@ -31,6 +31,7 @@ Foundations
                         the B/IP node and BBMD via bacnet-bip-core)
   bacnet-network        Network layer, BACnetRouter, RouterTable
   bacnet-objects        BACnetObject, ObjectDatabase, object implementations
+                        (no_std + alloc where atomics allow, #1615)
 
 Runtime and application roles
   bacnet-endpoint-core  Private lifecycle, ingress, egress, coordination
@@ -40,15 +41,16 @@ Runtime and application roles
 
 Operations core (UI-free, for the front ends)
   bacnet-ops            Target and value grammar, value formatting, request
-                        limits, read engine over bacnet-client
-  bacnet-mcp            Read-only MCP server over the bacnet-ops engine
-                        (rmcp SDK; the CLI's `mcp` feature)
+                        limits, read engine over bacnet-client, frame decoder,
+                        watch hub, write-safety core (plan, ledger, audit)
+  bacnet-mcp            MCP server over the bacnet-ops engine; read-only unless
+                        a profile offers writes (rmcp SDK; the CLI's `mcp` feature)
 
 Selected direct dependencies
   bacnet-endpoint -> bacnet-client, bacnet-server, bacnet-endpoint-core,
                      bacnet-network, bacnet-objects
-  bacnet-ops     -> bacnet-client, bacnet-transport
-  bacnet-mcp     -> bacnet-ops, rmcp
+  bacnet-ops     -> bacnet-client, bacnet-transport, bacnet-npdu
+  bacnet-mcp     -> bacnet-ops, bacnet-client, rmcp
   bacnet-cli     -> bacnet-ops, bacnet-client, bacnet-mcp (with `mcp`)  (CLI application)
   rusty-bacnet   -> bacnet-client, bacnet-server, bacnet-endpoint
                                               (PyO3 bindings)

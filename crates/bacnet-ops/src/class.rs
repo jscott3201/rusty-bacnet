@@ -6,7 +6,7 @@
 //! - **Read**: discovery, reads, finite COV subscriptions and
 //!   foreign-device registration, plus the commands that never reach a
 //!   device (`mstp-ports`, `capture`, `sc-check`, `help`), and `tui` and
-//!   `mcp`, which guard their own writes (the MCP server has none yet). A
+//!   `mcp`, which guard their own writes. A
 //!   subscription and a registration do leave an entry on the remote side,
 //!   but only to deliver what the client watches, and it lapses on its own:
 //!   `subscribe` cancels its subscription when it stops, and a registration

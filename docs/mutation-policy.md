@@ -184,7 +184,7 @@ Each mutation decision receives a `mutation::MutationAuthorizationContext`:
 - `source_mac` / `source_network` — claimed immediate peer and routed origin.
   Never authenticated identities, never certificate principals.
 - `provenance` — the reassembled ingress snapshot (`TransportProvenance`)
-  threaded from dispatch through `handle_admitted_confirmed_request[_with_lso]`
+  threaded from dispatch through `handle_admitted_confirmed_request`
   into `mutations::Request`. Cross-segment provenance mismatches already fail
   closed at reassembly, so every element of one request (including each WPM
   element) observes the same snapshot.
