@@ -11,9 +11,9 @@
 //! | priorities 1, 2 and 5 (life safety and critical equipment, Table 19-1) | T3 |
 //! | priority 6, kept for minimum on and off times (Clause 19.2.3) | blocked, or T3 with `dangerous = true` |
 
+use crate::format::{Floats, RawRow, StateTexts, ValueFormat, decode_all};
+use crate::label::PRIORITIES;
 use bacnet_encoding::primitives::{decode_priority_date_time, encode_property_value};
-use bacnet_ops::format::{Floats, RawRow, StateTexts, ValueFormat, decode_all};
-use bacnet_ops::label::PRIORITIES;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::PropertyValue;
 use bytes::BytesMut;
@@ -21,7 +21,7 @@ use bytes::BytesMut;
 use super::{Effect, Gate, Occupancy, Planned, Preview, Stored, Tier, WriteSpec};
 
 /// What is read before a write, besides the target property.
-pub(crate) const PRE_READ: [PropertyIdentifier; 4] = [
+pub const PRE_READ: [PropertyIdentifier; 4] = [
     PropertyIdentifier::PRESENT_VALUE,
     PropertyIdentifier::PRIORITY_ARRAY,
     PropertyIdentifier::RELINQUISH_DEFAULT,
@@ -32,12 +32,12 @@ pub(crate) const PRE_READ: [PropertyIdentifier; 4] = [
 /// whole target property, for a write without an array index) as rows,
 /// and for an indexed write the element itself, or why it couldn't be.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct PreRead {
+pub struct PreRead {
     /// The properties read by name.
-    pub(crate) rows: Vec<RawRow>,
+    pub rows: Vec<RawRow>,
     /// The element an indexed write targets, as read just before it.
     /// `None` for a write without an index.
-    pub(crate) element: Option<Result<Vec<u8>, String>>,
+    pub element: Option<Result<Vec<u8>, String>>,
 }
 
 impl From<Vec<RawRow>> for PreRead {
@@ -50,17 +50,17 @@ impl From<Vec<RawRow>> for PreRead {
 }
 
 /// Why a write to an array's length (index 0) has no pre-image.
-pub(crate) const RESIZE: &str = "a resize can't be reverted";
+pub const RESIZE: &str = "a resize can't be reverted";
 
 /// The priority a commandable write without one gets (Clause 19.2.1).
-pub(crate) const DEFAULT_PRIORITY: u8 = 16;
+pub const DEFAULT_PRIORITY: u8 = 16;
 
 /// Why priority 6 is refused.
-pub(crate) const PRIORITY_6: &str = "priority 6 is reserved for minimum on and off times \
+pub const PRIORITY_6: &str = "priority 6 is reserved for minimum on and off times \
      (Clause 19.2.3); a profile with dangerous = true allows it";
 
 /// The tier of one write.
-pub(crate) fn gate(
+pub fn gate(
     property: PropertyIdentifier,
     priority: Option<u8>,
     relinquish: bool,
@@ -80,7 +80,7 @@ pub(crate) fn gate(
 
 /// The tier of a whole change: its strongest write's, at least T2 for a
 /// batch; blocked when any write is.
-pub(crate) fn overall(items: &[Planned], batch: bool) -> Gate {
+pub fn overall(items: &[Planned], batch: bool) -> Gate {
     let mut tier = if batch { Tier::T2 } else { Tier::T1 };
     for item in items {
         match &item.gate {
@@ -95,7 +95,7 @@ pub(crate) fn overall(items: &[Planned], batch: bool) -> Gate {
 /// WritePropertyMultiple error names its first failed write by that
 /// triple alone, with no priority, so a repeat would make the failed write
 /// ambiguous and could leave an applied one untracked.
-pub(crate) fn repeated_target(specs: &[&WriteSpec]) -> Option<String> {
+pub fn repeated_target(specs: &[&WriteSpec]) -> Option<String> {
     specs.iter().enumerate().find_map(|(i, spec)| {
         specs[..i]
             .iter()
@@ -106,8 +106,8 @@ pub(crate) fn repeated_target(specs: &[&WriteSpec]) -> Option<String> {
             .then(|| {
                 format!(
                     "a batch writes each property once; {} {} appears twice",
-                    bacnet_ops::label::object_label(spec.object),
-                    bacnet_ops::label::kebab(spec.property)
+                    crate::label::object_label(spec.object),
+                    crate::label::kebab(spec.property)
                 )
             })
     })
@@ -115,7 +115,7 @@ pub(crate) fn repeated_target(specs: &[&WriteSpec]) -> Option<String> {
 
 /// Build the preview of `specs` from `reads`, one per spec. `ours` says
 /// whether the ledger wrote what a slot holds now (its encoded value).
-pub(crate) fn preview(
+pub fn preview(
     specs: &[WriteSpec],
     reads: &[PreRead],
     ours: impl Fn(&WriteSpec, Option<u8>, &[u8]) -> bool,
@@ -177,7 +177,7 @@ fn written(data: &[u8]) -> PropertyValue {
 /// Give a typed number the datatype the property already holds:
 /// `parse_value_for` reads `42` as Unsigned, which an analog Present_Value
 /// would refuse as the wrong datatype.
-pub(crate) fn coerce(value: PropertyValue, like: Option<&PropertyValue>) -> PropertyValue {
+pub fn coerce(value: PropertyValue, like: Option<&PropertyValue>) -> PropertyValue {
     use PropertyValue as V;
     match (like, value) {
         (Some(V::Real(_)), V::Unsigned(n)) => V::Real(n as f32),
@@ -278,7 +278,7 @@ fn plan(
         None => PropertyValue::Null,
         Some(text) => {
             let like = current.or(default).and_then(first);
-            let typed = bacnet_ops::parse::parse_value_for(
+            let typed = crate::parse::parse_value_for(
                 spec.object.object_type(),
                 spec.property,
                 spec.index,

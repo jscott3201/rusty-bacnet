@@ -8,9 +8,10 @@
 use bacnet_client::client::BACnetClient;
 use bacnet_ops::class::Class;
 use bacnet_ops::limits::RequestLimits;
+use bacnet_ops::safety::desk::{Caller, ENDED};
+use bacnet_ops::safety::find;
 use bacnet_transport::port::TransportPort;
 
-use super::send::find;
 use super::{PASSIVE, Runner, tell};
 use crate::tui::safety::manage::{Action, NEEDS_DANGEROUS, Request};
 use crate::tui::safety::{Outcome, SafetyEvent};
@@ -18,14 +19,14 @@ use crate::tui::worker::EventSink;
 
 impl Runner<'_> {
     /// Why a device management request may not be sent now, if it may not.
-    fn manage_refusal(&self) -> Option<String> {
+    fn manage_refusal(&self, sink: &EventSink) -> Option<String> {
         if self.options.passive {
             Some(PASSIVE.into())
-        } else if self.ledger.is_none() {
-            Some(self.missing.clone())
+        } else if let Some(why) = self.desk.missing() {
+            Some(why.to_string())
         } else if !self.options.policy.dangerous {
             Some(NEEDS_DANGEROUS.into())
-        } else if !self.level().permits(Class::DeviceManagement) {
+        } else if !self.caller(sink).level().permits(Class::DeviceManagement) {
             Some("read-only: press W to arm a write session".into())
         } else {
             None
@@ -42,12 +43,12 @@ impl Runner<'_> {
         request: Request,
     ) {
         let event = request.action.command();
-        if let Some(why) = self.manage_refusal() {
+        if let Some(why) = self.manage_refusal(sink) {
             let fields = request.audit_json();
             return self.refuse(sink, Some(req), event, why, fields).await;
         }
         let outcome = if sink.is_cancelled() {
-            Outcome::NotSent("the session ended first".into())
+            Outcome::NotSent(ENDED.into())
         } else {
             send(client, rate, &request).await
         };
@@ -55,7 +56,7 @@ impl Runner<'_> {
         let mut fields = request.audit_json();
         drop(request);
         fields["outcome"] = outcome.json();
-        self.audit(event, fields).await;
+        self.desk.record(&self.caller(sink), event, fields).await;
         let outcomes = vec![(label, outcome)];
         tell(sink, SafetyEvent::Done { req, outcomes }).await;
     }

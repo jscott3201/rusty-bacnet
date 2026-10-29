@@ -1,6 +1,5 @@
-//! The write worker's requests and their audit fields: sending a confirmed
-//! preview, finding a device again before a revert, and comparing a fresh
-//! read with what was previewed.
+//! A write's requests and their audit fields: sending a confirmed preview,
+//! and finding a device again before a revert.
 
 use std::time::Duration;
 
@@ -12,7 +11,7 @@ use bacnet_transport::port::TransportPort;
 use bacnet_types::error::{Error, ErrorDetail, RemoteError};
 use serde_json::{Value, json};
 
-use crate::tui::safety::{Gate, NULL, Outcome, Planned, Preview};
+use super::{Outcome, Planned, Preview, hex};
 
 /// How long a revert waits for a device it had to look for.
 const FIND_FOR: Duration = Duration::from_secs(3);
@@ -68,8 +67,9 @@ pub(super) async fn send<T: TransportPort + 'static>(
     batch_outcomes(items, &result)
 }
 
-/// Each write's outcome from one WritePropertyMultiple result.
-pub(super) fn batch_outcomes(items: &[Planned], result: &Result<(), Error>) -> Vec<Outcome> {
+/// Each write's outcome from one WritePropertyMultiple result: the ones
+/// before the write the device names took effect, the rest weren't tried.
+pub fn batch_outcomes(items: &[Planned], result: &Result<(), Error>) -> Vec<Outcome> {
     let failed_at = match result {
         Err(Error::Structured { detail, .. }) => match detail.as_ref() {
             ErrorDetail::FirstFailedWriteAttempt(at) => items.iter().position(|item| {
@@ -102,7 +102,7 @@ pub(super) fn batch_outcomes(items: &[Planned], result: &Result<(), Error>) -> V
 /// Make sure the client knows where `device` is before writing to it: a
 /// revert after a restart may come before any Who-Is. Asks with a Who-Is
 /// for that one instance and waits a little for the I-Am.
-pub(super) async fn find<T: TransportPort + 'static>(client: &BACnetClient<T>, device: u32) {
+pub async fn find<T: TransportPort + 'static>(client: &BACnetClient<T>, device: u32) {
     let known = |devices: &[bacnet_client::discovery::DiscoveredDevice]| {
         devices
             .iter()
@@ -130,38 +130,14 @@ pub(super) async fn find<T: TransportPort + 'static>(client: &BACnetClient<T>, d
     tracing::warn!("device {device} did not answer a Who-Is");
 }
 
-/// True when a fresh read plans the same writes as the confirmed preview:
-/// the same pre-images, slot holders and priorities.
-pub(super) fn unchanged(confirmed: &Preview, fresh: &Preview) -> bool {
-    confirmed.items.len() == fresh.items.len()
-        && confirmed.items.iter().zip(&fresh.items).all(|(a, b)| {
-            (a.before == b.before)
-                && (a.occupancy == b.occupancy)
-                && (a.priority == b.priority)
-                && (a.commandable == b.commandable)
-        })
-}
-
-/// A relinquish: NULL to a slot, typed or from `n`.
-pub(super) fn relinquishes(item: &Planned) -> bool {
-    item.value.bytes == NULL
-}
-
-pub(super) fn gate_name(gate: &Gate) -> String {
-    match gate {
-        Gate::Allowed(tier) => format!("{tier:?}"),
-        Gate::Blocked(_) => "blocked".into(),
-    }
-}
-
 /// A planned write's audit fields.
-pub(super) fn item_json(item: &Planned) -> Value {
+pub fn item_json(item: &Planned) -> Value {
     let spec = &item.spec;
     json!({
         "target": {
             "device": spec.device,
-            "object": bacnet_ops::label::object_label(spec.object),
-            "property": bacnet_ops::label::kebab(spec.property),
+            "object": crate::label::object_label(spec.object),
+            "property": crate::label::kebab(spec.property),
             "index": spec.index,
         },
         "params": { "value": item.value.text, "encoded": hex(&item.value.bytes) },
@@ -172,8 +148,4 @@ pub(super) fn item_json(item: &Planned) -> Value {
             "out_of_service": item.out_of_service,
         },
     })
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

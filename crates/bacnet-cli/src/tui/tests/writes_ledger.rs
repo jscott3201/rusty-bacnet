@@ -47,6 +47,7 @@ fn earlier(state: State) -> Entry {
         state,
         kept: false,
         seq: 1,
+        origin: Default::default(),
     }
 }
 
