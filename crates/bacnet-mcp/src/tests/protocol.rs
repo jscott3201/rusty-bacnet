@@ -29,11 +29,11 @@ async fn an_agent_surveys_the_lab_over_the_pipe() {
     assert_eq!(info["protocolVersion"], json!("2025-11-25"));
     assert_eq!(info["serverInfo"]["name"], json!("bacnet-mcp"));
     assert!(info["capabilities"]["tools"].is_object(), "{info}");
+    let instructions = info["instructions"].as_str().unwrap();
+    assert!(instructions.contains("cannot write"), "{instructions}");
     assert!(
-        info["instructions"]
-            .as_str()
-            .unwrap()
-            .contains("cannot write")
+        instructions.contains("bacnet_read_log_records") && !instructions.contains("bacnet_revert"),
+        "{instructions}"
     );
 
     let tools = lab.agent.request("tools/list", json!({})).await;

@@ -148,7 +148,11 @@ async fn the_write_tools_are_listed_only_when_the_profile_offers_writes() {
     let hello = lab.agent.initialize().await;
     let instructions = hello["result"]["instructions"].as_str().unwrap();
     assert!(
-        instructions.contains("only with approval"),
+        instructions.contains("only with approval") && instructions.contains("bacnet_revert"),
+        "{instructions}"
+    );
+    assert!(
+        !instructions.contains("Read-only") && !instructions.contains("cannot write"),
         "{instructions}"
     );
     let tools = lab.agent.request("tools/list", json!({})).await;
