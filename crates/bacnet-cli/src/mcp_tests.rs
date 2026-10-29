@@ -226,6 +226,53 @@ fn writes_and_a_plan_become_the_write_policy() {
     assert!(offered.raises(&McpSection::default()));
 }
 
+/// A future authorization time (a hand edit) can't lengthen a plan; the
+/// summary warns when a plan reaches the life-safety priorities, and when
+/// writes are listed but nothing can arm them; the audit's local address
+/// keeps no credential.
+#[test]
+fn plans_start_no_later_than_now_and_summaries_warn() {
+    use crate::tui::profile::mcp::{McpChoice, McpPlan};
+    let plan = McpPlan {
+        devices: vec!["1".into()],
+        properties: vec!["present-value".into()],
+        priority_min: 1,
+        priority_max: 16,
+        max_writes: 5,
+        hours: 1,
+        reason: None,
+    };
+    let future = McpSection {
+        mcp_writes: McpChoice::Elicit,
+        plan: Some(plan),
+        authorized_at_unix: Some(u64::MAX / 2),
+        ..McpSection::default()
+    };
+    let workspace = Workspace {
+        dir: "/tmp/site".into(),
+        profile: None,
+        transport: "BIP",
+        local: String::new(),
+    };
+    let grant = write_policy(&future, workspace).unwrap().plan.unwrap();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    assert!(grant.expires_unix <= now + 3_600, "{}", grant.expires_unix);
+    assert!(summary("site", &future).contains("CAUTION: priority 1, 2, 5"));
+    let unarmable = McpSection {
+        mcp_writes: McpChoice::Elicit,
+        ..McpSection::default()
+    };
+    assert!(summary("site", &unarmable).contains("refused (not-armed)"));
+    assert_eq!(
+        without_secrets("wss://user:pw@hub.example:443/sc?token=abc#x"),
+        "wss://hub.example:443/sc"
+    );
+    assert_eq!(without_secrets("wss://hub.example"), "wss://hub.example");
+}
+
 /// The defaults an absent key means agree with the server's.
 #[test]
 fn the_profile_defaults_are_the_servers() {

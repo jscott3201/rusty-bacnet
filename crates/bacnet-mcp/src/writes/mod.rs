@@ -287,6 +287,30 @@ pub(crate) struct McpCaller<'a> {
     /// How the write was approved; none for a refusal or a revert.
     pub(crate) via: Option<Via>,
     pub(crate) fields: Map<String, Value>,
+    /// Where the ids of the entries this write records as `sending` go,
+    /// so a call that stops waiting can still name them.
+    pub(crate) sending: Option<Sending>,
+}
+
+/// The ledger ids a handed-off write has recorded, shared with its call.
+pub(crate) type Sending = std::sync::Arc<Mutex<Vec<u64>>>;
+
+impl McpCaller<'_> {
+    /// A caller for `writes` under `policy`, approved `via`.
+    pub(crate) fn new<'a>(
+        writes: &'a Writes,
+        policy: &'a WritePolicy,
+        via: Option<Via>,
+        fields: Map<String, Value>,
+    ) -> McpCaller<'a> {
+        McpCaller {
+            writes,
+            policy,
+            via,
+            fields,
+            sending: None,
+        }
+    }
 }
 
 impl Caller for McpCaller<'_> {
@@ -310,6 +334,25 @@ impl Caller for McpCaller<'_> {
             }
             _ => None,
         }
+    }
+
+    fn ledger_changed<'a>(
+        &'a self,
+        entries: &'a [bacnet_ops::safety::ledger::Entry],
+    ) -> bacnet_ops::safety::desk::Waiting<'a> {
+        if let Some(sending) = &self.sending {
+            // Under the workspace's lock, this run's `sending` entries are
+            // this write's.
+            let ids = entries
+                .iter()
+                .filter(|e| {
+                    e.state == bacnet_ops::safety::ledger::State::Sending
+                        && e.run == bacnet_ops::safety::run_id()
+                })
+                .map(|e| e.id);
+            *sending.lock().unwrap_or_else(PoisonError::into_inner) = ids.collect();
+        }
+        Box::pin(async {})
     }
 
     fn fields(&self) -> Map<String, Value> {

@@ -68,7 +68,7 @@ async fn command(lab: &Lab, value: f32, priority: u8) {
 }
 
 /// The `_meta` of a 2026-07-28 client that takes form elicitations.
-fn meta() -> Value {
+pub(super) fn meta() -> Value {
     let mut meta = super::modern_meta();
     meta["io.modelcontextprotocol/clientCapabilities"] = json!({ "elicitation": { "form": {} } });
     meta
@@ -98,7 +98,7 @@ pub(super) async fn call(lab: &mut Lab, tool: &str, arguments: Value, extra: Val
 }
 
 /// The retry's params: the state, and the form answered.
-fn answered(state: &Value, action: &str, confirm: bool) -> Value {
+pub(super) fn answered(state: &Value, action: &str, confirm: bool) -> Value {
     json!({
         "requestState": state,
         "inputResponses": { "confirm": { "action": action, "content": { "confirm": confirm } } },
@@ -325,19 +325,25 @@ async fn bad_confirmations_send_nothing() {
     );
     assert_eq!(sends(&lab), before, "nothing sent");
 
-    let state = asked(&call(&mut lab, "bacnet_write", args.clone(), json!({})).await);
-    let other = one(json!(31), 14);
-    let reply = call(
-        &mut lab,
-        "bacnet_write",
-        other,
-        answered(&state, "accept", true),
-    )
-    .await;
-    assert_eq!(
-        reply["structuredContent"]["reason"],
-        json!("confirmation-mismatch")
-    );
+    // Another value, priority or array index than the one confirmed.
+    let indexed = json!({ "device": LAB, "writes": [{ "object": "ao:1",
+        "property": "present-value[1]", "value": 30, "priority": 14 }] });
+    let mut state = Value::Null;
+    for other in [one(json!(31), 14), one(json!(30), 15), indexed] {
+        state = asked(&call(&mut lab, "bacnet_write", args.clone(), json!({})).await);
+        let reply = call(
+            &mut lab,
+            "bacnet_write",
+            other.clone(),
+            answered(&state, "accept", true),
+        )
+        .await;
+        assert_eq!(
+            reply["structuredContent"]["reason"],
+            json!("confirmation-mismatch"),
+            "{other}: {reply}"
+        );
+    }
     let reply = call(
         &mut lab,
         "bacnet_write",
@@ -463,5 +469,33 @@ async fn unarmed_unsupported_and_locked_writes_are_refused() {
     );
     drop(held);
     assert_eq!(slot(&lab, 16).await, PropertyValue::Null);
+    lab.stop().await;
+}
+
+/// Over MCP a Priority_Array element is never written (the slot is
+/// commanded through present-value instead), and a write to
+/// Relinquish_Default is T3, so the client can't confirm it.
+#[tokio::test(start_paused = true)]
+async fn priority_array_and_relinquish_default_are_out_of_the_clients_reach() {
+    let (mut lab, _dir) = start(ArmMode::Elicit).await;
+    let before = sends(&lab);
+    let slot_write = json!({ "device": LAB, "writes": [{ "object": "ao:1",
+        "property": "priority-array[12]", "value": 5 }] });
+    let reply = call(&mut lab, "bacnet_write", slot_write, json!({})).await;
+    assert_eq!(
+        reply["structuredContent"]["reason"],
+        json!("read-only-property"),
+        "{reply}"
+    );
+    assert_eq!(sends(&lab), before, "nothing sent, not even a read");
+    let fallback = json!({ "device": LAB, "writes": [{ "object": "ao:1",
+        "property": "relinquish-default", "value": 5 }] });
+    let reply = call(&mut lab, "bacnet_write", fallback, json!({})).await;
+    assert_eq!(
+        reply["structuredContent"]["reason"],
+        json!("needs-verified-approver"),
+        "{reply}"
+    );
+    assert!(reply.get("inputRequests").is_none(), "{reply}");
     lab.stop().await;
 }

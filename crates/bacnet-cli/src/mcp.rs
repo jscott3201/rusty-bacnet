@@ -138,7 +138,12 @@ pub(crate) fn write_policy(
         None => None,
         Some(plan) => {
             let (devices, properties) = plan.parsed()?;
-            let start = section.authorized_at_unix.unwrap_or(0);
+            // From the authorization, but never from a time still to come:
+            // a hand-edited future time can't lengthen the plan.
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |since| since.as_secs());
+            let start = section.authorized_at_unix.unwrap_or(0).min(now);
             Some(PlanGrant {
                 devices,
                 properties,
@@ -165,12 +170,36 @@ pub(crate) fn write_policy(
     })
 }
 
+/// `url` without what may carry a credential: user information, the query
+/// and the fragment.
+fn without_secrets(url: &str) -> String {
+    let url = url.split(['?', '#']).next().unwrap_or_default();
+    match url.split_once("://") {
+        Some((scheme, rest)) => {
+            let (authority, path) = rest.split_once('/').map_or((rest, ""), |(a, p)| (a, p));
+            let host = authority
+                .rsplit_once('@')
+                .map_or(authority, |(_, host)| host);
+            let path = if path.is_empty() {
+                String::new()
+            } else {
+                format!("/{path}")
+            };
+            format!("{scheme}://{host}{path}")
+        }
+        None => url.to_string(),
+    }
+}
+
 /// The local end of `args`' link, for audit records.
 fn local(args: &TransportArgs) -> (&'static str, String) {
     if let Some(mstp) = &args.mstp {
         ("MSTP", mstp.port.clone())
     } else if args.sc {
-        ("SC", args.sc_url.clone().unwrap_or_default())
+        (
+            "SC",
+            without_secrets(args.sc_url.as_deref().unwrap_or_default()),
+        )
     } else if args.ipv6 {
         ("BIP6", "ipv6".into())
     } else {
@@ -227,6 +256,12 @@ fn from_profile(cli: &Cli, name: &str) -> Result<(TransportArgs, Policy), String
         };
         policy.writes = write_policy(&section, workspace)?;
         policy.validate().map_err(|e| format!("[mcp] {e}"))?;
+        if section.mcp_arm == McpChoice::Never && section.plan.is_none() {
+            tracing::warn!(
+                "[mcp] mcp_writes = \"elicit\" with mcp_arm = \"never\" and no [mcp.plan]: the \
+                 write tools are listed, but every write will be refused (not-armed)"
+            );
+        }
     }
     Ok((args, policy))
 }
@@ -337,21 +372,41 @@ fn summary(name: &str, section: &McpSection) -> String {
     let devices = list(section.devices.as_ref().map(|d| d.join(", ")));
     let writes = match (section.mcp_writes, &section.plan) {
         (McpChoice::Never, _) => "no writes".to_string(),
+        (McpChoice::Elicit, None) if section.mcp_arm == McpChoice::Never => {
+            "write tools listed, but with mcp_arm = \"never\" and no [mcp.plan] every write \
+             will be refused (not-armed)"
+                .to_string()
+        }
         (McpChoice::Elicit, None) => {
             "writes at priority 9-16 (or to properties that aren't commandable) once the user \
              confirms them in the agent host"
                 .to_string()
         }
-        (McpChoice::Elicit, Some(plan)) => format!(
-            "writes the user confirms in the agent host, and WITHOUT ANY PROMPT up to {} writes \
-             of {} on devices {} at priority {}-{} for the next {} hour(s)",
-            plan.max_writes,
-            plan.properties.join(", "),
-            plan.devices.join(", "),
-            plan.priority_min,
-            plan.priority_max,
-            plan.hours
-        ),
+        (McpChoice::Elicit, Some(plan)) => {
+            let safety: Vec<String> = [1u8, 2, 5]
+                .into_iter()
+                .filter(|p| (plan.priority_min..=plan.priority_max).contains(p))
+                .map(|p| p.to_string())
+                .collect();
+            let warning = if safety.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "; CAUTION: priority {} is for life safety or critical equipment",
+                    safety.join(", ")
+                )
+            };
+            format!(
+                "writes the user confirms in the agent host, and WITHOUT ANY PROMPT up to {} \
+                 writes of {} on devices {} at priority {}-{} for the next {} hour(s){warning}",
+                plan.max_writes,
+                plan.properties.join(", "),
+                plan.devices.join(", "),
+                plan.priority_min,
+                plan.priority_max,
+                plan.hours
+            )
+        }
     };
     format!(
         "Authorize AI agents to use profile {name} through `bacnet mcp serve`.\n\

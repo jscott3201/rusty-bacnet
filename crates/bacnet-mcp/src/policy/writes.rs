@@ -110,6 +110,15 @@ impl PlanGrant {
         if !(1..=MAX_PLAN_WRITES).contains(&self.max_writes) {
             return Err(format!("plan: max_writes must be 1 to {MAX_PLAN_WRITES}"));
         }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_secs());
+        if self.expires_unix > now.saturating_add(MAX_PLAN_SECS) {
+            return Err(format!(
+                "plan: it may run at most {} hours from now",
+                MAX_PLAN_SECS / 3_600
+            ));
+        }
         Ok(())
     }
 }
@@ -145,5 +154,54 @@ impl WritePolicy {
             return Err("mcp_arm = \"elicit\" needs mcp_writes = \"elicit\"".into());
         }
         self.plan.as_ref().map_or(Ok(()), PlanGrant::validate)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn now() -> u64 {
+        crate::writes::unix_now()
+    }
+
+    fn grant() -> PlanGrant {
+        PlanGrant {
+            devices: vec![(10, 20)],
+            properties: vec![PropertyIdentifier::PRESENT_VALUE],
+            priorities: (1, 16),
+            max_writes: 5,
+            expires_unix: now() + 60,
+            reason: None,
+        }
+    }
+
+    /// Priority 6 is outside every plan, even one whose range spans it;
+    /// the device, property and range are each checked.
+    #[test]
+    fn a_plan_covers_its_devices_properties_and_priorities_but_never_6() {
+        let plan = grant();
+        let pv = PropertyIdentifier::PRESENT_VALUE;
+        assert!(plan.covers(10, pv, Some(1)) && plan.covers(20, pv, Some(16)));
+        assert!(plan.covers(15, pv, None), "not commandable");
+        assert!(!plan.covers(15, pv, Some(6)));
+        assert!(!plan.covers(21, pv, Some(8)));
+        assert!(!plan.covers(15, PropertyIdentifier::OUT_OF_SERVICE, None));
+        let narrow = PlanGrant {
+            priorities: (8, 16),
+            ..grant()
+        };
+        assert!(!narrow.covers(15, pv, Some(7)));
+    }
+
+    /// A plan may not run more than 8 hours from now.
+    #[test]
+    fn a_plan_lasts_at_most_eight_hours() {
+        assert!(grant().validate().is_ok());
+        let long = PlanGrant {
+            expires_unix: now() + MAX_PLAN_SECS + 60,
+            ..grant()
+        };
+        assert!(long.validate().is_err());
     }
 }

@@ -35,7 +35,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::class::Class;
 
-pub use send::{batch_outcomes, find, item_json};
+pub use send::{find, item_json};
 
 /// Default write session length, in minutes.
 pub const DEFAULT_MINUTES: u32 = 15;
@@ -52,19 +52,21 @@ pub enum FrontEnd {
     /// The terminal UI; what a ledger written before #2068 holds.
     #[default]
     Tui,
-    /// A one-shot command.
-    Cli,
     /// The MCP server.
     Mcp,
+    /// A front end this release doesn't know, from a later one: its
+    /// entries still load, and revert like any other.
+    #[serde(other)]
+    Unknown,
 }
 
 impl FrontEnd {
-    /// Its name: `tui`, `cli` or `mcp`.
+    /// Its name: `tui`, `mcp`, or `unknown`.
     pub fn name(self) -> &'static str {
         match self {
             Self::Tui => "tui",
-            Self::Cli => "cli",
             Self::Mcp => "mcp",
+            Self::Unknown => "unknown",
         }
     }
 

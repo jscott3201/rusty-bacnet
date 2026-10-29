@@ -10,13 +10,14 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use bacnet_ops::safety::FrontEnd;
 use bacnet_ops::safety::ledger::{Entry, Ledger};
+use bacnet_ops::safety::{FrontEnd, Outcome};
 use bacnet_transport::port::TransportPort;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use super::write::{Peer, open};
+use super::write::{Peer, Step};
+use super::write_task::{self, hand_off, open};
 use super::{Spec, schema};
 use crate::context::{Call, Ctx};
 use crate::errors::ToolError;
@@ -96,7 +97,7 @@ pub(crate) async fn run<T: TransportPort + 'static>(
     call: &Call,
     raw: &Map<String, Value>,
     peer: &Peer,
-) -> Result<Value, ToolError> {
+) -> Result<Step, ToolError> {
     let args: Args = serde_json::from_value(Value::Object(raw.clone()))
         .map_err(|e| ToolError::invalid("entries", e.to_string()))?;
     let wanted: Option<BTreeSet<u64>> = match (&args.entries, args.all) {
@@ -157,33 +158,38 @@ pub(crate) async fn run<T: TransportPort + 'static>(
     fields.insert("client".into(), json!({ "claimed_name": peer.name }));
     fields.insert("args_digest".into(), json!(crate::cursor::digest(raw)));
     fields.insert("request_id".into(), json!(peer.request_id));
-    let ctx = Arc::clone(ctx);
     let account = Arc::clone(&call.account);
-    let task = async move {
-        let engine = ctx.engine()?;
-        let caller = McpCaller {
-            writes: &ctx.writes,
-            policy: &ctx.policy.writes,
-            via: None,
-            fields,
-        };
-        let mut desk = open(&ctx, &workspace, &caller).await?;
-        let principal = ctx.principal.clone();
-        let done = desk
-            .revert(engine.client(), engine.limits(), &caller, |entry| {
-                ours(entry, &principal) && wanted.as_ref().is_none_or(|ids| ids.contains(&entry.id))
-            })
-            .await;
-        let left = desk
-            .entries()
-            .iter()
-            .filter(|e| ours(e, &principal))
-            .count();
-        Ok::<_, ToolError>((done, left))
+    let sending = write_task::sending();
+    let work = {
+        let ctx = Arc::clone(ctx);
+        let workspace = workspace.clone();
+        async move {
+            let engine = ctx.engine()?;
+            let caller = McpCaller::new(&ctx.writes, &ctx.policy.writes, None, fields);
+            let mut desk = open(&ctx, &workspace, &caller).await?;
+            let principal = ctx.principal.clone();
+            let done = desk
+                .revert(engine.client(), engine.limits(), &caller, |entry| {
+                    ours(entry, &principal)
+                        && wanted.as_ref().is_none_or(|ids| ids.contains(&entry.id))
+                })
+                .await;
+            let left = desk
+                .entries()
+                .iter()
+                .filter(|e| ours(e, &principal))
+                .count();
+            body(&done, left)
+        }
     };
-    let (done, left) = tokio::spawn(bacnet_ops::limits::charged(account, task))
-        .await
-        .map_err(|e| ToolError::Failed(format!("the revert task failed: {e}")))??;
+    Ok(Step::Sending(hand_off(
+        ctx, workspace, account, sending, work,
+    )))
+}
+
+/// The result: each entry's outcome, and how many of this principal's are
+/// left; an error result when not every entry was put back.
+fn body(done: &[(Entry, Outcome)], left: usize) -> Result<Value, ToolError> {
     let results: Vec<Value> = done
         .iter()
         .map(|(entry, outcome)| {

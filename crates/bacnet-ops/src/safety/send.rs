@@ -69,7 +69,7 @@ pub(super) async fn send<T: TransportPort + 'static>(
 
 /// Each write's outcome from one WritePropertyMultiple result: the ones
 /// before the write the device names took effect, the rest weren't tried.
-pub fn batch_outcomes(items: &[Planned], result: &Result<(), Error>) -> Vec<Outcome> {
+pub(crate) fn batch_outcomes(items: &[Planned], result: &Result<(), Error>) -> Vec<Outcome> {
     let failed_at = match result {
         Err(Error::Structured { detail, .. }) => match detail.as_ref() {
             ErrorDetail::FirstFailedWriteAttempt(at) => items.iter().position(|item| {

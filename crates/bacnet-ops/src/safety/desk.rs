@@ -153,10 +153,16 @@ impl Desk {
         self.ledger.as_ref()
     }
 
-    /// The ledger, to change it in place (flag its entries kept, say);
-    /// [`save`](Self::save) writes it.
-    pub fn ledger_mut(&mut self) -> Option<&mut Ledger> {
-        self.ledger.as_mut()
+    /// Flag every entry as kept on exit and save the ledger; false when
+    /// there is no ledger or it couldn't be saved. The caller records it.
+    pub fn keep_all(&mut self) -> bool {
+        match &mut self.ledger {
+            Some(ledger) => {
+                ledger.keep_all();
+                self.save()
+            }
+            None => false,
+        }
     }
 
     /// The ledger's entries, oldest first; none without a ledger.
@@ -206,6 +212,21 @@ impl Desk {
             return;
         };
         let settled = ledger.settle_abandoned(run_id());
+        self.settle(caller, settled, "session ended").await;
+    }
+
+    /// Entries this run left `sending` because the task sending them
+    /// failed (a panic) before it settled them: their outcome is unknown,
+    /// and the audit log says why.
+    pub async fn settle_interrupted(&mut self, caller: &dyn Caller) {
+        let Some(ledger) = &mut self.ledger else {
+            return;
+        };
+        let settled = ledger.settle_interrupted(run_id());
+        self.settle(caller, settled, "the write task failed").await;
+    }
+
+    async fn settle(&mut self, caller: &dyn Caller, settled: Vec<Entry>, why: &str) {
         if settled.is_empty() {
             return;
         }
@@ -214,7 +235,7 @@ impl Desk {
             let fields = json!({
                 "target": entry.label(),
                 "priority": entry.priority,
-                "outcome": { "result": "unknown", "why": "session ended" },
+                "outcome": { "result": "unknown", "why": why },
             });
             self.record(caller, "unknown", fields).await;
         }
@@ -266,7 +287,12 @@ impl Desk {
     }
 
     /// Record every write of `preview` as not sent, and why.
-    pub async fn not_sent(&self, caller: &dyn Caller, preview: &Preview, why: &str) -> Vec<Sent> {
+    pub(crate) async fn not_sent(
+        &self,
+        caller: &dyn Caller,
+        preview: &Preview,
+        why: &str,
+    ) -> Vec<Sent> {
         let outcome = Outcome::NotSent(why.into());
         for item in &preview.items {
             self.audit_write(caller, preview, item, "write", &outcome)
@@ -409,7 +435,7 @@ impl Desk {
     }
 
     /// One write's audit record. `sending` carries no outcome yet.
-    pub async fn audit_write(
+    pub(crate) async fn audit_write(
         &self,
         caller: &dyn Caller,
         preview: &Preview,
@@ -557,3 +583,7 @@ pub async fn prepare<T: TransportPort + 'static>(
     };
     plan::preview(specs, &reads, ours, dangerous, batch)
 }
+
+#[cfg(test)]
+#[path = "desk_tests.rs"]
+mod tests;

@@ -22,6 +22,7 @@ mod trend;
 mod trend_data;
 mod watch;
 pub(crate) mod write;
+mod write_task;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -301,9 +302,7 @@ pub(crate) async fn call_write<T: TransportPort + 'static>(
         if name == write::NAME {
             write::run(ctx, &call, &args, retry, peer).await
         } else {
-            revert::run(ctx, &call, &args, peer)
-                .await
-                .map(write::Step::Done)
+            revert::run(ctx, &call, &args, peer).await
         }
     };
     let work = tokio::time::timeout(budget + GRACE, charged(account, run));
@@ -319,7 +318,24 @@ pub(crate) async fn call_write<T: TransportPort + 'static>(
             ctx.log_read(name, &call, "input-required");
             return Ok(CallToolResponse::InputRequired(ask));
         }
-        Ok(Ok(write::Step::Done(body))) => Ok(body),
+        // Handed off: from here the call never says nothing was sent. A
+        // cancel or the budget only stops the waiting; the task goes on.
+        Ok(Ok(write::Step::Sending(mut handoff))) => {
+            let deadline = call.started + budget + GRACE;
+            tokio::select! {
+                done = &mut handoff.task => done.unwrap_or_else(|e| {
+                    Err(ToolError::Failed(format!("the write task failed: {e}")))
+                }),
+                () = tokio::time::sleep_until(deadline) => Err(handoff.pending()),
+                () = cancel.cancelled() => {
+                    ctx.log_read(name, &call, "cancelled");
+                    return Err(ErrorData::internal_error(
+                        "the call was cancelled; the write goes on, see bacnet://ledger",
+                        None,
+                    ));
+                }
+            }
+        }
         Ok(Err(error)) => Err(error),
         Err(_) => Err(out_of_budget(&call, budget)),
     };

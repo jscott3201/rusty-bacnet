@@ -535,8 +535,13 @@ As built (#2068), and where it differs from the steps above:
 
 - The retry reads the targets again under the workspace's lock and
   compares the preview digest; the desk's `commit` then sends without a
-  third read. A write confirmed and retried runs on a task of its own, so
-  a cancelled call doesn't leave a write half recorded.
+  third read. A confirmed retry, a planned write and a revert each run on
+  a task of its own, so a cancelled call doesn't leave a write half
+  recorded; past its budget the call answers `pending` with the ledger ids
+  so far, never "nothing was sent". A task that panics has its `sending`
+  entries settled as `unknown`.
+- Over MCP, writes to Priority_Array are refused (the slots are commanded
+  through Present_Value) and a write to Relinquish_Default is T3.
 - Arming: with `mcp_arm = "elicit"`, confirming a write while unarmed also
   arms a 15-minute session (audited `arm`, `confirmed_via: elicitation`);
   with `never`, only a plan grant arms MCP writes. There is no separate

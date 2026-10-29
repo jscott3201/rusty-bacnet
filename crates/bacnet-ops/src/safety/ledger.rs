@@ -24,7 +24,7 @@ pub const FILE: &str = "ledger.json";
 
 /// What [`Ledger::begin`] returns for an element write that a whole-property
 /// entry already covers: no entry, so settling it changes nothing.
-pub const COVERED: u64 = 0;
+pub(crate) const COVERED: u64 = 0;
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
@@ -240,7 +240,7 @@ impl Ledger {
     /// True when the slot `spec` names at `priority` still holds what
     /// this ledger wrote there: `current` is the slot's encoded value now.
     /// A slot someone has since overwritten is theirs, not ours.
-    pub fn owns(&self, spec: &WriteSpec, priority: Option<u8>, current: &[u8]) -> bool {
+    pub(crate) fn owns(&self, spec: &WriteSpec, priority: Option<u8>, current: &[u8]) -> bool {
         self.entries
             .iter()
             .any(|entry| entry.same_target(spec, priority) && entry.written.bytes == current)
@@ -255,6 +255,7 @@ impl Ledger {
     /// pre-image is the original array, and an element write to an array
     /// with a whole entry records nothing, since that entry's pre-image
     /// already puts the element back.
+    #[doc(hidden)]
     pub fn begin(&mut self, planned: &Planned, run: &str, at: &str) -> u64 {
         let (spec, priority) = (&planned.spec, planned.priority);
         let seq = self.entries.iter().map(|e| e.seq).max().unwrap_or(0) + 1;
@@ -311,6 +312,7 @@ impl Ledger {
 
     /// Settle entry `id`: applied, refused (put `backup`'s version of it
     /// back, or drop it if it is new), or unknown.
+    #[doc(hidden)]
     pub fn finish(&mut self, id: u64, applied: Option<bool>, backup: &[Entry]) {
         match applied {
             Some(false) => {
@@ -347,7 +349,7 @@ impl Ledger {
     }
 
     /// The entries, latest write first: the order revert undoes them in.
-    pub fn newest_first(&self) -> Vec<Entry> {
+    pub(crate) fn newest_first(&self) -> Vec<Entry> {
         let mut entries = self.entries.clone();
         entries.sort_by(|a, b| b.seq.cmp(&a.seq).then(b.id.cmp(&a.id)));
         entries
@@ -355,10 +357,20 @@ impl Ledger {
 
     /// Entries an earlier run left mid-request (`sending`): its session
     /// ended before the answer, so they become `unknown`. Returns them.
-    pub fn settle_abandoned(&mut self, run: &str) -> Vec<Entry> {
+    pub(crate) fn settle_abandoned(&mut self, run: &str) -> Vec<Entry> {
+        self.settle_where(|entry| entry.run != run)
+    }
+
+    /// Entries `run` itself left mid-request, because the task that sent
+    /// them failed before it settled them: their outcome is unknown.
+    pub(crate) fn settle_interrupted(&mut self, run: &str) -> Vec<Entry> {
+        self.settle_where(|entry| entry.run == run)
+    }
+
+    fn settle_where(&mut self, pick: impl Fn(&Entry) -> bool) -> Vec<Entry> {
         let mut settled = Vec::new();
         for entry in &mut self.entries {
-            if entry.state == State::Sending && entry.run != run {
+            if entry.state == State::Sending && pick(entry) {
                 entry.state = State::Unknown;
                 settled.push(entry.clone());
             }
@@ -367,7 +379,7 @@ impl Ledger {
     }
 
     /// Drop entry `id`, once undone.
-    pub fn remove(&mut self, id: u64) {
+    pub(crate) fn remove(&mut self, id: u64) {
         self.entries.retain(|e| e.id != id);
     }
 

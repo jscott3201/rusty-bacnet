@@ -266,7 +266,10 @@ Writes go through `bacnet_ops::safety`: the TUI's planner, tiers, ledger
   (WritePropertyMultiple; several writes need it) and `reason`. Targets are
   numeric (`ao:1`, never a name); a value is a number, a boolean, `null`
   (relinquish), a typed `{"value": n}` or the CLI value grammar, checked
-  before anything is sent. The result names each write's `outcome` (the
+  before anything is sent. A Priority_Array element is never written
+  (`read-only-property`: command or relinquish the slot through
+  `present-value` at that priority), and a write to Relinquish_Default is
+  T3 over MCP, so only a plan grant can approve it. The result names each write's `outcome` (the
   TUI's outcome JSON), `applied` (true, false, or null when unknown) and
   `ledger_id`, with a `revert` hint; when a write isn't acknowledged it is
   an error result (`error`: `timeout` with `applied: "unknown"`, `bacnet`,
@@ -304,7 +307,13 @@ Writes go through `bacnet_ops::safety`: the TUI's planner, tiers, ledger
   holder, when the TUI has it), reads the targets again, refuses a preview
   that changed (`stale`, audited as a stale decline), records each write as
   `sending` in the ledger and the audit log, sends, and settles; a timeout
-  leaves the entry `unknown`. The lock is released after.
+  leaves the entry `unknown`. The lock is released after. A planned write
+  and a revert run on such a task too. Once a write is handed to its task
+  the call never answers that nothing was sent: a cancel only stops the
+  waiting, and a call past its budget answers `error: "pending"`,
+  `applied: "unknown"`, with the `ledger_ids` recorded so far and
+  `bacnet://ledger` to follow, and no retry hint. A task that panics has
+  its `sending` entries settled as `unknown`, audited.
 - **`bacnet_revert`**: `entries` (ledger ids) or `all`, this principal's
   MCP entries only (`not-yours` for another's), on devices the policy
   reaches; no prompt and no armed session, as in the TUI. Latest write
@@ -312,8 +321,13 @@ Writes go through `bacnet_ops::safety`: the TUI's planner, tiers, ledger
   many are `left`.
 - **Plan grants** (`[mcp.plan]`: `devices`, `properties`, `priority_min`
   and `priority_max` (8 and 16 by default), `max_writes`, `hours` (1 to
-  8), `reason`) run from `bacnet mcp authorize`, which spells out what the
-  plan lets through without a prompt; the budget counts per process.
+  8), `reason`) run from `bacnet mcp authorize` (never from a later time
+  than now, so a hand-edited time can't lengthen one; the server refuses a
+  plan running more than 8 hours from start), which spells out what the
+  plan lets through without a prompt and warns when its range includes
+  priorities 1, 2 or 5; the budget counts per process. `bacnet mcp serve`
+  warns when writes are offered with `mcp_arm = "never"` and no plan, since
+  every write is then refused.
   Offering writes, letting the client arm, or any change to a plan clears
   the authorization.
 - **Audit.** Every MCP record has `front_end: "mcp"`, `principal`,

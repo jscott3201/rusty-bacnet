@@ -217,6 +217,8 @@ pub(crate) struct Lab {
     client: Arc<BACnetClient<Recording>>,
     serving: JoinHandle<()>,
     mute: Arc<Mutex<Option<usize>>>,
+    /// The engine's request limits, to hold a device's gate from a test.
+    pub(crate) limits: Arc<bacnet_ops::limits::RequestLimits>,
     /// A handle on the server, for calling its handler directly.
     pub(crate) mcp: McpServer<Recording>,
     /// Shuts the server down gracefully when sent; `None` once it has.
@@ -346,10 +348,8 @@ impl Lab {
                 .await
                 .unwrap();
         }
-        let engine = Arc::new(Engine::new(
-            Arc::clone(&client),
-            Arc::new(policy.request_limits()),
-        ));
+        let limits = Arc::new(policy.request_limits());
+        let engine = Arc::new(Engine::new(Arc::clone(&client), Arc::clone(&limits)));
         let mcp = McpServer::new(Some(engine), policy, "tester").unwrap();
         let (agent, serving, shutdown) = Agent::connect_until(mcp.clone());
         Self {
@@ -360,6 +360,7 @@ impl Lab {
             client,
             serving,
             mute,
+            limits,
             mcp,
             shutdown: Some(shutdown),
         }

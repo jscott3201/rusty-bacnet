@@ -429,13 +429,7 @@ impl<'a> Runner<'a> {
             }
             SafetyCommand::Keep => {
                 let labels: Vec<String> = self.desk.entries().iter().map(Entry::label).collect();
-                let flagged = match self.desk.ledger_mut() {
-                    Some(ledger) => {
-                        ledger.keep_all();
-                        self.desk.save()
-                    }
-                    None => false,
-                };
+                let flagged = self.desk.keep_all();
                 let mut fields = json!({ "entries": labels, "flagged": flagged });
                 if !flagged {
                     fields["why"] = json!(self.desk.missing().unwrap_or_default());
