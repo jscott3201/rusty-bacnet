@@ -11,9 +11,9 @@
 //! | priorities 1, 2 and 5 (life safety and critical equipment, Table 19-1) | T3 |
 //! | priority 6, kept for minimum on and off times (Clause 19.2.3) | blocked, or T3 with `dangerous = true` |
 
+use crate::format::{Floats, RawRow, StateTexts, ValueFormat, decode_all};
+use crate::label::PRIORITIES;
 use bacnet_encoding::primitives::{decode_priority_date_time, encode_property_value};
-use bacnet_ops::format::{Floats, RawRow, StateTexts, ValueFormat, decode_all};
-use bacnet_ops::label::PRIORITIES;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::PropertyValue;
 use bytes::BytesMut;
@@ -50,7 +50,8 @@ impl From<Vec<RawRow>> for PreRead {
 }
 
 /// Why a write to an array's length (index 0) has no pre-image.
-pub(crate) const RESIZE: &str = "a resize can't be reverted";
+#[doc(hidden)]
+pub const RESIZE: &str = "a resize can't be reverted";
 
 /// The priority a commandable write without one gets (Clause 19.2.1).
 pub(crate) const DEFAULT_PRIORITY: u8 = 16;
@@ -106,8 +107,8 @@ pub(crate) fn repeated_target(specs: &[&WriteSpec]) -> Option<String> {
             .then(|| {
                 format!(
                     "a batch writes each property once; {} {} appears twice",
-                    bacnet_ops::label::object_label(spec.object),
-                    bacnet_ops::label::kebab(spec.property)
+                    crate::label::object_label(spec.object),
+                    crate::label::kebab(spec.property)
                 )
             })
     })
@@ -278,7 +279,7 @@ fn plan(
         None => PropertyValue::Null,
         Some(text) => {
             let like = current.or(default).and_then(first);
-            let typed = bacnet_ops::parse::parse_value_for(
+            let typed = crate::parse::parse_value_for(
                 spec.object.object_type(),
                 spec.property,
                 spec.index,

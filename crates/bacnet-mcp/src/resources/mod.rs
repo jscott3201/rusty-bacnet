@@ -62,7 +62,7 @@ pub(crate) fn list<T: TransportPort + 'static>(ctx: &Ctx<T>) -> Vec<Resource> {
             LEDGER,
             "ledger",
             "Write ledger",
-            "This principal's writes still in effect: none, since the server can't write",
+            "This principal's writes still in effect, with what undoes each",
         ),
     ];
     all.into_iter()
@@ -148,7 +148,7 @@ pub(crate) async fn read<T: TransportPort + 'static>(
             Uri::Alarms => content::alarms(ctx, &call).await,
             Uri::DeviceAlarms(device) => content::device_alarms(ctx, &call, device).await,
             Uri::Session => Ok(content::session(ctx)),
-            Uri::Ledger => Ok(content::ledger()),
+            Uri::Ledger => Ok(content::ledger(ctx)),
         }
     };
     let finished = tokio::select! {

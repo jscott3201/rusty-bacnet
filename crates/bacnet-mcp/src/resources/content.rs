@@ -350,11 +350,44 @@ pub(crate) async fn refresh_alarms<T: TransportPort + 'static>(ctx: &Ctx<T>, tex
 /// The session: the server's level, limits, rate and watch footprint.
 pub(super) fn session<T: TransportPort + 'static>(ctx: &Ctx<T>) -> Value {
     let caps = &ctx.policy.caps;
+    let policy = &ctx.policy.writes;
+    let offered = policy.offered() && !ctx.policy.passive;
+    let level = if ctx.policy.passive {
+        "passive"
+    } else {
+        ctx.writes.level(policy).audit_name()
+    };
+    let writes = if offered {
+        json!({
+            "mode": "elicit",
+            "arm": match policy.arm {
+                crate::policy::ArmMode::Never => "never",
+                crate::policy::ArmMode::Elicit => "elicit",
+            },
+            "client_confirms": "T1 only",
+        })
+    } else {
+        json!("not offered")
+    };
+    let grants: Vec<Value> = policy
+        .plan
+        .iter()
+        .filter(|_| offered)
+        .map(|plan| {
+            json!({
+                "kind": "plan",
+                "in_force": ctx.writes.plan(policy).is_some(),
+                "used": ctx.writes.plan_used(),
+                "max_writes": plan.max_writes,
+                "expires_unix": plan.expires_unix,
+            })
+        })
+        .collect();
     let mut body = json!({
-        "level": if ctx.policy.passive { "passive" } else { "read-only" },
-        "writes": "not offered",
-        "expires": null,
-        "grants": [],
+        "level": level,
+        "writes": writes,
+        "expires": ctx.writes.armed_for().map(|s| json!({ "in_s": s })),
+        "grants": grants,
         "limits": ctx.limits(None),
         "watches": {
             "held": ctx.subs.held(),
@@ -383,10 +416,33 @@ pub(super) fn session<T: TransportPort + 'static>(ctx: &Ctx<T>) -> Value {
     body
 }
 
-/// This principal's ledger entries in effect: none, since nothing writes.
-pub(super) fn ledger() -> Value {
-    json!({
-        "entries": [],
-        "note": "this server can't write, so its ledger is empty",
-    })
+/// This principal's ledger entries in effect, read from the workspace's
+/// ledger (which the TUI shares): none when the server can't write.
+pub(super) fn ledger<T: TransportPort + 'static>(ctx: &Ctx<T>) -> Value {
+    let Some(workspace) = &ctx.policy.writes.workspace else {
+        return json!({
+            "entries": [],
+            "note": "this server can't write, so its ledger is empty",
+        });
+    };
+    let entries: Vec<Value> = bacnet_ops::safety::ledger::Ledger::open(&workspace.dir)
+        .map(|ledger| ledger.entries().to_vec())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|e| {
+            e.origin.front_end == bacnet_ops::safety::FrontEnd::Mcp
+                && e.origin.principal.as_deref() == Some(ctx.principal.as_str())
+        })
+        .map(|e| {
+            json!({
+                "ledger_id": e.id,
+                "target": e.label(),
+                "written": crate::untrusted::clean(&e.written.text, ctx.policy.caps.text).0,
+                "undo": e.undo().map(|u| crate::untrusted::clean(&u.text, ctx.policy.caps.text).0),
+                "state": e.state,
+                "at": e.at,
+            })
+        })
+        .collect();
+    json!({ "entries": entries })
 }

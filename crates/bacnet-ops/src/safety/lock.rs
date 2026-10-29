@@ -12,17 +12,17 @@ use std::io::Write as _;
 use std::path::Path;
 
 /// The lock file in the workspace.
-pub(crate) const FILE: &str = "ledger.lock";
+pub const FILE: &str = "ledger.lock";
 
 /// The held lock; dropping it releases the lock.
 #[derive(Debug)]
-pub(crate) struct WorkspaceLock {
+pub struct WorkspaceLock {
     _file: File,
 }
 
 /// Take the workspace's lock for `front_end` (`tui`, later `mcp`), or say
 /// who holds it.
-pub(crate) fn lock(workspace: &Path, front_end: &str) -> Result<WorkspaceLock, String> {
+pub fn lock(workspace: &Path, front_end: &str) -> Result<WorkspaceLock, String> {
     let path = workspace.join(FILE);
     let mut file = OpenOptions::new()
         .read(true)

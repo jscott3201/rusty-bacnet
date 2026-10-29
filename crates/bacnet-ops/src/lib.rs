@@ -25,10 +25,10 @@
 //!   summary, trend log pages and alarms), Who-Is and the BBMD table reads
 //!   over those limits;
 //! - [`watch`]: the watch hub, one managed COV subscription or poller per
-//!   point however many listeners share it, holding the latest values.
-//!
-//! The write safety core (plans, ledger, audit) moves here in a later
-//! phase; see `docs/design/mcp.md`.
+//!   point however many listeners share it, holding the latest values;
+//! - [`safety`]: the write-safety core the TUI and the MCP server share:
+//!   levels, tiers, previews, the ledger, the audit log, the workspace lock
+//!   and the engine half of a write (#2068).
 
 pub mod bbmd;
 pub mod class;
@@ -39,5 +39,6 @@ pub mod format;
 pub mod label;
 pub mod limits;
 pub mod parse;
+pub mod safety;
 pub mod target;
 pub mod watch;

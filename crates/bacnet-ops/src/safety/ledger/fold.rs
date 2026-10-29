@@ -4,8 +4,8 @@
 //! included. The array before any of them is that pre-image with each
 //! element entry's own pre-image put back at its index.
 
+use crate::format::{Floats, StateTexts, ValueFormat, decode_all};
 use bacnet_encoding::primitives::encode_property_value;
-use bacnet_ops::format::{Floats, StateTexts, ValueFormat, decode_all};
 use bacnet_types::enums::ObjectType;
 use bytes::BytesMut;
 

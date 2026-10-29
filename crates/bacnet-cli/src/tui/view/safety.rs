@@ -15,7 +15,7 @@ use crate::tui::app::{App, Link};
 use crate::tui::safety::audit::Secret;
 use crate::tui::safety::ledger::{Entry, State};
 use crate::tui::safety::manage::{Action, DccTime, MAX_PASSWORD, Request};
-use crate::tui::safety::{Change, Effect, Gate, Occupancy, Outcome, Planned, Tier};
+use crate::tui::safety::{Change, Effect, FrontEnd, Gate, Occupancy, Outcome, Planned, Tier};
 
 /// Draw `modal` over the screen.
 pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, modal: &Modal, theme: &Theme) {
@@ -338,10 +338,17 @@ fn entry_line(app: &App, entry: &Entry, theme: &Theme) -> Line<'static> {
         (false, true) => " [kept, earlier run]",
         (false, false) => " [earlier run]",
     };
+    // Another front end's change (an MCP agent's, #2068), named with its
+    // principal: the TUI reverts it like its own.
+    let by = match (&entry.origin.front_end, &entry.origin.principal) {
+        (FrontEnd::Tui, _) => String::new(),
+        (front_end, Some(principal)) => format!(" [{}: {principal}]", front_end.name()),
+        (front_end, None) => format!(" [{}]", front_end.name()),
+    };
     Line::from(vec![
         Span::raw(entry.label()),
         Span::raw(format!(": {} (undo: {undo})", entry.written.text)),
-        Span::styled(format!("{state}{origin}"), theme.warn()),
+        Span::styled(format!("{state}{origin}{by}"), theme.warn()),
     ])
 }
 

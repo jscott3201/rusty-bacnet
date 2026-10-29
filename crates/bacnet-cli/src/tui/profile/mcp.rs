@@ -9,6 +9,15 @@
 //! devices = ["1000-1999", "5"]
 //! slow_networks = [2001]        # MS/TP behind a router: 2 requests a second
 //! broad_discovery = false
+//! mcp_writes = "elicit"         # offer bacnet_write and bacnet_revert (#2068)
+//! mcp_arm = "elicit"            # the client's confirmation may arm a session
+//!
+//! [mcp.plan]                    # writes approved in advance, no prompt
+//! devices = ["1201"]
+//! properties = ["present-value"]
+//! priority_min = 8
+//! max_writes = 50
+//! hours = 4                     # from `bacnet mcp authorize`, 8 at most
 //! ```
 //!
 //! The TUI round-trips the table without using it. Its first-use
@@ -72,6 +81,18 @@ pub(crate) struct McpSection {
     /// Seconds a call may wait on the limits and the network.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) call_budget_s: Option<u64>,
+    /// Whether `bacnet_write` and `bacnet_revert` are offered (#2068):
+    /// `never` (the default) or `elicit`, the client's confirmation
+    /// approving T1 writes only.
+    #[serde(skip_serializing_if = "McpChoice::is_never")]
+    pub(crate) mcp_writes: McpChoice,
+    /// Whether the client's confirmation may arm a write session:
+    /// `never` (the default) or `elicit`.
+    #[serde(skip_serializing_if = "McpChoice::is_never")]
+    pub(crate) mcp_arm: McpChoice,
+    /// Writes approved in advance, by `bacnet mcp authorize`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) plan: Option<McpPlan>,
     /// When `bacnet mcp authorize` recorded consent to serve MCP on this
     /// profile.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -85,6 +106,87 @@ pub(crate) struct McpSection {
     /// authorizing again.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) authorized_transport: Option<String>,
+}
+
+/// `mcp_writes` and `mcp_arm`: `never` or `elicit`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum McpChoice {
+    /// Not through MCP: the default.
+    #[default]
+    Never,
+    /// Through the client's confirmation (an elicitation form).
+    Elicit,
+}
+
+impl McpChoice {
+    fn is_never(&self) -> bool {
+        *self == Self::Never
+    }
+}
+
+/// A plan's device ranges and properties, parsed.
+pub(crate) type PlanTargets = (
+    Vec<(u32, u32)>,
+    Vec<bacnet_types::enums::PropertyIdentifier>,
+);
+
+/// `[mcp.plan]`: a commissioning plan. Writes it covers run without a
+/// prompt for `hours` after `bacnet mcp authorize`, up to `max_writes`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct McpPlan {
+    /// Devices it covers, as `low-high` or one instance.
+    pub(crate) devices: Vec<String>,
+    /// Properties it may write, by name.
+    #[serde(default = "McpPlan::present_value")]
+    pub(crate) properties: Vec<String>,
+    /// The lowest priority number it may command (8 by default).
+    #[serde(default = "McpPlan::eight")]
+    pub(crate) priority_min: u8,
+    /// The highest (16 by default).
+    #[serde(default = "McpPlan::sixteen")]
+    pub(crate) priority_max: u8,
+    /// How many writes it allows.
+    pub(crate) max_writes: u32,
+    /// How long it lasts after authorization, 1 to 8 hours.
+    pub(crate) hours: u64,
+    /// Why, for the audit log.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) reason: Option<String>,
+}
+
+impl McpPlan {
+    fn present_value() -> Vec<String> {
+        vec!["present-value".into()]
+    }
+    fn eight() -> u8 {
+        8
+    }
+    fn sixteen() -> u8 {
+        16
+    }
+
+    /// The device ranges, and the properties, parsed and checked.
+    pub(crate) fn parsed(&self) -> Result<PlanTargets, String> {
+        if !(1..=8).contains(&self.hours) {
+            return Err("[mcp.plan] hours must be 1 to 8".into());
+        }
+        let devices = self
+            .devices
+            .iter()
+            .map(|text| device_range(text))
+            .collect::<Result<Vec<_>, _>>()?;
+        let properties = self
+            .properties
+            .iter()
+            .map(|text| match bacnet_ops::parse::parse_property(text) {
+                Ok((property, None)) => Ok(property),
+                _ => Err(format!("[mcp.plan] properties: '{text}' is not a property")),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((devices, properties))
+    }
 }
 
 /// The rates an absent key means, in [`McpSection::rates`] order: the MCP
@@ -121,6 +223,15 @@ impl McpSection {
     pub(crate) fn validate(&self) -> Result<(), String> {
         for text in self.devices.iter().flatten() {
             device_range(text)?;
+        }
+        if let Some(plan) = &self.plan {
+            plan.parsed()?;
+            if self.mcp_writes == McpChoice::Never {
+                return Err("[mcp.plan] needs mcp_writes = \"elicit\"".into());
+            }
+        }
+        if self.mcp_arm == McpChoice::Elicit && self.mcp_writes == McpChoice::Never {
+            return Err("[mcp] mcp_arm = \"elicit\" needs mcp_writes = \"elicit\"".into());
         }
         Ok(())
     }
@@ -232,7 +343,12 @@ impl McpSection {
                     .slow_networks
                     .iter()
                     .any(|n| !from.slow_networks.contains(n)));
-        faster || bigger || unpaced || self.reaches_further(from)
+        // Offering writes, arming by the client, or any change to a plan
+        // grant (#2068).
+        let writes = (self.mcp_writes == McpChoice::Elicit && from.mcp_writes == McpChoice::Never)
+            || (self.mcp_arm == McpChoice::Elicit && from.mcp_arm == McpChoice::Never)
+            || (self.plan.is_some() && self.plan != from.plan);
+        faster || bigger || unpaced || writes || self.reaches_further(from)
     }
 
     /// True when `self` reaches a network or device outside `from`'s

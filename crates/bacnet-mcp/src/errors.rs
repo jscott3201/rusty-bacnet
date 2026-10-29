@@ -37,6 +37,10 @@ pub(crate) enum ToolError {
     UnknownDevice { device: String, hint: String },
     /// Any other failure, such as the transport's.
     Failed(String),
+    /// Writes that went out, or were meant to, and didn't all take: the
+    /// body names each write's outcome, and `error` says what went wrong
+    /// (`timeout` when one may or may not have been applied).
+    Write(Value),
 }
 
 impl ToolError {
@@ -108,6 +112,7 @@ impl ToolError {
                 json!({ "error": "unknown-device", "target": device, "hint": hint })
             }
             Self::Failed(message) => json!({ "error": "failed", "message": message }),
+            Self::Write(body) => body.clone(),
         }
     }
 
@@ -130,6 +135,10 @@ impl ToolError {
                 format!("device {device} is not in the discovery table; {hint}")
             }
             Self::Failed(message) => format!("failed: {message}"),
+            Self::Write(body) => format!(
+                "not every write took ({}); see each write's outcome",
+                body["error"].as_str().unwrap_or("failed")
+            ),
         }
     }
 }

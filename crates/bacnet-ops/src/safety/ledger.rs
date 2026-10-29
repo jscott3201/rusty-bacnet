@@ -15,12 +15,12 @@ use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
 use serde::{Deserialize, Serialize};
 
-use super::{NULL, Planned, Stored, WriteSpec};
+use super::{FrontEnd, NULL, Planned, Stored, WriteSpec};
 
 mod fold;
 
 /// The ledger's file in the workspace.
-pub(crate) const FILE: &str = "ledger.json";
+pub const FILE: &str = "ledger.json";
 
 /// What [`Ledger::begin`] returns for an element write that a whole-property
 /// entry already covers: no entry, so settling it changes nothing.
@@ -31,7 +31,7 @@ static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 /// Where an entry stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum State {
+pub enum State {
     /// The request is out; no answer yet.
     Sending,
     /// Acknowledged.
@@ -42,58 +42,84 @@ pub(crate) enum State {
 
 /// One change in effect.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct Entry {
+pub struct Entry {
     /// Unique within the file.
-    pub(crate) id: u64,
+    pub id: u64,
     /// The process run that made it.
-    pub(crate) run: String,
+    pub run: String,
     /// When it was first written, UTC.
-    pub(crate) at: String,
+    pub at: String,
     /// Device instance.
-    pub(crate) device: u32,
+    pub device: u32,
     /// Object type, raw.
-    pub(crate) object_type: u32,
+    pub object_type: u32,
     /// Object instance.
-    pub(crate) instance: u32,
+    pub instance: u32,
     /// Property, raw.
-    pub(crate) property: u32,
+    pub property: u32,
     /// Array index.
     #[serde(default)]
-    pub(crate) index: Option<u32>,
+    pub index: Option<u32>,
     /// The priority slot, for a commandable write.
     #[serde(default)]
-    pub(crate) priority: Option<u8>,
+    pub priority: Option<u8>,
     /// Written to a priority slot.
-    pub(crate) commandable: bool,
+    pub commandable: bool,
     /// What undoes it: the slot's old value (`None`: it was NULL) or the
     /// property's old value (`None`: unknown, so it can't be undone).
-    pub(crate) before: Option<Stored>,
+    pub before: Option<Stored>,
     /// What was written last.
-    pub(crate) written: Stored,
+    pub written: Stored,
     /// Where it stands.
-    pub(crate) state: State,
+    pub state: State,
     /// An earlier session chose to keep it on exit.
     #[serde(default)]
-    pub(crate) kept: bool,
+    pub kept: bool,
     /// Order of the latest write to it across the ledger: revert goes
     /// from the highest down.
     #[serde(default)]
-    pub(crate) seq: u64,
+    pub seq: u64,
+    /// The front end and principal of its latest write.
+    #[serde(flatten)]
+    pub origin: Origin,
+}
+
+/// Who wrote an entry: the front end, and for MCP the principal (on stdio,
+/// the OS user running the server). Entries written before #2068 are the
+/// TUI's, with no principal; the file leaves both out for the TUI.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Origin {
+    /// The front end.
+    #[serde(default, skip_serializing_if = "FrontEnd::is_tui")]
+    pub front_end: FrontEnd,
+    /// The principal, where the front end has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal: Option<String>,
+}
+
+impl Origin {
+    /// The MCP server, for `principal`.
+    pub fn mcp(principal: impl Into<String>) -> Self {
+        Self {
+            front_end: FrontEnd::Mcp,
+            principal: Some(principal.into()),
+        }
+    }
 }
 
 impl Entry {
     /// The object.
-    pub(crate) fn object(&self) -> Option<ObjectIdentifier> {
+    pub fn object(&self) -> Option<ObjectIdentifier> {
         ObjectIdentifier::new(ObjectType::from_raw(self.object_type), self.instance).ok()
     }
 
     /// The property.
-    pub(crate) fn property(&self) -> PropertyIdentifier {
+    pub fn property(&self) -> PropertyIdentifier {
         PropertyIdentifier::from_raw(self.property)
     }
 
     /// `device 100 analog-output 1 present-value @8`.
-    pub(crate) fn label(&self) -> String {
+    pub fn label(&self) -> String {
         match self.object() {
             Some(object) => super::label(
                 self.device,
@@ -109,7 +135,7 @@ impl Entry {
     /// The value and priority that undo it: the old slot value or NULL at
     /// the slot, or the old property value. `None` when the old value is
     /// unknown.
-    pub(crate) fn undo(&self) -> Option<Stored> {
+    pub fn undo(&self) -> Option<Stored> {
         match (&self.before, self.commandable) {
             (Some(before), _) => Some(before.clone()),
             (None, true) => Some(Stored::null()),
@@ -165,14 +191,16 @@ struct LedgerFile {
 
 /// The ledger and its file.
 #[derive(Debug)]
-pub(crate) struct Ledger {
+pub struct Ledger {
     path: PathBuf,
     entries: Vec<Entry>,
+    /// Who the entries [`Ledger::begin`] records are written by.
+    origin: Origin,
 }
 
 impl Ledger {
     /// Load the ledger in `workspace`; none yet is an empty one.
-    pub(crate) fn open(workspace: &Path) -> Result<Self, String> {
+    pub fn open(workspace: &Path) -> Result<Self, String> {
         let path = workspace.join(FILE);
         let entries = match std::fs::read_to_string(&path) {
             Ok(text) => {
@@ -183,11 +211,22 @@ impl Ledger {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
             Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
         };
-        Ok(Self { path, entries })
+        Ok(Self {
+            path,
+            entries,
+            origin: Origin::default(),
+        })
+    }
+
+    /// The ledger, with the entries it records marked as `origin`'s (the
+    /// TUI's otherwise).
+    pub fn written_by(mut self, origin: Origin) -> Self {
+        self.origin = origin;
+        self
     }
 
     /// The entries, oldest first.
-    pub(crate) fn entries(&self) -> &[Entry] {
+    pub fn entries(&self) -> &[Entry] {
         &self.entries
     }
 
@@ -216,7 +255,8 @@ impl Ledger {
     /// pre-image is the original array, and an element write to an array
     /// with a whole entry records nothing, since that entry's pre-image
     /// already puts the element back.
-    pub(crate) fn begin(&mut self, planned: &Planned, run: &str, at: &str) -> u64 {
+    #[doc(hidden)]
+    pub fn begin(&mut self, planned: &Planned, run: &str, at: &str) -> u64 {
         let (spec, priority) = (&planned.spec, planned.priority);
         let seq = self.entries.iter().map(|e| e.seq).max().unwrap_or(0) + 1;
         if priority.is_none() && spec.index.is_some() && self.whole_entry(spec).is_some() {
@@ -230,6 +270,7 @@ impl Ledger {
             entry.written = planned.value.clone();
             entry.state = State::Sending;
             entry.seq = seq;
+            entry.origin = self.origin.clone();
             return entry.id;
         }
         let id = self.entries.iter().map(|e| e.id).max().map_or(1, |n| n + 1);
@@ -264,13 +305,15 @@ impl Ledger {
             state: State::Sending,
             kept: false,
             seq,
+            origin: self.origin.clone(),
         });
         id
     }
 
     /// Settle entry `id`: applied, refused (put `backup`'s version of it
     /// back, or drop it if it is new), or unknown.
-    pub(crate) fn finish(&mut self, id: u64, applied: Option<bool>, backup: &[Entry]) {
+    #[doc(hidden)]
+    pub fn finish(&mut self, id: u64, applied: Option<bool>, backup: &[Entry]) {
         match applied {
             Some(false) => {
                 let failed = self.entries.iter().find(|e| e.id == id).cloned();
@@ -312,12 +355,16 @@ impl Ledger {
         entries
     }
 
-    /// Entries an earlier run left mid-request (`sending`): its session
-    /// ended before the answer, so they become `unknown`. Returns them.
-    pub(crate) fn settle_abandoned(&mut self, run: &str) -> Vec<Entry> {
+    /// Entries left mid-request (`sending`), whatever run wrote them: they
+    /// become `unknown`. Only the holder of the workspace's lock calls
+    /// this, and a writer in flight in any process holds that lock until
+    /// it has settled (the TUI for its whole session, MCP for each write),
+    /// so an entry still `sending` here has no writer left: its session
+    /// ended, or its task failed, before the answer. Returns them.
+    pub(crate) fn settle_abandoned(&mut self) -> Vec<Entry> {
         let mut settled = Vec::new();
         for entry in &mut self.entries {
-            if entry.state == State::Sending && entry.run != run {
+            if entry.state == State::Sending {
                 entry.state = State::Unknown;
                 settled.push(entry.clone());
             }
@@ -331,14 +378,14 @@ impl Ledger {
     }
 
     /// Mark every entry as kept on exit.
-    pub(crate) fn keep_all(&mut self) {
+    pub fn keep_all(&mut self) {
         for entry in &mut self.entries {
             entry.kept = true;
         }
     }
 
     /// Write the file: a complete, synced temporary file renamed over it.
-    pub(crate) fn save(&self) -> Result<(), String> {
+    pub fn save(&self) -> Result<(), String> {
         let text = serde_json::to_string_pretty(&LedgerFile {
             version: 1,
             entries: self.entries.clone(),
@@ -350,7 +397,7 @@ impl Ledger {
             std::process::id(),
             NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
         ));
-        crate::tui::profile::store::publish(&temp, &self.path, &text, false)
+        super::file::publish(&temp, &self.path, &text, false)
             .map_err(|e| format!("cannot save {}: {e}", self.path.display()))
     }
 }
@@ -532,11 +579,9 @@ mod tests {
         ledger.begin(&planned(stored(3.0), None), "run-a", "t");
         let order: Vec<u64> = ledger.newest_first().iter().map(|e| e.id).collect();
         assert_eq!(order, [first, second]);
-        assert!(
-            ledger.settle_abandoned("run-a").is_empty(),
-            "this run's own"
-        );
-        let settled = ledger.settle_abandoned("run-b");
+        // Whoever holds the lock settles every send left without a writer,
+        // its own run's included (#2068).
+        let settled = ledger.settle_abandoned();
         assert_eq!(settled.len(), 2);
         assert!(ledger.entries().iter().all(|e| e.state == State::Unknown));
     }

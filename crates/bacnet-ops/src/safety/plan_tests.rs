@@ -1,6 +1,6 @@
 //! Tests of the write preview: occupancy, effects, tiers and refusals.
 
-use bacnet_ops::format::RowError;
+use crate::format::RowError;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
 use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::ObjectIdentifier;

@@ -351,7 +351,7 @@ table, `bacnet_ops::class` (`crates/bacnet-ops/src/class.rs`); `Level::permits` 
 | T3 | Priorities 1, 2 and 5, DCC, reinitialize, Write-BDT, Delete-FDT-Entry, create and delete object, file write | Shows the blast radius; the user types the device instance (or BBMD address) to confirm. A DCC disable lasts 15 minutes unless a duration or `forever` is typed (#1799); plain disable is T3 here too, behind `dangerous = true` |
 | Blocked | Priority 6, which the standard sets aside for minimum on and off times (Clause 19.2.3) | Expert flag only (`dangerous = true`); then T3. The deprecated plain-disable DCC option, which current-revision servers refuse (Clause 16.1), needs the same flag, which every DCC needs, and is confirmed at T3 with a deprecation warning |
 
-As built in #964 (`tui/safety/plan.rs`): priorities 3, 4 and 7, which Table 19-1
+As built in #964 (`tui/safety/plan.rs`, since #2068 `bacnet_ops::safety::plan`): priorities 3, 4 and 7, which Table 19-1
 leaves to the site but which outrank the operator's 8, are T2 like 8. A
 WritePropertyMultiple batch is at least T2 and takes its strongest member's
 tier; one blocked member blocks it. The "expert flag" is the profile's
@@ -396,7 +396,9 @@ first, relinquishes our slots (or gives back another commander's value we
 overwrote) and rewrites old property values; it needs a connection but not an
 armed session. Quitting with entries left opens a modal: revert all, keep and
 log, or cancel. The next session on the same profile lists entries an earlier
-run left, marking the kept ones. A write already sent when its session is
+run left, marking the kept ones, and entries another front end wrote (an MCP
+agent's, #2068) with that front end and its principal (`[mcp: user]`); revert
+treats them like its own. A write already sent when its session is
 retired completes and is recorded; one still queued is recorded as not sent.
 
 Hardening after review (#964):
@@ -431,13 +433,15 @@ Hardening after review (#964):
   deadline but not yet disarmed is audited as `write-session (expired)`.
 
 **Audit log** (#964). `audit.jsonl` in the profile workspace is append-only.
-Each record holds UTC time, OS user, host, profile, transport and local
+Each record holds UTC time, OS user, host, the front end (`front_end`: `tui`,
+or `mcp` with its `principal`, #2068), profile, transport and local
 address, target, service, decoded parameters, priority, pre-image, outcome
 (ack, error class and code, reject, abort, timeout; `class`, `code` and
 `reason` are strings holding the name, or the decimal number when there is
 none) and session level.
 Passwords are redacted (an `audit::Secret` serialises as `[redacted]`, and any
-field named like a password is redacted on the way out), file payloads will be
+field whose name holds `password`, `token`, `authorization`, `secret` or `key`
+is redacted on the way out), file payloads will be
 reduced to size plus SHA-256 when file writes arrive, and key material never
 appears. Arming, disarming, refusals, declined confirmations, reverts and kept
 entries are recorded too. Each line is flushed and synced before the next; the
@@ -528,8 +532,11 @@ crates/bacnet-cli/src/
     tests/           app-core, frames (insta), in-process lab, load, event loop
 ```
 
-`safety/` holds the write session model (levels, tiers and planning, ledger,
-audit writer); `worker/write.rs` and `worker/passive.rs` its worker side, and
+`safety/` holds the TUI's side of the write session model (the device
+management requests, the password `Secret`, the app and worker messages); the
+shared core (levels, tiers and planning, ledger, audit writer, workspace lock,
+and the engine half of a write) is `bacnet_ops::safety` since #2068, which the
+MCP server uses too. `worker/write/` and `worker/passive.rs` are its worker side, and
 `app/safety.rs` and `view/safety.rs` its dialogs (#964). Each screen has its
 own app and view modules. The profile store in `profile/` keeps B/IP, SC and
 MS/TP profiles.

@@ -30,7 +30,7 @@ pub(crate) enum Uri {
     DeviceAlarms(u32),
     /// The session: level, limits, the watch footprint.
     Session,
-    /// This principal's ledger entries in effect (none before writes).
+    /// This principal's ledger entries in effect.
     Ledger,
 }
 

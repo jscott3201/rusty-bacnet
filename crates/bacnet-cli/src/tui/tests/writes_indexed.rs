@@ -101,6 +101,7 @@ fn unknown() -> Entry {
         state: State::Applied,
         kept: false,
         seq: 1,
+        origin: Default::default(),
     }
 }
 

@@ -34,6 +34,11 @@ targets, values and devices the same way and obey the same request limits.
   every 10 s or slower when the device refuses COV, however many listeners
   share it; it keeps the latest values, so reading a watched point sends
   nothing, and folds bursts of notifications, counting what it folds.
+- `safety`: the write-safety core the terminal UI and the MCP server
+  share: session levels, confirmation tiers, the write preview, the
+  crash-safe ledger of pre-images, the redacted append-only audit log,
+  the workspace lock, and the engine half of a write (read again, refuse a
+  stale preview, record, send, settle, revert).
 
 It is a hosted crate: it needs `std` and Tokio, and has no terminal or MCP
 dependency. Its `sc-tls` feature lets the address formatter recognise a

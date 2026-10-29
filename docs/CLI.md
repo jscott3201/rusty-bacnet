@@ -947,10 +947,13 @@ ledger, or with a write session request still out, opens the exit guard: `r`
 reverts all and quits, `k` keeps them, records that in the audit log and quits
 (also when passive or disconnected), Esc cancels. Entries left by an earlier
 run, whether kept or left by a crash, are listed when the next session on the
-profile starts; one a crash cut off mid-request is recorded as unknown.
+profile starts; one a crash cut off mid-request is recorded as unknown. Changes
+an AI agent made through `bacnet mcp serve` on the same profile are in the same
+ledger, marked `[mcp: user]`, and revert like the TUI's own.
 
 **Audit log.** `audit.jsonl` in the workspace gets one JSON object a line,
-flushed and synced: UTC time, OS user, host, profile, transport and local
+flushed and synced: UTC time, OS user, host, the front end (`front_end`:
+`tui`, or `mcp` with the agent's `principal`), profile, transport and local
 address, session level, the event, and for a write its target, service,
 parameters, priority, pre-image and outcome (ack, error class and code,
 denied, reject, abort, timeout or not sent). An outcome's `class`, `code` and
@@ -959,7 +962,8 @@ denied, reject, abort, timeout or not sent). An outcome's `class`, `code` and
 each request. Arming, disarming, refusals, declined confirmations, reverts and
 kept entries are recorded too; a session that ran out shows as
 `write-session (expired)`. Fields
-named like passwords are written as `[redacted]`. Reads are not logged. This
+named for a secret (`password`, `token`, `authorization`, `secret`, `key`) are
+written as `[redacted]`. Reads are not logged. This
 is a client-side record, separate from BACnet's own audit reporting.
 
 **Passive.** `--passive` builds no client at all, so nothing is transmitted;

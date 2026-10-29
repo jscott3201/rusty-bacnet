@@ -1,4 +1,4 @@
-//! The safety rules: no write tool anywhere, passive mode, the layered
+//! The safety rules: no write tool unless writes are offered, passive mode, the layered
 //! rate limits, untrusted device text and the policy's reach.
 
 use std::time::Duration;
@@ -33,7 +33,8 @@ fn busiest_second(times: &[Instant]) -> usize {
         .unwrap_or(0)
 }
 
-/// No configuration lists a write tool, and every listed tool says it is
+/// No configuration that doesn't offer writes lists a write tool (they
+/// are tested in `tests/writes.rs`), and every listed tool says it is
 /// read-only.
 #[tokio::test(start_paused = true)]
 async fn no_configuration_lists_a_write_tool() {

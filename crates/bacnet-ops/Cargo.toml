@@ -29,6 +29,7 @@ tracing.workspace = true
 bacnet-objects.workspace = true
 bacnet-server.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+tempfile = "3"
 
 [features]
 # The BACnet/SC transport, so the target grammar can tell an SC link from
