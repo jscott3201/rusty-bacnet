@@ -3,7 +3,8 @@
 # rusty_bacnet wheel installed:
 #   scripts/release/cli_smoke.sh [--no-capture] [--expect-version V] <bacnet-binary> <python>
 #
-# - --version and --help run, and with --expect-version, --version names V;
+# - --version, --help and mcp --help run (every release CLI has the MCP
+#   server, #2068), and with --expect-version, --version names V;
 # - plain `bacnet` without a terminal prints the usage and exits 2, and says
 #   why the terminal UI didn't open, which shows the build has one (#974);
 # - the README quickstart on loopback: a Python server with one analog input,
@@ -45,6 +46,7 @@ if [ -n "$expect_version" ] && [ "$version" != "bacnet $expect_version" ]; then
   exit 1
 fi
 bacnet --help >/dev/null
+bacnet mcp --help >/dev/null
 status=0
 plain=$(bacnet </dev/null 2>&1 >/dev/null) || status=$?
 if [ "$status" != 2 ] || ! grep -q 'must both be a terminal' <<<"$plain"; then

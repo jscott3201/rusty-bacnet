@@ -32,15 +32,16 @@ import sys
 from pathlib import Path
 
 # Each release target with the CLI's features there, on top of its default
-# ones (the terminal UI, #974): packet capture (pcap) and MS/TP (serial, #969)
-# only on Linux, as in scripts/release/build_linux.sh. The Python extension has
+# ones (the terminal UI, #974): the MCP server (mcp, #2068) everywhere, and
+# packet capture (pcap) and MS/TP (serial, #969) only on Linux, as in
+# scripts/release/build_linux.sh. The Python extension has
 # the same features everywhere.
 TARGETS = {
-    "x86_64-unknown-linux-gnu": "sc-tls,pcap,serial",
-    "aarch64-unknown-linux-gnu": "sc-tls,pcap,serial",
-    "x86_64-apple-darwin": "sc-tls",
-    "aarch64-apple-darwin": "sc-tls",
-    "x86_64-pc-windows-msvc": "sc-tls",
+    "x86_64-unknown-linux-gnu": "sc-tls,pcap,serial,mcp",
+    "aarch64-unknown-linux-gnu": "sc-tls,pcap,serial,mcp",
+    "x86_64-apple-darwin": "sc-tls,mcp",
+    "aarch64-apple-darwin": "sc-tls,mcp",
+    "x86_64-pc-windows-msvc": "sc-tls,mcp",
 }
 LICENSE_FILE = re.compile(r"^(licen[cs]e|copying|copyright|notice|unlicense)([-._].*)?$", re.IGNORECASE)
 SOURCE_SUFFIXES = {".rs", ".py", ".toml", ".json", ".sh", ".c", ".h", ".yml", ".yaml", ".html"}
@@ -225,7 +226,8 @@ def render(version, own_license, crates, libpcap):
         f"Rusty BACnet {version} release binaries:",
         "- CLI: the bacnet command-line tool (bacnet-linux-amd64, bacnet-linux-arm64,",
         "  bacnet-macos-amd64, bacnet-macos-arm64, bacnet-windows-amd64.exe), built",
-        "  with the sc-tls feature, and on Linux also with the pcap feature;",
+        "  with the sc-tls and mcp features, and on Linux also with the pcap and",
+        "  serial features;",
         "- Python: the rusty_bacnet extension module in the wheels for Linux, macOS",
         "  and Windows.",
         "",
