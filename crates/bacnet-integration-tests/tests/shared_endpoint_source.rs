@@ -14,11 +14,11 @@ fn manifest_contract(source: &str) -> Result<(), String> {
 name = "shared-endpoint-guide"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.93"
+rust-version = "1.95"
 publish = false
 [workspace]
 [dependencies]
-bacnet-endpoint = "=0.14.0"
+bacnet-endpoint = "=0.15.0"
 tokio = { version = "1", features = ["io-std", "io-util", "macros", "rt-multi-thread"] }
 "#,
     )
@@ -42,34 +42,34 @@ fn canonical_manifest_is_complete_and_release_pinned() {
     manifest_contract(MANIFEST).unwrap();
     assert!(
         include_str!("../../../website/src/lib/site.mjs")
-            .contains("export const release = '0.14.0';")
+            .contains("export const release = '0.15.0';")
     );
     assert!(GUIDE.contains("These files target **v{release}**"));
-    assert!(GUIDE.contains("minimum Rust version is **1.93**"));
+    assert!(GUIDE.contains("minimum Rust version is **1.95**"));
     assert!(GUIDE.contains("Rust 1.99.0 and a development test harness"));
 }
 
 #[test]
 fn dependency_versions_features_and_overrides_are_checked_semantically() {
     for invalid in [
-        MANIFEST.replace("=0.14.0", "0.14"),
-        MANIFEST.replace("=0.14.0", "=0.15.0"),
-        MANIFEST.replace("bacnet-endpoint = \"=0.14.0\"\n", ""),
+        MANIFEST.replace("=0.15.0", "0.15"),
+        MANIFEST.replace("=0.15.0", "=0.16.0"),
+        MANIFEST.replace("bacnet-endpoint = \"=0.15.0\"\n", ""),
         MANIFEST.replace(
-            "\"=0.14.0\"",
-            "{ version = \"=0.14.0\", path = \"../local\" }",
+            "\"=0.15.0\"",
+            "{ version = \"=0.15.0\", path = \"../local\" }",
         ),
         MANIFEST.replace(
-            "\"=0.14.0\"",
+            "\"=0.15.0\"",
             "{ git = \"https://example.invalid/endpoint\" }",
         ),
         MANIFEST.replace(
-            "\"=0.14.0\"",
-            "{ version = \"=0.14.0\", default-features = false }",
+            "\"=0.15.0\"",
+            "{ version = \"=0.15.0\", default-features = false }",
         ),
         MANIFEST.replace(
-            "\"=0.14.0\"",
-            "{ version = \"=0.14.0\", features = [\"sc-tls\"] }",
+            "\"=0.15.0\"",
+            "{ version = \"=0.15.0\", features = [\"sc-tls\"] }",
         ),
         MANIFEST.replace(
             "version = \"1\"",

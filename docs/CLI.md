@@ -564,7 +564,7 @@ SubscribeCOVProperty for anything else. Removing a row, and quitting, cancel
 its subscription on the device; the status bar's `COV` counter is how many
 subscriptions the session holds. A renewal that fails turns the row to
 polling and it subscribes again later, waiting longer each time it fails.
-A device that refuses COV, or a routed one, is polled instead: one
+Routed rows subscribe too (#1790). A device that refuses COV is polled instead: one
 ReadPropertyMultiple per device for up to 16 rows (asked again a row at a
 time when the answer would be too large), a point at most every
 `--poll-interval` seconds (default 10) counted from the end of its last

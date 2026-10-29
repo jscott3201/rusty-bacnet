@@ -19,7 +19,7 @@ const pages = [
   {
     title: 'Route between networks',
     path: 'integrate/router/',
-    hasDev: true,
+    hasDev: false,
     files: [
       ['Cargo.toml', 'rust/bip-router/Cargo.toml', 'examples/rust/bip-router/Cargo.toml', '[package]', 'toml'],
       ['main.rs', 'rust/bip-router/src/main.rs', 'examples/rust/bip-router/src/main.rs', 'async fn main()', 'rust'],

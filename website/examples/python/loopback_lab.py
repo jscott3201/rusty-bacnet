@@ -1,6 +1,6 @@
 """A bounded BACnet/IP learning lab on this machine only.
 
-Requires rusty-bacnet==0.14.0 and Python >=3.11. No physical device is needed.
+Requires rusty-bacnet==0.15.0 and Python >=3.11. No physical device is needed.
 Default: create an example server, read its analog input, verify it, and stop.
 --serve: keep that server available for directed CLI reads for a limited time.
 The server also holds a commandable analog value (av:1) for CLI write samples.
@@ -15,7 +15,7 @@ import os
 import sys
 
 LOOPBACK = "127.0.0.1"
-EXPECTED_VERSION = "0.14.0"
+EXPECTED_VERSION = "0.15.0"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

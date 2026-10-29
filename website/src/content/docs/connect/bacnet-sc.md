@@ -5,7 +5,7 @@ description: "Treat certificate trust, local identities, and build features as e
 
 BACnet/SC setup combines a WebSocket/TLS connection with BACnet-specific identities and hub behavior. A successful TCP or TLS connection alone does not establish a complete BACnet/SC deployment.
 
-This guide covers CLI, Python and Rust setup, trust roles, durable device identity and failure stages. The [upgrade guide](/rusty-bacnet/project/upgrading/v0-14/#bacnetsc-security-serverpolicy-and-principals) lists the release changes.
+This guide covers CLI, Python and Rust setup, trust roles, durable device identity and failure stages. The [upgrade guide](/rusty-bacnet/project/upgrading/v0-15/#wire-behavior) lists the release's changes to BACnet/SC liveness and timeouts.
 
 ## Before connecting
 
@@ -47,7 +47,7 @@ bacnet --sc \
 
 Replace every identity and path with an approved value for your network. The final VMAC is the **remote** target; `--sc-vmac` is the **local** node identity. Do not reuse the example VMAC or UUID throughout a deployment.
 
-The read targets the named peer without discovery. Check the [CLI transport reference](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/CLI.md#transport-variants) for parser and startup failures.
+The read targets the named peer without discovery. Check the [CLI transport reference](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/docs/CLI.md#transport-variants) for parser and startup failures.
 
 ### Trust the hub's issuer, not the system roots
 
@@ -65,9 +65,18 @@ A hub always requires `ca_cert` and verifies each node's certificate; there is n
 
 Python `BACnetClient` and `BACnetServer` with `transport="sc"` require nonempty `sc_ca_cert`, `sc_client_cert`, `sc_client_key` and keyword-only `sc_device_uuid`. Load the latter as 16 bytes from caller-owned durable storage. Missing or invalid identity/credential presence fails construction; file loading and TLS configuration happen at async startup. A trusted hub's verification policy remains a separate fact.
 
-The [Python credential example](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/python-api.md#required-operational-credentials) and [UUID migration](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/python-api.md#sc-device-uuid-migration) are the signature authority. Local TLS configuration errors can be repaired at the same paths and retried within the documented boundary; this does not promise rollback after every later peer/dial failure.
+The [Python credential example](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/docs/python-api.md#required-operational-credentials) and [UUID migration](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/docs/python-api.md#sc-device-uuid-migration) are the signature authority. Local TLS configuration errors can be repaired at the same paths and retried within the documented boundary; this does not promise rollback after every later peer/dial failure.
 
 Rust uses `ScNodeTlsConfig` and the transport's configured device identity. Raw `ScTransport::new(ws, vmac)` is initially unconfigured; set a valid UUID before start. Because the caller can dial `ws` first, transport validation cannot undo that earlier connection. A shared endpoint uses `ScEndpointBuilder` with a caller-dialed TLS WebSocket; see [shared endpoints](/rusty-bacnet/integrate/shared-endpoints/).
+
+## Know how idle links stay up
+
+A node sends a heartbeat once a heartbeat interval passes with nothing received, keeps a hub link that answers, and drops the link when the heartbeat stays unanswered one timeout after the last frame it received. Direct connections take part as well: an accepted connection answers Heartbeat-Request, and a dialed one sends a heartbeat after an interval of silence and closes the link when that goes unanswered.
+
+Two bounds on the accepting side are local settings:
+
+- **Direct listener idle bound.** A Rust `DirectListener` keeps an idle accepted link for 360 seconds, which covers every heartbeat timeout up to 300 seconds with a margin. For an initiator set above 300 seconds, raise it with `DirectAcceptConfig::with_idle_timeout`. `DirectListener::start` refuses an idle bound of zero or over one day, and a connect timeout of zero or over 300 seconds.
+- **Hub liveness bound.** A hub probes a silent connector, and retires it only after 360 seconds with nothing received from it since the probe, so a dead connector stays listed for about eight minutes after its last frame. Set the bound with `ScHubProbePolicy::with_liveness_bound` in Rust or `probe_liveness_bound_ms` on Python's `ScHub`, up to one day. A bound under 300 seconds can retire a working connector whose heartbeat timeout is longer.
 
 ## Diagnose the stage that failed
 
@@ -95,10 +104,10 @@ These instructions explain configuration boundaries. They are not a certificate-
 
 ## Sources and release scope
 
-These instructions target **v0.14.0**. Source review is not a claim of hardware qualification.
+These instructions target **v0.15.0**. Source review is not a claim of hardware qualification.
 
-[CLI SC transport](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/CLI.md#transport-variants) · [CLI flags](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/crates/bacnet-cli/src/args.rs) · [Python credentials](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/python-api.md#required-operational-credentials) · [SC example](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/examples/python/sc_secure_connect.py).
+[CLI SC transport](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/docs/CLI.md#transport-variants) · [CLI flags](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/crates/bacnet-cli/src/args.rs) · [Python credentials](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/docs/python-api.md#required-operational-credentials) · [SC example](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/examples/python/sc_secure_connect.py).
 
 ## Next steps
 
-[SC Rust contracts](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/rust-api.md#bacnetsc-client-transport) · [Shared endpoints](/rusty-bacnet/integrate/shared-endpoints/) · [Transport evidence](/rusty-bacnet/reference/transports/) · [Network Number controls](/rusty-bacnet/integrate/network-ports/)
+[SC Rust contracts](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/docs/rust-api.md#bacnetsc-client-transport) · [Shared endpoints](/rusty-bacnet/integrate/shared-endpoints/) · [Transport evidence](/rusty-bacnet/reference/transports/) · [Network Number controls](/rusty-bacnet/integrate/network-ports/)

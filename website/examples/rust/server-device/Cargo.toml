@@ -2,14 +2,14 @@
 name = "server-device"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.93"
+rust-version = "1.95"
 publish = false
 
 [workspace]
 
 [dependencies]
-bacnet-objects = "=0.14.0"
-bacnet-server = "=0.14.0"
-bacnet-transport = "=0.14.0"
-bacnet-types = "=0.14.0"
+bacnet-objects = "=0.15.0"
+bacnet-server = "=0.15.0"
+bacnet-transport = "=0.15.0"
+bacnet-types = "=0.15.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "io-util", "time"] }

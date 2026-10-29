@@ -14,14 +14,14 @@ fn manifest_contract(source: &str) -> Result<(), String> {
 name = "server-device"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.93"
+rust-version = "1.95"
 publish = false
 [workspace]
 [dependencies]
-bacnet-objects = "=0.14.0"
-bacnet-server = "=0.14.0"
-bacnet-transport = "=0.14.0"
-bacnet-types = "=0.14.0"
+bacnet-objects = "=0.15.0"
+bacnet-server = "=0.15.0"
+bacnet-transport = "=0.15.0"
+bacnet-types = "=0.15.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "io-util", "time"] }
 "#,
     )
@@ -37,15 +37,15 @@ fn manifest_is_complete_and_release_pinned() {
     manifest_contract(MANIFEST).unwrap();
     assert!(
         include_str!("../../../website/src/lib/site.mjs")
-            .contains("export const release = '0.14.0';")
+            .contains("export const release = '0.15.0';")
     );
     for invalid in [
-        MANIFEST.replace("bacnet-server = \"=0.14.0\"", "bacnet-server = \"0.14\""),
-        MANIFEST.replace("bacnet-types = \"=0.14.0\"\n", ""),
+        MANIFEST.replace("bacnet-server = \"=0.15.0\"", "bacnet-server = \"0.15\""),
+        MANIFEST.replace("bacnet-types = \"=0.15.0\"\n", ""),
         MANIFEST.replace(", \"time\"", ""),
         MANIFEST.replace("[workspace]\n", ""),
-        MANIFEST.replace("rust-version = \"1.93\"", "rust-version = \"1.95\""),
-        format!("{MANIFEST}bacnet-client = \"=0.14.0\"\n"),
+        MANIFEST.replace("rust-version = \"1.95\"", "rust-version = \"1.93\""),
+        format!("{MANIFEST}bacnet-client = \"=0.15.0\"\n"),
     ] {
         assert!(
             manifest_contract(&invalid).is_err(),
@@ -54,7 +54,7 @@ fn manifest_is_complete_and_release_pinned() {
     }
     assert!(
         GUIDE
-            .contains("These files target **v{release}**, whose minimum Rust version is **1.93**.")
+            .contains("These files target **v{release}**, whose minimum Rust version is **1.95**.")
     );
 }
 

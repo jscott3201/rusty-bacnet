@@ -53,6 +53,6 @@ Documentation, GitHub Pages, public issues, and screenshots must not contain rea
 
 ## Sources and release scope
 
-These instructions target **v0.14.0**. Source review is not a claim of hardware qualification.
+These instructions target **v0.15.0**. Source review is not a claim of hardware qualification.
 
-[CLI definitions](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/crates/bacnet-cli/src/args.rs) · [CLI transport construction](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/crates/bacnet-cli/src/transport.rs) · [Python constructor](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/python-api.md).
+[CLI definitions](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/crates/bacnet-cli/src/args.rs) · [CLI transport construction](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/crates/bacnet-cli/src/transport.rs) · [Python constructor](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/docs/python-api.md).

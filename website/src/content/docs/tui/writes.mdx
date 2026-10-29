@@ -18,7 +18,7 @@ The arm dialog names the site and the network, and takes an optional reason (a t
 
 ![The dialog that arms a write session, with a reason and a length in minutes.](../../../assets/tui/writes-arm-dialog.webp)
 
-While the session is armed, the status bar turns red and counts down, `WRITE 14:58`. At zero the session disarms itself; `W` disarms it early. Only one TUI at a time may arm a profile: a second `bacnet tui` on the same profile is refused and told which process holds it.
+While the session is armed, the status bar turns red and counts down, `WRITE 14:58`. At zero the session disarms itself; `W` disarms it early. A profile's ledger has one writer at a time, and `bacnet mcp serve` shares the lock with the TUI: a second `bacnet tui` on the same profile can't arm, and an MCP write to that profile is refused while the TUI holds it. Each is told which process holds the lock, such as `bacnet tui (pid 4242)`.
 
 ## Write a property
 
@@ -99,9 +99,7 @@ Single and double quotes both work, and a backslash makes the quote, whitespace 
 
 ![A WritePropertyMultiple batch preview of two writes, confirmed at T2.](../../../assets/tui/writes-writem-preview.webp)
 
-## Development: DCC and reinitialize
-
-The commands in this section are on the development branch and are **not part of v{release}**.
+## DCC and reinitialize
 
 Two command bar commands reach a whole device rather than one property:
 
@@ -144,12 +142,12 @@ Entries an earlier run kept, or left behind in a crash, are listed when the next
 
 ## The audit log
 
-`audit.jsonl` in the profile's workspace gets one JSON object a line, flushed to disk as it goes: the time, the OS user and host, the profile, transport and local address, the session level, the event, and for a write its target, service, priority, pre-image and outcome. A `sending` record is written before each request. Arming, disarming, refusals, declines, reverts and kept entries are logged too. Reads are not. Fields named like passwords are written as `[redacted]`. This is the TUI's own record, separate from BACnet audit reporting.
+`audit.jsonl` in the profile's workspace gets one JSON object a line, flushed to disk as it goes: the time, the OS user and host, the profile, transport and local address, the session level, the event, and for a write its target, service, priority, pre-image and outcome. A `sending` record is written before each request. Arming, disarming, refusals, declines, reverts and kept entries are logged too. Reads are not. Each record also names its `front_end`, `tui` or `mcp`, and for an MCP write the `principal` that made it, since `bacnet mcp serve` writes to the same log. Any field whose name contains `password`, `token`, `authorization`, `secret` or `key` is written as `[redacted]`, however deeply it is nested. This is the TUI's own record, separate from BACnet audit reporting.
 
 ## Sources and release scope
 
-Except for the explicitly marked development section on DCC and reinitialize, these pages describe **v{release}**. Source review is not a claim of hardware qualification. Command priorities are described in ASHRAE 135 Clause 19.2, and the device management services in Clause 16.
+These pages describe **v{release}**. Source review is not a claim of hardware qualification. Command priorities are described in ASHRAE 135 Clause 19.2, and the device management services in Clause 16.
 
-<a href={`${repository}/blob/v${release}/docs/CLI.md#write-sessions`}>Write sessions reference</a> · <a href={`${repository}/blob/v${release}/crates/bacnet-cli/src/tui/safety/plan.rs`}>Write plan and tiers</a> · <a href={`${repository}/blob/v${release}/crates/bacnet-cli/src/tui/safety/ledger.rs`}>Ledger</a>.
+<a href={`${repository}/blob/v${release}/docs/CLI.md#write-sessions`}>Write sessions reference</a> · <a href={`${repository}/blob/v${release}/crates/bacnet-ops/src/safety/plan.rs`}>Write plan and tiers</a> · <a href={`${repository}/blob/v${release}/crates/bacnet-ops/src/safety/ledger.rs`}>Ledger</a>.
 
 <NextStep href="/rusty-bacnet/tui/watch/" label="Watch points" description="Follow values by COV or polling, with sparklines and renewals." />

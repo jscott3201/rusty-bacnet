@@ -1,6 +1,6 @@
 [
   {
-    "label": "Start with v0.14",
+    "label": "Start with v0.15",
     "items": [
       {
         "label": "Choose your path",
@@ -265,6 +265,10 @@
       {
         "label": "Upgrade notes",
         "slug": "project/upgrading"
+      },
+      {
+        "label": "Upgrade to v0.15.0",
+        "slug": "project/upgrading/v0-15"
       },
       {
         "label": "Upgrade to v0.14.0",

@@ -3,11 +3,11 @@ title: "Use rusty-bacnet with AI agents"
 description: "Let an AI agent host such as Claude Code discover and read a BACnet site through an MCP server, and write only with a person's approval."
 ---
 
-`bacnet mcp serve` is a [Model Context Protocol](https://modelcontextprotocol.io) server: an agent host such as Claude Code or Codex starts it as a child process and calls its tools to discover devices, describe them, find and read their objects, read trend logs, event and audit logs and alarms, map the networks, decode frames, and follow points as they change. It is experimental in 0.15, part of the CLI's `mcp` feature, and **read-only by default**: a tool that writes is offered only when the profile opts in, and every write then needs a person's approval: in the host's confirmation form for a low-priority (T1) change, or ahead of time in a plan grant the person authorizes with `bacnet mcp authorize`, which covers the others it names (see [Writes](#writes)).
+`bacnet mcp serve` is a [Model Context Protocol](https://modelcontextprotocol.io) server: an agent host such as Claude Code or Codex starts it as a child process and calls its tools to discover devices, describe them, find and read their objects, read trend logs, event and audit logs and alarms, map the networks, decode frames, and follow points as they change. It is **experimental**, ships in the prebuilt `bacnet` downloads from 0.15.0, and is **read-only by default**: a tool that writes is offered only when the profile opts in, and every write then needs a person's approval: in the host's confirmation form for a low-priority (T1) change, or ahead of time in a plan grant the person authorizes with `bacnet mcp authorize`, which covers the others it names (see [Writes](#writes)).
 
-## Build it
+## Install it
 
-From 0.15 the prebuilt `bacnet` downloads on the [installation page](/rusty-bacnet/start/installation/) include `bacnet mcp serve`. A source build enables it with the `mcp` feature:
+Every prebuilt `bacnet` download on the [installation page](/rusty-bacnet/start/installation/) includes `bacnet mcp serve`. A source build enables it with the CLI's `mcp` feature:
 
 ```sh
 cargo install --path crates/bacnet-cli --locked --features mcp
@@ -117,4 +117,4 @@ An agent can watch up to 32 points at once, and the server 256 in all. The subsc
 - **Reads are logged as summaries** on stderr, always: a line per call, and the counts per device when the server stops.
 - **Site data reaches the agent's host.** Don't share an agent session that reads a sensitive site with tools that can send data elsewhere.
 
-The design, with the approval channels of later releases, is in [`docs/design/mcp.md`](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/design/mcp.md).
+The design, with the approval channels of later releases, is in [`docs/design/mcp.md`](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/docs/design/mcp.md).

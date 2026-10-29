@@ -1,12 +1,9 @@
 //! The website's PICS task page, integrate/pics (#1496). Everything below this
-//! header is the Rust block in the page's "On `dev` after the release"
-//! section, byte for byte: website/tests/python/test_site_samples.py checks
-//! it, and CI's clippy --all-targets compiles it. The page's release program
-//! still sets the protocol and product fields v0.14.0 has; at the next
-//! release this program replaces it (#2125, #2137).
+//! header is the Rust block in the page's "Generate one in Rust" section,
+//! byte for byte: website/tests/python/test_site_samples.py checks it, and
+//! CI's clippy --all-targets compiles it.
 #![allow(clippy::print_stdout)] // the page's program prints the PICS
 
-// On dev: the PICS takes the product and protocol details from the Device.
 use bacnet_objects::DeviceIdentity;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::binary::BinaryOutputObject;

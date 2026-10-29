@@ -92,10 +92,10 @@ The help overlay (`?`) lists these keys, then the screen's own and the command b
 
 | Key | Action |
 |---|---|
-| `Tab`, `Shift-Tab` | Monitor: next or previous view (stations, token ring, findings, errors; in development, also scan) |
+| `Tab`, `Shift-Tab` | Monitor: next or previous view (stations, token ring, findings, errors, scan) |
 | `J` | Monitor: start the safe join |
-| `Up` | Development: safe join, propose the previous free MAC; on the Scan tab, select the previous baud row for detailed errors |
-| `Down` | Development: safe join, propose the next free MAC; on the Scan tab, select the next baud row for detailed errors |
+| `Up` | Safe join: propose the previous free MAC; on the Scan view, select the previous baud row for its error breakdown |
+| `Down` | Safe join: propose the next free MAC; on the Scan view, select the next baud row for its error breakdown |
 | `+`, `=` | Safe join: propose the next free MAC |
 | `-` | Safe join: propose the previous free MAC |
 | `Enter` | Safe join: review the proposal in the join confirmation |
@@ -239,26 +239,20 @@ The arm dialog, the write and relinquish forms, the previews, the ledger and the
 
 Single or double quotes group words, and a backslash makes a following quote, whitespace character or backslash plain text. A quote left open shows an error instead of running the line. In `writem`, a quoted or escaped value is a character string; a quoted number, such as `'72.5'`, is a string too, so a numeric property refuses it. `find` takes the rest of the line as typed, and unwraps a name that is one quoted word, such as `find "Zone  Temp"`.
 
-### Development scan commands
+### MS/TP baud scan
 
-These commands are on the development branch, not v{release}. See the
-[baud-scan flow](/rusty-bacnet/tui/mstp/#development-receive-only-baud-scan).
+These run from a live monitor. See [Scan: find the baud rate](/rusty-bacnet/tui/mstp/#scan-find-the-baud-rate).
 
 | Command | What it does |
 |---|---|
 | `mstp scan SECS` | Measure six baud rates from a live receive-only monitor; 1..3600 whole seconds per rate |
-| `mstp scan cancel` | Retain partial evidence, await release and restore the original configured rate |
+| `mstp scan cancel` | Stop the scan, keep what it measured so far, and go back to the monitor's original baud rate |
 
-In the development Scan tab, Up/Down or `+`/`-` selects a row's detailed error
-counts. A suggestion never applies a rate, joins or writes a profile.
+On the Scan view, Up and Down or `+` and `-` select the row whose error counts are broken down. A suggestion never applies a rate, joins the trunk or changes a profile.
 
-### Development device management commands
+### Device management commands
 
-These commands are on the development branch, not v{release}. See
-[DCC and reinitialize](/rusty-bacnet/tui/writes/#development-dcc-and-reinitialize).
-Both go to the device open in Browse or selected on the Devices screen, ask
-for a masked password, and confirm at T3. They need an armed session on a
-profile with `dangerous = true`.
+See [DCC and reinitialize](/rusty-bacnet/tui/writes/#dcc-and-reinitialize). Both go to the device open in Browse or selected on the Devices screen, ask for a masked password, and confirm at T3. They need an armed session on a profile with `dangerous = true`.
 
 | Command | What it does |
 |---|---|

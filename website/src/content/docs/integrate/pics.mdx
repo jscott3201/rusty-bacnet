@@ -19,158 +19,11 @@ The draft describes the configuration you built and nothing more. It is not a te
 
 ## Generate one in Rust
 
-This program builds a server with a Device and two objects on 127.0.0.1, drafts its PICS, stops the server and prints the PICS as Markdown. It uses the crates from the [server guide's Cargo.toml](/rusty-bacnet/examples/rust/server-device/Cargo.toml); put it in `src/main.rs` and run `cargo run`. CI compiled it against v{release}; the program in [On `dev` after the release](#product-details-from-the-device) is the one CI compiles now.
+This program builds a server with a Device and two objects on 127.0.0.1, drafts its PICS, stops the server and prints the PICS as Markdown. It uses the crates from the [server guide's Cargo.toml](/rusty-bacnet/examples/rust/server-device/Cargo.toml); put it in `src/main.rs` and run `cargo run`. CI compiles this exact program against v{release}.
+
+The product details go on the Device object, and the PICS reads them there along with the protocol version and revision, so `PicsConfig` holds only what the server can't report about itself.
 
 ```rust
-use bacnet_objects::DeviceIdentity;
-use bacnet_objects::analog::AnalogInputObject;
-use bacnet_objects::binary::BinaryOutputObject;
-use bacnet_objects::database::ObjectDatabase;
-use bacnet_objects::device::{DeviceConfig, DeviceObject};
-use bacnet_server::pics::{DataLinkSupport, DeviceProfile, PicsConfig};
-use bacnet_server::server::BACnetServer;
-use bacnet_types::enums::{EngineeringUnits, PropertyIdentifier};
-use bacnet_types::primitives::PropertyValue;
-use std::net::Ipv4Addr;
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Your product's details; the Device object and the PICS both carry them.
-    let (vendor, model, version) = ("Example Controls", "AHU-100", "2.1.0");
-    // Vendor 0 is a placeholder: use the identifier ASHRAE assigned you.
-    let identity = DeviceIdentity::new(1001, 0)?.with_name("Example air handler");
-    let mut database = ObjectDatabase::new();
-    database.add(Box::new(DeviceObject::new(DeviceConfig {
-        identity: identity.clone(),
-        vendor_name: vendor.into(),
-        model_name: model.into(),
-        firmware_revision: version.into(),
-        application_software_version: version.into(),
-        ..DeviceConfig::default()
-    })?))?;
-    let celsius = EngineeringUnits::DEGREES_CELSIUS;
-    database.add(Box::new(AnalogInputObject::new(1, "Supply air", celsius)?))?;
-    database.add(Box::new(BinaryOutputObject::new(1, "Supply fan")?))?;
-
-    let device = identity.device_oid();
-    let mut server = BACnetServer::bip_builder()
-        .device(identity)
-        .interface(Ipv4Addr::LOCALHOST)
-        .port(0)
-        .broadcast_address(Ipv4Addr::LOCALHOST)
-        .database(database)
-        .build()
-        .await?;
-
-    // The PICS states the protocol version and revision the Device reports.
-    let mut protocol = [0u16; 2];
-    let properties = [
-        PropertyIdentifier::PROTOCOL_VERSION,
-        PropertyIdentifier::PROTOCOL_REVISION,
-    ];
-    for (value, property) in protocol.iter_mut().zip(properties) {
-        let PropertyValue::Unsigned(raw) = server.read_local(&device, property, None).await? else {
-            return Err(format!("the Device's {property} is not an unsigned value").into());
-        };
-        *value = u16::try_from(raw)?;
-    }
-
-    // What the server can't report about itself: the product, the profile
-    // you claim, and the data links and network roles you ship.
-    let pics_config = PicsConfig {
-        vendor_name: vendor.into(),
-        model_name: model.into(),
-        firmware_revision: version.into(),
-        application_software_version: version.into(),
-        protocol_version: protocol[0],
-        protocol_revision: protocol[1],
-        // Claim an Annex L profile only if the product meets it.
-        device_profile: DeviceProfile::Custom("None claimed".into()),
-        data_link_layers: vec![DataLinkSupport::BipV4],
-        ..PicsConfig::default()
-    };
-    let pics = server.generate_pics(&pics_config).await;
-    server.stop().await?;
-    println!("{}", pics.generate_markdown());
-    Ok(())
-}
-```
-
-Generate the PICS from the configuration you ship: the same objects, the same identity and the same transport choices. The program binds a port the operating system picks and stops the server once the PICS is drafted; `generate_pics` also works after `stop()`.
-
-## What the generator fills in
-
-| Section | Where it comes from |
-|---|---|
-| Vendor ID | The server's `DeviceIdentity` |
-| Supported object types | One section per object type in the database; a type you don't add isn't listed |
-| Createable and Deleteable | Whether CreateObject and DeleteObject reach the type, from the type's own declaration |
-| Whole value set only by CreateObject | Properties a CreateObject initial value may set that WriteProperty can't change later |
-| Property rows | Each instance's property metadata, combined across the instances of the type; the Device's rows come from the server's view of it |
-| Supported services, Executor | The services the full server runs; TimeSynchronization and UTCTimeSynchronization only when the server keeps a clock |
-| Supported services, Initiator | A fixed list of the requests the server can send in some configuration |
-
-The generator reads the database at the moment you call it. Objects your application adds later, or creates through CreateObject, appear only in a PICS generated after them.
-
-## What you fill in
-
-Everything in `PicsConfig` is your declaration; the generator prints it as given and checks none of it.
-
-| `PicsConfig` field | Default | What to set |
-|---|---|---|
-| `vendor_name`, `model_name` | Empty | Your company and product, as your Device object reports them |
-| `firmware_revision`, `application_software_version` | Empty | Your product's versions, matching the Device object |
-| `protocol_version`, `protocol_revision` | Fixed values that may differ from your Device | Read them from the served Device's Protocol_Version and Protocol_Revision, as the program does, so the PICS states what the device reports |
-| `device_profile` | B-ASC | The Annex L profile the product meets, or `DeviceProfile::Custom` to claim none, as the program does; the generator doesn't check it against your services |
-| `data_link_layers` | BACnet/IP | Each data link the shipped product runs; the generator doesn't detect them |
-| `network_layer` | Router, BBMD and foreign device all off | The roles the product fills |
-| `character_sets` | UTF-8 | The character sets the product handles |
-| `special_functionality` | None | Free text, printed as its own section |
-
-Annex A asks for more than the generator prints. Add these from your product's design:
-
-- the date, product name and product description;
-- anything else your product claims beyond what the generator lists, backed by your own testing;
-- segmentation support and window sizes;
-- the details of each data link, such as MS/TP options or BACnet/SC connection limits;
-- device address binding, the routing configurations behind a router claim, and gateway options;
-- proprietary properties, conditionally writable properties and any property range restrictions.
-
-## Read the output
-
-The Markdown starts with the vendor information and the device profile, then has one section per object type, then the services, data links, network layer options and character sets.
-
-- **Access flags.** `R` is readable, `W` writable and `O` optional. A row combines every instance of its type: a flag means at least one instance has that access, and `O` appears only when every instance that has the property marks it optional. A row such as State_Text with a "resized through" note can't be written directly, but writes of the property it names change it.
-- **Initiator column.** A Yes means the server can build that request, not that your configuration sends it: COV and event notifications need a subscription or a recipient.
-- **Executor column.** A Yes means the full server runs the service when a request arrives, subject to your server policy; see [restrict who can change a device](/rusty-bacnet/integrate/security/).
-- **Client requests aren't listed.** A `BACnetClient` in the same application initiates its own services, which this PICS doesn't record; the [capability tables](/rusty-bacnet/project/conformance/) list them.
-
-The [sample PICS](/rusty-bacnet/project/sample-pics/) shows every section for a database that holds one object of each constructible type.
-
-## On `dev` after the release
-
-These changes are merged on `dev` and will ship in the next release.
-
-### The initiator list
-
-On the `dev` branch the initiator list is public, as `PicsGenerator::INITIATED_SERVICES`, and adds the confirmed and unconfirmed audit notifications, ReadProperty, WriteProperty and Who-Is. Those go out only when configured: audit notifications need audit reporting, and the other three need a Command action or a Channel member that targets another device. The [sample PICS](/rusty-bacnet/project/sample-pics/) is generated on `dev` and shows them.
-
-### Protocol version and revision from the Device
-
-`PicsConfig` has no `protocol_version` or `protocol_revision` field on `dev` (#2125). Both generators read Protocol_Version and Protocol_Revision from the Device object the PICS describes, so the two can't disagree. Only a database without a Device, or a Device whose value doesn't fit, gets the stack's own values instead: `bacnet_types::PROTOCOL_VERSION` and `bacnet_types::PROTOCOL_REVISION`, 1 and 22 for ASHRAE 135-2020, which the bundled Device object also reports. In v{release} the default revision in `PicsConfig` is 24 while the Device reports 22, which is why the program above reads both values from the Device first.
-
-### Product details from the Device
-
-`PicsConfig` has no `vendor_name`, `model_name`, `firmware_revision` or `application_software_version` field on `dev` (#2137). Both generators read Vendor_Name, Model_Name, Firmware_Revision and Application_Software_Version from the same Device as the protocol fields, at the moment you call them, so a value your application changes on its Device appears in the next PICS. A database without a Device, or a value that isn't a character string, leaves the row empty. In v{release} the PICS prints the `PicsConfig` values instead, which default to empty, which is why the program above sets the details in both places.
-
-The Vendor ID comes from the same Device's Vendor_Identifier, read as the server would serve it. For `server.generate_pics` that is normally the server's `DeviceIdentity`, which the server serves as its Device's Vendor_Identifier; if the identity's Device isn't in the database, the selected Device's own value is used. The standalone `generate_pics` reads the selected Device's own value. Either way, the `ServerConfig` identity's Vendor ID is used only when the Device has no Vendor_Identifier, or one that doesn't fit 16 bits, so the vendor block always describes one Device.
-
-The PICS prints these values as plain text. Control characters and line or paragraph separators become spaces, and bidirectional and zero-width characters are dropped, as the CLI and terminal UI drop them. The Markdown also escapes `|` and the characters that start inline formatting. A Device string can't add rows or sections to the document, or hide or reorder its own text.
-
-On `dev` the program sets the details on the Device only and skips the protocol step. Remove all six fields from your `PicsConfig`; if the PICS needs different text, edit the generated document:
-
-```rust
-// On dev: the PICS takes the product and protocol details from the Device.
 use bacnet_objects::DeviceIdentity;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::binary::BinaryOutputObject;
@@ -223,6 +76,66 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+Generate the PICS from the configuration you ship: the same objects, the same identity and the same transport choices. The program binds a port the operating system picks and stops the server once the PICS is drafted; `generate_pics` also works after `stop()`. If the PICS needs different text from what the Device reports, edit the generated document.
+
+## What the generator fills in
+
+| Section | Where it comes from |
+|---|---|
+| Vendor name, model name, firmware revision, application software version | The Device object's Vendor_Name, Model_Name, Firmware_Revision and Application_Software_Version |
+| Vendor ID | The Device object's Vendor_Identifier, as the server serves it |
+| Protocol version and revision | The Device object's Protocol_Version and Protocol_Revision |
+| Supported object types | One section per object type in the database; a type you don't add isn't listed |
+| Createable and Deleteable | Whether CreateObject and DeleteObject reach the type, from the type's own declaration |
+| Whole value set only by CreateObject | Properties a CreateObject initial value may set that WriteProperty can't change later |
+| Property rows | Each instance's property metadata, combined across the instances of the type; the Device's rows come from the server's view of it |
+| Supported services, Executor | The services the full server runs; TimeSynchronization and UTCTimeSynchronization only when the server keeps a clock |
+| Supported services, Initiator | `PicsGenerator::INITIATED_SERVICES`, a fixed list of the requests the server can send in some configuration |
+
+The generator reads the database at the moment you call it. Objects your application adds later, or creates through CreateObject, appear only in a PICS generated after them, and so does a Device value your application changes.
+
+### Details read from the Device
+
+Both generators read the product details and the protocol fields from the Device object the PICS describes, so the PICS and the Device can't disagree:
+
+- **Product details.** A database without a Device, or a value that isn't a character string, leaves the row empty.
+- **Protocol version and revision.** Only a database without a Device, or a Device whose value doesn't fit, gets the stack's own values instead: `bacnet_types::PROTOCOL_VERSION` and `bacnet_types::PROTOCOL_REVISION`, 1 and 22 for ASHRAE 135-2020, which the bundled Device object also reports.
+- **Vendor ID.** For `server.generate_pics` the Vendor_Identifier is normally the server's `DeviceIdentity`, which the server serves as its Device's Vendor_Identifier; if the identity's Device isn't in the database, the selected Device's own value is used. The standalone `generate_pics` reads the selected Device's own value. Either way, the `ServerConfig` identity's Vendor ID is used only when the Device has no Vendor_Identifier, or one that doesn't fit 16 bits, so the vendor block always describes one Device.
+
+The PICS prints these values as plain text. Control characters and line or paragraph separators become spaces, and bidirectional and zero-width characters are dropped, as the CLI and terminal UI drop them. The Markdown also escapes `|` and the characters that start inline formatting. A Device string can't add rows or sections to the document, or hide or reorder its own text.
+
+## What you fill in
+
+Everything in `PicsConfig` is your declaration; the generator prints it as given and checks none of it.
+
+| `PicsConfig` field | Default | What to set |
+|---|---|---|
+| `device_profile` | B-ASC | The Annex L profile the product meets, or `DeviceProfile::Custom` to claim none, as the program does; the generator doesn't check it against your services |
+| `data_link_layers` | BACnet/IP | Each data link the shipped product runs; the generator doesn't detect them |
+| `network_layer` | Router, BBMD and foreign device all off | The roles the product fills |
+| `character_sets` | UTF-8 | The character sets the product handles |
+| `special_functionality` | None | Free text, printed as its own section |
+
+Annex A asks for more than the generator prints. Add these from your product's design:
+
+- the date, product name and product description;
+- anything else your product claims beyond what the generator lists, backed by your own testing;
+- segmentation support and window sizes;
+- the details of each data link, such as MS/TP options or BACnet/SC connection limits;
+- device address binding, the routing configurations behind a router claim, and gateway options;
+- proprietary properties, conditionally writable properties and any property range restrictions.
+
+## Read the output
+
+The Markdown starts with the vendor information and the device profile, then has one section per object type, then the services, data links, network layer options and character sets.
+
+- **Access flags.** `R` is readable, `W` writable and `O` optional. A row combines every instance of its type: a flag means at least one instance has that access, and `O` appears only when every instance that has the property marks it optional. A row such as State_Text with a "resized through" note can't be written directly, but writes of the property it names change it.
+- **Initiator column.** A Yes means the server can build that request, not that your configuration sends it: COV and event notifications need a subscription or a recipient, audit notifications need audit reporting, and ReadProperty, WriteProperty and Who-Is need a Command action or a Channel member that targets another device.
+- **Executor column.** A Yes means the full server runs the service when a request arrives, subject to your server policy; see [restrict who can change a device](/rusty-bacnet/integrate/security/).
+- **Client requests aren't listed.** A `BACnetClient` in the same application initiates its own services, which this PICS doesn't record; the [capability tables](/rusty-bacnet/project/conformance/) list them.
+
+The [sample PICS](/rusty-bacnet/project/sample-pics/) shows every section for a database that holds one object of each constructible type.
 
 ## Next steps
 

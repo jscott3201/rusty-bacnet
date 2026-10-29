@@ -303,14 +303,7 @@ SAMPLES: dict[str, object] = {
         Run(DEVICE, (REFUSED, ok(r'"value": "0"'))),
     "guides/safe-writes.md::bacnet --allow-write write 192.168.1.100 av:1 pv 72.5 --priority 8":
         Run(DEVICE, (WRITTEN, WRITTEN)),
-    # The release program sets PicsConfig's protocol and product fields, which
-    # dev removed (#2125, #2137); the dev section's program is the Cargo
-    # example, and replaces it at the next release.
-    "integrate/pics.mdx::use bacnet_objects::DeviceIdentity;": Skip(
-        "E", "the v0.14.0 program; CI compiled it until #2125 and #2137 removed the PicsConfig fields it sets"
-    ),
-    "integrate/pics.mdx::// On dev: the PICS takes the product and protocol details from the Device.":
-        Example(PICS_RS),
+    "integrate/pics.mdx::use bacnet_objects::DeviceIdentity;": Example(PICS_RS),
     "integrate/router.mdx::bacnet whois-router": Parse(),
     'integrate/router.mdx::<Code code={routerManifest} lang="toml" title="Cargo.toml" />': ROUTER_A,
     'integrate/router.mdx::<Code code={routerSource} lang="rust" title="src/main.rs" />': ROUTER_A,
@@ -348,6 +341,7 @@ SAMPLES: dict[str, object] = {
     "project/performance.mdx::cargo bench -p bacnet-benchmarks --bench bip_latency":
         Skip("F", "benchmarks; run sequentially by hand"),
     "project/upgrading/v0-14.md::python -m pip install --upgrade rusty-bacnet==0.14.0": Skip("F", INSTALL),
+    "project/upgrading/v0-15.md::python -m pip install --upgrade rusty-bacnet==0.15.0": Skip("F", INSTALL),
     "start/embedded.md::cargo run -p bacnet-mstp-core --example node":
         Skip("C", "run in the audit; CI's all-targets clippy builds both examples"),
     "start/first-read.md::bacnet --version": Run("", (ok(r"^bacnet \d+\.\d+\.\d+"), ok("Usage: bacnet")), server="none"),

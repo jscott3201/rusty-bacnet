@@ -15,23 +15,22 @@ async function page() {
   return { title, description, body: await plainBody(body, file, []) };
 }
 
-test('MS/TP real-time page is release-scoped, with the baud scan in the dev section', async () => {
+test('MS/TP real-time page is release-scoped, with the baud scan in the monitor section', async () => {
   const { title, description, body } = await page();
   assert.ok(title && description);
   assert.ok(body.includes(`The page describes **v${release}**.`));
-  assert.ok(body.includes('(#on-dev-after-the-release)'));
+  assert.ok(!body.includes('on-dev-after-the-release'));
   assert.ok(body.includes('\n## Next steps\n'));
   const { released, onDev } = splitDevSection(body, 'connect/mstp-realtime');
-  assert.ok(onDev.includes(`${repo}/blob/dev/docs/CLI.md`));
-  for (const name of [':mstp scan', '#1873']) {
-    assert.ok(onDev.includes(name), name);
-    assert.ok(!released.includes(name), `${name} only in the dev section`);
-  }
+  assert.equal(onDev, '', 'no dev section');
+  const monitor = released.slice(released.indexOf('\n## Diagnose with the receive-only monitor\n'), released.indexOf('\n## Test without hardware\n'));
+  assert.ok(monitor.includes(':mstp scan SECS'), 'the baud scan is in the monitor section');
   for (const path of [
     'docs/mstp-qualification.md',
     'docs/rust-api.md#real-time-scheduling-and-cpu-affinity-linux',
     'docs/rust-api.md#mstp-serial-rs-485',
     'docs/CLI.md#mstp',
+    'docs/CLI.md#mstp-monitor-and-safe-join',
     'Benchmarks.md#44-mstp',
   ]) assert.ok(released.includes(`${repo}/blob/v${release}/${path}`), path);
   // No qualification claim: the open hardware issues stay named.

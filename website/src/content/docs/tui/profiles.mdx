@@ -78,9 +78,13 @@ bacnet tui --profile plant-a --passive
 Each profile has a `[safety]` table:
 
 - `writes = "session"`, the default, lets `W` arm a write session. `writes = "never"` makes `W` say why and arm nothing.
-- `dangerous = true` allows a write at priority 6 inside an armed session. It needs `writes = "session"`. On the development branch it also allows [`:dcc` and `:reinit`](/rusty-bacnet/tui/writes/#development-dcc-and-reinitialize).
+- `dangerous = true` allows a write at priority 6 inside an armed session. It needs `writes = "session"`. It also allows [`:dcc` and `:reinit`](/rusty-bacnet/tui/writes/#dcc-and-reinitialize).
 
 [Write safely](/rusty-bacnet/tui/writes/) explains arming, the confirmation tiers and the ledger.
+
+### The MCP table
+
+A profile may also hold an `[mcp]` table for `bacnet mcp serve`, the [MCP server for AI agent hosts](/rusty-bacnet/guides/ai-agents/), which connects through the same profiles. It limits the networks and devices an agent may reach, how fast it may send, whether it may send a broad Who-Is, and whether it is offered writes. The TUI keeps the table when it saves the profile but doesn't use it, and its `writes` and `dangerous` settings don't apply to the server. The server needs its own first-use authorization, `bacnet mcp authorize --profile NAME`, which is recorded in the table and cleared when the table widens what an agent may reach. [Use rusty-bacnet with AI agents](/rusty-bacnet/guides/ai-agents/#authorize-a-profile) lists its keys.
 
 ## Connect, disconnect and reconnect
 

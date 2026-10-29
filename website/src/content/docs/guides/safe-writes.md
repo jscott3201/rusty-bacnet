@@ -62,6 +62,6 @@ Record what was requested, the response, readback, and cleanup outcome in the ap
 
 ## Sources and release scope
 
-These instructions target **v0.14.0**. Source review is not a claim of hardware qualification.
+These instructions target **v0.15.0**. Source review is not a claim of hardware qualification.
 
-[Write and relinquish grammar](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/CLI.md) · [CLI arguments and acknowledgment inputs](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/crates/bacnet-cli/src/args.rs) · [Python typed values](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/python-api.md).
+[Write and relinquish grammar](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/docs/CLI.md) · [CLI arguments and acknowledgment inputs](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/crates/bacnet-cli/src/args.rs) · [Python typed values](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/docs/python-api.md).

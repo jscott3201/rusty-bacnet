@@ -16,7 +16,7 @@ bacnet --version
 bacnet --help
 ```
 
-Confirm that you are using the intended binary. This guide targets v0.14.0; a newer or source-built version may have different options.
+Confirm that you are using the intended binary. This guide targets v0.15.0; a newer or source-built version may have different options.
 
 ## 2. Confirm one known target
 
@@ -81,6 +81,6 @@ A standalone `bacnet discover` process does not establish a documented persisten
 
 ## Sources and release scope
 
-These instructions target **v0.14.0**. Source review is not a claim of hardware qualification.
+These instructions target **v0.15.0**. Source review is not a claim of hardware qualification.
 
-[CLI guide](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/CLI.md) · [CLI argument definitions](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/crates/bacnet-cli/src/args.rs) · [One-shot target resolution](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/crates/bacnet-cli/src/main.rs).
+[CLI guide](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/docs/CLI.md) · [CLI argument definitions](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/crates/bacnet-cli/src/args.rs) · [One-shot target resolution](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/crates/bacnet-cli/src/main.rs).

@@ -22,8 +22,8 @@ test('security page shows the exact policy program and serves its downloads', as
     expect(download.status()).toBe(200);
     expect(await download.text()).toBe(expected);
   }
-  await main.getByRole('link', { name: 'their own section', exact: true }).click();
-  await expect(page).toHaveURL(base + 'integrate/security/#on-dev-after-the-release');
+  await main.getByRole('link', { name: 'example program', exact: true }).click();
+  await expect(page).toHaveURL(base + 'integrate/security/#example-writes-and-dcc-from-one-certificate-name');
   const raw = await request.get(base + 'raw/integrate/security.md');
   expect(raw.status()).toBe(200);
   const body = await raw.text();
