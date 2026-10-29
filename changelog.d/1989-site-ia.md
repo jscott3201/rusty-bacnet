@@ -1,7 +1,7 @@
 ---
 section: Changed
 ---
-- The website groups its guides by task: BACnet/IP, BACnet/SC and MS/TP setup
-  move under `connect/`, and the v0.14.0 upgrade guide moves under an upgrade
-  hub. Old URLs, section links and Markdown exports still lead to the new
-  pages (#1989).
+- The website groups its guides by task, with a start path per audience,
+  synced CLI, Python and Rust tabs, and separate integration and contributor
+  docs; its first-read and shared-endpoint samples run in CI. Old URLs and
+  section links still lead to the new pages (#1989).
