@@ -12,7 +12,7 @@ import policyManifest from '../../../../examples/rust/sc-operator-policy/Cargo.t
 
 A `BACnetServer` answers every peer that reaches it. Unless you configure it otherwise, any peer on any data link may write properties, create and delete objects, and subscribe. BACnet/SC mutual TLS doesn't change that: it authenticates a connection, not a service. This page shows where to decide who may change your device, which identity each decision can rely on, and what Python exposes.
 
-The page describes **v{release}**. Two additions merged on `dev` after the release have [their own section](#on-dev-after-the-release), with an example program: DeviceCommunicationControl decisions, and rules on certificate names.
+The page describes **v{release}**. Additions merged on `dev` after the release have [their own section](#on-dev-after-the-release), with an example program: DeviceCommunicationControl decisions, rules on certificate names, policy calls off the lock, Python callbacks and certificate names, and local access authorization.
 
 ## One policy makes the server's decisions
 
@@ -71,7 +71,7 @@ Python's `BACnetServer` takes static settings only:
 - `mutation_policy="permissive"`, the default, or `"deny_all"`, which denies the covered mutations through the same gate as Rust's `MutationPolicy::DenyAll`.
 - `dcc_policy`, `dcc_password` and `dcc_source_restriction` for DeviceCommunicationControl, and `time_sync_policy` for clock changes.
 
-Python has no policy callback, and no access to the requesting peer's principal or certificate. It has no direct BACnet/SC listener either, so a principal would always be absent there. A Python callback that sees the request context is tracked in issue #1966, and certificate names for Python in issue #2022; neither has a release date.
+Python has no policy callback, and no access to the requesting peer's principal or certificate. It has no direct BACnet/SC listener either, so a principal would always be absent there. A Python callback that sees the request context (issue #1966) and certificate names for Python (issue #2022) are merged on `dev`; see [Python callbacks and certificate names](#python-callbacks-and-certificate-names).
 
 ## Read the contracts
 
@@ -131,6 +131,17 @@ DCC without a certificate: denied
 ```
 
 Without a name, or without a password, it prints a usage message and exits unsuccessfully. CI compiles this exact file and runs it both ways in the `sc_operator_policy` integration tests. Those tests don't exercise the allow path. The server's own tests do, over real direct TLS: a renewed certificate with the same DNS name stays allowed.
+
+### Policy calls off the lock
+
+Every policy decision for a received request now runs on Tokio's blocking pool, with no database guard held (#2032), so a policy that blocks delays only its own request, and `stop()` doesn't wait for it. A call that never returns still keeps the process from exiting. WritePropertyMultiple asks about each element, in order up to the first denial, before it takes the write lock; a denial still leaves the elements before it written.
+
+### Python callbacks and certificate names
+
+- `BACnetServer(mutation_policy=...)` also takes a callable that gets a redacted `MutationContext` and decides each covered mutation; an exception or an answer that isn't a bool denies (#1966).
+- `ScCertificateMetadata.subject_alt_names` gives a certificate's DNS, URI, email and IP names as written (#2022). A `MutationContext`'s certificate accessors are `None`, since Python has no direct BACnet/SC listener.
+- `BACnetClient` and `BACnetServer` take `sc_control_rate_limit=(burst, per_second)` for the BACnet/SC control-message rate limit (#1969).
+- `BipEndpoint`, `ScEndpoint` and `MstpEndpoint` take `device_write_policy`, a callable that decides writes to the local Device under the same fail-closed rules (#2033).
 
 ### Local access authorization
 

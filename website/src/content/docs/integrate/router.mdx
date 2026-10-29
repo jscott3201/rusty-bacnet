@@ -96,6 +96,7 @@ The router's own application entity can host Python stacks too (#2071). Build th
 - The duplicate suppression also covers three messages the router passes on without a hop count, so that nothing else stops them around a loop (#1810): I-Am-Router-To-Network, and Router-Busy-To-Network or Router-Available-To-Network from one sender.
 - `BACnetRouter::originate` sends a global broadcast from the router's own application, such as a Who-Is for every network, on every port (#1809).
 - `RouterPort`'s transport type defaults to `AnyTransport` (#2043), so a router that mixes link types can write `RouterPort` alone.
+- `StartedRouter::into_application_port()` makes the router's own application a transport for a `BACnetClient`, and `into_application_ports()` splits it between a `BACnetServer` and a client (#1808, #2069).
 
 ### Example: two B/IP networks on one host
 

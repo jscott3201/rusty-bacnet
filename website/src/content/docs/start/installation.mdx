@@ -120,6 +120,8 @@ cargo install --path crates/bacnet-cli --locked --features sc-tls
 
 `pcap` is a separate optional Cargo feature and needs native development dependencies when building. A source build with it links the system's libpcap, so the machine that runs it needs libpcap too. Add it only when packet capture is needed.
 
+From 0.15 the prebuilt executables include the [MCP server for AI agent hosts](/rusty-bacnet/guides/ai-agents/) (`bacnet mcp serve`); a source build enables it with `--features mcp`.
+
 <NextStep href="/rusty-bacnet/start/first-read/" label="Read a known device" description="Start with one authorized device and one property." />
 
 </TabItem>

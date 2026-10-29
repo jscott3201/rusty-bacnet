@@ -30,7 +30,7 @@ bacnet --version
 bacnet --help
 ```
 
-The executable is `bacnet`. IPv6 is enabled through CLI dependencies; `pcap` is a separate optional feature requiring native capture dependencies. On `dev`, the terminal UI (`tui`) is a default feature (`--no-default-features` leaves it out), and MS/TP needs `--features serial`. A CLI version string alone cannot distinguish a source build from the release.
+The executable is `bacnet`. IPv6 is enabled through CLI dependencies; `pcap` is a separate optional feature requiring native capture dependencies. The terminal UI (`tui`) is a default feature (`--no-default-features` leaves it out), and MS/TP needs `--features serial`. On `dev`, the MCP server (`bacnet mcp serve`) needs `--features mcp`, which includes the terminal UI. A CLI version string alone cannot distinguish a source build from the release.
 
 A Rust project can depend on the `dev` branch instead of a release, for example `bacnet-client = { git = "https://github.com/jscott3201/rusty-bacnet", branch = "dev" }`. Its `Cargo.lock` records the commit.
 

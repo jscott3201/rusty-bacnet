@@ -11,7 +11,7 @@ Change of Value (COV) subscriptions can notify a client about selected property 
 bacnet subscribe 192.168.1.100 ai:1 --lifetime 300
 ```
 
-Use a known device and an object that supports the requested COV behavior. The lifetime is measured in seconds. The CLI watches for notifications; Ctrl+C stops the local watcher. Do not assume that stopping a client immediately removes remote state—verify cancellation behavior or allow the finite lifetime to expire.
+Use a known device and an object that supports the requested COV behavior. The lifetime is measured in seconds. The CLI watches for notifications, renews the subscription while it watches, and cancels it when it stops (Ctrl+C, or SIGTERM on Unix). The finite lifetime (300 seconds by default) bounds a subscription whose cancellation is lost, for example when the process is killed. `--lifetime 0` asks for one that never expires and stays after the CLI exits; it needs `--allow-write`.
 
 ## Read first, then subscribe
 

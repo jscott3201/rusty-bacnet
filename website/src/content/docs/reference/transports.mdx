@@ -44,7 +44,7 @@ Record the source revision, interface, feature set, OS and native artifact. Star
 
 ## Features are package-specific
 
-The CLI manifest enables its IPv6 path and defines optional `sc-tls` and `pcap` features; the release executables enable `sc-tls` everywhere and `pcap` and `serial` on Linux. The terminal UI (`tui`) is a default feature, and a `serial` feature adds MS/TP, which the Linux release executables include. The Python binding manifest enables underlying SC, IPv6, and serial transport features, but a Cargo feature selection alone is not proof of an installable or qualified wheel on a particular host.
+The CLI manifest enables its IPv6 path and defines optional `sc-tls` and `pcap` features; the release executables enable `sc-tls` everywhere and `pcap` and `serial` on Linux. The terminal UI (`tui`) is a default feature, and a `serial` feature adds MS/TP, which the Linux release executables include. An `mcp` feature adds the [MCP server](/rusty-bacnet/guides/ai-agents/) (`bacnet mcp serve`), in the release executables from 0.15. The Python binding manifest enables underlying SC, IPv6, and serial transport features, but a Cargo feature selection alone is not proof of an installable or qualified wheel on a particular host.
 
 Inspect the selected binary or wheel and its release build configuration. Do not turn a code-level table into five identical “fully supported” badges.
 

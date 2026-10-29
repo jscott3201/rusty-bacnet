@@ -279,6 +279,8 @@ SAMPLES: dict[str, object] = {
     "guides/ai-agents.md::cargo install --path crates/bacnet-cli --locked --features mcp": Skip("F", INSTALL),
     "guides/ai-agents.md::[mcp]":
         Skip("E", "checked against the McpSection serde type, which denies unknown fields"),
+    "guides/ai-agents.md::# A plan grant: writes approved in advance":
+        Skip("E", "the keys and defaults of the McpPlan serde type, which denies unknown fields"),
     "guides/ai-agents.md::bacnet mcp authorize --profile plant-a": Parse(),
     "guides/ai-agents.md::{": Skip("E", "agent host configuration; crates/bacnet-cli/tests/mcp_stdio.rs runs the server as a host would"),
     "guides/ai-agents.md::bacnet mcp serve --stdio --profile plant-a --passive": Parse(),

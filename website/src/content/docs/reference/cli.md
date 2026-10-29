@@ -11,7 +11,7 @@ This page is generated from the `dev` branch and tracks the next release, so it 
 
 ## Features and release executables
 
-Some commands and options need a Cargo feature; their entries below say which. The macOS and Windows release executables carry the terminal UI (`tui`) and BACnet/SC (`sc-tls`); the Linux ones add MS/TP (`serial`) and packet capture (`pcap`). No release executable carries `mcp`, the [MCP server for AI agent hosts](/rusty-bacnet/guides/ai-agents/). A source build turns on `tui` by default and the others with `cargo install bacnet-cli --features ...`. A command whose feature is missing still parses, then exits with an error that names the feature.
+Some commands and options need a Cargo feature; their entries below say which. The macOS and Windows release executables carry the terminal UI (`tui`) and BACnet/SC (`sc-tls`); the Linux ones add MS/TP (`serial`) and packet capture (`pcap`). From 0.15 every release executable also carries `mcp`, the [MCP server for AI agent hosts](/rusty-bacnet/guides/ai-agents/); a source build enables it with `--features mcp`. A source build turns on `tui` by default and the others with `cargo install bacnet-cli --features ...`. A command whose feature is missing still parses, then exits with an error that names the feature.
 
 ## Exit status
 
@@ -29,7 +29,7 @@ Examples use `ai:1` for analog input 1, `av:1` for analog value 1, and `pv` for 
 
 Do not use an object-name string where an object identifier is required. Do not assume a BACnet device instance is an IP address or that a discovered downstream device can be addressed by a router's IP alone.
 
-A new one-shot process has its own lifecycle and keeps no discovered devices, so give it an address, a `bip6:` or `mstp:` target, or a routed `DNET:instance` or `DNET:0xMAC` target. For a routed target the CLI asks that network for the device with a Who-Is and sends the request through the router that answers. `read`, `readm`, `read-range`, `alarms`, `file-read`, `file-write`, `write`, `writem`, `subscribe`, `control`, `reinit`, `time-sync`, `create-object`, `delete-object` and `ack-alarm` take routed targets; the BBMD commands `bdt`, `fdt`, `register` and `unregister` address local B/IP peers and refuse them.
+A new one-shot process has its own lifecycle and keeps no discovered devices, so give it an address, a `bip6:` or `mstp:` target, or a routed `DNET:instance` or `DNET:0xMAC` target. For a routed target the CLI asks that network for the device with a Who-Is and sends the request through the router that answers. `read`, `readm`, `read-range`, `alarms`, `alarm-summary`, `enrollment-summary`, `file-read`, `file-write`, `write`, `writem`, `subscribe`, `control`, `reinit`, `time-sync`, `create-object`, `delete-object` and `ack-alarm` take routed targets; the BBMD commands `bdt`, `fdt`, `register` and `unregister` address local B/IP peers and refuse them.
 
 ## Session behavior
 

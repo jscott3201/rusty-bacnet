@@ -9,10 +9,10 @@ and documentation work (`development/`), and discovery, subscription and write
 guides (`guides/`). [Engineering
 docs](../docs/README.md) remain the contract authority.
 
-This content refresh is local-only. A successful build or browser check does not
-publish it or establish that a hosted site contains these changes. Historical
-publication machinery below is reference material; invoking it requires separate
-explicit authority.
+The site is published to GitHub Pages by a manual dispatch of `docs-pages.yml`
+from a reviewed `dev` commit. A successful local build or browser check does not
+publish anything or show that the hosted site contains a change; publishing
+requires separate explicit authority.
 
 ## Local build and validation
 
@@ -165,9 +165,9 @@ the Screen Recording permission if macOS asks.
   another). Shots are scaled to at most 1440 pixels wide (`--width`).
 - **Checking the driving logic** without a Terminal window:
   `capture.py --reuse --tmux-only DIR` writes each shot's text to `DIR/NAME.txt`
-  and leaves the PNGs alone.
+  and leaves the images alone.
 
-Rerun it after a TUI change that the pages show, and review the new PNGs before
+Rerun it after a TUI change that the pages show, and review the new WebP images before
 committing them. A new shot needs an entry in `SHOTS` in `capture.py`, a step
 in one of its scenarios, and a page that uses it.
 
@@ -252,8 +252,6 @@ Actions artifacts retained for seven days, with hidden files excluded.
 5. Verify the **returned deployment URL** in a browser: homepage, direct nested
    route/reload, native search, theme/tabs, assets, raw Markdown, example download,
    original SVGs, sitemap/canonical URLs and 404 recovery under `/rusty-bacnet/`.
-   Only after deployment and live checks may a **separate** follow-up add public
-   repository README/package links or replace the unpublished status above.
 
 Future deployments remain manual with the same sequence and reviewed SHA.
 PR runs may cancel older checks for that PR, never a publication. Manual publish
@@ -291,8 +289,7 @@ artifact or fetch a mutable branch in the deployment job.
   dependency trees, screenshots and browser reports untracked.
 - The docs workflow is approved for CI and manual publication only. Pages
   settings and actual publication remain owner-operated; the workflow's presence
-  does not mean this site is live. Repository README/package public links remain
-  deferred until verified deployment. Do not introduce a support-status database.
+  does not mean a given change is live. Do not introduce a support-status database.
 
 ## Content organization
 
@@ -306,8 +303,8 @@ artifact or fetch a mutable branch in the deployment job.
   (the upgrade guide from it, `project/upgrading/v0-14.md`, and the lab's
   recorded evidence may name the previous one). It also checks the installation page's asset list against
   `.github/workflows/release.yml`.
-- `tui/`: the terminal UI on the `dev` branch, which ships after the release in
-  `src/lib/site.mjs`. Its screenshots come from `scripts/tui-screenshots/`
+- `tui/`: the terminal UI as it is on `dev`. It shipped in the release in
+  `src/lib/site.mjs`; later changes land in the next release. Its screenshots come from `scripts/tui-screenshots/`
   (see "TUI screenshots" above).
 - `reference/` and `project/`: reference entry points, support scope, and the
   upgrade hub (`project/upgrading`) with one guide per release under it.
