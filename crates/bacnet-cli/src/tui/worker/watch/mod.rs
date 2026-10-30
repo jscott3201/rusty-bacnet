@@ -19,25 +19,25 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::Duration;
 
 use bacnet_client::client::BACnetClient;
 use bacnet_ops::engine::Engine;
 use bacnet_ops::label::{kebab, object_label};
 use bacnet_ops::limits::RequestLimits;
 use bacnet_ops::watch::{
-    self as hub, Backoff, Hub, Lease, Lifetime, MissingDevice, Reads, Samples, Snapshot, Via,
-    Watched, Why,
+    self as hub, Backoff, Hub, Lease, Lifetime, MissingDevice, Reads, Samples, Snapshot, Watched,
+    Why,
 };
 use bacnet_transport::port::TransportPort;
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use tokio::sync::mpsc;
 
 use self::csv::{CsvLog, field};
-use self::sample::{Reading, RowFormat};
+use self::sample::{Details, Taken, Writer, Written};
 use super::EventSink;
 use crate::tui::message::{Command, WorkerEvent};
-use crate::tui::watched::{Point, RowId, Sample, Source, WatchCommand, WatchEvent, WatchStats};
+use crate::tui::watched::{Point, RowId, Source, WatchCommand, WatchEvent, WatchStats};
 
 /// Default `--cov-lifetime`, in seconds.
 pub(crate) const DEFAULT_COV_LIFETIME: u32 = 300;
@@ -156,8 +156,10 @@ struct Row {
     source: Source,
     /// Samples the stream had dropped at the last tick.
     dropped: u64,
-    /// How its values are written, from its first read.
-    format: RowFormat,
+    /// Whether its start was over at the last tick.
+    started: bool,
+    /// Writes its values out with the format of its first read.
+    writer: Writer,
 }
 
 type Closing = Pin<Box<dyn Future<Output = ()> + Send>>;
@@ -208,7 +210,8 @@ impl<'s, T: TransportPort + 'static> State<'s, T> {
                         samples,
                         source: Source::Starting,
                         dropped: 0,
-                        format: RowFormat::default(),
+                        started: false,
+                        writer: Writer::new(point),
                     },
                 );
             }
@@ -254,53 +257,33 @@ impl<'s, T: TransportPort + 'static> State<'s, T> {
         for (&id, row) in &mut self.rows {
             let snapshot = row.lease.snapshot();
             let polled = snapshot.source == Some(hub::Source::Poll);
+            let mut taken = Taken::default();
             while let Some(sample) = row.samples.try_next() {
-                let property = row.point.property;
-                let reading = match &sample.values {
-                    Ok(rows) => match sample.via {
-                        Via::Poll => Some(
-                            sample::from_rows(property, rows)
-                                .unwrap_or_else(|| Reading::failed(hub::poll::MISSING.into())),
-                        ),
-                        Via::First | Via::Notification => sample::from_rows(property, rows),
-                    },
-                    // A first read that failed leaves the row without a
-                    // value until the next.
-                    Err(_) if sample.via == Via::First => None,
-                    Err(error) => Some(Reading::failed(error.clone())),
-                };
-                let Some(mut reading) = reading else {
-                    continue;
-                };
-                reading.at = sample.at.into_std();
-                if let (Via::First, Ok(rows)) = (sample.via, &sample.values) {
-                    row.format = RowFormat::from_rows(rows);
-                    self.outbox.push_back(WatchEvent::Details {
-                        row: id,
-                        name: bacnet_ops::format::object_name(rows),
-                        units: row.format.units_name(),
-                    });
-                }
-                let source = match sample.via {
-                    Via::Notification => "cov",
-                    Via::Poll => "polled",
-                    Via::First if polled => "polled",
-                    Via::First => "cov",
-                };
-                let at = sample
-                    .time
-                    .duration_since(UNIX_EPOCH)
-                    .map_or(0, |since| since.as_millis());
-                let (shown, logged) = row.format.sample(&row.point, reading);
+                row.writer.take(sample, polled, &mut taken);
+            }
+            if row.started {
+                // The start was over a tick ago, so its first read was
+                // handed on by now: one not among the samples was lost.
+                row.writer.release(polled, &mut taken);
+            }
+            row.started = snapshot.state != hub::State::Starting;
+            for Details { name, units } in taken.details {
+                self.outbox.push_back(WatchEvent::Details {
+                    row: id,
+                    name,
+                    units,
+                });
+            }
+            for written in taken.written {
                 if let Some(log) = &self.csv
-                    && !log.line(csv_line(&row.point, &shown, &logged, at, source))
+                    && !log.line(csv_line(&row.point, &written))
                 {
                     self.sink.add_dropped(1);
                 }
-                samples.push((id, shown));
+                samples.push((id, written.shown));
             }
             let dropped = row.samples.dropped();
-            self.sink.add_dropped(dropped - row.dropped);
+            self.sink.add_dropped(dropped - row.dropped + taken.dropped);
             row.dropped = dropped;
             if let Some(source) = source_of(&snapshot, lifetime)
                 && source != row.source
@@ -365,19 +348,15 @@ impl<'s, T: TransportPort + 'static> State<'s, T> {
     }
 }
 
-/// One CSV line: the value in full (`logged`), not the screen's rounding.
-fn csv_line(
-    point: &Point,
-    sample: &Sample,
-    logged: &Result<String, String>,
-    at: u128,
-    source: &str,
-) -> String {
-    let value = match logged {
+/// One CSV line: the value in full, not the screen's rounding.
+fn csv_line(point: &Point, written: &Written) -> String {
+    let value = match &written.logged {
         Ok(value) => value.clone(),
         Err(error) => format!("error: {error}"),
     };
-    let flags = sample
+    let (at, source) = (written.time, written.source);
+    let flags = written
+        .shown
         .flags
         .map(|flags| flags.badges().concat())
         .unwrap_or_default();

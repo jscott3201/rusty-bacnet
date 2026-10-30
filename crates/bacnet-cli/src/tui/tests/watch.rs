@@ -215,6 +215,35 @@ async fn removing_a_row_cancels_its_subscription() {
     site.stop().await;
 }
 
+/// The lab device notifies as it takes each subscription, and its
+/// acknowledgement comes later, so each row's first notification reaches
+/// the worker before its first read; every row still shows its units
+/// (#2167).
+#[tokio::test(start_paused = true)]
+async fn rows_notified_before_their_first_read_show_their_units() {
+    let server = Server {
+        // The subscription reaches the device after the read ended, so its
+        // notification is the newer value.
+        quirks: Quirks {
+            latency: Duration::from_millis(20),
+            slow_cov_ack: Duration::from_millis(100),
+            ..Quirks::default()
+        },
+        ..Server::lab(100, LAB)
+    };
+    let mut site = lab_site(server, SessionOptions::default()).await;
+    for object in ["ai:1", "ai:2", "av:1"] {
+        command(&mut site, &format!("watch 100 {object}")).await;
+    }
+    settle(&mut site).await;
+    site.run_for(Duration::from_secs(1)).await;
+    for row in site.app.watch.rows() {
+        let value = row.value.clone().unwrap().unwrap();
+        assert!(value.ends_with(" °F"), "{:?}: {value}", row.point.object);
+    }
+    site.stop().await;
+}
+
 /// A device without COV, with these quirks and `points` analog values.
 fn no_cov(octet: u8, instance: u32, points: u32, quirks: Quirks) -> Server {
     Server {
