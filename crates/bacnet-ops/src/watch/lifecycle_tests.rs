@@ -7,6 +7,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use bacnet_types::primitives::PropertyValue;
 use tokio::time::Instant;
 
 use super::test_lab::{LAB, Lab, RP, RPM, SUBSCRIBE_COV, ai, nc, object, settle};
@@ -160,4 +161,72 @@ async fn a_renewal_behind_a_full_budget_request_lands_before_expiry() {
     );
     assert_eq!(lease.snapshot().renewals, 1);
     lab.stop().await;
+}
+
+/// A notification that reaches the hub before the start's first read is
+/// folded keeps its value: the read is older (#2169). The device's
+/// acknowledgement comes late, after the notification of a change made
+/// once it took the subscription.
+#[tokio::test(start_paused = true)]
+async fn a_first_read_folded_late_keeps_the_newer_notification() {
+    let lab = Lab::start(WatchOptions::default()).await;
+    lab.quirks.late_cov_ack.store(true, Ordering::Relaxed);
+    let lease = lab.hub.watch(object(ai(1))).unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    lab.server
+        .set_present_value_local(&ai(1), PropertyValue::Real(99.0))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    let early = lease.snapshot();
+    assert!(early.notifications > 0, "the notification overtook the ack");
+    assert_eq!(super::tests::present_value(&early), Some(99.0));
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let snapshot = lease.snapshot();
+    assert_eq!(super::tests::present_value(&snapshot), Some(99.0));
+    assert_eq!(snapshot.state, State::Live);
+    drop(lease);
+    lab.stop().await;
+}
+
+/// A first read fills the rows no notification set, a read that ended at
+/// the instant of a notification counts as older, one that ended after it
+/// is newer, and each first read's fold drops the notes (#2169).
+#[tokio::test(start_paused = true)]
+async fn a_first_read_skips_only_what_a_notification_set() {
+    use bacnet_types::enums::PropertyIdentifier;
+    let shared = super::shared::Shared::new(object(ai(1)), 1, 4);
+    let seq = std::sync::atomic::AtomicU64::new(0);
+    let pv = PropertyIdentifier::PRESENT_VALUE;
+    let units = PropertyIdentifier::UNITS;
+    let real = |v: f32| {
+        let mut buf = bytes::BytesMut::new();
+        bacnet_encoding::primitives::encode_app_real(&mut buf, v);
+        buf.to_vec()
+    };
+    let notify = |value: f32, at: Instant| {
+        let mut state = shared.lock();
+        super::shared::fold(&mut state.snapshot.rows, &[(pv, Ok(real(value)))]);
+        state.mark_notified(pv, at);
+    };
+    let read = vec![(pv, Ok(real(10.0))), (units, Ok(vec![0x91, 98]))];
+
+    // A notification before the read ended is older.
+    notify(50.0, Instant::now());
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    shared.read(&seq, read.clone(), false, Some(Instant::now()));
+    assert_eq!(shared.snapshot().rows[0].1, Ok(real(10.0)));
+
+    // One at the instant the read ended is newer.
+    let tied = Instant::now();
+    notify(99.0, tied);
+    shared.read(&seq, read.clone(), false, Some(tied));
+    let rows = shared.snapshot().rows;
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert_eq!(rows[0].1, Ok(real(99.0)), "a tie keeps the notification");
+    assert_eq!(rows[1].0, units, "the other rows still fold");
+
+    // That fold dropped the note: the next start's read folds.
+    shared.read(&seq, read, false, Some(tied));
+    assert_eq!(shared.snapshot().rows[0].1, Ok(real(10.0)));
 }
