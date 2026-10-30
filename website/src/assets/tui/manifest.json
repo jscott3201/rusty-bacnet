@@ -360,7 +360,7 @@
    "source": "live",
    "command": "bacnet tui",
    "keys": "Escape a : \"watch 1001 ai:2\" Enter : \"watch 1001 ai:3\" Enter : \"watch 1001 ai:1\" Enter : \"watch 2:2001 ai:1\" Enter : \"watch 1002 av:7\" Enter : \"watch 1001 bo:1\" Enter : \"watch 1001 schedule:1\" Enter 3",
-   "commit": "9a12e1c6a"
+   "commit": "e156bd9cc"
   },
   {
    "name": "overview-log-pane",
