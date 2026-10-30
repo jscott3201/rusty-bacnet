@@ -340,8 +340,12 @@ async fn a_later_start_read_older_than_what_shows_gives_only_its_details() {
         shown(&taken),
         [("70 °F".into(), "cov"), ("72 °F".into(), "cov")]
     );
+    // One ending at the same instant as the newest value counts as older.
+    let mut tie = first_read();
+    tie.at += Duration::from_millis(2_010);
+    writer.take(tie, false, &mut later);
     assert!(later.written.is_empty(), "{:?}", later.written);
-    assert_eq!(later.details.len(), 1);
+    assert_eq!(later.details.len(), 2);
     // A read newer than what shows is written as usual.
     let mut newer = first_read();
     newer.at += Duration::from_secs(3);
@@ -349,10 +353,10 @@ async fn a_later_start_read_older_than_what_shows_gives_only_its_details() {
     assert_eq!(shown(&later), [("70 °F".into(), "cov")]);
 }
 
-/// A row removed, or a session ended, with notifications still waiting
-/// for the first read: the end lets them out, a removal counts them.
+/// A session that ends with notifications still waiting for the first
+/// read lets them out (a removed row counts them as dropped instead).
 #[tokio::test(start_paused = true)]
-async fn what_waits_at_the_end_goes_out_or_is_counted() {
+async fn what_waits_at_the_end_goes_out() {
     let mut writer = Writer::new(ai1_value());
     let mut taken = Taken::default();
     writer.take(notified(70.2, 10), false, &mut taken);

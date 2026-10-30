@@ -185,15 +185,17 @@ impl<'s, T: TransportPort + 'static> State<'s, T> {
     fn command(&mut self, command: WatchCommand) {
         match command {
             WatchCommand::Add { row, point } => self.add(row, point),
-            WatchCommand::Remove { row } => {
-                // The hub cancels what the point holds once its last
-                // lease goes. What waited for its first read is lost
-                // with it, and counted.
-                if let Some(row) = self.rows.remove(&row) {
-                    self.sink.add_dropped(row.writer.held());
-                }
-            }
+            WatchCommand::Remove { row } => self.remove(row),
             WatchCommand::Csv(on) => self.csv(on),
+        }
+    }
+
+    /// Drop a row. The hub cancels what the point holds once its last
+    /// lease goes; what waited for its first read is lost with it, and
+    /// counted.
+    fn remove(&mut self, id: RowId) {
+        if let Some(row) = self.rows.remove(&id) {
+            self.sink.add_dropped(row.writer.held());
         }
     }
 
@@ -313,7 +315,7 @@ impl<'s, T: TransportPort + 'static> State<'s, T> {
             }
         }
         for id in gone {
-            self.rows.remove(&id);
+            self.remove(id);
         }
         if !samples.is_empty() {
             samples.sort_by_key(|(_, sample)| sample.at);

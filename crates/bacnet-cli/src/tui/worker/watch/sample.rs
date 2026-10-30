@@ -225,8 +225,9 @@ impl Writer {
     }
 
     fn write(&mut self, sample: &hub::Sample, polled: bool, out: &mut Taken) {
-        if sample.via == Via::First && self.newest.is_some_and(|newest| sample.at < newest) {
-            // A later start's read, older than a value already written.
+        if sample.via == Via::First && self.newest.is_some_and(|newest| sample.at <= newest) {
+            // A later start's read, no newer than a value already written:
+            // it ended before its SubscribeCOV, so a tie counts as older.
             return;
         }
         let property = self.point.property;
