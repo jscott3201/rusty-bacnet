@@ -845,12 +845,13 @@ def bip(s, p, lab):
     p.send("4")
     # Read the tables again: the read from connecting is a minute old by now,
     # and the FDT ages its rows from it, so the lab's 60 s foreign device
-    # would show 0 s left and "expiring".
+    # would show 0 s left and "expiring". The waits take only a fresh read:
+    # "read \d+s ago" would also match the old one before `r` lands.
     p.wait(r"\[BDT\]")
     p.send("r")
-    p.shot("network-fd-bdt", wait=r"\[BDT\].*read \d+s ago")
+    p.shot("network-fd-bdt", wait=r"\[BDT\].*read [0-9]s ago")
     p.send("Tab")
-    p.shot("network-fdt", wait=r"\[FDT\].*read \d+s ago")
+    p.shot("network-fdt", wait=r"\[FDT\].*read [0-9]s ago")
     p.send("Tab", "m")
     p.shot("network-matrix", wait=r"BDTs agree|MISS")
     p.send("Tab", "r")

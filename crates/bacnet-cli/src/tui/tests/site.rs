@@ -77,6 +77,9 @@ pub(super) struct Quirks {
     /// How long frames take to reach this port: a slow device, whose
     /// requests stay outstanding that long.
     pub(super) latency: Duration,
+    /// How much longer this device's acknowledgements of SubscribeCOV take
+    /// than its other frames: its first notification arrives before them.
+    pub(super) slow_cov_ack: Duration,
 }
 
 struct Port {
@@ -189,6 +192,13 @@ fn apdu_kind(npdu: &[u8]) -> Option<(u8, Option<(u8, u8)>)> {
         .then(|| Some((*apdu.get(2)?, *apdu.get(3)?)))
         .flatten();
     Some((pdu_type, request))
+}
+
+/// The service a SimpleAck acknowledges.
+fn simple_ack_service(npdu: &[u8]) -> Option<u8> {
+    let decoded = decode_npdu(Bytes::copy_from_slice(npdu)).ok()?;
+    let apdu = decoded.payload;
+    (apdu.first()? >> 4 == 2).then(|| apdu.get(2).copied())?
 }
 
 pub(super) struct HubPort {
@@ -326,11 +336,18 @@ impl HubPort {
                 _ => {}
             }
         }
+        let cov_ack =
+            simple_ack_service(npdu) == Some(ConfirmedServiceChoice::SUBSCRIBE_COV.to_raw());
+        let slow = inner
+            .ports
+            .iter()
+            .find(|port| cov_ack && port.mac == self.mac)
+            .map_or(Duration::ZERO, |port| port.quirks.slow_cov_ack);
         let targets: Vec<_> = inner
             .ports
             .iter()
             .filter(|port| port.mac != self.mac && to.is_none_or(|to| port.mac.as_slice() == to))
-            .map(|port| (port.inbox.clone(), port.quirks.latency))
+            .map(|port| (port.inbox.clone(), port.quirks.latency + slow))
             .collect();
         drop(inner);
         for (tx, latency) in targets {

@@ -1,10 +1,16 @@
 //! The worker on its own: the hub's settings for the list, rows as hub
-//! points, how a snapshot reads as a row's source, and the log's lines.
+//! points, how a snapshot reads as a row's source, the log's lines, and
+//! how a row's samples are written out.
 
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
-use bacnet_types::primitives::ObjectIdentifier;
+use std::time::UNIX_EPOCH;
+
+use bacnet_ops::format::RawRow;
+use bacnet_ops::watch::Via;
+use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier};
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::*;
+use crate::tui::watched::Sample;
 
 fn ai(instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::ANALOG_INPUT, instance).unwrap()
@@ -117,11 +123,16 @@ fn a_snapshot_reads_as_the_row_source() {
 /// its own column, last, empty on this network.
 #[test]
 fn a_log_line_puts_a_routed_device_network_in_its_own_column() {
-    let sample = Sample {
-        value: Ok("72.5 °F".into()),
-        number: Some(72.5),
-        flags: None,
-        at: std::time::Instant::now(),
+    let mut written = Written {
+        shown: Sample {
+            value: Ok("72.5 °F".into()),
+            number: Some(72.5),
+            flags: None,
+            at: std::time::Instant::now(),
+        },
+        logged: Ok("72.5".into()),
+        source: "polled",
+        time: 7,
     };
     let mut point = Point {
         device: 2001,
@@ -129,7 +140,7 @@ fn a_log_line_puts_a_routed_device_network_in_its_own_column() {
         object: ai(1),
         property: PropertyIdentifier::PRESENT_VALUE,
     };
-    let line = csv_line(&point, &sample, &Ok("72.5".into()), 7, "polled");
+    let line = csv_line(&point, &written);
     assert_eq!(line, "7,2001,analog-input 1,present-value,72.5,,polled,2");
     assert_eq!(
         csv::HEADER.split(',').count(),
@@ -137,6 +148,235 @@ fn a_log_line_puts_a_routed_device_network_in_its_own_column() {
         "a field per header column"
     );
     point.network = None;
-    let line = csv_line(&point, &sample, &Ok("72.5".into()), 7, "cov");
+    written.source = "cov";
+    let line = csv_line(&point, &written);
     assert_eq!(line, "7,2001,analog-input 1,present-value,72.5,,cov,");
+}
+
+fn encoded(value: &PropertyValue) -> Vec<u8> {
+    let mut buf = bytes::BytesMut::new();
+    bacnet_encoding::primitives::encode_property_value(&mut buf, value).unwrap();
+    buf.to_vec()
+}
+
+fn present_value(value: f32) -> RawRow {
+    (
+        PropertyIdentifier::PRESENT_VALUE,
+        Ok(encoded(&PropertyValue::Real(value))),
+    )
+}
+
+/// A sample of `values` that came `after` the test's start.
+fn sample(values: Result<Vec<RawRow>, String>, via: Via, after: Duration) -> hub::Sample {
+    hub::Sample {
+        values,
+        via,
+        at: tokio::time::Instant::now() + after,
+        time: UNIX_EPOCH + Duration::from_secs(1) + after,
+    }
+}
+
+/// AI 1's first read: 70 °F, named.
+fn first_read() -> hub::Sample {
+    let units = EngineeringUnits::DEGREES_FAHRENHEIT.to_raw();
+    let rows = vec![
+        present_value(70.0),
+        (
+            PropertyIdentifier::UNITS,
+            Ok(encoded(&PropertyValue::Enumerated(units))),
+        ),
+        (
+            PropertyIdentifier::OBJECT_NAME,
+            Ok(encoded(&PropertyValue::CharacterString("Zone".into()))),
+        ),
+    ];
+    sample(Ok(rows), Via::First, Duration::ZERO)
+}
+
+fn notified(value: f32, after_ms: u64) -> hub::Sample {
+    sample(
+        Ok(vec![present_value(value)]),
+        Via::Notification,
+        Duration::from_millis(after_ms),
+    )
+}
+
+fn ai1_value() -> Point {
+    Point {
+        device: 2001,
+        network: None,
+        object: ai(1),
+        property: PropertyIdentifier::PRESENT_VALUE,
+    }
+}
+
+/// What each written sample shows, and how it came.
+fn shown(taken: &Taken) -> Vec<(String, &'static str)> {
+    taken
+        .written
+        .iter()
+        .map(|w| (w.shown.value.clone().unwrap(), w.source))
+        .collect()
+}
+
+/// #2167: the device notifies as it takes the subscription, before the hub
+/// hands the first read on. The notification waits for the read's units
+/// and follows it, so the row ends on the newer value, with its units, and
+/// the log gets both in order.
+#[tokio::test(start_paused = true)]
+async fn a_notification_before_the_first_read_shows_with_units_once_it_lands() {
+    let mut writer = Writer::new(ai1_value());
+    let mut taken = Taken::default();
+    writer.take(notified(70.2, 10), false, &mut taken);
+    assert!(taken.written.is_empty(), "{:?}", taken.written);
+    writer.take(first_read(), false, &mut taken);
+    assert_eq!(
+        taken.details,
+        [Details {
+            name: Some("Zone".into()),
+            units: Some("degrees-fahrenheit".into()),
+        }]
+    );
+    assert_eq!(
+        shown(&taken),
+        [("70 °F".into(), "cov"), ("70.2 °F".into(), "cov")]
+    );
+    // The tick sorts by arrival: the notification stays last.
+    assert!(taken.written[0].shown.at < taken.written[1].shown.at);
+    assert_eq!(
+        csv_line(&ai1_value(), &taken.written[1]),
+        "1010,2001,analog-input 1,present-value,70.2,,cov,"
+    );
+    // Later ones go out at once.
+    let mut later = Taken::default();
+    writer.take(notified(71.0, 20), false, &mut later);
+    assert_eq!(shown(&later), [("71 °F".into(), "cov")]);
+}
+
+/// A first read that failed has no value to show and no units to give:
+/// what waited for it goes out as it is.
+#[tokio::test(start_paused = true)]
+async fn a_failed_first_read_lets_what_waited_out_without_units() {
+    let mut writer = Writer::new(ai1_value());
+    let mut taken = Taken::default();
+    writer.take(notified(70.2, 10), false, &mut taken);
+    let failed = sample(Err("timeout".into()), Via::First, Duration::ZERO);
+    writer.take(failed, false, &mut taken);
+    assert!(taken.details.is_empty());
+    assert_eq!(shown(&taken), [("70.2".into(), "cov")]);
+}
+
+/// A later start's read that fails keeps the units the first one found.
+#[tokio::test(start_paused = true)]
+async fn a_failed_later_read_keeps_the_units() {
+    let mut writer = Writer::new(ai1_value());
+    let mut taken = Taken::default();
+    writer.take(first_read(), false, &mut taken);
+    let failed = sample(Err("timeout".into()), Via::First, Duration::from_secs(1));
+    writer.take(failed, true, &mut taken);
+    writer.take(notified(72.0, 2_000), false, &mut taken);
+    assert_eq!(
+        shown(&taken),
+        [("70 °F".into(), "cov"), ("72 °F".into(), "cov")]
+    );
+}
+
+/// A start over without its first read seen (lost to a reader that fell
+/// behind) lets what waits out, and nothing waits after; a poll ends the
+/// wait too, after what waited.
+#[tokio::test(start_paused = true)]
+async fn a_start_over_without_its_read_lets_what_waited_out() {
+    let mut writer = Writer::new(ai1_value());
+    let mut taken = Taken::default();
+    writer.take(notified(70.2, 10), false, &mut taken);
+    writer.release(false, &mut taken);
+    writer.take(notified(70.4, 20), false, &mut taken);
+    assert_eq!(
+        shown(&taken),
+        [("70.2".into(), "cov"), ("70.4".into(), "cov")]
+    );
+
+    let mut writer = Writer::new(ai1_value());
+    let mut taken = Taken::default();
+    writer.take(notified(70.2, 10), false, &mut taken);
+    let poll = sample(
+        Ok(vec![present_value(70.6)]),
+        Via::Poll,
+        Duration::from_secs(10),
+    );
+    writer.take(poll, true, &mut taken);
+    assert_eq!(
+        shown(&taken),
+        [("70.2".into(), "cov"), ("70.6".into(), "polled")]
+    );
+    // A first read that comes after all still sets the units, though its
+    // value is older than the poll's.
+    writer.take(first_read(), true, &mut taken);
+    writer.take(notified(71.0, 20_000), false, &mut taken);
+    assert_eq!(
+        shown(&taken)[2..],
+        [("71 °F".into(), "cov")],
+        "{:?}",
+        shown(&taken)
+    );
+}
+
+/// A later start (a failed renewal subscribing again) hands its read on
+/// after the new subscription's notification, maybe ticks later: the read
+/// gives the details but never shows as the newer value, so the screen,
+/// the history and the log stay in order.
+#[tokio::test(start_paused = true)]
+async fn a_later_start_read_older_than_what_shows_gives_only_its_details() {
+    let mut writer = Writer::new(ai1_value());
+    let mut taken = Taken::default();
+    writer.take(first_read(), false, &mut taken);
+    writer.take(notified(72.0, 2_010), false, &mut taken);
+    let mut later = Taken::default();
+    let mut again = first_read();
+    again.at += Duration::from_secs(2);
+    again.values = Ok(vec![present_value(71.5)]);
+    writer.take(again, false, &mut later);
+    assert_eq!(
+        shown(&taken),
+        [("70 °F".into(), "cov"), ("72 °F".into(), "cov")]
+    );
+    // One ending at the same instant as the newest value counts as older.
+    let mut tie = first_read();
+    tie.at += Duration::from_millis(2_010);
+    writer.take(tie, false, &mut later);
+    assert!(later.written.is_empty(), "{:?}", later.written);
+    assert_eq!(later.details.len(), 2);
+    // A read newer than what shows is written as usual.
+    let mut newer = first_read();
+    newer.at += Duration::from_secs(3);
+    writer.take(newer, false, &mut later);
+    assert_eq!(shown(&later), [("70 °F".into(), "cov")]);
+}
+
+/// A session that ends with notifications still waiting for the first
+/// read lets them out (a removed row counts them as dropped instead).
+#[tokio::test(start_paused = true)]
+async fn what_waits_at_the_end_goes_out() {
+    let mut writer = Writer::new(ai1_value());
+    let mut taken = Taken::default();
+    writer.take(notified(70.2, 10), false, &mut taken);
+    writer.take(notified(70.4, 20), false, &mut taken);
+    assert_eq!(writer.held(), 2);
+    writer.release(false, &mut taken);
+    assert_eq!(writer.held(), 0);
+    assert_eq!(taken.written.len(), 2);
+}
+
+/// What waits is bounded like the stream: the oldest go, counted.
+#[tokio::test(start_paused = true)]
+async fn what_waits_for_the_first_read_is_bounded() {
+    let mut writer = Writer::new(ai1_value());
+    let mut taken = Taken::default();
+    for step in 0..PENDING_PER_ROW as u64 + 2 {
+        writer.take(notified(60.0 + step as f32, 10 + step), false, &mut taken);
+    }
+    assert_eq!(taken.dropped, 2);
+    writer.take(first_read(), false, &mut taken);
+    assert_eq!(taken.written.len(), PENDING_PER_ROW + 1);
+    assert_eq!(taken.written[1].shown.value.as_deref(), Ok("62 °F"));
 }
