@@ -5,7 +5,8 @@ macOS only. Run it from anywhere inside the repository:
 
     python3 website/scripts/tui-screenshots/capture.py
 
-It builds `bacnet` (with sc-tls and serial) and the loopback lab in
+It builds `bacnet` with the macOS release's features (sc-tls and mcp; serial
+too with --mstp-port) and the loopback lab in
 lab/, starts the lab, and runs `bacnet tui` in a tmux pane. A NEW Terminal
 window, opened just for this run, attaches to that pane; tmux sends the keys
 and `screencapture -l` photographs that window only. The window is closed at
@@ -175,11 +176,14 @@ def run(cmd, check=True, **kw):
 # ---------------------------------------------------------------- build
 
 
-def build():
+def build(serial):
     env = dict(os.environ, CARGO_TARGET_DIR=TARGET)
-    log("building bacnet (sc-tls, serial)")
+    # The macOS release executable's features, so the shots show what users
+    # install; serial only for the live --mstp-port monitor shots.
+    features = "sc-tls,mcp" + (",serial" if serial else "")
+    log("building bacnet (%s)" % features)
     subprocess.run(["cargo", "build", "--release", "--locked", "--manifest-path",
-                    os.path.join(REPO, "Cargo.toml"), "-p", "bacnet-cli", "--features", "sc-tls,serial"],
+                    os.path.join(REPO, "Cargo.toml"), "-p", "bacnet-cli", "--features", features],
                    check=True, env=env)
     log("building tui-lab")
     # The lab is its own workspace; start it from the workspace's lock so it
@@ -839,9 +843,14 @@ def bip(s, p, lab):
     p.send("L")
 
     p.send("4")
-    p.shot("network-fd-bdt", wait=r"\[BDT\]")
+    # Read the tables again: the read from connecting is a minute old by now,
+    # and the FDT ages its rows from it, so the lab's 60 s foreign device
+    # would show 0 s left and "expiring".
+    p.wait(r"\[BDT\]")
+    p.send("r")
+    p.shot("network-fd-bdt", wait=r"\[BDT\].*read \d+s ago")
     p.send("Tab")
-    p.shot("network-fdt", wait=r"\[FDT\]")
+    p.shot("network-fdt", wait=r"\[FDT\].*read \d+s ago")
     p.send("Tab", "m")
     p.shot("network-matrix", wait=r"BDTs agree|MISS")
     p.send("Tab", "r")
@@ -1069,7 +1078,7 @@ def main():
         os.makedirs(opts.tmux_only, exist_ok=True)
         opts.tmux_only = os.path.abspath(opts.tmux_only)
     if not opts.reuse:
-        build()
+        build(bool(opts.mstp_port))
     for binary in (BACNET, LAB):
         if not os.access(binary, os.X_OK):
             ap.error("%s is missing; run without --reuse" % binary)

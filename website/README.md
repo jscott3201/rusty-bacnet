@@ -141,7 +141,8 @@ python3 website/scripts/tui-screenshots/capture.py           # build, then every
 python3 website/scripts/tui-screenshots/capture.py --reuse --only watch-list,overview-help
 ```
 
-The script builds `bacnet` (with `sc-tls` and `serial`) and the loopback lab
+The script builds `bacnet` with the macOS release executable's features
+(`sc-tls` and `mcp`; `serial` too with `--mstp-port`) and the loopback lab
 in `scripts/tui-screenshots/lab/`, a standalone crate outside the workspace
 that uses the workspace crates by path. It starts the lab (a BBMD, a router,
 three B/IP devices and a BACnet/SC hub, all on 127.0.0.1) and runs the TUI in
@@ -171,12 +172,11 @@ Rerun it after a TUI change that the pages show, and review the new WebP images 
 committing them. A new shot needs an entry in `SHOTS` in `capture.py`, a step
 in one of its scenarios, and a page that uses it.
 
-**Known gap (#2110):** the scenarios match `dev`'s TUI again, and a full run
-takes every shot in the manifest. The committed images still date from before
-many TUI changes; they are to be retaken from the published 0.15.0 release
-build, so the site shows what users install. When a wait times out, the script names the
-scenario, the text it waited for and the last shot taken, then prints the
-pane.
+The committed images were all taken in one run from the 0.15.0 release tree
+(#2110), with Terminal in full screen, so every shot is cropped to the pane
+and none shows window chrome. Take a refresh in one run too, so the set
+keeps one look. When a wait times out, the script names the scenario, the
+text it waited for and the last shot taken, then prints the pane.
 
 ## Retained CI and publication reference
 
