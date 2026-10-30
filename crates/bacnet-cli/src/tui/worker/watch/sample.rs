@@ -135,9 +135,17 @@ pub(crate) struct Taken {
 /// A device usually notifies as soon as it takes the subscription, and the
 /// hub hands the first read on only once its start is over, so a
 /// notification can come before the read that says how to write it. It
-/// waits for that read, then follows it, being the newer (#2167). A first
-/// read that failed, or a start that ended without one seen, lets what
-/// waits out without units or state texts.
+/// waits for that read, for the whole start (the SubscribeCOV timeout and
+/// its retries included), then is written after it, since the read ended
+/// before the subscription was asked for (#2167). A first read that
+/// failed, or a start that ended without one seen, lets what waits out
+/// without units or state texts.
+///
+/// A later start (after a failed renewal, or a retry from polling) writes
+/// with the format it has, so nothing waits; its read, handed on last,
+/// can be older than a notification already written. It then still gives
+/// the format and the details but not a value, so every value written is
+/// at least as new as the one before.
 #[derive(Debug)]
 pub(crate) struct Writer {
     point: Point,
@@ -145,6 +153,8 @@ pub(crate) struct Writer {
     format: Option<RowFormat>,
     /// Notifications that came before it.
     held: VecDeque<hub::Sample>,
+    /// When the newest value written arrived.
+    newest: Option<Instant>,
 }
 
 impl Writer {
@@ -153,7 +163,13 @@ impl Writer {
             point,
             format: None,
             held: VecDeque::new(),
+            newest: None,
         }
+    }
+
+    /// Notifications waiting for the first read.
+    pub(crate) fn held(&self) -> u64 {
+        self.held.len() as u64
     }
 
     /// Take one sample; `polled` when the row is polled now.
@@ -176,7 +192,7 @@ impl Writer {
                         });
                         self.format = Some(format);
                     }
-                    // Keeps what an earlier start's read found.
+                    // Keeps what an earlier start's read found, or none.
                     Err(_) => {
                         self.format.get_or_insert_default();
                     }
@@ -193,7 +209,8 @@ impl Writer {
     }
 
     /// The start ended and no first read came (a reader that falls behind
-    /// loses the oldest samples): what waits goes out without the format.
+    /// loses the oldest samples), or the session is ending: what waits goes
+    /// out without the format.
     pub(crate) fn release(&mut self, polled: bool, out: &mut Taken) {
         if self.format.is_none() {
             self.format = Some(RowFormat::default());
@@ -207,7 +224,11 @@ impl Writer {
         }
     }
 
-    fn write(&self, sample: &hub::Sample, polled: bool, out: &mut Taken) {
+    fn write(&mut self, sample: &hub::Sample, polled: bool, out: &mut Taken) {
+        if sample.via == Via::First && self.newest.is_some_and(|newest| sample.at < newest) {
+            // A later start's read, older than a value already written.
+            return;
+        }
         let property = self.point.property;
         let reading = match &sample.values {
             Ok(rows) => match sample.via {
@@ -226,6 +247,7 @@ impl Writer {
             return;
         };
         reading.at = sample.at.into_std();
+        self.newest = self.newest.max(Some(sample.at));
         let source = match sample.via {
             Via::Notification => "cov",
             Via::Poll => "polled",

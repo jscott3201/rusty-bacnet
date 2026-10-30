@@ -309,10 +309,58 @@ async fn a_start_over_without_its_read_lets_what_waited_out() {
         shown(&taken),
         [("70.2".into(), "cov"), ("70.6".into(), "polled")]
     );
-    // A first read that comes after all still sets the units.
+    // A first read that comes after all still sets the units, though its
+    // value is older than the poll's.
     writer.take(first_read(), true, &mut taken);
     writer.take(notified(71.0, 20_000), false, &mut taken);
-    assert_eq!(shown(&taken)[3], ("71 °F".into(), "cov"));
+    assert_eq!(
+        shown(&taken)[2..],
+        [("71 °F".into(), "cov")],
+        "{:?}",
+        shown(&taken)
+    );
+}
+
+/// A later start (a failed renewal subscribing again) hands its read on
+/// after the new subscription's notification, maybe ticks later: the read
+/// gives the details but never shows as the newer value, so the screen,
+/// the history and the log stay in order.
+#[tokio::test(start_paused = true)]
+async fn a_later_start_read_older_than_what_shows_gives_only_its_details() {
+    let mut writer = Writer::new(ai1_value());
+    let mut taken = Taken::default();
+    writer.take(first_read(), false, &mut taken);
+    writer.take(notified(72.0, 2_010), false, &mut taken);
+    let mut later = Taken::default();
+    let mut again = first_read();
+    again.at += Duration::from_secs(2);
+    again.values = Ok(vec![present_value(71.5)]);
+    writer.take(again, false, &mut later);
+    assert_eq!(
+        shown(&taken),
+        [("70 °F".into(), "cov"), ("72 °F".into(), "cov")]
+    );
+    assert!(later.written.is_empty(), "{:?}", later.written);
+    assert_eq!(later.details.len(), 1);
+    // A read newer than what shows is written as usual.
+    let mut newer = first_read();
+    newer.at += Duration::from_secs(3);
+    writer.take(newer, false, &mut later);
+    assert_eq!(shown(&later), [("70 °F".into(), "cov")]);
+}
+
+/// A row removed, or a session ended, with notifications still waiting
+/// for the first read: the end lets them out, a removal counts them.
+#[tokio::test(start_paused = true)]
+async fn what_waits_at_the_end_goes_out_or_is_counted() {
+    let mut writer = Writer::new(ai1_value());
+    let mut taken = Taken::default();
+    writer.take(notified(70.2, 10), false, &mut taken);
+    writer.take(notified(70.4, 20), false, &mut taken);
+    assert_eq!(writer.held(), 2);
+    writer.release(false, &mut taken);
+    assert_eq!(writer.held(), 0);
+    assert_eq!(taken.written.len(), 2);
 }
 
 /// What waits is bounded like the stream: the oldest go, counted.

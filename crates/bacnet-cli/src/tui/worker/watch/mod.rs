@@ -187,8 +187,11 @@ impl<'s, T: TransportPort + 'static> State<'s, T> {
             WatchCommand::Add { row, point } => self.add(row, point),
             WatchCommand::Remove { row } => {
                 // The hub cancels what the point holds once its last
-                // lease goes.
-                self.rows.remove(&row);
+                // lease goes. What waited for its first read is lost
+                // with it, and counted.
+                if let Some(row) = self.rows.remove(&row) {
+                    self.sink.add_dropped(row.writer.held());
+                }
             }
             WatchCommand::Csv(on) => self.csv(on),
         }
@@ -249,8 +252,9 @@ impl<'s, T: TransportPort + 'static> State<'s, T> {
     }
 
     /// Every tick: hand each row's new values to the UI and the CSV, report
-    /// a changed source, count what was lost, and report the counters.
-    fn tick(&mut self, rate: &RequestLimits) {
+    /// a changed source, count what was lost, and report the counters. The
+    /// `last`, as the session ends, lets out what waits for a first read.
+    fn tick(&mut self, rate: &RequestLimits, last: bool) {
         let lifetime = self.options.lifetime;
         let mut samples = Vec::new();
         let mut gone = Vec::new();
@@ -261,7 +265,7 @@ impl<'s, T: TransportPort + 'static> State<'s, T> {
             while let Some(sample) = row.samples.try_next() {
                 row.writer.take(sample, polled, &mut taken);
             }
-            if row.started {
+            if row.started || last {
                 // The start was over a tick ago, so its first read was
                 // handed on by now: one not among the samples was lost.
                 row.writer.release(polled, &mut taken);
@@ -412,7 +416,7 @@ pub(crate) async fn run<T: TransportPort + 'static>(
                 None => break,
             },
             Some(()) = closing.next(), if !closing.is_empty() => {}
-            _ = tick.tick() => state.tick(rate),
+            _ = tick.tick() => state.tick(rate, false),
         }
         for log in state.closing.drain(..) {
             closing.push(Box::pin(log.close()));
@@ -420,7 +424,7 @@ pub(crate) async fn run<T: TransportPort + 'static>(
         state.send_outbox();
     }
     // The CSV gets what arrived since the last tick.
-    state.tick(rate);
+    state.tick(rate, true);
     state.rows.clear();
     state.hub.shutdown(CANCEL_WAIT).await;
     if let Some(log) = state.csv.take() {

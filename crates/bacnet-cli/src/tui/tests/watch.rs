@@ -465,6 +465,37 @@ async fn csv_logging_writes_samples_to_the_workspace() {
     site.stop().await;
 }
 
+/// Quitting while a notification waits for its row's first read (the
+/// device slow to acknowledge the subscription) still logs it (#2167).
+#[tokio::test(start_paused = true)]
+async fn quitting_logs_what_waited_for_the_first_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut with_workspace = options(300, 10, 0);
+    with_workspace.watch.workspace = Some(dir.path().to_owned());
+    let server = Server {
+        quirks: Quirks {
+            latency: Duration::from_millis(20),
+            slow_cov_ack: Duration::from_secs(5),
+            ..Quirks::default()
+        },
+        ..Server::lab(100, LAB)
+    };
+    let mut site = lab_site(server, with_workspace).await;
+    command(&mut site, "csv on").await;
+    command(&mut site, "watch 100 ai:2").await;
+    site.run_for(Duration::from_secs(1)).await;
+    assert!(site.app.watch.rows()[0].value.is_none(), "still waiting");
+    site.quit().await;
+    let files: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
+    let text = std::fs::read_to_string(files[0].as_ref().unwrap().path()).unwrap();
+    assert!(
+        text.lines()
+            .any(|line| line.contains(",51,") && line.contains(",cov,")),
+        "{text}"
+    );
+    site.stop().await;
+}
+
 #[path = "watch_initial_retry.rs"]
 mod initial_retry;
 

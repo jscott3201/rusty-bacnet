@@ -336,8 +336,8 @@ impl HubPort {
                 _ => {}
             }
         }
-        let cov_ack = kind.is_some_and(|(pdu_type, _)| pdu_type == 2)
-            && simple_ack_service(npdu) == Some(ConfirmedServiceChoice::SUBSCRIBE_COV.to_raw());
+        let cov_ack =
+            simple_ack_service(npdu) == Some(ConfirmedServiceChoice::SUBSCRIBE_COV.to_raw());
         let slow = inner
             .ports
             .iter()
