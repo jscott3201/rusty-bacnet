@@ -14,8 +14,8 @@ use bacnet_types::enums::{ObjectType, PropertyIdentifier, ServiceSupported};
 use bacnet_types::primitives::PropertyValue;
 use bacnet_types::{PROTOCOL_REVISION, PROTOCOL_VERSION};
 
-use crate::local_device::announcement_device;
 use crate::server::ServerConfig;
+use bacnet_device_core::discovery::announcement_device;
 
 // ───────────────────────────── Data model ──────────────────────────────────
 

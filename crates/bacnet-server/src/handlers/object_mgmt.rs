@@ -2,47 +2,6 @@ use super::*;
 use bacnet_types::enums::EngineeringUnits;
 use bacnet_types::error::RemoteError;
 
-/// Handle a WhoHas request and return an IHave response if we have the object.
-///
-/// Returns `Some(IHaveRequest)` if we have the requested object, `None` otherwise.
-pub fn handle_who_has(
-    db: &ObjectDatabase,
-    service_data: &[u8],
-    device_oid: ObjectIdentifier,
-) -> Result<Option<IHaveRequest>, Error> {
-    let request = WhoHasRequest::decode(service_data)?;
-
-    let instance = device_oid.instance_number();
-    if request.range.is_some_and(|range| !range.contains(instance)) {
-        return Ok(None);
-    }
-
-    match &request.object {
-        WhoHasObject::Identifier(oid) => {
-            if let Some(obj) = db.get(oid) {
-                return Ok(Some(IHaveRequest {
-                    device_identifier: device_oid,
-                    object_identifier: *oid,
-                    object_name: obj.object_name().to_string(),
-                }));
-            }
-        }
-        WhoHasObject::Name(name) => {
-            for (oid, obj) in db.iter_objects() {
-                if obj.object_name() == name {
-                    return Ok(Some(IHaveRequest {
-                        device_identifier: device_oid,
-                        object_identifier: oid,
-                        object_name: name.clone(),
-                    }));
-                }
-            }
-        }
-    }
-
-    Ok(None)
-}
-
 /// Handle a CreateObject request.
 ///
 /// Supports creating objects by type (server picks instance) or by identifier.

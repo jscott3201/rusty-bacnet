@@ -11,7 +11,6 @@
 //! Value.
 use super::*;
 use crate::server::cov_wire_test_support::Harness;
-use crate::server::test_transport::TestTransport;
 use bacnet_types::error::DecodingKind;
 
 /// AV-1's object identifier as a primitive `[0]`.
@@ -163,9 +162,7 @@ async fn confirmed_audit_notification_cut_short_or_misshapen_is_rejected() {
 /// the Error PDU the service answers other refusals with.
 #[test]
 fn request_syntax_faults_draw_the_reject_naming_them_for_every_service() {
-    let reply = |service, error: &Error| {
-        BACnetServer::<TestTransport>::error_apdu_from_error(7, service, error)
-    };
+    let reply = |service, error: &Error| bacnet_device_core::reply::error_apdu(7, service, error);
     for raw in 0..=u8::MAX {
         let service = ConfirmedServiceChoice::from_raw(raw);
         for (error, reason) in [

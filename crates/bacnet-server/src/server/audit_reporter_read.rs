@@ -32,9 +32,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
                 | Error::Remote(RemoteError::Reject { .. })
                 | Error::Remote(RemoteError::Abort { .. }),
             ) => return None,
-            Err(error) => Some(super::super::requests::confirmed_response::error_fields(
-                error,
-            )),
+            Err(error) => Some(bacnet_device_core::reply::error_fields(error)),
         };
         self.read_target_intent(db, target, property, result)
     }

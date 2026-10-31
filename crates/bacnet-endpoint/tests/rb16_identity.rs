@@ -207,7 +207,7 @@ fn identity_iam_bytes_match_server_discovery_construction() {
 
     // Server side builds the same four fields from the derived config.
     let server_config = bacnet_endpoint::identity::server_config(&id);
-    let server_req = bacnet_server::server::discovery_iam_for_test(&server_config);
+    let server_req = bacnet_device_core::discovery::i_am(&server_config.device);
     assert_eq!(
         server_req,
         bacnet_services::who_is::IAmRequest {

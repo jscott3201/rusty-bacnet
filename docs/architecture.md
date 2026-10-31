@@ -32,6 +32,9 @@ Foundations
   bacnet-network        Network layer, BACnetRouter, RouterTable
   bacnet-objects        BACnetObject, ObjectDatabase, object implementations
                         (no_std + alloc where atomics allow, #1615)
+  bacnet-device-core    Sans-IO request core over a borrowed ObjectDatabase: the read
+                        path, discovery and the reply map the server runs on, and a
+                        Responder for firmware (no_std + alloc where atomics allow, #2178)
 
 Runtime and application roles
   bacnet-endpoint-core  Private lifecycle, ingress, egress, coordination
@@ -47,6 +50,7 @@ Operations core (UI-free, for the front ends)
                         a profile offers writes (rmcp SDK; the CLI's `mcp` feature)
 
 Selected direct dependencies
+  bacnet-server   -> bacnet-device-core, bacnet-objects, bacnet-network
   bacnet-endpoint -> bacnet-client, bacnet-server, bacnet-endpoint-core,
                      bacnet-network, bacnet-objects
   bacnet-ops     -> bacnet-client, bacnet-transport, bacnet-npdu
@@ -96,7 +100,7 @@ Optional private EndpointIngress classifier / Client dispatch task / Server disp
     |  Decodes APDU header (PDU type, service choice, invoke ID)
     |  Routes to appropriate handler
     v
-Service handler (e.g., handle_read_property)
+Service handler (ReadProperty, Who-Is and Who-Has through bacnet-device-core)
     |  Decodes service request from APDU payload
     |  Reads/writes ObjectDatabase
     |  Encodes response

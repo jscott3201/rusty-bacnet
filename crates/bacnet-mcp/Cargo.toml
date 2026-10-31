@@ -54,7 +54,7 @@ libc.workspace = true
 
 [dev-dependencies]
 bacnet-encoding = { workspace = true, features = ["std"] }
-bacnet-objects.workspace = true
+bacnet-objects = { workspace = true, features = ["std"] }
 bytes = { workspace = true, features = ["std"] }
 bacnet-server.workspace = true
 tempfile = "3"

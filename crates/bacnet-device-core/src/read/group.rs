@@ -23,57 +23,68 @@
 //! plans its rows, a Group's member rows included, before it reads a value,
 //! and samples the live lists once for the request when the plan reads one,
 //! so those member rows serve the request's one live snapshot (#1171, #1213).
-use super::read_budget::{ReadFailure, Work};
-use super::rpm_budget::{self, PlannedObject, PlannedRow};
-use super::*;
+use super::budget::{ReadFailure, Work};
+use super::property;
+use super::rpm::{self, PlannedObject, PlannedRow};
+use super::{ReadOverlay, ReadScope};
+use alloc::vec::Vec;
 use bacnet_encoding::constructed::decode_read_access_specification;
+use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::traits::BACnetObject;
+use bacnet_services::rpm::ReadAccessResult;
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
+use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
+use bacnet_types::error::Error;
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bytes::BytesMut;
 
 /// A Group's members, planned for the request that reads its Present_Value.
 /// A list that doesn't decode keeps its error for the row to report.
-pub(super) struct GroupMembers(Result<Vec<PlannedObject>, Error>);
+pub struct GroupMembers(Result<Vec<PlannedObject>, Error>);
 
 impl GroupMembers {
     /// Every planned member row, with the member object it reads; none when
     /// the list didn't decode.
-    pub(super) fn rows(&self) -> impl Iterator<Item = (ObjectIdentifier, &PlannedRow)> {
-        self.0
-            .as_deref()
-            .into_iter()
-            .flat_map(rpm_budget::planned_rows)
+    pub(crate) fn rows(&self) -> impl Iterator<Item = (ObjectIdentifier, &PlannedRow)> {
+        self.0.as_deref().into_iter().flat_map(rpm::planned_rows)
     }
 }
 
 /// Plan a single-property read (ReadProperty, ReadRange, the local read) of
 /// a found object: the read's own row and, for a Group's whole
-/// Present_Value, the member rows, all charged to the view's work limit.
-pub(super) fn plan_property(
+/// Present_Value, the member rows, all charged to the scope's work limit.
+///
+/// Hosts plan through [`PropertyPlan::new`](super::PropertyPlan::new).
+/// For bacnet-server's legacy, unbudgeted ReadPropertyMultiple helper only;
+/// it leaves the public API with that helper (#2178, PR 3).
+#[doc(hidden)]
+pub fn plan_property<O: ReadOverlay>(
     db: &ObjectDatabase,
-    view: Option<&DeviceReadContext<'_>>,
+    scope: &ReadScope,
+    overlay: Option<&O>,
     object: &dyn BACnetObject,
     reference: &PropertyReference,
 ) -> Result<Option<GroupMembers>, ReadFailure> {
-    let mut work = Work::new(view.map_or(usize::MAX, |view| view.work_limit));
+    let mut work = Work::new(scope.work_limit);
     // This read's own row, as a one-property ReadPropertyMultiple counts it.
     work.charge()?;
-    plan_members(db, view, object, reference, &mut work)
+    plan_members(db, scope, overlay, object, reference, &mut work)
 }
 
 /// Read `property` of a found object the way the single-property services
 /// serve it. A Group's whole Present_Value is rebuilt from the `members` the
 /// read planned; every other read is the object's own answer (the
-/// executor's, when `object` is a served view).
-pub(super) fn read_served_property(
+/// host's, when `object` is a served view).
+pub fn read_served_property<O: ReadOverlay>(
     db: &ObjectDatabase,
-    view: Option<&DeviceReadContext<'_>>,
+    overlay: Option<&O>,
     object: &dyn BACnetObject,
     property: PropertyIdentifier,
     array_index: Option<u32>,
     members: Option<GroupMembers>,
 ) -> Result<PropertyValue, Error> {
     match members {
-        Some(members) => value(db, view, members),
+        Some(members) => value(db, overlay, members),
         None => object.read_property(property, array_index),
     }
 }
@@ -82,9 +93,10 @@ pub(super) fn read_served_property(
 /// and `object` is a Group; `None` for any other row. Each member is planned
 /// as ReadPropertyMultiple plans one specification, and every member row is
 /// charged to `work`.
-pub(super) fn plan_members(
+pub(crate) fn plan_members<O: ReadOverlay>(
     db: &ObjectDatabase,
-    view: Option<&DeviceReadContext<'_>>,
+    scope: &ReadScope,
+    overlay: Option<&O>,
     object: &dyn BACnetObject,
     reference: &PropertyReference,
     work: &mut Work,
@@ -96,7 +108,7 @@ pub(super) fn plan_members(
         return Ok(None);
     }
     let planned = match members(object) {
-        Ok(specs) => Ok(rpm_budget::plan_specs(db, &specs, work, view, false)?),
+        Ok(specs) => Ok(rpm::plan_specs(db, scope, overlay, &specs, work, false)?),
         Err(error) => Err(error),
     };
     Ok(Some(GroupMembers(planned)))
@@ -111,17 +123,17 @@ pub(super) fn plan_members(
 /// Member rows were planned without Group expansion, so they use each
 /// object's own reader and a Group listed as a member can't make this read
 /// recurse.
-pub(super) fn value(
+pub(crate) fn value<O: ReadOverlay>(
     db: &ObjectDatabase,
-    view: Option<&DeviceReadContext<'_>>,
+    overlay: Option<&O>,
     members: GroupMembers,
 ) -> Result<PropertyValue, Error> {
     let results = members
         .0?
         .into_iter()
         .map(|member| {
-            let stored = read_property::read_target_object(db, &member.lookup_oid);
-            let served = stored.and_then(|object| view.map(|view| view.object(object)));
+            let stored = property::read_target_object(db, &member.lookup_oid);
+            let served = stored.and_then(|object| overlay.and_then(|overlay| overlay.view(object)));
             let object = served
                 .as_ref()
                 .map(|served| served as &dyn BACnetObject)
@@ -131,7 +143,7 @@ pub(super) fn value(
                 list_of_results: member
                     .properties
                     .into_iter()
-                    .map(|row| rpm_budget::read_row(db, view, object, row))
+                    .map(|row| rpm::read_row(db, overlay, object, row))
                     .collect(),
             };
             let mut encoded = BytesMut::new();
@@ -145,7 +157,7 @@ pub(super) fn value(
 /// The group's members, decoded from its List_Of_Group_Members elements.
 /// A built-in Group always serves decodable ones; a custom object whose
 /// list doesn't decode fails the read with PROPERTY / OTHER.
-pub(super) fn members(group: &dyn BACnetObject) -> Result<Vec<ReadAccessSpecification>, Error> {
+pub(crate) fn members(group: &dyn BACnetObject) -> Result<Vec<ReadAccessSpecification>, Error> {
     let PropertyValue::List(elements) =
         group.read_property(PropertyIdentifier::LIST_OF_GROUP_MEMBERS, None)?
     else {

@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::mutation::{
     DeviceWriteAuthorizer, MutationAuthorizationContext, MutationTarget, MutationTrust,
 };
+use bacnet_device_core::reply;
 use bacnet_encoding::apdu::{decode_apdu, encode_apdu};
 use bacnet_endpoint_core::endpoint_ingress::{EndpointApduDestination, EndpointEgress};
 use bacnet_network::layer::ReceivedApdu;
@@ -110,7 +111,7 @@ impl EndpointResponder {
             reinitialize: None,
             reinitialize_audit: None,
             registered_port: None,
-            read_work_limit: crate::server::ReadPropertyMultipleBudget::default()
+            read_work_limit: bacnet_device_core::read::ReadPropertyMultipleBudget::default()
                 .max_result_elements,
         }
     }
@@ -314,12 +315,8 @@ impl EndpointResponder {
             .as_ref()
             .filter(|_| request.service_choice == ConfirmedServiceChoice::REINITIALIZE_DEVICE);
         let mut after_reply = reinitialize::AfterReply::default();
-        let mut response = if request.segmented {
-            Apdu::Abort(AbortPdu {
-                sent_by_server: true,
-                invoke_id,
-                abort_reason: AbortReason::SEGMENTATION_NOT_SUPPORTED,
-            })
+        let response = if request.segmented {
+            reply::refuse_segmented(invoke_id)
         } else if request.service_choice == ConfirmedServiceChoice::READ_PROPERTY {
             confirmed_response::read_property_response(
                 self.db(),
@@ -367,17 +364,10 @@ impl EndpointResponder {
                     invoke_id,
                     service_choice: request.service_choice,
                 }),
-                Err(error) => confirmed_response::error_apdu_from_error(
-                    invoke_id,
-                    request.service_choice,
-                    &error,
-                ),
+                Err(error) => reply::error_apdu(invoke_id, request.service_choice, &error),
             }
         } else {
-            Apdu::Reject(RejectPdu {
-                invoke_id,
-                reject_reason: RejectReason::UNRECOGNIZED_SERVICE,
-            })
+            reply::unrecognized_service(invoke_id)
         };
 
         // Sizing uses the saved link limits after application execution. Invalid
@@ -385,17 +375,9 @@ impl EndpointResponder {
         let max_apdu = response_route
             .max_apdu_length(request.max_apdu_length, received.source_network.as_ref())
             .unwrap_or(request.max_apdu_length);
+        let response = reply::fit(response, max_apdu);
         let mut encoded = BytesMut::new();
         encode_apdu(&mut encoded, &response)?;
-        if matches!(response, Apdu::ComplexAck(_)) && encoded.len() > usize::from(max_apdu) {
-            response = Apdu::Abort(AbortPdu {
-                sent_by_server: true,
-                invoke_id,
-                abort_reason: AbortReason::SEGMENTATION_NOT_SUPPORTED,
-            });
-            encoded.clear();
-            encode_apdu(&mut encoded, &response)?;
-        }
 
         if !response_route.requires_direct_response()
             && let Some(reply_tx) = received.reply_tx.take()

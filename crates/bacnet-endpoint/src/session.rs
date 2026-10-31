@@ -169,7 +169,7 @@ pub struct SessionConfig {
     /// (default 256).
     ///
     /// The endpoint's counterpart of the server's
-    /// [`ReadPropertyMultipleBudget::max_result_elements`](bacnet_server::server::ReadPropertyMultipleBudget::max_result_elements),
+    /// [`ReadPropertyMultipleBudget::max_result_elements`](bacnet_device_core::read::ReadPropertyMultipleBudget::max_result_elements),
     /// with the same default. A read counts its own row, and a Group's
     /// Present_Value adds one row per member property after ALL, REQUIRED
     /// and OPTIONAL expand. A read past the limit is answered with an Abort
@@ -199,7 +199,7 @@ impl Default for SessionConfig {
             apdu_timeout_ms: 1_000,
             apdu_retries: 0,
             max_apdu_length: 480,
-            read_work_limit: bacnet_server::server::ReadPropertyMultipleBudget::default()
+            read_work_limit: bacnet_device_core::read::ReadPropertyMultipleBudget::default()
                 .max_result_elements,
             min_request_interval_ms: 0,
         }

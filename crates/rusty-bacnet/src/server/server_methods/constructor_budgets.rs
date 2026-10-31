@@ -117,7 +117,7 @@ pub(super) struct BudgetKeywords {
 /// The validated policy and budgets the server starts with.
 pub(super) struct Budgets {
     pub request_admission_policy: server::RequestAdmissionPolicy,
-    pub read_property_multiple_budget: server::ReadPropertyMultipleBudget,
+    pub read_property_multiple_budget: bacnet_device_core::read::ReadPropertyMultipleBudget,
     pub get_alarm_summary_budget: server::GetAlarmSummaryBudget,
     pub get_enrollment_summary_budget: server::GetEnrollmentSummaryBudget,
     pub atomic_read_file_budget: server::AtomicReadFileBudget,
@@ -139,7 +139,7 @@ pub(super) fn budgets(keywords: BudgetKeywords) -> PyResult<Budgets> {
         max_recovery_in_flight_per_peer: keywords.max_recovery_in_flight_per_peer,
     };
     request_admission_policy.validate().map_err(invalid)?;
-    let read_property_multiple_budget = server::ReadPropertyMultipleBudget {
+    let read_property_multiple_budget = bacnet_device_core::read::ReadPropertyMultipleBudget {
         max_result_elements: keywords.rpm_max_result_elements,
         max_service_ack_bytes: keywords.rpm_max_service_ack_bytes,
     };

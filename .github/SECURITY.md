@@ -31,7 +31,7 @@ You should receive an acknowledgment within 48 hours. We will work with you to u
 
 This policy covers:
 
-- The Rust crates in this repository (`bacnet-time`, `bacnet-npdu`, `bacnet-types`, `bacnet-encoding`, `bacnet-services`, `bacnet-mstp-codec`, `bacnet-mstp-core`, `bacnet-bip-codec`, `bacnet-bip-core`, `bacnet-router-core`, `bacnet-transport`, `bacnet-network`, `bacnet-objects`, `bacnet-client`, `bacnet-server`, `bacnet-endpoint-core`, `bacnet-endpoint`, `bacnet-ops`, `bacnet-mcp`)
+- The Rust crates in this repository (`bacnet-time`, `bacnet-npdu`, `bacnet-types`, `bacnet-encoding`, `bacnet-services`, `bacnet-mstp-codec`, `bacnet-mstp-core`, `bacnet-bip-codec`, `bacnet-bip-core`, `bacnet-router-core`, `bacnet-transport`, `bacnet-network`, `bacnet-objects`, `bacnet-device-core`, `bacnet-client`, `bacnet-server`, `bacnet-endpoint-core`, `bacnet-endpoint`, `bacnet-ops`, `bacnet-mcp`)
 - The `bacnet` CLI (`bacnet-cli`)
 - The Python bindings (`rusty-bacnet`)
 - BACnet protocol handling (parsing, encoding, transport security)

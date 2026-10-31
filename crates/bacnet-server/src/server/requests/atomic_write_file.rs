@@ -27,7 +27,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 service_ack: buf.freeze(),
             }),
             Err(handlers::AtomicWriteFileFailure::Service(error)) => {
-                Self::error_apdu_from_error(invoke_id, service_choice, &error)
+                bacnet_device_core::reply::error_apdu(invoke_id, service_choice, &error)
             }
             Err(handlers::AtomicWriteFileFailure::Budget) => Apdu::Abort(AbortPdu {
                 sent_by_server: true,

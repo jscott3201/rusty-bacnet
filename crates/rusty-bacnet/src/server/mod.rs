@@ -139,7 +139,7 @@ pub struct BACnetServer {
     /// The `on_reinitialize` and `after_reinitialize` callables (#1566).
     reinitialize: Option<Arc<crate::reinitialize::PyReinitialize>>,
     request_admission_policy: server::RequestAdmissionPolicy,
-    read_property_multiple_budget: server::ReadPropertyMultipleBudget,
+    read_property_multiple_budget: bacnet_device_core::read::ReadPropertyMultipleBudget,
     get_alarm_summary_budget: server::GetAlarmSummaryBudget,
     get_enrollment_summary_budget: server::GetEnrollmentSummaryBudget,
     atomic_read_file_budget: server::AtomicReadFileBudget,

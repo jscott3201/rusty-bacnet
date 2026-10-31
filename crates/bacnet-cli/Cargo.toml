@@ -73,7 +73,7 @@ unicode-segmentation = { version = "1.13", optional = true }
 tempfile = "3"
 # The decode tests' frame builders (`bacnet_ops::decode::testing`).
 bacnet-ops = { workspace = true, features = ["test-support"] }
-bacnet-objects.workspace = true
+bacnet-objects = { workspace = true, features = ["std"] }
 bacnet-server.workspace = true
 rcgen.workspace = true
 futures-util.workspace = true

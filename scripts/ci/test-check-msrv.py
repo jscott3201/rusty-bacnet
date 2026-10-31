@@ -14,7 +14,8 @@ import unittest
 SCRIPT = Path(__file__).with_name("check-msrv.sh")
 # The no_std builds' run, after the baseline (#1613).
 NO_STD_ALLOC = ["-p", "bacnet-types", "-p", "bacnet-encoding", "-p", "bacnet-services",
-                "-p", "bacnet-objects", "--no-default-features", "--features", "alloc"]
+                "-p", "bacnet-objects", "-p", "bacnet-device-core",
+                "--no-default-features", "--features", "alloc"]
 DRIVER = r'''
 import json, os, sys
 from pathlib import Path

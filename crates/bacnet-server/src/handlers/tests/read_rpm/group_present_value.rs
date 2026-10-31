@@ -248,7 +248,8 @@ fn expanded_rows(db: &ObjectDatabase, specs: Vec<ReadAccessSpecification>) -> us
 
 #[test]
 fn member_rows_are_charged_to_the_rpm_work_budget_and_shared_between_groups() {
-    use crate::handlers::{ReadFailure, rpm_budget::handle_rpm_budgeted_observed};
+    use crate::handlers::rpm_budget::handle_rpm_budgeted_observed;
+    use bacnet_device_core::read::ReadFailure;
     let input = oid(ObjectType::ANALOG_INPUT, 1);
     let value = oid(ObjectType::ANALOG_VALUE, 2);
     // Group 7 expands ALL on AV-2; Group 8 is two explicit rows.
@@ -270,7 +271,7 @@ fn member_rows_are_charged_to_the_rpm_work_budget_and_shared_between_groups() {
     let read_seven = member(seven, &[(P::PRESENT_VALUE, None)]);
     let read_eight = member(eight, &[(P::PRESENT_VALUE, None)]);
     let pair = 1 + seven_members + 1 + 2;
-    let budget = |max_result_elements| crate::server::ReadPropertyMultipleBudget {
+    let budget = |max_result_elements| bacnet_device_core::read::ReadPropertyMultipleBudget {
         max_result_elements,
         max_service_ack_bytes: 16384,
     };

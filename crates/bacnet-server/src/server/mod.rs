@@ -21,10 +21,14 @@ use tracing::{debug, warn};
 use event_delivery::EventDelivery;
 
 use bacnet_encoding::apdu::{
-    self, AbortPdu, Apdu, ComplexAck, ConfirmedRequest as ConfirmedRequestPdu, ErrorPdu, RejectPdu,
+    self, AbortPdu, Apdu, ComplexAck, ConfirmedRequest as ConfirmedRequestPdu, RejectPdu,
     SegmentAck as SegmentAckPdu, SimpleAck, UnconfirmedRequest as UnconfirmedRequestPdu,
     encode_apdu,
 };
+// The server's tests build Error and Reject PDUs; its code takes them from
+// bacnet_device_core::reply.
+#[cfg(test)]
+use bacnet_encoding::apdu::ErrorPdu;
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_encoding::segmentation::{
@@ -47,9 +51,11 @@ use bacnet_transport::port::TransportPort;
 use bacnet_transport::warn_throttle::WarnThrottle;
 use bacnet_transport::warn_throttled;
 use bacnet_types::MacAddr;
+#[cfg(test)]
+use bacnet_types::enums::RejectReason;
 use bacnet_types::enums::{
     AbortReason, ConfirmedServiceChoice, ErrorClass, ErrorCode, LifeSafetyOperation, NotifyType,
-    ObjectType, PropertyIdentifier, RejectReason, Segmentation, UnconfirmedServiceChoice,
+    ObjectType, PropertyIdentifier, Segmentation, UnconfirmedServiceChoice,
 };
 use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
@@ -481,6 +487,8 @@ mod cov_snapshot;
 mod dcc_disable_rate;
 pub(crate) mod dcc_outcomes;
 mod dcc_policy;
+#[cfg(test)]
+mod device_core_parity_tests;
 mod lso_replay;
 pub use dcc_disable_rate::DccDisableRateLimit;
 mod dcc_timer;
@@ -491,8 +499,6 @@ pub use dcc_timer::DccState;
 mod binding_probes;
 mod device_bindings;
 mod discovery;
-#[doc(hidden)]
-pub use discovery::iam_request_for as discovery_iam_for_test;
 pub use discovery::{DiscoveryCounters, DiscoveryPolicy};
 pub(crate) use discovery::{DiscoveryLimiter, PreCheckDecision, WhoHasTarget};
 mod audit_log_purge;
@@ -565,10 +571,9 @@ mod segmentation;
 mod segmented_receive;
 mod segmented_send;
 pub(crate) use segmented_send::*;
+mod alarm_summary_budget;
 mod request_admission;
 mod rpm_budget;
-pub use rpm_budget::ReadPropertyMultipleBudget;
-mod alarm_summary_budget;
 pub use alarm_summary_budget::GetAlarmSummaryBudget;
 mod atomic_read_file_budget;
 mod atomic_write_file_budget;

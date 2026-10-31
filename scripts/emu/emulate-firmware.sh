@@ -51,8 +51,10 @@ all_boards=(
   "sifive_e riscv32imc-unknown-none-elf riscv32 board-sifive-e router"
 )
 # One cargo run per feature set, as in check-firmware-link.sh: every image
-# but apdu without the crate's default `alloc` feature, then apdu with it.
-builds=("--no-default-features" "--lib --bin apdu")
+# but apdu without the crate's default features, then apdu with `alloc`
+# alone (the default `objects` needs compare-and-swap, which the micro:bit
+# lacks). The objects image has no emulation build yet.
+builds=("--no-default-features" "--no-default-features --features alloc --lib --bin apdu")
 images=(mstp mstp-extended bip node bbmd router device apdu)
 stack_budget=firmware/link/stack-budget.toml
 

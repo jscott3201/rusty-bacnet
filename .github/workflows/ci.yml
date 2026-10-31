@@ -225,7 +225,7 @@ jobs:
       NO_STD_TARGETS: thumbv6m-none-eabi thumbv7em-none-eabihf riscv32imac-unknown-none-elf
       # Targets the firmware link test builds its images for (#1626), each with
       # budgets in firmware/link/size-budget.toml; in the cache key too.
-      FIRMWARE_TARGETS: thumbv7m-none-eabi thumbv6m-none-eabi riscv32imc-unknown-none-elf thumbv7em-none-eabihf
+      FIRMWARE_TARGETS: thumbv7m-none-eabi thumbv6m-none-eabi riscv32imc-unknown-none-elf thumbv7em-none-eabihf riscv32imac-unknown-none-elf
       # pcap for bacnet-cli, whose build script loads libpcap.
       APT_PACKAGES: libpcap-dev
     steps:
@@ -289,12 +289,12 @@ jobs:
           rustup target add $NO_STD_TARGETS
           # shellcheck disable=SC2086
           bash scripts/ci/check-no-std.sh $NO_STD_TARGETS
-      # bacnet-types, bacnet-encoding, bacnet-services and bacnet-objects
-      # with alloc and without std, tests included: Test runs those tests,
-      # and no run above lints them (#1613, #1615).
+      # bacnet-types, bacnet-encoding, bacnet-services, bacnet-objects and
+      # bacnet-device-core with alloc and without std, tests included: Test
+      # runs those tests, and no run above lints them (#1613, #1615, #2178).
       - name: Clippy (no_std crates with alloc, all targets)
         if: ${{ !cancelled() }}
-        run: cargo clippy -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects --no-default-features --features alloc --all-targets --locked -- -D warnings
+        run: cargo clippy -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc --all-targets --locked -- -D warnings
       # And without alloc either, the allocation-free profile (#1614).
       - name: Clippy (no_std crates without alloc, all targets)
         if: ${{ !cancelled() }}
@@ -305,7 +305,9 @@ jobs:
       # B/IP codec, node and BBMD, and a router between B/IP and MS/TP with
       # no allocator (#1664, #1667, #1679), and
       # bacnet-encoding and bacnet-services with one, its critical section
-      # and, without compare-and-swap, portable-atomic (#1635). It links with
+      # and, without compare-and-swap, portable-atomic (#1635), and
+      # bacnet-device-core over bacnet-objects with one, on the targets with
+      # compare-and-swap (riscv32imac for that image alone, #2178). It links with
       # the rust-lld that rustc ships, so the targets' core libraries are all
       # it needs. Nothing runs the images; the scenarios they link run in Test.
       - name: Firmware link test (bare-metal images, size budgets)
@@ -387,10 +389,10 @@ jobs:
       # needs none.
       - name: no_std crates' tests (alloc, without std)
         if: ${{ !cancelled() }}
-        run: cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects --no-default-features --features alloc --locked --profile ci
+        run: cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc --locked --profile ci
       - name: no_std crates' doctests (alloc, without std)
         if: ${{ !cancelled() }}
-        run: cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects --no-default-features --features alloc --locked
+        run: cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc --locked
       # Without alloc either (#1614): the allocation-free profile's code, and
       # tests/no_alloc_subset.rs, which counts the subset's allocations: none.
       - name: no_std crates' tests (without alloc)
@@ -491,7 +493,8 @@ jobs:
           cache-bin: false
           save-if: ${{ github.ref == 'refs/heads/dev' }}
       # Publishable crates with consumer-visible features, the no_std builds
-      # of bacnet-types, bacnet-encoding, bacnet-services and bacnet-objects (alloc, no std),
+      # of bacnet-types, bacnet-encoding, bacnet-services, bacnet-objects and
+      # bacnet-device-core (alloc, no std),
       # then the ethernet, serial and serial-gpio transport checks and a
       # linked bacnet-cli pcap build.
       - run: bash scripts/ci/check-msrv.sh --linux-native

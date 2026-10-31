@@ -25,7 +25,8 @@ bacnet-endpoint-core.workspace = true
 bacnet-services = { workspace = true, features = ["std"] }
 bacnet-transport.workspace = true
 bacnet-network.workspace = true
-bacnet-objects.workspace = true
+bacnet-objects = { workspace = true, features = ["std"] }
+bacnet-device-core = { workspace = true, features = ["std"] }
 bytes = { workspace = true, features = ["std"] }
 futures-util.workspace = true
 tracing.workspace = true

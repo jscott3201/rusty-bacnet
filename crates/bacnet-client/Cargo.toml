@@ -38,7 +38,7 @@ sc-tls = ["bacnet-transport/sc-tls", "dep:tokio-rustls"]
 
 [dev-dependencies]
 rcgen.workspace = true
-bacnet-objects.workspace = true
+bacnet-objects = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["net", "rt-multi-thread", "sync", "macros", "time", "test-util"] }
 
 [lints]

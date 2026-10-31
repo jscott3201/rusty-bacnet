@@ -16,7 +16,7 @@ use bacnet_network::layer::{NetworkLayer, ReceivedApdu};
 use bacnet_npdu::NetworkPriority;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_services::who_has::{WhoHasObject, WhoHasRequest};
-use bacnet_services::who_is::{DeviceInstanceRange, IAmRequest, WhoIsRequest};
+use bacnet_services::who_is::{DeviceInstanceRange, WhoIsRequest};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::MacAddr;
 use bacnet_types::enums::{ErrorClass, ErrorCode, UnconfirmedServiceChoice};
@@ -768,12 +768,12 @@ pub(crate) async fn broadcast_i_am_from<T: TransportPort + 'static>(
     limiter: Option<&Arc<DiscoveryLimiter>>,
 ) -> Result<(), Error> {
     let guard = db.read().await;
-    crate::local_device::announcement_device(&guard, &config.device)
+    bacnet_device_core::discovery::announcement_device(&guard, &config.device)
         .ok_or_else(|| Error::Encoding("no Device object in database".into()))?;
 
     // Both discovery paths encode the same frozen, resolved declarations.
     let mut service_buf = BytesMut::new();
-    iam_request_for(config).encode(&mut service_buf);
+    bacnet_device_core::discovery::i_am(&config.device).encode(&mut service_buf);
 
     let mut buf = BytesMut::new();
     encode_apdu(
@@ -804,17 +804,6 @@ pub(crate) async fn broadcast_i_am_from<T: TransportPort + 'static>(
     network
         .broadcast_apdu(&buf, false, NetworkPriority::Normal)
         .await
-}
-
-/// I-Am from the server's frozen, resolved Device declarations.
-#[doc(hidden)]
-pub fn iam_request_for(config: &ServerConfig) -> IAmRequest {
-    IAmRequest {
-        object_identifier: config.device.device_oid(),
-        max_apdu_length: u32::from(config.device.max_apdu_length()),
-        segmentation_supported: config.device.segmentation(),
-        vendor_id: config.device.vendor_id(),
-    }
 }
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
