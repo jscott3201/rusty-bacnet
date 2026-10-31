@@ -6,7 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Sans-IO BACnet request core: answers ReadProperty, Who-Is and Who-Has from an ObjectDatabase, for firmware and the bacnet-server executor"
+description = "Sans-IO BACnet request core: answers ReadProperty, WriteProperty, Who-Is and Who-Has from an ObjectDatabase, for firmware and the bacnet-server executor"
 keywords = ["bacnet", "building-automation", "sans-io", "embedded", "no-std"]
 categories = ["network-programming", "embedded", "no-std"]
 
