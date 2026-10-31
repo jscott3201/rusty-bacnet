@@ -10,10 +10,11 @@
 //! both caps leave room: [`Caps::watches`](crate::policy::Caps::watches)
 //! points per principal (the same point on two streams counts once) and
 //! the watch hub's cap for the process. The leases wait for the stream's
-//! `listen` call ([`Subs::claim`]), matched by their URI list: two streams
-//! asking for the same URIs hold the same points, so either may take
-//! either's leases. A reservation no stream claims within
-//! [`UNCLAIMED`] (the acknowledgment couldn't be sent) is dropped.
+//! `listen` call ([`Subs::claim`]), matched by the [`Ticket`] of the request
+//! that made them and their URI list, so a stream refused at its start
+//! frees its own reservation, never another's with the same URIs (#2157).
+//! A reservation no stream claims within [`UNCLAIMED`] (the acknowledgment
+//! couldn't be sent) is dropped.
 //!
 //! A session runs at most [`MAX_STREAMS`] streams at once; one more is
 //! refused when its `listen` call begins. A stream's per-device alarm URIs
@@ -135,8 +136,26 @@ impl Drop for Hold {
 
 struct Pending {
     at: Instant,
+    ticket: Ticket,
     uris: Vec<String>,
     claim: Claim,
+}
+
+/// Which `subscriptions/listen` request a reservation is for. The SDK asks
+/// for the accepted filter and then runs the stream within the one task it
+/// spawned for the request, and the filter hook isn't told the request's
+/// id, so the task's id names the request at both ends. Tokio only
+/// promises an id unique among running tasks; a reservation outlives its
+/// task only when its stream never began, and the sweep drops it. Calls
+/// made outside any task (`None`) share one ticket.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Ticket(Option<tokio::task::Id>);
+
+impl Ticket {
+    /// The ticket of the request this task handles.
+    pub(crate) fn current() -> Self {
+        Self(tokio::task::try_id())
+    }
 }
 
 /// The points one stream holds, counted against the principal's cap
@@ -148,6 +167,17 @@ pub(crate) struct Claim {
     points: Vec<Point>,
     leases: Vec<(String, Lease)>,
     alarms: usize,
+}
+
+impl Claim {
+    /// The lease set aside for `uri`, for a test.
+    #[cfg(test)]
+    pub(crate) fn lease(&self, uri: &str) -> Option<&Lease> {
+        self.leases
+            .iter()
+            .find(|(held, _)| held == uri)
+            .map(|(_, lease)| lease)
+    }
 }
 
 impl Drop for Claim {
@@ -354,10 +384,12 @@ impl Subs {
     }
 
     /// The URIs of `requested` this server honours, distinct and in order,
-    /// with the leases they need taken and set aside for the stream.
+    /// with the leases they need taken and set aside for the stream of
+    /// `ticket`.
     pub(crate) fn reserve<T: TransportPort + 'static>(
         self: &Arc<Self>,
         ctx: &Ctx<T>,
+        ticket: Ticket,
         requested: &[String],
     ) -> Vec<String> {
         self.prune();
@@ -428,6 +460,7 @@ impl Subs {
             }
             state.pending.push(Pending {
                 at: Instant::now(),
+                ticket,
                 uris: accepted.clone(),
                 claim,
             });
@@ -438,11 +471,21 @@ impl Subs {
         accepted
     }
 
-    /// The leases reserved for a stream acknowledged with `uris`.
-    pub(crate) fn claim(&self, uris: &[String]) -> Option<Claim> {
+    /// The leases reserved for the stream of `ticket`, acknowledged with
+    /// `uris`.
+    pub(crate) fn claim(&self, ticket: Ticket, uris: &[String]) -> Option<Claim> {
         let mut state = self.lock();
-        let at = state.pending.iter().position(|p| p.uris == uris)?;
+        let at = state
+            .pending
+            .iter()
+            .position(|p| p.ticket == ticket && p.uris == uris)?;
         Some(state.pending.remove(at).claim)
+    }
+
+    /// The tickets of the reservations waiting, oldest first, for a test.
+    #[cfg(test)]
+    pub(crate) fn pending_tickets(&self) -> Vec<Ticket> {
+        self.lock().pending.iter().map(|p| p.ticket).collect()
     }
 
     /// Drop reservations no stream claimed in time.
@@ -496,16 +539,18 @@ fn accepted(context: &SubscriptionContext) -> Vec<String> {
         .collect()
 }
 
-/// A stream acknowledged with `uris` beginning: counted among the session's
-/// streams, with what [`Subs::reserve`] set aside for it. Past
-/// [`MAX_STREAMS`] it is refused, and anything set aside for it goes now,
-/// not at the sweep, so its watches and alarm URIs free their room at once.
+/// The stream of `ticket`, acknowledged with `uris`, beginning: counted
+/// among the session's streams, with what [`Subs::reserve`] set aside for
+/// it. Past [`MAX_STREAMS`] it is refused, and anything set aside for it
+/// goes now, not at the sweep, so its watches and alarm URIs free their
+/// room at once.
 pub(crate) fn open<'a, T: TransportPort + 'static>(
     ctx: &'a Ctx<T>,
+    ticket: Ticket,
     uris: &[String],
 ) -> Result<(Listening<'a>, Option<Claim>), ErrorData> {
     let Some(listening) = ctx.listening(MAX_STREAMS) else {
-        drop(ctx.subs.claim(uris));
+        drop(ctx.subs.claim(ticket, uris));
         let error = ToolError::refused(
             "stream-cap",
             format!(
@@ -518,7 +563,7 @@ pub(crate) fn open<'a, T: TransportPort + 'static>(
             Some(error.json()),
         ));
     };
-    Ok((listening, ctx.subs.claim(uris)))
+    Ok((listening, ctx.subs.claim(ticket, uris)))
 }
 
 /// Serve one stream until the client cancels it or the server closes.
@@ -530,7 +575,7 @@ pub(crate) async fn run<T: TransportPort + 'static>(
     let uris = accepted(&context);
     // Both held to the end: the stream's count, and the claim, whose
     // leases keep the points watched.
-    let (_listening, claim) = open(ctx, &uris)?;
+    let (_listening, claim) = open(ctx, Ticket::current(), &uris)?;
     if claim.is_none() && !uris.is_empty() {
         // Only when the reservation was dropped before the stream began.
         tracing::warn!(

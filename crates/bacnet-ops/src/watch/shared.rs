@@ -38,9 +38,23 @@ pub(super) struct EntryState {
     /// Where the device is, once looked up: notifications must come from
     /// there.
     pub(super) target: Option<CovTarget>,
+    /// When a notification last set each property's row since the last
+    /// first read was folded. A first read folded in later skips the rows
+    /// notified at or after it ended: those values are newer (#2169).
+    /// Bounded by the rows, as only a row's property is merged, and emptied
+    /// by each first read's fold.
+    notified: HashMap<PropertyIdentifier, Instant>,
     last_signal: Option<Instant>,
     /// A change waits for the end of the coalescing window.
     pending: bool,
+}
+
+impl EntryState {
+    /// A test notes a notification's arrival.
+    #[cfg(test)]
+    pub(super) fn mark_notified(&mut self, property: PropertyIdentifier, at: Instant) {
+        self.notified.insert(property, at);
+    }
 }
 
 impl Shared {
@@ -51,6 +65,7 @@ impl Shared {
             state: Mutex::new(EntryState {
                 snapshot: Snapshot::new(),
                 target: None,
+                notified: HashMap::new(),
                 last_signal: None,
                 pending: false,
             }),
@@ -153,17 +168,47 @@ impl Shared {
     /// the rows, mark the watch live, signal at once, and sample a poll's.
     /// A first read's sample waits for its start's outcome
     /// ([`FirstSample`]).
-    pub(super) fn read(&self, seq: &AtomicU64, rows: Vec<RawRow>, poll: bool) {
-        let mut state = self.lock();
-        fold(&mut state.snapshot.rows, &rows);
+    ///
+    /// A first read passes the instant it ended as `first_at`: a property a
+    /// notification set at or after then keeps the notification's value
+    /// (#2169). The read ended before its SubscribeCOV was sent, so a
+    /// notification of that subscription can't be older, and a tie counts
+    /// the read as older, as the TUI's writer does. A notification that
+    /// came in while the read was out can only be from an earlier attempt's
+    /// subscription; assuming the link delivers in order, the device sent
+    /// it before its answer to the read, so the read wins. A datagram
+    /// reordered past that answer can at worst leave the read's value
+    /// shown until the next change. The notes are then dropped: a later
+    /// start's read is newer than all of them.
+    pub(super) fn read(
+        &self,
+        seq: &AtomicU64,
+        rows: Vec<RawRow>,
+        poll: bool,
+        first_at: Option<Instant>,
+    ) {
+        let mut guard = self.lock();
+        let state = &mut *guard;
+        match first_at {
+            Some(at) => {
+                let kept: Vec<RawRow> = rows
+                    .iter()
+                    .filter(|(p, _)| !state.notified.get(p).is_some_and(|n| *n >= at))
+                    .cloned()
+                    .collect();
+                fold(&mut state.snapshot.rows, &kept);
+                state.notified.clear();
+            }
+            None => fold(&mut state.snapshot.rows, &rows),
+        }
         state.snapshot.updated = Some(Instant::now());
         state.snapshot.state = State::Live;
         if poll {
             state.snapshot.polls += 1;
             state.snapshot.source = Some(Source::Poll);
         }
-        self.changed(&mut state, seq, Duration::ZERO);
-        drop(state);
+        self.changed(state, seq, Duration::ZERO);
+        drop(guard);
         if poll {
             self.sample(Ok(rows), Via::Poll);
         }
@@ -354,8 +399,12 @@ impl Registry {
             self.property_flags,
             received,
         );
+        let now = Instant::now();
+        for (property, _) in &merged {
+            state.notified.insert(*property, now);
+        }
         state.snapshot.notifications += 1;
-        state.snapshot.updated = Some(Instant::now());
+        state.snapshot.updated = Some(now);
         let due = shared.changed(&mut state, &self.seq, self.coalesce);
         drop(state);
         if !merged.is_empty() {

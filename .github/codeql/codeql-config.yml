@@ -1,0 +1,46 @@
+# CodeQL configuration for .github/workflows/codeql.yml (#2166).
+#
+# Scans the code that ships: the library and binary crates' source, the
+# firmware images, the website's source and build scripts, the repository
+# scripts and the workflows. Leaves out test code and code that never ships
+# (benchmarks, examples, fuzz crates, test harness crates), whose fixture
+# passwords and assert! messages were most of default setup's alerts.
+#
+# Every language here runs with build-mode none, where the CodeQL actions
+# apply paths-ignore to the files they extract. Patterns follow the CodeQL
+# rules: `**` stands alone between slashes, `*` matches within one path
+# segment, and anything with a `*` is quoted. See docs/ci.md, "CodeQL".
+#
+# Keep the default query suite: no queries, packs or query-filters here.
+
+name: rusty-bacnet CodeQL
+
+paths-ignore:
+  # Test code. Integration tests, the in-crate test module directories, the
+  # Python suite (crates/rusty-bacnet/tests) and the website's tests.
+  - "**/tests/**"
+  # In-crate test modules, each declared under #[cfg(test)]: tests.rs,
+  # foo_tests.rs, and helpers such as test_transport.rs,
+  # deadline_test_support.rs and rights_test_storage.rs.
+  - "**/tests.rs"
+  - "**/*_tests.rs"
+  - "**/test_*.rs"
+  - "**/*_test_*.rs"
+  # bacnet-ops' decode fixtures: built only for tests and the doc-hidden
+  # test-support feature.
+  - crates/bacnet-ops/src/decode/testing.rs
+  # Tests of the repository scripts.
+  - "**/test_*.py"
+  - "scripts/ci/test-*"
+  # Code that never ships: benchmarks (and their recorded results), the
+  # examples (top-level, per crate and the website's samples), the fuzz
+  # crates, and the unpublished test harness crates.
+  - "benchmarks/**"
+  - "**/examples/**"
+  - "**/fuzz/**"
+  - "crates/bacnet-integration-tests/**"
+  - "crates/bacnet-mstp-sim/**"
+  # The website's local tooling: the server its tests run against and the
+  # TUI screenshot lab.
+  - website/scripts/test-server.mjs
+  - "website/scripts/tui-screenshots/**"

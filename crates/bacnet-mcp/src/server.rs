@@ -496,7 +496,9 @@ impl<T: TransportPort + 'static> ServerHandler for McpServer<T> {
         requested: &SubscriptionFilter,
     ) -> Option<SubscriptionFilter> {
         let uris = requested.resource_subscriptions.as_deref().unwrap_or(&[]);
-        let accepted = self.ctx.subs.reserve(&self.ctx, uris);
+        // `listen` runs later in this same task: its id ties the two.
+        let ticket = crate::listen::Ticket::current();
+        let accepted = self.ctx.subs.reserve(&self.ctx, ticket, uris);
         Some(
             SubscriptionFilter::builder()
                 .resource_subscriptions(accepted)

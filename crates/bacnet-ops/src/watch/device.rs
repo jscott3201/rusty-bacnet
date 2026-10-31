@@ -406,6 +406,10 @@ impl<T: TransportPort + 'static> Device<T> {
             return;
         };
         let read_first = first.is_ok();
+        let read_at = started
+            .read_at
+            .unwrap_or_else(|| (Instant::now(), std::time::SystemTime::now()));
+        let first_at = read_at.0;
         // Handed on as this returns, whichever way.
         let _first_sample = FirstSample {
             shared: &shared,
@@ -415,14 +419,12 @@ impl<T: TransportPort + 'static> Device<T> {
                     .map(Clone::clone)
                     .map_err(ToString::to_string),
             ),
-            read_at: started
-                .read_at
-                .unwrap_or_else(|| (Instant::now(), std::time::SystemTime::now())),
+            read_at,
         };
         match first {
             Ok(rows) => {
                 shared.lock().snapshot.note = None;
-                shared.read(seq, rows, false);
+                shared.read(seq, rows, false, Some(first_at));
             }
             Err(error) => {
                 let (source, state) = if unreachable(&error) {
@@ -511,7 +513,7 @@ impl<T: TransportPort + 'static> Device<T> {
             };
             let shared = &row.shared;
             match read {
-                Ok(rows) => shared.read(seq, rows, true),
+                Ok(rows) => shared.read(seq, rows, true, None),
                 Err(error) => {
                     let state = if polled.unreachable {
                         State::Unreachable

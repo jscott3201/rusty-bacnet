@@ -54,6 +54,9 @@ pub(super) struct Quirks {
     pub(super) swallow_cov: AtomicU8,
     /// The device's acknowledgements of SubscribeCOV take half a second.
     pub(super) slow_cov_ack: AtomicBool,
+    /// The device's acknowledgements of SubscribeCOV come half a second
+    /// late, after what it sent meanwhile: its notifications overtake them.
+    pub(super) late_cov_ack: AtomicBool,
 }
 
 /// The client's link to the lab device.
@@ -107,6 +110,14 @@ impl TransportPort for Link {
             while let Some(npdu) = from_device.recv().await {
                 if quirks.slow_cov_ack.load(Ordering::Relaxed) && is_cov_ack(&npdu) {
                     tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+                if quirks.late_cov_ack.load(Ordering::Relaxed) && is_cov_ack(&npdu) {
+                    let sender = sender.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        let _ = sender.send(npdu).await;
+                    });
+                    continue;
                 }
                 if sender.send(npdu).await.is_err() {
                     break;

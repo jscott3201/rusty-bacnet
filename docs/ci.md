@@ -6,7 +6,7 @@ GitHub-hosted runners, the [release](#release) included.
 
 | Host | Runs |
 | --- | --- |
-| GitHub (hosted runners) | Linux CI, [`.github/workflows/ci.yml`](../.github/workflows/ci.yml); [native macOS and Windows tests](#native-tests-macos-and-windows), [`native-tests.yml`](../.github/workflows/native-tests.yml); the nightly [flake hunt](#flake-hunt), [`flake-hunt.yml`](../.github/workflows/flake-hunt.yml); [fuzzing](#fuzzing) of the MS/TP and B/IP codecs, [`fuzz.yml`](../.github/workflows/fuzz.yml); website validation and the GitHub Pages deploy, [`docs-pages.yml`](../.github/workflows/docs-pages.yml); [releases](#release), built and tested on each platform and published to crates.io, PyPI and GitHub Releases, [`release.yml`](../.github/workflows/release.yml) |
+| GitHub (hosted runners) | Linux CI, [`.github/workflows/ci.yml`](../.github/workflows/ci.yml); [native macOS and Windows tests](#native-tests-macos-and-windows), [`native-tests.yml`](../.github/workflows/native-tests.yml); the nightly [flake hunt](#flake-hunt), [`flake-hunt.yml`](../.github/workflows/flake-hunt.yml); [fuzzing](#fuzzing) of the MS/TP and B/IP codecs, [`fuzz.yml`](../.github/workflows/fuzz.yml); [CodeQL](#codeql) code scanning, [`codeql.yml`](../.github/workflows/codeql.yml); website validation and the GitHub Pages deploy, [`docs-pages.yml`](../.github/workflows/docs-pages.yml); [releases](#release), built and tested on each platform and published to crates.io, PyPI and GitHub Releases, [`release.yml`](../.github/workflows/release.yml) |
 
 | Platform | Where it is checked |
 | --- | --- |
@@ -1516,6 +1516,51 @@ crate's own `tests/`, fix it, and check that the replay passes. A fault in
 `mstp_core`'s checker instead gets its minimized input saved in the fuzz
 crate's `regressions/mstp_core/`, which the crate's tests replay. `bash
 scripts/ci/fuzz.sh tmin <target> <input>` minimizes an input further.
+
+## CodeQL
+
+[`.github/workflows/codeql.yml`](../.github/workflows/codeql.yml) runs
+GitHub's CodeQL code scanning (#2166) over the workflows, the
+JavaScript/TypeScript, the Python and the Rust, each with build mode `none`
+(nothing is compiled) and the default query suite. It replaced the
+repository's default setup, which also scanned test code, where nearly all
+of its alerts were: fixture passwords and `assert!` messages. GitHub rejects
+an advanced workflow's uploads while default setup is enabled, so default
+setup stays off in the repository's settings.
+
+No check here is required for merging: every job's name starts with
+`CodeQL:`, so none can pass for `CI OK` or `Native OK`, and the release's
+[CI gate](#ci-gate) reads only `ci.yml` and `native-tests.yml` runs.
+
+**When.** Every PR to `dev` or `main`, every push to `dev` and `main`,
+weekly on `dev` (Tuesday 05:23 UTC) and by hand. A newer push to a PR cancels
+its older run. On a PR, GitHub compares the PR's alerts with its base
+branch's and reports the new ones in the `CodeQL` check.
+
+**Scope.** [`.github/codeql/codeql-config.yml`](../.github/codeql/codeql-config.yml)
+keeps the code that ships in scope: each crate's `src/` (its test modules
+aside), the firmware images, the website's source and build scripts, the
+repository scripts and the workflows. Its `paths-ignore` leaves out:
+
+- test code: every `tests/` directory (the crates' integration tests, the
+  test module directories under `src/`, the Python suite and the website's
+  tests), in-crate test files (`tests.rs`, `*_tests.rs`, `test_*.rs`,
+  `*_test_*.rs`), `bacnet-ops`' decode fixtures, and the scripts' own tests;
+- code that never ships: `benchmarks/`, every `examples/` directory, the fuzz
+  crates, `bacnet-integration-tests` and `bacnet-mstp-sim`, and the website's
+  test server and TUI screenshot lab.
+
+With build mode `none`, `paths-ignore` decides which files CodeQL extracts at
+all. It can't see `#[cfg(test)]`, so a test module written inline in a library
+file (`#[cfg(test)] mod tests { ... }`) is still scanned. Put new tests in a
+file the patterns match, such as `foo_tests.rs`, or dismiss what CodeQL finds
+in an inline one. Check a pattern change against `git ls-files` before
+merging it: a pattern that matched shipped code would silently stop scanning
+it.
+
+**Alerts.** Fix a real finding in code. Dismiss a false positive in the
+repository's Security tab with the reason and a one-line comment saying why
+(for example, which value the query took for a secret).
 
 ## Local checks
 

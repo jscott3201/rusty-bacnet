@@ -52,6 +52,7 @@ CLAUDE.md
 .mcp/
 .mcp.json
 mcp.json
+.serena/
 
 # Proprietary spec
 _spec/
