@@ -13,6 +13,7 @@
 //! with its own [`TokenBucket`] ([`charged`]).
 
 mod account;
+mod schedule;
 
 pub use self::account::{Account, TokenBucket, charged, refund};
 
@@ -23,6 +24,8 @@ use std::time::Duration;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::Instant;
 
+use self::schedule::{Booking, Schedule};
+
 /// How long, in seconds, the request-rate meter ([`RequestLimits::recent`])
 /// remembers a request.
 pub const METER_WINDOW_SECS: u64 = 10;
@@ -30,7 +33,8 @@ pub const METER_WINDOW_SECS: u64 = 10;
 /// Spaces requests evenly: at most `per_second` a second across every job,
 /// the browser's and the watch list's alike. Each caller takes the next free
 /// slot and sleeps until it; the lock is held only to take the slot, never
-/// across the sleep. It also remembers when recent requests went, for the
+/// across the sleep. A wait dropped before its slot gives the slot back
+/// (#2202). It also remembers when recent requests went, for the
 /// request-rate meter.
 ///
 /// It also holds each device's gate: a one-permit semaphore that a request
@@ -87,7 +91,7 @@ struct Networks {
     /// The spacing of a network without a rate of its own; zero for none.
     default: Duration,
     rates: HashMap<u16, Duration>,
-    next: Mutex<HashMap<u16, Instant>>,
+    next: Mutex<HashMap<u16, Schedule>>,
 }
 
 impl Networks {
@@ -108,18 +112,51 @@ impl Networks {
         }
     }
 
-    /// The instant a request to `network` may go, reserving it; `None`
+    /// The slot a request to `network` may go in, reserving it; `None`
     /// when the network has no rate.
-    fn reserve(&self, network: u16, now: Instant) -> Option<Instant> {
+    fn reserve(&self, network: u16, now: Instant) -> Option<Booking> {
         let interval = self.interval(network);
         if interval.is_zero() {
             return None;
         }
         let mut next = self.next.lock().unwrap_or_else(PoisonError::into_inner);
-        let at = next.entry(network).or_insert(now);
-        let slot = (*at).max(now);
-        *at = slot + interval;
-        Some(slot)
+        Some(next.entry(network).or_default().book(now, interval))
+    }
+
+    /// Give back `network`'s slot `booking`, unless its instant has come.
+    fn release(&self, network: u16, booking: Booking, now: Instant) {
+        let mut next = self.next.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(schedule) = next.get_mut(&network) {
+            schedule.release(booking, now);
+        }
+    }
+}
+
+/// A slot booked and not yet reached. Dropped before the slot's instant
+/// (its wait abandoned), it gives the slot back, so later requests don't
+/// queue behind it; once the instant has come it changes nothing.
+struct Hold<'a> {
+    owner: Owner<'a>,
+    booking: Booking,
+}
+
+/// Whose schedule a [`Hold`]'s slot is on.
+enum Owner<'a> {
+    Global(&'a RequestLimits),
+    Network(&'a Networks, u16),
+}
+
+impl Drop for Hold<'_> {
+    fn drop(&mut self) {
+        let now = Instant::now();
+        // The usual case, a request whose slot came: no lock to take.
+        if self.booking.at <= now {
+            return;
+        }
+        match self.owner {
+            Owner::Global(limits) => limits.release(self.booking, now),
+            Owner::Network(networks, network) => networks.release(network, self.booking, now),
+        }
     }
 }
 
@@ -141,9 +178,10 @@ pub struct Turn {
 
 #[derive(Default)]
 struct Slots {
-    /// The next free slot.
-    next: Option<Instant>,
-    /// The slots handed out within the meter's window, oldest first.
+    /// The slots booked and given back.
+    schedule: Schedule,
+    /// The slots handed out within the meter's window, oldest first; a
+    /// slot given back leaves it.
     recent: VecDeque<Instant>,
 }
 
@@ -277,14 +315,21 @@ impl RequestLimits {
             .map(|layer| &layer.networks)
             .or(self.networks.as_ref());
         if let (Some(networks), Some(network)) = (networks, network)
-            && let Some(slot) = networks.reserve(network, Instant::now())
+            && let Some(booking) = networks.reserve(network, Instant::now())
         {
-            tokio::time::sleep_until(slot).await;
+            let _hold = Hold {
+                owner: Owner::Network(networks, network),
+                booking,
+            };
+            tokio::time::sleep_until(booking.at).await;
         }
         let interval = self.global_spacing(layer.as_deref());
-        let slot = self.reserve(Instant::now(), interval);
-        if !interval.is_zero() {
-            tokio::time::sleep_until(slot).await;
+        if let Some(booking) = self.reserve(Instant::now(), interval) {
+            let _hold = Hold {
+                owner: Owner::Global(self),
+                booking,
+            };
+            tokio::time::sleep_until(booking.at).await;
         }
     }
 
@@ -301,16 +346,17 @@ impl RequestLimits {
         layer.map_or(self.interval, |layer| layer.interval.max(self.interval))
     }
 
-    /// The instant this request may go, `interval` before the next,
-    /// reserving it. Without spacing it goes now, whatever slots spaced
-    /// requests left booked.
-    fn reserve(&self, now: Instant, interval: Duration) -> Instant {
+    /// The slot this request may go in, `interval` before the next,
+    /// reserving it. Without spacing it goes now (`None`), whatever slots
+    /// spaced requests left booked.
+    fn reserve(&self, now: Instant, interval: Duration) -> Option<Booking> {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        let slot = match state.next {
-            Some(next) if !interval.is_zero() => next.max(now),
-            _ => now,
+        let booking = if interval.is_zero() {
+            state.schedule.clear(now);
+            None
+        } else {
+            Some(state.schedule.book(now, interval))
         };
-        state.next = Some(slot + interval);
         while state
             .recent
             .front()
@@ -318,8 +364,22 @@ impl RequestLimits {
         {
             state.recent.pop_front();
         }
-        state.recent.push_back(slot);
-        slot
+        // A slot given back and taken again lies before later bookings.
+        let at = booking.map_or(now, |booking| booking.at);
+        let i = state.recent.partition_point(|recent| *recent <= at);
+        state.recent.insert(i, at);
+        booking
+    }
+
+    /// Give back the global slot `booking`, and its place on the meter,
+    /// unless its instant has come.
+    fn release(&self, booking: Booking, now: Instant) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if state.schedule.release(booking, now)
+            && let Some(i) = state.recent.iter().rposition(|at| *at == booking.at)
+        {
+            state.recent.remove(i);
+        }
     }
 
     /// Wait for this request's slot under the rate cap alone; a request to
@@ -349,7 +409,8 @@ impl RequestLimits {
                 .state
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
-                .next;
+                .schedule
+                .next();
             match next {
                 Some(at) if at > Instant::now() => tokio::time::sleep_until(at).await,
                 _ => return,
@@ -368,6 +429,9 @@ impl RequestLimits {
             .count()
     }
 }
+
+#[cfg(test)]
+mod giveback_tests;
 
 #[cfg(test)]
 mod tests {

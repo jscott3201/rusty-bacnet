@@ -475,10 +475,13 @@ Every request goes through `RequestLimits`: the caller's token first (5 a
 second, burst 20), then the device's gate (one outstanding request), then
 its network's rate (20, or 2 for `slow_networks` and 5 for
 `fast_networks`; a router doesn't say what link it reaches), then the
-global rate (20). Each tool call runs on its own task under an `Account`
-that counts its requests and waits. A call that pages stops at its budget
-(30 s) and returns a cursor; one still waiting `budget + 15 s` later
-returns `refused: rate-limited` if it sent nothing, else `timeout`.
+global rate (20). A request books its slots and token as it starts
+waiting; one cancelled before its slot comes gives them back, so later
+requests don't wait behind it. Each tool call runs on its own task under
+an `Account` that counts its requests and waits. A call that pages stops
+at its budget (30 s) and returns a cursor; one still waiting
+`budget + 15 s` later returns `refused: rate-limited` if it sent nothing,
+else `timeout`.
 
 ## Operation
 

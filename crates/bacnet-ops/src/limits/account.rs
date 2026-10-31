@@ -93,8 +93,8 @@ pub(super) fn current() -> Option<Arc<Account>> {
 
 /// A token bucket: at most `burst` requests at once, refilled at
 /// `per_second`. A caller that finds it empty waits for its token, which
-/// is booked as it starts waiting, so callers are served in turn and a
-/// dropped wait still spends its token.
+/// is booked as it starts waiting, so callers are served in turn; a wait
+/// dropped before its token comes gives the token back (#2202).
 #[derive(Debug)]
 pub struct TokenBucket {
     per_second: f64,
@@ -138,7 +138,32 @@ impl TokenBucket {
             (tokens.left < 0.0).then(|| Duration::from_secs_f64(-tokens.left / self.per_second))
         };
         if let Some(wait) = wait {
+            let mut refund = Refund {
+                bucket: self,
+                armed: true,
+            };
             tokio::time::sleep(wait).await;
+            refund.armed = false;
+        }
+    }
+}
+
+/// A token booked by a wait still running: dropped with it, the token goes
+/// back to the bucket.
+struct Refund<'a> {
+    bucket: &'a TokenBucket,
+    armed: bool,
+}
+
+impl Drop for Refund<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            let mut tokens = self
+                .bucket
+                .state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            tokens.left += 1.0;
         }
     }
 }
@@ -173,6 +198,24 @@ mod tests {
             unlimited.take().await;
         }
         assert_eq!(Instant::now(), before);
+    }
+
+    /// A wait dropped before its token comes gives the token back: the
+    /// next caller waits for one token, not for those of the dropped waits.
+    #[tokio::test(start_paused = true)]
+    async fn a_dropped_wait_gives_its_token_back() {
+        use std::future::Future as _;
+        use std::task::{Context, Poll, Waker};
+        let bucket = TokenBucket::new(1, 1);
+        let start = Instant::now();
+        bucket.take().await;
+        for _ in 0..3 {
+            let mut wait = std::pin::pin!(bucket.take());
+            let polled = wait.as_mut().poll(&mut Context::from_waker(Waker::noop()));
+            assert_eq!(polled, Poll::Pending, "the bucket is empty");
+        }
+        bucket.take().await;
+        assert_eq!(Instant::now() - start, Duration::from_secs(1));
     }
 
     /// A charged future sees its account; one outside sees none.
