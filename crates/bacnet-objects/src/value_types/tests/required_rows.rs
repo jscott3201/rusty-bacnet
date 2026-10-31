@@ -144,7 +144,10 @@ fn assert_cov_increment_row(object: &mut dyn BACnetObject, zero: PropertyValue) 
     let cov = PropertyIdentifier::COV_INCREMENT;
     let kind = object.object_identifier().object_type();
     assert!(object.property_list().contains(&cov), "{kind:?}");
-    assert!(!object.required_properties().contains(&cov), "{kind:?}");
+    // Tables 12-46, 12-50 and 12-51 footnote 3: required of an object that
+    // reports COV, as these do (#2193).
+    assert!(object.supports_cov(), "{kind:?}");
+    assert!(object.required_properties().contains(&cov), "{kind:?}");
     assert!(object.is_writable_property(cov), "{kind:?}");
     assert!(!object.is_array_property(cov), "{kind:?}");
     // A new object notifies on any change.

@@ -49,8 +49,9 @@ fn rpm_loop_program_metadata_selectors_preserve_bytes_and_budgets() {
         P::INTEGRAL_CONSTANT_UNITS,
         P::DERIVATIVE_CONSTANT,
         P::DERIVATIVE_CONSTANT_UNITS,
-        P::COV_INCREMENT,
     ];
+    // COV_Increment is required of a Loop that reports COV (Table 12-20
+    // footnote 4, #2193).
     let program_all = [
         P::OBJECT_IDENTIFIER,
         P::OBJECT_NAME,

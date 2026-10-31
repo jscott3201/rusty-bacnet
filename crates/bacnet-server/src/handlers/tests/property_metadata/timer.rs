@@ -2,7 +2,7 @@ use super::*;
 use PropertyIdentifier as P;
 use bacnet_objects::{timer::TimerObject, traits::BACnetObject};
 use bacnet_types::error::RemoteError;
-use bacnet_types::primitives::{Date, PropertyValue, Time};
+use bacnet_types::primitives::PropertyValue;
 
 fn timer_object(configured: bool) -> TimerObject {
     let mut object = TimerObject::new(7, "TMR-7").unwrap();
@@ -15,22 +15,8 @@ fn timer_object(configured: bool) -> TimerObject {
                 None,
             )
             .unwrap();
-        object.start();
-        object.set_initial_timeout(5000);
-        let date = Date {
-            year: 126,
-            month: 9,
-            day: 14,
-            day_of_week: 1,
-        };
-        let time = Time {
-            hour: 12,
-            minute: 30,
-            second: 15,
-            hundredths: 25,
-        };
-        object.set_update_time(date, time);
-        object.set_expiration_time(date, time);
+        object.set_pres_value_range(1_000, 4_000_000_000).unwrap();
+        object.set_default_timeout(3_000_000_000).unwrap();
     }
     // Exercise the unconditional write routes so large encodings persist.
     object
@@ -43,15 +29,7 @@ fn timer_object(configured: bool) -> TimerObject {
         .unwrap();
     if configured {
         object
-            .write_property(P::PRESENT_VALUE, None, PropertyValue::Enumerated(1), None)
-            .unwrap();
-        object
-            .write_property(
-                P::INITIAL_TIMEOUT,
-                None,
-                PropertyValue::Unsigned(1_000_000),
-                None,
-            )
+            .write_property(P::TIMER_RUNNING, None, PropertyValue::Boolean(true), None)
             .unwrap();
     }
     object
@@ -65,35 +43,43 @@ fn rpm_timer_metadata_selectors_preserve_bytes_and_budgets() {
         P::DESCRIPTION,
         P::OBJECT_TYPE,
         P::PRESENT_VALUE,
+        P::STATUS_FLAGS,
+        P::EVENT_STATE,
+        P::RELIABILITY,
+        P::OUT_OF_SERVICE,
         P::TIMER_STATE,
         P::TIMER_RUNNING,
-        P::INITIAL_TIMEOUT,
         P::UPDATE_TIME,
+        P::LAST_STATE_CHANGE,
         P::EXPIRATION_TIME,
-        P::STATUS_FLAGS,
-        P::OUT_OF_SERVICE,
-        P::RELIABILITY,
-        P::EVENT_STATE,
+        P::INITIAL_TIMEOUT,
+        P::DEFAULT_TIMEOUT,
+        P::MIN_PRES_VALUE,
+        P::MAX_PRES_VALUE,
     ];
+    // Table 12-75's R rows, and the range its footnote 4 requires of a
+    // timer whose Present_Value is writable in service (#2192).
     let required = [
         P::OBJECT_IDENTIFIER,
         P::OBJECT_NAME,
         P::OBJECT_TYPE,
         P::PRESENT_VALUE,
+        P::STATUS_FLAGS,
         P::TIMER_STATE,
         P::TIMER_RUNNING,
-        P::STATUS_FLAGS,
+        P::MIN_PRES_VALUE,
+        P::MAX_PRES_VALUE,
     ];
-    // Table 12-75 classes Update_Time, Expiration_Time and Reliability
-    // optional (#2174).
     let optional = [
         P::DESCRIPTION,
-        P::INITIAL_TIMEOUT,
-        P::UPDATE_TIME,
-        P::EXPIRATION_TIME,
-        P::OUT_OF_SERVICE,
-        P::RELIABILITY,
         P::EVENT_STATE,
+        P::RELIABILITY,
+        P::OUT_OF_SERVICE,
+        P::UPDATE_TIME,
+        P::LAST_STATE_CHANGE,
+        P::EXPIRATION_TIME,
+        P::INITIAL_TIMEOUT,
+        P::DEFAULT_TIMEOUT,
     ];
     for configured in [false, true] {
         let object = timer_object(configured);

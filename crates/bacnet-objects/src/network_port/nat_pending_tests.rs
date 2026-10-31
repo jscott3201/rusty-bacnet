@@ -192,6 +192,28 @@ fn a_nat_capable_ipv4_bbmd_serves_both_rows() {
     );
     // Unset until configured (Clause 12.56.33).
     assert_eq!(global_read(&db), UNSET);
+    // Both keep the table's O. Footnote 9's condition holds for a port
+    // that can work behind NAT, footnote 10's only once it does (#2191).
+    let conditions = |db: &ObjectDatabase| {
+        db.get(&oid())
+            .unwrap()
+            .property_metadata()
+            .iter()
+            .filter(|row| pending::nat_row(row.property_identifier))
+            .map(|row| {
+                assert_eq!(
+                    row.conformance,
+                    crate::property_metadata::PropertyConformance::Optional
+                );
+                (row.presence_condition, row.is_required())
+            })
+            .collect::<Vec<_>>()
+    };
+    use crate::property_metadata::PropertyPresenceCondition as C;
+    assert_eq!(
+        conditions(&db),
+        [(Some(C::NatTraversalCapable), true), (None, false)]
+    );
     // Read live.
     *tables.nat.lock().unwrap() = true;
     *tables.global.lock().unwrap() = global();
@@ -200,6 +222,13 @@ fn a_nat_capable_ipv4_bbmd_serves_both_rows() {
         PropertyValue::Boolean(true)
     );
     assert_eq!(global_read(&db), global());
+    assert_eq!(
+        conditions(&db),
+        [
+            (Some(C::NatTraversalCapable), true),
+            (Some(C::NatTraversalConfigured), true)
+        ]
+    );
 }
 
 #[test]
@@ -277,19 +306,25 @@ fn written_nat_rows_read_back_and_wait_for_activation() {
     assert_eq!(db.activate_network_port_changes().unwrap(), 1);
     assert!(*tables.nat.lock().unwrap());
     assert_eq!(*tables.global.lock().unwrap(), global());
-    // Behind NAT the address is required (Table 12-71, footnote 10).
-    let conformance = db
+    // Behind NAT the address is required (Table 12-71, footnote 10): it
+    // keeps the table's O and carries the footnote's condition (#2191).
+    let row = db
         .get(&oid())
         .unwrap()
         .property_metadata()
         .iter()
         .find(|meta| meta.property_identifier == P::BACNET_IP_GLOBAL_ADDRESS)
-        .unwrap()
-        .conformance;
+        .copied()
+        .unwrap();
     assert_eq!(
-        conformance,
-        crate::property_metadata::PropertyConformance::RequiredRead
+        row.conformance,
+        crate::property_metadata::PropertyConformance::Optional
     );
+    assert_eq!(
+        row.presence_condition,
+        Some(crate::property_metadata::PropertyPresenceCondition::NatTraversalConfigured)
+    );
+    assert!(row.is_required());
     let activated = tables.activated.lock().unwrap();
     assert_eq!(activated.len(), 1, "both in one activation");
     assert_eq!(activated[0].nat_traversal, Some(true));

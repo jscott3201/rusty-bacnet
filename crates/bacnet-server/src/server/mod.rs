@@ -685,6 +685,8 @@ mod direct_principal_tests;
 #[cfg(test)]
 mod discovery_dcc_tests;
 #[cfg(test)]
+mod discovery_lock_tests;
+#[cfg(test)]
 mod discovery_tests;
 #[cfg(test)]
 mod event_confirmed_routing_tests;
@@ -782,6 +784,8 @@ pub(crate) mod test_forwarder;
 pub(crate) mod test_transport;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod timer_task_tests;
 #[cfg(test)]
 mod trailing_octet_wire_tests;
 #[cfg(test)]

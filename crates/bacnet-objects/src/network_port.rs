@@ -278,4 +278,6 @@ mod nat_pending_tests;
 #[cfg(test)]
 mod pending_tests;
 #[cfg(test)]
+mod required_rows_tests;
+#[cfg(test)]
 mod tests;

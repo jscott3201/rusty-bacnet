@@ -40,8 +40,10 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             (P::UPDATE_TIME, false, false),
             (P::COUNT_CHANGE_TIME, false, false),
             (P::COUNT_BEFORE_CHANGE, false, false),
-            (P::COV_INCREMENT, true, true),
-            (P::COV_PERIOD, true, false),
+            // Required of an object that reports COV (Table 12-27
+            // footnote 2, #2193).
+            (P::COV_INCREMENT, false, true),
+            (P::COV_PERIOD, false, false),
             (P::INPUT_REFERENCE, true, true),
             (P::STATUS_FLAGS, false, false),
             (P::EVENT_STATE, false, false),
