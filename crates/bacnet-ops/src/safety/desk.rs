@@ -371,6 +371,12 @@ impl Desk {
                     ledger.finish(*id, Some(false), &backup);
                 }
             }
+            // The save may have failed only at the directory sync, with
+            // the `sending` rows already in the file: put the file back as
+            // it was, so it doesn't claim a write that never went. Should
+            // this save fail before its rename too, the next holder of the
+            // lock settles those rows as unknown.
+            self.save();
             return self
                 .not_sent(caller, preview, "the ledger could not be saved")
                 .await;

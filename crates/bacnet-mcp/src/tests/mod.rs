@@ -2,12 +2,15 @@
 //! against an in-process lab device on a loopback link.
 
 mod bbmd;
+mod budget;
+mod confirm;
 mod discovery;
 mod handoff;
 mod legacy;
 mod limits;
 mod listen;
 mod logs;
+mod notify;
 mod paging;
 mod plan;
 mod protocol;
