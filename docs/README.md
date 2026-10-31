@@ -31,7 +31,7 @@ These documents follow the `dev` branch. The latest release is **0.15.0**, and t
 - [Terminal UI](design/tui.md): the `bacnet` TUI's architecture, screens, safety model and test strategy.
 - [MCP server](design/mcp.md): the `bacnet-ops` core, the `bacnet-mcp` tool surface, its safety model and phases (#2064).
 - [`bacnet-objects` without std](design/objects-no-std.md): the `alloc` build for bare-metal targets with an allocator, what it drops and why (#1615).
-- [Device core](design/device-core.md) (proposed): a sans-IO request core that serves an `ObjectDatabase` for firmware and the hosted server, its API, error map, PR plan and size budget (#2178).
+- [Device core](design/device-core.md) (approved): a sans-IO request core that serves an `ObjectDatabase` for firmware and the hosted server, its API, error map, PR plan and size budget (#2178).
 - [Website audit for 0.15.0](design/website-audit-0.15.md): page inventory, sample verification, and the task sitemap and PR plan the maintainer approved for the 0.15 site.
 - [Conformance and support reporting](design/conformance-reporting.md): how the website shows support: capability tables generated from the code and a sample PICS (#1496).
 

@@ -1,7 +1,7 @@
 # Design: a sans-IO device core that serves an ObjectDatabase (#2178)
 
-Status: **proposed** (2026-10-30), for the maintainer's approval before any
-code is written. Milestone 0.16.0. Line references are to dev at
+Status: **approved** by the maintainer on 2026-10-30; the crate name and
+§10 are decided. Milestone 0.16.0. Line references are to dev at
 `294dc32e9`. BACnet references are clause numbers in ANSI/ASHRAE 135-2020,
 paraphrased.
 
@@ -67,8 +67,9 @@ Layer 6:   bacnet-server, bacnet-endpoint                          (run on it)
 ```
 
 Dependencies: `bacnet-types`, `bacnet-encoding`, `bacnet-services`,
-`bacnet-objects` and `bytes`; nothing else. No `tracing`: the two
-`debug!` lines in the command-run code it takes over become the host's.
+`bacnet-objects` and `bytes`; nothing else. No `tracing`: the one `debug!`
+line in the code it takes over (`command_lists.rs:298`, in `end_unmade`) is
+dropped; `:261` stays with the server's ownerless-run sweep.
 
 It is published, since the published `bacnet-server` depends on it, and
 joins `default-members`.
@@ -86,6 +87,19 @@ compare-and-swap (CAS), which `bacnet-objects` needs for `alloc::sync::Arc`.
 So the core builds for thumbv7m, thumbv7em and riscv32imac, and not for
 thumbv6m (ARMv6-M has no CAS) or riscv32imc (no atomics). The
 allocation-free path stays the `device` image (#1614, #1771).
+
+Like `bacnet-objects` (`lib.rs:4-9`), the crate is `no_std` without `std`
+and declares `#[macro_use] extern crate alloc` for `format!` and `vec!`. The
+moved code has a few std-only spellings, which a prep commit in
+`bacnet-server` rewrites before each move, so the move commits stay pure:
+`std::borrow::Cow` (`local_references.rs:29`) becomes `alloc::borrow::Cow`;
+the `HashSet` of required properties (`handlers/rpm_budget.rs:71`, from
+`handlers/mod.rs:6`) becomes `alloc::collections::BTreeSet`, used only for
+membership; and `format!` (`server/rpm_budget.rs:39`) and `to_string`
+(`handlers/object_mgmt.rs:26`) take the `alloc` imports (the prep commit
+adds `extern crate alloc` to the server for this). These and the renames
+in §6.5 are the only edits to moved code; logic changes get commits of
+their own (§9).
 
 ### 3.3 CI scripts
 
@@ -122,8 +136,8 @@ never locks, so the lock order stays the host's.
 /// database (Reject, Abort), or not this core's.
 pub enum Access { Read, Write, None }
 
-pub struct Inbound<'a> {
-    pub apdu: &'a [u8],  // the whole APDU, header included
+pub struct Inbound {
+    pub apdu: Bytes,     // the whole APDU, header included
     pub max_reply: u16,  // what the requester and route accept; the host works
                          // it out as endpoint_responder.rs:378-380 does today
 }
@@ -148,12 +162,12 @@ impl Responder {
     /// PDU type and service choice only; never decodes the service.
     pub fn classify(apdu: &[u8]) -> Access;
     pub fn read<O: ReadOverlay>(&self, db: &ObjectDatabase, overlay: Option<&O>,
-        request: Inbound<'_>, out: &mut BytesMut) -> Outcome;
+        request: Inbound, out: &mut BytesMut) -> Outcome;
     pub fn write(&self, db: &mut ObjectDatabase,
         observer: Option<&mut dyn WriteCommitObserver>,
-        request: Inbound<'_>, out: &mut BytesMut) -> Written;
+        request: Inbound, out: &mut BytesMut) -> Written;
     /// Firmware convenience: classify, then `read` or `write`.
-    pub fn handle(&self, db: &mut ObjectDatabase, request: Inbound<'_>,
+    pub fn handle(&self, db: &mut ObjectDatabase, request: Inbound,
         out: &mut BytesMut) -> Written;
 }
 ```
@@ -163,8 +177,36 @@ before calling `read` or `write`. Firmware that owns its database calls
 `handle`. The `Responder`'s `ReadScope` (§4.3) takes its work limit from
 `Limits` and its Device from the identity, as the server's does. `Inbound`
 carries no source address and no time: whether a confirmed request that
-arrived by broadcast is answered at all (`endpoint_responder.rs:295-297`
-drops it) is the host's call, made before the core sees the APDU.
+arrived as a group (link-layer broadcast or multicast) is answered at all is
+the host's call, made before the core sees the APDU; the endpoint responder
+drops one on `received.is_group` (`endpoint_responder.rs:295-297`).
+
+**The APDU is owned `Bytes` (lead decision, 2026-10-30).** `decode_apdu`
+takes `Bytes` (`bacnet-encoding/src/apdu/mod.rs:539`) and there is no
+borrowed decoder. The server already holds each received APDU as `Bytes`,
+so it copies nothing; firmware makes one `Bytes` from its receive buffer
+per request, an allocation the `alloc` profile already accepts. `classify`
+keeps `&[u8]` and reads only the header octets (PDU type, segmented flag,
+service choice); it decodes nothing. A borrowed decoder in
+`bacnet-encoding` is out of scope, and a follow-up only if the `objects`
+image's heap or cycle figures call for one.
+
+**Requests the core doesn't run (lead decision, 2026-10-30).** `read` and
+`write` return `Outcome::Unhandled` for a confirmed service they don't run,
+so a host routes it on: the server goes on to ReadRange, the file services
+and the rest. `handle`, for firmware, answers every confirmed request
+itself, per §5: Reject UNRECOGNIZED_SERVICE for a service the core doesn't
+run, Abort SEGMENTATION_NOT_SUPPORTED for a segmented request. An
+unconfirmed service it doesn't run is `Silent`. It does so through `reply`
+helpers that a host using `classify` can call on `Access::None` too:
+
+```rust
+pub fn refuse(apdu: &[u8], out: &mut BytesMut) -> Outcome;  // picks one of the two below,
+                                                            // or Silent for unconfirmed
+pub fn unrecognized_service(invoke_id: u8) -> Apdu;         // Reject UNRECOGNIZED_SERVICE
+pub fn refuse_segmented(invoke_id: u8) -> Apdu;             // Abort SEGMENTATION_NOT_SUPPORTED
+pub fn fit(reply: Apdu, max_reply: u16) -> Apdu;            // oversize ComplexACK -> Abort
+```
 
 ### 4.3 ReadScope and ReadOverlay
 
@@ -208,7 +250,7 @@ Why each piece exists, by the server code that needs it:
 `group_present_value.rs:124`, `read_property.rs:36`, `:143`), and today's
 `DeviceReadContext::object` returns a borrowed wrapper
 (`device_view.rs:137-142`). Through `&dyn` that would need a box per row,
-so the read functions are generic over `O: ReadOverlay` (open question 1).
+so the read functions are generic over `O: ReadOverlay` (decision 1, §10).
 The server implements the trait for `DeviceReadContext`, which keeps
 `DeviceReadView`, the profile, clock cache, live lists and identity values
 and gives `registered_port`, `work_limit` and `device_oid()` to `ReadScope`.
@@ -248,7 +290,7 @@ pub fn read_property_ack<O: ReadOverlay>(db: &ObjectDatabase, overlay: Option<&O
     completed: impl FnMut(ObjectIdentifier, &ReadPropertyRequest, &Result<(), Error>),
 ) -> Result<(), Error>;
 
-// handlers/rpm_budget.rs:142; `read` takes the byte limit and a row callback.
+// struct at handlers/rpm_budget.rs:142, `new` at :147, `read` (today `read_observed`) at :169.
 impl RpmPlan {
     pub fn new<O: ReadOverlay>(db: &ObjectDatabase, scope: &ReadScope, overlay: Option<&O>,
         request: &ReadPropertyMultipleRequest, limit: usize) -> Result<Self, ReadFailure>;
@@ -317,8 +359,8 @@ pub fn end_unmade(db: &mut ObjectDatabase, written: &[ObjectIdentifier]);
 
 The observer is synchronous and runs under the host's database guard. Its
 implementations must take no lock; the server's take none today, and the
-COV capture they run was read from the COV table before the write
-(`server/requests/mutations.rs:319`).
+COV capture they run was read from the COV table before the write, under
+the database write guard (`server/requests/mutations.rs:316-319`).
 
 WPM's Life Safety snapshots need no hook of their own:
 `capture_before_write` runs just before `commit_attempt`
@@ -370,8 +412,9 @@ network; then the answer must be an Error. The core keeps today's line:
   limit fails after the reads, and RPM writes nothing. Both are Aborts, as
   today.
 
-`error_apdu_from_error` and `error_fields` (`confirmed_response.rs:233-311`)
-move to the core's `reply` module whole, the special productions for the
+`error_apdu_from_error` (as `reply::error_apdu`) and `error_fields`
+(`confirmed_response.rs:233-311`) move to the core's `reply` module whole,
+the special productions for the
 list, CreateObject and SubscribeCOVPropertyMultiple services included, so
 the hosted services keep using the one map. The segmented-request and
 oversize-reply Aborts become `reply::refuse_segmented` and `reply::fit`,
@@ -391,12 +434,12 @@ same PR (AGENTS.md, pre-1.0 rules). Line counts include doc comments.
 | `ReadFailure`, `Work` | `handlers/read_budget.rs` | 47 |
 | `PlannedObject`, `PlannedRow`, `expand`, `plan_specs`, `live_cov_selection`, `RpmPlan`, `read_row`, `element`, `Scratch` (Group planning needs `plan_specs`) | `handlers/rpm_budget.rs:1-373` | ~370 |
 | Group Present_Value | `handlers/group_present_value.rs` | 170 |
-| `ReadPropertyMultipleBudget` (public; callers in `rusty-bacnet` `server_methods/constructor_budgets.rs` and `bacnet-endpoint` `session.rs:202`) | `server/rpm_budget.rs:10` | 133 |
+| `ReadPropertyMultipleBudget`, its `Default` and `validate` (public; callers in `rusty-bacnet` `server_methods/constructor_budgets.rs` and `bacnet-endpoint` `session.rs:202`). The builder setters (`:46-69`) and the inline test module (`:71-133`: `#[tokio::test]`, `TestTransport`, `ServerConfig` checks) stay in `bacnet-server` as tests of the config wiring, imports retargeted | `server/rpm_budget.rs:1-44` | 44 |
 | `LiveCovSelection`, as `LiveLists` | `cov/active.rs:157-177` | 21 |
 | `handle_who_has` | `handlers/object_mgmt.rs:5-43` | 39 |
 | `iam_request_for`, `announcement_device` | `server/discovery.rs:809-818`, `local_device.rs:37-47` | 21 |
 | `error_apdu_from_error`, `error_fields` | `server/requests/confirmed_response.rs:222-311` | 90 |
-| **Total** | | **~1,150** |
+| **Total** | | **~1,040** |
 
 Deleted: `handlers::handle_read_property` (`read_property.rs:86-102`), whose
 40-odd test callers switch to the core. The legacy unbounded
@@ -441,13 +484,33 @@ COV capture, Schedule re-evaluation); command runs (`command_lists`,
 `command_runs.rs`); the discovery limiter and reply routing; segmentation
 (`issue.rs`); CreateObject and every other service.
 
+### 6.5 Renames
+
+The move renames these, and nothing else; every other item keeps its name.
+
+| Today | In the core |
+|---|---|
+| `handlers::resolve_read_target(db, oid, port, device)` | `read::resolve_target(db, scope, oid)` |
+| `handlers::plan_read_property` | `read::plan_property` |
+| `handlers::read_property_value` | `read::read_value` |
+| `handlers::read_property_request_observed` | `read::read_property_ack` |
+| `PropertyPlan::live_cov`, `RpmPlan::live_cov` | `live_lists` |
+| `RpmPlan::read_observed` | `RpmPlan::read` |
+| `cov::active::LiveCovSelection` (`active`, `multiple`, `address_bindings`) | `read::LiveLists` (`active_cov`, `active_cov_multiple`, `address_bindings`) |
+| `handlers::handle_who_has` | `discovery::who_has` |
+| `discovery::iam_request_for(&ServerConfig)` (and its `discovery_iam_for_test` alias) | `discovery::i_am(&DeviceIdentity)`, which `discovery::who_is` uses |
+| `confirmed_response::error_apdu_from_error` | `reply::error_apdu` |
+| `handlers::handle_write_property_observed` | `write::write_property` |
+| `handlers::handle_write_property_multiple_observed` and its `_detailed`, `_authorized` wrappers | `write::write_property_multiple` |
+| `handlers::WritePropertyMultipleOutcome` | `write::WpmOutcome` |
+
 ## 7. Delivery
 
 ### 7.1 Three PRs
 
 | PR | Adds | Moves | Tests | New lines |
 |---|---|---|---|---|
-| 1. Read path | crate, features, `reply`, `ReadScope`/`ReadOverlay`/`NoOverlay`, `Responder` for RP, Who-Is, Who-Has; `objects` image and three budget rows; script changes (§3.3) | §6.1, ~1,150 | core host tests for every error row of §5 that RP, Who-Is and Who-Has reach; the parity test (§7.2); the image's host test (`firmware/link/tests/objects.rs`); server tests changed only in imports | ~900 |
+| 1. Read path | crate, features, `reply`, `ReadScope`/`ReadOverlay`/`NoOverlay`, `Responder` for RP, Who-Is, Who-Has; `objects` image and three budget rows; script changes (§3.3) | §6.1, ~1,040 | core host tests for every error row of §5 that RP, Who-Is and Who-Has reach; the parity test (§7.2); the image's host test (`firmware/link/tests/objects.rs`); server tests changed only in imports | ~900 |
 | 2. Write path | `Responder` WP; WP rows in the parity corpus; the image writes a Binary Value and reads it back | §6.2, ~1,060 | parity for success, WRITE_ACCESS_DENIED, a NULL left unchanged, duplicate Object_Name, an index on a non-array, a Command Present_Value write ending unmade | ~300 |
 | 3. RPM/WPM | `Responder` RPM and WPM under `Limits`; Life Safety capture folded into the server's observer; the image reads with RPM | §6.3, ~205, and ~200 deleted | parity for ALL/REQUIRED/OPTIONAL, the work and byte limits, WPM with an applied prefix then a syntax fault (20.1.8); the legacy-vs-bounded RPM comparisons rewired to the core with an unlimited budget | ~300 |
 
@@ -549,6 +612,11 @@ code. Mitigations:
   the spawned ReadProperty future to 1,032 octets (#1713). Nothing the core
   returns may be held across the sampling await. PR 1 reports the sizes the
   test prints, before and after.
+- No new copy of the request: `Inbound.apdu` is the `Bytes` the server
+  already holds, a reference-counted clone (§4.2). Firmware pays one
+  allocation per request to make its `Bytes`; if the `objects` image's heap
+  or cycle figures show that matters, a borrowed APDU decoder in
+  `bacnet-encoding` is the follow-up.
 - Benchmarks, before and after, on the same machine, sequentially, with no
   competing load, each with `--save-baseline` then `--baseline`:
 
@@ -578,9 +646,13 @@ sample, read; turning the sample into a join with other work under the
 database guard would reopen #1494's failure.
 
 **#2179 (capability accessors).** `BACnetObject` has 101 methods, 69 of
-them `_internal`. The core calls a few (`registered_port_internal`,
-`device_authority_internal`, `audit_reporter_authority_internal`, four
-command-run hooks); `DeviceReadView` forwards about thirty more
+them `_internal`. The core calls a few: `registered_port_internal`,
+`device_authority_internal`, `audit_reporter_authority_internal`, and three
+command-run hooks in the moved run-ending code (`take_command_run_internal`,
+`command_lists.rs:287`; `record_command_write_internal`, `:174`;
+`complete_command_run_internal`, `:176`). `command_generation_internal`
+(`:270`, `:402`) stays with the server's runners. `DeviceReadView` forwards
+about thirty more
 (`device_view.rs:413-513`). The maintainer decided on 2026-10-30 that #2179
 is in 0.16.0 and lands after PR 1, so PR 1 baselines `.text` on the
 `objects` rows first, and #2179 reports its delta on them, editing the
@@ -593,31 +665,36 @@ pass unchanged" stays meaningful; moving pure database tests into the core
 is a follow-up. No file passes the 700-line cap: the two largest sources,
 `confirmed_response.rs` (608) and `write_property.rs` (744), shrink.
 
-## 10. Open questions
+## 10. Decisions
 
-1. **Overlay shape.** (a) Generic `O: ReadOverlay` with an associated view
-   type; `DeviceReadView` stays in the server (§4.3). (b) An object-safe
-   `&dyn ReadOverlay` that hands the core values (services, live lists,
-   identity), with `DeviceReadView`'s 522 lines and hook forwards moved into
-   the core. (c) `&dyn` returning boxed views: an allocation per result row
-   on the hottest path. *Recommendation: (a).* It is today's code,
-   monomorphized once, and keeps executor policy hosted; firmware doesn't
-   need the view (§4.3), and (b) would move the forwards #2179 rewrites.
-2. **Crate name.** `bacnet-device-core` or `bacnet-server-core`.
-   *Recommendation: `bacnet-device-core`:* it serves one device's objects,
-   matches the firmware images' names, and doesn't suggest the server's
-   COV, scheduling or segmentation.
-3. **`core::fmt` in the `objects` image.** (a) Budget today's count, 7,
-   with no headroom (as `apdu` does memmove) and file a follow-up for
-   `DeviceIdentity::new`'s default name. (b) Fix it in PR 1 (a small
-   `bacnet-objects` change). (c) Let it float within the 12%.
-   *Recommendation: (a):* PR 1 stays a move, and the count can only fall.
-4. **Which Device an I-Have names.** Who-Is answers from the frozen
-   identity (`unconfirmed.rs:101`, `announcement_device`), Who-Has from
-   `db.selected_device()` (`unconfirmed.rs:192`). (a) Keep the difference
-   in the move and open an issue. (b) Use the frozen identity for both in
-   PR 1, a **Wire:** change. *Recommendation: (a):* a move shouldn't change
-   behaviour.
+1. **Overlay shape: (a)** (lead, 2026-10-30). The options were (a) generic
+   `O: ReadOverlay` with an associated view type, `DeviceReadView` staying
+   in the server (§4.3); (b) an object-safe `&dyn ReadOverlay` handing the
+   core values (services, live lists, identity), with the view and context
+   code (about 380 lines, `device_view.rs:137-513`) and its hook forwards
+   moved into the core; (c) `&dyn` returning boxed views, an allocation per
+   result row on the hottest path. (a) is today's code, monomorphized once,
+   and keeps executor policy hosted; firmware doesn't need the view, and (b)
+   would move the forwards #2179 rewrites.
+2. **Crate name: `bacnet-device-core`** (maintainer, 2026-10-30), over
+   `bacnet-server-core`. It serves one device's objects, matches the
+   firmware images' names, and doesn't suggest the server's COV,
+   scheduling or segmentation.
+3. **`core::fmt` in the `objects` image: (a)** (lead). Budget today's
+   count, 7, with no headroom (as `apdu` does memmove); #2187 formats
+   `DeviceIdentity::new`'s default name without `core::fmt`. The options
+   not taken: fix it in PR 1, or let it float within the 12%. PR 1 stays a
+   move, and the count can only fall.
+4. **Which Device an I-Have names: (a)** (lead). Who-Is answers from the
+   frozen identity (`unconfirmed.rs:101`, `announcement_device`), Who-Has
+   from `db.selected_device()` (`unconfirmed.rs:192`). PR 1 keeps that, and
+   #2186 makes I-Have and I-Am name the Device picked the same way. The
+   option not taken: unify in PR 1, a **Wire:** change inside a move.
+5. **Owned APDU** (lead, from the review): `Inbound.apdu` is `Bytes`, and
+   `classify` peeks a `&[u8]` header; no borrowed decoder for now (§4.2).
+6. **Requests the core doesn't run** (lead, from the review): `read` and
+   `write` return `Unhandled` so a host routes the request on; `handle`
+   answers every confirmed request through the `reply` helpers (§4.2).
 
 ## 11. Evidence
 
