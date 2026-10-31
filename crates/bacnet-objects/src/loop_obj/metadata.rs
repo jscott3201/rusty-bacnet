@@ -46,7 +46,7 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::DERIVATIVE_CONSTANT_UNITS, Optional, None, ReadOnly),
     PropertyMetadata::new(P::PRIORITY_FOR_WRITING, RequiredRead, None, ReadOnly),
     // Table 12-20 footnote 4: present because the object supports COV.
-    PropertyMetadata::new(P::COV_INCREMENT, Optional, None, Always),
+    crate::property_metadata::COV_INCREMENT_ROW,
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -111,6 +111,8 @@ mod tests {
             P::SETPOINT,
             P::ACTION,
             P::PRIORITY_FOR_WRITING,
+            // Table 12-20 footnote 4: required of a Loop that reports COV (#2193).
+            P::COV_INCREMENT,
             P::PROPERTY_LIST,
         ];
         assert!(matches!(object.property_metadata(), Cow::Borrowed(_)));
@@ -120,10 +122,14 @@ mod tests {
         assert!(object.supports_cov());
         assert!(!object.is_createable());
         for row in object.property_metadata().iter() {
-            assert_eq!(row.presence_condition, None);
+            let cov = row.property_identifier == P::COV_INCREMENT;
+            assert_eq!(
+                row.presence_condition,
+                cov.then_some(crate::property_metadata::PropertyPresenceCondition::CovReporting)
+            );
             assert_eq!(
                 row.conformance,
-                if required.contains(&row.property_identifier) {
+                if required.contains(&row.property_identifier) && !cov {
                     RequiredRead
                 } else {
                     Optional

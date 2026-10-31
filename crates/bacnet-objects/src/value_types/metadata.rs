@@ -51,7 +51,7 @@ pub(crate) const INTEGER_VALUE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::UNITS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
-    PropertyMetadata::new(P::COV_INCREMENT, Optional, None, Always),
+    crate::property_metadata::COV_INCREMENT_ROW,
     PropertyMetadata::new(
         P::CURRENT_COMMAND_PRIORITY,
         Optional,
@@ -73,7 +73,7 @@ pub(crate) const POSITIVE_INTEGER_VALUE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::UNITS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
-    PropertyMetadata::new(P::COV_INCREMENT, Optional, None, Always),
+    crate::property_metadata::COV_INCREMENT_ROW,
     PropertyMetadata::new(
         P::CURRENT_COMMAND_PRIORITY,
         Optional,
@@ -95,7 +95,7 @@ pub(crate) const LARGE_ANALOG_VALUE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::UNITS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
-    PropertyMetadata::new(P::COV_INCREMENT, Optional, None, Always),
+    crate::property_metadata::COV_INCREMENT_ROW,
     PropertyMetadata::new(
         P::CURRENT_COMMAND_PRIORITY,
         Optional,

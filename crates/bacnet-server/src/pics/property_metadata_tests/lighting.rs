@@ -28,7 +28,8 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             (P::DEFAULT_RAMP_RATE, false, true),
             (P::DEFAULT_STEP_INCREMENT, false, true),
             (P::CURRENT_COMMAND_PRIORITY, false, false),
-            (P::COV_INCREMENT, true, true),
+            // Table 12-64 footnote 3 (#2193).
+            (P::COV_INCREMENT, false, true),
             (P::VALUE_SOURCE, false, true),
             (P::VALUE_SOURCE_ARRAY, false, false),
             (P::LAST_COMMAND_TIME, false, false),

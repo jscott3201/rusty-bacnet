@@ -96,7 +96,7 @@ const LIGHTING_OUTPUT_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::DEFAULT_RAMP_RATE, RequiredRead, None, Always),
     PropertyMetadata::new(P::DEFAULT_STEP_INCREMENT, RequiredRead, None, Always),
     PropertyMetadata::new(P::CURRENT_COMMAND_PRIORITY, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::COV_INCREMENT, Optional, None, Always),
+    crate::property_metadata::COV_INCREMENT_ROW,
     VALUE_SOURCE_ROWS[0],
     VALUE_SOURCE_ROWS[1],
     VALUE_SOURCE_ROWS[2],
@@ -244,6 +244,8 @@ mod tests {
                     Some(PropertyPresenceCondition::CommandableValueSourceTracking),
                     true,
                 ),
+                // Table 12-64 footnote 3 (#2193).
+                P::COV_INCREMENT => (Some(PropertyPresenceCondition::CovReporting), true),
                 _ => (None, false),
             };
             assert_eq!(row.presence_condition, condition);
@@ -349,6 +351,7 @@ mod tests {
             P::DEFAULT_RAMP_RATE,
             P::DEFAULT_STEP_INCREMENT,
             P::CURRENT_COMMAND_PRIORITY,
+            P::COV_INCREMENT,
             P::VALUE_SOURCE,
             P::VALUE_SOURCE_ARRAY,
             P::LAST_COMMAND_TIME,

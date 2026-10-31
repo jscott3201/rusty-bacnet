@@ -5342,6 +5342,19 @@ delay capability and preserving exactly-one source-role ownership. See
 | `AveragingObject` | `::new(instance, name)` |
 | `StagingObject` | `::new(instance, name, StagingConfig { ... })` |
 
+The Timer is a countdown driven by the Clause 12.57 state machine (#2192).
+Present_Value is an Unsigned count of the milliseconds left while it runs, and
+zero otherwise. Writing a timeout within Min_Pres_Value..=Max_Pres_Value to
+Present_Value starts or restarts it, and zero expires it. Writing TRUE to
+Timer_Running starts it with Default_Timeout, and FALSE expires it. Writing
+IDLE to Timer_State clears it. Any other Timer_State, or a nonzero timeout
+outside the range, is VALUE_OUT_OF_RANGE and changes nothing. A new Timer
+accepts 1 to 4294967295 ms and defaults to 60000 ms; change them with
+`set_pres_value_range` and `set_default_timeout`. The countdown runs on the
+database's monotonic clock and holds while Out_Of_Service is TRUE, which also
+makes Reliability writable. The Timer has no State_Change_Values, so its
+transitions write nothing to other objects.
+
 The Loop serves every required Table 12-20 row. Setpoint, the gain constants,
 Update_Interval and Action (DIRECT or REVERSE) take network writes.
 Controlled_Variable_Units, the three gain units rows and Priority_For_Writing

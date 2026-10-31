@@ -44,7 +44,7 @@ const BASE: &[PropertyMetadata] = &[
         Some(Commandable),
         ReadOnly,
     ),
-    PropertyMetadata::new(P::COV_INCREMENT, Optional, None, Always),
+    crate::property_metadata::COV_INCREMENT_ROW,
     PropertyMetadata::new(
         P::HIGH_LIMIT,
         Optional,
