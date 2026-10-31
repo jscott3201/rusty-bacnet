@@ -135,9 +135,11 @@ fn expected_rows(kind: ObjectType, triggered: bool) -> Vec<(P, bool, bool)> {
             (P::LOG_DEVICE_OBJECT_PROPERTY, false, true),
         ]);
         // The window, clock alignment and Trigger, all writable (#1235,
-        // #1353, #1354).
+        // #1353, #1354). Clock-aligned logging requires the alignment pair
+        // (Table 12-29 footnote 5, Table 12-35 footnote 3, #2174).
         rows.extend([P::START_TIME, P::STOP_TIME].map(|p| (p, !trend, true)));
-        rows.extend([P::ALIGN_INTERVALS, P::INTERVAL_OFFSET, P::TRIGGER].map(|p| (p, true, true)));
+        rows.extend([P::ALIGN_INTERVALS, P::INTERVAL_OFFSET].map(|p| (p, false, true)));
+        rows.push((P::TRIGGER, true, true));
         if trend {
             // A Trend Log's two COV rows, optional and writable (#1480).
             rows.extend(

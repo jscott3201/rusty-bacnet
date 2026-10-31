@@ -145,7 +145,7 @@ fn device_eight_masks_compose_with_clock_segmentation_cov_and_audit_metadata() {
                             .map(|(_, p)| p)
                             .collect();
                         assert_eq!(&object.property_list()[list.len()..], expected);
-                        assert!(object.property_list().contains(&P::PROPERTY_LIST));
+                        assert!(!object.property_list().contains(&P::PROPERTY_LIST));
                         assert!(
                             !object
                                 .property_list()

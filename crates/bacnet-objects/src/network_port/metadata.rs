@@ -2,13 +2,19 @@ use super::{IpConfig, NetworkPortObject};
 use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead},
     PropertyMetadata,
+    PropertyPresenceCondition::{ApplicationProtocolLevel, NotPointToPoint},
     PropertyWriteCapability::{Always, ReadOnly},
 };
 use alloc::borrow::Cow;
 use bacnet_types::enums::{IPMode, PropertyIdentifier as P};
 
-// 135-2020 Table12-71 incl application footnote25; Link_Speed optional per
-// 2024-04-29 errata item23. Readonly configured snapshot: no activation owner.
+// 135-2020 Table 12-71. Every port here is at the BACnet application
+// protocol level, which footnote 25 makes the condition for Network_Number,
+// Network_Number_Quality and APDU_Length, and none is a point-to-point link,
+// which footnote 3 makes the condition for MAC_Address: each keeps the
+// table's optional class and carries its condition (#2174). The table
+// classes Link_Speed required. Read-only configured snapshot: no activation
+// owner.
 const COMMON: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
@@ -19,11 +25,26 @@ const COMMON: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::RELIABILITY, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::NETWORK_TYPE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PROTOCOL_LEVEL, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::NETWORK_NUMBER, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::NETWORK_NUMBER_QUALITY, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::MAC_ADDRESS, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::APDU_LENGTH, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::LINK_SPEED, Optional, None, ReadOnly),
+    PropertyMetadata::new(
+        P::NETWORK_NUMBER,
+        Optional,
+        Some(ApplicationProtocolLevel),
+        ReadOnly,
+    ),
+    PropertyMetadata::new(
+        P::NETWORK_NUMBER_QUALITY,
+        Optional,
+        Some(ApplicationProtocolLevel),
+        ReadOnly,
+    ),
+    PropertyMetadata::new(P::MAC_ADDRESS, Optional, Some(NotPointToPoint), ReadOnly),
+    PropertyMetadata::new(
+        P::APDU_LENGTH,
+        Optional,
+        Some(ApplicationProtocolLevel),
+        ReadOnly,
+    ),
+    PropertyMetadata::new(P::LINK_SPEED, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::CHANGES_PENDING, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];

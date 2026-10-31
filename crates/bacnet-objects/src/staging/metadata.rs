@@ -2,6 +2,9 @@ use bacnet_types::enums::PropertyIdentifier;
 
 use crate::property_metadata::{PropertyConformance, PropertyMetadata, PropertyWriteCapability};
 
+// Table 12-80 codes only Present_Value W. Stages, Target_References,
+// Out_Of_Service, Priority_For_Writing and Min_Pres_Value are R there; this
+// device takes writes to them, which their capability says (#2174).
 pub(super) const STAGING_PROPERTY_METADATA: &[PropertyMetadata] = &[
     PropertyMetadata::new(
         PropertyIdentifier::OBJECT_IDENTIFIER,
@@ -41,13 +44,13 @@ pub(super) const STAGING_PROPERTY_METADATA: &[PropertyMetadata] = &[
     ),
     PropertyMetadata::new(
         PropertyIdentifier::STAGES,
-        PropertyConformance::RequiredWrite,
+        PropertyConformance::RequiredRead,
         None,
         PropertyWriteCapability::Always,
     ),
     PropertyMetadata::new(
         PropertyIdentifier::TARGET_REFERENCES,
-        PropertyConformance::RequiredWrite,
+        PropertyConformance::RequiredRead,
         None,
         PropertyWriteCapability::Always,
     ),
@@ -71,7 +74,7 @@ pub(super) const STAGING_PROPERTY_METADATA: &[PropertyMetadata] = &[
     ),
     PropertyMetadata::new(
         PropertyIdentifier::OUT_OF_SERVICE,
-        PropertyConformance::RequiredWrite,
+        PropertyConformance::RequiredRead,
         None,
         PropertyWriteCapability::Always,
     ),
@@ -83,13 +86,13 @@ pub(super) const STAGING_PROPERTY_METADATA: &[PropertyMetadata] = &[
     ),
     PropertyMetadata::new(
         PropertyIdentifier::PRIORITY_FOR_WRITING,
-        PropertyConformance::RequiredWrite,
+        PropertyConformance::RequiredRead,
         None,
         PropertyWriteCapability::Always,
     ),
     PropertyMetadata::new(
         PropertyIdentifier::MIN_PRES_VALUE,
-        PropertyConformance::RequiredWrite,
+        PropertyConformance::RequiredRead,
         None,
         PropertyWriteCapability::Always,
     ),
@@ -113,3 +116,46 @@ pub(super) const STAGING_PROPERTY_METADATA: &[PropertyMetadata] = &[
         PropertyWriteCapability::ReadOnly,
     ),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use PropertyIdentifier as P;
+
+    #[test]
+    fn staging_rows_carry_the_table_codes_and_their_write_routes() {
+        // Table 12-80 codes only Present_Value W; this device writes these
+        // R rows too, which their capability carries (#2174).
+        let written_r_rows = [
+            P::STAGES,
+            P::TARGET_REFERENCES,
+            P::OUT_OF_SERVICE,
+            P::PRIORITY_FOR_WRITING,
+            P::MIN_PRES_VALUE,
+        ];
+        for row in STAGING_PROPERTY_METADATA {
+            let p = row.property_identifier;
+            let expected = match p {
+                P::PRESENT_VALUE => PropertyConformance::RequiredWrite,
+                P::DESCRIPTION | P::COV_INCREMENT => PropertyConformance::Optional,
+                _ => PropertyConformance::RequiredRead,
+            };
+            assert_eq!(row.conformance, expected, "{p:?}");
+            assert_eq!(row.presence_condition, None, "{p:?}");
+            if written_r_rows.contains(&p) {
+                assert_eq!(
+                    row.write_capability,
+                    PropertyWriteCapability::Always,
+                    "{p:?}"
+                );
+            }
+        }
+        for p in written_r_rows {
+            assert!(
+                STAGING_PROPERTY_METADATA
+                    .iter()
+                    .any(|row| row.property_identifier == p)
+            );
+        }
+    }
+}

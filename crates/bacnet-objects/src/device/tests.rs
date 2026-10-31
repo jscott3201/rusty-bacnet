@@ -270,7 +270,8 @@ fn property_list_contains_expected() {
     assert!(props.contains(&PropertyIdentifier::OBJECT_TYPE));
     assert!(props.contains(&PropertyIdentifier::VENDOR_NAME));
     assert!(props.contains(&PropertyIdentifier::OBJECT_LIST));
-    assert!(props.contains(&PropertyIdentifier::PROPERTY_LIST));
+    // Property_List is a row, but the list leaves it out as every type's does (#2174).
+    assert!(!props.contains(&PropertyIdentifier::PROPERTY_LIST));
     assert!(props.contains(&PropertyIdentifier::PROTOCOL_OBJECT_TYPES_SUPPORTED));
     assert!(props.contains(&PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED));
 }
@@ -592,7 +593,12 @@ fn device_property_metadata_preserves_dynamic_list_and_write_dispatch() {
                     .collect::<Vec<_>>(),
                 expected
             );
-            assert_eq!(device.property_list().as_ref(), expected);
+            let listed: Vec<_> = expected
+                .iter()
+                .copied()
+                .filter(|p| *p != P::PROPERTY_LIST)
+                .collect();
+            assert_eq!(device.property_list().as_ref(), listed);
             let wire: Vec<_> = expected
                 .iter()
                 .copied()

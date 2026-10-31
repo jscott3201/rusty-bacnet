@@ -809,14 +809,7 @@ impl BACnetObject for DeviceObject {
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        // Preserve Device's legacy inclusion of PROPERTY_LIST. The wire reader
-        // still removes it and the identity rows as before.
-        Cow::Owned(
-            self.property_metadata()
-                .iter()
-                .map(|row| row.property_identifier)
-                .collect(),
-        )
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
     /// Device is not createable or deleteable at runtime.

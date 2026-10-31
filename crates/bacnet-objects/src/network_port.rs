@@ -188,7 +188,7 @@ impl BACnetObject for NetworkPortObject {
             )),
             P::MAC_ADDRESS => Ok(PropertyValue::OctetString(self.mac_address.to_vec())),
             P::APDU_LENGTH => Ok(PropertyValue::Unsigned(self.apdu_length.into())),
-            // Optional unknown rate, not a measured NIC speed (errata item 23).
+            // Zero says the rate is unknown (Clause 12.56); no NIC speed is measured.
             P::LINK_SPEED => Ok(PropertyValue::Real(0.0)),
             P::CHANGES_PENDING => Ok(PropertyValue::Boolean(self.changes_pending())),
             _ => {

@@ -84,7 +84,12 @@ fn a_configured_snapshot_serves_the_ipv6_rows_read_only() {
     assert_eq!(object.property_list().as_ref(), ALL);
     for row in object.property_metadata().iter() {
         let expected = match row.property_identifier {
-            P::DESCRIPTION | P::LINK_SPEED => PropertyConformance::Optional,
+            // Table 12-71 footnotes 3 and 25 (#2174).
+            P::DESCRIPTION
+            | P::NETWORK_NUMBER
+            | P::NETWORK_NUMBER_QUALITY
+            | P::MAC_ADDRESS
+            | P::APDU_LENGTH => PropertyConformance::Optional,
             _ => PropertyConformance::RequiredRead,
         };
         assert_eq!(row.conformance, expected, "{}", row.property_identifier);

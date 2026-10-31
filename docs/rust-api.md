@@ -9298,7 +9298,7 @@ The snapshot denies activation-dependent network writes, except a registered
 BBMD's two writable rows (see below), and derives its readonly MAC from
 configured IP/UDP. Reconstruct it to change configuration. It has no inert
 Command or obsolete port62 projection. Link_Speed is
-optional and zero means unknown. The former raw `new` constructor and configuration
+required, as Table 12-71 classes it, and zero means unknown (#2174). The former raw `new` constructor and configuration
 setters are removed. `new_non_bip` takes explicit Ethernet/VIRTUAL number, MAC and
 capacity and exposes common application rows only; it does not claim a complete
 SC or Ethernet profile. Both `DeviceIdentity` database builders use these same
