@@ -199,9 +199,12 @@ pub(crate) async fn planned<T: TransportPort + 'static>(
     let Some(plan) = ctx.writes.plan(&ctx.policy.writes) else {
         return Err(ToolError::refused("plan-spent", "the plan grant ended"));
     };
+    // Counted under the workspace's lock, which `desk` holds, before
+    // `commit` sends anything.
     let approver = PlanApprover {
         plan,
         writes: &ctx.writes,
+        workspace: &workspace.dir,
     };
     if let Approval::Refused { reason, message } = approver.approve(&ctx.principal, &preview, tier)
     {

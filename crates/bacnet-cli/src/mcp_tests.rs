@@ -208,6 +208,11 @@ fn writes_and_a_plan_become_the_write_policy() {
         "{}",
         person.asked[0]
     );
+    // Authorizing starts the plan's write count at zero (#2159).
+    let count = store.workspace("site").unwrap().join("plan-budget.json");
+    let count: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(count).unwrap()).unwrap();
+    assert_eq!(count["used"], serde_json::json!(0), "{count}");
     let mut profile = store.load("site").unwrap();
     let mcp = profile.mcp.as_mut().unwrap();
     mcp.plan.as_mut().unwrap().max_writes = 51;

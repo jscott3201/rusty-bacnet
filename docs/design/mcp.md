@@ -572,8 +572,16 @@ As built (#2068), and where it differs from the steps above:
   isn't used yet. Plan grants work for every client.
 - A plan grant (`[mcp.plan]`) is approved in a terminal by `bacnet mcp
   authorize`, which names what it lets through without a prompt; it runs
-  for its `hours` (8 at most) from that authorization, and its write budget
-  counts per process. While one is in force, a write it doesn't cover is
+  for its `hours` (8 at most) from that authorization. Its write budget is
+  counted in the workspace beside the ledger, keyed to the authorization
+  (#2159): `bacnet mcp authorize` starts the count at zero, before it
+  saves the authorization, and a write the plan covers is counted, under
+  the workspace's lock, before it goes on the wire; a crash between the
+  two costs at most that write. A count the server can't read for this
+  authorization (missing, unreadable, corrupt or another
+  authorization's) or can't save refuses the plan's writes
+  (`plan-budget-unavailable`): none of these can give budget back, and
+  authorizing again is the way out. While one is in force, a write it doesn't cover is
   refused (`outside-plan`) rather than offered to the client.
 - `bacnet_revert` needs no prompt and no armed session, as in the TUI, and
   reverts only this principal's MCP entries.

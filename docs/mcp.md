@@ -342,8 +342,15 @@ Writes go through `bacnet_ops::safety`: the TUI's planner, tiers, ledger
   hand-edited time can't lengthen one; the server refuses a plan running
   more than 8 hours from start), which spells out what the plan lets
   through without a prompt and warns when its range includes priorities
-  1, 2 or 5; the budget counts per process, and a plan that ends between
-  a call's check and its write is refused (`plan-spent`). `bacnet mcp
+  1, 2 or 5. The budget is counted in the profile workspace beside the
+  ledger (`plan-budget.json`, #2159), for that authorization, so a
+  restart doesn't reset it and authorizing again starts it at zero. Each
+  write the plan covers is counted, under the workspace's lock, before it
+  is sent; a count that is missing, unreadable, corrupt, left by another
+  authorization, or can't be saved refuses the plan's writes
+  (`plan-budget-unavailable`, nothing sent) until `bacnet mcp authorize`
+  runs again. A plan that ends between a call's check and its write is
+  refused (`plan-spent`). `bacnet mcp
   serve` warns when writes are offered with `mcp_arm = "never"` and no
   plan, since every write is then refused (`not-armed`).
   Offering writes, letting the client arm, or adding or changing a plan

@@ -19,16 +19,24 @@ pub(super) fn plan(max_writes: u32) -> PlanGrant {
         properties: vec![PropertyIdentifier::PRESENT_VALUE],
         priorities: (8, 16),
         max_writes,
+        authorized_unix: crate::writes::unix_now(),
         expires_unix: crate::writes::unix_now() + 3_600,
         reason: Some("commissioning".into()),
     }
+}
+
+/// `grant` with its write count started in `dir`, as `bacnet mcp
+/// authorize` leaves it.
+pub(super) fn authorized(dir: &std::path::Path, grant: PlanGrant) -> Option<PlanGrant> {
+    grant.start_budget(dir).unwrap();
+    Some(grant)
 }
 
 #[tokio::test(start_paused = true)]
 async fn fifty_planned_writes_run_without_prompts_and_others_are_refused() {
     let dir = tempfile::tempdir().unwrap();
     let mut policy = writes(dir.path(), ArmMode::Never);
-    policy.writes.plan = Some(plan(51));
+    policy.writes.plan = authorized(dir.path(), plan(51));
     let mut lab = Lab::start(policy).await;
     for n in 0..50u8 {
         // Priority 8 is T2: the plan covers it, where a client can't.
@@ -86,10 +94,13 @@ async fn fifty_planned_writes_run_without_prompts_and_others_are_refused() {
 async fn a_plans_reach_holds_on_every_side() {
     let dir = tempfile::tempdir().unwrap();
     let mut policy = writes(dir.path(), ArmMode::Never);
-    policy.writes.plan = Some(PlanGrant {
-        priorities: (1, 16),
-        ..plan(10)
-    });
+    policy.writes.plan = authorized(
+        dir.path(),
+        PlanGrant {
+            priorities: (1, 16),
+            ..plan(10)
+        },
+    );
     let mut lab = Lab::start(policy).await;
     let reply = call(&mut lab, "bacnet_write", one(json!(3), 1), json!({})).await;
     assert_eq!(reply["isError"], json!(false), "{reply}");
@@ -106,10 +117,13 @@ async fn a_plans_reach_holds_on_every_side() {
 
     let dir = tempfile::tempdir().unwrap();
     let mut policy = writes(dir.path(), ArmMode::Never);
-    policy.writes.plan = Some(PlanGrant {
-        expires_unix: crate::writes::unix_now() - 1,
-        ..plan(10)
-    });
+    policy.writes.plan = authorized(
+        dir.path(),
+        PlanGrant {
+            expires_unix: crate::writes::unix_now() - 1,
+            ..plan(10)
+        },
+    );
     let mut lab = Lab::start(policy).await;
     let reply = call(&mut lab, "bacnet_write", one(json!(3), 12), json!({})).await;
     assert_eq!(
@@ -127,7 +141,7 @@ async fn a_plans_reach_holds_on_every_side() {
 async fn a_cancelled_planned_write_still_settles() {
     let dir = tempfile::tempdir().unwrap();
     let mut policy = writes(dir.path(), ArmMode::Never);
-    policy.writes.plan = Some(plan(10));
+    policy.writes.plan = authorized(dir.path(), plan(10));
     // The device answers each request after 400 ms: the pre-read by 400,
     // the write by about 800.
     let mut lab = Lab::start_with(policy, Duration::from_millis(400)).await;
@@ -159,10 +173,13 @@ async fn a_cancelled_planned_write_still_settles() {
 async fn a_plan_may_approve_relinquish_default() {
     let dir = tempfile::tempdir().unwrap();
     let mut policy = writes(dir.path(), ArmMode::Never);
-    policy.writes.plan = Some(PlanGrant {
-        properties: vec![PropertyIdentifier::RELINQUISH_DEFAULT],
-        ..plan(10)
-    });
+    policy.writes.plan = authorized(
+        dir.path(),
+        PlanGrant {
+            properties: vec![PropertyIdentifier::RELINQUISH_DEFAULT],
+            ..plan(10)
+        },
+    );
     let mut lab = Lab::start(policy).await;
     let args = json!({ "device": LAB, "writes": [{ "object": "ao:1",
         "property": "relinquish-default", "value": 5 }] });

@@ -2,6 +2,7 @@
 //! against an in-process lab device on a loopback link.
 
 mod bbmd;
+mod budget;
 mod discovery;
 mod handoff;
 mod legacy;

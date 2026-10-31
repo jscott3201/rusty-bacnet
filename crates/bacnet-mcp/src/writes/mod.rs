@@ -5,9 +5,11 @@
 //!
 //! The tools themselves are `tools/write.rs` and `tools/revert.rs`.
 
+pub(crate) mod budget;
 pub(crate) mod notify;
 pub(crate) mod seal;
 
+use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -28,8 +30,14 @@ use crate::policy::{ArmMode, PlanGrant, WritePolicy};
 pub(crate) struct Writes {
     pub(crate) sealer: Sealer,
     armed: Mutex<Option<Armed>>,
+    /// The plan grant's writes as last read from or saved to the
+    /// workspace's count ([`budget`]), which is what a write is checked
+    /// against.
     plan_used: AtomicU32,
     pub(crate) signals: Signals,
+    /// Fail the next count saves, for tests.
+    #[cfg(test)]
+    pub(crate) budget_fault: std::sync::atomic::AtomicBool,
 }
 
 /// An armed write session: until when, and the reason given.
@@ -40,12 +48,21 @@ struct Armed {
 }
 
 impl Writes {
-    pub(crate) fn new() -> Self {
+    /// The write state under `policy`: a plan grant's count as the
+    /// workspace keeps it (none read counts as zero here, and its writes
+    /// are refused when they go).
+    pub(crate) fn new(policy: &WritePolicy) -> Self {
+        let used = match (&policy.plan, &policy.workspace) {
+            (Some(plan), Some(workspace)) => budget::read(&workspace.dir, plan).unwrap_or(0),
+            _ => 0,
+        };
         Self {
             sealer: Sealer::new(),
             armed: Mutex::new(None),
-            plan_used: AtomicU32::new(0),
+            plan_used: AtomicU32::new(used),
             signals: Signals::default(),
+            #[cfg(test)]
+            budget_fault: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -87,7 +104,8 @@ impl Writes {
         self.armed().and_then(|a| a.reason)
     }
 
-    /// The plan grant, while it is in force: not expired, budget left.
+    /// The plan grant, while it is in force: not expired, budget left (as
+    /// last counted; [`spend`](Self::spend) reads the count again).
     /// Checked on every write: a clock set back past the plan's start
     /// can't stretch it beyond its 8 hours either.
     pub(crate) fn plan<'a>(&self, policy: &'a WritePolicy) -> Option<&'a PlanGrant> {
@@ -99,20 +117,45 @@ impl Writes {
         })
     }
 
-    /// Take `n` writes from the plan's budget, if it has them.
-    fn spend(&self, plan: &PlanGrant, n: u32) -> bool {
-        let spent = self
-            .plan_used
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
-                used.checked_add(n)
-                    .filter(|total| *total <= plan.max_writes)
-            })
-            .is_ok();
-        if spent {
-            // The session shows the budget used, and the plan's end.
+    /// Take `n` writes from the plan's budget kept in `workspace`, if it
+    /// has them, and save the new count before anything is sent. The
+    /// caller holds the workspace's lock, which every writer of the count
+    /// takes, so two servers on one workspace can't both spend the last
+    /// writes. A count that can't be read for this authorization, or
+    /// can't be saved, refuses: nothing goes that wasn't counted first.
+    fn spend(&self, plan: &PlanGrant, n: u32, workspace: &Path) -> Result<(), Approval> {
+        let unavailable = |why: String| {
+            refused(
+                "plan-budget-unavailable",
+                format!(
+                    "{why}; the plan grant's writes are refused until its count can be kept \
+                     (run `bacnet mcp authorize` again to start a fresh one); nothing was sent"
+                ),
+            )
+        };
+        let used = budget::read(workspace, plan).map_err(unavailable)?;
+        if self.plan_used.swap(used, Ordering::AcqRel) != used {
+            // Another server on the workspace spent some.
             self.signals.session_changed();
         }
-        spent
+        let total = used
+            .checked_add(n)
+            .filter(|total| *total <= plan.max_writes)
+            .ok_or_else(|| refused("plan-spent", "the plan grant's write budget is spent"))?;
+        self.save_count(workspace, plan, total)
+            .map_err(unavailable)?;
+        self.plan_used.store(total, Ordering::Release);
+        // The session shows the budget used, and the plan's end.
+        self.signals.session_changed();
+        Ok(())
+    }
+
+    fn save_count(&self, workspace: &Path, plan: &PlanGrant, used: u32) -> Result<(), String> {
+        #[cfg(test)]
+        if self.budget_fault.load(Ordering::Relaxed) {
+            return Err("the count could not be saved (a test's fault)".into());
+        }
+        budget::write(workspace, plan, used)
     }
 
     /// Writes the plan has made.
@@ -253,10 +296,12 @@ impl Approver for ClientElicitation {
     }
 }
 
-/// A plan grant's approver: the writes it names, within its budget.
+/// A plan grant's approver: the writes it names, within its budget,
+/// counted in `workspace` (whose lock the caller holds) before they go.
 pub(crate) struct PlanApprover<'a> {
     pub(crate) plan: &'a PlanGrant,
     pub(crate) writes: &'a Writes,
+    pub(crate) workspace: &'a Path,
 }
 
 impl Approver for PlanApprover<'_> {
@@ -273,10 +318,10 @@ impl Approver for PlanApprover<'_> {
             );
         }
         let n = u32::try_from(preview.items.len()).unwrap_or(u32::MAX);
-        if !self.writes.spend(self.plan, n) {
-            return refused("plan-spent", "the plan grant's write budget is spent");
+        match self.writes.spend(self.plan, n, self.workspace) {
+            Ok(()) => Approval::Approved(Via::Plan),
+            Err(refusal) => refusal,
         }
-        Approval::Approved(Via::Plan)
     }
 }
 

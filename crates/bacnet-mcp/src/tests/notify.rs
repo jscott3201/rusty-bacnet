@@ -8,7 +8,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::Lab;
-use super::plan::plan;
+use super::plan::{authorized, plan};
 use super::writes::{answered, call, one, writes};
 use crate::policy::ArmMode;
 
@@ -104,7 +104,7 @@ async fn a_sessions_end_is_announced_without_a_request() {
 async fn a_legacy_session_hears_a_planned_write_and_the_plans_end() {
     let dir = tempfile::tempdir().unwrap();
     let mut policy = writes(dir.path(), ArmMode::Never);
-    policy.writes.plan = Some(plan(1));
+    policy.writes.plan = authorized(dir.path(), plan(1));
     let mut lab = Lab::start(policy).await;
     lab.agent.initialize_legacy().await;
     for uri in [SESSION, LEDGER] {

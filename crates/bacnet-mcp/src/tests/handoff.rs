@@ -26,6 +26,7 @@ fn plan() -> PlanGrant {
         properties: vec![PropertyIdentifier::PRESENT_VALUE],
         priorities: (8, 16),
         max_writes: 10,
+        authorized_unix: crate::writes::unix_now(),
         expires_unix: crate::writes::unix_now() + 3_600,
         reason: None,
     }
@@ -34,7 +35,7 @@ fn plan() -> PlanGrant {
 /// A lab whose device answers each request after 500 ms, with a plan.
 async fn planned_lab(dir: &std::path::Path, budget: Duration) -> Lab {
     let mut policy = writes(dir, ArmMode::Never);
-    policy.writes.plan = Some(plan());
+    policy.writes.plan = super::plan::authorized(dir, plan());
     policy.caps.budget = budget;
     let mut lab = Lab::start_with(policy, Duration::from_millis(500)).await;
     lab.agent.initialize().await;

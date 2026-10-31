@@ -136,6 +136,7 @@ impl<T: TransportPort + 'static> McpServer<T> {
                     .map_err(|e| ServeError(format!("the watch hub: {e}")))
             })
             .transpose()?;
+        let writes = crate::writes::Writes::new(&policy.writes);
         Ok(Self {
             ctx: Arc::new(Ctx {
                 engine,
@@ -157,7 +158,7 @@ impl<T: TransportPort + 'static> McpServer<T> {
                 known: Mutex::new(HashMap::new()),
                 described: Mutex::new(HashMap::new()),
                 alarms: Mutex::new(HashMap::new()),
-                writes: crate::writes::Writes::new(),
+                writes,
                 handoffs: tokio_util::task::TaskTracker::new(),
             }),
         })

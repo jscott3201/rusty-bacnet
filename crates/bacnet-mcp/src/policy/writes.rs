@@ -9,7 +9,7 @@
 //! form arm a time-boxed write session too. A [`PlanGrant`], approved by a
 //! person in a terminal, approves the writes it names without a prompt.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use bacnet_types::enums::PropertyIdentifier;
 
@@ -51,6 +51,11 @@ pub struct Workspace {
 /// A commissioning plan a person approved in a terminal (`bacnet mcp
 /// authorize`): the writes it names run without a prompt, up to its
 /// budget and until it expires (8 hours at most).
+///
+/// Its budget is counted in the profile workspace, beside the ledger, for
+/// this authorization ([`start_budget`](Self::start_budget)), so a restart
+/// doesn't reset it. A count that is missing, can't be read, belongs to
+/// another authorization or can't be saved refuses the plan's writes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanGrant {
     /// The device instances it covers, as inclusive ranges.
@@ -60,8 +65,13 @@ pub struct PlanGrant {
     /// The lowest and highest priority it may command, inclusive; 6 is
     /// refused whatever the range (Clause 19.2.3).
     pub priorities: (u8, u8),
-    /// How many writes it allows in this process.
+    /// How many writes it allows, across restarts, for this
+    /// authorization.
     pub max_writes: u32,
+    /// When `bacnet mcp authorize` approved it, in seconds since the Unix
+    /// epoch: with its terms, this names the authorization its count is
+    /// kept for, so authorizing again starts a fresh count.
+    pub authorized_unix: u64,
     /// When it ends, in seconds since the Unix epoch.
     pub expires_unix: u64,
     /// Why it was granted, for the audit log.
@@ -78,6 +88,13 @@ pub const MAX_PLAN_WRITES: u32 = 10_000;
 pub const MAX_WRITES: usize = 20;
 
 impl PlanGrant {
+    /// Start this authorization's write count at zero in `workspace` (the
+    /// profile's): `bacnet mcp authorize` calls it before it records the
+    /// authorization. Until it has, the plan's writes are refused.
+    pub fn start_budget(&self, workspace: &Path) -> Result<(), String> {
+        crate::writes::budget::write(workspace, self, 0)
+    }
+
     /// Whether it covers device `device`.
     pub fn covers_device(&self, device: u32) -> bool {
         self.devices
@@ -171,6 +188,7 @@ mod tests {
             properties: vec![PropertyIdentifier::PRESENT_VALUE],
             priorities: (1, 16),
             max_writes: 5,
+            authorized_unix: now(),
             expires_unix: now() + 60,
             reason: None,
         }
