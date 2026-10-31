@@ -214,4 +214,24 @@ mod tests {
             "the spawned confirmed-request future is {spawned} bytes, over {LIMIT}: {ADVICE}"
         );
     }
+
+    /// The size of the future `make` returns for borrowed arguments, without
+    /// making one; a borrow's lifetime doesn't change it.
+    fn borrowing_future_size<A: 'static, B: 'static, C: 'static, D: 'static, E: 'static, F>(
+        _make: impl FnOnce(&'static A, &'static B, &'static C, &'static mut D, &'static mut E) -> F,
+    ) -> usize {
+        std::mem::size_of::<F>()
+    }
+
+    /// No guard holds a WriteProperty future to a size: it runs inside the
+    /// general handler's boxed future, not on a path of its own. This prints
+    /// the mutation's own future, which holds the write's result across the
+    /// COV and Schedule awaits, so a move of the synchronous write path
+    /// (#2178) shows up here if it grows what the future keeps.
+    #[test]
+    fn write_property_future_size_is_reported() {
+        let write_property =
+            borrowing_future_size(super::super::mutations::Request::write_property::<BipTransport>);
+        eprintln!("WriteProperty mutation future: {write_property} bytes");
+    }
 }
