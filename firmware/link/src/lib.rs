@@ -2,7 +2,7 @@
 //! #1664, #1667, #1679, #1771).
 //!
 //! Each image links one stack into a bare-metal binary, all but the last
-//! with no allocator:
+//! two with no allocator:
 //!
 //! - `mstp` ([`mstp::run`]): `bacnet-mstp-codec` and `bacnet-mstp-core`.
 //! - `mstp-extended` ([`mstp_extended::run`]): the same core with extended
@@ -23,6 +23,11 @@
 //! - `apdu` (`apdu::run`, with the `alloc` feature): `bacnet-encoding` and
 //!   `bacnet-services`, `no_std` with `alloc`, and a global allocator over a
 //!   fixed arena.
+//! - `objects` (`objects::run`, with the `objects` feature):
+//!   `bacnet-device-core`'s `Responder` answering from a `bacnet-objects`
+//!   database, both `no_std` with `alloc`, over a fixed arena. Both need
+//!   atomic compare-and-swap, so it builds for thumbv7m, thumbv7em and
+//!   riscv32imac only.
 //!
 //! One image per stack keeps each stack's flash and RAM separate: within one
 //! LTO image, code can't be attributed to a crate reliably. So `bip` links
@@ -33,20 +38,22 @@
 //! A scenario is one `no_std` function that returns a summary of what it
 //! saw, and each module holds the summary of a good run: [`mstp::EXPECTED`],
 //! [`mstp_extended::EXPECTED`], [`bip::EXPECTED`], [`node::expected()`],
-//! [`bbmd::EXPECTED`], [`router::expected()`], `device::expected()` and
-//! `apdu::expected()`. The
+//! [`bbmd::EXPECTED`], [`router::expected()`], `device::expected()`,
+//! `apdu::expected()` and `objects::expected()`. The
 //! host tests in `tests/` run each scenario natively and compare the whole
 //! summary with it; that is where behaviour is checked. Each image
 //! (`src/bin/`) calls its scenario from its reset entry, so building it
-//! proves that the stack links without `std`, and for all but `apdu`
-//! without an allocator. CI never runs the images. Their emulation build,
+//! proves that the stack links without `std`, and for all but `apdu` and
+//! `objects` without an allocator. CI never runs the images. Their emulation build,
 //! with the `emulate` feature and a board's, runs under QEMU by hand: each
 //! image checks its summary against the same expected one and reports
 //! through semihosting (docs/ci.md, "Emulation (manual)").
 //!
 //! The `alloc` feature, on by default, brings in the `apdu` module and its
-//! dependencies. The other images build without it: with it, this crate
-//! links `alloc`, and an image without a global allocator fails to link.
+//! dependencies, and the `objects` feature, also on by default, the
+//! `objects` module and its own. The other images build without either:
+//! with `alloc`, this crate links `alloc`, and an image without a global
+//! allocator fails to link. The `objects` image has no emulation build yet.
 //!
 //! The crate is `no_std` on every target, so the host build compiles the
 //! same code as the images.
@@ -65,6 +72,8 @@ pub mod device;
 pub mod mstp;
 pub mod mstp_extended;
 pub mod node;
+#[cfg(feature = "objects")]
+pub mod objects;
 pub mod router;
 mod tally;
 

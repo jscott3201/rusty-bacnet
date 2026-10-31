@@ -70,6 +70,19 @@ name = "apdu"
 path = "tests/apdu.rs"
 required-features = ["alloc"]
 
+# bacnet-device-core's Responder over a bacnet-objects database (#2178).
+[[bin]]
+name = "objects"
+path = "src/bin/objects.rs"
+test = false
+bench = false
+required-features = ["objects"]
+
+[[test]]
+name = "objects"
+path = "tests/objects.rs"
+required-features = ["objects"]
+
 # `alloc`: the apdu image and its scenario, which link bacnet-encoding and
 # bacnet-services with `alloc` (the device image links them without it),
 # and on bare-metal targets
@@ -79,7 +92,7 @@ required-features = ["alloc"]
 # (`--no-default-features`): with it, the lib links `alloc`, and an image
 # without a global allocator fails to link.
 [features]
-default = ["alloc"]
+default = ["alloc", "objects"]
 alloc = [
     "bacnet-types/alloc",
     "bacnet-encoding/alloc",
@@ -90,6 +103,14 @@ alloc = [
     "dep:critical-section",
     "dep:riscv",
 ]
+
+# `objects`: the objects image and its scenario (#2178), bacnet-device-core's
+# Responder answering from a bacnet-objects database, both with `alloc`. On
+# by default for the host builds, as `alloc` is. Both crates need atomic
+# compare-and-swap, so the image builds only for targets that have it
+# (scripts/ci/check-firmware-link.sh filters them), and the apdu image
+# builds with `alloc` alone.
+objects = ["alloc", "dep:bacnet-objects", "dep:bacnet-device-core"]
 
 # `emulate`: the emulation build, which scripts/emu/emulate-firmware.sh runs
 # under QEMU by hand, never in CI (docs/ci.md, "Emulation (manual)"). Each
@@ -131,6 +152,8 @@ bacnet-types = { workspace = true }
 bacnet-encoding = { workspace = true }
 bacnet-services = { workspace = true }
 bytes = { workspace = true, optional = true }
+bacnet-objects = { workspace = true, optional = true, features = ["alloc"] }
+bacnet-device-core = { workspace = true, optional = true, features = ["alloc"] }
 
 # The host test runs the alloc scenario in the image's allocator, a
 # linked-list first fit, over an arena of the image's size.

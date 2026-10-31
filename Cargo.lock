@@ -1542,10 +1542,12 @@ version = "0.15.0"
 dependencies = [
  "bacnet-bip-codec",
  "bacnet-bip-core",
+ "bacnet-device-core",
  "bacnet-encoding",
  "bacnet-mstp-codec",
  "bacnet-mstp-core",
  "bacnet-npdu",
+ "bacnet-objects",
  "bacnet-router-core",
  "bacnet-services",
  "bacnet-types",

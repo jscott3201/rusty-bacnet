@@ -52,7 +52,7 @@ step "clippy and rustdoc (each published crate, default features; no_std types, 
 bash scripts/ci/check-default-features.sh
 step "clippy (no_std crates, bare-metal targets)"; bash scripts/ci/check-no-std.sh
 step "clippy (no_std types, encoding and services with alloc, all targets)"
-cargo clippy -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects --no-default-features --features alloc --all-targets --locked -- -D warnings
+cargo clippy -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc --all-targets --locked -- -D warnings
 step "clippy (no_std types, encoding and services without alloc, all targets)"
 cargo clippy -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --all-targets --locked -- -D warnings
 step "firmware link test (bare-metal images, size budgets)"; bash scripts/ci/check-firmware-link.sh
@@ -77,8 +77,8 @@ if ! "$quick"; then
   step "bacnet-cli tests (no default features: without the TUI)"
   cargo nextest run -p bacnet-cli --no-default-features --locked
   step "no_std crates' tests and doctests (alloc, without std)"
-  cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects --no-default-features --features alloc --locked
-  cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects --no-default-features --features alloc --locked
+  cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc --locked
+  cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc --locked
   step "no_std crates' tests (without alloc)"
   cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --locked
   step "PyO3 crate Rust tests"
