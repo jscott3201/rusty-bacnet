@@ -383,6 +383,7 @@ async fn device_execution_view_owns_selected_live_and_other_empty_cov_values() {
 #[test]
 fn device_execution_view_rpm_budgets_count_canonical_rows_and_preserve_output() {
     use crate::device_view::{DeviceExecution, DeviceReadContext};
+    use bacnet_device_core::read::ReadScope;
     use bacnet_services::rpm::ReadPropertyMultipleRequest;
     use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
     let mut db = ObjectDatabase::new();
@@ -421,17 +422,22 @@ fn device_execution_view_rpm_budgets_count_canonical_rows_and_preserve_output() 
     ] {
         let mut out = BytesMut::from(&b"unchanged"[..]);
         let mut observations = 0;
-        let result =
-            crate::handlers::RpmPlan::new(&db, &request, budget.max_result_elements, Some(&view))
-                .and_then(|plan| {
-                    plan.read_observed(
-                        &db,
-                        Some(&view),
-                        &mut out,
-                        budget.max_service_ack_bytes,
-                        |_, _, _, _| observations += 1,
-                    )
-                });
+        let result = crate::handlers::RpmPlan::new(
+            &db,
+            &ReadScope::UNLIMITED,
+            Some(&view),
+            &request,
+            budget.max_result_elements,
+        )
+        .and_then(|plan| {
+            plan.read_observed(
+                &db,
+                Some(&view),
+                &mut out,
+                budget.max_service_ack_bytes,
+                |_, _, _, _| observations += 1,
+            )
+        });
         assert!(matches!(
             (&result, work_failure),
             (Err(crate::handlers::ReadFailure::Work), true)
@@ -441,10 +447,16 @@ fn device_execution_view_rpm_budgets_count_canonical_rows_and_preserve_output() 
         assert_eq!(observations, 0);
     }
     let mut out = BytesMut::new();
-    crate::handlers::RpmPlan::new(&db, &request(PropertyIdentifier::ALL), 5, Some(&view))
-        .unwrap()
-        .read_observed(&db, Some(&view), &mut out, 4096, |_, _, _, _| {})
-        .unwrap();
+    crate::handlers::RpmPlan::new(
+        &db,
+        &ReadScope::UNLIMITED,
+        Some(&view),
+        &request(PropertyIdentifier::ALL),
+        5,
+    )
+    .unwrap()
+    .read_observed(&db, Some(&view), &mut out, 4096, |_, _, _, _| {})
+    .unwrap();
     let ack = bacnet_services::rpm::ReadPropertyMultipleACK::decode(&out).unwrap();
     let properties: Vec<_> = ack.list_of_read_access_results[0]
         .list_of_results

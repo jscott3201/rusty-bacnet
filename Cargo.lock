@@ -592,6 +592,7 @@ name = "bacnet-server"
 version = "0.15.0"
 dependencies = [
  "bacnet-client",
+ "bacnet-device-core",
  "bacnet-encoding",
  "bacnet-endpoint-core",
  "bacnet-network",

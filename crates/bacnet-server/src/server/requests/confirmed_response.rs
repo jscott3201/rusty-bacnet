@@ -1,6 +1,7 @@
 use super::*;
 use crate::cov::active::{LiveCovSelection, LiveDeviceCov};
 use crate::device_view::{DeviceExecution, DeviceReadContext};
+use bacnet_device_core::read::ReadScope;
 use bacnet_services::read_property::ReadPropertyRequest;
 use bacnet_types::error::{ErrorDetail, RemoteError};
 
@@ -106,9 +107,19 @@ pub(super) async fn read_property_multiple_observed(
         .map_err(|error| handlers::ReadFailure::Service(error.into_request_reject()))?;
     let budget = config.read_property_multiple_budget;
     let view = DeviceReadContext::new(&db, DeviceExecution::FullServer)
-        .with_identity(Some(&config.device))
-        .with_registered_port(config.registered_network_port);
-    let plan = handlers::RpmPlan::new(&db, &request, budget.max_result_elements, Some(&view))?;
+        .with_identity(Some(&config.device));
+    let scope = ReadScope {
+        work_limit: budget.max_result_elements,
+        registered_port: config.registered_network_port,
+        device: view.device_oid(),
+    };
+    let plan = handlers::RpmPlan::new(
+        &db,
+        &scope,
+        Some(&view),
+        &request,
+        budget.max_result_elements,
+    )?;
     let live = match plan.live_cov(&db) {
         Some(selection) => Some(active_cov_snapshot(&db, tables, selection).await),
         None => None,
@@ -153,18 +164,17 @@ pub(super) async fn read_property_response_observed(
         .map_err(Error::into_request_reject)
     {
         Ok(decoded) => {
-            let view = DeviceReadContext::new(&db, profile.execution)
-                .with_identity(profile.identity)
-                .with_registered_port(profile.registered_port)
-                .with_work_limit(profile.work_limit);
-            let lookup_oid = handlers::resolve_read_target(
-                &db,
-                &decoded.object_identifier,
-                profile.registered_port,
-                view.device_oid(),
-            );
+            let view =
+                DeviceReadContext::new(&db, profile.execution).with_identity(profile.identity);
+            let scope = ReadScope {
+                work_limit: profile.work_limit,
+                registered_port: profile.registered_port,
+                device: view.device_oid(),
+            };
+            let lookup_oid = handlers::resolve_read_target(&db, &scope, &decoded.object_identifier);
             match handlers::plan_read_property(
                 &db,
+                &scope,
                 Some(&view),
                 lookup_oid,
                 decoded.property_identifier,

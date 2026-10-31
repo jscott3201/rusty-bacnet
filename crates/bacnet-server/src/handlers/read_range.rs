@@ -2,6 +2,7 @@ use std::ops::Range;
 
 use super::group_present_value::GroupMembers;
 use super::*;
+use bacnet_device_core::read::ReadScope;
 use bacnet_objects::log_buffer::{LogRecordIdentity, TimestampKey};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::read_range::{RangeSpec, ReadRangeAck, ReadRangeRequest};
@@ -153,7 +154,7 @@ pub fn handle_read_range(
         }
     };
     let request = ReadRangeRequest::decode(service_data).map_err(Error::into_request_reject)?;
-    let plan = plan_read_range(db, None, &request).map_err(unlimited)?;
+    let plan = plan_read_range(db, &ReadScope::UNLIMITED, None, &request).map_err(unlimited)?;
     let selected = prepare_read_range(db, None, request, plan.into_members()).map_err(unlimited)?;
     append_read_range_ack_with(
         &selected.request,
@@ -174,20 +175,22 @@ pub(crate) fn handle_read_range_budgeted(
 ) -> Result<(), ReadRangeFailure> {
     let request = ReadRangeRequest::decode(service_data)
         .map_err(|error| ReadRangeFailure::Service(error.into_request_reject()))?;
-    let plan = plan_read_range(db, None, &request)?;
+    let plan = plan_read_range(db, &ReadScope::UNLIMITED, None, &request)?;
     read_range_request_observed(db, None, request, plan, response, budget, |_, _, _, _| {})
 }
 
 /// Plan a ReadRange of the object the request names: its row and, for a
-/// Group's whole Present_Value, the member rows, charged to the view's work
+/// Group's whole Present_Value, the member rows, charged to the scope's work
 /// limit before any value is read (#1172, #1213).
 pub(crate) fn plan_read_range(
     db: &ObjectDatabase,
+    scope: &ReadScope,
     view: Option<&DeviceReadContext<'_>>,
     request: &ReadRangeRequest,
 ) -> Result<PropertyPlan, ReadRangeFailure> {
     Ok(PropertyPlan::new(
         db,
+        scope,
         view,
         request.object_identifier,
         db.get(&request.object_identifier),

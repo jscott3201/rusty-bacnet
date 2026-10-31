@@ -2,9 +2,10 @@
 use super::group_present_value::GroupMembers;
 use super::read_budget::{ReadFailure, Work};
 use super::*;
-use alloc::collections::BTreeSet;
 #[cfg(test)]
 use crate::server::ReadPropertyMultipleBudget;
+use alloc::collections::BTreeSet;
+use bacnet_device_core::read::{ReadOverlay, ReadScope};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::error::RemoteError;
@@ -148,13 +149,21 @@ pub(crate) struct RpmPlan(Vec<PlannedObject>);
 impl RpmPlan {
     /// Plan `request` within `limit` result rows. A request past it fails
     /// with [`ReadFailure::Work`] here, before any value is read.
-    pub(crate) fn new(
+    pub(crate) fn new<O: ReadOverlay>(
         db: &ObjectDatabase,
+        scope: &ReadScope,
+        overlay: Option<&O>,
         request: &ReadPropertyMultipleRequest,
         limit: usize,
-        view: Option<&DeviceReadContext<'_>>,
     ) -> Result<Self, ReadFailure> {
-        plan(db, request, limit, view).map(Self)
+        plan(db, scope, overlay, request, limit).map(Self)
+    }
+
+    /// The result rows planned, ALL, REQUIRED and OPTIONAL expanded; a
+    /// Group's member rows aren't counted.
+    #[cfg(test)]
+    pub(crate) fn rows(&self) -> usize {
+        planned_rows(&self.0).count()
     }
 
     /// The selected Device's COV lists the planned rows read.
@@ -168,12 +177,12 @@ impl RpmPlan {
     /// effects. Observations are provisional until this entire call succeeds.
     /// The caller must discard them on failure; callbacks carry the requested
     /// index (which may differ from the response index) and no property
-    /// values. `view` owns the effective Device definitions and the
+    /// values. `overlay` owns the effective Device definitions and the
     /// request-local COV values for every row.
-    pub(crate) fn read_observed(
+    pub(crate) fn read_observed<O: ReadOverlay>(
         self,
         db: &ObjectDatabase,
-        view: Option<&DeviceReadContext<'_>>,
+        overlay: Option<&O>,
         buf: &mut BytesMut,
         max_service_ack_bytes: usize,
         mut completed: impl FnMut(
@@ -195,13 +204,14 @@ impl RpmPlan {
             scratch.append(&header, footer.len())?;
             for row in spec.properties {
                 let object = read_property::read_target_object(db, &spec.lookup_oid);
-                let served = object.and_then(|object| view.map(|view| view.object(object)));
+                let served =
+                    object.and_then(|object| overlay.and_then(|overlay| overlay.view(object)));
                 let object = served
                     .as_ref()
                     .map(|served| served as &dyn BACnetObject)
                     .or(object);
                 let requested_index = row.reference.property_array_index;
-                let result = read_row(db, view, object, row);
+                let result = read_row(db, overlay, object, row);
                 let mut encoded = BytesMut::new();
                 result.encode(&mut encoded);
                 scratch.append(&encoded, footer.len())?;
@@ -219,17 +229,19 @@ impl RpmPlan {
     }
 }
 
-fn plan(
+fn plan<O: ReadOverlay>(
     db: &ObjectDatabase,
+    scope: &ReadScope,
+    overlay: Option<&O>,
     request: &ReadPropertyMultipleRequest,
     limit: usize,
-    view: Option<&DeviceReadContext<'_>>,
 ) -> Result<Vec<PlannedObject>, ReadFailure> {
     plan_specs(
         db,
+        scope,
+        overlay,
         &request.list_of_read_access_specs,
         &mut Work::new(limit),
-        view,
         true,
     )
 }
@@ -238,23 +250,19 @@ fn plan(
 /// row that reads a Group's whole Present_Value plans the Group's members as
 /// well; member rows are planned without it, so they read each object's own
 /// value and a Group listed as a member can't make the read recurse.
-pub(super) fn plan_specs(
+pub(super) fn plan_specs<O: ReadOverlay>(
     db: &ObjectDatabase,
+    scope: &ReadScope,
+    overlay: Option<&O>,
     specs: &[ReadAccessSpecification],
     work: &mut Work,
-    view: Option<&DeviceReadContext<'_>>,
     groups: bool,
 ) -> Result<Vec<PlannedObject>, ReadFailure> {
     let mut plan = Vec::new();
     for spec in specs {
-        let lookup_oid = read_property::resolve_read_target(
-            db,
-            &spec.object_identifier,
-            view.and_then(|view| view.registered_port),
-            view.and_then(|view| view.device_oid()),
-        );
+        let lookup_oid = read_property::resolve_read_target(db, scope, &spec.object_identifier);
         let stored = read_property::read_target_object(db, &lookup_oid);
-        let served = stored.and_then(|object| view.map(|view| view.object(object)));
+        let served = stored.and_then(|object| overlay.and_then(|overlay| overlay.view(object)));
         let object = served
             .as_ref()
             .map(|served| served as &dyn BACnetObject)
@@ -273,7 +281,7 @@ pub(super) fn plan_specs(
                 };
                 let members = match object {
                     Some(object) if groups => {
-                        group_present_value::plan_members(db, view, object, &row, work)?
+                        group_present_value::plan_members(db, scope, overlay, object, &row, work)?
                     }
                     _ => None,
                 };
@@ -301,15 +309,15 @@ pub(super) fn plan_specs(
 /// Read one planned row. `object` is the effective read view of the row's
 /// target, if it exists; a Group's Present_Value row is built from the members
 /// it planned, every other row is the object's own answer.
-pub(super) fn read_row(
+pub(super) fn read_row<O: ReadOverlay>(
     db: &ObjectDatabase,
-    view: Option<&DeviceReadContext<'_>>,
+    overlay: Option<&O>,
     object: Option<&dyn BACnetObject>,
     row: PlannedRow,
 ) -> ReadResultElement {
     let PlannedRow { reference, members } = row;
     element(object, &reference, |object| match members {
-        Some(members) => group_present_value::value(db, view, members),
+        Some(members) => group_present_value::value(db, overlay, members),
         None => object.read_property(
             reference.property_identifier,
             reference.property_array_index,
@@ -403,9 +411,16 @@ pub(crate) fn handle_rpm_budgeted_observed(
 ) -> Result<(), ReadFailure> {
     let request = ReadPropertyMultipleRequest::decode(data)
         .map_err(|error| ReadFailure::Service(error.into_request_reject()))?;
-    RpmPlan::new(db, &request, budget.max_result_elements, None)?.read_observed(
+    RpmPlan::new(
         db,
-        None,
+        &ReadScope::UNLIMITED,
+        None::<&bacnet_device_core::read::NoOverlay>,
+        &request,
+        budget.max_result_elements,
+    )?
+    .read_observed(
+        db,
+        None::<&bacnet_device_core::read::NoOverlay>,
         buf,
         budget.max_service_ack_bytes,
         completed,

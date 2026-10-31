@@ -598,9 +598,8 @@ async fn active_cov_multiple_wire_rpm_rp_and_local_reads_agree_within_scope() {
         .unwrap();
     let selected = handlers::resolve_read_target(
         &*wire.server.database().read().await,
+        &bacnet_device_core::read::ReadScope::UNLIMITED,
         &wildcard(),
-        None,
-        None,
     );
     assert_eq!(
         selected,

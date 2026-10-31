@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_device_core::read::NoOverlay;
 
 #[path = "rpm_optional_fallback.rs"]
 mod optional_fallback;
@@ -154,7 +155,13 @@ fn rpm_wildcards_duplicates_unknown_and_index_count_results() {
         ]);
         let decoded = ReadPropertyMultipleRequest::decode(&data).unwrap();
         assert!(matches!(
-            plan(&db, &decoded, count * 2, None),
+            RpmPlan::new(
+                &db,
+                &ReadScope::UNLIMITED,
+                None::<&NoOverlay>,
+                &decoded,
+                count * 2
+            ),
             Err(ReadFailure::Work)
         ));
         assert!(matches!(
@@ -163,11 +170,15 @@ fn rpm_wildcards_duplicates_unknown_and_index_count_results() {
         ));
         assert_eq!(reads.load(Ordering::SeqCst), 0);
         assert_eq!(
-            plan(&db, &decoded, count * 2 + 1, None)
-                .unwrap()
-                .iter()
-                .map(|p| p.properties.len())
-                .sum::<usize>(),
+            RpmPlan::new(
+                &db,
+                &ReadScope::UNLIMITED,
+                None::<&NoOverlay>,
+                &decoded,
+                count * 2 + 1
+            )
+            .unwrap()
+            .rows(),
             count * 2 + 1
         );
     }

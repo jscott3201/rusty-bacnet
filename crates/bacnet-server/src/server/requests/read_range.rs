@@ -43,9 +43,13 @@ pub(super) async fn response(
     {
         Ok(decoded) => {
             let view = DeviceReadContext::new(&db, DeviceExecution::FullServer)
-                .with_identity(Some(&config.device))
-                .with_work_limit(config.read_property_multiple_budget.max_result_elements);
-            match handlers::plan_read_range(&db, Some(&view), &decoded) {
+                .with_identity(Some(&config.device));
+            let scope = bacnet_device_core::read::ReadScope {
+                work_limit: config.read_property_multiple_budget.max_result_elements,
+                registered_port: None,
+                device: view.device_oid(),
+            };
+            match handlers::plan_read_range(&db, &scope, Some(&view), &decoded) {
                 Ok(plan) => {
                     let live = match plan.live_cov(&db) {
                         Some(selection) => Some(

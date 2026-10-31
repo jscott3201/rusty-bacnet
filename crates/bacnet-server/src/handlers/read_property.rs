@@ -1,13 +1,14 @@
 use super::group_present_value::GroupMembers;
 use super::rpm_budget::{self, PlannedRow};
 use super::*;
+use bacnet_device_core::read::{NoOverlay, ReadOverlay, ReadScope};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::PropertyReference;
 use bacnet_types::error::RemoteError;
 
 /// One single-property read (ReadProperty, ReadRange or the local read),
 /// planned before any value is read: its target and row, with the member rows
-/// of a Group's whole Present_Value charged to the view's work limit (#1172).
+/// of a Group's whole Present_Value charged to the scope's work limit (#1172).
 /// Planning reads no value, so the request chooses its COV snapshot from the
 /// plan and reads afterwards (#1213).
 pub(crate) struct PropertyPlan {
@@ -19,9 +20,10 @@ impl PropertyPlan {
     /// Plan the read of `property` on `stored`, the object the service's own
     /// lookup found at `lookup_oid`. A missing object plans nothing more; the
     /// read reports it.
-    pub(super) fn new(
+    pub(super) fn new<O: ReadOverlay>(
         db: &ObjectDatabase,
-        view: Option<&DeviceReadContext<'_>>,
+        scope: &ReadScope,
+        overlay: Option<&O>,
         lookup_oid: ObjectIdentifier,
         stored: Option<&dyn BACnetObject>,
         property: PropertyIdentifier,
@@ -33,9 +35,11 @@ impl PropertyPlan {
         };
         let members = match stored {
             Some(stored) => {
-                let served = view.map(|view| view.object(stored));
-                let object: &dyn BACnetObject = served.as_ref().map_or(stored, |served| served);
-                group_present_value::plan_property(db, view, object, &reference)?
+                let served = overlay.and_then(|overlay| overlay.view(stored));
+                let object: &dyn BACnetObject = served
+                    .as_ref()
+                    .map_or(stored, |served| served as &dyn BACnetObject);
+                group_present_value::plan_property(db, scope, overlay, object, &reference)?
             }
             None => None,
         };
@@ -57,18 +61,20 @@ impl PropertyPlan {
 }
 
 /// Plan a ReadProperty, or a local read, of the resolved `lookup_oid`. Past
-/// the view's work limit it fails with [`ReadFailure::Work`], before any
+/// the scope's work limit it fails with [`ReadFailure::Work`], before any
 /// value is read.
-pub(crate) fn plan_read_property(
+pub(crate) fn plan_read_property<O: ReadOverlay>(
     db: &ObjectDatabase,
-    view: Option<&DeviceReadContext<'_>>,
+    scope: &ReadScope,
+    overlay: Option<&O>,
     lookup_oid: ObjectIdentifier,
     property: PropertyIdentifier,
     array_index: Option<u32>,
 ) -> Result<PropertyPlan, ReadFailure> {
     PropertyPlan::new(
         db,
-        view,
+        scope,
+        overlay,
         lookup_oid,
         read_target_object(db, &lookup_oid),
         property,
@@ -89,44 +95,46 @@ pub fn handle_read_property(
     buf: &mut BytesMut,
 ) -> Result<(), Error> {
     let request = ReadPropertyRequest::decode(service_data).map_err(Error::into_request_reject)?;
-    let lookup_oid = resolve_read_target(db, &request.object_identifier, None, None);
+    let scope = ReadScope::UNLIMITED;
+    let lookup_oid = resolve_read_target(db, &scope, &request.object_identifier);
     let plan = plan_read_property(
         db,
-        None,
+        &scope,
+        None::<&NoOverlay>,
         lookup_oid,
         request.property_identifier,
         request.property_array_index,
     )
     .map_err(ReadFailure::unlimited)?;
-    read_property_request_observed(db, None, &request, plan, buf, |_, _, _| {})
+    read_property_request_observed(db, None::<&NoOverlay>, &request, plan, buf, |_, _, _| {})
 }
 
-/// ReadProperty evaluator over one decoded request and its plan. `view`
+/// ReadProperty evaluator over one decoded request and its plan. `overlay`
 /// carries executor-owned Device definitions and the request-local COV lists
 /// the plan selected; observations carry only execution outcomes, never the
 /// read value. A read past the work limit failed in planning and is not
 /// observed, as a ReadPropertyMultiple over its work budget is not.
-pub(crate) fn read_property_request_observed(
+pub(crate) fn read_property_request_observed<O: ReadOverlay>(
     db: &ObjectDatabase,
-    view: Option<&DeviceReadContext<'_>>,
+    overlay: Option<&O>,
     request: &ReadPropertyRequest,
     plan: PropertyPlan,
     buf: &mut BytesMut,
     mut completed: impl FnMut(ObjectIdentifier, &ReadPropertyRequest, &Result<(), Error>),
 ) -> Result<(), Error> {
     let lookup_oid = plan.lookup_oid;
-    let result = read_property_decoded(db, view, request, plan, buf);
+    let result = read_property_decoded(db, overlay, request, plan, buf);
     completed(lookup_oid, request, &result);
     result
 }
 
 /// Evaluate one planned property read with ReadProperty error precedence:
 /// unknown object, then non-array index using the effective property
-/// definition, then the executor view or raw object's reader, except that a
+/// definition, then the overlay's view or raw object's reader, except that a
 /// Group's Present_Value is rebuilt from the members its plan holds.
-pub(crate) fn read_property_value(
+pub(crate) fn read_property_value<O: ReadOverlay>(
     db: &ObjectDatabase,
-    view: Option<&DeviceReadContext<'_>>,
+    overlay: Option<&O>,
     plan: PropertyPlan,
 ) -> Result<PropertyValue, Error> {
     let PropertyPlan {
@@ -140,8 +148,10 @@ pub(crate) fn read_property_value(
         ErrorCode::UNKNOWN_OBJECT,
     ))?;
 
-    let served = view.map(|view| view.object(object));
-    let object: &dyn BACnetObject = served.as_ref().map_or(object, |served| served);
+    let served = overlay.and_then(|overlay| overlay.view(object));
+    let object: &dyn BACnetObject = served
+        .as_ref()
+        .map_or(object, |served| served as &dyn BACnetObject);
 
     // Clause 15.5.1.3: an array index on a non-array property is rejected
     // with PROPERTY / PROPERTY_IS_NOT_AN_ARRAY. The array/list decision
@@ -155,18 +165,18 @@ pub(crate) fn read_property_value(
         ));
     }
 
-    group_present_value::read_served_property(db, view, object, property, array_index, members)
+    group_present_value::read_served_property(db, overlay, object, property, array_index, members)
 }
 
-fn read_property_decoded(
+fn read_property_decoded<O: ReadOverlay>(
     db: &ObjectDatabase,
-    view: Option<&DeviceReadContext<'_>>,
+    overlay: Option<&O>,
     request: &ReadPropertyRequest,
     plan: PropertyPlan,
     buf: &mut BytesMut,
 ) -> Result<(), Error> {
     let lookup_oid = plan.lookup_oid;
-    let value = read_property_value(db, view, plan)?;
+    let value = read_property_value(db, overlay, plan)?;
 
     let mut value_buf = BytesMut::new();
     encode_property_value(&mut value_buf, &value)?;
@@ -201,19 +211,19 @@ fn is_device_wildcard(oid: &ObjectIdentifier) -> bool {
 /// Resolve Device or explicitly registered receiving-port wildcard identity.
 pub(crate) fn resolve_read_target(
     db: &ObjectDatabase,
+    scope: &ReadScope,
     oid: &ObjectIdentifier,
-    registered_port: Option<ObjectIdentifier>,
-    frozen_device: Option<ObjectIdentifier>,
 ) -> ObjectIdentifier {
     if oid.object_type() == ObjectType::NETWORK_PORT && oid.instance_number() == 4194303 {
-        return registered_port
+        return scope
+            .registered_port
             .filter(|selected| Some(*selected) == db.registered_port_internal())
             .unwrap_or(*oid);
     }
     if is_device_wildcard(oid) {
         // A configured executor never rebinds to another Device after mutation.
         // Returning a missing frozen OID preserves UNKNOWN_OBJECT downstream.
-        if let Some(device) = frozen_device.or_else(|| db.selected_device()) {
+        if let Some(device) = scope.device.or_else(|| db.selected_device()) {
             return device;
         }
     }
@@ -305,7 +315,7 @@ pub fn handle_read_property_multiple(
     for spec in &request.list_of_read_access_specs {
         let mut elements = Vec::new();
 
-        let lookup_oid = resolve_read_target(db, &spec.object_identifier, None, None);
+        let lookup_oid = resolve_read_target(db, &ReadScope::UNLIMITED, &spec.object_identifier);
         match read_target_object(db, &lookup_oid) {
             Some(object) => {
                 for prop_ref in &spec.list_of_property_references {
@@ -339,18 +349,24 @@ pub fn handle_read_property_multiple(
                             property_identifier: prop_id,
                             property_array_index: array_index,
                         };
-                        match group_present_value::plan_property(db, None, object, &reference)
-                            .map_err(ReadFailure::unlimited)
-                            .and_then(|members| {
-                                group_present_value::read_served_property(
-                                    db,
-                                    None,
-                                    object,
-                                    prop_id,
-                                    array_index,
-                                    members,
-                                )
-                            }) {
+                        match group_present_value::plan_property(
+                            db,
+                            &ReadScope::UNLIMITED,
+                            None::<&NoOverlay>,
+                            object,
+                            &reference,
+                        )
+                        .map_err(ReadFailure::unlimited)
+                        .and_then(|members| {
+                            group_present_value::read_served_property(
+                                db,
+                                None::<&NoOverlay>,
+                                object,
+                                prop_id,
+                                array_index,
+                                members,
+                            )
+                        }) {
                             Ok(value) => {
                                 let mut value_buf = BytesMut::new();
                                 match encode_property_value(&mut value_buf, &value) {

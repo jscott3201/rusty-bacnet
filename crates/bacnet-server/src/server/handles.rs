@@ -79,26 +79,39 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             &db,
             crate::device_view::DeviceExecution::FullServer,
         )
-        .with_identity(Some(&self.config.device))
-        .with_work_limit(
-            self.config
+        .with_identity(Some(&self.config.device));
+        // The local read resolves the Network_Port wildcard to the registered
+        // port, but plans a Group's members without it.
+        let scope = bacnet_device_core::read::ReadScope {
+            work_limit: self
+                .config
                 .read_property_multiple_budget
                 .max_result_elements,
-        );
+            registered_port: None,
+            device: view.device_oid(),
+        };
         let lookup_oid = handlers::resolve_read_target(
             &db,
+            &bacnet_device_core::read::ReadScope {
+                registered_port: self.config.registered_network_port,
+                ..scope
+            },
             oid,
-            self.config.registered_network_port,
-            view.device_oid(),
         );
-        let plan =
-            handlers::plan_read_property(&db, Some(&view), lookup_oid, property, array_index)
-                .map_err(|failure| match failure {
-                    handlers::ReadFailure::Service(error) => error,
-                    handlers::ReadFailure::Work | handlers::ReadFailure::Bytes => {
-                        Error::abort(AbortReason::OUT_OF_RESOURCES)
-                    }
-                })?;
+        let plan = handlers::plan_read_property(
+            &db,
+            &scope,
+            Some(&view),
+            lookup_oid,
+            property,
+            array_index,
+        )
+        .map_err(|failure| match failure {
+            handlers::ReadFailure::Service(error) => error,
+            handlers::ReadFailure::Work | handlers::ReadFailure::Bytes => {
+                Error::abort(AbortReason::OUT_OF_RESOURCES)
+            }
+        })?;
         use super::requests::confirmed_response::{active_cov_snapshot, address_bindings};
         let live = match plan.live_cov(&db) {
             Some(selection) if self.dispatch_task.is_none() => {
