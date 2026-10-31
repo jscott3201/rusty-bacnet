@@ -827,11 +827,13 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             .database
             .as_ref()
             .ok_or_else(|| Error::Encoding("endpoint I-Am has no Device database".into()))?;
-        let database = database.read().await;
-        if !database
+        // The guard covers only this check, never the send below (#2199).
+        let present = database
+            .read()
+            .await
             .get(&identity.device_oid())
-            .is_some_and(|object| object.object_identifier() == identity.device_oid())
-        {
+            .is_some_and(|object| object.object_identifier() == identity.device_oid());
+        if !present {
             return Err(Error::Encoding("endpoint I-Am Device is absent".into()));
         }
         let apdu = crate::identity::encode_iam_apdu(identity)?;
