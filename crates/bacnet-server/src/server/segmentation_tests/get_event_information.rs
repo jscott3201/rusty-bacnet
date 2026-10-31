@@ -1,3 +1,4 @@
+use bacnet_objects::property_metadata::PropertyMetadata;
 use std::borrow::Cow;
 
 use bacnet_encoding::primitives::encode_timestamp_choice;
@@ -97,8 +98,8 @@ impl BACnetObject for LargeSummaryObject {
         ))
     }
 
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&[
             PropertyIdentifier::EVENT_STATE,
             PropertyIdentifier::ACKED_TRANSITIONS,
             PropertyIdentifier::EVENT_TIME_STAMPS,
@@ -106,6 +107,9 @@ impl BACnetObject for LargeSummaryObject {
             PropertyIdentifier::EVENT_ENABLE,
             PropertyIdentifier::NOTIFICATION_CLASS,
         ])
+    }
+    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 }
 

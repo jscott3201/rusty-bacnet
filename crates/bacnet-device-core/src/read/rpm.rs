@@ -4,7 +4,6 @@ use super::budget::{ReadFailure, Work};
 use super::group::{self, GroupMembers};
 use super::property;
 use super::{LiveLists, ReadOverlay, ReadScope};
-use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_objects::database::ObjectDatabase;
@@ -34,7 +33,7 @@ pub(crate) struct PlannedRow {
 /// REQUIRED and OPTIONAL expand, any other property is itself. `visit`'s
 /// error stops the expansion.
 // Visit expansion rows without collecting a second, unbounded expansion vector.
-// Opaque metadata/property-list allocation is outside this service budget.
+// Opaque metadata allocation is outside this service budget.
 pub(crate) fn expand(
     object: &dyn BACnetObject,
     reference: &PropertyReference,
@@ -47,49 +46,16 @@ pub(crate) fn expand(
     ) {
         return visit(id);
     }
-    let metadata = object.property_metadata();
-    if !metadata.is_empty() {
-        for row in metadata.iter() {
-            let selected = match id {
-                PropertyIdentifier::ALL => {
-                    row.property_identifier != PropertyIdentifier::PROPERTY_LIST
-                }
-                PropertyIdentifier::REQUIRED => {
-                    row.property_identifier != PropertyIdentifier::PROPERTY_LIST
-                        && row.is_required()
-                }
-                _ => !row.is_required(),
-            };
-            if selected {
-                visit(row.property_identifier)?;
-            }
-        }
-    } else {
-        match id {
-            PropertyIdentifier::ALL => {
-                for &property in object.property_list().iter() {
-                    visit(property)?;
-                }
-            }
+    for row in object.property_metadata().iter() {
+        let selected = match id {
+            PropertyIdentifier::ALL => row.property_identifier != PropertyIdentifier::PROPERTY_LIST,
             PropertyIdentifier::REQUIRED => {
-                for &property in object.required_properties().iter() {
-                    visit(property)?;
-                }
+                row.property_identifier != PropertyIdentifier::PROPERTY_LIST && row.is_required()
             }
-            _ => {
-                // Preserve legacy expected-linear selection even when every
-                // row is required and the result budget never cuts the scan.
-                let required: BTreeSet<u32> = object
-                    .required_properties()
-                    .iter()
-                    .map(|property| property.to_raw())
-                    .collect();
-                for &property in object.property_list().iter() {
-                    if !required.contains(&property.to_raw()) {
-                        visit(property)?;
-                    }
-                }
-            }
+            _ => !row.is_required(),
+        };
+        if selected {
+            visit(row.property_identifier)?;
         }
     }
     Ok(())

@@ -566,6 +566,7 @@ dependencies = [
  "bacnet-types",
  "bytes",
  "futures-util",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",

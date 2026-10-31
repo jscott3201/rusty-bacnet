@@ -4,6 +4,7 @@ use crate::server::test_transport::TestTransport;
 use bacnet_objects::binary::{BinaryOutputObject, BinaryValueObject};
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::lighting::BinaryLightingOutputObject;
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::staging::{StagingConfig, StagingObject};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetStageLimitValue};
@@ -381,13 +382,14 @@ impl BACnetObject for CountingBinaryOutput {
         ))
     }
 
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::rows(
+            &[PropertyIdentifier::PRESENT_VALUE],
+            &[PropertyIdentifier::PRESENT_VALUE],
+        )
+    }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PRESENT_VALUE,
-        ])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 }
 

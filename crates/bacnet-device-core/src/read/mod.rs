@@ -77,6 +77,7 @@ impl ReadOverlay for NoOverlay {
 
 /// [`NoOverlay`]'s view, reachable only as `<NoOverlay as ReadOverlay>::View`.
 mod unserved {
+    use bacnet_objects::property_metadata::PropertyMetadata;
     use bacnet_objects::traits::BACnetObject;
     use bacnet_types::enums::PropertyIdentifier;
     use bacnet_types::error::Error;
@@ -108,6 +109,9 @@ mod unserved {
             _: PropertyValue,
             _: Option<u8>,
         ) -> Result<(), Error> {
+            match *self {}
+        }
+        fn property_metadata(&self) -> alloc::borrow::Cow<'_, [PropertyMetadata]> {
             match *self {}
         }
         fn property_list(&self) -> alloc::borrow::Cow<'static, [PropertyIdentifier]> {

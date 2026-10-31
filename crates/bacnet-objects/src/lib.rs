@@ -89,6 +89,8 @@ mod present_value_access_tests;
 
 #[cfg(test)]
 mod property_metadata_tests;
+#[cfg(test)]
+mod test_rows;
 
 #[cfg(test)]
 mod reliability_writability_tests;

@@ -32,6 +32,11 @@ serde_json.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
 tracing.workspace = true
 
+# The errno values that mean a filesystem can't sync a directory, which a
+# workspace save counts as synced (`safety::file`).
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [dev-dependencies]
 bacnet-objects = { workspace = true, features = ["std"] }
 bacnet-server.workspace = true

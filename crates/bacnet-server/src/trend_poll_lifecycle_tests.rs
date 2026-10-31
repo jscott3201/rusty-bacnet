@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_types::error::Error;
 use std::borrow::Cow;
 use std::future::Future;
@@ -76,6 +77,9 @@ impl BACnetObject for GateTrend {
     }
     fn object_name(&self) -> &str {
         self.object.object_name()
+    }
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        self.object.property_metadata()
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         self.object.property_list()

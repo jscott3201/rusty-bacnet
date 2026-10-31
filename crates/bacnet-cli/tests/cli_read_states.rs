@@ -15,6 +15,9 @@ use bacnet_encoding::apdu::{Apdu, decode_apdu};
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_objects::binary::BinaryValueObject;
 use bacnet_objects::multistate::MultiStateValueObject;
+use bacnet_objects::property_metadata::{
+    PropertyConformance, PropertyMetadata, PropertyWriteCapability, property_list_from_metadata,
+};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_server::server::BACnetServer;
 use bacnet_services::read_property::ReadPropertyRequest;
@@ -82,13 +85,27 @@ impl BACnetObject for Textless {
         ))
     }
 
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        // Every row required and read-only: this object takes no write.
+        const fn row(property: PropertyIdentifier) -> PropertyMetadata {
+            PropertyMetadata::new(
+                property,
+                PropertyConformance::RequiredRead,
+                None,
+                PropertyWriteCapability::ReadOnly,
+            )
+        }
+        const ROWS: &[PropertyMetadata] = &[
+            row(PropertyIdentifier::OBJECT_IDENTIFIER),
+            row(PropertyIdentifier::OBJECT_NAME),
+            row(PropertyIdentifier::OBJECT_TYPE),
+            row(PropertyIdentifier::PRESENT_VALUE),
+            row(PropertyIdentifier::PROPERTY_LIST),
+        ];
+        Cow::Borrowed(ROWS)
+    }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PRESENT_VALUE,
-        ])
+        property_list_from_metadata(&self.property_metadata())
     }
 }
 

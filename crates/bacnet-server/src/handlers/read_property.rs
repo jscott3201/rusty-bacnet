@@ -35,44 +35,25 @@ fn expand_property_reference(
     property_identifier: PropertyIdentifier,
 ) -> Vec<PropertyIdentifier> {
     let metadata = object.property_metadata();
-    if !metadata.is_empty() {
-        return match property_identifier {
-            PropertyIdentifier::ALL => metadata
-                .iter()
-                .filter_map(|row| {
-                    (row.property_identifier != PropertyIdentifier::PROPERTY_LIST)
-                        .then_some(row.property_identifier)
-                })
-                .collect(),
-            PropertyIdentifier::REQUIRED => metadata
-                .iter()
-                .filter_map(|row| {
-                    (row.property_identifier != PropertyIdentifier::PROPERTY_LIST
-                        && row.is_required())
-                    .then_some(row.property_identifier)
-                })
-                .collect(),
-            PropertyIdentifier::OPTIONAL => metadata
-                .iter()
-                .filter_map(|row| (!row.is_required()).then_some(row.property_identifier))
-                .collect(),
-            other => vec![other],
-        };
-    }
-
     match property_identifier {
-        PropertyIdentifier::ALL => object.property_list().to_vec(),
-        PropertyIdentifier::REQUIRED => object.required_properties().to_vec(),
-        PropertyIdentifier::OPTIONAL => {
-            let required: std::collections::HashSet<PropertyIdentifier> =
-                object.required_properties().iter().copied().collect();
-            object
-                .property_list()
-                .iter()
-                .copied()
-                .filter(|property| !required.contains(property))
-                .collect()
-        }
+        PropertyIdentifier::ALL => metadata
+            .iter()
+            .filter_map(|row| {
+                (row.property_identifier != PropertyIdentifier::PROPERTY_LIST)
+                    .then_some(row.property_identifier)
+            })
+            .collect(),
+        PropertyIdentifier::REQUIRED => metadata
+            .iter()
+            .filter_map(|row| {
+                (row.property_identifier != PropertyIdentifier::PROPERTY_LIST && row.is_required())
+                    .then_some(row.property_identifier)
+            })
+            .collect(),
+        PropertyIdentifier::OPTIONAL => metadata
+            .iter()
+            .filter_map(|row| (!row.is_required()).then_some(row.property_identifier))
+            .collect(),
         other => vec![other],
     }
 }

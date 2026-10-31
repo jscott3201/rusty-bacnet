@@ -106,9 +106,6 @@ impl Service {
         } else {
             Some(store.load(name)?)
         };
-        if !create && previous != stored {
-            return Err("profile changed on disk; reload before saving".into());
-        }
         if let Some(sc) = &mut profile.sc {
             for path in [&mut sc.ca, &mut sc.cert, &mut sc.key] {
                 if !path.as_os_str().is_empty() {
@@ -123,6 +120,12 @@ impl Service {
                 sc.device_uuid = kept.device_uuid.or(sc.device_uuid);
             }
             sc.assign_identity()?;
+        }
+        // Changed since it was shown, unless to this very profile: a save
+        // whose file went in place but whose directory sync failed is
+        // retried as it was.
+        if !create && previous != stored && stored.as_ref() != Some(&profile) {
+            return Err("profile changed on disk; reload before saving".into());
         }
         self.overrides.resolve(&profile)?;
         store.save(name, &profile, create)?;

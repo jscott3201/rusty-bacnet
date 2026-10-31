@@ -291,8 +291,45 @@ mod tests {
             Err(Error::Encoding("not used by this test".into()))
         }
 
+        fn property_metadata(
+            &self,
+        ) -> Cow<'_, [bacnet_objects::property_metadata::PropertyMetadata]> {
+            use bacnet_objects::property_metadata::{
+                PropertyConformance as C, PropertyMetadata as M, PropertyWriteCapability as W,
+            };
+            const ROWS: &[M] = &[
+                M::new(
+                    PropertyIdentifier::OBJECT_IDENTIFIER,
+                    C::RequiredRead,
+                    None,
+                    W::ReadOnly,
+                ),
+                M::new(
+                    PropertyIdentifier::OBJECT_NAME,
+                    C::RequiredRead,
+                    None,
+                    W::ReadOnly,
+                ),
+                M::new(
+                    PropertyIdentifier::OBJECT_TYPE,
+                    C::RequiredRead,
+                    None,
+                    W::ReadOnly,
+                ),
+                M::new(
+                    PropertyIdentifier::PROPERTY_LIST,
+                    C::RequiredRead,
+                    None,
+                    W::ReadOnly,
+                ),
+            ];
+            Cow::Borrowed(ROWS)
+        }
+
         fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-            Cow::Borrowed(&[])
+            bacnet_objects::property_metadata::property_list_from_metadata(
+                &self.property_metadata(),
+            )
         }
     }
 

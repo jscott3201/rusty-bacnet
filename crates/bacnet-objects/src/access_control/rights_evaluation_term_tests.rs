@@ -2,6 +2,7 @@
 //! time-range value reads as TRUE or FALSE, the time ranges with nothing to
 //! judge, and which locations cover a point.
 
+use crate::property_metadata::PropertyMetadata;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -382,6 +383,9 @@ impl BACnetObject for CountedZone {
             .write_property(property, array_index, value, priority)
     }
 
+    fn property_metadata(&self) -> std::borrow::Cow<'_, [PropertyMetadata]> {
+        self.zone.property_metadata()
+    }
     fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
         self.zone.property_list()
     }

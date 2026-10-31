@@ -10,6 +10,7 @@
 //! a missing object or property, is reported as a reference the target can't
 //! write (#1433).
 
+use bacnet_objects::property_metadata::PropertyMetadata;
 use std::borrow::Cow;
 use std::sync::Mutex;
 
@@ -95,8 +96,11 @@ impl BACnetObject for OwingSchedule {
         ))
     }
 
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&[])
+    }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 
     fn take_owed_schedule_writes(&mut self) -> Vec<ScheduleWrite> {

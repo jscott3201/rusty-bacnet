@@ -462,36 +462,19 @@ impl<'a> PicsGenerator<'a> {
     fn object_property_support(
         object: &dyn bacnet_objects::traits::BACnetObject,
     ) -> Vec<PropertySupport> {
-        let metadata = object.property_metadata();
-        if metadata.is_empty() {
-            let all_props = object.property_list();
-            let required = object.required_properties();
-            all_props
-                .iter()
-                .map(|&property_id| PropertySupport {
-                    property_id,
-                    access: PropertyAccess {
-                        readable: true,
-                        writable: object.is_writable_property(property_id),
-                        optional: !required.contains(&property_id),
-                    },
-                    written_through: None,
-                })
-                .collect()
-        } else {
-            metadata
-                .iter()
-                .map(|row| PropertySupport {
-                    property_id: row.property_identifier,
-                    access: PropertyAccess {
-                        readable: true,
-                        writable: row.write_capability.is_writable(),
-                        optional: !row.is_required(),
-                    },
-                    written_through: row.write_capability.written_through(),
-                })
-                .collect()
-        }
+        object
+            .property_metadata()
+            .iter()
+            .map(|row| PropertySupport {
+                property_id: row.property_identifier,
+                access: PropertyAccess {
+                    readable: true,
+                    writable: row.write_capability.is_writable(),
+                    optional: !row.is_required(),
+                },
+                written_through: row.write_capability.written_through(),
+            })
+            .collect()
     }
 
     fn union_property_support(

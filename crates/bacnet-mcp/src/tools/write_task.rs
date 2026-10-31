@@ -93,7 +93,9 @@ where
                 let caller = McpCaller::new(&ctx.writes, &ctx.policy.writes, None, fields);
                 let origin = Origin::mcp(ctx.principal.clone());
                 let mut desk = Desk::open(Some(&workspace.dir), context(&workspace), origin);
+                let before = desk.entries();
                 desk.settle_abandoned(&caller).await;
+                ctx.writes.signals.ledger_settled(&before, &desk, false);
                 Err(ToolError::Failed(format!(
                     "the write task failed: {failed}"
                 )))
@@ -108,24 +110,19 @@ pub(crate) fn sending() -> Sending {
     Arc::new(Mutex::new(Vec::new()))
 }
 
-/// The retry: the client confirmed. Read again under the lock, refuse a
-/// stale preview, arm if asked, send.
+/// The retry: the client confirmed, `via` a form or the server's own
+/// elicitation request. Read again under the lock, refuse a stale
+/// preview, arm if asked, send.
 pub(crate) async fn confirmed<T: TransportPort + 'static>(
     ctx: Arc<Ctx<T>>,
     workspace: Workspace,
-    specs: Vec<WriteSpec>,
-    args: Args,
-    state: State,
+    (specs, args): (Vec<WriteSpec>, Args),
+    (state, via): (State, Via),
     fields: Map<String, Value>,
     sending: Sending,
 ) -> Result<Value, ToolError> {
     let engine = ctx.engine()?;
-    let mut caller = McpCaller::new(
-        &ctx.writes,
-        &ctx.policy.writes,
-        Some(Via::Elicitation),
-        fields,
-    );
+    let mut caller = McpCaller::new(&ctx.writes, &ctx.policy.writes, Some(via), fields);
     caller.sending = Some(sending);
     let mut desk = open(&ctx, &workspace, &caller).await?;
     let fresh = desk
@@ -154,10 +151,14 @@ pub(crate) async fn confirmed<T: TransportPort + 'static>(
         let fields = json!({ "minutes": minutes, "reason": args.reason });
         desk.record(&caller, "arm", fields).await;
     }
+    let before = desk.entries();
     let sent = desk
         .commit(engine.client(), engine.limits(), &caller, &fresh)
         .await;
-    outcome(fresh.device, Via::Elicitation, sent)
+    ctx.writes
+        .signals
+        .ledger_settled(&before, &desk, caller.announced());
+    outcome(fresh.device, via, sent)
 }
 
 /// A write under a plan grant: everything under the workspace's lock,
@@ -195,9 +196,12 @@ pub(crate) async fn planned<T: TransportPort + 'static>(
     let Some(plan) = ctx.writes.plan(&ctx.policy.writes) else {
         return Err(ToolError::refused("plan-spent", "the plan grant ended"));
     };
+    // Counted under the workspace's lock, which `desk` holds, before
+    // `commit` sends anything.
     let approver = PlanApprover {
         plan,
         writes: &ctx.writes,
+        workspace: &workspace.dir,
     };
     if let Approval::Refused { reason, message } = approver.approve(&ctx.principal, &preview, tier)
     {
@@ -207,9 +211,13 @@ pub(crate) async fn planned<T: TransportPort + 'static>(
     }
     let mut caller = McpCaller::new(&ctx.writes, &ctx.policy.writes, Some(Via::Plan), fields);
     caller.sending = Some(sending);
+    let before = desk.entries();
     let sent = desk
         .commit(engine.client(), engine.limits(), &caller, &preview)
         .await;
+    ctx.writes
+        .signals
+        .ledger_settled(&before, &desk, caller.announced());
     outcome(preview.device, Via::Plan, sent)
 }
 
@@ -238,7 +246,9 @@ pub(crate) async fn open<T: TransportPort + 'static>(
         .await;
         return Err(error);
     }
+    let before = desk.entries();
     desk.settle_abandoned(caller).await;
+    ctx.writes.signals.ledger_settled(&before, &desk, false);
     Ok(desk)
 }
 

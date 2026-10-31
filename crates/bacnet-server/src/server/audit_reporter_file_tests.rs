@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::{
     file::{FileObject, FileRecordRead, FileStorage, FileStreamRead, FileWriteStart},
     traits::BACnetObject,
@@ -285,6 +286,9 @@ impl BACnetObject for ProbeFile {
         priority: Option<u8>,
     ) -> Result<(), Error> {
         self.file.write_property(p, i, v, priority)
+    }
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        self.file.property_metadata()
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         self.file.property_list()

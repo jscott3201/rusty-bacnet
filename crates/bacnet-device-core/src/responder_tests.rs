@@ -7,6 +7,9 @@ use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::binary::BinaryValueObject;
 use bacnet_objects::device_identity::build_database_with_extra;
 use bacnet_objects::group::GroupObject;
+use bacnet_objects::property_metadata::{
+    PropertyConformance, PropertyMetadata, PropertyWriteCapability,
+};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::who_has::{IHaveRequest, WhoHasObject, WhoHasRequest};
 use bacnet_services::who_is::{DeviceInstanceRange, IAmRequest, WhoIsRequest};
@@ -55,6 +58,15 @@ impl BACnetObject for Lenient {
             ErrorClass::PROPERTY,
             ErrorCode::WRITE_ACCESS_DENIED,
         ))
+    }
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        const ROWS: &[PropertyMetadata] = &[PropertyMetadata::new(
+            P::PRESENT_VALUE,
+            PropertyConformance::RequiredRead,
+            None,
+            PropertyWriteCapability::ReadOnly,
+        )];
+        Cow::Borrowed(ROWS)
     }
     fn property_list(&self) -> Cow<'static, [P]> {
         Cow::Borrowed(&[P::PRESENT_VALUE])

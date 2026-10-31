@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::RemoteError;
 
@@ -103,11 +104,14 @@ impl BACnetObject for CustomDevice {
     fn object_name(&self) -> &str {
         "custom-device"
     }
-    fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
-        std::borrow::Cow::Owned(vec![
+    fn property_metadata(&self) -> std::borrow::Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&[
             PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS,
             PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS,
         ])
+    }
+    fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
     fn read_property(
         &self,

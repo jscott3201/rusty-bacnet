@@ -399,10 +399,15 @@ The config root is the platform directory returned by
 shows its path. `BACNET_CONFIG_DIR` replaces it completely, including all
 per-profile workspaces. Profiles are `profiles/NAME.toml`; workspaces are
 `workspaces/NAME/` and hold the session ledger (`ledger.json`), the audit log
-(`audit.jsonl`) and watch-list CSV logs.
+(`audit.jsonl`), watch-list CSV logs and, for a profile with an MCP plan
+grant, the plan's write count (`plan-budget.json`).
 Names use 1–64 ASCII letters, digits, `_` or `-`, excluding Windows device
 names. New-profile saves never overwrite an existing name. Failed saves keep
-the previous file; errors stay visible. Reload after changing a file outside
+the previous file, except when only the final directory sync fails: the error
+then says the new file is already in place (it may not survive a power loss),
+and saving the same profile again goes through. A filesystem that can't sync
+a directory at all counts as synced, with one warning in the log. Errors stay
+visible. Reload after changing a file outside
 the TUI. A profile uses this versioned schema:
 
 ```toml
@@ -1050,7 +1055,13 @@ agent can't run it. Widening the table later (more networks or devices, broad
 discovery, a higher rate or cap, a network taken off `slow_networks` or
 `fast_networks`), offering writes, letting the client arm, adding or changing
 a plan, or changing the profile's transport clears the authorization; dropping
-a plan doesn't.
+a plan doesn't. Authorizing a profile with an `[mcp.plan]` starts the plan's
+write count at zero in `plan-budget.json`, beside the ledger: the count holds
+across `bacnet mcp serve` restarts, and only authorizing again starts it
+afresh. A plan authorized by an earlier release has no count, so its writes are
+refused until it is authorized again. A running `bacnet mcp serve` reads the
+authorization when it starts: after authorizing again, restart it to pick up
+the new plan and its fresh count; until then it keeps spending the old count.
 
 The `[mcp]` table is optional; every key in it is too. Left out, the server
 may reach every network and device at the default rates, with no broad

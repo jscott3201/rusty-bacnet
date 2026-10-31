@@ -3,6 +3,7 @@ use crate::server::test_transport::TestTransport;
 use bacnet_objects::audit::{
     AuditLogObject, AuditLogPersistence, AuditLogQueryPage, AuditLogSnapshot, AuditLogStorage,
 };
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_types::{
     constructed::{BACnetAuditLogDatum, BACnetAuditLogRecord, BACnetAuditLogRecordResult},
     primitives::{Date, Time},
@@ -125,8 +126,11 @@ impl BACnetObject for Probe {
     fn object_name(&self) -> &str {
         "query log"
     }
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&[])
+    }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
     fn read_property(&self, _: PropertyIdentifier, _: Option<u32>) -> Result<PropertyValue, Error> {
         panic!("query must not reread properties")

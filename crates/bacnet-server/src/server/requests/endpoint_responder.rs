@@ -32,18 +32,11 @@ fn device_write_target<'a>(
     let object = db
         .get_mut(&write.object_identifier)
         .ok_or_else(|| property_error(ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT))?;
-    // Presence follows the metadata rows, Property_List among them; empty
-    // metadata is a custom object's default, so its list decides.
-    let present = {
-        let metadata = object.property_metadata();
-        if metadata.is_empty() {
-            object.property_list().contains(&write.property_identifier)
-        } else {
-            metadata
-                .iter()
-                .any(|row| row.property_identifier == write.property_identifier)
-        }
-    };
+    // Presence follows the metadata rows, Property_List among them.
+    let present = object
+        .property_metadata()
+        .iter()
+        .any(|row| row.property_identifier == write.property_identifier);
     if !present {
         return Err(property_error(
             ErrorClass::PROPERTY,

@@ -1,5 +1,8 @@
 use super::*;
 use bacnet_encoding::constructed::encode_event_notification_subscription_list;
+use bacnet_objects::property_metadata::{
+    PropertyConformance, PropertyMetadata, PropertyWriteCapability, property_list_from_metadata,
+};
 use bacnet_objects::subscribed_recipients::SubscribedRecipients;
 use bacnet_objects::traits::MonotonicClock;
 use bacnet_types::constructed::{
@@ -66,13 +69,41 @@ impl BACnetObject for Forwarder {
         }
     }
 
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        const fn row(
+            property: PropertyIdentifier,
+            write: PropertyWriteCapability,
+        ) -> PropertyMetadata {
+            let conformance = match write {
+                PropertyWriteCapability::ReadOnly => PropertyConformance::RequiredRead,
+                _ => PropertyConformance::RequiredWrite,
+            };
+            PropertyMetadata::new(property, conformance, None, write)
+        }
+        const ROWS: &[PropertyMetadata] = &[
+            row(
+                PropertyIdentifier::OBJECT_IDENTIFIER,
+                PropertyWriteCapability::ReadOnly,
+            ),
+            row(
+                PropertyIdentifier::OBJECT_NAME,
+                PropertyWriteCapability::ReadOnly,
+            ),
+            row(
+                PropertyIdentifier::OBJECT_TYPE,
+                PropertyWriteCapability::ReadOnly,
+            ),
+            row(SUBSCRIBED_RECIPIENTS, PropertyWriteCapability::Always),
+            row(
+                PropertyIdentifier::PROPERTY_LIST,
+                PropertyWriteCapability::ReadOnly,
+            ),
+        ];
+        Cow::Borrowed(ROWS)
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::OBJECT_TYPE,
-            SUBSCRIBED_RECIPIENTS,
-        ])
+        property_list_from_metadata(&self.property_metadata())
     }
 
     fn bind_monotonic_clock_internal(&mut self, clock: Option<Arc<MonotonicClock>>) {

@@ -6,6 +6,9 @@ use bacnet_objects::access_control::{
     AccessCredentialObject, AccessPointObject, AccessRightsObject, evaluate_access_rights,
 };
 use bacnet_objects::database::ObjectDatabase;
+use bacnet_objects::property_metadata::{
+    PropertyConformance, PropertyMetadata, PropertyWriteCapability, property_list_from_metadata,
+};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{BACnetAccessRule, BACnetDeviceObjectReference};
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier as P};
@@ -55,8 +58,28 @@ impl BACnetObject for Fixture {
             ErrorCode::WRITE_ACCESS_DENIED,
         ))
     }
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        let mut served = vec![P::OBJECT_IDENTIFIER, P::OBJECT_NAME, P::OBJECT_TYPE];
+        if self.assignments.is_some() {
+            served.push(P::ASSIGNED_ACCESS_RIGHTS);
+        }
+        served.push(P::PROPERTY_LIST);
+        Cow::Owned(
+            served
+                .into_iter()
+                .map(|property| {
+                    PropertyMetadata::new(
+                        property,
+                        PropertyConformance::RequiredRead,
+                        None,
+                        PropertyWriteCapability::ReadOnly,
+                    )
+                })
+                .collect(),
+        )
+    }
     fn property_list(&self) -> Cow<'static, [P]> {
-        Cow::Borrowed(&[])
+        property_list_from_metadata(&self.property_metadata())
     }
 }
 

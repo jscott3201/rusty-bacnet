@@ -1,4 +1,5 @@
 use super::*;
+use crate::property_metadata::PropertyMetadata;
 use crate::{
     network_port::{BipPortConfig, NetworkPortObject},
     property_metadata::PropertyWriteCapability,
@@ -137,6 +138,9 @@ impl BACnetObject for ForwardingPort {
         _: Option<u8>,
     ) -> Result<(), Error> {
         panic!("wrapper writes must not be called")
+    }
+    fn property_metadata(&self) -> std::borrow::Cow<'_, [PropertyMetadata]> {
+        self.inner.property_metadata()
     }
     fn property_list(&self) -> std::borrow::Cow<'static, [P]> {
         self.inner.property_list()

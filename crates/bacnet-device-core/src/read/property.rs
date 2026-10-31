@@ -232,13 +232,9 @@ pub fn rpm_response_index(
 ) -> Option<u32> {
     let index = requested?;
     let object = object?;
-    let metadata = object.property_metadata();
-    let present = if metadata.is_empty() {
-        object.property_list().contains(&property)
-    } else {
-        metadata
-            .iter()
-            .any(|row| row.property_identifier == property)
-    };
+    let present = object
+        .property_metadata()
+        .iter()
+        .any(|row| row.property_identifier == property);
     (present && object.is_array_property(property)).then_some(index)
 }

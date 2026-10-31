@@ -1,5 +1,6 @@
 //! The probe with every provided `BACnetObject` method left at its default.
 
+use bacnet_objects::property_metadata::PropertyMetadata;
 use std::borrow::Cow;
 
 use bacnet_objects::traits::BACnetObject;
@@ -31,6 +32,9 @@ impl BACnetObject for Defaults {
         priority: Option<u8>,
     ) -> Result<(), Error> {
         self.0.write_property(property, index, value, priority)
+    }
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        self.0.property_metadata()
     }
     fn property_list(&self) -> Cow<'static, [P]> {
         self.0.property_list()

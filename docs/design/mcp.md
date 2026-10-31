@@ -359,8 +359,8 @@ the user.
 | `bacnet://device/{instance}/object/{type}:{n}` | the point preset | one managed SubscribeCOV per object with a finite lifetime (300 s, renewed), or polling at 10 s or slower when the device refuses COV |
 | `.../property/{prop}` | one property | SubscribeCOVProperty, or polling |
 | `bacnet://alarms`, `bacnet://device/{instance}/alarms` | active and unacknowledged alarms | GetEventInformation polled (60 s per device, rate limited) |
-| `bacnet://session` | level, expiry, grants, limits, rate meter, COV footprint | updated on arm, disarm or expiry |
-| `bacnet://ledger` | this principal's ledger entries still in effect | updated on each settle (empty until phase 3) |
+| `bacnet://session` | level, expiry, grants, limits, rate meter, COV footprint | updated on arm, plan-grant spend, or expiry (#2160) |
+| `bacnet://ledger` | this principal's ledger entries still in effect | updated on each settle or revert (#2160) |
 
 Mechanics:
 
@@ -412,9 +412,8 @@ As built (#2067), and where it differs from the plan above:
   by the next reservation or the once-a-minute sweep, so within 90 s; at
   most 16 wait at once.
 - `bacnet://device/{instance}` has no subscription meaning and is not
-  honoured. The session and ledger resources are honoured but don't send
-  updates: phase 3 (#2068) shows writes, arming and grants in them and
-  left the notifications on arming and settling for later.
+  honoured. The session and ledger resources send updates since #2160
+  (see §7.4).
 - The per-process cap is the hub's, and counts points still cancelling, so
   the device-side footprint stays bounded.
 - Charging: the hub's requests run under its own account and token bucket
@@ -496,13 +495,16 @@ over multi round-trip requests is two calls rather than one await:
 `approve` answers `Approved(via)`, `Ask { arm }` (return the form and a
 sealed state; the retry confirms) or `Refused { reason }`. A decline, an
 expired state or a missing capability is a refusal reason on the retry
-(`declined`, `confirmation-expired`, `elicitation-unsupported`). Phase 4's
-`TuiApprover` will need the waiting form back, and can add it then.
+(`declined`, `confirmation-expired`, `elicitation-unsupported`). For an
+older client (#2158) the tool call itself sends the form and waits for
+the answer after `Ask`, then runs the retry; the approver still doesn't
+wait. Phase 4's `TuiApprover` will need the waiting form back, and can
+add it then.
 
 | Approver | Verified by the server | Phase |
 |---|---|---|
 | `Deny` | n/a (the default) | 3 |
-| `ClientElicitation`: a form through multi round-trip requests | no, so T1 only and opt-in | 3 |
+| `ClientElicitation`: a form through multi round-trip requests, or on an older client the server's own elicitation request (#2158) | no, so T1 only and opt-in | 3 |
 | `PlanGrant` (`PlanApprover` as built): a commissioning plan a person approved once, at T3, through a verified channel (device set, property allowlist, priority range, write budget, expiry of 8 h or less) | yes | 3 |
 | `TuiApprover`: the attached TUI's own preview dialog, with an "agent request" banner, the 300 ms key debounce and the 120 s auto-decline | yes | 4 |
 | `UrlApprover`: an approval page behind the same identity provider, same subject or a permitted second person | yes | 5 |
@@ -567,19 +569,66 @@ As built (#2068), and where it differs from the steps above:
   arms a 15-minute session (audited `arm`, `confirmed_via: elicitation`);
   with `never`, only a plan grant arms MCP writes. There is no separate
   arm tool, so the tool list stays two write tools.
-- On a client older than 2026-07-28, or one that doesn't declare form
-  elicitation, a write needing confirmation is refused
-  (`elicitation-unsupported`): the older server-initiated elicitation
-  isn't used yet. Plan grants work for every client.
+- On a client older than 2026-07-28 that declares form elicitation (or
+  the capability without a mode, which meant the form before URL
+  elicitation), the server sends the same form as its own
+  `elicitation/create` request over the session (#2158), through `rmcp`'s
+  `Peer::send_request_with_option`. The call waits until 5 s before the
+  sealed state's lifetime ends (so an answer it takes is one the retry
+  honours), until the tool call is cancelled, or until the server shuts
+  down; then it cancels the request at the client itself, since the
+  SDK's request handle does that only on its own timeout. One such
+  request waits at a time: the slot is claimed before the preview, so
+  meanwhile another write no plan grant covers is refused
+  (`confirmation-pending`) before anything is read or sealed, unasked. The call waits holding no
+  lock, neither the workspace's nor the write state's, then hands the
+  answer to the retry path as if
+  the client had retried: the sealed state, which never leaves the
+  server, is opened, the targets are read again and a stale preview is
+  refused. Accepting is audited `confirmed_via: "server-elicitation"`
+  (`approved_by: client`, T1 only, as for the form): it is the same
+  client claim, but an audit reader can tell the older flow from multi
+  round-trip requests. Declining or cancelling is `declined`, nothing
+  sent, as for the form; no answer in time, an error answer, the call
+  cancelled or a shutdown is `confirmation-expired` (the audit's `why`
+  says which), nothing sent; with
+  `mcp_arm = "elicit"` a confirmation arms the session as the form does.
+  A client that declares neither, or URL elicitation only, is refused
+  (`elicitation-unsupported`). Plan grants work for every client.
 - A plan grant (`[mcp.plan]`) is approved in a terminal by `bacnet mcp
   authorize`, which names what it lets through without a prompt; it runs
-  for its `hours` (8 at most) from that authorization, and its write budget
-  counts per process. While one is in force, a write it doesn't cover is
+  for its `hours` (8 at most) from that authorization. Its write budget is
+  counted in the workspace beside the ledger, keyed to the authorization
+  (#2159): `bacnet mcp authorize` starts the count at zero, before it
+  saves the authorization, and a write the plan covers is counted, under
+  the workspace's lock, before it goes on the wire; a crash between the
+  two costs at most that write. The count a running server has seen is a
+  floor: a file put back from a backup or a sync can't lower it. A count the server can't read for this
+  authorization (missing, unreadable, corrupt or another
+  authorization's) or can't save refuses the plan's writes
+  (`plan-budget-unavailable`): none of these can give budget back, and
+  authorizing again is the way out. A server that starts without a count
+  to trust logs a warning saying so, and `bacnet://session` shows the
+  count as unavailable, with why, rather than as zero. While one is in force, a write it doesn't cover is
   refused (`outside-plan`) rather than offered to the client.
 - `bacnet_revert` needs no prompt and no armed session, as in the TUI, and
   reverts only this principal's MCP entries.
-- `bacnet://ledger` and `bacnet://session` show the writes, but don't yet
-  notify on arming or settling.
+- `bacnet://ledger` and `bacnet://session` show the writes, and notify
+  their subscribers (#2160): the session on arming, on each plan-grant
+  spend (so its exhaustion too), and when the armed session or the plan
+  grant runs out, which a server task announces with no request
+  arriving (the plan's end, a wall-clock time, is looked at again at
+  least every minute, so a clock step can't hide it); the ledger when
+  one of this server's writes is recorded as `sending` and again when it
+  settles (a refused write's row comes and goes), when a revert settles,
+  or when it settles an entry left `sending`. Streams and legacy
+  subscriptions take the signals when the subscription is made, before
+  it is acknowledged, so no change after that is missed. There is no
+  separate disarm: a session ends by expiring. Each resource has one
+  watch channel, waited on like a point's change signal, so bumps made
+  while a notification is going out are announced once; a stream on
+  both hears one update per arm, settle and revert. The ledger is shared
+  with the TUI, whose changes aren't announced.
 
 A write already sent always completes and is recorded; cancellation never
 interrupts it, as in the TUI's write worker.
@@ -771,10 +820,10 @@ that discusses BACnet is checked for overlap with the standard.
 
 So the core value lives in well-annotated tools, and subscriptions,
 elicitation and tasks are enhancements with tool-only fallbacks. On a client
-older than 2026-07-28, a write needing approval was to use the older
-server-initiated elicitation when the client supports it, and be refused
-otherwise. As built (#2068), it is always refused there
-(`elicitation-unsupported`, §7.4); plan grants work for every client.
+older than 2026-07-28, a write needing approval uses the older
+server-initiated elicitation when the client declares it (#2158, §7.4),
+and is refused otherwise (`elicitation-unsupported`); plan grants work
+for every client.
 
 ## 12. Risks
 

@@ -130,8 +130,8 @@ impl PropertyWriteCapability {
 
 /// Canonical metadata for one effective property row on a BACnet object.
 ///
-/// A migrated object's canonical set includes `PROPERTY_LIST` itself. The
-/// legacy [`BACnetObject::property_list`](crate::traits::BACnetObject::property_list)
+/// An object's canonical set includes `PROPERTY_LIST` itself. The
+/// [`BACnetObject::property_list`](crate::traits::BACnetObject::property_list)
 /// projection omits that identifier, and the encoded BACnet Property_List
 /// value additionally omits Object_Identifier, Object_Name, and Object_Type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -189,7 +189,8 @@ impl PropertyMetadata {
     }
 }
 
-/// Derive the legacy object property-list projection from canonical metadata.
+/// Derive [`BACnetObject::property_list`](crate::traits::BACnetObject::property_list)
+/// from canonical metadata.
 ///
 /// The projection preserves metadata order and omits only `PROPERTY_LIST`.
 pub fn property_list_from_metadata(
@@ -208,7 +209,7 @@ pub fn property_list_from_metadata(
 
 /// Derive all effectively required identifiers from canonical metadata.
 ///
-/// Unlike the legacy property-list projection, this includes `PROPERTY_LIST`.
+/// Unlike the property-list projection, this includes `PROPERTY_LIST`.
 /// Consumers such as RPM apply their own service-specific exclusion.
 pub fn required_properties_from_metadata(
     metadata: &[PropertyMetadata],

@@ -126,34 +126,39 @@ pub(crate) fn policy(section: &McpSection, passive: bool) -> Result<Policy, Stri
     Ok(policy)
 }
 
+/// The `[mcp.plan]` grant, which runs from the authorization for its
+/// hours; its write budget is counted for that authorization (#2159).
+fn plan_grant(section: &McpSection) -> Result<Option<PlanGrant>, String> {
+    let Some(plan) = &section.plan else {
+        return Ok(None);
+    };
+    let (devices, properties) = plan.parsed()?;
+    // From the authorization, but never from a time still to come: a
+    // hand-edited future time can't lengthen the plan.
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs());
+    let authorized = section.authorized_at_unix.unwrap_or(0);
+    let start = authorized.min(now);
+    Ok(Some(PlanGrant {
+        devices,
+        properties,
+        priorities: (plan.priority_min, plan.priority_max),
+        max_writes: plan.max_writes,
+        authorized_unix: authorized,
+        expires_unix: start.saturating_add(plan.hours.saturating_mul(3_600)),
+        reason: plan.reason.clone(),
+    }))
+}
+
 /// What the `[mcp]` table lets the server change, recording to
-/// `workspace` (#2068). A plan grant runs from the authorization for its
-/// hours.
+/// `workspace` (#2068).
 pub(crate) fn write_policy(
     section: &McpSection,
     workspace: Workspace,
 ) -> Result<WritePolicy, String> {
     let choice = |c: McpChoice| c == McpChoice::Elicit;
-    let plan = match &section.plan {
-        None => None,
-        Some(plan) => {
-            let (devices, properties) = plan.parsed()?;
-            // From the authorization, but never from a time still to come:
-            // a hand-edited future time can't lengthen the plan.
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_or(0, |since| since.as_secs());
-            let start = section.authorized_at_unix.unwrap_or(0).min(now);
-            Some(PlanGrant {
-                devices,
-                properties,
-                priorities: (plan.priority_min, plan.priority_max),
-                max_writes: plan.max_writes,
-                expires_unix: start.saturating_add(plan.hours.saturating_mul(3_600)),
-                reason: plan.reason.clone(),
-            })
-        }
-    };
+    let plan = plan_grant(section)?;
     Ok(WritePolicy {
         mode: if choice(section.mcp_writes) {
             WriteMode::Elicit
@@ -443,7 +448,16 @@ pub(crate) fn authorize(store: &Store, name: &str, confirm: &mut dyn Confirm) ->
         .map_err(|e| format!("cannot timestamp authorization: {e}"))?
         .as_secs();
     let link = profile.link();
-    profile.mcp.get_or_insert_default().authorize(now, link);
+    let section = profile.mcp.get_or_insert_default();
+    section.authorize(now, link);
+    // A fresh write count for the plan, before the authorization is
+    // saved: a count left by an earlier authorization never matches this
+    // one, so if saving the profile fails the plan's writes stay refused.
+    if section.mcp_writes == McpChoice::Elicit
+        && let Some(plan) = plan_grant(section)?
+    {
+        plan.start_budget(&store.workspace(name)?)?;
+    }
     store.save(name, &profile, false)?;
     // stderr, as the question was: an explicit write, not a print.
     let _ = writeln!(std::io::stderr(), "Profile {name} is authorized for MCP.");
