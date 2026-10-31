@@ -2,7 +2,11 @@ use super::{IpConfig, NetworkPortObject};
 use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead},
     PropertyMetadata,
-    PropertyPresenceCondition::{ApplicationProtocolLevel, NotPointToPoint},
+    PropertyPresenceCondition::{
+        ApplicationProtocolLevel, BacnetIpMulticast, BacnetIpPort, BacnetIpv6Application,
+        BbmdCapable, ForeignDeviceMode, Ipv6Port, NatTraversalCapable, NatTraversalConfigured,
+        NotPointToPoint,
+    },
     PropertyWriteCapability::{Always, ReadOnly},
 };
 use alloc::borrow::Cow;
@@ -14,10 +18,9 @@ use bacnet_types::enums::{IPMode, PropertyIdentifier as P};
 // which footnote 3 makes the condition for MAC_Address: each keeps the
 // table's optional class and carries its condition (#2174). The table
 // classes Link_Speed required. The B/IP, B/IPv6, BBMD, FOREIGN, NAT and
-// multicast rows below stay R for now, though the table codes them O with
-// footnote conditions; each is listed only when its condition holds, so
-// they come out required either way (#2191). Read-only configured snapshot:
-// no activation owner.
+// multicast rows below do the same with their own footnotes' conditions,
+// and each set is listed only for a port its condition holds for (#2191).
+// Read-only configured snapshot: no activation owner.
 const COMMON: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
@@ -51,13 +54,24 @@ const COMMON: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::CHANGES_PENDING, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
+// Table 12-71 footnotes 5 and 6: a BACnet/IP port has these.
 const BIP: &[PropertyMetadata] = &[
-    PropertyMetadata::new(P::BACNET_IP_MODE, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::IP_ADDRESS, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::IP_DEFAULT_GATEWAY, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::IP_SUBNET_MASK, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::BACNET_IP_UDP_PORT, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::IP_DNS_SERVER, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::BACNET_IP_MODE, Optional, Some(BacnetIpPort), ReadOnly),
+    PropertyMetadata::new(P::IP_ADDRESS, Optional, Some(BacnetIpPort), ReadOnly),
+    PropertyMetadata::new(
+        P::IP_DEFAULT_GATEWAY,
+        Optional,
+        Some(BacnetIpPort),
+        ReadOnly,
+    ),
+    PropertyMetadata::new(P::IP_SUBNET_MASK, Optional, Some(BacnetIpPort), ReadOnly),
+    PropertyMetadata::new(
+        P::BACNET_IP_UDP_PORT,
+        Optional,
+        Some(BacnetIpPort),
+        ReadOnly,
+    ),
+    PropertyMetadata::new(P::IP_DNS_SERVER, Optional, Some(BacnetIpPort), ReadOnly),
 ];
 // Table 12-71 footnotes 14 and 15, and Table 12-72's IPV6 rows: a B/IPv6
 // application port has its mode, address, prefix length, UDP port, gateway,
@@ -68,18 +82,28 @@ const BIP: &[PropertyMetadata] = &[
 // only for a node with several link-local addresses; registration refuses
 // link-local), and the DHCPv6 rows, which are plain optional.
 const BIP6: &[PropertyMetadata] = &[
-    PropertyMetadata::new(P::BACNET_IPV6_MODE, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::IPV6_ADDRESS, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::IPV6_PREFIX_LENGTH, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::BACNET_IPV6_UDP_PORT, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::IPV6_DEFAULT_GATEWAY, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(
-        P::BACNET_IPV6_MULTICAST_ADDRESS,
-        RequiredRead,
-        None,
+        P::BACNET_IPV6_MODE,
+        Optional,
+        Some(BacnetIpv6Application),
         ReadOnly,
     ),
-    PropertyMetadata::new(P::IPV6_DNS_SERVER, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::IPV6_ADDRESS, Optional, Some(Ipv6Port), ReadOnly),
+    PropertyMetadata::new(P::IPV6_PREFIX_LENGTH, Optional, Some(Ipv6Port), ReadOnly),
+    PropertyMetadata::new(
+        P::BACNET_IPV6_UDP_PORT,
+        Optional,
+        Some(BacnetIpv6Application),
+        ReadOnly,
+    ),
+    PropertyMetadata::new(P::IPV6_DEFAULT_GATEWAY, Optional, Some(Ipv6Port), ReadOnly),
+    PropertyMetadata::new(
+        P::BACNET_IPV6_MULTICAST_ADDRESS,
+        Optional,
+        Some(BacnetIpv6Application),
+        ReadOnly,
+    ),
+    PropertyMetadata::new(P::IPV6_DNS_SERVER, Optional, Some(Ipv6Port), ReadOnly),
 ];
 // Table 12-71 footnotes 11 and 12 (IPV4 or IPV6): a port that can act as a BBMD has these;
 // the informative Table 12-72 lists them for BBMD mode. A port counts as
@@ -91,30 +115,40 @@ const BIP6: &[PropertyMetadata] = &[
 const BBMD: &[PropertyMetadata] = &[
     PropertyMetadata::new(
         P::BBMD_BROADCAST_DISTRIBUTION_TABLE,
-        RequiredRead,
-        None,
+        Optional,
+        Some(BbmdCapable),
         ReadOnly,
     ),
     PropertyMetadata::new(
         P::BBMD_ACCEPT_FD_REGISTRATIONS,
-        RequiredRead,
-        None,
+        Optional,
+        Some(BbmdCapable),
         ReadOnly,
     ),
-    PropertyMetadata::new(P::BBMD_FOREIGN_DEVICE_TABLE, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(
+        P::BBMD_FOREIGN_DEVICE_TABLE,
+        Optional,
+        Some(BbmdCapable),
+        ReadOnly,
+    ),
 ];
 // Table 12-71 footnotes 9 and 10 (IPV4 only): a port that can run behind a
 // NAT router (Annex J.7.5) has BACnet_IP_NAT_Traversal, and one configured
 // to has BACnet_IP_Global_Address. This stack's BBMD can, so an IPv4 BBMD
 // port whose transport says so serves both, the address as the unset
-// sentinel while none is configured; the address is listed required while
-// NAT traversal is on, optional otherwise. Clauses 12.56.32 and 12.56.33 make
+// sentinel while none is configured; the address carries footnote 10's
+// condition while NAT traversal is on, and is plain optional otherwise. Clauses 12.56.32 and 12.56.33 make
 // them writable (the address because this stack never discovers it), with
 // a write waiting for a ReinitializeDevice as the BBMD rows' do (#940).
 // They are listed read-only here and become writable only for an owner
 // that activates changes.
 const NAT: &[PropertyMetadata] = &[
-    PropertyMetadata::new(P::BACNET_IP_NAT_TRAVERSAL, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(
+        P::BACNET_IP_NAT_TRAVERSAL,
+        Optional,
+        Some(NatTraversalCapable),
+        ReadOnly,
+    ),
     PropertyMetadata::new(P::BACNET_IP_GLOBAL_ADDRESS, Optional, None, ReadOnly),
 ];
 // Table 12-71 footnote 7 (IPV4 only): a port that supports B/IP multicast
@@ -129,8 +163,8 @@ const NAT: &[PropertyMetadata] = &[
 // (Annex J.8.3 ties it to the BBMD's own BDT row, #1963).
 const MULTICAST: &[PropertyMetadata] = &[PropertyMetadata::new(
     P::BACNET_IP_MULTICAST_ADDRESS,
-    RequiredRead,
-    None,
+    Optional,
+    Some(BacnetIpMulticast),
     ReadOnly,
 )];
 // Table 12-71 footnote 13 and Table 12-72: FOREIGN mode has these, for
@@ -139,8 +173,18 @@ const MULTICAST: &[PropertyMetadata] = &[PropertyMetadata::new(
 // ReinitializeDevice as the BBMD rows' do (#1825). They are listed read-only
 // here and become writable only for an owner that activates changes.
 const FOREIGN: &[PropertyMetadata] = &[
-    PropertyMetadata::new(P::FD_BBMD_ADDRESS, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::FD_SUBSCRIPTION_LIFETIME, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(
+        P::FD_BBMD_ADDRESS,
+        Optional,
+        Some(ForeignDeviceMode),
+        ReadOnly,
+    ),
+    PropertyMetadata::new(
+        P::FD_SUBSCRIPTION_LIFETIME,
+        Optional,
+        Some(ForeignDeviceMode),
+        ReadOnly,
+    ),
 ];
 pub(super) fn for_object(object: &NetworkPortObject) -> Cow<'_, [PropertyMetadata]> {
     if let Some(config) = &object.ip {
@@ -175,7 +219,7 @@ pub(super) fn for_object(object: &NetworkPortObject) -> Cow<'_, [PropertyMetadat
                     if row.property_identifier == P::BACNET_IP_GLOBAL_ADDRESS
                         && object.mode.nat_on()
                     {
-                        row.conformance = RequiredRead;
+                        row.presence_condition = Some(NatTraversalConfigured);
                     }
                     if object.activates_changes()
                         && super::pending::writable_pending_row(row.property_identifier)

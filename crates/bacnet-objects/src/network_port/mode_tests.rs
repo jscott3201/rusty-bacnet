@@ -3,7 +3,9 @@
 
 use super::*;
 use crate::database::ObjectDatabase;
-use crate::property_metadata::{PropertyConformance, PropertyWriteCapability};
+use crate::property_metadata::{
+    PropertyConformance, PropertyPresenceCondition, PropertyWriteCapability,
+};
 use bacnet_encoding::constructed::{decode_bdt_entry_list, decode_fdt_entry_list};
 use bacnet_types::bip_port::{BbmdTables, BipPortMode};
 use bacnet_types::constructed::{
@@ -113,18 +115,21 @@ fn list_bytes(value: PropertyValue) -> Vec<u8> {
 #[test]
 fn each_mode_lists_its_own_rows_read_only_and_required() {
     let tables: Arc<dyn BbmdTables> = Arc::new(Tables::default());
-    for (mode, ip_mode, present, absent) in [
+    // Table 12-71 footnotes 11 to 13 (#2191).
+    for (mode, ip_mode, present, absent, condition) in [
         (
             BipPortMode::Normal,
             0,
             &[][..],
             &[&BBMD_ROWS[..], &FOREIGN_ROWS[..]],
+            None,
         ),
         (
             BipPortMode::fixed_foreign(host([10, 0, 0, 1], 0xBAC0), 300),
             1,
             &FOREIGN_ROWS[..],
             &[&BBMD_ROWS[..], &[][..]],
+            Some(PropertyPresenceCondition::ForeignDeviceMode),
         ),
         (
             BipPortMode::Bbmd {
@@ -133,6 +138,7 @@ fn each_mode_lists_its_own_rows_read_only_and_required() {
             2,
             &BBMD_ROWS[..],
             &[&FOREIGN_ROWS[..], &[][..]],
+            Some(PropertyPresenceCondition::BbmdCapable),
         ),
     ] {
         let (mut db, _lease) = published(mode);
@@ -151,7 +157,8 @@ fn each_mode_lists_its_own_rows_read_only_and_required() {
                 .iter()
                 .find(|row| row.property_identifier == property)
                 .unwrap();
-            assert_eq!(row.conformance, PropertyConformance::RequiredRead);
+            assert_eq!(row.conformance, PropertyConformance::Optional);
+            assert_eq!(row.presence_condition, condition, "{property}");
             assert_eq!(row.write_capability, PropertyWriteCapability::ReadOnly);
             assert!(read(&db, property).is_ok(), "{property} reads");
         }
