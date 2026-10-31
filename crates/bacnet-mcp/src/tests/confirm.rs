@@ -67,6 +67,21 @@ async fn result(lab: &mut Lab, id: u64) -> Value {
     reply["result"].clone()
 }
 
+/// The slot is free: another write is asked (not refused as pending),
+/// and declined.
+async fn asked_again(lab: &mut Lab) {
+    let (id, ask) = write(lab, one(json!(99), 10)).await;
+    lab.agent
+        .reply_to(&ask, json!({ "action": "decline" }))
+        .await;
+    let done = result(lab, id).await;
+    assert_eq!(
+        done["structuredContent"]["reason"],
+        json!("declined"),
+        "{done}"
+    );
+}
+
 /// Acceptance: confirming a T1 write gets it sent, ledgered and audited
 /// as confirmed through the server's request, and arms the session (with
 /// `mcp_arm = "elicit"`); while the person decides, other calls go on.
@@ -224,6 +239,7 @@ async fn the_wait_ends_inside_the_sealed_states_lifetime() {
     let cancelled = lab.agent.notification("notifications/cancelled").await;
     assert_eq!(cancelled["params"]["requestId"], ask["id"], "{cancelled}");
 
+    // The timeout freed the slot: this one is asked.
     let (id, ask) = write(&mut lab, one(json!(3), 14)).await;
     tokio::time::sleep(Duration::from_secs(116)).await;
     lab.agent.reply_to(&ask, accept).await;
@@ -257,6 +273,7 @@ async fn cancelling_the_call_cancels_the_request() {
     assert_eq!(slot(&lab, 13).await, PropertyValue::Null);
     let whys = refusals(dir.path(), "confirmation-expired");
     assert_eq!(whys, [json!("the tool call was cancelled")]);
+    asked_again(&mut lab).await;
     lab.stop().await;
 }
 
@@ -267,6 +284,7 @@ async fn cancelling_the_call_cancels_the_request() {
 async fn one_confirmation_waits_at_a_time() {
     let (mut lab, dir) = older(ArmMode::Elicit).await;
     let (first, ask) = write(&mut lab, one(json!(5), 12)).await;
+    let before = lab.sends().len();
     let params = json!({ "name": "bacnet_write", "arguments": one(json!(6), 16) });
     let second = lab.agent.post("tools/call", params).await;
     let refused = result(&mut lab, second).await;
@@ -281,7 +299,19 @@ async fn one_confirmation_waits_at_a_time() {
             .await
             .is_empty()
     );
-    assert_eq!(refusals(dir.path(), "confirmation-pending").len(), 1);
+    // Refused before its preview: not even a read went.
+    assert_eq!(lab.sends().len(), before, "no preview");
+    let pending: Vec<Value> = audit(dir.path())
+        .into_iter()
+        .filter(|r| r["outcome"]["why"]["reason"] == "confirmation-pending")
+        .collect();
+    let [record] = &pending[..] else {
+        panic!("{pending:?}");
+    };
+    assert!(
+        record.get("asked_via").is_none(),
+        "nothing was asked: {record}"
+    );
     let accept = json!({ "action": "accept", "content": { "confirm": true } });
     lab.agent.reply_to(&ask, accept).await;
     let done = result(&mut lab, first).await;
@@ -323,6 +353,7 @@ async fn an_error_answer_is_recorded_as_one() {
             "the client answered with an error (-32603: form crashed)"
         )]
     );
+    asked_again(&mut lab).await;
     lab.stop().await;
 }
 
@@ -356,5 +387,60 @@ async fn without_the_capability_a_write_is_refused_unasked() {
             .await
             .is_empty()
     );
+    lab.stop().await;
+}
+
+/// A shutdown while a confirmation waits cancels the request at the
+/// client and refuses the write as expired; the slot is free again, so
+/// the next write is asked (and, the server closing, cancelled at once).
+#[tokio::test(start_paused = true)]
+async fn a_shutdown_cancels_a_waiting_confirmation() {
+    let (mut lab, dir) = older(ArmMode::Elicit).await;
+    let (id, ask) = write(&mut lab, one(json!(2), 11)).await;
+    lab.mcp.ctx().closing.cancel();
+    let done = result(&mut lab, id).await;
+    assert_eq!(
+        done["structuredContent"]["reason"],
+        json!("confirmation-expired")
+    );
+    let cancelled = lab.agent.notification("notifications/cancelled").await;
+    assert_eq!(cancelled["params"]["requestId"], ask["id"], "{cancelled}");
+    assert_eq!(
+        refusals(dir.path(), "confirmation-expired"),
+        [json!("the server is shutting down")]
+    );
+    let (id, again) = write(&mut lab, one(json!(3), 11)).await;
+    assert_eq!(again["method"], json!(ASK));
+    let done = result(&mut lab, id).await;
+    assert_eq!(
+        done["structuredContent"]["reason"],
+        json!("confirmation-expired")
+    );
+    assert_eq!(slot(&lab, 11).await, PropertyValue::Null);
+    lab.stop().await;
+}
+
+/// An accept and the call's cancel arriving together: the answer wins
+/// (the select is biased to it), the write is handed to its own task and
+/// recorded once, and the call reports only that it was cancelled.
+#[tokio::test(start_paused = true)]
+async fn an_accept_racing_a_cancel_is_written_once() {
+    let (mut lab, dir) = older(ArmMode::Elicit).await;
+    let (id, ask) = write(&mut lab, one(json!(6), 9)).await;
+    let accept = json!({ "action": "accept", "content": { "confirm": true } });
+    lab.agent.reply_to(&ask, accept).await;
+    lab.agent.cancel(id).await;
+    if let Ok(reply) = tokio::time::timeout(Duration::from_secs(5), lab.agent.answer(id)).await {
+        let message = reply["error"]["message"].as_str().unwrap_or_default();
+        assert!(message.contains("cancelled"), "{reply}");
+    }
+    assert_eq!(slot(&lab, 9).await, PropertyValue::Real(6.0));
+    let ledger = Ledger::open(dir.path()).unwrap();
+    assert_eq!(ledger.entries().len(), 1, "{:?}", ledger.entries());
+    let written = audit(dir.path())
+        .into_iter()
+        .filter(|r| r["event"] == "write")
+        .count();
+    assert_eq!(written, 1);
     lab.stop().await;
 }

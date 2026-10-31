@@ -308,22 +308,34 @@ pub(crate) async fn call_write<T: TransportPort + 'static>(
     };
     schema_check?;
     let budget = ctx.policy.caps.budget;
+    // An older client that the server would ask to confirm: one such
+    // request waits at a time, so the slot is claimed before anything is
+    // read or sealed (#2158). A write a plan grant covers needs no slot.
+    let asking = if name == write::NAME
+        && retry.state.is_none()
+        && peer.session.is_some()
+        && ctx.writes.plan(&ctx.policy.writes).is_none()
+    {
+        match ctx.writes.ask() {
+            Some(slot) => Some(slot),
+            None => {
+                let account = Arc::new(Account::new(Some(Arc::clone(&ctx.bucket))));
+                let call = Call::new(budget, account);
+                let error = write::unconfirmed(ctx, &args, peer, (PENDING, PENDING_WHY)).await;
+                return Ok(finish(ctx, name, &call, Err(error)).into());
+            }
+        }
+    } else {
+        None
+    };
     let (call, finished) = attempt(ctx, name, &args, retry, peer, &cancel, None).await?;
     let (call, finished) = match (finished, &peer.session) {
         // A client older than 2026-07-28 that takes the server's
         // elicitation requests: ask it, holding no lock while it answers,
         // then go on as a retry with the form's answer would (#2158).
         (Ok(Ok(write::Step::Ask(ask, good_until))), Some(session)) => {
-            confirm(
-                ctx,
-                name,
-                &args,
-                peer,
-                &cancel,
-                call,
-                (session, ask, good_until),
-            )
-            .await?
+            let asked = (session, ask, good_until, asking);
+            confirm(ctx, name, &args, peer, &cancel, call, asked).await?
         }
         (finished, _) => (call, finished),
     };
@@ -357,6 +369,14 @@ pub(crate) async fn call_write<T: TransportPort + 'static>(
     Ok(finish(ctx, name, &call, outcome).into())
 }
 
+/// The refusal of a write that would ask an older client to confirm
+/// while another confirmation waits.
+const PENDING: &str = "confirmation-pending";
+
+/// Why, in words.
+const PENDING_WHY: &str =
+    "another write is waiting for this client's confirmation; answer or cancel it first";
+
 /// What one run of a write tool came to, under its own budget: the call
 /// that counted it, and its step or error, or `Err` past the budget.
 type Attempt = (
@@ -376,16 +396,17 @@ async fn confirm<T: TransportPort + 'static>(
     peer: &write::Peer,
     cancel: &CancellationToken,
     call: Call,
-    (session, ask, good_until): (
+    (session, ask, good_until, asking): (
         &rmcp::service::Peer<rmcp::RoleServer>,
         rmcp::model::InputRequiredResult,
         tokio::time::Instant,
+        Option<crate::writes::Asking<'_>>,
     ),
 ) -> Result<Attempt, ErrorData> {
-    let Some(asking) = ctx.writes.ask() else {
-        let why =
-            "another write is waiting for this client's confirmation; answer or cancel it first";
-        let error = write::unconfirmed(ctx, args, peer, ("confirmation-pending", why)).await;
+    // Claimed before the preview, unless a plan was in force then and
+    // has ended since.
+    let Some(asking) = asking.or_else(|| ctx.writes.ask()) else {
+        let error = write::unconfirmed(ctx, args, peer, (PENDING, PENDING_WHY)).await;
         return Ok((call, Ok(Err(error))));
     };
     ctx.log_read(name, &call, "confirming");

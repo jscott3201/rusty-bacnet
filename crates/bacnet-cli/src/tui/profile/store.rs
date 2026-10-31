@@ -107,7 +107,10 @@ impl Store {
         Ok(profile)
     }
     /// Save a complete synced temporary file, then atomically publish it.
-    /// A new profile uses a hard link so concurrent creation never overwrites.
+    /// A new profile uses a hard link so concurrent creation never
+    /// overwrites; creating it again with the same text, as a retry does,
+    /// finds it saved. When only the directory sync fails, the error says
+    /// the new file is in place.
     pub(crate) fn save(&self, name: &str, profile: &Profile, create: bool) -> Result<(), String> {
         let path = self.path(name)?;
         profile.validate()?;
@@ -121,7 +124,20 @@ impl Store {
             std::process::id(),
             NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
         ));
-        publish(&temp, &path, &text, create).map_err(|e| format!("cannot save profile {name}: {e}"))
+        match publish(&temp, &path, &text, create) {
+            Ok(()) => Ok(()),
+            // An earlier save of this very profile went in place, and only
+            // its directory sync failed: it is there already.
+            Err(e)
+                if create
+                    && e.kind() == std::io::ErrorKind::AlreadyExists
+                    && fs::read_to_string(&path).is_ok_and(|saved| saved == text) =>
+            {
+                Ok(())
+            }
+            Err(e) if in_place(&e) => Err(format!("profile {name}: {e}")),
+            Err(e) => Err(format!("cannot save profile {name}: {e}")),
+        }
     }
     pub(crate) fn workspace(&self, name: &str) -> Result<PathBuf, String> {
         validate_name(name)?;
@@ -133,7 +149,7 @@ impl Store {
 
 /// The atomic publish profiles and the session ledger share; it lives
 /// beside the ledger in `bacnet_ops::safety::file`.
-pub(crate) use bacnet_ops::safety::file::publish;
+pub(crate) use bacnet_ops::safety::file::{in_place, publish};
 
 #[cfg(test)]
 mod tests {

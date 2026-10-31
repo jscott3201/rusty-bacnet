@@ -328,6 +328,13 @@ impl Subs {
         (uris, std::mem::take(&mut state.legacy_signals))
     }
 
+    /// Session and ledger signals of legacy subscriptions not yet
+    /// followed, for a test.
+    #[cfg(test)]
+    pub(crate) fn legacy_signal_count(&self) -> usize {
+        self.lock().legacy_signals.len()
+    }
+
     /// Legacy URIs the session holds.
     pub(crate) fn legacy_count(&self) -> usize {
         self.lock().legacy.len()
@@ -537,6 +544,7 @@ impl Subs {
         let (pending, legacy, tool) = {
             let mut state = self.lock();
             state.closed = true;
+            state.legacy_signals.clear();
             (
                 std::mem::take(&mut state.pending),
                 std::mem::take(&mut state.legacy),

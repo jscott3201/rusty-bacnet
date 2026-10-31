@@ -109,8 +109,17 @@ async fn a_refused_write_announces_its_row_and_its_removal() {
     lab.stop().await;
 }
 
+/// Step the wall clock the server checks plans against by `secs`.
+fn offset(lab: &Lab, secs: u64) {
+    let writes = &lab.mcp.ctx().writes;
+    writes
+        .wall_offset
+        .store(secs, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// A plan grant's end is announced when the wall clock passes it, even
-/// one that steps forward, within a minute and with no request.
+/// one that steps forward, within a minute and with no request; a clock
+/// stepped back into the window is announced too.
 #[tokio::test(start_paused = true)]
 async fn a_plans_end_is_announced_without_a_request() {
     let dir = tempfile::tempdir().unwrap();
@@ -121,10 +130,7 @@ async fn a_plans_end_is_announced_without_a_request() {
     let session = lab.agent.read(SESSION).await.unwrap();
     assert_eq!(session["grants"][0]["in_force"], json!(true), "{session}");
     // The plan runs an hour; the wall clock jumps past it.
-    let writes = &lab.mcp.ctx().writes;
-    writes
-        .wall_offset
-        .store(3_600, std::sync::atomic::Ordering::Relaxed);
+    offset(&lab, 3_600);
     // Looked at again a minute after the last look, at the start.
     tokio::time::sleep(Duration::from_secs(58)).await;
     assert_eq!(
@@ -137,7 +143,29 @@ async fn a_plans_end_is_announced_without_a_request() {
     let session = lab.agent.read(SESSION).await.unwrap();
     assert_eq!(session["grants"][0]["in_force"], json!(false), "{session}");
     assert_eq!(session["level"], json!("read-only"), "{session}");
+    // The clock steps back inside the window: the plan is in force again.
+    offset(&lab, 0);
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    assert_eq!(updates(&mut lab).await, [SESSION], "open again");
+    let session = lab.agent.read(SESSION).await.unwrap();
+    assert_eq!(session["grants"][0]["in_force"], json!(true), "{session}");
     lab.stop().await;
+}
+
+/// The session ends: the legacy signals not yet followed go with it.
+#[tokio::test(start_paused = true)]
+async fn a_sessions_end_drops_signals_not_yet_followed() {
+    use bacnet_transport::bip::BipTransport;
+    let policy = crate::Policy {
+        passive: true,
+        ..crate::Policy::default()
+    };
+    let server = crate::McpServer::<BipTransport>::new(None, policy, "tester").unwrap();
+    server.subscribe_now(SESSION).unwrap();
+    server.subscribe_now(LEDGER).unwrap();
+    assert_eq!(server.ctx().subs.legacy_signal_count(), 2);
+    server.ctx().subs.clear();
+    assert_eq!(server.ctx().subs.legacy_signal_count(), 0);
 }
 
 /// The armed session's end is announced when it comes, with no request
@@ -179,17 +207,20 @@ async fn a_legacy_session_hears_a_planned_write_and_the_budget_spent() {
     let dir = tempfile::tempdir().unwrap();
     let mut policy = writes(dir.path(), ArmMode::Never);
     policy.writes.plan = authorized(dir.path(), plan(1));
-    let mut lab = Lab::start(policy).await;
+    let mut lab = Lab::start_with(policy, Duration::from_millis(400)).await;
     lab.agent.initialize_legacy().await;
     for uri in [SESSION, LEDGER] {
         lab.agent.subscribe(uri).await.unwrap();
     }
     let reply = lab.agent.call("bacnet_write", one(json!(3), 12)).await;
     assert_eq!(reply["isError"], json!(false), "{reply}");
-    let mut heard = updates(&mut lab).await;
-    heard.sort();
-    heard.dedup();
-    assert_eq!(heard, [LEDGER, SESSION]);
+    // The spend; the `sending` row, then the settle.
+    let heard = updates(&mut lab).await;
+    assert_eq!(
+        (count(&heard, SESSION), count(&heard, LEDGER)),
+        (1, 2),
+        "{heard:?}"
+    );
     let session = lab.agent.read(SESSION).await.unwrap();
     assert_eq!(session["grants"][0]["in_force"], json!(false), "{session}");
     let reply = lab.agent.call("bacnet_write", one(json!(4), 12)).await;

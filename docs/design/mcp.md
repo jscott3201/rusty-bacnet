@@ -578,8 +578,9 @@ As built (#2068), and where it differs from the steps above:
   honours), until the tool call is cancelled, or until the server shuts
   down; then it cancels the request at the client itself, since the
   SDK's request handle does that only on its own timeout. One such
-  request waits at a time; a second write needing one meanwhile is
-  refused (`confirmation-pending`), unasked. The call waits holding no
+  request waits at a time: the slot is claimed before the preview, so
+  meanwhile another write no plan grant covers is refused
+  (`confirmation-pending`) before anything is read or sealed, unasked. The call waits holding no
   lock, neither the workspace's nor the write state's, then hands the
   answer to the retry path as if
   the client had retried: the sealed state, which never leaves the

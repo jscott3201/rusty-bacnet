@@ -149,9 +149,7 @@ impl Writes {
     pub(crate) fn plan<'a>(&self, policy: &'a WritePolicy) -> Option<&'a PlanGrant> {
         let now = self.wall_now();
         policy.plan.as_ref().filter(|plan| {
-            now < plan.expires_unix
-                && plan.expires_unix <= now.saturating_add(crate::policy::MAX_PLAN_SECS)
-                && self.plan_used.load(Ordering::Relaxed) < plan.max_writes
+            in_window(plan, now) && self.plan_used.load(Ordering::Relaxed) < plan.max_writes
         })
     }
 
@@ -167,6 +165,13 @@ impl Writes {
             Level::ReadOnly
         }
     }
+}
+
+/// Whether `plan`'s window is open at `now` (seconds since the Unix
+/// epoch): before its end, and no more than 8 hours before it, so a clock
+/// set back can't stretch it either.
+pub(crate) fn in_window(plan: &PlanGrant, now: u64) -> bool {
+    now < plan.expires_unix && plan.expires_unix <= now.saturating_add(crate::policy::MAX_PLAN_SECS)
 }
 
 /// Seconds since the Unix epoch.

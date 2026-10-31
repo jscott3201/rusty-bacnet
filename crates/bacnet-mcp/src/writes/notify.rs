@@ -18,6 +18,7 @@ use bacnet_transport::port::TransportPort;
 use tokio::sync::watch;
 use tokio::time::Instant;
 
+use super::in_window;
 use crate::context::Ctx;
 use crate::resources::uri::Uri;
 
@@ -85,34 +86,31 @@ impl Signals {
 /// longer than this.
 const LOOK_AGAIN: Duration = Duration::from_secs(60);
 
-/// Announce the session when its armed session or its plan grant runs
-/// out, until the server closes: no request arrives to mark either. The
-/// plan's end is a wall-clock time, checked on the clock
-/// [`Writes::plan`](super::Writes::plan) uses each time this wakes, at
-/// least every [`LOOK_AGAIN`]. A plan already over when the server starts
-/// is no change to announce.
+/// Announce the session when its armed session ends, or when its plan
+/// grant's window opens or closes, until the server closes: no request
+/// arrives to mark either. The window is checked as
+/// [`Writes::plan`](super::Writes::plan) checks it, on the same wall clock,
+/// each time this wakes: at the plan's end, and at least every
+/// [`LOOK_AGAIN`], so a clock stepped forward or back is noticed.
 pub(crate) async fn follow_ends<T: TransportPort + 'static>(ctx: &Ctx<T>) {
     let mut changed = ctx.writes.signals.session();
-    let plan_end = ctx
-        .policy
-        .writes
-        .plan
-        .as_ref()
-        .map(|plan| plan.expires_unix);
-    let mut plan_over = plan_end.is_none_or(|end| ctx.writes.wall_now() >= end);
+    let plan = ctx.policy.writes.plan.as_ref();
+    let window = |now| plan.is_some_and(|plan| in_window(plan, now));
+    let mut open = window(ctx.writes.wall_now());
     loop {
-        let plan_left = match plan_end {
-            Some(end) if !plan_over => {
-                let left = end.saturating_sub(ctx.writes.wall_now());
-                if left == 0 {
-                    plan_over = true;
-                    ctx.writes.signals.session_changed();
-                    continue;
-                }
-                Some(Duration::from_secs(left).min(LOOK_AGAIN))
+        let now = ctx.writes.wall_now();
+        if window(now) != open {
+            open = !open;
+            ctx.writes.signals.session_changed();
+            continue;
+        }
+        let plan_left = plan.map(|plan| {
+            if open {
+                Duration::from_secs(plan.expires_unix.saturating_sub(now)).min(LOOK_AGAIN)
+            } else {
+                LOOK_AGAIN
             }
-            _ => None,
-        };
+        });
         let session_end = ctx.writes.armed_until();
         let next = match (session_end, plan_left) {
             (Some(end), Some(left)) => Some(end.min(Instant::now() + left)),
@@ -129,7 +127,7 @@ pub(crate) async fn follow_ends<T: TransportPort + 'static>(ctx: &Ctx<T>) {
             }
             () = tokio::time::sleep_until(next.unwrap_or_else(Instant::now)), if next.is_some() => {
                 // The armed session's end, or time to look at the plan's
-                // (at the top of the loop).
+                // window (at the top of the loop).
                 if session_end.is_some_and(|end| end <= Instant::now()) {
                     ctx.writes.signals.session_changed();
                 }

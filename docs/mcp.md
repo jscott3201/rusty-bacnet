@@ -304,8 +304,9 @@ Writes go through `bacnet_ops::safety`: the TUI's planner, tiers, ledger
   an error answer, the call cancelled or the server shutting down is
   refused (`confirmation-expired`, the audit saying which), nothing sent,
   and the request is cancelled at the client. One such request waits at a
-  time: a second write needing one meanwhile is refused
-  (`confirmation-pending`), unasked and with nothing sent. A client that
+  time: meanwhile another write from that client that no plan grant
+  covers is refused (`confirmation-pending`) before anything is read,
+  unasked and with nothing sent. A client that
   declared neither, or URL elicitation only, is refused
   (`elicitation-unsupported`).
 - **Arming.** A write needs an armed session or a plan grant in force, as

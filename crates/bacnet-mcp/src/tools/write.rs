@@ -417,7 +417,12 @@ pub(crate) async fn unconfirmed<T: TransportPort + 'static>(
     if let Some(workspace) = &ctx.policy.writes.workspace {
         let fields = fields(&ctx.principal, peer, raw);
         let caller = McpCaller::new(&ctx.writes, &ctx.policy.writes, None, fields);
-        let fields = json!({ "why": why, "asked_via": Via::ServerElicitation.name() });
+        // Nothing was asked for a write refused as pending.
+        let fields = if reason == "confirmation-pending" {
+            json!({ "why": why })
+        } else {
+            json!({ "why": why, "asked_via": Via::ServerElicitation.name() })
+        };
         audit_refusal(workspace, &caller, "write", &error, fields).await;
     }
     error
