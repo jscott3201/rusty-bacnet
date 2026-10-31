@@ -131,7 +131,7 @@ pub fn run(requests: &[&[u8]; REQUESTS]) -> Summary {
     {
         let mut out = BytesMut::new();
         let inbound = Inbound::new(Bytes::copy_from_slice(request), MAX_REPLY);
-        *outcome = responder.handle(&mut db, inbound, &mut out);
+        *outcome = responder.handle(&mut db, inbound, &mut out).outcome;
         *answer = out.to_vec();
     }
     summary

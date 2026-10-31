@@ -218,7 +218,11 @@ impl Parity {
         let server = frames.first().map(|frame| frame.decode_npdu().payload);
         let mut out = BytesMut::new();
         let request = Inbound::new(apdu, max_reply);
-        let core = match self.responder.handle(&mut self.db, request, &mut out) {
+        let core = match self
+            .responder
+            .handle(&mut self.db, request, &mut out)
+            .outcome
+        {
             Outcome::Reply | Outcome::Announce => Some(out.freeze()),
             Outcome::Silent => None,
             other => unreachable!("handle answers every request: {other:?}"),

@@ -23,8 +23,8 @@ pub(crate) enum WritePropertyMultipleOutcome {
 ///
 /// The complete successful prefix remains committed if a later attempt fails.
 /// A Command or Channel object's Present_Value write in that prefix runs
-/// nothing: as in [`handle_write_property`], its list or distribution ends at
-/// once as unsuccessful.
+/// nothing: as in bacnet-device-core's `Responder::write`, its list or
+/// distribution ends at once as unsuccessful.
 pub fn handle_write_property_multiple(
     db: &mut ObjectDatabase,
     service_data: &[u8],
@@ -236,18 +236,12 @@ fn wpm_undecodable_coordinate() -> BACnetObjectPropertyReference {
     }
 }
 
-/// Handle a WriteProperty request.
-///
-/// This synchronous handler makes no writes on a Command or Channel object's
-/// behalf: it has no task to wait out a delay in. A Present_Value write that
-/// selects a list with commands is accepted, and the run it starts ends at
-/// once with every command unsuccessful, so In_Process is FALSE again on
-/// return and All_Writes_Successful is FALSE (#1178). A Channel's
-/// Present_Value write is accepted too, and the distribution it starts ends at
-/// once without writing the members, so Write_Status reads FAILED on return
-/// (#1151). The bundled [`BACnetServer`](crate::server::BACnetServer) runs
-/// both.
-pub fn handle_write_property(
+/// The handler tests' WriteProperty: bacnet-device-core's write with no
+/// observer, source or command origin, ending any Command or Channel run the
+/// write queues at once, unmade, as `Responder::write` does. Running servers
+/// make those runs instead.
+#[cfg(test)]
+pub(crate) fn handle_write_property(
     db: &mut ObjectDatabase,
     service_data: &[u8],
 ) -> Result<ObjectIdentifier, Error> {
