@@ -5,6 +5,8 @@
 mod attach;
 #[cfg(unix)]
 mod attach_more;
+#[cfg(unix)]
+mod attach_shared;
 mod bbmd;
 mod budget;
 mod confirm;

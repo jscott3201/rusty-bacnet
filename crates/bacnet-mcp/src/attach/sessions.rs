@@ -152,7 +152,10 @@ impl<T: TransportPort + 'static> Sessions<T> {
             INITIALIZE_WAIT,
         ) {
             Ok(server) => server,
-            Err(error) => return tracing::error!("an attached MCP session can't start: {error}"),
+            Err(error) => {
+                tracing::error!("an attached MCP session can't start: {error}");
+                return self.refuse_with(Some(peer), "session-failed", Some(error.to_string()));
+            }
         };
         let connection = self.next.fetch_add(1, Ordering::Relaxed);
         let (workspace, principal) = (self.workspace.clone(), self.principal.clone());
@@ -163,7 +166,11 @@ impl<T: TransportPort + 'static> Sessions<T> {
             tracing::info!("MCP agent {connection} attached (pid {:?})", peer.pid);
             let (reader, writer) = tokio::io::split(stream);
             let serving = server.serve_until(reader, writer, stop.cancelled_owned());
-            // A panic in the session still leaves its close on record.
+            // rmcp serves requests on tasks of its own, whose panics come
+            // back as the session's error. This catches a panic polled on
+            // this task: in the initialize handshake (where the server's
+            // `initialize` handler runs) or the session's own clean-up, so
+            // its close is still on record.
             let served = AssertUnwindSafe(serving).catch_unwind().await;
             drop(seat);
             match served {
@@ -179,6 +186,11 @@ impl<T: TransportPort + 'static> Sessions<T> {
     /// Audit a connection closed before any MCP traffic, and `why`, up to
     /// [`REFUSALS_PER_MINUTE`] records a minute.
     pub(super) fn refuse(&self, peer: Option<PeerId>, why: &'static str) {
+        self.refuse_with(peer, why, None);
+    }
+
+    /// [`refuse`](Self::refuse), with the `error` behind it.
+    fn refuse_with(&self, peer: Option<PeerId>, why: &'static str, error: Option<String>) {
         let connection = self.next.fetch_add(1, Ordering::Relaxed);
         let admitted = self
             .refusals
@@ -199,6 +211,9 @@ impl<T: TransportPort + 'static> Sessions<T> {
             fields["outcome"] = json!({ "result": "refused", "why": why });
             if left_out > 0 {
                 fields["refusals_not_recorded_before"] = json!(left_out);
+            }
+            if let Some(error) = error {
+                fields["error"] = json!(error);
             }
             record(&workspace, &principal, "mcp-refused", fields).await;
         });

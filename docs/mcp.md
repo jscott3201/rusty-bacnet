@@ -532,8 +532,10 @@ stderr; when the TUI ends the session it exits cleanly.
   OS user. Its reads go through the TUI's engine: the same client,
   transport and UDP port, the same device gates, and the watch list's
   rate meter counts them. The agents are one principal, so their sessions
-  share one `principal_rate` budget and one watch hub (256 points between
-  them, as for one stdio server); the hub's subscriptions use
+  share one `principal_rate` budget, one watch hub (256 points between
+  them, as for one stdio server), one per-principal point cap, and the
+  once-a-minute limits on broad Who-Is, router queries and BBMD surveys;
+  the hub's subscriptions use
   subscriber process identifiers of their own, so an agent leaving a
   point the watch list also watches never cancels the TUI's subscription.
 - **Limits while an agent is attached.** With no agent attached the TUI
@@ -557,7 +559,10 @@ stderr; when the TUI ends the session it exits cleanly.
   takes (103 bytes on macOS and the BSDs, 107 on Linux) is refused before
   binding: use a shorter profile name or point `BACNET_CONFIG_DIR`
   somewhere shorter. At most 8 agents attach at once, and a connection
-  that sends no MCP message within 30 seconds is closed.
+  that sends no MCP message within 30 seconds is closed (once open, a
+  session may sit idle). `bacnet mcp connect` probes the lock with a
+  shared lock, and a starting listener retries for a moment, so a probe
+  never keeps a TUI from listening.
 - **The lock.** A listener holds an exclusive lock on `mcp.lock` in the
   workspace for its whole life, taken before it touches the socket path.
   A second TUI on the same profile finds it held and doesn't listen; the
@@ -686,11 +691,17 @@ available yet; a named pipe with an owner-only access list follows.
   finish; the TUI keeping its COV notifications when an agent leaves the
   same point; the bridge refusing a listener of another user with nothing
   written; unreadable credentials refused and audited; an idle connection
-  closed after 30 s. `attach/guard_tests.rs`: ownership, narrowing on one
-  handle, the re-check after bind, the post-bind socket check, the lock
-  and the path length. `crates/bacnet-cli/src/tui/tests/mcp_attach.rs`:
+  closed after 30 s. `tests/attach_shared.rs`: a second session's broad
+  Who-Is within the minute refused and the watch cap counting both
+  sessions' points; shutdown not waiting out a silent handshake; an agent
+  keeping a shared point's COV updates when the other leaves; an open
+  session idle past 30 s kept. `attach/guard_tests.rs`: ownership,
+  narrowing on one handle, the re-check after bind, the post-bind socket
+  check, the lock (a probe's shared lock refusing neither another probe
+  nor, once released, a starting listener) and the path length. `crates/bacnet-cli/src/tui/tests/mcp_attach.rs`:
   an agent on an open session's socket reading through its client, on the
-  watch list's meter, `MCP n` and `MCP off` on the bar, and quitting
-  ending it;
+  watch list's meter, `MCP n` and `MCP off` on the bar, the watch list's
+  first SubscribeCOV keeping the first subscriber process identifier, and
+  quitting ending it;
   `crates/bacnet-cli/tests/mcp_connect.rs`: `bacnet mcp connect` against a
   listener, stdout JSON-RPC only, and the refusal with nothing listening.

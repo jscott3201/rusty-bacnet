@@ -40,7 +40,7 @@ async fn spacing(limits: &RequestLimits) -> u128 {
 }
 
 /// Wait until the listener counts `agents`.
-async fn agents_are(listener: &Listener, agents: usize) {
+pub(super) async fn agents_are(listener: &Listener, agents: usize) {
     let mut count = listener.agents();
     count.wait_for(|n| *n == agents).await.unwrap();
 }

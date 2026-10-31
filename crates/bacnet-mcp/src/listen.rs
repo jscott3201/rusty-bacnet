@@ -41,7 +41,7 @@ use rmcp::service::SubscriptionContext;
 use tokio::sync::watch;
 use tokio::time::Instant;
 
-use crate::context::{Ctx, Listening};
+use crate::context::{Ctx, Listening, Points};
 use crate::errors::ToolError;
 use crate::follow::{Follow, Wake};
 use crate::resources::uri::{self, Uri};
@@ -93,10 +93,15 @@ pub(crate) struct Subs {
     legacy_changed: watch::Sender<u64>,
 }
 
-impl Default for Subs {
-    fn default() -> Self {
+impl Subs {
+    /// A session's subscriptions, counted in its principal's `points`.
+    pub(crate) fn new(points: Points) -> Self {
+        let state = SubsState {
+            principal: points,
+            ..SubsState::default()
+        };
         Self {
-            state: Mutex::default(),
+            state: Mutex::new(state),
             legacy_changed: watch::Sender::new(0),
         }
     }
@@ -124,6 +129,8 @@ struct SubsState {
     /// Set when the session ends ([`Subs::clear`]): nothing new is
     /// watched after it.
     closed: bool,
+    /// The principal's points, which its cap counts (locked after this).
+    principal: Points,
 }
 
 /// One legacy subscription's watch on a point: counted against the
@@ -207,6 +214,7 @@ impl SubsState {
                 *count -= 1;
                 if *count == 0 {
                     self.held.remove(point);
+                    crate::context::let_go(&self.principal, point);
                 }
             }
         }
@@ -218,9 +226,14 @@ impl Subs {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Points the principal watches now.
+    /// Points the principal watches now, in all its sessions.
     pub(crate) fn held(&self) -> usize {
-        self.lock().held.len()
+        let state = self.lock();
+        let points = state
+            .principal
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        points.len()
     }
 
     fn release(&self, points: &[Point]) {
@@ -239,13 +252,19 @@ impl Subs {
         if state.closed {
             return Err(SHUTTING_DOWN);
         }
-        if !state.held.contains_key(&point) && state.held.len() >= ctx.policy.caps.watches {
+        let new = !state.held.contains_key(&point);
+        let principal = Arc::clone(&state.principal);
+        let mut points = principal.lock().unwrap_or_else(PoisonError::into_inner);
+        if new && !points.contains_key(&point) && points.len() >= ctx.policy.caps.watches {
             return Err("principal-cap");
         }
         let lease = hub.watch(point).map_err(|e| match e {
             WatchError::Shut => SHUTTING_DOWN,
             WatchError::Full { .. } => "process-cap",
         })?;
+        if new {
+            *points.entry(point).or_default() += 1;
+        }
         *state.held.entry(point).or_default() += 1;
         Ok(lease)
     }

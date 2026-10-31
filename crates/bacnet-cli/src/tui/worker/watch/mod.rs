@@ -376,16 +376,26 @@ fn csv_line(point: &Point, written: &Written) -> String {
     )
 }
 
-/// Serve watch commands until `commands` closes or the session is
-/// cancelled, then shut the hub down, cancelling every subscription.
-pub(crate) async fn run<T: TransportPort + 'static>(
+/// The watch list's hub over `engine`. The session makes it before the
+/// MCP listener's, so it takes the engine's first range of subscriber
+/// process identifiers whatever order the workers start in (#2185).
+pub(crate) fn hub<T: TransportPort + 'static>(
     engine: &Arc<Engine<T>>,
+    options: &WatchOptions,
+) -> Result<Hub<T>, String> {
+    Hub::new(Arc::clone(engine), hub_options(options))
+}
+
+/// Serve watch commands on `hub` until `commands` closes or the session
+/// is cancelled, then shut the hub down, cancelling every subscription.
+pub(crate) async fn run<T: TransportPort + 'static>(
+    hub: Result<Hub<T>, String>,
     sink: &EventSink,
     mut commands: mpsc::Receiver<Command>,
     rate: &Arc<RequestLimits>,
     options: &WatchOptions,
 ) {
-    let hub = match Hub::new(Arc::clone(engine), hub_options(options)) {
+    let hub = match hub {
         Ok(hub) => hub,
         Err(error) => {
             tracing::error!("the watch list can't start: {error}");

@@ -192,12 +192,12 @@ impl Listener {
                  report too, so it doesn't listen for MCP"
             )));
         }
-        let dir = guard::open_workspace(&workspace.dir, uid)?;
         let path = socket_path(&workspace.dir);
         guard::check_length(&path)?;
+        let dir = guard::open_workspace(&workspace.dir, uid)?;
         // Taken before the socket path is touched: holding it, any socket
         // there is a stale one.
-        let lock = guard::lock(&workspace.dir)?;
+        let lock = guard::lock(&workspace.dir).await?;
         guard::clear_stale(&path)?;
         let listener = UnixListener::bind(&path)
             .map_err(|e| format!("cannot listen on {}: {e}", path.display()))?;
@@ -291,7 +291,10 @@ impl Drop for Listener {
         if let Some(accept) = self.accept.take() {
             accept.abort();
         }
-        // Without a graceful shutdown the hub still stops, on its own task.
+        // The ordered path is the graceful `shutdown()`. Dropped without it,
+        // the hub's shutdown runs on a task of its own, racing the sessions
+        // still ending, and the count of refusals left out of the record
+        // may be lost.
         if let Some(finish) = self.finish.take()
             && let Ok(runtime) = tokio::runtime::Handle::try_current()
         {

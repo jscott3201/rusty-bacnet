@@ -557,11 +557,12 @@ async fn serve_with<T: TransportPort + 'static>(
                 }
             }
         };
+        let watch_hub = super::watch::hub(&engine, &options.watch);
         tokio::join!(
             Box::pin(session),
             Box::pin(super::browse::run(&client, &sink, browse_rx, &rate)),
             Box::pin(super::watch::run(
-                &engine,
+                watch_hub,
                 &sink,
                 watch_rx,
                 &rate,

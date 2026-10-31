@@ -222,3 +222,32 @@ fn the_bar_follows_the_listeners_count() {
     let text = screen(&mut app, 120, 24);
     assert!(text.contains("MCP 3") && !text.contains("MCP 2"), "{text}");
 }
+
+/// With the listener running, the watch list's hub keeps the engine's
+/// first range of subscriber process identifiers: its first SubscribeCOV
+/// carries the hub's base, 0x4D43_0000, as it does without a listener.
+#[tokio::test(start_paused = true)]
+async fn the_watch_list_keeps_the_first_subscriber_ids() {
+    use bacnet_services::cov::SubscribeCOVRequest;
+    use bacnet_types::enums::ConfirmedServiceChoice;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let options = SessionOptions {
+        attach: Some(plan(dir.path())),
+        ..SessionOptions::default()
+    };
+    let servers = vec![Server::lab(100, LAB)];
+    let mut site = Site::start_with_options(servers, ClientLimits::default(), options).await;
+    site.who_is("", 1).await;
+    site.pump_until(|app| mcp_agents(app) == Some(0)).await;
+    super::watch::command(&mut site, "watch 100 ai:1").await;
+    super::watch::settle(&mut site).await;
+    let mac = [10, 0, 0, 100, 0xBA, 0xC0];
+    let bodies = site
+        .hub
+        .bodies_to(&mac, ConfirmedServiceChoice::SUBSCRIBE_COV);
+    let first = SubscribeCOVRequest::decode(&bodies[0]).unwrap();
+    assert_eq!(first.subscriber_process_identifier, 0x4D43_0000);
+    site.quit().await;
+    site.stop().await;
+}

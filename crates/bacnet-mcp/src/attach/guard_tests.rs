@@ -91,18 +91,46 @@ fn only_the_socket_just_bound_is_kept() {
     assert!(fs::symlink_metadata(&link).is_ok(), "the link is left");
 }
 
-/// One listener's lock at a time; the try shows whether one is held.
-#[test]
-fn the_lock_admits_one_listener() {
+/// One listener's lock at a time; a probe shows whether one is held,
+/// without refusing another probe.
+#[tokio::test(start_paused = true)]
+async fn the_lock_admits_one_listener() {
     let dir = dir_at(0o700);
     assert!(!held(dir.path()), "no lock file yet");
-    let first = lock(dir.path()).unwrap();
+    let first = lock(dir.path()).await.unwrap();
     assert!(held(dir.path()));
-    let error = lock(dir.path()).unwrap_err();
+    let error = lock(dir.path()).await.unwrap_err();
     assert!(error.contains("another TUI is listening"), "{error}");
     drop(first);
     assert!(!held(dir.path()));
-    drop(lock(dir.path()).unwrap());
+    let probe = File::open(dir.path().join(LOCK_FILE)).unwrap();
+    probe.try_lock_shared().unwrap();
+    assert!(
+        !held(dir.path()),
+        "another probe isn't taken for a listener"
+    );
+}
+
+/// A listener starting while a probe holds its shared lock waits for it
+/// and takes the lock once it goes; a lock held throughout refuses it.
+#[tokio::test(start_paused = true)]
+async fn a_listener_waits_out_a_probe() {
+    let dir = dir_at(0o700);
+    let path = dir.path().join(LOCK_FILE);
+    fs::write(&path, "").unwrap();
+    let probe = File::open(&path).unwrap();
+    probe.try_lock_shared().unwrap();
+    let starting = tokio::spawn({
+        let dir = dir.path().to_path_buf();
+        async move { lock(&dir).await }
+    });
+    tokio::time::sleep(Duration::from_millis(70)).await;
+    drop(probe);
+    assert!(starting.await.unwrap().is_ok(), "the probe went first");
+    let probe = File::open(&path).unwrap();
+    probe.try_lock_shared().unwrap();
+    let error = lock(dir.path()).await.unwrap_err();
+    assert!(error.contains("another TUI is listening"), "{error}");
 }
 
 /// A path longer than a socket takes is refused before any bind.

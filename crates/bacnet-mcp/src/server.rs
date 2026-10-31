@@ -30,7 +30,7 @@ use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceExt};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_util::sync::CancellationToken;
 
-use crate::context::Ctx;
+use crate::context::{Ctx, Gates};
 use crate::cursor::Cursors;
 use crate::listen::{self, Subs};
 use crate::policy::Policy;
@@ -91,12 +91,15 @@ impl<T: TransportPort + 'static> Clone for McpServer<T> {
 }
 
 /// What a server's sessions share: the watch hub (`None` in passive
-/// mode), so one point cap, and the principal's token bucket. A stdio
+/// mode), so one point cap, the principal's token bucket, and its minute
+/// gates and per-principal point cap ([`Gates`]). A stdio
 /// server has its own; the TUI's listener hands one to all its sessions,
 /// since they are one principal (#2185).
 pub(crate) struct Shared<T: TransportPort + 'static> {
     pub(crate) hub: Option<Hub<T>>,
     pub(crate) bucket: Arc<TokenBucket>,
+    /// The principal's minute gates and watched points.
+    pub(crate) gates: Gates,
     /// Whether the session shuts the hub down when it ends.
     owned: bool,
 }
@@ -106,6 +109,7 @@ impl<T: TransportPort + 'static> Clone for Shared<T> {
         Self {
             hub: self.hub.clone(),
             bucket: Arc::clone(&self.bucket),
+            gates: self.gates.clone(),
             owned: self.owned,
         }
     }
@@ -140,6 +144,7 @@ impl<T: TransportPort + 'static> Shared<T> {
         Ok(Self {
             hub,
             bucket: Arc::new(TokenBucket::new(rates.principal, rates.burst)),
+            gates: Gates::default(),
             owned: true,
         })
     }
@@ -219,17 +224,17 @@ impl<T: TransportPort + 'static> McpServer<T> {
                 principal,
                 cursors: Cursors::new(),
                 bucket: shared.bucket,
-                broad: Mutex::new(None),
+                broad: shared.gates.broad,
                 lists: Mutex::new(HashMap::new()),
                 list_locks: Mutex::new(HashMap::new()),
                 reads: Mutex::new(BTreeMap::new()),
                 names: Mutex::new(HashMap::new()),
-                routers: Mutex::default(),
-                bbmd_asked: Mutex::new(None),
+                routers: shared.gates.routers,
+                bbmd_asked: shared.gates.bbmd_asked,
                 hub: shared.hub,
                 owns_hub: shared.owned,
                 initialize,
-                subs: Arc::new(Subs::default()),
+                subs: Arc::new(Subs::new(shared.gates.points)),
                 closing: CancellationToken::new(),
                 listening: tokio::sync::watch::Sender::new(0),
                 known: Mutex::new(HashMap::new()),
@@ -339,16 +344,28 @@ impl<T: TransportPort + 'static> McpServer<T> {
             notifier: None,
         };
         // A listener's session must open within its wait, so an idle
-        // connection can't hold a seat.
+        // connection can't hold a seat; a shutdown meanwhile ends it at
+        // once rather than waiting out the handshake.
+        tokio::pin!(shutdown);
         let starting = ServiceExt::serve(self, (reader, writer));
-        let started = match ctx.initialize {
-            Some(wait) => tokio::time::timeout(wait, starting)
-                .await
-                .map_err(|_| format!("no MCP request within {} s", wait.as_secs())),
-            None => Ok(starting.await),
+        let initialize = ctx.initialize;
+        let deadline = async move {
+            match initialize {
+                Some(wait) => tokio::time::sleep(wait).await,
+                None => std::future::pending().await,
+            }
+        };
+        let started = tokio::select! {
+            biased;
+            () = &mut shutdown => Err(None),
+            started = starting => Ok(started),
+            () = deadline => Err(initialize.map(|wait| {
+                format!("no MCP request within {} s", wait.as_secs())
+            })),
         };
         let quit = match started {
-            Err(why) => Err(ServeError(why)),
+            Err(None) => Ok(()),
+            Err(Some(why)) => Err(ServeError(why)),
             Ok(Err(e)) => Err(ServeError(format!("MCP session did not start: {e}"))),
             Ok(Ok(running)) => {
                 session.notifier = Some(tokio::spawn(legacy::notify(
@@ -360,7 +377,7 @@ impl<T: TransportPort + 'static> McpServer<T> {
                 tokio::pin!(waiting);
                 let quit = tokio::select! {
                     quit = &mut waiting => quit,
-                    () = shutdown => {
+                    () = &mut shutdown => {
                         ctx.closing.cancel();
                         let mut streams = ctx.listening.subscribe();
                         let _ = tokio::time::timeout(LISTEN_WAIT, streams.wait_for(|n| *n == 0)).await;
@@ -368,7 +385,8 @@ impl<T: TransportPort + 'static> McpServer<T> {
                         waiting.await
                     }
                 };
-                quit.map_err(|e| ServeError(format!("MCP session failed: {e}")))
+                quit.map(drop)
+                    .map_err(|e| ServeError(format!("MCP session failed: {e}")))
             }
         };
         ctx.closing.cancel();
@@ -400,7 +418,7 @@ impl<T: TransportPort + 'static> McpServer<T> {
         let _ = follow.await;
         let _ = ends.await;
         ctx.log_summary();
-        quit.map(drop)
+        quit
     }
 
     /// Serve MCP on this process's stdin and stdout. Nothing else may
