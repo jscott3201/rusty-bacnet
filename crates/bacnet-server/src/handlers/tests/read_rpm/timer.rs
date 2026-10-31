@@ -239,8 +239,9 @@ fn rpm_timer_indexed_reads_and_bytes_are_unchanged() {
                 }
             }
         }
-        use crate::handlers::{ReadFailure, rpm_budget::handle_rpm_budgeted};
-        let budget = crate::server::ReadPropertyMultipleBudget {
+        use crate::handlers::rpm_budget::handle_rpm_budgeted;
+        use bacnet_device_core::read::ReadFailure;
+        let budget = bacnet_device_core::read::ReadPropertyMultipleBudget {
             max_result_elements: cases.len(),
             max_service_ack_bytes: legacy.len(),
         };
@@ -253,7 +254,7 @@ fn rpm_timer_indexed_reads_and_bytes_are_unchanged() {
                 &db,
                 &request,
                 &mut prefix,
-                crate::server::ReadPropertyMultipleBudget {
+                bacnet_device_core::read::ReadPropertyMultipleBudget {
                     max_result_elements: cases.len() - 1,
                     ..budget
                 }
@@ -266,7 +267,7 @@ fn rpm_timer_indexed_reads_and_bytes_are_unchanged() {
                 &db,
                 &request,
                 &mut prefix,
-                crate::server::ReadPropertyMultipleBudget {
+                bacnet_device_core::read::ReadPropertyMultipleBudget {
                     max_service_ack_bytes: legacy.len() - 1,
                     ..budget
                 }

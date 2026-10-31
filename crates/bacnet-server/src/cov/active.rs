@@ -9,6 +9,7 @@
 //! form `Active_COV_Multiple_Subscriptions` (see [`multiple`]).
 use super::reported::lead;
 use super::*;
+use bacnet_device_core::read::LiveLists;
 use bacnet_encoding::constructed::encode_cov_subscription_list;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::traits::BACnetObject;
@@ -154,28 +155,6 @@ impl ActiveCovSubscriptions {
     }
 }
 
-/// Which server-owned Device lists one request may select: the two COV lists
-/// and Device_Address_Binding (#1369).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct LiveCovSelection {
-    /// The selected local Device.
-    pub(crate) device: ObjectIdentifier,
-    /// `Active_COV_Subscriptions` may be read.
-    pub(crate) active: bool,
-    /// `Active_COV_Multiple_Subscriptions` may be read.
-    pub(crate) multiple: bool,
-    /// `Device_Address_Binding` may be read. It comes from the server's
-    /// binding table, not the COV table.
-    pub(crate) address_bindings: bool,
-}
-
-impl LiveCovSelection {
-    /// Whether either COV list is selected, so the COV table is sampled.
-    pub(crate) fn reads_cov(self) -> bool {
-        self.active || self.multiple
-    }
-}
-
 /// Selected entries copied under one table read guard at one sampled instant.
 #[derive(Debug)]
 pub(crate) struct LiveCovEntries {
@@ -185,18 +164,14 @@ pub(crate) struct LiveCovEntries {
 
 impl CovSubscriptionTable {
     /// Copy only the selected lists' entries live at the one instant `now`.
-    pub(crate) fn live_cov_entries(
-        &self,
-        selection: LiveCovSelection,
-        now: Instant,
-    ) -> LiveCovEntries {
+    pub(crate) fn live_cov_entries(&self, selection: LiveLists, now: Instant) -> LiveCovEntries {
         #[cfg(test)]
         self.live_samples
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         LiveCovEntries {
-            active: selection.active.then(|| self.active_cov_entries(now)),
+            active: selection.active_cov.then(|| self.active_cov_entries(now)),
             multiple: selection
-                .multiple
+                .active_cov_multiple
                 .then(|| self.active_cov_multiple_entries(now)),
         }
     }
@@ -226,13 +201,13 @@ pub(crate) struct LiveDeviceCov {
 
 impl LiveDeviceCov {
     /// A stopped server services no subscription: every selected list is empty.
-    pub(crate) fn stopped(selection: LiveCovSelection) -> Self {
+    pub(crate) fn stopped(selection: LiveLists) -> Self {
         Self {
             active: selection
-                .active
+                .active_cov
                 .then(|| ActiveCovSubscriptions::stopped(selection.device)),
             multiple: selection
-                .multiple
+                .active_cov_multiple
                 .then(|| ActiveCovMultipleSubscriptions::stopped(selection.device)),
             address_bindings: None,
         }
@@ -241,7 +216,7 @@ impl LiveDeviceCov {
     /// Project copied entries while the caller holds the database guard.
     pub(crate) fn project(
         db: &ObjectDatabase,
-        selection: LiveCovSelection,
+        selection: LiveLists,
         entries: LiveCovEntries,
     ) -> Self {
         Self {
@@ -259,7 +234,7 @@ impl LiveDeviceCov {
     /// selected Device's Device_Address_Binding.
     pub(crate) fn with_address_bindings(
         mut self,
-        selection: LiveCovSelection,
+        selection: LiveLists,
         bindings: Option<PropertyValue>,
     ) -> Self {
         self.address_bindings = bindings.map(|bindings| (selection.device, bindings));

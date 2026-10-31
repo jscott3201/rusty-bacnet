@@ -1,8 +1,8 @@
 use std::ops::Range;
 
-use super::group_present_value::GroupMembers;
 use super::*;
-use bacnet_device_core::read::ReadScope;
+use bacnet_device_core::read::group::{self, GroupMembers};
+use bacnet_device_core::read::{PropertyPlan, ReadScope};
 use bacnet_objects::log_buffer::{LogRecordIdentity, TimestampKey};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::read_range::{RangeSpec, ReadRangeAck, ReadRangeRequest};
@@ -261,8 +261,7 @@ fn read_range_items(
             ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
         )));
     }
-    let value =
-        group_present_value::read_served_property(db, view, object, property, index, members)?;
+    let value = group::read_served_property(db, view, object, property, index, members)?;
     // An indexed array element is never a list: 135-2020 defines no
     // BACnetARRAY of BACnetLIST property.
     if index.is_some() || !object.is_list_property(property) {

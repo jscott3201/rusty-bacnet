@@ -10,6 +10,18 @@ use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
+mod budget;
+pub mod group;
+mod property;
+mod rpm;
+
+pub use budget::{ReadFailure, ReadPropertyMultipleBudget};
+pub use property::{
+    PropertyPlan, plan_property, read_property_ack, read_target_object, read_value, resolve_target,
+    rpm_response_index,
+};
+pub use rpm::{RpmPlan, expand};
+
 /// Plain per-request read settings, apart from how objects are served.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReadScope {
@@ -90,5 +102,27 @@ impl BACnetObject for Unserved {
     }
     fn property_list(&self) -> alloc::borrow::Cow<'static, [PropertyIdentifier]> {
         match *self {}
+    }
+}
+
+/// Which server-owned Device lists one request may select: the two COV lists
+/// and Device_Address_Binding (#1369).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LiveLists {
+    /// The selected local Device.
+    pub device: ObjectIdentifier,
+    /// `Active_COV_Subscriptions` may be read.
+    pub active_cov: bool,
+    /// `Active_COV_Multiple_Subscriptions` may be read.
+    pub active_cov_multiple: bool,
+    /// `Device_Address_Binding` may be read. It comes from the server's
+    /// binding table, not the COV table.
+    pub address_bindings: bool,
+}
+
+impl LiveLists {
+    /// Whether either COV list is selected, so the COV table is sampled.
+    pub fn reads_cov(self) -> bool {
+        self.active_cov || self.active_cov_multiple
     }
 }

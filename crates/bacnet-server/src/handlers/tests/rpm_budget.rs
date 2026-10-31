@@ -275,27 +275,6 @@ fn rpm_empty_expansions_still_charge_object_wrappers() {
 }
 
 #[test]
-fn rpm_scratch_growth_never_exceeds_cap_even_on_overflow() {
-    let mut scratch = Scratch {
-        bytes: BytesMut::new(),
-        limit: 4,
-    };
-    scratch.append(&[1, 2], 2).unwrap();
-    assert_eq!(scratch.bytes.len(), 2);
-    assert!(matches!(
-        scratch.append(&[3, 4, 5], 0),
-        Err(ReadFailure::Bytes)
-    ));
-    assert_eq!(scratch.bytes.len(), 2);
-    assert!(matches!(
-        scratch.append(&[], usize::MAX),
-        Err(ReadFailure::Bytes)
-    ));
-    scratch.append(&[3, 4], 0).unwrap();
-    assert_eq!(scratch.bytes.len(), 4);
-}
-
-#[test]
 fn rpm_decode_failure_keeps_priority_and_caller_prefix() {
     let (db, reads) = fixture(false, false);
     let mut out = BytesMut::from(&b"prefix"[..]);

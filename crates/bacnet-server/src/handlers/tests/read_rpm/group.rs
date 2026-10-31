@@ -85,9 +85,10 @@ pub(super) fn assert_cases(
             }
         }
     }
-    use crate::handlers::{ReadFailure, rpm_budget::handle_rpm_budgeted};
+    use crate::handlers::rpm_budget::handle_rpm_budgeted;
+    use bacnet_device_core::read::ReadFailure;
     let members = group_member_rows(db, oid, cases.iter().map(|&(p, i, _)| (p, i)));
-    let budget = crate::server::ReadPropertyMultipleBudget {
+    let budget = bacnet_device_core::read::ReadPropertyMultipleBudget {
         max_result_elements: cases.len() + members,
         max_service_ack_bytes: legacy.len(),
     };
@@ -100,7 +101,7 @@ pub(super) fn assert_cases(
             db,
             &request,
             &mut prefix,
-            crate::server::ReadPropertyMultipleBudget {
+            bacnet_device_core::read::ReadPropertyMultipleBudget {
                 max_result_elements: budget.max_result_elements - 1,
                 ..budget
             }
@@ -113,7 +114,7 @@ pub(super) fn assert_cases(
             db,
             &request,
             &mut prefix,
-            crate::server::ReadPropertyMultipleBudget {
+            bacnet_device_core::read::ReadPropertyMultipleBudget {
                 max_service_ack_bytes: legacy.len() - 1,
                 ..budget
             }

@@ -233,16 +233,20 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
                 match result {
                     Ok(()) => complex_ack(ack_buf),
-                    Err(handlers::ReadFailure::Service(e)) => {
+                    Err(bacnet_device_core::read::ReadFailure::Service(e)) => {
                         Self::error_apdu_from_error(invoke_id, service_choice, &e)
                     }
                     Err(failure) => Apdu::Abort(AbortPdu {
                         sent_by_server: true,
                         invoke_id,
                         abort_reason: match failure {
-                            handlers::ReadFailure::Work => AbortReason::OUT_OF_RESOURCES,
-                            handlers::ReadFailure::Bytes => AbortReason::BUFFER_OVERFLOW,
-                            handlers::ReadFailure::Service(_) => unreachable!(),
+                            bacnet_device_core::read::ReadFailure::Work => {
+                                AbortReason::OUT_OF_RESOURCES
+                            }
+                            bacnet_device_core::read::ReadFailure::Bytes => {
+                                AbortReason::BUFFER_OVERFLOW
+                            }
+                            bacnet_device_core::read::ReadFailure::Service(_) => unreachable!(),
                         },
                     }),
                 }

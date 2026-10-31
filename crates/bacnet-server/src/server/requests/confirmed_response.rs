@@ -1,7 +1,7 @@
 use super::*;
-use crate::cov::active::{LiveCovSelection, LiveDeviceCov};
+use crate::cov::active::LiveDeviceCov;
 use crate::device_view::{DeviceExecution, DeviceReadContext};
-use bacnet_device_core::read::ReadScope;
+use bacnet_device_core::read::{self, LiveLists, ReadFailure, ReadScope};
 use bacnet_services::read_property::ReadPropertyRequest;
 use bacnet_types::error::{ErrorDetail, RemoteError};
 
@@ -55,7 +55,7 @@ pub(in crate::server) struct LiveTables<'a> {
 pub(in crate::server) async fn active_cov_snapshot(
     db: &ObjectDatabase,
     tables: LiveTables<'_>,
-    selection: LiveCovSelection,
+    selection: LiveLists,
 ) -> LiveDeviceCov {
     let live = if selection.reads_cov() {
         let entries = {
@@ -74,7 +74,7 @@ pub(in crate::server) async fn active_cov_snapshot(
 /// the bindings `table` holds now, copied under its read guard (#1369).
 pub(in crate::server) async fn address_bindings(
     table: &RwLock<DeviceBindingTable>,
-    selection: LiveCovSelection,
+    selection: LiveLists,
 ) -> Option<PropertyValue> {
     if !selection.address_bindings {
         return None;
@@ -101,10 +101,10 @@ pub(super) async fn read_property_multiple_observed(
         Option<u32>,
         Option<(ErrorClass, ErrorCode)>,
     ),
-) -> Result<(), handlers::ReadFailure> {
+) -> Result<(), ReadFailure> {
     let db = db.read().await;
     let request = bacnet_services::rpm::ReadPropertyMultipleRequest::decode(service_request)
-        .map_err(|error| handlers::ReadFailure::Service(error.into_request_reject()))?;
+        .map_err(|error| ReadFailure::Service(error.into_request_reject()))?;
     let budget = config.read_property_multiple_budget;
     let view = DeviceReadContext::new(&db, DeviceExecution::FullServer)
         .with_identity(Some(&config.device));
@@ -113,19 +113,19 @@ pub(super) async fn read_property_multiple_observed(
         registered_port: config.registered_network_port,
         device: view.device_oid(),
     };
-    let plan = handlers::RpmPlan::new(
+    let plan = read::RpmPlan::new(
         &db,
         &scope,
         Some(&view),
         &request,
         budget.max_result_elements,
     )?;
-    let live = match plan.live_cov(&db) {
+    let live = match plan.live_lists(&db) {
         Some(selection) => Some(active_cov_snapshot(&db, tables, selection).await),
         None => None,
     };
     let view = view.with_live(live.as_ref());
-    plan.read_observed(
+    plan.read(
         &db,
         Some(&view),
         service_ack,
@@ -171,8 +171,8 @@ pub(super) async fn read_property_response_observed(
                 registered_port: profile.registered_port,
                 device: view.device_oid(),
             };
-            let lookup_oid = handlers::resolve_read_target(&db, &scope, &decoded.object_identifier);
-            match handlers::plan_read_property(
+            let lookup_oid = read::resolve_target(&db, &scope, &decoded.object_identifier);
+            match read::plan_property(
                 &db,
                 &scope,
                 Some(&view),
@@ -181,7 +181,7 @@ pub(super) async fn read_property_response_observed(
                 decoded.property_array_index,
             ) {
                 Ok(plan) => {
-                    let live = match (tables, plan.live_cov(&db)) {
+                    let live = match (tables, plan.live_lists(&db)) {
                         // Boxed: only a read of the Device's COV subscription
                         // list samples them, and the inline future would
                         // more than double every ReadProperty's (#1713).
@@ -191,7 +191,7 @@ pub(super) async fn read_property_response_observed(
                         _ => None,
                     };
                     let view = view.with_live(live.as_ref());
-                    handlers::read_property_request_observed(
+                    read::read_property_ack(
                         &db,
                         Some(&view),
                         &decoded,
@@ -199,12 +199,12 @@ pub(super) async fn read_property_response_observed(
                         &mut service_ack,
                         |oid, request, result| completed(&db, oid, request, result),
                     )
-                    .map_err(handlers::ReadFailure::Service)
+                    .map_err(ReadFailure::Service)
                 }
                 Err(failure) => Err(failure),
             }
         }
-        Err(error) => Err(handlers::ReadFailure::Service(error)),
+        Err(error) => Err(ReadFailure::Service(error)),
     };
     match result {
         Ok(()) => Apdu::ComplexAck(ComplexAck {
@@ -216,12 +216,12 @@ pub(super) async fn read_property_response_observed(
             service_choice: request.service_choice,
             service_ack: service_ack.freeze(),
         }),
-        Err(handlers::ReadFailure::Service(error)) => {
+        Err(ReadFailure::Service(error)) => {
             error_apdu_from_error(request.invoke_id, request.service_choice, &error)
         }
         // A Group's Present_Value past the work limit draws the abort an RPM
         // over its work budget does; ReadProperty has no byte budget.
-        Err(handlers::ReadFailure::Work | handlers::ReadFailure::Bytes) => Apdu::Abort(AbortPdu {
+        Err(ReadFailure::Work | ReadFailure::Bytes) => Apdu::Abort(AbortPdu {
             sent_by_server: true,
             invoke_id: request.invoke_id,
             abort_reason: AbortReason::OUT_OF_RESOURCES,

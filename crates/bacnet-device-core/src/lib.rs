@@ -5,6 +5,8 @@
 #![cfg_attr(all(not(feature = "std"), not(test)), no_std)]
 #![forbid(unsafe_code)]
 
+// `format!` and `vec!` without std's prelude, as in bacnet-objects.
+#[macro_use]
 extern crate alloc;
 
 #[cfg(not(any(feature = "std", feature = "alloc")))]

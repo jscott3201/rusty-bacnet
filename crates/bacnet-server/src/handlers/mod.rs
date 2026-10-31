@@ -15,7 +15,7 @@ use bacnet_services::alarm_event::{
 use bacnet_services::cov::SubscribeCOVRequest;
 use bacnet_services::device_mgmt::{DeviceCommunicationControlRequest, ReinitializeDeviceRequest};
 use bacnet_services::object_mgmt::{CreateObjectRequest, DeleteObjectRequest, ObjectSpecifier};
-use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
+use bacnet_services::read_property::ReadPropertyRequest;
 use bacnet_services::rpm::{
     ReadAccessResult, ReadPropertyMultipleACK, ReadPropertyMultipleRequest, ReadResultElement,
 };
@@ -33,7 +33,6 @@ use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue}
 
 use bytes::BytesMut;
 
-use crate::cov::active::LiveCovSelection;
 use crate::cov::{
     CovNotificationKind, CovSubscription, CovSubscriptionKey, CovSubscriptionSnapshot,
     CovSubscriptionTable, MultipleContextKey, SubscriberEndpoint,
@@ -46,16 +45,13 @@ mod audit_notification;
 mod cov;
 pub(crate) mod device_mgmt;
 mod file;
-mod group_present_value;
 mod list;
 mod object_mgmt;
-mod read_budget;
-pub(crate) use read_budget::ReadFailure;
 mod read_property;
 mod read_range;
-mod rpm_budget;
-pub(crate) use rpm_budget::RpmPlan;
 pub(crate) mod relinquish;
+#[cfg(test)]
+mod rpm_budget;
 mod write_property;
 
 pub use alarm_event::*;

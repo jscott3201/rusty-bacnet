@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_device_core::read::ReadPropertyMultipleBudget;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::ServiceSupported;
 use bacnet_types::error::RemoteError;
@@ -422,7 +423,7 @@ fn device_execution_view_rpm_budgets_count_canonical_rows_and_preserve_output() 
     ] {
         let mut out = BytesMut::from(&b"unchanged"[..]);
         let mut observations = 0;
-        let result = crate::handlers::RpmPlan::new(
+        let result = bacnet_device_core::read::RpmPlan::new(
             &db,
             &ReadScope::UNLIMITED,
             Some(&view),
@@ -430,7 +431,7 @@ fn device_execution_view_rpm_budgets_count_canonical_rows_and_preserve_output() 
             budget.max_result_elements,
         )
         .and_then(|plan| {
-            plan.read_observed(
+            plan.read(
                 &db,
                 Some(&view),
                 &mut out,
@@ -440,14 +441,14 @@ fn device_execution_view_rpm_budgets_count_canonical_rows_and_preserve_output() 
         });
         assert!(matches!(
             (&result, work_failure),
-            (Err(crate::handlers::ReadFailure::Work), true)
-                | (Err(crate::handlers::ReadFailure::Bytes), false)
+            (Err(bacnet_device_core::read::ReadFailure::Work), true)
+                | (Err(bacnet_device_core::read::ReadFailure::Bytes), false)
         ));
         assert_eq!(out.as_ref(), b"unchanged");
         assert_eq!(observations, 0);
     }
     let mut out = BytesMut::new();
-    crate::handlers::RpmPlan::new(
+    bacnet_device_core::read::RpmPlan::new(
         &db,
         &ReadScope::UNLIMITED,
         Some(&view),
@@ -455,7 +456,7 @@ fn device_execution_view_rpm_budgets_count_canonical_rows_and_preserve_output() 
         5,
     )
     .unwrap()
-    .read_observed(&db, Some(&view), &mut out, 4096, |_, _, _, _| {})
+    .read(&db, Some(&view), &mut out, 4096, |_, _, _, _| {})
     .unwrap();
     let ack = bacnet_services::rpm::ReadPropertyMultipleACK::decode(&out).unwrap();
     let properties: Vec<_> = ack.list_of_read_access_results[0]

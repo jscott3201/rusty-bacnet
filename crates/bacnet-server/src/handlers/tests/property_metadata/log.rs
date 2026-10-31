@@ -250,8 +250,9 @@ fn request(oid: ObjectIdentifier, references: &[(P, Option<u32>)]) -> BytesMut {
 }
 
 fn assert_budget_parity(db: &ObjectDatabase, request: &[u8], legacy: &[u8], count: usize) {
-    use crate::handlers::{ReadFailure, rpm_budget::handle_rpm_budgeted};
-    use crate::server::ReadPropertyMultipleBudget;
+    use crate::handlers::rpm_budget::handle_rpm_budgeted;
+    use bacnet_device_core::read::ReadFailure;
+    use bacnet_device_core::read::ReadPropertyMultipleBudget;
     let budget = ReadPropertyMultipleBudget {
         max_result_elements: count,
         max_service_ack_bytes: legacy.len(),

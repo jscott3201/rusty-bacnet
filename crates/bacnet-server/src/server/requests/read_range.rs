@@ -51,7 +51,7 @@ pub(super) async fn response(
             };
             match handlers::plan_read_range(&db, &scope, Some(&view), &decoded) {
                 Ok(plan) => {
-                    let live = match plan.live_cov(&db) {
+                    let live = match plan.live_lists(&db) {
                         Some(selection) => Some(
                             confirmed_response::active_cov_snapshot(&db, tables, selection).await,
                         ),

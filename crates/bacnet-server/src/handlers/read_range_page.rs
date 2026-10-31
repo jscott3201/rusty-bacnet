@@ -20,12 +20,12 @@ impl From<Error> for ReadRangeFailure {
     }
 }
 
-impl From<super::ReadFailure> for ReadRangeFailure {
-    fn from(failure: super::ReadFailure) -> Self {
+impl From<bacnet_device_core::read::ReadFailure> for ReadRangeFailure {
+    fn from(failure: bacnet_device_core::read::ReadFailure) -> Self {
         match failure {
-            super::ReadFailure::Service(error) => Self::Service(error),
-            super::ReadFailure::Work => Self::Work,
-            super::ReadFailure::Bytes => Self::Bytes,
+            bacnet_device_core::read::ReadFailure::Service(error) => Self::Service(error),
+            bacnet_device_core::read::ReadFailure::Work => Self::Work,
+            bacnet_device_core::read::ReadFailure::Bytes => Self::Bytes,
         }
     }
 }

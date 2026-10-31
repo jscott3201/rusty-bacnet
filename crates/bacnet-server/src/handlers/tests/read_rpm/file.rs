@@ -84,7 +84,7 @@ fn rpm_file_indexed_property_list_and_scalar_gates_preserve_bytes() {
                 }
             }
         }
-        let budget = crate::server::ReadPropertyMultipleBudget {
+        let budget = bacnet_device_core::read::ReadPropertyMultipleBudget {
             max_result_elements: references.len(),
             max_service_ack_bytes: legacy.len(),
         };
@@ -93,11 +93,11 @@ fn rpm_file_indexed_property_list_and_scalar_gates_preserve_bytes() {
             .unwrap();
         assert_eq!(bounded, legacy);
         for too_small in [
-            crate::server::ReadPropertyMultipleBudget {
+            bacnet_device_core::read::ReadPropertyMultipleBudget {
                 max_result_elements: references.len() - 1,
                 ..budget
             },
-            crate::server::ReadPropertyMultipleBudget {
+            bacnet_device_core::read::ReadPropertyMultipleBudget {
                 max_service_ack_bytes: legacy.len() - 1,
                 ..budget
             },
@@ -110,9 +110,15 @@ fn rpm_file_indexed_property_list_and_scalar_gates_preserve_bytes() {
                 too_small,
             );
             if too_small.max_result_elements < references.len() {
-                assert!(matches!(failure, Err(crate::handlers::ReadFailure::Work)));
+                assert!(matches!(
+                    failure,
+                    Err(bacnet_device_core::read::ReadFailure::Work)
+                ));
             } else {
-                assert!(matches!(failure, Err(crate::handlers::ReadFailure::Bytes)));
+                assert!(matches!(
+                    failure,
+                    Err(bacnet_device_core::read::ReadFailure::Bytes)
+                ));
             }
             assert_eq!(&prefix[..], b"prefix");
         }

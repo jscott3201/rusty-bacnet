@@ -149,11 +149,12 @@ fn rpm_notification_class_indexed_reads_and_constructed_bytes_are_unchanged() {
             }
         }
     }
-    let budget = crate::server::ReadPropertyMultipleBudget {
+    let budget = bacnet_device_core::read::ReadPropertyMultipleBudget {
         max_result_elements: cases.len(),
         max_service_ack_bytes: legacy.len(),
     };
-    use crate::handlers::{ReadFailure, rpm_budget::handle_rpm_budgeted};
+    use crate::handlers::rpm_budget::handle_rpm_budgeted;
+    use bacnet_device_core::read::ReadFailure;
     let mut bounded = BytesMut::new();
     handle_rpm_budgeted(&db, &request_bytes, &mut bounded, budget).unwrap();
     assert_eq!(bounded, legacy);
@@ -163,7 +164,7 @@ fn rpm_notification_class_indexed_reads_and_constructed_bytes_are_unchanged() {
             &db,
             &request_bytes,
             &mut prefix,
-            crate::server::ReadPropertyMultipleBudget {
+            bacnet_device_core::read::ReadPropertyMultipleBudget {
                 max_result_elements: cases.len() - 1,
                 ..budget
             }
@@ -176,7 +177,7 @@ fn rpm_notification_class_indexed_reads_and_constructed_bytes_are_unchanged() {
             &db,
             &request_bytes,
             &mut prefix,
-            crate::server::ReadPropertyMultipleBudget {
+            bacnet_device_core::read::ReadPropertyMultipleBudget {
                 max_service_ack_bytes: legacy.len() - 1,
                 ..budget
             }

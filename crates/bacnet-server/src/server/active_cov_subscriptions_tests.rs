@@ -470,7 +470,7 @@ async fn active_cov_read_only_list_scope_local_read_and_stop() {
         .await
         .add(Box::new(DeviceObject::new(config).unwrap()))
         .unwrap();
-    let selected = handlers::resolve_read_target(
+    let selected = bacnet_device_core::read::resolve_target(
         &*wire.server.database().read().await,
         &bacnet_device_core::read::ReadScope::UNLIMITED,
         &wildcard(),

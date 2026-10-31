@@ -117,7 +117,7 @@ impl EndpointResponder {
             reinitialize: None,
             reinitialize_audit: None,
             registered_port: None,
-            read_work_limit: crate::server::ReadPropertyMultipleBudget::default()
+            read_work_limit: bacnet_device_core::read::ReadPropertyMultipleBudget::default()
                 .max_result_elements,
         }
     }
