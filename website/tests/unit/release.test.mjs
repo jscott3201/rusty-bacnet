@@ -5,6 +5,7 @@ import { parseDocument } from 'yaml';
 import navigation from '../../src/data/navigation.json' with { type: 'json' };
 import downloads from '../../src/data/downloads.json' with { type: 'json' };
 import { release } from '../../src/lib/site.mjs';
+import { newer } from '../../scripts/reference-rust.mjs';
 
 // A release PR changes `release` in src/lib/site.mjs. MDX pages and components
 // read it from there; this test lists every literal copy that doesn't follow it.
@@ -129,7 +130,9 @@ test('the installation page lists exactly the assets release.yml publishes', asy
   assert.match(await readRepo('scripts/release/release_api.py'), /^SUMS = "SHA256SUMS"$/m);
   for (const name of ['THIRD-PARTY-NOTICES', 'SHA256SUMS']) assert.ok(page.includes(`\`${name}\``), name);
 
-  // The crates: every workspace member that crates.io may take (publish_crates.sh's `publish != []`).
+  // The crates: every workspace member that crates.io may take (publish_crates.sh's `publish != []`),
+  // but one whose `[package.metadata.website] first-release` comes after this
+  // release, which the page says joins them later, naming no version.
   const manifest = await readRepo('Cargo.toml');
   const members = [...manifest.match(/^members = \[([\s\S]*?)^\]/m)[1].matchAll(/^\s*"([^"]+)"/gm)].map(match => match[1]);
   // A crate whose manifest sets its own version, not `version.workspace = true`,
@@ -140,6 +143,11 @@ test('the installation page lists exactly the assets release.yml publishes', asy
     const toml = await readRepo(`${member}/Cargo.toml`);
     if (/^publish = false$/m.test(toml)) continue;
     const name = toml.match(/^name = "([^"]+)"$/m)[1];
+    const first = toml.match(/^first-release = "([^"]+)"$/m)?.[1];
+    if (first !== undefined && newer(first, release)) {
+      assert.ok(page.includes(`\`${name}\` joins them from the next release`), `${install} says ${name} joins later`);
+      continue;
+    }
     crates.push(name);
     if (!/^version\.workspace = true$/m.test(toml)) independent.push(name);
   }

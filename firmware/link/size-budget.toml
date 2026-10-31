@@ -377,7 +377,11 @@
 # 13 KB); the core itself is about 12 KB. Its counts are what it links,
 # with no headroom: the 7 core::fmt functions format the default Device's
 # name (#2187); the 64-bit division and memmove limits are the routines it
-# links today, so a new one fails the check.
+# links today, so a new one fails the check. Once #2181 dropped the objects'
+# pre-migration property-list fallbacks, the image measured 4.9-5.7 KB less
+# flash, links no 64-bit division and two memmove routines: flash 125256 /
+# 124608 / 151030 on thumbv7m / thumbv7em / riscv32imac, RAM unchanged. The
+# counts are those; the octet budgets stay as first set.
 
 [thumbv7m-none-eabi.mstp]
 text = 18320
@@ -475,8 +479,8 @@ bss = 18464
 flash = 145776
 ram = 18464
 fmt_functions = 7
-div64_functions = 3
-memmove_functions = 3
+div64_functions = 0
+memmove_functions = 2
 
 [thumbv6m-none-eabi.mstp]
 text = 19696
@@ -750,8 +754,8 @@ bss = 18464
 flash = 145040
 ram = 18464
 fmt_functions = 7
-div64_functions = 3
-memmove_functions = 3
+div64_functions = 0
+memmove_functions = 2
 
 [riscv32imac-unknown-none-elf.objects]
 text = 159280
@@ -761,5 +765,5 @@ bss = 18464
 flash = 175504
 ram = 18464
 fmt_functions = 7
-div64_functions = 2
+div64_functions = 0
 memmove_functions = 2
