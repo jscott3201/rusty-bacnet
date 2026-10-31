@@ -1,0 +1,73 @@
+name: CodeQL
+
+# CodeQL code scanning (#2166): actions, JavaScript/TypeScript, Python and
+# Rust, each with build-mode none and the default query suite. Replaces the
+# repository's default setup, which scanned test code too: most of its alerts
+# were fixture passwords and assert! messages in tests. What is scanned and
+# what is left out is in .github/codeql/codeql-config.yml. See docs/ci.md,
+# "CodeQL".
+#
+#   pull request  every PR to dev or main; GitHub compares its alerts with
+#                 the base branch's and reports them in the "CodeQL" check
+#   push          dev and main, the baselines those comparisons use
+#   scheduled     weekly on dev (the default branch), as the queries change
+#                 without code changes
+#   manual        on the branch picked
+#
+# No check here is required for merging. Every job's name starts with
+# "CodeQL:", so none can pass for CI OK or Native OK, and the release's CI
+# gate reads only ci.yml and native-tests.yml runs. GitHub rejects this
+# workflow's uploads while the repository's default setup is enabled.
+
+on:
+  pull_request:
+    branches: [dev, main]
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [dev, main]
+  schedule:
+    # Tuesday, off the hour.
+    - cron: "23 5 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # A newer push to a PR cancels its superseded run. Push, scheduled and
+  # manual runs are never cancelled once running; a newer one waits, and
+  # replaces any older one still waiting.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  analyze:
+    name: "CodeQL: ${{ matrix.language }}"
+    runs-on: ubuntu-24.04
+    # Default setup's Rust analysis took 20 minutes on dev (October 2026).
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      # Upload the results to code scanning.
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [actions, javascript-typescript, python, rust]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          config-file: ./.github/codeql/codeql-config.yml
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          # The categories default setup used.
+          category: /language:${{ matrix.language }}
