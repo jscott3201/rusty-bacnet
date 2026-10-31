@@ -1,7 +1,10 @@
 use super::*;
 
-#[path = "rpm_optional_fallback.rs"]
-mod optional_fallback;
+#[path = "rpm_optional_rows.rs"]
+mod optional_rows;
+use bacnet_objects::property_metadata::{
+    PropertyConformance, PropertyMetadata, PropertyWriteCapability, property_list_from_metadata,
+};
 use bacnet_types::constructed::ReadAccessSpecification;
 use std::borrow::Cow;
 use std::sync::{
@@ -22,26 +25,32 @@ impl BACnetObject for Counting {
     fn object_name(&self) -> &str {
         "counting"
     }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        if self.empty {
-            Cow::Borrowed(&[])
-        } else {
-            Cow::Borrowed(&[
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        const ROWS: &[PropertyMetadata] = &[
+            PropertyMetadata::new(
                 PropertyIdentifier::PRESENT_VALUE,
+                PropertyConformance::RequiredRead,
+                None,
+                PropertyWriteCapability::ReadOnly,
+            ),
+            PropertyMetadata::new(
                 PropertyIdentifier::OBJECT_NAME,
+                PropertyConformance::RequiredRead,
+                None,
+                PropertyWriteCapability::ReadOnly,
+            ),
+            PropertyMetadata::new(
                 PropertyIdentifier::DESCRIPTION,
-            ])
-        }
+                PropertyConformance::Optional,
+                None,
+                PropertyWriteCapability::ReadOnly,
+            ),
+        ];
+        // `empty` serves no row at all.
+        Cow::Borrowed(if self.empty { &[] } else { ROWS })
     }
-    fn required_properties(&self) -> Cow<'static, [PropertyIdentifier]> {
-        if self.empty {
-            Cow::Borrowed(&[])
-        } else {
-            Cow::Borrowed(&[
-                PropertyIdentifier::PRESENT_VALUE,
-                PropertyIdentifier::OBJECT_NAME,
-            ])
-        }
+    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
+        property_list_from_metadata(self.property_metadata().as_ref())
     }
     fn is_array_property(&self, _: PropertyIdentifier) -> bool {
         self.array

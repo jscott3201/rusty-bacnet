@@ -1,5 +1,6 @@
 //! Downstream-style integration coverage for the complete Reporter configuration contract.
 
+use bacnet_objects::property_metadata::PropertyMetadata;
 use std::borrow::Cow;
 
 use bacnet_objects::audit::AuditReporterObject;
@@ -69,6 +70,9 @@ impl BACnetObject for CustomReporter {
             .write_property(property, array_index, value, priority)
     }
 
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        self.inner.property_metadata()
+    }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         self.inner.property_list()
     }

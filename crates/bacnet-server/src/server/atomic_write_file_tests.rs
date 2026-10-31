@@ -197,6 +197,7 @@ async fn atomic_write_file_all_builders_validate_before_start_or_dial() {
 #[tokio::test]
 async fn atomic_write_file_opaque_abort_keeps_legacy_service_mapping() {
     use bacnet_objects::file::{FileRecordRead, FileStorage, FileStreamRead, FileWriteStart};
+    use bacnet_objects::property_metadata::PropertyMetadata;
     use bacnet_objects::traits::BACnetObject;
     use std::borrow::Cow;
     struct ErrorFile(FileObject);
@@ -207,8 +208,13 @@ async fn atomic_write_file_opaque_abort_keeps_legacy_service_mapping() {
         fn object_name(&self) -> &str {
             self.0.object_name()
         }
+        fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+            crate::test_rows::read_only(&[])
+        }
         fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-            Cow::Borrowed(&[])
+            bacnet_objects::property_metadata::property_list_from_metadata(
+                &self.property_metadata(),
+            )
         }
         fn read_property(
             &self,

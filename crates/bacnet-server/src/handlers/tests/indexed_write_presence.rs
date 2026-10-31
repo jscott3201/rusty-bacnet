@@ -397,17 +397,21 @@ impl BACnetObject for VendorArray {
         self.value = value;
         Ok(())
     }
+    fn property_metadata(
+        &self,
+    ) -> std::borrow::Cow<'_, [bacnet_objects::property_metadata::PropertyMetadata]> {
+        crate::test_rows::rows(&[VENDOR], &[VENDOR])
+    }
     fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
-        std::borrow::Cow::Owned(vec![VENDOR])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
     fn is_array_property(&self, property: PropertyIdentifier) -> bool {
         property == VENDOR
     }
-    // The optional metadata default remains empty; it is not an absence claim.
 }
 
 #[test]
-fn indexed_write_empty_metadata_vendor_array_delegates_to_custom_writer() {
+fn indexed_write_vendor_array_row_delegates_to_custom_writer() {
     let object = VendorArray {
         value: PropertyValue::Unsigned(0),
     };
@@ -440,7 +444,8 @@ fn indexed_write_empty_metadata_vendor_array_delegates_to_custom_writer() {
                 value(PropertyValue::Unsigned(1)),
                 multiple,
             ),
-            ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
+            // No row: absent, before any array classification.
+            ErrorCode::UNKNOWN_PROPERTY,
         );
     }
 }

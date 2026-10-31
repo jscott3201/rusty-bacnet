@@ -1,28 +1,17 @@
 use std::borrow::Cow;
 use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
 
-use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
-use crate::access_control::{
-    AccessCredentialObject, AccessDoorObject, AccessPointObject, AccessRightsObject,
-    AccessUserObject, AccessZoneObject, CredentialDataInputObject,
-};
-use crate::audit::{AuditLogObject, AuditLogPersistence, AuditLogSnapshot};
 use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject};
 use crate::property_metadata::{
     PropertyConformance, PropertyMetadata, PropertyPresenceCondition, PropertyWriteCapability,
 };
 use crate::traits::BACnetObject;
-use crate::value_types::{
-    BitStringValueObject, CharacterStringValueObject, DatePatternValueObject,
-    DateTimePatternValueObject, DateTimeValueObject, DateValueObject, IntegerValueObject,
-    LargeAnalogValueObject, OctetStringValueObject, PositiveIntegerValueObject,
-    TimePatternValueObject, TimeValueObject,
-};
+use crate::value_types::{DateValueObject, TimeValueObject};
 
 mod analog;
 mod intrinsic;
@@ -52,20 +41,6 @@ pub(crate) fn metadata_row_reads(object: &dyn BACnetObject, property: PropertyId
 struct InstanceMetadataObject {
     oid: ObjectIdentifier,
     include_description: bool,
-}
-
-#[derive(Default)]
-struct MemoryAuditLogPersistence(Mutex<Option<AuditLogSnapshot>>);
-
-impl AuditLogPersistence for MemoryAuditLogPersistence {
-    fn load(&self, _expected_object: ObjectIdentifier) -> Result<Option<AuditLogSnapshot>, Error> {
-        Ok(self.0.lock().unwrap().clone())
-    }
-
-    fn commit(&self, snapshot: &AuditLogSnapshot) -> Result<(), Error> {
-        *self.0.lock().unwrap() = Some(snapshot.clone());
-        Ok(())
-    }
 }
 
 impl InstanceMetadataObject {
@@ -270,103 +245,86 @@ fn property_metadata_contract_binary_input() {
     }
 }
 
-#[test]
-fn property_metadata_contract_all_migrated_rows_are_readable() {
-    let objects: [Box<dyn BACnetObject>; 54] = [
-        Box::new(crate::device::DeviceObject::new(Default::default()).unwrap()),
-        Box::new(TimeValueObject::new(1, "TV-1").unwrap()),
-        Box::new(IntegerValueObject::new(1, "IV-1").unwrap()),
-        Box::new(PositiveIntegerValueObject::new(1, "PIV-1").unwrap()),
-        Box::new(LargeAnalogValueObject::new(1, "LAV-1").unwrap()),
-        Box::new(CharacterStringValueObject::new(1, "CSV-1").unwrap()),
-        Box::new(OctetStringValueObject::new(1, "OSV-1").unwrap()),
-        Box::new(BitStringValueObject::new(1, "BSV-1").unwrap()),
-        Box::new(DateValueObject::new(1, "DV-1").unwrap()),
-        Box::new(DateTimeValueObject::new(1, "DTV-1").unwrap()),
-        Box::new(DatePatternValueObject::new(1, "DPV-1").unwrap()),
-        Box::new(TimePatternValueObject::new(1, "TPV-1").unwrap()),
-        Box::new(DateTimePatternValueObject::new(1, "DTPV-1").unwrap()),
-        Box::new(BinaryInputObject::new(1, "BI-1").unwrap()),
-        Box::new(BinaryValueObject::new(1, "BV-1").unwrap()),
-        Box::new(BinaryOutputObject::new(1, "BO-1").unwrap()),
-        Box::new(MultiStateInputObject::new(1, "MSI-1", 3).unwrap()),
-        Box::new(MultiStateValueObject::new(1, "MSV-1", 3).unwrap()),
-        Box::new(MultiStateOutputObject::new(1, "MSO-1", 3).unwrap()),
-        Box::new(
-            crate::loop_obj::LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS)
-                .unwrap(),
-        ),
-        Box::new(crate::program::ProgramObject::new(1, "PRG-1").unwrap()),
-        Box::new(crate::file::FileObject::new(1, "FILE-1", "raw").unwrap()),
-        Box::new(crate::trend::TrendLogObject::new(1, "TL-1", 3).unwrap()),
-        Box::new(crate::trend::TrendLogMultipleObject::new(1, "TLM-1", 3).unwrap()),
-        Box::new(crate::event_log::EventLogObject::new(1, "EL-1", 3).unwrap()),
-        Box::new(crate::schedule::ScheduleObject::new(1, "SCH-1", PropertyValue::Null).unwrap()),
-        Box::new(crate::schedule::CalendarObject::new(1, "CAL-1").unwrap()),
-        Box::new(crate::life_safety::LifeSafetyPointObject::new(1, "LSP-1").unwrap()),
-        Box::new(crate::life_safety::LifeSafetyZoneObject::new(1, "LSZ-1").unwrap()),
-        Box::new(
-            AuditLogObject::new(1, "AL-1", 3, Arc::new(MemoryAuditLogPersistence::default()))
-                .unwrap(),
-        ),
-        Box::new(crate::timer::TimerObject::new(1, "TMR-1").unwrap()),
-        Box::new(crate::averaging::AveragingObject::new(1, "AVG-1").unwrap()),
-        Box::new(crate::command::CommandObject::new(1, "CMD-1").unwrap()),
-        Box::new(crate::group::GroupObject::new(1, "GRP-1").unwrap()),
-        Box::new(crate::group::GlobalGroupObject::new(1, "GG-1").unwrap()),
-        Box::new(crate::group::StructuredViewObject::new(1, "SV-1").unwrap()),
-        Box::new(crate::load_control::LoadControlObject::new(1, "LC-1").unwrap()),
-        Box::new(
-            crate::network_port::NetworkPortObject::new_non_bip(
-                1,
-                "NP-1",
-                bacnet_types::enums::NetworkType::from_raw(0),
-                0,
-                Default::default(),
-                1476,
-            )
-            .unwrap(),
-        ),
-        Box::new(crate::elevator::ElevatorGroupObject::new(1, "EG-1").unwrap()),
-        Box::new(crate::elevator::EscalatorObject::new(1, "ESC-1").unwrap()),
-        Box::new(crate::elevator::LiftObject::new(1, "LIFT-1", 3).unwrap()),
-        Box::new(crate::lighting::LightingOutputObject::new(1, "LO-1").unwrap()),
-        Box::new(crate::lighting::BinaryLightingOutputObject::new(1, "BLO-1").unwrap()),
-        Box::new(
-            crate::accumulator::AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS)
-                .unwrap(),
-        ),
-        Box::new(
-            crate::accumulator::PulseConverterObject::new(
-                1,
-                "PC-1",
-                EngineeringUnits::DEGREES_CELSIUS,
-            )
-            .unwrap(),
-        ),
-        Box::new(crate::color::ColorObject::new(1, "CLR-1").unwrap()),
-        Box::new(crate::color::ColorTemperatureObject::new(1, "CT-1").unwrap()),
-        Box::new(AccessDoorObject::new(1, "DOOR-1").unwrap()),
-        Box::new(AccessPointObject::new(1, "AP-1").unwrap()),
-        Box::new(AccessZoneObject::new(1, "ZONE-1").unwrap()),
-        Box::new(AccessCredentialObject::new(1, "CRED-1").unwrap()),
-        Box::new(AccessUserObject::new(1, "USER-1").unwrap()),
-        Box::new(AccessRightsObject::new(1, "AR-1").unwrap()),
-        Box::new(CredentialDataInputObject::new(1, "CDI-1").unwrap()),
-    ];
+/// The ASHRAE-assigned property identifiers the served-without-a-row sweep
+/// tries: 0 to 511, and from 4,194,304 up to sixteen past the highest one
+/// this stack names (Clause 23 leaves the range between to vendors). The
+/// audit checks that every built-in row falls inside it.
+pub(crate) fn swept_property_identifiers() -> impl Iterator<Item = PropertyIdentifier> {
+    (0..512)
+        .chain(4_194_304..=swept_upper_bound())
+        .map(PropertyIdentifier::from_raw)
+}
 
-    for object in objects {
-        assert_unique_and_canonical(object.as_ref());
+/// The last identifier of the sweep's upper range.
+pub(crate) fn swept_upper_bound() -> u32 {
+    PropertyIdentifier::ALL_NAMED
+        .iter()
+        .map(|(_, property)| property.to_raw())
+        .max()
+        .expect("named property identifiers")
+        + 16
+}
+
+/// Whether [`swept_property_identifiers`] tries `property`.
+pub(crate) fn is_swept(property: PropertyIdentifier) -> bool {
+    swept_property_identifiers().any(|swept| swept == property)
+}
+
+/// The other half of the audit's readability check: a property the object
+/// serves, read without an array index, has a row. Every identifier of
+/// [`swept_property_identifiers`] is tried on one object of each catalogue
+/// type; a property without a row must answer PROPERTY / UNKNOWN_PROPERTY.
+#[test]
+fn property_metadata_contract_every_served_property_has_a_row() {
+    use bacnet_types::enums::{ErrorClass, ErrorCode};
+    let mut objects = crate::catalogue::representatives();
+    // Reach the Staging object's started state, as the audit does.
+    for object in objects
+        .iter_mut()
+        .filter(|object| object.object_identifier().object_type() == ObjectType::STAGING)
+    {
+        object
+            .write_property(
+                PropertyIdentifier::PRESENT_VALUE,
+                None,
+                PropertyValue::Real(5.0),
+                None,
+            )
+            .unwrap();
+    }
+    let mut failures = Vec::new();
+    let mut visited = std::collections::BTreeSet::new();
+    for object in &objects {
+        visited.insert(object.object_identifier().object_type().to_raw());
         let metadata = object.property_metadata();
-        for row in metadata.iter() {
-            assert!(
-                metadata_row_reads(object.as_ref(), row.property_identifier),
-                "{:?} must read {:?} without an array index",
-                object.object_identifier().object_type(),
-                row.property_identifier
-            );
+        for property in swept_property_identifiers() {
+            if matches!(
+                property,
+                PropertyIdentifier::ALL
+                    | PropertyIdentifier::REQUIRED
+                    | PropertyIdentifier::OPTIONAL
+            ) || metadata
+                .iter()
+                .any(|row| row.property_identifier == property)
+            {
+                continue;
+            }
+            match object.read_property(property, None) {
+                Err(Error::Remote(RemoteError::Error { class, code }))
+                    if class == ErrorClass::PROPERTY && code == ErrorCode::UNKNOWN_PROPERTY => {}
+                other => failures.push(format!(
+                    "{:?} serves {property:?} without a row: {other:?}",
+                    object.object_identifier().object_type()
+                )),
+            }
         }
     }
+    assert_eq!(
+        visited.len(),
+        64,
+        "the sweep must visit every catalogue type"
+    );
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 #[test]
@@ -458,17 +416,6 @@ fn property_metadata_contract_property_list_projection_excludes_property_list() 
         );
         assert_eq!(wire_list, expected_wire);
     }
-}
-
-#[test]
-fn property_metadata_contract_all_value_types_opt_in_to_metadata() {
-    // Every value type now passes `property_metadata:` to the macro, so no
-    // value type exercises the legacy empty-metadata default.
-    let time_value = TimeValueObject::new(1, "TV-1").unwrap();
-    let date_value = DateValueObject::new(1, "DV-1").unwrap();
-
-    assert!(!time_value.property_metadata().is_empty());
-    assert!(!date_value.property_metadata().is_empty());
 }
 
 #[test]

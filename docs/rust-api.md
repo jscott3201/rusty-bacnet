@@ -3935,14 +3935,69 @@ use bacnet_objects::traits::BACnetObject;
 trait BACnetObject {
     fn object_identifier(&self) -> ObjectIdentifier;
     fn object_name(&self) -> &str;
-    fn object_type(&self) -> ObjectType;
     fn read_property(&self, property: PropertyIdentifier, array_index: Option<u32>)
         -> Result<PropertyValue, Error>;
     fn write_property(&mut self, property: PropertyIdentifier, array_index: Option<u32>,
         value: PropertyValue, priority: Option<u8>) -> Result<(), Error>;
-    fn property_list(&self) -> Vec<PropertyIdentifier>;
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]>;
+    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]>;
+    // ...and many provided methods with defaults.
 }
 ```
+
+`property_metadata` is required (#2181): an object's rows are its property
+model. Each `PropertyMetadata` row names one property the object serves, with
+its `R`/`W`/`O` code, the condition that makes an optional row present, and the
+write route the object implements. Include the universal rows
+(Object_Identifier, Object_Name, Object_Type and Property_List). The defaults of
+`required_properties` and `is_writable_property` derive from the rows, and the
+server reads them for property presence, ReadPropertyMultiple's ALL, REQUIRED
+and OPTIONAL, the indexed-write gate and the PICS. A property without a row is
+absent to all of those, whatever `read_property` answers. `property_list` is the
+rows minus Property_List, and `property_metadata::property_list_from_metadata`
+derives it. Every built-in object supplies rows. A custom object's smallest
+honest set is the universal rows plus one for each property it serves:
+
+```rust,ignore
+use bacnet_objects::property_metadata::{
+    PropertyConformance as C, PropertyMetadata, PropertyWriteCapability as W,
+    property_list_from_metadata,
+};
+use bacnet_types::enums::PropertyIdentifier as P;
+
+const ROWS: &[PropertyMetadata] = &[
+    PropertyMetadata::new(P::OBJECT_IDENTIFIER, C::RequiredRead, None, W::ReadOnly),
+    PropertyMetadata::new(P::OBJECT_NAME, C::RequiredRead, None, W::ReadOnly),
+    PropertyMetadata::new(P::OBJECT_TYPE, C::RequiredRead, None, W::ReadOnly),
+    PropertyMetadata::new(P::PRESENT_VALUE, C::RequiredWrite, None, W::Always),
+    PropertyMetadata::new(P::PROPERTY_LIST, C::RequiredRead, None, W::ReadOnly),
+];
+
+// In `impl BACnetObject for MyObject`:
+fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+    Cow::Borrowed(ROWS)
+}
+fn property_list(&self) -> Cow<'static, [P]> {
+    property_list_from_metadata(ROWS)
+}
+```
+
+Two provided methods decide what the object-management services may do:
+
+- `is_createable` defaults to `false`. The PICS reports it as the type's
+  createability. The server's CreateObject doesn't ask it: it builds only its
+  built-in factory types (Analog Input and Output, the binary types and the
+  multi-state types, which answer `true`), and refuses every other type, a
+  custom one included, with `OBJECT/UNSUPPORTED_OBJECT_TYPE` for a type the
+  Device doesn't list in Protocol_Object_Types_Supported or
+  `OBJECT/DYNAMIC_CREATION_NOT_SUPPORTED` for a listed one (#2171). Keep the
+  default on a custom object, or the PICS promises a creation the server refuses.
+- `is_deleteable` defaults to `true`. DeleteObject asks it of the named object
+  and removes the object when it is `true`, a custom object included; when it
+  is `false` the request gets `OBJECT/OBJECT_DELETION_NOT_PERMITTED` and the
+  object stays. The PICS reports it as the type's deleteability. Answer `false`
+  for an object a client must not remove; the built-in Device and Network Port
+  do.
 
 The pre-1.0 object API removes `WritePropertyRollback` and the
 `capture_write_property_rollback` / `restore_write_property_rollback` hooks.
@@ -3963,18 +4018,17 @@ guards retain their precedence; custom object implementations retain their own
 write dispatch. WPM reports the failed coordinate and retains its successful
 prefix.
 
-At the indexed WP/WPM service gate, nonempty effective metadata that omits the
-property produces `PROPERTY/UNKNOWN_PROPERTY` before value decoding. A served
-scalar or BACnetLIST still produces `PROPERTY/PROPERTY_IS_NOT_AN_ARRAY`; a served
-array retains its object-owned element, count and write-access rules. This
-absence-first ordering is a local error-precedence policy. Empty custom metadata
-does not prove absence: those objects keep their array classifier and writer
-delegation. For this early absence failure, WPM keeps its successful prefix and
-reports the exact failed object/property/index, without authorizing or observing
-the failing element or suffix. The rejected indexed attempt produces no execution
-Audit record; present read-only arrays and unindexed absence retain their existing
-Audit handling. The outer WP authorization check and direct object writes are
-unchanged.
+At the indexed WP/WPM service gate, effective metadata that omits the property
+produces `PROPERTY/UNKNOWN_PROPERTY` before value decoding. A served scalar or
+BACnetLIST still produces `PROPERTY/PROPERTY_IS_NOT_AN_ARRAY`; a served array
+retains its object-owned element, count and write-access rules. This
+absence-first ordering is a local error-precedence policy, and it applies to
+custom objects too: their rows decide presence. For this early absence failure,
+WPM keeps its successful prefix and reports the exact failed
+object/property/index, without authorizing or observing the failing element or
+suffix. The rejected indexed attempt produces no execution Audit record; present
+read-only arrays and unindexed absence retain their existing Audit handling. The
+outer WP authorization check and direct object writes are unchanged.
 
 A NULL written to a property that isn't commandable and has no NULL in its
 datatype succeeds and leaves the property as it is (Clauses 15.9.2 and 15.10.2,

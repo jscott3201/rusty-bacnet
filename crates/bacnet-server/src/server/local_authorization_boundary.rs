@@ -1,6 +1,7 @@
 //! Custom reader instrumentation keeps the native point's atomic install hook.
 use super::fixture::*;
 use super::*;
+use bacnet_objects::property_metadata::PropertyMetadata;
 use std::borrow::Cow;
 use std::sync::atomic::AtomicUsize;
 
@@ -65,6 +66,20 @@ impl BACnetObject for Boundary {
         priority: Option<u8>,
     ) -> Result<(), Error> {
         self.inner.write_property(p, index, value, priority)
+    }
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        let mut rows = self.inner.property_metadata().into_owned();
+        for (p, _) in &self.overrides {
+            if !rows.iter().any(|row| row.property_identifier == *p) {
+                rows.push(PropertyMetadata::new(
+                    *p,
+                    bacnet_objects::property_metadata::PropertyConformance::Optional,
+                    None,
+                    bacnet_objects::property_metadata::PropertyWriteCapability::ReadOnly,
+                ));
+            }
+        }
+        Cow::Owned(rows)
     }
     fn property_list(&self) -> Cow<'static, [P]> {
         let mut properties = self.inner.property_list().into_owned();

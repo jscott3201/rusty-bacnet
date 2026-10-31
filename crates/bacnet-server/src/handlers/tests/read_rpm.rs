@@ -484,10 +484,6 @@ fn rpm_handler_required_vs_optional() {
     ))
     .unwrap();
     let oid = ObjectIdentifier::new(ObjectType::DATE_VALUE, 1).unwrap();
-    assert!(
-        !db.get(&oid).unwrap().property_metadata().is_empty(),
-        "Date Value routes RPM selectors through canonical metadata"
-    );
 
     // Metadata routing fixtures mirror the Time Value precedent: REQUIRED
     // carries the RequiredRead rows (Property_List excluded from the wire

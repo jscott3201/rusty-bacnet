@@ -734,8 +734,11 @@ mod tests {
                 Err(Error::Encoding("not used by this test".into()))
             }
 
+            fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+                crate::test_rows::read_only(&[])
+            }
             fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-                Cow::Borrowed(&[])
+                crate::property_metadata::property_list_from_metadata(&self.property_metadata())
             }
         }
 

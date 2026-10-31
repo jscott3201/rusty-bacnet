@@ -1,5 +1,6 @@
 use super::*;
 use bacnet_encoding::constructed::decode_bacnet_property_value;
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use std::borrow::Cow;
 
@@ -104,8 +105,11 @@ impl BACnetObject for BuiltInProjectionObject {
         ))
     }
 
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&[])
+    }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 }
 

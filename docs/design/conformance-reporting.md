@@ -37,7 +37,7 @@ or stays as small as today's summary.
 
 | Fact | Source | Already guarded by |
 |---|---|---|
-| Object types implemented | One `BACnetObject` implementation per type; `supported_representatives()` in `bacnet-objects/src/property_metadata_audit.rs` builds one of each (64; Network Security excluded) | That audit test, which fails if a type falls back to default metadata |
+| Object types implemented | One `BACnetObject` implementation per type; `supported_representatives()` in `bacnet-objects/src/property_metadata_audit.rs` builds one of each (64; Network Security excluded) | That audit test, which fails if a type's rows are missing, duplicated or unreadable, or don't derive its required set, property list and writability (`property_metadata` has no default since #2181) |
 | Per-type properties, access, creation-only rows | Each object's `property_metadata`, read by `bacnet_server::pics` | PICS truth-source and property-union tests |
 | Services the full server executes | `bacnet_objects::device::EXECUTED_SERVICES` | `executed_services_match_dispatch_table` in `bacnet-server/src/pics/tests.rs` |
 | Services the server initiates | `PicsGenerator::INITIATED_SERVICES` (private) | None against the client crate |

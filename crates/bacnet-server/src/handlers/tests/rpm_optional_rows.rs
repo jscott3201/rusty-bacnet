@@ -1,5 +1,8 @@
 //! ROOT-1 semantic characterization; no wall-clock performance assertions.
 use super::*;
+use bacnet_objects::property_metadata::{
+    PropertyConformance, PropertyMetadata, PropertyWriteCapability, property_list_from_metadata,
+};
 
 const REQUIRED_COUNT: usize = 4096;
 const OPTIONAL_IDS: [PropertyIdentifier; 4] = [
@@ -9,45 +12,50 @@ const OPTIONAL_IDS: [PropertyIdentifier; 4] = [
     PropertyIdentifier::from_raw(6002),
 ];
 
-const fn properties() -> [PropertyIdentifier; REQUIRED_COUNT + 4] {
-    let mut result = [PropertyIdentifier::PRESENT_VALUE; REQUIRED_COUNT + 4];
+const fn rows() -> [PropertyMetadata; REQUIRED_COUNT + 4] {
+    let mut result = [PropertyMetadata::new(
+        PropertyIdentifier::PRESENT_VALUE,
+        PropertyConformance::RequiredRead,
+        None,
+        PropertyWriteCapability::ReadOnly,
+    ); REQUIRED_COUNT + 4];
     let mut i = 0;
     while i < REQUIRED_COUNT {
-        result[i] = PropertyIdentifier::from_raw(512 + i as u32);
+        result[i].property_identifier = PropertyIdentifier::from_raw(512 + i as u32);
         i += 1;
     }
     let mut j = 0;
     while j < OPTIONAL_IDS.len() {
-        result[i + j] = OPTIONAL_IDS[j];
+        result[i + j].property_identifier = OPTIONAL_IDS[j];
+        result[i + j].conformance = PropertyConformance::Optional;
         j += 1;
     }
     result
 }
 
-static PROPERTIES: [PropertyIdentifier; REQUIRED_COUNT + 4] = properties();
+static ROWS: [PropertyMetadata; REQUIRED_COUNT + 4] = rows();
 
-struct BorrowedLegacy {
+struct BorrowedRows {
     all_required: bool,
     reads: Arc<AtomicUsize>,
 }
 
-impl BACnetObject for BorrowedLegacy {
+impl BACnetObject for BorrowedRows {
     fn object_identifier(&self) -> ObjectIdentifier {
         oid(1)
     }
     fn object_name(&self) -> &str {
-        "large borrowed legacy metadata"
+        "large borrowed metadata"
     }
-    // Deliberately inherit the empty property_metadata default.
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         Cow::Borrowed(if self.all_required {
-            &PROPERTIES[..REQUIRED_COUNT]
+            &ROWS[..REQUIRED_COUNT]
         } else {
-            &PROPERTIES
+            &ROWS
         })
     }
-    fn required_properties(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&PROPERTIES[..REQUIRED_COUNT])
+    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
+        property_list_from_metadata(self.property_metadata().as_ref())
     }
     fn read_property(
         &self,
@@ -68,10 +76,10 @@ impl BACnetObject for BorrowedLegacy {
     }
 }
 
-fn legacy_fixture(all_required: bool) -> (ObjectDatabase, Arc<AtomicUsize>) {
+fn large_fixture(all_required: bool) -> (ObjectDatabase, Arc<AtomicUsize>) {
     let reads = Arc::new(AtomicUsize::new(0));
     let mut db = ObjectDatabase::new();
-    db.add(Box::new(BorrowedLegacy {
+    db.add(Box::new(BorrowedRows {
         all_required,
         reads: reads.clone(),
     }))
@@ -81,7 +89,7 @@ fn legacy_fixture(all_required: bool) -> (ObjectDatabase, Arc<AtomicUsize>) {
 
 #[test]
 fn rpm_optional_large_borrowed_all_required_preserves_empty_wrappers() {
-    let (db, reads) = legacy_fixture(true);
+    let (db, reads) = large_fixture(true);
     let data = request(vec![
         spec(1, vec![reference(PropertyIdentifier::OPTIONAL)]),
         spec(1, vec![reference(PropertyIdentifier::OPTIONAL)]),
@@ -103,11 +111,9 @@ fn rpm_optional_large_borrowed_all_required_preserves_empty_wrappers() {
 
 #[test]
 fn rpm_optional_large_borrowed_mostly_required_order_duplicates_and_late_cap() {
-    let (db, reads) = legacy_fixture(false);
+    let (db, reads) = large_fixture(false);
     let object = db.get(&oid(1)).unwrap();
-    assert!(object.property_metadata().is_empty());
-    assert!(matches!(object.property_list(), Cow::Borrowed(_)));
-    assert!(matches!(object.required_properties(), Cow::Borrowed(_)));
+    assert!(matches!(object.property_metadata(), Cow::Borrowed(_)));
 
     // The visitor's failure must stop before the final optional occurrence;
     // required rows themselves never spend expanded-result capacity.
@@ -124,7 +130,7 @@ fn rpm_optional_large_borrowed_mostly_required_order_duplicates_and_late_cap() {
     assert_eq!(visits, OPTIONAL_IDS[..3]);
 
     let data = request(vec![
-        spec(1, vec![reference(PROPERTIES[0])]),
+        spec(1, vec![reference(ROWS[0].property_identifier)]),
         spec(1, vec![reference(PropertyIdentifier::OPTIONAL)]),
     ]);
     let mut out = BytesMut::from(&b"prefix"[..]);

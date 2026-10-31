@@ -147,15 +147,13 @@ fn acked_transitions_network_write_and_metadata_deny_every_family() {
                 assert!(!object.is_writable_property(PropertyIdentifier::ACKED_TRANSITIONS));
                 {
                     let metadata = object.property_metadata();
-                    if !metadata.is_empty() {
-                        let row = metadata
-                            .iter()
-                            .find(|row| {
-                                row.property_identifier == PropertyIdentifier::ACKED_TRANSITIONS
-                            })
-                            .expect("migrated metadata must include Acked_Transitions");
-                        assert_eq!(row.write_capability, PropertyWriteCapability::ReadOnly);
-                    }
+                    let row = metadata
+                        .iter()
+                        .find(|row| {
+                            row.property_identifier == PropertyIdentifier::ACKED_TRANSITIONS
+                        })
+                        .expect("the metadata must include Acked_Transitions");
+                    assert_eq!(row.write_capability, PropertyWriteCapability::ReadOnly);
                 }
                 for priority in [None, Some(1), Some(16)] {
                     // Fabricating, erasing, and partially replacing acknowledgments

@@ -1,6 +1,7 @@
 //! A writable decorator must preserve source authority and its own write gate.
 use super::*;
 use bacnet_objects::command_source::CommandOrigin;
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_types::enums::ObjectType;
 use bacnet_types::error::RemoteError;
 use std::sync::Mutex;
@@ -13,8 +14,11 @@ impl BACnetObject for RecordingObject {
     fn object_name(&self) -> &str {
         "source-forwarding"
     }
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&[])
+    }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
     fn read_property(&self, _: PropertyIdentifier, _: Option<u32>) -> Result<PropertyValue, Error> {
         Ok(PropertyValue::Null)

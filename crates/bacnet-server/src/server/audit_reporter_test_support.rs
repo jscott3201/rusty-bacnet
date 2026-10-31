@@ -3,6 +3,7 @@
 use super::super::*;
 use crate::server::test_transport::{SendMode, SentFrame, StartMode, TestTransport};
 use bacnet_encoding::{apdu::decode_apdu, npdu::decode_npdu};
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::{
     analog::AnalogInputObject,
     audit::AuditReporterObject,
@@ -242,6 +243,9 @@ impl<O: BACnetObject> BACnetObject for CountingValue<O> {
             .write_property_from(property, index, value, priority, origin)?;
         self.writes.fetch_add(1, Ordering::AcqRel);
         Ok(())
+    }
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        self.value.property_metadata()
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         self.value.property_list()

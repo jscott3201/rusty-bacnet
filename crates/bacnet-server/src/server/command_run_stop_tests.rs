@@ -17,6 +17,7 @@ use super::cov_wire_test_support::*;
 use super::*;
 use bacnet_encoding::constructed::decode_action_list;
 use bacnet_objects::command::CommandObject;
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{BACnetActionCommand, BACnetActionList};
 use bacnet_types::enums::WriteStatus;
@@ -320,8 +321,11 @@ impl BACnetObject for Panicking {
         panic!("BOOM-7 refuses every write by panicking");
     }
 
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&[])
+    }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 }
 

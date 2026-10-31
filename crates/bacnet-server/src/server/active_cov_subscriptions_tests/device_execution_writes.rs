@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::error::RemoteError;
 use std::sync::Mutex;
@@ -19,14 +20,20 @@ impl BACnetObject for WritableObject {
             "writable-other"
         }
     }
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::rows(
+            &[
+                PropertyIdentifier::DESCRIPTION,
+                SERVICES,
+                ACTIVE,
+                MULTIPLE,
+                LIST,
+            ],
+            &[PropertyIdentifier::DESCRIPTION],
+        )
+    }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Owned(vec![
-            SERVICES,
-            ACTIVE,
-            MULTIPLE,
-            LIST,
-            PropertyIdentifier::DESCRIPTION,
-        ])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
     fn read_property(
         &self,

@@ -11,6 +11,7 @@ use super::channel_wire_tests::{
 use super::command_action_wire_tests::ao;
 use super::cov_wire_test_support::*;
 use super::*;
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::WriteStatus;
 use std::borrow::Cow;
@@ -64,8 +65,14 @@ impl BACnetObject for Recorder {
         Ok(())
     }
 
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        // Vendor members 1000 to 1003 and Lighting_Command, all writable.
+        let mut served: Vec<_> = (1000..=1003).map(PropertyIdentifier::from_raw).collect();
+        served.push(PropertyIdentifier::LIGHTING_COMMAND);
+        crate::test_rows::rows(&served, &served)
+    }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 }
 

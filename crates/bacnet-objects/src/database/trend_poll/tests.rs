@@ -1,6 +1,7 @@
 use super::*;
 use crate::analog::AnalogValueObject;
 use crate::clock::{ClockFrame, ClockReader};
+use crate::property_metadata::PropertyMetadata;
 use crate::trend::TrendLogObject;
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
 use bacnet_types::enums::EngineeringUnits;
@@ -269,6 +270,9 @@ impl BACnetObject for ConfigurableTrend {
     }
     fn object_name(&self) -> &str {
         self.inner.object_name()
+    }
+    fn property_metadata(&self) -> std::borrow::Cow<'_, [PropertyMetadata]> {
+        self.inner.property_metadata()
     }
     fn property_list(&self) -> std::borrow::Cow<'static, [P]> {
         self.inner.property_list()

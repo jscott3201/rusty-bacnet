@@ -83,8 +83,8 @@ pub(super) fn cov_reported_properties_default(
 /// Everything else, the BACnetLIST properties included, takes no array index:
 /// Clause 12.1.5.2 leaves ReadRange as the only positional access to a list.
 ///
-/// Like [`historical_writable_default`] this is a free function (not a
-/// per-object override) so the default trait method can delegate to it
+/// This is a free function (not a per-object override) so the default trait
+/// method can delegate to it
 /// without requiring `Self: Sized` (which would break `dyn BACnetObject`
 /// dispatch).
 #[inline]
@@ -240,48 +240,6 @@ pub(super) fn list_property_default(object_type: ObjectType, property: PropertyI
         ),
         _ => false,
     }
-}
-
-/// The historical PICS writable-property heuristic, used by the default
-/// [`super::BACnetObject::is_writable_property`] so unmigrated object types keep
-/// their current PICS output.
-///
-/// This is a free function (not a per-object override) so the default trait
-/// method can delegate to it without requiring `Self: Sized` (which would
-/// break `dyn BACnetObject` dispatch). Object implementations should override
-/// [`super::BACnetObject::is_writable_property`] to mirror their real
-/// `write_property` arms exactly rather than calling this.
-#[inline]
-pub(super) fn historical_writable_default(
-    object_type: ObjectType,
-    property: PropertyIdentifier,
-) -> bool {
-    // Universal read-only properties.
-    if property == PropertyIdentifier::OBJECT_IDENTIFIER
-        || property == PropertyIdentifier::OBJECT_TYPE
-        || property == PropertyIdentifier::PROPERTY_LIST
-        || property == PropertyIdentifier::STATUS_FLAGS
-    {
-        return false;
-    }
-
-    if property == PropertyIdentifier::OBJECT_NAME {
-        return true;
-    }
-
-    if property == PropertyIdentifier::PRESENT_VALUE {
-        return object_type != ObjectType::ANALOG_INPUT
-            && object_type != ObjectType::BINARY_INPUT
-            && object_type != ObjectType::MULTI_STATE_INPUT;
-    }
-
-    property == PropertyIdentifier::DESCRIPTION
-        || property == PropertyIdentifier::OUT_OF_SERVICE
-        || property == PropertyIdentifier::COV_INCREMENT
-        || property == PropertyIdentifier::HIGH_LIMIT
-        || property == PropertyIdentifier::LOW_LIMIT
-        || property == PropertyIdentifier::DEADBAND
-        || property == PropertyIdentifier::NOTIFICATION_CLASS
 }
 
 #[cfg(test)]

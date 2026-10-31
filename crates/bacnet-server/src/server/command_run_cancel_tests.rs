@@ -20,6 +20,7 @@ use super::command_action_wire_tests::{ao, cmd, idle, read_db, slot8};
 use super::command_run_stop_tests::{channel_status, db_flags, db_state, objects, with_channel};
 use super::cov_wire_test_support::*;
 use super::*;
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_types::enums::{EngineeringUnits, WriteStatus};
 use std::future::Future;
 use std::pin::Pin;
@@ -213,8 +214,14 @@ impl bacnet_objects::traits::BACnetObject for PanicsAfterCommit {
         Ok(())
     }
 
+    fn property_metadata(&self) -> std::borrow::Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::rows(
+            &[PropertyIdentifier::PRESENT_VALUE],
+            &[PropertyIdentifier::PRESENT_VALUE],
+        )
+    }
     fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
-        std::borrow::Cow::Borrowed(&[])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 
     fn evaluate_intrinsic_reporting(&mut self) -> Option<bacnet_objects::event::TransitionOutcome> {
@@ -384,6 +391,9 @@ impl bacnet_objects::traits::BACnetObject for Rearmable {
         self.0.write_property(p, i, value, priority)
     }
 
+    fn property_metadata(&self) -> std::borrow::Cow<'_, [PropertyMetadata]> {
+        self.0.property_metadata()
+    }
     fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
         self.0.property_list()
     }
