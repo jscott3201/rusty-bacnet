@@ -7,6 +7,7 @@
 //! timestamps, a clock set back and timestamps that aren't actual moments,
 //! both must give the same bytes or the same error for every request. An
 //! Audit Log ring whose numbers skip falls back to the search.
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_types::error::RemoteError;
 use std::collections::VecDeque;
 use std::ops::Range;
@@ -530,8 +531,11 @@ impl BACnetObject for OddAuditRing {
         unreachable!("ReadRange is read-only")
     }
 
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&[PropertyIdentifier::LOG_BUFFER])
+    }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[PropertyIdentifier::LOG_BUFFER])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 
     fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {

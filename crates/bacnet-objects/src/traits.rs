@@ -45,10 +45,7 @@ pub type MonotonicClock = dyn Fn() -> Duration + Send + Sync;
 pub type DeadlineWaker = dyn Fn() + Send + Sync;
 
 mod defaults;
-use defaults::{
-    array_property_default, cov_reported_properties_default, historical_writable_default,
-    list_property_default,
-};
+use defaults::{array_property_default, cov_reported_properties_default, list_property_default};
 
 /// One property a whole-object (SubscribeCOV) notification reports after
 /// Present_Value and Status_Flags, from the object type's Table 13-1 row.
@@ -265,19 +262,122 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
 
     /// Return canonical metadata for this object's effective property rows.
     ///
-    /// Migrated implementations return every supported standard row for the
-    /// current instance, including `PROPERTY_LIST`. Borrowed rows cover static
-    /// or object-owned metadata; owned rows support dynamically assembled
-    /// per-instance sets. An empty borrowed default marks an object as unmigrated.
-    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
-        Cow::Borrowed(&[])
-    }
-
-    /// List all properties this object supports in the legacy projection.
+    /// The rows are the object's property model: one row for every property
+    /// the current instance serves, `PROPERTY_LIST` and the universal
+    /// Object_Identifier, Object_Name and Object_Type among them. Each row
+    /// carries the property's `R`/`W`/`O` classification, the condition that
+    /// makes an optional row present, and the write route the object
+    /// implements. The defaults of [`Self::required_properties`] and
+    /// [`Self::is_writable_property`] derive from them, and the bundled server
+    /// reads them for property presence, ReadPropertyMultiple's ALL, REQUIRED
+    /// and OPTIONAL, the indexed-write gate and the PICS. A property missing
+    /// from the rows is absent to all of those, whatever `read_property`
+    /// answers. Every built-in object type supplies rows, and a custom object
+    /// supplies its own. The smallest honest set is the universal rows plus
+    /// one for each property the object serves:
     ///
-    /// For migrated objects this includes Object_Identifier, Object_Name, and
-    /// Object_Type but omits Property_List. Reading the BACnet Property_List
-    /// property applies the additional wire-level universal-property filter.
+    /// ```
+    /// use std::borrow::Cow;
+    /// use bacnet_objects::property_metadata::{
+    ///     PropertyConformance as C, PropertyMetadata, PropertyWriteCapability as Wr,
+    ///     property_list_from_metadata,
+    /// };
+    /// use bacnet_objects::traits::BACnetObject;
+    /// use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier as P};
+    /// use bacnet_types::error::Error;
+    /// use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+    ///
+    /// // The universal properties, plus a writable Present_Value.
+    /// const ROWS: &[PropertyMetadata] = &[
+    ///     PropertyMetadata::new(P::OBJECT_IDENTIFIER, C::RequiredRead, None, Wr::ReadOnly),
+    ///     PropertyMetadata::new(P::OBJECT_NAME, C::RequiredRead, None, Wr::ReadOnly),
+    ///     PropertyMetadata::new(P::OBJECT_TYPE, C::RequiredRead, None, Wr::ReadOnly),
+    ///     PropertyMetadata::new(P::PRESENT_VALUE, C::RequiredWrite, None, Wr::Always),
+    ///     PropertyMetadata::new(P::PROPERTY_LIST, C::RequiredRead, None, Wr::ReadOnly),
+    /// ];
+    ///
+    /// struct Setpoint(f32);
+    ///
+    /// impl BACnetObject for Setpoint {
+    ///     fn object_identifier(&self) -> ObjectIdentifier {
+    ///         ObjectIdentifier::new(ObjectType::from_raw(130), 1).unwrap()
+    ///     }
+    ///     fn object_name(&self) -> &str {
+    ///         "setpoint"
+    ///     }
+    ///     fn read_property(&self, p: P, _: Option<u32>) -> Result<PropertyValue, Error> {
+    ///         match p {
+    ///             P::PRESENT_VALUE => Ok(PropertyValue::Real(self.0)),
+    ///             // ... and the universal rows ...
+    ///             _ => Err(Error::protocol(ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY)),
+    ///         }
+    ///     }
+    ///     fn write_property(
+    ///         &mut self,
+    ///         p: P,
+    ///         _: Option<u32>,
+    ///         value: PropertyValue,
+    ///         _: Option<u8>,
+    ///     ) -> Result<(), Error> {
+    ///         match (p, value) {
+    ///             (P::PRESENT_VALUE, PropertyValue::Real(v)) => {
+    ///                 self.0 = v;
+    ///                 Ok(())
+    ///             }
+    ///             _ => Err(Error::protocol(ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED)),
+    ///         }
+    ///     }
+    ///     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+    ///         Cow::Borrowed(ROWS)
+    ///     }
+    ///     fn property_list(&self) -> Cow<'static, [P]> {
+    ///         property_list_from_metadata(ROWS)
+    ///     }
+    /// }
+    ///
+    /// let object = Setpoint(21.0);
+    /// assert!(object.is_writable_property(P::PRESENT_VALUE));
+    /// assert!(!object.is_writable_property(P::OBJECT_NAME));
+    /// assert_eq!(object.required_properties().len(), 5);
+    /// ```
+    ///
+    /// Return borrowed rows for a fixed or object-owned set, and owned rows
+    /// for a set assembled per instance, such as one that grows optional rows
+    /// with the object's configuration. There is no default: an object that
+    /// doesn't say what it serves doesn't build.
+    ///
+    /// ```compile_fail,E0046
+    /// # use std::borrow::Cow;
+    /// # use bacnet_objects::traits::BACnetObject;
+    /// # use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+    /// # use bacnet_types::error::Error;
+    /// # use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+    /// struct NoRows;
+    ///
+    /// impl BACnetObject for NoRows {
+    /// #   fn object_identifier(&self) -> ObjectIdentifier {
+    /// #       ObjectIdentifier::new(ObjectType::from_raw(130), 1).unwrap()
+    /// #   }
+    /// #   fn object_name(&self) -> &str { "no-rows" }
+    /// #   fn read_property(&self, _: PropertyIdentifier, _: Option<u32>)
+    /// #       -> Result<PropertyValue, Error> { unimplemented!() }
+    /// #   fn write_property(&mut self, _: PropertyIdentifier, _: Option<u32>,
+    /// #       _: PropertyValue, _: Option<u8>) -> Result<(), Error> { unimplemented!() }
+    ///     // Every required method but `property_metadata`.
+    ///     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
+    ///         Cow::Borrowed(&[])
+    ///     }
+    /// }
+    /// ```
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]>;
+
+    /// List all properties this object supports, without Property_List.
+    ///
+    /// This is [`Self::property_metadata`] minus its `PROPERTY_LIST` row, so
+    /// it includes Object_Identifier, Object_Name, and Object_Type
+    /// ([`property_list_from_metadata`](crate::property_metadata::property_list_from_metadata)
+    /// derives it). Reading the BACnet Property_List property applies the
+    /// additional wire-level universal-property filter.
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]>;
 
     /// Bind or remove the database's shared wall-clock reader.
@@ -362,14 +462,14 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// `write_property_from` where source authority is required) rather than a
     /// separate heuristic, so the PICS
     /// writable flags cannot drift from the actual write routes. The default
-    /// reproduces the historical PICS heuristic (see
-    /// `historical_writable_default`) so unmigrated object types keep their
-    /// current PICS output. Object implementations override to mirror their
-    /// real write capabilities, including required command origin and ownership.
+    /// answers from the property's [`Self::property_metadata`] row: writable
+    /// when its [`PropertyWriteCapability`](crate::property_metadata::PropertyWriteCapability)
+    /// names a write route, and not writable for a property without a row.
+    /// Keep the rows' write capabilities true to `write_property`, including
+    /// required command origin and ownership, rather than overriding this.
     ///
-    /// Universal read-only properties (`OBJECT_IDENTIFIER`, `OBJECT_TYPE`,
-    /// `PROPERTY_LIST`, `STATUS_FLAGS`) are always non-writable and are
-    /// excluded by the default; overrides should preserve that invariant.
+    /// `OBJECT_IDENTIFIER`, `OBJECT_TYPE` and `PROPERTY_LIST` are never
+    /// writable over the network; their rows should say `ReadOnly`.
     ///
     /// Built-in analog, binary, multi-state, Event Enrollment, and Alert
     /// Enrollment objects also deny network writes to `ACKED_TRANSITIONS`.
@@ -381,12 +481,10 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// supported AcknowledgeAlarm paths do not use `write_property`, so this
     /// network restriction does not prevent their internal updates.
     fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        let metadata = self.property_metadata();
-        if metadata.is_empty() {
-            historical_writable_default(self.object_identifier().object_type(), property)
-        } else {
-            crate::property_metadata::is_writable_in_metadata(metadata.as_ref(), property)
-        }
+        crate::property_metadata::is_writable_in_metadata(
+            self.property_metadata().as_ref(),
+            property,
+        )
     }
 
     /// Whether `property` accepts an array index on this object.
@@ -436,9 +534,16 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
 
     /// Whether this object type can be created at runtime via CreateObject.
     ///
-    /// Default `false`; override `true` only for types the network factory
-    /// (`handle_create_object`) actually constructs, so PICS createability
-    /// matches the runtime factory with no separate list to drift.
+    /// Default `false`. The bundled server's PICS reports the answer as the
+    /// type's createability. Its CreateObject handler doesn't ask: it builds
+    /// objects from a fixed factory of built-in types (Analog Input and
+    /// Output, the binary types and the multi-state types), which are the
+    /// ones that answer `true`. It refuses every other type, a custom type
+    /// included: OBJECT / UNSUPPORTED_OBJECT_TYPE for a type the Device
+    /// doesn't list in Protocol_Object_Types_Supported, and OBJECT /
+    /// DYNAMIC_CREATION_NOT_SUPPORTED for a listed one it doesn't build
+    /// (#2171). So a custom object keeps the default; answering `true` would
+    /// make the PICS promise a creation the server refuses.
     fn is_createable(&self) -> bool {
         false
     }
@@ -486,32 +591,30 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         ))
     }
 
-    /// Whether this object type can be deleted at runtime via DeleteObject.
+    /// Whether this object can be deleted at runtime via DeleteObject.
     ///
-    /// Default `true`; override `false` on object types that are not
-    /// deleteable (e.g. `Device`, `NetworkPort`).
+    /// Default `true`: the bundled server's DeleteObject handler asks this of
+    /// the named object and removes it when the answer is `true`, a custom
+    /// object included. When it is `false` the request is refused with
+    /// OBJECT / OBJECT_DELETION_NOT_PERMITTED and the object stays (#2171).
+    /// The PICS reports the answer as the type's deleteability. Override it
+    /// to `false` for an object a client must not remove, such as one that
+    /// models a fixed part of the device; the built-in Device and Network
+    /// Port do.
     fn is_deleteable(&self) -> bool {
         true
     }
 
     /// List the REQUIRED properties for this object type.
     ///
-    /// Migrated objects derive this set from canonical `R` and `W` rows,
-    /// including Property_List. Unmigrated objects retain the historical four
-    /// universal properties. Service-specific consumers may exclude
-    /// Property_List where their protocol contract requires it.
+    /// The default derives the set from the [`Self::property_metadata`] rows
+    /// that are required, by their `R` or `W` code or by the condition that
+    /// made them present, Property_List included. Service-specific consumers
+    /// may exclude Property_List where their protocol contract requires it.
     fn required_properties(&self) -> Cow<'static, [PropertyIdentifier]> {
-        let metadata = self.property_metadata();
-        if !metadata.is_empty() {
-            return crate::property_metadata::required_properties_from_metadata(metadata.as_ref());
-        }
-        static UNIVERSAL: [PropertyIdentifier; 4] = [
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PROPERTY_LIST,
-        ];
-        Cow::Borrowed(&UNIVERSAL)
+        crate::property_metadata::required_properties_from_metadata(
+            self.property_metadata().as_ref(),
+        )
     }
 
     /// Whether this object type supports COV notifications.

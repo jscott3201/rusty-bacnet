@@ -2,6 +2,7 @@ use super::*;
 use bacnet_objects::file::{
     FileObject, FileRecordRead, FileStorage, FileStreamRead, FileWriteStart,
 };
+use bacnet_objects::property_metadata::PropertyMetadata;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Kind {
@@ -113,8 +114,11 @@ impl BACnetObject for Probe {
     fn object_name(&self) -> &str {
         "read target"
     }
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&[])
+    }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
     fn is_array_property(&self, property: PropertyIdentifier) -> bool {
         property == PropertyIdentifier::WEEKLY_SCHEDULE

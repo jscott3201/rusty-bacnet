@@ -5,6 +5,7 @@
 
 use super::*;
 use bacnet_objects::device::SUPPORTED_OBJECT_TYPES;
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_services::object_mgmt::{CreateObjectRequest, DeleteObjectRequest, ObjectSpecifier};
 use std::borrow::Cow;
 
@@ -173,8 +174,11 @@ impl BACnetObject for Vendor {
         ))
     }
 
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&[])
+    }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 }
 
@@ -237,6 +241,9 @@ impl BACnetObject for Pinned {
             .write_property(property, array_index, value, priority)
     }
 
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        self.0.property_metadata()
+    }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         self.0.property_list()
     }

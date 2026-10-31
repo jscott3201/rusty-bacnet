@@ -358,13 +358,10 @@ pub(crate) fn check_write_array_index(
     if index.is_none() {
         return Ok(());
     }
-    let metadata = object.property_metadata();
-    // Empty metadata is the optional custom/unmigrated default, not proof of
-    // absence. Preserve those objects' classifier and write dispatch.
-    if !metadata.is_empty()
-        && !metadata
-            .iter()
-            .any(|row| row.property_identifier == property)
+    if !object
+        .property_metadata()
+        .iter()
+        .any(|row| row.property_identifier == property)
     {
         return Err(protocol_error(
             ErrorClass::PROPERTY,

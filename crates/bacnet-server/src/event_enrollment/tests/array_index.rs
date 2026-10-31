@@ -1,6 +1,7 @@
 use super::super::*;
 use bacnet_objects::analog::AnalogValueObject;
 use bacnet_objects::event_enrollment::{EventEnrollmentEvalState, EventEnrollmentObject};
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventParameter, ChangeOfValueCriteria,
@@ -152,6 +153,9 @@ impl BACnetObject for IndexedReadProbe {
         )
     }
 
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        self.inner.property_metadata()
+    }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         self.inner.property_list()
     }

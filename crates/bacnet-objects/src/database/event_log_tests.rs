@@ -6,6 +6,7 @@ use crate::clock::{ClockFrame, ClockReader};
 use crate::device::{DeviceConfig, DeviceObject};
 use crate::event_enrollment::EventEnrollmentObject;
 use crate::event_log::EventLogObject;
+use crate::property_metadata::PropertyMetadata;
 use crate::traits::BACnetObject;
 use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, NotificationParameters};
@@ -349,8 +350,11 @@ impl BACnetObject for Refusing {
     ) -> Result<(), Error> {
         Err(crate::common::unknown_property_error())
     }
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&[])
+    }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[])
+        crate::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
     fn add_event_log_record(&mut self, _: BACnetEventLogRecord) -> Result<(), Error> {
         self.0.fetch_add(1, Ordering::Relaxed);

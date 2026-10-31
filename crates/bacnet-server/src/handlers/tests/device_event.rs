@@ -1,6 +1,7 @@
 use super::*;
 use bacnet_encoding::primitives::encode_timestamp_choice;
 use bacnet_objects::notification_class::NotificationClass;
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::NotifyType;
 use bacnet_types::error::RemoteError;
@@ -66,8 +67,8 @@ impl BACnetObject for EventSummaryFixture {
         ))
     }
 
-    fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
-        static PROPERTIES: &[PropertyIdentifier] = &[
+    fn property_metadata(&self) -> std::borrow::Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&[
             PropertyIdentifier::EVENT_DETECTION_ENABLE,
             PropertyIdentifier::EVENT_STATE,
             PropertyIdentifier::NOTIFICATION_CLASS,
@@ -75,8 +76,10 @@ impl BACnetObject for EventSummaryFixture {
             PropertyIdentifier::NOTIFY_TYPE,
             PropertyIdentifier::ACKED_TRANSITIONS,
             PropertyIdentifier::EVENT_TIME_STAMPS,
-        ];
-        std::borrow::Cow::Borrowed(PROPERTIES)
+        ])
+    }
+    fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 }
 

@@ -5,6 +5,7 @@
 use super::super::*;
 use super::*;
 use bacnet_objects::event_enrollment::EventEnrollmentEvalState;
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_types::constructed::ChangeOfValueCriteria;
 use std::borrow::Cow;
 
@@ -158,11 +159,14 @@ impl BACnetObject for Variable {
         Ok(())
     }
 
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::rows(
+            &[PropertyIdentifier::PRESENT_VALUE],
+            &[PropertyIdentifier::PRESENT_VALUE],
+        )
+    }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::PRESENT_VALUE,
-        ])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 }
 
@@ -365,6 +369,9 @@ impl BACnetObject for UnencodableParameters {
             .write_property(property, array_index, value, priority)
     }
 
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        self.inner.property_metadata()
+    }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         self.inner.property_list()
     }

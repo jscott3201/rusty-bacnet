@@ -6,6 +6,7 @@ use crate::server::cov_notify_context::CovNotifyContext;
 use crate::server::test_transport::{BIP_LOCAL_MAC, SendLog, SendMode, TestTransport};
 use bacnet_objects::analog::AnalogValueObject;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_types::enums::EngineeringUnits;
 use std::collections::HashSet;
 
@@ -370,8 +371,11 @@ impl bacnet_objects::traits::BACnetObject for PanicsOnce {
         "PANICS-ONCE"
     }
 
+    fn property_metadata(&self) -> std::borrow::Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&[PropertyIdentifier::PRESENT_VALUE])
+    }
     fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
-        std::borrow::Cow::Borrowed(&[PropertyIdentifier::PRESENT_VALUE])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 
     fn read_property(

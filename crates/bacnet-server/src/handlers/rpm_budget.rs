@@ -36,46 +36,16 @@ fn expand(
     ) {
         return visit(id);
     }
-    let metadata = object.property_metadata();
-    if !metadata.is_empty() {
-        for row in metadata.iter() {
-            let selected = match id {
-                PropertyIdentifier::ALL => {
-                    row.property_identifier != PropertyIdentifier::PROPERTY_LIST
-                }
-                PropertyIdentifier::REQUIRED => {
-                    row.property_identifier != PropertyIdentifier::PROPERTY_LIST
-                        && row.is_required()
-                }
-                _ => !row.is_required(),
-            };
-            if selected {
-                visit(row.property_identifier)?;
-            }
-        }
-    } else {
-        match id {
-            PropertyIdentifier::ALL => {
-                for &property in object.property_list().iter() {
-                    visit(property)?;
-                }
-            }
+    for row in object.property_metadata().iter() {
+        let selected = match id {
+            PropertyIdentifier::ALL => row.property_identifier != PropertyIdentifier::PROPERTY_LIST,
             PropertyIdentifier::REQUIRED => {
-                for &property in object.required_properties().iter() {
-                    visit(property)?;
-                }
+                row.property_identifier != PropertyIdentifier::PROPERTY_LIST && row.is_required()
             }
-            _ => {
-                // Preserve legacy expected-linear selection even when every
-                // row is required and the result budget never cuts the scan.
-                let required: HashSet<PropertyIdentifier> =
-                    object.required_properties().iter().copied().collect();
-                for &property in object.property_list().iter() {
-                    if !required.contains(&property) {
-                        visit(property)?;
-                    }
-                }
-            }
+            _ => !row.is_required(),
+        };
+        if selected {
+            visit(row.property_identifier)?;
         }
     }
     Ok(())

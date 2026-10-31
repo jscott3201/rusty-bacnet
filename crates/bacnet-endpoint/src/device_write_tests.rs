@@ -346,6 +346,11 @@ async fn device_write_rejects_device_shaped_custom_object_without_authority() {
         fn object_name(&self) -> &str {
             self.0.object_name()
         }
+        fn property_metadata(
+            &self,
+        ) -> std::borrow::Cow<'_, [bacnet_objects::property_metadata::PropertyMetadata]> {
+            self.0.property_metadata()
+        }
         fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
             self.0.property_list()
         }

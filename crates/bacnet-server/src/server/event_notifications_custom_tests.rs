@@ -1,6 +1,7 @@
 //! A custom implementation using only public object-contract types.
 use super::*;
 use bacnet_objects::event::{EventTransitionCommit, EventTransitionCommitError, TransitionOutcome};
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_services::alarm_event::NotificationParameters;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::primitives::StatusFlags;
@@ -124,8 +125,11 @@ impl BACnetObject for CustomProposal {
             ErrorCode::WRITE_ACCESS_DENIED,
         ))
     }
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&[])
+    }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
     fn evaluate_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
         if self.delay == 0 {
@@ -198,6 +202,9 @@ impl BACnetObject for UnsupportedProposal {
         priority: Option<u8>,
     ) -> Result<(), Error> {
         self.0.write_property(p, i, v, priority)
+    }
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        self.0.property_metadata()
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         self.0.property_list()
