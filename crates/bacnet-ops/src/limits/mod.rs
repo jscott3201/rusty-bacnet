@@ -42,6 +42,43 @@ pub struct RequestLimits {
     state: Mutex<Slots>,
     gates: Mutex<HashMap<u32, Arc<Semaphore>>>,
     networks: Option<Networks>,
+    /// Limits that join these for a while ([`set_overlay`](Self::set_overlay)).
+    /// The lock is held only to swap or clone the layer, never across an
+    /// await.
+    overlay: Mutex<Option<Arc<Layer>>>,
+}
+
+/// Limits that join a session's own for a while, as an attached agent's
+/// do while it is attached (#2185): a global rate, the stricter of it and
+/// the session's own counting, and a rate per network.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Overlay {
+    /// Requests a second across every network (0 for no cap of its own).
+    pub global: u32,
+    /// Requests a second to a network without a rate of its own (0 for no
+    /// cap).
+    pub network: u32,
+    /// The networks with rates of their own.
+    pub rates: Vec<(u16, u32)>,
+}
+
+/// An [`Overlay`] in force.
+struct Layer {
+    interval: Duration,
+    networks: Networks,
+}
+
+impl Networks {
+    fn new(default: u32, rates: impl IntoIterator<Item = (u16, u32)>) -> Self {
+        Self {
+            default: spacing(default),
+            rates: rates
+                .into_iter()
+                .map(|(network, per_second)| (network, spacing(per_second)))
+                .collect(),
+            next: Mutex::new(HashMap::new()),
+        }
+    }
 }
 
 /// The rate of each network: requests to it are spaced as the global cap
@@ -54,10 +91,27 @@ struct Networks {
 }
 
 impl Networks {
+    /// The spacing of requests to `network`; zero for none.
+    fn interval(&self, network: u16) -> Duration {
+        self.rates.get(&network).copied().unwrap_or(self.default)
+    }
+
+    /// These rates joined with `other`'s: each network at the stricter.
+    fn join(&self, other: &Self) -> Self {
+        let networks = self.rates.keys().chain(other.rates.keys());
+        Self {
+            default: self.default.max(other.default),
+            rates: networks
+                .map(|&n| (n, self.interval(n).max(other.interval(n))))
+                .collect(),
+            next: Mutex::new(HashMap::new()),
+        }
+    }
+
     /// The instant a request to `network` may go, reserving it; `None`
     /// when the network has no rate.
     fn reserve(&self, network: u16, now: Instant) -> Option<Instant> {
-        let interval = self.rates.get(&network).copied().unwrap_or(self.default);
+        let interval = self.interval(network);
         if interval.is_zero() {
             return None;
         }
@@ -104,6 +158,7 @@ impl RequestLimits {
             state: Mutex::new(Slots::default()),
             gates: Mutex::new(HashMap::new()),
             networks: None,
+            overlay: Mutex::new(None),
         }
     }
 
@@ -117,21 +172,40 @@ impl RequestLimits {
         default: u32,
         rates: impl IntoIterator<Item = (u16, u32)>,
     ) -> Self {
-        self.networks = Some(Networks {
-            default: spacing(default),
-            rates: rates
-                .into_iter()
-                .map(|(network, per_second)| (network, spacing(per_second)))
-                .collect(),
-            next: Mutex::new(HashMap::new()),
-        });
+        self.networks = Some(Networks::new(default, rates));
         self
+    }
+
+    /// Let `overlay` join these limits until it is replaced or cleared
+    /// (`None`): requests then keep to the stricter of the two global
+    /// rates, and per network to the stricter of the two. The switch
+    /// takes effect from the next request; no engine is rebuilt.
+    pub fn set_overlay(&self, overlay: Option<&Overlay>) {
+        let layer = overlay.map(|overlay| {
+            let networks = Networks::new(overlay.network, overlay.rates.iter().copied());
+            Arc::new(Layer {
+                interval: spacing(overlay.global),
+                networks: match &self.networks {
+                    Some(own) => own.join(&networks),
+                    None => networks,
+                },
+            })
+        });
+        *self.overlay.lock().unwrap_or_else(PoisonError::into_inner) = layer;
+    }
+
+    /// The overlay in force, if any.
+    fn layer(&self) -> Option<Arc<Layer>> {
+        self.overlay
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// True when requests are spaced per network too, so a request has to
     /// say which network its device is on ([`turn_on`](Self::turn_on)).
     pub fn paces_networks(&self) -> bool {
-        self.networks.is_some()
+        self.networks.is_some() || self.layer().is_some()
     }
 
     /// `device`'s gate: one permit, held by whichever request to it is
@@ -194,14 +268,24 @@ impl RequestLimits {
         }
     }
 
-    /// Wait for `network`'s slot, then the global one.
+    /// Wait for `network`'s slot, then the global one, under the overlay
+    /// too while one is in force.
     async fn pace(&self, network: Option<u16>) {
-        if let (Some(networks), Some(network)) = (&self.networks, network)
+        let layer = self.layer();
+        let networks = layer
+            .as_deref()
+            .map(|layer| &layer.networks)
+            .or(self.networks.as_ref());
+        if let (Some(networks), Some(network)) = (networks, network)
             && let Some(slot) = networks.reserve(network, Instant::now())
         {
             tokio::time::sleep_until(slot).await;
         }
-        self.wait_slot().await;
+        let interval = self.global_spacing(layer.as_deref());
+        let slot = self.reserve(Instant::now(), interval);
+        if !interval.is_zero() {
+            tokio::time::sleep_until(slot).await;
+        }
     }
 
     /// Wait until `device`'s gate is free and a request could go at once,
@@ -211,11 +295,22 @@ impl RequestLimits {
         self.wait_free().await;
     }
 
-    /// The instant this request may go, reserving it.
-    fn reserve(&self, now: Instant) -> Instant {
+    /// The global spacing in force: the stricter of these limits' own and
+    /// `layer`'s.
+    fn global_spacing(&self, layer: Option<&Layer>) -> Duration {
+        layer.map_or(self.interval, |layer| layer.interval.max(self.interval))
+    }
+
+    /// The instant this request may go, `interval` before the next,
+    /// reserving it. Without spacing it goes now, whatever slots spaced
+    /// requests left booked.
+    fn reserve(&self, now: Instant, interval: Duration) -> Instant {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        let slot = state.next.map_or(now, |next| next.max(now));
-        state.next = Some(slot + self.interval);
+        let slot = match state.next {
+            Some(next) if !interval.is_zero() => next.max(now),
+            _ => now,
+        };
+        state.next = Some(slot + interval);
         while state
             .recent
             .front()
@@ -234,13 +329,6 @@ impl RequestLimits {
         self.slot(None).await;
     }
 
-    async fn wait_slot(&self) {
-        let slot = self.reserve(Instant::now());
-        if !self.interval.is_zero() {
-            tokio::time::sleep_until(slot).await;
-        }
-    }
-
     /// Wait until a request could go at once, without reserving a slot: a
     /// caller that decides only then what to send (the name reads) spends
     /// no slot on work withdrawn while it waited.
@@ -253,6 +341,10 @@ impl RequestLimits {
     /// have been withdrawn meanwhile.
     pub async fn wait_free(&self) {
         loop {
+            // Without spacing a request could always go at once.
+            if self.global_spacing(self.layer().as_deref()).is_zero() {
+                return;
+            }
             let next = self
                 .state
                 .lock()
@@ -350,6 +442,80 @@ mod tests {
         let before = Instant::now();
         drop(limits.turn_on(20, None).await);
         assert_eq!(Instant::now(), before);
+    }
+
+    /// An overlay holds requests to its rates while it is in force, the
+    /// stricter global rate winning, and the limits' own apply again once
+    /// it is cleared.
+    #[tokio::test(start_paused = true)]
+    async fn an_overlay_joins_the_limits_while_it_is_in_force() {
+        let limits = RequestLimits::new(50);
+        let spaced = async |limits: &RequestLimits, network| {
+            let start = Instant::now();
+            for device in 0..3 {
+                drop(limits.turn_on(device, network).await);
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            (Instant::now() - start - Duration::from_secs(1)).as_millis()
+        };
+        assert!(!limits.paces_networks());
+        assert_eq!(spaced(&limits, None).await, 40, "its own 50 a second");
+        let overlay = Overlay {
+            global: 10,
+            network: 20,
+            rates: vec![(2001, 2)],
+        };
+        limits.set_overlay(Some(&overlay));
+        assert!(limits.paces_networks());
+        assert_eq!(spaced(&limits, None).await, 200, "the overlay's 10");
+        assert_eq!(spaced(&limits, Some(2001)).await, 1000, "network 2001's 2");
+        limits.set_overlay(Some(&Overlay {
+            global: 100,
+            ..overlay
+        }));
+        assert_eq!(spaced(&limits, None).await, 40, "the stricter, its own");
+        limits.set_overlay(None);
+        assert!(!limits.paces_networks());
+        assert_eq!(spaced(&limits, Some(2001)).await, 40, "its own again");
+    }
+
+    /// Per network the overlay joins the limits' own rates, the stricter
+    /// winning; without a global cap, a request goes at once once the
+    /// overlay is cleared, though overlay-spaced slots were booked ahead.
+    #[tokio::test(start_paused = true)]
+    async fn an_overlay_joins_network_rates_and_leaves_no_wait_behind() {
+        let limits = RequestLimits::new(0).with_network_rates(0, [(2001, 4), (2003, 5)]);
+        let spaced = async |limits: &RequestLimits, network| {
+            let start = Instant::now();
+            for device in 0..3 {
+                drop(limits.turn_on(device, Some(network)).await);
+            }
+            let spent = (Instant::now() - start).as_millis();
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            spent
+        };
+        let overlay = Overlay {
+            global: 0,
+            network: 0,
+            rates: vec![(2001, 2), (2003, 10)],
+        };
+        limits.set_overlay(Some(&overlay));
+        assert_eq!(spaced(&limits, 2001).await, 1000, "the overlay's 2");
+        assert_eq!(spaced(&limits, 2003).await, 400, "its own 5");
+        limits.set_overlay(Some(&Overlay {
+            global: 1,
+            ..overlay
+        }));
+        for device in 0..3 {
+            drop(limits.turn(device).await);
+        }
+        limits.set_overlay(None);
+        let start = Instant::now();
+        limits.wait_free().await;
+        let before = limits.recent();
+        drop(limits.turn(9).await);
+        assert_eq!(Instant::now(), start, "no wait on slots booked ahead");
+        assert_eq!(limits.recent(), before + 1, "and on the meter now");
     }
 
     /// A charged call counts each request and the time it waited, and

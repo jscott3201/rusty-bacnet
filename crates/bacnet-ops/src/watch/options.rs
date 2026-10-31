@@ -218,8 +218,8 @@ impl WatchOptions {
         if self.retry_cov.first < self.poll_floor {
             return Err("retry_cov waits at least the poll floor".into());
         }
-        if self.max_points == 0 {
-            return Err("max_points must be at least 1".into());
+        if self.max_points == 0 || self.max_points > 0xFFFF {
+            return Err("max_points must be 1 to 65535".into());
         }
         if self.coalesce > Duration::from_secs(60) {
             return Err("coalesce must be a minute or less".into());

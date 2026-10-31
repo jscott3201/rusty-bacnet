@@ -73,6 +73,8 @@ mod inprocess;
 #[path = "../../../tests/support/lab.rs"]
 mod lab;
 mod load;
+#[cfg(all(unix, feature = "mcp"))]
+mod mcp_attach;
 mod mstp_join_audit;
 mod mstp_layout;
 mod mstp_monitor;

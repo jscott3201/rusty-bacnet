@@ -1028,6 +1028,7 @@ feature.
 bacnet mcp authorize --profile plant-a          # once, in a terminal: review and consent
 bacnet mcp serve --stdio --profile plant-a      # what an agent host's configuration launches
 bacnet mcp serve --stdio --passive              # decode and list only; sends nothing
+bacnet mcp connect --profile plant-a            # attach to the TUI that has plant-a open (Unix)
 ```
 
 `bacnet mcp serve --stdio` runs a [Model Context Protocol](https://modelcontextprotocol.io)
@@ -1046,6 +1047,32 @@ Experimental in 0.15.
 | `--stdio` | Serve on stdin and stdout, the transport an agent host launches (required) |
 | `--profile <NAME>` | Named B/IP, BACnet/SC or MS/TP profile to connect with; its `[mcp]` table limits what the agent may reach. Needed unless `--passive`; global transport flags are refused with it, since they would change the transport that was authorized |
 | `--passive` | Build no client and send nothing: only the tools that need no network are offered (`bacnet_decode`, and `bacnet_discover`, which only lists) |
+
+**mcp connect flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--profile <NAME>` | The profile a `bacnet tui` has open. Without it, `connect` attaches to the only profile whose TUI is listening, and asks for a name when there are several |
+
+`bacnet mcp connect` attaches an agent host to a running `bacnet tui`
+instead of starting a client of its own (Unix only for now; on Windows it
+says so). It passes its stdin and stdout to the local socket the TUI
+opens in the profile's workspace, byte for byte, so the agent's reads go
+through the TUI's client, transport and rate meter, and the profile's UDP
+port isn't contended for. The agent host launches it as it launches
+`bacnet mcp serve`. The TUI listens only on a profile authorized for MCP
+(below), unless its `[mcp]` table sets `tui_listener = false`; the status
+bar shows `MCP n` with the agents attached. Over the socket the tools are
+read-only whatever `mcp_writes` says, and the table's rates join the
+TUI's only while an agent is attached. Only your own OS user can connect:
+the workspace is kept at mode 0700 (a looser one is narrowed when the
+listener starts), the socket is 0600, and each connection's peer
+credentials are checked, a refusal going to the audit log. The listener
+holds `mcp.lock` in the workspace, so a second TUI on the profile doesn't
+listen, and without `--profile` `connect` picks the only profile whose
+lock is held. With no TUI listening, `connect` exits
+non-zero with a message on stderr; when the TUI closes the profile, it
+exits cleanly. Details are in [docs/mcp.md](mcp.md#attached-to-the-tui).
 
 Live traffic needs an authorized profile. `bacnet mcp authorize --profile
 NAME` shows what the profile's `[mcp]` table lets an agent reach (networks,
@@ -1075,6 +1102,7 @@ slow_networks = [2001]        # MS/TP behind a router: 2 requests a second
 broad_discovery = false
 mcp_writes = "elicit"         # offer bacnet_write and bacnet_revert (default "never")
 mcp_arm = "elicit"            # the host's confirmation may arm a session (default "never")
+tui_listener = true           # let agents attach to `bacnet tui` (default: on once authorized)
 
 [mcp.plan]                    # writes approved in advance, without a prompt
 devices = ["1201"]

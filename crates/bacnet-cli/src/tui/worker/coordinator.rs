@@ -215,6 +215,15 @@ async fn run(
                                         options.safety.profile = Some(name.clone());
                                         options.safety.policy = prepared.stored.safety.clone();
                                         options.safety.transport = kind.label();
+                                        #[cfg(feature = "mcp")]
+                                        {
+                                            let workspace = options.watch.workspace.as_deref();
+                                            let planned = crate::tui::attach::plan(&name, &prepared, workspace, &args, options.safety.passive);
+                                            options.attach = planned.unwrap_or_else(|error| {
+                                                tracing::warn!("MCP: agents can't attach: {error}");
+                                                None
+                                            });
+                                        }
                                         let checks = crate::tui::profile::checks::inspect(&prepared.resolved);
                                         sink.deliver(WorkerEvent::Profile(Ok(Reply::Loaded { name, profile: prepared.stored, checks }))).await;
                                         let next = ConnectPlan { kind, args, await_interface: false };

@@ -402,6 +402,35 @@ pub(crate) enum WorkerEvent {
     MonitorScan(super::monitor::scan::ScanReport),
     /// Captured frames and capture reports (#971).
     Capture(super::capture::CaptureEvent),
+    /// The MCP listener's state (#2185).
+    #[cfg_attr(not(all(unix, feature = "mcp")), allow(dead_code))]
+    Mcp(McpListener),
+}
+
+/// The session's MCP listener, for the status bar (#2185).
+#[derive(Debug, Clone)]
+#[cfg_attr(not(all(unix, feature = "mcp")), allow(dead_code))]
+pub(crate) enum McpListener {
+    /// Listening: the agents attached, always the latest count.
+    Agents(tokio::sync::watch::Receiver<usize>),
+    /// The profile asked for a listener, and it couldn't start.
+    Off,
+}
+
+impl McpListener {
+    /// The agents attached; `None` when the listener is off.
+    pub(crate) fn agents(&self) -> Option<usize> {
+        match self {
+            Self::Agents(count) => Some(*count.borrow()),
+            Self::Off => None,
+        }
+    }
+}
+
+impl PartialEq for McpListener {
+    fn eq(&self, other: &Self) -> bool {
+        self.agents() == other.agents()
+    }
 }
 
 #[cfg(test)]

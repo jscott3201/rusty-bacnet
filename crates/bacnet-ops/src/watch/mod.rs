@@ -90,8 +90,29 @@ pub const POINT_PROPERTIES: [PropertyIdentifier; 10] = [
 ];
 
 /// Subscriber process identifiers start here, clear of the small numbers
-/// the TUI's watch rows use.
+/// the one-shot commands use.
 const PROCESS_BASE: u32 = 0x4D43_0000;
+
+/// Each hub on an engine takes its own range of this many subscriber
+/// process identifiers (#2185): two hubs on one client (the TUI's watch
+/// list and its attached agents') then never share one, so neither's
+/// cancel can end the other's subscription. A hub's `max_points` is held
+/// below the range's size.
+const PROCESS_SPAN: u32 = 0x1_0000;
+
+/// How many ranges an engine hands out before it starts again from the
+/// first: more hubs than this alive on one engine at once could share one.
+const PROCESS_RANGES: u32 = 256;
+
+/// The first identifier of the range of an engine's `index`-th hub.
+fn process_base(index: u32) -> u32 {
+    PROCESS_BASE + (index % PROCESS_RANGES) * PROCESS_SPAN
+}
+
+/// The identifier after `process` in the range starting at `base`.
+fn next_process(base: u32, process: u32) -> u32 {
+    base + (process.wrapping_sub(base).wrapping_add(1)) % PROCESS_SPAN
+}
 
 /// A COV subscription's lifetime in seconds: never zero, so never the
 /// subscription that doesn't lapse.
@@ -417,7 +438,7 @@ impl<T: TransportPort + 'static> Hub<T> {
     pub fn new(engine: Arc<Engine<T>>, options: WatchOptions) -> Result<Self, String> {
         options.validate()?;
         let registry = Arc::new(Registry::new(
-            PROCESS_BASE,
+            process_base(engine.next_hub()),
             options.coalesce,
             options.reads.object.clone(),
             options.reads.property_flags,
@@ -461,12 +482,13 @@ impl<T: TransportPort + 'static> Hub<T> {
                 if *registry.tasks.borrow() >= max {
                     return Err(WatchError::Full { max });
                 }
+                // Within the hub's own range, never 0 or another hub's.
+                let base = registry.process_base;
                 let mut process = table.next_process;
-                // 0 is skipped when the count wraps.
-                while process == 0 || table.by_process.contains_key(&process) {
-                    process = process.wrapping_add(1);
+                while table.by_process.contains_key(&process) {
+                    process = next_process(base, process);
                 }
-                table.next_process = process.wrapping_add(1);
+                table.next_process = next_process(base, process);
                 let shared = Arc::new(Shared::new(point, process, self.inner.options.samples));
                 table.entries.insert(
                     point,

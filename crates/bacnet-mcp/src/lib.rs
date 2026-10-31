@@ -23,10 +23,16 @@
 //!   confirmation may approve a T1 write and a plan grant the writes it
 //!   names; T2 and T3 need a verifiable approver. The confirmation state is
 //!   sealed for its caller, single use and short-lived.
+//! - On Unix, `attach::Listener` serves agents over a local socket in
+//!   the terminal UI's process, on the TUI's own engine, read-only, to
+//!   this OS user only (#2185); `attach::bridge` is `bacnet mcp
+//!   connect`'s side of it.
 //!
 //! Stdout carries only JSON-RPC: this crate never prints, and its logs go
 //! through `tracing`, which the host process points at stderr.
 
+#[cfg(unix)]
+pub mod attach;
 mod context;
 mod cursor;
 mod errors;
