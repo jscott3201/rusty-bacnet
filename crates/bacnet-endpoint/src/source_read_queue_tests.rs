@@ -302,8 +302,9 @@ async fn queued_i_am_holds_no_database_guard() {
         .unwrap();
     timeout(WAIT, entered.notified()).await.unwrap();
     let db = Arc::clone(session.database.as_ref().unwrap());
-    let (announced, ()) = tokio::join!(session.broadcast_i_am(), async {
-        // The I-Am was polled first and now waits behind the held send.
+    let (announced, ()) = tokio::join!(biased; session.broadcast_i_am(), async {
+        // The biased join polls the I-Am first, so it now waits behind the
+        // held send.
         let mut db = timeout(WAIT, db.write())
             .await
             .expect("a database write must not wait for the queued I-Am");

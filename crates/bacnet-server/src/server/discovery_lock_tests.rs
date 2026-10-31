@@ -129,9 +129,11 @@ fn answers(server: &BACnetServer<TestTransport>) -> u64 {
 }
 
 async fn answered(server: &BACnetServer<TestTransport>, count: u64) {
+    // Sleep rather than yield, so the paused clock can reach STUCK and a lost
+    // answer fails here instead of spinning.
     tokio::time::timeout(STUCK, async {
         while answers(server) < count {
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(1)).await;
         }
     })
     .await
