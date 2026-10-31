@@ -190,6 +190,9 @@ pub(crate) enum Via {
     /// The client's elicitation form: the client's claim that a person
     /// confirmed, so T1 only.
     Elicitation,
+    /// The same claim, answered to an elicitation request the server sent
+    /// a client older than 2026-07-28 (#2158): T1 only as well.
+    ServerElicitation,
     /// A plan grant a person approved in a terminal.
     Plan,
 }
@@ -199,6 +202,7 @@ impl Via {
     pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Elicitation => "elicitation",
+            Self::ServerElicitation => "server-elicitation",
             Self::Plan => "plan",
         }
     }
@@ -206,7 +210,7 @@ impl Via {
     /// `approved_by`: who stands behind the approval.
     pub(crate) fn by(self) -> &'static str {
         match self {
-            Self::Elicitation => "client",
+            Self::Elicitation | Self::ServerElicitation => "client",
             Self::Plan => "plan",
         }
     }
@@ -259,8 +263,10 @@ pub(crate) struct ClientElicitation {
     pub(crate) arm: ArmMode,
     /// Whether a session is armed now.
     pub(crate) armed: bool,
-    /// Whether the client takes form elicitations over multi round-trip
-    /// requests (a 2026-07-28 client that declares the capability).
+    /// Whether the client can be asked: it takes form elicitations over
+    /// multi round-trip requests (a 2026-07-28 client that declares the
+    /// capability), or is an older client that takes the server's
+    /// elicitation requests.
     pub(crate) supported: bool,
 }
 
@@ -289,7 +295,8 @@ impl Approver for ClientElicitation {
         if !self.supported {
             return refused(
                 "elicitation-unsupported",
-                "confirming a write needs a 2026-07-28 client that takes form elicitations",
+                "confirming a write needs a client that takes form elicitations (over multi \
+                 round-trip requests on 2026-07-28, or as the server's requests before it)",
             );
         }
         Approval::Ask { arm }
@@ -388,7 +395,7 @@ impl Caller for McpCaller<'_> {
 
     fn refusal(&self) -> Option<String> {
         match self.via {
-            Some(Via::Elicitation) if !self.writes.is_armed() => {
+            Some(Via::Elicitation | Via::ServerElicitation) if !self.writes.is_armed() => {
                 Some("the write session expired before the write went".into())
             }
             Some(Via::Plan)

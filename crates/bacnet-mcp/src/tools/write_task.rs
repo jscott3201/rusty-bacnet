@@ -110,24 +110,19 @@ pub(crate) fn sending() -> Sending {
     Arc::new(Mutex::new(Vec::new()))
 }
 
-/// The retry: the client confirmed. Read again under the lock, refuse a
-/// stale preview, arm if asked, send.
+/// The retry: the client confirmed, `via` a form or the server's own
+/// elicitation request. Read again under the lock, refuse a stale
+/// preview, arm if asked, send.
 pub(crate) async fn confirmed<T: TransportPort + 'static>(
     ctx: Arc<Ctx<T>>,
     workspace: Workspace,
-    specs: Vec<WriteSpec>,
-    args: Args,
-    state: State,
+    (specs, args): (Vec<WriteSpec>, Args),
+    (state, via): (State, Via),
     fields: Map<String, Value>,
     sending: Sending,
 ) -> Result<Value, ToolError> {
     let engine = ctx.engine()?;
-    let mut caller = McpCaller::new(
-        &ctx.writes,
-        &ctx.policy.writes,
-        Some(Via::Elicitation),
-        fields,
-    );
+    let mut caller = McpCaller::new(&ctx.writes, &ctx.policy.writes, Some(via), fields);
     caller.sending = Some(sending);
     let mut desk = open(&ctx, &workspace, &caller).await?;
     let fresh = desk
@@ -161,7 +156,7 @@ pub(crate) async fn confirmed<T: TransportPort + 'static>(
         .commit(engine.client(), engine.limits(), &caller, &fresh)
         .await;
     ctx.writes.signals.ledger_settled(&before, &desk);
-    outcome(fresh.device, Via::Elicitation, sent)
+    outcome(fresh.device, via, sent)
 }
 
 /// A write under a plan grant: everything under the workspace's lock,

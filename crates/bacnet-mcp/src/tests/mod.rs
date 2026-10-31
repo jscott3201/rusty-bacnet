@@ -3,6 +3,7 @@
 
 mod bbmd;
 mod budget;
+mod confirm;
 mod discovery;
 mod handoff;
 mod legacy;

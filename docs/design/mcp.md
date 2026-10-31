@@ -495,13 +495,16 @@ over multi round-trip requests is two calls rather than one await:
 `approve` answers `Approved(via)`, `Ask { arm }` (return the form and a
 sealed state; the retry confirms) or `Refused { reason }`. A decline, an
 expired state or a missing capability is a refusal reason on the retry
-(`declined`, `confirmation-expired`, `elicitation-unsupported`). Phase 4's
-`TuiApprover` will need the waiting form back, and can add it then.
+(`declined`, `confirmation-expired`, `elicitation-unsupported`). For an
+older client (#2158) the tool call itself sends the form and waits for
+the answer after `Ask`, then runs the retry; the approver still doesn't
+wait. Phase 4's `TuiApprover` will need the waiting form back, and can
+add it then.
 
 | Approver | Verified by the server | Phase |
 |---|---|---|
 | `Deny` | n/a (the default) | 3 |
-| `ClientElicitation`: a form through multi round-trip requests | no, so T1 only and opt-in | 3 |
+| `ClientElicitation`: a form through multi round-trip requests, or on an older client the server's own elicitation request (#2158) | no, so T1 only and opt-in | 3 |
 | `PlanGrant` (`PlanApprover` as built): a commissioning plan a person approved once, at T3, through a verified channel (device set, property allowlist, priority range, write budget, expiry of 8 h or less) | yes | 3 |
 | `TuiApprover`: the attached TUI's own preview dialog, with an "agent request" banner, the 300 ms key debounce and the 120 s auto-decline | yes | 4 |
 | `UrlApprover`: an approval page behind the same identity provider, same subject or a permitted second person | yes | 5 |
@@ -566,10 +569,24 @@ As built (#2068), and where it differs from the steps above:
   arms a 15-minute session (audited `arm`, `confirmed_via: elicitation`);
   with `never`, only a plan grant arms MCP writes. There is no separate
   arm tool, so the tool list stays two write tools.
-- On a client older than 2026-07-28, or one that doesn't declare form
-  elicitation, a write needing confirmation is refused
-  (`elicitation-unsupported`): the older server-initiated elicitation
-  isn't used yet. Plan grants work for every client.
+- On a client older than 2026-07-28 that declares form elicitation (or
+  the capability without a mode, which meant the form before URL
+  elicitation), the server sends the same form as its own
+  `elicitation/create` request over the session (#2158), through `rmcp`'s
+  `Peer::send_request_with_option` with a 120 s timeout (the
+  confirmation's lifetime; the SDK then tells the client the request was
+  cancelled). The call waits holding no lock, neither the workspace's
+  nor the write state's, then hands the answer to the retry path as if
+  the client had retried: the sealed state, which never leaves the
+  server, is opened, the targets are read again and a stale preview is
+  refused. Accepting is audited `confirmed_via: "server-elicitation"`
+  (`approved_by: client`, T1 only, as for the form): it is the same
+  client claim, but an audit reader can tell the older flow from multi
+  round-trip requests. Declining is `declined`, nothing sent; a cancel
+  or no answer in time is `confirmation-expired`, nothing sent; with
+  `mcp_arm = "elicit"` a confirmation arms the session as the form does.
+  A client that declares neither, or URL elicitation only, is refused
+  (`elicitation-unsupported`). Plan grants work for every client.
 - A plan grant (`[mcp.plan]`) is approved in a terminal by `bacnet mcp
   authorize`, which names what it lets through without a prompt; it runs
   for its `hours` (8 at most) from that authorization. Its write budget is
@@ -787,10 +804,10 @@ that discusses BACnet is checked for overlap with the standard.
 
 So the core value lives in well-annotated tools, and subscriptions,
 elicitation and tasks are enhancements with tool-only fallbacks. On a client
-older than 2026-07-28, a write needing approval was to use the older
-server-initiated elicitation when the client supports it, and be refused
-otherwise. As built (#2068), it is always refused there
-(`elicitation-unsupported`, §7.4); plan grants work for every client.
+older than 2026-07-28, a write needing approval uses the older
+server-initiated elicitation when the client declares it (#2158, §7.4),
+and is refused otherwise (`elicitation-unsupported`); plan grants work
+for every client.
 
 ## 12. Risks
 

@@ -380,7 +380,10 @@ impl<R: AsyncRead + Unpin> AsyncRead for Eof<R> {
 
 /// What a request says about its client: the name it claims (cleaned
 /// and capped, and only ever a claim), and whether it takes form
-/// elicitations over multi round-trip requests (2026-07-28).
+/// elicitations over multi round-trip requests (2026-07-28) or, older,
+/// the server's own elicitation requests (#2158). A capability that
+/// names neither form nor URL elicitation means the form, as it did
+/// before URL elicitation existed.
 fn peer(context: &RequestContext<RoleServer>) -> tools::write::Peer {
     let modern = context
         .protocol_version()
@@ -394,6 +397,7 @@ fn peer(context: &RequestContext<RoleServer>) -> tools::write::Peer {
     let form = capabilities
         .and_then(|caps| caps.elicitation)
         .is_some_and(|e| e.form.is_some() || e.url.is_none());
+    let session = (!modern && form).then(|| context.peer.clone());
     let name = context
         .meta
         .client_info()
@@ -407,6 +411,7 @@ fn peer(context: &RequestContext<RoleServer>) -> tools::write::Peer {
     tools::write::Peer {
         name,
         form: modern && form,
+        session,
         request_id: format!("{:?}", context.id),
     }
 }
@@ -457,6 +462,7 @@ impl<T: TransportPort + 'static> ServerHandler for McpServer<T> {
             let retry = tools::write::Retry {
                 state: request.request_state,
                 responses: request.input_responses,
+                server: false,
             };
             let peer = peer(&context);
             return tools::call_write(&self.ctx, &request.name, args, retry, &peer, context.ct)

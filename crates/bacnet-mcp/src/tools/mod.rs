@@ -25,6 +25,7 @@ mod trend;
 mod trend_data;
 mod watch;
 pub(crate) mod write;
+mod write_confirm;
 pub(crate) mod write_task;
 
 use std::sync::Arc;
@@ -306,26 +307,31 @@ pub(crate) async fn call_write<T: TransportPort + 'static>(
         parse::<revert::Args>(&args).map(drop)
     };
     schema_check?;
-    let account = Arc::new(Account::new(Some(Arc::clone(&ctx.bucket))));
     let budget = ctx.policy.caps.budget;
-    let call = Call::new(budget, Arc::clone(&account));
-    let run = async {
-        if name == write::NAME {
-            write::run(ctx, &call, &args, retry, peer).await
-        } else {
-            revert::run(ctx, &call, &args, peer).await
+    let (call, finished) = attempt(ctx, name, &args, retry, peer, &cancel).await?;
+    let (call, finished) = match (finished, &peer.session) {
+        // A client older than 2026-07-28 that takes the server's
+        // elicitation requests: ask it, holding no lock while it answers,
+        // then go on as a retry with the form's answer would (#2158).
+        (Ok(Ok(write::Step::Ask(ask))), Some(session)) => {
+            ctx.log_read(name, &call, "confirming");
+            let asked = tokio::select! {
+                biased;
+                asked = write_confirm::confirm(session, ask) => asked,
+                () = cancel.cancelled() => {
+                    ctx.log_read(name, &call, "cancelled");
+                    return Err(ErrorData::internal_error("the call was cancelled", None));
+                }
+            };
+            match asked {
+                Ok(retry) => attempt(ctx, name, &args, retry, peer, &cancel).await?,
+                Err(why) => {
+                    let error = write::unconfirmed(ctx, &args, peer, why).await;
+                    (call, Ok(Err(error)))
+                }
+            }
         }
-    };
-    let work = tokio::time::timeout(budget + GRACE, charged(account, run));
-    // Biased: a write already handed off wins over a cancel arriving at
-    // the same time, so the reply never loses that the write goes on.
-    let finished = tokio::select! {
-        biased;
-        finished = work => finished,
-        () = cancel.cancelled() => {
-            ctx.log_read(name, &call, "cancelled");
-            return Err(ErrorData::internal_error("the call was cancelled", None));
-        }
+        (finished, _) => (call, finished),
     };
     let outcome = match finished {
         Ok(Ok(write::Step::Ask(ask))) => {
@@ -355,6 +361,47 @@ pub(crate) async fn call_write<T: TransportPort + 'static>(
         Err(_) => Err(out_of_budget(&call, budget)),
     };
     Ok(finish(ctx, name, &call, outcome).into())
+}
+
+/// What one run of a write tool came to, under its own budget: the call
+/// that counted it, and its step or error, or `Err` past the budget.
+type Attempt = (
+    Call,
+    Result<Result<write::Step, ToolError>, tokio::time::error::Elapsed>,
+);
+
+/// Run a write tool once, within the call's budget and its grace; a
+/// cancel ends it with an error.
+async fn attempt<T: TransportPort + 'static>(
+    ctx: &Arc<Ctx<T>>,
+    name: &str,
+    args: &Map<String, Value>,
+    retry: write::Retry,
+    peer: &write::Peer,
+    cancel: &CancellationToken,
+) -> Result<Attempt, ErrorData> {
+    let account = Arc::new(Account::new(Some(Arc::clone(&ctx.bucket))));
+    let budget = ctx.policy.caps.budget;
+    let call = Call::new(budget, Arc::clone(&account));
+    let run = async {
+        if name == write::NAME {
+            write::run(ctx, &call, args, retry, peer).await
+        } else {
+            revert::run(ctx, &call, args, peer).await
+        }
+    };
+    let work = tokio::time::timeout(budget + GRACE, charged(account, run));
+    // Biased: a write already handed off wins over a cancel arriving at
+    // the same time, so the reply never loses that the write goes on.
+    let finished = tokio::select! {
+        biased;
+        finished = work => finished,
+        () = cancel.cancelled() => {
+            ctx.log_read(name, &call, "cancelled");
+            return Err(ErrorData::internal_error("the call was cancelled", None));
+        }
+    };
+    Ok((call, finished))
 }
 
 /// The text rendering: what the call did, the heading about device text,

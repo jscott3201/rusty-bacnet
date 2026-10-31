@@ -293,10 +293,17 @@ Writes go through `bacnet_ops::safety`: the TUI's planner, tiers, ledger
   `input_required` (multi round-trip requests, 2026-07-28) with a form
   elicitation `confirm` (the canonical targets, the value now and after,
   the Present_Value change and the planner's notes; device text cleaned and
-  labelled) and a sealed `requestState`. A client that didn't declare form
-  elicitation, or an older-revision session, is refused
-  (`elicitation-unsupported`); the older server-initiated elicitation is
-  not used yet.
+  labelled) and a sealed `requestState`. An older-revision session that
+  declared form elicitation (or the capability without a mode, as
+  2025-11-25 and earlier clients do) is asked by the server instead, with
+  an `elicitation/create` request carrying the same form (#2158): the
+  call waits for the answer, at most 120 s and holding no lock, then goes
+  on as the retry would. Accepting sends the write
+  (`confirmed_via: "server-elicitation"`), declining is recorded as
+  `declined` with nothing sent, and a cancel or no answer in time is
+  refused (`confirmation-expired`), nothing sent. A client that declared
+  neither, or URL elicitation only, is refused
+  (`elicitation-unsupported`).
 - **Arming.** A write needs an armed session or a plan grant in force, as
   in the TUI. With `mcp_arm = "elicit"` the confirmation of a write while
   unarmed arms a 15-minute session too (audited `arm`); with `never` (the
@@ -357,7 +364,8 @@ Writes go through `bacnet_ops::safety`: the TUI's planner, tiers, ledger
   clears the authorization (dropping a plan doesn't).
 - **Audit.** Every MCP record has `front_end: "mcp"`, `principal`,
   `client` (`claimed_name`, a claim), `tool`, `args_digest` and
-  `request_id`, and a write `confirmed_via` (`elicitation` or `plan`) and
+  `request_id`, and a write `confirmed_via` (`elicitation`,
+  `server-elicitation` or `plan`) and
   `approved_by` (`client` or `plan`, with the plan's reason and count).
   Refusals and declines are recorded without the lock: the audit log is
   append-only.
