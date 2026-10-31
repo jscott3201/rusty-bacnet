@@ -20,7 +20,10 @@
 //! hours = 4                     # from `bacnet mcp authorize`, 8 at most
 //! ```
 //!
-//! The TUI round-trips the table without using it. Its first-use
+//! The TUI uses the table for its local MCP socket (#2185): while the
+//! profile is open, agents may attach through `bacnet mcp connect`, under
+//! the table's reach and rates and read-only, unless `tui_listener =
+//! false`. The table's first-use
 //! authorization, separate from the TUI's, is recorded in it by `bacnet mcp
 //! authorize` (`authorized_at_unix`, and the reach it covered as
 //! `[mcp.authorized]`) and cleared when the table widens the server's
@@ -93,6 +96,11 @@ pub(crate) struct McpSection {
     /// Writes approved in advance, by `bacnet mcp authorize`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) plan: Option<McpPlan>,
+    /// Whether the TUI listens for agents on its local socket while the
+    /// profile is open (#2185); absent, it does whenever MCP is
+    /// authorized.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) tui_listener: Option<bool>,
     /// When `bacnet mcp authorize` recorded consent to serve MCP on this
     /// profile.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -255,6 +263,13 @@ impl McpSection {
             && self.authorized_transport.is_some()
     }
 
+    /// Whether the TUI opens its MCP socket on this profile: only while
+    /// consent stands, and then unless `tui_listener = false`.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
+    pub(crate) fn listens(&self) -> bool {
+        self.authorized() && self.tui_listener != Some(false)
+    }
+
     /// Record consent, given at `at`, to this table and to the transport
     /// settings `link`.
     #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
@@ -348,7 +363,9 @@ impl McpSection {
         let writes = (self.mcp_writes == McpChoice::Elicit && from.mcp_writes == McpChoice::Never)
             || (self.mcp_arm == McpChoice::Elicit && from.mcp_arm == McpChoice::Never)
             || (self.plan.is_some() && self.plan != from.plan);
-        faster || bigger || unpaced || writes || self.reaches_further(from)
+        // The TUI's socket, where consent covered a table that turned it off.
+        let listener = self.tui_listener != Some(false) && from.tui_listener == Some(false);
+        faster || bigger || unpaced || writes || listener || self.reaches_further(from)
     }
 
     /// True when `self` reaches a network or device outside `from`'s
@@ -459,5 +476,28 @@ mod tests {
             ..narrow.clone()
         };
         assert!(!slower.raises(&narrow));
+    }
+
+    /// The TUI listens by default once consent stands, never without it,
+    /// and turning the listener back on needs consent again (#2185).
+    #[test]
+    fn the_tui_listener_follows_consent_and_its_key() {
+        let mut section: McpSection = toml::from_str("networks = [0]\n").unwrap();
+        assert_eq!(section.tui_listener, None);
+        assert!(!section.listens(), "never without consent");
+        section.authorize(1, "bip".into());
+        assert!(section.listens(), "on by default with consent");
+        let off: McpSection = toml::from_str("tui_listener = false\n").unwrap();
+        let mut off_authorized = off.clone();
+        off_authorized.authorize(1, "bip".into());
+        assert!(!off_authorized.listens());
+        let on = McpSection {
+            tui_listener: Some(true),
+            ..off.clone()
+        };
+        assert!(on.raises(&off) && McpSection::default().raises(&off));
+        assert!(!off.raises(&on) && !on.raises(&McpSection::default()));
+        let again: McpSection = toml::from_str(&toml::to_string(&off).unwrap()).unwrap();
+        assert_eq!(again, off);
     }
 }

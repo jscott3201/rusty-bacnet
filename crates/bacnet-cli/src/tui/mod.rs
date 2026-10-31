@@ -24,6 +24,8 @@
 //!   hand-off (#970).
 //! - [`capture`]: live capture for the Capture screen, its sources, ring,
 //!   filter and pcap export (#971).
+//! - `attach` (the `mcp` feature): the local socket agents attach to while
+//!   a profile is open (#2185).
 //!
 //! The TUI is read-only by default: discovery, the device browser's reads,
 //! the watch list's reads and finite COV subscriptions, and finite
@@ -31,6 +33,8 @@
 //! `W` on a profile that allows it; `--passive` transmits nothing at all.
 
 mod app;
+#[cfg(feature = "mcp")]
+mod attach;
 mod capture;
 mod event_loop;
 mod help;
@@ -145,7 +149,7 @@ pub(crate) async fn run(cli: Cli) -> crate::CliResult {
                     passive: *passive,
                     ..SafetyOptions::default()
                 },
-                mstp: Default::default(),
+                ..SessionOptions::default()
             },
         ),
         _ => (
@@ -153,9 +157,7 @@ pub(crate) async fn run(cli: Cli) -> crate::CliResult {
             None,
             SessionOptions {
                 max_rate: worker::browse::DEFAULT_MAX_RATE,
-                watch: WatchOptions::default(),
-                safety: SafetyOptions::default(),
-                mstp: Default::default(),
+                ..SessionOptions::default()
             },
         ),
     };

@@ -107,6 +107,7 @@ These options go before or after the command. Each command also takes `-h` or `-
 | [`tui`](#bacnet-tui) | — | Open the full-screen terminal UI (read-only until W arms writes). Needs the `tui` feature. |
 | [`mcp`](#bacnet-mcp) | — | Serve an MCP server to an AI agent host (needs the `mcp` feature). |
 | [`mcp serve`](#bacnet-mcp-serve) | — | Serve MCP on stdin and stdout until the agent host closes them. Stdout carries only JSON-RPC; logs go to stderr. Needs the `mcp` feature. |
+| [`mcp connect`](#bacnet-mcp-connect) | — | Bridge stdin and stdout to the MCP socket of a TUI that has the profile open, so an agent shares its client (Unix only). Read-only. Needs the `mcp` feature. |
 | [`mcp authorize`](#bacnet-mcp-authorize) | — | Record, after showing what an agent may reach, that you authorize the MCP server on a profile. Needs a terminal. Needs the `mcp` feature. |
 | [`discover`](#bacnet-discover) | `whois` | Discover BACnet devices (WhoIs). |
 | [`find`](#bacnet-find) | `whohas` | Find objects by name (WhoHas). |
@@ -202,6 +203,20 @@ Options:
 - `--stdio`: Serve on stdin and stdout, the transport an agent host launches. Required.
 - `--profile <NAME>`: Named profile to connect with; its mcp table limits what the agent may reach. Needed unless --passive; no transport flags with it.
 - `--passive`: Build no client and send nothing: only the tools that need no network are offered.
+
+### bacnet mcp connect
+
+Bridge stdin and stdout to the MCP socket of a TUI that has the profile open, so an agent shares its client (Unix only). Read-only.
+
+Needs the `mcp` feature.
+
+```text
+Usage: bacnet mcp connect [OPTIONS]
+```
+
+Options:
+
+- `--profile <NAME>`: The profile the TUI has open; needed when more than one TUI is listening.
 
 ### bacnet mcp authorize
 

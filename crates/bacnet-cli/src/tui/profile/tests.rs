@@ -53,6 +53,13 @@ fn roundtrip_preserves_bip_settings_safety_authorization_and_workspace_isolation
     assert!(a.starts_with(store.root()) && b.starts_with(store.root()));
     std::fs::write(a.join("state"), "west").unwrap();
     assert!(!b.join("state").exists());
+    // Private, as the TUI's MCP socket needs (#2185).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = std::fs::metadata(&a).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "{mode:o}");
+    }
 }
 
 #[test]

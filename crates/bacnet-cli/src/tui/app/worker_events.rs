@@ -249,6 +249,7 @@ impl App {
                 }
             }
             WorkerEvent::ForeignDevice(foreign) => self.network.foreign_device(foreign),
+            WorkerEvent::Mcp(listener) => self.mcp = Some(listener),
             WorkerEvent::Network(event) => self.network_event(event),
             WorkerEvent::Discovery(event) => self.discovery_event(event),
             WorkerEvent::Sc(report) => self.sc_report(report),

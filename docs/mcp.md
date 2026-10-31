@@ -3,7 +3,8 @@
 A [Model Context Protocol](https://modelcontextprotocol.io) server for
 BACnet sites, read-only unless a profile offers writes: phase 1 (#2066, the
 tools), phase 2 (#2067, resources and subscriptions) and phase 3 (#2068,
-writes) of the MCP epic (#2064). The design, with
+writes) of the MCP epic (#2064), and the first part of phase 4 (#2185,
+[attached to the TUI](#attached-to-the-tui), Unix only). The design, with
 the later phases, is [design/mcp.md](design/mcp.md); the user guide is the
 website's [AI agents](https://jscott3201.github.io/rusty-bacnet/guides/ai-agents/)
 page. Experimental in 0.15.
@@ -16,10 +17,11 @@ page. Experimental in 0.15.
 | Engine extensions | `bacnet-ops` | `RequestLimits::with_network_rates`, `turn_on` and `slot`; per-caller `Account` and `TokenBucket` through `limits::charged`; `Engine::who_is`, `discover_routers`, `devices`, `device`, `address_style`; `read_trend` charged per request; `alarm_summary` and `enrollment_summary` |
 | Decoder | `bacnet-ops::decode` | The capture screen's frame summary and field tree, moved from the CLI for `bacnet_decode`: any tapped link (B/IP, B/IPv6, BACnet/SC, MS/TP), or a bare NPDU or APDU; a field quoting a character string is marked as device text |
 | Watch hub | `bacnet-ops::watch` | `Hub`: one managed COV subscription or poller per point, shared by every listener, holding the latest values (phase 2); `Engine::device_events` |
-| `bacnet mcp` | `crates/bacnet-cli/src/mcp.rs` | `serve --stdio [--profile NAME] [--passive]` and `authorize --profile NAME`, behind the CLI feature `mcp` (which brings `tui`, for the profiles; the release binaries include it from 0.15.0, and a source build enables it with `--features mcp`). Classified `Read` in `bacnet_ops::class`. |
+| `bacnet mcp` | `crates/bacnet-cli/src/mcp.rs` | `serve --stdio [--profile NAME] [--passive]`, `connect [--profile NAME]` (#2185) and `authorize --profile NAME`, behind the CLI feature `mcp` (which brings `tui`, for the profiles; the release binaries include it from 0.15.0, and a source build enables it with `--features mcp`). Classified `Read` in `bacnet_ops::class`. |
 | `[mcp]` profile table | `crates/bacnet-cli/src/tui/profile/mcp.rs` | networks, devices, slow and fast networks, broad discovery, rates and caps; `mcp_writes`, `mcp_arm` and `[mcp.plan]` (#2068) |
 | Write safety core | `bacnet-ops::safety` | The TUI's plan, ledger, audit log and workspace lock, and the engine half of a write (`desk`: pre-image reads, the stale check, the ledger and audit around each send, revert), shared by the TUI and MCP (#2068) |
 | Writes | `crates/bacnet-mcp/src/writes/`, `tools/write.rs`, `tools/revert.rs` | The write session, the approvers (`ClientElicitation`, `PlanApprover`, `Deny`), the sealed confirmation state, and the two write tools |
+| Attached mode | `crates/bacnet-mcp/src/attach/`, `crates/bacnet-cli/src/tui/attach.rs` | The TUI's local socket (`attach::Listener`), the peer checks, and `bacnet mcp connect`'s bridge (`attach::bridge`); Unix only (#2185) |
 
 The SDK is `rmcp` 3.5.1 (pinned, server role, stdio only). It answers both
 the 2026-07-28 request form (`server/discover`, version and capabilities in
@@ -457,13 +459,15 @@ second.
 | `call_budget_s` | Seconds a call may wait on the limits and the network | 30 | 1 to 600 |
 | `mcp_writes` | `"elicit"` offers `bacnet_write` and `bacnet_revert` ([Writes](#writes)) | `"never"` | `"never"` or `"elicit"`; `"elicit"` needs the profile's workspace |
 | `mcp_arm` | `"elicit"` lets the client's confirmation arm a write session | `"never"` | `"elicit"` needs `mcp_writes = "elicit"` |
+| `tui_listener` | Whether `bacnet tui` listens for agents on its local socket while the profile is open ([Attached to the TUI](#attached-to-the-tui)) | `true` once MCP is authorized | `true` or `false`; never listens without the authorization |
 | `[mcp.plan]` | Writes approved in advance ([Writes](#writes)): `devices` and `max_writes` (1 to 10,000) and `hours` (1 to 8) are required; `properties` defaults to `["present-value"]`, `priority_min` to 8 and `priority_max` to 16 (both 1 to 16); `reason` is optional | none | needs `mcp_writes = "elicit"` |
 
 `bacnet mcp authorize` writes `authorized_at_unix`, `[mcp.authorized]` and
 `authorized_transport`; don't edit them by hand ([Operation](#operation)).
 A change that raises a rate or a cap, adds a network or device, enables
-broad discovery, writes or arming, changes a plan in any way, or takes a
-network out of `slow_networks` or `fast_networks` clears that consent.
+broad discovery, writes or arming, changes a plan in any way, takes a
+network out of `slow_networks` or `fast_networks`, or turns `tui_listener`
+back on clears that consent.
 
 ## Limits
 
@@ -501,6 +505,83 @@ returns `refused: rate-limited` if it sent nothing, else `timeout`.
   resources.
 - SIGINT or SIGTERM (Ctrl-C on Windows) shuts the server down gracefully:
   listen streams complete and COV subscriptions are cancelled.
+
+## Attached to the TUI
+
+Unix only for now (#2185, the first part of phase 4). While `bacnet tui`
+has a profile open, agents can attach to it instead of starting their own
+client: `bacnet mcp connect --profile NAME` passes its stdin and stdout to
+a local socket in the TUI's process, byte for byte, and the agent host
+launches it as it launches `bacnet mcp serve`. Without `--profile`, it
+attaches to the only profile a TUI is listening on (one whose listener
+holds its lock, below), and asks for a name when there are several. With no TUI listening it exits non-zero, saying so on
+stderr; when the TUI ends the session it exits cleanly.
+
+- **When it listens.** Opening a profile that is authorized for MCP
+  (`bacnet mcp authorize`) starts the listener, unless its `[mcp]` table
+  sets `tui_listener = false`; a profile authorized before this release
+  starts one too after the upgrade, read-only and for your own user, and
+  the log pane says so. An unauthorized profile, a passive session, an
+  MS/TP monitor, or a command line whose transport flags change the
+  authorized transport gets none, and the log pane says why whenever the
+  profile asked for one. The status bar shows `MCP n`, the agents
+  attached, while it listens, and `MCP off` when a listener the profile
+  asked for couldn't start.
+- **One client.** Each connection gets its own MCP session, as a stdio
+  server does, under the profile's `[mcp]` reach and caps, as the TUI's
+  OS user. Its reads go through the TUI's engine: the same client,
+  transport and UDP port, the same device gates, and the watch list's
+  rate meter counts them. The agents are one principal, so their sessions
+  share one `principal_rate` budget, one watch hub (256 points between
+  them, as for one stdio server), one per-principal point cap, and the
+  once-a-minute limits on broad Who-Is, router queries and BBMD surveys;
+  the hub's subscriptions use
+  subscriber process identifiers of their own, so an agent leaving a
+  point the watch list also watches never cancels the TUI's subscription.
+- **Limits while an agent is attached.** With no agent attached the TUI
+  keeps to its own `--max-rate`. From the first agent's connection until
+  the last one leaves, the table's rates join it: the global cap is the
+  lower of the TUI's and `max_rate`, and `network_rate`, `slow_networks`
+  and `fast_networks` pace every request to those networks, the TUI's own
+  included. The log pane notes each switch.
+- **Read-only.** The socket never lists `bacnet_write` or `bacnet_revert`,
+  whatever `mcp_writes` says: writes over it wait for the TUI's own
+  approval dialog, which comes next.
+- **The socket.** `mcp.sock` in the profile's workspace. The workspace
+  must be a directory of yours, not a symbolic link; one with a looser
+  mode than 0700 is narrowed to 0700 when the listener starts, and the
+  log pane says so (new workspaces are made 0700). The socket is made
+  0600, and every connection's peer credentials (`SO_PEERCRED`, or
+  `getpeereid` on macOS and the BSDs) must name the TUI's own user before
+  any MCP message is read. A refused connection is closed and audited. A
+  TUI running as the overflow uid (65534), which peers in other user
+  namespaces report, doesn't listen. A socket path longer than the OS
+  takes (103 bytes on macOS and the BSDs, 107 on Linux) is refused before
+  binding: use a shorter profile name or point `BACNET_CONFIG_DIR`
+  somewhere shorter. At most 8 agents attach at once, and a connection
+  that sends no MCP message within 30 seconds is closed (once open, a
+  session may sit idle). `bacnet mcp connect` probes the lock with a
+  shared lock, and a starting listener retries for a moment, so a probe
+  never keeps a TUI from listening.
+- **The lock.** A listener holds an exclusive lock on `mcp.lock` in the
+  workspace for its whole life, taken before it touches the socket path.
+  A second TUI on the same profile finds it held and doesn't listen; the
+  first keeps serving. Holding the lock, any socket at the path is one a
+  crashed TUI left, and it is removed; a symbolic link or any other file
+  there is neither followed nor removed.
+- **Audit.** Each connection's open (`mcp-connect`), close
+  (`mcp-disconnect`) and each refused peer (`mcp-refused`, with the peer's
+  uid and pid and why) go to the workspace's `audit.jsonl`, with
+  `front_end: "mcp"` and the principal. At most 10 refusals a minute are
+  recorded; the number left out goes with the next refusal record
+  (`refusals_not_recorded_before`) and in one record at shutdown.
+- **Ending.** Closing the profile or the TUI stops the listener: each
+  agent's listen streams complete, its connection closes, the shared
+  watch hub cancels its COV subscriptions, the socket file is removed and
+  the lock released.
+
+On Windows, `bacnet mcp connect` and the TUI say attached mode isn't
+available yet; a named pipe with an owner-only access list follows.
 
 ## Tests
 
@@ -594,3 +675,33 @@ returns `refused: rate-limited` if it sent nothing, else `timeout`.
   refused; 50 plan-grant writes without a prompt, each audited as approved
   by the plan, and writes outside it refused. `writes/seal.rs`: a state
   bound to its principal and tool, opened once, within its lifetime.
+- `crates/bacnet-mcp/src/tests/attach.rs` (#2185, Unix): an agent
+  through the bridge reads the lab on the shared engine, which its rate
+  meter shows, with no write tool though the policy offers writes; a peer
+  of another uid (named by a stand-in for the kernel's credentials, since a
+  test can't connect as another user) closed before any MCP traffic and
+  audited with its uid and pid; a loose workspace narrowed to 0700, a
+  symbolic link or a file refused; a second listener refused by the lock
+  while the first keeps serving, a stale socket cleared, and a symbolic
+  link or file at the socket's path left alone; `bacnet_revert` refused
+  like `bacnet_write`; shutdown completing a listen stream, cancelling its
+  COV subscription, ending the bridge and removing the socket.
+  `tests/attach_more.rs`: the `[mcp]` limits only while an agent is
+  attached; four flooding agents held to one budget while the TUI's reads
+  finish; the TUI keeping its COV notifications when an agent leaves the
+  same point; the bridge refusing a listener of another user with nothing
+  written; unreadable credentials refused and audited; an idle connection
+  closed after 30 s. `tests/attach_shared.rs`: a second session's broad
+  Who-Is within the minute refused and the watch cap counting both
+  sessions' points; shutdown not waiting out a silent handshake; an agent
+  keeping a shared point's COV updates when the other leaves; an open
+  session idle past 30 s kept. `attach/guard_tests.rs`: ownership,
+  narrowing on one handle, the re-check after bind, the post-bind socket
+  check, the lock (a probe's shared lock refusing neither another probe
+  nor, once released, a starting listener) and the path length. `crates/bacnet-cli/src/tui/tests/mcp_attach.rs`:
+  an agent on an open session's socket reading through its client, on the
+  watch list's meter, `MCP n` and `MCP off` on the bar, the watch list's
+  first SubscribeCOV keeping the first subscriber process identifier, and
+  quitting ending it;
+  `crates/bacnet-cli/tests/mcp_connect.rs`: `bacnet mcp connect` against a
+  listener, stdout JSON-RPC only, and the refusal with nothing listening.
