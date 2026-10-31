@@ -487,6 +487,8 @@ mod cov_snapshot;
 mod dcc_disable_rate;
 pub(crate) mod dcc_outcomes;
 mod dcc_policy;
+#[cfg(test)]
+mod device_core_parity_tests;
 mod lso_replay;
 pub use dcc_disable_rate::DccDisableRateLimit;
 mod dcc_timer;
