@@ -58,12 +58,12 @@ const DIFFER: &[(ObjectType, P, Option<u32>)] =
 /// The server commands a commandable Present_Value for the requester it
 /// knows from the request's source address; the core's `Inbound` carries
 /// none, so the object refuses the unsourced command. And the server makes
-/// a Command's writes, where the core ends the run unmade, so the Command's
-/// All_Writes_Successful differs once the run is over.
+/// a Command's writes, where the core ends the run unmade and makes none:
+/// its targets, results and All_Writes_Successful differ (`write.rs`).
 const DIFFER_EXCHANGES: &[&str] = &[
     "reply over max_reply, segmented response accepted",
     "commandable Present_Value write",
-    "All_Writes_Successful after a Command run",
+    "a Command run's actions",
 ];
 
 struct FixedClock;

@@ -22,6 +22,13 @@ use bytes::{Bytes, BytesMut};
 /// The services a [`Responder`] runs, for the Device's
 /// Protocol_Services_Supported: build the database from
 /// `DeviceIdentity::with_services(SERVICES)`.
+///
+/// WriteProperty is among them, but [`Responder::write`] has no command
+/// origin to give, since [`Inbound`] carries no source address: an object
+/// whose Present_Value is commandable (the default Binary Value, Analog
+/// Value and Analog Output among them) refuses a write to it with
+/// WRITE_ACCESS_DENIED
+/// ([#2209](https://github.com/jscott3201/rusty-bacnet/issues/2209)).
 pub const SERVICES: &[ServiceSupported] = &[
     ServiceSupported::READ_PROPERTY,
     ServiceSupported::WRITE_PROPERTY,
@@ -236,9 +243,16 @@ impl Responder {
     /// Error or Reject that refuses it, to `out`. `observer` sees the
     /// attempt, as the server's audit and change capture do. A write that
     /// queues a Command's or Channel's run ends that run at once, unmade:
-    /// the core has no task to make its writes in. A confirmed request that
-    /// arrived segmented is refused. Any other service is
-    /// [`Outcome::Unhandled`], for the host to route on.
+    /// the core has no task to make its writes in, so it performs none of
+    /// the run's actions, and the object reports them unsuccessful. A
+    /// confirmed request that arrived segmented is refused. Any other
+    /// service is [`Outcome::Unhandled`], for the host to route on.
+    ///
+    /// The write carries no command origin, since [`Inbound`] has no source
+    /// address: an object whose Present_Value is commandable (the default
+    /// Binary Value, Analog Value and Analog Output among them) refuses a
+    /// write to it with WRITE_ACCESS_DENIED
+    /// ([#2209](https://github.com/jscott3201/rusty-bacnet/issues/2209)).
     pub fn write(
         &self,
         db: &mut ObjectDatabase,
@@ -287,6 +301,11 @@ impl Responder {
     /// answered by [`reply::refuse`]. An unconfirmed request it doesn't run
     /// is [`Outcome::Silent`], and so is an APDU that doesn't decode, which
     /// the server drops too.
+    ///
+    /// Its writes are [`write`](Self::write)'s: with no command origin, so a
+    /// commandable Present_Value refuses them
+    /// ([#2209](https://github.com/jscott3201/rusty-bacnet/issues/2209)),
+    /// and with any Command or Channel run they start ended unmade.
     pub fn handle(&self, db: &mut ObjectDatabase, request: Inbound, out: &mut BytesMut) -> Written {
         let apdu = request.apdu.clone();
         let handled = if Self::classify(&apdu) == Access::Write {

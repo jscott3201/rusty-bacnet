@@ -4,7 +4,8 @@
 //! Command or Channel run a write queued that its host can't make.
 //!
 //! The host owns the database guard. A [`WriteCommitObserver`] runs under
-//! it, synchronously, and takes no lock of its own.
+//! it, synchronously; [its documentation](WriteCommitObserver) says which
+//! locks an implementation may take.
 use bacnet_objects::command_source::CommandOrigin;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::device::AuditWriteSource;
@@ -41,7 +42,13 @@ pub struct WriteTarget<'a> {
 }
 
 /// What a host does around each write attempt, under its database guard.
-/// Every call is synchronous, and an implementation takes no lock.
+///
+/// Every call is synchronous and runs while the host holds the database
+/// for writing. An implementation must not await, and must take no lock
+/// that can wait on the database, on an async task, or on anything held
+/// across an await. A short leaf mutex, taken after the database and held
+/// for the call alone, is fine: the server's COV capture takes its timed
+/// store's, and its Audit Reporter its delivery bookkeeping's.
 pub trait WriteCommitObserver: Send {
     /// The attempt on `write` is about to run, after its checks.
     fn before(&mut self, db: &ObjectDatabase, write: WriteTarget<'_>);

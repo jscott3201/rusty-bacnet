@@ -42,13 +42,25 @@ use bytes::BytesMut;
 
 /// A reference whose optional Device member the server may drop, with the
 /// shared codec for its wire form.
-pub trait DeviceQualified: Sized {
+///
+/// Sealed: it is public only so [`localize_member`] can name it in a bound,
+/// and only the two reference types here implement it.
+pub trait DeviceQualified: sealed::Sealed + Sized {
     /// Decode one reference at `offset`: the reference and the offset after it.
     fn decode(bytes: &[u8], offset: usize) -> Result<(Self, usize), Error>;
     /// Append the reference's encoding to `buf`.
     fn encode(&self, buf: &mut BytesMut);
     /// The optional Device member.
     fn device_mut(&mut self) -> &mut Option<ObjectIdentifier>;
+}
+
+mod sealed {
+    /// The private supertrait that keeps [`DeviceQualified`](super::DeviceQualified)
+    /// closed to the types in this module.
+    pub trait Sealed {}
+
+    impl Sealed for super::BACnetDeviceObjectPropertyReference {}
+    impl Sealed for super::BACnetDeviceObjectReference {}
 }
 
 impl DeviceQualified for BACnetDeviceObjectPropertyReference {

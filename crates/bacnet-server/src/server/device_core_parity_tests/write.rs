@@ -229,8 +229,10 @@ async fn write_property_rows_match() {
 }
 
 /// A Command's Present_Value write: both acknowledge it, and both leave
-/// the Command out of process. The server made the run's write, the core
-/// ended the run unmade, so only All_Writes_Successful differs.
+/// the Command out of process. The server performs the run's action, the
+/// core ends the run unmade and performs none, so the action's effect
+/// differs: BV-2's Present_Value, the action's write-successful flag, and
+/// the Command's All_Writes_Successful.
 #[tokio::test(start_paused = true)]
 async fn a_command_write_matches_until_its_run_ends() {
     let mut parity = Parity::start_writes().await;
@@ -248,11 +250,8 @@ async fn a_command_write_matches_until_its_run_ends() {
     parity
         .read_back("In_Process after the run", cmd1(), P::IN_PROCESS)
         .await;
-    let read = read_property(2, cmd1(), P::ALL_WRITES_SUCCESSFUL, None);
-    let (server, core) = parity
-        .differ("All_Writes_Successful after a Command run", read, 1476)
-        .await;
-    let flag = |reply: Option<Apdu>| {
+    const ACTIONS: &str = "a Command run's actions";
+    let value = |reply: Option<Apdu>| {
         let Some(Apdu::ComplexAck(ack)) = reply else {
             panic!("expected a ComplexACK, got {reply:?}");
         };
@@ -262,10 +261,42 @@ async fn a_command_write_matches_until_its_run_ends() {
             .unwrap()
             .0
     };
+    // The action's target: written active by the server, untouched by the
+    // core.
+    let target = read_property(2, bv(2), P::PRESENT_VALUE, None);
+    let (server, core) = parity.differ(ACTIONS, target, 1476).await;
     assert_eq!(
-        (flag(server), flag(core)),
+        (value(server), value(core)),
+        (PropertyValue::Enumerated(1), PropertyValue::Enumerated(0)),
+        "BV-2's Present_Value: server, then core"
+    );
+    // List 1, whose one action records whether its write succeeded.
+    let action = read_property(3, cmd1(), P::ACTION, Some(1));
+    let (server, core) = parity.differ(ACTIONS, action, 1476).await;
+    let succeeded = |reply: Option<Apdu>| {
+        let Some(Apdu::ComplexAck(ack)) = reply else {
+            panic!("expected a ComplexACK, got {reply:?}");
+        };
+        let ack =
+            bacnet_services::read_property::ReadPropertyACK::decode(&ack.service_ack).unwrap();
+        let (list, _) =
+            bacnet_encoding::constructed::decode_action_list(&ack.property_value, 0).unwrap();
+        list.commands
+            .iter()
+            .map(|command| command.write_successful)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        (succeeded(server), succeeded(core)),
+        (vec![true], vec![false]),
+        "the action's write-successful flag: server, then core"
+    );
+    let flag = read_property(4, cmd1(), P::ALL_WRITES_SUCCESSFUL, None);
+    let (server, core) = parity.differ(ACTIONS, flag, 1476).await;
+    assert_eq!(
+        (value(server), value(core)),
         (PropertyValue::Boolean(true), PropertyValue::Boolean(false)),
-        "server, then core"
+        "All_Writes_Successful: server, then core"
     );
     parity.server.stop().await.unwrap();
 }

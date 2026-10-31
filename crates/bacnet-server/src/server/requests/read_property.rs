@@ -223,15 +223,31 @@ mod tests {
         std::mem::size_of::<F>()
     }
 
-    /// No guard holds a WriteProperty future to a size: it runs inside the
-    /// general handler's boxed future, not on a path of its own. This prints
-    /// the mutation's own future, which holds the write's result across the
-    /// COV and Schedule awaits, so a move of the synchronous write path
-    /// (#2178) shows up here if it grows what the future keeps.
+    /// The WriteProperty mutation's future, which holds the write's result
+    /// across the COV and Schedule awaits, kept to a ceiling. It runs inside
+    /// the general handler's boxed future, not on a path of its own, so no
+    /// allocator size class bounds it: the ceiling is its size when the
+    /// synchronous write path moved into bacnet-device-core (#2178), 1,024
+    /// bytes, plus the 64 bytes of slack the ReadProperty guard warns
+    /// within. A change that grows it past the ceiling should shrink it
+    /// again (box a rare path, don't hold a large value across an await)
+    /// rather than raise it.
     #[test]
-    fn write_property_future_size_is_reported() {
+    fn write_property_mutation_future_stays_within_its_ceiling() {
+        const SIZE_AT_MOVE: usize = 1024;
+        const SLACK: usize = 64;
+        const CEILING: usize = SIZE_AT_MOVE + SLACK;
         let write_property =
             borrowing_future_size(super::super::mutations::Request::write_property::<BipTransport>);
-        eprintln!("WriteProperty mutation future: {write_property} bytes");
+        const ADVICE: &str = "the ceiling is the size at #2178 plus 64 bytes, not a budget; \
+            shrink the future (box a rare path), don't raise the ceiling";
+        eprintln!("WriteProperty mutation future: {write_property} bytes; ceiling {CEILING}");
+        if write_property > CEILING - SLACK {
+            eprintln!("warning: the future is within {SLACK} bytes of {CEILING}. {ADVICE}");
+        }
+        assert!(
+            write_property <= CEILING,
+            "the WriteProperty mutation future is {write_property} bytes, over {CEILING}: {ADVICE}"
+        );
     }
 }

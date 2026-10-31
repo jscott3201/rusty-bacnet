@@ -385,8 +385,10 @@
 #
 # The scenario writes BV-1's Present_Value and reads it back since PR 2 of
 # #2178, so the image links WriteProperty: the value decoding every write
-# path shares, the local form of device references, and each object's
-# write. Measured with Rust 1.99.0 against dev at 69555845b, flash grew
+# path shares and the local form of device references. The objects' own
+# write methods were linked before: each object's vtable keeps them
+# whether or not anything calls them, and bacnet-objects' .text didn't
+# grow. Measured with Rust 1.99.0 against dev at 69555845b, flash grew
 # from 125256 / 124608 / 151030 to 158456 / 157840 / 191882 on thumbv7m /
 # thumbv7em / riscv32imac, RAM unchanged at 16480. On thumbv7m, .text is
 # 140624 (from 110564) and .rodata 16808 (from 13668); most of the growth

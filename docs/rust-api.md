@@ -5493,8 +5493,8 @@ fails with `Error::Encoding` before anything is written.
 Whatever commits a Present_Value write owns the run it starts and finishes it,
 so no path leaves a Command in process (#1178). Without a server,
 `tick_schedules` runs the lists its Schedule writes start before it returns,
-post delays included, making each command as the bare WriteProperty handler
-would with the Command as the initiating object; it has no network, so a
+post delays included, making each command through `bacnet-device-core`'s
+`write::write_property`, with the Command as the initiating object; it has no network, so a
 command naming another device fails. Dropping its future first ends each
 unfinished run as unsuccessful. `bacnet-device-core`'s `Responder::write`
 and the bare `handle_write_property_multiple` handler are synchronous and make
@@ -6614,7 +6614,10 @@ on targets with atomic compare-and-swap, as `bacnet-objects` does. The
 - `write`: `write_property`, which runs a WriteProperty and says whether
   it changed the object or was a NULL the property left as it was
   (`Applied`), with an optional `WriteCommitObserver` that the host's audit
-  and change capture run in, under its guard and taking no lock; the shared
+  and change capture run in, synchronously under its database guard. An
+  observer must not await or take a lock that can wait on the database, an
+  async task or anything held across an await; a short leaf mutex taken
+  after the database is fine, and the server's take a few. The shared
   steps every write path takes (`check_write_array_index`,
   `gate_and_decode_write`, `decode_write_property_value`, `localize`,
   `commit_attempt`, `check_executor_owned_write`); the NULL-relinquish rule
@@ -6645,8 +6648,8 @@ and a `read_work` limit of zero.
 `Inbound` carries no source address, so `Responder::write` writes with no
 command origin: an object with a commandable Present_Value refuses the
 write with WRITE_ACCESS_DENIED, where the server commands it for the
-requester. A write that starts a Command's or Channel's run ends that run
-at once, unmade.
+requester (#2209). A write that starts a Command's or Channel's run ends
+that run at once, unmade, with none of its actions performed.
 
 ```rust
 use bacnet_device_core::responder::{Inbound, Limits, Outcome, Responder};

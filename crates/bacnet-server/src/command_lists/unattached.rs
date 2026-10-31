@@ -1,7 +1,8 @@
 //! Running Command lists and Channel distributions without a server, for
 //! [`tick_schedules`](crate::schedule::tick_schedules) (#1178, #1151).
 //!
-//! Each write is made as the bare WriteProperty handler would make a request
+//! Each write is made through
+//! [`bacnet_device_core::write::write_property`], as a WriteProperty request
 //! carrying it, with the Command or Channel as the initiating object. There
 //! is no network here, so a command or Channel member naming another device
 //! fails unsent, which a Channel reports as PROCESS_ERROR. There is no

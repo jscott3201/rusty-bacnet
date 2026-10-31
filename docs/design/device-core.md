@@ -186,7 +186,9 @@ a write with WRITE_ACCESS_DENIED, as it refused the bare handler's, where
 the server commands it for the requester; a writable Present_Value and
 every other writable property take the write. The parity test pins the
 difference (§7.2). A host that knows its requester and needs commands
-through `write` is a follow-up: `Inbound` would carry the origin. The `Responder`'s `ReadScope` (§4.3) takes its work limit from
+through `write` is a follow-up (#2209): `Inbound` would carry the origin.
+
+The `Responder`'s `ReadScope` (§4.3) takes its work limit from
 `Limits` and its Device from the identity, as the server's does. `Inbound`
 carries no source address and no time: whether a confirmed request that
 arrived as a group (link-layer broadcast or multicast) is answered at all is
@@ -369,10 +371,17 @@ pub fn end_unmade(db: &mut ObjectDatabase, written: &[ObjectIdentifier]);
 | `origin` | writes a Command or Schedule makes on a local object (`command_lists/unattached.rs:100-111`, `server/requests/mutations.rs:228`) |
 | `authorize` | WPM attempts decided ahead, without the guard (#2032, `server/requests/mutations.rs:307-329`) |
 
-The observer is synchronous and runs under the host's database guard. Its
-implementations must take no lock; the server's take none today, and the
-COV capture they run was read from the COV table before the write, under
-the database write guard (`server/requests/mutations.rs:316-319`).
+The observer is synchronous and runs under the host's database write
+guard. An implementation must not await, and must take no lock that can
+wait on the database, on an async task, or on anything held across an
+await; a short leaf mutex, taken after the database and held for the call
+alone, is fine. The server's take only such mutexes: the COV capture locks
+its timed store last (database, then COV table, then timed store,
+`cov/timed_capture.rs:9`), and the Audit Reporter's observer locks its
+delivery bookkeeping (the reporter's status, the failure and batch queues
+and the transaction slots). The COV capture they run was read from the
+COV table before the write, under the database write guard
+(`server/requests/mutations.rs:316-319`).
 
 WPM's Life Safety snapshots need no hook of their own:
 `capture_before_write` runs just before `commit_attempt`
@@ -571,11 +580,13 @@ The server serves executor-owned Device properties from its view
 `Responder` with `NoOverlay` from the Device object, so some of those rows
 differ by design. PR 2 pins two write exchanges as well: a commandable
 Present_Value write, which the server commands for the requester and the
-core refuses for want of an origin (§4.2), and All_Writes_Successful after
-a Command's Present_Value write, since the server makes the run's writes
-and the core ends the run unmade. The Command's write itself, and its
-In_Process afterwards, match. The test pins the exact set that differs: a drift
-anywhere else, or a pinned row that stops differing, fails. Mutation check
+core refuses for want of an origin (§4.2), and a Command run's actions,
+since the server performs them and the core ends the run unmade and
+performs none: the target an action writes, the action's write-successful
+flag and the Command's All_Writes_Successful differ. The Command's write
+itself, and its In_Process afterwards, match. The test pins the exact set
+that differs: a drift anywhere else, or a pinned row that stops
+differing, fails. Mutation check
 for PR 1: drop the array-index gate from the core's `read_value`; the
 core's tests, the server's array-index tests and the parity test must all
 fail.
@@ -669,9 +680,10 @@ code. Mitigations:
 **Lock order.** The server takes `ObjectDatabase` before `COVTable`. The
 core takes no lock and never sees the COV table: live lists reach it as a
 sampled overlay (§4.4), and the observer's COV capture was read before the
-write (§4.5). Both traits are synchronous; an implementation that blocked
-on a lock inside a core call would hold it under the database guard, and
-review rejects one.
+write (§4.5). Both traits are synchronous; an implementation that waited
+on a lock the database guard's holder might need, or on an async task,
+would deadlock under the guard, and review rejects one. A short leaf mutex
+taken after the database is allowed (§4.5).
 
 **#1494 (unpolled lock waiters).** The core adds no futures, `select!`,
 `join` or `FuturesUnordered`. The host's sequence stays plan, await the
@@ -728,6 +740,10 @@ is a follow-up. No file passes the 700-line cap: the two largest sources,
 6. **Requests the core doesn't run** (lead, from the review): `read` and
    `write` return `Unhandled` so a host routes the request on; `handle`
    answers every confirmed request through the `reply` helpers (§4.2).
+7. **No command origin on `Inbound` in PR 2** (lead, from the PR 2
+   review): `Responder::write` writes with none, so a commandable
+   Present_Value refuses it, and the parity test pins that difference
+   (§4.2, §7.2). #2209 adds the origin to `Inbound`.
 
 ## 11. Evidence
 

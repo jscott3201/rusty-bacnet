@@ -492,14 +492,24 @@ impl WriteCommitObserver for Seen {
 
 #[test]
 fn the_observer_sees_each_attempt() {
-    for (value, expected) in [
-        (&[0x91, 0x01][..], &["before", "committed", "applied"][..]),
-        (&[0x44, 0, 0, 0, 0][..], &["before", "failed"][..]),
+    for (property, value, expected) in [
+        (
+            P::PRESENT_VALUE,
+            &[0x91, 0x01][..],
+            &["before", "committed", "applied"][..],
+        ),
+        (
+            P::PRESENT_VALUE,
+            &[0x44, 0, 0, 0, 0][..],
+            &["before", "failed"][..],
+        ),
+        // A NULL the property leaves as it was succeeds and changes nothing.
+        (P::OBJECT_NAME, &[0x00][..], &["before", "committed"][..]),
     ] {
         let mut db = database();
         let mut seen = Seen::default();
         let mut out = BytesMut::new();
-        let apdu = write_property(bv1(), P::PRESENT_VALUE, None, value);
+        let apdu = write_property(bv1(), property, None, value);
         responder().write(&mut db, Some(&mut seen), Inbound::new(apdu, 1476), &mut out);
         assert_eq!(seen.0, expected);
     }
