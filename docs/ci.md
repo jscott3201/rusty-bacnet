@@ -426,11 +426,13 @@ targets, so a crate that needs one builds only with a backend such as
     Clause 6.2 and 20.1 layouts, and so are the answers it expects, whose
     hashes `device::expected()` holds.
   - `objects::run` builds a database of a Device and two Analog Inputs and
-    two Binary Values, and hands `Responder::handle` ten request APDUs:
+    two Binary Values, and hands `Responder::handle` twelve request APDUs:
     Who-Is in range and out of it, a Who-Has, a ReadProperty of each
     Present_Value, one of an object the device lacks, one whose parameters
-    stop short, and a segmented request. `objects::expected()` holds each
-    outcome and answer.
+    stop short, a segmented request, then a WriteProperty of a Binary
+    Value's Present_Value and a ReadProperty that reads it back.
+    `objects::expected()` holds each outcome and answer, and the object
+    the write changed.
 
   The host tests in `firmware/link/tests/` (`mstp.rs`, `mstp_extended.rs`,
   `bip.rs`, `node.rs`, `bbmd.rs`, `router.rs`, `device.rs`, `apdu.rs` and

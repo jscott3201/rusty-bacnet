@@ -348,7 +348,7 @@ fn default_name(db: &ObjectDatabase, object_type: ObjectType, instance: u32) -> 
 /// applies its value: the array index checked against the object, the value
 /// decoded whole with the object's list classification, the Object_Name kept
 /// unique, and a NULL the property leaves as it is taken as applied
-/// ([`relinquish`]). A whole value for one of the object's
+/// ([`relinquish`](bacnet_device_core::write::relinquish)). A whole value for one of the object's
 /// [`creation_only_properties`] goes to its
 /// [`initialize_property`] instead of the write route, which keeps refusing
 /// it (#1429). A State_Text written whole goes the write route, which sets
@@ -365,7 +365,7 @@ fn initialize(
     counts: StateCounts,
     command_origin: Option<&bacnet_objects::command_source::CommandOrigin>,
 ) -> Result<(), CreateObjectRefusal> {
-    use super::write_property::{
+    use bacnet_device_core::write::{
         WriteTarget, check_and_prepare_name_write, check_write_array_index, commit_attempt,
         decode_write_property_value,
     };
@@ -382,15 +382,17 @@ fn initialize(
         &pv.value,
     )
     .map_err(CreateObjectRefusal::Malformed)?;
-    let value = crate::local_references::localize(db, created_oid, property, value);
+    let value = bacnet_device_core::write::localize(db, created_oid, property, value);
     let object = db.get_mut(&created_oid).expect("created above");
     if array_index.is_none() && object.creation_only_properties().contains(&property) {
         return match object.initialize_property(property, value) {
             Ok(()) => Ok(()),
             // A NULL is judged as on the write route.
             Err(error)
-                if super::relinquish::is_null_octets(&pv.value)
-                    && super::relinquish::leaves_unchanged(object, property, None, &error) =>
+                if bacnet_device_core::write::relinquish::is_null_octets(&pv.value)
+                    && bacnet_device_core::write::relinquish::leaves_unchanged(
+                        object, property, None, &error,
+                    ) =>
             {
                 Ok(())
             }

@@ -33,8 +33,9 @@ Foundations
   bacnet-objects        BACnetObject, ObjectDatabase, object implementations
                         (no_std + alloc where atomics allow, #1615)
   bacnet-device-core    Sans-IO request core over a borrowed ObjectDatabase: the read
-                        path, discovery and the reply map the server runs on, and a
-                        Responder for firmware (no_std + alloc where atomics allow, #2178)
+                        and write paths, discovery and the reply map the server runs
+                        on, and a Responder for firmware (no_std + alloc where atomics
+                        allow, #2178)
 
 Runtime and application roles
   bacnet-endpoint-core  Private lifecycle, ingress, egress, coordination
@@ -100,7 +101,7 @@ Optional private EndpointIngress classifier / Client dispatch task / Server disp
     |  Decodes APDU header (PDU type, service choice, invoke ID)
     |  Routes to appropriate handler
     v
-Service handler (ReadProperty, Who-Is and Who-Has through bacnet-device-core)
+Service handler (ReadProperty, WriteProperty, Who-Is and Who-Has through bacnet-device-core)
     |  Decodes service request from APDU payload
     |  Reads/writes ObjectDatabase
     |  Encodes response

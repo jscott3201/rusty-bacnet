@@ -1,5 +1,5 @@
 use super::*;
-use crate::handlers::{WriteCommitObserver, WriteTarget};
+use bacnet_device_core::write::{WriteCommitObserver, WriteTarget};
 use bacnet_types::enums::EngineeringUnits;
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
@@ -125,14 +125,8 @@ fn indexed_absence_keeps_wpm_prefix_coordinate_and_skips_authorizer_observer_sou
             let origin = crate::command_source::test_origin();
             let mut observer = Observer(events.clone());
             assert_error(
-                handle_write_property_observed(
-                    &mut db,
-                    &bytes,
-                    Some(&mut observer),
-                    None,
-                    Some(&origin),
-                )
-                .map(|_| ()),
+                write::write_property(&mut db, &bytes, Some(&mut observer), None, Some(&origin))
+                    .map(|_| ()),
                 ErrorCode::UNKNOWN_PROPERTY,
             );
             assert!(

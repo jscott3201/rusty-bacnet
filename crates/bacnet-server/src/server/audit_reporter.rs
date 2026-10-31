@@ -3,7 +3,7 @@ use super::notification_transactions::{
     AuditFailureContext, AuditFailureTicket, NotificationReservation, NotificationReserveError,
 };
 use super::*;
-use crate::handlers::{WriteCommitObserver, WriteTarget};
+use bacnet_device_core::write::{WriteCommitObserver, WriteTarget};
 use bacnet_objects::audit::AuditReporterStatus;
 use bacnet_services::audit::AuditNotificationRequest;
 use bacnet_types::constructed::{

@@ -22,8 +22,8 @@ bacnet-types → bacnet-encoding → bacnet-services → bacnet-transport → ba
 ```
 
 `bacnet-device-core` sits between `bacnet-objects` and `bacnet-server`: the
-read path the server runs ReadProperty, Who-Is and Who-Has through, which
-firmware can run without the server ([bacnet-device-core](#bacnet-device-core)).
+read and write paths the server runs ReadProperty, WriteProperty, Who-Is and
+Who-Has through, which firmware can run without the server ([bacnet-device-core](#bacnet-device-core)).
 Above them, `bacnet-endpoint` (on `bacnet-endpoint-core`) runs client and
 server roles through one transport ([bacnet-endpoint](#bacnet-endpoint)), and
 `bacnet-ops` and `bacnet-mcp` sit on `bacnet-client`
@@ -5493,12 +5493,12 @@ fails with `Error::Encoding` before anything is written.
 Whatever commits a Present_Value write owns the run it starts and finishes it,
 so no path leaves a Command in process (#1178). Without a server,
 `tick_schedules` runs the lists its Schedule writes start before it returns,
-post delays included, making each command as the bare WriteProperty handler
-would with the Command as the initiating object; it has no network, so a
+post delays included, making each command through `bacnet-device-core`'s
+`write::write_property`, with the Command as the initiating object; it has no network, so a
 command naming another device fails. Dropping its future first ends each
-unfinished run as unsuccessful. The bare `handle_write_property` and
-`handle_write_property_multiple` handlers are synchronous and make no writes
-for a Command: the run a Present_Value write starts ends at once, with
+unfinished run as unsuccessful. `bacnet-device-core`'s `Responder::write`
+and the bare `handle_write_property_multiple` handler are synchronous and make
+no writes for a Command: the run a Present_Value write starts ends at once, with
 In_Process FALSE, All_Writes_Successful FALSE and every command's
 `write_successful` FALSE. The endpoint responder refuses a Command's
 Present_Value write with WRITE_ACCESS_DENIED, as it does every write other
@@ -6118,8 +6118,9 @@ after the Channel took its value leaves the distribution running, as it does
 a Command's run (#1367). Without a server,
 `tick_schedules` runs a distribution its Schedule writes start before it
 returns, delays included, and ends it FAILED if its future is dropped first.
-The bare `handle_write_property` and `handle_write_property_multiple` handlers
-end it at once as FAILED, without writing the members. The endpoint responder
+`bacnet-device-core`'s `Responder::write` and the bare
+`handle_write_property_multiple` handler end it at once as FAILED, without
+writing the members. The endpoint responder
 refuses a Channel's Present_Value write with WRITE_ACCESS_DENIED.
 
 A run that one Command's or Channel's write starts in another carries the
@@ -6610,6 +6611,19 @@ on targets with atomic compare-and-swap, as `bacnet-objects` does. The
   plan reads (`live_lists`), then read (`read_property_ack`,
   `RpmPlan::read`). `ReadPropertyMultipleBudget` lives here, moved from
   `bacnet_server::server`.
+- `write`: `write_property`, which runs a WriteProperty and says whether
+  it changed the object or was a NULL the property left as it was
+  (`Applied`), with an optional `WriteCommitObserver` that the host's audit
+  and change capture run in, synchronously under its database guard. An
+  observer must not await or take a lock that can wait on the database, an
+  async task or anything held across an await; a short leaf mutex taken
+  after the database is fine, and the server's take a few. The shared
+  steps every write path takes (`check_write_array_index`,
+  `gate_and_decode_write`, `decode_write_property_value`, `localize`,
+  `commit_attempt`, `check_executor_owned_write`); the NULL-relinquish rule
+  (`write::relinquish`); and the end of a Command's or Channel's run a host
+  can't make (`end_unmade`, `take_queued`, `Unfinished`).
+  `handle_write_property` is gone from `bacnet_server::handlers`.
 - `discovery`: `who_is` (the I-Am a Who-Is calls for, or none), `who_has`,
   `i_am` and `announcement_device`.
 - `reply`: `error_apdu`, the one map from an `Error` to its Reject or Error
@@ -6617,16 +6631,25 @@ on targets with atomic compare-and-swap, as `bacnet-objects` does. The
   refusals a host sends for a service it doesn't run.
 - `responder`: `Responder`, for a host with nothing to await between the
   steps. `Responder::classify` says from the header alone whether a request
-  reads the database; `Responder::read` answers ReadProperty, Who-Is and
-  Who-Has through an overlay; and `Responder::handle`, for firmware that
-  owns its database, also refuses every other well-formed confirmed
-  request, and drops an APDU that doesn't decode, as the server does.
+  reads or writes the database; `Responder::read` answers ReadProperty,
+  Who-Is and Who-Has through an overlay; `Responder::write` answers
+  WriteProperty, returning `Written`: the outcome and the objects the write
+  changed, for the host's post-write work; and `Responder::handle`, for
+  firmware that owns its database, does either, refuses every other
+  well-formed confirmed request, and drops an APDU that doesn't decode, as
+  the server does.
   `bacnet_device_core::SERVICES` lists the services it runs, for the
   Device's Protocol_Services_Supported.
 
 `Responder::new` refuses an identity that claims segmentation support, since
 the core aborts every segmented request and every reply too long for one APDU,
 and a `read_work` limit of zero.
+
+`Inbound` carries no source address, so `Responder::write` writes with no
+command origin: an object with a commandable Present_Value refuses the
+write with WRITE_ACCESS_DENIED, where the server commands it for the
+requester (#2209). A write that starts a Command's or Channel's run ends
+that run at once, unmade, with none of its actions performed.
 
 ```rust
 use bacnet_device_core::responder::{Inbound, Limits, Outcome, Responder};
@@ -6635,7 +6658,8 @@ let responder = Responder::new(identity, Limits::default())?;
 // `request` is the received APDU as `Bytes`; `max_reply` is the smaller of
 // its Max-APDU-Length-Accepted and the route's limit.
 let mut out = bytes::BytesMut::new();
-match responder.handle(&mut db, Inbound::new(request, max_reply), &mut out) {
+let handled = responder.handle(&mut db, Inbound::new(request, max_reply), &mut out);
+match handled.outcome {
     Outcome::Reply => send_to_requester(&out),
     Outcome::Announce => broadcast(&out),
     _ => {}
@@ -6644,9 +6668,13 @@ match responder.handle(&mut db, Inbound::new(request, max_reply), &mut out) {
 
 `bacnet-server` runs its ReadProperty, ReadPropertyMultiple, ReadRange's
 Group reads, `read_local`, Who-Is and Who-Has on these functions, with its
-Device view as the overlay. The `objects` image of the
-[firmware link test](ci.md#firmware-link-test) links `Responder::handle`
-over a `bacnet-objects` database. Writes and WritePropertyMultiple follow.
+Device view as the overlay, and its WriteProperty, WritePropertyMultiple's
+attempts, CreateObject's initial values and its local writes on the write
+functions, with its audit and COV capture as the observer. The `objects`
+image of the [firmware link test](ci.md#firmware-link-test) links
+`Responder::handle` over a `bacnet-objects` database, writing a Binary Value
+and reading it back. ReadPropertyMultiple and WritePropertyMultiple through
+the `Responder` follow.
 
 ## bacnet-client
 

@@ -21,6 +21,7 @@ use bacnet_services::rpm::{
     ReadAccessResult, ReadPropertyMultipleACK, ReadPropertyMultipleRequest, ReadResultElement,
 };
 use bacnet_services::wpm::{WritePropertyMultipleCursor, WritePropertyMultipleEvent};
+#[cfg(test)]
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::MacAddr;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
@@ -49,7 +50,6 @@ mod list;
 mod object_mgmt;
 mod read_property;
 mod read_range;
-pub(crate) mod relinquish;
 #[cfg(test)]
 mod rpm_budget;
 mod write_property;

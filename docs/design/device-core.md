@@ -151,13 +151,15 @@ pub enum Outcome { Reply, Announce, Silent, Unhandled }
 pub struct Written { pub outcome: Outcome, pub objects: Vec<ObjectIdentifier> }
 
 /// `read_work`: rows one ReadProperty may expand (a Group's Present_Value).
-/// `rpm`: moved from server/rpm_budget.rs:10, used from PR 3.
-pub struct Limits { pub read_work: usize, pub rpm: ReadPropertyMultipleBudget }
+/// PR 3 adds the RPM limits.
+pub struct Limits { pub read_work: usize }
 
-pub struct Responder { identity: DeviceIdentity, scope: ReadScope, rpm: ReadPropertyMultipleBudget }
+pub struct Responder { identity: DeviceIdentity, scope: ReadScope }
 
 impl Responder {
-    pub fn new(identity: DeviceIdentity, limits: Limits) -> Self;
+    /// Refuses an identity that claims segmentation (the core segments
+    /// neither way) and a `read_work` of zero.
+    pub fn new(identity: DeviceIdentity, limits: Limits) -> Result<Self, Error>;
     pub fn with_registered_port(self, port: ObjectIdentifier) -> Self;
     /// PDU type and service choice only; never decodes the service.
     pub fn classify(apdu: &[u8]) -> Access;
@@ -174,7 +176,19 @@ impl Responder {
 
 `classify` exists for a host with a reader-writer lock: it picks the guard
 before calling `read` or `write`. Firmware that owns its database calls
-`handle`. The `Responder`'s `ReadScope` (§4.3) takes its work limit from
+`handle`. `Inbound`, `Limits` and `Written` are `#[non_exhaustive]`;
+`Inbound::new`, `Limits::new` and `Written::from(Outcome)` construct them.
+
+`write` passes no command origin (as built, PR 2): `Inbound` carries no
+source address, so the core can't name the requester a command came from
+(Clause 19.5). An object whose Present_Value is commandable refuses such
+a write with WRITE_ACCESS_DENIED, as it refused the bare handler's, where
+the server commands it for the requester; a writable Present_Value and
+every other writable property take the write. The parity test pins the
+difference (§7.2). A host that knows its requester and needs commands
+through `write` is a follow-up (#2209): `Inbound` would carry the origin.
+
+The `Responder`'s `ReadScope` (§4.3) takes its work limit from
 `Limits` and its Device from the identity, as the server's does. `Inbound`
 carries no source address and no time: whether a confirmed request that
 arrived as a group (link-layer broadcast or multicast) is answered at all is
@@ -357,10 +371,17 @@ pub fn end_unmade(db: &mut ObjectDatabase, written: &[ObjectIdentifier]);
 | `origin` | writes a Command or Schedule makes on a local object (`command_lists/unattached.rs:100-111`, `server/requests/mutations.rs:228`) |
 | `authorize` | WPM attempts decided ahead, without the guard (#2032, `server/requests/mutations.rs:307-329`) |
 
-The observer is synchronous and runs under the host's database guard. Its
-implementations must take no lock; the server's take none today, and the
-COV capture they run was read from the COV table before the write, under
-the database write guard (`server/requests/mutations.rs:316-319`).
+The observer is synchronous and runs under the host's database write
+guard. An implementation must not await, and must take no lock that can
+wait on the database, on an async task, or on anything held across an
+await; a short leaf mutex, taken after the database and held for the call
+alone, is fine. The server's take only such mutexes: the COV capture locks
+its timed store last (database, then COV table, then timed store,
+`cov/timed_capture.rs:9`), and the Audit Reporter's observer locks its
+delivery bookkeeping (the reporter's status, the failure and batch queues
+and the transaction slots). The COV capture they run was read from the
+COV table before the write, under the database write guard
+(`server/requests/mutations.rs:316-319`).
 
 WPM's Life Safety snapshots need no hook of their own:
 `capture_before_write` runs just before `commit_attempt`
@@ -464,6 +485,19 @@ Callers that switch imports: `server/durable_writes.rs`, `write_group.rs`,
 `handlers/list.rs`, `handlers/object_mgmt.rs`. Deleted:
 `handlers::handle_write_property`.
 
+As built: the items sit in `write` (`write/mod.rs`, with `decode`,
+`executor`, `local_references` and `runs` re-exported from it, and
+`write::relinquish` public as a module). `owned` and `identity_property`
+are public, since the server's Device view still reads them;
+`null_in_datatype` is crate-private, and its table test moved with it.
+`Unfinished`'s fields stay private, so the runner's progress record became
+`Unfinished::progress`, the body of the runner's own `Owner::progress`.
+`WriteTarget` (the service's five coordinates) and `Applied` (written or
+left unchanged) stay exhaustive: hosts build a `WriteTarget` for their own
+commits and match `Applied` whole. The server's other callers also include
+`cov/timed_capture.rs`, `audit_reporter.rs`, `request_tasks.rs`,
+`command_lists.rs` and `command_lists/taken.rs`.
+
 ### 6.3 PR 3, RPM and WPM
 
 | Item | From | Lines |
@@ -544,8 +578,15 @@ implementation, per CLAUDE.md):
 The server serves executor-owned Device properties from its view
 (`device_view.rs:150-159`, `device_view_identity.rs:14-24`), and a
 `Responder` with `NoOverlay` from the Device object, so some of those rows
-differ by design. The test pins the exact set that differs: a drift
-anywhere else, or a pinned row that stops differing, fails. Mutation check
+differ by design. PR 2 pins two write exchanges as well: a commandable
+Present_Value write, which the server commands for the requester and the
+core refuses for want of an origin (§4.2), and a Command run's actions,
+since the server performs them and the core ends the run unmade and
+performs none: the target an action writes, the action's write-successful
+flag and the Command's All_Writes_Successful differ. The Command's write
+itself, and its In_Process afterwards, match. The test pins the exact set
+that differs: a drift anywhere else, or a pinned row that stops
+differing, fails. Mutation check
 for PR 1: drop the array-index gate from the core's `read_value`; the
 core's tests, the server's array-index tests and the parity test must all
 fail.
@@ -559,7 +600,10 @@ The database is a Device from `DeviceIdentity` plus two Analog Input and two
 Binary Value objects. The scenario, through `Responder::handle`: Who-Is in
 range and out of it, Who-Has, ReadProperty of each Present_Value, an
 unknown object (Error), malformed parameters (Reject), a segmented request
-(Abort); PR 2 adds a write, PR 3 an RPM.
+(Abort); PR 2 adds a write, PR 3 an RPM. PR 2's write is to a Binary
+Value whose Present_Value is writable rather than commandable (§4.2), and
+the image then links the write path: 33 to 41 KB more flash, most of it
+the structured decoders the generic value decoding reaches.
 
 Heap: on a 64-bit host, a counting allocator measured the database at
 8,907 octets live and 9,075 at peak; a 32-bit target needs less. PR 1 gives
@@ -636,9 +680,10 @@ code. Mitigations:
 **Lock order.** The server takes `ObjectDatabase` before `COVTable`. The
 core takes no lock and never sees the COV table: live lists reach it as a
 sampled overlay (§4.4), and the observer's COV capture was read before the
-write (§4.5). Both traits are synchronous; an implementation that blocked
-on a lock inside a core call would hold it under the database guard, and
-review rejects one.
+write (§4.5). Both traits are synchronous; an implementation that waited
+on a lock the database guard's holder might need, or on an async task,
+would deadlock under the guard, and review rejects one. A short leaf mutex
+taken after the database is allowed (§4.5).
 
 **#1494 (unpolled lock waiters).** The core adds no futures, `select!`,
 `join` or `FuturesUnordered`. The host's sequence stays plan, await the
@@ -695,6 +740,10 @@ is a follow-up. No file passes the 700-line cap: the two largest sources,
 6. **Requests the core doesn't run** (lead, from the review): `read` and
    `write` return `Unhandled` so a host routes the request on; `handle`
    answers every confirmed request through the `reply` helpers (§4.2).
+7. **No command origin on `Inbound` in PR 2** (lead, from the PR 2
+   review): `Responder::write` writes with none, so a commandable
+   Present_Value refuses it, and the parity test pins that difference
+   (§4.2, §7.2). #2209 adds the origin to `Inbound`.
 
 ## 11. Evidence
 

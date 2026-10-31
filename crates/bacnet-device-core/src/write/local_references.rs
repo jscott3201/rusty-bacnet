@@ -26,7 +26,8 @@
 //! the local form; a member naming another device is kept, and the Channel
 //! writes it there (#1264).
 
-use std::borrow::Cow;
+use alloc::borrow::Cow;
+use alloc::vec::Vec;
 
 use bacnet_encoding::constructed::{
     decode_device_object_property_reference, decode_device_object_reference,
@@ -41,13 +42,25 @@ use bytes::BytesMut;
 
 /// A reference whose optional Device member the server may drop, with the
 /// shared codec for its wire form.
-pub(crate) trait DeviceQualified: Sized {
+///
+/// Sealed: it is public only so [`localize_member`] can name it in a bound,
+/// and only the two reference types here implement it.
+pub trait DeviceQualified: sealed::Sealed + Sized {
     /// Decode one reference at `offset`: the reference and the offset after it.
     fn decode(bytes: &[u8], offset: usize) -> Result<(Self, usize), Error>;
     /// Append the reference's encoding to `buf`.
     fn encode(&self, buf: &mut BytesMut);
     /// The optional Device member.
     fn device_mut(&mut self) -> &mut Option<ObjectIdentifier>;
+}
+
+mod sealed {
+    /// The private supertrait that keeps [`DeviceQualified`](super::DeviceQualified)
+    /// closed to the types in this module.
+    pub trait Sealed {}
+
+    impl Sealed for super::BACnetDeviceObjectPropertyReference {}
+    impl Sealed for super::BACnetDeviceObjectReference {}
 }
 
 impl DeviceQualified for BACnetDeviceObjectPropertyReference {
@@ -106,7 +119,7 @@ fn rewrite(object_type: ObjectType, property: PropertyIdentifier) -> Option<Rewr
 }
 
 /// Drop `member`'s Device identifier if it names this device.
-pub(crate) fn localize_member<R: DeviceQualified>(member: &mut R, local: LocalDevice) {
+pub fn localize_member<R: DeviceQualified>(member: &mut R, local: LocalDevice) {
     let device = member.device_mut();
     if local.is_local(*device) {
         *device = None;
@@ -116,7 +129,7 @@ pub(crate) fn localize_member<R: DeviceQualified>(member: &mut R, local: LocalDe
 /// A value written to `property` of `oid`, with every member that names the
 /// local Device in its local form. Other properties, and values that are
 /// not raw member bytes, pass through unchanged for the object to judge.
-pub(crate) fn localize(
+pub fn localize(
     db: &ObjectDatabase,
     oid: ObjectIdentifier,
     property: PropertyIdentifier,

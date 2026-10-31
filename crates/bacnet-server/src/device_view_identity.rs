@@ -11,18 +11,6 @@ pub(super) struct IdentityView {
     timeout: u64,
 }
 
-pub(super) fn identity_property(property: P) -> bool {
-    matches!(
-        property,
-        P::OBJECT_IDENTIFIER
-            | P::VENDOR_IDENTIFIER
-            | P::MAX_APDU_LENGTH_ACCEPTED
-            | P::SEGMENTATION_SUPPORTED
-            | P::APDU_SEGMENT_TIMEOUT
-            | P::MAX_SEGMENTS_ACCEPTED
-    )
-}
-
 impl From<&bacnet_objects::DeviceIdentity> for IdentityView {
     fn from(identity: &bacnet_objects::DeviceIdentity) -> Self {
         Self {

@@ -640,7 +640,7 @@ fn localize_edits(db: &ObjectDatabase, edits: &mut Elements) {
     if let Elements::References(members) = edits {
         let local = db.local_device();
         for member in members {
-            crate::local_references::localize_member(member, local);
+            bacnet_device_core::write::localize_member(member, local);
         }
     }
 }

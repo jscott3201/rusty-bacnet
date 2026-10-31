@@ -382,6 +382,20 @@
 # flash, links no 64-bit division and two memmove routines: flash 125256 /
 # 124608 / 151030 on thumbv7m / thumbv7em / riscv32imac, RAM unchanged. The
 # counts are those; the octet budgets stay as first set.
+#
+# The scenario writes BV-1's Present_Value and reads it back since PR 2 of
+# #2178, so the image links WriteProperty: the value decoding every write
+# path shares and the local form of device references. The objects' own
+# write methods were linked before: each object's vtable keeps them
+# whether or not anything calls them, and bacnet-objects' .text didn't
+# grow. Measured with Rust 1.99.0 against dev at 69555845b, flash grew
+# from 125256 / 124608 / 151030 to 158456 / 157840 / 191882 on thumbv7m /
+# thumbv7em / riscv32imac, RAM unchanged at 16480. On thumbv7m, .text is
+# 140624 (from 110564) and .rodata 16808 (from 13668); most of the growth
+# is bacnet-encoding's structured decoders (13178 to 33696 octets of
+# .text), which the generic value decoding reaches for any property, and
+# the core's write path (11272 to 13904). The octet budgets are the new
+# sizes plus 12%; the counts are unchanged.
 
 [thumbv7m-none-eabi.mstp]
 text = 18320
@@ -472,11 +486,11 @@ div64_functions = 0
 memmove_functions = 0
 
 [thumbv7m-none-eabi.objects]
-text = 129392
-rodata = 15232
+text = 157504
+rodata = 18832
 data = 64
 bss = 18464
-flash = 145776
+flash = 177472
 ram = 18464
 fmt_functions = 7
 div64_functions = 0
@@ -747,22 +761,22 @@ div64_functions = 0
 memmove_functions = 0
 
 [thumbv7em-none-eabihf.objects]
-text = 128656
-rodata = 15232
+text = 156816
+rodata = 18832
 data = 64
 bss = 18464
-flash = 145040
+flash = 176784
 ram = 18464
 fmt_functions = 7
 div64_functions = 0
 memmove_functions = 2
 
 [riscv32imac-unknown-none-elf.objects]
-text = 159280
-rodata = 16208
+text = 194448
+rodata = 20448
 data = 64
 bss = 18464
-flash = 175504
+flash = 214912
 ram = 18464
 fmt_functions = 7
 div64_functions = 0

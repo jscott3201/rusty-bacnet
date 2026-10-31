@@ -3,8 +3,10 @@
 use crate::discovery;
 use crate::read::{self, ReadFailure, ReadOverlay, ReadPropertyMultipleBudget, ReadScope};
 use crate::reply::{self, SEGMENTED, emit};
+use crate::write::{self, Applied, WriteCommitObserver};
+use alloc::vec::Vec;
 use bacnet_encoding::apdu::{
-    AbortPdu, Apdu, ComplexAck, ConfirmedRequest, UnconfirmedRequest, decode_apdu,
+    AbortPdu, Apdu, ComplexAck, ConfirmedRequest, SimpleAck, UnconfirmedRequest, decode_apdu,
 };
 use bacnet_objects::DeviceIdentity;
 use bacnet_objects::database::ObjectDatabase;
@@ -20,8 +22,16 @@ use bytes::{Bytes, BytesMut};
 /// The services a [`Responder`] runs, for the Device's
 /// Protocol_Services_Supported: build the database from
 /// `DeviceIdentity::with_services(SERVICES)`.
+///
+/// WriteProperty is among them, but [`Responder::write`] has no command
+/// origin to give, since [`Inbound`] carries no source address: an object
+/// whose Present_Value is commandable (the default Binary Value, Analog
+/// Value and Analog Output among them) refuses a write to it with
+/// WRITE_ACCESS_DENIED
+/// ([#2209](https://github.com/jscott3201/rusty-bacnet/issues/2209)).
 pub const SERVICES: &[ServiceSupported] = &[
     ServiceSupported::READ_PROPERTY,
+    ServiceSupported::WRITE_PROPERTY,
     ServiceSupported::WHO_HAS,
     ServiceSupported::WHO_IS,
 ];
@@ -33,6 +43,8 @@ pub enum Access {
     /// ReadProperty, Who-Is or Who-Has: [`Responder::read`] under a shared
     /// guard.
     Read,
+    /// WriteProperty: [`Responder::write`] under an exclusive guard.
+    Write,
     /// Nothing: a request the core doesn't run, answered (if at all) by
     /// [`reply::refuse`], or one the host routes to its own handlers. A
     /// segmented request is one.
@@ -72,6 +84,30 @@ pub enum Outcome {
     Unhandled,
 }
 
+/// What the core did with a request that may write, and what the write
+/// changed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Written {
+    /// What the core did with the request.
+    pub outcome: Outcome,
+    /// The objects a write changed, for the host's post-write work (change
+    /// reports, event evaluation, saving). Empty when nothing changed: a
+    /// refused write, a NULL the property left as it was, or a request that
+    /// writes nothing.
+    pub objects: Vec<ObjectIdentifier>,
+}
+
+impl From<Outcome> for Written {
+    /// `outcome`, with nothing written.
+    fn from(outcome: Outcome) -> Self {
+        Self {
+            outcome,
+            objects: Vec::new(),
+        }
+    }
+}
+
 /// The limits a [`Responder`] reads within.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -97,8 +133,8 @@ impl Default for Limits {
     }
 }
 
-/// Answers ReadProperty, Who-Is and Who-Has from a borrowed database, for
-/// one Device.
+/// Answers ReadProperty, WriteProperty, Who-Is and Who-Has from a borrowed
+/// database, for one Device.
 ///
 /// It holds the Device's frozen identity: a Who-Is is answered for it, and
 /// the Device wildcard instance reads it, even after the object is gone. A
@@ -151,10 +187,16 @@ impl Responder {
         let pdu_type = first >> 4;
         if pdu_type == PduType::CONFIRMED_REQUEST.to_raw() {
             // Type and flags, max segments and APDU, invoke ID, service.
-            let read = first & SEGMENTED == 0
-                && apdu.get(3) == Some(&ConfirmedServiceChoice::READ_PROPERTY.to_raw());
-            if read {
-                return Access::Read;
+            if first & SEGMENTED == 0 {
+                match apdu.get(3).copied() {
+                    Some(service) if service == ConfirmedServiceChoice::READ_PROPERTY.to_raw() => {
+                        return Access::Read;
+                    }
+                    Some(service) if service == ConfirmedServiceChoice::WRITE_PROPERTY.to_raw() => {
+                        return Access::Write;
+                    }
+                    _ => {}
+                }
             }
         } else if pdu_type == PduType::UNCONFIRMED_REQUEST.to_raw()
             && apdu.get(1).is_some_and(|&service| {
@@ -197,18 +239,85 @@ impl Responder {
         }
     }
 
-    /// For firmware that owns its database: [`read`](Self::read) with no
-    /// overlay, and every confirmed request the core doesn't run answered
-    /// by [`reply::refuse`]. An unconfirmed request it doesn't run is
-    /// [`Outcome::Silent`], and so is an APDU that doesn't decode, which the
-    /// server drops too.
-    pub fn handle(&self, db: &mut ObjectDatabase, request: Inbound, out: &mut BytesMut) -> Outcome {
+    /// Run `request` if it is a WriteProperty, writing the SimpleACK, or the
+    /// Error or Reject that refuses it, to `out`. `observer` sees the
+    /// attempt, as the server's audit and change capture do. A write that
+    /// queues a Command's or Channel's run ends that run at once, unmade:
+    /// the core has no task to make its writes in, so it performs none of
+    /// the run's actions, and the object reports them unsuccessful. A
+    /// confirmed request that arrived segmented is refused. Any other
+    /// service is [`Outcome::Unhandled`], for the host to route on.
+    ///
+    /// The write carries no command origin, since [`Inbound`] has no source
+    /// address: an object whose Present_Value is commandable (the default
+    /// Binary Value, Analog Value and Analog Output among them) refuses a
+    /// write to it with WRITE_ACCESS_DENIED
+    /// ([#2209](https://github.com/jscott3201/rusty-bacnet/issues/2209)).
+    pub fn write(
+        &self,
+        db: &mut ObjectDatabase,
+        observer: Option<&mut dyn WriteCommitObserver>,
+        request: Inbound,
+        out: &mut BytesMut,
+    ) -> Written {
+        let confirmed = match decode_apdu(request.apdu) {
+            Ok(Apdu::ConfirmedRequest(confirmed)) if confirmed.segmented => {
+                let refused = reply::refuse_segmented(confirmed.invoke_id);
+                return emit(out, &refused, Outcome::Reply).into();
+            }
+            Ok(Apdu::ConfirmedRequest(confirmed))
+                if confirmed.service_choice == ConfirmedServiceChoice::WRITE_PROPERTY =>
+            {
+                confirmed
+            }
+            Ok(_) => return Outcome::Unhandled.into(),
+            // Neither a type nor an invoke ID to answer.
+            Err(_) => return Outcome::Silent.into(),
+        };
+        let mut objects = Vec::new();
+        let answer =
+            match write::write_property(db, &confirmed.service_request, observer, None, None) {
+                Ok((oid, applied)) => {
+                    if applied == Applied::Written {
+                        write::end_unmade(db, &[oid]);
+                        objects.push(oid);
+                    }
+                    Apdu::SimpleAck(SimpleAck {
+                        invoke_id: confirmed.invoke_id,
+                        service_choice: confirmed.service_choice,
+                    })
+                }
+                Err(error) => {
+                    reply::error_apdu(confirmed.invoke_id, confirmed.service_choice, &error)
+                }
+            };
+        let outcome = emit(out, &answer, Outcome::Reply);
+        Written { outcome, objects }
+    }
+
+    /// For firmware that owns its database: [`classify`](Self::classify),
+    /// then [`write`](Self::write) with no observer or [`read`](Self::read)
+    /// with no overlay, and every confirmed request the core doesn't run
+    /// answered by [`reply::refuse`]. An unconfirmed request it doesn't run
+    /// is [`Outcome::Silent`], and so is an APDU that doesn't decode, which
+    /// the server drops too.
+    ///
+    /// Its writes are [`write`](Self::write)'s: with no command origin, so a
+    /// commandable Present_Value refuses them
+    /// ([#2209](https://github.com/jscott3201/rusty-bacnet/issues/2209)),
+    /// and with any Command or Channel run they start ended unmade.
+    pub fn handle(&self, db: &mut ObjectDatabase, request: Inbound, out: &mut BytesMut) -> Written {
         let apdu = request.apdu.clone();
-        // `read` decodes every APDU, so only a well-formed request it
-        // doesn't run reaches the refusal.
-        match self.read(db, None::<&read::NoOverlay>, request, out) {
-            Outcome::Unhandled => reply::refuse(&apdu, out),
-            outcome => outcome,
+        let handled = if Self::classify(&apdu) == Access::Write {
+            self.write(db, None, request, out)
+        } else {
+            self.read(db, None::<&read::NoOverlay>, request, out).into()
+        };
+        // `read` and `write` decode every APDU, so only a well-formed
+        // request neither runs reaches the refusal.
+        match handled.outcome {
+            Outcome::Unhandled => reply::refuse(&apdu, out).into(),
+            _ => handled,
         }
     }
 
@@ -300,3 +409,7 @@ impl Responder {
 #[cfg(test)]
 #[path = "responder_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "responder_write_tests.rs"]
+mod write_tests;

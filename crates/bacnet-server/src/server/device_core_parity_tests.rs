@@ -11,7 +11,8 @@
 //! matches silence. The server serves its executor-owned Device properties
 //! from its view, and the `Responder`, with no overlay, from the Device
 //! object, so those rows may differ: [`DIFFER`] pins exactly which do, and
-//! [`DIFFER_EXCHANGES`] the one other exchange that differs by design.
+//! [`DIFFER_EXCHANGES`] the other exchanges that differ by design. The
+//! WriteProperty rows are in `write`.
 use super::*;
 use crate::server::test_transport::{self, SendLog, TestTransport};
 use bacnet_device_core::read::ReadPropertyMultipleBudget;
@@ -53,7 +54,17 @@ const DIFFER: &[(ObjectType, P, Option<u32>)] =
 /// requester's max_reply is aborted with SEGMENTATION_NOT_SUPPORTED even when
 /// the requester accepts a segmented response; the server sends the first
 /// segment.
-const DIFFER_EXCHANGES: &[&str] = &["reply over max_reply, segmented response accepted"];
+///
+/// The server commands a commandable Present_Value for the requester it
+/// knows from the request's source address; the core's `Inbound` carries
+/// none, so the object refuses the unsourced command. And the server makes
+/// a Command's writes, where the core ends the run unmade and makes none:
+/// its targets, results and All_Writes_Successful differ (`write.rs`).
+const DIFFER_EXCHANGES: &[&str] = &[
+    "reply over max_reply, segmented response accepted",
+    "commandable Present_Value write",
+    "a Command run's actions",
+];
 
 struct FixedClock;
 
@@ -89,6 +100,14 @@ fn identity() -> bacnet_objects::DeviceIdentity {
 }
 
 fn database(identity: &bacnet_objects::DeviceIdentity) -> ObjectDatabase {
+    database_with(identity, Vec::new())
+}
+
+/// The fixture, with `more` objects besides.
+fn database_with(
+    identity: &bacnet_objects::DeviceIdentity,
+    more: Vec<Box<dyn bacnet_objects::traits::BACnetObject>>,
+) -> ObjectDatabase {
     let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.set_present_value(21.5);
     let bv = BinaryValueObject::new(1, "BV-1").unwrap();
@@ -109,11 +128,10 @@ fn database(identity: &bacnet_objects::DeviceIdentity) -> ObjectDatabase {
             .unwrap();
     }
     let identity = identity.clone().with_services(EXECUTED_SERVICES);
-    let mut db = build_database_with_extra(
-        &identity,
-        vec![Box::new(ai), Box::new(bv), Box::new(msv), Box::new(group)],
-    )
-    .unwrap();
+    let mut extra: Vec<Box<dyn bacnet_objects::traits::BACnetObject>> =
+        vec![Box::new(ai), Box::new(bv), Box::new(msv), Box::new(group)];
+    extra.extend(more);
+    let mut db = build_database_with_extra(&identity, extra).unwrap();
     db.set_clock_reader(Some(Arc::new(FixedClock)));
     db
 }
@@ -135,6 +153,16 @@ impl Parity {
     /// Both sides within `budget`'s result-row limit, the server's Device
     /// claiming `segmentation`; the core's claims none, as it must.
     async fn start_with(budget: ReadPropertyMultipleBudget, segmentation: Segmentation) -> Self {
+        Self::start_from(budget, segmentation, database).await
+    }
+
+    /// [`start_with`](Self::start_with), each side's database built by
+    /// `fixture`.
+    async fn start_from(
+        budget: ReadPropertyMultipleBudget,
+        segmentation: Segmentation,
+        fixture: fn(&bacnet_objects::DeviceIdentity) -> ObjectDatabase,
+    ) -> Self {
         let identity = identity();
         let (transport, tx) = TestTransport::inbound(16);
         let sent = transport.sent();
@@ -144,7 +172,7 @@ impl Parity {
             read_property_multiple_budget: budget,
             ..ServerConfig::default()
         };
-        let server = BACnetServer::start(config, database(&served), transport)
+        let server = BACnetServer::start(config, fixture(&served), transport)
             .await
             .unwrap();
         // Start installs the system clock; serve the fixed one, as the
@@ -173,7 +201,7 @@ impl Parity {
             tx,
             sent,
             responder,
-            db: database(&identity),
+            db: fixture(&identity),
             requests: 0,
         }
     }
@@ -218,7 +246,11 @@ impl Parity {
         let server = frames.first().map(|frame| frame.decode_npdu().payload);
         let mut out = BytesMut::new();
         let request = Inbound::new(apdu, max_reply);
-        let core = match self.responder.handle(&mut self.db, request, &mut out) {
+        let core = match self
+            .responder
+            .handle(&mut self.db, request, &mut out)
+            .outcome
+        {
             Outcome::Reply | Outcome::Announce => Some(out.freeze()),
             Outcome::Silent => None,
             other => unreachable!("handle answers every request: {other:?}"),
@@ -660,3 +692,5 @@ async fn edge_rows_match_and_the_segmented_reply_differs() {
     );
     parity.server.stop().await.unwrap();
 }
+
+mod write;

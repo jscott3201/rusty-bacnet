@@ -144,7 +144,7 @@ impl DurableTarget {
         if !may_save(request.object_identifier, request.property_identifier) {
             return Vec::new();
         }
-        let Ok(value) = handlers::decode_write_property_value(
+        let Ok(value) = bacnet_device_core::write::decode_write_property_value(
             request.property_identifier,
             request.property_array_index,
             held_as_list(request.object_identifier, request.property_identifier),
@@ -195,7 +195,7 @@ impl DurableTarget {
             if !may_save(oid, property) {
                 continue;
             }
-            let Ok(value) = handlers::decode_write_property_value(
+            let Ok(value) = bacnet_device_core::write::decode_write_property_value(
                 property,
                 reference.property_array_index,
                 held_as_list(oid, property),
@@ -293,7 +293,7 @@ impl TargetValue {
         property: PropertyIdentifier,
     ) -> Option<PropertyValue> {
         match self {
-            Self::Written(value) => Some(crate::local_references::localize(
+            Self::Written(value) => Some(bacnet_device_core::write::localize(
                 db,
                 oid,
                 property,

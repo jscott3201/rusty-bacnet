@@ -18,7 +18,8 @@ use bacnet_types::primitives::ObjectIdentifier;
 use tokio::sync::RwLock;
 use tracing::debug;
 
-use super::{Unfinished, when_free};
+use super::when_free;
+use bacnet_device_core::write::Unfinished;
 
 /// Runs taken from their objects, owned until each is handed on.
 ///
@@ -51,7 +52,7 @@ impl TakenRuns {
         db: &mut ObjectDatabase,
         oids: &[ObjectIdentifier],
     ) -> Self {
-        let runs = super::take_queued(db, oids);
+        let runs = bacnet_device_core::write::take_queued(db, oids);
         // Most writes queue nothing, and nothing then needs the database.
         let database = (!runs.is_empty()).then(|| Arc::clone(database));
         Self { runs, database }
