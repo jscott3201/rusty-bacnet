@@ -541,11 +541,13 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// reports this answer as the type's createability in its PICS. Every
     /// built-in object keeps the default, so the two can't disagree.
     ///
-    /// A custom object keeps the default too: the server builds only the
-    /// table's types, so overriding this to `true` makes the PICS promise a
-    /// creation the server refuses: OBJECT /
-    /// UNSUPPORTED_OBJECT_TYPE for a type the Device doesn't list in
-    /// Protocol_Object_Types_Supported, and OBJECT /
+    /// A custom object keeps the default too. To make its type creatable,
+    /// register a constructor for the type with the server
+    /// (`bacnet_server::server::ObjectConstructors`); the PICS then reports
+    /// the type as createable from the registration (#2173). Overriding
+    /// this to `true` alone makes the PICS promise a creation the server
+    /// refuses: OBJECT / UNSUPPORTED_OBJECT_TYPE for a type the Device
+    /// doesn't list in Protocol_Object_Types_Supported, and OBJECT /
     /// DYNAMIC_CREATION_NOT_SUPPORTED for a listed one it doesn't build
     /// (#2171).
     fn is_createable(&self) -> bool {
@@ -580,9 +582,9 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// answer for a property that can't be initialized at creation (Clause
     /// 15.3.1.3.1).
     ///
-    /// The bundled server's CreateObject builds only the types in
-    /// [`crate::creation`], so on a custom object this hook is reached only
-    /// by a caller that builds the object itself.
+    /// The bundled server's CreateObject reaches this hook on the types in
+    /// [`crate::creation`] and on a custom object whose type the
+    /// application registered a constructor for.
     fn initialize_property(
         &mut self,
         _property: PropertyIdentifier,

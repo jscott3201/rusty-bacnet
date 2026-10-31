@@ -494,6 +494,7 @@ impl Request<'_> {
             let mut target = None;
             let result = handlers::handle_create_object_observed(
                 &mut db,
+                &self.config.object_constructors,
                 &self.req.service_request,
                 &mut ack_buf,
                 &mut target,

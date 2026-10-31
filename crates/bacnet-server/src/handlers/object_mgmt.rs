@@ -8,12 +8,17 @@ use bacnet_types::error::RemoteError;
 /// A refused initial value is `Error::Structured` naming its position in the
 /// List of Initial Values (Clause 15.3.1.3); any other refusal is
 /// `Error::protocol` or a decoding error.
+///
+/// This builds only the types of the built-in table,
+/// [`bacnet_objects::creation`]; the running server also builds those of
+/// its [`ObjectConstructors`](crate::server::ObjectConstructors).
 pub fn handle_create_object(
     db: &mut ObjectDatabase,
     service_data: &[u8],
     buf: &mut BytesMut,
 ) -> Result<(), Error> {
-    handle_create_object_observed(db, service_data, buf, &mut None, None)
+    let constructors = crate::server::ObjectConstructors::default();
+    handle_create_object_observed(db, &constructors, service_data, buf, &mut None, None)
         .map_err(CreateObjectRefusal::into_error)
 }
 
@@ -57,6 +62,7 @@ impl CreateObjectRefusal {
 /// allocated candidate, or final identity. Before by-type allocation it is absent.
 pub(crate) fn handle_create_object_observed(
     db: &mut ObjectDatabase,
+    constructors: &crate::server::ObjectConstructors,
     service_data: &[u8],
     buf: &mut BytesMut,
     target: &mut Option<ObjectIdentifier>,
@@ -68,7 +74,8 @@ pub(crate) fn handle_create_object_observed(
     if let ObjectSpecifier::Identifier(oid) = request.object_specifier {
         *target = Some(oid);
     }
-    let created_oid = create(db, &request, target).map_err(CreateObjectRefusal::Failed)?;
+    let created_oid =
+        create(db, constructors, &request, target).map_err(CreateObjectRefusal::Failed)?;
     let counts = StateCounts::of(db, created_oid, &request);
 
     // Apply initial values; on failure, remove the created object.
@@ -166,9 +173,11 @@ fn apply_counts_first<'a>(
 }
 
 /// Create the requested object with its default values, setting `target` to
-/// its identifier once one is known.
+/// its identifier once one is known. An application's registered
+/// constructor for the type comes before the built-in table's.
 fn create(
     db: &mut ObjectDatabase,
+    constructors: &crate::server::ObjectConstructors,
     request: &CreateObjectRequest,
     target: &mut Option<ObjectIdentifier>,
 ) -> Result<ObjectIdentifier, Error> {
@@ -185,14 +194,18 @@ fn create(
     }
     // The clause keeps apart a type the device supports but does not create
     // from one it does not support. The Device advertises exactly
-    // SUPPORTED_OBJECT_TYPES, so any other type is refused next, whatever
-    // instance the request names; only a listed type gets the refusals
+    // SUPPORTED_OBJECT_TYPES, and the application supports the proprietary
+    // types it registered, so any other type is refused next, whatever
+    // instance the request names; only a supported type gets the refusals
     // below, DYNAMIC_CREATION_NOT_SUPPORTED among them.
     let object_type = match &request.object_specifier {
         ObjectSpecifier::Type(object_type) => *object_type,
         ObjectSpecifier::Identifier(oid) => oid.object_type(),
     };
-    if !bacnet_objects::device::SUPPORTED_OBJECT_TYPES.contains(&object_type) {
+    let registered = constructors.get(object_type);
+    if registered.is_none()
+        && !bacnet_objects::device::SUPPORTED_OBJECT_TYPES.contains(&object_type)
+    {
         return Err(Error::protocol(
             ErrorClass::OBJECT,
             ErrorCode::UNSUPPORTED_OBJECT_TYPE,
@@ -239,27 +252,37 @@ fn create(
         }
     };
 
-    // A listed type fits an ObjectIdentifier.
-    *target = ObjectIdentifier::new(object_type, instance).ok();
-    // A listed type the table doesn't build (#2172).
-    let constructor =
-        bacnet_objects::creation::builtin_constructor(object_type).ok_or(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::DYNAMIC_CREATION_NOT_SUPPORTED,
-        ))?;
-    // The constructor provisions the optional rows the initial values name,
-    // since WriteProperty can't add an absent one; the values themselves go
-    // through the writer below, with rollback on a refusal.
-    let initial_properties: Vec<PropertyIdentifier> = request
-        .list_of_initial_values
-        .iter()
-        .map(|value| value.property_identifier)
-        .collect();
-    let object = constructor(
-        instance,
-        default_name(db, object_type, instance),
-        &initial_properties,
-    )?;
+    // A supported type fits an ObjectIdentifier: a listed one does, and a
+    // registration takes no type past 1023.
+    let oid = ObjectIdentifier::new(object_type, instance)?;
+    *target = Some(oid);
+    let object = if let Some(constructor) = registered {
+        crate::server::construct_registered_object(
+            constructor,
+            oid,
+            &default_name(db, object_type, instance),
+        )?
+    } else {
+        // A listed type the table doesn't build (#2172).
+        let constructor =
+            bacnet_objects::creation::builtin_constructor(object_type).ok_or(Error::protocol(
+                ErrorClass::OBJECT,
+                ErrorCode::DYNAMIC_CREATION_NOT_SUPPORTED,
+            ))?;
+        // The constructor provisions the optional rows the initial values
+        // name, since WriteProperty can't add an absent one; the values
+        // themselves go through the writer below, with rollback on a refusal.
+        let initial_properties: Vec<PropertyIdentifier> = request
+            .list_of_initial_values
+            .iter()
+            .map(|value| value.property_identifier)
+            .collect();
+        constructor(
+            instance,
+            default_name(db, object_type, instance),
+            &initial_properties,
+        )?
+    };
 
     let created_oid = object.object_identifier();
     *target = Some(created_oid);

@@ -215,6 +215,7 @@ fn values_that_name_a_state_are_judged_against_the_requested_count() {
     ] {
         handle_create_object_observed(
             &mut db,
+            &Default::default(),
             &super::create_object_initial_values::request(object_type, request_values.clone()),
             &mut BytesMut::new(),
             &mut target,

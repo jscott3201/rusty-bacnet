@@ -141,7 +141,10 @@ pub struct PropertySupport {
 pub struct ObjectTypeSupport {
     /// Object type described.
     pub object_type: ObjectType,
-    /// Whether the type can be created remotely with CreateObject.
+    /// Whether the type can be created remotely with CreateObject: the
+    /// server configuration registers a constructor for it
+    /// ([`ServerConfig::object_constructors`]), or an instance's
+    /// `is_createable` says the built-in table builds it.
     pub createable: bool,
     /// The properties a CreateObject initial value may set whole on a type
     /// that is createable, although WriteProperty can't change them later
@@ -431,9 +434,10 @@ impl<'a> PicsGenerator<'a> {
                 }));
 
             // Factory/deletion capabilities are type-level declarations, not
-            // per-instance property capabilities. Preserve that separate policy.
-
-            let createable = representative.is_createable();
+            // per-instance property capabilities. A type the application
+            // registered a constructor for is createable through it (#2173).
+            let createable = self.server_config.object_constructors.contains(object_type)
+                || representative.is_createable();
             let deleteable = representative.is_deleteable();
             let written_through = |property: &PropertyIdentifier| {
                 supported_properties

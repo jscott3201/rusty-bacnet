@@ -114,6 +114,12 @@ The server answers SubscribeCOV, SubscribeCOVProperty and SubscribeCOVPropertyMu
 
 Rust's builder takes a `CovPolicy` with `cov_policy(..)`, and Python's constructor a `cov_policy` dict. `cov_counters()` reports the subscriptions held and the notifications sent and throttled.
 
+## Let clients create objects
+
+A client's CreateObject builds Analog, Binary and Multi-state Inputs, Outputs and Values and the twelve value types (Integer Value through DateTime Pattern Value), each with its defaults, then applies the request's initial values as writes. The PICS marks those types createable.
+
+In Rust you can make your own object types creatable, or give a built-in type your own defaults, by registering a constructor for the type with `object_constructor(object_type, constructor)` on the builder. The constructor gets the new object's identifier and a default name and returns the object; the server policy, the initial values and the audit then work as for a built-in type, and the PICS marks the type createable. A type can be registered once, and only a type the Device lists or a proprietary one (128 to 1023). The constructor runs while the server holds its object database, so keep it short and don't block in it. Python can't register constructors. See <a href={`${repository}/blob/v${release}/docs/rust-api.md#createobject-constructors`}>CreateObject constructors</a>.
+
 ## Know the limits
 
 | Limit | Default | What happens at the limit |
