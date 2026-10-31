@@ -266,6 +266,24 @@ async fn device_profiles_read_but_tags_never_enter_endpoint_mutation_authority()
             } else {
                 assert_reject(result);
             }
+            // Property_List is present, though the Device's property list
+            // leaves it out as every object's does (#2174), so a write is
+            // denied, not unknown.
+            let result = client
+                .write_property(
+                    &mac,
+                    oid(123),
+                    PropertyIdentifier::PROPERTY_LIST,
+                    None,
+                    FLOOR.to_vec(),
+                    None,
+                )
+                .await;
+            if writes {
+                assert_error(result, ErrorCode::WRITE_ACCESS_DENIED);
+            } else {
+                assert_reject(result);
+            }
             assert_reject(
                 client
                     .write_property_multiple(

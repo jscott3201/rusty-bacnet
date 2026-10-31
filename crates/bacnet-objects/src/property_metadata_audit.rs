@@ -119,38 +119,20 @@ fn audit_every_supported_type_derives_from_canonical_metadata() {
             "{object_type:?} required_properties must equal the metadata derivation"
         );
 
-        // GENERATED comparison surface: legacy list is metadata minus PL.
-        //
-        // One documented exception: Device preserves its legacy projection,
-        // which includes PROPERTY_LIST itself (`device/mod.rs`
-        // `property_list`). The deviation is contained: PICS (`pics/mod.rs`)
-        // and both RPM paths (`handlers/read_property.rs`,
-        // `handlers/rpm_budget.rs`) expand migrated objects from metadata
-        // directly, so the legacy list only serves direct `property_list()`
-        // callers. Pin the deviation exactly here; canonicalizing it is a
-        // production behavior change for a separate slice, not this audit.
-        if object_type == ObjectType::DEVICE {
-            let expected_with_pl: Vec<_> =
-                metadata.iter().map(|row| row.property_identifier).collect();
-            assert_eq!(
-                object.property_list().as_ref(),
-                expected_with_pl.as_slice(),
-                "{object_type:?} property_list must keep its pinned legacy projection"
-            );
-        } else {
-            let expected_list: Vec<_> = metadata
-                .iter()
-                .filter_map(|row| {
-                    (row.property_identifier != PropertyIdentifier::PROPERTY_LIST)
-                        .then_some(row.property_identifier)
-                })
-                .collect();
-            assert_eq!(
-                object.property_list().as_ref(),
-                expected_list.as_slice(),
-                "{object_type:?} property_list must equal metadata minus PROPERTY_LIST"
-            );
-        }
+        // GENERATED comparison surface: legacy list is metadata minus PL, for
+        // every type, Device included (#2174).
+        let expected_list: Vec<_> = metadata
+            .iter()
+            .filter_map(|row| {
+                (row.property_identifier != PropertyIdentifier::PROPERTY_LIST)
+                    .then_some(row.property_identifier)
+            })
+            .collect();
+        assert_eq!(
+            object.property_list().as_ref(),
+            expected_list.as_slice(),
+            "{object_type:?} property_list must equal metadata minus PROPERTY_LIST"
+        );
 
         // Every advertised row reads, and writability never drifts from dispatch.
         for row in metadata.iter() {

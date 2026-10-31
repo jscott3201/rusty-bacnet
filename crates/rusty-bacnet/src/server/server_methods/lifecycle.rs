@@ -1,6 +1,24 @@
 use super::super::*;
 use bacnet_transport::port::TransportPort;
 
+/// The ValueError for an object the database refuses: a duplicate name, or
+/// another refusal such as the reserved instance 4194303 (#2171).
+fn refused_object(error: bacnet_types::error::Error) -> PyErr {
+    use bacnet_types::enums::{ErrorClass, ErrorCode};
+    use bacnet_types::error::{Error, RemoteError};
+    let duplicate = matches!(
+        &error,
+        Error::Remote(RemoteError::Error { class, code })
+            if *class == ErrorClass::PROPERTY && *code == ErrorCode::DUPLICATE_NAME
+    );
+    let what = if duplicate {
+        "duplicate object name"
+    } else {
+        "object refused"
+    };
+    PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("{what}: {error}"))
+}
+
 #[pymethods]
 impl BACnetServer {
     /// Start the server. It will begin responding to BACnet requests.
@@ -223,19 +241,11 @@ impl BACnetServer {
             // Move pending objects into the database
             for obj in objects {
                 object_list.push(obj.object_identifier());
-                db.add(obj).map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                        "duplicate object name: {e}"
-                    ))
-                })?;
+                db.add(obj).map_err(refused_object)?;
             }
 
             device.set_object_list(object_list);
-            db.add(Box::new(device)).map_err(|e| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "duplicate object name: {e}"
-                ))
-            })?;
+            db.add(Box::new(device)).map_err(refused_object)?;
 
             let transport = match (prepared_transport, router) {
                 (Some(transport), _) => transport,

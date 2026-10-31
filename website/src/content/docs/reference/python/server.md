@@ -35,6 +35,10 @@ be positive; it supplies Device APDU\_SEGMENT\_TIMEOUT, response SegmentACK
 waits, and the 4\*Tseg receive inactivity timer. A separate 16-second
 no-progress resource limit aborts abandoned request transfers with OTHER.
 
+`device_instance` takes 0 to 4194302. Instance 4194303 is reserved, as
+no object may have it, so it, or anything larger, raises ValueError at
+construction (#2171).
+
 Usage:
 
 ```python
@@ -1778,6 +1782,11 @@ def start(self) -> Awaitable[None]
 ```
 
 Start the server and begin accepting BACnet requests.
+
+An added object the database won't take raises ValueError: "duplicate
+object name: ..." for a name another object holds, or "object
+refused: ..." for any other reason, an instance of 4194303 among them
+(#2171).
 
 ### BACnetServer.stop
 

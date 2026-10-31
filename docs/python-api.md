@@ -2848,6 +2848,13 @@ shutdown begins. Successful stop clears the Python server's running instance.
 
 Async BACnet server that hosts objects and responds to remote requests.
 
+`device_instance` takes 0 to 4194302. Instance 4194303 is reserved, since no
+object may have it (Clause 12.1.1), so the constructor raises `ValueError` for
+it or anything larger (#2171). At `start()`, an added object the database
+won't take raises `ValueError`: "duplicate object name" for a name already
+held, "object refused" for any other reason, such as an object at instance
+4194303.
+
 ### Constructor
 
 ```python
@@ -5359,7 +5366,9 @@ sibling roles. Each exposes `await endpoint.client()` (`EndpointClient`) and
 `await endpoint.server()` (`EndpointServer`); roles hold no lifecycle and fail
 closed with `BacnetError` after the owner closes. Builder-time config only:
 `DeviceIdentity` (instance/vendor/APDU/segmentation/services/ports/UUID) is
-validated in the constructor; there is no post-start owner mutation.
+validated in the constructor; there is no post-start owner mutation. A
+`device_instance` of 4194303, which no object may have, or anything larger
+raises `ValueError` there, as `BACnetServer`'s does (#2171).
 
 ```python
 endpoint = BipEndpoint(device_instance=1001, vendor_id=42, port=47808)

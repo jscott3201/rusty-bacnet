@@ -13,7 +13,10 @@ use crate::property_metadata::{
 // Event_State. Present_Value and Initial_Timeout keep their unconditional
 // network write routes; Timer_State/Timer_Running stay application-managed
 // with no behavior fix. Only Description, Present_Value, Initial_Timeout,
-// and Out_Of_Service have network write routes.
+// and Out_Of_Service have network write routes. Table 12-75 classes
+// Update_Time, Expiration_Time and Reliability optional; footnote 3 would
+// require Update_Time of an intrinsically reporting timer, which this one
+// isn't (#2174).
 const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
@@ -23,11 +26,11 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::TIMER_STATE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::TIMER_RUNNING, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::INITIAL_TIMEOUT, Optional, None, Always),
-    PropertyMetadata::new(P::UPDATE_TIME, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::EXPIRATION_TIME, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::UPDATE_TIME, Optional, None, ReadOnly),
+    PropertyMetadata::new(P::EXPIRATION_TIME, Optional, None, ReadOnly),
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OUT_OF_SERVICE, Optional, None, Always),
-    PropertyMetadata::new(P::RELIABILITY, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
     PropertyMetadata::new(P::EVENT_STATE, Optional, None, ReadOnly),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
@@ -80,10 +83,7 @@ mod tests {
             P::PRESENT_VALUE,
             P::TIMER_STATE,
             P::TIMER_RUNNING,
-            P::UPDATE_TIME,
-            P::EXPIRATION_TIME,
             P::STATUS_FLAGS,
-            P::RELIABILITY,
             P::PROPERTY_LIST,
         ];
         let metadata = object.property_metadata();

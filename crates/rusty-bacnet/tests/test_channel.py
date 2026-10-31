@@ -292,12 +292,11 @@ class ChannelMembersTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ChannelWildcardDeviceTests(unittest.IsolatedAsyncioTestCase):
-    async def test_a_wildcard_device_server_keeps_every_device_member(self) -> None:
-        # Instance 4194303 names no particular device, so the server has no
-        # own Device: a member naming Device 4194303 keeps it, as the
-        # database's local-device rule says.
+    async def test_a_member_naming_the_wildcard_device_keeps_it(self) -> None:
+        # Instance 4194303 names no particular device, so a member naming
+        # Device 4194303 isn't this server's and keeps its device.
         wildcard = ObjectIdentifier(ObjectType.DEVICE, 4_194_303)
-        server = make_server(4_194_303)
+        server = make_server()
         server.add_analog_value(1, "AV-1")
         server.add_channel(
             1,
@@ -317,6 +316,12 @@ class ChannelWildcardDeviceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(element, member(AV1, wildcard))
         finally:
             await server.stop()
+
+    async def test_a_server_cannot_be_the_wildcard_device(self) -> None:
+        # No object may have instance 4194303 (#2171), the Device included,
+        # so the constructor refuses it.
+        with self.assertRaisesRegex(ValueError, "4194303"):
+            make_server(4_194_303)
 
 
 class ChannelArgumentTests(unittest.IsolatedAsyncioTestCase):

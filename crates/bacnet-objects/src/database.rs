@@ -103,6 +103,9 @@ impl ObjectDatabase {
 
     /// Add an object to the database.
     ///
+    /// Returns [`Error::Range`] if the object's instance number is the
+    /// reserved 4194303 (Clause 12.1.1), which no object may hold.
+    ///
     /// Returns PROPERTY / DUPLICATE_NAME if another object already has the
     /// same `object_name()`, as
     /// [`check_name_available`](Self::check_name_available) does.
@@ -116,8 +119,10 @@ impl ObjectDatabase {
     /// holding a refused reference to it is queued for the server to retry
     /// that reference (#1440).
     pub fn add(&mut self, mut object: Box<dyn BACnetObject>) -> Result<(), Error> {
-        self.check_network_port_membership(&object.object_identifier())?;
-        self.check_audit_membership(&object.object_identifier(), true)?;
+        let identifier = object.object_identifier();
+        ObjectIdentifier::new_addressable(identifier.object_type(), identifier.instance_number())?;
+        self.check_network_port_membership(&identifier)?;
+        self.check_audit_membership(&identifier, true)?;
         object.bind_clock_internal(self.clock.clone());
         object.bind_monotonic_clock_internal(self.monotonic_clock.clone());
         object.bind_deadline_waker_internal(self.deadline_waker.clone());

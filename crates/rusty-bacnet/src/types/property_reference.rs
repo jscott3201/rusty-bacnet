@@ -150,12 +150,11 @@ pub(crate) fn check_device(device: Option<ObjectIdentifier>, name: &str) -> PyRe
 }
 
 /// The Device identifier a reference names to stay inside a server whose
-/// Device is `instance`. The rule is `ObjectDatabase::local_device`'s: the
-/// wildcard instance 4194303 names no particular device, so it has none.
-pub(crate) fn local_device(instance: u32) -> Option<ObjectIdentifier> {
-    ObjectIdentifier::new(ObjectType::DEVICE, instance)
-        .ok()
-        .filter(|device| device.instance_number() != ObjectIdentifier::WILDCARD_INSTANCE)
+/// Device is `instance`. The server's constructor has already refused an
+/// instance that names no Device (#2171).
+pub(crate) fn local_device(instance: u32) -> ObjectIdentifier {
+    ObjectIdentifier::new_addressable(ObjectType::DEVICE, instance)
+        .expect("the server constructor validated its Device instance")
 }
 
 /// Drop the Device member of each reference that names `local`, so a member
@@ -164,11 +163,8 @@ pub(crate) fn local_device(instance: u32) -> Option<ObjectIdentifier> {
 /// they are, for the object to judge.
 pub(crate) fn localize(
     references: &mut [BACnetDeviceObjectPropertyReference],
-    local: Option<ObjectIdentifier>,
+    local: ObjectIdentifier,
 ) {
-    let Some(local) = local else {
-        return;
-    };
     for reference in references {
         if reference.device_identifier == Some(local) {
             reference.device_identifier = None;

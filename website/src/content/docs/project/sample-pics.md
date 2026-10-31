@@ -695,8 +695,8 @@ Property rows aggregate configured instances: a row or access flag means at leas
 | STOP_WHEN_FULL | RW |
 | TOTAL_RECORD_COUNT | R |
 | LAST_NOTIFY_RECORD | R |
-| ALIGN_INTERVALS | RWO |
-| INTERVAL_OFFSET | RWO |
+| ALIGN_INTERVALS | RW |
+| INTERVAL_OFFSET | RW |
 | LOGGING_TYPE | RW |
 | TRIGGER | RWO |
 | EVENT_MESSAGE_TEXTS | RO |
@@ -900,8 +900,8 @@ Property rows aggregate configured instances: a row or access flag means at leas
 | STOP_WHEN_FULL | RW |
 | TOTAL_RECORD_COUNT | R |
 | LAST_NOTIFY_RECORD | R |
-| ALIGN_INTERVALS | RWO |
-| INTERVAL_OFFSET | RWO |
+| ALIGN_INTERVALS | RW |
+| INTERVAL_OFFSET | RW |
 | LOGGING_TYPE | RW |
 | TRIGGER | RWO |
 | EVENT_MESSAGE_TEXTS | RO |
@@ -1008,10 +1008,10 @@ Property rows aggregate configured instances: a row or access flag means at leas
 | OBJECT_TYPE | R |
 | OUT_OF_SERVICE | RWO |
 | PRESENT_VALUE | RW |
-| RELIABILITY | R |
+| RELIABILITY | RO |
 | STATUS_FLAGS | R |
-| UPDATE_TIME | R |
-| EXPIRATION_TIME | R |
+| UPDATE_TIME | RO |
+| EXPIRATION_TIME | RO |
 | PROPERTY_LIST | R |
 | INITIAL_TIMEOUT | RWO |
 | TIMER_RUNNING | R |
@@ -1558,7 +1558,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 | PROPERTY_LIST | R |
 | APDU_LENGTH | R |
 | CHANGES_PENDING | R |
-| LINK_SPEED | RO |
+| LINK_SPEED | R |
 | MAC_ADDRESS | R |
 | NETWORK_NUMBER | R |
 | NETWORK_NUMBER_QUALITY | R |

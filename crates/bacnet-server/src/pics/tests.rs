@@ -740,7 +740,7 @@ fn pics_createability_matches_runtime_factory() {
         .expect("ANALOG_VALUE should be in PICS");
     assert!(
         !av.createable,
-        "AnalogValue must NOT be createable (factory rejects it with UNSUPPORTED_OBJECT_TYPE)"
+        "AnalogValue must NOT be createable (the factory refuses it with DYNAMIC_CREATION_NOT_SUPPORTED)"
     );
 }
 

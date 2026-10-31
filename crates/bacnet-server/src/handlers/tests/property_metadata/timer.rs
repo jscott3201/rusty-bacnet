@@ -82,15 +82,17 @@ fn rpm_timer_metadata_selectors_preserve_bytes_and_budgets() {
         P::PRESENT_VALUE,
         P::TIMER_STATE,
         P::TIMER_RUNNING,
-        P::UPDATE_TIME,
-        P::EXPIRATION_TIME,
         P::STATUS_FLAGS,
-        P::RELIABILITY,
     ];
+    // Table 12-75 classes Update_Time, Expiration_Time and Reliability
+    // optional (#2174).
     let optional = [
         P::DESCRIPTION,
         P::INITIAL_TIMEOUT,
+        P::UPDATE_TIME,
+        P::EXPIRATION_TIME,
         P::OUT_OF_SERVICE,
+        P::RELIABILITY,
         P::EVENT_STATE,
     ];
     for configured in [false, true] {
@@ -130,7 +132,7 @@ fn rpm_timer_metadata_does_not_enable_create_object() {
         assert!(
             matches!(result, Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::OBJECT
-                && code == ErrorCode::UNSUPPORTED_OBJECT_TYPE)
+                && code == ErrorCode::DYNAMIC_CREATION_NOT_SUPPORTED)
         );
         assert!(response.is_empty());
         assert!(db.is_empty());

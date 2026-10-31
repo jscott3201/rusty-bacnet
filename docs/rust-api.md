@@ -4437,7 +4437,7 @@ framing, through the shared `bacnet-encoding` codecs.
 use bacnet_objects::database::ObjectDatabase;
 
 let mut db = ObjectDatabase::new();
-db.add(Box::new(analog_input))?; // Err on a duplicate name or a protected membership; same OID replaces
+db.add(Box::new(analog_input))?; // Err on instance 4194303, a duplicate name or a protected membership; same OID replaces
 
 let obj = db.get(&oid);                // Option<&dyn BACnetObject>
 let obj = db.get_mut(&oid);            // Option<&mut dyn BACnetObject>
@@ -4504,9 +4504,11 @@ several. The database selects the lowest instance independently of insertion ord
 - **Other Devices** take no part. Their recipient, APDU_Timeout and declared
   services are plain object data.
 
-When the only Device has the wildcard instance there is a selected Device but
-no concrete identity, so Audit, endpoint Device writes, local command sources
-and Audit Log forwarding refuse to start or stay unconfigured.
+No Device can have the wildcard instance: `ObjectDatabase::add` refuses
+instance 4194303 for every object (Clause 12.1.1, #2171), so a selected
+Device is always a concrete one. Without a Device, Audit, endpoint Device
+writes, local command sources and Audit Log forwarding refuse to start or
+stay unconfigured.
 
 ### Object Types (64)
 
@@ -8550,7 +8552,17 @@ The server automatically dispatches:
 - ReadProperty, WriteProperty (mutation-gated)
 - ReadPropertyMultiple, WritePropertyMultiple (mutation-gated)
 - SubscribeCOV, SubscribeCOVProperty, SubscribeCOVPropertyMultiple (mutation-gated)
-- CreateObject, DeleteObject (mutation-gated)
+- CreateObject, DeleteObject (mutation-gated). The Device's
+  Protocol_Object_Types_Supported comes from
+  `bacnet_objects::device::SUPPORTED_OBJECT_TYPES`, every type the crate
+  builds, and CreateObject reads the same list. A request naming an
+  identifier already in use is OBJECT / OBJECT_IDENTIFIER_ALREADY_EXISTS
+  first, whatever its type. Then a type outside the list is OBJECT /
+  UNSUPPORTED_OBJECT_TYPE whatever the instance, and a listed type the server
+  doesn't create, or a listed type at instance 4194303, is OBJECT /
+  DYNAMIC_CREATION_NOT_SUPPORTED (Clause 15.3.1.3, #2171). DeleteObject
+  answers OBJECT / UNKNOWN_OBJECT for an absent object, then asks the
+  object's `is_deleteable()`.
 - DeviceCommunicationControl
 - ReinitializeDevice (restart, apply changes, or a Clause 19 backup or restore
   step): decoded and password-validated, then carried out by the
@@ -9296,7 +9308,7 @@ The snapshot denies activation-dependent network writes, except a registered
 BBMD's two writable rows (see below), and derives its readonly MAC from
 configured IP/UDP. Reconstruct it to change configuration. It has no inert
 Command or obsolete port62 projection. Link_Speed is
-optional and zero means unknown. The former raw `new` constructor and configuration
+required, as Table 12-71 classes it, and zero means unknown (#2174). The former raw `new` constructor and configuration
 setters are removed. `new_non_bip` takes explicit Ethernet/VIRTUAL number, MAC and
 capacity and exposes common application rows only; it does not claim a complete
 SC or Ethernet profile. Both `DeviceIdentity` database builders use these same

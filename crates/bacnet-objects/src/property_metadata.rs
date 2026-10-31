@@ -67,6 +67,21 @@ pub enum PropertyPresenceCondition {
     /// Override_Color_Reference too where it supports colour override
     /// (Addendum 135-2020ca part 4, #1527).
     LightingColor,
+    /// A Trend Log samples a BACnet property, which its table's footnotes
+    /// make the condition for requiring the window, Log_Interval and
+    /// Log_DeviceObjectProperty (Table 12-29 footnotes 1 and 8, #2174).
+    MonitoredBacnetProperty,
+    /// The log supports clock-aligned logging, which requires Align_Intervals
+    /// and Interval_Offset and is the only case that admits them (Table 12-29
+    /// footnote 5, Table 12-35 footnote 3, #2174).
+    ClockAlignedLogging,
+    /// The Network Port is at the BACnet application protocol level, which
+    /// requires Network_Number, Network_Number_Quality and APDU_Length
+    /// (Table 12-71 footnote 25, #2174).
+    ApplicationProtocolLevel,
+    /// The Network Port isn't a point-to-point link, which requires
+    /// MAC_Address (Table 12-71 footnote 3, #2174).
+    NotPointToPoint,
 }
 
 /// The write capability implemented by an object's property-write routes.
@@ -147,6 +162,10 @@ impl PropertyMetadata {
                         | PropertyPresenceCondition::CommandableValueSourceTracking
                         | PropertyPresenceCondition::LightingTrims
                         | PropertyPresenceCondition::LightingColor
+                        | PropertyPresenceCondition::MonitoredBacnetProperty
+                        | PropertyPresenceCondition::ClockAlignedLogging
+                        | PropertyPresenceCondition::ApplicationProtocolLevel
+                        | PropertyPresenceCondition::NotPointToPoint
                 )
             )
     }

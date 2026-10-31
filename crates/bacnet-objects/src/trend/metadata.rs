@@ -7,29 +7,48 @@ use crate::log_buffer::{BUFFER_SIZE_METADATA, LOG_BUFFER_METADATA, TOTAL_RECORD_
 use crate::log_lifecycle::{LOG_ENABLE_METADATA, RECORD_COUNT_METADATA, STOP_WHEN_FULL_METADATA};
 use crate::log_reporting::BUFFER_READY_METADATA;
 use crate::property_metadata::{
-    PropertyConformance::{Optional, RequiredRead, RequiredWrite},
-    PropertyMetadata, PropertyWriteCapability,
+    PropertyConformance::{Optional, RequiredRead},
+    PropertyMetadata, PropertyPresenceCondition, PropertyWriteCapability,
     PropertyWriteCapability::{Always, ReadOnly},
 };
 
+const MONITORED: PropertyPresenceCondition = PropertyPresenceCondition::MonitoredBacnetProperty;
+
+/// Align_Intervals on a log that supports clock-aligned logging, as both
+/// trend objects here do (Table 12-29 footnote 5, Table 12-35 footnote 3).
+pub(super) const ALIGN_INTERVALS_METADATA: PropertyMetadata = PropertyMetadata::new(
+    P::ALIGN_INTERVALS,
+    Optional,
+    Some(PropertyPresenceCondition::ClockAlignedLogging),
+    Always,
+);
+
+/// Interval_Offset, under the same condition as Align_Intervals.
+pub(super) const INTERVAL_OFFSET_METADATA: PropertyMetadata = PropertyMetadata::new(
+    P::INTERVAL_OFFSET,
+    Optional,
+    Some(PropertyPresenceCondition::ClockAlignedLogging),
+    Always,
+);
+
 // The legacy rows keep their order, then the window, alignment and Trigger
-// rows follow as on a Trend Log Multiple. Table 12-29 marks Start_Time,
-// Stop_Time, Log_Interval and Log_DeviceObjectProperty optional, but its
+// rows follow as on a Trend Log Multiple. Table 12-29 classes Start_Time,
+// Stop_Time, Log_Interval and Log_DeviceObjectProperty optional, and its
 // footnotes 1 and 8 require them of a log that samples a BACnet property,
-// and sampling one is the only thing a Trend Log here does (#1481). So they
-// are classed required: Start_Time and Stop_Time as writable ones (footnote
-// 2), and Log_Interval and Log_DeviceObjectProperty as readable. Log_Interval
-// has to be writable only while POLLED (footnote 3), so, as on a Trend Log
-// Multiple, its write capability follows Logging_Type rather than its class;
-// this device also takes Log_DeviceObjectProperty writes held to this device
-// (#1234). There is no Out_Of_Service
-// row (#985), and Reliability stays read-only. Logging_Type takes POLLED,
-// TRIGGERED or COV (#1480). The device supports clock-aligned logging, so Align_Intervals
-// and Interval_Offset are present (footnote 5) and writable, as Trigger is,
-// to ask for an acquisition. The two COV rows Table 12-29 lists follow, both
-// optional and writable (#1480). The log reports BUFFER_READY (#1347), so the
-// intrinsic reporting rows footnote 4 asks for come last, each marked as
-// present for that reason.
+// the only thing a Trend Log here does (#1481). So they keep the table's
+// optional class and carry that condition, which makes them required
+// (#2174). The window is writable (footnote 2). Log_Interval has to be
+// writable only while POLLED (footnote 3), so, as on a Trend Log Multiple,
+// its write capability follows Logging_Type; this device also takes
+// Log_DeviceObjectProperty writes held to this device (#1234). There is no
+// Out_Of_Service row (#985), and Reliability stays read-only. Logging_Type
+// takes POLLED, TRIGGERED or COV (#1480). The device supports clock-aligned
+// logging, which footnote 5 makes the condition for Align_Intervals and
+// Interval_Offset, so both are present, required and writable, as Trigger
+// is, to ask for an acquisition. The two COV rows Table 12-29 lists follow,
+// both optional and writable (#1480). The log reports BUFFER_READY (#1347),
+// so the intrinsic reporting rows footnote 4 asks for come last, each marked
+// as present for that reason.
 const fn rows(log_interval: PropertyWriteCapability) -> [PropertyMetadata; 37] {
     let r = BUFFER_READY_METADATA;
     [
@@ -38,7 +57,7 @@ const fn rows(log_interval: PropertyWriteCapability) -> [PropertyMetadata; 37] {
         PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
         PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
         LOG_ENABLE_METADATA,
-        PropertyMetadata::new(P::LOG_INTERVAL, RequiredRead, None, log_interval),
+        PropertyMetadata::new(P::LOG_INTERVAL, Optional, Some(MONITORED), log_interval),
         STOP_WHEN_FULL_METADATA,
         BUFFER_SIZE_METADATA,
         LOG_BUFFER_METADATA,
@@ -48,11 +67,16 @@ const fn rows(log_interval: PropertyWriteCapability) -> [PropertyMetadata; 37] {
         PropertyMetadata::new(P::EVENT_STATE, RequiredRead, None, ReadOnly),
         PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
         PropertyMetadata::new(P::LOGGING_TYPE, RequiredRead, None, Always),
-        PropertyMetadata::new(P::LOG_DEVICE_OBJECT_PROPERTY, RequiredRead, None, Always),
-        PropertyMetadata::new(P::START_TIME, RequiredWrite, None, Always),
-        PropertyMetadata::new(P::STOP_TIME, RequiredWrite, None, Always),
-        PropertyMetadata::new(P::ALIGN_INTERVALS, Optional, None, Always),
-        PropertyMetadata::new(P::INTERVAL_OFFSET, Optional, None, Always),
+        PropertyMetadata::new(
+            P::LOG_DEVICE_OBJECT_PROPERTY,
+            Optional,
+            Some(MONITORED),
+            Always,
+        ),
+        PropertyMetadata::new(P::START_TIME, Optional, Some(MONITORED), Always),
+        PropertyMetadata::new(P::STOP_TIME, Optional, Some(MONITORED), Always),
+        ALIGN_INTERVALS_METADATA,
+        INTERVAL_OFFSET_METADATA,
         PropertyMetadata::new(P::TRIGGER, Optional, None, Always),
         PropertyMetadata::new(P::COV_RESUBSCRIPTION_INTERVAL, Optional, None, Always),
         PropertyMetadata::new(P::CLIENT_COV_INCREMENT, Optional, None, Always),
@@ -89,6 +113,7 @@ mod tests {
     use super::*;
     use crate::clock::{ClockFrame, ClockReader};
     use crate::event_log::EventLogObject;
+    use crate::property_metadata::PropertyConformance::RequiredWrite;
     use crate::property_metadata::PropertyPresenceCondition;
     use crate::traits::BACnetObject;
     use crate::trend::TrendLogMultipleObject;
@@ -106,6 +131,18 @@ mod tests {
 
     /// The rows only the two trend objects serve (#1235, #1354).
     const TREND_ONLY: [P; 3] = [P::ALIGN_INTERVALS, P::INTERVAL_OFFSET, P::TRIGGER];
+
+    /// The clock-aligned logging pair (#1354, #2174).
+    const ALIGNMENT: [P; 2] = [P::ALIGN_INTERVALS, P::INTERVAL_OFFSET];
+
+    /// The Trend Log rows required because it samples a BACnet property
+    /// (Table 12-29 footnotes 1 and 8, #1481).
+    const MONITORED_ROWS: [P; 4] = [
+        P::LOG_INTERVAL,
+        P::LOG_DEVICE_OBJECT_PROPERTY,
+        P::START_TIME,
+        P::STOP_TIME,
+    ];
 
     /// The COV rows only a Trend Log serves (Table 12-29, #1480).
     const TREND_LOG_COV: [P; 2] = [P::COV_RESUBSCRIPTION_INTERVAL, P::CLIENT_COV_INCREMENT];
@@ -252,6 +289,11 @@ mod tests {
                         // Table 12-29 footnote 1 (#1481).
                         required.extend(WINDOW);
                     }
+                    if kind != ObjectType::EVENT_LOG {
+                        // Clock-aligned logging requires the pair (Table
+                        // 12-29 footnote 5, Table 12-35 footnote 3, #2174).
+                        required.extend(ALIGNMENT);
+                    }
                     // Intrinsic reporting requires every BUFFER_READY row but
                     // the ones it only permits (#1485).
                     required.extend(
@@ -272,27 +314,35 @@ mod tests {
                     for row in metadata.iter() {
                         let p = row.property_identifier;
                         let reporting = REPORTING.contains(&p);
+                        // Rows the tables class optional but whose footnotes
+                        // require them here carry the reason (#2174): a Trend
+                        // Log samples a BACnet property (Table 12-29
+                        // footnotes 1 and 8), and both trend objects log
+                        // clock-aligned (footnote 5, Table 12-35 footnote 3).
                         let condition = if REPORTING_PERMITTED.contains(&p) {
-                            PropertyPresenceCondition::IntrinsicReportingOptional
+                            Some(PropertyPresenceCondition::IntrinsicReportingOptional)
+                        } else if reporting {
+                            Some(PropertyPresenceCondition::IntrinsicReportingRequired)
+                        } else if kind == ObjectType::TREND_LOG && MONITORED_ROWS.contains(&p) {
+                            Some(PropertyPresenceCondition::MonitoredBacnetProperty)
+                        } else if ALIGNMENT.contains(&p) {
+                            Some(PropertyPresenceCondition::ClockAlignedLogging)
                         } else {
-                            PropertyPresenceCondition::IntrinsicReportingRequired
+                            None
                         };
-                        assert_eq!(row.presence_condition, reporting.then_some(condition));
-                        // A Trend Log's window has to be writable (Table
-                        // 12-29 footnote 2); Log_Interval only while POLLED,
-                        // which its capability carries, as on a Trend Log
-                        // Multiple (footnote 3, Table 12-35 footnote 2).
-                        let trend_write = kind == ObjectType::TREND_LOG && WINDOW.contains(&p);
-                        let conformance =
-                            if matches!(p, P::LOG_ENABLE | P::RECORD_COUNT) || trend_write {
-                                RequiredWrite
-                            } else if reporting {
-                                Optional
-                            } else if required.contains(&p) {
-                                RequiredRead
-                            } else {
-                                Optional
-                            };
+                        assert_eq!(row.presence_condition, condition, "{kind:?} {p:?}");
+                        // Only Log_Enable and Record_Count are W in the
+                        // tables; a writable R or O row says so in its
+                        // capability.
+                        let conformance = if matches!(p, P::LOG_ENABLE | P::RECORD_COUNT) {
+                            RequiredWrite
+                        } else if condition.is_some() {
+                            Optional
+                        } else if required.contains(&p) {
+                            RequiredRead
+                        } else {
+                            Optional
+                        };
                         assert_eq!(row.conformance, conformance, "{kind:?} {p:?}");
                         assert!(
                             crate::property_metadata_tests::metadata_row_reads(object.as_ref(), p),

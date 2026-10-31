@@ -108,7 +108,13 @@ fn rpm_device_property_metadata_pics_and_database_are_exact() {
             assert_eq!(db.find_by_type(ObjectType::DEVICE), vec![oid]);
             assert_eq!(db.list_objects(), vec![oid]);
             let object = db.get(&oid).unwrap();
-            assert_eq!(object.property_list().as_ref(), all);
+            // The list leaves out Property_List, as every type's does (#2174).
+            let listed: Vec<_> = all
+                .iter()
+                .copied()
+                .filter(|&p| p != P::PROPERTY_LIST)
+                .collect();
+            assert_eq!(object.property_list().as_ref(), listed);
             assert_eq!(object.required_properties().as_ref(), required);
             for property in [
                 P::LOCAL_DATE,

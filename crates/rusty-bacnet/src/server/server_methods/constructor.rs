@@ -147,6 +147,11 @@ impl BACnetServer {
         after_reinitialize: Option<&Bound<'_, PyAny>>,
         router: Option<PyRef<'_, crate::router::PyBACnetRouter>>,
     ) -> PyResult<Self> {
+        // The same check the endpoints make through their identity: an
+        // instance past 4194303, or 4194303 itself, which no object may
+        // have (#2171), is a ValueError now rather than a failed start().
+        bacnet_objects::DeviceIdentity::new(device_instance, 555)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         let router = crate::router::application::stack_router(
             transport,
             router,

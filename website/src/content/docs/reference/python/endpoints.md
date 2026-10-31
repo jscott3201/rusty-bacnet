@@ -28,6 +28,10 @@ cancellation can race publication, so always await close for cleanup.
 Setup errors are delivered by awaiting start/context entry. BIPv6/Ethernet
 have no endpoint owner.
 
+`device_instance` takes 0 to 4194302. Instance 4194303 is reserved, as
+no object may have it, so it, or anything larger, raises ValueError at
+construction (#2171).
+
 Properties:
 
 - `device_instance: int`
@@ -256,6 +260,8 @@ SC endpoint: one hub connection that both initiates and executes.
 
 `sc_device_uuid` is the single durable lifetime identity for both the
 hub dial and DEVICE\_UUID. Lifecycle mirrors `BipEndpoint`.
+`device_instance` takes 0 to 4194302, as there: 4194303 or more raises
+ValueError at construction (#2171).
 
 Properties:
 
@@ -447,6 +453,8 @@ MS/TP endpoint: one serial owner that both initiates and executes.
 
 Opens a real serial device via `TokioSerialPort` like the current
 wrappers. Lifecycle mirrors `BipEndpoint`.
+`device_instance` takes 0 to 4194302, as there: 4194303 or more raises
+ValueError at construction (#2171).
 
 Properties:
 

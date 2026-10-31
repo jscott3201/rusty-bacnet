@@ -31,15 +31,29 @@ fn device_write_target<'a>(
     let object = db
         .get_mut(&write.object_identifier)
         .ok_or_else(|| property_error(ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT))?;
-    if !object.property_list().contains(&write.property_identifier) {
+    // Presence follows the metadata rows, Property_List among them; empty
+    // metadata is a custom object's default, so its list decides.
+    let present = {
+        let metadata = object.property_metadata();
+        if metadata.is_empty() {
+            object.property_list().contains(&write.property_identifier)
+        } else {
+            metadata
+                .iter()
+                .any(|row| row.property_identifier == write.property_identifier)
+        }
+    };
+    if !present {
         return Err(property_error(
             ErrorClass::PROPERTY,
             ErrorCode::UNKNOWN_PROPERTY,
         ));
     }
+    // A session takes `selected` from its database's local Device, which
+    // must match its identity, and neither takes the wildcard instance
+    // (#2171), so the wildcard check this replaced could never fire.
     if write.object_identifier != selected
         || selected.object_type() != ObjectType::DEVICE
-        || selected.instance_number() == ObjectIdentifier::MAX_INSTANCE
         || !matches!(
             write.property_identifier,
             PropertyIdentifier::DESCRIPTION | PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT

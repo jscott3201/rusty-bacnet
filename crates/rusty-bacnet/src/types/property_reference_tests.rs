@@ -336,13 +336,9 @@ fn reference_mappings_refuse_bad_shapes_and_types() {
 }
 
 #[test]
-fn own_device_follows_the_database_rule_and_skips_the_wildcard() {
-    assert_eq!(local_device(1262), Some(oid(ObjectType::DEVICE, 1262)));
-    assert_eq!(local_device(0), Some(oid(ObjectType::DEVICE, 0)));
-    // The wildcard instance names no particular device, and past it there's
-    // no identifier at all.
-    assert_eq!(local_device(ObjectIdentifier::WILDCARD_INSTANCE), None);
-    assert_eq!(local_device(ObjectIdentifier::WILDCARD_INSTANCE + 1), None);
+fn own_device_names_the_server_device() {
+    assert_eq!(local_device(1262), oid(ObjectType::DEVICE, 1262));
+    assert_eq!(local_device(0), oid(ObjectType::DEVICE, 0));
 }
 
 #[test]
@@ -370,13 +366,4 @@ fn localize_drops_only_the_own_device() {
             naming(wildcard)
         ]
     );
-
-    // A server whose Device is the wildcard has no own Device to drop, so
-    // even a member naming instance 4194303 keeps it.
-    let mut references = given.clone();
-    localize(
-        &mut references,
-        local_device(ObjectIdentifier::WILDCARD_INSTANCE),
-    );
-    assert_eq!(references, given);
 }

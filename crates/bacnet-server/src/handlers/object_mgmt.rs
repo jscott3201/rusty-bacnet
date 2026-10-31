@@ -214,6 +214,32 @@ fn create(
     request: &CreateObjectRequest,
     target: &mut Option<ObjectIdentifier>,
 ) -> Result<ObjectIdentifier, Error> {
+    // Clause 15.3.1.3 has the device look for a named object before
+    // anything else, so an identifier already in use is refused first,
+    // whatever its type: an application's own object of a vendor type too.
+    if let ObjectSpecifier::Identifier(oid) = &request.object_specifier
+        && db.get(oid).is_some()
+    {
+        return Err(Error::protocol(
+            ErrorClass::OBJECT,
+            ErrorCode::OBJECT_IDENTIFIER_ALREADY_EXISTS,
+        ));
+    }
+    // The clause keeps apart a type the device supports but does not create
+    // from one it does not support. The Device advertises exactly
+    // SUPPORTED_OBJECT_TYPES, so any other type is refused next, whatever
+    // instance the request names; only a listed type gets the refusals
+    // below, DYNAMIC_CREATION_NOT_SUPPORTED among them.
+    let object_type = match &request.object_specifier {
+        ObjectSpecifier::Type(object_type) => *object_type,
+        ObjectSpecifier::Identifier(oid) => oid.object_type(),
+    };
+    if !bacnet_objects::device::SUPPORTED_OBJECT_TYPES.contains(&object_type) {
+        return Err(Error::protocol(
+            ErrorClass::OBJECT,
+            ErrorCode::UNSUPPORTED_OBJECT_TYPE,
+        ));
+    }
     const MAX_OBJECTS: usize = 10_000;
     if db.len() >= MAX_OBJECTS {
         return Err(Error::protocol(
@@ -229,31 +255,34 @@ fn create(
                 .iter()
                 .map(|oid| oid.instance_number())
                 .collect();
-            let next =
-                (1u32..=4_194_303)
-                    .find(|i| !existing.contains(i))
-                    .ok_or(Error::protocol(
-                        ErrorClass::RESOURCES,
-                        ErrorCode::NO_SPACE_FOR_OBJECT,
-                    ))?;
+            // 4194303 is reserved (Clause 12.1.1), so the last instance the
+            // server can pick is 4194302.
+            let next = (1u32..=ObjectIdentifier::MAX_ADDRESSABLE_INSTANCE)
+                .find(|i| !existing.contains(i))
+                .ok_or(Error::protocol(
+                    ErrorClass::RESOURCES,
+                    ErrorCode::NO_SPACE_FOR_OBJECT,
+                ))?;
             (*obj_type, next)
         }
         ObjectSpecifier::Identifier(oid) => {
-            if db.get(oid).is_some() {
+            // Clause 12.1.1 gives no object the instance 4194303 (it only
+            // means "not initialized" in properties), and the Clause 15.3.1.3
+            // error table has no row for asking for it. The device can't
+            // create such an object, so it answers as for a creation it won't
+            // perform; nothing is added.
+            if oid.instance_number() == ObjectIdentifier::WILDCARD_INSTANCE {
                 return Err(Error::protocol(
                     ErrorClass::OBJECT,
-                    ErrorCode::OBJECT_IDENTIFIER_ALREADY_EXISTS,
+                    ErrorCode::DYNAMIC_CREATION_NOT_SUPPORTED,
                 ));
             }
             (oid.object_type(), oid.instance_number())
         }
     };
 
-    // Unsupported extensible types need not fit an ObjectIdentifier. Do not
-    // truncate them or manufacture an instance when allocation did not occur.
-    *target = (object_type.to_raw() <= 1023)
-        .then(|| ObjectIdentifier::new(object_type, instance).ok())
-        .flatten();
+    // A listed type fits an ObjectIdentifier.
+    *target = ObjectIdentifier::new(object_type, instance).ok();
     // Named only once the type is known to be one the server builds.
     let name = || default_name(db, object_type, instance);
 
@@ -323,9 +352,10 @@ fn create(
             2,
         )?)
     } else {
+        // A listed type the factory doesn't build (#2172).
         return Err(Error::protocol(
             ErrorClass::OBJECT,
-            ErrorCode::UNSUPPORTED_OBJECT_TYPE,
+            ErrorCode::DYNAMIC_CREATION_NOT_SUPPORTED,
         ));
     };
 
@@ -446,11 +476,12 @@ fn state_count(db: &ObjectDatabase, created_oid: ObjectIdentifier) -> Option<Pro
 
 /// Handle a DeleteObject request.
 ///
-/// Removes the object from the database. Returns an error if the object
-/// doesn't exist or is an object type that cannot be deleted at runtime
-/// (Device and NetworkPort, which model the running node itself). The set
-/// of non-deleteable types is kept in sync with `BACnetObject::is_deleteable`
-/// so PICS and runtime dispatch share one truth source.
+/// Removes the object from the database. An absent object is OBJECT /
+/// UNKNOWN_OBJECT whatever its type; one whose
+/// `BACnetObject::is_deleteable` is false (the Device and Network Port
+/// objects, which model the running node itself, and any application object
+/// that opts out) is OBJECT / OBJECT_DELETION_NOT_PERMITTED, so PICS and
+/// runtime dispatch share one truth source.
 ///
 /// Returns the removed object. Drop it after releasing the database guard,
 /// and off the async runtime: an object that saves its state (a Notification
@@ -462,14 +493,15 @@ pub fn handle_delete_object(
 ) -> Result<Box<dyn bacnet_objects::traits::BACnetObject>, Error> {
     let request = DeleteObjectRequest::decode(service_data).map_err(Error::into_request_reject)?;
 
-    match request.object_identifier.object_type() {
-        ObjectType::DEVICE | ObjectType::NETWORK_PORT => {
-            return Err(Error::protocol(
-                ErrorClass::OBJECT,
-                ErrorCode::OBJECT_DELETION_NOT_PERMITTED,
-            ));
-        }
-        _ => {}
+    let object = db.get(&request.object_identifier).ok_or(Error::protocol(
+        ErrorClass::OBJECT,
+        ErrorCode::UNKNOWN_OBJECT,
+    ))?;
+    if !object.is_deleteable() {
+        return Err(Error::protocol(
+            ErrorClass::OBJECT,
+            ErrorCode::OBJECT_DELETION_NOT_PERMITTED,
+        ));
     }
 
     db.remove(&request.object_identifier)?

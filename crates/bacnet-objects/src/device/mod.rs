@@ -98,6 +98,77 @@ fn compute_services_supported(services: &[ServiceSupported]) -> Vec<u8> {
     bits
 }
 
+/// The object types a Device advertises in `Protocol_Object_Types_Supported`:
+/// every type with a concrete implementation in this crate. The server's
+/// CreateObject handler reads the same list to tell a type it supports but
+/// does not create from one it does not support (Clause 15.3.1.3).
+pub const SUPPORTED_OBJECT_TYPES: &[ObjectType] = &[
+    ObjectType::ANALOG_INPUT,
+    ObjectType::ANALOG_OUTPUT,
+    ObjectType::ANALOG_VALUE,
+    ObjectType::BINARY_INPUT,
+    ObjectType::BINARY_OUTPUT,
+    ObjectType::BINARY_VALUE,
+    ObjectType::CALENDAR,
+    ObjectType::COMMAND,
+    ObjectType::DEVICE,
+    ObjectType::EVENT_ENROLLMENT,
+    ObjectType::FILE,
+    ObjectType::GROUP,
+    ObjectType::LOOP,
+    ObjectType::MULTI_STATE_INPUT,
+    ObjectType::MULTI_STATE_OUTPUT,
+    ObjectType::NOTIFICATION_CLASS,
+    ObjectType::PROGRAM,
+    ObjectType::SCHEDULE,
+    ObjectType::AVERAGING,
+    ObjectType::MULTI_STATE_VALUE,
+    ObjectType::TREND_LOG,
+    ObjectType::LIFE_SAFETY_POINT,
+    ObjectType::LIFE_SAFETY_ZONE,
+    ObjectType::ACCUMULATOR,
+    ObjectType::PULSE_CONVERTER,
+    ObjectType::EVENT_LOG,
+    ObjectType::GLOBAL_GROUP,
+    ObjectType::TREND_LOG_MULTIPLE,
+    ObjectType::LOAD_CONTROL,
+    ObjectType::STRUCTURED_VIEW,
+    ObjectType::ACCESS_DOOR,
+    ObjectType::TIMER,
+    ObjectType::ACCESS_CREDENTIAL,
+    ObjectType::ACCESS_POINT,
+    ObjectType::ACCESS_RIGHTS,
+    ObjectType::ACCESS_USER,
+    ObjectType::ACCESS_ZONE,
+    ObjectType::CREDENTIAL_DATA_INPUT,
+    ObjectType::BITSTRING_VALUE,
+    ObjectType::CHARACTERSTRING_VALUE,
+    ObjectType::DATEPATTERN_VALUE,
+    ObjectType::DATE_VALUE,
+    ObjectType::DATETIMEPATTERN_VALUE,
+    ObjectType::DATETIME_VALUE,
+    ObjectType::INTEGER_VALUE,
+    ObjectType::LARGE_ANALOG_VALUE,
+    ObjectType::OCTETSTRING_VALUE,
+    ObjectType::POSITIVE_INTEGER_VALUE,
+    ObjectType::TIMEPATTERN_VALUE,
+    ObjectType::TIME_VALUE,
+    ObjectType::NOTIFICATION_FORWARDER,
+    ObjectType::ALERT_ENROLLMENT,
+    ObjectType::CHANNEL,
+    ObjectType::LIGHTING_OUTPUT,
+    ObjectType::BINARY_LIGHTING_OUTPUT,
+    ObjectType::NETWORK_PORT,
+    ObjectType::ELEVATOR_GROUP,
+    ObjectType::ESCALATOR,
+    ObjectType::LIFT,
+    ObjectType::STAGING,
+    ObjectType::AUDIT_LOG,
+    ObjectType::AUDIT_REPORTER,
+    ObjectType::COLOR,
+    ObjectType::COLOR_TEMPERATURE,
+];
+
 /// Build a BACnet bitstring representing supported object types.
 /// Each type N sets bit at byte N/8, position 7-(N%8) (MSB-first within each byte).
 fn compute_object_types_supported(types: &[u32]) -> Vec<u8> {
@@ -325,75 +396,14 @@ impl DeviceObject {
             );
         }
 
-        // Protocol_Object_Types_Supported: bitstring with one bit per
-        // implemented object type.  Computed from the full set of types
-        // that have concrete struct implementations in this crate.
-        let protocol_object_types_supported = compute_object_types_supported(&[
-            ObjectType::ANALOG_INPUT.to_raw(),
-            ObjectType::ANALOG_OUTPUT.to_raw(),
-            ObjectType::ANALOG_VALUE.to_raw(),
-            ObjectType::BINARY_INPUT.to_raw(),
-            ObjectType::BINARY_OUTPUT.to_raw(),
-            ObjectType::BINARY_VALUE.to_raw(),
-            ObjectType::CALENDAR.to_raw(),
-            ObjectType::COMMAND.to_raw(),
-            ObjectType::DEVICE.to_raw(),
-            ObjectType::EVENT_ENROLLMENT.to_raw(),
-            ObjectType::FILE.to_raw(),
-            ObjectType::GROUP.to_raw(),
-            ObjectType::LOOP.to_raw(),
-            ObjectType::MULTI_STATE_INPUT.to_raw(),
-            ObjectType::MULTI_STATE_OUTPUT.to_raw(),
-            ObjectType::NOTIFICATION_CLASS.to_raw(),
-            ObjectType::PROGRAM.to_raw(),
-            ObjectType::SCHEDULE.to_raw(),
-            ObjectType::AVERAGING.to_raw(),
-            ObjectType::MULTI_STATE_VALUE.to_raw(),
-            ObjectType::TREND_LOG.to_raw(),
-            ObjectType::LIFE_SAFETY_POINT.to_raw(),
-            ObjectType::LIFE_SAFETY_ZONE.to_raw(),
-            ObjectType::ACCUMULATOR.to_raw(),
-            ObjectType::PULSE_CONVERTER.to_raw(),
-            ObjectType::EVENT_LOG.to_raw(),
-            ObjectType::GLOBAL_GROUP.to_raw(),
-            ObjectType::TREND_LOG_MULTIPLE.to_raw(),
-            ObjectType::LOAD_CONTROL.to_raw(),
-            ObjectType::STRUCTURED_VIEW.to_raw(),
-            ObjectType::ACCESS_DOOR.to_raw(),
-            ObjectType::TIMER.to_raw(),
-            ObjectType::ACCESS_CREDENTIAL.to_raw(),
-            ObjectType::ACCESS_POINT.to_raw(),
-            ObjectType::ACCESS_RIGHTS.to_raw(),
-            ObjectType::ACCESS_USER.to_raw(),
-            ObjectType::ACCESS_ZONE.to_raw(),
-            ObjectType::CREDENTIAL_DATA_INPUT.to_raw(),
-            ObjectType::BITSTRING_VALUE.to_raw(),
-            ObjectType::CHARACTERSTRING_VALUE.to_raw(),
-            ObjectType::DATEPATTERN_VALUE.to_raw(),
-            ObjectType::DATE_VALUE.to_raw(),
-            ObjectType::DATETIMEPATTERN_VALUE.to_raw(),
-            ObjectType::DATETIME_VALUE.to_raw(),
-            ObjectType::INTEGER_VALUE.to_raw(),
-            ObjectType::LARGE_ANALOG_VALUE.to_raw(),
-            ObjectType::OCTETSTRING_VALUE.to_raw(),
-            ObjectType::POSITIVE_INTEGER_VALUE.to_raw(),
-            ObjectType::TIMEPATTERN_VALUE.to_raw(),
-            ObjectType::TIME_VALUE.to_raw(),
-            ObjectType::NOTIFICATION_FORWARDER.to_raw(),
-            ObjectType::ALERT_ENROLLMENT.to_raw(),
-            ObjectType::CHANNEL.to_raw(),
-            ObjectType::LIGHTING_OUTPUT.to_raw(),
-            ObjectType::BINARY_LIGHTING_OUTPUT.to_raw(),
-            ObjectType::NETWORK_PORT.to_raw(),
-            ObjectType::ELEVATOR_GROUP.to_raw(),
-            ObjectType::ESCALATOR.to_raw(),
-            ObjectType::LIFT.to_raw(),
-            ObjectType::STAGING.to_raw(),
-            ObjectType::AUDIT_LOG.to_raw(),
-            ObjectType::AUDIT_REPORTER.to_raw(),
-            ObjectType::COLOR.to_raw(),
-            ObjectType::COLOR_TEMPERATURE.to_raw(),
-        ]);
+        // Protocol_Object_Types_Supported: one bit per type in
+        // SUPPORTED_OBJECT_TYPES.
+        let protocol_object_types_supported = compute_object_types_supported(
+            &SUPPORTED_OBJECT_TYPES
+                .iter()
+                .map(|t| t.to_raw())
+                .collect::<Vec<_>>(),
+        );
 
         Ok(Self {
             oid,
@@ -799,14 +809,7 @@ impl BACnetObject for DeviceObject {
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        // Preserve Device's legacy inclusion of PROPERTY_LIST. The wire reader
-        // still removes it and the identity rows as before.
-        Cow::Owned(
-            self.property_metadata()
-                .iter()
-                .map(|row| row.property_identifier)
-                .collect(),
-        )
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
     /// Device is not createable or deleteable at runtime.

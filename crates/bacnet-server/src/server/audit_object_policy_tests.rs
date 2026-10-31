@@ -508,7 +508,10 @@ async fn object_audit_policy_bv_create_delete_and_failed_av_create_fallback() {
     assert_eq!(count(&f), 3);
     assert_eq!(
         notifications(&f.transport.sent)[2].notifications[0].result,
-        Some((ErrorClass::OBJECT, ErrorCode::UNSUPPORTED_OBJECT_TYPE))
+        Some((
+            ErrorClass::OBJECT,
+            ErrorCode::DYNAMIC_CREATION_NOT_SUPPORTED
+        ))
     );
     f.server.stop().await.unwrap();
 }
