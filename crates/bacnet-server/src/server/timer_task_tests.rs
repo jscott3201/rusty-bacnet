@@ -28,7 +28,8 @@ fn timer_oid(instance: u32) -> ObjectIdentifier {
 impl Wire {
     /// A server with Timers 1 and 2, each starting with 400 ms when
     /// Timer_Running is written TRUE, and run 1.2 s: past the task's first
-    /// pass and its 1 s one, so the next routine pass is at 2 s.
+    /// pass and its 1 s one. That tick fires late, at 1.2 s, and the task's
+    /// interval delays the next routine pass to 2.2 s.
     async fn start() -> Self {
         let mut db = ObjectDatabase::new();
         db.add(Box::new(
@@ -202,7 +203,7 @@ fn expired() -> (PropertyValue, PropertyValue, Option<Duration>) {
 #[tokio::test(start_paused = true)]
 async fn a_start_over_the_wire_expires_at_its_deadline_not_the_next_tick() {
     let mut wire = Wire::start().await;
-    // 300 ms, written at 1.2 s: due at 1.5 s, before the 2 s routine pass,
+    // 300 ms, written at 1.2 s: due at 1.5 s, before the 2.2 s routine pass,
     // so only the start's wake gets the task there in time.
     wire.write(1, PV, PropertyValue::Unsigned(300)).await;
     let (running, started, deadline) = wire.state(1).await;

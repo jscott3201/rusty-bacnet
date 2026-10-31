@@ -523,8 +523,9 @@ fn reads_serve_a_due_expiry_before_any_pass() {
         fixture.read(P::LAST_STATE_CHANGE),
         PropertyValue::Enumerated(4)
     );
-    assert_eq!(fixture.read(P::EXPIRATION_TIME), datetime(at(0, 12)));
-    assert_eq!(fixture.read(P::UPDATE_TIME), datetime(at(0, 12)));
+    // Stamped when the countdown reached zero, not when it was read.
+    assert_eq!(fixture.read(P::EXPIRATION_TIME), datetime(at(0, 10)));
+    assert_eq!(fixture.read(P::UPDATE_TIME), datetime(at(0, 10)));
 }
 
 #[test]
@@ -540,7 +541,9 @@ fn writes_apply_a_due_expiry_first() {
         TimerTransition::RUNNING_TO_EXPIRED
     );
     assert_eq!(fixture.timer.timer_state(), TimerState::EXPIRED);
-    assert_eq!(fixture.read(P::EXPIRATION_TIME), datetime(at(0, 12)));
+    // At the deadline, though the write came 2 s later.
+    assert_eq!(fixture.read(P::EXPIRATION_TIME), datetime(at(0, 10)));
+    assert_eq!(fixture.read(P::UPDATE_TIME), datetime(at(0, 10)));
 
     let mut fixture = overdue();
     fixture
@@ -575,4 +578,75 @@ fn writes_apply_a_due_expiry_first() {
     assert_eq!(fixture.timer.countdown, Countdown::Stopped);
     // The task's later pass finds nothing left to do.
     assert!(!fixture.timer.advance_monotonic_time_internal(fixture.now()));
+}
+
+#[test]
+fn a_natural_expiry_keeps_its_deadline_stamp_from_read_to_pass() {
+    let fixture = overdue();
+    let stamps = |fixture: &Fixture| {
+        (
+            fixture.read(P::UPDATE_TIME),
+            fixture.read(P::EXPIRATION_TIME),
+        )
+    };
+    let read_in_window = stamps(&fixture);
+    assert_eq!(read_in_window, (datetime(at(0, 10)), datetime(at(0, 10))));
+    // The pass runs later still, with both clocks moved on together.
+    let mut fixture = fixture;
+    fixture.set_clocks(
+        SETUP + 3_500,
+        (
+            at(0, 13).0,
+            Time {
+                hundredths: 50,
+                ..at(0, 13).1
+            },
+        ),
+    );
+    assert!(fixture.timer.advance_monotonic_time_internal(fixture.now()));
+    assert_eq!(stamps(&fixture), read_in_window);
+    fixture.set_clocks(SETUP + 60_000, at(1, 10));
+    assert_eq!(stamps(&fixture), read_in_window);
+    // A forced expiry is stamped at its write.
+    fixture
+        .write(P::TIMER_RUNNING, PropertyValue::Boolean(true))
+        .unwrap();
+    fixture
+        .write(P::TIMER_RUNNING, PropertyValue::Boolean(false))
+        .unwrap();
+    assert_eq!(stamps(&fixture), (datetime(at(1, 10)), datetime(at(1, 10))));
+}
+
+#[test]
+fn a_deadline_before_midnight_read_after_it_keeps_the_previous_day() {
+    // 500 ms started at 23:59:59.00 on 2026-12-31 is due at 23:59:59.50;
+    // read 2 s later, at 00:00:01.50 on New Year's Day.
+    let eve = SpecificDate::new(2026, 12, 31).unwrap().to_date();
+    let clock = |date, second, hundredths| {
+        let hour = if second == 59 { 23 } else { 0 };
+        let minute = if second == 59 { 59 } else { 0 };
+        (
+            date,
+            Time {
+                hour,
+                minute,
+                second,
+                hundredths,
+            },
+        )
+    };
+    let mut fixture = Fixture::new();
+    fixture.timer.set_pres_value_range(500, MAX).unwrap();
+    fixture.set_clocks(0, clock(eve, 59, 0));
+    fixture
+        .write(P::PRESENT_VALUE, PropertyValue::Unsigned(500))
+        .unwrap();
+    let new_year = SpecificDate::new(2027, 1, 1).unwrap().to_date();
+    fixture.set_clocks(2_500, clock(new_year, 1, 50));
+    let due = datetime(clock(eve, 59, 50));
+    assert_eq!(fixture.read(P::UPDATE_TIME), due);
+    assert_eq!(fixture.read(P::EXPIRATION_TIME), due);
+    assert!(fixture.timer.advance_monotonic_time_internal(fixture.now()));
+    assert_eq!(fixture.read(P::UPDATE_TIME), due);
+    assert_eq!(fixture.read(P::EXPIRATION_TIME), due);
 }
