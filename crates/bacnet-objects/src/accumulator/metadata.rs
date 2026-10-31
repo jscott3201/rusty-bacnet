@@ -44,9 +44,9 @@ use crate::property_metadata::{
 // shared common arm even though the object owns an Event_State field; both
 // quirks are preserved, not fixed, by this migration. Presence is None
 // throughout: the implementation models no commandable, intrinsic-reporting,
-// or paired-text gating. The object is not createable at runtime (the network
-// factory builds only the eight analog/binary/multi-state input/output/value
-// types, so the is_createable=false default holds) and remains deleteable
+// or paired-text gating. The object is not createable at runtime (the
+// `creation` table has no constructor for it, so the is_createable default
+// answers false) and remains deleteable
 // (delete denies only Device and NetworkPort, so the is_deleteable=true
 // default holds); neither needs an override. Array gating keeps the default:
 // Property_List admits an index (BACnetARRAY per Table 12-79) while every

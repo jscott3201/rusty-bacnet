@@ -277,7 +277,9 @@ impl BACnetObject for Probe {
     }
     fn is_createable(&self) -> bool {
         self.called("is_createable", ());
-        true
+        // The default answers from the constructor table, which builds this
+        // probe's type, so the probe answers the other way.
+        bacnet_objects::creation::builtin_constructor(self.oid.object_type()).is_none()
     }
     fn creation_only_properties(&self) -> &'static [P] {
         self.called("creation_only_properties", ());

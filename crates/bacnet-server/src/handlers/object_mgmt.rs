@@ -1,5 +1,4 @@
 use super::*;
-use bacnet_types::enums::EngineeringUnits;
 use bacnet_types::error::RemoteError;
 
 /// Handle a CreateObject request.
@@ -242,81 +241,25 @@ fn create(
 
     // A listed type fits an ObjectIdentifier.
     *target = ObjectIdentifier::new(object_type, instance).ok();
-    // Named only once the type is known to be one the server builds.
-    let name = || default_name(db, object_type, instance);
-
-    let object: Box<dyn bacnet_objects::traits::BACnetObject> = if object_type
-        == ObjectType::ANALOG_INPUT
-    {
-        Box::new(bacnet_objects::analog::AnalogInputObject::new(
-            instance,
-            name(),
-            EngineeringUnits::NO_UNITS,
-        )?)
-    } else if object_type == ObjectType::ANALOG_OUTPUT {
-        Box::new(bacnet_objects::analog::AnalogOutputObject::new(
-            instance,
-            name(),
-            EngineeringUnits::NO_UNITS,
-        )?)
-    } else if object_type == ObjectType::BINARY_INPUT {
-        Box::new(bacnet_objects::binary::BinaryInputObject::new(
-            instance,
-            name(),
-        )?)
-    } else if object_type == ObjectType::BINARY_OUTPUT {
-        Box::new(bacnet_objects::binary::BinaryOutputObject::new(
-            instance,
-            name(),
-        )?)
-    } else if object_type == ObjectType::BINARY_VALUE {
-        let mut object = bacnet_objects::binary::BinaryValueObject::new(instance, name())?;
-        // Initial values provision only the optional rows actually requested.
-        // Normal WP cannot materialize an absent property. Values still pass
-        // the same writer below, including rollback on invalid initialization.
-        let mut policy = bacnet_objects::audit::ObjectAuditPolicy::default();
-        for value in &request.list_of_initial_values {
-            match value.property_identifier {
-                PropertyIdentifier::AUDIT_LEVEL => {
-                    policy.level = Some(bacnet_types::enums::AuditLevel::DEFAULT)
-                }
-                PropertyIdentifier::AUDITABLE_OPERATIONS => {
-                    policy.operations = Some(bacnet_types::bitstring::AuditOperationFlags::empty())
-                }
-                PropertyIdentifier::AUDIT_PRIORITY_FILTER => {
-                    policy.priority_filter =
-                        Some(bacnet_objects::audit::AuditPriorityPolicy::Inherit)
-                }
-                _ => {}
-            }
-        }
-        object.set_audit_policy(policy);
-        Box::new(object)
-    } else if object_type == ObjectType::MULTI_STATE_INPUT {
-        Box::new(bacnet_objects::multistate::MultiStateInputObject::new(
-            instance,
-            name(),
-            2,
-        )?)
-    } else if object_type == ObjectType::MULTI_STATE_OUTPUT {
-        Box::new(bacnet_objects::multistate::MultiStateOutputObject::new(
-            instance,
-            name(),
-            2,
-        )?)
-    } else if object_type == ObjectType::MULTI_STATE_VALUE {
-        Box::new(bacnet_objects::multistate::MultiStateValueObject::new(
-            instance,
-            name(),
-            2,
-        )?)
-    } else {
-        // A listed type the factory doesn't build (#2172).
-        return Err(Error::protocol(
+    // A listed type the table doesn't build (#2172).
+    let constructor =
+        bacnet_objects::creation::builtin_constructor(object_type).ok_or(Error::protocol(
             ErrorClass::OBJECT,
             ErrorCode::DYNAMIC_CREATION_NOT_SUPPORTED,
-        ));
-    };
+        ))?;
+    // The constructor provisions the optional rows the initial values name,
+    // since WriteProperty can't add an absent one; the values themselves go
+    // through the writer below, with rollback on a refusal.
+    let initial_properties: Vec<PropertyIdentifier> = request
+        .list_of_initial_values
+        .iter()
+        .map(|value| value.property_identifier)
+        .collect();
+    let object = constructor(
+        instance,
+        default_name(db, object_type, instance),
+        &initial_properties,
+    )?;
 
     let created_oid = object.object_identifier();
     *target = Some(created_oid);

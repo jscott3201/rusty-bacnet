@@ -3987,14 +3987,17 @@ fn property_list(&self) -> Cow<'static, [P]> {
 
 Two provided methods decide what the object-management services may do:
 
-- `is_createable` defaults to `false`. The PICS reports it as the type's
-  createability. The server's CreateObject doesn't ask it: it builds only its
-  built-in factory types (Analog Input and Output, the binary types and the
-  multi-state types, which answer `true`), and refuses every other type, a
-  custom one included, with `OBJECT/UNSUPPORTED_OBJECT_TYPE` for a type the
-  Device doesn't list in Protocol_Object_Types_Supported or
-  `OBJECT/DYNAMIC_CREATION_NOT_SUPPORTED` for a listed one (#2171). Keep the
-  default on a custom object, or the PICS promises a creation the server refuses.
+- `is_createable` answers from `bacnet_objects::creation`, the one table of
+  constructors the server's CreateObject builds from (#2172): `true` for the
+  analog, binary and multi-state input, output and value types and the twelve
+  value types (Integer, Positive Integer, Large Analog, CharacterString,
+  OctetString, BitString, Date, Time, DateTime and the three pattern types),
+  `false` for the rest. The PICS reports it as the type's createability. The
+  server refuses every other type, a custom one included, with
+  `OBJECT/UNSUPPORTED_OBJECT_TYPE` for a type the Device doesn't list in
+  Protocol_Object_Types_Supported or `OBJECT/DYNAMIC_CREATION_NOT_SUPPORTED`
+  for a listed one (#2171). Keep the default on a custom object, or the PICS
+  promises a creation the server refuses.
 - `is_deleteable` defaults to `true`. DeleteObject asks it of the named object
   and removes the object when it is `true`, a custom object included; when it
   is `false` the request gets `OBJECT/OBJECT_DELETION_NOT_PERMITTED` and the
@@ -4080,7 +4083,7 @@ create fail (#1437). A few read-only properties take a CreateObject initial
 value: `BACnetObject::creation_only_properties` lists the ones an object sets
 whole only at creation, and the server gives such a value, sent without an
 array index, to `BACnetObject::initialize_property` instead of the write
-route (#1429). The built-in Analog Input and Analog Output take Units (an
+route (#1429). The built-in Analog Input, Output and Value take Units (an
 Enumerated up to 65535). The Multi-state Input, Output and Value take
 Number_Of_States (1 to `multistate::MAX_NUMBER_OF_STATES`, 1024),
 which resizes State_Text. A count is refused with `PROPERTY/VALUE_OUT_OF_RANGE`
@@ -8685,7 +8688,9 @@ The server automatically dispatches:
   first, whatever its type. Then a type outside the list is OBJECT /
   UNSUPPORTED_OBJECT_TYPE whatever the instance, and a listed type the server
   doesn't create, or a listed type at instance 4194303, is OBJECT /
-  DYNAMIC_CREATION_NOT_SUPPORTED (Clause 15.3.1.3, #2171). DeleteObject
+  DYNAMIC_CREATION_NOT_SUPPORTED (Clause 15.3.1.3, #2171). The types it
+  creates are those of `bacnet_objects::creation`, each started with its
+  own constructor's defaults (#2172). DeleteObject
   answers OBJECT / UNKNOWN_OBJECT for an absent object, then asks the
   object's `is_deleteable()`.
 - DeviceCommunicationControl

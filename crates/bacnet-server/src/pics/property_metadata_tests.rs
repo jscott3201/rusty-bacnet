@@ -464,9 +464,8 @@ fn pics_analog_property_metadata_is_exact_for_each_configuration() {
             let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
             let support = &pics.supported_object_types[0];
             assert_eq!(support.object_type, kind);
-            if kind != ObjectType::ANALOG_INPUT {
-                assert_eq!(support.createable, kind == ObjectType::ANALOG_OUTPUT);
-            }
+            // Every analog type is createable since #2172.
+            assert!(support.createable);
             let rows: Vec<_> = support
                 .supported_properties
                 .iter()

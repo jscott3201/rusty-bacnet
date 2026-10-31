@@ -618,12 +618,11 @@ fn ai_property_list_invalid_index_returns_error() {
 // ── Trait capability method tests (issue #115 shared truth source) ──────────
 
 #[test]
-fn av_is_not_createable_matches_factory() {
+fn av_is_createable_matches_factory() {
     use crate::traits::BACnetObject;
     let av = AnalogValueObject::new(1, "av-1", EngineeringUnits::NO_UNITS).unwrap();
-    // handle_create_object has NO branch for ANALOG_VALUE — it falls through
-    // to DYNAMIC_CREATION_NOT_SUPPORTED. PICS must not advertise createability.
-    assert!(!av.is_createable(), "AnalogValue must NOT be createable");
+    // The constructor table builds Analog Values (#2172).
+    assert!(av.is_createable(), "AnalogValue is factory-constructable");
 }
 
 #[test]

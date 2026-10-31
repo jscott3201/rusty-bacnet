@@ -64,6 +64,8 @@ mod notification_class_durable_tests;
 #[cfg(test)]
 mod policy_off_task_tests;
 
+#[cfg(test)]
+mod create_object_types_wire_tests;
 pub(super) mod read_property;
 mod read_range;
 #[cfg(test)]

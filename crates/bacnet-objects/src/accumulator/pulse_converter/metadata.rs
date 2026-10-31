@@ -48,8 +48,7 @@ use crate::property_metadata::{
 // TRUE (Clause 12.23.10), so Optional/WhenOutOfService.
 // Presence is None throughout: the implementation models no commandable,
 // intrinsic-reporting, or paired-text gating. The object is not createable at
-// runtime (the network factory builds only the eight analog/binary/
-// multi-state input/output/value types) and remains deleteable (delete denies
+// runtime (the `creation` table has no constructor for it) and remains deleteable (delete denies
 // only Device and NetworkPort); neither needs an override. Array gating keeps
 // the default: Property_List admits an index (BACnetARRAY per Table 12-27)
 // while every other served row rejects one. COV keeps its overrides:

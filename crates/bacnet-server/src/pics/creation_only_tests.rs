@@ -52,8 +52,8 @@ fn each_createable_type_lists_what_only_creation_sets() {
     for (object_type, expected) in [
         (ObjectType::ANALOG_INPUT, vec![P::UNITS]),
         (ObjectType::ANALOG_OUTPUT, vec![P::UNITS]),
-        // Not createable, so nothing is set at creation.
-        (ObjectType::ANALOG_VALUE, vec![]),
+        // Createable since #2172, with Units as its siblings take it.
+        (ObjectType::ANALOG_VALUE, vec![P::UNITS]),
         (ObjectType::BINARY_VALUE, vec![]),
         (ObjectType::MULTI_STATE_INPUT, vec![]),
         (ObjectType::MULTI_STATE_OUTPUT, vec![]),
@@ -109,6 +109,6 @@ fn each_createable_type_lists_what_only_creation_sets() {
     assert!(markdown.contains("### BINARY_VALUE\n\n- Createable: true\n- Deleteable: true\n\n|"));
     assert_eq!(
         text.matches("Whole value set only by CreateObject").count(),
-        2
+        3
     );
 }

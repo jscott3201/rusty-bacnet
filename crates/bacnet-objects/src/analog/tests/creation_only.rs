@@ -17,10 +17,12 @@ fn code(result: Result<(), Error>) -> ErrorCode {
 }
 
 #[test]
-fn analog_input_and_output_take_units_only_at_creation() {
-    let objects: [Box<dyn BACnetObject>; 2] = [
+fn the_analog_types_take_units_only_at_creation() {
+    // Analog Value joined the other two when it became createable (#2172).
+    let objects: [Box<dyn BACnetObject>; 3] = [
         Box::new(AnalogInputObject::new(1, "AI-1", EngineeringUnits::NO_UNITS).unwrap()),
         Box::new(AnalogOutputObject::new(1, "AO-1", EngineeringUnits::NO_UNITS).unwrap()),
+        Box::new(AnalogValueObject::new(1, "AV-1", EngineeringUnits::NO_UNITS).unwrap()),
     ];
     for mut object in objects {
         let kind = object.object_identifier().object_type();
@@ -81,15 +83,4 @@ fn analog_input_and_output_take_units_only_at_creation() {
             ErrorCode::WRITE_ACCESS_DENIED
         );
     }
-}
-
-#[test]
-fn analog_value_is_not_createable_and_takes_nothing_at_creation() {
-    let mut value = AnalogValueObject::new(1, "AV-1", EngineeringUnits::NO_UNITS).unwrap();
-    assert!(!value.is_createable());
-    assert!(value.creation_only_properties().is_empty());
-    assert_eq!(
-        code(value.initialize_property(PropertyIdentifier::UNITS, PropertyValue::Enumerated(62))),
-        ErrorCode::WRITE_ACCESS_DENIED
-    );
 }

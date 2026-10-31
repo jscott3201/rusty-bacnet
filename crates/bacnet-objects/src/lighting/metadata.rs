@@ -60,9 +60,8 @@ use crate::property_metadata::{
 // arm unconditionally and the suites pin in-service writes, so the metadata
 // mirrors dispatch. Presence is None apart from the value-source rows: the
 // implementation models no commandable or intrinsic-reporting gating here.
-// The duo is not createable at runtime (the network factory builds only the
-// eight analog/binary/multi-state input/output/value types, so the
-// is_createable=false default holds) and remains deleteable (delete denies
+// The duo is not createable at runtime (the `creation` table has no
+// constructor for it, so the is_createable default answers false) and remains deleteable (delete denies
 // only Device and NetworkPort, so the is_deleteable=true default holds);
 // neither needs an override. Array gating keeps the default: Priority_Array
 // and Property_List admit an index (BACnetARRAY per Tables 12-64/12-69)

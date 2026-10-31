@@ -692,41 +692,44 @@ fn pics_fixed_readonly_properties_never_writable() {
 }
 
 #[test]
-fn pics_createability_matches_runtime_factory() {
-    let db = make_real_objects_db();
+fn pics_createability_of_every_catalogue_type_follows_the_constructor_table() {
+    // One table drives both CreateObject and the PICS (#2172), replacing the
+    // old pin of Analog Value as not createable.
+    use bacnet_objects::creation::builtin_constructor;
+    let mut db = ObjectDatabase::new();
+    for object in bacnet_objects::catalogue::representatives() {
+        db.add(object).unwrap();
+    }
     let pics = generate_pics(&db, &ServerConfig::default(), &make_pics_config());
-
-    // The 8 types handle_create_object actually constructs must be createable.
-    for ot in [
-        ObjectType::ANALOG_INPUT,
-        ObjectType::ANALOG_OUTPUT,
-        ObjectType::BINARY_INPUT,
-        ObjectType::BINARY_OUTPUT,
-        ObjectType::BINARY_VALUE,
-        ObjectType::MULTI_STATE_INPUT,
-        ObjectType::MULTI_STATE_OUTPUT,
-        ObjectType::MULTI_STATE_VALUE,
-    ] {
-        let entry = pics
-            .supported_object_types
-            .iter()
-            .find(|e| e.object_type == ot)
-            .expect("type should be in PICS");
-        assert!(
+    assert_eq!(
+        pics.supported_object_types.len(),
+        bacnet_objects::device::SUPPORTED_OBJECT_TYPES.len()
+    );
+    for entry in &pics.supported_object_types {
+        assert_eq!(
             entry.createable,
-            "{ot:?} should be createable (factory constructs it)"
+            builtin_constructor(entry.object_type).is_some(),
+            "{:?}",
+            entry.object_type
         );
     }
-
-    // AnalogValue is NOT in the factory — PICS must not advertise createability.
-    let av = pics
-        .supported_object_types
-        .iter()
-        .find(|e| e.object_type == ObjectType::ANALOG_VALUE)
-        .expect("ANALOG_VALUE should be in PICS");
-    assert!(
-        !av.createable,
-        "AnalogValue must NOT be createable (the factory refuses it with DYNAMIC_CREATION_NOT_SUPPORTED)"
+    let createable = |kind| {
+        pics.supported_object_types
+            .iter()
+            .find(|entry| entry.object_type == kind)
+            .unwrap()
+            .createable
+    };
+    assert!(createable(ObjectType::ANALOG_VALUE));
+    assert!(createable(ObjectType::DATETIMEPATTERN_VALUE));
+    assert!(!createable(ObjectType::CALENDAR));
+    assert!(!createable(ObjectType::DEVICE));
+    assert_eq!(
+        pics.supported_object_types
+            .iter()
+            .filter(|entry| entry.createable)
+            .count(),
+        21
     );
 }
 

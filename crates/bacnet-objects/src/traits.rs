@@ -534,18 +534,22 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
 
     /// Whether this object type can be created at runtime via CreateObject.
     ///
-    /// Default `false`. The bundled server's PICS reports the answer as the
-    /// type's createability. Its CreateObject handler doesn't ask: it builds
-    /// objects from a fixed factory of built-in types (Analog Input and
-    /// Output, the binary types and the multi-state types), which are the
-    /// ones that answer `true`. It refuses every other type, a custom type
-    /// included: OBJECT / UNSUPPORTED_OBJECT_TYPE for a type the Device
-    /// doesn't list in Protocol_Object_Types_Supported, and OBJECT /
+    /// The default answers whether the object's type has a constructor in
+    /// the built-in table, [`crate::creation`]: the analog, binary and
+    /// multi-state input, output and value types and the twelve value types
+    /// (#2172). The bundled server builds new objects from that table and
+    /// reports this answer as the type's createability in its PICS. Every
+    /// built-in object keeps the default, so the two can't disagree.
+    ///
+    /// A custom object keeps the default too: the server builds only the
+    /// table's types, so overriding this to `true` makes the PICS promise a
+    /// creation the server refuses: OBJECT /
+    /// UNSUPPORTED_OBJECT_TYPE for a type the Device doesn't list in
+    /// Protocol_Object_Types_Supported, and OBJECT /
     /// DYNAMIC_CREATION_NOT_SUPPORTED for a listed one it doesn't build
-    /// (#2171). So a custom object keeps the default; answering `true` would
-    /// make the PICS promise a creation the server refuses.
+    /// (#2171).
     fn is_createable(&self) -> bool {
-        false
+        crate::creation::builtin_constructor(self.object_identifier().object_type()).is_some()
     }
 
     /// The properties whose whole value a CreateObject initial value may set
@@ -576,10 +580,9 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// answer for a property that can't be initialized at creation (Clause
     /// 15.3.1.3.1).
     ///
-    /// The bundled server's CreateObject builds only built-in objects today
-    /// (Analog Input and Output, the binary types and the multi-state
-    /// types), so on a custom object this hook is reached only by a caller
-    /// that builds the object itself.
+    /// The bundled server's CreateObject builds only the types in
+    /// [`crate::creation`], so on a custom object this hook is reached only
+    /// by a caller that builds the object itself.
     fn initialize_property(
         &mut self,
         _property: PropertyIdentifier,
