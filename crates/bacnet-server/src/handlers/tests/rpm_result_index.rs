@@ -77,11 +77,7 @@ impl BACnetObject for Declared {
         "declared"
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::STATE_TEXT,
-            VENDOR_ARRAY,
-        ])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         Cow::Owned(

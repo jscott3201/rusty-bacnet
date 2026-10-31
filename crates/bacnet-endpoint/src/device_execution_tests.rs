@@ -111,10 +111,7 @@ impl BACnetObject for CustomDevice {
         ])
     }
     fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
-        std::borrow::Cow::Owned(vec![
-            PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS,
-            PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS,
-        ])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
     fn read_property(
         &self,

@@ -33,7 +33,7 @@ impl BACnetObject for RecipientObject {
         crate::test_rows::rows(&[PROPERTY], &[PROPERTY])
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[PROPERTY])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 
     fn read_property(

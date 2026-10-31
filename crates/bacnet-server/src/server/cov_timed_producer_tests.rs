@@ -487,14 +487,7 @@ impl bacnet_objects::traits::BACnetObject for WritablePoint {
         )
     }
     fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
-        std::borrow::Cow::Borrowed(&[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-        ])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 }
 

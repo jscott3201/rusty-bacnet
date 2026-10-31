@@ -1,7 +1,8 @@
 ---
 section: Changed
 ---
-- **Breaking (Rust API):** `BACnetObject::property_metadata` is required, and
-  the fallbacks for an object without rows are gone: the server reads every
-  object's rows for presence, ReadPropertyMultiple's ALL, REQUIRED and
-  OPTIONAL, indexed writes and the PICS (#2181).
+- **Breaking (Rust API):** `BACnetObject::property_metadata` is required. Rows
+  alone drive the PICS, RPM ALL/REQUIRED/OPTIONAL and result index, the
+  indexed-write gate (UNKNOWN_PROPERTY without a row) and the endpoint
+  Device-write check; ReadProperty and WriteProperty still reach the object
+  (#2181).

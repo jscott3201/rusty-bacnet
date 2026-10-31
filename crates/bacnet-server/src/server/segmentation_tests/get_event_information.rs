@@ -109,14 +109,7 @@ impl BACnetObject for LargeSummaryObject {
         ])
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[
-            PropertyIdentifier::EVENT_STATE,
-            PropertyIdentifier::ACKED_TRANSITIONS,
-            PropertyIdentifier::EVENT_TIME_STAMPS,
-            PropertyIdentifier::NOTIFY_TYPE,
-            PropertyIdentifier::EVENT_ENABLE,
-            PropertyIdentifier::NOTIFICATION_CLASS,
-        ])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 }
 

@@ -16,6 +16,12 @@ const UNIVERSAL: [P; 3] = [P::OBJECT_IDENTIFIER, P::OBJECT_NAME, P::OBJECT_TYPE]
 /// The universal rows, then `served` in order, then Property_List. A
 /// property in `writable` gets a write route; every other row is read-only.
 pub(crate) fn rows(served: &[P], writable: &[P]) -> Cow<'static, [PropertyMetadata]> {
+    debug_assert!(
+        writable
+            .iter()
+            .all(|property| served.contains(property) || UNIVERSAL.contains(property)),
+        "a writable row must be served: {writable:?} against {served:?}"
+    );
     let row = |property: P| {
         let (conformance, write) = if writable.contains(&property) {
             (

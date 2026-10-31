@@ -245,10 +245,35 @@ fn property_metadata_contract_binary_input() {
     }
 }
 
+/// The ASHRAE-assigned property identifiers the served-without-a-row sweep
+/// tries: 0 to 511, and from 4,194,304 up to sixteen past the highest one
+/// this stack names (Clause 23 leaves the range between to vendors). The
+/// audit checks that every built-in row falls inside it.
+pub(crate) fn swept_property_identifiers() -> impl Iterator<Item = PropertyIdentifier> {
+    (0..512)
+        .chain(4_194_304..=swept_upper_bound())
+        .map(PropertyIdentifier::from_raw)
+}
+
+/// The last identifier of the sweep's upper range.
+pub(crate) fn swept_upper_bound() -> u32 {
+    PropertyIdentifier::ALL_NAMED
+        .iter()
+        .map(|(_, property)| property.to_raw())
+        .max()
+        .expect("named property identifiers")
+        + 16
+}
+
+/// Whether [`swept_property_identifiers`] tries `property`.
+pub(crate) fn is_swept(property: PropertyIdentifier) -> bool {
+    swept_property_identifiers().any(|swept| swept == property)
+}
+
 /// The other half of the audit's readability check: a property the object
-/// serves, read without an array index, has a row. Every standard property
-/// identifier (0 to 511) is tried on one object of each catalogue type; a
-/// property without a row must answer PROPERTY / UNKNOWN_PROPERTY.
+/// serves, read without an array index, has a row. Every identifier of
+/// [`swept_property_identifiers`] is tried on one object of each catalogue
+/// type; a property without a row must answer PROPERTY / UNKNOWN_PROPERTY.
 #[test]
 fn property_metadata_contract_every_served_property_has_a_row() {
     use bacnet_types::enums::{ErrorClass, ErrorCode};
@@ -268,9 +293,11 @@ fn property_metadata_contract_every_served_property_has_a_row() {
             .unwrap();
     }
     let mut failures = Vec::new();
+    let mut visited = std::collections::BTreeSet::new();
     for object in &objects {
+        visited.insert(object.object_identifier().object_type().to_raw());
         let metadata = object.property_metadata();
-        for property in (0..512).map(PropertyIdentifier::from_raw) {
+        for property in swept_property_identifiers() {
             if matches!(
                 property,
                 PropertyIdentifier::ALL
@@ -292,6 +319,11 @@ fn property_metadata_contract_every_served_property_has_a_row() {
             }
         }
     }
+    assert_eq!(
+        visited.len(),
+        64,
+        "the sweep must visit every catalogue type"
+    );
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 

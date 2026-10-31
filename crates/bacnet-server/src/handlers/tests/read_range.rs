@@ -100,7 +100,7 @@ impl BACnetObject for ListObject {
         crate::test_rows::read_only(&[self.property])
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Owned(vec![self.property])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 
     fn log_record_identities_internal(&self) -> Option<Vec<LogRecordIdentity>> {

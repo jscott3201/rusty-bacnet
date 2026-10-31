@@ -73,10 +73,7 @@ impl BACnetObject for LookupTestNotificationClass {
         ])
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[
-            PropertyIdentifier::NOTIFICATION_CLASS,
-            PropertyIdentifier::RECIPIENT_LIST,
-        ])
+        crate::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 }
 

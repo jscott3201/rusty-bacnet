@@ -43,7 +43,6 @@ fn expected_services(clock: bool) -> Vec<u8> {
 /// Opaque custom reader: executor-owned rows must never delegate into it.
 struct CustomDevice {
     oid: ObjectIdentifier,
-    metadata: bool,
 }
 impl BACnetObject for CustomDevice {
     fn object_identifier(&self) -> ObjectIdentifier {
@@ -73,17 +72,14 @@ impl BACnetObject for CustomDevice {
         panic!("read-only fixture")
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Owned(vec![PropertyIdentifier::DESCRIPTION, ACTIVE, MULTIPLE])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
     fn property_metadata(&self) -> Cow<'_, [bacnet_objects::property_metadata::PropertyMetadata]> {
         use bacnet_objects::property_metadata::{
             PropertyConformance, PropertyMetadata, PropertyWriteCapability,
         };
-        if !self.metadata {
-            return Cow::Borrowed(&[]);
-        }
         Cow::Owned(
-            self.property_list()
+            [PropertyIdentifier::DESCRIPTION, ACTIVE, MULTIPLE]
                 .iter()
                 .map(|property| {
                     PropertyMetadata::new(
@@ -265,27 +261,22 @@ async fn device_execution_view_survives_public_profile_mutation_and_same_oid_rep
             .add(Box::new(replacement))
             .unwrap();
         assert_profile(&mut wire, wildcard(), clock).await;
-        for metadata in [false, true] {
-            wire.server
-                .database()
-                .write()
-                .await
-                .add(Box::new(CustomDevice {
-                    oid: device(),
-                    metadata,
-                }))
-                .unwrap();
-            assert_profile(&mut wire, device(), clock).await;
-            assert_eq!(
-                value(
-                    &wire
-                        .read(device(), PropertyIdentifier::DESCRIPTION, None)
-                        .await
-                        .unwrap()
-                ),
-                PropertyValue::CharacterString("custom-description".into())
-            );
-        }
+        wire.server
+            .database()
+            .write()
+            .await
+            .add(Box::new(CustomDevice { oid: device() }))
+            .unwrap();
+        assert_profile(&mut wire, device(), clock).await;
+        assert_eq!(
+            value(
+                &wire
+                    .read(device(), PropertyIdentifier::DESCRIPTION, None)
+                    .await
+                    .unwrap()
+            ),
+            PropertyValue::CharacterString("custom-description".into())
+        );
         wire.server.stop().await.unwrap();
     }
 }
@@ -314,10 +305,7 @@ async fn device_execution_view_owns_selected_live_and_other_empty_cov_values() {
         .database()
         .write()
         .await
-        .add(Box::new(CustomDevice {
-            oid: other,
-            metadata: true,
-        }))
+        .add(Box::new(CustomDevice { oid: other }))
         .unwrap();
     simple_ack(
         wire.send(&direct(), subscribe_cov(20, av(1), Some(false), Some(300)))
@@ -386,11 +374,7 @@ fn device_execution_view_rpm_budgets_count_canonical_rows_and_preserve_output() 
     use bacnet_services::rpm::ReadPropertyMultipleRequest;
     use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
     let mut db = ObjectDatabase::new();
-    db.add(Box::new(CustomDevice {
-        oid: device(),
-        metadata: true,
-    }))
-    .unwrap();
+    db.add(Box::new(CustomDevice { oid: device() })).unwrap();
     let view = DeviceReadContext::new(&db, DeviceExecution::FullServer);
     let request = |property| ReadPropertyMultipleRequest {
         list_of_read_access_specs: vec![ReadAccessSpecification {

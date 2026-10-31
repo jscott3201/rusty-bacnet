@@ -110,19 +110,7 @@ impl BACnetObject for DisabledAlarmingObject {
         crate::test_rows::read_only(&served)
     }
     fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
-        let mut properties = vec![
-            PropertyIdentifier::EVENT_STATE,
-            PropertyIdentifier::EVENT_TYPE,
-            PropertyIdentifier::NOTIFICATION_CLASS,
-            PropertyIdentifier::EVENT_ENABLE,
-            PropertyIdentifier::ACKED_TRANSITIONS,
-            PropertyIdentifier::NOTIFY_TYPE,
-            PropertyIdentifier::EVENT_TIME_STAMPS,
-        ];
-        if self.detection_enable.is_some() {
-            properties.push(PropertyIdentifier::EVENT_DETECTION_ENABLE);
-        }
-        std::borrow::Cow::Owned(properties)
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 
     fn enrollment_summary_capability_internal(

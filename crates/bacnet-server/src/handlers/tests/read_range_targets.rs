@@ -168,7 +168,7 @@ impl BACnetObject for FixedList {
         crate::test_rows::read_only(&[self.property])
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Owned(vec![self.property])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 
     fn is_list_property(&self, property: PropertyIdentifier) -> bool {

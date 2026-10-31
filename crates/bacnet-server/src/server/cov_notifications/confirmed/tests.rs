@@ -375,7 +375,7 @@ impl bacnet_objects::traits::BACnetObject for PanicsOnce {
         crate::test_rows::read_only(&[PropertyIdentifier::PRESENT_VALUE])
     }
     fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
-        std::borrow::Cow::Borrowed(&[PropertyIdentifier::PRESENT_VALUE])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 
     fn read_property(

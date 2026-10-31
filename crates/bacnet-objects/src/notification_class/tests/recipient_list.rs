@@ -227,7 +227,7 @@ fn routing_skips_delivery_when_stored_recipient_list_is_malformed() {
             crate::test_rows::read_only(&[PropertyIdentifier::NOTIFICATION_CLASS])
         }
         fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-            Cow::Borrowed(&[PropertyIdentifier::NOTIFICATION_CLASS])
+            crate::property_metadata::property_list_from_metadata(&self.property_metadata())
         }
     }
 

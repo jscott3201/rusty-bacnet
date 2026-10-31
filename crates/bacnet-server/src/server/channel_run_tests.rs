@@ -72,7 +72,7 @@ impl BACnetObject for Recorder {
         crate::test_rows::rows(&served, &served)
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 }
 

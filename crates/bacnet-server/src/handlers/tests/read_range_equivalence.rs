@@ -535,7 +535,7 @@ impl BACnetObject for OddAuditRing {
         crate::test_rows::read_only(&[PropertyIdentifier::LOG_BUFFER])
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[PropertyIdentifier::LOG_BUFFER])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 
     fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {

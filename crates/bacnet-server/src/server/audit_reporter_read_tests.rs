@@ -239,10 +239,7 @@ impl BACnetObject for ReadProbe {
         Cow::Borrowed(ROWS)
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::DESCRIPTION,
-        ])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
     fn read_property(
         &self,

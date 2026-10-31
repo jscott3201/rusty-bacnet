@@ -109,7 +109,7 @@ impl BACnetObject for BuiltInProjectionObject {
         crate::test_rows::read_only(&[])
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 }
 

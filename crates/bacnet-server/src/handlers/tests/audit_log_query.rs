@@ -227,7 +227,7 @@ impl BACnetObject for AuditWithoutCapability {
         crate::test_rows::read_only(&[])
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 }
 
@@ -310,7 +310,7 @@ impl BACnetObject for SpyAuditObject {
         crate::test_rows::read_only(&[])
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 
     fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {

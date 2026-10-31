@@ -79,16 +79,7 @@ impl BACnetObject for EventSummaryFixture {
         ])
     }
     fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
-        static PROPERTIES: &[PropertyIdentifier] = &[
-            PropertyIdentifier::EVENT_DETECTION_ENABLE,
-            PropertyIdentifier::EVENT_STATE,
-            PropertyIdentifier::NOTIFICATION_CLASS,
-            PropertyIdentifier::EVENT_ENABLE,
-            PropertyIdentifier::NOTIFY_TYPE,
-            PropertyIdentifier::ACKED_TRANSITIONS,
-            PropertyIdentifier::EVENT_TIME_STAMPS,
-        ];
-        std::borrow::Cow::Borrowed(PROPERTIES)
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 }
 

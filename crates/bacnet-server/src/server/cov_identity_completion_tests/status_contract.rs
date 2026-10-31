@@ -39,14 +39,7 @@ impl BACnetObject for Probe {
         crate::test_rows::read_only(&served)
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        let mut p = vec![
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::RELINQUISH_DEFAULT,
-        ];
-        if self.0.lock().unwrap().present {
-            p.push(PropertyIdentifier::STATUS_FLAGS);
-        }
-        Cow::Owned(p)
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
     fn supports_cov(&self) -> bool {
         true

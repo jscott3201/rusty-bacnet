@@ -33,13 +33,7 @@ impl BACnetObject for WritableObject {
         )
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Owned(vec![
-            SERVICES,
-            ACTIVE,
-            MULTIPLE,
-            LIST,
-            PropertyIdentifier::DESCRIPTION,
-        ])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
     fn read_property(
         &self,

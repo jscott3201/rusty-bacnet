@@ -354,7 +354,7 @@ impl BACnetObject for Refusing {
         crate::test_rows::read_only(&[])
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[])
+        crate::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
     fn add_event_log_record(&mut self, _: BACnetEventLogRecord) -> Result<(), Error> {
         self.0.fetch_add(1, Ordering::Relaxed);

@@ -50,7 +50,7 @@ impl BACnetObject for UnsupportedFaultReindication {
         crate::test_rows::read_only(&[PropertyIdentifier::NOTIFICATION_CLASS])
     }
     fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
-        std::borrow::Cow::Borrowed(&[PropertyIdentifier::NOTIFICATION_CLASS])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 
     fn evaluate_intrinsic_reporting(&mut self) -> Option<bacnet_objects::event::TransitionOutcome> {

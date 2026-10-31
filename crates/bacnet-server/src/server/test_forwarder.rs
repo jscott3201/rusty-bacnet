@@ -92,7 +92,7 @@ impl BACnetObject for TestForwarder {
         crate::test_rows::rows(PROPERTIES, &[PropertyIdentifier::SUBSCRIBED_RECIPIENTS])
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(PROPERTIES)
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 
     fn advance_time_internal(&mut self, elapsed: Duration) -> bool {

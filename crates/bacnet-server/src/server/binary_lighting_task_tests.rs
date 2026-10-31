@@ -562,7 +562,7 @@ impl BACnetObject for StuckDeadline {
         crate::test_rows::read_only(&[])
     }
     fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
-        std::borrow::Cow::Borrowed(&[])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
     fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
         Some(Duration::ZERO)

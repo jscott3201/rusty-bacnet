@@ -585,7 +585,7 @@ fn set_event_state_internal_default_rejects() {
             crate::test_rows::read_only(&[])
         }
         fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-            Cow::Borrowed(&[PropertyIdentifier::OBJECT_NAME])
+            crate::property_metadata::property_list_from_metadata(&self.property_metadata())
         }
     }
 

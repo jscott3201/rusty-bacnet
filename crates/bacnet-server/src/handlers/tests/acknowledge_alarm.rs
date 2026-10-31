@@ -180,7 +180,7 @@ impl BACnetObject for MalformedDetailedAckObject {
         crate::test_rows::read_only(&[])
     }
     fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
-        std::borrow::Cow::Borrowed(&[])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 
     fn enrollment_summary_capability_internal(&self) -> Option<EnrollmentSummaryCapability> {
@@ -235,7 +235,7 @@ impl BACnetObject for LegacyCoarseAckObject {
         crate::test_rows::read_only(&[])
     }
     fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
-        std::borrow::Cow::Borrowed(&[])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 
     fn acknowledge_alarm_correlated_internal(

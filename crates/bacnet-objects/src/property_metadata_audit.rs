@@ -105,6 +105,15 @@ fn audit_every_supported_type_derives_from_canonical_metadata() {
                 .any(|row| row.property_identifier == PropertyIdentifier::PROPERTY_LIST),
             "{object_type:?} metadata must contain PROPERTY_LIST"
         );
+        // The served-without-a-row sweep in `property_metadata_tests` tries
+        // every identifier a built-in row uses.
+        for row in metadata.iter() {
+            assert!(
+                crate::property_metadata_tests::is_swept(row.property_identifier),
+                "{object_type:?} row {:?} is outside the served-without-a-row sweep",
+                row.property_identifier
+            );
+        }
         let unique: HashSet<_> = metadata.iter().map(|row| row.property_identifier).collect();
         assert_eq!(
             unique.len(),

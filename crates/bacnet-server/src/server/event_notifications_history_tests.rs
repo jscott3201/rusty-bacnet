@@ -136,21 +136,7 @@ impl BACnetObject for AtomicHistoryObject {
         ])
     }
     fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
-        std::borrow::Cow::Borrowed(&[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::NOTIFICATION_CLASS,
-            PropertyIdentifier::NOTIFY_TYPE,
-            PropertyIdentifier::EVENT_TIME_STAMPS,
-            PropertyIdentifier::EVENT_MESSAGE_TEXTS,
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::RELIABILITY,
-            PropertyIdentifier::HIGH_LIMIT,
-            PropertyIdentifier::LOW_LIMIT,
-            PropertyIdentifier::DEADBAND,
-        ])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 
     fn commit_event_transition_internal(

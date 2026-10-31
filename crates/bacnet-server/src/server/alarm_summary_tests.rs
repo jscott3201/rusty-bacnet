@@ -69,11 +69,7 @@ impl BACnetObject for MalformedAlarmObject {
         ])
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[
-            PropertyIdentifier::EVENT_STATE,
-            PropertyIdentifier::NOTIFY_TYPE,
-            PropertyIdentifier::ACKED_TRANSITIONS,
-        ])
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 }
 

@@ -147,7 +147,7 @@ impl BACnetObject for ProjectionFixture {
         crate::test_rows::read_only(&self.advertised)
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Owned(self.advertised.clone())
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 }
 

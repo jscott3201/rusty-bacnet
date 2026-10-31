@@ -1,10 +1,11 @@
 ---
 section: Migration notes
 ---
-- **Custom objects (Rust API, #2181):** implement `property_metadata` with one
-  row per property served, the universal ones included, such as
-  `Cow::Borrowed(&[PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead,
-  None, ReadOnly), …, PropertyMetadata::new(P::PRESENT_VALUE, RequiredWrite,
-  None, Always), PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None,
-  ReadOnly)])`. Writability and required properties derive from the rows; the
-  trait docs show a full object.
+- **Custom objects (Rust API, #2181):** implement `property_metadata` with a
+  row per served property, universal ones included. With
+  `use bacnet_objects::property_metadata::{PropertyConformance as C,
+  PropertyMetadata as M, PropertyWriteCapability as W};` a row is
+  `M::new(PropertyIdentifier::OBJECT_NAME, C::RequiredRead, None, W::ReadOnly)`.
+  `property_list()` is still required and must match the rows:
+  `property_list_from_metadata` derives it, and #2197 tracks making the rows
+  the only source.

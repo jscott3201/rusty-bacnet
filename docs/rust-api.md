@@ -4018,17 +4018,17 @@ guards retain their precedence; custom object implementations retain their own
 write dispatch. WPM reports the failed coordinate and retains its successful
 prefix.
 
-At the indexed WP/WPM service gate, effective metadata that omits the
-property produces `PROPERTY/UNKNOWN_PROPERTY` before value decoding. A served
-scalar or BACnetLIST still produces `PROPERTY/PROPERTY_IS_NOT_AN_ARRAY`; a served
-array retains its object-owned element, count and write-access rules. This
+At the indexed WP/WPM service gate, effective metadata that omits the property
+produces `PROPERTY/UNKNOWN_PROPERTY` before value decoding. A served scalar or
+BACnetLIST still produces `PROPERTY/PROPERTY_IS_NOT_AN_ARRAY`; a served array
+retains its object-owned element, count and write-access rules. This
 absence-first ordering is a local error-precedence policy, and it applies to
-custom objects too: their rows decide presence. For this early absence failure, WPM keeps its successful prefix and
-reports the exact failed object/property/index, without authorizing or observing
-the failing element or suffix. The rejected indexed attempt produces no execution
-Audit record; present read-only arrays and unindexed absence retain their existing
-Audit handling. The outer WP authorization check and direct object writes are
-unchanged.
+custom objects too: their rows decide presence. For this early absence failure,
+WPM keeps its successful prefix and reports the exact failed
+object/property/index, without authorizing or observing the failing element or
+suffix. The rejected indexed attempt produces no execution Audit record; present
+read-only arrays and unindexed absence retain their existing Audit handling. The
+outer WP authorization check and direct object writes are unchanged.
 
 A NULL written to a property that isn't commandable and has no NULL in its
 datatype succeeds and leaves the property as it is (Clauses 15.9.2 and 15.10.2,
