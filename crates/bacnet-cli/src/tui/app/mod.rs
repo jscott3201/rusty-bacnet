@@ -349,6 +349,8 @@ pub(crate) struct App {
     pub(crate) now: Instant,
     /// Worker events dropped because the UI fell behind.
     pub(crate) dropped: u64,
+    /// Agents attached to the session's MCP listener, while it listens.
+    pub(crate) agents: Option<usize>,
     /// Recent log lines.
     pub(crate) log: LogRing,
     log_generation: u64,
@@ -410,6 +412,7 @@ impl App {
             epoch: config.now,
             now: config.now,
             dropped: 0,
+            agents: None,
             log,
             log_generation,
             quit: false,
@@ -668,6 +671,7 @@ impl App {
     }
 
     fn reset_session(&mut self) {
+        self.agents = None;
         if let Some(monitor) = self.monitor.as_deref_mut() {
             monitor.live = false;
             monitor.wizard = None;

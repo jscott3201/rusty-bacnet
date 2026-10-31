@@ -30,7 +30,8 @@ const RESERVED: u8 = 8;
 /// and `? help`. `COV` and `FD` are the footprint: subscriptions held on
 /// devices, and the foreign-device registration with its state (shown only
 /// with one). An armed write session turns the bar red with its countdown;
-/// `ledger n` counts changes still in effect.
+/// `ledger n` counts changes still in effect; `MCP n`, agents attached to
+/// the profile's MCP listener while it listens.
 pub(super) fn status_bar(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let level = app.level();
     let bar = match level {
@@ -120,6 +121,13 @@ fn status_parts(app: &App, theme: &Theme, bar: Style) -> Vec<Part> {
         parts.push(Part::new(
             5,
             vec![span(format!("FD {}", registration.label()), bar)],
+        ));
+    }
+    // The MCP listener (#2185): agents attached, while it listens.
+    if let Some(agents) = app.agents {
+        parts.push(Part::new(
+            if agents > 0 { 5 } else { 3 },
+            vec![span(format!("MCP {agents}"), bar)],
         ));
     }
     if !app.safety.ledger.is_empty() {

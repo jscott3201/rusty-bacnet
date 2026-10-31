@@ -311,3 +311,27 @@ fn the_profile_defaults_are_the_servers() {
         ]
     );
 }
+
+/// `bacnet mcp connect` finds the socket of the profile named, or of the
+/// only profile with one, and asks for a name when several have one.
+#[cfg(unix)]
+#[test]
+fn connect_finds_the_listening_profile() {
+    let (_dir, store) = store_with(None);
+    store.save("plant", &Profile::default(), true).unwrap();
+    let error = attached_socket(&store, None).unwrap_err();
+    assert!(error.contains("no TUI is listening"), "{error}");
+    let named = attached_socket(&store, Some("plant")).unwrap();
+    assert_eq!(
+        named,
+        store.workspace_path("plant").unwrap().join("mcp.sock")
+    );
+    assert!(attached_socket(&store, Some("../x")).is_err());
+    let site = store.workspace("site").unwrap().join("mcp.sock");
+    let _site = std::os::unix::net::UnixListener::bind(&site).unwrap();
+    assert_eq!(attached_socket(&store, None).unwrap(), site);
+    let plant = store.workspace("plant").unwrap().join("mcp.sock");
+    let _plant = std::os::unix::net::UnixListener::bind(&plant).unwrap();
+    let error = attached_socket(&store, None).unwrap_err();
+    assert!(error.contains("plant, site"), "{error}");
+}

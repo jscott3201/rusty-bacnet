@@ -1,7 +1,9 @@
 //! `bacnet mcp serve --stdio` and `bacnet mcp authorize` (#2066): the MCP
 //! server of the `bacnet-mcp` crate, on a client built from a profile or
 //! the transport flags; read-only unless the profile's `[mcp]` table
-//! offers writes (#2068), which go through the profile's workspace.
+//! offers writes (#2068), which go through the profile's workspace. And
+//! `bacnet mcp connect` (#2185): stdio bridged to the socket of a TUI that
+//! has the profile open.
 //!
 //! Stdout belongs to the JSON-RPC stream while the server runs, so this
 //! module denies the print lints the rest of the CLI allows, and tracing
@@ -63,6 +65,9 @@ pub(crate) async fn run(cli: Cli) -> crate::CliResult {
                 profile, passive, ..
             },
         }) => serve(&cli, profile.as_deref(), *passive).await,
+        Some(Command::Mcp {
+            action: McpAction::Connect { profile },
+        }) => connect(&Store::discover()?, profile.as_deref()).await,
         Some(Command::Mcp {
             action: McpAction::Authorize { profile },
         }) => {
@@ -197,7 +202,7 @@ fn without_secrets(url: &str) -> String {
 }
 
 /// The local end of `args`' link, for audit records.
-fn local(args: &TransportArgs) -> (&'static str, String) {
+pub(crate) fn local(args: &TransportArgs) -> (&'static str, String) {
     if let Some(mstp) = &args.mstp {
         ("MSTP", mstp.port.clone())
     } else if args.sc {
@@ -212,8 +217,9 @@ fn local(args: &TransportArgs) -> (&'static str, String) {
     }
 }
 
-/// The one principal of a stdio server: the OS user running it.
-fn principal() -> String {
+/// The one principal of a stdio server, and of the TUI's attached
+/// sessions: the OS user running it.
+pub(crate) fn principal() -> String {
     std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
         .unwrap_or_else(|_| "local-user".into())
@@ -370,6 +376,69 @@ async fn serve_on<T: TransportPort + 'static>(
     Ok(served?)
 }
 
+/// Why `bacnet mcp connect` can't run here yet.
+#[cfg(not(unix))]
+const NO_ATTACH: &str = "bacnet mcp connect (attaching to the TUI) isn't available on Windows yet; \
+     run `bacnet mcp serve --stdio --profile NAME` instead";
+
+/// `bacnet mcp connect`: stdin and stdout passed to the socket of the TUI
+/// that has `profile` open (or the only TUI listening), byte for byte.
+async fn connect(store: &Store, profile: Option<&str>) -> crate::CliResult {
+    #[cfg(unix)]
+    {
+        let path = attached_socket(store, profile)?;
+        let bridged = bacnet_mcp::attach::bridge_stdio(&path).await;
+        // A read of stdin may still be blocked on a runtime thread, which
+        // the runtime would wait for: exit now instead.
+        let code = match bridged {
+            Ok(()) => 0,
+            Err(error) => {
+                let _ = writeln!(std::io::stderr(), "Error: {error}");
+                1
+            }
+        };
+        std::process::exit(code);
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (store, profile);
+        Err(NO_ATTACH.into())
+    }
+}
+
+/// The socket `bacnet mcp connect` attaches to: `profile`'s, or without
+/// one the only profile with a socket in its workspace.
+#[cfg(unix)]
+fn attached_socket(store: &Store, profile: Option<&str>) -> Result<std::path::PathBuf, String> {
+    use bacnet_mcp::attach::socket_path;
+    if let Some(name) = profile {
+        return Ok(socket_path(&store.workspace_path(name)?));
+    }
+    let open: Vec<String> = store
+        .list()?
+        .into_iter()
+        .filter(|name| {
+            store.workspace_path(name).is_ok_and(|dir| {
+                use std::os::unix::fs::FileTypeExt as _;
+                std::fs::symlink_metadata(socket_path(&dir))
+                    .is_ok_and(|meta| meta.file_type().is_socket())
+            })
+        })
+        .collect();
+    match open.as_slice() {
+        [] => Err(
+            "no TUI is listening for MCP: open a profile in `bacnet tui`, or name one \
+                   with --profile NAME"
+                .into(),
+        ),
+        [name] => Ok(socket_path(&store.workspace_path(name)?)),
+        names => Err(format!(
+            "TUIs are listening on several profiles ({}); pick one with --profile NAME",
+            names.join(", ")
+        )),
+    }
+}
+
 /// What an authorization shows: the reach the `[mcp]` table gives.
 fn summary(name: &str, section: &McpSection) -> String {
     let list = |items: Option<String>| items.unwrap_or_else(|| "all".into());
@@ -413,8 +482,13 @@ fn summary(name: &str, section: &McpSection) -> String {
             )
         }
     };
+    let attached = if section.tui_listener == Some(false) {
+        ""
+    } else {
+        ", and read-only through the TUI's local socket while the profile is open there"
+    };
     format!(
-        "Authorize AI agents to use profile {name} through `bacnet mcp serve`.\n\
+        "Authorize AI agents to use profile {name} through `bacnet mcp serve`{attached}.\n\
          They can discover devices and read them ({writes}), on networks: {networks}; \
          devices: {devices}; broad discovery: {}.\n\
          Device text and site data will reach the agent and its host.\n\

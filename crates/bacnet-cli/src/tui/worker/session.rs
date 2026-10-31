@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bacnet_client::client::BACnetClient;
+use bacnet_ops::engine::Engine;
 use bacnet_ops::limits::RequestLimits;
 use bacnet_ops::target::AddressStyle;
 use bacnet_services::who_is::WhoIsRequest;
@@ -94,6 +95,9 @@ pub(crate) struct SessionOptions {
     pub(crate) safety: SafetyOptions,
     /// The MS/TP monitor's plan and where serial ports are opened.
     pub(crate) mstp: crate::tui::monitor::MstpOptions,
+    /// The profile's MCP listener, when it has one (#2185).
+    #[cfg(feature = "mcp")]
+    pub(crate) attach: Option<crate::tui::attach::Plan>,
 }
 
 /// Capacity of the session's queue to the watch worker: a burst of adds
@@ -385,7 +389,7 @@ async fn serve_with<T: TransportPort + 'static>(
     sc_events: Option<broadcast::Receiver<ScEvent>>,
 ) {
     let client = Arc::new(client);
-    let rate = Arc::new(RequestLimits::new(options.max_rate));
+    let rate = Arc::new(session_limits(&options));
     let mut local = style.format(client.local_mac());
     // A B/IPv6 VMAC alone doesn't say where the client is bound.
     if let Some(bound) =
@@ -410,6 +414,10 @@ async fn serve_with<T: TransportPort + 'static>(
         let (capture, capture_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
         // Dropped with the session loop, which ends the SC worker.
         let (sc_stop, sc_stop_rx) = mpsc::channel::<()>(1);
+        // Likewise for the MCP listener, which ends its agents' sessions.
+        let (attach_stop, attach_stop_rx) = mpsc::channel::<()>(1);
+        // The watch list and attached agents read through one engine.
+        let engine = Arc::new(Engine::new(Arc::clone(&client), Arc::clone(&rate)));
         let quiet = options.safety.passive;
         // The browser and the watch list run beside this loop under
         // `join!`, so their jobs keep being polled while an arm here awaits;
@@ -422,6 +430,7 @@ async fn serve_with<T: TransportPort + 'static>(
             let discovery = discovery;
             let capture = capture;
             let _sc_stop = sc_stop;
+            let _attach_stop = attach_stop;
             let mut feed = DeviceFeed::new(style);
             let mut listening: Option<(OpId, Instant)> = None;
             let mut resolving: Option<Resolving<'_>> = None;
@@ -552,7 +561,7 @@ async fn serve_with<T: TransportPort + 'static>(
             Box::pin(session),
             Box::pin(super::browse::run(&client, &sink, browse_rx, &rate)),
             Box::pin(super::watch::run(
-                &client,
+                &engine,
                 &sink,
                 watch_rx,
                 &rate,
@@ -571,10 +580,42 @@ async fn serve_with<T: TransportPort + 'static>(
             Box::pin(super::sc::run(&client, &sink, sc_stop_rx, sc_events)),
             Box::pin(crate::tui::capture::worker::run(
                 &*client, &sink, capture_rx, style
-            ))
+            )),
+            Box::pin(attached(&engine, &sink, &options, attach_stop_rx))
         );
     }
     stop_shared(client).await;
+}
+
+/// The session's request limits: its cap, and the MCP listener's rates
+/// when it has one.
+fn session_limits(options: &SessionOptions) -> RequestLimits {
+    #[cfg(feature = "mcp")]
+    if let Some(plan) = &options.attach {
+        return crate::tui::attach::limits(options.max_rate, plan);
+    }
+    RequestLimits::new(options.max_rate)
+}
+
+/// The MCP listener, while the session runs.
+#[cfg(feature = "mcp")]
+async fn attached<T: TransportPort + 'static>(
+    engine: &Arc<Engine<T>>,
+    sink: &EventSink,
+    options: &SessionOptions,
+    stop: mpsc::Receiver<()>,
+) {
+    crate::tui::attach::run(engine, options.attach.as_ref(), sink, stop).await;
+}
+
+/// No MCP listener without the `mcp` feature.
+#[cfg(not(feature = "mcp"))]
+async fn attached<T: TransportPort + 'static>(
+    _engine: &Arc<Engine<T>>,
+    _sink: &EventSink,
+    _options: &SessionOptions,
+    _stop: mpsc::Receiver<()>,
+) {
 }
 
 /// How long [`stop_shared`] waits quietly for the renewal tasks to let go

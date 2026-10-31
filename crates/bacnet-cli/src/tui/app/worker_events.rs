@@ -249,6 +249,7 @@ impl App {
                 }
             }
             WorkerEvent::ForeignDevice(foreign) => self.network.foreign_device(foreign),
+            WorkerEvent::Agents(agents) => self.agents = agents,
             WorkerEvent::Network(event) => self.network_event(event),
             WorkerEvent::Discovery(event) => self.discovery_event(event),
             WorkerEvent::Sc(report) => self.sc_report(report),

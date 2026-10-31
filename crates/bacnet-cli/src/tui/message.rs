@@ -402,6 +402,9 @@ pub(crate) enum WorkerEvent {
     MonitorScan(super::monitor::scan::ScanReport),
     /// Captured frames and capture reports (#971).
     Capture(super::capture::CaptureEvent),
+    /// The MCP listener's agents attached, while it listens (#2185).
+    #[cfg_attr(not(all(unix, feature = "mcp")), allow(dead_code))]
+    Agents(Option<usize>),
 }
 
 #[cfg(test)]

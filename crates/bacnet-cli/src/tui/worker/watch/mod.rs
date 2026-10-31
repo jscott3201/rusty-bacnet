@@ -21,7 +21,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bacnet_client::client::BACnetClient;
 use bacnet_ops::engine::Engine;
 use bacnet_ops::label::{kebab, object_label};
 use bacnet_ops::limits::RequestLimits;
@@ -380,14 +379,13 @@ fn csv_line(point: &Point, written: &Written) -> String {
 /// Serve watch commands until `commands` closes or the session is
 /// cancelled, then shut the hub down, cancelling every subscription.
 pub(crate) async fn run<T: TransportPort + 'static>(
-    client: &Arc<BACnetClient<T>>,
+    engine: &Arc<Engine<T>>,
     sink: &EventSink,
     mut commands: mpsc::Receiver<Command>,
     rate: &Arc<RequestLimits>,
     options: &WatchOptions,
 ) {
-    let engine = Arc::new(Engine::new(Arc::clone(client), Arc::clone(rate)));
-    let hub = match Hub::new(engine, hub_options(options)) {
+    let hub = match Hub::new(Arc::clone(engine), hub_options(options)) {
         Ok(hub) => hub,
         Err(error) => {
             tracing::error!("the watch list can't start: {error}");

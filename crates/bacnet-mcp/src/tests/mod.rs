@@ -1,6 +1,8 @@
 //! The server driven over a pipe, as an agent host drives it on stdio,
 //! against an in-process lab device on a loopback link.
 
+#[cfg(unix)]
+mod attach;
 mod bbmd;
 mod budget;
 mod confirm;
@@ -476,14 +478,18 @@ impl Agent {
                 .await
                 .unwrap();
         });
-        let (read, write) = tokio::io::split(agent);
-        let agent = Self {
+        (Self::over(agent), serving, shutdown)
+    }
+
+    /// The agent on its end of `pipe`, whatever serves the other end.
+    pub(crate) fn over(pipe: DuplexStream) -> Self {
+        let (read, write) = tokio::io::split(pipe);
+        Self {
             write,
             lines: BufReader::new(read).lines(),
             next_id: 1,
             backlog: VecDeque::new(),
-        };
-        (agent, serving, shutdown)
+        }
     }
 
     /// Close the server's input, as an agent host closing stdin does.

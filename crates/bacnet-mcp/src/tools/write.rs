@@ -254,7 +254,7 @@ fn specs(device: u32, args: &Args) -> Result<Vec<WriteSpec>, ToolError> {
 }
 
 /// The audit log's context for this server's workspace.
-pub(super) fn context(workspace: &Workspace) -> Context {
+pub(crate) fn context(workspace: &Workspace) -> Context {
     Context {
         profile: workspace.profile.clone(),
         transport: workspace.transport,
