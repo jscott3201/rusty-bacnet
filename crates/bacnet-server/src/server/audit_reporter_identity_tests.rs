@@ -22,13 +22,13 @@ fn device(instance: u32) -> Box<DeviceObject> {
 
 #[tokio::test]
 async fn audit_reporter_identity_startup_requires_a_concrete_local_device() {
-    for devices in [&[][..], &[ObjectIdentifier::MAX_INSTANCE][..]] {
-        assert!(
-            try_server(reporter(), devices, Some(recipient()), bindings())
-                .await
-                .is_err()
-        );
-    }
+    // No database holds a Device at the wildcard instance (#2171), so the
+    // only database without a concrete Device is one without a Device.
+    assert!(
+        try_server(reporter(), &[], Some(recipient()), bindings())
+            .await
+            .is_err()
+    );
     assert!(
         try_server(reporter(), &[10], None, bindings())
             .await

@@ -1,5 +1,7 @@
 use super::*;
-use crate::property_metadata::{PropertyConformance, PropertyWriteCapability};
+use crate::property_metadata::{
+    PropertyConformance, PropertyPresenceCondition, PropertyWriteCapability,
+};
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
 use bacnet_types::error::RemoteError;
 
@@ -71,7 +73,7 @@ fn configured_bip_metadata_exact_sets_and_indexed_list() {
     let required: Vec<_> = ALL
         .iter()
         .copied()
-        .filter(|p| !matches!(*p, P::DESCRIPTION | P::LINK_SPEED))
+        .filter(|p| *p != P::DESCRIPTION)
         .collect();
     let actual: Vec<_> = object
         .required_properties()
@@ -81,9 +83,19 @@ fn configured_bip_metadata_exact_sets_and_indexed_list() {
         .collect();
     assert_eq!(actual, required);
     for row in metadata.iter() {
+        // Footnotes 3 and 25 of Table 12-71 require these optional rows of
+        // a non-PTP application port, which every port here is (#2174).
+        let condition = match row.property_identifier {
+            P::NETWORK_NUMBER | P::NETWORK_NUMBER_QUALITY | P::APDU_LENGTH => {
+                Some(PropertyPresenceCondition::ApplicationProtocolLevel)
+            }
+            P::MAC_ADDRESS => Some(PropertyPresenceCondition::NotPointToPoint),
+            _ => None,
+        };
+        assert_eq!(row.presence_condition, condition);
         assert_eq!(
             row.conformance,
-            if matches!(row.property_identifier, P::DESCRIPTION | P::LINK_SPEED) {
+            if row.property_identifier == P::DESCRIPTION || condition.is_some() {
                 PropertyConformance::Optional
             } else {
                 PropertyConformance::RequiredRead

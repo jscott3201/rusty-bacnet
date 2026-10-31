@@ -184,10 +184,9 @@ fn qualified_reference_names_the_selected_device() {
     let (mut other, _, _) = setup_qualified_reference(&[100, 200], 200);
     assert!(evaluate_event_enrollments(&mut other, 1).is_empty());
 
-    let (mut wildcard, _, _) = setup_qualified_reference(
-        &[ObjectIdentifier::WILDCARD_INSTANCE],
-        ObjectIdentifier::WILDCARD_INSTANCE,
-    );
+    // The wildcard Device names no particular device, so a reference
+    // naming it never points inside this one.
+    let (mut wildcard, _, _) = setup_qualified_reference(&[], ObjectIdentifier::WILDCARD_INSTANCE);
     assert!(evaluate_event_enrollments(&mut wildcard, 1).is_empty());
 }
 

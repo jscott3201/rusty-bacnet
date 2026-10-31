@@ -149,7 +149,6 @@ async fn device_write_preflight_errors_are_atomic_and_retryable() {
         "client",
         "empty",
         "lower device",
-        "wildcard",
         "mismatch",
         "services",
         "source",
@@ -165,7 +164,6 @@ async fn device_write_preflight_errors_are_atomic_and_retryable() {
                 "empty" => &[],
                 // Device 50 is the local Device, so identity 123 is a mismatch.
                 "lower device" => &[123, 50],
-                "wildcard" => &[ObjectIdentifier::MAX_INSTANCE],
                 _ => &[123],
             }));
         }

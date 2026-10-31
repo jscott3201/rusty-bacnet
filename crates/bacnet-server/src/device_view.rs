@@ -356,12 +356,7 @@ impl BACnetObject for DeviceReadView<'_> {
         if !self.is_device() {
             return self.object.property_list();
         }
-        Cow::Owned(
-            self.property_metadata()
-                .iter()
-                .map(|row| row.property_identifier)
-                .collect(),
-        )
+        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
     fn required_properties(&self) -> Cow<'static, [P]> {
         if !self.is_device() {

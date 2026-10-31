@@ -452,12 +452,10 @@ async fn audit_forwarding_isolated_cycle_is_content_bounded_not_global_deduplica
 /// a parent from itself, so it forwards nothing.
 #[tokio::test(start_paused = true)]
 async fn audit_forwarding_follows_the_lowest_of_several_devices() {
-    let wildcard = ObjectIdentifier::WILDCARD_INSTANCE;
     for (devices, parent_device, forwards) in [
         (&[30, 10][..], 20, true),
         (&[10, 20][..], 20, true),
         (&[30, 10][..], 10, false),
-        (&[wildcard][..], 20, false),
     ] {
         let store = Arc::new(MemoryPersistence::default());
         let mut log = AuditLogObject::new(7, "forwarder", 16, store.clone()).unwrap();

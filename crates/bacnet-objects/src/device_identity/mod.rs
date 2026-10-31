@@ -51,10 +51,10 @@ impl DeviceIdentity {
     /// `services = [READ_PROPERTY]` (narrow endpoint reality, no superset),
     /// no ports, zero UUID (B/IP-only may keep zeros; SC dial requires
     /// [`with_device_uuid`](Self::with_device_uuid)). Returns
-    /// [`Error::Encoding`] for an
-    /// out-of-range Device instance.
+    /// [`Error::Range`] for an instance past 4194303, or for 4194303 itself,
+    /// which no object may have (Clause 12.1.1, #2171).
     pub fn new(instance: u32, vendor_id: u16) -> Result<Self, Error> {
-        ObjectIdentifier::new(ObjectType::DEVICE, instance)?;
+        ObjectIdentifier::new_addressable(ObjectType::DEVICE, instance)?;
         Ok(Self {
             instance,
             vendor_id,
@@ -327,7 +327,7 @@ impl DeviceIdentity {
 
     /// Check the pure Device declaration. Executors also validate deadlines.
     pub fn validate(&self) -> Result<(), Error> {
-        ObjectIdentifier::new(ObjectType::DEVICE, self.instance)?;
+        ObjectIdentifier::new_addressable(ObjectType::DEVICE, self.instance)?;
         if self.max_apdu_length < 50 {
             return Err(Error::Encoding(
                 "Device max-APDU must be at least 50".into(),
@@ -411,7 +411,7 @@ impl DeviceIdentity {
 
     /// Device object identifier derived from the instance.
     pub fn device_oid(&self) -> ObjectIdentifier {
-        ObjectIdentifier::new(ObjectType::DEVICE, self.instance)
+        ObjectIdentifier::new_addressable(ObjectType::DEVICE, self.instance)
             .expect("identity instance was validated at construction")
     }
 

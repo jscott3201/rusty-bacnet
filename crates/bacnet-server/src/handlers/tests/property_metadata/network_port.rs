@@ -73,6 +73,8 @@ fn rpm_network_port_metadata_selectors_preserve_bytes_and_budgets() {
         P::NETWORK_NUMBER_QUALITY,
         P::MAC_ADDRESS,
         P::APDU_LENGTH,
+        // Table 12-71 classes Link_Speed required (#2174).
+        P::LINK_SPEED,
         P::CHANGES_PENDING,
         P::BACNET_IP_MODE,
         P::IP_ADDRESS,
@@ -81,7 +83,7 @@ fn rpm_network_port_metadata_selectors_preserve_bytes_and_budgets() {
         P::BACNET_IP_UDP_PORT,
         P::IP_DNS_SERVER,
     ];
-    let optional = [P::DESCRIPTION, P::LINK_SPEED];
+    let optional = [P::DESCRIPTION];
     for configured in [false, true] {
         let object = network_port_object(configured);
         let oid = object.object_identifier();
@@ -119,7 +121,7 @@ fn rpm_network_port_metadata_does_not_enable_create_object() {
         assert!(
             matches!(result, Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::OBJECT
-                && code == ErrorCode::UNSUPPORTED_OBJECT_TYPE)
+                && code == ErrorCode::DYNAMIC_CREATION_NOT_SUPPORTED)
         );
         assert!(response.is_empty());
         assert!(db.is_empty());

@@ -4707,6 +4707,10 @@ class BACnetServer:
     waits, and the 4*Tseg receive inactivity timer. A separate 16-second
     no-progress resource limit aborts abandoned request transfers with OTHER.
 
+    ``device_instance`` takes 0 to 4194302. Instance 4194303 is reserved, as
+    no object may have it, so it, or anything larger, raises ValueError at
+    construction (#2171).
+
     Usage::
 
         server = BACnetServer(device_instance=1234, device_name="My Device")
@@ -6004,7 +6008,13 @@ class BACnetServer:
 
     # --- Server lifecycle ---
     def start(self) -> Awaitable[None]:
-        """Start the server and begin accepting BACnet requests."""
+        """Start the server and begin accepting BACnet requests.
+
+        An added object the database won't take raises ValueError: "duplicate
+        object name: ..." for a name another object holds, or "object
+        refused: ..." for any other reason, an instance of 4194303 among them
+        (#2171).
+        """
         ...
 
     def stop(self) -> Awaitable[None]:
@@ -6819,6 +6829,10 @@ class BipEndpoint:
     cancellation can race publication, so always await close for cleanup.
     Setup errors are delivered by awaiting start/context entry. BIPv6/Ethernet
     have no endpoint owner.
+
+    ``device_instance`` takes 0 to 4194302. Instance 4194303 is reserved, as
+    no object may have it, so it, or anything larger, raises ValueError at
+    construction (#2171).
     """
 
     # network_port_instance declares a snapshot; registered_network_port explicitly
@@ -6965,6 +6979,8 @@ class ScEndpoint:
 
     ``sc_device_uuid`` is the single durable lifetime identity for both the
     hub dial and DEVICE_UUID. Lifecycle mirrors ``BipEndpoint``.
+    ``device_instance`` takes 0 to 4194302, as there: 4194303 or more raises
+    ValueError at construction (#2171).
     """
 
     def __init__(
@@ -7071,6 +7087,8 @@ class MstpEndpoint:
 
     Opens a real serial device via ``TokioSerialPort`` like the current
     wrappers. Lifecycle mirrors ``BipEndpoint``.
+    ``device_instance`` takes 0 to 4194302, as there: 4194303 or more raises
+    ValueError at construction (#2171).
     """
 
     def __init__(

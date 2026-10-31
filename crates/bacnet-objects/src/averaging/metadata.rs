@@ -17,8 +17,8 @@ use crate::property_metadata::{
 // (timestamps, Variance_Value, audit, tags, profile rows) stay absent until
 // dispatch exists. Attempted_Samples, Window_Interval and Window_Samples carry
 // the table W code and Object_Property_Reference the R code; all four take
-// network writes, each of which resets the sample window, so they are
-// RequiredWrite/Always. Table 12-5 has no Present_Value, Status_Flags,
+// network writes, each of which resets the sample window, which their Always
+// capability says (#2174). Table 12-5 has no Present_Value, Status_Flags,
 // Out_Of_Service, Reliability or Event_State, so there are no such rows
 // (#1064 removed the rows the 0.1.0 import carried).
 const BASE: &[PropertyMetadata] = &[
@@ -31,7 +31,7 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::AVERAGE_VALUE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::ATTEMPTED_SAMPLES, RequiredWrite, None, Always),
     PropertyMetadata::new(P::VALID_SAMPLES, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::OBJECT_PROPERTY_REFERENCE, RequiredWrite, None, Always),
+    PropertyMetadata::new(P::OBJECT_PROPERTY_REFERENCE, RequiredRead, None, Always),
     PropertyMetadata::new(P::WINDOW_INTERVAL, RequiredWrite, None, Always),
     PropertyMetadata::new(P::WINDOW_SAMPLES, RequiredWrite, None, Always),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
@@ -121,7 +121,8 @@ mod tests {
             let p = row.property_identifier;
             let expected = if p == P::DESCRIPTION {
                 Optional
-            } else if WRITABLE.contains(&p) {
+            } else if WRITABLE.contains(&p) && p != P::OBJECT_PROPERTY_REFERENCE {
+                // Table 12-5 codes Object_Property_Reference R (#2174).
                 RequiredWrite
             } else {
                 assert!(required.contains(&p), "{p:?}");

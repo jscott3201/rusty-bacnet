@@ -97,8 +97,39 @@ async fn create_object_refusals_go_out_as_create_object_errors() {
             ),
         ),
         (
-            "an object type the server cannot create",
+            "an object type the server lists but cannot create",
             create(ObjectSpecifier::Type(ObjectType::ANALOG_VALUE), vec![]),
+            create_object_error(
+                ErrorClass::OBJECT,
+                ErrorCode::DYNAMIC_CREATION_NOT_SUPPORTED,
+                0,
+            ),
+        ),
+        (
+            // The type refusal comes before any initial value (#2171).
+            "a listed type the server cannot create, with initial values",
+            create(
+                ObjectSpecifier::Type(ObjectType::ANALOG_VALUE),
+                vec![
+                    description(),
+                    (PropertyIdentifier::PRESENT_VALUE, vec![0x44, 0, 0, 0, 0]),
+                ],
+            ),
+            create_object_error(
+                ErrorClass::OBJECT,
+                ErrorCode::DYNAMIC_CREATION_NOT_SUPPORTED,
+                0,
+            ),
+        ),
+        (
+            "an unlisted type, even at the reserved instance",
+            create(
+                ObjectSpecifier::Identifier(oid(
+                    ObjectType::from_raw(600),
+                    ObjectIdentifier::WILDCARD_INSTANCE,
+                )),
+                vec![description()],
+            ),
             create_object_error(ErrorClass::OBJECT, ErrorCode::UNSUPPORTED_OBJECT_TYPE, 0),
         ),
         (
