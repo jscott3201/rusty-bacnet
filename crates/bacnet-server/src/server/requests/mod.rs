@@ -234,19 +234,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 match result {
                     Ok(()) => complex_ack(ack_buf),
                     Err(bacnet_device_core::read::ReadFailure::Service(e)) => {
-                        Self::error_apdu_from_error(invoke_id, service_choice, &e)
+                        bacnet_device_core::reply::error_apdu(invoke_id, service_choice, &e)
                     }
                     Err(failure) => Apdu::Abort(AbortPdu {
                         sent_by_server: true,
                         invoke_id,
                         abort_reason: match failure {
-                            bacnet_device_core::read::ReadFailure::Work => {
-                                AbortReason::OUT_OF_RESOURCES
-                            }
                             bacnet_device_core::read::ReadFailure::Bytes => {
                                 AbortReason::BUFFER_OVERFLOW
                             }
-                            bacnet_device_core::read::ReadFailure::Service(_) => unreachable!(),
+                            // Work, and any other limit the core reports.
+                            _ => AbortReason::OUT_OF_RESOURCES,
                         },
                     }),
                 }
@@ -258,12 +256,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
             s if s == ConfirmedServiceChoice::SUBSCRIBE_COV => {
                 mutation
-                    .subscribe_cov::<T>(db, cov_table, &mut initial_cov_notifications)
+                    .subscribe_cov(db, cov_table, &mut initial_cov_notifications)
                     .await
             }
             s if s == ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY => {
                 mutation
-                    .subscribe_cov_property::<T>(db, cov_table, &mut initial_cov_notifications)
+                    .subscribe_cov_property(db, cov_table, &mut initial_cov_notifications)
                     .await
             }
             s if s == ConfirmedServiceChoice::CREATE_OBJECT => {
@@ -400,11 +398,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             Err(e) => {
                                 // Execution alone is not a completed query response.
                                 read_audits.clear();
-                                Self::error_apdu_from_error(invoke_id, service_choice, &e)
+                                bacnet_device_core::reply::error_apdu(invoke_id, service_choice, &e)
                             }
                         }
                     }
-                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
+                    Err(e) => bacnet_device_core::reply::error_apdu(invoke_id, service_choice, &e),
                 }
             }
             s if s == ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION => {
@@ -430,7 +428,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         simple_ack()
                     }
                     Ok((audit_notification::Duplicate, _)) => return,
-                    Err(error) => Self::error_apdu_from_error(invoke_id, service_choice, &error),
+                    Err(error) => {
+                        bacnet_device_core::reply::error_apdu(invoke_id, service_choice, &error)
+                    }
                 }
             }
             // The sender's acknowledgment depends only on the request being
@@ -461,7 +461,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     }
                     // A syntax fault draws the Reject naming it, as the
                     // client's does (#1446).
-                    Err(error) => Self::error_apdu_from_error(
+                    Err(error) => bacnet_device_core::reply::error_apdu(
                         invoke_id,
                         service_choice,
                         &error.into_request_reject(),
@@ -471,7 +471,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             s if s == ConfirmedServiceChoice::CONFIRMED_TEXT_MESSAGE => {
                 match handlers::handle_text_message(&req.service_request) {
                     Ok(_msg) => simple_ack(),
-                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
+                    Err(e) => bacnet_device_core::reply::error_apdu(invoke_id, service_choice, &e),
                 }
             }
             s if s == ConfirmedServiceChoice::LIFE_SAFETY_OPERATION => {
@@ -480,7 +480,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 )
                 .map_err(Error::into_request_reject);
                 match request {
-                    Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
+                    Err(e) => bacnet_device_core::reply::error_apdu(invoke_id, service_choice, &e),
                     Ok(request) => {
                         let validation = handlers::validate_life_safety_operation(request.request);
                         let execution = if let Err(e) = validation {
@@ -539,18 +539,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 effects.life_safety_cov_changes.extend(result);
                                 simple_ack()
                             }
-                            Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
+                            Err(e) => {
+                                bacnet_device_core::reply::error_apdu(invoke_id, service_choice, &e)
+                            }
                         }
                     }
                 }
             }
             s if s == ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE => {
                 mutation
-                    .subscribe_cov_property_multiple::<T>(
-                        db,
-                        cov_table,
-                        &mut initial_cov_notifications,
-                    )
+                    .subscribe_cov_property_multiple(db, cov_table, &mut initial_cov_notifications)
                     .await
             }
             _ => {

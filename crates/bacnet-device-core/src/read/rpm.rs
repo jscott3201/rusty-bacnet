@@ -35,7 +35,7 @@ pub(crate) struct PlannedRow {
 /// error stops the expansion.
 // Visit expansion rows without collecting a second, unbounded expansion vector.
 // Opaque metadata/property-list allocation is outside this service budget.
-pub fn expand(
+pub(crate) fn expand(
     object: &dyn BACnetObject,
     reference: &PropertyReference,
     mut visit: impl FnMut(PropertyIdentifier) -> Result<(), ReadFailure>,
@@ -170,7 +170,8 @@ impl RpmPlan {
 
     /// The result rows planned, ALL, REQUIRED and OPTIONAL expanded; a
     /// Group's member rows aren't counted.
-    pub fn rows(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn rows(&self) -> usize {
         planned_rows(&self.0).count()
     }
 
@@ -395,6 +396,88 @@ impl Scratch {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::read::NoOverlay;
+    use bacnet_objects::analog::AnalogInputObject;
+    use bacnet_types::constructed::ReadAccessSpecification;
+    use bacnet_types::enums::EngineeringUnits;
+
+    fn reference(property_identifier: PropertyIdentifier) -> PropertyReference {
+        PropertyReference {
+            property_identifier,
+            property_array_index: None,
+        }
+    }
+
+    /// ALL, REQUIRED and OPTIONAL visit the metadata rows in order, and the
+    /// visitor's error stops the expansion where it is.
+    #[test]
+    fn expand_follows_the_metadata_and_stops_at_the_visitors_error() {
+        let object = AnalogInputObject::new(1, "AI-1", EngineeringUnits::NO_UNITS).unwrap();
+        let rows = object.property_metadata();
+        let optional: Vec<_> = rows
+            .iter()
+            .filter(|row| !row.is_required())
+            .map(|row| row.property_identifier)
+            .collect();
+        assert!(optional.len() > 3, "{optional:?}");
+        let mut visits = Vec::new();
+        let result = expand(&object, &reference(PropertyIdentifier::OPTIONAL), |id| {
+            visits.push(id);
+            if visits.len() == 3 {
+                Err(ReadFailure::Work)
+            } else {
+                Ok(())
+            }
+        });
+        assert!(matches!(result, Err(ReadFailure::Work)));
+        assert_eq!(visits, optional[..3]);
+
+        let mut all = Vec::new();
+        expand(&object, &reference(PropertyIdentifier::ALL), |id| {
+            all.push(id);
+            Ok(())
+        })
+        .unwrap();
+        assert!(!all.contains(&PropertyIdentifier::PROPERTY_LIST));
+        assert_eq!(all.len(), rows.len() - 1);
+        let mut one = Vec::new();
+        expand(
+            &object,
+            &reference(PropertyIdentifier::PRESENT_VALUE),
+            |id| {
+                one.push(id);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(one, [PropertyIdentifier::PRESENT_VALUE]);
+    }
+
+    /// A plan counts the expanded rows, and fits a limit of exactly that.
+    #[test]
+    fn a_plan_counts_its_expanded_rows_against_the_limit() {
+        let object = AnalogInputObject::new(1, "AI-1", EngineeringUnits::NO_UNITS).unwrap();
+        let expanded = object.property_metadata().len() - 1;
+        let mut db = ObjectDatabase::new();
+        let oid = object.object_identifier();
+        db.add(Box::new(object)).unwrap();
+        let request = ReadPropertyMultipleRequest {
+            list_of_read_access_specs: vec![ReadAccessSpecification {
+                object_identifier: oid,
+                list_of_property_references: vec![
+                    reference(PropertyIdentifier::ALL),
+                    reference(PropertyIdentifier::PRESENT_VALUE),
+                ],
+            }],
+        };
+        let scope = ReadScope::UNLIMITED;
+        let plan = RpmPlan::new(&db, &scope, None::<&NoOverlay>, &request, expanded + 1).unwrap();
+        assert_eq!(plan.rows(), expanded + 1);
+        assert!(matches!(
+            RpmPlan::new(&db, &scope, None::<&NoOverlay>, &request, expanded),
+            Err(ReadFailure::Work)
+        ));
+    }
 
     #[test]
     fn rpm_scratch_growth_never_exceeds_cap_even_on_overflow() {

@@ -3,7 +3,7 @@
 //! Error PDU, the plain one and the ChangeList-Error, and every reject
 //! reason in a Reject PDU; an abort goes out as SERVICES / OTHER.
 
-use bacnet_device_core::reply::error_apdu as error_apdu_from_error;
+use bacnet_device_core::reply::error_apdu;
 use bacnet_encoding::apdu::{self, Apdu};
 use bacnet_types::enums::{
     AbortReason, ConfirmedServiceChoice, ErrorClass, ErrorCode, RejectReason,
@@ -24,7 +24,7 @@ fn enumerated(value: u16) -> Vec<u8> {
 
 fn wire(service: ConfirmedServiceChoice, error: &Error) -> Vec<u8> {
     let mut buf = BytesMut::new();
-    apdu::encode_apdu(&mut buf, &error_apdu_from_error(9, service, error)).unwrap();
+    apdu::encode_apdu(&mut buf, &error_apdu(9, service, error)).unwrap();
     buf.to_vec()
 }
 

@@ -6,9 +6,7 @@
 //! [`ObjectDatabase`]: bacnet_objects::database::ObjectDatabase
 
 use bacnet_objects::traits::BACnetObject;
-use bacnet_types::enums::PropertyIdentifier;
-use bacnet_types::error::Error;
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bacnet_types::primitives::ObjectIdentifier;
 
 mod budget;
 pub mod group;
@@ -20,7 +18,7 @@ pub use property::{
     PropertyPlan, plan_property, read_property_ack, read_target_object, read_value, resolve_target,
     rpm_response_index,
 };
-pub use rpm::{RpmPlan, expand};
+pub use rpm::RpmPlan;
 
 /// Plain per-request read settings, apart from how objects are served.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,39 +67,52 @@ pub trait ReadOverlay {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NoOverlay;
 
-/// [`NoOverlay`]'s view, which is never made.
-#[derive(Debug)]
-pub enum Unserved {}
-
 impl ReadOverlay for NoOverlay {
-    type View<'a> = Unserved;
+    type View<'a> = unserved::Unserved;
 
-    fn view<'a>(&'a self, _: &'a dyn BACnetObject) -> Option<Unserved> {
+    fn view<'a>(&'a self, _: &'a dyn BACnetObject) -> Option<unserved::Unserved> {
         None
     }
 }
 
-impl BACnetObject for Unserved {
-    fn object_identifier(&self) -> ObjectIdentifier {
-        match *self {}
-    }
-    fn object_name(&self) -> &str {
-        match *self {}
-    }
-    fn read_property(&self, _: PropertyIdentifier, _: Option<u32>) -> Result<PropertyValue, Error> {
-        match *self {}
-    }
-    fn write_property(
-        &mut self,
-        _: PropertyIdentifier,
-        _: Option<u32>,
-        _: PropertyValue,
-        _: Option<u8>,
-    ) -> Result<(), Error> {
-        match *self {}
-    }
-    fn property_list(&self) -> alloc::borrow::Cow<'static, [PropertyIdentifier]> {
-        match *self {}
+/// [`NoOverlay`]'s view, reachable only as `<NoOverlay as ReadOverlay>::View`.
+mod unserved {
+    use bacnet_objects::traits::BACnetObject;
+    use bacnet_types::enums::PropertyIdentifier;
+    use bacnet_types::error::Error;
+    use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+
+    /// A view that is never made: [`NoOverlay`](super::NoOverlay) serves
+    /// every object as it is.
+    #[derive(Debug)]
+    pub enum Unserved {}
+
+    impl BACnetObject for Unserved {
+        fn object_identifier(&self) -> ObjectIdentifier {
+            match *self {}
+        }
+        fn object_name(&self) -> &str {
+            match *self {}
+        }
+        fn read_property(
+            &self,
+            _: PropertyIdentifier,
+            _: Option<u32>,
+        ) -> Result<PropertyValue, Error> {
+            match *self {}
+        }
+        fn write_property(
+            &mut self,
+            _: PropertyIdentifier,
+            _: Option<u32>,
+            _: PropertyValue,
+            _: Option<u8>,
+        ) -> Result<(), Error> {
+            match *self {}
+        }
+        fn property_list(&self) -> alloc::borrow::Cow<'static, [PropertyIdentifier]> {
+            match *self {}
+        }
     }
 }
 

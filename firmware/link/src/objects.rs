@@ -101,7 +101,7 @@ pub struct Summary {
     /// The APDU it wrote for each, empty when it wrote none.
     pub answers: [Vec<u8>; REQUESTS],
     /// Calls that failed where the scenario expects success: building the
-    /// identity or the database. Zero in a good run.
+    /// identity, the database or the responder. Zero in a good run.
     pub errors: u8,
 }
 
@@ -120,17 +120,17 @@ pub fn run(requests: &[&[u8]; REQUESTS]) -> Summary {
         summary.errors += 1;
         return summary;
     };
-    let responder = Responder::new(identity, Limits::default());
+    let Ok(responder) = Responder::new(identity, Limits::default()) else {
+        summary.errors += 1;
+        return summary;
+    };
     for ((request, outcome), answer) in requests
         .iter()
         .zip(&mut summary.outcomes)
         .zip(&mut summary.answers)
     {
         let mut out = BytesMut::new();
-        let inbound = Inbound {
-            apdu: Bytes::copy_from_slice(request),
-            max_reply: MAX_REPLY,
-        };
+        let inbound = Inbound::new(Bytes::copy_from_slice(request), MAX_REPLY);
         *outcome = responder.handle(&mut db, inbound, &mut out);
         *answer = out.to_vec();
     }

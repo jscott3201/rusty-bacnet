@@ -10,9 +10,11 @@
 //! sends is compared with the `Responder`'s, octet for octet; silence
 //! matches silence. The server serves its executor-owned Device properties
 //! from its view, and the `Responder`, with no overlay, from the Device
-//! object, so those rows may differ: [`DIFFER`] pins exactly which do.
+//! object, so those rows may differ: [`DIFFER`] pins exactly which do, and
+//! [`DIFFER_EXCHANGES`] the one other exchange that differs by design.
 use super::*;
 use crate::server::test_transport::{self, SendLog, TestTransport};
+use bacnet_device_core::read::ReadPropertyMultipleBudget;
 use bacnet_device_core::responder::{Inbound, Limits, Outcome, Responder};
 use bacnet_encoding::npdu::{Npdu, encode_npdu};
 use bacnet_objects::analog::AnalogInputObject;
@@ -27,7 +29,7 @@ use bacnet_services::who_has::{WhoHasObject, WhoHasRequest};
 use bacnet_services::who_is::{DeviceInstanceRange, WhoIsRequest};
 use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
-use bacnet_types::enums::{EngineeringUnits, PropertyIdentifier as P};
+use bacnet_types::enums::{EngineeringUnits, PropertyIdentifier as P, Segmentation};
 use bacnet_types::primitives::{Date, Time};
 use std::collections::BTreeSet;
 use tokio::sync::mpsc;
@@ -45,6 +47,13 @@ const DEVICE: u32 = 4321;
 /// identity.
 const DIFFER: &[(ObjectType, P, Option<u32>)] =
     &[(ObjectType::DEVICE, P::ACTIVE_COV_SUBSCRIPTIONS, None)];
+
+/// The other exchanges that differ by design, by the name the test gives
+/// them. The core segments neither way, so a reply longer than the
+/// requester's max_reply is aborted with SEGMENTATION_NOT_SUPPORTED even when
+/// the requester accepts a segmented response; the server sends the first
+/// segment.
+const DIFFER_EXCHANGES: &[&str] = &["reply over max_reply, segmented response accepted"];
 
 struct FixedClock;
 
@@ -120,14 +129,22 @@ struct Parity {
 
 impl Parity {
     async fn start() -> Self {
+        Self::start_with(ReadPropertyMultipleBudget::default(), Segmentation::NONE).await
+    }
+
+    /// Both sides within `budget`'s result-row limit, the server's Device
+    /// claiming `segmentation`; the core's claims none, as it must.
+    async fn start_with(budget: ReadPropertyMultipleBudget, segmentation: Segmentation) -> Self {
         let identity = identity();
         let (transport, tx) = TestTransport::inbound(16);
         let sent = transport.sent();
+        let served = identity.clone().with_segmentation(segmentation);
         let config = ServerConfig {
-            device: identity.clone(),
+            device: served.clone(),
+            read_property_multiple_budget: budget,
             ..ServerConfig::default()
         };
-        let server = BACnetServer::start(config, database(&identity), transport)
+        let server = BACnetServer::start(config, database(&served), transport)
             .await
             .unwrap();
         // Start installs the system clock; serve the fixed one, as the
@@ -137,12 +154,18 @@ impl Parity {
             .write()
             .await
             .set_clock_reader(Some(Arc::new(FixedClock)));
-        let budget = server.config.read_property_multiple_budget;
-        let limits = Limits {
-            read_work: budget.max_result_elements,
-            rpm: budget,
-        };
-        let responder = Responder::new(server.config.device.clone(), limits);
+        let limits = Limits::new(
+            server
+                .config
+                .read_property_multiple_budget
+                .max_result_elements,
+        );
+        let core_identity = server
+            .config
+            .device
+            .clone()
+            .with_segmentation(Segmentation::NONE);
+        let responder = Responder::new(core_identity, limits).unwrap();
         tokio::time::sleep(Duration::from_millis(50)).await;
         sent.clear();
         Self {
@@ -194,11 +217,11 @@ impl Parity {
         assert!(frames.len() <= 1, "{apdu:02X?} drew {frames:?}");
         let server = frames.first().map(|frame| frame.decode_npdu().payload);
         let mut out = BytesMut::new();
-        let request = Inbound { apdu, max_reply };
+        let request = Inbound::new(apdu, max_reply);
         let core = match self.responder.handle(&mut self.db, request, &mut out) {
             Outcome::Reply | Outcome::Announce => Some(out.freeze()),
             Outcome::Silent => None,
-            Outcome::Unhandled => unreachable!("handle answers every request"),
+            other => unreachable!("handle answers every request: {other:?}"),
         };
         (server, core)
     }
@@ -209,10 +232,27 @@ impl Parity {
         assert_eq!(server, core, "{what}: server, then core");
         server.map(|apdu| bacnet_encoding::apdu::decode_apdu(apdu).unwrap())
     }
+
+    /// [`exchange`](Self::exchange) for one of the [`DIFFER_EXCHANGES`],
+    /// requiring the answers to differ; the server's, then the core's.
+    async fn differ(
+        &mut self,
+        what: &str,
+        apdu: Bytes,
+        max_reply: u16,
+    ) -> (Option<Apdu>, Option<Apdu>) {
+        assert!(DIFFER_EXCHANGES.contains(&what), "{what} isn't pinned");
+        let (server, core) = self.exchange(apdu, max_reply).await;
+        assert_ne!(server, core, "{what}: pinned, but the answers agree");
+        let decode = |apdu: Option<Bytes>| {
+            apdu.map(|apdu| bacnet_encoding::apdu::decode_apdu(apdu).unwrap())
+        };
+        (decode(server), decode(core))
+    }
 }
 
 fn confirmed(invoke_id: u8, service: ConfirmedServiceChoice, body: &[u8], max: u16) -> Bytes {
-    confirmed_with(invoke_id, service, body, max, false)
+    confirmed_with(invoke_id, service, body, max, false, false)
 }
 
 fn confirmed_with(
@@ -221,6 +261,7 @@ fn confirmed_with(
     body: &[u8],
     max_apdu_length: u16,
     segmented: bool,
+    segmented_response_accepted: bool,
 ) -> Bytes {
     let mut apdu = BytesMut::new();
     encode_apdu(
@@ -228,7 +269,7 @@ fn confirmed_with(
         &Apdu::ConfirmedRequest(ConfirmedRequestPdu {
             segmented,
             more_follows: segmented,
-            segmented_response_accepted: false,
+            segmented_response_accepted,
             max_segments: None,
             max_apdu_length,
             invoke_id,
@@ -442,7 +483,14 @@ async fn refusals_and_discovery_match() {
         property_array_index: None,
     }
     .encode(&mut body);
-    let segmented = confirmed_with(4, ConfirmedServiceChoice::READ_PROPERTY, &body, 1476, true);
+    let segmented = confirmed_with(
+        4,
+        ConfirmedServiceChoice::READ_PROPERTY,
+        &body,
+        1476,
+        true,
+        false,
+    );
     let reply = parity.same("segmented request", segmented, 1476).await;
     assert!(matches!(reply, Some(Apdu::Abort(_))), "{reply:?}");
 
@@ -499,6 +547,116 @@ async fn refusals_and_discovery_match() {
             .same("Who-Has, no such object", missing, 1476)
             .await
             .is_none()
+    );
+    parity.server.stop().await.unwrap();
+}
+
+/// The edges: the work limit, both wildcard instances, malformed discovery,
+/// APDUs that don't decode, and the one exchange pinned to differ.
+#[tokio::test(start_paused = true)]
+async fn edge_rows_match_and_the_segmented_reply_differs() {
+    let mut parity = Parity::start().await;
+    let read = |object, property| read_property(1, object, property, None);
+
+    // The Device wildcard reads the configured Device on both sides.
+    let wildcard = read(oid(ObjectType::DEVICE, 4_194_303), P::OBJECT_IDENTIFIER);
+    let reply = parity.same("Device wildcard", wildcard, 1476).await;
+    assert!(matches!(reply, Some(Apdu::ComplexAck(_))), "{reply:?}");
+    // No port is registered, so the Network_Port wildcard names no object.
+    let port = read(oid(ObjectType::NETWORK_PORT, 4_194_303), P::OBJECT_NAME);
+    let reply = parity.same("Network_Port wildcard", port, 1476).await;
+    assert_eq!(
+        error_of(reply),
+        (ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT)
+    );
+
+    // A low limit with no high one; a Who-Has with no object.
+    let who_is = unconfirmed(
+        UnconfirmedServiceChoice::WHO_IS,
+        BytesMut::from(&[0x09, 0x01][..]),
+    );
+    assert!(
+        parity
+            .same("malformed Who-Is", who_is, 1476)
+            .await
+            .is_none()
+    );
+    let who_has = unconfirmed(
+        UnconfirmedServiceChoice::WHO_HAS,
+        BytesMut::from(&[0xFF][..]),
+    );
+    assert!(
+        parity
+            .same("malformed Who-Has", who_has, 1476)
+            .await
+            .is_none()
+    );
+
+    // Cut off before the service choice, and a segmented one before its
+    // sequence number: neither decodes, and both sides drop it.
+    for (what, truncated) in [
+        ("truncated confirmed request", &[0x00, 0x05, 6][..]),
+        ("truncated segmented request", &[0x08, 0x05, 6][..]),
+    ] {
+        let apdu = Bytes::copy_from_slice(truncated);
+        assert!(parity.same(what, apdu, 1476).await.is_none());
+    }
+
+    parity.server.stop().await.unwrap();
+
+    // The requester takes a segmented response, and the server's Device
+    // segments; only the server sends one.
+    let mut parity =
+        Parity::start_with(ReadPropertyMultipleBudget::default(), Segmentation::BOTH).await;
+    let mut body = BytesMut::new();
+    ReadPropertyRequest {
+        object_identifier: oid(ObjectType::DEVICE, DEVICE),
+        property_identifier: P::PROPERTY_LIST,
+        property_array_index: None,
+    }
+    .encode(&mut body);
+    let accepts = confirmed_with(
+        7,
+        ConfirmedServiceChoice::READ_PROPERTY,
+        &body,
+        50,
+        false,
+        true,
+    );
+    let (server, core) = parity
+        .differ(
+            "reply over max_reply, segmented response accepted",
+            accepts,
+            50,
+        )
+        .await;
+    assert!(
+        matches!(&server, Some(Apdu::ComplexAck(ack)) if ack.segmented),
+        "{server:?}"
+    );
+    assert!(
+        matches!(&core, Some(Apdu::Abort(abort))
+            if abort.abort_reason == AbortReason::SEGMENTATION_NOT_SUPPORTED),
+        "{core:?}"
+    );
+    parity.server.stop().await.unwrap();
+
+    // A Group's Present_Value is its own row and two member rows: past a
+    // limit of two, both sides abort with OUT_OF_RESOURCES.
+    let mut parity = Parity::start_with(
+        ReadPropertyMultipleBudget {
+            max_result_elements: 2,
+            ..ReadPropertyMultipleBudget::default()
+        },
+        Segmentation::NONE,
+    )
+    .await;
+    let group = read(oid(ObjectType::GROUP, 1), P::PRESENT_VALUE);
+    let reply = parity.same("Group past the work limit", group, 1476).await;
+    assert!(
+        matches!(&reply, Some(Apdu::Abort(abort))
+            if abort.abort_reason == AbortReason::OUT_OF_RESOURCES),
+        "{reply:?}"
     );
     parity.server.stop().await.unwrap();
 }

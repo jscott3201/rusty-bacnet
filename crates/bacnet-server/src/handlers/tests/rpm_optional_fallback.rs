@@ -109,20 +109,9 @@ fn rpm_optional_large_borrowed_mostly_required_order_duplicates_and_late_cap() {
     assert!(matches!(object.property_list(), Cow::Borrowed(_)));
     assert!(matches!(object.required_properties(), Cow::Borrowed(_)));
 
-    // The visitor's failure must stop before the final optional occurrence;
-    // required rows themselves never spend expanded-result capacity.
-    let mut visits = Vec::new();
-    let result = expand(object, &reference(PropertyIdentifier::OPTIONAL), |id| {
-        visits.push(id);
-        if visits.len() == 3 {
-            Err(ReadFailure::Work)
-        } else {
-            Ok(())
-        }
-    });
-    assert!(matches!(result, Err(ReadFailure::Work)));
-    assert_eq!(visits, OPTIONAL_IDS[..3]);
-
+    // Required rows never spend expanded-result capacity, and the cap stops
+    // before the final optional occurrence (bacnet-device-core's `expand`
+    // tests cover the visitor itself).
     let data = request(vec![
         spec(1, vec![reference(PROPERTIES[0])]),
         spec(1, vec![reference(PropertyIdentifier::OPTIONAL)]),

@@ -220,7 +220,7 @@ pub(super) async fn read_property_response_observed(
         }
         // A Group's Present_Value past the work limit draws the abort an RPM
         // over its work budget does; ReadProperty has no byte budget.
-        Err(ReadFailure::Work | ReadFailure::Bytes) => Apdu::Abort(AbortPdu {
+        Err(_) => Apdu::Abort(AbortPdu {
             sent_by_server: true,
             invoke_id: request.invoke_id,
             abort_reason: AbortReason::OUT_OF_RESOURCES,
@@ -459,17 +459,6 @@ fn hand_off_reply<T: TransportPort + 'static>(
             }
             Err(pending)
         }
-    }
-}
-
-impl<T: TransportPort + 'static> BACnetServer<T> {
-    /// Convert an error into its protocol response APDU.
-    pub(in crate::server) fn error_apdu_from_error(
-        invoke_id: u8,
-        service_choice: ConfirmedServiceChoice,
-        error: &Error,
-    ) -> Apdu {
-        bacnet_device_core::reply::error_apdu(invoke_id, service_choice, error)
     }
 }
 

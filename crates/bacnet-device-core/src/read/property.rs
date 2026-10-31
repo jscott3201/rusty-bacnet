@@ -176,6 +176,10 @@ fn read_property_decoded<O: ReadOverlay>(
 
 /// The stored object a read of `oid` targets: never one at the unregistered
 /// Network_Port wildcard instance.
+///
+/// For bacnet-server's legacy, unbudgeted ReadPropertyMultiple helper only;
+/// it leaves the public API with that helper (#2178, PR 3).
+#[doc(hidden)]
 pub fn read_target_object<'a>(
     db: &'a ObjectDatabase,
     oid: &ObjectIdentifier,
@@ -217,6 +221,10 @@ pub fn resolve_target(
 /// Clause 15.7.3.2.2.2 includes an index only for a declared array property.
 /// An unknown object/property or unavailable declaration conservatively omits
 /// it. Classification must not probe `read_property` or change error precedence.
+///
+/// For bacnet-server's legacy, unbudgeted ReadPropertyMultiple helper only;
+/// it leaves the public API with that helper (#2178, PR 3).
+#[doc(hidden)]
 pub fn rpm_response_index(
     object: Option<&dyn bacnet_objects::traits::BACnetObject>,
     property: PropertyIdentifier,

@@ -499,7 +499,6 @@ pub use dcc_timer::DccState;
 mod binding_probes;
 mod device_bindings;
 mod discovery;
-#[doc(hidden)]
 pub use discovery::{DiscoveryCounters, DiscoveryPolicy};
 pub(crate) use discovery::{DiscoveryLimiter, PreCheckDecision, WhoHasTarget};
 mod audit_log_purge;

@@ -20,7 +20,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 service_ack: buf.freeze(),
             }),
             Err(handlers::EnrollmentSummaryFailure::Service(e)) => {
-                Self::error_apdu_from_error(invoke_id, service_choice, &e)
+                bacnet_device_core::reply::error_apdu(invoke_id, service_choice, &e)
             }
             Err(failure) => Apdu::Abort(AbortPdu {
                 sent_by_server: true,

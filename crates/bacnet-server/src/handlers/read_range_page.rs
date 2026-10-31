@@ -24,8 +24,9 @@ impl From<bacnet_device_core::read::ReadFailure> for ReadRangeFailure {
     fn from(failure: bacnet_device_core::read::ReadFailure) -> Self {
         match failure {
             bacnet_device_core::read::ReadFailure::Service(error) => Self::Service(error),
-            bacnet_device_core::read::ReadFailure::Work => Self::Work,
             bacnet_device_core::read::ReadFailure::Bytes => Self::Bytes,
+            // Work, and any other limit the core reports.
+            _ => Self::Work,
         }
     }
 }

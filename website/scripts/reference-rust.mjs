@@ -37,8 +37,8 @@ export const LAYERS = [
     ['bacnet-types', 'bacnet-encoding', 'bacnet-services']],
   ['Hosted network', 'The Tokio data links and the network layer with its router.',
     ['bacnet-transport', 'bacnet-network']],
-  ['Objects and roles', 'The object database, the client and server roles, and the shared endpoint that runs both on one transport.',
-    ['bacnet-objects', 'bacnet-endpoint-core', 'bacnet-client', 'bacnet-server', 'bacnet-endpoint']],
+  ['Objects and roles', 'The object database, the sans-IO request core that answers from it, the client and server roles, and the shared endpoint that runs both on one transport.',
+    ['bacnet-objects', 'bacnet-device-core', 'bacnet-endpoint-core', 'bacnet-client', 'bacnet-server', 'bacnet-endpoint']],
   ['Tools', 'The operations core, the MCP server for AI agent hosts, and the command-line tool.',
     ['bacnet-ops', 'bacnet-mcp', 'bacnet-cli']],
 ];

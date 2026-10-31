@@ -159,8 +159,8 @@ impl Request<'_> {
         }
     }
 
-    fn error<T: TransportPort + 'static>(&self, error: &Error) -> Apdu {
-        BACnetServer::<T>::error_apdu_from_error(self.req.invoke_id, self.req.service_choice, error)
+    fn error(&self, error: &Error) -> Apdu {
+        bacnet_device_core::reply::error_apdu(self.req.invoke_id, self.req.service_choice, error)
     }
 
     fn simple_ack(&self) -> Apdu {
@@ -204,7 +204,7 @@ impl Request<'_> {
             })
             .await
         {
-            return self.error::<T>(&error);
+            return self.error(&error);
         }
         // A write the object saves first saves here, without the guard.
         let staged = durable_writes::stage(
@@ -282,7 +282,7 @@ impl Request<'_> {
                 self.simple_ack()
             }
             Ok(None) => self.simple_ack(),
-            Err(e) => self.error::<T>(&e),
+            Err(e) => self.error(&e),
         };
         // Targets a written Schedule commanded on re-evaluation.
         schedule_cov.merge_into(coarse_cov_oids, life_safety_cov_changes, command_runs);
@@ -394,7 +394,7 @@ impl Request<'_> {
         response
     }
 
-    pub(super) async fn subscribe_cov<T: TransportPort + 'static>(
+    pub(super) async fn subscribe_cov(
         &self,
         db: &Arc<RwLock<ObjectDatabase>>,
         cov_table: &Arc<RwLock<CovSubscriptionTable>>,
@@ -407,7 +407,7 @@ impl Request<'_> {
             })
             .await
         {
-            return self.error::<T>(&error);
+            return self.error(&error);
         }
         let db = db.read().await;
         let mut table = cov_table.write().await;
@@ -427,11 +427,11 @@ impl Request<'_> {
                 );
                 self.simple_ack()
             }
-            Err(e) => self.error::<T>(&e),
+            Err(e) => self.error(&e),
         }
     }
 
-    pub(super) async fn subscribe_cov_property<T: TransportPort + 'static>(
+    pub(super) async fn subscribe_cov_property(
         &self,
         db: &Arc<RwLock<ObjectDatabase>>,
         cov_table: &Arc<RwLock<CovSubscriptionTable>>,
@@ -444,7 +444,7 @@ impl Request<'_> {
             })
             .await
         {
-            return self.error::<T>(&error);
+            return self.error(&error);
         }
         let db = db.read().await;
         let mut table = cov_table.write().await;
@@ -464,7 +464,7 @@ impl Request<'_> {
                 );
                 self.simple_ack()
             }
-            Err(e) => self.error::<T>(&e),
+            Err(e) => self.error(&e),
         }
     }
 
@@ -486,7 +486,7 @@ impl Request<'_> {
             })
             .await
         {
-            return self.error::<T>(&error);
+            return self.error(&error);
         }
         let database = db;
         let (result, membership) = {
@@ -505,7 +505,7 @@ impl Request<'_> {
             let result = match result {
                 Ok(()) => Ok(()),
                 Err(handlers::CreateObjectRefusal::Malformed(error)) => {
-                    return self.error::<T>(&error);
+                    return self.error(&error);
                 }
                 Err(handlers::CreateObjectRefusal::Failed(error)) => Err(error),
             };
@@ -537,7 +537,7 @@ impl Request<'_> {
         );
         match result {
             Ok(()) => self.complex_ack(ack_buf),
-            Err(e) => self.error::<T>(&e),
+            Err(e) => self.error(&e),
         }
     }
 
@@ -558,7 +558,7 @@ impl Request<'_> {
             })
             .await
         {
-            return self.error::<T>(&error);
+            return self.error(&error);
         }
         let deleted_oid = DeleteObjectRequest::decode(&self.req.service_request)
             .ok()
@@ -613,7 +613,7 @@ impl Request<'_> {
                 }
                 self.simple_ack()
             }
-            Err(e) => self.error::<T>(&e),
+            Err(e) => self.error(&e),
         }
     }
 
@@ -629,7 +629,7 @@ impl Request<'_> {
             })
             .await
         {
-            return self.error::<T>(&error);
+            return self.error(&error);
         }
         let mut db = db.write().await;
         BACnetServer::<T>::atomic_write_file_response(
@@ -670,7 +670,7 @@ impl Request<'_> {
             })
             .await
         {
-            return self.error::<T>(&error);
+            return self.error(&error);
         }
         // A list the object saves first saves here, without the guard.
         let staged = durable_writes::stage(
@@ -719,11 +719,11 @@ impl Request<'_> {
         );
         match result {
             Ok(()) => self.simple_ack(),
-            Err(e) => self.error::<T>(&e),
+            Err(e) => self.error(&e),
         }
     }
 
-    pub(super) async fn subscribe_cov_property_multiple<T: TransportPort + 'static>(
+    pub(super) async fn subscribe_cov_property_multiple(
         &self,
         db: &Arc<RwLock<ObjectDatabase>>,
         cov_table: &Arc<RwLock<CovSubscriptionTable>>,
@@ -732,7 +732,7 @@ impl Request<'_> {
         let decoded = SubscribeCOVPropertyMultipleRequest::decode(&self.req.service_request)
             .map_err(Error::into_request_reject);
         match decoded {
-            Err(e) => self.error::<T>(&e),
+            Err(e) => self.error(&e),
             Ok(request) => {
                 if let Err(error) = self
                     .authorize(|| {
@@ -742,7 +742,7 @@ impl Request<'_> {
                     })
                     .await
                 {
-                    return self.error::<T>(&error);
+                    return self.error(&error);
                 }
                 let db = db.read().await;
                 let mut table = cov_table.write().await;
@@ -768,7 +768,7 @@ impl Request<'_> {
                             initial_cov_notifications
                                 .push(InitialCovNotification::Multiple(refusal.committed));
                         }
-                        self.error::<T>(&refusal.error)
+                        self.error(&refusal.error)
                     }
                 }
             }

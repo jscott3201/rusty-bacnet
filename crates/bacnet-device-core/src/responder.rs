@@ -10,7 +10,8 @@ use bacnet_objects::DeviceIdentity;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_services::read_property::ReadPropertyRequest;
 use bacnet_types::enums::{
-    AbortReason, ConfirmedServiceChoice, PduType, ServiceSupported, UnconfirmedServiceChoice,
+    AbortReason, ConfirmedServiceChoice, PduType, Segmentation, ServiceSupported,
+    UnconfirmedServiceChoice,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
@@ -27,6 +28,7 @@ pub const SERVICES: &[ServiceSupported] = &[
 
 /// What a request needs from the database, read from its header alone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Access {
     /// ReadProperty, Who-Is or Who-Has: [`Responder::read`] under a shared
     /// guard.
@@ -39,6 +41,7 @@ pub enum Access {
 
 /// One request APDU, as a host received it.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct Inbound {
     /// The whole APDU, header included.
     pub apdu: Bytes,
@@ -47,8 +50,16 @@ pub struct Inbound {
     pub max_reply: u16,
 }
 
+impl Inbound {
+    /// The request `apdu`, whose reply may be up to `max_reply` octets.
+    pub fn new(apdu: Bytes, max_reply: u16) -> Self {
+        Self { apdu, max_reply }
+    }
+}
+
 /// What the core did with one request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Outcome {
     /// A confirmed reply is in `out`, for the host to send to the requester.
     Reply,
@@ -63,24 +74,26 @@ pub enum Outcome {
 
 /// The limits a [`Responder`] reads within.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Limits {
     /// Result rows one ReadProperty may expand: its own row plus, for a
     /// Group's whole Present_Value, every member row. A read past it is
     /// aborted with OUT_OF_RESOURCES.
     pub read_work: usize,
-    /// The ReadPropertyMultiple limits, for when the responder runs it.
-    pub rpm: ReadPropertyMultipleBudget,
+}
+
+impl Limits {
+    /// Limits of `read_work` result rows per ReadProperty.
+    pub fn new(read_work: usize) -> Self {
+        Self { read_work }
+    }
 }
 
 impl Default for Limits {
-    /// The server's defaults: the ReadPropertyMultiple budget's, with its
-    /// result-row limit for ReadProperty.
+    /// The server's default: the ReadPropertyMultiple budget's result-row
+    /// limit, which the server also applies to ReadProperty.
     fn default() -> Self {
-        let rpm = ReadPropertyMultipleBudget::default();
-        Self {
-            read_work: rpm.max_result_elements,
-            rpm,
-        }
+        Self::new(ReadPropertyMultipleBudget::default().max_result_elements)
     }
 }
 
@@ -98,13 +111,28 @@ pub struct Responder {
 
 impl Responder {
     /// A responder for `identity`, within `limits`.
-    pub fn new(identity: DeviceIdentity, limits: Limits) -> Self {
+    ///
+    /// It refuses an identity that claims segmentation support: the core
+    /// aborts every segmented request and every reply too long for one APDU,
+    /// so an I-Am naming segmentation would overstate it. Give it
+    /// `Segmentation::NONE`, the [`DeviceIdentity`] default. It also refuses
+    /// a `read_work` of zero, which no ReadProperty fits.
+    pub fn new(identity: DeviceIdentity, limits: Limits) -> Result<Self, Error> {
+        if identity.segmentation() != Segmentation::NONE {
+            return Err(Error::Encoding(
+                "bacnet-device-core segments neither way: the Device identity must claim no segmentation"
+                    .into(),
+            ));
+        }
+        if limits.read_work == 0 {
+            return Err(Error::Encoding("read_work must be positive".into()));
+        }
         let scope = ReadScope {
             work_limit: limits.read_work,
             registered_port: None,
             device: Some(identity.device_oid()),
         };
-        Self { identity, scope }
+        Ok(Self { identity, scope })
     }
 
     /// Resolve the Network_Port wildcard instance to `port`, the port the
@@ -172,15 +200,15 @@ impl Responder {
     /// For firmware that owns its database: [`read`](Self::read) with no
     /// overlay, and every confirmed request the core doesn't run answered
     /// by [`reply::refuse`]. An unconfirmed request it doesn't run is
-    /// [`Outcome::Silent`].
+    /// [`Outcome::Silent`], and so is an APDU that doesn't decode, which the
+    /// server drops too.
     pub fn handle(&self, db: &mut ObjectDatabase, request: Inbound, out: &mut BytesMut) -> Outcome {
         let apdu = request.apdu.clone();
-        match Self::classify(&apdu) {
-            Access::Read => match self.read(db, None::<&read::NoOverlay>, request, out) {
-                Outcome::Unhandled => reply::refuse(&apdu, out),
-                outcome => outcome,
-            },
-            Access::None => reply::refuse(&apdu, out),
+        // `read` decodes every APDU, so only a well-formed request it
+        // doesn't run reaches the refusal.
+        match self.read(db, None::<&read::NoOverlay>, request, out) {
+            Outcome::Unhandled => reply::refuse(&apdu, out),
+            outcome => outcome,
         }
     }
 

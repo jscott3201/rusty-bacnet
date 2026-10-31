@@ -6545,25 +6545,33 @@ on targets with atomic compare-and-swap, as `bacnet-objects` does. The
   `bacnet_server::server`.
 - `discovery`: `who_is` (the I-Am a Who-Is calls for, or none), `who_has`,
   `i_am` and `announcement_device`.
-- `reply`: `error_apdu`, the one map from an `Error` to its Reject, Abort or
-  Error PDU, and the refusals a host sends for a service it doesn't run.
+- `reply`: `error_apdu`, the one map from an `Error` to its Reject or Error
+  PDU (never an Abort: a work or byte limit is the caller's Abort), and the
+  refusals a host sends for a service it doesn't run.
 - `responder`: `Responder`, for a host with nothing to await between the
   steps. `Responder::classify` says from the header alone whether a request
   reads the database; `Responder::read` answers ReadProperty, Who-Is and
   Who-Has through an overlay; and `Responder::handle`, for firmware that
-  owns its database, also refuses every other confirmed request.
+  owns its database, also refuses every other well-formed confirmed
+  request, and drops an APDU that doesn't decode, as the server does.
+  `bacnet_device_core::SERVICES` lists the services it runs, for the
+  Device's Protocol_Services_Supported.
+
+`Responder::new` refuses an identity that claims segmentation support, since
+the core aborts every segmented request and every reply too long for one APDU,
+and a `read_work` limit of zero.
 
 ```rust
 use bacnet_device_core::responder::{Inbound, Limits, Outcome, Responder};
 
-let responder = Responder::new(identity, Limits::default());
+let responder = Responder::new(identity, Limits::default())?;
 // `request` is the received APDU as `Bytes`; `max_reply` is the smaller of
 // its Max-APDU-Length-Accepted and the route's limit.
 let mut out = bytes::BytesMut::new();
-match responder.handle(&mut db, Inbound { apdu: request, max_reply }, &mut out) {
+match responder.handle(&mut db, Inbound::new(request, max_reply), &mut out) {
     Outcome::Reply => send_to_requester(&out),
     Outcome::Announce => broadcast(&out),
-    Outcome::Silent | Outcome::Unhandled => {}
+    _ => {}
 }
 ```
 

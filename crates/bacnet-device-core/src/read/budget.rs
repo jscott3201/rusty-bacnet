@@ -5,6 +5,7 @@ use bacnet_types::error::Error;
 /// Why a bounded read produced no answer: a service error the requester sees,
 /// or a work or byte limit the request would pass.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ReadFailure {
     /// A service error, which the requester sees in an Error or Reject PDU.
     Service(Error),
@@ -17,6 +18,10 @@ pub enum ReadFailure {
 impl ReadFailure {
     /// The error of a read made with no work or byte limit, which only a
     /// service error can fail.
+    ///
+    /// For bacnet-server's legacy, unbudgeted ReadPropertyMultiple helper only;
+    /// it leaves the public API with that helper (#2178, PR 3).
+    #[doc(hidden)]
     pub fn unlimited(self) -> Error {
         match self {
             Self::Service(error) => error,

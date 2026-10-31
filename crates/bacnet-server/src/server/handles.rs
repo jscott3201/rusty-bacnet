@@ -108,10 +108,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         )
         .map_err(|failure| match failure {
             bacnet_device_core::read::ReadFailure::Service(error) => error,
-            bacnet_device_core::read::ReadFailure::Work
-            | bacnet_device_core::read::ReadFailure::Bytes => {
-                Error::abort(AbortReason::OUT_OF_RESOURCES)
-            }
+            // Work, and any other limit the core reports.
+            _ => Error::abort(AbortReason::OUT_OF_RESOURCES),
         })?;
         use super::requests::confirmed_response::{active_cov_snapshot, address_bindings};
         let live = match plan.live_lists(&db) {

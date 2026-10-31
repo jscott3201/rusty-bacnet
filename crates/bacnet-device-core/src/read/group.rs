@@ -53,6 +53,11 @@ impl GroupMembers {
 /// Plan a single-property read (ReadProperty, ReadRange, the local read) of
 /// a found object: the read's own row and, for a Group's whole
 /// Present_Value, the member rows, all charged to the scope's work limit.
+///
+/// Hosts plan through [`PropertyPlan::new`](super::PropertyPlan::new).
+/// For bacnet-server's legacy, unbudgeted ReadPropertyMultiple helper only;
+/// it leaves the public API with that helper (#2178, PR 3).
+#[doc(hidden)]
 pub fn plan_property<O: ReadOverlay>(
     db: &ObjectDatabase,
     scope: &ReadScope,

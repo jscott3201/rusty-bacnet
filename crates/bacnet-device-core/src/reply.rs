@@ -132,8 +132,8 @@ pub fn fit(reply: Apdu, max_reply: u16) -> Apdu {
     reply
 }
 
-/// Answer `apdu`, a request the caller doesn't run, without decoding its
-/// service: a confirmed request gets [`refuse_segmented`] when it arrived
+/// Answer `apdu`, a well-formed request the caller doesn't run, without
+/// decoding its service: a confirmed request gets [`refuse_segmented`] when it arrived
 /// segmented and [`unrecognized_service`] otherwise, written to `out`;
 /// anything else, or an APDU too short to name its invoke ID, is
 /// [`Outcome::Silent`].

@@ -3,7 +3,7 @@
 //! no overlay.
 use super::*;
 use bacnet_device_core::read::{
-    NoOverlay, ReadFailure, ReadPropertyMultipleBudget, ReadScope, RpmPlan, expand,
+    NoOverlay, ReadFailure, ReadPropertyMultipleBudget, ReadScope, RpmPlan,
 };
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::PropertyReference;

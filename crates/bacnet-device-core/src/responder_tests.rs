@@ -101,7 +101,7 @@ fn database() -> ObjectDatabase {
 }
 
 fn responder() -> Responder {
-    Responder::new(identity(), Limits::default())
+    Responder::new(identity(), Limits::default()).unwrap()
 }
 
 fn confirmed(service: ConfirmedServiceChoice, body: &[u8], segmented: bool) -> Bytes {
@@ -153,7 +153,7 @@ fn unconfirmed(service: UnconfirmedServiceChoice, body: &[u8]) -> Bytes {
 fn handle_with(responder: &Responder, apdu: Bytes, max_reply: u16) -> (Outcome, Option<Apdu>) {
     let mut db = database();
     let mut out = BytesMut::new();
-    let outcome = responder.handle(&mut db, Inbound { apdu, max_reply }, &mut out);
+    let outcome = responder.handle(&mut db, Inbound::new(apdu, max_reply), &mut out);
     let reply = (!out.is_empty()).then(|| decode_apdu(out.freeze()).unwrap());
     (outcome, reply)
 }
@@ -186,6 +186,43 @@ fn abort_of(reply: Option<Apdu>) -> AbortReason {
             abort.abort_reason
         }
         other => panic!("expected a server Abort, got {other:?}"),
+    }
+}
+
+/// The core segments neither way, so an identity that claims segmentation
+/// would overstate it in I-Am; and no ReadProperty fits a work limit of
+/// zero.
+#[test]
+fn new_refuses_segmentation_and_a_zero_work_limit() {
+    for segmentation in [
+        bacnet_types::enums::Segmentation::BOTH,
+        bacnet_types::enums::Segmentation::TRANSMIT,
+        bacnet_types::enums::Segmentation::RECEIVE,
+    ] {
+        let claims = identity().with_segmentation(segmentation);
+        assert!(
+            Responder::new(claims, Limits::default()).is_err(),
+            "{segmentation:?}"
+        );
+    }
+    assert!(Responder::new(identity(), Limits::new(0)).is_err());
+    assert!(Responder::new(identity(), Limits::new(1)).is_ok());
+}
+
+/// An APDU that doesn't decode draws nothing, as the server drops it: a
+/// confirmed request cut off before its service choice, or before its
+/// segment header, has no service to refuse.
+#[test]
+fn an_apdu_that_doesnt_decode_is_silent() {
+    for truncated in [
+        &[0x00, 0x05, INVOKE][..],
+        // Segmented, with no sequence number or window.
+        &[0x08, 0x05, INVOKE][..],
+        &[0x00][..],
+        &[][..],
+    ] {
+        let apdu = Bytes::copy_from_slice(truncated);
+        assert_eq!(handle(apdu), (Outcome::Silent, None), "{truncated:02X?}");
     }
 }
 
@@ -291,19 +328,13 @@ fn refused_reads_are_error_pdus() {
 #[test]
 fn a_read_past_the_work_limit_is_aborted() {
     let group = read_property(oid(ObjectType::GROUP, 1), P::PRESENT_VALUE, None);
-    let tight = Limits {
-        read_work: 2,
-        ..Limits::default()
-    };
-    let (outcome, reply) = handle_with(&Responder::new(identity(), tight), group.clone(), 1476);
+    let tight = Responder::new(identity(), Limits::new(2)).unwrap();
+    let (outcome, reply) = handle_with(&tight, group.clone(), 1476);
     assert_eq!(outcome, Outcome::Reply);
     assert_eq!(abort_of(reply), AbortReason::OUT_OF_RESOURCES);
     // Its own row and two member rows fit a limit of three.
-    let enough = Limits {
-        read_work: 3,
-        ..Limits::default()
-    };
-    let (_, reply) = handle_with(&Responder::new(identity(), enough), group, 1476);
+    let enough = Responder::new(identity(), Limits::new(3)).unwrap();
+    let (_, reply) = handle_with(&enough, group, 1476);
     assert!(matches!(reply, Some(Apdu::ComplexAck(_))), "{reply:?}");
 }
 
@@ -349,10 +380,7 @@ fn a_service_the_core_doesnt_run_is_rejected_by_handle_only() {
     let apdu = confirmed(ConfirmedServiceChoice::WRITE_PROPERTY, &[0x0C], false);
     assert_eq!(Responder::classify(&apdu), Access::None);
     let mut out = BytesMut::new();
-    let request = Inbound {
-        apdu: apdu.clone(),
-        max_reply: 1476,
-    };
+    let request = Inbound::new(apdu.clone(), 1476);
     let outcome = responder().read(&database(), None::<&NoOverlay>, request, &mut out);
     assert_eq!((outcome, out.is_empty()), (Outcome::Unhandled, true));
     let (outcome, reply) = handle(apdu);
