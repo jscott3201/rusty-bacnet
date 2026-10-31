@@ -685,6 +685,8 @@ mod direct_principal_tests;
 #[cfg(test)]
 mod discovery_dcc_tests;
 #[cfg(test)]
+mod discovery_lock_tests;
+#[cfg(test)]
 mod discovery_tests;
 #[cfg(test)]
 mod event_confirmed_routing_tests;
