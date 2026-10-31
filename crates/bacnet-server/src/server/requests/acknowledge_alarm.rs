@@ -20,10 +20,8 @@ pub(super) async fn response(
                 service_choice: request.service_choice,
             })
         }
-        Err(error) => confirmed_response::error_apdu_from_error(
-            request.invoke_id,
-            request.service_choice,
-            &error,
-        ),
+        Err(error) => {
+            bacnet_device_core::reply::error_apdu(request.invoke_id, request.service_choice, &error)
+        }
     }
 }

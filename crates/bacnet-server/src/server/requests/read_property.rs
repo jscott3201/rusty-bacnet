@@ -125,7 +125,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         ) => {
                             return;
                         }
-                        Err(error) => Some(confirmed_response::error_fields(error)),
+                        Err(error) => Some(bacnet_device_core::reply::error_fields(error)),
                     };
                     read_audits.extend(audit.read_intent(
                         db,

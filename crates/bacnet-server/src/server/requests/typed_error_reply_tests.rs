@@ -3,7 +3,7 @@
 //! Error PDU, the plain one and the ChangeList-Error, and every reject
 //! reason in a Reject PDU; an abort goes out as SERVICES / OTHER.
 
-use super::error_apdu_from_error;
+use bacnet_device_core::reply::error_apdu as error_apdu_from_error;
 use bacnet_encoding::apdu::{self, Apdu};
 use bacnet_types::enums::{
     AbortReason, ConfirmedServiceChoice, ErrorClass, ErrorCode, RejectReason,

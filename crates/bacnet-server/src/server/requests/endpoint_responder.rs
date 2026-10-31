@@ -374,11 +374,9 @@ impl EndpointResponder {
                     invoke_id,
                     service_choice: request.service_choice,
                 }),
-                Err(error) => confirmed_response::error_apdu_from_error(
-                    invoke_id,
-                    request.service_choice,
-                    &error,
-                ),
+                Err(error) => {
+                    bacnet_device_core::reply::error_apdu(invoke_id, request.service_choice, &error)
+                }
             }
         } else {
             Apdu::Reject(RejectPdu {

@@ -98,7 +98,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             };
 
             let db = db.read().await;
-            let device_oid = crate::local_device::announcement_device(&db, &config.device);
+            let device_oid =
+                bacnet_device_core::discovery::announcement_device(&db, &config.device);
 
             if let Some(device_oid) = device_oid {
                 let instance = device_oid.instance_number();
@@ -106,7 +107,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let in_range = who_is.range.is_none_or(|range| range.contains(instance));
 
                 if in_range {
-                    let i_am = super::super::discovery::iam_request_for(config);
+                    let i_am = bacnet_device_core::discovery::i_am(&config.device);
 
                     let mut service_buf = BytesMut::new();
                     i_am.encode(&mut service_buf);
@@ -192,7 +193,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let device_oid = db.selected_device();
 
             if let Some(device_oid) = device_oid {
-                match handlers::handle_who_has(&db, &req.service_request, device_oid) {
+                match bacnet_device_core::discovery::who_has(&db, &req.service_request, device_oid)
+                {
                     Ok(Some(i_have)) => {
                         let mut service_buf = BytesMut::new();
                         if let Err(e) = i_have.encode(&mut service_buf) {

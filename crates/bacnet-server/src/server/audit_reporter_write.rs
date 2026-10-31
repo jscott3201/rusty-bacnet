@@ -168,9 +168,6 @@ impl<T: TransportPort + 'static> WriteCommitObserver for WriteAudit<'_, T> {
             self.pending = None;
             return;
         }
-        self.complete(
-            db,
-            Some(super::requests::confirmed_response::error_fields(error)),
-        );
+        self.complete(db, Some(bacnet_device_core::reply::error_fields(error)));
     }
 }

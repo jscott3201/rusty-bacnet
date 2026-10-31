@@ -21,10 +21,14 @@ use tracing::{debug, warn};
 use event_delivery::EventDelivery;
 
 use bacnet_encoding::apdu::{
-    self, AbortPdu, Apdu, ComplexAck, ConfirmedRequest as ConfirmedRequestPdu, ErrorPdu, RejectPdu,
+    self, AbortPdu, Apdu, ComplexAck, ConfirmedRequest as ConfirmedRequestPdu, RejectPdu,
     SegmentAck as SegmentAckPdu, SimpleAck, UnconfirmedRequest as UnconfirmedRequestPdu,
     encode_apdu,
 };
+// The server's tests build Error PDUs; its code takes them from
+// bacnet_device_core::reply.
+#[cfg(test)]
+use bacnet_encoding::apdu::ErrorPdu;
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_encoding::segmentation::{
@@ -492,7 +496,6 @@ mod binding_probes;
 mod device_bindings;
 mod discovery;
 #[doc(hidden)]
-pub use discovery::iam_request_for as discovery_iam_for_test;
 pub use discovery::{DiscoveryCounters, DiscoveryPolicy};
 pub(crate) use discovery::{DiscoveryLimiter, PreCheckDecision, WhoHasTarget};
 mod audit_log_purge;

@@ -19,7 +19,6 @@ use bacnet_services::read_property::ReadPropertyRequest;
 use bacnet_services::rpm::{
     ReadAccessResult, ReadPropertyMultipleACK, ReadPropertyMultipleRequest, ReadResultElement,
 };
-use bacnet_services::who_has::{IHaveRequest, WhoHasObject, WhoHasRequest};
 use bacnet_services::wpm::{WritePropertyMultipleCursor, WritePropertyMultipleEvent};
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::MacAddr;

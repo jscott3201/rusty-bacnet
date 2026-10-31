@@ -367,7 +367,7 @@ impl Request<'_> {
                 committed_oids,
             } => {
                 *written_oids = committed_oids;
-                let (error_class, error_code) = confirmed_response::error_fields(&error);
+                let (error_class, error_code) = bacnet_device_core::reply::error_fields(&error);
                 Apdu::Error(
                     bacnet_services::wpm::WritePropertyMultipleError {
                         error_class,
