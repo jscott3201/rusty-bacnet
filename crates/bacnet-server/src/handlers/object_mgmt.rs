@@ -1,4 +1,5 @@
 use super::*;
+use alloc::string::ToString;
 use bacnet_types::enums::EngineeringUnits;
 use bacnet_types::error::RemoteError;
 

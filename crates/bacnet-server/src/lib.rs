@@ -2,6 +2,10 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![forbid(unsafe_code)]
 
+// The read path moves into bacnet-device-core, which builds without std;
+// its code names `alloc` paths, as the server's copy does before the move.
+extern crate alloc;
+
 pub mod audit_notification;
 mod command_lists;
 mod committed_cov;

@@ -2,6 +2,7 @@
 use super::group_present_value::GroupMembers;
 use super::read_budget::{ReadFailure, Work};
 use super::*;
+use alloc::collections::BTreeSet;
 #[cfg(test)]
 use crate::server::ReadPropertyMultipleBudget;
 use bacnet_objects::traits::BACnetObject;
@@ -68,10 +69,13 @@ fn expand(
             _ => {
                 // Preserve legacy expected-linear selection even when every
                 // row is required and the result budget never cuts the scan.
-                let required: HashSet<PropertyIdentifier> =
-                    object.required_properties().iter().copied().collect();
+                let required: BTreeSet<u32> = object
+                    .required_properties()
+                    .iter()
+                    .map(|property| property.to_raw())
+                    .collect();
                 for &property in object.property_list().iter() {
-                    if !required.contains(&property) {
+                    if !required.contains(&property.to_raw()) {
                         visit(property)?;
                     }
                 }
