@@ -21,7 +21,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bacnet_client::client::BACnetClient;
 use bacnet_ops::engine::Engine;
 use bacnet_ops::label::{kebab, object_label};
 use bacnet_ops::limits::RequestLimits;
@@ -377,17 +376,26 @@ fn csv_line(point: &Point, written: &Written) -> String {
     )
 }
 
-/// Serve watch commands until `commands` closes or the session is
-/// cancelled, then shut the hub down, cancelling every subscription.
+/// The watch list's hub over `engine`. The session makes it before the
+/// MCP listener's, so it takes the engine's first range of subscriber
+/// process identifiers whatever order the workers start in (#2185).
+pub(crate) fn hub<T: TransportPort + 'static>(
+    engine: &Arc<Engine<T>>,
+    options: &WatchOptions,
+) -> Result<Hub<T>, String> {
+    Hub::new(Arc::clone(engine), hub_options(options))
+}
+
+/// Serve watch commands on `hub` until `commands` closes or the session
+/// is cancelled, then shut the hub down, cancelling every subscription.
 pub(crate) async fn run<T: TransportPort + 'static>(
-    client: &Arc<BACnetClient<T>>,
+    hub: Result<Hub<T>, String>,
     sink: &EventSink,
     mut commands: mpsc::Receiver<Command>,
     rate: &Arc<RequestLimits>,
     options: &WatchOptions,
 ) {
-    let engine = Arc::new(Engine::new(Arc::clone(client), Arc::clone(rate)));
-    let hub = match Hub::new(engine, hub_options(options)) {
+    let hub = match hub {
         Ok(hub) => hub,
         Err(error) => {
             tracing::error!("the watch list can't start: {error}");

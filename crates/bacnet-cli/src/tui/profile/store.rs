@@ -145,10 +145,24 @@ impl Store {
             Err(e) => Err(format!("cannot save profile {name}: {e}")),
         }
     }
-    pub(crate) fn workspace(&self, name: &str) -> Result<PathBuf, String> {
+    /// Where the profile's workspace is, without creating it.
+    pub(crate) fn workspace_path(&self, name: &str) -> Result<PathBuf, String> {
         validate_name(name)?;
-        let path = self.root.join("workspaces").join(name);
-        fs::create_dir_all(&path).map_err(|e| format!("cannot create profile workspace: {e}"))?;
+        Ok(self.root.join("workspaces").join(name))
+    }
+
+    /// The profile's workspace, created if missing. On Unix a new one is
+    /// mode 0700, as the TUI's MCP socket needs (#2185); an existing one
+    /// keeps its mode.
+    pub(crate) fn workspace(&self, name: &str) -> Result<PathBuf, String> {
+        let path = self.workspace_path(name)?;
+        let mut builder = fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        builder
+            .create(&path)
+            .map_err(|e| format!("cannot create profile workspace: {e}"))?;
         Ok(path)
     }
 }

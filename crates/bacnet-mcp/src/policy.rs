@@ -6,7 +6,7 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use bacnet_ops::limits::RequestLimits;
+use bacnet_ops::limits::{Overlay, RequestLimits};
 
 mod writes;
 
@@ -198,10 +198,21 @@ impl Policy {
     /// The request limits the engine runs under: the global rate, and a
     /// rate per network.
     pub fn request_limits(&self) -> RequestLimits {
+        let overlay = self.overlay();
+        RequestLimits::new(overlay.global).with_network_rates(overlay.network, overlay.rates)
+    }
+
+    /// The same rates as an overlay on another front end's limits: the
+    /// TUI's while an agent is attached to it (#2185).
+    pub fn overlay(&self) -> Overlay {
         let rates = self.rates;
         let slow = self.slow_networks.iter().map(|&n| (n, rates.slow));
         let fast = self.fast_networks.iter().map(|&n| (n, rates.fast));
-        RequestLimits::new(rates.global).with_network_rates(rates.network, slow.chain(fast))
+        Overlay {
+            global: rates.global,
+            network: rates.network,
+            rates: slow.chain(fast).collect(),
+        }
     }
 
     /// The fastest a request to `network` may go, for the limits block.

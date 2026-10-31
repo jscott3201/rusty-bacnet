@@ -22,7 +22,7 @@ mod log;
 mod read;
 
 use std::collections::HashSet;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use bacnet_client::client::BACnetClient;
@@ -111,6 +111,9 @@ pub struct Engine<T: TransportPort + 'static> {
     /// from then on. The lock is held only to look up or record a device,
     /// never across an await.
     no_rpm: Mutex<HashSet<u32>>,
+    /// Watch hubs made on this engine, so each takes its own range of
+    /// subscriber process identifiers (#2185).
+    hubs: AtomicU32,
 }
 
 impl<T: TransportPort + 'static> Engine<T> {
@@ -121,7 +124,14 @@ impl<T: TransportPort + 'static> Engine<T> {
             client,
             limits,
             no_rpm: Mutex::new(HashSet::new()),
+            hubs: AtomicU32::new(0),
         }
+    }
+
+    /// How many watch hubs were made on this engine before this one: a
+    /// client's hubs share its engine, so their subscriptions can't clash.
+    pub(crate) fn next_hub(&self) -> u32 {
+        self.hubs.fetch_add(1, Ordering::Relaxed)
     }
 
     /// The limits every request waits for.

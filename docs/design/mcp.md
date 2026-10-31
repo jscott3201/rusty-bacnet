@@ -7,7 +7,10 @@ tools. Phase 2 (#2067) is complete: the watch hub, the resources,
 `subscriptions/listen` and the `bacnet_watch` fallback, with the deviations
 noted in §6. Phase 3 (#2068) is complete: the shared safety core in
 `bacnet-ops::safety`, `bacnet_write` and `bacnet_revert`, with the
-deviations noted in §7.4; [`../mcp.md`](../mcp.md) describes what exists. Anything marked
+deviations noted in §7.4. Phase 4 (#2185) has begun: the TUI's Unix socket
+and `bacnet mcp connect`, read-only (§8.1, §9); the `TuiApprover`, the
+agent pane and the Windows named pipe follow.
+[`../mcp.md`](../mcp.md) describes what exists. Anything marked
 **planned** does not exist yet. BACnet references are clause numbers in ANSI/ASHRAE 135-2020,
 paraphrased. MCP references are to the 2026-07-28 revision of the
 specification, linked in §14.
