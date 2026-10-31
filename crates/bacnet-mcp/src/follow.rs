@@ -10,21 +10,26 @@ use bacnet_ops::watch::Changes;
 use bacnet_transport::port::TransportPort;
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use tokio::sync::broadcast::{self, error::RecvError};
+use tokio::sync::watch;
 use tokio::time::{Instant, Interval};
 
 use crate::listen::ALARMS_EVERY;
 use crate::resources::uri::{self, Uri};
+use crate::writes::notify::Signals;
 
 /// The fastest the device list is announced as changed.
 const DEVICES_EVERY: Duration = Duration::from_secs(1);
 
-/// What one subscriber follows: its points' change signals, the
-/// discovery table's events and the alarm tick. A listen stream's set is
-/// fixed; a legacy session's follows its subscribes and unsubscribes
-/// ([`Follow::set`]). [`Follow::next`] waits on watch and broadcast
-/// channels and timers only, never a lock (#1498), and is cancel safe.
+/// What one subscriber follows: its points' change signals, the session's
+/// and the ledger's ([`Signals`]), the discovery table's events and the
+/// alarm tick. A listen stream's set is fixed; a legacy session's follows
+/// its subscribes and unsubscribes ([`Follow::set`]). [`Follow::next`]
+/// waits on watch and broadcast channels and timers only, never a lock
+/// (#1498), and is cancel safe.
 pub(crate) struct Follow {
     points: Vec<(String, Changes)>,
+    /// `bacnet://session` and `bacnet://ledger`, as followed.
+    writes: Vec<(String, watch::Receiver<u64>)>,
     devices: Option<broadcast::Receiver<DeviceEvent>>,
     devices_due: Option<Instant>,
     devices_last: Option<Instant>,
@@ -50,6 +55,7 @@ impl Follow {
         alarms.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         Self {
             points: Vec::new(),
+            writes: Vec::new(),
             devices: None,
             devices_due: None,
             devices_last: None,
@@ -63,14 +69,19 @@ impl Follow {
     /// already followed on the same watch keeps the signal it had, so
     /// nothing is announced twice.
     /// `engine` gives the discovery table's events, when the device list
-    /// is followed.
+    /// is followed, and `signals` the session's and the ledger's changes.
+    /// A session or ledger URI followed already keeps its receiver, so a
+    /// change not yet announced isn't lost.
     pub(crate) fn set<T: TransportPort + 'static>(
         &mut self,
         engine: Option<&Engine<T>>,
+        signals: &Signals,
         uris: Vec<(String, Option<Changes>)>,
     ) {
         let mut kept: HashMap<String, Changes> =
             std::mem::take(&mut self.points).into_iter().collect();
+        let mut kept_writes: HashMap<String, watch::Receiver<u64>> =
+            std::mem::take(&mut self.writes).into_iter().collect();
         self.device_uris.clear();
         self.alarm_uris.clear();
         for (name, changes) in uris {
@@ -87,6 +98,16 @@ impl Follow {
                 match uri::parse(&name) {
                     Ok(Uri::Devices | Uri::DevicesAfter(_)) => self.device_uris.push(name),
                     Ok(Uri::Alarms | Uri::DeviceAlarms(_)) => self.alarm_uris.push(name),
+                    Ok(found @ (Uri::Session | Uri::Ledger)) => {
+                        let signal = kept_writes.remove(&name).unwrap_or_else(|| {
+                            if found == Uri::Session {
+                                signals.session()
+                            } else {
+                                signals.ledger()
+                            }
+                        });
+                        self.writes.push((name, signal));
+                    }
                     _ => {}
                 }
             }
@@ -110,7 +131,10 @@ impl Follow {
 
     /// Whether nothing followed can change.
     pub(crate) fn quiet(&self) -> bool {
-        self.points.is_empty() && self.devices.is_none() && self.alarm_uris.is_empty()
+        self.points.is_empty()
+            && self.writes.is_empty()
+            && self.devices.is_none()
+            && self.alarm_uris.is_empty()
     }
 
     /// The device-list pages followed, the first and any later ones.
@@ -131,6 +155,9 @@ impl Follow {
                 biased;
                 at = point_change(&mut self.points), if !self.points.is_empty() => {
                     return Wake::Updated(self.points[at].0.clone());
+                }
+                at = signal_change(&mut self.writes), if !self.writes.is_empty() => {
+                    return Wake::Updated(self.writes[at].0.clone());
                 }
                 change = device_change(&mut self.devices), if self.devices.is_some() => {
                     match change {
@@ -166,6 +193,26 @@ async fn point_change(points: &mut [(String, Changes)]) -> usize {
         .map(|(at, (_, changes))| async move {
             changes.changed().await;
             at
+        })
+        .collect();
+    match waiting.next().await {
+        Some(at) => at,
+        None => std::future::pending().await,
+    }
+}
+
+/// The index of the next session or ledger signal to change; every bump
+/// since the last wake counts once. Each wait is cancel safe. A signal
+/// whose sender is gone never fires.
+async fn signal_change(signals: &mut [(String, watch::Receiver<u64>)]) -> usize {
+    let mut waiting: FuturesUnordered<_> = signals
+        .iter_mut()
+        .enumerate()
+        .map(|(at, (_, signal))| async move {
+            match signal.changed().await {
+                Ok(()) => at,
+                Err(_) => std::future::pending().await,
+            }
         })
         .collect();
     match waiting.next().await {

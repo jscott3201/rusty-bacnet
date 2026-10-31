@@ -8,6 +8,7 @@ mod legacy;
 mod limits;
 mod listen;
 mod logs;
+mod notify;
 mod paging;
 mod plan;
 mod protocol;

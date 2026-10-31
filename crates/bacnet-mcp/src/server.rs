@@ -246,6 +246,10 @@ impl<T: TransportPort + 'static> McpServer<T> {
             let ctx = Arc::clone(&ctx);
             async move { ctx.follow_devices().await }
         });
+        let ends = tokio::spawn({
+            let ctx = Arc::clone(&ctx);
+            async move { crate::writes::notify::follow_ends(&ctx).await }
+        });
         let reader = Eof {
             inner: reader,
             closing: ctx.closing.clone(),
@@ -305,6 +309,7 @@ impl<T: TransportPort + 'static> McpServer<T> {
             hub.shutdown(cancel_wait(hub.stats().tasks)).await;
         }
         let _ = follow.await;
+        let _ = ends.await;
         ctx.log_summary();
         quit.map(drop)
     }

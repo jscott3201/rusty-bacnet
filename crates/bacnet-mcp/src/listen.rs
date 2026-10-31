@@ -23,7 +23,8 @@
 //! reservation) goes, so the 60-second alarm poll has bounded work.
 //!
 //! The listen loop waits on a [`Follow`]: the leases' signals, the
-//! discovery table's events and an alarm tick. Its arms send notifications
+//! session's and the ledger's (#2160), the discovery table's events and an
+//! alarm tick. Its arms send notifications
 //! and refresh alarms; the futures it leaves pending meanwhile wait on
 //! watch and broadcast channels only, never a lock (#1498). Legacy
 //! subscriptions ([`crate::legacy`]) follow theirs the same way, and their
@@ -586,6 +587,7 @@ pub(crate) async fn run<T: TransportPort + 'static>(
     let mut follow = Follow::new();
     follow.set(
         ctx.engine.as_deref(),
+        &ctx.writes.signals,
         uris.iter()
             .map(|name| {
                 let changes = leases

@@ -31,7 +31,7 @@ async fn settle() {
 
 impl Agent {
     /// The 2025-06-18 handshake, as Codex opens; the answer's result.
-    async fn initialize_legacy(&mut self) -> Value {
+    pub(super) async fn initialize_legacy(&mut self) -> Value {
         let reply = self
             .request(
                 "initialize",
@@ -45,7 +45,7 @@ impl Agent {
     }
 
     /// A legacy `resources/subscribe`: the result, or the error.
-    async fn subscribe(&mut self, uri: &str) -> Result<Value, Value> {
+    pub(super) async fn subscribe(&mut self, uri: &str) -> Result<Value, Value> {
         let reply = self
             .request("resources/subscribe", json!({ "uri": uri }))
             .await;
@@ -191,8 +191,10 @@ async fn a_point_watched_again_is_followed_on_its_new_watch() {
     };
     let mut follow = Follow::new();
     let first = hub.watch(point).unwrap();
+    let signals = crate::writes::notify::Signals::default();
     follow.set(
         Some(&*engine),
+        &signals,
         vec![(AI1.to_string(), Some(first.changes()))],
     );
     assert!(first.changes().same(follow.signal(AI1).unwrap()));
@@ -201,6 +203,7 @@ async fn a_point_watched_again_is_followed_on_its_new_watch() {
     assert!(!second.changes().same(&follow.signal(AI1).unwrap().clone()));
     follow.set(
         None::<&Engine<Recording>>,
+        &signals,
         vec![(AI1.to_string(), Some(second.changes()))],
     );
     assert!(second.changes().same(follow.signal(AI1).unwrap()));

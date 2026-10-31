@@ -359,8 +359,8 @@ the user.
 | `bacnet://device/{instance}/object/{type}:{n}` | the point preset | one managed SubscribeCOV per object with a finite lifetime (300 s, renewed), or polling at 10 s or slower when the device refuses COV |
 | `.../property/{prop}` | one property | SubscribeCOVProperty, or polling |
 | `bacnet://alarms`, `bacnet://device/{instance}/alarms` | active and unacknowledged alarms | GetEventInformation polled (60 s per device, rate limited) |
-| `bacnet://session` | level, expiry, grants, limits, rate meter, COV footprint | updated on arm, disarm or expiry |
-| `bacnet://ledger` | this principal's ledger entries still in effect | updated on each settle (empty until phase 3) |
+| `bacnet://session` | level, expiry, grants, limits, rate meter, COV footprint | updated on arm, plan-grant spend, or expiry (#2160) |
+| `bacnet://ledger` | this principal's ledger entries still in effect | updated on each settle or revert (#2160) |
 
 Mechanics:
 
@@ -412,9 +412,8 @@ As built (#2067), and where it differs from the plan above:
   by the next reservation or the once-a-minute sweep, so within 90 s; at
   most 16 wait at once.
 - `bacnet://device/{instance}` has no subscription meaning and is not
-  honoured. The session and ledger resources are honoured but don't send
-  updates: phase 3 (#2068) shows writes, arming and grants in them and
-  left the notifications on arming and settling for later.
+  honoured. The session and ledger resources send updates since #2160
+  (see §7.4).
 - The per-process cap is the hub's, and counts points still cancelling, so
   the device-side footprint stays bounded.
 - Charging: the hub's requests run under its own account and token bucket
@@ -578,8 +577,17 @@ As built (#2068), and where it differs from the steps above:
   refused (`outside-plan`) rather than offered to the client.
 - `bacnet_revert` needs no prompt and no armed session, as in the TUI, and
   reverts only this principal's MCP entries.
-- `bacnet://ledger` and `bacnet://session` show the writes, but don't yet
-  notify on arming or settling.
+- `bacnet://ledger` and `bacnet://session` show the writes, and notify
+  their subscribers (#2160): the session on arming, on each plan-grant
+  spend (so its exhaustion too), and when the armed session or the plan
+  grant runs out, which a server task announces with no request
+  arriving; the ledger when one of this server's writes or reverts
+  settles, or when it settles an entry left `sending`. There is no
+  separate disarm: a session ends by expiring. Each resource has one
+  watch channel, waited on like a point's change signal, so bumps made
+  while a notification is going out are announced once; a stream on
+  both hears one update per arm, settle and revert. The ledger is shared
+  with the TUI, whose changes aren't announced.
 
 A write already sent always completes and is recorded; cancellation never
 interrupts it, as in the TUI's write worker.

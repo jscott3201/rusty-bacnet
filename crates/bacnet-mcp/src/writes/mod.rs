@@ -5,6 +5,7 @@
 //!
 //! The tools themselves are `tools/write.rs` and `tools/revert.rs`.
 
+pub(crate) mod notify;
 pub(crate) mod seal;
 
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -17,15 +18,18 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use tokio::time::Instant;
 
+use self::notify::Signals;
 use self::seal::Sealer;
 use crate::policy::{ArmMode, PlanGrant, WritePolicy};
 
 /// The server's write state: its armed session, the plan grant's budget
-/// spent, and the confirmation sealer.
+/// spent, the confirmation sealer, and the signals that tell subscribers
+/// of `bacnet://session` and `bacnet://ledger` they changed.
 pub(crate) struct Writes {
     pub(crate) sealer: Sealer,
     armed: Mutex<Option<Armed>>,
     plan_used: AtomicU32,
+    pub(crate) signals: Signals,
 }
 
 /// An armed write session: until when, and the reason given.
@@ -41,6 +45,7 @@ impl Writes {
             sealer: Sealer::new(),
             armed: Mutex::new(None),
             plan_used: AtomicU32::new(0),
+            signals: Signals::default(),
         }
     }
 
@@ -63,10 +68,18 @@ impl Writes {
             .map(|left| left.as_secs())
     }
 
+    /// When the armed session ends, if one is armed now.
+    pub(crate) fn armed_until(&self) -> Option<Instant> {
+        self.armed()
+            .map(|a| a.until)
+            .filter(|until| Instant::now() < *until)
+    }
+
     /// Arm a write session for `minutes`.
     pub(crate) fn arm(&self, minutes: u32, reason: Option<String>) {
         let until = Instant::now() + Duration::from_secs(u64::from(minutes) * 60);
         *self.armed.lock().unwrap_or_else(PoisonError::into_inner) = Some(Armed { until, reason });
+        self.signals.session_changed();
     }
 
     /// The armed session's reason, for audit records.
@@ -88,12 +101,18 @@ impl Writes {
 
     /// Take `n` writes from the plan's budget, if it has them.
     fn spend(&self, plan: &PlanGrant, n: u32) -> bool {
-        self.plan_used
+        let spent = self
+            .plan_used
             .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
                 used.checked_add(n)
                     .filter(|total| *total <= plan.max_writes)
             })
-            .is_ok()
+            .is_ok();
+        if spent {
+            // The session shows the budget used, and the plan's end.
+            self.signals.session_changed();
+        }
+        spent
     }
 
     /// Writes the plan has made.

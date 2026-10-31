@@ -127,7 +127,11 @@ pub(crate) async fn notify<T: TransportPort + 'static>(ctx: Arc<Ctx<T>>, peer: P
     let mut follow = Follow::new();
     // Subscriptions made before this task first ran: the receiver counts
     // them as seen already.
-    follow.set(ctx.engine.as_deref(), ctx.subs.legacy_snapshot());
+    follow.set(
+        ctx.engine.as_deref(),
+        &ctx.writes.signals,
+        ctx.subs.legacy_snapshot(),
+    );
     loop {
         let wake = tokio::select! {
             biased;
@@ -136,7 +140,11 @@ pub(crate) async fn notify<T: TransportPort + 'static>(ctx: Arc<Ctx<T>>, peer: P
                 if seen.is_err() {
                     return;
                 }
-                follow.set(ctx.engine.as_deref(), ctx.subs.legacy_snapshot());
+                follow.set(
+                    ctx.engine.as_deref(),
+                    &ctx.writes.signals,
+                    ctx.subs.legacy_snapshot(),
+                );
                 continue;
             }
             wake = follow.next() => wake,

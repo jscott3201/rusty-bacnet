@@ -169,12 +169,14 @@ pub(crate) async fn run<T: TransportPort + 'static>(
             let caller = McpCaller::new(&ctx.writes, &ctx.policy.writes, None, fields);
             let mut desk = open(&ctx, &workspace, &caller).await?;
             let principal = ctx.principal.clone();
+            let before = desk.entries();
             let done = desk
                 .revert(engine.client(), engine.limits(), &caller, |entry| {
                     ours(entry, &principal)
                         && wanted.as_ref().is_none_or(|ids| ids.contains(&entry.id))
                 })
                 .await;
+            ctx.writes.signals.ledger_settled(&before, &desk);
             let left = desk
                 .entries()
                 .iter()

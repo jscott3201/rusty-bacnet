@@ -13,7 +13,7 @@ use super::writes::{audit, call, meta, one, slot, writes};
 use super::{LAB, Lab};
 use crate::policy::{ArmMode, PlanGrant};
 
-fn plan(max_writes: u32) -> PlanGrant {
+pub(super) fn plan(max_writes: u32) -> PlanGrant {
     PlanGrant {
         devices: vec![(LAB, LAB)],
         properties: vec![PropertyIdentifier::PRESENT_VALUE],

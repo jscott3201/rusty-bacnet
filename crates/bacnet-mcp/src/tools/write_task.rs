@@ -93,7 +93,9 @@ where
                 let caller = McpCaller::new(&ctx.writes, &ctx.policy.writes, None, fields);
                 let origin = Origin::mcp(ctx.principal.clone());
                 let mut desk = Desk::open(Some(&workspace.dir), context(&workspace), origin);
+                let before = desk.entries();
                 desk.settle_abandoned(&caller).await;
+                ctx.writes.signals.ledger_settled(&before, &desk);
                 Err(ToolError::Failed(format!(
                     "the write task failed: {failed}"
                 )))
@@ -154,9 +156,11 @@ pub(crate) async fn confirmed<T: TransportPort + 'static>(
         let fields = json!({ "minutes": minutes, "reason": args.reason });
         desk.record(&caller, "arm", fields).await;
     }
+    let before = desk.entries();
     let sent = desk
         .commit(engine.client(), engine.limits(), &caller, &fresh)
         .await;
+    ctx.writes.signals.ledger_settled(&before, &desk);
     outcome(fresh.device, Via::Elicitation, sent)
 }
 
@@ -207,9 +211,11 @@ pub(crate) async fn planned<T: TransportPort + 'static>(
     }
     let mut caller = McpCaller::new(&ctx.writes, &ctx.policy.writes, Some(Via::Plan), fields);
     caller.sending = Some(sending);
+    let before = desk.entries();
     let sent = desk
         .commit(engine.client(), engine.limits(), &caller, &preview)
         .await;
+    ctx.writes.signals.ledger_settled(&before, &desk);
     outcome(preview.device, Via::Plan, sent)
 }
 
@@ -238,7 +244,9 @@ pub(crate) async fn open<T: TransportPort + 'static>(
         .await;
         return Err(error);
     }
+    let before = desk.entries();
     desk.settle_abandoned(caller).await;
+    ctx.writes.signals.ledger_settled(&before, &desk);
     Ok(desk)
 }
 
