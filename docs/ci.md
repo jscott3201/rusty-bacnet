@@ -23,7 +23,7 @@ only when every job under it did (see [Merge evidence](#merge-evidence)).
 | Job | PR to `dev` | PR to `main` | Push to `dev` (merge) | Push to `main`, `v*` tag, weekly, manual |
 | --- | --- | --- | --- | --- |
 | Lint: rustfmt, 700-LOC cap, no-secret scan, script regressions, the `named_codes!` copies, changelog fragments, the [tool pins](#tool-pins), the [fuzz crates' lockfiles](#fuzzing) | ✓ | ✓ | ✓ | ✓ |
-| Clippy and rustdoc, warnings denied: every feature, PyO3 crate, `bacnet-cli` without default features, each published crate with default features for Linux, Windows and macOS, the `no_std` crates on bare-metal targets and their `alloc` tests on the host; the every-feature and PyO3 rustdoc runs include private items. The workspace runs include the [samples](#samples). Also the [firmware link test](#firmware-link-test): the MS/TP, B/IP and MS/TP device images built without an allocator, and the APDU image with one, checked against their size budgets | ✓ | ✓ | ✓ | ✓ |
+| Clippy and rustdoc, warnings denied: every feature, PyO3 crate, `bacnet-cli` without default features, each published crate with default features for Linux, Windows and macOS, the `no_std` crates on bare-metal targets and their `alloc` tests on the host; the every-feature and PyO3 rustdoc runs include private items. The workspace runs include the [samples](#samples). Also the [firmware link test](#firmware-link-test): the MS/TP, B/IP and MS/TP device images built without an allocator, and the APDU and objects images with one, checked against their size budgets | ✓ | ✓ | ✓ | ✓ |
 | Test: Linux, every feature (`LINUX_FEATURES`); also the [`no_std` crates](#no_std-checks)' tests and doctests with `alloc` and without `std`, and their tests without either | ✓ | ✓ | ✓ | ✓ |
 | Python bindings: `maturin develop` (maturin at its [pinned](#tool-pins) version), then `python -m unittest discover -s crates/rusty-bacnet/tests`, the website's sample tests (`python -m unittest discover -s website/tests/python`: the loopback lab, and the CLI samples on the pages run against it with a debug `bacnet-cli` build; the root README's samples too (#2105): its quickstart server runs, its Python programs and CLI lines run against it, its MCP host configuration is parsed, its Rust blocks must match the `readme_*` Cargo examples that clippy compiles, and its dependency table must name published crates at the release; the step sets `BACNET_LAB_EXPECTED_VERSION` to the workspace version, since the lab otherwise expects the site's release and the wheel under test can be ahead of it) and the crate's Rust tests (`cargo nextest run -p rusty-bacnet`) | ✓ | ✓ | ✓ | ✓ |
 | MSRV (`RUST_MSRV` in [`.github/ci-pins.env`](../.github/ci-pins.env)), Linux native (`check-msrv.sh --linux-native`), the `no_std` builds included |  | ✓ |  | ✓ |
@@ -211,13 +211,13 @@ proves all of that; each check covers a part.
 
 | Check | Job | What it shows |
 | --- | --- | --- |
-| `scripts/ci/check-no-std.sh` | Clippy, `NO_STD_TARGETS` | Each crate and feature set compiles clean under clippy on `thumbv6m-none-eabi`, `thumbv7em-none-eabihf` and `riscv32imac-unknown-none-elf`, with nothing skipped but `bacnet-objects` on `thumbv6m-none-eabi` (it needs atomic compare-and-swap, #1615), and no package in its graph turns `std` on or is `tracing`, `tokio` or `socket2`. Nor does the crate choose atomics for the firmware: its own graph holds no `portable-atomic` or `critical-section`, and no `bytes` with `extra-platforms` |
+| `scripts/ci/check-no-std.sh` | Clippy, `NO_STD_TARGETS` | Each crate and feature set compiles clean under clippy on `thumbv6m-none-eabi`, `thumbv7em-none-eabihf` and `riscv32imac-unknown-none-elf`, with nothing skipped but `bacnet-objects` and `bacnet-device-core` on `thumbv6m-none-eabi` (they need atomic compare-and-swap, #1615, #2178), and no package in its graph turns `std` on or is `tracing`, `tokio` or `socket2`. Nor does the crate choose atomics for the firmware: its own graph holds no `portable-atomic` or `critical-section`, and no `bytes` with `extra-platforms` |
 | `scripts/ci/check-default-features.sh` | Clippy | Clippy and rustdoc, private items included, for the three crates with `alloc` and without `std`, and without either, and for `bacnet-objects` with `alloc`, on Linux, Windows and macOS |
 | `cargo clippy -p bacnet-types -p bacnet-encoding -p bacnet-services [-p bacnet-objects --features alloc] --no-default-features --all-targets` | Clippy | The tests with `alloc` and without `std` (the three crates and `bacnet-objects`), and the three crates' tests without either, which the Test job runs, are lint-clean too |
 | The `alloc` tests and doctests | Test | The three crates' and `bacnet-objects`' tests and doctests with `alloc` and without `std`: the code a bare-metal build compiles. The tests link `std`; `check-no-std.sh` shows the code needs none |
 | The allocation-free tests | Test | The three crates' tests without `alloc` either, including `bacnet-services/tests/no_alloc_subset.rs`, which runs Who-Is, I-Am and ReadProperty through the APDU header under a counting allocator and finds no allocation, and their doctests, whose examples write to sinks (#1779) |
-| `scripts/ci/check-msrv.sh` | MSRV | The three crates and `bacnet-objects` with `alloc` and without `std` build at the MSRV, in a run of their own, since the hosted crates turn `std` back on in the main run |
-| [Firmware link test](#firmware-link-test) | Clippy, `FIRMWARE_TARGETS` | The MS/TP and B/IP stacks, and an MS/TP device with its application layer, link into bare-metal images with no allocator, and `bacnet-encoding` and `bacnet-services` into one with an allocator, each within its size budget |
+| `scripts/ci/check-msrv.sh` | MSRV | The three crates, `bacnet-objects` and `bacnet-device-core` with `alloc` and without `std` build at the MSRV, in a run of their own, since the hosted crates turn `std` back on in the main run |
+| [Firmware link test](#firmware-link-test) | Clippy, `FIRMWARE_TARGETS` | The MS/TP and B/IP stacks, and an MS/TP device with its application layer, link into bare-metal images with no allocator, and `bacnet-encoding` and `bacnet-services` into one with an allocator, and `bacnet-device-core` over `bacnet-objects` into another, each within its size budget |
 
 **ARMv6-M and `bytes`.** `bytes` needs atomic compare-and-swap, which
 `thumbv6m-none-eabi` lacks. With its `extra-platforms` feature it takes that
@@ -266,8 +266,8 @@ cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services --no-defa
 ### Firmware link test
 
 `check-no-std.sh` runs clippy on the `no_std` crates, and clippy never links.
-The firmware link test (#1626, #1635, #1664, #1667, #1679, #1771) does.
-`firmware/link` (the `firmware-link` crate, `publish = false`) builds eight
+The firmware link test (#1626, #1635, #1664, #1667, #1679, #1771, #2178) does.
+`firmware/link` (the `firmware-link` crate, `publish = false`) builds nine
 `#![no_main]` bare-metal images, one per stack, because code can't be
 credited to a crate reliably within one LTO image:
 
@@ -303,9 +303,14 @@ credited to a crate reliably within one LTO image:
   ReadProperty for a Device object and an Analog Input;
 - `apdu` links `bacnet-encoding` and `bacnet-services` (and through them
   `bacnet-types`) without default features and with `alloc`, the way a
-  firmware uses them, with a global allocator over a fixed arena.
+  firmware uses them, with a global allocator over a fixed arena;
+- `objects` links `bacnet-device-core`'s `Responder` over a `bacnet-objects`
+  database, with a global allocator over a 16 KiB arena. Both need atomic
+  compare-and-swap, so it builds for `thumbv7m-none-eabi`,
+  `thumbv7em-none-eabihf` and `riscv32imac-unknown-none-elf` only, the last
+  for this image alone.
 
-A use of `alloc` anywhere in an image but `apdu`, the device's application layer included, fails its build with "no
+A use of `alloc` anywhere in an image but `apdu` and `objects`, the device's application layer included, fails its build with "no
 global memory allocator found". In any image, a symbol that only a hosted
 target or the firmware provides fails the link: an atomic library call, or
 a critical section that nothing implements. A compare-and-swap on ARMv6-M or
@@ -419,9 +424,16 @@ targets, so a crate that needs one builds only with a backend such as
     broadcast frame and one to every network, go unanswered. The client's frames are written by hand from the
     Clause 6.2 and 20.1 layouts, and so are the answers it expects, whose
     hashes `device::expected()` holds.
+  - `objects::run` builds a database of a Device and two Analog Inputs and
+    two Binary Values, and hands `Responder::handle` ten request APDUs:
+    Who-Is in range and out of it, a Who-Has, a ReadProperty of each
+    Present_Value, one of an object the device lacks, one whose parameters
+    stop short, and a segmented request. `objects::expected()` holds each
+    outcome and answer.
 
   The host tests in `firmware/link/tests/` (`mstp.rs`, `mstp_extended.rs`,
-  `bip.rs`, `node.rs`, `bbmd.rs`, `router.rs`, `device.rs` and `apdu.rs`)
+  `bip.rs`, `node.rs`, `bbmd.rs`, `router.rs`, `device.rs`, `apdu.rs` and
+  `objects.rs`)
   run them and
   compare each
   whole summary, so the behaviour is checked natively, in every
@@ -471,7 +483,8 @@ targets, so a crate that needs one builds only with a backend such as
   (Cortex-M0/M0+), `riscv32imc-unknown-none-elf` (RV32IMC, the ESP32-C3
   class) and `thumbv7em-none-eabihf` (Cortex-M4F and M7F, with the
   hard-float ABI, since #1660), in `FIRMWARE_TARGETS` in `ci.yml`, each
-  with budget tables of its own. `thumbv7em-none-eabihf`'s images are a
+  with budget tables of its own; `riscv32imac-unknown-none-elf` joins them
+  for the objects image alone (#2178). `thumbv7em-none-eabihf`'s images are a
   little smaller than `thumbv7m-none-eabi`'s. They share one generic memory
   layout, `firmware/link/memory.x`: 256 KiB of flash at `0x08000000` and 64
   KiB of RAM at `0x20000000`. The startup code comes from `cortex-m-rt` and
@@ -505,7 +518,10 @@ targets, so a crate that needs one builds only with a backend such as
   image depends on `bacnet-types`, `bacnet-encoding` and
   `bacnet-services` without default features; the feature turns on their
   `alloc` profile for `apdu`, so the device image fails the same way if
-  anything turns it on for them.
+  anything turns it on for them. The `objects` feature, also on by
+  default, brings in the objects scenario and image with
+  `bacnet-device-core` and `bacnet-objects`; the check builds that image
+  with it alone.
 - **The check.** `scripts/ci/check-firmware-link.sh` runs, per target,
   clippy on the images' code (a host build compiles it out) and the
   `firmware`-profile build, once without the `alloc` feature for every
@@ -537,7 +553,7 @@ targets, so a crate that needs one builds only with a backend such as
   have no 64-bit divide instruction, so a 64-bit division by a runtime
   value costs about 0.9 KB, which the budgets' headroom would otherwise
   absorb; the MS/TP core divides only in 32 bits (#1618). Every image,
-  apdu included, holds both counts at 0: the libraries' decoding and
+  apdu included, holds both counts at 0 but objects: the libraries' decoding and
   encoding errors carry static labels formatted only when displayed
   (#1646, #1777), which no image does. The apdu image used to build its
   messages with `format!`, which linked 15 `core::fmt` functions (about
@@ -556,7 +572,9 @@ targets, so a crate that needs one builds only with a backend such as
   doesn't overlap its source, or a slice rotation, calls it. The bip,
   node, bbmd, mstp, mstp-extended, router and device images link none, and their
   limit of 0 keeps it out. The apdu image links it (2); its limit is that count,
-  with no headroom.
+  with no headroom. The objects image's three counts are what it links, with
+  no headroom: 7 `core::fmt` functions, which format the default Device's
+  name (#2187), and 2-3 each of 64-bit division and memmove routines.
   `scripts/ci/test-firmware-size.py` tests the helper on small ELF files
   it builds itself, in the Lint job. CI runs the check in the Clippy job,
   after the `no_std` check, which already sets up bare-metal targets,
@@ -668,7 +686,7 @@ targets, so a crate that needs one builds only with a backend such as
   table for each image as it builds now.
 
 ```bash
-rustup target add thumbv7m-none-eabi thumbv6m-none-eabi riscv32imc-unknown-none-elf thumbv7em-none-eabihf
+rustup target add thumbv7m-none-eabi thumbv6m-none-eabi riscv32imc-unknown-none-elf thumbv7em-none-eabihf riscv32imac-unknown-none-elf
 bash scripts/ci/check-firmware-link.sh                       # every target
 bash scripts/ci/check-firmware-link.sh thumbv6m-none-eabi    # one
 bash scripts/ci/check-firmware-link.sh --suggest             # budgets as the images build now

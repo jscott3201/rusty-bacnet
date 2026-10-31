@@ -7,7 +7,8 @@ benchmark-derived guarantees.
 
 ## Configuration and compatibility
 
-Rust exposes `bacnet_server::server::ReadPropertyMultipleBudget` with public
+Rust exposes `bacnet_device_core::read::ReadPropertyMultipleBudget` (in
+`bacnet_server::server` before #2178) with public
 `max_result_elements` and `max_service_ack_bytes` fields. Set it through
 `ServerConfig::read_property_multiple_budget` or the
 `read_property_multiple_budget(...)` method on generic, BACnet/IP, and SC
