@@ -389,7 +389,7 @@ async fn serve_with<T: TransportPort + 'static>(
     sc_events: Option<broadcast::Receiver<ScEvent>>,
 ) {
     let client = Arc::new(client);
-    let rate = Arc::new(session_limits(&options));
+    let rate = Arc::new(RequestLimits::new(options.max_rate));
     let mut local = style.format(client.local_mac());
     // A B/IPv6 VMAC alone doesn't say where the client is bound.
     if let Some(bound) =
@@ -585,16 +585,6 @@ async fn serve_with<T: TransportPort + 'static>(
         );
     }
     stop_shared(client).await;
-}
-
-/// The session's request limits: its cap, and the MCP listener's rates
-/// when it has one.
-fn session_limits(options: &SessionOptions) -> RequestLimits {
-    #[cfg(feature = "mcp")]
-    if let Some(plan) = &options.attach {
-        return crate::tui::attach::limits(options.max_rate, plan);
-    }
-    RequestLimits::new(options.max_rate)
 }
 
 /// The MCP listener, while the session runs.

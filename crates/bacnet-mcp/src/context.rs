@@ -58,6 +58,12 @@ pub(crate) struct Ctx<T: TransportPort + 'static> {
     pub(crate) bbmd_asked: Mutex<Option<Instant>>,
     /// The watch hub; `None` in passive mode.
     pub(crate) hub: Option<Hub<T>>,
+    /// Whether the session shuts the hub down when it ends: not when the
+    /// TUI's listener shares it among its sessions (#2185).
+    pub(crate) owns_hub: bool,
+    /// How long the client has to open the session, for the TUI's
+    /// listener; `None` on stdio.
+    pub(crate) initialize: Option<Duration>,
     /// What the principal watches, and the subscriptions waiting for their
     /// streams.
     pub(crate) subs: Arc<Subs>,

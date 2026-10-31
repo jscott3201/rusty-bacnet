@@ -20,13 +20,13 @@ use crate::{McpServer, Policy};
 const AI1: &str = "bacnet://device/1201/object/analog-input:1";
 
 /// A workspace directory nobody else can enter.
-fn private_dir() -> tempfile::TempDir {
+pub(super) fn private_dir() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     dir
 }
 
-fn workspace(dir: &Path) -> Workspace {
+pub(super) fn workspace(dir: &Path) -> Workspace {
     Workspace {
         dir: dir.to_path_buf(),
         profile: Some("lab".into()),
@@ -51,7 +51,7 @@ fn writes_offered(dir: &Path) -> Policy {
 
 impl Lab {
     /// The lab client's engine, on the lab's limits: the TUI's shared one.
-    fn engine(&self) -> Arc<Engine<super::Recording>> {
+    pub(super) fn engine(&self) -> Arc<Engine<super::Recording>> {
         Arc::new(Engine::new(
             Arc::clone(&self.client),
             Arc::clone(&self.limits),
@@ -59,20 +59,20 @@ impl Lab {
     }
 
     /// A listener on `dir` over the lab's engine.
-    async fn attach(&self, dir: &Path, policy: Policy) -> Result<Listener, AttachError> {
+    pub(super) async fn attach(&self, dir: &Path, policy: Policy) -> Result<Listener, AttachError> {
         Listener::bind(self.engine(), policy, "tester", workspace(dir)).await
     }
 }
 
 /// The lab, its own pipe's session started (it fails if never opened).
-async fn lab() -> Lab {
+pub(super) async fn lab() -> Lab {
     let mut lab = Lab::start(Policy::default()).await;
     lab.agent.initialize().await;
     lab
 }
 
 /// An agent through the bridge to the socket at `path`, and the bridge.
-fn bridged(path: &Path) -> (Agent, JoinHandle<Result<(), AttachError>>) {
+pub(super) fn bridged(path: &Path) -> (Agent, JoinHandle<Result<(), AttachError>>) {
     let (agent, bridge) = tokio::io::duplex(1 << 20);
     let path = path.to_path_buf();
     let bridge = tokio::spawn(async move {
@@ -83,7 +83,7 @@ fn bridged(path: &Path) -> (Agent, JoinHandle<Result<(), AttachError>>) {
 }
 
 /// The workspace's audit records.
-fn audit(dir: &Path) -> Vec<Value> {
+pub(super) fn audit(dir: &Path) -> Vec<Value> {
     std::fs::read_to_string(dir.join("audit.jsonl"))
         .unwrap_or_default()
         .lines()
@@ -91,7 +91,7 @@ fn audit(dir: &Path) -> Vec<Value> {
         .collect()
 }
 
-fn events(dir: &Path) -> Vec<String> {
+pub(super) fn events(dir: &Path) -> Vec<String> {
     audit(dir)
         .iter()
         .map(|record| record["event"].as_str().unwrap().to_string())
@@ -160,6 +160,13 @@ async fn an_attached_agent_reads_on_the_shared_engine() {
         .request(
             "tools/call",
             json!({ "name": "bacnet_write", "arguments": { "device": "1201", "writes": [] } }),
+        )
+        .await;
+    assert!(refused.get("error").is_some(), "{refused}");
+    let refused = agent
+        .request(
+            "tools/call",
+            json!({ "name": "bacnet_revert", "arguments": { "all": true } }),
         )
         .await;
     assert!(refused.get("error").is_some(), "{refused}");
@@ -236,61 +243,60 @@ async fn another_users_connection_is_refused_and_audited() {
     lab.stop().await;
 }
 
-/// A workspace others can enter, one that is a symbolic link, or one that
-/// isn't a directory gets no socket, and the refusal says why.
+/// Acceptance (maintainer, 2026-10-31): a looser workspace of this user's
+/// is narrowed to 0700 when the listener starts; one that is a symbolic
+/// link, or isn't a directory, gets no socket and the refusal says why.
 #[tokio::test(start_paused = true)]
-async fn a_workspace_others_can_enter_is_refused() {
+async fn a_loose_workspace_is_narrowed_and_a_link_refused() {
     let lab = lab().await;
     let dir = private_dir();
     for mode in [0o755, 0o750, 0o705, 0o710, 0o701, 0o720] {
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(mode)).unwrap();
-        let error = lab.attach(dir.path(), Policy::default()).await.unwrap_err();
-        let error = error.to_string();
-        assert!(
-            error.contains(&format!("mode {mode:03o}")) && error.contains("0700"),
-            "{error}"
-        );
-        assert!(!socket_path(dir.path()).exists());
+        let listener = lab.attach(dir.path(), Policy::default()).await.unwrap();
+        let now = std::fs::metadata(dir.path()).unwrap().mode() & 0o777;
+        assert_eq!(now, 0o700, "{mode:o}");
+        listener.shutdown().await;
     }
-    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let link = dir.path().join("link");
     let real = dir.path().join("real");
     std::fs::create_dir(&real).unwrap();
-    std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::os::unix::fs::symlink(&real, &link).unwrap();
     let error = lab.attach(&link, Policy::default()).await.unwrap_err();
     assert!(error.to_string().contains("symbolic link"), "{error}");
     assert!(!socket_path(&real).exists());
+    let real_mode = std::fs::metadata(&real).unwrap().mode() & 0o777;
+    assert_eq!(real_mode, 0o755, "nothing done through the link");
     let file = dir.path().join("file");
     std::fs::write(&file, "").unwrap();
     let error = lab.attach(&file, Policy::default()).await.unwrap_err();
     assert!(error.to_string().contains("not a directory"), "{error}");
-    // The narrowest mode is fine.
-    lab.attach(&real, Policy::default())
-        .await
-        .unwrap()
-        .shutdown()
-        .await;
     lab.stop().await;
 }
 
-/// A socket nobody listens on (a TUI that crashed) is replaced; a live
-/// one is left to its listener, which keeps serving; a symbolic link or
-/// any other file at the path is neither followed nor removed.
+/// A second listener on the workspace finds the first's lock and is
+/// refused without touching the socket or opening a session, and the
+/// first keeps serving; a socket with no lock holder (a TUI that crashed)
+/// is cleared; a symbolic link or any other file at the path is neither
+/// followed nor removed.
 #[tokio::test(start_paused = true)]
-async fn a_stale_socket_is_cleared_and_a_live_one_kept() {
+async fn a_second_listener_is_refused_and_a_stale_socket_cleared() {
     let lab = lab().await;
     let dir = private_dir();
     let path = socket_path(dir.path());
     drop(std::os::unix::net::UnixListener::bind(&path).unwrap());
     assert!(path.exists(), "a stale socket");
+    assert!(!attach::listening(dir.path()), "no lock held");
     let first = lab.attach(dir.path(), Policy::default()).await.unwrap();
+    assert!(attach::listening(dir.path()));
 
     let error = lab.attach(dir.path(), Policy::default()).await.unwrap_err();
     assert!(
-        error.to_string().contains("another process is listening"),
+        error.to_string().contains("another TUI is listening"),
         "{error}"
     );
+    assert_eq!(*first.agents().borrow(), 0, "no session was opened");
+    assert!(events(dir.path()).is_empty(), "{:?}", events(dir.path()));
     let (mut agent, bridge) = bridged(&path);
     let hello = agent.initialize().await;
     assert!(
@@ -301,6 +307,7 @@ async fn a_stale_socket_is_cleared_and_a_live_one_kept() {
     bridge.await.unwrap().unwrap();
     first.shutdown().await;
     assert!(!path.exists());
+    assert!(!attach::listening(dir.path()), "released at shutdown");
 
     let target = dir.path().join("target");
     std::fs::write(&target, "keep").unwrap();

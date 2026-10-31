@@ -7,11 +7,19 @@ use std::path::Path;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt as _};
 use tokio::net::UnixStream;
 
-use super::{AttachError, os_credentials, own_uid};
+use super::{AttachError, Credentials, os_credentials, own_uid};
 
 /// Connect to the TUI's socket at `path`, checking that the listener is
 /// this OS user's own.
 pub async fn connect(path: &Path) -> Result<UnixStream, AttachError> {
+    connect_with(path, os_credentials).await
+}
+
+/// [`connect`], identifying the listener with `credentials`.
+pub(crate) async fn connect_with(
+    path: &Path,
+    credentials: Credentials,
+) -> Result<UnixStream, AttachError> {
     let shown = path.display();
     let stream = match UnixStream::connect(path).await {
         Ok(stream) => stream,
@@ -24,7 +32,7 @@ pub async fn connect(path: &Path) -> Result<UnixStream, AttachError> {
         }
         Err(e) => return Err(AttachError(format!("cannot connect to {shown}: {e}"))),
     };
-    let peer = os_credentials(&stream)
+    let peer = credentials(&stream)
         .map_err(|e| AttachError(format!("cannot identify the listener at {shown}: {e}")))?;
     let uid = own_uid();
     if peer.uid != uid {

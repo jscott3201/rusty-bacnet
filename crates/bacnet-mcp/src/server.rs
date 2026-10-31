@@ -43,7 +43,7 @@ const LISTEN_WAIT: Duration = Duration::from_secs(5);
 /// 60 ms a point (one cancel each, paced at the global rate of 20 a
 /// second), up to 30 s. A cancel still waiting then is given up, and its
 /// subscription lapses with its lifetime (300 s).
-fn cancel_wait(points: usize) -> Duration {
+pub(crate) fn cancel_wait(points: usize) -> Duration {
     let points = u32::try_from(points).unwrap_or(u32::MAX);
     (Duration::from_secs(10) + Duration::from_millis(60).saturating_mul(points))
         .min(Duration::from_secs(30))
@@ -90,6 +90,61 @@ impl<T: TransportPort + 'static> Clone for McpServer<T> {
     }
 }
 
+/// What a server's sessions share: the watch hub (`None` in passive
+/// mode), so one point cap, and the principal's token bucket. A stdio
+/// server has its own; the TUI's listener hands one to all its sessions,
+/// since they are one principal (#2185).
+pub(crate) struct Shared<T: TransportPort + 'static> {
+    pub(crate) hub: Option<Hub<T>>,
+    pub(crate) bucket: Arc<TokenBucket>,
+    /// Whether the session shuts the hub down when it ends.
+    owned: bool,
+}
+
+impl<T: TransportPort + 'static> Clone for Shared<T> {
+    fn clone(&self) -> Self {
+        Self {
+            hub: self.hub.clone(),
+            bucket: Arc::clone(&self.bucket),
+            owned: self.owned,
+        }
+    }
+}
+
+impl<T: TransportPort + 'static> Shared<T> {
+    /// A hub over `engine` (with one) and a bucket, under checked `policy`.
+    /// With an engine it starts the hub, so it must be called inside a
+    /// Tokio runtime.
+    pub(crate) fn new(
+        engine: Option<&Arc<Engine<T>>>,
+        policy: &Policy,
+    ) -> Result<Self, ServeError> {
+        policy
+            .validate()
+            .map_err(|e| ServeError(format!("the MCP policy: {e}")))?;
+        let rates = policy.rates;
+        // The hub's own bucket, at a principal's rate: its polls and
+        // subscriptions never take the agent's tokens, and a shared point
+        // costs the same whatever the number of listeners.
+        let hub = engine
+            .map(|engine| {
+                let options = WatchOptions {
+                    max_points: policy.caps.process_watches,
+                    bucket: Some(Arc::new(TokenBucket::new(rates.principal, rates.burst))),
+                    ..WatchOptions::default()
+                };
+                Hub::new(Arc::clone(engine), options)
+                    .map_err(|e| ServeError(format!("the watch hub: {e}")))
+            })
+            .transpose()?;
+        Ok(Self {
+            hub,
+            bucket: Arc::new(TokenBucket::new(rates.principal, rates.burst)),
+            owned: true,
+        })
+    }
+}
+
 /// Why the server stopped other than its client going away.
 #[derive(Debug)]
 pub struct ServeError(String);
@@ -117,33 +172,53 @@ impl<T: TransportPort + 'static> McpServer<T> {
         policy: Policy,
         principal: impl Into<String>,
     ) -> Result<Self, ServeError> {
+        let shared = Shared::new(engine.as_ref(), &policy)?;
+        Ok(Self::build(engine, policy, principal.into(), shared, None))
+    }
+
+    /// A session of the TUI's listener (#2185): over the TUI's `engine`,
+    /// sharing the listener's watch hub and principal bucket with its other
+    /// sessions, and ended unless the client opens it within `initialize`.
+    /// It leaves the shared hub running when it ends; its watches go.
+    #[cfg(unix)]
+    pub(crate) fn attached(
+        engine: Arc<Engine<T>>,
+        policy: Policy,
+        principal: String,
+        shared: &Shared<T>,
+        initialize: Duration,
+    ) -> Result<Self, ServeError> {
         policy
             .validate()
             .map_err(|e| ServeError(format!("the MCP policy: {e}")))?;
-        let rates = policy.rates;
-        // The hub's own bucket, at a principal's rate: its polls and
-        // subscriptions never take the agent's tokens, and a shared point
-        // costs the same whatever the number of listeners.
-        let hub = engine
-            .as_ref()
-            .map(|engine| {
-                let options = WatchOptions {
-                    max_points: policy.caps.process_watches,
-                    bucket: Some(Arc::new(TokenBucket::new(rates.principal, rates.burst))),
-                    ..WatchOptions::default()
-                };
-                Hub::new(Arc::clone(engine), options)
-                    .map_err(|e| ServeError(format!("the watch hub: {e}")))
-            })
-            .transpose()?;
+        let shared = Shared {
+            owned: false,
+            ..shared.clone()
+        };
+        Ok(Self::build(
+            Some(engine),
+            policy,
+            principal,
+            shared,
+            Some(initialize),
+        ))
+    }
+
+    fn build(
+        engine: Option<Arc<Engine<T>>>,
+        policy: Policy,
+        principal: String,
+        shared: Shared<T>,
+        initialize: Option<Duration>,
+    ) -> Self {
         let writes = crate::writes::Writes::new(&policy.writes);
-        Ok(Self {
+        Self {
             ctx: Arc::new(Ctx {
                 engine,
                 policy,
-                principal: principal.into(),
+                principal,
                 cursors: Cursors::new(),
-                bucket: Arc::new(TokenBucket::new(rates.principal, rates.burst)),
+                bucket: shared.bucket,
                 broad: Mutex::new(None),
                 lists: Mutex::new(HashMap::new()),
                 list_locks: Mutex::new(HashMap::new()),
@@ -151,7 +226,9 @@ impl<T: TransportPort + 'static> McpServer<T> {
                 names: Mutex::new(HashMap::new()),
                 routers: Mutex::default(),
                 bbmd_asked: Mutex::new(None),
-                hub,
+                hub: shared.hub,
+                owns_hub: shared.owned,
+                initialize,
                 subs: Arc::new(Subs::default()),
                 closing: CancellationToken::new(),
                 listening: tokio::sync::watch::Sender::new(0),
@@ -161,7 +238,7 @@ impl<T: TransportPort + 'static> McpServer<T> {
                 writes,
                 handoffs: tokio_util::task::TaskTracker::new(),
             }),
-        })
+        }
     }
 
     /// The server's shared state, for tests that hand it to a task.
@@ -261,9 +338,19 @@ impl<T: TransportPort + 'static> McpServer<T> {
             ctx: Arc::clone(&ctx),
             notifier: None,
         };
-        let quit = match ServiceExt::serve(self, (reader, writer)).await {
-            Err(e) => Err(ServeError(format!("MCP session did not start: {e}"))),
-            Ok(running) => {
+        // A listener's session must open within its wait, so an idle
+        // connection can't hold a seat.
+        let starting = ServiceExt::serve(self, (reader, writer));
+        let started = match ctx.initialize {
+            Some(wait) => tokio::time::timeout(wait, starting)
+                .await
+                .map_err(|_| format!("no MCP request within {} s", wait.as_secs())),
+            None => Ok(starting.await),
+        };
+        let quit = match started {
+            Err(why) => Err(ServeError(why)),
+            Ok(Err(e)) => Err(ServeError(format!("MCP session did not start: {e}"))),
+            Ok(Ok(running)) => {
                 session.notifier = Some(tokio::spawn(legacy::notify(
                     Arc::clone(&ctx),
                     running.peer().clone(),
@@ -306,7 +393,8 @@ impl<T: TransportPort + 'static> McpServer<T> {
             }
         }
         ctx.subs.clear();
-        if let Some(hub) = &ctx.hub {
+        // A shared hub outlives the session: its listener shuts it down.
+        if let Some(hub) = ctx.hub.as_ref().filter(|_| ctx.owns_hub) {
             hub.shutdown(cancel_wait(hub.stats().tasks)).await;
         }
         let _ = follow.await;

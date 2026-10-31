@@ -1063,10 +1063,14 @@ port isn't contended for. The agent host launches it as it launches
 `bacnet mcp serve`. The TUI listens only on a profile authorized for MCP
 (below), unless its `[mcp]` table sets `tui_listener = false`; the status
 bar shows `MCP n` with the agents attached. Over the socket the tools are
-read-only whatever `mcp_writes` says. Only your own OS user can connect:
-the workspace must be mode 0700 (new ones are; `chmod 700` an older one),
-the socket is 0600, and each connection's peer credentials are checked,
-a refusal going to the audit log. With no TUI listening, `connect` exits
+read-only whatever `mcp_writes` says, and the table's rates join the
+TUI's only while an agent is attached. Only your own OS user can connect:
+the workspace is kept at mode 0700 (a looser one is narrowed when the
+listener starts), the socket is 0600, and each connection's peer
+credentials are checked, a refusal going to the audit log. The listener
+holds `mcp.lock` in the workspace, so a second TUI on the profile doesn't
+listen, and without `--profile` `connect` picks the only profile whose
+lock is held. With no TUI listening, `connect` exits
 non-zero with a message on stderr; when the TUI closes the profile, it
 exits cleanly. Details are in [docs/mcp.md](mcp.md#attached-to-the-tui).
 

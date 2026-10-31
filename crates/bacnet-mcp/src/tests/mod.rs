@@ -3,6 +3,8 @@
 
 #[cfg(unix)]
 mod attach;
+#[cfg(unix)]
+mod attach_more;
 mod bbmd;
 mod budget;
 mod confirm;

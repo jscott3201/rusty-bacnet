@@ -46,8 +46,11 @@ getrandom = { workspace = true, features = ["std"] }
 chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["alloc"] }
 
 # The attached mode's socket admits only this process's own user (#2185).
+# O_DIRECTORY and O_NOFOLLOW, for checking and narrowing the workspace on
+# one open handle.
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true, features = ["user"] }
+libc.workspace = true
 
 [dev-dependencies]
 bacnet-encoding = { workspace = true, features = ["std"] }

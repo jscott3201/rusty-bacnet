@@ -313,10 +313,18 @@ fn the_profile_defaults_are_the_servers() {
 }
 
 /// `bacnet mcp connect` finds the socket of the profile named, or of the
-/// only profile with one, and asks for a name when several have one.
+/// only profile whose listener holds its lock (a stale socket file alone
+/// doesn't count), and asks for a name when several are listening.
 #[cfg(unix)]
 #[test]
 fn connect_finds_the_listening_profile() {
+    /// A listener's lock on `name`'s workspace, as the TUI holds it.
+    fn listen(store: &Store, name: &str) -> std::fs::File {
+        let dir = store.workspace(name).unwrap();
+        let lock = std::fs::File::create(dir.join(bacnet_mcp::attach::LOCK_FILE)).unwrap();
+        lock.try_lock().unwrap();
+        lock
+    }
     let (_dir, store) = store_with(None);
     store.save("plant", &Profile::default(), true).unwrap();
     let error = attached_socket(&store, None).unwrap_err();
@@ -327,11 +335,17 @@ fn connect_finds_the_listening_profile() {
         store.workspace_path("plant").unwrap().join("mcp.sock")
     );
     assert!(attached_socket(&store, Some("../x")).is_err());
-    let site = store.workspace("site").unwrap().join("mcp.sock");
-    let _site = std::os::unix::net::UnixListener::bind(&site).unwrap();
+    let stale = store.workspace("plant").unwrap().join("mcp.sock");
+    drop(std::os::unix::net::UnixListener::bind(&stale).unwrap());
+    let error = attached_socket(&store, None).unwrap_err();
+    assert!(
+        error.contains("no TUI is listening"),
+        "a stale socket: {error}"
+    );
+    let _site = listen(&store, "site");
+    let site = store.workspace_path("site").unwrap().join("mcp.sock");
     assert_eq!(attached_socket(&store, None).unwrap(), site);
-    let plant = store.workspace("plant").unwrap().join("mcp.sock");
-    let _plant = std::os::unix::net::UnixListener::bind(&plant).unwrap();
+    let _plant = listen(&store, "plant");
     let error = attached_socket(&store, None).unwrap_err();
     assert!(error.contains("plant, site"), "{error}");
 }

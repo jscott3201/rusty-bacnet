@@ -54,6 +54,13 @@ impl Agent {
     }
 }
 
+/// The agents the bar counts, while the listener runs.
+fn mcp_agents(app: &App) -> Option<usize> {
+    app.mcp
+        .as_ref()
+        .and_then(crate::tui::message::McpListener::agents)
+}
+
 fn plan(dir: &Path) -> Plan {
     Plan {
         policy: Policy::default(),
@@ -81,7 +88,7 @@ async fn an_agent_reads_through_the_open_session() {
     let servers = vec![Server::lab(100, LAB)];
     let mut site = Site::start_with_options(servers, ClientLimits::default(), options).await;
     site.who_is("", 1).await;
-    site.pump_until(|app| app.agents == Some(0)).await;
+    site.pump_until(|app| mcp_agents(app) == Some(0)).await;
     assert!(screen(&mut site.app, 120, 40).contains("MCP 0"));
 
     let path = socket_path(dir.path());
@@ -97,7 +104,7 @@ async fn an_agent_reads_through_the_open_session() {
     agent
         .request(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }))
         .await;
-    site.pump_until(|app| app.agents == Some(1)).await;
+    site.pump_until(|app| mcp_agents(app) == Some(1)).await;
     for width in [120, 80] {
         let text = screen(&mut site.app, width, 24);
         assert!(text.contains("MCP 1"), "{width} columns:\n{text}");
@@ -200,27 +207,18 @@ fn the_plan_follows_the_profile() {
     assert!(error.contains("transport"), "{error}");
 }
 
-/// With a listener, the session keeps to the table's rate per network
-/// and to the lower of the two global caps.
-#[tokio::test(start_paused = true)]
-async fn the_session_keeps_to_the_tables_rates() {
-    use crate::tui::attach::limits;
-    use tokio::time::Instant;
-    let mut planned = plan(Path::new("/tmp/site"));
-    planned.policy.slow_networks = [2001].into();
-    planned.policy.rates.global = 10;
-    let slow = limits(0, &planned);
-    let start = Instant::now();
-    for device in 0..3 {
-        drop(slow.turn_on(device, Some(2001)).await);
-    }
-    assert_eq!(start.elapsed(), Duration::from_secs(1), "2 a second");
-    for (tui, spacing) in [(50, 100), (4, 250), (0, 100)] {
-        let capped = limits(tui, &planned);
-        let start = Instant::now();
-        for device in 0..3 {
-            drop(capped.turn(device).await);
-        }
-        assert_eq!(start.elapsed(), Duration::from_millis(2 * spacing), "{tui}");
-    }
+/// The bar shows the listener's latest count without another event, and
+/// `MCP off` when a listener the profile asked for couldn't start.
+#[test]
+fn the_bar_follows_the_listeners_count() {
+    use crate::tui::message::McpListener;
+    let mut app = connected_app();
+    worker(&mut app, WorkerEvent::Mcp(McpListener::Off));
+    assert!(screen(&mut app, 120, 24).contains("MCP off"));
+    let (count, seen) = tokio::sync::watch::channel(2);
+    worker(&mut app, WorkerEvent::Mcp(McpListener::Agents(seen)));
+    assert!(screen(&mut app, 120, 24).contains("MCP 2"));
+    count.send_replace(3);
+    let text = screen(&mut app, 120, 24);
+    assert!(text.contains("MCP 3") && !text.contains("MCP 2"), "{text}");
 }

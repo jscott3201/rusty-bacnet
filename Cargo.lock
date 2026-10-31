@@ -463,6 +463,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.3.4",
  "hmac",
+ "libc",
  "nix 0.31.3",
  "rmcp",
  "serde",

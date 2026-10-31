@@ -12,7 +12,6 @@ use std::sync::Arc;
 use bacnet_mcp::Policy;
 use bacnet_mcp::policy::Workspace;
 use bacnet_ops::engine::Engine;
-use bacnet_ops::limits::RequestLimits;
 use bacnet_transport::port::TransportPort;
 use tokio::sync::mpsc;
 
@@ -25,6 +24,7 @@ use crate::transport::TransportArgs;
 pub(crate) struct Plan {
     /// The `[mcp]` table's reach, rates and caps; the listener drops any
     /// write policy.
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) policy: Policy,
     /// The workspace that holds the socket and the audit log.
     pub(crate) workspace: Workspace,
@@ -83,24 +83,10 @@ pub(crate) fn plan(
     }))
 }
 
-/// The session's request limits with `plan`'s: the TUI's cap, or the
-/// table's when it is stricter, and the table's rate per network, so an
-/// agent's requests to a slow trunk keep to it. The TUI's own requests
-/// to a paced network keep to it too.
-pub(crate) fn limits(max_rate: u32, plan: &Plan) -> RequestLimits {
-    let rates = plan.policy.rates;
-    let global = match max_rate {
-        0 => rates.global,
-        tui => tui.min(rates.global),
-    };
-    let slow = plan.policy.slow_networks.iter().map(|&n| (n, rates.slow));
-    let fast = plan.policy.fast_networks.iter().map(|&n| (n, rates.fast));
-    RequestLimits::new(global).with_network_rates(rates.network, slow.chain(fast))
-}
-
 /// Run `plan`'s listener over `engine` until `stop` closes (the session
-/// loop ended) or the session is cancelled, telling the UI how many agents
-/// are attached; then end their sessions and remove the socket.
+/// loop ended) or the session is cancelled, handing the UI the agents'
+/// count; then end their sessions and remove the socket. While an agent
+/// is attached the `[mcp]` limits join the engine's, the listener's doing.
 pub(crate) async fn run<T: TransportPort + 'static>(
     engine: &Arc<Engine<T>>,
     plan: Option<&Plan>,
@@ -112,7 +98,7 @@ pub(crate) async fn run<T: TransportPort + 'static>(
     };
     #[cfg(unix)]
     {
-        use super::message::WorkerEvent;
+        use super::message::{McpListener, WorkerEvent};
         use bacnet_mcp::attach::Listener;
         let mut stop = stop;
         let bound = Listener::bind(
@@ -125,7 +111,9 @@ pub(crate) async fn run<T: TransportPort + 'static>(
         let listener = match bound {
             Ok(listener) => listener,
             Err(error) => {
-                return tracing::warn!("MCP: agents can't attach: {error}");
+                tracing::warn!("MCP: agents can't attach: {error}");
+                sink.deliver(WorkerEvent::Mcp(McpListener::Off)).await;
+                return;
             }
         };
         let profile = plan.workspace.profile.as_deref().unwrap_or_default();
@@ -133,25 +121,16 @@ pub(crate) async fn run<T: TransportPort + 'static>(
             "MCP: agents can attach with `bacnet mcp connect --profile {profile}` (read-only; {})",
             listener.path().display()
         );
-        let mut agents = listener.agents();
-        sink.offer(WorkerEvent::Agents(Some(0)));
-        loop {
-            // None of these holds a lock; each is cancel-safe.
-            tokio::select! {
-                biased;
-                _ = stop.recv() => break,
-                () = sink.cancelled() => break,
-                changed = agents.changed() => {
-                    if changed.is_err() {
-                        break;
-                    }
-                    let now = *agents.borrow_and_update();
-                    sink.offer(WorkerEvent::Agents(Some(now)));
-                }
-            }
+        // The bar reads the count from the listener's own channel, so it
+        // always shows the latest.
+        let agents = McpListener::Agents(listener.agents());
+        sink.deliver(WorkerEvent::Mcp(agents)).await;
+        tokio::select! {
+            biased;
+            _ = stop.recv() => {}
+            () = sink.cancelled() => {}
         }
         listener.shutdown().await;
-        sink.offer(WorkerEvent::Agents(None));
     }
     #[cfg(not(unix))]
     {

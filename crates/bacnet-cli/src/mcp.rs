@@ -407,23 +407,18 @@ async fn connect(store: &Store, profile: Option<&str>) -> crate::CliResult {
 }
 
 /// The socket `bacnet mcp connect` attaches to: `profile`'s, or without
-/// one the only profile with a socket in its workspace.
+/// one that of the only profile whose listener holds its workspace's lock
+/// (a socket file alone may be a stale one).
 #[cfg(unix)]
 fn attached_socket(store: &Store, profile: Option<&str>) -> Result<std::path::PathBuf, String> {
-    use bacnet_mcp::attach::socket_path;
+    use bacnet_mcp::attach::{listening, socket_path};
     if let Some(name) = profile {
         return Ok(socket_path(&store.workspace_path(name)?));
     }
     let open: Vec<String> = store
         .list()?
         .into_iter()
-        .filter(|name| {
-            store.workspace_path(name).is_ok_and(|dir| {
-                use std::os::unix::fs::FileTypeExt as _;
-                std::fs::symlink_metadata(socket_path(&dir))
-                    .is_ok_and(|meta| meta.file_type().is_socket())
-            })
-        })
+        .filter(|name| store.workspace_path(name).is_ok_and(|dir| listening(&dir)))
         .collect();
     match open.as_slice() {
         [] => Err(

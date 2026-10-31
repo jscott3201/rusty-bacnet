@@ -1,4 +1,4 @@
 ---
 section: Added
 ---
-- On Unix, `bacnet tui` now lets AI agents attach to an open profile authorized for MCP through `bacnet mcp connect`, read-only, sharing the TUI's client and rate budget; only your own OS user can connect, and new profile workspaces are made private (#2185).
+- On Unix, `bacnet tui` lets agents attach read-only to a profile authorized for MCP (`bacnet mcp connect`), profiles authorized earlier included, unless `tui_listener = false`; the `[mcp]` limits apply only while one is attached, and its workspace is kept private (#2185).
