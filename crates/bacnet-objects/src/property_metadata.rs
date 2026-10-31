@@ -116,6 +116,10 @@ pub enum PropertyPresenceCondition {
     /// an object whose
     /// [`supports_cov`](crate::traits::BACnetObject::supports_cov) is true.
     CovReporting,
+    /// A Timer's Present_Value is writable while it is in service, which
+    /// requires Min_Pres_Value and Max_Pres_Value (Table 12-75 footnote 4,
+    /// #2192).
+    PresentValueWritableInService,
 }
 
 /// The write capability implemented by an object's property-write routes.
@@ -209,6 +213,7 @@ impl PropertyMetadata {
                         | PropertyPresenceCondition::BacnetIpv6Application
                         | PropertyPresenceCondition::Ipv6Port
                         | PropertyPresenceCondition::CovReporting
+                        | PropertyPresenceCondition::PresentValueWritableInService
                 )
             )
     }

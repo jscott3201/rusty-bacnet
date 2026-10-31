@@ -1003,19 +1003,23 @@ Property rows aggregate configured instances: a row or access flag means at leas
 |----------|--------|
 | DESCRIPTION | RWO |
 | EVENT_STATE | RO |
+| MAX_PRES_VALUE | R |
+| MIN_PRES_VALUE | R |
 | OBJECT_IDENTIFIER | R |
 | OBJECT_NAME | R |
 | OBJECT_TYPE | R |
 | OUT_OF_SERVICE | RWO |
 | PRESENT_VALUE | RW |
-| RELIABILITY | RO |
+| RELIABILITY | RWO |
 | STATUS_FLAGS | R |
 | UPDATE_TIME | RO |
 | EXPIRATION_TIME | RO |
 | PROPERTY_LIST | R |
-| INITIAL_TIMEOUT | RWO |
-| TIMER_RUNNING | R |
-| TIMER_STATE | R |
+| DEFAULT_TIMEOUT | RWO |
+| INITIAL_TIMEOUT | RO |
+| LAST_STATE_CHANGE | RO |
+| TIMER_RUNNING | RW |
+| TIMER_STATE | RW |
 
 #### ACCESS_CREDENTIAL
 
