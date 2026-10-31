@@ -21,6 +21,9 @@ bacnet-types → bacnet-encoding → bacnet-services → bacnet-transport → ba
                                                                    bacnet-server
 ```
 
+`bacnet-device-core` sits between `bacnet-objects` and `bacnet-server`: the
+read path the server runs ReadProperty, Who-Is and Who-Has through, which
+firmware can run without the server ([bacnet-device-core](#bacnet-device-core)).
 Above them, `bacnet-endpoint` (on `bacnet-endpoint-core`) runs client and
 server roles through one transport ([bacnet-endpoint](#bacnet-endpoint)), and
 `bacnet-ops` and `bacnet-mcp` sit on `bacnet-client`
@@ -4188,8 +4191,8 @@ Active_COV_Multiple_Subscriptions. A running
 server pages those two Device lists from the live COV table, through the same
 Device view as ReadProperty and from one snapshot per request, so a page's
 items joined in order are a run of the ReadProperty value. The standalone
-`handle_read_range` pages the Device object's empty lists, as standalone
-`handle_read_property` reads them. A list it cannot split (a framed list with
+`handle_read_range` pages the Device object's empty lists, as a
+`bacnet-device-core` read with no overlay reads them. A list it cannot split (a framed list with
 no element codec, such as a vendor list, or a value of another shape) returns
 `SERVICES/OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`; ReadProperty still reads it
 whole. Custom objects that hold a vendor list should return
@@ -6578,6 +6581,60 @@ non-finite increment with VALUE_OUT_OF_RANGE.
 
 ---
 
+## bacnet-device-core
+
+A sans-IO request core over a borrowed `ObjectDatabase` (#2178): it takes a
+request APDU and writes the reply, with no I/O, clock, locks or async. It
+builds hosted (`std`, the default) and `no_std` with an allocator (`alloc`),
+on targets with atomic compare-and-swap, as `bacnet-objects` does. The
+[design note](design/device-core.md) has the whole plan.
+
+- `read`: `ReadScope` (the work limit, the registered Network_Port and the
+  Device the wildcard instance names), `ReadOverlay` (how a host serves an
+  object differently from the stored one; `NoOverlay` for none), and the
+  staged steps of ReadProperty and ReadPropertyMultiple: plan
+  (`plan_property`, `RpmPlan::new`), see which server-owned Device lists the
+  plan reads (`live_lists`), then read (`read_property_ack`,
+  `RpmPlan::read`). `ReadPropertyMultipleBudget` lives here, moved from
+  `bacnet_server::server`.
+- `discovery`: `who_is` (the I-Am a Who-Is calls for, or none), `who_has`,
+  `i_am` and `announcement_device`.
+- `reply`: `error_apdu`, the one map from an `Error` to its Reject or Error
+  PDU (never an Abort: a work or byte limit is the caller's Abort), and the
+  refusals a host sends for a service it doesn't run.
+- `responder`: `Responder`, for a host with nothing to await between the
+  steps. `Responder::classify` says from the header alone whether a request
+  reads the database; `Responder::read` answers ReadProperty, Who-Is and
+  Who-Has through an overlay; and `Responder::handle`, for firmware that
+  owns its database, also refuses every other well-formed confirmed
+  request, and drops an APDU that doesn't decode, as the server does.
+  `bacnet_device_core::SERVICES` lists the services it runs, for the
+  Device's Protocol_Services_Supported.
+
+`Responder::new` refuses an identity that claims segmentation support, since
+the core aborts every segmented request and every reply too long for one APDU,
+and a `read_work` limit of zero.
+
+```rust
+use bacnet_device_core::responder::{Inbound, Limits, Outcome, Responder};
+
+let responder = Responder::new(identity, Limits::default())?;
+// `request` is the received APDU as `Bytes`; `max_reply` is the smaller of
+// its Max-APDU-Length-Accepted and the route's limit.
+let mut out = bytes::BytesMut::new();
+match responder.handle(&mut db, Inbound::new(request, max_reply), &mut out) {
+    Outcome::Reply => send_to_requester(&out),
+    Outcome::Announce => broadcast(&out),
+    _ => {}
+}
+```
+
+`bacnet-server` runs its ReadProperty, ReadPropertyMultiple, ReadRange's
+Group reads, `read_local`, Who-Is and Who-Has on these functions, with its
+Device view as the overlay. The `objects` image of the
+[firmware link test](ci.md#firmware-link-test) links `Responder::handle`
+over a `bacnet-objects` database. Writes and WritePropertyMultiple follow.
+
 ## bacnet-client
 
 Async BACnet client with transaction state machine, segmentation, and discovery.
@@ -7129,8 +7186,9 @@ membership changes still do not rebind discovery identity.
 runtime service toggle. Raw built-in Device metadata and reads include property
 152 only for declared SubscribeCOV or SubscribeCOVProperty, and property 481
 only for declared SubscribeCOVPropertyMultiple; present standalone lists are empty.
-Direct database reads, context-free `handle_read_property`/`handle_read_property_multiple`
-and standalone `PicsGenerator` use raw object declarations. Use the full server's
+Direct database reads, `bacnet-device-core` reads with no overlay (`NoOverlay`,
+`Responder::handle`), context-free `handle_read_property_multiple` and
+standalone `PicsGenerator` use raw object declarations. Use the full server's
 read and PICS methods for its execution view.
 
 PICS property rows aggregate all configured instances of each object type in

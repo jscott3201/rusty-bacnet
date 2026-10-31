@@ -3,6 +3,7 @@
 #[path = "device_view_identity.rs"]
 mod identity;
 use crate::cov::active::LiveDeviceCov;
+use bacnet_device_core::read::ReadOverlay;
 use bacnet_objects::{
     audit::{AuditLogForwarding, AuditLogStorage, AuditReporterObject, ObjectAuditPolicy},
     database::ObjectDatabase,
@@ -63,14 +64,10 @@ impl DeviceExecution {
     }
 }
 
-/// One execution profile and lazy clock availability, shared across a served request.
+/// One execution profile and lazy clock availability, shared across a served
+/// request: the server's [`ReadOverlay`]. The request's work limit and
+/// wildcard targets are its [`ReadScope`](bacnet_device_core::read::ReadScope).
 pub(crate) struct DeviceReadContext<'a> {
-    pub(crate) registered_port: Option<ObjectIdentifier>,
-    /// Result rows a single-property read of a Group's Present_Value may
-    /// expand, its own row and the member rows (#1172). ReadPropertyMultiple
-    /// charges its own budget instead; this starts at that budget's default,
-    /// and the endpoint responder sets its configured limit (#1215).
-    pub(crate) work_limit: usize,
     execution: DeviceExecution,
     db: &'a ObjectDatabase,
     clock: OnceLock<bool>,
@@ -83,8 +80,6 @@ impl<'a> DeviceReadContext<'a> {
     /// snapshot with [`with_live`](Self::with_live) once its plan is known.
     pub(crate) fn new(db: &'a ObjectDatabase, execution: DeviceExecution) -> Self {
         Self {
-            registered_port: None,
-            work_limit: crate::server::ReadPropertyMultipleBudget::default().max_result_elements,
             execution,
             db,
             clock: OnceLock::new(),
@@ -100,8 +95,6 @@ impl<'a> DeviceReadContext<'a> {
         'a: 'b,
     {
         DeviceReadContext {
-            registered_port: self.registered_port,
-            work_limit: self.work_limit,
             execution: self.execution,
             db: self.db,
             clock: self.clock,
@@ -126,19 +119,22 @@ impl<'a> DeviceReadContext<'a> {
     pub(crate) fn device_oid(&self) -> Option<ObjectIdentifier> {
         self.identity.map(|identity| identity.oid)
     }
-    pub(crate) fn with_registered_port(mut self, oid: Option<ObjectIdentifier>) -> Self {
-        self.registered_port = oid;
-        self
-    }
-    pub(crate) fn with_work_limit(mut self, limit: usize) -> Self {
-        self.work_limit = limit;
-        self
-    }
     pub(crate) fn object<'b>(&'b self, object: &'b dyn BACnetObject) -> DeviceReadView<'b> {
         DeviceReadView {
             object,
             context: self,
         }
+    }
+}
+
+impl<'c> ReadOverlay for DeviceReadContext<'c> {
+    type View<'a>
+        = DeviceReadView<'a>
+    where
+        Self: 'a;
+
+    fn view<'a>(&'a self, stored: &'a dyn BACnetObject) -> Option<DeviceReadView<'a>> {
+        Some(self.object(stored))
     }
 }
 

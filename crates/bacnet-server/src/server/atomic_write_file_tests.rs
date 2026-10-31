@@ -282,7 +282,7 @@ async fn atomic_write_file_opaque_abort_keeps_legacy_service_mapping() {
         let mut out = BytesMut::new();
         let error = handlers::handle_atomic_write_file(&mut db, &wire, &mut out).unwrap_err();
         assert!(out.is_empty());
-        let expected = BACnetServer::<BipTransport>::error_apdu_from_error(
+        let expected = bacnet_device_core::reply::error_apdu(
             80,
             ConfirmedServiceChoice::ATOMIC_WRITE_FILE,
             &error,

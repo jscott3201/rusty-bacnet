@@ -8,8 +8,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use bacnet_transport::port::{DirectScIdentity, TransportProvenance};
 use bacnet_types::enums::{AuditOperation, ReinitializedState};
 
-use super::requests::confirmed_response::error_apdu_from_error;
 use super::*;
+use bacnet_device_core::reply::error_apdu;
 
 /// Carries out a ReinitializeDevice request (Clause 16.4) on a full server or
 /// an endpoint session.
@@ -387,7 +387,7 @@ pub(in crate::server) async fn response(
             (ack, hooks)
         }
         Err(error) => (
-            error_apdu_from_error(request.invoke_id, request.service_choice, &error),
+            error_apdu(request.invoke_id, request.service_choice, &error),
             AfterReply::default(),
         ),
     }

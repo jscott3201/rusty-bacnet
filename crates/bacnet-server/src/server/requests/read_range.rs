@@ -43,11 +43,15 @@ pub(super) async fn response(
     {
         Ok(decoded) => {
             let view = DeviceReadContext::new(&db, DeviceExecution::FullServer)
-                .with_identity(Some(&config.device))
-                .with_work_limit(config.read_property_multiple_budget.max_result_elements);
-            match handlers::plan_read_range(&db, Some(&view), &decoded) {
+                .with_identity(Some(&config.device));
+            let scope = bacnet_device_core::read::ReadScope {
+                work_limit: config.read_property_multiple_budget.max_result_elements,
+                registered_port: None,
+                device: view.device_oid(),
+            };
+            match handlers::plan_read_range(&db, &scope, Some(&view), &decoded) {
                 Ok(plan) => {
-                    let live = match plan.live_cov(&db) {
+                    let live = match plan.live_lists(&db) {
                         Some(selection) => Some(
                             confirmed_response::active_cov_snapshot(&db, tables, selection).await,
                         ),
@@ -82,11 +86,7 @@ pub(super) async fn response(
             service_ack: service_ack.freeze(),
         }),
         Err(handlers::ReadRangeFailure::Service(error)) => {
-            confirmed_response::error_apdu_from_error(
-                request.invoke_id,
-                request.service_choice,
-                &error,
-            )
+            bacnet_device_core::reply::error_apdu(request.invoke_id, request.service_choice, &error)
         }
         Err(handlers::ReadRangeFailure::Bytes) => Apdu::Abort(AbortPdu {
             sent_by_server: true,

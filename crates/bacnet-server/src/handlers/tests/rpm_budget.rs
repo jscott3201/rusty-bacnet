@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_device_core::read::NoOverlay;
 
 #[path = "rpm_optional_rows.rs"]
 mod optional_rows;
@@ -163,7 +164,13 @@ fn rpm_wildcards_duplicates_unknown_and_index_count_results() {
         ]);
         let decoded = ReadPropertyMultipleRequest::decode(&data).unwrap();
         assert!(matches!(
-            plan(&db, &decoded, count * 2, None),
+            RpmPlan::new(
+                &db,
+                &ReadScope::UNLIMITED,
+                None::<&NoOverlay>,
+                &decoded,
+                count * 2
+            ),
             Err(ReadFailure::Work)
         ));
         assert!(matches!(
@@ -171,13 +178,16 @@ fn rpm_wildcards_duplicates_unknown_and_index_count_results() {
             Err(ReadFailure::Work)
         ));
         assert_eq!(reads.load(Ordering::SeqCst), 0);
-        assert_eq!(
-            plan(&db, &decoded, count * 2 + 1, None)
-                .unwrap()
-                .iter()
-                .map(|p| p.properties.len())
-                .sum::<usize>(),
-            count * 2 + 1
+        // A limit of one row fewer fails: the plan holds exactly this many.
+        assert!(
+            RpmPlan::new(
+                &db,
+                &ReadScope::UNLIMITED,
+                None::<&NoOverlay>,
+                &decoded,
+                count * 2 + 1
+            )
+            .is_ok()
         );
     }
     let data = request(vec![spec(
@@ -270,27 +280,6 @@ fn rpm_empty_expansions_still_charge_object_wrappers() {
         }
     }
     assert_eq!(reads.load(Ordering::SeqCst), 0);
-}
-
-#[test]
-fn rpm_scratch_growth_never_exceeds_cap_even_on_overflow() {
-    let mut scratch = Scratch {
-        bytes: BytesMut::new(),
-        limit: 4,
-    };
-    scratch.append(&[1, 2], 2).unwrap();
-    assert_eq!(scratch.bytes.len(), 2);
-    assert!(matches!(
-        scratch.append(&[3, 4, 5], 0),
-        Err(ReadFailure::Bytes)
-    ));
-    assert_eq!(scratch.bytes.len(), 2);
-    assert!(matches!(
-        scratch.append(&[], usize::MAX),
-        Err(ReadFailure::Bytes)
-    ));
-    scratch.append(&[3, 4], 0).unwrap();
-    assert_eq!(scratch.bytes.len(), 4);
 }
 
 #[test]

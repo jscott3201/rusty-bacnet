@@ -524,7 +524,7 @@ fn segmented_transaction_key_identity_matrix() {
 
 #[test]
 fn service_reject_error_preserves_reason_on_wire_response() {
-    let response = BACnetServer::<BipTransport>::error_apdu_from_error(
+    let response = bacnet_device_core::reply::error_apdu(
         0x31,
         ConfirmedServiceChoice::GET_ENROLLMENT_SUMMARY,
         &Error::reject(RejectReason::UNDEFINED_ENUMERATION),

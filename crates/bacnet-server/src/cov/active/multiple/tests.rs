@@ -295,10 +295,10 @@ fn live_device_cov_resolves_only_selected_lists() {
     let empty = Some(PropertyValue::ApplicationData(Vec::new()));
     let active = PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS;
     for (selected_active, selected_multiple) in [(true, false), (false, true), (true, true)] {
-        let selection = LiveCovSelection {
+        let selection = LiveLists {
             device: device(),
-            active: selected_active,
-            multiple: selected_multiple,
+            active_cov: selected_active,
+            active_cov_multiple: selected_multiple,
             address_bindings: false,
         };
         let entries = table.live_cov_entries(selection, Instant::now());

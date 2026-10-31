@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_device_core::read::{ReadFailure, ReadPropertyMultipleBudget};
 use bacnet_types::error::RemoteError;
 
 mod access_identity;
@@ -652,7 +653,7 @@ fn rpm_multistate_indexed_state_text_and_list_gating_preserve_bytes() {
                 assert!(result.property_value.is_none());
             }
         }
-        let budget = crate::server::ReadPropertyMultipleBudget {
+        let budget = ReadPropertyMultipleBudget {
             max_result_elements: references.len(),
             max_service_ack_bytes: legacy.len(),
         };
@@ -665,12 +666,12 @@ fn rpm_multistate_indexed_state_text_and_list_gating_preserve_bytes() {
                 &db,
                 &bytes,
                 &mut prefix,
-                crate::server::ReadPropertyMultipleBudget {
+                ReadPropertyMultipleBudget {
                     max_service_ack_bytes: legacy.len() - 1,
                     ..budget
                 }
             ),
-            Err(super::super::ReadFailure::Bytes)
+            Err(ReadFailure::Bytes)
         ));
         assert_eq!(&prefix[..], b"prefix");
     }

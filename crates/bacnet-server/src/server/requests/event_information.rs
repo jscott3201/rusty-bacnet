@@ -43,11 +43,7 @@ pub(super) async fn response(
             service_ack: service_ack.freeze(),
         }),
         Err(handlers::EventInformationFailure::Service(error)) => {
-            confirmed_response::error_apdu_from_error(
-                request.invoke_id,
-                request.service_choice,
-                &error,
-            )
+            bacnet_device_core::reply::error_apdu(request.invoke_id, request.service_choice, &error)
         }
         Err(failure) => Apdu::Abort(AbortPdu {
             sent_by_server: true,

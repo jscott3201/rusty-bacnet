@@ -1,6 +1,6 @@
 //! Startup identity resolution and the frozen announcement target.
 use bacnet_objects::{DeviceIdentity, database::ObjectDatabase};
-use bacnet_types::{error::Error, primitives::ObjectIdentifier};
+use bacnet_types::error::Error;
 
 /// Only an absent database requests generation. An explicitly empty database
 /// stays empty; a supplied Device is checked without rebuilding its state.
@@ -32,16 +32,4 @@ pub(crate) fn validate_startup(
         identity.validate_device(db.get(&oid).expect("selected under the database guard"))?;
     }
     Ok(())
-}
-
-/// Membership may change, but announcement identity never rebinds. Served
-/// identity properties are projected from the same frozen declarations.
-pub(crate) fn announcement_device(
-    db: &ObjectDatabase,
-    identity: &DeviceIdentity,
-) -> Option<ObjectIdentifier> {
-    let oid = identity.device_oid();
-    db.get(&oid)
-        .filter(|object| object.object_identifier() == oid)
-        .map(|_| oid)
 }

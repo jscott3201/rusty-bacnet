@@ -322,7 +322,7 @@ Depend on the highest layer that covers your task; the
 - **Codecs and cores** (`no_std`, no allocator): `bacnet-time`, `bacnet-npdu`, `bacnet-mstp-codec`, `bacnet-bip-codec`, `bacnet-mstp-core`, `bacnet-bip-core`, `bacnet-router-core`
 - **Protocol** (`no_std`, allocator optional): `bacnet-types`, `bacnet-encoding`, `bacnet-services`
 - **Transports and network:** `bacnet-transport`, `bacnet-network`
-- **Roles:** `bacnet-objects` (also `no_std` with an allocator), `bacnet-client`, `bacnet-server`, `bacnet-endpoint-core`, `bacnet-endpoint`
+- **Roles:** `bacnet-objects` and `bacnet-device-core` (also `no_std` with an allocator), `bacnet-client`, `bacnet-server`, `bacnet-endpoint-core`, `bacnet-endpoint`
 - **Tools:** `bacnet-cli`; new in 0.15.0, `bacnet-ops` (shared by the CLI, TUI and MCP server) and `bacnet-mcp`
 - **Python:** [`crates/rusty-bacnet`](crates/rusty-bacnet), built with [maturin](https://www.maturin.rs/)
 

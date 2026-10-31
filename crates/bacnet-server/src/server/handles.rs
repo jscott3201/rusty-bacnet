@@ -65,7 +65,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ///
     /// A Group's `Present_Value` is rebuilt from its members, whose rows count
     /// against the ReadPropertyMultiple work limit
-    /// ([`ReadPropertyMultipleBudget::max_result_elements`](crate::server::ReadPropertyMultipleBudget))
+    /// ([`ReadPropertyMultipleBudget::max_result_elements`](bacnet_device_core::read::ReadPropertyMultipleBudget))
     /// as for network ReadProperty; past it the read fails with
     /// [`Error::abort`] carrying OUT_OF_RESOURCES.
     pub async fn read_local(
@@ -79,28 +79,40 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             &db,
             crate::device_view::DeviceExecution::FullServer,
         )
-        .with_identity(Some(&self.config.device))
-        .with_work_limit(
-            self.config
+        .with_identity(Some(&self.config.device));
+        // The local read resolves the Network_Port wildcard to the registered
+        // port, but plans a Group's members without it.
+        let scope = bacnet_device_core::read::ReadScope {
+            work_limit: self
+                .config
                 .read_property_multiple_budget
                 .max_result_elements,
-        );
-        let lookup_oid = handlers::resolve_read_target(
+            registered_port: None,
+            device: view.device_oid(),
+        };
+        let lookup_oid = bacnet_device_core::read::resolve_target(
             &db,
+            &bacnet_device_core::read::ReadScope {
+                registered_port: self.config.registered_network_port,
+                ..scope
+            },
             oid,
-            self.config.registered_network_port,
-            view.device_oid(),
         );
-        let plan =
-            handlers::plan_read_property(&db, Some(&view), lookup_oid, property, array_index)
-                .map_err(|failure| match failure {
-                    handlers::ReadFailure::Service(error) => error,
-                    handlers::ReadFailure::Work | handlers::ReadFailure::Bytes => {
-                        Error::abort(AbortReason::OUT_OF_RESOURCES)
-                    }
-                })?;
+        let plan = bacnet_device_core::read::plan_property(
+            &db,
+            &scope,
+            Some(&view),
+            lookup_oid,
+            property,
+            array_index,
+        )
+        .map_err(|failure| match failure {
+            bacnet_device_core::read::ReadFailure::Service(error) => error,
+            // Work, and any other limit the core reports.
+            _ => Error::abort(AbortReason::OUT_OF_RESOURCES),
+        })?;
         use super::requests::confirmed_response::{active_cov_snapshot, address_bindings};
-        let live = match plan.live_cov(&db) {
+        let live = match plan.live_lists(&db) {
             Some(selection) if self.dispatch_task.is_none() => {
                 let bindings = address_bindings(&self.device_bindings, selection).await;
                 Some(
@@ -118,7 +130,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             None => None,
         };
         let view = view.with_live(live.as_ref());
-        handlers::read_property_value(&db, Some(&view), plan)
+        bacnet_device_core::read::read_value(&db, Some(&view), plan)
     }
 
     /// Write one local property from its encoded value: the octets a network

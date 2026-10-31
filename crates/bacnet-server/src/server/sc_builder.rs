@@ -287,6 +287,7 @@ pub(super) fn test_tls_config() -> bacnet_transport::sc_tls::ScNodeTlsConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bacnet_device_core::read::ReadPropertyMultipleBudget;
     use bacnet_transport::sc::ScReconnectConfig;
 
     #[tokio::test]

@@ -104,12 +104,12 @@ FEATURES="$FEATURES,bacnet-router-core/bip,bacnet-router-core/mstp"
 # The no_std builds (std off, alloc on) of the crates that have one (#1613).
 # In the run above, the hosted crates turn std back on for them, so these get
 # a run of their own.
-NO_STD_ARGS=(-p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects --no-default-features --features alloc)
+NO_STD_ARGS=(-p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc)
 
 echo "MSRV gate covers:"
 for p in $PKGS; do echo "  - $p"; done
 echo "with features: $FEATURES"
-echo "and bacnet-types, bacnet-encoding, bacnet-services and bacnet-objects without std, with alloc"
+echo "and bacnet-types, bacnet-encoding, bacnet-services, bacnet-objects and bacnet-device-core without std, with alloc"
 echo
 
 run() { printf '+ ' >&2; printf '%q ' "$@" >&2; printf '\n' >&2; "$@"; }

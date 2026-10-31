@@ -40,7 +40,7 @@
 #
 # A crate in `cas_only` needs atomic compare-and-swap (alloc::sync::Arc), so
 # it is checked only on the targets that have it: ARMv6-M is passed over
-# (#1615).
+# (#1615, and bacnet-device-core over it, #2178).
 #
 # To cover another crate or feature set, add a line to `checks`.
 set -euo pipefail
@@ -76,6 +76,7 @@ checks=(
   "bacnet-services -"
   "bacnet-services alloc"
   "bacnet-objects alloc"
+  "bacnet-device-core alloc"
 )
 default_targets=(thumbv6m-none-eabi thumbv7em-none-eabihf riscv32imac-unknown-none-elf)
 # Crates that need std (or, for tracing, atomics the no_std crates don't
@@ -84,7 +85,7 @@ host_only=(tracing tracing-core tokio socket2)
 # The firmware stand-in for ARMv6-M builds that use bytes; see above.
 harness=nostd-harness
 # The crates that need compare-and-swap, and the targets that lack it.
-cas_only=(bacnet-objects)
+cas_only=(bacnet-objects bacnet-device-core)
 no_cas_target_re='^thumbv6m-'
 # The crates whose builds without `alloc` (or `std` or `serde`, which turn it
 # on) are their allocation-free profile (#1614), and the packages that

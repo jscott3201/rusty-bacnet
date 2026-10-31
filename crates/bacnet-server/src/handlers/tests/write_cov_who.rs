@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_device_core::discovery::who_has;
 use bacnet_services::who_is::DeviceInstanceRange;
 
 #[test]
@@ -462,7 +463,7 @@ fn who_has_by_id_found() {
     let mut buf = BytesMut::new();
     request.encode(&mut buf).unwrap();
 
-    let result = handle_who_has(&db, &buf, device_oid).unwrap();
+    let result = who_has(&db, &buf, device_oid).unwrap();
     assert!(result.is_some());
     let i_have = result.unwrap();
     assert_eq!(i_have.object_identifier, ai_oid);
@@ -481,7 +482,7 @@ fn who_has_by_name_found() {
     let mut buf = BytesMut::new();
     request.encode(&mut buf).unwrap();
 
-    let result = handle_who_has(&db, &buf, device_oid).unwrap();
+    let result = who_has(&db, &buf, device_oid).unwrap();
     assert!(result.is_some());
 }
 
@@ -498,7 +499,7 @@ fn who_has_not_found() {
     let mut buf = BytesMut::new();
     request.encode(&mut buf).unwrap();
 
-    let result = handle_who_has(&db, &buf, device_oid).unwrap();
+    let result = who_has(&db, &buf, device_oid).unwrap();
     assert!(result.is_none());
 }
 
@@ -515,7 +516,7 @@ fn who_has_out_of_range() {
     let mut buf = BytesMut::new();
     request.encode(&mut buf).unwrap();
 
-    let result = handle_who_has(&db, &buf, device_oid).unwrap();
+    let result = who_has(&db, &buf, device_oid).unwrap();
     assert!(result.is_none()); // device instance 1 not in [100, 200]
 }
 

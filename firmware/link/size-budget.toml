@@ -358,6 +358,30 @@
 # .text grew by 728 / 820 / 996 / 748 octets and flash by 736 / 860 /
 # 1,036 / 756 on thumbv7m / thumbv6m / riscv32imc / thumbv7em; RAM is
 # unchanged. Every image stays within its budget; no budget changed.
+#
+# The objects rows are from when that image joined, on 2026-10-30, same
+# toolchain (#2178), as flash / ram:
+#
+#   thumbv7m objects      130144 / 16480
+#   thumbv7em objects     129488 / 16480
+#   riscv32imac objects   156694 / 16480
+#
+# It is bacnet-device-core's Responder over a bacnet-objects database (a
+# Device, two Analog Inputs and two Binary Values) with a 16 KiB heap arena
+# in .bss, answering Who-Is, Who-Has and ReadProperty.
+# It needs an allocator with compare-and-swap atomics, so it builds only on
+# thumbv7m, thumbv7em and riscv32imac, not on thumbv6m or riscv32imc.
+# Against the design's floor for a Device answering Who-Is (docs/design/
+# device-core.md, section 8.1: 100,776 octets of thumbv7m text), most of
+# the difference is bacnet-objects (about 46 KB) and the encoders (about
+# 13 KB); the core itself is about 12 KB. Its counts are what it links,
+# with no headroom: the 7 core::fmt functions format the default Device's
+# name (#2187); the 64-bit division and memmove limits are the routines it
+# links today, so a new one fails the check. Once #2181 dropped the objects'
+# pre-migration property-list fallbacks, the image measured 4.9-5.7 KB less
+# flash, links no 64-bit division and two memmove routines: flash 125256 /
+# 124608 / 151030 on thumbv7m / thumbv7em / riscv32imac, RAM unchanged. The
+# counts are those; the octet budgets stay as first set.
 
 [thumbv7m-none-eabi.mstp]
 text = 18320
@@ -446,6 +470,17 @@ ram = 3920
 fmt_functions = 0
 div64_functions = 0
 memmove_functions = 0
+
+[thumbv7m-none-eabi.objects]
+text = 129392
+rodata = 15232
+data = 64
+bss = 18464
+flash = 145776
+ram = 18464
+fmt_functions = 7
+div64_functions = 0
+memmove_functions = 2
 
 [thumbv6m-none-eabi.mstp]
 text = 19696
@@ -710,3 +745,25 @@ ram = 3920
 fmt_functions = 0
 div64_functions = 0
 memmove_functions = 0
+
+[thumbv7em-none-eabihf.objects]
+text = 128656
+rodata = 15232
+data = 64
+bss = 18464
+flash = 145040
+ram = 18464
+fmt_functions = 7
+div64_functions = 0
+memmove_functions = 2
+
+[riscv32imac-unknown-none-elf.objects]
+text = 159280
+rodata = 16208
+data = 64
+bss = 18464
+flash = 175504
+ram = 18464
+fmt_functions = 7
+div64_functions = 0
+memmove_functions = 2

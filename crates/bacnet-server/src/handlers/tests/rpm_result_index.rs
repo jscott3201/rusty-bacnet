@@ -1,5 +1,5 @@
-use crate::handlers::ReadFailure;
 use crate::handlers::rpm_budget::{handle_rpm_budgeted, handle_rpm_budgeted_observed};
+use bacnet_device_core::read::ReadFailure;
 use bacnet_objects::property_metadata::{
     PropertyConformance, PropertyMetadata, PropertyWriteCapability,
 };
@@ -12,7 +12,7 @@ use std::{
 };
 
 use super::*;
-use crate::server::ReadPropertyMultipleBudget;
+use bacnet_device_core::read::ReadPropertyMultipleBudget;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};

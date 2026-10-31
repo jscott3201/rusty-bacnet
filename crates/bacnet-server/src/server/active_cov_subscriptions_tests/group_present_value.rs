@@ -4,6 +4,7 @@
 //! work limit, so a read that would pass it gets the abort any
 //! ReadPropertyMultiple over its work budget gets (#1172).
 use super::*;
+use bacnet_device_core::read::ReadPropertyMultipleBudget;
 use bacnet_objects::group::GroupObject;
 use bacnet_services::read_property::ReadPropertyRequest;
 use bacnet_services::read_range::{ReadRangeAck, ReadRangeRequest};

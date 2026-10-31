@@ -48,11 +48,7 @@ pub(super) async fn response<T: TransportPort + 'static>(
                 source_mac,
                 source,
             );
-            BACnetServer::<T>::error_apdu_from_error(
-                req.invoke_id,
-                req.service_choice,
-                &failure.error,
-            )
+            bacnet_device_core::reply::error_apdu(req.invoke_id, req.service_choice, &failure.error)
         }
     }
 }
