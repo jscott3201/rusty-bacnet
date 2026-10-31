@@ -89,12 +89,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 | device_bindings::ObservationOutcome::ConfiguredPreserved => {}
             }
         } else if req.service_choice == UnconfirmedServiceChoice::WHO_IS {
-            let db = db.read().await;
-            let i_am = match bacnet_device_core::discovery::who_is(
-                &config.device,
-                &db,
-                &req.service_request,
-            ) {
+            // Build the I-Am under the guard and drop it before the send, so
+            // a slow link never holds the database lock (#2199).
+            let i_am = {
+                let db = db.read().await;
+                bacnet_device_core::discovery::who_is(&config.device, &db, &req.service_request)
+            };
+            let i_am = match i_am {
                 Ok(i_am) => i_am,
                 Err(e) => {
                     warn_throttled!(warnings.decode, error = %e, "Failed to decode WhoIs");
@@ -177,12 +178,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 return;
             }
 
-            let db = db.read().await;
-            let device_oid = db.selected_device();
+            // As for Who-Is, the guard covers only the lookup (#2199).
+            let found = {
+                let db = db.read().await;
+                db.selected_device().map(|device_oid| {
+                    bacnet_device_core::discovery::who_has(&db, &req.service_request, device_oid)
+                })
+            };
 
-            if let Some(device_oid) = device_oid {
-                match bacnet_device_core::discovery::who_has(&db, &req.service_request, device_oid)
-                {
+            if let Some(found) = found {
+                match found {
                     Ok(Some(i_have)) => {
                         let mut service_buf = BytesMut::new();
                         if let Err(e) = i_have.encode(&mut service_buf) {

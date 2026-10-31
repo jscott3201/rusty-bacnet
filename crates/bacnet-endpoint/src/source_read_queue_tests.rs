@@ -259,3 +259,73 @@ async fn source_recipient_full_egress_fails_one_sibling_after_commit_without_ret
     session.stop().await.unwrap();
     peer.stop().await.unwrap();
 }
+
+/// An I-Am queued behind a held send holds no database guard (#2199): a
+/// writer finishes while it waits, and it goes out unchanged once released.
+#[tokio::test(start_paused = true)]
+async fn queued_i_am_holds_no_database_guard() {
+    let source_mac = encode_bip_mac([127, 0, 0, 1], 30001);
+    let peer_mac = encode_bip_mac([127, 0, 0, 1], 30002);
+    let (transport, peer) = LoopbackTransport::pair(source_mac.to_vec(), peer_mac.to_vec());
+    let entered = Arc::new(Notify::new());
+    let gate = Arc::new(Semaphore::new(0));
+    let identity = crate::DeviceIdentity::new(123, 42).unwrap();
+    let mut session = EndpointSession::new(
+        Gated {
+            inner: transport,
+            entered: Arc::clone(&entered),
+            gate: Arc::clone(&gate),
+        },
+        SessionRole::ClientOnly,
+        SessionConfig::default(),
+    )
+    .unwrap()
+    .with_database(database(false))
+    .device(identity.clone());
+    let mut peer = NetworkLayer::new(peer);
+    let mut received = peer.start().await.unwrap();
+    session.start().await.unwrap();
+    let blocker = session
+        .egress
+        .as_ref()
+        .unwrap()
+        .admit_apdu(
+            vec![0x10, 8],
+            bacnet_endpoint_core::endpoint_ingress::EndpointApduDestination::Direct {
+                destination_mac: peer_mac.into_iter().collect(),
+            },
+            false,
+            NetworkPriority::Normal,
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+    timeout(WAIT, entered.notified()).await.unwrap();
+    let db = Arc::clone(session.database.as_ref().unwrap());
+    let (announced, ()) = tokio::join!(session.broadcast_i_am(), async {
+        // The I-Am was polled first and now waits behind the held send.
+        let mut db = timeout(WAIT, db.write())
+            .await
+            .expect("a database write must not wait for the queued I-Am");
+        db.add(Box::new(
+            bacnet_objects::analog::AnalogValueObject::new(
+                9,
+                "Added",
+                bacnet_types::enums::EngineeringUnits::NO_UNITS,
+            )
+            .unwrap(),
+        ))
+        .unwrap();
+        drop(db);
+        gate.add_permits(1);
+    });
+    announced.unwrap();
+    assert!(blocker.complete().await.result.is_ok());
+    assert_eq!(&receive(&mut received).await.apdu[..], [0x10, 8]);
+    assert_eq!(
+        receive(&mut received).await.apdu.to_vec(),
+        crate::identity::encode_iam_apdu(&identity).unwrap()
+    );
+    session.stop().await.unwrap();
+    peer.stop().await.unwrap();
+}
