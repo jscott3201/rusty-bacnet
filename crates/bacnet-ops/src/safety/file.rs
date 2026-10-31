@@ -46,7 +46,7 @@ pub fn publish(temp: &Path, path: &Path, text: &str, create: bool) -> std::io::R
         let _ = fs::remove_file(temp);
     }
     result?;
-    sync_directory(path).map_err(|error| {
+    sync_parent(path).map_err(|error| {
         std::io::Error::new(
             error.kind(),
             InPlace(format!(
@@ -76,10 +76,13 @@ impl std::fmt::Display for InPlace {
 impl std::error::Error for InPlace {}
 
 /// Sync the directory holding `path`, so a rename or link into it is
-/// durable. Windows has no directory handle to sync this way (NTFS
-/// journals the rename itself), so there it does nothing.
+/// durable: what [`publish`] does after it publishes, for a caller that
+/// finds the file already in place (a retried save). A filesystem that
+/// can't sync a directory counts as synced, with one warning a process.
+/// Windows has no directory handle to sync this way (NTFS journals the
+/// rename itself), so there it does nothing.
 #[cfg(unix)]
-fn sync_directory(path: &Path) -> std::io::Result<()> {
+pub fn sync_parent(path: &Path) -> std::io::Result<()> {
     let directory = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -132,8 +135,10 @@ fn unsupported(error: &std::io::Error) -> bool {
     })
 }
 
+/// Sync the directory holding `path`: nothing to do on this platform
+/// (see the Unix version).
 #[cfg(not(unix))]
-fn sync_directory(_path: &Path) -> std::io::Result<()> {
+pub fn sync_parent(_path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 

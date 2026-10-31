@@ -127,13 +127,19 @@ impl Store {
         match publish(&temp, &path, &text, create) {
             Ok(()) => Ok(()),
             // An earlier save of this very profile went in place, and only
-            // its directory sync failed: it is there already.
+            // its directory sync failed: it is there already, and saved
+            // once its directory syncs.
             Err(e)
                 if create
                     && e.kind() == std::io::ErrorKind::AlreadyExists
                     && fs::read_to_string(&path).is_ok_and(|saved| saved == text) =>
             {
-                Ok(())
+                sync_parent(&path).map_err(|e| {
+                    format!(
+                        "profile {name}: the file is in place, but its directory could not be \
+                         synced, so it may not survive a power loss: {e}"
+                    )
+                })
             }
             Err(e) if in_place(&e) => Err(format!("profile {name}: {e}")),
             Err(e) => Err(format!("cannot save profile {name}: {e}")),
@@ -151,9 +157,53 @@ impl Store {
 /// beside the ledger in `bacnet_ops::safety::file`.
 pub(crate) use bacnet_ops::safety::file::{in_place, publish};
 
+/// [`bacnet_ops::safety::file::sync_parent`], which a test can make fail.
+fn sync_parent(path: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    if let Some(error) = tests::injected_sync() {
+        return Err(error);
+    }
+    bacnet_ops::safety::file::sync_parent(path)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use super::*;
+
+    thread_local! {
+        /// Directory syncs the store asked for on this thread, and an
+        /// error the next ones fail with instead.
+        static SYNCS: Cell<usize> = const { Cell::new(0) };
+        static FAIL_SYNC: Cell<bool> = const { Cell::new(false) };
+    }
+
+    pub(super) fn injected_sync() -> Option<std::io::Error> {
+        SYNCS.with(|n| n.set(n.get() + 1));
+        FAIL_SYNC
+            .with(Cell::get)
+            .then(|| std::io::Error::other("injected directory sync failure"))
+    }
+
+    /// A retried creation that finds its file in place still syncs the
+    /// directory, and reports that sync's failure, file in place.
+    #[test]
+    fn a_retried_creation_syncs_its_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::new(root.path().to_path_buf());
+        let profile = Profile::default();
+        store.save("site", &profile, true).unwrap();
+        let before = SYNCS.with(Cell::get);
+        store.save("site", &profile, true).unwrap();
+        assert_eq!(SYNCS.with(Cell::get), before + 1, "the retry synced");
+        FAIL_SYNC.with(|f| f.set(true));
+        let failed = store.save("site", &profile, true);
+        FAIL_SYNC.with(|f| f.set(false));
+        let error = failed.unwrap_err();
+        assert!(error.contains("in place"), "{error}");
+        assert_eq!(store.load("site").unwrap(), profile);
+    }
 
     #[test]
     fn failed_temporary_creation_preserves_both_prior_profile_and_unowned_file() {
