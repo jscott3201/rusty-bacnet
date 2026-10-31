@@ -403,10 +403,14 @@ As built (#2067), and where it differs from the plan above:
   `bacnet_watch` stays the fallback for hosts that don't subscribe.
 - The SDK asks for the accepted filter synchronously, before the
   acknowledgment. The watches are taken there and held for the stream,
-  matched by its URI list; a point URI needs its device in the discovery
-  table, which a synchronous copy tracks. The SDK repeats a URI asked for
-  twice in the acknowledgment; it is watched once. A reservation no stream
-  claims is released by a sweep (about 90 s); at most 16 wait at once.
+  matched by the ticket of the request that made them (the SDK runs the
+  filter and the stream in that request's task) and by its URI list, so a
+  stream refused at its start frees only its own (#2157); a point URI
+  needs its device in the discovery table, which a synchronous copy
+  tracks. The SDK repeats a URI asked for twice in the acknowledgment; it
+  is watched once. A reservation no stream claims within 30 s is released
+  by the next reservation or the once-a-minute sweep, so within 90 s; at
+  most 16 wait at once.
 - `bacnet://device/{instance}` has no subscription meaning and is not
   honoured. The session and ledger resources are honoured but don't send
   updates: phase 3 (#2068) shows writes, arming and grants in them and

@@ -408,7 +408,9 @@ async fn a_stream_refused_at_its_start_frees_what_was_set_aside() {
     let running: Vec<_> = (0..crate::listen::MAX_STREAMS)
         .map(|_| ctx.listening(crate::listen::MAX_STREAMS).unwrap())
         .collect();
-    let refused = crate::listen::open(ctx, &uris).err().expect("refused");
+    let refused = crate::listen::open(ctx, crate::listen::Ticket::current(), &uris)
+        .err()
+        .expect("refused");
     assert_eq!(refused.data.unwrap()["reason"], json!("stream-cap"));
     assert_eq!((ctx.subs.held(), ctx.subs.uris()), (0, 0), "freed at once");
     settle().await;
@@ -417,5 +419,87 @@ async fn a_stream_refused_at_its_start_frees_what_was_set_aside() {
         "cancelled before the sweep"
     );
     drop(running);
+    lab.stop().await;
+}
+
+/// Two streams acknowledged with the same URIs wait to begin. The first
+/// one's reservation was swept before it began, and it is refused at its
+/// start: it frees nothing of the second's, which still claims its own
+/// watches, and its point keeps updating (#2157).
+#[tokio::test(start_paused = true)]
+async fn a_refused_stream_frees_only_its_own_reservation() {
+    use crate::listen::{MAX_STREAMS, Ticket, open};
+    let mut lab = Lab::start_site(Policy::default(), Duration::ZERO).await;
+    lab.known().await;
+    let ctx = lab.mcp.ctx();
+    let uris = [AI1.to_string()];
+    // Each request is handled in a task of its own.
+    let ticket = || async { tokio::spawn(async { Ticket::current() }).await.unwrap() };
+    let (first, second) = (ticket().await, ticket().await);
+    assert_ne!(first, second);
+    assert_eq!(ctx.subs.reserve(ctx, first, &uris), uris);
+    tokio::time::sleep(Duration::from_secs(20)).await;
+    assert_eq!(ctx.subs.reserve(ctx, second, &uris), uris);
+    tokio::time::sleep(Duration::from_secs(11)).await;
+    ctx.subs.prune();
+    assert_eq!(
+        ctx.subs.pending_tickets(),
+        [second],
+        "the first's was swept"
+    );
+    assert_eq!(ctx.subs.held(), 1);
+
+    let running: Vec<_> = (0..MAX_STREAMS)
+        .map(|_| ctx.listening(MAX_STREAMS).unwrap())
+        .collect();
+    let refused = open(ctx, first, &uris).err().expect("refused");
+    assert_eq!(refused.data.unwrap()["reason"], json!("stream-cap"));
+    drop(running);
+    settle().await;
+    assert_eq!(ctx.subs.held(), 1, "the second's reservation stays");
+    assert_eq!(lab.cov_table().await.len(), 1);
+
+    let (listening, claim) = open(ctx, second, &uris).expect("room again");
+    let claim = claim.expect("the second claims its own reservation");
+    let lease = claim.lease(AI1).expect("its point's lease");
+    let before = lease.snapshot().notifications;
+    let ai1 = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+    lab.server
+        .set_present_value_local(&ai1, PropertyValue::Real(42.0))
+        .await
+        .unwrap();
+    settle().await;
+    assert!(lease.snapshot().notifications > before, "its point updates");
+    drop((claim, listening));
+    lab.stop().await;
+}
+
+/// Over the pipe, a stream claims the reservation its own request made,
+/// not an older one with the same URIs (#2157). This rests on the SDK
+/// asking for the filter and running the stream in the request's task: if
+/// that changes, the stream claims nothing and both reservations wait.
+#[tokio::test(start_paused = true)]
+async fn a_stream_claims_the_reservation_its_request_made() {
+    use crate::listen::Ticket;
+    let mut lab = Lab::start(Policy::default()).await;
+    lab.known().await;
+    let other = tokio::spawn(async { Ticket::current() }).await.unwrap();
+    let ctx = lab.mcp.ctx();
+    let uris = [AI1.to_string()];
+    assert_eq!(ctx.subs.reserve(ctx, other, &uris), uris);
+    let (_, accepted) = lab.agent.listen(&[AI1]).await;
+    assert_eq!(accepted, [AI1]);
+    settle().await;
+    assert_eq!(ctx.subs.pending_tickets(), [other], "only the other waits");
+    assert_eq!(lab.cov_table().await.len(), 1);
+
+    lab.agent.drain(UPDATED, Duration::from_millis(10)).await;
+    let ai1 = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+    lab.server
+        .set_present_value_local(&ai1, PropertyValue::Real(42.0))
+        .await
+        .unwrap();
+    let updated = lab.agent.notification(UPDATED).await;
+    assert_eq!(updated["params"]["uri"], json!(AI1), "the stream follows");
     lab.stop().await;
 }
