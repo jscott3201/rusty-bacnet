@@ -10,8 +10,10 @@
 //! 120 s), the targets are read again under the workspace's lock, a
 //! preview that changed is refused as stale, and the writes go through
 //! the shared desk, which records each in the ledger before it is sent.
-//! Targets are numbers only: nothing a device reports chooses what is
-//! written.
+//! A client older than 2026-07-28 that takes the older elicitation
+//! requests is asked by the server instead (`write_confirm`, #2158), and
+//! its answer goes through the same retry. Targets are numbers only:
+//! nothing a device reports chooses what is written.
 
 use std::sync::Arc;
 
@@ -23,6 +25,7 @@ use bacnet_ops::safety::{FrontEnd, Gate, Preview, Tier, WriteSpec, item_json};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::ObjectIdentifier;
+use rmcp::RoleServer;
 use rmcp::model::{InputRequest, InputRequests, InputRequiredResult, InputResponses};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -32,7 +35,7 @@ use super::{Spec, schema};
 use crate::context::{Call, Ctx, DeviceArg};
 use crate::errors::ToolError;
 use crate::policy::{MAX_WRITES, Workspace};
-use crate::writes::{Approval, Approver, ClientElicitation, Deny, McpCaller, preview_digest};
+use crate::writes::{Approval, Approver, ClientElicitation, Deny, McpCaller, Via, preview_digest};
 
 pub(crate) const NAME: &str = "bacnet_write";
 
@@ -101,7 +104,7 @@ fn output() -> Value {
         "approval": {
             "type": "object",
             "properties": {
-                "confirmed_via": { "enum": ["elicitation", "plan"] },
+                "confirmed_via": { "enum": ["elicitation", "server-elicitation", "plan"] },
                 "approved_by": { "type": "string" },
             },
         },
@@ -154,6 +157,9 @@ pub(crate) struct Peer {
     pub(crate) name: Option<String>,
     /// It takes form elicitations over multi round-trip requests.
     pub(crate) form: bool,
+    /// The session, when the client is older than 2026-07-28 and takes
+    /// the older elicitation requests: the server asks it to confirm.
+    pub(crate) session: Option<rmcp::service::Peer<RoleServer>>,
     /// The request's id, for the audit log.
     pub(crate) request_id: String,
 }
@@ -163,12 +169,16 @@ pub(crate) struct Peer {
 pub(crate) struct Retry {
     pub(crate) state: Option<String>,
     pub(crate) responses: Option<InputResponses>,
+    /// The answer came from an elicitation request the server sent, not
+    /// from a retry the client made.
+    pub(crate) server: bool,
 }
 
-/// A step of a write or revert: waiting for the client's confirmation, or
+/// A step of a write or revert: waiting for the client's confirmation
+/// (until the sealed state's lifetime ends at the instant given), or
 /// handed to a task of its own, which the call then waits for.
 pub(crate) enum Step {
-    Ask(InputRequiredResult),
+    Ask(InputRequiredResult, tokio::time::Instant),
     Sending(Handoff),
 }
 
@@ -361,9 +371,14 @@ pub(crate) async fn run<T: TransportPort + 'static>(
                     return Err(error);
                 }
             };
+            let via = if retry.server {
+                Via::ServerElicitation
+            } else {
+                Via::Elicitation
+            };
             if let Some(why) = declined(retry.responses.as_ref()) {
                 let error = ToolError::refused("declined", format!("the user {why}"));
-                let fields = json!({ "why": why });
+                let fields = json!({ "why": why, "asked_via": via.name() });
                 audit_refusal(&workspace, &refusing, "declined", &error, fields).await;
                 return Err(error);
             }
@@ -371,9 +386,8 @@ pub(crate) async fn run<T: TransportPort + 'static>(
             let work = write_task::confirmed(
                 Arc::clone(ctx),
                 workspace.clone(),
-                specs,
-                args,
-                state,
+                (specs, args),
+                (state, via),
                 fields.clone(),
                 Arc::clone(&sending),
             );
@@ -382,6 +396,36 @@ pub(crate) async fn run<T: TransportPort + 'static>(
             )))
         }
     }
+}
+
+/// The refusal of a write the server asked, or would have asked, an
+/// older client to confirm (#2158) with no answer to go on: none in time,
+/// the call cancelled, the session ending (`confirmation-expired`), or
+/// another confirmation waiting (`confirmation-pending`), with `why`.
+/// Audited; nothing was sent. The sealed state was never handed out, so
+/// nothing can redeem it.
+pub(crate) async fn unconfirmed<T: TransportPort + 'static>(
+    ctx: &Ctx<T>,
+    raw: &Map<String, Value>,
+    peer: &Peer,
+    (reason, why): (&'static str, &str),
+) -> ToolError {
+    let error = ToolError::refused(
+        reason,
+        format!("the write wasn't confirmed: {why}; nothing was sent"),
+    );
+    if let Some(workspace) = &ctx.policy.writes.workspace {
+        let fields = fields(&ctx.principal, peer, raw);
+        let caller = McpCaller::new(&ctx.writes, &ctx.policy.writes, None, fields);
+        // Nothing was asked for a write refused as pending.
+        let fields = if reason == "confirmation-pending" {
+            json!({ "why": why })
+        } else {
+            json!({ "why": why, "asked_via": Via::ServerElicitation.name() })
+        };
+        audit_refusal(workspace, &caller, "write", &error, fields).await;
+    }
+    error
 }
 
 /// Why the form's answer isn't a confirmation, if it isn't.
@@ -441,13 +485,14 @@ async fn preview<T: TransportPort + 'static>(
         Box::new(ClientElicitation {
             arm: ctx.policy.writes.arm,
             armed: ctx.writes.is_armed(),
-            supported: peer.form,
+            supported: peer.form || peer.session.is_some(),
         })
     } else {
         Box::new(Deny)
     };
     match approver.approve(&ctx.principal, &preview, tier) {
         Approval::Ask { arm } => {
+            let good_until = ctx.writes.sealer.good_until();
             let state = ctx.writes.sealer.seal(
                 &ctx.principal,
                 NAME,
@@ -455,7 +500,7 @@ async fn preview<T: TransportPort + 'static>(
                 preview_digest(&preview),
                 arm,
             );
-            Ok(Step::Ask(ask(&preview, tier, arm, state)))
+            Ok(Step::Ask(ask(&preview, tier, arm, state), good_until))
         }
         Approval::Refused { reason, message } => {
             let error = ToolError::refused(reason, message);

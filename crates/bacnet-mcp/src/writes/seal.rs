@@ -94,6 +94,13 @@ impl Sealer {
         aad
     }
 
+    /// When a state sealed from now on is still good until, at the
+    /// earliest: a wait for its confirmation ends by then.
+    pub(crate) fn good_until(&self) -> Instant {
+        let ms = self.now_ms().saturating_add(LIFETIME.as_millis() as u64);
+        self.epoch + Duration::from_millis(ms)
+    }
+
     /// Seal a confirmation of `preview` (a digest) for these arguments,
     /// for `principal` calling `tool`.
     pub(crate) fn seal(

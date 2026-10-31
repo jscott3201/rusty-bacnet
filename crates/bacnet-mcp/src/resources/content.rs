@@ -374,10 +374,16 @@ pub(super) fn session<T: TransportPort + 'static>(ctx: &Ctx<T>) -> Value {
         .iter()
         .filter(|_| offered)
         .map(|plan| {
+            // What is enforced: no count to trust refuses the plan's writes.
+            let (used, unavailable) = match ctx.writes.count_error() {
+                Some(why) => (Value::Null, json!(why)),
+                None => (json!(ctx.writes.plan_used()), Value::Null),
+            };
             json!({
                 "kind": "plan",
                 "in_force": ctx.writes.plan(policy).is_some(),
-                "used": ctx.writes.plan_used(),
+                "used": used,
+                "count_unavailable": unavailable,
                 "max_writes": plan.max_writes,
                 "expires_unix": plan.expires_unix,
             })

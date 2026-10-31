@@ -5,9 +5,12 @@
 //!
 //! The tools themselves are `tools/write.rs` and `tools/revert.rs`.
 
+pub(crate) mod budget;
+pub(crate) mod notify;
 pub(crate) mod seal;
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -17,15 +20,44 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use tokio::time::Instant;
 
+use self::notify::Signals;
 use self::seal::Sealer;
 use crate::policy::{ArmMode, PlanGrant, WritePolicy};
 
 /// The server's write state: its armed session, the plan grant's budget
-/// spent, and the confirmation sealer.
+/// spent, the confirmation sealer, and the signals that tell subscribers
+/// of `bacnet://session` and `bacnet://ledger` they changed.
 pub(crate) struct Writes {
     pub(crate) sealer: Sealer,
     armed: Mutex<Option<Armed>>,
+    /// The plan grant's writes as last read from or saved to the
+    /// workspace's count ([`budget`]), which is what a write is checked
+    /// against; never lowered while the server runs.
     plan_used: AtomicU32,
+    /// Why the plan grant's count couldn't be read, when it last
+    /// couldn't: the plan's writes are refused meanwhile, and the session
+    /// says so.
+    count_error: Mutex<Option<String>>,
+    pub(crate) signals: Signals,
+    /// Set while the server waits for an older client to confirm a write
+    /// (#2158): one such request at a time.
+    asking: AtomicBool,
+    /// Fail the next count saves, for tests.
+    #[cfg(test)]
+    pub(crate) budget_fault: AtomicBool,
+    /// Seconds added to the wall clock, for tests.
+    #[cfg(test)]
+    pub(crate) wall_offset: std::sync::atomic::AtomicU64,
+}
+
+/// The one confirmation an older client is being asked for, held until it
+/// is answered or given up.
+pub(crate) struct Asking<'a>(&'a AtomicBool);
+
+impl Drop for Asking<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 /// An armed write session: until when, and the reason given.
@@ -36,12 +68,40 @@ struct Armed {
 }
 
 impl Writes {
-    pub(crate) fn new() -> Self {
+    /// The write state under `policy`, with a plan grant's count as the
+    /// workspace keeps it ([`budget::load`]).
+    pub(crate) fn new(policy: &WritePolicy) -> Self {
+        let (used, count_error) = budget::load(policy);
         Self {
             sealer: Sealer::new(),
             armed: Mutex::new(None),
-            plan_used: AtomicU32::new(0),
+            plan_used: AtomicU32::new(used),
+            count_error: Mutex::new(count_error),
+            signals: Signals::default(),
+            asking: AtomicBool::new(false),
+            #[cfg(test)]
+            budget_fault: AtomicBool::new(false),
+            #[cfg(test)]
+            wall_offset: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    /// Seconds since the Unix epoch, on the clock a plan grant's window is
+    /// checked against.
+    pub(crate) fn wall_now(&self) -> u64 {
+        #[cfg(test)]
+        return unix_now().saturating_add(self.wall_offset.load(Ordering::Relaxed));
+        #[cfg(not(test))]
+        unix_now()
+    }
+
+    /// Claim the one confirmation request an older client may have
+    /// waiting, unless another holds it.
+    pub(crate) fn ask(&self) -> Option<Asking<'_>> {
+        self.asking
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+            .then(|| Asking(&self.asking))
     }
 
     fn armed(&self) -> Option<Armed> {
@@ -63,10 +123,18 @@ impl Writes {
             .map(|left| left.as_secs())
     }
 
+    /// When the armed session ends, if one is armed now.
+    pub(crate) fn armed_until(&self) -> Option<Instant> {
+        self.armed()
+            .map(|a| a.until)
+            .filter(|until| Instant::now() < *until)
+    }
+
     /// Arm a write session for `minutes`.
     pub(crate) fn arm(&self, minutes: u32, reason: Option<String>) {
         let until = Instant::now() + Duration::from_secs(u64::from(minutes) * 60);
         *self.armed.lock().unwrap_or_else(PoisonError::into_inner) = Some(Armed { until, reason });
+        self.signals.session_changed();
     }
 
     /// The armed session's reason, for audit records.
@@ -74,31 +142,15 @@ impl Writes {
         self.armed().and_then(|a| a.reason)
     }
 
-    /// The plan grant, while it is in force: not expired, budget left.
+    /// The plan grant, while it is in force: not expired, budget left (as
+    /// last counted; [`spend`](Self::spend) reads the count again).
     /// Checked on every write: a clock set back past the plan's start
     /// can't stretch it beyond its 8 hours either.
     pub(crate) fn plan<'a>(&self, policy: &'a WritePolicy) -> Option<&'a PlanGrant> {
-        let now = unix_now();
+        let now = self.wall_now();
         policy.plan.as_ref().filter(|plan| {
-            now < plan.expires_unix
-                && plan.expires_unix <= now.saturating_add(crate::policy::MAX_PLAN_SECS)
-                && self.plan_used.load(Ordering::Relaxed) < plan.max_writes
+            in_window(plan, now) && self.plan_used.load(Ordering::Relaxed) < plan.max_writes
         })
-    }
-
-    /// Take `n` writes from the plan's budget, if it has them.
-    fn spend(&self, plan: &PlanGrant, n: u32) -> bool {
-        self.plan_used
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
-                used.checked_add(n)
-                    .filter(|total| *total <= plan.max_writes)
-            })
-            .is_ok()
-    }
-
-    /// Writes the plan has made.
-    pub(crate) fn plan_used(&self) -> u32 {
-        self.plan_used.load(Ordering::Relaxed)
     }
 
     /// The level a write runs at: armed while a session or a plan grant
@@ -115,6 +167,13 @@ impl Writes {
     }
 }
 
+/// Whether `plan`'s window is open at `now` (seconds since the Unix
+/// epoch): before its end, and no more than 8 hours before it, so a clock
+/// set back can't stretch it either.
+pub(crate) fn in_window(plan: &PlanGrant, now: u64) -> bool {
+    now < plan.expires_unix && plan.expires_unix <= now.saturating_add(crate::policy::MAX_PLAN_SECS)
+}
+
 /// Seconds since the Unix epoch.
 pub(crate) fn unix_now() -> u64 {
     SystemTime::now()
@@ -128,6 +187,9 @@ pub(crate) enum Via {
     /// The client's elicitation form: the client's claim that a person
     /// confirmed, so T1 only.
     Elicitation,
+    /// The same claim, answered to an elicitation request the server sent
+    /// a client older than 2026-07-28 (#2158): T1 only as well.
+    ServerElicitation,
     /// A plan grant a person approved in a terminal.
     Plan,
 }
@@ -137,6 +199,7 @@ impl Via {
     pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Elicitation => "elicitation",
+            Self::ServerElicitation => "server-elicitation",
             Self::Plan => "plan",
         }
     }
@@ -144,7 +207,7 @@ impl Via {
     /// `approved_by`: who stands behind the approval.
     pub(crate) fn by(self) -> &'static str {
         match self {
-            Self::Elicitation => "client",
+            Self::Elicitation | Self::ServerElicitation => "client",
             Self::Plan => "plan",
         }
     }
@@ -197,8 +260,10 @@ pub(crate) struct ClientElicitation {
     pub(crate) arm: ArmMode,
     /// Whether a session is armed now.
     pub(crate) armed: bool,
-    /// Whether the client takes form elicitations over multi round-trip
-    /// requests (a 2026-07-28 client that declares the capability).
+    /// Whether the client can be asked: it takes form elicitations over
+    /// multi round-trip requests (a 2026-07-28 client that declares the
+    /// capability), or is an older client that takes the server's
+    /// elicitation requests.
     pub(crate) supported: bool,
 }
 
@@ -227,17 +292,20 @@ impl Approver for ClientElicitation {
         if !self.supported {
             return refused(
                 "elicitation-unsupported",
-                "confirming a write needs a 2026-07-28 client that takes form elicitations",
+                "confirming a write needs a client that takes form elicitations (over multi \
+                 round-trip requests on 2026-07-28, or as the server's requests before it)",
             );
         }
         Approval::Ask { arm }
     }
 }
 
-/// A plan grant's approver: the writes it names, within its budget.
+/// A plan grant's approver: the writes it names, within its budget,
+/// counted in `workspace` (whose lock the caller holds) before they go.
 pub(crate) struct PlanApprover<'a> {
     pub(crate) plan: &'a PlanGrant,
     pub(crate) writes: &'a Writes,
+    pub(crate) workspace: &'a Path,
 }
 
 impl Approver for PlanApprover<'_> {
@@ -254,10 +322,10 @@ impl Approver for PlanApprover<'_> {
             );
         }
         let n = u32::try_from(preview.items.len()).unwrap_or(u32::MAX);
-        if !self.writes.spend(self.plan, n) {
-            return refused("plan-spent", "the plan grant's write budget is spent");
+        match self.writes.spend(self.plan, n, self.workspace) {
+            Ok(()) => Approval::Approved(Via::Plan),
+            Err(refusal) => refusal,
         }
-        Approval::Approved(Via::Plan)
     }
 }
 
@@ -294,6 +362,8 @@ pub(crate) struct McpCaller<'a> {
     /// Where the ids of the entries this write records as `sending` go,
     /// so a call that stops waiting can still name them.
     pub(crate) sending: Option<Sending>,
+    /// Set once this caller's `sending` rows were announced.
+    announced: AtomicBool,
 }
 
 /// The ledger ids a handed-off write has recorded, shared with its call.
@@ -313,7 +383,14 @@ impl McpCaller<'_> {
             via,
             fields,
             sending: None,
+            announced: AtomicBool::new(false),
         }
+    }
+
+    /// Whether this caller's write reached the ledger as `sending` (and
+    /// was announced), so its settle is announced whatever it leaves.
+    pub(crate) fn announced(&self) -> bool {
+        self.announced.load(Ordering::Acquire)
     }
 }
 
@@ -324,7 +401,7 @@ impl Caller for McpCaller<'_> {
 
     fn refusal(&self) -> Option<String> {
         match self.via {
-            Some(Via::Elicitation) if !self.writes.is_armed() => {
+            Some(Via::Elicitation | Via::ServerElicitation) if !self.writes.is_armed() => {
                 Some("the write session expired before the write went".into())
             }
             Some(Via::Plan)
@@ -332,7 +409,7 @@ impl Caller for McpCaller<'_> {
                     .policy
                     .plan
                     .as_ref()
-                    .is_none_or(|p| unix_now() >= p.expires_unix) =>
+                    .is_none_or(|p| self.writes.wall_now() >= p.expires_unix) =>
             {
                 Some("the plan grant expired before the write went".into())
             }
@@ -344,6 +421,10 @@ impl Caller for McpCaller<'_> {
         &'a self,
         entries: &'a [bacnet_ops::safety::ledger::Entry],
     ) -> bacnet_ops::safety::desk::Waiting<'a> {
+        // The `sending` rows are in the file now: tell the ledger's
+        // subscribers, and again once they settle, however they settle.
+        self.announced.store(true, Ordering::Release);
+        self.writes.signals.ledger_changed();
         if let Some(sending) = &self.sending {
             // Under the workspace's lock, this run's `sending` entries are
             // this write's.

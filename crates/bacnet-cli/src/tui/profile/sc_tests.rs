@@ -421,3 +421,39 @@ fn sc_failover_reconnect_and_timeout_flags_override_a_profile() {
     let error = resolve(&["--sc-failover-url", "wss://hub.example"]).unwrap_err();
     assert!(error.contains("differ"), "{error}");
 }
+
+/// A save whose file went in place but was reported failed (its directory
+/// sync failed) can be retried: an edit finds the disk holding exactly
+/// what it saves, a creation finds the same text; anything else on disk is
+/// still refused.
+#[test]
+fn a_save_already_in_place_can_be_retried() {
+    let root = tempfile::tempdir().unwrap();
+    let files = tempfile::tempdir().unwrap();
+    let p = sc_profile(files.path(), "wss://127.0.0.1:47808");
+    let service = service(root.path(), Overrides::default());
+    let Reply::Loaded { profile: saved, .. } = service.save("site", p.clone(), true, None).unwrap()
+    else {
+        panic!("save replies with the profile");
+    };
+    let store = Store::new(root.path().into());
+    // The retry of a creation, with the same text.
+    store.save("site", &saved, true).unwrap();
+    let mut edited = saved.clone();
+    edited.sc_mut().timeout_ms = 9000;
+    // The first attempt's file went in place.
+    store.save("site", &edited, false).unwrap();
+    service
+        .save("site", edited.clone(), false, Some(saved.clone()))
+        .unwrap();
+    let mut other = edited.clone();
+    other.sc_mut().timeout_ms = 7000;
+    let refused = service
+        .save("site", other.clone(), false, Some(saved))
+        .unwrap_err();
+    assert!(refused.contains("changed on disk"), "{refused}");
+    assert!(
+        store.save("site", &other, true).is_err(),
+        "never overwritten"
+    );
+}

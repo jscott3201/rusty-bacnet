@@ -49,7 +49,7 @@ pub(super) async fn slot(lab: &Lab, n: u32) -> PropertyValue {
 }
 
 /// Command AO:1 at `priority` on the device, as another commander would.
-async fn command(lab: &Lab, value: f32, priority: u8) {
+pub(super) async fn command(lab: &Lab, value: f32, priority: u8) {
     let operator = bacnet_objects::command_source::CommandOrigin::Local {
         owner_device: ObjectIdentifier::new(ObjectType::DEVICE, LAB).unwrap(),
         initiating_object: None,

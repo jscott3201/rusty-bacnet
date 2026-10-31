@@ -189,7 +189,7 @@ fn writes_and_a_plan_become_the_write_policy() {
         transport: "BIP",
         local: "0.0.0.0:47808".into(),
     };
-    let writes = write_policy(&section, workspace).unwrap();
+    let writes = write_policy(&section, workspace.clone()).unwrap();
     assert_eq!(writes.mode, WriteMode::Elicit);
     assert_eq!(writes.arm, ArmMode::Elicit);
     let grant = writes.plan.unwrap();
@@ -208,6 +208,16 @@ fn writes_and_a_plan_become_the_write_policy() {
         "{}",
         person.asked[0]
     );
+    // Authorizing starts the plan's write count at zero (#2159), under the
+    // key `serve` computes from the stored profile.
+    let site = store.workspace("site").unwrap();
+    let stored = store.load("site").unwrap().mcp.unwrap();
+    let served = Workspace {
+        dir: site.clone(),
+        ..workspace.clone()
+    };
+    let grant = write_policy(&stored, served).unwrap().plan.unwrap();
+    assert_eq!(grant.budget_used(&site), Ok(0));
     let mut profile = store.load("site").unwrap();
     let mcp = profile.mcp.as_mut().unwrap();
     mcp.plan.as_mut().unwrap().max_writes = 51;

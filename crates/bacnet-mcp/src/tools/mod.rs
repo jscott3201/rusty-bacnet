@@ -25,6 +25,7 @@ mod trend;
 mod trend_data;
 mod watch;
 pub(crate) mod write;
+mod write_confirm;
 pub(crate) mod write_task;
 
 use std::sync::Arc;
@@ -306,29 +307,40 @@ pub(crate) async fn call_write<T: TransportPort + 'static>(
         parse::<revert::Args>(&args).map(drop)
     };
     schema_check?;
-    let account = Arc::new(Account::new(Some(Arc::clone(&ctx.bucket))));
     let budget = ctx.policy.caps.budget;
-    let call = Call::new(budget, Arc::clone(&account));
-    let run = async {
-        if name == write::NAME {
-            write::run(ctx, &call, &args, retry, peer).await
-        } else {
-            revert::run(ctx, &call, &args, peer).await
+    // An older client that the server would ask to confirm: one such
+    // request waits at a time, so the slot is claimed before anything is
+    // read or sealed (#2158). A write a plan grant covers needs no slot.
+    let asking = if name == write::NAME
+        && retry.state.is_none()
+        && peer.session.is_some()
+        && ctx.writes.plan(&ctx.policy.writes).is_none()
+    {
+        match ctx.writes.ask() {
+            Some(slot) => Some(slot),
+            None => {
+                let account = Arc::new(Account::new(Some(Arc::clone(&ctx.bucket))));
+                let call = Call::new(budget, account);
+                let error = write::unconfirmed(ctx, &args, peer, (PENDING, PENDING_WHY)).await;
+                return Ok(finish(ctx, name, &call, Err(error)).into());
+            }
         }
+    } else {
+        None
     };
-    let work = tokio::time::timeout(budget + GRACE, charged(account, run));
-    // Biased: a write already handed off wins over a cancel arriving at
-    // the same time, so the reply never loses that the write goes on.
-    let finished = tokio::select! {
-        biased;
-        finished = work => finished,
-        () = cancel.cancelled() => {
-            ctx.log_read(name, &call, "cancelled");
-            return Err(ErrorData::internal_error("the call was cancelled", None));
+    let (call, finished) = attempt(ctx, name, &args, retry, peer, &cancel, None).await?;
+    let (call, finished) = match (finished, &peer.session) {
+        // A client older than 2026-07-28 that takes the server's
+        // elicitation requests: ask it, holding no lock while it answers,
+        // then go on as a retry with the form's answer would (#2158).
+        (Ok(Ok(write::Step::Ask(ask, good_until))), Some(session)) => {
+            let asked = (session, ask, good_until, asking);
+            confirm(ctx, name, &args, peer, &cancel, call, asked).await?
         }
+        (finished, _) => (call, finished),
     };
     let outcome = match finished {
-        Ok(Ok(write::Step::Ask(ask))) => {
+        Ok(Ok(write::Step::Ask(ask, _))) => {
             ctx.log_read(name, &call, "input-required");
             return Ok(CallToolResponse::InputRequired(ask));
         }
@@ -355,6 +367,102 @@ pub(crate) async fn call_write<T: TransportPort + 'static>(
         Err(_) => Err(out_of_budget(&call, budget)),
     };
     Ok(finish(ctx, name, &call, outcome).into())
+}
+
+/// The refusal of a write that would ask an older client to confirm
+/// while another confirmation waits.
+const PENDING: &str = "confirmation-pending";
+
+/// Why, in words.
+const PENDING_WHY: &str =
+    "another write is waiting for this client's confirmation; answer or cancel it first";
+
+/// What one run of a write tool came to, under its own budget: the call
+/// that counted it, and its step or error, or `Err` past the budget.
+type Attempt = (
+    Call,
+    Result<Result<write::Step, ToolError>, tokio::time::error::Elapsed>,
+);
+
+/// Ask an older client to confirm the write `ask` describes (#2158),
+/// one such request at a time, then run the retry with its answer, on
+/// the first run's account so the result's cost counts the preview's
+/// reads too. No answer to go on is a refusal, audited, with nothing
+/// sent; a cancelled call is an error, as any cancelled call is.
+async fn confirm<T: TransportPort + 'static>(
+    ctx: &Arc<Ctx<T>>,
+    name: &str,
+    args: &Map<String, Value>,
+    peer: &write::Peer,
+    cancel: &CancellationToken,
+    call: Call,
+    (session, ask, good_until, asking): (
+        &rmcp::service::Peer<rmcp::RoleServer>,
+        rmcp::model::InputRequiredResult,
+        tokio::time::Instant,
+        Option<crate::writes::Asking<'_>>,
+    ),
+) -> Result<Attempt, ErrorData> {
+    // Claimed before the preview, unless a plan was in force then and
+    // has ended since.
+    let Some(asking) = asking.or_else(|| ctx.writes.ask()) else {
+        let error = write::unconfirmed(ctx, args, peer, (PENDING, PENDING_WHY)).await;
+        return Ok((call, Ok(Err(error))));
+    };
+    ctx.log_read(name, &call, "confirming");
+    let asked = write_confirm::confirm(session, ask, good_until, cancel, &ctx.closing).await;
+    drop(asking);
+    match asked {
+        Ok(retry) => {
+            let account = Arc::clone(&call.account);
+            attempt(ctx, name, args, retry, peer, cancel, Some(account)).await
+        }
+        Err(unanswered) => {
+            let reason = ("confirmation-expired", unanswered.why.as_str());
+            let error = write::unconfirmed(ctx, args, peer, reason).await;
+            if unanswered.cancelled {
+                ctx.log_read(name, &call, "cancelled");
+                return Err(ErrorData::internal_error("the call was cancelled", None));
+            }
+            Ok((call, Ok(Err(error))))
+        }
+    }
+}
+
+/// Run a write tool once, within the call's budget and its grace,
+/// charged to `account` (a new one when none); a cancel ends it with an
+/// error.
+async fn attempt<T: TransportPort + 'static>(
+    ctx: &Arc<Ctx<T>>,
+    name: &str,
+    args: &Map<String, Value>,
+    retry: write::Retry,
+    peer: &write::Peer,
+    cancel: &CancellationToken,
+    account: Option<Arc<Account>>,
+) -> Result<Attempt, ErrorData> {
+    let account = account.unwrap_or_else(|| Arc::new(Account::new(Some(Arc::clone(&ctx.bucket)))));
+    let budget = ctx.policy.caps.budget;
+    let call = Call::new(budget, Arc::clone(&account));
+    let run = async {
+        if name == write::NAME {
+            write::run(ctx, &call, args, retry, peer).await
+        } else {
+            revert::run(ctx, &call, args, peer).await
+        }
+    };
+    let work = tokio::time::timeout(budget + GRACE, charged(account, run));
+    // Biased: a write already handed off wins over a cancel arriving at
+    // the same time, so the reply never loses that the write goes on.
+    let finished = tokio::select! {
+        biased;
+        finished = work => finished,
+        () = cancel.cancelled() => {
+            ctx.log_read(name, &call, "cancelled");
+            return Err(ErrorData::internal_error("the call was cancelled", None));
+        }
+    };
+    Ok((call, finished))
 }
 
 /// The text rendering: what the call did, the heading about device text,

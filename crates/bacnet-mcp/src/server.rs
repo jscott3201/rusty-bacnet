@@ -136,6 +136,7 @@ impl<T: TransportPort + 'static> McpServer<T> {
                     .map_err(|e| ServeError(format!("the watch hub: {e}")))
             })
             .transpose()?;
+        let writes = crate::writes::Writes::new(&policy.writes);
         Ok(Self {
             ctx: Arc::new(Ctx {
                 engine,
@@ -157,7 +158,7 @@ impl<T: TransportPort + 'static> McpServer<T> {
                 known: Mutex::new(HashMap::new()),
                 described: Mutex::new(HashMap::new()),
                 alarms: Mutex::new(HashMap::new()),
-                writes: crate::writes::Writes::new(),
+                writes,
                 handoffs: tokio_util::task::TaskTracker::new(),
             }),
         })
@@ -246,6 +247,10 @@ impl<T: TransportPort + 'static> McpServer<T> {
             let ctx = Arc::clone(&ctx);
             async move { ctx.follow_devices().await }
         });
+        let ends = tokio::spawn({
+            let ctx = Arc::clone(&ctx);
+            async move { crate::writes::notify::follow_ends(&ctx).await }
+        });
         let reader = Eof {
             inner: reader,
             closing: ctx.closing.clone(),
@@ -305,6 +310,7 @@ impl<T: TransportPort + 'static> McpServer<T> {
             hub.shutdown(cancel_wait(hub.stats().tasks)).await;
         }
         let _ = follow.await;
+        let _ = ends.await;
         ctx.log_summary();
         quit.map(drop)
     }
@@ -374,7 +380,10 @@ impl<R: AsyncRead + Unpin> AsyncRead for Eof<R> {
 
 /// What a request says about its client: the name it claims (cleaned
 /// and capped, and only ever a claim), and whether it takes form
-/// elicitations over multi round-trip requests (2026-07-28).
+/// elicitations over multi round-trip requests (2026-07-28) or, older,
+/// the server's own elicitation requests (#2158). A capability that
+/// names neither form nor URL elicitation means the form, as it did
+/// before URL elicitation existed.
 fn peer(context: &RequestContext<RoleServer>) -> tools::write::Peer {
     let modern = context
         .protocol_version()
@@ -388,6 +397,7 @@ fn peer(context: &RequestContext<RoleServer>) -> tools::write::Peer {
     let form = capabilities
         .and_then(|caps| caps.elicitation)
         .is_some_and(|e| e.form.is_some() || e.url.is_none());
+    let session = (!modern && form).then(|| context.peer.clone());
     let name = context
         .meta
         .client_info()
@@ -401,6 +411,7 @@ fn peer(context: &RequestContext<RoleServer>) -> tools::write::Peer {
     tools::write::Peer {
         name,
         form: modern && form,
+        session,
         request_id: format!("{:?}", context.id),
     }
 }
@@ -451,6 +462,7 @@ impl<T: TransportPort + 'static> ServerHandler for McpServer<T> {
             let retry = tools::write::Retry {
                 state: request.request_state,
                 responses: request.input_responses,
+                server: false,
             };
             let peer = peer(&context);
             return tools::call_write(&self.ctx, &request.name, args, retry, &peer, context.ct)
