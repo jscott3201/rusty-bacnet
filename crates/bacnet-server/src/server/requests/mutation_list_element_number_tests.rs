@@ -19,6 +19,7 @@ use bacnet_encoding::constructed::{
 };
 use bacnet_objects::elevator::EscalatorObject;
 use bacnet_objects::notification_class::{MAX_RECIPIENT_LIST_DESTINATIONS, NotificationClass};
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::schedule::CalendarObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::write_property::WritePropertyRequest;
@@ -307,6 +308,12 @@ impl BACnetObject for Recipients {
         }
         self.list = list;
         Ok(())
+    }
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::rows(
+            &[PropertyIdentifier::RECIPIENT_LIST],
+            &[PropertyIdentifier::RECIPIENT_LIST],
+        )
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         Cow::Borrowed(&[

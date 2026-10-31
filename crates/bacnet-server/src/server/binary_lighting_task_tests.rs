@@ -4,6 +4,7 @@ use crate::server::test_transport::{SendLog, TestTransport};
 use bacnet_encoding::{apdu::decode_apdu, npdu::decode_npdu};
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::lighting::BinaryLightingOutputObject;
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::traits::BACnetObject;
 
 async fn start_server(
@@ -556,6 +557,9 @@ impl BACnetObject for StuckDeadline {
             ErrorClass::PROPERTY,
             ErrorCode::WRITE_ACCESS_DENIED,
         ))
+    }
+    fn property_metadata(&self) -> std::borrow::Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&[])
     }
     fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
         std::borrow::Cow::Borrowed(&[])

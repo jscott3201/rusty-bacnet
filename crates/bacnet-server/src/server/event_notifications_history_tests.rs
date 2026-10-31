@@ -8,6 +8,7 @@ use crate::server::event_timestamp::SampledEventClock;
 use bacnet_objects::event::{
     EventStateChange, EventTransitionCommit, EventTransitionCommitError, TransitionOutcome,
 };
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::alarm_event::NotificationParameters;
 use bacnet_types::enums::{EventState, EventType};
@@ -120,6 +121,20 @@ impl BACnetObject for AtomicHistoryObject {
         ))
     }
 
+    fn property_metadata(&self) -> std::borrow::Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&[
+            PropertyIdentifier::NOTIFICATION_CLASS,
+            PropertyIdentifier::NOTIFY_TYPE,
+            PropertyIdentifier::EVENT_TIME_STAMPS,
+            PropertyIdentifier::EVENT_MESSAGE_TEXTS,
+            PropertyIdentifier::PRESENT_VALUE,
+            PropertyIdentifier::STATUS_FLAGS,
+            PropertyIdentifier::RELIABILITY,
+            PropertyIdentifier::HIGH_LIMIT,
+            PropertyIdentifier::LOW_LIMIT,
+            PropertyIdentifier::DEADBAND,
+        ])
+    }
     fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
         std::borrow::Cow::Borrowed(&[
             PropertyIdentifier::OBJECT_IDENTIFIER,

@@ -10,6 +10,7 @@
 //! *included* rather than excluded.
 
 use super::*;
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::traits::BACnetObject;
 
 /// A minimal event-initiating object that is simultaneously in HIGH_LIMIT and
@@ -92,6 +93,21 @@ impl BACnetObject for DisabledAlarmingObject {
             bacnet_types::enums::ErrorClass::PROPERTY,
             bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED,
         ))
+    }
+    fn property_metadata(&self) -> std::borrow::Cow<'_, [PropertyMetadata]> {
+        let mut served = vec![
+            PropertyIdentifier::EVENT_STATE,
+            PropertyIdentifier::EVENT_TYPE,
+            PropertyIdentifier::NOTIFICATION_CLASS,
+            PropertyIdentifier::EVENT_ENABLE,
+            PropertyIdentifier::ACKED_TRANSITIONS,
+            PropertyIdentifier::NOTIFY_TYPE,
+            PropertyIdentifier::EVENT_TIME_STAMPS,
+        ];
+        if self.detection_enable.is_some() {
+            served.push(PropertyIdentifier::EVENT_DETECTION_ENABLE);
+        }
+        crate::test_rows::read_only(&served)
     }
     fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
         let mut properties = vec![

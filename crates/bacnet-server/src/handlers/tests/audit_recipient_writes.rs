@@ -2,6 +2,7 @@
 //! This fixture does not add the property to the built-in Device object.
 
 use super::*;
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::WriteAccessSpecification;
 use bacnet_types::error::RemoteError;
@@ -28,6 +29,9 @@ impl BACnetObject for RecipientObject {
         "Recipient boundary fixture"
     }
 
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::rows(&[PROPERTY], &[PROPERTY])
+    }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         Cow::Borrowed(&[PROPERTY])
     }

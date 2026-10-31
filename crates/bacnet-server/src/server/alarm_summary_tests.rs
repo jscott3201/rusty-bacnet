@@ -1,3 +1,4 @@
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_types::error::RemoteError;
 use std::borrow::Cow;
 
@@ -60,6 +61,13 @@ impl BACnetObject for MalformedAlarmObject {
         ))
     }
 
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&[
+            PropertyIdentifier::EVENT_STATE,
+            PropertyIdentifier::NOTIFY_TYPE,
+            PropertyIdentifier::ACKED_TRANSITIONS,
+        ])
+    }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         Cow::Borrowed(&[
             PropertyIdentifier::EVENT_STATE,

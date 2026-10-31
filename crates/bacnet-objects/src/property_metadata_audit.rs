@@ -1,16 +1,16 @@
 //! Workspace-wide property-metadata exactness audit: issue #261 close-out.
 //!
-//! This test proves that no supported object type uses the trait fallback
-//! paths in `traits.rs` (empty `property_metadata` default, the universal-4
-//! `required_properties` default, the heuristic `is_writable_property`
-//! default). Every supported `ObjectType` gets one representative, and each
+//! `property_metadata` is a required trait method (#2181), so every object
+//! supplies rows; this audit checks the built-in rows are complete and
+//! coherent. Every supported `ObjectType` gets one representative, and each
 //! representative must expose non-empty canonical metadata from which the
 //! GENERATED comparison surfaces (`required_properties`, `property_list`,
-//! `is_writable_property`) are exactly derived. Any fallback regression or
-//! required/optional drift fails this test.
+//! `is_writable_property`) are exactly derived, and every row must read.
+//! Any missing, duplicated or unreadable row, or required/optional drift,
+//! fails this test. `property_metadata_tests` checks the other direction:
+//! no representative serves a property without a row.
 //!
-//! Deliberately out of scope (kept, not removed):
-//! - The fallback defaults themselves stay for downstream custom objects.
+//! Deliberately out of scope:
 //! - `NETWORK_SECURITY` (38) is deprecated (Clause 24 deleted) with no impl.
 //! - `WRITE_GROUP` is a service family, not an object type, so it is not an
 //!   `ObjectType` member at all.
@@ -94,7 +94,7 @@ fn audit_every_supported_type_derives_from_canonical_metadata() {
         let object_type = object.object_identifier().object_type();
         let metadata = object.property_metadata();
 
-        // No supported type may use the empty-metadata fallback.
+        // Every supported type has rows.
         assert!(
             !metadata.is_empty(),
             "{object_type:?} must return non-empty canonical metadata"

@@ -9,6 +9,7 @@ use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::elevator::ElevatorGroupObject;
 use bacnet_objects::multistate::MultiStateValueObject;
 use bacnet_objects::notification_class::NotificationClass;
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::schedule::ScheduleObject;
 use bacnet_objects::value_types::DateTimeValueObject;
 use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
@@ -163,6 +164,9 @@ impl BACnetObject for FixedList {
         ))
     }
 
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&[self.property])
+    }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         Cow::Owned(vec![self.property])
     }

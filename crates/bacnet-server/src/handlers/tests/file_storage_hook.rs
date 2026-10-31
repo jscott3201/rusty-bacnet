@@ -18,6 +18,7 @@ use super::file_persistence::{
 };
 use super::*;
 use bacnet_objects::file::{DEFAULT_MAX_RECORD_COUNT, FileObject};
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_services::common::MAX_DECODED_ITEMS;
 use bacnet_services::file::{
     AtomicReadFileAck, FileAccessMethod, FileReadAckMethod, FileWriteAccessMethod,
@@ -67,6 +68,9 @@ impl BACnetObject for HookLessFile {
         ))
     }
 
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&[])
+    }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         Cow::Borrowed(&[])
     }
@@ -226,6 +230,9 @@ impl BACnetObject for LaxFile {
         HookLessFile.write_property(property, array_index, value, priority)
     }
 
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&[])
+    }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         Cow::Borrowed(&[])
     }
@@ -362,6 +369,9 @@ impl BACnetObject for OpaqueReadOnlyFile {
         HookLessFile.write_property(property, array_index, value, priority)
     }
 
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&[])
+    }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         Cow::Borrowed(&[])
     }

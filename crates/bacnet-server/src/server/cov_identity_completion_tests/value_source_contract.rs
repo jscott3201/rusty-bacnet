@@ -1,5 +1,6 @@
 use super::value_source::{FIELDS, decoded};
 use super::*;
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::cov_multiple::COVNotificationMultipleRequest;
 use bacnet_types::enums::EngineeringUnits;
@@ -22,6 +23,13 @@ impl BACnetObject for Probe {
     }
     fn object_name(&self) -> &str {
         "command COV probe"
+    }
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        let mut rows = self.inner.property_metadata().into_owned();
+        if self.state.lock().unwrap().noncommandable {
+            rows.retain(|row| row.property_identifier != PropertyIdentifier::PRIORITY_ARRAY);
+        }
+        Cow::Owned(rows)
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         let mut list = self.inner.property_list().into_owned();

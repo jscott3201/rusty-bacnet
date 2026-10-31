@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 
+use bacnet_objects::property_metadata::{PropertyMetadata, property_list_from_metadata};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::{
     EngineeringUnits, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier,
@@ -42,18 +43,16 @@ impl BACnetObject for TestAnalogInput {
             ErrorCode::WRITE_ACCESS_DENIED,
         ))
     }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: [PropertyIdentifier; 8] = [
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PROPERTY_LIST,
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&[
             PropertyIdentifier::PRESENT_VALUE,
             PropertyIdentifier::STATUS_FLAGS,
             PropertyIdentifier::OUT_OF_SERVICE,
             PropertyIdentifier::UNITS,
-        ];
-        Cow::Borrowed(&PROPS)
+        ])
+    }
+    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
+        property_list_from_metadata(&self.property_metadata())
     }
 }
 
@@ -85,16 +84,17 @@ impl BACnetObject for TestBinaryValue {
     ) -> Result<(), Error> {
         Ok(())
     }
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::rows(
+            &[
+                PropertyIdentifier::PRESENT_VALUE,
+                PropertyIdentifier::STATUS_FLAGS,
+            ],
+            &[PropertyIdentifier::PRESENT_VALUE],
+        )
+    }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: [PropertyIdentifier; 6] = [
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PROPERTY_LIST,
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::STATUS_FLAGS,
-        ];
-        Cow::Borrowed(&PROPS)
+        property_list_from_metadata(&self.property_metadata())
     }
 }
 
@@ -135,16 +135,14 @@ impl BACnetObject for TestDevice {
             ErrorCode::WRITE_ACCESS_DENIED,
         ))
     }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: [PropertyIdentifier; 6] = [
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PROPERTY_LIST,
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&[
             PropertyIdentifier::PROTOCOL_VERSION,
             PropertyIdentifier::PROTOCOL_REVISION,
-        ];
-        Cow::Borrowed(&PROPS)
+        ])
+    }
+    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
+        property_list_from_metadata(&self.property_metadata())
     }
     /// Device is not createable or deleteable; mirrors the real DeviceObject.
     fn is_createable(&self) -> bool {
@@ -237,16 +235,6 @@ fn all_object_types_listed() {
 #[test]
 fn object_type_properties_populated() {
     let db = make_test_db();
-    let unmigrated = db
-        .iter_objects()
-        .find_map(|(_, object)| {
-            (object.object_identifier().object_type() == ObjectType::ANALOG_INPUT).then_some(object)
-        })
-        .unwrap();
-    assert!(
-        unmigrated.property_metadata().is_empty(),
-        "the test fixture must exercise the legacy PICS fallback"
-    );
     let server_config = ServerConfig::default();
     let pics_config = make_pics_config();
     let pics = generate_pics(&db, &server_config, &pics_config);
@@ -260,10 +248,8 @@ fn object_type_properties_populated() {
     // AI has 8 properties in our test fixture
     assert_eq!(ai.supported_properties.len(), 8);
 
-    // The TestAnalogInput stub does not override is_writable_property, so it
-    // inherits the default historical_writable_default heuristic, which reports
-    // PRESENT_VALUE read-only for ANALOG_INPUT. The real AnalogInputObject
-    // overrides this to writable-when-out-of-service — see
+    // The TestAnalogInput stub's rows give PRESENT_VALUE no write route. The
+    // real AnalogInputObject's make it writable when out of service: see
     // pics_input_present_value_writable_only_when_out_of_service.
     let pv = ai
         .supported_properties

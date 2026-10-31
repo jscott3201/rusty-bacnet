@@ -3,6 +3,9 @@
 
 use std::borrow::Cow;
 
+use bacnet_objects::property_metadata::{
+    PropertyConformance, PropertyMetadata, PropertyWriteCapability, property_list_from_metadata,
+};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, EventState, NotifyType, ObjectType, PropertyIdentifier,
@@ -103,17 +106,31 @@ impl BACnetObject for FixedAlarm {
         ))
     }
 
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        // Every row required and read-only: this object takes no write.
+        const fn row(property: PropertyIdentifier) -> PropertyMetadata {
+            PropertyMetadata::new(
+                property,
+                PropertyConformance::RequiredRead,
+                None,
+                PropertyWriteCapability::ReadOnly,
+            )
+        }
+        const ROWS: &[PropertyMetadata] = &[
+            row(PropertyIdentifier::OBJECT_IDENTIFIER),
+            row(PropertyIdentifier::OBJECT_NAME),
+            row(PropertyIdentifier::OBJECT_TYPE),
+            row(PropertyIdentifier::EVENT_STATE),
+            row(PropertyIdentifier::ACKED_TRANSITIONS),
+            row(PropertyIdentifier::EVENT_TIME_STAMPS),
+            row(PropertyIdentifier::NOTIFY_TYPE),
+            row(PropertyIdentifier::EVENT_ENABLE),
+            row(PropertyIdentifier::NOTIFICATION_CLASS),
+            row(PropertyIdentifier::PROPERTY_LIST),
+        ];
+        Cow::Borrowed(ROWS)
+    }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::EVENT_STATE,
-            PropertyIdentifier::ACKED_TRANSITIONS,
-            PropertyIdentifier::EVENT_TIME_STAMPS,
-            PropertyIdentifier::NOTIFY_TYPE,
-            PropertyIdentifier::EVENT_ENABLE,
-            PropertyIdentifier::NOTIFICATION_CLASS,
-        ])
+        property_list_from_metadata(&self.property_metadata())
     }
 }

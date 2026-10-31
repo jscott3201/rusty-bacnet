@@ -27,6 +27,8 @@ pub use policy::{FnPolicy, ServerPolicy};
 mod runtime_clock;
 pub mod schedule;
 pub mod server;
+#[cfg(test)]
+mod test_rows;
 pub mod trend_log;
 
 /// Explicit initiators for local command-source tracking.

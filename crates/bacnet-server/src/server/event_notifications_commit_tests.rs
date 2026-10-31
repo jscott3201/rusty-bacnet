@@ -1,5 +1,6 @@
 use super::*;
 use bacnet_objects::event::EventStateChange;
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::{EventState, EventType};
 use bacnet_types::primitives::BACnetTimeStamp;
@@ -45,6 +46,9 @@ impl BACnetObject for UnsupportedFaultReindication {
         ))
     }
 
+    fn property_metadata(&self) -> std::borrow::Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&[PropertyIdentifier::NOTIFICATION_CLASS])
+    }
     fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
         std::borrow::Cow::Borrowed(&[PropertyIdentifier::NOTIFICATION_CLASS])
     }

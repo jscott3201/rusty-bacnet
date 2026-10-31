@@ -3,6 +3,7 @@
 //! caps, access-method refusal, and the `BACnetObject` storage hooks.
 
 use super::*;
+use crate::property_metadata::PropertyMetadata;
 use bacnet_types::enums::ErrorCode;
 use bacnet_types::error::RemoteError;
 
@@ -513,6 +514,9 @@ impl BACnetObject for NoStorageFile {
         Err(common::write_access_denied_error())
     }
 
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&[])
+    }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         Cow::Borrowed(&[])
     }

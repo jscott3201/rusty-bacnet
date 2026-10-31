@@ -131,6 +131,7 @@ impl FaultDetector {
 
 #[cfg(test)]
 mod tests {
+    use bacnet_objects::property_metadata::PropertyMetadata;
     use std::borrow::Cow;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -252,6 +253,9 @@ mod tests {
             Err(Error::Encoding("test object is read-only".into()))
         }
 
+        fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+            crate::test_rows::read_only(&[PropertyIdentifier::RELIABILITY])
+        }
         fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
             Cow::Borrowed(&[PropertyIdentifier::RELIABILITY])
         }
@@ -305,6 +309,9 @@ mod tests {
             Err(Error::Encoding("test object is read-only".into()))
         }
 
+        fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+            crate::test_rows::read_only(&[])
+        }
         fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
             Cow::Borrowed(&[])
         }

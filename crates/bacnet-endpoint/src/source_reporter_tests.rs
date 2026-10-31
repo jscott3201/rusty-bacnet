@@ -2,6 +2,7 @@
 
 use super::*;
 use bacnet_objects::audit::AuditReporterObject;
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::ReceivedNpdu;
@@ -398,6 +399,9 @@ impl BACnetObject for ForeignReporter {
         _: Option<u8>,
     ) -> Result<(), Error> {
         Err(Error::Encoding("not writable".into()))
+    }
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&[])
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         Cow::Borrowed(&[])

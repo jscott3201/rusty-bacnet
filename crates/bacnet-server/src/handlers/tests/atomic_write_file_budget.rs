@@ -3,6 +3,7 @@ use crate::server::AtomicWriteFileBudget;
 use bacnet_objects::file::{
     FileObject, FileRecordRead, FileStorage, FileStreamRead, FileWriteStart,
 };
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_services::file::{
     AtomicWriteFileAck, AtomicWriteFileRequest, FileWriteAccessMethod, FileWriteAckMethod,
 };
@@ -27,6 +28,9 @@ impl BACnetObject for Probe {
     }
     fn object_name(&self) -> &str {
         self.file.object_name()
+    }
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&[])
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         Cow::Borrowed(&[])

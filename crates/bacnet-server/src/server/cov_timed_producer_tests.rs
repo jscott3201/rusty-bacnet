@@ -12,6 +12,7 @@ use super::cov_wire_test_support::*;
 use super::*;
 use bacnet_objects::binary::BinaryOutputObject;
 use bacnet_objects::life_safety::LifeSafetyPointObject;
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::staging::{StagingConfig, StagingObject};
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::cov_multiple::COVNotificationMultipleRequest;
@@ -472,6 +473,19 @@ impl bacnet_objects::traits::BACnetObject for WritablePoint {
         true
     }
 
+    fn property_metadata(&self) -> std::borrow::Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::rows(
+            &[
+                PropertyIdentifier::PRESENT_VALUE,
+                PropertyIdentifier::STATUS_FLAGS,
+                PropertyIdentifier::OUT_OF_SERVICE,
+            ],
+            &[
+                PropertyIdentifier::PRESENT_VALUE,
+                PropertyIdentifier::OUT_OF_SERVICE,
+            ],
+        )
+    }
     fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
         std::borrow::Cow::Borrowed(&[
             PropertyIdentifier::OBJECT_IDENTIFIER,

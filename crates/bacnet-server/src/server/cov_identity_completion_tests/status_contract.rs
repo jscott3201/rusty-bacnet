@@ -1,5 +1,6 @@
 use super::status_flags::values;
 use super::*;
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::traits::BACnetObject;
 use std::borrow::Cow;
 
@@ -26,6 +27,16 @@ impl BACnetObject for Probe {
     }
     fn object_name(&self) -> &str {
         "flags probe"
+    }
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        let mut served = vec![
+            PropertyIdentifier::PRESENT_VALUE,
+            PropertyIdentifier::RELINQUISH_DEFAULT,
+        ];
+        if self.0.lock().unwrap().present {
+            served.push(PropertyIdentifier::STATUS_FLAGS);
+        }
+        crate::test_rows::read_only(&served)
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         let mut p = vec![

@@ -3,6 +3,7 @@
 //! carries, unresolved assignments and the caller's errors. The time-range
 //! and location rules are in `rights_evaluation_term_tests.rs`.
 
+use crate::property_metadata::PropertyMetadata;
 use bacnet_types::error::RemoteError;
 use std::borrow::Cow;
 
@@ -259,6 +260,9 @@ impl BACnetObject for Stub {
         Err(common::write_access_denied_error())
     }
 
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&[])
+    }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         Cow::Borrowed(&[])
     }

@@ -581,6 +581,9 @@ fn set_event_state_internal_default_rejects() {
                 ErrorCode::WRITE_ACCESS_DENIED,
             ))
         }
+        fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+            crate::test_rows::read_only(&[])
+        }
         fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
             Cow::Borrowed(&[PropertyIdentifier::OBJECT_NAME])
         }

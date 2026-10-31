@@ -286,33 +286,7 @@ impl BACnetObject for DeviceReadView<'_> {
         if !self.is_device() {
             return self.object.property_metadata();
         }
-        let original = self.object.property_metadata();
-        let mut rows: Vec<_> = if original.is_empty() {
-            let required = self.object.required_properties();
-            self.object
-                .property_list()
-                .iter()
-                .copied()
-                .map(|property| {
-                    PropertyMetadata::new(
-                        property,
-                        if required.contains(&property) {
-                            PropertyConformance::RequiredRead
-                        } else {
-                            PropertyConformance::Optional
-                        },
-                        None,
-                        if self.object.is_writable_property(property) {
-                            PropertyWriteCapability::Always
-                        } else {
-                            PropertyWriteCapability::ReadOnly
-                        },
-                    )
-                })
-                .collect()
-        } else {
-            original.into_owned()
-        };
+        let mut rows = self.object.property_metadata().into_owned();
         rows.retain(|row| !self.owns(row.property_identifier));
         if let Some(identity) = self.identity() {
             rows.extend(identity.properties().map(|property| {

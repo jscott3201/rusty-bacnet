@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::cov::COVNotificationRequest;
 use bacnet_services::cov_multiple::COVNotificationMultipleRequest;
@@ -18,6 +19,9 @@ impl BACnetObject for Probe {
     }
     fn object_name(&self) -> &str {
         "selected probe"
+    }
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&[PropertyIdentifier::PRESENT_VALUE, SELECTED])
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         Cow::Owned(vec![PropertyIdentifier::PRESENT_VALUE, SELECTED])

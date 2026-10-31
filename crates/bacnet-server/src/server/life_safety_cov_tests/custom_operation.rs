@@ -1,5 +1,6 @@
 //! Custom LifeSafetyOperation contract exercised through confirmed dispatch.
 use super::*;
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::traits::{BACnetObject, LifeSafetyOperationEffect, LifeSafetyOperationOutcome};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use std::borrow::Cow;
@@ -61,6 +62,15 @@ impl BACnetObject for CustomPoint {
     }
     fn object_name(&self) -> &str {
         &self.name
+    }
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&[
+            PropertyIdentifier::PRESENT_VALUE,
+            PropertyIdentifier::TRACKING_VALUE,
+            PropertyIdentifier::SILENCED,
+            PropertyIdentifier::OPERATION_EXPECTED,
+            PropertyIdentifier::STATUS_FLAGS,
+        ])
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         Cow::Borrowed(&[

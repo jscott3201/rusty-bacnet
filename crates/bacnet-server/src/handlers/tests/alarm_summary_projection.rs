@@ -1,3 +1,4 @@
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_types::error::RemoteError;
 use std::borrow::Cow;
 
@@ -97,6 +98,9 @@ impl BACnetObject for AlarmSummaryFixture {
         ))
     }
 
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&self.advertised)
+    }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         Cow::Owned(self.advertised.clone())
     }

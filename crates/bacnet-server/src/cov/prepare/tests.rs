@@ -1,5 +1,6 @@
 use super::*;
 use crate::cov::*;
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::{
     accumulator::AccumulatorObject, analog::AnalogValueObject, color::ColorObject,
     database::ObjectDatabase,
@@ -229,6 +230,9 @@ impl BACnetObject for Custom {
     }
     fn object_name(&self) -> &str {
         "custom"
+    }
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&[PropertyIdentifier::PRESENT_VALUE, CUSTOM, VARIABLE])
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         Cow::Owned(vec![PropertyIdentifier::PRESENT_VALUE, CUSTOM, VARIABLE])

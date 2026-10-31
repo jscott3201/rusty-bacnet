@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::traits::BACnetObject;
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
@@ -14,6 +15,9 @@ impl BACnetObject for ReadProbe {
     }
     fn object_name(&self) -> &str {
         self.inner.object_name()
+    }
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        self.inner.property_metadata()
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         self.inner.property_list()

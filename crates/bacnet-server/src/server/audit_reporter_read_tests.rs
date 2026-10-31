@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::{audit::AuditReporterObject, traits::BACnetObject};
 use bacnet_services::{
     read_property::{ReadPropertyACK, ReadPropertyRequest},
@@ -214,6 +215,28 @@ impl BACnetObject for ReadProbe {
     }
     fn object_name(&self) -> &str {
         "read probe"
+    }
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        // The probe serves these two rows only, Description with its
+        // injected failure, so RPM ALL reads exactly them.
+        use bacnet_objects::property_metadata::{
+            PropertyConformance as C, PropertyWriteCapability as W,
+        };
+        const ROWS: &[PropertyMetadata] = &[
+            PropertyMetadata::new(
+                PropertyIdentifier::PRESENT_VALUE,
+                C::RequiredRead,
+                None,
+                W::ReadOnly,
+            ),
+            PropertyMetadata::new(
+                PropertyIdentifier::DESCRIPTION,
+                C::Optional,
+                None,
+                W::ReadOnly,
+            ),
+        ];
+        Cow::Borrowed(ROWS)
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         Cow::Borrowed(&[

@@ -8,6 +8,7 @@ use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::notification_class::NotificationClass;
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::alarm_event::{EventNotificationRequest, NotificationParameters};
 use bacnet_types::bitstring::EventTransitionBits;
@@ -169,6 +170,20 @@ impl BACnetObject for ObservedObject {
         Ok(())
     }
 
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::rows(
+            &[
+                PropertyIdentifier::PRESENT_VALUE,
+                PropertyIdentifier::RELIABILITY,
+                PropertyIdentifier::STATUS_FLAGS,
+            ],
+            &[
+                PropertyIdentifier::PRESENT_VALUE,
+                PropertyIdentifier::RELIABILITY,
+                PropertyIdentifier::STATUS_FLAGS,
+            ],
+        )
+    }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         Cow::Borrowed(&[
             PropertyIdentifier::OBJECT_IDENTIFIER,

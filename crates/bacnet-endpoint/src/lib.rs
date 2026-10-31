@@ -10,6 +10,9 @@ pub mod roles;
 pub mod sc;
 pub mod session;
 mod source_audit;
+#[cfg(test)]
+#[path = "../../bacnet-server/src/test_rows.rs"]
+mod test_rows;
 
 pub use identity::{DeviceIdentity, NetworkPortEntry, build_database_with_extra};
 pub use roles::{ClientRoleHandle, EndpointApduDestination, ServerRoleHandle};

@@ -1,5 +1,6 @@
 use super::*;
 use bacnet_encoding::primitives::{decode_timestamp_choice, encode_timestamp_choice};
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::primitives::{Date, Time};
 
@@ -55,6 +56,9 @@ impl bacnet_objects::traits::BACnetObject for EventArrayFixture {
         ))
     }
 
+    fn property_metadata(&self) -> std::borrow::Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(EVENT_ARRAY_PROPERTIES)
+    }
     fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
         std::borrow::Cow::Borrowed(EVENT_ARRAY_PROPERTIES)
     }

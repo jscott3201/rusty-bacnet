@@ -444,6 +444,11 @@ async fn priority_array_custom_object_write_policy_is_not_globally_restricted() 
         fn object_name(&self) -> &str {
             "custom-array"
         }
+        fn property_metadata(
+            &self,
+        ) -> std::borrow::Cow<'_, [bacnet_objects::property_metadata::PropertyMetadata]> {
+            crate::test_rows::rows(&[PA], &[PA])
+        }
         fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
             std::borrow::Cow::Owned(vec![PA])
         }

@@ -172,6 +172,7 @@ fn routing_skips_delivery_when_stored_recipient_list_is_malformed() {
     // End-to-end fail-closed: a NotificationClass whose stored Recipient_List
     // is undecodable yields None from the strict lookup (the router skips
     // the notification) rather than delivering to a decodable prefix.
+    use crate::property_metadata::PropertyMetadata;
     use std::borrow::Cow;
 
     struct MalformedListObject {
@@ -221,6 +222,9 @@ fn routing_skips_delivery_when_stored_recipient_list_is_malformed() {
                 bacnet_types::enums::ErrorClass::PROPERTY,
                 bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED,
             ))
+        }
+        fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+            crate::test_rows::read_only(&[PropertyIdentifier::NOTIFICATION_CLASS])
         }
         fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
             Cow::Borrowed(&[PropertyIdentifier::NOTIFICATION_CLASS])
