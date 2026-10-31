@@ -327,7 +327,7 @@ impl DeviceIdentity {
 
     /// Check the pure Device declaration. Executors also validate deadlines.
     pub fn validate(&self) -> Result<(), Error> {
-        ObjectIdentifier::new(ObjectType::DEVICE, self.instance)?;
+        ObjectIdentifier::new_addressable(ObjectType::DEVICE, self.instance)?;
         if self.max_apdu_length < 50 {
             return Err(Error::Encoding(
                 "Device max-APDU must be at least 50".into(),
@@ -411,7 +411,7 @@ impl DeviceIdentity {
 
     /// Device object identifier derived from the instance.
     pub fn device_oid(&self) -> ObjectIdentifier {
-        ObjectIdentifier::new(ObjectType::DEVICE, self.instance)
+        ObjectIdentifier::new_addressable(ObjectType::DEVICE, self.instance)
             .expect("identity instance was validated at construction")
     }
 

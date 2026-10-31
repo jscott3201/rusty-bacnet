@@ -214,9 +214,20 @@ fn create(
     request: &CreateObjectRequest,
     target: &mut Option<ObjectIdentifier>,
 ) -> Result<ObjectIdentifier, Error> {
-    // Clause 15.3.1.3 keeps apart a type the device supports but does not
-    // create from one it does not support. The Device advertises exactly
-    // SUPPORTED_OBJECT_TYPES, so any other type is refused first, whatever
+    // Clause 15.3.1.3 has the device look for a named object before
+    // anything else, so an identifier already in use is refused first,
+    // whatever its type: an application's own object of a vendor type too.
+    if let ObjectSpecifier::Identifier(oid) = &request.object_specifier
+        && db.get(oid).is_some()
+    {
+        return Err(Error::protocol(
+            ErrorClass::OBJECT,
+            ErrorCode::OBJECT_IDENTIFIER_ALREADY_EXISTS,
+        ));
+    }
+    // The clause keeps apart a type the device supports but does not create
+    // from one it does not support. The Device advertises exactly
+    // SUPPORTED_OBJECT_TYPES, so any other type is refused next, whatever
     // instance the request names; only a listed type gets the refusals
     // below, DYNAMIC_CREATION_NOT_SUPPORTED among them.
     let object_type = match &request.object_specifier {
@@ -255,12 +266,6 @@ fn create(
             (*obj_type, next)
         }
         ObjectSpecifier::Identifier(oid) => {
-            if db.get(oid).is_some() {
-                return Err(Error::protocol(
-                    ErrorClass::OBJECT,
-                    ErrorCode::OBJECT_IDENTIFIER_ALREADY_EXISTS,
-                ));
-            }
             // Clause 12.1.1 gives no object the instance 4194303 (it only
             // means "not initialized" in properties), and the Clause 15.3.1.3
             // error table has no row for asking for it. The device can't

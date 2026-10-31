@@ -141,6 +141,71 @@ fn the_reserved_instance_is_refused_and_nothing_is_added() {
     assert!(db.get(&last).is_some());
 }
 
+/// An application's own object of a vendor type the Device doesn't list.
+struct Vendor(ObjectIdentifier);
+
+impl BACnetObject for Vendor {
+    fn object_identifier(&self) -> ObjectIdentifier {
+        self.0
+    }
+
+    fn object_name(&self) -> &str {
+        "vendor-object"
+    }
+
+    fn read_property(&self, _: PropertyIdentifier, _: Option<u32>) -> Result<PropertyValue, Error> {
+        Err(Error::protocol(
+            ErrorClass::PROPERTY,
+            ErrorCode::UNKNOWN_PROPERTY,
+        ))
+    }
+
+    fn write_property(
+        &mut self,
+        _: PropertyIdentifier,
+        _: Option<u32>,
+        _: PropertyValue,
+        _: Option<u8>,
+    ) -> Result<(), Error> {
+        Err(Error::protocol(
+            ErrorClass::PROPERTY,
+            ErrorCode::WRITE_ACCESS_DENIED,
+        ))
+    }
+
+    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
+        Cow::Borrowed(&[])
+    }
+}
+
+#[test]
+fn an_identifier_in_use_is_refused_before_its_type_is_judged() {
+    // Clause 15.3.1.3 looks for the named object first (#2171), so an
+    // application's object of an unlisted vendor type is already there,
+    // not an unsupported type.
+    let mut db = make_db_with_device_and_ai();
+    let vendor = object(ObjectType::from_raw(600), 7);
+    assert!(!SUPPORTED_OBJECT_TYPES.contains(&vendor.object_type()));
+    db.add(Box::new(Vendor(vendor))).unwrap();
+    assert_eq!(
+        refusal(create(&mut db, ObjectSpecifier::Identifier(vendor))),
+        (
+            ErrorClass::OBJECT,
+            ErrorCode::OBJECT_IDENTIFIER_ALREADY_EXISTS
+        )
+    );
+    // A free identifier of the same type is still an unsupported type.
+    assert_eq!(
+        refusal(create(
+            &mut db,
+            ObjectSpecifier::Identifier(object(ObjectType::from_raw(600), 8))
+        )),
+        (ErrorClass::OBJECT, ErrorCode::UNSUPPORTED_OBJECT_TYPE)
+    );
+    assert_eq!(db.len(), 3);
+    assert!(db.get(&vendor).is_some());
+}
+
 /// A Binary Input that its application keeps from being deleted.
 struct Pinned(bacnet_objects::binary::BinaryInputObject);
 

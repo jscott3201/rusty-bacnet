@@ -45,12 +45,16 @@ fn selected_device_is_independent_of_iteration_order() {
 }
 
 #[test]
-fn selected_device_preserves_empty_and_single_cases() {
+fn selected_device_preserves_empty_single_and_wildcard_cases() {
     let concrete = device(813);
+    let wildcard = device(ObjectIdentifier::WILDCARD_INSTANCE);
     let analog = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 1).unwrap();
     assert_eq!(select_device([]), None);
     assert_eq!(select_device([analog]), None);
     assert_eq!(select_device([analog, concrete]), Some(concrete));
+    // The pure choice passes the wildcard through; it's ObjectDatabase::add
+    // that keeps a Device there out of every database (#2171).
+    assert_eq!(select_device([analog, wildcard]), Some(wildcard));
 }
 
 #[test]

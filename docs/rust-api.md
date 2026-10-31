@@ -8555,9 +8555,11 @@ The server automatically dispatches:
 - CreateObject, DeleteObject (mutation-gated). The Device's
   Protocol_Object_Types_Supported comes from
   `bacnet_objects::device::SUPPORTED_OBJECT_TYPES`, every type the crate
-  builds, and CreateObject reads the same list: a type outside it is OBJECT /
-  UNSUPPORTED_OBJECT_TYPE whatever the instance, a listed type the server
-  doesn't create, or instance 4194303, is OBJECT /
+  builds, and CreateObject reads the same list. A request naming an
+  identifier already in use is OBJECT / OBJECT_IDENTIFIER_ALREADY_EXISTS
+  first, whatever its type. Then a type outside the list is OBJECT /
+  UNSUPPORTED_OBJECT_TYPE whatever the instance, and a listed type the server
+  doesn't create, or a listed type at instance 4194303, is OBJECT /
   DYNAMIC_CREATION_NOT_SUPPORTED (Clause 15.3.1.3, #2171). DeleteObject
   answers OBJECT / UNKNOWN_OBJECT for an absent object, then asks the
   object's `is_deleteable()`.

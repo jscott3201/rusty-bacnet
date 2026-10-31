@@ -49,11 +49,9 @@ fn device_write_target<'a>(
             ErrorCode::UNKNOWN_PROPERTY,
         ));
     }
-    // `selected` comes from the session's `with_device_writes`, so it may be
-    // the wildcard Device. No object has that instance (#2171), so a write
-    // naming it was already refused as UNKNOWN_OBJECT above, and a write
-    // naming a real Device differs from it and is denied here: the outcomes
-    // a separate wildcard check gave.
+    // A session takes `selected` from its database's local Device, which
+    // must match its identity, and neither takes the wildcard instance
+    // (#2171), so the wildcard check this replaced could never fire.
     if write.object_identifier != selected
         || selected.object_type() != ObjectType::DEVICE
         || !matches!(
