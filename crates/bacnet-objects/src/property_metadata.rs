@@ -109,11 +109,10 @@ pub enum PropertyPresenceCondition {
     /// An IPv6 port, which requires its address, prefix length, gateway and
     /// DNS servers (Table 12-71 footnote 15, #2191).
     Ipv6Port,
-    /// The object reports COV, which its table's footnote makes the
-    /// condition for COV_Increment (and for a Pulse Converter's COV_Period
-    /// too): the analog types, Loop, Pulse Converter, the numeric value
-    /// types, Lighting Output and Staging (#2193). A row carries it only on
-    /// an object whose
+    /// The object reports COV, which its table's footnote makes the condition
+    /// for COV_Increment (and for a Pulse Converter's COV_Period too): the
+    /// analog types, Loop, Pulse Converter, the numeric value types, Lighting
+    /// Output and Staging (#2193). A row carries it only on an object whose
     /// [`supports_cov`](crate::traits::BACnetObject::supports_cov) is true.
     CovReporting,
     /// A Timer's Present_Value is writable while it is in service, which

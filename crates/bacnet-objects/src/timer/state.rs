@@ -52,9 +52,54 @@ impl TimerObject {
         }
     }
 
+    /// Whether the countdown has reached zero but no expiry pass has run
+    /// yet: the server's task, or the next write, applies it. Reads serve
+    /// the timer as already expired, so none shows RUNNING with nothing
+    /// left.
+    pub(super) fn is_due(&self) -> bool {
+        matches!(self.countdown, Countdown::Counting { deadline } if self.monotonic_now() >= deadline)
+    }
+
+    /// Timer_State as served, a due expiry applied.
+    pub(super) fn served_state(&self) -> TimerState {
+        if self.is_due() {
+            TimerState::EXPIRED
+        } else {
+            self.timer_state
+        }
+    }
+
+    /// Last_State_Change as served, a due expiry applied.
+    pub(super) fn served_last_state_change(&self) -> TimerTransition {
+        if self.is_due() {
+            TimerTransition::RUNNING_TO_EXPIRED
+        } else {
+            self.last_state_change
+        }
+    }
+
+    /// Update_Time as served: a due expiry is stamped now.
+    pub(super) fn served_update_time(&self) -> (Date, Time) {
+        if self.is_due() {
+            stamp_datetime(self.clock.as_deref())
+        } else {
+            self.update_time
+        }
+    }
+
     /// Expiration_Time: when a running timer will expire, worked out now
-    /// from the Device clock; the stored value in IDLE and EXPIRED.
+    /// from the Device clock; the stored value in IDLE and EXPIRED, and now
+    /// for a due expiry.
+    ///
+    /// While Out_Of_Service holds a running countdown this is still now plus
+    /// the time left, so it moves on with the Device clock. Clause 12.57 has
+    /// a RUNNING timer's Expiration_Time worked out when read, and lets an
+    /// out-of-service timer behave as specified apart from not counting
+    /// down; it names no other value for the held case.
     pub(super) fn expiration_time_now(&self) -> (Date, Time) {
+        if self.is_due() {
+            return stamp_datetime(self.clock.as_deref());
+        }
         if self.timer_state != TimerState::RUNNING {
             return self.expiration_time;
         }
@@ -63,8 +108,17 @@ impl TimerObject {
             .unwrap_or(UNSPECIFIED_DATETIME)
     }
 
+    /// Apply an expiry whose deadline has passed before the task's pass
+    /// got to it, so a write acts on the state the timer is really in.
+    pub(super) fn apply_due_expiry(&mut self) {
+        self.expire_if_due(self.monotonic_now());
+    }
+
     /// Out_Of_Service changed: hold a running countdown, or resume it.
     pub(super) fn service_changed(&mut self) {
+        // A countdown that already ran out expires rather than being held
+        // with nothing left.
+        self.apply_due_expiry();
         match (self.out_of_service, self.countdown) {
             (true, Countdown::Counting { .. }) => {
                 self.countdown = Countdown::Held {

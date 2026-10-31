@@ -1,7 +1,7 @@
-//! Every Network Port kind the crate builds: each conditional row keeps
-//! Table 12-71's O code and carries its footnote's condition, and the rows
-//! RPM REQUIRED and the PICS treat as required are the same as before the
-//! conditions existed (#2191).
+//! Every IP (B/IP and B/IPv6) Network Port kind the crate builds: each
+//! conditional row keeps Table 12-71's O code and carries its footnote's
+//! condition, and the rows RPM REQUIRED and the PICS treat as required are
+//! the same as before the conditions existed (#2191).
 
 use super::*;
 use crate::property_metadata::{PropertyConformance, PropertyPresenceCondition as C};

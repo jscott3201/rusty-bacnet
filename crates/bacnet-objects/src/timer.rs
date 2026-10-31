@@ -14,7 +14,11 @@
 //! down, and Reliability is writable.
 //!
 //! The object has no State_Change_Values, List_Of_Object_Property_References
-//! or Priority_For_Writing, so a transition has no write requests to make.
+//! or Priority_For_Writing, so a transition has no write requests to make
+//! (#2206).
+//!
+//! A Timer keeps nothing across a restart: a rebuilt one starts IDLE with
+//! Last_State_Change NONE.
 
 use crate::prelude::*;
 use alloc::borrow::Cow;
@@ -109,7 +113,12 @@ impl TimerObject {
     /// Min_Pres_Value and Max_Pres_Value. `min` must be at least 1 and no
     /// more than `max`, and Default_Timeout must lie within the new range;
     /// otherwise this refuses with PROPERTY / VALUE_OUT_OF_RANGE and changes
-    /// nothing. A timer already running keeps its countdown.
+    /// nothing.
+    ///
+    /// To narrow the range past the current Default_Timeout, call
+    /// [`Self::set_default_timeout`] with a value inside the new range
+    /// first. A timer already running keeps its countdown, even one whose
+    /// time left now lies outside the narrowed range.
     pub fn set_pres_value_range(&mut self, min: u64, max: u64) -> Result<(), Error> {
         if min == 0 || min > max || !(min..=max).contains(&self.default_timeout) {
             return Err(common::value_out_of_range_error());
@@ -192,14 +201,14 @@ impl BACnetObject for TimerObject {
                 Ok(PropertyValue::Unsigned(self.remaining()))
             }
             p if p == PropertyIdentifier::TIMER_STATE => {
-                Ok(PropertyValue::Enumerated(self.timer_state.to_raw()))
+                Ok(PropertyValue::Enumerated(self.served_state().to_raw()))
             }
             p if p == PropertyIdentifier::TIMER_RUNNING => Ok(PropertyValue::Boolean(
-                self.timer_state == TimerState::RUNNING,
+                self.served_state() == TimerState::RUNNING,
             )),
-            p if p == PropertyIdentifier::LAST_STATE_CHANGE => {
-                Ok(PropertyValue::Enumerated(self.last_state_change.to_raw()))
-            }
+            p if p == PropertyIdentifier::LAST_STATE_CHANGE => Ok(PropertyValue::Enumerated(
+                self.served_last_state_change().to_raw(),
+            )),
             p if p == PropertyIdentifier::INITIAL_TIMEOUT => {
                 Ok(PropertyValue::Unsigned(self.initial_timeout))
             }
@@ -212,7 +221,9 @@ impl BACnetObject for TimerObject {
             p if p == PropertyIdentifier::MAX_PRES_VALUE => {
                 Ok(PropertyValue::Unsigned(self.max_pres_value))
             }
-            p if p == PropertyIdentifier::UPDATE_TIME => Ok(Self::datetime(self.update_time)),
+            p if p == PropertyIdentifier::UPDATE_TIME => {
+                Ok(Self::datetime(self.served_update_time()))
+            }
             p if p == PropertyIdentifier::EXPIRATION_TIME => {
                 Ok(Self::datetime(self.expiration_time_now()))
             }
@@ -230,6 +241,9 @@ impl BACnetObject for TimerObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        // Every write, a refused one included, first applies an expiry that
+        // is already due.
+        self.apply_due_expiry();
         let was_out_of_service = self.out_of_service;
         if let Some(result) = common::write_out_of_service_with_reliability_restore(
             &mut self.out_of_service,
@@ -293,6 +307,8 @@ impl BACnetObject for TimerObject {
         self.clock = clock;
     }
 
+    // Only tests call this. It moves `logical_now`, which stands in for the
+    // monotonic clock when none is bound, so it assumes one time domain.
     fn advance_time_internal(&mut self, elapsed: Duration) -> bool {
         self.logical_now = self.logical_now.saturating_add(elapsed);
         self.expire_if_due(self.logical_now)

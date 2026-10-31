@@ -498,3 +498,81 @@ fn a_new_timer_is_idle_with_the_documented_range() {
         assert_eq!(timer.read_property(p, None).unwrap(), value, "{p:?}");
     }
 }
+
+/// A RUNNING timer whose 10 s ran out at 12:00:10, with the clocks now at
+/// 12:00:12 and no expiry pass run since.
+fn overdue() -> Fixture {
+    let mut fixture = Fixture::new();
+    fixture
+        .write(P::PRESENT_VALUE, PropertyValue::Unsigned(SETUP))
+        .unwrap();
+    fixture.set_clocks(SETUP + 2_000, at(0, 12));
+    fixture
+}
+
+#[test]
+fn reads_serve_a_due_expiry_before_any_pass() {
+    let fixture = overdue();
+    assert_eq!(fixture.read(P::TIMER_STATE), PropertyValue::Enumerated(2));
+    assert_eq!(
+        fixture.read(P::TIMER_RUNNING),
+        PropertyValue::Boolean(false)
+    );
+    assert_eq!(fixture.read(P::PRESENT_VALUE), PropertyValue::Unsigned(0));
+    assert_eq!(
+        fixture.read(P::LAST_STATE_CHANGE),
+        PropertyValue::Enumerated(4)
+    );
+    assert_eq!(fixture.read(P::EXPIRATION_TIME), datetime(at(0, 12)));
+    assert_eq!(fixture.read(P::UPDATE_TIME), datetime(at(0, 12)));
+}
+
+#[test]
+fn writes_apply_a_due_expiry_first() {
+    // Zero is ignored by an expired timer: the expiry it records is the
+    // countdown's, not a forced one.
+    let mut fixture = overdue();
+    fixture
+        .write(P::PRESENT_VALUE, PropertyValue::Unsigned(0))
+        .unwrap();
+    assert_eq!(
+        fixture.timer.last_state_change(),
+        TimerTransition::RUNNING_TO_EXPIRED
+    );
+    assert_eq!(fixture.timer.timer_state(), TimerState::EXPIRED);
+    assert_eq!(fixture.read(P::EXPIRATION_TIME), datetime(at(0, 12)));
+
+    let mut fixture = overdue();
+    fixture
+        .write(P::TIMER_STATE, PropertyValue::Enumerated(0))
+        .unwrap();
+    assert_eq!(
+        fixture.timer.last_state_change(),
+        TimerTransition::EXPIRED_TO_IDLE
+    );
+
+    let mut fixture = overdue();
+    fixture
+        .write(P::TIMER_RUNNING, PropertyValue::Boolean(true))
+        .unwrap();
+    assert_eq!(
+        fixture.timer.last_state_change(),
+        TimerTransition::EXPIRED_TO_RUNNING
+    );
+
+    // A refused write still applies it.
+    let mut fixture = overdue();
+    assert_out_of_range(fixture.write(P::TIMER_STATE, PropertyValue::Enumerated(1)));
+    assert_eq!(fixture.timer.timer_state(), TimerState::EXPIRED);
+    assert_eq!(fixture.timer.next_monotonic_deadline_internal(), None);
+
+    // Out of service, a countdown that already ran out isn't held at zero.
+    let mut fixture = overdue();
+    fixture
+        .write(P::OUT_OF_SERVICE, PropertyValue::Boolean(true))
+        .unwrap();
+    assert_eq!(fixture.timer.timer_state(), TimerState::EXPIRED);
+    assert_eq!(fixture.timer.countdown, Countdown::Stopped);
+    // The task's later pass finds nothing left to do.
+    assert!(!fixture.timer.advance_monotonic_time_internal(fixture.now()));
+}
