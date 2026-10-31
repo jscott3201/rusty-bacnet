@@ -214,6 +214,21 @@ fn create(
     request: &CreateObjectRequest,
     target: &mut Option<ObjectIdentifier>,
 ) -> Result<ObjectIdentifier, Error> {
+    // Clause 15.3.1.3 keeps apart a type the device supports but does not
+    // create from one it does not support. The Device advertises exactly
+    // SUPPORTED_OBJECT_TYPES, so any other type is refused first, whatever
+    // instance the request names; only a listed type gets the refusals
+    // below, DYNAMIC_CREATION_NOT_SUPPORTED among them.
+    let object_type = match &request.object_specifier {
+        ObjectSpecifier::Type(object_type) => *object_type,
+        ObjectSpecifier::Identifier(oid) => oid.object_type(),
+    };
+    if !bacnet_objects::device::SUPPORTED_OBJECT_TYPES.contains(&object_type) {
+        return Err(Error::protocol(
+            ErrorClass::OBJECT,
+            ErrorCode::UNSUPPORTED_OBJECT_TYPE,
+        ));
+    }
     const MAX_OBJECTS: usize = 10_000;
     if db.len() >= MAX_OBJECTS {
         return Err(Error::protocol(
@@ -261,11 +276,8 @@ fn create(
         }
     };
 
-    // Unsupported extensible types need not fit an ObjectIdentifier. Do not
-    // truncate them or manufacture an instance when allocation did not occur.
-    *target = (object_type.to_raw() <= 1023)
-        .then(|| ObjectIdentifier::new(object_type, instance).ok())
-        .flatten();
+    // A listed type fits an ObjectIdentifier.
+    *target = ObjectIdentifier::new(object_type, instance).ok();
     // Named only once the type is known to be one the server builds.
     let name = || default_name(db, object_type, instance);
 
@@ -335,15 +347,11 @@ fn create(
             2,
         )?)
     } else {
-        // Clause 15.3.1.3 keeps apart a type the device supports but does
-        // not create from one it does not support. The Device advertises
-        // exactly SUPPORTED_OBJECT_TYPES.
-        let code = if bacnet_objects::device::SUPPORTED_OBJECT_TYPES.contains(&object_type) {
-            ErrorCode::DYNAMIC_CREATION_NOT_SUPPORTED
-        } else {
-            ErrorCode::UNSUPPORTED_OBJECT_TYPE
-        };
-        return Err(Error::protocol(ErrorClass::OBJECT, code));
+        // A listed type the factory doesn't build (#2172).
+        return Err(Error::protocol(
+            ErrorClass::OBJECT,
+            ErrorCode::DYNAMIC_CREATION_NOT_SUPPORTED,
+        ));
     };
 
     let created_oid = object.object_identifier();

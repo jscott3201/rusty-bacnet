@@ -34,26 +34,23 @@ fn database(instances: &[u32]) -> ObjectDatabase {
 fn selected_device_is_independent_of_iteration_order() {
     let low = device(813);
     let high = device(900);
-    let wildcard = device(ObjectIdentifier::WILDCARD_INSTANCE);
     let analog = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 1).unwrap();
     for candidates in [
-        [analog, high, low, wildcard],
-        [analog, low, high, wildcard],
-        [wildcard, high, low, analog],
+        [analog, high, low],
+        [analog, low, high],
+        [high, low, analog],
     ] {
         assert_eq!(select_device(candidates), Some(low));
     }
 }
 
 #[test]
-fn selected_device_preserves_empty_single_and_wildcard_only_cases() {
+fn selected_device_preserves_empty_and_single_cases() {
     let concrete = device(813);
-    let wildcard = device(ObjectIdentifier::WILDCARD_INSTANCE);
     let analog = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 1).unwrap();
     assert_eq!(select_device([]), None);
     assert_eq!(select_device([analog]), None);
     assert_eq!(select_device([analog, concrete]), Some(concrete));
-    assert_eq!(select_device([analog, wildcard]), Some(wildcard));
 }
 
 #[test]
@@ -63,25 +60,26 @@ fn the_database_selects_its_lowest_device() {
 }
 
 #[test]
-fn the_database_refuses_a_device_at_the_reserved_instance() {
-    // Clause 12.1.1 reserves instance 4194303 (#2171): the database refuses
-    // a Device there, as any object, and stays as it was.
-    let mut db = database(&[900]);
+fn neither_an_identity_nor_the_database_takes_the_reserved_instance() {
+    // Clause 12.1.1 reserves instance 4194303 (#2171): no Device identity
+    // names it, and the database refuses any object there and stays as it
+    // was.
     let wildcard = ObjectIdentifier::WILDCARD_INSTANCE;
+    assert!(matches!(
+        crate::DeviceIdentity::new(wildcard, 0),
+        Err(bacnet_types::error::Error::Range(_))
+    ));
+    crate::DeviceIdentity::new(ObjectIdentifier::MAX_ADDRESSABLE_INSTANCE, 0).unwrap();
+    let mut db = database(&[900]);
     let refused = db.add(Box::new(
-        DeviceObject::new(DeviceConfig {
-            identity: crate::DeviceIdentity::new(wildcard, 0)
-                .expect("the identity itself allows the wildcard")
-                .with_name("Wildcard"),
-            ..DeviceConfig::default()
-        })
-        .unwrap(),
+        AnalogValueObject::new(wildcard, "Wildcard", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
     ));
     assert!(
         matches!(refused, Err(bacnet_types::error::Error::Range(_))),
         "{refused:?}"
     );
-    assert!(db.get(&device(wildcard)).is_none());
+    let reserved = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, wildcard).unwrap();
+    assert!(db.get(&reserved).is_none());
     assert!(db.find_by_name("Wildcard").is_none());
     assert_eq!(db.len(), 2);
     assert_eq!(db.selected_device(), Some(device(900)));

@@ -13,8 +13,11 @@ use bacnet_types::enums::{IPMode, PropertyIdentifier as P};
 // Network_Number_Quality and APDU_Length, and none is a point-to-point link,
 // which footnote 3 makes the condition for MAC_Address: each keeps the
 // table's optional class and carries its condition (#2174). The table
-// classes Link_Speed required. Read-only configured snapshot: no activation
-// owner.
+// classes Link_Speed required. The B/IP, B/IPv6, BBMD, FOREIGN, NAT and
+// multicast rows below stay R for now, though the table codes them O with
+// footnote conditions; each is listed only when its condition holds, so
+// they come out required either way (#2191). Read-only configured snapshot:
+// no activation owner.
 const COMMON: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),

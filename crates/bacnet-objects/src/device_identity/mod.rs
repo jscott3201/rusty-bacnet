@@ -51,10 +51,10 @@ impl DeviceIdentity {
     /// `services = [READ_PROPERTY]` (narrow endpoint reality, no superset),
     /// no ports, zero UUID (B/IP-only may keep zeros; SC dial requires
     /// [`with_device_uuid`](Self::with_device_uuid)). Returns
-    /// [`Error::Encoding`] for an
-    /// out-of-range Device instance.
+    /// [`Error::Range`] for an instance past 4194303, or for 4194303 itself,
+    /// which no object may have (Clause 12.1.1, #2171).
     pub fn new(instance: u32, vendor_id: u16) -> Result<Self, Error> {
-        ObjectIdentifier::new(ObjectType::DEVICE, instance)?;
+        ObjectIdentifier::new_addressable(ObjectType::DEVICE, instance)?;
         Ok(Self {
             instance,
             vendor_id,

@@ -8552,7 +8552,15 @@ The server automatically dispatches:
 - ReadProperty, WriteProperty (mutation-gated)
 - ReadPropertyMultiple, WritePropertyMultiple (mutation-gated)
 - SubscribeCOV, SubscribeCOVProperty, SubscribeCOVPropertyMultiple (mutation-gated)
-- CreateObject, DeleteObject (mutation-gated)
+- CreateObject, DeleteObject (mutation-gated). The Device's
+  Protocol_Object_Types_Supported comes from
+  `bacnet_objects::device::SUPPORTED_OBJECT_TYPES`, every type the crate
+  builds, and CreateObject reads the same list: a type outside it is OBJECT /
+  UNSUPPORTED_OBJECT_TYPE whatever the instance, a listed type the server
+  doesn't create, or instance 4194303, is OBJECT /
+  DYNAMIC_CREATION_NOT_SUPPORTED (Clause 15.3.1.3, #2171). DeleteObject
+  answers OBJECT / UNKNOWN_OBJECT for an absent object, then asks the
+  object's `is_deleteable()`.
 - DeviceCommunicationControl
 - ReinitializeDevice (restart, apply changes, or a Clause 19 backup or restore
   step): decoded and password-validated, then carried out by the

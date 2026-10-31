@@ -1,7 +1,7 @@
 ---
 section: Migration notes
 ---
-- **Object database (Rust API, #2171):** `ObjectDatabase::add` refuses an
-  object at instance 4194303, the reserved wildcard, a Device included. A
-  Python `BACnetServer` holding one, or built with `device_instance=4194303`,
-  now raises `ValueError` at `start()`. Give the object an instance from 0 to 4194302.
+- **Reserved instance (Rust API, #2171):** `ObjectDatabase::add` refuses an
+  object at instance 4194303, a Device included, and `DeviceIdentity::new`
+  returns `Error::Range` for it. Give the object or identity an instance from
+  0 to 4194302.

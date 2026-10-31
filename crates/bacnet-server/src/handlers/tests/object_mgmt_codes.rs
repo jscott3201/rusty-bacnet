@@ -99,6 +99,22 @@ fn an_unlisted_type_is_unsupported_object_type() {
 }
 
 #[test]
+fn an_unlisted_type_is_unsupported_whatever_its_instance() {
+    // The type refusal comes first, so the reserved instance doesn't change
+    // it (#2171).
+    for instance in [5, ObjectIdentifier::WILDCARD_INSTANCE] {
+        let mut db = make_db_with_device_and_ai();
+        let unlisted = object(ObjectType::from_raw(600), instance);
+        assert_eq!(
+            refusal(create(&mut db, ObjectSpecifier::Identifier(unlisted))),
+            (ErrorClass::OBJECT, ErrorCode::UNSUPPORTED_OBJECT_TYPE),
+            "{instance}"
+        );
+        assert_eq!(db.len(), 2);
+    }
+}
+
+#[test]
 fn the_reserved_instance_is_refused_and_nothing_is_added() {
     for kind in [ObjectType::BINARY_VALUE, ObjectType::ANALOG_VALUE] {
         let mut db = make_db_with_device_and_ai();

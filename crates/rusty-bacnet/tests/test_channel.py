@@ -318,10 +318,10 @@ class ChannelWildcardDeviceTests(unittest.IsolatedAsyncioTestCase):
             await server.stop()
 
     async def test_a_server_cannot_be_the_wildcard_device(self) -> None:
-        # No object may have instance 4194303 (#2171), the Device included.
-        server = make_server(4_194_303)
-        with self.assertRaisesRegex(ValueError, "object refused: .*4194303"):
-            await server.start()
+        # No object may have instance 4194303 (#2171), the Device included,
+        # so the constructor refuses it.
+        with self.assertRaisesRegex(ValueError, "4194303"):
+            make_server(4_194_303)
 
 
 class ChannelArgumentTests(unittest.IsolatedAsyncioTestCase):
