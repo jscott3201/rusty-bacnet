@@ -40,7 +40,8 @@ use super::local_writes::{LocalWrite, LocalWriter};
 use super::remote_writes::{RemoteWrite, RemoteWriter};
 use super::request_tasks::RequestTaskSpawner;
 use super::*;
-use crate::command_lists::{RunHost, TakenRuns, Unfinished};
+use crate::command_lists::{RunHost, TakenRuns};
+use bacnet_device_core::write::Unfinished;
 use bacnet_objects::command::{CommandRun, WriteFailure};
 use bacnet_services::read_property::ReadPropertyRequest;
 use bacnet_types::constructed::{BACnetActionCommand, BACnetDeviceObjectPropertyReference};
@@ -231,7 +232,7 @@ impl<T: TransportPort + 'static> RunHost for CommandRunner<T> {
                 ErrorClass::OBJECT,
                 ErrorCode::UNKNOWN_OBJECT,
             ))?;
-            handlers::gate_and_decode_write(
+            bacnet_device_core::write::gate_and_decode_write(
                 object,
                 command.property_identifier,
                 command.property_array_index,

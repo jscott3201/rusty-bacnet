@@ -30,7 +30,7 @@
 //!
 //! A NULL relinquishes the Schedule's slot in a commandable target. On a
 //! target property that isn't commandable and has no NULL in its datatype,
-//! it is the no-op WriteProperty would make of it (`handlers::relinquish`,
+//! it is the no-op WriteProperty would make of it (`bacnet_device_core::write::relinquish`,
 //! #1416): the property keeps its value and the target counts as having
 //! taken the write. Every target here is local; a Schedule's references
 //! name objects of its own device only.
@@ -236,7 +236,7 @@ fn deliver(
     let origin =
         crate::command_source::resolve_local(db_w, crate::LocalCommandSource::Object(initiator))
             .ok();
-    let null = crate::handlers::relinquish::is_null_value(&write.value);
+    let null = bacnet_device_core::write::relinquish::is_null_value(&write.value);
     // Clause 12.24.4: a failed member does not stop the others.
     let mut outcomes = Vec::with_capacity(write.references.len());
     for reference in &write.references {
@@ -253,7 +253,7 @@ fn deliver(
         // property that isn't an array fails the target without the object
         // seeing the value, a NULL included. Its refusals, like the object's
         // UNKNOWN_PROPERTY or INVALID_ARRAY_INDEX, fault the Schedule (#1433).
-        let result = crate::handlers::check_write_array_index(
+        let result = bacnet_device_core::write::check_write_array_index(
             &*target_obj,
             property,
             reference.property_array_index,
@@ -273,10 +273,10 @@ fn deliver(
             Ok(()) => commit.changed(target_oid),
             // A NULL on a target property that isn't commandable and can't
             // hold one leaves it as it is, and the target took the write
-            // (`handlers::relinquish`); nothing changed, so no COV follows.
+            // (`bacnet_device_core::write::relinquish`); nothing changed, so no COV follows.
             Err(error)
                 if null
-                    && crate::handlers::relinquish::leaves_unchanged(
+                    && bacnet_device_core::write::relinquish::leaves_unchanged(
                         &*target_obj,
                         property,
                         reference.property_array_index,

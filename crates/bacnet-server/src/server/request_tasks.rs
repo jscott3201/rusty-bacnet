@@ -1,6 +1,6 @@
 use super::request_admission::{Admission, Class, Rejection};
 use super::{RequestAdmissionCounters, RequestAdmissionPolicy};
-use crate::command_lists::Unfinished;
+use bacnet_device_core::write::Unfinished;
 use bacnet_types::primitives::ObjectIdentifier;
 use std::future::{Future, poll_fn};
 use std::pin::Pin;

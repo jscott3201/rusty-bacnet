@@ -51,7 +51,6 @@ use bacnet_types::enums::PropertyIdentifier;
 use tokio::sync::RwLock;
 
 use super::Request;
-use crate::handlers;
 use crate::mutation::{MutationDecision, MutationPolicy, MutationTarget};
 use crate::server::durable_writes::DurableTarget;
 
@@ -150,7 +149,7 @@ fn checked_attempts(db: &ObjectDatabase, service_data: &[u8]) -> Vec<WriteProper
         };
         let reference = &attempt.reference;
         let passes = db.get(&reference.object_identifier).is_some_and(|object| {
-            handlers::gate_and_decode_write(
+            bacnet_device_core::write::gate_and_decode_write(
                 object,
                 PropertyIdentifier::from_raw(reference.property_identifier),
                 reference.property_array_index,

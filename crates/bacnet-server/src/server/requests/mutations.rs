@@ -220,7 +220,7 @@ impl Request<'_> {
                 &self.req.service_request,
             );
             let source = audit.write_source();
-            let result = handlers::handle_write_property_observed(
+            let result = bacnet_device_core::write::write_property(
                 &mut db,
                 &self.req.service_request,
                 Some(audit),
@@ -229,10 +229,10 @@ impl Request<'_> {
             );
             staged.release(&mut db);
             // Post-write work follows a change. A NULL the property left as
-            // it was (`handlers::relinquish`) is acknowledged with none.
+            // it was (`bacnet_device_core::write::relinquish`) is acknowledged with none.
             let written = match &result {
-                Ok((oid, handlers::Applied::Written)) => Some(*oid),
-                Ok((_, handlers::Applied::Unchanged)) | Err(_) => None,
+                Ok((oid, bacnet_device_core::write::Applied::Written)) => Some(*oid),
+                Ok((_, bacnet_device_core::write::Applied::Unchanged)) | Err(_) => None,
             };
             let changes = written
                 .map(|oid| snapshots.changes(&db, std::slice::from_ref(&oid)))

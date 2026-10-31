@@ -25,8 +25,9 @@ use futures_util::StreamExt;
 use futures_util::stream::FuturesUnordered;
 use tokio::sync::{RwLock, mpsc};
 
-use super::{RunHost, TakenRuns, Unfinished, end_when_free, execute};
+use super::{RunHost, TakenRuns, end_when_free, execute};
 use crate::server::RemoteRequestError;
+use bacnet_device_core::write::Unfinished;
 
 /// Run `runs`, and any runs their writes start, to their ends.
 ///
@@ -102,7 +103,7 @@ impl RunHost for Unattached<'_> {
                 crate::LocalCommandSource::Object(run.source),
             )
             .ok();
-            let (target, _) = crate::handlers::handle_write_property_observed(
+            let (target, _) = bacnet_device_core::write::write_property(
                 &mut db,
                 &request,
                 None,

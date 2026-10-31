@@ -22,5 +22,6 @@ pub mod discovery;
 pub mod read;
 pub mod reply;
 pub mod responder;
+pub mod write;
 
 pub use responder::SERVICES;

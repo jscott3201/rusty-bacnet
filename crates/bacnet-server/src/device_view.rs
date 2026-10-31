@@ -4,6 +4,7 @@
 mod identity;
 use crate::cov::active::LiveDeviceCov;
 use bacnet_device_core::read::ReadOverlay;
+use bacnet_device_core::write::{identity_property, owned};
 use bacnet_objects::{
     audit::{AuditLogForwarding, AuditLogStorage, AuditReporterObject, ObjectAuditPolicy},
     database::ObjectDatabase,
@@ -24,7 +25,7 @@ use bacnet_types::{
     error::Error,
     primitives::{ObjectIdentifier, PropertyValue},
 };
-use identity::{IdentityView, identity_property};
+use identity::IdentityView;
 use std::borrow::Cow;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -141,26 +142,6 @@ impl<'c> ReadOverlay for DeviceReadContext<'c> {
 pub(crate) struct DeviceReadView<'a> {
     object: &'a dyn BACnetObject,
     context: &'a DeviceReadContext<'a>,
-}
-
-fn owned(property: P) -> bool {
-    matches!(
-        property,
-        P::PROTOCOL_SERVICES_SUPPORTED
-            | P::PROPERTY_LIST
-            | P::ACTIVE_COV_SUBSCRIPTIONS
-            | P::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS
-            | P::DEVICE_ADDRESS_BINDING
-    )
-}
-/// Executor-owned fields cannot be assigned through a custom Device writer.
-/// Call only after the existing object/index/value and authorization preflight.
-pub(crate) fn check_executor_owned_write(oid: ObjectIdentifier, property: P) -> Result<(), Error> {
-    if oid.object_type() == ObjectType::DEVICE && (owned(property) || identity_property(property)) {
-        Err(property_error(ErrorCode::WRITE_ACCESS_DENIED))
-    } else {
-        Ok(())
-    }
 }
 
 fn property_error(code: ErrorCode) -> Error {
