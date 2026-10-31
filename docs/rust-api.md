@@ -4437,7 +4437,7 @@ framing, through the shared `bacnet-encoding` codecs.
 use bacnet_objects::database::ObjectDatabase;
 
 let mut db = ObjectDatabase::new();
-db.add(Box::new(analog_input))?; // Err on a duplicate name or a protected membership; same OID replaces
+db.add(Box::new(analog_input))?; // Err on instance 4194303, a duplicate name or a protected membership; same OID replaces
 
 let obj = db.get(&oid);                // Option<&dyn BACnetObject>
 let obj = db.get_mut(&oid);            // Option<&mut dyn BACnetObject>
@@ -4504,9 +4504,11 @@ several. The database selects the lowest instance independently of insertion ord
 - **Other Devices** take no part. Their recipient, APDU_Timeout and declared
   services are plain object data.
 
-When the only Device has the wildcard instance there is a selected Device but
-no concrete identity, so Audit, endpoint Device writes, local command sources
-and Audit Log forwarding refuse to start or stay unconfigured.
+No Device can have the wildcard instance: `ObjectDatabase::add` refuses
+instance 4194303 for every object (Clause 12.1.1, #2171), so a selected
+Device is always a concrete one. Without a Device, Audit, endpoint Device
+writes, local command sources and Audit Log forwarding refuse to start or
+stay unconfigured.
 
 ### Object Types (64)
 

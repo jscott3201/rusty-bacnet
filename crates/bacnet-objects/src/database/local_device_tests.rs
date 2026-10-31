@@ -60,15 +60,31 @@ fn selected_device_preserves_empty_single_and_wildcard_only_cases() {
 fn the_database_selects_its_lowest_device() {
     assert_eq!(database(&[]).selected_device(), None);
     assert_eq!(database(&[900, 813]).selected_device(), Some(device(813)));
+}
+
+#[test]
+fn the_database_refuses_a_device_at_the_reserved_instance() {
+    // Clause 12.1.1 reserves instance 4194303 (#2171): the database refuses
+    // a Device there, as any object, and stays as it was.
+    let mut db = database(&[900]);
     let wildcard = ObjectIdentifier::WILDCARD_INSTANCE;
-    assert_eq!(
-        database(&[wildcard]).selected_device(),
-        Some(device(wildcard))
+    let refused = db.add(Box::new(
+        DeviceObject::new(DeviceConfig {
+            identity: crate::DeviceIdentity::new(wildcard, 0)
+                .expect("the identity itself allows the wildcard")
+                .with_name("Wildcard"),
+            ..DeviceConfig::default()
+        })
+        .unwrap(),
+    ));
+    assert!(
+        matches!(refused, Err(bacnet_types::error::Error::Range(_))),
+        "{refused:?}"
     );
-    assert_eq!(
-        database(&[wildcard, 900]).selected_device(),
-        Some(device(900))
-    );
+    assert!(db.get(&device(wildcard)).is_none());
+    assert!(db.find_by_name("Wildcard").is_none());
+    assert_eq!(db.len(), 2);
+    assert_eq!(db.selected_device(), Some(device(900)));
 }
 
 #[test]
@@ -86,13 +102,10 @@ fn a_reference_is_local_without_a_device_or_naming_the_selected_one() {
 }
 
 #[test]
-fn without_a_concrete_device_only_unqualified_references_are_local() {
-    let wildcard = ObjectIdentifier::WILDCARD_INSTANCE;
-    for db in [database(&[]), database(&[wildcard])] {
-        let local = db.local_device();
-        assert_eq!(local.identifier(), None);
-        assert!(local.is_local(None));
-        assert!(!local.is_local(Some(device(wildcard))));
-        assert!(!local.is_local(Some(device(813))));
-    }
+fn without_a_device_only_unqualified_references_are_local() {
+    let local = database(&[]).local_device();
+    assert_eq!(local.identifier(), None);
+    assert!(local.is_local(None));
+    assert!(!local.is_local(Some(device(ObjectIdentifier::WILDCARD_INSTANCE))));
+    assert!(!local.is_local(Some(device(813))));
 }

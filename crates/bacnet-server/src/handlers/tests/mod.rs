@@ -170,6 +170,7 @@ mod multi_element_writes;
 mod noncommandable_null_writes;
 mod noncommandable_value_source;
 mod none_enrollment_fault;
+mod object_mgmt_codes;
 mod passwords;
 mod property_metadata;
 mod pulse_converter_input_reference;

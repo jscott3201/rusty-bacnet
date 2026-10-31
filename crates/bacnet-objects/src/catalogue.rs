@@ -254,6 +254,39 @@ mod tests {
     }
 
     #[test]
+    fn the_device_advertises_exactly_the_catalogue_types() {
+        use crate::device::{DeviceConfig, DeviceObject, SUPPORTED_OBJECT_TYPES};
+        use bacnet_types::enums::PropertyIdentifier;
+        use bacnet_types::primitives::PropertyValue;
+
+        // One list feeds Protocol_Object_Types_Supported and the server's
+        // CreateObject refusals (#2171); it names every catalogue type.
+        let catalogue: Vec<ObjectType> = representatives()
+            .iter()
+            .map(|object| object.object_identifier().object_type())
+            .collect();
+        assert_eq!(SUPPORTED_OBJECT_TYPES, catalogue.as_slice());
+        let device = DeviceObject::new(DeviceConfig {
+            identity: crate::DeviceIdentity::default().with_name("Device"),
+            ..DeviceConfig::default()
+        })
+        .unwrap();
+        let Ok(PropertyValue::BitString { data, .. }) =
+            device.read_property(PropertyIdentifier::PROTOCOL_OBJECT_TYPES_SUPPORTED, None)
+        else {
+            panic!("Protocol_Object_Types_Supported is a bit string");
+        };
+        for raw in 0..data.len() as u32 * 8 {
+            let set = data[raw as usize / 8] & (0x80 >> (raw % 8)) != 0;
+            assert_eq!(
+                set,
+                SUPPORTED_OBJECT_TYPES.contains(&ObjectType::from_raw(raw)),
+                "type {raw}"
+            );
+        }
+    }
+
+    #[test]
     fn the_whole_catalogue_fits_one_database() {
         let objects = representatives();
         let count = objects.len();

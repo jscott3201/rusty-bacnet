@@ -97,9 +97,13 @@ async fn create_object_refusals_go_out_as_create_object_errors() {
             ),
         ),
         (
-            "an object type the server cannot create",
+            "an object type the server lists but cannot create",
             create(ObjectSpecifier::Type(ObjectType::ANALOG_VALUE), vec![]),
-            create_object_error(ErrorClass::OBJECT, ErrorCode::UNSUPPORTED_OBJECT_TYPE, 0),
+            create_object_error(
+                ErrorClass::OBJECT,
+                ErrorCode::DYNAMIC_CREATION_NOT_SUPPORTED,
+                0,
+            ),
         ),
         (
             "a name in use, the first initial value",

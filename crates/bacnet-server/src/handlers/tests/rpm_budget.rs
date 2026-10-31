@@ -369,7 +369,7 @@ fn rpm_migrated_metadata_device_wildcard_and_index_legacy_parity() {
 fn rpm_device_result_identity_errors_and_exact_byte_budget() {
     use bacnet_encoding::primitives::decode_application_value;
     use bacnet_objects::device::{DeviceConfig, DeviceObject};
-    for instance in [123, ObjectIdentifier::MAX_INSTANCE] {
+    for instance in [123, ObjectIdentifier::MAX_ADDRESSABLE_INSTANCE] {
         let selected = ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap();
         let wildcard =
             ObjectIdentifier::new(ObjectType::DEVICE, ObjectIdentifier::MAX_INSTANCE).unwrap();

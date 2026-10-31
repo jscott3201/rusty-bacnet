@@ -516,12 +516,12 @@ mod tests {
             localize(&empty, staging(), TARGETS, staged_value()),
             staged_value()
         );
-        // A Device at the wildcard instance names no device in particular.
-        let wildcard = database(ObjectIdentifier::WILDCARD_INSTANCE);
+        // The wildcard Device names no device in particular, and no
+        // database holds a Device there (#2171).
         let named = encoded(&[member(1, Some(device(ObjectIdentifier::WILDCARD_INSTANCE)))]);
         assert_eq!(
             localize(
-                &wildcard,
+                &empty,
                 schedule(),
                 LIST,
                 PropertyValue::ApplicationData(named.clone())

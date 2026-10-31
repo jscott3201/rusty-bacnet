@@ -37,9 +37,10 @@ fn device_write_target<'a>(
             ErrorCode::UNKNOWN_PROPERTY,
         ));
     }
+    // The object exists, so `selected` can't be the wildcard Device:
+    // ObjectDatabase::add refuses instance 4194303 (#2171).
     if write.object_identifier != selected
         || selected.object_type() != ObjectType::DEVICE
-        || selected.instance_number() == ObjectIdentifier::MAX_INSTANCE
         || !matches!(
             write.property_identifier,
             PropertyIdentifier::DESCRIPTION | PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT

@@ -622,7 +622,7 @@ fn av_is_not_createable_matches_factory() {
     use crate::traits::BACnetObject;
     let av = AnalogValueObject::new(1, "av-1", EngineeringUnits::NO_UNITS).unwrap();
     // handle_create_object has NO branch for ANALOG_VALUE — it falls through
-    // to UNSUPPORTED_OBJECT_TYPE. PICS must not advertise createability.
+    // to DYNAMIC_CREATION_NOT_SUPPORTED. PICS must not advertise createability.
     assert!(!av.is_createable(), "AnalogValue must NOT be createable");
 }
 

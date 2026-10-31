@@ -25,8 +25,7 @@ pub struct LocalDevice(Option<ObjectIdentifier>);
 
 impl LocalDevice {
     /// The Device identifier that names this device. `None` when the
-    /// database holds no Device, or only the wildcard instance, which names
-    /// no particular device.
+    /// database holds no Device.
     pub fn identifier(self) -> Option<ObjectIdentifier> {
         self.0
     }
@@ -44,9 +43,9 @@ impl ObjectDatabase {
     ///
     /// Clause 12.11 expects one Device per BACnet device. When a database
     /// holds several, the lowest instance wins: a deterministic local policy,
-    /// independent of hash or insertion order. A concrete instance always
-    /// precedes the wildcard instance, which is the highest; a database whose
-    /// only Device is the wildcard selects it. No Device yields `None`.
+    /// independent of hash or insertion order. No Device yields `None`. The
+    /// wildcard instance can't be among them: [`add`](Self::add) refuses it
+    /// (#2171).
     pub fn selected_device(&self) -> Option<ObjectIdentifier> {
         select_device(
             self.type_index
@@ -58,13 +57,9 @@ impl ObjectDatabase {
     }
 
     /// The Device a reference must name to stay inside this device: the
-    /// [selected Device](Self::selected_device) when its instance is
-    /// concrete.
+    /// [selected Device](Self::selected_device).
     pub fn local_device(&self) -> LocalDevice {
-        LocalDevice(
-            self.selected_device()
-                .filter(|device| device.instance_number() != ObjectIdentifier::WILDCARD_INSTANCE),
-        )
+        LocalDevice(self.selected_device())
     }
 }
 

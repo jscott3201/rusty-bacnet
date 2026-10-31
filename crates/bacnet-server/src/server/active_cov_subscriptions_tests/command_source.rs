@@ -198,7 +198,7 @@ async fn command_source_wire_origin_correlation_and_original_owner_matrix() {
 
 #[tokio::test]
 async fn command_source_local_required_identity_membership_and_owner_replacement() {
-    for instances in [vec![], vec![ObjectIdentifier::WILDCARD_INSTANCE], vec![813]] {
+    for instances in [vec![], vec![813]] {
         let mut wire = Wire::start_with_devices(ServerConfig::default(), &instances).await;
         let has_device = instances == [813];
         for initiating in [

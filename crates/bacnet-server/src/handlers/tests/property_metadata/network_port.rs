@@ -119,7 +119,7 @@ fn rpm_network_port_metadata_does_not_enable_create_object() {
         assert!(
             matches!(result, Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::OBJECT
-                && code == ErrorCode::UNSUPPORTED_OBJECT_TYPE)
+                && code == ErrorCode::DYNAMIC_CREATION_NOT_SUPPORTED)
         );
         assert!(response.is_empty());
         assert!(db.is_empty());
