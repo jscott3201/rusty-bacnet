@@ -5,14 +5,12 @@ use bacnet_device_core::read::{
 use bacnet_types::constructed::PropertyReference;
 use bacnet_types::error::RemoteError;
 
-/// Handle a ReadProperty request against standalone object data.
-///
-/// Looks up the object and property in the database, encodes the value,
-/// and returns the ReadPropertyACK service bytes. This low-level helper has
-/// no executor context: a built-in Device follows its declared service profile,
-/// including absent or empty COV lists. Running server reads use the executor's
-/// property definitions and live subscription table instead.
-pub fn handle_read_property(
+/// The handler tests' ReadProperty: bacnet-device-core's staged read with no
+/// overlay and no work limit, writing the ReadPropertyACK service bytes. A
+/// built-in Device follows its declared service profile, including absent or
+/// empty COV lists; running server reads use the executor's view instead.
+#[cfg(test)]
+pub(crate) fn handle_read_property(
     db: &ObjectDatabase,
     service_data: &[u8],
     buf: &mut BytesMut,

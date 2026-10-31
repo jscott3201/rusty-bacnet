@@ -25,7 +25,7 @@ use bacnet_encoding::apdu::{
     SegmentAck as SegmentAckPdu, SimpleAck, UnconfirmedRequest as UnconfirmedRequestPdu,
     encode_apdu,
 };
-// The server's tests build Error PDUs; its code takes them from
+// The server's tests build Error and Reject PDUs; its code takes them from
 // bacnet_device_core::reply.
 #[cfg(test)]
 use bacnet_encoding::apdu::ErrorPdu;
@@ -51,9 +51,11 @@ use bacnet_transport::port::TransportPort;
 use bacnet_transport::warn_throttle::WarnThrottle;
 use bacnet_transport::warn_throttled;
 use bacnet_types::MacAddr;
+#[cfg(test)]
+use bacnet_types::enums::RejectReason;
 use bacnet_types::enums::{
     AbortReason, ConfirmedServiceChoice, ErrorClass, ErrorCode, LifeSafetyOperation, NotifyType,
-    ObjectType, PropertyIdentifier, RejectReason, Segmentation, UnconfirmedServiceChoice,
+    ObjectType, PropertyIdentifier, Segmentation, UnconfirmedServiceChoice,
 };
 use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};

@@ -558,10 +558,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     service = service_choice.to_raw(),
                     "Unsupported confirmed service"
                 );
-                Apdu::Reject(RejectPdu {
-                    invoke_id,
-                    reject_reason: RejectReason::UNRECOGNIZED_SERVICE,
-                })
+                bacnet_device_core::reply::unrecognized_service(invoke_id)
             }
         };
 

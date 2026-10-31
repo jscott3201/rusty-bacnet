@@ -21,3 +21,4 @@ compile_error!(
 pub mod discovery;
 pub mod read;
 pub mod reply;
+pub mod responder;

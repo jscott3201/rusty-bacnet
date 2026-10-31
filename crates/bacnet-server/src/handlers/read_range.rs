@@ -139,8 +139,8 @@ where
 /// use aligned resident identities supplied for `LOG_BUFFER` by the object. A
 /// built-in log's `LOG_BUFFER`, which ReadProperty refuses, comes from its
 /// record store: each item is one encoded record.
-/// Like [`handle_read_property`], this low-level helper has no executor
-/// context: a built-in Device's COV subscription lists read as the object
+/// Like the device core's reads with no overlay, this low-level helper has no
+/// executor context: a built-in Device's COV subscription lists read as the object
 /// holds them, empty. Running server reads page the live subscription table.
 pub fn handle_read_range(
     db: &ObjectDatabase,

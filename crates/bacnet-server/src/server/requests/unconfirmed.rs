@@ -89,85 +89,73 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 | device_bindings::ObservationOutcome::ConfiguredPreserved => {}
             }
         } else if req.service_choice == UnconfirmedServiceChoice::WHO_IS {
-            let who_is = match WhoIsRequest::decode(&req.service_request) {
-                Ok(r) => r,
+            let db = db.read().await;
+            let i_am = match bacnet_device_core::discovery::who_is(
+                &config.device,
+                &db,
+                &req.service_request,
+            ) {
+                Ok(i_am) => i_am,
                 Err(e) => {
                     warn_throttled!(warnings.decode, error = %e, "Failed to decode WhoIs");
                     return;
                 }
             };
 
-            let db = db.read().await;
-            let device_oid =
-                bacnet_device_core::discovery::announcement_device(&db, &config.device);
+            if let Some(i_am) = i_am {
+                let mut service_buf = BytesMut::new();
+                i_am.encode(&mut service_buf);
 
-            if let Some(device_oid) = device_oid {
-                let instance = device_oid.instance_number();
+                let pdu = Apdu::UnconfirmedRequest(UnconfirmedRequestPdu {
+                    service_choice: UnconfirmedServiceChoice::I_AM,
+                    service_request: service_buf.freeze(),
+                });
 
-                let in_range = who_is.range.is_none_or(|range| range.contains(instance));
+                let mut buf = BytesMut::new();
+                encode_apdu(&mut buf, &pdu).expect("valid APDU encoding");
 
-                if in_range {
-                    let i_am = bacnet_device_core::discovery::i_am(&config.device);
+                let now = runtime_clock::now();
+                let is_unicast = !received.is_group && !received.link_layer_group;
+                let (res, directed) = if let Some(ref source_net) = received.source_network {
+                    (
+                        network
+                            .send_apdu_routed(
+                                &buf,
+                                source_net.network,
+                                &source_net.mac_address,
+                                &received.source_mac,
+                                false,
+                                NetworkPriority::Normal,
+                            )
+                            .await,
+                        true,
+                    )
+                } else if config.discovery_policy.prefer_directed_responses || is_unicast {
+                    (
+                        network
+                            .send_apdu(&buf, &received.source_mac, false, NetworkPriority::Normal)
+                            .await,
+                        true,
+                    )
+                } else {
+                    (
+                        network
+                            .broadcast_apdu(&buf, false, NetworkPriority::Normal)
+                            .await,
+                        false,
+                    )
+                };
 
-                    let mut service_buf = BytesMut::new();
-                    i_am.encode(&mut service_buf);
-
-                    let pdu = Apdu::UnconfirmedRequest(UnconfirmedRequestPdu {
-                        service_choice: UnconfirmedServiceChoice::I_AM,
-                        service_request: service_buf.freeze(),
-                    });
-
-                    let mut buf = BytesMut::new();
-                    encode_apdu(&mut buf, &pdu).expect("valid APDU encoding");
-
-                    let now = runtime_clock::now();
-                    let is_unicast = !received.is_group && !received.link_layer_group;
-                    let (res, directed) = if let Some(ref source_net) = received.source_network {
-                        (
-                            network
-                                .send_apdu_routed(
-                                    &buf,
-                                    source_net.network,
-                                    &source_net.mac_address,
-                                    &received.source_mac,
-                                    false,
-                                    NetworkPriority::Normal,
-                                )
-                                .await,
-                            true,
-                        )
-                    } else if config.discovery_policy.prefer_directed_responses || is_unicast {
-                        (
-                            network
-                                .send_apdu(
-                                    &buf,
-                                    &received.source_mac,
-                                    false,
-                                    NetworkPriority::Normal,
-                                )
-                                .await,
-                            true,
-                        )
-                    } else {
-                        (
-                            network
-                                .broadcast_apdu(&buf, false, NetworkPriority::Normal)
-                                .await,
-                            false,
-                        )
-                    };
-
-                    if let Err(e) = res {
-                        warn!(error = %e, directed, "Failed to send IAm");
-                    } else {
-                        discovery_limiter.record_i_am_sent(
-                            buf.len(),
-                            directed,
-                            &received.source_mac,
-                            received.source_network.as_ref(),
-                            now,
-                        );
-                    }
+                if let Err(e) = res {
+                    warn!(error = %e, directed, "Failed to send IAm");
+                } else {
+                    discovery_limiter.record_i_am_sent(
+                        buf.len(),
+                        directed,
+                        &received.source_mac,
+                        received.source_network.as_ref(),
+                        now,
+                    );
                 }
             }
         } else if req.service_choice == UnconfirmedServiceChoice::WHO_HAS {

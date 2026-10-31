@@ -5,9 +5,28 @@ use alloc::string::ToString;
 use bacnet_objects::DeviceIdentity;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_services::who_has::{IHaveRequest, WhoHasObject, WhoHasRequest};
-use bacnet_services::who_is::IAmRequest;
+use bacnet_services::who_is::{IAmRequest, WhoIsRequest};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
+
+/// Answer a Who-Is: the I-Am of the Device `identity` names when the
+/// database holds it and the request's range, if any, takes in its instance.
+/// The identity is frozen, so the answer never rebinds to another Device. A
+/// request that doesn't decode is an error the host may log; it never draws
+/// an answer.
+pub fn who_is(
+    identity: &DeviceIdentity,
+    db: &ObjectDatabase,
+    request: &[u8],
+) -> Result<Option<IAmRequest>, Error> {
+    let request = WhoIsRequest::decode(request)?;
+    let Some(device) = announcement_device(db, identity) else {
+        return Ok(None);
+    };
+    let instance = device.instance_number();
+    let in_range = request.range.is_none_or(|range| range.contains(instance));
+    Ok(in_range.then(|| i_am(identity)))
+}
 
 /// Handle a WhoHas request and return an IHave response if we have the object.
 ///

@@ -15,6 +15,7 @@ use bacnet_services::alarm_event::{
 use bacnet_services::cov::SubscribeCOVRequest;
 use bacnet_services::device_mgmt::{DeviceCommunicationControlRequest, ReinitializeDeviceRequest};
 use bacnet_services::object_mgmt::{CreateObjectRequest, DeleteObjectRequest, ObjectSpecifier};
+#[cfg(test)]
 use bacnet_services::read_property::ReadPropertyRequest;
 use bacnet_services::rpm::{
     ReadAccessResult, ReadPropertyMultipleACK, ReadPropertyMultipleRequest, ReadResultElement,
