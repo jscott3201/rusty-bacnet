@@ -68,8 +68,8 @@ under its own account and budget, and a cancelled read sends nothing more.
 | `.../property/{prop}` | one property (`name` or `name[index]`; `[`, `]` and `:` may be percent-encoded) | a property watch (SubscribeCOVProperty) |
 | `bacnet://alarms` | each device in reach: its first page of GetEventInformation, as far as the read's budget goes (`unread` past it, `errors` per device) | a poll every 60 s; an update when the events change |
 | `bacnet://device/{instance}/alarms` | one device's first page of events | the same, for one device. A session's per-device alarm URIs, on listen streams and legacy subscriptions alike, count against its 64-URI bound (the acknowledgment leaves out the rest), so the poll reads at most that many devices |
-| `bacnet://session` | level (`read-only`, `write-session` while a session or plan grant is in force, `write-session (expired)`), `writes` (`not offered`, or the mode, arming and what the client may confirm), `expires` (seconds left in an armed session), `grants` (a plan grant: in force, used, budget, expiry), limits, the request meter, the principal's watches and the hub's footprint (points, subscribed, polled, requests, lagged notifications, lifetime) | an update when this server arms a session, a write spends a plan grant's budget, or the armed session or the plan grant runs out (announced when it ends, with no request needed) (#2160) |
-| `bacnet://ledger` | this principal's ledger entries in effect (`ledger_id`, target, value written, what undoes it, state, time), read from the profile workspace's `ledger.json`; empty without writes | an update when one of this server's writes or reverts settles, or it settles an entry left `sending` as unknown; a write the device refused leaves the ledger as it was and sends none. The TUI's own changes to the shared ledger aren't announced (#2160) |
+| `bacnet://session` | level (`read-only`, `write-session` while a session or plan grant is in force, `write-session (expired)`), `writes` (`not offered`, or the mode, arming and what the client may confirm), `expires` (seconds left in an armed session), `grants` (a plan grant: in force, used, budget, expiry; `used` is null and `count_unavailable` says why when the plan's write count can't be trusted, so its writes are refused), limits, the request meter, the principal's watches and the hub's footprint (points, subscribed, polled, requests, lagged notifications, lifetime) | an update when this server arms a session, a write spends a plan grant's budget, or the armed session or the plan grant runs out (announced when it ends, with no request needed) (#2160) |
+| `bacnet://ledger` | this principal's ledger entries in effect (`ledger_id`, target, value written, what undoes it, state, time), read from the profile workspace's `ledger.json`; empty without writes | an update when one of this server's writes is recorded as `sending`, and again when it settles (two updates, folded into one when they come close together); when a revert settles; and when it settles an entry left `sending` as unknown. A write the device refused announces its `sending` row and then the row's removal, so the ledger ends as it was. The TUI's own changes to the shared ledger aren't announced (#2160) |
 
 A watched point is read from the hub, which sends nothing. An unwatched one
 is read once. Each device's alarms are read at most once a minute, whoever
@@ -297,12 +297,16 @@ Writes go through `bacnet_ops::safety`: the TUI's planner, tiers, ledger
   declared form elicitation (or the capability without a mode, as
   2025-11-25 and earlier clients do) is asked by the server instead, with
   an `elicitation/create` request carrying the same form (#2158): the
-  call waits for the answer, at most 120 s and holding no lock, then goes
-  on as the retry would. Accepting sends the write
-  (`confirmed_via: "server-elicitation"`), declining is recorded as
-  `declined` with nothing sent, and a cancel or no answer in time is
-  refused (`confirmation-expired`), nothing sent. A client that declared
-  neither, or URL elicitation only, is refused
+  call waits for the answer, holding no lock, until 5 s before the sealed
+  state would expire (115 s), then goes on as the retry would. Accepting
+  sends the write (`confirmed_via: "server-elicitation"`); declining or
+  cancelling is recorded as `declined`, nothing sent. No answer in time,
+  an error answer, the call cancelled or the server shutting down is
+  refused (`confirmation-expired`, the audit saying which), nothing sent,
+  and the request is cancelled at the client. One such request waits at a
+  time: a second write needing one meanwhile is refused
+  (`confirmation-pending`), unasked and with nothing sent. A client that
+  declared neither, or URL elicitation only, is refused
   (`elicitation-unsupported`).
 - **Arming.** A write needs an armed session or a plan grant in force, as
   in the TUI. With `mcp_arm = "elicit"` the confirmation of a write while
@@ -356,8 +360,11 @@ Writes go through `bacnet_ops::safety`: the TUI's planner, tiers, ledger
   is sent; a count that is missing, unreadable, corrupt, left by another
   authorization, or can't be saved refuses the plan's writes
   (`plan-budget-unavailable`, nothing sent) until `bacnet mcp authorize`
-  runs again. A plan that ends between a call's check and its write is
-  refused (`plan-spent`). `bacnet mcp
+  runs again; the server logs a warning at its start when it finds no
+  count to trust, and `bacnet://session` shows why. While a server runs,
+  the count it has seen is a floor, so a count file put back from a
+  backup can't hand writes out again. A plan that ends between a call's
+  check and its write is refused (`plan-spent`). `bacnet mcp
   serve` warns when writes are offered with `mcp_arm = "never"` and no
   plan, since every write is then refused (`not-armed`).
   Offering writes, letting the client arm, or adding or changing a plan

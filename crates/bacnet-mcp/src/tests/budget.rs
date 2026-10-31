@@ -17,6 +17,9 @@ use crate::Policy;
 use crate::policy::{ArmMode, PlanGrant};
 use crate::writes::budget;
 
+/// Requests a planned write of AO:1's Present_Value reads first.
+const PRE_READS: usize = 1;
+
 /// A lab whose policy has `grant`, recording to `dir`.
 async fn lab(dir: &Path, grant: PlanGrant) -> Lab {
     let mut policy: Policy = writes(dir, ArmMode::Never);
@@ -142,7 +145,7 @@ async fn a_count_that_cant_be_saved_sends_nothing() {
     assert_eq!(slot(&lab, 16).await, PropertyValue::Null);
     // The pre-read went (the preview is read under the lock); no write.
     let sent = lab.sends().len() - before;
-    assert!(sent <= 1, "only the pre-read: {sent}");
+    assert_eq!(sent, PRE_READS, "only the pre-read");
     assert!(Ledger::open(dir.path()).unwrap().entries().is_empty());
     assert_eq!(budget::read(dir.path(), &grant), Ok(0));
     lab.mcp
@@ -155,4 +158,76 @@ async fn a_count_that_cant_be_saved_sends_nothing() {
     assert_eq!(slot(&lab, 16).await, PropertyValue::Real(3.0));
     assert_eq!(budget::read(dir.path(), &grant), Ok(1));
     lab.stop().await;
+}
+
+/// While another holder has the workspace's lock, a planned write is
+/// refused (`workspace-locked`) and the count stays as it was.
+#[tokio::test(start_paused = true)]
+async fn a_held_workspace_leaves_the_count_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let grant = authorized(dir.path(), plan(10)).unwrap();
+    let mut lab = lab(dir.path(), grant.clone()).await;
+    let held = bacnet_ops::safety::lock::lock(dir.path(), "tui").unwrap();
+    let before = lab.sends().len();
+    assert_eq!(refusal(&mut lab, 1).await, json!("workspace-locked"));
+    assert_eq!(lab.sends().len(), before, "nothing sent, not even a read");
+    assert_eq!(budget::read(dir.path(), &grant), Ok(0));
+    drop(held);
+    lab.stop().await;
+}
+
+/// The count another server saved is what a write is checked against:
+/// past the budget there, `spend` refuses (`plan-spent`) though this
+/// server's own count had room, and nothing is sent.
+#[tokio::test(start_paused = true)]
+async fn the_saved_count_refuses_a_write_past_the_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let grant = authorized(dir.path(), plan(2)).unwrap();
+    let mut lab = lab(dir.path(), grant.clone()).await;
+    budget::write(dir.path(), &grant, 2).unwrap();
+    assert_eq!(refusal(&mut lab, 1).await, json!("plan-spent"));
+    assert_eq!(slot(&lab, 16).await, PropertyValue::Null);
+    assert_eq!(budget::read(dir.path(), &grant), Ok(2));
+    lab.stop().await;
+}
+
+/// A count put back to an older value (a backup restored) can't lower
+/// what the running server has counted.
+#[tokio::test(start_paused = true)]
+async fn a_count_put_back_does_not_give_writes_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let grant = authorized(dir.path(), plan(5)).unwrap();
+    let mut lab = lab(dir.path(), grant.clone()).await;
+    spend(&mut lab, 3).await;
+    budget::write(dir.path(), &grant, 0).unwrap();
+    spend(&mut lab, 1).await;
+    assert_eq!(budget::read(dir.path(), &grant), Ok(4));
+    spend(&mut lab, 1).await;
+    assert_eq!(refusal(&mut lab, 9).await, json!("not-armed"), "spent");
+    lab.stop().await;
+}
+
+/// A count the server can't trust at its start shows in the session as
+/// unavailable, with why, not as a count of zero.
+#[tokio::test(start_paused = true)]
+async fn the_session_says_when_the_count_is_unavailable() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut first = lab(dir.path(), plan(10)).await;
+    let session = first.agent.read("bacnet://session").await.unwrap();
+    let grant = &session["grants"][0];
+    assert_eq!(grant["used"], Value::Null, "{session}");
+    let why = grant["count_unavailable"].as_str().unwrap();
+    assert!(why.contains("missing"), "{why}");
+    assert_eq!(
+        refusal(&mut first, 1).await,
+        json!("plan-budget-unavailable")
+    );
+    first.stop().await;
+
+    let grant = authorized(dir.path(), plan(10)).unwrap();
+    let mut second = lab(dir.path(), grant).await;
+    let session = second.agent.read("bacnet://session").await.unwrap();
+    assert_eq!(session["grants"][0]["used"], json!(0), "{session}");
+    assert_eq!(session["grants"][0]["count_unavailable"], Value::Null);
+    second.stop().await;
 }

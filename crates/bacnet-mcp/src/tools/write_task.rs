@@ -95,7 +95,7 @@ where
                 let mut desk = Desk::open(Some(&workspace.dir), context(&workspace), origin);
                 let before = desk.entries();
                 desk.settle_abandoned(&caller).await;
-                ctx.writes.signals.ledger_settled(&before, &desk);
+                ctx.writes.signals.ledger_settled(&before, &desk, false);
                 Err(ToolError::Failed(format!(
                     "the write task failed: {failed}"
                 )))
@@ -155,7 +155,9 @@ pub(crate) async fn confirmed<T: TransportPort + 'static>(
     let sent = desk
         .commit(engine.client(), engine.limits(), &caller, &fresh)
         .await;
-    ctx.writes.signals.ledger_settled(&before, &desk);
+    ctx.writes
+        .signals
+        .ledger_settled(&before, &desk, caller.announced());
     outcome(fresh.device, via, sent)
 }
 
@@ -213,7 +215,9 @@ pub(crate) async fn planned<T: TransportPort + 'static>(
     let sent = desk
         .commit(engine.client(), engine.limits(), &caller, &preview)
         .await;
-    ctx.writes.signals.ledger_settled(&before, &desk);
+    ctx.writes
+        .signals
+        .ledger_settled(&before, &desk, caller.announced());
     outcome(preview.device, Via::Plan, sent)
 }
 
@@ -244,7 +248,7 @@ pub(crate) async fn open<T: TransportPort + 'static>(
     }
     let before = desk.entries();
     desk.settle_abandoned(caller).await;
-    ctx.writes.signals.ledger_settled(&before, &desk);
+    ctx.writes.signals.ledger_settled(&before, &desk, false);
     Ok(desk)
 }
 

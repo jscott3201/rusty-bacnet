@@ -99,14 +99,8 @@ impl Follow {
                     Ok(Uri::Devices | Uri::DevicesAfter(_)) => self.device_uris.push(name),
                     Ok(Uri::Alarms | Uri::DeviceAlarms(_)) => self.alarm_uris.push(name),
                     Ok(found @ (Uri::Session | Uri::Ledger)) => {
-                        let signal = kept_writes.remove(&name).unwrap_or_else(|| {
-                            if found == Uri::Session {
-                                signals.session()
-                            } else {
-                                signals.ledger()
-                            }
-                        });
-                        self.writes.push((name, signal));
+                        let signal = kept_writes.remove(&name).or_else(|| signals.of(found));
+                        self.writes.extend(signal.map(|signal| (name, signal)));
                     }
                     _ => {}
                 }
@@ -117,6 +111,19 @@ impl Follow {
             self.devices_due = None;
         } else if self.devices.is_none() {
             self.devices = engine.map(Engine::device_events);
+        }
+    }
+
+    /// Follow these session and ledger signals, taken when their
+    /// subscriptions were made, so a change between then and [`set`]
+    /// isn't missed; a URI followed already keeps its own.
+    ///
+    /// [`set`]: Self::set
+    pub(crate) fn adopt(&mut self, signals: Vec<(String, watch::Receiver<u64>)>) {
+        for (name, signal) in signals {
+            if !self.writes.iter().any(|(held, _)| *held == name) {
+                self.writes.push((name, signal));
+            }
         }
     }
 

@@ -95,6 +95,12 @@ impl PlanGrant {
         crate::writes::budget::write(workspace, self, 0)
     }
 
+    /// The writes counted for this authorization in `workspace`, or why
+    /// there is no count to trust (and the plan's writes are refused).
+    pub fn budget_used(&self, workspace: &Path) -> Result<u32, String> {
+        crate::writes::budget::read(workspace, self)
+    }
+
     /// Whether it covers device `device`.
     pub fn covers_device(&self, device: u32) -> bool {
         self.devices

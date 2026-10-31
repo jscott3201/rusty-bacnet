@@ -11,13 +11,20 @@
 //! covers is sent; a count it can't read for this authorization, or can't
 //! save, refuses the write. A missing file, an unreadable or corrupt one,
 //! and one left by another authorization are all refused alike: none of
-//! them can give back budget, and authorizing again is the way out.
+//! them can give back budget, and authorizing again is the way out. While
+//! the server runs, the count it has seen is a floor: a file restored from
+//! a backup or a sync can't lower it.
+//!
 //! Authorizing writes the file without the lock (the TUI may hold it for
-//! its whole session): a server spending at that moment may put the old
-//! authorization's count back, which then matches nothing, so that too
-//! ends in a refusal rather than a larger budget.
+//! its whole session). A server spending at that moment may write the
+//! old authorization's key back with its own count: a server still running
+//! on the old authorization goes on spending what is left of its old,
+//! counted budget, and one started on the new authorization refuses until
+//! `bacnet mcp authorize` runs again. Neither gets more than was
+//! authorized.
 
 use std::path::Path;
+use std::sync::PoisonError;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use bacnet_ops::safety::hex;
@@ -25,7 +32,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use crate::policy::PlanGrant;
+use super::{Approval, Writes, refused};
+use crate::policy::{PlanGrant, WritePolicy};
 
 /// The count's file in the workspace.
 pub(crate) const FILE: &str = "plan-budget.json";
@@ -86,7 +94,8 @@ pub(crate) fn read(workspace: &Path, plan: &PlanGrant) -> Result<u32, String> {
     }
     if file.plan != key(plan) {
         return Err(format!(
-            "{} counts another authorization of the plan",
+            "{} counts another authorization of the plan (or the plan changed since it was \
+             authorized); running `bacnet mcp authorize` again starts this plan's count",
             path.display()
         ));
     }
@@ -110,6 +119,96 @@ pub(crate) fn write(workspace: &Path, plan: &PlanGrant, used: u32) -> Result<(),
     ));
     bacnet_ops::safety::file::publish(&temp, &path, &text, false)
         .map_err(|e| format!("cannot save {}: {e}", path.display()))
+}
+
+/// The count a server starts with under `policy`, and why there is none
+/// to trust if there isn't: then the plan's writes are refused, the start
+/// is logged, and `bacnet://session` says why.
+pub(crate) fn load(policy: &WritePolicy) -> (u32, Option<String>) {
+    let (Some(plan), Some(workspace)) = (&policy.plan, &policy.workspace) else {
+        return (0, None);
+    };
+    match read(&workspace.dir, plan) {
+        Ok(used) => (used, None),
+        Err(why) => {
+            tracing::warn!(
+                "[mcp.plan] its writes will be refused: {why}; run `bacnet mcp authorize` again \
+                 to start the plan's write count"
+            );
+            (0, Some(why))
+        }
+    }
+}
+
+impl Writes {
+    /// Take `n` writes from the plan's budget kept in `workspace`, if it
+    /// has them, and save the new count before anything is sent. The
+    /// caller holds the workspace's lock, which every writer of the count
+    /// takes, so two servers on one workspace can't both spend the last
+    /// writes. A count that can't be read for this authorization, or
+    /// can't be saved, refuses: nothing goes that wasn't counted first.
+    pub(super) fn spend(&self, plan: &PlanGrant, n: u32, workspace: &Path) -> Result<(), Approval> {
+        let unavailable = |why: String| {
+            refused(
+                "plan-budget-unavailable",
+                format!(
+                    "{why}; the plan grant's writes are refused until its count can be kept \
+                     (run `bacnet mcp authorize` again to start a fresh one); nothing was sent"
+                ),
+            )
+        };
+        let read = read(workspace, plan);
+        self.set_count_error(read.as_ref().err().cloned());
+        // Never below what this server has seen: a file put back from a
+        // backup can't hand out writes again.
+        let used = read.map_err(unavailable)?.max(self.plan_used());
+        if self.plan_used.fetch_max(used, Ordering::AcqRel) != used {
+            // Another server on the workspace spent some.
+            self.signals.session_changed();
+        }
+        let total = used
+            .checked_add(n)
+            .filter(|total| *total <= plan.max_writes)
+            .ok_or_else(|| refused("plan-spent", "the plan grant's write budget is spent"))?;
+        self.save_count(workspace, plan, total)
+            .map_err(unavailable)?;
+        self.plan_used.fetch_max(total, Ordering::AcqRel);
+        // The session shows the budget used, and the plan's end.
+        self.signals.session_changed();
+        Ok(())
+    }
+
+    fn save_count(&self, workspace: &Path, plan: &PlanGrant, used: u32) -> Result<(), String> {
+        #[cfg(test)]
+        if self.budget_fault.load(Ordering::Relaxed) {
+            return Err("the count could not be saved (a test's fault)".into());
+        }
+        write(workspace, plan, used)
+    }
+
+    fn set_count_error(&self, why: Option<String>) {
+        let mut error = self
+            .count_error
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if *error != why {
+            *error = why;
+            self.signals.session_changed();
+        }
+    }
+
+    /// Writes the plan has made, as last counted.
+    pub(crate) fn plan_used(&self) -> u32 {
+        self.plan_used.load(Ordering::Acquire)
+    }
+
+    /// Why the plan's count can't be trusted now, if it can't.
+    pub(crate) fn count_error(&self) -> Option<String> {
+        self.count_error
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
 }
 
 #[cfg(test)]
@@ -140,7 +239,11 @@ mod tests {
         write(dir.path(), &first, 30).unwrap();
         assert_eq!(read(dir.path(), &first), Ok(30));
         let again = plan(1_001);
-        assert!(read(dir.path(), &again).unwrap_err().contains("another"));
+        let foreign = read(dir.path(), &again).unwrap_err();
+        assert!(
+            foreign.contains("another") && foreign.contains("authorize"),
+            "{foreign}"
+        );
         let wider = PlanGrant {
             max_writes: 51,
             ..first.clone()

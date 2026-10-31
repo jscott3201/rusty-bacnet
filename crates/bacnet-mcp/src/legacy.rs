@@ -94,8 +94,11 @@ pub(crate) fn subscribe<T: TransportPort + 'static>(
             )));
         }
     };
+    // The session's and the ledger's signal, taken before the answer, so
+    // no change after it is missed.
+    let signal = ctx.writes.signals.of(parsed);
     ctx.subs
-        .legacy_add(text, hold, max_uris(ctx))
+        .legacy_add(text, (hold, signal), max_uris(ctx))
         .map_err(|reason| match reason {
             SHUTTING_DOWN => refusal(&over_cap(reason)),
             _ => refusal(&too_many(ctx)),
@@ -127,11 +130,7 @@ pub(crate) async fn notify<T: TransportPort + 'static>(ctx: Arc<Ctx<T>>, peer: P
     let mut follow = Follow::new();
     // Subscriptions made before this task first ran: the receiver counts
     // them as seen already.
-    follow.set(
-        ctx.engine.as_deref(),
-        &ctx.writes.signals,
-        ctx.subs.legacy_snapshot(),
-    );
+    follow_legacy(&ctx, &mut follow);
     loop {
         let wake = tokio::select! {
             biased;
@@ -140,11 +139,7 @@ pub(crate) async fn notify<T: TransportPort + 'static>(ctx: Arc<Ctx<T>>, peer: P
                 if seen.is_err() {
                     return;
                 }
-                follow.set(
-                    ctx.engine.as_deref(),
-                    &ctx.writes.signals,
-                    ctx.subs.legacy_snapshot(),
-                );
+                follow_legacy(&ctx, &mut follow);
                 continue;
             }
             wake = follow.next() => wake,
@@ -173,6 +168,13 @@ pub(crate) async fn notify<T: TransportPort + 'static>(ctx: Arc<Ctx<T>>, peer: P
             }
         }
     }
+}
+
+/// Follow the session's legacy subscriptions as they stand now.
+fn follow_legacy<T: TransportPort + 'static>(ctx: &Ctx<T>, follow: &mut Follow) {
+    let (uris, signals) = ctx.subs.legacy_snapshot();
+    follow.adopt(signals);
+    follow.set(ctx.engine.as_deref(), &ctx.writes.signals, uris);
 }
 
 async fn send(peer: &Peer<RoleServer>, uri: String) -> Result<(), rmcp::service::ServiceError> {

@@ -1,15 +1,18 @@
 //! Writes confirmed by a client older than 2026-07-28 (#2158): the server
 //! sends it an `elicitation/create` request over the session and waits.
 //! A 2025-11-25 client that declares the capability confirms (sent,
-//! ledgered, armed), declines (nothing sent), cancels or lets it time out
-//! (refused, nothing sent); one without the capability is refused, and
-//! other calls go on while a confirmation waits. All on paused time.
+//! ledgered, armed), declines or cancels (declined, nothing sent), lets it
+//! time out, answers with an error or has its call cancelled (refused,
+//! nothing sent, the request cancelled at the client); one without the
+//! capability is refused; one confirmation waits at a time, and other
+//! calls go on meanwhile. All on paused time.
 
 use std::time::Duration;
 
 use bacnet_ops::safety::ledger::{Ledger, State};
 use bacnet_types::primitives::PropertyValue;
 use serde_json::{Value, json};
+use tokio::time::Instant;
 
 use super::writes::{audit, command, one, slot, writes};
 use super::{Agent, Lab};
@@ -159,35 +162,167 @@ async fn declining_sends_nothing_and_a_stale_preview_is_refused() {
     lab.stop().await;
 }
 
-/// No answer within the confirmation's 120 s, or a cancel, is refused as
-/// expired with nothing sent; on the timeout the client is told the
-/// request was cancelled.
+/// The refusals recorded with `reason`, and their `why`.
+fn refusals(dir: &std::path::Path, reason: &str) -> Vec<Value> {
+    audit(dir)
+        .into_iter()
+        .filter(|r| r["outcome"]["why"]["reason"] == reason)
+        .map(|r| r["why"].clone())
+        .collect()
+}
+
+/// A cancel is declined, as a form's cancel is: recorded, nothing sent.
 #[tokio::test(start_paused = true)]
-async fn no_answer_or_a_cancel_expires_the_confirmation() {
+async fn a_cancel_is_declined_and_sends_nothing() {
     let (mut lab, dir) = older(ArmMode::Elicit).await;
     let (id, ask) = write(&mut lab, one(json!(9), 15)).await;
     let before = lab.sends().len();
-    // Nothing answers: the paused clock runs on to the timeout.
-    let done = result(&mut lab, id).await;
-    let body = &done["structuredContent"];
-    assert_eq!(body["reason"], json!("confirmation-expired"), "{done}");
-    let cancelled = lab.agent.notification("notifications/cancelled").await;
-    assert_eq!(cancelled["params"]["requestId"], ask["id"], "{cancelled}");
-    assert_eq!(lab.sends().len(), before, "nothing sent");
-
-    let (id, ask) = write(&mut lab, one(json!(9), 15)).await;
     lab.agent
         .reply_to(&ask, json!({ "action": "cancel" }))
         .await;
     let done = result(&mut lab, id).await;
-    let body = &done["structuredContent"];
-    assert_eq!(body["reason"], json!("confirmation-expired"), "{done}");
+    assert_eq!(
+        done["structuredContent"]["reason"],
+        json!("declined"),
+        "{done}"
+    );
+    assert_eq!(lab.sends().len(), before, "nothing sent");
     assert_eq!(slot(&lab, 15).await, PropertyValue::Null);
-    let expired = audit(dir.path())
-        .into_iter()
-        .filter(|r| r["outcome"]["why"]["reason"] == "confirmation-expired")
-        .count();
-    assert_eq!(expired, 2, "each recorded");
+    let records = audit(dir.path());
+    let declined = records.iter().find(|r| r["event"] == "declined").unwrap();
+    assert_eq!(declined["why"], json!("cancelled"), "{declined}");
+    lab.stop().await;
+}
+
+/// The wait ends 5 s before the sealed state would (120 s from the
+/// preview): an accept just inside it is sent; with no answer the request
+/// is cancelled at the client by then, refused as expired with nothing
+/// sent; an accept past it is not taken.
+#[tokio::test(start_paused = true)]
+async fn the_wait_ends_inside_the_sealed_states_lifetime() {
+    let (mut lab, dir) = older(ArmMode::Elicit).await;
+    let (id, ask) = write(&mut lab, one(json!(1), 14)).await;
+    tokio::time::sleep(Duration::from_secs(114)).await;
+    let accept = json!({ "action": "accept", "content": { "confirm": true } });
+    lab.agent.reply_to(&ask, accept.clone()).await;
+    let done = result(&mut lab, id).await;
+    assert_eq!(done["isError"], json!(false), "just inside: {done}");
+    assert_eq!(slot(&lab, 14).await, PropertyValue::Real(1.0));
+
+    let (id, ask) = write(&mut lab, one(json!(2), 14)).await;
+    let asked = Instant::now();
+    let done = result(&mut lab, id).await;
+    let waited = asked.elapsed();
+    assert_eq!(
+        done["structuredContent"]["reason"],
+        json!("confirmation-expired")
+    );
+    assert!(
+        waited >= Duration::from_secs(114) && waited <= Duration::from_secs(115),
+        "{waited:?}"
+    );
+    let cancelled = lab.agent.notification("notifications/cancelled").await;
+    assert_eq!(cancelled["params"]["requestId"], ask["id"], "{cancelled}");
+
+    let (id, ask) = write(&mut lab, one(json!(3), 14)).await;
+    tokio::time::sleep(Duration::from_secs(116)).await;
+    lab.agent.reply_to(&ask, accept).await;
+    let done = result(&mut lab, id).await;
+    assert_eq!(
+        done["structuredContent"]["reason"],
+        json!("confirmation-expired")
+    );
+    assert_eq!(slot(&lab, 14).await, PropertyValue::Real(1.0), "not taken");
+    let whys = refusals(dir.path(), "confirmation-expired");
+    assert_eq!(whys.len(), 2, "{whys:?}");
+    assert!(
+        whys[0].as_str().unwrap().starts_with("no answer within 11"),
+        "{whys:?}"
+    );
+    lab.stop().await;
+}
+
+/// Cancelling the tool call while it waits cancels the request at the
+/// client too; nothing is sent, and the refusal is recorded.
+#[tokio::test(start_paused = true)]
+async fn cancelling_the_call_cancels_the_request() {
+    let (mut lab, dir) = older(ArmMode::Elicit).await;
+    let (id, ask) = write(&mut lab, one(json!(4), 13)).await;
+    let before = lab.sends().len();
+    lab.agent.cancel(id).await;
+    let cancelled = lab.agent.notification("notifications/cancelled").await;
+    assert_eq!(cancelled["params"]["requestId"], ask["id"], "{cancelled}");
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(lab.sends().len(), before, "nothing sent");
+    assert_eq!(slot(&lab, 13).await, PropertyValue::Null);
+    let whys = refusals(dir.path(), "confirmation-expired");
+    assert_eq!(whys, [json!("the tool call was cancelled")]);
+    lab.stop().await;
+}
+
+/// One confirmation waits at a time: a second write needing one is
+/// refused (`confirmation-pending`), unasked and with nothing sent, while
+/// the first goes on to be confirmed.
+#[tokio::test(start_paused = true)]
+async fn one_confirmation_waits_at_a_time() {
+    let (mut lab, dir) = older(ArmMode::Elicit).await;
+    let (first, ask) = write(&mut lab, one(json!(5), 12)).await;
+    let params = json!({ "name": "bacnet_write", "arguments": one(json!(6), 16) });
+    let second = lab.agent.post("tools/call", params).await;
+    let refused = result(&mut lab, second).await;
+    assert_eq!(
+        refused["structuredContent"]["reason"],
+        json!("confirmation-pending"),
+        "{refused}"
+    );
+    assert!(
+        lab.agent
+            .drain(ASK, Duration::from_secs(1))
+            .await
+            .is_empty()
+    );
+    assert_eq!(refusals(dir.path(), "confirmation-pending").len(), 1);
+    let accept = json!({ "action": "accept", "content": { "confirm": true } });
+    lab.agent.reply_to(&ask, accept).await;
+    let done = result(&mut lab, first).await;
+    assert_eq!(done["isError"], json!(false), "{done}");
+    assert_eq!(slot(&lab, 12).await, PropertyValue::Real(5.0));
+    assert_eq!(slot(&lab, 16).await, PropertyValue::Null);
+    // Answered, the next write may be asked again.
+    let (id, again) = write(&mut lab, one(json!(7), 16)).await;
+    lab.agent
+        .reply_to(&again, json!({ "action": "decline" }))
+        .await;
+    let done = result(&mut lab, id).await;
+    assert_eq!(
+        done["structuredContent"]["reason"],
+        json!("declined"),
+        "{done}"
+    );
+    lab.stop().await;
+}
+
+/// An error answer is refused, recorded as what it was, nothing sent.
+#[tokio::test(start_paused = true)]
+async fn an_error_answer_is_recorded_as_one() {
+    let (mut lab, dir) = older(ArmMode::Elicit).await;
+    let (id, ask) = write(&mut lab, one(json!(8), 11)).await;
+    let error = json!({ "jsonrpc": "2.0", "id": ask["id"],
+                        "error": { "code": -32603, "message": "form crashed" } });
+    lab.agent.send(error).await;
+    let done = result(&mut lab, id).await;
+    assert_eq!(
+        done["structuredContent"]["reason"],
+        json!("confirmation-expired")
+    );
+    assert_eq!(slot(&lab, 11).await, PropertyValue::Null);
+    let whys = refusals(dir.path(), "confirmation-expired");
+    assert_eq!(
+        whys,
+        [json!(
+            "the client answered with an error (-32603: form crashed)"
+        )]
+    );
     lab.stop().await;
 }
 

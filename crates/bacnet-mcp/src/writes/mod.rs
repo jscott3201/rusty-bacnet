@@ -10,7 +10,7 @@ pub(crate) mod notify;
 pub(crate) mod seal;
 
 use std::path::Path;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -32,12 +32,32 @@ pub(crate) struct Writes {
     armed: Mutex<Option<Armed>>,
     /// The plan grant's writes as last read from or saved to the
     /// workspace's count ([`budget`]), which is what a write is checked
-    /// against.
+    /// against; never lowered while the server runs.
     plan_used: AtomicU32,
+    /// Why the plan grant's count couldn't be read, when it last
+    /// couldn't: the plan's writes are refused meanwhile, and the session
+    /// says so.
+    count_error: Mutex<Option<String>>,
     pub(crate) signals: Signals,
+    /// Set while the server waits for an older client to confirm a write
+    /// (#2158): one such request at a time.
+    asking: AtomicBool,
     /// Fail the next count saves, for tests.
     #[cfg(test)]
-    pub(crate) budget_fault: std::sync::atomic::AtomicBool,
+    pub(crate) budget_fault: AtomicBool,
+    /// Seconds added to the wall clock, for tests.
+    #[cfg(test)]
+    pub(crate) wall_offset: std::sync::atomic::AtomicU64,
+}
+
+/// The one confirmation an older client is being asked for, held until it
+/// is answered or given up.
+pub(crate) struct Asking<'a>(&'a AtomicBool);
+
+impl Drop for Asking<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 /// An armed write session: until when, and the reason given.
@@ -48,22 +68,40 @@ struct Armed {
 }
 
 impl Writes {
-    /// The write state under `policy`: a plan grant's count as the
-    /// workspace keeps it (none read counts as zero here, and its writes
-    /// are refused when they go).
+    /// The write state under `policy`, with a plan grant's count as the
+    /// workspace keeps it ([`budget::load`]).
     pub(crate) fn new(policy: &WritePolicy) -> Self {
-        let used = match (&policy.plan, &policy.workspace) {
-            (Some(plan), Some(workspace)) => budget::read(&workspace.dir, plan).unwrap_or(0),
-            _ => 0,
-        };
+        let (used, count_error) = budget::load(policy);
         Self {
             sealer: Sealer::new(),
             armed: Mutex::new(None),
             plan_used: AtomicU32::new(used),
+            count_error: Mutex::new(count_error),
             signals: Signals::default(),
+            asking: AtomicBool::new(false),
             #[cfg(test)]
-            budget_fault: std::sync::atomic::AtomicBool::new(false),
+            budget_fault: AtomicBool::new(false),
+            #[cfg(test)]
+            wall_offset: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    /// Seconds since the Unix epoch, on the clock a plan grant's window is
+    /// checked against.
+    pub(crate) fn wall_now(&self) -> u64 {
+        #[cfg(test)]
+        return unix_now().saturating_add(self.wall_offset.load(Ordering::Relaxed));
+        #[cfg(not(test))]
+        unix_now()
+    }
+
+    /// Claim the one confirmation request an older client may have
+    /// waiting, unless another holds it.
+    pub(crate) fn ask(&self) -> Option<Asking<'_>> {
+        self.asking
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+            .then(|| Asking(&self.asking))
     }
 
     fn armed(&self) -> Option<Armed> {
@@ -109,58 +147,12 @@ impl Writes {
     /// Checked on every write: a clock set back past the plan's start
     /// can't stretch it beyond its 8 hours either.
     pub(crate) fn plan<'a>(&self, policy: &'a WritePolicy) -> Option<&'a PlanGrant> {
-        let now = unix_now();
+        let now = self.wall_now();
         policy.plan.as_ref().filter(|plan| {
             now < plan.expires_unix
                 && plan.expires_unix <= now.saturating_add(crate::policy::MAX_PLAN_SECS)
                 && self.plan_used.load(Ordering::Relaxed) < plan.max_writes
         })
-    }
-
-    /// Take `n` writes from the plan's budget kept in `workspace`, if it
-    /// has them, and save the new count before anything is sent. The
-    /// caller holds the workspace's lock, which every writer of the count
-    /// takes, so two servers on one workspace can't both spend the last
-    /// writes. A count that can't be read for this authorization, or
-    /// can't be saved, refuses: nothing goes that wasn't counted first.
-    fn spend(&self, plan: &PlanGrant, n: u32, workspace: &Path) -> Result<(), Approval> {
-        let unavailable = |why: String| {
-            refused(
-                "plan-budget-unavailable",
-                format!(
-                    "{why}; the plan grant's writes are refused until its count can be kept \
-                     (run `bacnet mcp authorize` again to start a fresh one); nothing was sent"
-                ),
-            )
-        };
-        let used = budget::read(workspace, plan).map_err(unavailable)?;
-        if self.plan_used.swap(used, Ordering::AcqRel) != used {
-            // Another server on the workspace spent some.
-            self.signals.session_changed();
-        }
-        let total = used
-            .checked_add(n)
-            .filter(|total| *total <= plan.max_writes)
-            .ok_or_else(|| refused("plan-spent", "the plan grant's write budget is spent"))?;
-        self.save_count(workspace, plan, total)
-            .map_err(unavailable)?;
-        self.plan_used.store(total, Ordering::Release);
-        // The session shows the budget used, and the plan's end.
-        self.signals.session_changed();
-        Ok(())
-    }
-
-    fn save_count(&self, workspace: &Path, plan: &PlanGrant, used: u32) -> Result<(), String> {
-        #[cfg(test)]
-        if self.budget_fault.load(Ordering::Relaxed) {
-            return Err("the count could not be saved (a test's fault)".into());
-        }
-        budget::write(workspace, plan, used)
-    }
-
-    /// Writes the plan has made.
-    pub(crate) fn plan_used(&self) -> u32 {
-        self.plan_used.load(Ordering::Relaxed)
     }
 
     /// The level a write runs at: armed while a session or a plan grant
@@ -365,6 +357,8 @@ pub(crate) struct McpCaller<'a> {
     /// Where the ids of the entries this write records as `sending` go,
     /// so a call that stops waiting can still name them.
     pub(crate) sending: Option<Sending>,
+    /// Set once this caller's `sending` rows were announced.
+    announced: AtomicBool,
 }
 
 /// The ledger ids a handed-off write has recorded, shared with its call.
@@ -384,7 +378,14 @@ impl McpCaller<'_> {
             via,
             fields,
             sending: None,
+            announced: AtomicBool::new(false),
         }
+    }
+
+    /// Whether this caller's write reached the ledger as `sending` (and
+    /// was announced), so its settle is announced whatever it leaves.
+    pub(crate) fn announced(&self) -> bool {
+        self.announced.load(Ordering::Acquire)
     }
 }
 
@@ -403,7 +404,7 @@ impl Caller for McpCaller<'_> {
                     .policy
                     .plan
                     .as_ref()
-                    .is_none_or(|p| unix_now() >= p.expires_unix) =>
+                    .is_none_or(|p| self.writes.wall_now() >= p.expires_unix) =>
             {
                 Some("the plan grant expired before the write went".into())
             }
@@ -415,6 +416,10 @@ impl Caller for McpCaller<'_> {
         &'a self,
         entries: &'a [bacnet_ops::safety::ledger::Entry],
     ) -> bacnet_ops::safety::desk::Waiting<'a> {
+        // The `sending` rows are in the file now: tell the ledger's
+        // subscribers, and again once they settle, however they settle.
+        self.announced.store(true, Ordering::Release);
+        self.writes.signals.ledger_changed();
         if let Some(sending) = &self.sending {
             // Under the workspace's lock, this run's `sending` entries are
             // this write's.

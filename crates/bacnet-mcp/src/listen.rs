@@ -45,6 +45,11 @@ use crate::context::{Ctx, Listening};
 use crate::errors::ToolError;
 use crate::follow::{Follow, Wake};
 use crate::resources::uri::{self, Uri};
+use crate::writes::notify::Signal;
+
+/// The legacy subscriptions as [`Follow::set`] and [`Follow::adopt`] take
+/// them.
+pub(crate) type LegacySnapshot = (Vec<(String, Option<Changes>)>, Vec<(String, Signal)>);
 
 /// Why a watch is refused once the session has ended or the hub stopped.
 pub(crate) const SHUTTING_DOWN: &str = "shutting-down";
@@ -109,6 +114,9 @@ struct SubsState {
     /// The session's legacy `resources/subscribe` URIs, each point URI
     /// with its hold.
     legacy: HashMap<String, Option<Hold>>,
+    /// The session and ledger signals of legacy subscriptions, taken when
+    /// they were made and not yet followed.
+    legacy_signals: Vec<(String, Signal)>,
     /// Per-device alarm URIs held by listen streams and their waiting
     /// reservations, one a stream each: they count with the legacy URIs
     /// against the session's URI bound ([`Subs::uris`]).
@@ -168,6 +176,8 @@ pub(crate) struct Claim {
     points: Vec<Point>,
     leases: Vec<(String, Lease)>,
     alarms: usize,
+    /// The session and ledger signals, taken before the acknowledgment.
+    signals: Vec<(String, Signal)>,
 }
 
 impl Claim {
@@ -265,7 +275,7 @@ impl Subs {
     pub(crate) fn legacy_add(
         &self,
         uri: &str,
-        hold: Option<Hold>,
+        (hold, signal): (Option<Hold>, Option<Signal>),
         max: usize,
     ) -> Result<(), &'static str> {
         let mut state = self.lock();
@@ -277,6 +287,9 @@ impl Subs {
             Err("principal-cap")
         } else {
             state.legacy.insert(uri.to_string(), hold);
+            state
+                .legacy_signals
+                .extend(signal.map(|s| (uri.to_string(), s)));
             Ok(true)
         };
         drop(state);
@@ -290,7 +303,11 @@ impl Subs {
 
     /// Drop the legacy subscription `uri`, if the session has it.
     pub(crate) fn legacy_remove(&self, uri: &str) {
-        let removed = self.lock().legacy.remove(uri);
+        let removed = {
+            let mut state = self.lock();
+            state.legacy_signals.retain(|(held, _)| held != uri);
+            state.legacy.remove(uri)
+        };
         if removed.is_some() {
             // The guard is gone: the hold's release takes the lock.
             drop(removed);
@@ -298,13 +315,17 @@ impl Subs {
         }
     }
 
-    /// The legacy URIs, each point URI with its change signal.
-    pub(crate) fn legacy_snapshot(&self) -> Vec<(String, Option<Changes>)> {
-        self.lock()
+    /// The legacy URIs, each point URI with its change signal, and, taken
+    /// at the same time, the session and ledger signals of those not yet
+    /// followed ([`Follow::adopt`]).
+    pub(crate) fn legacy_snapshot(&self) -> LegacySnapshot {
+        let mut state = self.lock();
+        let uris = state
             .legacy
             .iter()
             .map(|(uri, hold)| (uri.clone(), hold.as_ref().map(|h| h.lease.changes())))
-            .collect()
+            .collect();
+        (uris, std::mem::take(&mut state.legacy_signals))
     }
 
     /// Legacy URIs the session holds.
@@ -405,6 +426,7 @@ impl Subs {
             points: Vec::new(),
             leases: Vec::new(),
             alarms: 0,
+            signals: Vec::new(),
         };
         let mut seen = HashSet::new();
         let mut pages = 0;
@@ -435,7 +457,13 @@ impl Subs {
                     claim.alarms += usize::from(taken);
                     taken
                 }
-                Ok(Uri::Session | Uri::Ledger) => true,
+                Ok(found @ (Uri::Session | Uri::Ledger)) => {
+                    // Taken before the acknowledgment, so no change after
+                    // it is missed.
+                    let signal = ctx.writes.signals.of(found);
+                    claim.signals.extend(signal.map(|s| (text.clone(), s)));
+                    true
+                }
                 // A device summary has no updates; a device-list page past
                 // the cap or on a passive server isn't honoured; anything
                 // else isn't ours.
@@ -576,15 +604,18 @@ pub(crate) async fn run<T: TransportPort + 'static>(
     let uris = accepted(&context);
     // Both held to the end: the stream's count, and the claim, whose
     // leases keep the points watched.
-    let (_listening, claim) = open(ctx, Ticket::current(), &uris)?;
+    let (_listening, mut claim) = open(ctx, Ticket::current(), &uris)?;
     if claim.is_none() && !uris.is_empty() {
         // Only when the reservation was dropped before the stream began.
         tracing::warn!(
             "a listen stream found no watches set aside for it; its points won't update"
         );
     }
-    let leases = claim.as_ref().map_or(&[][..], |c| &c.leases[..]);
     let mut follow = Follow::new();
+    if let Some(claim) = claim.as_mut() {
+        follow.adopt(std::mem::take(&mut claim.signals));
+    }
+    let leases = claim.as_ref().map_or(&[][..], |c| &c.leases[..]);
     follow.set(
         ctx.engine.as_deref(),
         &ctx.writes.signals,

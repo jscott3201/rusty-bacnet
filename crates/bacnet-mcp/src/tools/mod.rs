@@ -308,33 +308,27 @@ pub(crate) async fn call_write<T: TransportPort + 'static>(
     };
     schema_check?;
     let budget = ctx.policy.caps.budget;
-    let (call, finished) = attempt(ctx, name, &args, retry, peer, &cancel).await?;
+    let (call, finished) = attempt(ctx, name, &args, retry, peer, &cancel, None).await?;
     let (call, finished) = match (finished, &peer.session) {
         // A client older than 2026-07-28 that takes the server's
         // elicitation requests: ask it, holding no lock while it answers,
         // then go on as a retry with the form's answer would (#2158).
-        (Ok(Ok(write::Step::Ask(ask))), Some(session)) => {
-            ctx.log_read(name, &call, "confirming");
-            let asked = tokio::select! {
-                biased;
-                asked = write_confirm::confirm(session, ask) => asked,
-                () = cancel.cancelled() => {
-                    ctx.log_read(name, &call, "cancelled");
-                    return Err(ErrorData::internal_error("the call was cancelled", None));
-                }
-            };
-            match asked {
-                Ok(retry) => attempt(ctx, name, &args, retry, peer, &cancel).await?,
-                Err(why) => {
-                    let error = write::unconfirmed(ctx, &args, peer, why).await;
-                    (call, Ok(Err(error)))
-                }
-            }
+        (Ok(Ok(write::Step::Ask(ask, good_until))), Some(session)) => {
+            confirm(
+                ctx,
+                name,
+                &args,
+                peer,
+                &cancel,
+                call,
+                (session, ask, good_until),
+            )
+            .await?
         }
         (finished, _) => (call, finished),
     };
     let outcome = match finished {
-        Ok(Ok(write::Step::Ask(ask))) => {
+        Ok(Ok(write::Step::Ask(ask, _))) => {
             ctx.log_read(name, &call, "input-required");
             return Ok(CallToolResponse::InputRequired(ask));
         }
@@ -370,8 +364,53 @@ type Attempt = (
     Result<Result<write::Step, ToolError>, tokio::time::error::Elapsed>,
 );
 
-/// Run a write tool once, within the call's budget and its grace; a
-/// cancel ends it with an error.
+/// Ask an older client to confirm the write `ask` describes (#2158),
+/// one such request at a time, then run the retry with its answer, on
+/// the first run's account so the result's cost counts the preview's
+/// reads too. No answer to go on is a refusal, audited, with nothing
+/// sent; a cancelled call is an error, as any cancelled call is.
+async fn confirm<T: TransportPort + 'static>(
+    ctx: &Arc<Ctx<T>>,
+    name: &str,
+    args: &Map<String, Value>,
+    peer: &write::Peer,
+    cancel: &CancellationToken,
+    call: Call,
+    (session, ask, good_until): (
+        &rmcp::service::Peer<rmcp::RoleServer>,
+        rmcp::model::InputRequiredResult,
+        tokio::time::Instant,
+    ),
+) -> Result<Attempt, ErrorData> {
+    let Some(asking) = ctx.writes.ask() else {
+        let why =
+            "another write is waiting for this client's confirmation; answer or cancel it first";
+        let error = write::unconfirmed(ctx, args, peer, ("confirmation-pending", why)).await;
+        return Ok((call, Ok(Err(error))));
+    };
+    ctx.log_read(name, &call, "confirming");
+    let asked = write_confirm::confirm(session, ask, good_until, cancel, &ctx.closing).await;
+    drop(asking);
+    match asked {
+        Ok(retry) => {
+            let account = Arc::clone(&call.account);
+            attempt(ctx, name, args, retry, peer, cancel, Some(account)).await
+        }
+        Err(unanswered) => {
+            let reason = ("confirmation-expired", unanswered.why.as_str());
+            let error = write::unconfirmed(ctx, args, peer, reason).await;
+            if unanswered.cancelled {
+                ctx.log_read(name, &call, "cancelled");
+                return Err(ErrorData::internal_error("the call was cancelled", None));
+            }
+            Ok((call, Ok(Err(error))))
+        }
+    }
+}
+
+/// Run a write tool once, within the call's budget and its grace,
+/// charged to `account` (a new one when none); a cancel ends it with an
+/// error.
 async fn attempt<T: TransportPort + 'static>(
     ctx: &Arc<Ctx<T>>,
     name: &str,
@@ -379,8 +418,9 @@ async fn attempt<T: TransportPort + 'static>(
     retry: write::Retry,
     peer: &write::Peer,
     cancel: &CancellationToken,
+    account: Option<Arc<Account>>,
 ) -> Result<Attempt, ErrorData> {
-    let account = Arc::new(Account::new(Some(Arc::clone(&ctx.bucket))));
+    let account = account.unwrap_or_else(|| Arc::new(Account::new(Some(Arc::clone(&ctx.bucket)))));
     let budget = ctx.policy.caps.budget;
     let call = Call::new(budget, Arc::clone(&account));
     let run = async {

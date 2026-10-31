@@ -174,10 +174,11 @@ pub(crate) struct Retry {
     pub(crate) server: bool,
 }
 
-/// A step of a write or revert: waiting for the client's confirmation, or
+/// A step of a write or revert: waiting for the client's confirmation
+/// (until the sealed state's lifetime ends at the instant given), or
 /// handed to a task of its own, which the call then waits for.
 pub(crate) enum Step {
-    Ask(InputRequiredResult),
+    Ask(InputRequiredResult, tokio::time::Instant),
     Sending(Handoff),
 }
 
@@ -397,18 +398,20 @@ pub(crate) async fn run<T: TransportPort + 'static>(
     }
 }
 
-/// The refusal of a write the server asked an older client to confirm
-/// (#2158) when no answer came: in time, or at all (`why`). Audited;
-/// nothing was sent. The sealed state was never handed out, so nothing
-/// can redeem it.
+/// The refusal of a write the server asked, or would have asked, an
+/// older client to confirm (#2158) with no answer to go on: none in time,
+/// the call cancelled, the session ending (`confirmation-expired`), or
+/// another confirmation waiting (`confirmation-pending`), with `why`.
+/// Audited; nothing was sent. The sealed state was never handed out, so
+/// nothing can redeem it.
 pub(crate) async fn unconfirmed<T: TransportPort + 'static>(
     ctx: &Ctx<T>,
     raw: &Map<String, Value>,
     peer: &Peer,
-    why: &str,
+    (reason, why): (&'static str, &str),
 ) -> ToolError {
     let error = ToolError::refused(
-        "confirmation-expired",
+        reason,
         format!("the write wasn't confirmed: {why}; nothing was sent"),
     );
     if let Some(workspace) = &ctx.policy.writes.workspace {
@@ -484,6 +487,7 @@ async fn preview<T: TransportPort + 'static>(
     };
     match approver.approve(&ctx.principal, &preview, tier) {
         Approval::Ask { arm } => {
+            let good_until = ctx.writes.sealer.good_until();
             let state = ctx.writes.sealer.seal(
                 &ctx.principal,
                 NAME,
@@ -491,7 +495,7 @@ async fn preview<T: TransportPort + 'static>(
                 preview_digest(&preview),
                 arm,
             );
-            Ok(Step::Ask(ask(&preview, tier, arm, state)))
+            Ok(Step::Ask(ask(&preview, tier, arm, state), good_until))
         }
         Approval::Refused { reason, message } => {
             let error = ToolError::refused(reason, message);

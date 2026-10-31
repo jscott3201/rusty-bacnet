@@ -176,7 +176,7 @@ pub(crate) async fn run<T: TransportPort + 'static>(
                         && wanted.as_ref().is_none_or(|ids| ids.contains(&entry.id))
                 })
                 .await;
-            ctx.writes.signals.ledger_settled(&before, &desk);
+            ctx.writes.signals.ledger_settled(&before, &desk, false);
             let left = desk
                 .entries()
                 .iter()

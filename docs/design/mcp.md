@@ -573,17 +573,24 @@ As built (#2068), and where it differs from the steps above:
   the capability without a mode, which meant the form before URL
   elicitation), the server sends the same form as its own
   `elicitation/create` request over the session (#2158), through `rmcp`'s
-  `Peer::send_request_with_option` with a 120 s timeout (the
-  confirmation's lifetime; the SDK then tells the client the request was
-  cancelled). The call waits holding no lock, neither the workspace's
-  nor the write state's, then hands the answer to the retry path as if
+  `Peer::send_request_with_option`. The call waits until 5 s before the
+  sealed state's lifetime ends (so an answer it takes is one the retry
+  honours), until the tool call is cancelled, or until the server shuts
+  down; then it cancels the request at the client itself, since the
+  SDK's request handle does that only on its own timeout. One such
+  request waits at a time; a second write needing one meanwhile is
+  refused (`confirmation-pending`), unasked. The call waits holding no
+  lock, neither the workspace's nor the write state's, then hands the
+  answer to the retry path as if
   the client had retried: the sealed state, which never leaves the
   server, is opened, the targets are read again and a stale preview is
   refused. Accepting is audited `confirmed_via: "server-elicitation"`
   (`approved_by: client`, T1 only, as for the form): it is the same
   client claim, but an audit reader can tell the older flow from multi
-  round-trip requests. Declining is `declined`, nothing sent; a cancel
-  or no answer in time is `confirmation-expired`, nothing sent; with
+  round-trip requests. Declining or cancelling is `declined`, nothing
+  sent, as for the form; no answer in time, an error answer, the call
+  cancelled or a shutdown is `confirmation-expired` (the audit's `why`
+  says which), nothing sent; with
   `mcp_arm = "elicit"` a confirmation arms the session as the form does.
   A client that declares neither, or URL elicitation only, is refused
   (`elicitation-unsupported`). Plan grants work for every client.
@@ -594,11 +601,14 @@ As built (#2068), and where it differs from the steps above:
   (#2159): `bacnet mcp authorize` starts the count at zero, before it
   saves the authorization, and a write the plan covers is counted, under
   the workspace's lock, before it goes on the wire; a crash between the
-  two costs at most that write. A count the server can't read for this
+  two costs at most that write. The count a running server has seen is a
+  floor: a file put back from a backup or a sync can't lower it. A count the server can't read for this
   authorization (missing, unreadable, corrupt or another
   authorization's) or can't save refuses the plan's writes
   (`plan-budget-unavailable`): none of these can give budget back, and
-  authorizing again is the way out. While one is in force, a write it doesn't cover is
+  authorizing again is the way out. A server that starts without a count
+  to trust logs a warning saying so, and `bacnet://session` shows the
+  count as unavailable, with why, rather than as zero. While one is in force, a write it doesn't cover is
   refused (`outside-plan`) rather than offered to the client.
 - `bacnet_revert` needs no prompt and no armed session, as in the TUI, and
   reverts only this principal's MCP entries.
@@ -606,8 +616,13 @@ As built (#2068), and where it differs from the steps above:
   their subscribers (#2160): the session on arming, on each plan-grant
   spend (so its exhaustion too), and when the armed session or the plan
   grant runs out, which a server task announces with no request
-  arriving; the ledger when one of this server's writes or reverts
-  settles, or when it settles an entry left `sending`. There is no
+  arriving (the plan's end, a wall-clock time, is looked at again at
+  least every minute, so a clock step can't hide it); the ledger when
+  one of this server's writes is recorded as `sending` and again when it
+  settles (a refused write's row comes and goes), when a revert settles,
+  or when it settles an entry left `sending`. Streams and legacy
+  subscriptions take the signals when the subscription is made, before
+  it is acknowledged, so no change after that is missed. There is no
   separate disarm: a session ends by expiring. Each resource has one
   watch channel, waited on like a point's change signal, so bumps made
   while a notification is going out are announced once; a stream on
