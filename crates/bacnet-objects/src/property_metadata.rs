@@ -109,6 +109,13 @@ pub enum PropertyPresenceCondition {
     /// An IPv6 port, which requires its address, prefix length, gateway and
     /// DNS servers (Table 12-71 footnote 15, #2191).
     Ipv6Port,
+    /// The object reports COV, which its table's footnote makes the
+    /// condition for COV_Increment (and for a Pulse Converter's COV_Period
+    /// too): the analog types, Loop, Pulse Converter, the numeric value
+    /// types, Lighting Output and Staging (#2193). A row carries it only on
+    /// an object whose
+    /// [`supports_cov`](crate::traits::BACnetObject::supports_cov) is true.
+    CovReporting,
 }
 
 /// The write capability implemented by an object's property-write routes.
@@ -201,6 +208,7 @@ impl PropertyMetadata {
                         | PropertyPresenceCondition::ForeignDeviceMode
                         | PropertyPresenceCondition::BacnetIpv6Application
                         | PropertyPresenceCondition::Ipv6Port
+                        | PropertyPresenceCondition::CovReporting
                 )
             )
     }
@@ -223,6 +231,21 @@ impl PropertyMetadata {
         }
     }
 }
+
+/// The COV_Increment row of an object that reports COV, writable.
+///
+/// Each table that has the row ties it to COV reporting in a footnote:
+/// Table 12-2 footnote 2 (Analog Input), 12-3 footnote 1 (Analog Output),
+/// 12-4 footnote 2 (Analog Value), 12-20 footnote 4 (Loop), 12-27 footnote 2
+/// (Pulse Converter), 12-46, 12-50 and 12-51 footnote 3 (Large Analog,
+/// Integer and Positive Integer Value), 12-64 footnote 3 (Lighting Output)
+/// and 12-80 footnote 3 (Staging), #2193.
+pub(crate) const COV_INCREMENT_ROW: PropertyMetadata = PropertyMetadata::new(
+    PropertyIdentifier::COV_INCREMENT,
+    PropertyConformance::Optional,
+    Some(PropertyPresenceCondition::CovReporting),
+    PropertyWriteCapability::Always,
+);
 
 /// Derive [`BACnetObject::property_list`](crate::traits::BACnetObject::property_list)
 /// from canonical metadata.

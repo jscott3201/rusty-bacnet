@@ -42,21 +42,23 @@ const ALL: [P; 13] = [
     P::COV_INCREMENT,
     P::CURRENT_COMMAND_PRIORITY,
 ];
-const REQUIRED: [P; 6] = [
+// COV_Increment is required of these objects, which report COV (Tables
+// 12-46, 12-50 and 12-51 footnote 3, #2193).
+const REQUIRED: [P; 7] = [
     P::OBJECT_IDENTIFIER,
     P::OBJECT_NAME,
     P::OBJECT_TYPE,
     P::PRESENT_VALUE,
     P::STATUS_FLAGS,
     P::UNITS,
+    P::COV_INCREMENT,
 ];
-const OPTIONAL: [P; 7] = [
+const OPTIONAL: [P; 6] = [
     P::DESCRIPTION,
     P::OUT_OF_SERVICE,
     P::RELIABILITY,
     P::PRIORITY_ARRAY,
     P::RELINQUISH_DEFAULT,
-    P::COV_INCREMENT,
     P::CURRENT_COMMAND_PRIORITY,
 ];
 

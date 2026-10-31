@@ -59,7 +59,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 |----------|--------|
 | ACKED_TRANSITIONS | R |
 | NOTIFICATION_CLASS | RW |
-| COV_INCREMENT | RWO |
+| COV_INCREMENT | RW |
 | DEADBAND | RW |
 | DESCRIPTION | RWO |
 | EVENT_ENABLE | RW |
@@ -97,7 +97,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 |----------|--------|
 | ACKED_TRANSITIONS | R |
 | NOTIFICATION_CLASS | RW |
-| COV_INCREMENT | RWO |
+| COV_INCREMENT | RW |
 | DEADBAND | RW |
 | DESCRIPTION | RWO |
 | EVENT_ENABLE | RW |
@@ -140,7 +140,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 |----------|--------|
 | ACKED_TRANSITIONS | R |
 | NOTIFICATION_CLASS | RW |
-| COV_INCREMENT | RWO |
+| COV_INCREMENT | RW |
 | DEADBAND | RW |
 | DESCRIPTION | RWO |
 | EVENT_ENABLE | RW |
@@ -439,7 +439,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 | CONTROLLED_VARIABLE_REFERENCE | RW |
 | CONTROLLED_VARIABLE_UNITS | R |
 | CONTROLLED_VARIABLE_VALUE | R |
-| COV_INCREMENT | RWO |
+| COV_INCREMENT | RW |
 | DERIVATIVE_CONSTANT | RWO |
 | DERIVATIVE_CONSTANT_UNITS | RO |
 | DESCRIPTION | RWO |
@@ -789,7 +789,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 
 | Property | Access |
 |----------|--------|
-| COV_INCREMENT | RWO |
+| COV_INCREMENT | RW |
 | DESCRIPTION | RWO |
 | EVENT_STATE | R |
 | OBJECT_IDENTIFIER | R |
@@ -804,7 +804,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 | COUNT | R |
 | COUNT_BEFORE_CHANGE | R |
 | COUNT_CHANGE_TIME | R |
-| COV_PERIOD | RO |
+| COV_PERIOD | R |
 | INPUT_REFERENCE | RWO |
 | SCALE_FACTOR | RW |
 | UPDATE_TIME | R |
@@ -1293,7 +1293,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 
 | Property | Access |
 |----------|--------|
-| COV_INCREMENT | RWO |
+| COV_INCREMENT | RW |
 | DESCRIPTION | RWO |
 | OBJECT_IDENTIFIER | R |
 | OBJECT_NAME | RW |
@@ -1315,7 +1315,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 
 | Property | Access |
 |----------|--------|
-| COV_INCREMENT | RWO |
+| COV_INCREMENT | RW |
 | DESCRIPTION | RWO |
 | OBJECT_IDENTIFIER | R |
 | OBJECT_NAME | RW |
@@ -1357,7 +1357,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 
 | Property | Access |
 |----------|--------|
-| COV_INCREMENT | RWO |
+| COV_INCREMENT | RW |
 | DESCRIPTION | RWO |
 | OBJECT_IDENTIFIER | R |
 | OBJECT_NAME | RW |
@@ -1488,7 +1488,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 
 | Property | Access |
 |----------|--------|
-| COV_INCREMENT | RWO |
+| COV_INCREMENT | RW |
 | DESCRIPTION | RWO |
 | OBJECT_IDENTIFIER | R |
 | OBJECT_NAME | R |
@@ -1656,7 +1656,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 
 | Property | Access |
 |----------|--------|
-| COV_INCREMENT | RWO |
+| COV_INCREMENT | RW |
 | DESCRIPTION | RWO |
 | EVENT_STATE | R |
 | MAX_PRES_VALUE | R |

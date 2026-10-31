@@ -241,7 +241,8 @@ fn pics_value_types_list_current_command_priority_and_cov_increment() {
         match row(P::COV_INCREMENT) {
             Some(cov) => {
                 assert!(index < 3, "{kind:?} lists COV_Increment");
-                assert!(cov.access.readable && cov.access.optional, "{kind:?}");
+                // Required of an object that reports COV (#2193).
+                assert!(cov.access.readable && !cov.access.optional, "{kind:?}");
                 assert!(cov.access.writable, "{kind:?}");
             }
             None => assert!(index >= 3, "{kind:?} lacks COV_Increment"),
