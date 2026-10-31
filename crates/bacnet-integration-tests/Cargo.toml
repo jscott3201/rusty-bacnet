@@ -20,7 +20,7 @@ bacnet-encoding = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-std", "io-util", "time", "signal"] }
 # The website's guide programs (the [[bin]] targets below).
 bacnet-network.workspace = true
-bacnet-objects.workspace = true
+bacnet-objects = { workspace = true, features = ["std"] }
 bacnet-server.workspace = true
 bacnet-services = { workspace = true, features = ["std"] }
 bacnet-transport.workspace = true

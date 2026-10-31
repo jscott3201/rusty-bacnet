@@ -1,0 +1,51 @@
+[package]
+name = "bacnet-device-core"
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Sans-IO BACnet request core: answers ReadProperty, Who-Is and Who-Has from an ObjectDatabase, for firmware and the bacnet-server executor"
+keywords = ["bacnet", "building-automation", "sans-io", "embedded", "no-std"]
+categories = ["network-programming", "embedded", "no-std"]
+
+# Without `std` the crate builds for bare-metal targets with a global
+# allocator and atomic compare-and-swap, as bacnet-objects does (#2178). One
+# of `std` and `alloc` is required: the database it serves boxes every
+# object.
+[features]
+default = ["std"]
+# Hosted builds: std in every dependency. It doesn't turn on bacnet-objects'
+# `alloc`, so a hosted build compiles none of its no_std stand-ins.
+std = [
+    "bacnet-types/std",
+    "bacnet-encoding/std",
+    "bacnet-services/std",
+    "bacnet-objects/std",
+    "bytes/std",
+]
+# no_std with a global allocator.
+alloc = [
+    "bacnet-types/alloc",
+    "bacnet-encoding/alloc",
+    "bacnet-services/alloc",
+    "bacnet-objects/alloc",
+]
+
+[package.metadata.docs.rs]
+no-default-features = true
+features = ["std"]
+default-target = "x86_64-unknown-linux-gnu"
+targets = []
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+bacnet-types = { workspace = true }
+bacnet-encoding = { workspace = true }
+bacnet-services = { workspace = true }
+bacnet-objects = { workspace = true }
+bytes = { workspace = true }
+
+[lints]
+workspace = true

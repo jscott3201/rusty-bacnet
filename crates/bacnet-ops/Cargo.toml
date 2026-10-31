@@ -33,7 +33,7 @@ tokio = { workspace = true, features = ["rt", "sync", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]
-bacnet-objects.workspace = true
+bacnet-objects = { workspace = true, features = ["std"] }
 bacnet-server.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 tempfile = "3"

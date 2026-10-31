@@ -373,6 +373,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "bacnet-device-core"
+version = "0.15.0"
+dependencies = [
+ "bacnet-encoding",
+ "bacnet-objects",
+ "bacnet-services",
+ "bacnet-types",
+ "bytes",
+]
+
+[[package]]
 name = "bacnet-encoding"
 version = "0.15.0"
 dependencies = [

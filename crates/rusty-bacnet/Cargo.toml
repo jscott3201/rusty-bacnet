@@ -20,7 +20,7 @@ bacnet-endpoint = { workspace = true, features = ["sc-tls"] }
 bacnet-transport = { workspace = true, features = ["sc-tls", "ipv6", "serial"] }
 bacnet-network.workspace = true
 bacnet-npdu.workspace = true
-bacnet-objects.workspace = true
+bacnet-objects = { workspace = true, features = ["std"] }
 bacnet-services = { workspace = true, features = ["std"] }
 pyo3.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
