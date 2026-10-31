@@ -180,6 +180,7 @@ async fn a_first_read_folded_late_keeps_the_newer_notification() {
     tokio::time::sleep(Duration::from_millis(10)).await;
     let early = lease.snapshot();
     assert!(early.notifications > 0, "the notification overtook the ack");
+    assert_eq!(early.state, State::Starting, "the first read waits");
     assert_eq!(super::tests::present_value(&early), Some(99.0));
     tokio::time::sleep(Duration::from_secs(2)).await;
     let snapshot = lease.snapshot();

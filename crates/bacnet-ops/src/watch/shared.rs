@@ -175,9 +175,11 @@ impl Shared {
     /// notification of that subscription can't be older, and a tie counts
     /// the read as older, as the TUI's writer does. A notification that
     /// came in while the read was out can only be from an earlier attempt's
-    /// subscription; the device sent it before its answer to the read, so
-    /// the read wins. The notes are then dropped: a later start's read is
-    /// newer than all of them.
+    /// subscription; assuming the link delivers in order, the device sent
+    /// it before its answer to the read, so the read wins. A datagram
+    /// reordered past that answer can at worst leave the read's value
+    /// shown until the next change. The notes are then dropped: a later
+    /// start's read is newer than all of them.
     pub(super) fn read(
         &self,
         seq: &AtomicU64,
