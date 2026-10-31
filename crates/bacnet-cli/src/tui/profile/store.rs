@@ -125,7 +125,17 @@ impl Store {
             NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
         ));
         match publish(&temp, &path, &text, create) {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                // A test fails the publish's own directory sync this way.
+                #[cfg(test)]
+                if let Some(e) = tests::injected_sync() {
+                    return Err(format!(
+                        "profile {name}: the new file is in place, but its directory could \
+                         not be synced: {e}"
+                    ));
+                }
+                Ok(())
+            }
             // An earlier save of this very profile went in place, and only
             // its directory sync failed: it is there already, and saved
             // once its directory syncs.
@@ -181,7 +191,7 @@ fn sync_parent(path: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use std::cell::Cell;
 
     use super::*;
@@ -191,6 +201,11 @@ mod tests {
         /// error the next ones fail with instead.
         static SYNCS: Cell<usize> = const { Cell::new(0) };
         static FAIL_SYNC: Cell<bool> = const { Cell::new(false) };
+    }
+
+    /// Fail the directory syncs that follow on this thread, or stop.
+    pub(in crate::tui::profile) fn fail_syncs(fail: bool) {
+        FAIL_SYNC.with(|f| f.set(fail));
     }
 
     pub(super) fn injected_sync() -> Option<std::io::Error> {

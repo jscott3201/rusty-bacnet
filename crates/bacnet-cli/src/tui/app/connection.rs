@@ -199,6 +199,20 @@ impl Connection {
                 self.creating = false;
                 self.screen = Screen::Preview;
             }
+            Ok(Reply::InPlace { error, profile }) => {
+                // The retry must write the same identity (#2196).
+                if let Some(sc) = profile
+                    .sc
+                    .as_ref()
+                    .filter(|_| self.transport == Transport::Sc)
+                    && self.fields.len() == SC_LABELS.len()
+                {
+                    self.fields[VMAC_FIELD] = sc.vmac.map(|v| v.to_string()).unwrap_or_default();
+                    self.fields[UUID_FIELD] =
+                        sc.device_uuid.map(|v| v.to_string()).unwrap_or_default();
+                }
+                self.error = Some(error);
+            }
             Err(error) => self.error = Some(error),
         }
     }

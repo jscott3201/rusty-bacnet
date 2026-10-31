@@ -405,7 +405,9 @@ Names use 1–64 ASCII letters, digits, `_` or `-`, excluding Windows device
 names. New-profile saves never overwrite an existing name. Failed saves keep
 the previous file, except when only the final directory sync fails: the error
 then says the new file is already in place (it may not survive a power loss),
-and saving the same profile again goes through. A filesystem that can't sync
+and saving the same profile again goes through (a new BACnet/SC profile's
+editor keeps the VMAC and device UUID it was given, so the retry matches the
+file). A filesystem that can't sync
 a directory at all counts as synced, with one warning in the log. Errors stay
 visible. Reload after changing a file outside
 the TUI. A profile uses this versioned schema:

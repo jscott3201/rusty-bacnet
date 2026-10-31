@@ -1,8 +1,8 @@
 //! BACnet/SC profiles: schema, identity persistence, overrides, and what a
 //! saved file may contain. Each test uses its own temporary config root.
 
-use super::service::{Reply, Service};
-use super::store::Store;
+use super::service::{Reply, Request, Service};
+use super::store::{self, Store};
 use super::*;
 use std::path::{Path, PathBuf};
 
@@ -455,5 +455,73 @@ fn a_save_already_in_place_can_be_retried() {
     assert!(
         store.save("site", &other, true).is_err(),
         "never overwritten"
+    );
+}
+
+/// A new SC profile whose save fails with its file in place (the
+/// directory sync failed) is retried from the same editor state: the
+/// editor kept the identity drawn for it, so the retry writes the same
+/// text, reports saved, and the file keeps that first identity (#2196).
+#[test]
+fn a_retried_sc_creation_keeps_its_identity() {
+    use crate::tui::app::connection::{Connection, Key, Screen};
+    use crate::tui::message::Command;
+    let root = tempfile::tempdir().unwrap();
+    let files = tempfile::tempdir().unwrap();
+    let (ca, cert, key, _) = pem_files(files.path());
+    let service = service(root.path(), Overrides::default());
+    let mut editor = Connection::new(Overrides::default());
+    assert!(editor.key(Key::NewSc).is_none());
+    editor.fields[0] = "site".into();
+    editor.fields[1] = "wss://127.0.0.1:47808".into();
+    for (i, path) in [(3, &ca), (4, &cert), (5, &key)] {
+        editor.fields[i] = path.display().to_string();
+    }
+    let save = |editor: &mut Connection| {
+        let Some(Command::Profile(Request::Save {
+            name,
+            profile,
+            create,
+            previous,
+        })) = editor.key(Key::Submit)
+        else {
+            panic!("the editor saves: {:?}", editor.error);
+        };
+        service.save(&name, profile, create, previous)
+    };
+
+    store::tests::fail_syncs(true);
+    let failed = save(&mut editor);
+    store::tests::fail_syncs(false);
+    let Ok(Reply::InPlace {
+        profile: written, ..
+    }) = &failed
+    else {
+        panic!("the file is in place: {failed:?}");
+    };
+    let first = uuid_of(written);
+    editor.reply(failed.clone());
+    assert_eq!(editor.screen, Screen::Edit);
+    assert!(
+        editor
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("in place"))
+    );
+
+    let retried = save(&mut editor);
+    let Ok(Reply::Loaded { profile, .. }) = &retried else {
+        panic!("the retry is saved: {retried:?}");
+    };
+    assert_eq!(uuid_of(profile), first);
+    let on_disk = Store::new(root.path().into()).load("site").unwrap();
+    assert_eq!(
+        uuid_of(&on_disk),
+        first,
+        "the file keeps the first identity"
+    );
+    assert_eq!(
+        on_disk.sc.as_ref().unwrap().vmac,
+        written.sc.as_ref().unwrap().vmac
     );
 }
