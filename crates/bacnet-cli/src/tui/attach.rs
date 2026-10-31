@@ -4,7 +4,8 @@
 //! engine, so their reads share the client, the transport and the rate
 //! meter. The listener runs beside the session's workers and ends with
 //! the session: every agent's session ends gracefully and the socket file
-//! goes. Unix only for now.
+//! goes. The agents' sessions run on the listener's own runtime, whose
+//! threads the panic hook leaves alone (#2203). Unix only for now.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -31,6 +32,11 @@ pub(crate) struct Plan {
     /// Whom the sessions run as: the TUI's OS user.
     #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) principal: String,
+    /// Whether the sessions run on the listener's own runtime, so a panic
+    /// in one leaves the terminal alone (#2203): always, but for tests on
+    /// a paused clock, which that runtime doesn't share.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub(crate) own_runtime: bool,
 }
 
 /// The listener the profile `name` asks for, as stored and as resolved
@@ -80,6 +86,7 @@ pub(crate) fn plan(
             local,
         },
         principal: crate::mcp::principal(),
+        own_runtime: true,
     }))
 }
 
@@ -99,13 +106,19 @@ pub(crate) async fn run<T: TransportPort + 'static>(
     #[cfg(unix)]
     {
         use super::message::{McpListener, WorkerEvent};
-        use bacnet_mcp::attach::Listener;
+        use bacnet_mcp::attach::{Listener, SessionRuntime};
         let mut stop = stop;
+        let runtime = if plan.own_runtime {
+            SessionRuntime::Own
+        } else {
+            SessionRuntime::Callers
+        };
         let bound = Listener::bind(
             Arc::clone(engine),
             plan.policy.clone(),
             plan.principal.clone(),
             plan.workspace.clone(),
+            runtime,
         )
         .await;
         let listener = match bound {

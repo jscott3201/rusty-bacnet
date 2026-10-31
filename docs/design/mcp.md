@@ -780,7 +780,12 @@ outcome; a decline or the 120 s timeout returns `declined`. This is the
 verifiable approver for T2 and T3: a person on a UI the server controls, one
 transport, one ledger, one rate budget, and no contention for UDP 47808.
 Approvals queue one at a time; there is no "approve all". An agent pane lists
-every MCP call and its cost.
+every MCP call and its cost. The agents' sessions run on a Tokio runtime of
+the listener's own, whose threads the TUI's panic hook recognizes by name: a
+bug an agent's request reaches ends that agent's session, audited, without
+restoring the terminal (#2203). The engine, client and transport stay on the
+TUI's runtime; the sessions reach them through Tokio's synchronization
+primitives, which work across runtimes.
 
 **Background daemon (phase 4b, optional).** One background process per
 profile owns the transport, the client, the engine and the MCP endpoints,

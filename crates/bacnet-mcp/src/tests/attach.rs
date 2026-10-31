@@ -13,7 +13,7 @@ use tokio::io::AsyncReadExt as _;
 use tokio::task::JoinHandle;
 
 use super::{Agent, LAB, Lab};
-use crate::attach::{self, AttachError, Listener, PeerId, socket_path};
+use crate::attach::{self, AttachError, Listener, PeerId, SessionRuntime, socket_path};
 use crate::policy::{ArmMode, Workspace, WriteMode, WritePolicy};
 use crate::{McpServer, Policy};
 
@@ -60,7 +60,8 @@ impl Lab {
 
     /// A listener on `dir` over the lab's engine.
     pub(super) async fn attach(&self, dir: &Path, policy: Policy) -> Result<Listener, AttachError> {
-        Listener::bind(self.engine(), policy, "tester", workspace(dir)).await
+        let callers = SessionRuntime::Callers;
+        Listener::bind(self.engine(), policy, "tester", workspace(dir), callers).await
     }
 }
 
@@ -209,6 +210,7 @@ async fn another_users_connection_is_refused_and_audited() {
         "tester".into(),
         workspace(dir.path()),
         stranger,
+        SessionRuntime::Callers,
     )
     .await
     .unwrap();

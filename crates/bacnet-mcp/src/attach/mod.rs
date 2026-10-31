@@ -18,6 +18,16 @@
 //! listener is refused, and a socket found by the lock's holder is stale
 //! and removed. The socket file is never followed through a symbolic link.
 //!
+//! The sessions run on a runtime of the listener's own
+//! ([`SessionRuntime::Own`]), every task an agent's request starts included,
+//! on threads named [`SESSION_THREADS`]: a host whose panic hook restores
+//! its terminal (the TUI's) leaves a panic on those threads alone, and the
+//! session it hit ends, audited, while the host and other agents carry on
+//! (#2203). The engine, its client and transport stay on the host's
+//! runtime; the sessions reach them through Tokio's synchronization, which
+//! works across runtimes, and their own timers and socket I/O run on their
+//! runtime.
+//!
 //! Sessions over the socket are read-only whatever the profile's write
 //! policy: the write tools need the TUI's own approver, which comes later.
 //! Unix only for now; Windows gets a named pipe with an owner-only DACL.
@@ -36,6 +46,7 @@ use std::time::Duration;
 use bacnet_ops::engine::Engine;
 use bacnet_transport::port::TransportPort;
 use tokio::net::{UnixListener, UnixStream};
+use tokio::runtime::{Handle, Runtime};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -56,6 +67,89 @@ pub const SOCKET_FILE: &str = "mcp.sock";
 
 /// How many agents may be attached at once; another is refused.
 pub const MAX_AGENTS: usize = 8;
+
+/// The name of every thread of a listener's own runtime begins with this,
+/// so a panic hook can tell a session's panic from its host's.
+pub const SESSION_THREADS: &str = "bacnet-mcp-agent";
+
+/// The worker threads of a listener's own runtime.
+const SESSION_WORKERS: usize = 2;
+
+/// How long a listener's shutdown waits for its runtime's threads to stop,
+/// once every session has ended.
+const RUNTIME_WAIT: Duration = Duration::from_secs(5);
+
+/// Where a listener runs its agents' sessions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionRuntime {
+    /// On a runtime of the listener's own, whose threads are named
+    /// [`SESSION_THREADS`]; it ends with the listener. What the TUI uses.
+    Own,
+    /// On the caller's runtime, sharing its clock: for tests on a paused
+    /// clock, which a second runtime doesn't share. A session's panic
+    /// can't be told apart by its thread then.
+    Callers,
+}
+
+/// The listener's own runtime ([`SessionRuntime::Own`]). Dropped, it
+/// stops without waiting for its threads, which any context allows: a
+/// runtime dropped the usual way inside another's task panics.
+struct OwnRuntime(Option<Runtime>);
+
+impl Drop for OwnRuntime {
+    fn drop(&mut self) {
+        if let Some(runtime) = self.0.take() {
+            runtime.shutdown_background();
+        }
+    }
+}
+
+/// Stop the sessions' own runtime and wait for its threads, off the async
+/// context, where a runtime may not block.
+async fn stop_runtime(mut runtime: OwnRuntime) {
+    let stopped = tokio::task::spawn_blocking(move || {
+        if let Some(runtime) = runtime.0.take() {
+            runtime.shutdown_timeout(RUNTIME_WAIT);
+        }
+    });
+    if let Err(e) = stopped.await {
+        tracing::warn!("the MCP sessions' runtime didn't stop cleanly: {e}");
+    }
+}
+
+/// Build the listener's own runtime.
+fn session_runtime() -> Result<OwnRuntime, AttachError> {
+    let mut builder = tokio::runtime::Builder::new_multi_thread();
+    builder
+        .worker_threads(SESSION_WORKERS)
+        .thread_name_fn(|| {
+            static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+            let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            format!("{SESSION_THREADS}-{n}")
+        })
+        .enable_all();
+    #[cfg(test)]
+    builder
+        .on_thread_start(|| {
+            threads::LIVE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        })
+        .on_thread_stop(|| {
+            threads::LIVE.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        });
+    builder
+        .build()
+        .map(|runtime| OwnRuntime(Some(runtime)))
+        .map_err(|e| AttachError(format!("cannot start the MCP sessions' runtime: {e}")))
+}
+
+/// The threads of listeners' own runtimes alive now, for tests.
+#[cfg(test)]
+pub(crate) mod threads {
+    use std::sync::atomic::AtomicUsize;
+
+    /// Started and not yet stopped.
+    pub(crate) static LIVE: AtomicUsize = AtomicUsize::new(0);
+}
 
 /// Where the TUI's socket for the workspace `dir` is.
 pub fn socket_path(dir: &Path) -> PathBuf {
@@ -136,6 +230,9 @@ pub struct Listener {
     agents: watch::Receiver<usize>,
     finish: Option<Finish>,
     removed: bool,
+    /// The sessions' own runtime, if they have one: shut down once they
+    /// have all ended.
+    runtime: Option<OwnRuntime>,
     /// The listener's lock, held for its life and released last.
     _lock: std::fs::File,
 }
@@ -152,8 +249,9 @@ impl std::fmt::Debug for Listener {
 impl Listener {
     /// Listen on [`socket_path`] of `workspace.dir` for agents of this OS
     /// user, each served by a read-only session over `engine` under
-    /// `policy` as `principal`, audited in the workspace. Needs a Tokio
-    /// runtime.
+    /// `policy` as `principal`, audited in the workspace, the sessions run
+    /// on `runtime`. Needs a Tokio runtime, which must outlive the
+    /// listener: the engine's client and transport run on it.
     ///
     /// The workspace must be this user's own directory, not a symbolic
     /// link; a looser mode than 0700 is narrowed. Refused when another
@@ -165,8 +263,18 @@ impl Listener {
         policy: Policy,
         principal: impl Into<String>,
         workspace: Workspace,
+        runtime: SessionRuntime,
     ) -> Result<Self, AttachError> {
-        Self::bind_with(engine, policy, principal.into(), workspace, os_credentials).await
+        let principal = principal.into();
+        Self::bind_with(
+            engine,
+            policy,
+            principal,
+            workspace,
+            os_credentials,
+            runtime,
+        )
+        .await
     }
 
     /// [`bind`](Self::bind), identifying peers with `credentials`.
@@ -176,6 +284,7 @@ impl Listener {
         principal: String,
         workspace: Workspace,
         credentials: Credentials,
+        runtime: SessionRuntime,
     ) -> Result<Self, AttachError> {
         // The listener always has an engine, so a caller's passive policy
         // is overridden; and no write tool goes over the socket, whatever
@@ -198,6 +307,17 @@ impl Listener {
         // Taken before the socket path is touched: holding it, any socket
         // there is a stale one.
         let lock = guard::lock(&workspace.dir).await?;
+        let runtime = match runtime {
+            SessionRuntime::Own => Some(session_runtime()?),
+            SessionRuntime::Callers => None,
+        };
+        let handle = match runtime.as_ref().and_then(|own| own.0.as_ref()) {
+            Some(own) => own.handle().clone(),
+            None => Handle::current(),
+        };
+        // The socket, its connections and the watch hub's tasks belong to
+        // the sessions' runtime. Nothing below awaits while it is entered.
+        let entered = handle.enter();
         guard::clear_stale(&path)?;
         let listener = UnixListener::bind(&path)
             .map_err(|e| format!("cannot listen on {}: {e}", path.display()))?;
@@ -215,6 +335,7 @@ impl Listener {
                 return Err(AttachError(error.to_string()));
             }
         };
+        drop(entered);
         let stop = CancellationToken::new();
         let (agents, seen) = watch::channel(0);
         let tracker = tokio_util::task::TaskTracker::new();
@@ -232,8 +353,9 @@ impl Listener {
             agents,
             next: std::sync::atomic::AtomicU64::new(1),
             refusals,
+            runtime: handle.clone(),
         };
-        let accept = tokio::spawn(accept_loop(listener, uid, credentials, sessions));
+        let accept = handle.spawn(accept_loop(listener, uid, credentials, sessions));
         Ok(Self {
             path,
             identity,
@@ -243,6 +365,7 @@ impl Listener {
             agents: seen,
             finish: Some(finish),
             removed: false,
+            runtime,
             _lock: lock,
         })
     }
@@ -259,8 +382,8 @@ impl Listener {
 
     /// Stop accepting, end every session gracefully (listen streams
     /// complete, writes in flight settle), cancel the COV subscriptions
-    /// through the sessions' shared watch hub, then remove the socket
-    /// file and release the lock.
+    /// through the sessions' shared watch hub, stop the sessions' own
+    /// runtime, then remove the socket file and release the lock.
     pub async fn shutdown(mut self) {
         self.stop.cancel();
         if let Some(accept) = self.accept.take()
@@ -273,6 +396,9 @@ impl Listener {
         self.sessions.wait().await;
         if let Some(finish) = self.finish.take() {
             finish.await;
+        }
+        if let Some(runtime) = self.runtime.take() {
+            stop_runtime(runtime).await;
         }
         self.remove();
     }
@@ -294,11 +420,19 @@ impl Drop for Listener {
         // The ordered path is the graceful `shutdown()`. Dropped without it,
         // the hub's shutdown runs on a task of its own, racing the sessions
         // still ending, and the count of refusals left out of the record
-        // may be lost.
-        if let Some(finish) = self.finish.take()
-            && let Ok(runtime) = tokio::runtime::Handle::try_current()
-        {
-            runtime.spawn(finish);
+        // may be lost. The sessions' runtime stops after it.
+        let runtime = self.runtime.take();
+        match (self.finish.take(), Handle::try_current()) {
+            (Some(finish), Ok(current)) => {
+                current.spawn(async move {
+                    finish.await;
+                    if let Some(runtime) = runtime {
+                        stop_runtime(runtime).await;
+                    }
+                });
+            }
+            // Stopped without waiting, as it drops.
+            _ => drop(runtime),
         }
         self.remove();
     }
@@ -337,7 +471,8 @@ const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
 
 /// Accept connections until `sessions.stop` is cancelled: a peer of
 /// `uid` gets a session, any other is refused and audited before a byte
-/// of MCP is read. Runs on a task of its own, never the TUI's loop.
+/// of MCP is read. Runs on a task of the sessions' runtime, never the
+/// TUI's loop.
 async fn accept_loop<T: TransportPort + 'static>(
     listener: UnixListener,
     uid: u32,

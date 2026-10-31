@@ -382,6 +382,8 @@ impl TransportPort for HubPort {
     }
 
     async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
+        #[cfg(all(unix, feature = "mcp"))]
+        super::mcp_attach::panic_if_armed();
         self.deliver(npdu, Some(mac));
         Ok(())
     }

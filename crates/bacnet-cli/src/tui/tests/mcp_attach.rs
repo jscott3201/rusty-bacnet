@@ -3,9 +3,12 @@
 //! client and limits, so its requests show on the watch list's rate meter;
 //! the status bar counts the agents; quitting ends the agent's session and
 //! removes the socket. Its plan comes from the profile's `[mcp]` table.
+//! A bug an agent's request reaches ends only that agent's session.
 
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use bacnet_mcp::Policy;
 use bacnet_mcp::attach::socket_path;
@@ -54,6 +57,44 @@ impl Agent {
     }
 }
 
+/// Set to make the next request an agent's session thread sends panic.
+static ARMED: AtomicBool = AtomicBool::new(false);
+
+/// Panic, once armed, on an agent's session thread: the hub port calls it
+/// as a request leaves, standing in for a bug an agent's request reaches.
+pub(super) fn panic_if_armed() {
+    let on_agents_thread = std::thread::current()
+        .name()
+        .is_some_and(|name| name.starts_with(bacnet_mcp::attach::SESSION_THREADS));
+    if on_agents_thread && ARMED.swap(false, Ordering::SeqCst) {
+        panic!("an injected bug, reached by an agent's request");
+    }
+}
+
+/// An agent on the socket at `path`, its session open.
+async fn attached(path: &Path) -> Agent {
+    let mut agent = Agent::connect(path).await;
+    let hello = agent
+        .request(
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": "2025-11-25", "capabilities": {},
+            "clientInfo": { "name": "agent", "version": "1" } } }),
+        )
+        .await;
+    assert!(hello.get("result").is_some(), "{hello}");
+    agent
+        .request(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }))
+        .await;
+    agent
+}
+
+/// A read of the lab's ai:1, as request `id`.
+fn read(id: u64) -> Value {
+    json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {
+        "name": "bacnet_read", "arguments": { "device": LAB,
+        "reads": [{ "object": "ai:1", "properties": ["present-value"] }] } } })
+}
+
 /// The agents the bar counts, while the listener runs.
 fn mcp_agents(app: &App) -> Option<usize> {
     app.mcp
@@ -71,6 +112,7 @@ fn plan(dir: &Path) -> Plan {
             local: "10.0.0.1:47808".into(),
         },
         principal: "tester".into(),
+        own_runtime: false,
     }
 }
 
@@ -249,5 +291,81 @@ async fn the_watch_list_keeps_the_first_subscriber_ids() {
     let first = SubscribeCOVRequest::decode(&bodies[0]).unwrap();
     assert_eq!(first.subscriber_process_identifier, 0x4D43_0000);
     site.quit().await;
+    site.stop().await;
+}
+
+/// Acceptance (#2203): a bug an attached agent's request reaches panics
+/// on the listener's own threads, which the TUI's panic hook leaves alone:
+/// the terminal isn't restored and nothing is printed over the screen.
+/// That agent's session ends, audited with the panic; the other agent
+/// reads on, and the TUI keeps drawing. On a real clock, as the
+/// listener's own runtime doesn't share a paused one.
+#[tokio::test]
+async fn an_agents_panic_ends_its_session_and_the_tui_draws_on() {
+    use crate::tui::terminal::chain_panic_hook;
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let original = Arc::new(std::panic::take_hook());
+    std::panic::set_hook(chain_panic_hook(
+        {
+            let (calls, original) = (Arc::clone(&calls), Arc::clone(&original));
+            Box::new(move |info| {
+                calls.lock().unwrap().push("previous hook");
+                original(info);
+            })
+        },
+        {
+            let calls = Arc::clone(&calls);
+            move || calls.lock().unwrap().push("restore")
+        },
+    ));
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let options = SessionOptions {
+        attach: Some(Plan {
+            own_runtime: true,
+            ..plan(dir.path())
+        }),
+        ..SessionOptions::default()
+    };
+    let servers = vec![Server::lab(100, LAB)];
+    let mut site = Site::start_with_options(servers, ClientLimits::default(), options).await;
+    site.who_is("", 1).await;
+    site.pump_until(|app| mcp_agents(app) == Some(0)).await;
+    let path = socket_path(dir.path());
+    let mut first = attached(&path).await;
+    let mut second = attached(&path).await;
+    site.pump_until(|app| mcp_agents(app) == Some(2)).await;
+
+    ARMED.store(true, Ordering::SeqCst);
+    let line = format!("{}\n", read(2));
+    first.write.write_all(line.as_bytes()).await.unwrap();
+    // Its answer may or may not get out before the session ends.
+    while bounded(first.lines.next_line()).await.unwrap().is_some() {}
+    assert!(
+        !ARMED.load(Ordering::SeqCst),
+        "the read ran on an agent's thread"
+    );
+    let other = second.request(read(2)).await;
+    assert_eq!(other["result"]["isError"], json!(false), "{other}");
+    site.pump_until(|app| mcp_agents(app) == Some(1)).await;
+    let text = screen(&mut site.app, 120, 40);
+    assert!(text.contains("MCP 1"), "the TUI draws on:\n{text}");
+    let hooked = calls.lock().unwrap().clone();
+    assert!(hooked.is_empty(), "the terminal was left alone: {hooked:?}");
+
+    site.quit().await;
+    drop(std::panic::take_hook());
+    std::panic::set_hook(Box::new(move |info| original(info)));
+    let audit = std::fs::read_to_string(dir.path().join("audit.jsonl")).unwrap();
+    let records: Vec<Value> = audit
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let first_close = records
+        .iter()
+        .find(|r| r["event"] == json!("mcp-disconnect") && r["connection"] == json!(1))
+        .unwrap_or_else(|| panic!("{records:?}"));
+    let why = first_close["error"].as_str().unwrap_or_default();
+    assert!(why.contains("panicked"), "{first_close}");
     site.stop().await;
 }

@@ -54,6 +54,8 @@ pub(super) struct Sessions<T: TransportPort + 'static> {
     /// The next connection's number, for the audit log.
     pub(super) next: AtomicU64,
     pub(super) refusals: Arc<Mutex<Refusals>>,
+    /// The runtime the sessions run on.
+    pub(super) runtime: tokio::runtime::Handle,
 }
 
 /// The refusal records of the current minute, and those left out.
@@ -160,15 +162,16 @@ impl<T: TransportPort + 'static> Sessions<T> {
         let connection = self.next.fetch_add(1, Ordering::Relaxed);
         let (workspace, principal) = (self.workspace.clone(), self.principal.clone());
         let stop = self.stop.clone();
-        self.tracker.spawn(async move {
+        let session = async move {
             let mut fields = peer_fields(Some(peer), connection);
             record(&workspace, &principal, "mcp-connect", fields.clone()).await;
             tracing::info!("MCP agent {connection} attached (pid {:?})", peer.pid);
             let (reader, writer) = tokio::io::split(stream);
             let serving = server.serve_until(reader, writer, stop.cancelled_owned());
-            // rmcp serves requests on tasks of its own, whose panics come
-            // back as the session's error. This catches a panic polled on
-            // this task: in the initialize handshake (where the server's
+            // A request's handler that panics ends the session with that
+            // reason (`contain`), and a panic in the SDK's own serving task
+            // comes back as its error. This catches a panic polled on this
+            // task: in the initialize handshake (where the server's
             // `initialize` handler runs) or the session's own clean-up, so
             // its close is still on record.
             let served = AssertUnwindSafe(serving).catch_unwind().await;
@@ -180,7 +183,8 @@ impl<T: TransportPort + 'static> Sessions<T> {
             }
             tracing::info!("MCP agent {connection} detached");
             record(&workspace, &principal, "mcp-disconnect", fields).await;
-        });
+        };
+        self.tracker.spawn_on(session, &self.runtime);
     }
 
     /// Audit a connection closed before any MCP traffic, and `why`, up to
@@ -206,7 +210,7 @@ impl<T: TransportPort + 'static> Sessions<T> {
             peer.and_then(|p| p.pid)
         );
         let (workspace, principal) = (self.workspace.clone(), self.principal.clone());
-        self.tracker.spawn(async move {
+        let refused = async move {
             let mut fields = peer_fields(peer, connection);
             fields["outcome"] = json!({ "result": "refused", "why": why });
             if left_out > 0 {
@@ -216,7 +220,8 @@ impl<T: TransportPort + 'static> Sessions<T> {
                 fields["error"] = json!(error);
             }
             record(&workspace, &principal, "mcp-refused", fields).await;
-        });
+        };
+        self.tracker.spawn_on(refused, &self.runtime);
     }
 }
 
