@@ -295,10 +295,6 @@ fn take_queued(db: &mut ObjectDatabase, oids: &[ObjectIdentifier]) -> Vec<Comman
 /// busy.
 pub(crate) fn end_unmade(db: &mut ObjectDatabase, oids: &[ObjectIdentifier]) {
     for run in take_queued(db, oids) {
-        debug!(
-            source = %run.source,
-            "Ending a run without its writes: this path can't make them"
-        );
         Unfinished::start(&run).end(db);
     }
 }

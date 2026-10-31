@@ -26,7 +26,7 @@
 //! the local form; a member naming another device is kept, and the Channel
 //! writes it there (#1264).
 
-use std::borrow::Cow;
+use alloc::borrow::Cow;
 
 use bacnet_encoding::constructed::{
     decode_device_object_property_reference, decode_device_object_reference,
