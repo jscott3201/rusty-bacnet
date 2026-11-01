@@ -25,10 +25,22 @@
 //! the accessor on to the object inside, so the wrapped object's own
 //! capability answers.
 //!
+//! A capability the host also reads under a shared guard has a second,
+//! `&self` accessor beside the mutable one, named without the `_mut`
+//! suffix (`CommandRunner`, whose generation the server checks under the
+//! database's read guard). An accessor with only the mutable form takes the
+//! plain name.
+//!
 //! [`BACnetObject`]: super::BACnetObject
 
+mod command_runner;
+mod staging_source;
 mod timed;
 
 pub use crate::durable::DurableWrites;
+#[doc(hidden)]
+pub use command_runner::CommandRunner;
+#[doc(hidden)]
+pub use staging_source::StagingSource;
 pub(crate) use timed::same_handle;
 pub use timed::{Clocks, DeadlineWaker, MonotonicClock, Timed};

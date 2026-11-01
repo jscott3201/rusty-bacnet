@@ -6,7 +6,6 @@ use super::fixtures::{address, day, noon, oid, schedule_write};
 use super::probe::{CUSTOM, CUSTOM_LIST};
 use bacnet_objects::access_control::{AccessControlInput, AccessEventReport, DoorStateReport};
 use bacnet_objects::accumulator::InputReading;
-use bacnet_objects::command::WriteFailure;
 use bacnet_objects::command_source::CommandOrigin;
 use bacnet_objects::event::{EventStateChange, EventTransition, EventTransitionCommit};
 use bacnet_objects::event_enrollment::{
@@ -171,11 +170,8 @@ pub const QUERIES: &[(&str, Query)] = &[
             [o.supports_cov(), o.supports_subscribe_cov_property()]
         )
     }),
-    ("staging_generation_internal", |o| {
-        format!("{:?}", o.staging_generation_internal())
-    }),
-    ("command_generation_internal", |o| {
-        format!("{:?}", o.command_generation_internal())
+    ("command_runner", |o| {
+        format!("{:?}", o.command_runner().map(|runner| address(runner)))
     }),
     ("enrollment_summary_capability_internal", |o| {
         format!("{:?}", o.enrollment_summary_capability_internal())
@@ -313,32 +309,11 @@ pub const COMMANDS: &[(&str, Command)] = &[
     ("timed", |o| {
         format!("{:?}", o.timed().map(|timed| address(timed)))
     }),
-    ("take_staging_write_plan_internal", |o| {
-        format!("{:?}", o.take_staging_write_plan_internal())
+    ("staging_source", |o| {
+        format!("{:?}", o.staging_source().map(|source| address(source)))
     }),
-    ("complete_staging_write_plan_internal", |o| {
-        o.complete_staging_write_plan_internal(7, true).to_string()
-    }),
-    ("take_command_run_internal", |o| {
-        format!("{:?}", o.take_command_run_internal())
-    }),
-    ("record_command_write_internal", |o| {
-        o.record_command_write_internal(11, 2, false).to_string()
-    }),
-    ("remember_member_datatype_internal", |o| {
-        let reference = bacnet_types::constructed::BACnetDeviceObjectPropertyReference::new_local(
-            oid(ObjectType::BINARY_OUTPUT, 4),
-            P::PRESENT_VALUE.to_raw(),
-        );
-        let datatype = Some(bacnet_objects::channel::MemberDatatype::Enumerated);
-        format!(
-            "{:?}",
-            o.remember_member_datatype_internal(3, &reference, datatype)
-        )
-    }),
-    ("complete_command_run_internal", |o| {
-        o.complete_command_run_internal(11, Err(WriteFailure::Communication))
-            .to_string()
+    ("command_runner_mut", |o| {
+        format!("{:?}", o.command_runner_mut().map(|runner| address(runner)))
     }),
     ("set_overridden", |o| {
         format!("{:?}", o.set_overridden(true))

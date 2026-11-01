@@ -206,17 +206,18 @@ fn end_ownerless(db: &mut ObjectDatabase) {
 }
 
 fn end_ownerless_object(object: &mut dyn BACnetObject) -> bool {
-    // A run still queued on the object belongs to the generation in progress,
-    // so ending that generation covers it.
-    drop(object.take_command_run_internal());
-    let Some(generation) = object.command_generation_internal() else {
+    let Some(runner) = object.command_runner_mut() else {
         return false;
     };
+    // A run still queued on the object belongs to the generation in progress,
+    // so ending that generation covers it.
+    drop(runner.take_command_run());
+    let generation = runner.command_generation();
     let mut index = 0;
-    while object.record_command_write_internal(generation, index, false) {
+    while runner.record_command_write(generation, index, false) {
         index += 1;
     }
-    object.complete_command_run_internal(generation, Err(WriteFailure::Process))
+    runner.complete_command_run(generation, Err(WriteFailure::Process))
 }
 
 /// Make `run`'s writes, then end it.
@@ -314,7 +315,8 @@ async fn make<H: RunHost>(
         let db = host.database().read().await;
         if db
             .get(&run.source)
-            .and_then(|object| object.command_generation_internal())
+            .and_then(|object| object.command_runner())
+            .map(|runner| runner.command_generation())
             != Some(run.generation)
         {
             return None;
@@ -339,9 +341,10 @@ async fn make<H: RunHost>(
         .map_err(|failed| failed.failure);
     let recorded = {
         let mut db = host.database().write().await;
-        let recorded = db.get_mut(&run.source).is_some_and(|object| {
-            object.record_command_write_internal(run.generation, index, made.is_ok())
-        });
+        let recorded = db
+            .get_mut(&run.source)
+            .and_then(|object| object.command_runner_mut())
+            .is_some_and(|runner| runner.record_command_write(run.generation, index, made.is_ok()));
         if recorded {
             host.committed(&db, run.source).await;
         }
@@ -368,7 +371,8 @@ pub(crate) async fn complete<H: RunHost>(
         let mut db = host.database().write().await;
         let completed = db
             .get_mut(&source)
-            .is_some_and(|object| object.complete_command_run_internal(generation, outcome));
+            .and_then(|object| object.command_runner_mut())
+            .is_some_and(|runner| runner.complete_command_run(generation, outcome));
         if completed {
             host.committed(&db, source).await;
         }

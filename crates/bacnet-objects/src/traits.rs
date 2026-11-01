@@ -37,6 +37,8 @@ use crate::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 
 pub mod capabilities;
 pub use capabilities::{Clocks, DeadlineWaker, DurableWrites, MonotonicClock, Timed};
+#[doc(hidden)]
+pub use capabilities::{CommandRunner, StagingSource};
 
 mod defaults;
 use defaults::{array_property_default, cov_reported_properties_default, list_property_default};
@@ -535,89 +537,36 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         self.supports_cov()
     }
 
-    /// Take pending local target work from a Staging object.
+    /// Mutably borrow a Staging object's capability: the target writes its
+    /// stage changes queue. Not public API yet (#2179).
     ///
-    /// The default keeps every non-Staging object source-compatible. The
-    /// bundled server calls this only while it owns the database mutation
-    /// guard, then performs the returned writes after releasing that guard.
+    /// The default has none. The bundled server takes a plan under the
+    /// database mutation guard and makes its writes after releasing it.
     #[doc(hidden)]
-    fn take_staging_write_plan_internal(&mut self) -> Option<crate::staging::StagingWritePlan> {
+    fn staging_source(&mut self) -> Option<&mut dyn StagingSource> {
         None
     }
 
-    /// Return the current Staging transition generation, if applicable.
+    /// Borrow a Command or Channel object's run capability for the
+    /// generation check a host makes under a shared guard. Not public API
+    /// yet (#2179).
+    ///
+    /// An object with the capability answers here and from
+    /// [`command_runner_mut`](Self::command_runner_mut) alike; the default
+    /// has none.
     #[doc(hidden)]
-    fn staging_generation_internal(&self) -> Option<u64> {
+    fn command_runner(&self) -> Option<&dyn CommandRunner> {
         None
     }
 
-    /// Commit one guarded Staging plan's success or failure to Reliability.
+    /// Mutably borrow a Command or Channel object's run capability: the
+    /// writes its Present_Value write queues. Not public API yet (#2179).
     ///
-    /// Returns whether readable source state changed. Implementations ignore a
-    /// stale generation so older work cannot fault a newer transition.
+    /// The default has none. The bundled server takes a run under the guard
+    /// that committed the write, then makes the writes after releasing it.
     #[doc(hidden)]
-    fn complete_staging_write_plan_internal(&mut self, _generation: u64, _success: bool) -> bool {
-        false
-    }
-
-    /// Take the writes a Command or Channel object's Present_Value write
-    /// queued: a Command's selected list, or a Channel's value for its
-    /// members.
-    ///
-    /// The default keeps every other object source-compatible. The bundled
-    /// server takes it under the guard that committed the write, then makes
-    /// the writes after releasing that guard.
-    #[doc(hidden)]
-    fn take_command_run_internal(&mut self) -> Option<crate::command::CommandRun> {
+    fn command_runner_mut(&mut self) -> Option<&mut dyn CommandRunner> {
         None
-    }
-
-    /// Return the current Command or Channel run generation, if applicable.
-    #[doc(hidden)]
-    fn command_generation_internal(&self) -> Option<u64> {
-        None
-    }
-
-    /// Record how command `command` of a Command's running list fared.
-    ///
-    /// Returns whether the run is still the current one. Implementations
-    /// ignore a stale generation, so older work can't mark a newer run.
-    #[doc(hidden)]
-    fn record_command_write_internal(
-        &mut self,
-        _generation: u64,
-        _command: usize,
-        _success: bool,
-    ) -> bool {
-        false
-    }
-
-    /// Keep `datatype`, learned for a Channel's member in another device, for
-    /// the distributions after this one, or forget the one kept with `None`:
-    /// the member at zero-based `slot` of List_Of_Object_Property_References,
-    /// if that slot still holds `reference`. Writing the member, or the whole
-    /// list, forgets it too.
-    #[doc(hidden)]
-    fn remember_member_datatype_internal(
-        &mut self,
-        _slot: usize,
-        _reference: &bacnet_types::constructed::BACnetDeviceObjectPropertyReference,
-        _datatype: Option<crate::channel::MemberDatatype>,
-    ) {
-    }
-
-    /// End the current run, setting a Command's All_Writes_Successful or a
-    /// Channel's Write_Status and Reliability. `outcome` is `Ok` when every
-    /// write was made and succeeded, otherwise the run's first failure.
-    ///
-    /// Returns whether readable state changed; a stale generation is ignored.
-    #[doc(hidden)]
-    fn complete_command_run_internal(
-        &mut self,
-        _generation: u64,
-        _outcome: Result<(), crate::command::WriteFailure>,
-    ) -> bool {
-        false
     }
 
     /// Return this object's GetEnrollmentSummary event capability.

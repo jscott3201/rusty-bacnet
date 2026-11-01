@@ -13,12 +13,12 @@
 //! guard is released, coerces the value to each member's datatype
 //! ([`coerce_channel_value`]) and writes it through the local write path,
 //! honouring each member's Execution_Delay. The outcome comes back through
-//! [`BACnetObject::complete_command_run_internal`].
+//! [`CommandRunner::complete_command_run`].
 //!
 //! A member may name another Device (Clause 12.53.11): the server writes it
 //! there as a confirmed WriteProperty, from its device bindings, coerced to
 //! the datatype a ReadProperty there returned. The object keeps that datatype
-//! for each member ([`BACnetObject::remember_member_datatype_internal`]) until
+//! for each member ([`CommandRunner::remember_member_datatype`]) until
 //! the member is written again, or the server forgets it (#1342).
 //!
 //! Reliability reports how the last distribution ended (Clause 12.53.9). A
@@ -51,7 +51,7 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use crate::command::{CommandRun, RunPlan, WriteFailure, next_generation};
 use crate::common::{self, read_identity_properties};
 use crate::property_metadata::PropertyMetadata;
-use crate::traits::BACnetObject;
+use crate::traits::{BACnetObject, CommandRunner};
 
 mod arrays;
 mod coercion;
@@ -450,15 +450,25 @@ impl BACnetObject for ChannelObject {
         Cow::Borrowed(metadata::CHANNEL_PROPERTY_METADATA)
     }
 
-    fn take_command_run_internal(&mut self) -> Option<CommandRun> {
+    fn command_runner(&self) -> Option<&dyn CommandRunner> {
+        Some(self)
+    }
+
+    fn command_runner_mut(&mut self) -> Option<&mut dyn CommandRunner> {
+        Some(self)
+    }
+}
+
+impl CommandRunner for ChannelObject {
+    fn take_command_run(&mut self) -> Option<CommandRun> {
         self.pending_run.take()
     }
 
-    fn command_generation_internal(&self) -> Option<u64> {
-        Some(self.generation)
+    fn command_generation(&self) -> u64 {
+        self.generation
     }
 
-    fn remember_member_datatype_internal(
+    fn remember_member_datatype(
         &mut self,
         slot: usize,
         reference: &BACnetDeviceObjectPropertyReference,
@@ -469,11 +479,7 @@ impl BACnetObject for ChannelObject {
         }
     }
 
-    fn complete_command_run_internal(
-        &mut self,
-        generation: u64,
-        outcome: Result<(), WriteFailure>,
-    ) -> bool {
+    fn complete_command_run(&mut self, generation: u64, outcome: Result<(), WriteFailure>) -> bool {
         if generation != self.generation || self.write_status != WriteStatus::IN_PROGRESS {
             return false;
         }

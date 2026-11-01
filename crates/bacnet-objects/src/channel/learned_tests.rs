@@ -17,9 +17,9 @@ fn learned(channel: &mut ChannelObject) -> Vec<Option<MemberDatatype>> {
     channel
         .write_property(P::PRESENT_VALUE, None, PropertyValue::Real(1.0), None)
         .unwrap();
-    let run = channel.take_command_run_internal().unwrap();
+    let run = channel.take_command_run().unwrap();
     // Ended, so the next write isn't refused BUSY.
-    channel.complete_command_run_internal(run.generation, Ok(()));
+    channel.complete_command_run(run.generation, Ok(()));
     let RunPlan::Channel(distribution) = run.plan else {
         panic!("a Channel run");
     };
@@ -32,7 +32,7 @@ fn learned(channel: &mut ChannelObject) -> Vec<Option<MemberDatatype>> {
 
 fn learn(channel: &mut ChannelObject, slot: usize, instance: u32) {
     let datatype = MemberDatatype::Enumerated;
-    channel.remember_member_datatype_internal(slot, &remote(instance), Some(datatype));
+    channel.remember_member_datatype(slot, &remote(instance), Some(datatype));
 }
 
 #[test]
@@ -50,9 +50,9 @@ fn a_learned_datatype_stays_until_its_member_is_replaced() {
     assert_eq!(learned(&mut channel), [some, None, some]);
 
     // The server forgets one with `None`, again only for that reference.
-    channel.remember_member_datatype_internal(0, &remote(2), None);
+    channel.remember_member_datatype(0, &remote(2), None);
     assert_eq!(learned(&mut channel), [some, None, some]);
-    channel.remember_member_datatype_internal(0, &remote(1), None);
+    channel.remember_member_datatype(0, &remote(1), None);
     assert_eq!(learned(&mut channel), [None, None, some]);
     learn(&mut channel, 0, 1);
 

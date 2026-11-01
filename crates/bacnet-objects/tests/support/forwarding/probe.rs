@@ -34,8 +34,8 @@ use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 use bacnet_objects::staging::StagingWritePlan;
 use bacnet_objects::traits::{
-    BACnetObject, Clocks, CovReportedProperty, LifeSafetyOperationEffect,
-    LifeSafetyOperationOutcome, ReliabilityEvaluation, Timed,
+    BACnetObject, Clocks, CommandRunner, CovReportedProperty, LifeSafetyOperationEffect,
+    LifeSafetyOperationOutcome, ReliabilityEvaluation, StagingSource, Timed,
 };
 use bacnet_objects::trend::TrendLogObject;
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter, EventTransitionBits};
@@ -255,69 +255,17 @@ impl BACnetObject for Probe {
         // Unlike the default, which follows `supports_cov`.
         false
     }
-    fn take_staging_write_plan_internal(&mut self) -> Option<StagingWritePlan> {
-        self.called("take_staging_write_plan_internal", ());
-        Some(StagingWritePlan {
-            source: self.oid,
-            generation: 7,
-            priority: 9,
-            writes: Vec::new(),
-        })
+    fn staging_source(&mut self) -> Option<&mut dyn StagingSource> {
+        self.called("staging_source", ());
+        Some(self)
     }
-    fn staging_generation_internal(&self) -> Option<u64> {
-        self.called("staging_generation_internal", ());
-        Some(7)
+    fn command_runner(&self) -> Option<&dyn CommandRunner> {
+        self.called("command_runner", ());
+        Some(self)
     }
-    fn complete_staging_write_plan_internal(&mut self, generation: u64, success: bool) -> bool {
-        self.called(
-            "complete_staging_write_plan_internal",
-            (generation, success),
-        );
-        true
-    }
-    fn take_command_run_internal(&mut self) -> Option<CommandRun> {
-        self.called("take_command_run_internal", ());
-        Some(CommandRun {
-            source: self.oid,
-            generation: 11,
-            plan: RunPlan::Actions(Vec::new()),
-            chain: std::sync::Arc::from([]),
-        })
-    }
-    fn command_generation_internal(&self) -> Option<u64> {
-        self.called("command_generation_internal", ());
-        Some(11)
-    }
-    fn record_command_write_internal(
-        &mut self,
-        generation: u64,
-        command: usize,
-        success: bool,
-    ) -> bool {
-        self.called(
-            "record_command_write_internal",
-            (generation, command, success),
-        );
-        true
-    }
-    fn remember_member_datatype_internal(
-        &mut self,
-        slot: usize,
-        reference: &bacnet_types::constructed::BACnetDeviceObjectPropertyReference,
-        datatype: Option<bacnet_objects::channel::MemberDatatype>,
-    ) {
-        self.called(
-            "remember_member_datatype_internal",
-            (slot, reference.clone(), datatype),
-        );
-    }
-    fn complete_command_run_internal(
-        &mut self,
-        generation: u64,
-        outcome: Result<(), WriteFailure>,
-    ) -> bool {
-        self.called("complete_command_run_internal", (generation, outcome));
-        true
+    fn command_runner_mut(&mut self) -> Option<&mut dyn CommandRunner> {
+        self.called("command_runner_mut", ());
+        Some(self)
     }
     fn enrollment_summary_capability_internal(&self) -> Option<EnrollmentSummaryCapability> {
         self.called("enrollment_summary_capability_internal", ());
@@ -700,6 +648,69 @@ impl Timed for Probe {
         Some(Box::new(
             AuditReporterObject::new(18, "Probe snapshot").unwrap(),
         ))
+    }
+}
+
+/// The probe's Staging capability, logged under `StagingSource::`.
+impl StagingSource for Probe {
+    fn take_staging_write_plan(&mut self) -> Option<StagingWritePlan> {
+        self.called("StagingSource::take_staging_write_plan", ());
+        Some(StagingWritePlan {
+            source: self.oid,
+            generation: 7,
+            priority: 9,
+            writes: Vec::new(),
+        })
+    }
+    fn staging_generation(&self) -> u64 {
+        self.called("StagingSource::staging_generation", ());
+        7
+    }
+    fn complete_staging_write_plan(&mut self, generation: u64, success: bool) -> bool {
+        self.called(
+            "StagingSource::complete_staging_write_plan",
+            (generation, success),
+        );
+        true
+    }
+}
+
+/// The probe's command-run capability, logged under `CommandRunner::`.
+impl CommandRunner for Probe {
+    fn take_command_run(&mut self) -> Option<CommandRun> {
+        self.called("CommandRunner::take_command_run", ());
+        Some(CommandRun {
+            source: self.oid,
+            generation: 11,
+            plan: RunPlan::Actions(Vec::new()),
+            chain: std::sync::Arc::from([]),
+        })
+    }
+    fn command_generation(&self) -> u64 {
+        self.called("CommandRunner::command_generation", ());
+        11
+    }
+    fn record_command_write(&mut self, generation: u64, command: usize, success: bool) -> bool {
+        self.called(
+            "CommandRunner::record_command_write",
+            (generation, command, success),
+        );
+        true
+    }
+    fn remember_member_datatype(
+        &mut self,
+        slot: usize,
+        reference: &bacnet_types::constructed::BACnetDeviceObjectPropertyReference,
+        datatype: Option<bacnet_objects::channel::MemberDatatype>,
+    ) {
+        self.called(
+            "CommandRunner::remember_member_datatype",
+            (slot, reference.clone(), datatype),
+        );
+    }
+    fn complete_command_run(&mut self, generation: u64, outcome: Result<(), WriteFailure>) -> bool {
+        self.called("CommandRunner::complete_command_run", (generation, outcome));
+        true
     }
 }
 

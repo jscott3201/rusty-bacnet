@@ -16,7 +16,7 @@ use bacnet_objects::{
     log_reporting::BufferReadyReport,
     property_metadata::{PropertyConformance, PropertyMetadata, PropertyWriteCapability},
     schedule::ScheduleWrite,
-    traits::{BACnetObject, CovReportedProperty},
+    traits::{BACnetObject, CommandRunner, CovReportedProperty},
 };
 use bacnet_types::{
     calendar::SpecificDate,
@@ -332,11 +332,8 @@ impl BACnetObject for DeviceReadView<'_> {
     fn supports_subscribe_cov_property(&self) -> bool {
         self.object.supports_subscribe_cov_property()
     }
-    fn staging_generation_internal(&self) -> Option<u64> {
-        self.object.staging_generation_internal()
-    }
-    fn command_generation_internal(&self) -> Option<u64> {
-        self.object.command_generation_internal()
+    fn command_runner(&self) -> Option<&dyn CommandRunner> {
+        self.object.command_runner()
     }
     fn enrollment_summary_capability_internal(&self) -> Option<EnrollmentSummaryCapability> {
         self.object.enrollment_summary_capability_internal()
