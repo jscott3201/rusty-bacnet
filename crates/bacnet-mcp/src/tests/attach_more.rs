@@ -265,7 +265,7 @@ async fn an_idle_connection_is_closed_after_the_initialize_wait() {
     let lab = lab().await;
     let dir = private_dir();
     let listener = lab.attach(dir.path(), Policy::default()).await.unwrap();
-    let mut idle = raw(&socket_path(dir.path())).await;
+    let mut idle = raw(&socket_path(dir.path()).unwrap()).await;
     agents_are(&listener, 1).await;
     let mut answer = Vec::new();
     let closed = tokio::time::timeout(Duration::from_secs(60), idle.read_to_end(&mut answer));

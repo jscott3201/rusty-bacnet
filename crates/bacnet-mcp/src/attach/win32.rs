@@ -1,26 +1,37 @@
 //! The few Win32 calls the named pipe needs that Tokio doesn't make: whose
-//! process is at either end, which user a process runs as, and the
-//! owner-only security descriptor. Each call is wrapped in a small safe
+//! process is at either end, which user a process runs as, the
+//! owner-only security descriptor, and the checks of who may read the
+//! workspace and the pipe's salt file (#2219). Each call is wrapped in a small safe
 //! function; every handle and every buffer the system allocates has an
 //! owner that frees it, on error paths too. This module is the crate's
 //! only unsafe code, hence its allow (the workspace denies it).
 #![allow(unsafe_code)]
 
+use std::fs::File;
 use std::io;
+use std::os::windows::ffi::OsStrExt as _;
 use std::os::windows::io::{AsRawHandle, FromRawHandle as _, OwnedHandle};
 use std::path::Path;
 use std::ptr;
 
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
-use windows_sys::Win32::Foundation::{HANDLE, LocalFree};
+use windows_sys::Win32::Foundation::{
+    GENERIC_ALL, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
+};
 use windows_sys::Win32::Security::Authorization::{
     ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SDDL_REVISION_1,
-    SE_KERNEL_OBJECT,
+    SE_FILE_OBJECT, SE_KERNEL_OBJECT, SE_OBJECT_TYPE,
 };
 use windows_sys::Win32::Security::{
-    ACL, GetLengthSid, GetTokenInformation, IsValidSid, OBJECT_SECURITY_INFORMATION,
-    OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, TOKEN_QUERY,
-    TOKEN_USER, TokenUser,
+    ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation,
+    DACL_SECURITY_INFORMATION, GetAce, GetAclInformation, GetLengthSid, GetTokenInformation,
+    INHERIT_ONLY_ACE, IsValidSid, OBJECT_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION,
+    PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER, TokenUser,
+};
+use windows_sys::Win32::Storage::FileSystem::{
+    CREATE_NEW, CreateFileW, DELETE, FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY, FILE_ATTRIBUTE_NORMAL,
+    FILE_DELETE_CHILD, FILE_LIST_DIRECTORY, FILE_WRITE_ATTRIBUTES, FILE_WRITE_EA, WRITE_DAC,
+    WRITE_OWNER,
 };
 use windows_sys::Win32::System::Pipes::{GetNamedPipeClientProcessId, GetNamedPipeServerProcessId};
 use windows_sys::Win32::System::Threading::{
@@ -159,7 +170,7 @@ fn token_user(process: HANDLE) -> io::Result<Sid> {
 
 /// A security descriptor the system allocated, freed when dropped. Read
 /// only after it is made.
-pub(super) struct Descriptor(PSECURITY_DESCRIPTOR);
+pub(crate) struct Descriptor(PSECURITY_DESCRIPTOR);
 
 // SAFETY: the descriptor is a plain block of memory this value alone owns
 // and never changes after it is made; the system reads it from any thread.
@@ -174,7 +185,11 @@ impl Descriptor {
     /// (a sandboxed one of the same user) from opening it to read or
     /// write.
     pub(super) fn owner_only(owner: &Sid) -> io::Result<Self> {
-        let sddl = format!("O:{owner}D:P(A;;FA;;;{owner})S:(ML;;NWNR;;;ME)");
+        Self::from_sddl(&format!("O:{owner}D:P(A;;FA;;;{owner})S:(ML;;NWNR;;;ME)"))
+    }
+
+    /// The descriptor the security descriptor string `sddl` describes.
+    pub(crate) fn from_sddl(sddl: &str) -> io::Result<Self> {
         let wide: Vec<u16> = sddl.encode_utf16().chain(std::iter::once(0)).collect();
         let mut descriptor = ptr::null_mut();
         // SAFETY: `wide` is NUL-terminated and lives past the call;
@@ -201,15 +216,58 @@ impl Descriptor {
         options: &ServerOptions,
         name: &Path,
     ) -> io::Result<NamedPipeServer> {
-        let mut attributes = SECURITY_ATTRIBUTES {
-            nLength: u32::try_from(size_of::<SECURITY_ATTRIBUTES>()).unwrap_or(u32::MAX),
-            lpSecurityDescriptor: self.0,
-            bInheritHandle: 0,
-        };
+        let mut attributes = self.attributes();
         // SAFETY: `attributes` is a valid SECURITY_ATTRIBUTES for the call,
         // and the descriptor it points at lives as long as `self`.
         unsafe { options.create_with_security_attributes_raw(name, (&raw mut attributes).cast()) }
     }
+}
+
+impl Descriptor {
+    /// Attributes that give a new object this descriptor, its handle not
+    /// inherited; valid while `self` lives.
+    fn attributes(&self) -> SECURITY_ATTRIBUTES {
+        SECURITY_ATTRIBUTES {
+            nLength: u32::try_from(size_of::<SECURITY_ATTRIBUTES>()).unwrap_or(u32::MAX),
+            lpSecurityDescriptor: self.0,
+            bInheritHandle: 0,
+        }
+    }
+}
+
+/// Make the file `path`, which must not exist yet, with `descriptor`
+/// from the start, open for reading and writing and shared with nobody
+/// while open.
+pub(super) fn create_file(path: &Path, descriptor: &Descriptor) -> io::Result<File> {
+    let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    if wide.contains(&0) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a path with a NUL in it",
+        ));
+    }
+    let wide: Vec<u16> = wide.into_iter().chain(std::iter::once(0)).collect();
+    let attributes = descriptor.attributes();
+    // SAFETY: `wide` is NUL-terminated and lives past the call;
+    // `attributes` and the descriptor it points at (`descriptor`, borrowed
+    // for the call) are valid; no template file.
+    let handle = unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            &raw const attributes,
+            CREATE_NEW,
+            FILE_ATTRIBUTE_NORMAL,
+            ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE || handle.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: `CreateFileW` succeeded, so `handle` is an open file handle
+    // that nothing else owns; the `File` closes it once.
+    Ok(File::from(unsafe { OwnedHandle::from_raw_handle(handle) }))
 }
 
 impl Drop for Descriptor {
@@ -259,6 +317,7 @@ impl Drop for Local {
 /// [`Local`], which must outlive their use.
 fn query(
     handle: &impl AsRawHandle,
+    object: SE_OBJECT_TYPE,
     what: OBJECT_SECURITY_INFORMATION,
 ) -> io::Result<(Local, PSID, *mut ACL, *mut ACL)> {
     let (mut owner, mut dacl, mut sacl) = (ptr::null_mut(), ptr::null_mut(), ptr::null_mut());
@@ -268,7 +327,7 @@ fn query(
     let status = unsafe {
         GetSecurityInfo(
             handle.as_raw_handle(),
-            SE_KERNEL_OBJECT,
+            object,
             what,
             &raw mut owner,
             ptr::null_mut(),
@@ -287,12 +346,277 @@ fn query(
 /// owner its descriptor names). Needs read-control access, which a pipe
 /// opened for reading has.
 pub(super) fn owner_of(handle: &impl AsRawHandle) -> io::Result<Sid> {
-    let (descriptor, owner, _, _) = query(handle, OWNER_SECURITY_INFORMATION)?;
+    let (descriptor, owner, _, _) = query(handle, SE_KERNEL_OBJECT, OWNER_SECURITY_INFORMATION)?;
     // SAFETY: `owner` is null or points into `descriptor`, alive until the
     // end of this function.
     let owner = unsafe { copy_sid(owner) };
     drop(descriptor);
     owner
+}
+
+/// An entry of an access or label list.
+#[derive(Debug)]
+pub(super) struct Ace {
+    /// Allowed, denied, audit, label, or a kind with another layout.
+    pub(super) kind: u8,
+    /// Its inheritance flags.
+    pub(super) flags: u8,
+    /// Its mask and SID, for the kinds laid out as a header, a mask and a
+    /// SID ([`laid_out_plainly`]); none for other kinds.
+    pub(super) mask: Option<u32>,
+    pub(super) sid: Option<Sid>,
+}
+
+/// The entry kinds this module tells apart.
+pub(super) const ACCESS_ALLOWED: u8 = 0;
+pub(super) const ACCESS_DENIED: u8 = 1;
+const SYSTEM_AUDIT: u8 = 2;
+const SYSTEM_MANDATORY_LABEL: u8 = 0x11;
+
+/// Whether entries of `kind` are a header, a mask and then a SID.
+fn laid_out_plainly(kind: u8) -> bool {
+    matches!(
+        kind,
+        ACCESS_ALLOWED | ACCESS_DENIED | SYSTEM_AUDIT | SYSTEM_MANDATORY_LABEL
+    )
+}
+
+/// The entries of `list`, which points into a live descriptor. Each
+/// entry must lie within the list's bytes in use, and an entry's SID
+/// within the entry; one that doesn't is an error.
+///
+/// # Safety
+///
+/// `list` must be null or point at a valid ACL that stays alive for the
+/// call, its `AclBytesInUse` bytes readable.
+unsafe fn entries(list: *mut ACL) -> io::Result<Vec<Ace>> {
+    if list.is_null() {
+        return Ok(Vec::new());
+    }
+    let mut size = ACL_SIZE_INFORMATION {
+        AceCount: 0,
+        AclBytesInUse: 0,
+        AclBytesFree: 0,
+    };
+    // SAFETY: `list` is a live ACL (the caller's promise); `size` is a
+    // valid place of the length given.
+    let ok = unsafe {
+        GetAclInformation(
+            list,
+            (&raw mut size).cast(),
+            u32::try_from(size_of::<ACL_SIZE_INFORMATION>()).unwrap_or(u32::MAX),
+            AclSizeInformation,
+        )
+    };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let malformed = || io::Error::other("a malformed access list entry");
+    let start = list as usize;
+    let end = start.saturating_add(size.AclBytesInUse as usize);
+    let mask_at = std::mem::offset_of!(ACCESS_ALLOWED_ACE, Mask);
+    let sid_at = std::mem::offset_of!(ACCESS_ALLOWED_ACE, SidStart);
+    let mut found = Vec::new();
+    for index in 0..size.AceCount {
+        let mut got = ptr::null_mut();
+        // SAFETY: `index` is below the list's count; `got` is a valid place.
+        if unsafe { GetAce(list, index, &raw mut got) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let at = got as usize;
+        if at < start + size_of::<ACL>() || at.saturating_add(size_of::<ACE_HEADER>()) > end {
+            return Err(malformed());
+        }
+        // Read through a pointer derived from `list` rather than the one
+        // GetAce wrote, so its provenance is the live ACL itself.
+        // SAFETY: `at - start` is within the list's bytes in use (checked
+        // above), so the offset stays inside the ACL's allocation.
+        let ace = unsafe { list.cast::<u8>().add(at - start) };
+        // SAFETY: the header's bytes lie within the list's bytes in use
+        // (checked), which the caller promises are readable.
+        let header = unsafe { ptr::read_unaligned(ace.cast::<ACE_HEADER>()) };
+        let length = usize::from(header.AceSize);
+        if length < size_of::<ACE_HEADER>() || at.saturating_add(length) > end {
+            return Err(malformed());
+        }
+        let (mask, sid) = if laid_out_plainly(header.AceType) {
+            // A SID is 8 bytes and then 4 per sub-authority, whose count
+            // is its second byte.
+            if length < sid_at + 8 {
+                return Err(malformed());
+            }
+            // SAFETY: the mask and the SID's first 8 bytes lie within the
+            // entry (checked), and so within the list's bytes in use.
+            let (mask, count) = unsafe {
+                (
+                    ptr::read_unaligned(ace.cast::<u8>().add(mask_at).cast::<u32>()),
+                    usize::from(*ace.cast::<u8>().add(sid_at + 1)),
+                )
+            };
+            if length < sid_at + 8 + 4 * count {
+                return Err(malformed());
+            }
+            // SAFETY: the whole SID, as long as its count says, lies
+            // within the entry (checked); `copy_sid` reads no further.
+            let sid = unsafe { copy_sid(ace.cast::<u8>().add(sid_at).cast())? };
+            (Some(mask), Some(sid))
+        } else {
+            (None, None)
+        };
+        found.push(Ace {
+            kind: header.AceType,
+            flags: header.AceFlags,
+            mask,
+            sid,
+        });
+    }
+    Ok(found)
+}
+
+/// The owner and access list of the file or directory `handle`, which
+/// must be open with read-control access. No access list at all grants
+/// everyone everything: an error.
+fn file_security(handle: &impl AsRawHandle) -> io::Result<(Sid, Vec<Ace>)> {
+    let what = OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
+    let (descriptor, owner, dacl, _) = query(handle, SE_FILE_OBJECT, what)?;
+    if dacl.is_null() {
+        return Err(io::Error::other(
+            "it has no access list, so anyone may open it",
+        ));
+    }
+    // SAFETY: each points into `descriptor`, alive until the end of this
+    // function.
+    let found = unsafe { (copy_sid(owner)?, entries(dacl)?) };
+    drop(descriptor);
+    Ok(found)
+}
+
+/// The local SYSTEM account (S-1-5-18) and the local Administrators group
+/// (S-1-5-32-544): they may read anything anyway, through their
+/// privileges, so a file or directory open to them is still private.
+const SYSTEM: [u8; 12] = [1, 1, 0, 0, 0, 0, 0, 5, 18, 0, 0, 0];
+const ADMINISTRATORS: [u8; 16] = [1, 2, 0, 0, 0, 0, 0, 5, 32, 0, 0, 0, 0x20, 0x02, 0, 0];
+
+/// Whether `sid` is `own`, SYSTEM or the Administrators group.
+fn trusted(sid: &Sid, own: &Sid) -> bool {
+    sid == own || sid.0 == SYSTEM || sid.0 == ADMINISTRATORS
+}
+
+/// A SID for a message, with its well-known name where it has one.
+fn shown(sid: &Sid) -> String {
+    let plain = sid.to_string();
+    let name = match plain.as_str() {
+        "S-1-1-0" => "Everyone",
+        "S-1-5-7" => "Anonymous Logon",
+        "S-1-5-11" => "Authenticated Users",
+        "S-1-5-18" => "SYSTEM",
+        "S-1-5-32-544" => "Administrators",
+        "S-1-5-32-545" => "Users",
+        "S-1-3-0" => "CREATOR OWNER",
+        "S-1-3-4" => "OWNER RIGHTS",
+        _ => return plain,
+    };
+    format!("{name} ({plain})")
+}
+
+/// Who an entry names, for a message.
+fn named(ace: &Ace) -> String {
+    ace.sid
+        .as_ref()
+        .map_or_else(|| format!("an entry of kind {}", ace.kind), shown)
+}
+
+/// The salt file's owner and access list must be `own`'s: owned by it,
+/// and allowing nobody but it, SYSTEM and the Administrators group
+/// anything. Deny entries change nothing; an entry of a kind this module
+/// can't read is taken as a grant.
+pub(super) fn private_file(owner: &Sid, list: &[Ace], own: &Sid) -> Result<(), String> {
+    if owner != own {
+        return Err(format!("it is owned by {}", shown(owner)));
+    }
+    let harmless = |ace: &&Ace| {
+        ace.kind == ACCESS_DENIED
+            || (ace.kind == ACCESS_ALLOWED && ace.sid.as_ref().is_some_and(|s| trusted(s, own)))
+    };
+    match list.iter().find(|ace| !harmless(ace)) {
+        Some(ace) => Err(format!("its access list has an entry for {}", named(ace))),
+        None => Ok(()),
+    }
+}
+
+/// Whether the file `file` (the pipe's salt) passes [`private_file`].
+pub(super) fn check_private_file(file: &File, own: &Sid) -> io::Result<()> {
+    let (owner, list) = file_security(file)?;
+    private_file(&owner, &list, own).map_err(io::Error::other)
+}
+
+/// What no one but the user, SYSTEM and the Administrators group may do
+/// to the workspace: list it, add to it, delete in it, change its
+/// attributes, delete it, or change its access list or owner.
+pub(super) const FORBIDDEN: u32 = FILE_LIST_DIRECTORY
+    | FILE_ADD_FILE
+    | FILE_ADD_SUBDIRECTORY
+    | FILE_WRITE_EA
+    | FILE_DELETE_CHILD
+    | FILE_WRITE_ATTRIBUTES
+    | DELETE
+    | WRITE_DAC
+    | WRITE_OWNER
+    | GENERIC_READ
+    | GENERIC_WRITE
+    | GENERIC_ALL;
+
+/// The workspace's owner and access list must keep others out: owned by
+/// `own`, SYSTEM or the Administrators group, and granting nobody else
+/// any of [`FORBIDDEN`]. An entry that only passes to what the directory
+/// holds, or denies, changes nothing; one of a kind this module can't
+/// read is taken as a grant. The message completes "the workspace …".
+pub(super) fn private_dir(owner: &Sid, list: &[Ace], own: &Sid) -> Result<(), String> {
+    if !trusted(owner, own) {
+        return Err(format!("is owned by {}", shown(owner)));
+    }
+    let open = list.iter().find(|ace| {
+        let applies = u32::from(ace.flags) & INHERIT_ONLY_ACE == 0;
+        let harmless = ace.kind == ACCESS_DENIED
+            || (ace.kind == ACCESS_ALLOWED
+                && (ace.mask.is_some_and(|m| m & FORBIDDEN == 0)
+                    || ace.sid.as_ref().is_some_and(|s| trusted(s, own))));
+        applies && !harmless
+    });
+    match open {
+        Some(ace) => Err(format!(
+            "is open to other users: its access list lets {} list or change it",
+            named(ace)
+        )),
+        None => Ok(()),
+    }
+}
+
+/// Whether the workspace `dir` passes [`private_dir`] and is a plain
+/// directory, not a junction or symbolic link (it is opened as itself).
+pub(super) fn check_private_dir(dir: &Path, own: &Sid) -> Result<(), String> {
+    use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        READ_CONTROL,
+    };
+    let handle = std::fs::OpenOptions::new()
+        .access_mode(READ_CONTROL)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(dir)
+        .map_err(|e| format!("can't be opened: {e}"))?;
+    let metadata = handle
+        .metadata()
+        .map_err(|e| format!("can't be inspected: {e}"))?;
+    if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err("is a junction or symbolic link".into());
+    }
+    if !metadata.is_dir() {
+        return Err("is not a directory".into());
+    }
+    let (owner, list) =
+        file_security(&handle).map_err(|e| format!("has an unreadable descriptor: {e}"))?;
+    private_dir(&owner, &list, own)
 }
 
 /// An access or label entry: its type, mask and SID.
@@ -310,75 +634,56 @@ pub(crate) struct Security {
     pub(crate) label: Vec<Entry>,
 }
 
-/// The entries of `list`, which points into a live descriptor.
-///
-/// # Safety
-///
-/// `list` must be null or point at a valid ACL that stays alive for the
-/// call.
-#[cfg(test)]
-unsafe fn entries(list: *mut ACL) -> io::Result<Vec<Entry>> {
-    use windows_sys::Win32::Security::{
-        ACCESS_ALLOWED_ACE, ACL_SIZE_INFORMATION, AclSizeInformation, GetAce, GetAclInformation,
-    };
-    if list.is_null() {
-        return Ok(Vec::new());
-    }
-    let mut size = ACL_SIZE_INFORMATION {
-        AceCount: 0,
-        AclBytesInUse: 0,
-        AclBytesFree: 0,
-    };
-    // SAFETY: `list` is a live ACL (the caller's promise); `size` is a
-    // valid place of the length given.
-    let ok = unsafe {
-        GetAclInformation(
-            list,
-            (&raw mut size).cast(),
-            u32::try_from(size_of::<ACL_SIZE_INFORMATION>()).unwrap(),
-            AclSizeInformation,
-        )
-    };
-    if ok == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    let mut found = Vec::new();
-    for index in 0..size.AceCount {
-        let mut ace = ptr::null_mut();
-        // SAFETY: `index` is below the list's count; `ace` is a valid place.
-        if unsafe { GetAce(list, index, &raw mut ace) } == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: an entry of the live list; allowed, denied and label
-        // entries all start with a header, a mask and then their SID.
-        let entry = unsafe {
-            let ace = ace.cast::<ACCESS_ALLOWED_ACE>();
-            let sid = (&raw const (*ace).SidStart).cast_mut().cast();
-            ((*ace).Header.AceType, (*ace).Mask, copy_sid(sid)?)
-        };
-        found.push(entry);
-    }
-    Ok(found)
-}
-
 /// The [`Security`] of the kernel object `handle`, for tests.
 #[cfg(test)]
 pub(crate) fn security_of(handle: &impl AsRawHandle) -> io::Result<Security> {
-    use windows_sys::Win32::Security::{DACL_SECURITY_INFORMATION, LABEL_SECURITY_INFORMATION};
+    use windows_sys::Win32::Security::LABEL_SECURITY_INFORMATION;
     let what = OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION;
-    let (descriptor, owner, dacl, sacl) = query(handle, what)?;
+    let (descriptor, owner, dacl, sacl) = query(handle, SE_KERNEL_OBJECT, what)?;
     if dacl.is_null() {
         return Err(io::Error::other("no access list: everyone has access"));
     }
+    let plain = |list: Vec<Ace>| -> io::Result<Vec<Entry>> {
+        list.into_iter()
+            .map(|ace| {
+                let sid = ace
+                    .sid
+                    .ok_or_else(|| io::Error::other("an entry with no SID"))?;
+                Ok((ace.kind, ace.mask.unwrap_or_default(), sid))
+            })
+            .collect()
+    };
     // SAFETY: each points into `descriptor`, alive until the end of this
     // function, or is null.
     let security = unsafe {
         Security {
             owner: copy_sid(owner)?,
-            access: entries(dacl)?,
-            label: entries(sacl)?,
+            access: plain(entries(dacl)?)?,
+            label: plain(entries(sacl)?)?,
         }
     };
     drop(descriptor);
     Ok(security)
 }
+
+/// Make the directory `path` with `descriptor`, for tests.
+#[cfg(test)]
+pub(crate) fn create_dir(path: &Path, descriptor: &Descriptor) -> io::Result<()> {
+    use windows_sys::Win32::Storage::FileSystem::CreateDirectoryW;
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let attributes = descriptor.attributes();
+    // SAFETY: `wide` is NUL-terminated and lives past the call; so do
+    // `attributes` and the descriptor it points at.
+    if unsafe { CreateDirectoryW(wide.as_ptr(), &raw const attributes) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "win32_tests.rs"]
+mod tests;

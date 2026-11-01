@@ -400,7 +400,7 @@ async fn connect(store: &Store, profile: Option<&str>) -> crate::CliResult {
 fn attached_socket(store: &Store, profile: Option<&str>) -> Result<std::path::PathBuf, String> {
     use bacnet_mcp::attach::{listening, socket_path};
     if let Some(name) = profile {
-        return Ok(socket_path(&store.workspace_path(name)?));
+        return socket_path(&store.workspace_path(name)?).map_err(|e| e.to_string());
     }
     let open: Vec<String> = store
         .list()?
@@ -413,7 +413,7 @@ fn attached_socket(store: &Store, profile: Option<&str>) -> Result<std::path::Pa
                    with --profile NAME"
                 .into(),
         ),
-        [name] => Ok(socket_path(&store.workspace_path(name)?)),
+        [name] => socket_path(&store.workspace_path(name)?).map_err(|e| e.to_string()),
         names => Err(format!(
             "TUIs are listening on several profiles ({}); pick one with --profile NAME",
             names.join(", ")

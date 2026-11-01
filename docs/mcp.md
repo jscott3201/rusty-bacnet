@@ -571,8 +571,29 @@ stderr; when the TUI ends the session it exits cleanly.
   shared lock, and a starting listener retries for a moment, so a probe
   never keeps a TUI from listening.
 - **The named pipe (Windows).** `\\.\pipe\rusty-bacnet-mcp-` and a hash
-  of the workspace's canonical path, so each profile has its own and
-  `connect` finds it with no setting; the hash carries nothing secret.
+  of a salt and the workspace's canonical path, so each profile has its
+  own and `connect` finds it with no setting (#2219). Pipe names are one
+  namespace for every user of the machine, so the salt keeps another
+  user from working the name out in advance from the path. It doesn't
+  hide the name: any local user can list the pipes there while the TUI
+  listens, and the salt never changes, so someone who has seen the name
+  once can create a pipe of that name while the TUI is closed. The
+  harm is a denial of service only: the TUI then refuses to listen, and
+  `connect` never talks to a pipe of another user's (see below). The
+  salt is 32 random bytes in `mcp-pipe.salt` in the workspace, made by
+  the first TUI to listen there and owned by its user. Two TUIs starting
+  at once agree on one salt: each writes its own under a temporary name
+  and links it into place, and the one that finds a salt there already
+  takes it. The TUI refuses a workspace that is a junction or symbolic
+  link, that isn't owned by its user, SYSTEM or the Administrators
+  group, or that lets anyone else list or change it (the error shows an
+  `icacls` command to fix it). The TUI and `connect` both refuse a salt
+  file that isn't a plain file, isn't owned by the user, grants anyone
+  but the user, SYSTEM and the Administrators group access, or doesn't
+  hold exactly 32 bytes. The salt is never made anew while one is
+  there, since a running TUI's pipe name depends on it: remove a refused
+  one with no TUI open on the profile. With no salt file, `connect` says
+  that no TUI has listened on the profile.
   The pipe's security descriptor is owned by the TUI's user and grants
   access to that user's SID alone, with no entry for Everyone,
   Authenticated Users, anonymous logons, SYSTEM or Administrators (the
@@ -583,9 +604,9 @@ stderr; when the TUI ends the session it exits cleanly.
   opening it to read or write. There is no entry denying network logons:
   remote clients are refused anyway, and a local session that holds the
   network logon SID (an SSH session, say) would be shut out of its own
-  TUI. Every instance refuses remote clients. The
-  first instance claims the name, so a pipe of that name made by anyone
-  else (another user's process, say) is refused rather than joined, and
+  TUI. Every instance refuses remote clients. The first instance claims
+  the name, so a pipe of that name made by anyone else (another user's
+  process, say) is refused rather than joined, and
   the next instance is made before a connected client is handed to its
   session, so the name never goes free while the TUI listens. Before any
   MCP message is read, the client's process (`GetNamedPipeClientProcessId`)
@@ -753,9 +774,17 @@ stderr; when the TUI ends the session it exits cleanly.
   again at once after the first stops, and a pipe of the same name made
   without the lock refused rather than joined; the listener's first and
   later instances owned by and granting only the test's user, with the
-  medium label. `attach/pipe_tests.rs`: the pipe's name per workspace,
-  every instance's refusal of remote clients and the first's claim on
-  the name, and the kernel's copy of the descriptor and label.
+  medium label; the pipe named from the salt, which is owned by and open
+  to the test's user alone, and a workspace everyone may list refused.
+  `attach/salt_tests.rs` (every platform): the name needing both the salt
+  and the workspace, the salt made once, racing makers agreeing on one,
+  and a corrupt, linked, non-file or readable-by-others salt file refused
+  and left alone; on Windows, the workspace check. `attach/win32_tests.rs`
+  (Windows): the owners and entries the salt file and the workspace
+  accept, each forbidden right refused, and a workspace junction
+  refused. `attach/pipe_tests.rs`: every instance's refusal of remote
+  clients and the first's claim on the name, and the kernel's copy of
+  the descriptor and label.
   `fence_tests.rs`: unsafe code only in `attach/win32.rs`.
   `crates/bacnet-cli/src/tui/tests/mcp_attach.rs`:
   an agent on an open session's socket reading through its client, on the

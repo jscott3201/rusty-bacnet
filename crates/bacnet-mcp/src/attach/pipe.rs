@@ -1,17 +1,20 @@
 //! The Windows side of the attached mode (#2201): a named pipe whose name
-//! comes from the workspace's path, open to this user's SID alone and to
-//! local clients only, its peers identified by their process's token, and
-//! the bridge's connection to it.
+//! comes from a secret salt and the workspace's path, open to this user's
+//! SID alone and to local clients only, its peers identified by their
+//! process's token, and the bridge's connection to it.
 //!
-//! The pipe's name is global, so it is guarded three ways. The first
-//! instance claims the name (`FILE_FLAG_FIRST_PIPE_INSTANCE`): if anyone
-//! holds it already, the listener is refused rather than joining their
-//! pipe. Every instance after it carries the same owner-only descriptor
-//! and refuses remote clients, and the next instance is always made
-//! before a connected one is handed on, so the name never goes free while
-//! the listener runs. And either end checks the other's user before any
-//! MCP byte: the listener each client's, the bridge the listener's, so an
-//! impostor pipe gets nothing from it.
+//! The pipe's name is global, so it is guarded four ways. It can't be
+//! worked out without the salt (`salt.rs`, #2219), a file in the
+//! workspace only this user may read; the workspace itself must not be
+//! listable by other users. The first instance claims the name
+//! (`FILE_FLAG_FIRST_PIPE_INSTANCE`): if anyone holds it already, the
+//! listener is refused rather than joining their pipe. Every instance
+//! after it carries the same owner-only descriptor and refuses remote
+//! clients, and the next instance is always made before a connected one
+//! is handed on, so the name never goes free while the listener runs.
+//! And either end checks the other's user before any MCP byte: the
+//! listener each client's, the bridge the listener's, so an impostor pipe
+//! gets nothing from it.
 //!
 //! The descriptor grants nobody but this user: not SYSTEM, not the
 //! Administrators group. The agents are this user's own processes; SYSTEM
@@ -25,12 +28,12 @@ use std::time::Duration;
 
 use bacnet_transport::port::TransportPort;
 use serde_json::{Value, json};
-use sha2::{Digest as _, Sha256};
 use tokio::net::windows::named_pipe::{
     ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions,
 };
 use tokio::runtime::Handle;
 
+use super::salt;
 use super::sessions::Sessions;
 use super::win32::{self, Descriptor};
 use super::{ACCEPT_BACKOFF, AttachError, not_listening};
@@ -70,16 +73,14 @@ impl fmt::Debug for Sid {
 }
 
 /// The TUI's pipe for the workspace `dir`: a name from a hash of the
-/// workspace's canonical path, so each profile has its own and `bacnet mcp
-/// connect` finds it with no setting. The hash hides nothing secret; it
-/// only keeps the name short and free of path separators.
-pub fn socket_path(dir: &Path) -> PathBuf {
-    let canonical = std::fs::canonicalize(dir)
-        .or_else(|_| std::path::absolute(dir))
-        .unwrap_or_else(|_| dir.to_path_buf());
-    let digest = Sha256::digest(canonical.as_os_str().as_encoded_bytes());
-    let hex: String = digest[..16].iter().map(|b| format!("{b:02x}")).collect();
-    PathBuf::from(format!(r"\\.\pipe\rusty-bacnet-mcp-{hex}"))
+/// workspace's salt file and canonical path, so each profile has its own,
+/// `bacnet mcp connect` finds it with no setting, and nobody who can't
+/// read the salt can work it out. Fails when the workspace has no salt
+/// (no TUI has listened on it) or its salt file isn't this user's alone,
+/// or is corrupt.
+pub fn socket_path(dir: &Path) -> Result<PathBuf, AttachError> {
+    let salt = salt::load(dir)?;
+    Ok(salt::pipe_name(&salt, dir))
 }
 
 /// Who is at the other end of a connection, as the OS reports it.
@@ -180,14 +181,27 @@ pub(super) struct Preflight {
 }
 
 /// This user's SID, the pipe's name and its owner-only descriptor.
+/// Refused when other users may list the workspace, or when its salt
+/// file is not this user's alone or is corrupt; the salt is made when
+/// the workspace has none.
 pub(super) fn preflight(dir: &Path) -> Result<Preflight, AttachError> {
     let owner =
         win32::own_sid().map_err(|e| format!("cannot tell which user this TUI runs as: {e}"))?;
+    win32::check_private_dir(dir, &owner).map_err(|e| {
+        format!(
+            "the workspace {shown} {e}; not listening for MCP. Only your account, SYSTEM \
+             and Administrators may have access to it: `icacls \"{shown}\"` shows who does, \
+             and `icacls \"{shown}\" /inheritance:r /grant:r \"%USERNAME%:(OI)(CI)F\"` \
+             leaves only you",
+            shown = dir.display()
+        )
+    })?;
     let descriptor = Descriptor::owner_only(&owner)
         .map_err(|e| format!("cannot make the MCP pipe's security descriptor: {e}"))?;
+    let salt = salt::load_or_create(dir)?;
     Ok(Preflight {
         owner,
-        name: socket_path(dir),
+        name: salt::pipe_name(&salt, dir),
         descriptor,
     })
 }

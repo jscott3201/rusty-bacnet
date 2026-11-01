@@ -139,7 +139,7 @@ async fn an_agent_reads_through_the_open_session() {
     site.pump_until(|app| mcp_agents(app) == Some(0)).await;
     assert!(screen(&mut site.app, 120, 40).contains("MCP 0"));
 
-    let path = socket_path(dir.path());
+    let path = socket_path(dir.path()).unwrap();
     let mut agent = Agent::connect(&path).await;
     let hello = agent
         .request(
@@ -341,7 +341,7 @@ async fn an_agents_panic_ends_its_session_and_the_tui_draws_on() {
     // Most of this test's time: the Who-Is window, on the real clock.
     site.who_is_briefly("", 1).await;
     site.pump_until(|app| mcp_agents(app) == Some(0)).await;
-    let path = socket_path(dir.path());
+    let path = socket_path(dir.path()).unwrap();
     let mut first = attached(&path).await;
     let mut second = attached(&path).await;
     site.pump_until(|app| mcp_agents(app) == Some(2)).await;

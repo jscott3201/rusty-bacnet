@@ -16,7 +16,8 @@ use tokio::net::windows::named_pipe::{
 use super::attach::{audit, bridged, events, lab, private_dir, workspace};
 use crate::Policy;
 use crate::attach::{
-    self, Listener, ListenerId, PeerId, SessionRuntime, Sid, Unidentified, security_of, socket_path,
+    self, Listener, ListenerId, PeerId, SessionRuntime, Sid, Unidentified, pipe_name, security_of,
+    socket_path,
 };
 
 /// The local SYSTEM account's SID: a user other than the test's.
@@ -115,7 +116,10 @@ async fn an_unidentified_client_is_refused() {
 /// refusal, after checking the impostor was written nothing.
 async fn refused_by_the_bridge(tag: &str, credentials: attach::ListenerCredentials) -> String {
     let dir = private_dir();
-    let name = PathBuf::from(format!("{}-{tag}", socket_path(dir.path()).display()));
+    let mut salt = [0; 32];
+    getrandom::fill(&mut salt).unwrap();
+    let name = pipe_name(&attach::Salt(salt), dir.path());
+    let name = PathBuf::from(format!("{}-{tag}", name.display()));
     let mut impostor = ServerOptions::new().create(&name).unwrap();
     let connecting = tokio::spawn({
         let name = name.clone();
@@ -191,8 +195,9 @@ async fn a_second_listener_and_a_taken_name_are_refused() {
     let again = lab.attach(dir.path(), Policy::default()).await.unwrap();
     again.shutdown().await;
 
+    // Squatting takes the salt, which only this user may read.
     let squatter = ServerOptions::new()
-        .create(socket_path(dir.path()))
+        .create(socket_path(dir.path()).unwrap())
         .unwrap();
     let error = lab.attach(dir.path(), Policy::default()).await.unwrap_err();
     assert!(error.to_string().contains("is taken"), "{error}");
@@ -226,5 +231,36 @@ async fn the_listeners_instances_grant_only_this_user() {
     }
     drop((first, later));
     listener.shutdown().await;
+    lab.stop().await;
+}
+
+/// Acceptance (#2219): the listener names its pipe from the workspace's
+/// salt, which it makes owned by and open to this user alone, so the
+/// path alone doesn't give the name; `connect`'s lookup finds the same
+/// name. A workspace other users may list is refused before any pipe or
+/// salt is made.
+#[tokio::test(start_paused = true)]
+async fn the_pipe_name_needs_the_private_salt() {
+    let lab = lab().await;
+    let dir = private_dir();
+    let listener = lab.attach(dir.path(), Policy::default()).await.unwrap();
+    assert_eq!(listener.path(), socket_path(dir.path()).unwrap());
+    let salt = std::fs::File::open(dir.path().join(attach::SALT_FILE)).unwrap();
+    let own = attach::own_sid().unwrap();
+    let security = security_of(&salt).unwrap();
+    assert_eq!(security.owner, own);
+    let entries = &security.access;
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!((entries[0].0, &entries[0].2), (0, &own), "{entries:?}");
+    let other = attach::Salt([0; 32]);
+    assert_ne!(listener.path(), pipe_name(&other, dir.path()));
+    listener.shutdown().await;
+
+    let open = dir.path().join("open");
+    let sddl = format!("D:P(A;OICI;FA;;;{own})(A;;FR;;;WD)");
+    attach::create_dir(&open, &attach::Descriptor::from_sddl(&sddl).unwrap()).unwrap();
+    let error = lab.attach(&open, Policy::default()).await.unwrap_err();
+    assert!(error.to_string().contains("open to other users"), "{error}");
+    assert!(!open.join(attach::SALT_FILE).exists());
     lab.stop().await;
 }

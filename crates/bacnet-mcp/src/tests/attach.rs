@@ -23,13 +23,37 @@ use crate::{McpServer, Policy};
 
 const AI1: &str = "bacnet://device/1201/object/analog-input:1";
 
-/// A workspace directory nobody else can enter (on Windows, a user's
-/// temporary directory already is).
-pub(super) fn private_dir() -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
+/// A workspace directory nobody else can enter: mode 0700 on Unix, and
+/// on Windows a directory made with an access list for the test's user
+/// alone, so the tests don't depend on the temporary directory's.
+pub(super) struct PrivateDir {
+    _root: tempfile::TempDir,
+    path: std::path::PathBuf,
+}
+
+impl PrivateDir {
+    pub(super) fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+/// A new [`PrivateDir`].
+pub(super) fn private_dir() -> PrivateDir {
+    let root = tempfile::tempdir().unwrap();
     #[cfg(unix)]
-    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-    dir
+    let path = {
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        root.path().to_path_buf()
+    };
+    #[cfg(windows)]
+    let path = {
+        let own = attach::own_sid().unwrap();
+        let sddl = format!("D:P(A;OICI;FA;;;{own})");
+        let path = root.path().join("workspace");
+        attach::create_dir(&path, &attach::Descriptor::from_sddl(&sddl).unwrap()).unwrap();
+        path
+    };
+    PrivateDir { _root: root, path }
 }
 
 /// A plain connection to the listener at `path`, as an agent's host
@@ -156,7 +180,7 @@ async fn an_attached_agent_reads_on_the_shared_engine() {
         "writes offered"
     );
     let listener = lab.attach(dir.path(), offered).await.unwrap();
-    let path = socket_path(dir.path());
+    let path = socket_path(dir.path()).unwrap();
     assert_eq!(listener.path(), path);
     #[cfg(unix)]
     {
@@ -305,7 +329,7 @@ async fn a_loose_workspace_is_narrowed_and_a_link_refused() {
     std::os::unix::fs::symlink(&real, &link).unwrap();
     let error = lab.attach(&link, Policy::default()).await.unwrap_err();
     assert!(error.to_string().contains("symbolic link"), "{error}");
-    assert!(!socket_path(&real).exists());
+    assert!(!socket_path(&real).unwrap().exists());
     let real_mode = std::fs::metadata(&real).unwrap().mode() & 0o777;
     assert_eq!(real_mode, 0o755, "nothing done through the link");
     let file = dir.path().join("file");
@@ -325,7 +349,7 @@ async fn a_loose_workspace_is_narrowed_and_a_link_refused() {
 async fn a_second_listener_is_refused_and_a_stale_socket_cleared() {
     let lab = lab().await;
     let dir = private_dir();
-    let path = socket_path(dir.path());
+    let path = socket_path(dir.path()).unwrap();
     drop(std::os::unix::net::UnixListener::bind(&path).unwrap());
     assert!(path.exists(), "a stale socket");
     assert!(!attach::listening(dir.path()), "no lock held");
@@ -381,7 +405,7 @@ async fn shutdown_ends_sessions_and_removes_the_socket() {
     let lab = lab().await;
     let dir = private_dir();
     let listener = lab.attach(dir.path(), Policy::default()).await.unwrap();
-    let path = socket_path(dir.path());
+    let path = socket_path(dir.path()).unwrap();
     let (mut agent, bridge) = bridged(&path);
     let devices = agent
         .modern("resources/read", json!({ "uri": "bacnet://devices" }))

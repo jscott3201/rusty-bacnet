@@ -1059,7 +1059,8 @@ Experimental in 0.15.
 `bacnet mcp connect` attaches an agent host to a running `bacnet tui`
 instead of starting a client of its own. It passes its stdin and stdout
 to the local socket the TUI opens in the profile's workspace (on Windows,
-a named pipe named after the workspace), byte for byte, so the agent's reads go
+a named pipe whose name comes from the workspace and a secret file in
+it), byte for byte, so the agent's reads go
 through the TUI's client, transport and rate meter, and the profile's UDP
 port isn't contended for. The agent host launches it as it launches
 `bacnet mcp serve`. The TUI listens only on a profile authorized for MCP
