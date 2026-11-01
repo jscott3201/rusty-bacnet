@@ -129,6 +129,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             suppressions,
             retry_timeout_ms,
             local_apdu_capacity,
+            device: _,
         } = ctx;
         let notification_class = outbound.notification_class;
         let network_priority = network_priority_for_event(outbound.priority);

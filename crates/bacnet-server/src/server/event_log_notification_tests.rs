@@ -37,7 +37,7 @@ fn el(instance: u32) -> ObjectIdentifier {
 }
 
 /// Notification Class 0 sending every transition to `PEER`.
-fn to_peer() -> NotificationClass {
+pub(super) fn to_peer() -> NotificationClass {
     let mut class = NotificationClass::new(0, "NC-0").unwrap();
     class
         .add_destination(destination(address_recipient(0, &PEER), PROCESS, false))
@@ -46,7 +46,7 @@ fn to_peer() -> NotificationClass {
 }
 
 /// AV-1 alarms above 80 and reports through `class`.
-fn alarm(db: &mut ObjectDatabase, class: NotificationClass) {
+pub(super) fn alarm(db: &mut ObjectDatabase, class: NotificationClass) {
     db.add(Box::new(class)).unwrap();
     let object = db.get_mut(&av1()).unwrap();
     for (property, value) in [
@@ -93,7 +93,7 @@ fn alarm_and_logs(db: &mut ObjectDatabase, instances: &[u32], buffer_size: u32) 
 }
 
 /// Take the next event notification sent, in sending order.
-async fn sent_notification(h: &Harness) -> EventNotificationRequest {
+pub(super) async fn sent_notification(h: &Harness) -> EventNotificationRequest {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let next = {

@@ -608,6 +608,7 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
             suppressions: self.event_suppressions,
             retry_timeout_ms: self.config.cov_retry_timeout_ms,
             local_apdu_capacity: u32::from(self.config.device.max_apdu_length()),
+            device: crate::local_device::initiating_device(&self.config.device),
         }
     }
 
@@ -718,22 +719,19 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                             self.config,
                             self.network,
                             self.notification_transactions,
-                            &db,
                         );
                         let encoded = audit_reporter::small_value(&value).unwrap_or_default();
-                        if let Some(audit) = &mut audit {
-                            audit.before(
-                                &db,
-                                WriteTarget {
-                                    oid: *oid,
-                                    property,
-                                    array_index,
-                                    priority,
-                                    value: &encoded,
-                                },
-                            );
-                        }
-                        audit
+                        audit.before(
+                            &db,
+                            WriteTarget {
+                                oid: *oid,
+                                property,
+                                array_index,
+                                priority,
+                                value: &encoded,
+                            },
+                        );
+                        Some(audit)
                     }
                 }
                 // Audited as the WriteProperty of the Channel's Present_Value

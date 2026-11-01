@@ -120,6 +120,7 @@ impl Harness {
                 suppressions: &self.suppressions,
                 retry_timeout_ms: self.retry_timeout_ms,
                 local_apdu_capacity: 1474,
+                device: crate::server::event_delivery::fixture_device(&self.db).await,
             },
             &oid,
             (
@@ -173,6 +174,7 @@ impl Harness {
                 suppressions: &self.suppressions,
                 retry_timeout_ms: self.retry_timeout_ms,
                 local_apdu_capacity: 1474,
+                device: crate::server::event_delivery::fixture_device(&self.db).await,
             },
             &oid,
             committed,

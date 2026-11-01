@@ -248,9 +248,7 @@ async fn mandatory_policy_no_runtime_refuses_without_consuming_sequence() {
                     &f.server.config,
                     f.server.test_network(),
                     &f.server.notification_transactions,
-                    &db,
-                )
-                .unwrap();
+                );
                 bacnet_device_core::write::write_property(
                     &mut db,
                     &wp(
@@ -519,9 +517,7 @@ async fn mandatory_policy_stop_between_capture_and_commit_denies_without_assignm
         &f.server.config,
         f.server.test_network(),
         &f.server.notification_transactions,
-        &db,
-    )
-    .unwrap();
+    );
     audit.before(&db, target);
     // This is the exact precommit boundary; no arbitrary callback is inserted
     // inside the assignment/admission critical section to manufacture the race.

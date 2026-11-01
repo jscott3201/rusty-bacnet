@@ -83,6 +83,7 @@ impl<T: TransportPort + 'static> CovFanout<T> {
             suppressions: &self.event_suppressions,
             retry_timeout_ms: self.config.cov_retry_timeout_ms,
             local_apdu_capacity: u32::from(self.config.device.max_apdu_length()),
+            device: crate::local_device::initiating_device(&self.config.device),
         }
     }
 

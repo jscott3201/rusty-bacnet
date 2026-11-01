@@ -283,7 +283,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let mut pending = offered;
         pending.reverse();
         while let Some(notification) = pending.pop() {
-            let (local_device, mut recipients) = {
+            let mut recipients = {
                 let db = ctx.db.read().await;
                 let system_utc = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -318,12 +318,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         .record(EventSuppression::ReceivedNotForwarded);
                 }
                 taken.extend(targets.forwarders);
-                (db.selected_device(), targets.recipients)
+                targets.recipients
             };
-            if let Some(local_device) = local_device {
-                for process_identifier in take_local(&mut recipients, local_device) {
-                    pending.push(notification.retargeted(process_identifier));
-                }
+            for process_identifier in take_local(&mut recipients, ctx.device) {
+                pending.push(notification.retargeted(process_identifier));
             }
             recipients.retain(|destination| !sent.contains(destination));
             if recipients.is_empty() {

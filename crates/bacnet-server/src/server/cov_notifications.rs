@@ -308,11 +308,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             return;
         }
 
-        let device_oid = {
-            let db = db.read().await;
-            db.selected_device()
-                .unwrap_or_else(|| ObjectIdentifier::new(ObjectType::DEVICE, 0).unwrap())
-        };
+        let device_oid = crate::local_device::initiating_device(&config.device);
         let ordinary = if subs.iter().any(|sub| sub.monitored_property.is_none()) {
             let db = if snapshot.is_none() {
                 Some(db.read().await)

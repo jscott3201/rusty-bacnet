@@ -247,6 +247,7 @@ async fn committed_ack_required_snapshot_survives_notification_class_replacement
             suppressions: &Default::default(),
             retry_timeout_ms: 1000,
             local_apdu_capacity: 1476,
+            device: crate::server::event_delivery::fixture_device(&db).await,
         },
         &oid,
         committed,

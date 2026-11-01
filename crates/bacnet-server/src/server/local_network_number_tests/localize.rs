@@ -232,6 +232,7 @@ async fn a_confirmed_notification_to_this_network_is_completed_by_the_direct_ack
             suppressions: &server.event_suppressions,
             retry_timeout_ms: 1000,
             local_apdu_capacity: 1476,
+            device: crate::server::event_delivery::fixture_device(&server.db).await,
         },
         &input_oid(),
         (

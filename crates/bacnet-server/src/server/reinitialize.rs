@@ -552,14 +552,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     pub async fn report_device_reset_local(&self) -> Result<(), Error> {
         let network = self.active_network()?;
         let mut db = self.db.write().await;
-        if let Some(mut audit) = super::audit_reporter::WriteAudit::local(
+        super::audit_reporter::WriteAudit::local(
             &self.config,
             network,
             &self.notification_transactions,
-            &db,
-        ) {
-            audit.device_operation(&mut db, AuditOperation::DEVICE_RESET);
-        }
+        )
+        .device_operation(&mut db, AuditOperation::DEVICE_RESET);
         Ok(())
     }
 }

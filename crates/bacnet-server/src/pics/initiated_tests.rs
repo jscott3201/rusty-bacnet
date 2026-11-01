@@ -90,33 +90,121 @@ fn braced(text: &str) -> &str {
     text
 }
 
-/// The crate's non-test source files: test-named files and directories are
-/// left out, and so are the files test modules include by `#[path]`.
+/// The crate's non-test source files, keyed by their path under `src/`.
+/// Left out: test-named files and directories ([`test_named`]), every file
+/// a `#[cfg(test)] mod name;` declaration loads, and every file a test file
+/// declares as a module (by name or `#[path]`). Only the path under `src/`
+/// is read, so a checkout whose own path says "test" changes nothing
+/// (#2224).
 fn sources() -> Vec<(PathBuf, String)> {
-    fn walk(dir: &Path, out: &mut Vec<(PathBuf, String)>) {
+    sources_under(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"))
+}
+
+/// [`sources`] for the source tree at `root`.
+fn sources_under(root: &Path) -> Vec<(PathBuf, String)> {
+    fn walk(root: &Path, dir: &Path, out: &mut Vec<(PathBuf, String)>) {
         for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
             if path.is_dir() {
-                walk(&path, out);
+                walk(root, &path, out);
             } else if path.extension().is_some_and(|e| e == "rs") {
-                out.push((path.clone(), std::fs::read_to_string(&path).unwrap()));
+                let source = std::fs::read_to_string(&path).unwrap();
+                out.push((path.strip_prefix(root).unwrap().to_path_buf(), source));
             }
         }
     }
     let mut all = Vec::new();
-    walk(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut all);
-    let is_test = |path: &Path| path.to_string_lossy().contains("test");
-    let mut test_support = BTreeSet::new();
-    for (path, source) in all.iter().filter(|(path, _)| is_test(path)) {
-        for (at, _) in source.match_indices("#[path = \"") {
-            let rest = &source[at + "#[path = \"".len()..];
-            let name = &rest[..rest.find('"').unwrap()];
-            test_support.insert(path.parent().unwrap().join(name));
+    walk(root, root, &mut all);
+    let mut tests: BTreeSet<PathBuf> = all
+        .iter()
+        .map(|(path, _)| path.clone())
+        .filter(|path| test_named(path))
+        .collect();
+    // A test file's modules are test files too, so repeat until none is new.
+    loop {
+        let before = tests.len();
+        for (path, source) in &all {
+            let in_test = tests.contains(path);
+            for (cfg_test, child) in declared_modules(path, source) {
+                if in_test || cfg_test {
+                    tests.insert(child);
+                }
+            }
+        }
+        if tests.len() == before {
+            break;
         }
     }
     all.into_iter()
-        .filter(|(path, _)| !is_test(path) && !test_support.contains(path))
+        .filter(|(path, _)| !tests.contains(path))
         .collect()
+}
+
+/// Whether a path under `src/` follows a test-file naming convention: a
+/// component named `tests` (a directory or `tests.rs`), or one whose name,
+/// less `.rs`, ends `_tests` or `_test_support` or starts `test_`.
+fn test_named(relative: &Path) -> bool {
+    relative.components().any(|component| {
+        let name = component.as_os_str().to_string_lossy();
+        let stem = name.strip_suffix(".rs").unwrap_or(&name);
+        stem == "tests"
+            || stem.ends_with("_tests")
+            || stem.ends_with("_test_support")
+            || stem.starts_with("test_")
+    })
+}
+
+/// The out-of-line modules `source` (at `path` under `src/`) declares, one
+/// `mod name;` line each, with whether the attribute lines just above it
+/// include `#[cfg(test)]`. A `#[path]` attribute names the file relative to
+/// the declaring file's directory; otherwise it is `name.rs` or
+/// `name/mod.rs`, beside a `lib.rs` or `mod.rs` and under a directory named
+/// after any other file.
+fn declared_modules(path: &Path, source: &str) -> Vec<(bool, PathBuf)> {
+    let parent = path.parent().unwrap_or(Path::new(""));
+    let owner = match path.file_name().and_then(|name| name.to_str()) {
+        Some("lib.rs" | "mod.rs" | "main.rs") => parent.to_path_buf(),
+        _ => parent.join(path.file_stem().unwrap()),
+    };
+    let lines: Vec<&str> = source.lines().map(str::trim).collect();
+    let mut found = Vec::new();
+    for (at, line) in lines.iter().enumerate() {
+        let declaration = line
+            .strip_prefix("pub ")
+            .or_else(|| line.strip_prefix("pub(crate) "))
+            .or_else(|| line.strip_prefix("pub(super) "))
+            .unwrap_or(line);
+        let Some(name) = declaration
+            .strip_prefix("mod ")
+            .and_then(|rest| rest.strip_suffix(';'))
+        else {
+            continue;
+        };
+        let attributes = lines[..at]
+            .iter()
+            .rev()
+            .take_while(|line| line.starts_with("#["));
+        let mut cfg_test = false;
+        let mut file = None;
+        for attribute in attributes {
+            cfg_test |= *attribute == "#[cfg(test)]";
+            if let Some(named) = attribute
+                .strip_prefix("#[path = \"")
+                .and_then(|rest| rest.strip_suffix("\"]"))
+            {
+                file = Some(parent.join(named));
+            }
+        }
+        match file {
+            Some(file) => found.push((cfg_test, file)),
+            // Whichever of the two exists; naming the other too is harmless.
+            None => {
+                found.push((cfg_test, owner.join(format!("{name}.rs"))));
+                found.push((cfg_test, owner.join(name).join("mod.rs")));
+            }
+        }
+    }
+    found
 }
 
 /// The service bit a `ConfirmedServiceChoice::X` or
@@ -226,4 +314,64 @@ fn every_initiated_service_has_a_pics_name() {
     for service in PicsGenerator::INITIATED_SERVICES {
         assert!(service_display_name(*service).is_some(), "{service:?}");
     }
+}
+
+#[test]
+fn test_files_are_told_apart_by_their_path_under_src() {
+    let kept: BTreeSet<PathBuf> = sources().into_iter().map(|(path, _)| path).collect();
+    // Kept: ordinary sources, and one a non-test file loads by `#[path]`.
+    for path in [
+        "lib.rs",
+        "pics/mod.rs",
+        "server/cov_notifications.rs",
+        "device_view_identity.rs",
+    ] {
+        assert!(kept.contains(Path::new(path)), "{path} is a source");
+    }
+    // Left out: by name, by directory, and by `#[cfg(test)] mod name;`.
+    for path in [
+        "pics/initiated_tests.rs",
+        "server/test_transport.rs",
+        "server/audit_reporter_test_support.rs",
+        "handlers/tests/mod.rs",
+        "server/warn_spy.rs",
+        "handlers/read_property.rs",
+    ] {
+        assert!(!kept.contains(Path::new(path)), "{path} is test code");
+    }
+    assert!(!test_named(Path::new("server/latest.rs")));
+    assert!(!test_named(Path::new("attestation/mod.rs")));
+}
+
+/// A source tree under a directory whose own path says "test" (#2224): only
+/// the paths under it decide what is test code.
+#[test]
+fn a_root_whose_path_says_test_changes_nothing() {
+    let root = std::env::temp_dir()
+        .join(format!("pics-test-root-{}", std::process::id()))
+        .join("src");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("server")).unwrap();
+    for (path, source) in [
+        ("lib.rs", "mod server;\n#[cfg(test)]\nmod spy;\n"),
+        ("server.rs", "mod sends;\n#[cfg(test)]\nmod server_tests;\n"),
+        ("server/sends.rs", ""),
+        ("server_tests.rs", ""),
+        ("spy.rs", "mod helper;\n"),
+        ("spy/helper.rs", ""),
+    ] {
+        let file = root.join(path);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, source).unwrap();
+    }
+    let kept: BTreeSet<PathBuf> = sources_under(&root)
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect();
+    std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+    let expected: BTreeSet<PathBuf> = ["lib.rs", "server.rs", "server/sends.rs"]
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+    assert_eq!(kept, expected);
 }

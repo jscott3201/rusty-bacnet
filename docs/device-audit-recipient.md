@@ -7,8 +7,7 @@ uses `configure_audit_recipient(AuditRecipientInput)` before `start()` and selec
 settings separately with `configure_audit_reporters`. The former Rust configuration
 field and Python `recipient_device_instance` keyword are removed before 1.0.
 
-Startup requires a concrete built-in local Device (the lowest when the database
-holds several; see
+Startup requires the built-in Device the server's identity names (see
 [Databases with several Devices](rust-api.md#databases-with-several-devices)), a
 typed provision on it, and the selected Audit Reporters. See [target Reporter ownership](target-audit-reporters.md) for
 association, overlap health, and the single pair-owner election. Provisioning alone does not expose a network property.

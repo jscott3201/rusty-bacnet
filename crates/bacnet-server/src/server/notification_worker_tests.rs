@@ -119,9 +119,10 @@ async fn fire_event(server: &BACnetServer<TestTransport>) {
         AnalogInputObject::new(1, "AI-1", EngineeringUnits::SQUARE_METERS).unwrap(),
     ))
     .unwrap();
+    let db = Arc::new(RwLock::new(db));
     BACnetServer::<TestTransport>::build_and_send_event_notification_with_bindings(
         &EventDelivery {
-            db: &Arc::new(RwLock::new(db)),
+            db: &db,
             network: server.test_network(),
             comm_state: &server.comm_state,
             learned_routers: &server.learned_routers,
@@ -130,6 +131,7 @@ async fn fire_event(server: &BACnetServer<TestTransport>) {
             suppressions: &Default::default(),
             retry_timeout_ms: 3000,
             local_apdu_capacity: 1476,
+            device: crate::server::event_delivery::fixture_device(&db).await,
         },
         &ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
         (

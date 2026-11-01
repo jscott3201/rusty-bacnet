@@ -748,6 +748,8 @@ mod noncommandable_null_cov_tests;
 #[cfg(test)]
 mod notification_dcc_tests;
 #[cfg(test)]
+mod notification_initiator_tests;
+#[cfg(test)]
 mod notification_transactions_tests;
 #[cfg(test)]
 mod pulse_converter_cov_tests;
