@@ -12,8 +12,10 @@
 //! when looser), the socket file is made 0600, and every connection's
 //! peer credentials must name the listener's own user before any MCP
 //! traffic flows. On Windows the listener is a named pipe whose name comes
-//! from the workspace's path: its security descriptor grants access to
-//! this user's SID alone, it takes no remote clients, its first instance
+//! from the workspace's path and a secret salt kept in it (#2219), which
+//! must be this user's alone, in a workspace other users may not list.
+//! The pipe's security descriptor grants access to this user's SID
+//! alone, it takes no remote clients, its first instance
 //! claims the name, and every client process's token must name this user
 //! before any MCP traffic flows. A refused peer is closed and audited with
 //! what the OS reports of it.
@@ -46,6 +48,8 @@ mod guard;
 mod lock;
 #[cfg(windows)]
 mod pipe;
+#[cfg(any(windows, all(unix, test)))]
+mod salt;
 mod sessions;
 #[cfg(unix)]
 mod socket;
@@ -77,6 +81,8 @@ pub use pipe::{connect, socket_path};
 pub(crate) use platform::connect_with;
 use platform::os_credentials;
 pub(crate) use platform::{Credentials, PeerId, VIA};
+#[cfg(all(test, windows))]
+pub(crate) use salt::{SALT_FILE, Salt, pipe_name};
 #[cfg(unix)]
 use socket as platform;
 #[cfg(all(test, unix))]
@@ -84,7 +90,7 @@ pub(crate) use socket::own_uid;
 #[cfg(unix)]
 pub use socket::{SOCKET_FILE, connect, socket_path};
 #[cfg(all(test, windows))]
-pub(crate) use win32::{own_sid, security_of};
+pub(crate) use win32::{Descriptor, create_dir, own_sid, security_of};
 
 use crate::policy::{Policy, Workspace, WritePolicy};
 use crate::server::Shared;
@@ -265,7 +271,9 @@ impl Listener {
     /// link, and a looser mode than 0700 is narrowed; refused too when the
     /// socket path is too long, a symbolic link or some other file, or
     /// when the TUI runs as the overflow uid. On Windows, refused when the
-    /// pipe's name is already taken, by anyone.
+    /// pipe's name is already taken, by anyone; when the workspace lets
+    /// other users list it; or when its salt file isn't this user's alone
+    /// or is corrupt.
     pub async fn bind<T: TransportPort + 'static>(
         engine: Arc<Engine<T>>,
         policy: Policy,

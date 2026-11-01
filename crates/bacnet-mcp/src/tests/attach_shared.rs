@@ -42,7 +42,7 @@ async fn shutdown_does_not_wait_out_a_silent_handshake() {
     let lab = lab().await;
     let dir = private_dir();
     let listener = lab.attach(dir.path(), Policy::default()).await.unwrap();
-    let path = socket_path(dir.path());
+    let path = socket_path(dir.path()).unwrap();
     let mut idle = raw(&path).await;
     agents_are(&listener, 1).await;
     let start = Instant::now();

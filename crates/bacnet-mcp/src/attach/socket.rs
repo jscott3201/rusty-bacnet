@@ -18,9 +18,10 @@ pub const SOCKET_FILE: &str = "mcp.sock";
 /// How the audit records name the way a connection came in.
 pub(crate) const VIA: &str = "local-socket";
 
-/// Where the TUI's socket for the workspace `dir` is.
-pub fn socket_path(dir: &Path) -> PathBuf {
-    dir.join(SOCKET_FILE)
+/// Where the TUI's socket for the workspace `dir` is. Never fails on
+/// Unix; the Windows pipe's name needs the workspace's salt file.
+pub fn socket_path(dir: &Path) -> Result<PathBuf, AttachError> {
+    Ok(dir.join(SOCKET_FILE))
 }
 
 /// Who is at the other end of a connection, as the OS reports it.
@@ -92,7 +93,7 @@ pub(super) fn preflight(dir: &Path) -> Result<Preflight, AttachError> {
              report too, so it doesn't listen for MCP"
         )));
     }
-    let path = socket_path(dir);
+    let path = dir.join(SOCKET_FILE);
     guard::check_length(&path)?;
     let dir = guard::open_workspace(dir, uid)?;
     Ok(Preflight { uid, path, dir })

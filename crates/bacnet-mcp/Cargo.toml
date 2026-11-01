@@ -55,12 +55,14 @@ nix = { workspace = true, features = ["user"] }
 libc.workspace = true
 
 # The Windows named pipe (#2201): whose process is at either end of it,
-# which user a process runs as, and its owner-only security descriptor.
+# which user a process runs as, and its owner-only security descriptor;
+# the salt file in its name, made with that descriptor (#2219).
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
     "Win32_System_Pipes",
     "Win32_System_Threading",
 ] }

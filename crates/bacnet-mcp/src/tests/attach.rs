@@ -156,7 +156,7 @@ async fn an_attached_agent_reads_on_the_shared_engine() {
         "writes offered"
     );
     let listener = lab.attach(dir.path(), offered).await.unwrap();
-    let path = socket_path(dir.path());
+    let path = socket_path(dir.path()).unwrap();
     assert_eq!(listener.path(), path);
     #[cfg(unix)]
     {
@@ -305,7 +305,7 @@ async fn a_loose_workspace_is_narrowed_and_a_link_refused() {
     std::os::unix::fs::symlink(&real, &link).unwrap();
     let error = lab.attach(&link, Policy::default()).await.unwrap_err();
     assert!(error.to_string().contains("symbolic link"), "{error}");
-    assert!(!socket_path(&real).exists());
+    assert!(!socket_path(&real).unwrap().exists());
     let real_mode = std::fs::metadata(&real).unwrap().mode() & 0o777;
     assert_eq!(real_mode, 0o755, "nothing done through the link");
     let file = dir.path().join("file");
@@ -325,7 +325,7 @@ async fn a_loose_workspace_is_narrowed_and_a_link_refused() {
 async fn a_second_listener_is_refused_and_a_stale_socket_cleared() {
     let lab = lab().await;
     let dir = private_dir();
-    let path = socket_path(dir.path());
+    let path = socket_path(dir.path()).unwrap();
     drop(std::os::unix::net::UnixListener::bind(&path).unwrap());
     assert!(path.exists(), "a stale socket");
     assert!(!attach::listening(dir.path()), "no lock held");
@@ -381,7 +381,7 @@ async fn shutdown_ends_sessions_and_removes_the_socket() {
     let lab = lab().await;
     let dir = private_dir();
     let listener = lab.attach(dir.path(), Policy::default()).await.unwrap();
-    let path = socket_path(dir.path());
+    let path = socket_path(dir.path()).unwrap();
     let (mut agent, bridge) = bridged(&path);
     let devices = agent
         .modern("resources/read", json!({ "uri": "bacnet://devices" }))

@@ -571,9 +571,22 @@ stderr; when the TUI ends the session it exits cleanly.
   shared lock, and a starting listener retries for a moment, so a probe
   never keeps a TUI from listening.
 - **The named pipe (Windows).** `\\.\pipe\rusty-bacnet-mcp-` and a hash
-  of the workspace's canonical path, so each profile has its own and
-  `connect` finds it with no setting; the hash carries nothing secret.
-  The pipe's security descriptor is owned by the TUI's user and grants
+  of a salt and the workspace's canonical path, so each profile has its
+  own and `connect` finds it with no setting (#2219). Pipe names are one
+  namespace for every user of the machine, so the salt keeps another
+  user from working the name out and taking it first: 32 random bytes in
+  `mcp-pipe.salt` in the workspace, made by the first TUI to listen
+  there, owned by and open to its user alone. Two TUIs starting at once
+  agree on one salt: each writes its own under a temporary name and links
+  it into place, and the one that finds a salt there already takes it.
+  The TUI refuses to listen in a workspace that anyone but its user,
+  SYSTEM and the Administrators group may list, and both the TUI and
+  `connect` refuse a salt file that isn't a plain file, isn't owned by
+  the user, grants anyone else access, or doesn't hold exactly 32 bytes.
+  It is never made anew while one is there, since a running TUI's pipe
+  name depends on it: remove a refused one with no TUI open on the
+  profile. With no salt file, `connect` says that no TUI has listened on
+  the profile. The pipe's security descriptor is owned by the TUI's user and grants
   access to that user's SID alone, with no entry for Everyone,
   Authenticated Users, anonymous logons, SYSTEM or Administrators (the
   agents are your own processes, and SYSTEM and administrators can take
@@ -753,8 +766,13 @@ stderr; when the TUI ends the session it exits cleanly.
   again at once after the first stops, and a pipe of the same name made
   without the lock refused rather than joined; the listener's first and
   later instances owned by and granting only the test's user, with the
-  medium label. `attach/pipe_tests.rs`: the pipe's name per workspace,
-  every instance's refusal of remote clients and the first's claim on
+  medium label; the pipe named from the salt, which is owned by and open
+  to the test's user alone, and a workspace everyone may list refused.
+  `attach/salt_tests.rs` (every platform): the name needing both the salt
+  and the workspace, the salt made once, racing makers agreeing on one,
+  and a corrupt, linked, non-file or readable-by-others salt file refused
+  and left alone; on Windows, the workspace check.
+  `attach/pipe_tests.rs`: every instance's refusal of remote clients and the first's claim on
   the name, and the kernel's copy of the descriptor and label.
   `fence_tests.rs`: unsafe code only in `attach/win32.rs`.
   `crates/bacnet-cli/src/tui/tests/mcp_attach.rs`:

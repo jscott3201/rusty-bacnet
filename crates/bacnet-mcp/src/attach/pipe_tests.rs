@@ -1,7 +1,9 @@
-//! The named pipe's guards on their own: its name, its instances'
-//! options, and the descriptor the kernel ends up holding.
+//! The named pipe's guards on their own: its instances' options, and the
+//! descriptor the kernel ends up holding. Its name is tested with the
+//! salt (`salt_tests.rs`).
 
 use super::*;
+use crate::attach::salt::{Salt, pipe_name};
 
 /// The access every allowed entry grants: all file access.
 const FILE_ALL_ACCESS: u32 = 0x001F_01FF;
@@ -16,24 +18,10 @@ fn medium_label() -> win32::Entry {
 /// A pipe name of this test's own.
 fn unique(tag: &str) -> PathBuf {
     let dir = tempfile::tempdir().unwrap();
-    let name = socket_path(dir.path());
+    let mut salt = [0; 32];
+    getrandom::fill(&mut salt).unwrap();
+    let name = pipe_name(&Salt(salt), dir.path());
     PathBuf::from(format!("{}-{tag}", name.display()))
-}
-
-/// The name is the same however the workspace is spelt, differs between
-/// workspaces, and says nothing but a hash.
-#[test]
-fn the_name_follows_the_workspace() {
-    let one = tempfile::tempdir().unwrap();
-    let two = tempfile::tempdir().unwrap();
-    let name = socket_path(one.path());
-    assert_eq!(name, socket_path(one.path()));
-    assert_eq!(name, socket_path(&one.path().join(".")));
-    assert_ne!(name, socket_path(two.path()));
-    let shown = name.to_str().unwrap();
-    let hash = shown.strip_prefix(r"\\.\pipe\rusty-bacnet-mcp-").unwrap();
-    assert_eq!(hash.len(), 32, "{shown}");
-    assert!(hash.bytes().all(|b| b.is_ascii_hexdigit()), "{shown}");
 }
 
 /// A SID shows in its usual form.
