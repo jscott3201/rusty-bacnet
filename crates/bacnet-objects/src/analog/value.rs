@@ -511,41 +511,7 @@ impl BACnetObject for AnalogValueObject {
         Some(f64::from(self.cov_increment))
     }
 
-    crate::event::impl_builtin_intrinsic_reporting!(
-        event_detector,
-        event_history,
-        [present_value],
-        reliability,
-        event_detection_enable,
-        OutOfRangeDetector::ALGORITHM
-    );
-
-    fn acknowledge_alarm(
-        &mut self,
-        transition_bit: bacnet_types::bitstring::EventTransitionBits,
-    ) -> Result<(), bacnet_types::error::Error> {
-        self.event_detector.acked_transitions |=
-            transition_bit & bacnet_types::bitstring::EventTransitionBits::all();
-        Ok(())
-    }
-
-    fn acknowledge_alarm_correlated_internal(
-        &mut self,
-        event_state: EventState,
-        timestamp: &BACnetTimeStamp,
-    ) -> Result<(), Error> {
-        if !self.event_detection_enable {
-            return Err(Error::protocol(
-                ErrorClass::OBJECT,
-                ErrorCode::NO_ALARM_CONFIGURED,
-            ));
-        }
-        self.event_history.acknowledge_correlated(
-            &mut self.event_detector.acked_transitions,
-            event_state,
-            timestamp,
-        )
-    }
+    crate::traits::lend_event_reporting!();
 
     fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
         if self.out_of_service || self.reliability_inhibit.enabled() {
@@ -587,6 +553,16 @@ impl BACnetObject for AnalogValueObject {
         Some(self)
     }
 }
+
+crate::event::impl_builtin_intrinsic_reporting!(
+    AnalogValueObject,
+    event_detector,
+    event_history,
+    [present_value],
+    reliability,
+    event_detection_enable,
+    OutOfRangeDetector::ALGORITHM
+);
 
 /// The Present_Value the application supplies while it isn't commandable,
 /// published as Value_Source from `origin` when the object tracks its

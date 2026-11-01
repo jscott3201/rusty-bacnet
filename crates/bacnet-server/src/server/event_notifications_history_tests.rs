@@ -136,7 +136,16 @@ impl BACnetObject for AtomicHistoryObject {
         ])
     }
 
-    fn commit_event_transition_internal(
+    fn event_reporting(&self) -> Option<&dyn bacnet_objects::traits::EventReporting> {
+        Some(self)
+    }
+    fn event_reporting_mut(&mut self) -> Option<&mut dyn bacnet_objects::traits::EventReporting> {
+        Some(self)
+    }
+}
+
+impl bacnet_objects::traits::EventReporting for AtomicHistoryObject {
+    fn commit_event_transition(
         &mut self,
         _commit: EventTransitionCommit,
     ) -> Result<(), EventTransitionCommitError> {

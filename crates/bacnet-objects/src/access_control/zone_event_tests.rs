@@ -3,6 +3,7 @@
 //!
 //! Configuration goes through `write_property`, the route a client takes.
 
+use crate::traits::EventReporting as _;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::PropertyIdentifier as P;
 use bacnet_types::enums::{
@@ -121,7 +122,7 @@ fn access_zone_serves_the_event_rows() {
         );
     }
     assert_eq!(
-        zone.enrollment_summary_capability_internal()
+        zone.enrollment_summary_capability()
             .map(|capability| capability.event_type),
         Some(EventType::CHANGE_OF_STATE)
     );
@@ -388,7 +389,7 @@ fn access_zone_event_detection_enable_suspends_and_resets_reporting() {
     adjust(&mut zone, 6);
     let offnormal = zone.evaluate_intrinsic_reporting().unwrap();
     let stamp = BACnetTimeStamp::SequenceNumber(9);
-    zone.commit_event_transition_internal(EventTransitionCommit {
+    zone.commit_event_transition(EventTransitionCommit {
         change: offnormal.change.clone(),
         coordinate: EventTransition::ToOffnormal,
         ack_required: true,
@@ -425,7 +426,8 @@ fn access_zone_event_detection_enable_suspends_and_resets_reporting() {
     assert_eq!(zone.evaluate_intrinsic_reporting(), None);
     assert_eq!(zone.tick_intrinsic_reporting(), None);
     assert_protocol_error(
-        zone.acknowledge_alarm_correlated_internal(EventState::OFFNORMAL, &stamp),
+        zone.acknowledge_alarm(EventState::OFFNORMAL, &stamp)
+            .map(|_| ()),
         ErrorClass::OBJECT,
         ErrorCode::NO_ALARM_CONFIGURED,
     );
@@ -459,7 +461,7 @@ fn access_zone_acknowledges_its_latest_offnormal_transition() {
     adjust(&mut zone, 6);
     let offnormal = zone.evaluate_intrinsic_reporting().unwrap();
     let stamp = BACnetTimeStamp::SequenceNumber(41);
-    zone.commit_event_transition_internal(EventTransitionCommit {
+    zone.commit_event_transition(EventTransitionCommit {
         change: offnormal.change,
         coordinate: EventTransition::ToOffnormal,
         ack_required: true,
@@ -469,14 +471,11 @@ fn access_zone_acknowledges_its_latest_offnormal_transition() {
     .unwrap();
     // A stale time stamp is refused and changes nothing.
     assert!(
-        zone.acknowledge_alarm_correlated_detailed_internal(
-            EventState::OFFNORMAL,
-            &BACnetTimeStamp::SequenceNumber(40),
-        )
-        .is_err()
+        zone.acknowledge_alarm(EventState::OFFNORMAL, &BACnetTimeStamp::SequenceNumber(40),)
+            .is_err()
     );
     assert_eq!(
-        zone.acknowledge_alarm_correlated_detailed_internal(EventState::OFFNORMAL, &stamp)
+        zone.acknowledge_alarm(EventState::OFFNORMAL, &stamp)
             .unwrap(),
         Some(change(EventState::NORMAL, EventState::OFFNORMAL))
     );

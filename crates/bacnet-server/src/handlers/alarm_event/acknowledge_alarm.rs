@@ -5,6 +5,7 @@
 
 use super::super::*;
 use bacnet_objects::event::EventStateChange;
+use bacnet_objects::traits::no_alarm_configured;
 use bacnet_types::bitstring::EventTransitionBits;
 
 /// Exact context the bundled server can use for ACK_NOTIFICATION distribution.
@@ -25,8 +26,8 @@ pub struct AcceptedAcknowledgeAlarm {
     pub event_object_identifier: ObjectIdentifier,
     /// Exact notification context, when the object can provide it.
     ///
-    /// Custom objects implementing only the legacy coarse acknowledgment hook
-    /// return `None`; their accepted acknowledgment remains successful.
+    /// `None` when the object's acknowledgment returns no exact transition
+    /// (`Ok(None)`) or no Event Type; the acknowledgment remains accepted.
     pub notification: Option<AcknowledgmentNotificationContext>,
 }
 
@@ -47,13 +48,18 @@ pub fn handle_acknowledge_alarm(
             ErrorCode::UNKNOWN_OBJECT,
         ))?;
 
-    let change = object.acknowledge_alarm_correlated_detailed_internal(
-        request.event_state_acknowledged,
-        &request.timestamp,
-    )?;
+    let reporting = object
+        .event_reporting_mut()
+        .ok_or_else(no_alarm_configured)?;
+    let change =
+        reporting.acknowledge_alarm(request.event_state_acknowledged, &request.timestamp)?;
+    // The notification's Event Type comes from the object's own algorithm.
+    let correlated = change.and_then(|change| {
+        let algorithm = reporting.enrollment_summary_capability()?.event_type;
+        Some((change, algorithm))
+    });
 
-    let notification = change.and_then(|change| {
-        let algorithm = object.enrollment_summary_capability_internal()?.event_type;
+    let notification = correlated.and_then(|(change, algorithm)| {
         let PropertyValue::BitString { unused_bits, data } = object
             .read_property(PropertyIdentifier::EVENT_ENABLE, None)
             .ok()?

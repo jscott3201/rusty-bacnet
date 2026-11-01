@@ -155,7 +155,7 @@ fn project_buffer_ready(
     object: &dyn BACnetObject,
     device: Option<ObjectIdentifier>,
 ) -> Option<NotificationParameters> {
-    let report = object.buffer_ready_report_internal()?;
+    let report = object.event_reporting()?.buffer_ready_report()?;
     Some(NotificationParameters::BufferReady {
         buffer_property: BACnetDeviceObjectPropertyReference {
             object_identifier: object.object_identifier(),

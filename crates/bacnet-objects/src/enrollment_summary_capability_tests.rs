@@ -58,13 +58,17 @@ fn all_eleven_intrinsic_families_report_implied_algorithm_and_shared_commit_coor
 
     for (object, expected_event_type) in &mut objects {
         let capability = object
-            .enrollment_summary_capability_internal()
+            .event_reporting()
+            .expect("lends event reporting")
+            .enrollment_summary_capability()
             .expect("built-in family must opt in");
         assert_eq!(capability.event_type, *expected_event_type);
         assert_eq!(capability.last_transition, None);
 
         object
-            .commit_event_transition_internal(EventTransitionCommit {
+            .event_reporting_mut()
+            .unwrap()
+            .commit_event_transition(EventTransitionCommit {
                 change: EventStateChange {
                     from: EventState::NORMAL,
                     to: EventState::OFFNORMAL,
@@ -75,7 +79,11 @@ fn all_eleven_intrinsic_families_report_implied_algorithm_and_shared_commit_coor
                 message_text: None,
             })
             .unwrap();
-        let capability = object.enrollment_summary_capability_internal().unwrap();
+        let capability = object
+            .event_reporting()
+            .expect("lends event reporting")
+            .enrollment_summary_capability()
+            .unwrap();
         assert_eq!(capability.event_type, *expected_event_type);
         assert_eq!(
             capability.last_transition,

@@ -35,7 +35,8 @@ pub(super) async fn run<T: TransportPort + 'static>(
                 db.follow_event_algorithm_inhibit(&oid);
                 let Some(outcome) = db
                     .get_mut(&oid)
-                    .and_then(|object| object.tick_intrinsic_reporting())
+                    .and_then(|object| object.event_reporting_mut())
+                    .and_then(|reporting| reporting.tick_intrinsic_reporting())
                 else {
                     continue;
                 };

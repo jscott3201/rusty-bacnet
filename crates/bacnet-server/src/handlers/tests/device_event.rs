@@ -2,6 +2,7 @@ use super::*;
 use bacnet_encoding::primitives::encode_timestamp_choice;
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::property_metadata::PropertyMetadata;
+use bacnet_objects::traits::EventReporting as _;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::NotifyType;
 use bacnet_types::error::RemoteError;
@@ -127,7 +128,9 @@ fn commit_test_proposal(
     outcome: bacnet_objects::event::TransitionOutcome,
 ) {
     object
-        .commit_event_transition_internal(bacnet_objects::event::EventTransitionCommit {
+        .event_reporting_mut()
+        .unwrap()
+        .commit_event_transition(bacnet_objects::event::EventTransitionCommit {
             coordinate: outcome.change.transition(),
             change: outcome.change,
             ack_required: false,

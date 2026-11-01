@@ -1,6 +1,7 @@
 //! Multi-state Number_Of_States configuration and object-owned Reliability.
 
 use super::super::*;
+use crate::traits::EventReporting as _;
 use crate::traits::ReliabilityEvaluation;
 use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, Reliability};
 use bacnet_types::error::RemoteError;

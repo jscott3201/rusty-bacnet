@@ -34,8 +34,8 @@ use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 use bacnet_objects::staging::StagingWritePlan;
 use bacnet_objects::traits::{
-    AccessEvents, BACnetObject, Clocks, CommandRunner, CovReportedProperty, LifeSafety,
-    LifeSafetyOperationEffect, LifeSafetyOperationOutcome, LocalInput, LocalInputValue,
+    AccessEvents, BACnetObject, Clocks, CommandRunner, CovReportedProperty, EventReporting,
+    LifeSafety, LifeSafetyOperationEffect, LifeSafetyOperationOutcome, LocalInput, LocalInputValue,
     ReliabilityEvaluation, StagingSource, Timed,
 };
 use bacnet_objects::trend::TrendLogObject;
@@ -280,12 +280,13 @@ impl BACnetObject for Probe {
         self.called("life_safety", ());
         Some(self)
     }
-    fn enrollment_summary_capability_internal(&self) -> Option<EnrollmentSummaryCapability> {
-        self.called("enrollment_summary_capability_internal", ());
-        Some(EnrollmentSummaryCapability {
-            event_type: EventType::CHANGE_OF_STATE,
-            last_transition: None,
-        })
+    fn event_reporting(&self) -> Option<&dyn EventReporting> {
+        self.called("event_reporting", ());
+        Some(self)
+    }
+    fn event_reporting_mut(&mut self) -> Option<&mut dyn EventReporting> {
+        self.called("event_reporting_mut", ());
+        Some(self)
     }
     fn supports_cov_property(&self, property: P) -> bool {
         self.called("supports_cov_property", (property,));
@@ -303,35 +304,6 @@ impl BACnetObject for Probe {
     }
     fn set_overridden(&mut self, overridden: bool) {
         self.called("set_overridden", (overridden,));
-    }
-    fn evaluate_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
-        self.called("evaluate_intrinsic_reporting", ());
-        Some(TransitionOutcome {
-            change: EventStateChange {
-                from: EventState::NORMAL,
-                to: EventState::HIGH_LIMIT,
-            },
-            event_type: EventType::OUT_OF_RANGE,
-            distribute: true,
-        })
-    }
-    fn tick_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
-        self.called("tick_intrinsic_reporting", ());
-        Some(TransitionOutcome {
-            change: EventStateChange {
-                from: EventState::HIGH_LIMIT,
-                to: EventState::NORMAL,
-            },
-            event_type: EventType::OUT_OF_RANGE,
-            distribute: false,
-        })
-    }
-    fn commit_event_transition_internal(
-        &mut self,
-        commit: EventTransitionCommit,
-    ) -> Result<(), EventTransitionCommitError> {
-        self.called("commit_event_transition_internal", (commit,));
-        Ok(())
     }
     fn commit_event_enrollment_reliability_internal(
         &mut self,
@@ -370,31 +342,6 @@ impl BACnetObject for Probe {
     fn calendar_state_internal(&self, date: SpecificDate) -> Option<bool> {
         self.called("calendar_state_internal", (date,));
         Some(date == day())
-    }
-    fn acknowledge_alarm(&mut self, transition_bit: EventTransitionBits) -> Result<(), Error> {
-        self.called("acknowledge_alarm", (transition_bit,));
-        Ok(())
-    }
-    fn acknowledge_alarm_correlated_internal(
-        &mut self,
-        event_state: EventState,
-        timestamp: &BACnetTimeStamp,
-    ) -> Result<(), Error> {
-        let arguments = (event_state, timestamp);
-        self.called("acknowledge_alarm_correlated_internal", arguments);
-        Ok(())
-    }
-    fn acknowledge_alarm_correlated_detailed_internal(
-        &mut self,
-        event_state: EventState,
-        timestamp: &BACnetTimeStamp,
-    ) -> Result<Option<EventStateChange>, Error> {
-        let arguments = (event_state, timestamp);
-        self.called("acknowledge_alarm_correlated_detailed_internal", arguments);
-        Ok(Some(EventStateChange {
-            from: event_state,
-            to: EventState::NORMAL,
-        }))
     }
     fn set_event_state_internal(&mut self, state: EventState) -> Result<(), Error> {
         self.called("set_event_state_internal", (state,));
@@ -548,25 +495,6 @@ impl BACnetObject for Probe {
         self.called("logs_received_event_notifications_internal", ());
         true
     }
-    fn buffer_ready_report_internal(&self) -> Option<BufferReadyReport> {
-        self.called("buffer_ready_report_internal", ());
-        Some(BufferReadyReport {
-            previous_notification: 4,
-            current_notification: 9,
-        })
-    }
-    fn event_algorithm_inhibit_reference_internal(&self) -> Option<BACnetObjectPropertyReference> {
-        self.called("event_algorithm_inhibit_reference_internal", ());
-        Some(BACnetObjectPropertyReference {
-            object_identifier: oid(ObjectType::BINARY_VALUE, 43),
-            property_identifier: P::PRESENT_VALUE.to_raw(),
-            property_array_index: None,
-        })
-    }
-    fn follow_event_algorithm_inhibit_internal(&mut self, inhibit: bool) -> bool {
-        self.called("follow_event_algorithm_inhibit_internal", (inhibit,));
-        true
-    }
 }
 
 /// The probe's time capability: every method answers unlike its default
@@ -712,4 +640,76 @@ impl LifeSafety for Probe {
 /// object's own, unlike the default's OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
 fn own_record_error() -> Error {
     Error::protocol(ErrorClass::DEVICE, ErrorCode::OPERATIONAL_PROBLEM)
+}
+
+/// The probe's event reporting, logged under `EventReporting::`: every
+/// method answers unlike its default.
+impl EventReporting for Probe {
+    fn evaluate_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
+        self.called("EventReporting::evaluate_intrinsic_reporting", ());
+        Some(TransitionOutcome {
+            change: EventStateChange {
+                from: EventState::NORMAL,
+                to: EventState::HIGH_LIMIT,
+            },
+            event_type: EventType::OUT_OF_RANGE,
+            distribute: true,
+        })
+    }
+    fn tick_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
+        self.called("EventReporting::tick_intrinsic_reporting", ());
+        Some(TransitionOutcome {
+            change: EventStateChange {
+                from: EventState::HIGH_LIMIT,
+                to: EventState::NORMAL,
+            },
+            event_type: EventType::OUT_OF_RANGE,
+            distribute: false,
+        })
+    }
+    fn commit_event_transition(
+        &mut self,
+        commit: EventTransitionCommit,
+    ) -> Result<(), EventTransitionCommitError> {
+        self.called("EventReporting::commit_event_transition", (commit,));
+        Ok(())
+    }
+    fn acknowledge_alarm(
+        &mut self,
+        event_state: EventState,
+        timestamp: &BACnetTimeStamp,
+    ) -> Result<Option<EventStateChange>, Error> {
+        let arguments = (event_state, timestamp);
+        self.called("EventReporting::acknowledge_alarm", arguments);
+        Ok(Some(EventStateChange {
+            from: event_state,
+            to: EventState::NORMAL,
+        }))
+    }
+    fn enrollment_summary_capability(&self) -> Option<EnrollmentSummaryCapability> {
+        self.called("EventReporting::enrollment_summary_capability", ());
+        Some(EnrollmentSummaryCapability {
+            event_type: EventType::CHANGE_OF_STATE,
+            last_transition: None,
+        })
+    }
+    fn buffer_ready_report(&self) -> Option<BufferReadyReport> {
+        self.called("EventReporting::buffer_ready_report", ());
+        Some(BufferReadyReport {
+            previous_notification: 4,
+            current_notification: 9,
+        })
+    }
+    fn event_algorithm_inhibit_reference(&self) -> Option<BACnetObjectPropertyReference> {
+        self.called("EventReporting::event_algorithm_inhibit_reference", ());
+        Some(BACnetObjectPropertyReference {
+            object_identifier: oid(ObjectType::BINARY_VALUE, 43),
+            property_identifier: P::PRESENT_VALUE.to_raw(),
+            property_array_index: None,
+        })
+    }
+    fn follow_event_algorithm_inhibit(&mut self, inhibit: bool) -> bool {
+        self.called("EventReporting::follow_event_algorithm_inhibit", (inhibit,));
+        true
+    }
 }

@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::traits::EventReporting as _;
 
 #[test]
 fn bv_read_present_value_default() {

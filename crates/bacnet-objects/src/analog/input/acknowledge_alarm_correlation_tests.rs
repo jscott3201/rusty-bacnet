@@ -1,4 +1,5 @@
 use super::*;
+use crate::traits::EventReporting as _;
 use bacnet_types::error::RemoteError;
 
 use crate::event::{EventStateChange, EventTransition, EventTransitionCommit, PendingTransition};
@@ -7,7 +8,7 @@ fn committed_input() -> AnalogInputObject {
     let mut object =
         AnalogInputObject::new(1, "AI-correlated", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     object
-        .commit_event_transition_internal(EventTransitionCommit {
+        .commit_event_transition(EventTransitionCommit {
             change: EventStateChange {
                 from: EventState::NORMAL,
                 to: EventState::HIGH_LIMIT,
@@ -47,10 +48,7 @@ fn rejected_correlation_preserves_detector_pending_and_all_event_history() {
     );
 
     let error = object
-        .acknowledge_alarm_correlated_internal(
-            EventState::LOW_LIMIT,
-            &BACnetTimeStamp::SequenceNumber(99),
-        )
+        .acknowledge_alarm(EventState::LOW_LIMIT, &BACnetTimeStamp::SequenceNumber(99))
         .unwrap_err();
 
     assert_invalid_event_state(error);
@@ -79,10 +77,7 @@ fn idempotent_valid_correlation_changes_no_detector_or_history_state() {
     );
 
     object
-        .acknowledge_alarm_correlated_internal(
-            EventState::HIGH_LIMIT,
-            &BACnetTimeStamp::SequenceNumber(42),
-        )
+        .acknowledge_alarm(EventState::HIGH_LIMIT, &BACnetTimeStamp::SequenceNumber(42))
         .unwrap();
 
     assert_eq!(

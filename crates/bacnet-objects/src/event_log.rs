@@ -352,12 +352,14 @@ impl BACnetObject for EventLogObject {
         self.log_received_notifications
     }
 
-    impl_buffer_ready_reporting!(reporting, log_buffer);
+    crate::traits::lend_event_reporting!();
 
     fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
         Some(self)
     }
 }
+
+impl_buffer_ready_reporting!(EventLogObject, reporting, log_buffer);
 
 impl crate::traits::Timed for EventLogObject {
     fn bind_clocks(&mut self, clocks: &crate::traits::Clocks) {

@@ -2,6 +2,7 @@ use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject};
 use crate::property_metadata::{PropertyConformance, PropertyWriteCapability};
+use crate::traits::EventReporting as _;
 use crate::traits::{BACnetObject, ReliabilityEvaluation};
 use bacnet_types::enums::{EngineeringUnits, EventState, PropertyIdentifier, Reliability};
 use bacnet_types::primitives::PropertyValue;

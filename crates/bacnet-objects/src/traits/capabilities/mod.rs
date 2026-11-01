@@ -34,6 +34,7 @@
 
 mod access_events;
 mod command_runner;
+mod event_reporting;
 mod life_safety;
 mod local_input;
 mod staging_source;
@@ -44,6 +45,8 @@ pub use crate::durable::DurableWrites;
 pub use access_events::AccessEvents;
 #[doc(hidden)]
 pub use command_runner::CommandRunner;
+pub(crate) use event_reporting::lend_event_reporting;
+pub use event_reporting::{EventReporting, no_alarm_configured};
 pub use life_safety::LifeSafety;
 pub use local_input::{LocalInput, LocalInputValue};
 #[doc(hidden)]

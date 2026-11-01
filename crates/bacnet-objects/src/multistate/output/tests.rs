@@ -1,4 +1,5 @@
 use super::*;
+use crate::traits::EventReporting as _;
 use bacnet_types::enums::{EventState, EventType};
 
 fn write_unsigned(object: &mut MultiStateOutputObject, property: PropertyIdentifier, value: u64) {

@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::traits::EventReporting as _;
 use bacnet_types::enums::{EventState, EventType};
 
 fn write_enumerated(object: &mut BinaryOutputObject, property: PropertyIdentifier, value: u32) {

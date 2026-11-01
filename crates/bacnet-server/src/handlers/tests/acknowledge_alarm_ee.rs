@@ -144,7 +144,9 @@ fn ee_acknowledge_to_normal_bit() {
     let (mut db, ee_oid) = make_db_with_ack_required_ee();
     db.get_mut(&ee_oid)
         .unwrap()
-        .commit_event_transition_internal(bacnet_objects::event::EventTransitionCommit {
+        .event_reporting_mut()
+        .unwrap()
+        .commit_event_transition(bacnet_objects::event::EventTransitionCommit {
             change: bacnet_objects::event::EventStateChange {
                 from: EventState::NORMAL,
                 to: EventState::HIGH_LIMIT,
@@ -157,7 +159,9 @@ fn ee_acknowledge_to_normal_bit() {
         .unwrap();
     db.get_mut(&ee_oid)
         .unwrap()
-        .commit_event_transition_internal(bacnet_objects::event::EventTransitionCommit {
+        .event_reporting_mut()
+        .unwrap()
+        .commit_event_transition(bacnet_objects::event::EventTransitionCommit {
             change: bacnet_objects::event::EventStateChange {
                 from: EventState::HIGH_LIMIT,
                 to: EventState::NORMAL,

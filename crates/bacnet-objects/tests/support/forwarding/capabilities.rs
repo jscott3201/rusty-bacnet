@@ -13,14 +13,16 @@
 
 use super::declared;
 use super::fixtures::{clocks, oid};
-use super::rows::Row;
+use super::rows::{Row, commit};
 use bacnet_objects::access_control::AccessEventReport;
 use bacnet_objects::channel::MemberDatatype;
 use bacnet_objects::command::WriteFailure;
 use bacnet_objects::command_source::CommandOrigin;
 use bacnet_objects::traits::LocalInputValue;
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
-use bacnet_types::enums::{AccessEvent, LifeSafetyOperation, ObjectType, PropertyIdentifier as P};
+use bacnet_types::enums::{
+    AccessEvent, EventState, LifeSafetyOperation, ObjectType, PropertyIdentifier as P,
+};
 use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
 use std::collections::BTreeSet;
 use std::time::Duration;
@@ -36,6 +38,10 @@ const SOURCES: &[(&str, &str)] = &[
     (
         "command_runner",
         include_str!("../../../src/traits/capabilities/command_runner.rs"),
+    ),
+    (
+        "event_reporting",
+        include_str!("../../../src/traits/capabilities/event_reporting.rs"),
     ),
     (
         "life_safety",
@@ -197,6 +203,79 @@ pub const CAPABILITY_ROWS: &[(&str, Row)] = &[
                 })
             });
             format!("{committed:?}")
+        }),
+    ),
+    (
+        "EventReporting::evaluate_intrinsic_reporting",
+        Row::Command(|o| {
+            let outcome = o
+                .event_reporting_mut()
+                .map(|r| r.evaluate_intrinsic_reporting());
+            format!("{outcome:?}")
+        }),
+    ),
+    (
+        "EventReporting::tick_intrinsic_reporting",
+        Row::Command(|o| {
+            let outcome = o
+                .event_reporting_mut()
+                .map(|r| r.tick_intrinsic_reporting());
+            format!("{outcome:?}")
+        }),
+    ),
+    (
+        "EventReporting::commit_event_transition",
+        Row::Command(|o| {
+            let committed = o
+                .event_reporting_mut()
+                .map(|r| r.commit_event_transition(commit()));
+            format!("{committed:?}")
+        }),
+    ),
+    (
+        "EventReporting::acknowledge_alarm",
+        Row::Command(|o| {
+            let timestamp = BACnetTimeStamp::SequenceNumber(42);
+            let acknowledged = o
+                .event_reporting_mut()
+                .map(|r| r.acknowledge_alarm(EventState::HIGH_LIMIT, &timestamp));
+            format!("{acknowledged:?}")
+        }),
+    ),
+    // The two queries go through the shared accessor, the one a host's read
+    // guard lends, so a read-only view runs them as well.
+    (
+        "EventReporting::enrollment_summary_capability",
+        Row::Query(|o| {
+            let capability = o
+                .event_reporting()
+                .map(|r| r.enrollment_summary_capability());
+            format!("{capability:?}")
+        }),
+    ),
+    (
+        "EventReporting::buffer_ready_report",
+        Row::Query(|o| {
+            let report = o.event_reporting().map(|r| r.buffer_ready_report());
+            format!("{report:?}")
+        }),
+    ),
+    (
+        "EventReporting::event_algorithm_inhibit_reference",
+        Row::Query(|o| {
+            let reference = o
+                .event_reporting()
+                .map(|r| r.event_algorithm_inhibit_reference());
+            format!("{reference:?}")
+        }),
+    ),
+    (
+        "EventReporting::follow_event_algorithm_inhibit",
+        Row::Command(|o| {
+            let changed = o
+                .event_reporting_mut()
+                .map(|r| r.follow_event_algorithm_inhibit(true));
+            format!("{changed:?}")
         }),
     ),
     (

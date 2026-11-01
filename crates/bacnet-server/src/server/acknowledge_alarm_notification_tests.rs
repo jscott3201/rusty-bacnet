@@ -1,5 +1,6 @@
 use super::super::*;
 use bacnet_encoding::constructed::decode_event_notification;
+use bacnet_objects::traits::EventReporting as _;
 
 use crate::server::test_transport::{BIP_LOCAL_MAC, SendLog, TestTransport};
 use bacnet_encoding::apdu::decode_apdu;
@@ -182,7 +183,7 @@ impl Harness {
             )
             .unwrap();
         object
-            .commit_event_transition_internal(EventTransitionCommit {
+            .commit_event_transition(EventTransitionCommit {
                 change: EventStateChange {
                     from: EventState::NORMAL,
                     to: EventState::HIGH_LIMIT,

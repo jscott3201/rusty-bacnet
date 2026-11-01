@@ -7,6 +7,7 @@
 //! writable, so the transition bits were stuck at (F, F, F).
 
 use super::*;
+use crate::traits::EventReporting as _;
 use bacnet_encoding::primitives::{decode_timestamp_choice, encode_timestamp_choice};
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{ErrorClass, ErrorCode, EventState};

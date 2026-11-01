@@ -31,7 +31,9 @@ fn all_eleven_builtin_intrinsic_families_implement_atomic_commit() {
 
     for object in &mut objects {
         object
-            .commit_event_transition_internal(EventTransitionCommit {
+            .event_reporting_mut()
+            .unwrap()
+            .commit_event_transition(EventTransitionCommit {
                 change: EventStateChange {
                     from: EventState::NORMAL,
                     to: EventState::OFFNORMAL,

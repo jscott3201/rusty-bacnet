@@ -330,41 +330,7 @@ impl BACnetObject for AnalogInputObject {
         Some(f64::from(self.cov_increment))
     }
 
-    crate::event::impl_builtin_intrinsic_reporting!(
-        event_detector,
-        event_history,
-        [present_value],
-        reliability,
-        event_detection_enable,
-        OutOfRangeDetector::ALGORITHM
-    );
-
-    fn acknowledge_alarm(
-        &mut self,
-        transition_bit: bacnet_types::bitstring::EventTransitionBits,
-    ) -> Result<(), bacnet_types::error::Error> {
-        self.event_detector.acked_transitions |=
-            transition_bit & bacnet_types::bitstring::EventTransitionBits::all();
-        Ok(())
-    }
-
-    fn acknowledge_alarm_correlated_internal(
-        &mut self,
-        event_state: EventState,
-        timestamp: &BACnetTimeStamp,
-    ) -> Result<(), Error> {
-        if !self.event_detection_enable {
-            return Err(Error::protocol(
-                ErrorClass::OBJECT,
-                ErrorCode::NO_ALARM_CONFIGURED,
-            ));
-        }
-        self.event_history.acknowledge_correlated(
-            &mut self.event_detector.acked_transitions,
-            event_state,
-            timestamp,
-        )
-    }
+    crate::traits::lend_event_reporting!();
 
     fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
         if self.out_of_service || self.reliability_inhibit.enabled() {
@@ -407,6 +373,16 @@ impl BACnetObject for AnalogInputObject {
     }
 }
 
+crate::event::impl_builtin_intrinsic_reporting!(
+    AnalogInputObject,
+    event_detector,
+    event_history,
+    [present_value],
+    reliability,
+    event_detection_enable,
+    OutOfRangeDetector::ALGORITHM
+);
+
 /// The Present_Value the application supplies.
 impl crate::traits::LocalInput for AnalogInputObject {
     fn apply_local_input(&mut self, input: crate::traits::LocalInputValue) -> Result<(), Error> {
@@ -424,6 +400,7 @@ impl crate::traits::LocalInput for AnalogInputObject {
 #[cfg(test)]
 mod detection_enable_reset_tests {
     use super::*;
+    use crate::traits::EventReporting as _;
     use bacnet_types::error::RemoteError;
 
     #[test]
@@ -454,7 +431,7 @@ mod detection_enable_reset_tests {
         );
         assert!(ai.event_detector.pending.is_none());
 
-        ai.commit_event_transition_internal(EventTransitionCommit {
+        ai.commit_event_transition(EventTransitionCommit {
             coordinate: outcome.change.transition(),
             change: outcome.change,
             ack_required: true,
@@ -509,7 +486,7 @@ mod detection_enable_reset_tests {
             message_text: None,
         };
         assert_eq!(
-            delayed.commit_event_transition_internal(stale),
+            delayed.commit_event_transition(stale),
             Err(EventTransitionCommitError::CurrentStateMismatch {
                 expected: EventState::FAULT,
                 actual: EventState::NORMAL,
@@ -536,7 +513,7 @@ mod detection_enable_reset_tests {
             }
         );
         assert_eq!(
-            faulted.commit_event_transition_internal(EventTransitionCommit {
+            faulted.commit_event_transition(EventTransitionCommit {
                 change: reindication.change.clone(),
                 coordinate: EventTransition::ToNormal,
                 ack_required: false,

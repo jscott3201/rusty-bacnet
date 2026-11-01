@@ -4033,6 +4033,20 @@ behaviour, so an object without it writes nothing.
   object and `set_life_safety_operation_expected` arms the operation it
   expects next ([Life Safety execution and COV](#life-safety-execution-and-cov)).
   Both default to `not_supported()`.
+- **`event_reporting()` and `event_reporting_mut()` → `EventReporting`**, for
+  an object that reports events: an intrinsic reporter, an Event or Alert
+  Enrollment, or a log reporting BUFFER_READY. The shared accessor serves the
+  queries the server makes under a read guard (the Event_Algorithm_Inhibit_Ref
+  the database follows, and GetEnrollmentSummary); the mutable one serves
+  `evaluate_intrinsic_reporting`, `tick_intrinsic_reporting`,
+  `commit_event_transition`, `acknowledge_alarm` and
+  `follow_event_algorithm_inhibit`. An object lends both or neither; the
+  proposal and commit contract is set out below.
+  `acknowledge_alarm(event_state, &timestamp)` takes an AcknowledgeAlarm
+  request's event state and timestamp and returns the acknowledged
+  transition's states when it keeps them; it defaults to, and the server
+  answers an object that lends none with, `no_alarm_configured()`, OBJECT /
+  NO_ALARM_CONFIGURED.
 
 ```rust,ignore
 use bacnet_objects::traits::{BACnetObject, Clocks, Timed};
@@ -4085,6 +4099,76 @@ object
     .local_input()
     .ok_or_else(not_supported)?
     .apply_local_input(LocalInputValue::present_value(value))?;
+```
+
+Event reporting moves the same way. `commit_event_transition_internal`,
+`enrollment_summary_capability_internal`,
+`event_algorithm_inhibit_reference_internal`,
+`follow_event_algorithm_inhibit_internal` and
+`buffer_ready_report_internal` drop their suffix as `EventReporting` methods.
+`acknowledge_alarm_correlated_internal` and
+`acknowledge_alarm_correlated_detailed_internal` become one
+`acknowledge_alarm`. The old bits-only `BACnetObject::acknowledge_alarm(bits)`
+is removed outright: the server never called it, and its default refused with
+OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. A call on a concrete type, such as
+`ai.evaluate_intrinsic_reporting()`, needs
+`use bacnet_objects::traits::EventReporting;` in scope; through a
+`dyn BACnetObject`, go through the accessor:
+
+```rust,ignore
+// Before: on `impl BACnetObject for MyAlarm`.
+fn evaluate_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
+    self.detector.propose(self.value)
+}
+fn commit_event_transition_internal(
+    &mut self,
+    commit: EventTransitionCommit,
+) -> Result<(), EventTransitionCommitError> {
+    self.history.commit(commit)
+}
+fn acknowledge_alarm_correlated_detailed_internal(
+    &mut self,
+    state: EventState,
+    timestamp: &BACnetTimeStamp,
+) -> Result<Option<EventStateChange>, Error> {
+    self.history.acknowledge(state, timestamp)
+}
+
+// After: lend the capability.
+use bacnet_objects::traits::EventReporting;
+
+// In `impl BACnetObject for MyAlarm`:
+fn event_reporting(&self) -> Option<&dyn EventReporting> {
+    Some(self)
+}
+fn event_reporting_mut(&mut self) -> Option<&mut dyn EventReporting> {
+    Some(self)
+}
+
+impl EventReporting for MyAlarm {
+    fn evaluate_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
+        self.detector.propose(self.value)
+    }
+    fn commit_event_transition(
+        &mut self,
+        commit: EventTransitionCommit,
+    ) -> Result<(), EventTransitionCommitError> {
+        self.history.commit(commit)
+    }
+    fn acknowledge_alarm(
+        &mut self,
+        state: EventState,
+        timestamp: &BACnetTimeStamp,
+    ) -> Result<Option<EventStateChange>, Error> {
+        self.history.acknowledge(state, timestamp)
+    }
+}
+
+// A caller that held the object:
+let change = object
+    .event_reporting_mut()
+    .ok_or_else(no_alarm_configured)?
+    .acknowledge_alarm(state, &timestamp)?;
 ```
 
 Createability belongs to the object type, not to an instance, so the trait
@@ -4306,17 +4390,19 @@ no element codec, such as a vendor list, or a value of another shape) returns
 whole. Custom objects that hold a vendor list should return
 `PropertyValue::List`, one value per item.
 
-Intrinsic reporting uses one proposal/commit contract. The
-`evaluate_intrinsic_reporting` and `tick_intrinsic_reporting` hooks return a
+Intrinsic reporting uses one proposal/commit contract, on the
+`EventReporting` capability. Its
+`evaluate_intrinsic_reporting` and `tick_intrinsic_reporting` return a
 fire-ready `TransitionOutcome` while leaving event state, acknowledgment bits,
 history, and the ready proposal unchanged until commit succeeds. Implement
-`commit_event_transition_internal` to validate the supplied
+`commit_event_transition` to validate the supplied
 `EventTransitionCommit`, atomically apply all object-owned transition state, and
 return `EventTransitionCommitError` without mutation on failure. Custom objects
 can use these public types directly; the built-in private commit kernel is not
 required. Both server paths commit before distribution, even when Event_Enable,
-DCC, or an empty recipient list suppresses sending. The default commit hook
-returns `Unsupported`; it never authorizes an intrinsic notification.
+DCC, or an empty recipient list suppresses sending. The default commit
+returns `Unsupported`, as the server does for an object that lends no
+`EventReporting`; it never authorizes an intrinsic notification.
 
 The pre-1.0 API removes `intrinsic_reporting_requires_atomic_commit` and the
 exported `impl_intrinsic_reporting!` macro. Migrate custom objects to the hooks

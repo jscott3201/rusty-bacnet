@@ -1,5 +1,6 @@
 use super::super::*;
 use crate::event::{EventStateChange, EventTransition};
+use crate::traits::EventReporting as _;
 use bacnet_types::enums::EventType;
 
 fn monitored_reference() -> BACnetDeviceObjectPropertyReference {
@@ -14,7 +15,7 @@ fn monitored_reference() -> BACnetDeviceObjectPropertyReference {
 #[test]
 fn configured_event_enrollment_reports_stored_type_and_shared_commit_coordinate() {
     let mut enrollment = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_VALUE).unwrap();
-    assert_eq!(enrollment.enrollment_summary_capability_internal(), None);
+    assert_eq!(enrollment.enrollment_summary_capability(), None);
 
     enrollment
         .set_object_property_reference(Some(monitored_reference()))
@@ -26,13 +27,13 @@ fn configured_event_enrollment_reports_stored_type_and_shared_commit_coordinate(
         ),
     });
     let capability = enrollment
-        .enrollment_summary_capability_internal()
+        .enrollment_summary_capability()
         .expect("supported configured enrollment must opt in");
     assert_eq!(capability.event_type, EventType::CHANGE_OF_VALUE);
     assert_eq!(capability.last_transition, None);
 
     enrollment
-        .commit_event_transition_internal(EventTransitionCommit {
+        .commit_event_transition(EventTransitionCommit {
             change: EventStateChange {
                 from: EventState::NORMAL,
                 to: EventState::OFFNORMAL,
@@ -45,7 +46,7 @@ fn configured_event_enrollment_reports_stored_type_and_shared_commit_coordinate(
         .unwrap();
     assert_eq!(
         enrollment
-            .enrollment_summary_capability_internal()
+            .enrollment_summary_capability()
             .unwrap()
             .last_transition,
         Some(EventTransition::ToOffnormal)
@@ -63,14 +64,14 @@ fn unreferenced_event_enrollment_and_alert_enrollment_opt_out() {
         extended_event_type: 2,
         parameters: Vec::new(),
     });
-    assert_eq!(enrollment.enrollment_summary_capability_internal(), None);
+    assert_eq!(enrollment.enrollment_summary_capability(), None);
 
     enrollment
         .set_object_property_reference(Some(monitored_reference()))
         .unwrap();
     assert_eq!(
         enrollment
-            .enrollment_summary_capability_internal()
+            .enrollment_summary_capability()
             .unwrap()
             .event_type,
         EventType::EXTENDED
@@ -82,7 +83,7 @@ fn unreferenced_event_enrollment_and_alert_enrollment_opt_out() {
         ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
     )
     .unwrap();
-    assert_eq!(alert.enrollment_summary_capability_internal(), None);
+    assert_eq!(alert.enrollment_summary_capability(), None);
 }
 
 #[test]
@@ -107,7 +108,7 @@ fn detection_enable_is_separate_from_configured_capability() {
         .unwrap();
 
     let capability = enrollment
-        .enrollment_summary_capability_internal()
+        .enrollment_summary_capability()
         .expect("handler, not capability, applies detection-enable exclusion");
     assert_eq!(capability.event_type, EventType::OUT_OF_RANGE);
     assert_eq!(capability.last_transition, None);
@@ -135,14 +136,12 @@ fn unset_event_parameters_serve_the_none_alternative() {
         (BACnetEventParameter::None, 2)
     );
     assert_eq!(
-        ee.enrollment_summary_capability_internal()
-            .unwrap()
-            .event_type,
+        ee.enrollment_summary_capability().unwrap().event_type,
         EventType::NONE
     );
     // Without a reference it can't fault, so it stays out.
     ee.set_object_property_reference(None).unwrap();
-    assert_eq!(ee.enrollment_summary_capability_internal(), None);
+    assert_eq!(ee.enrollment_summary_capability(), None);
 
     // The served value writes back as itself.
     ee.write_property(

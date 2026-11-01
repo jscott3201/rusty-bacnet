@@ -628,11 +628,7 @@ impl BACnetObject for AccessDoorObject {
         true
     }
 
-    crate::event::impl_change_of_state_reporting!(
-        reporting,
-        Self::watched_alarm_state,
-        Self::served_reliability
-    );
+    crate::traits::lend_event_reporting!();
 
     fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
         Some(self)
@@ -642,6 +638,13 @@ impl BACnetObject for AccessDoorObject {
         Some(self)
     }
 }
+
+crate::event::impl_change_of_state_reporting!(
+    AccessDoorObject,
+    reporting,
+    Self::watched_alarm_state,
+    Self::served_reliability
+);
 
 /// Take what the door's hardware reports (#1132): Door_Status,
 /// Lock_Status and Door_Alarm_State, each one given, together. A value

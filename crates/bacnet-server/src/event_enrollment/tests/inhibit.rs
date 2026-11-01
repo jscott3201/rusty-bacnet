@@ -410,19 +410,28 @@ impl BACnetObject for UnencodableParameters {
             .set_acked_transitions_internal(transition_bit, acknowledged)
     }
 
-    fn commit_event_transition_internal(
-        &mut self,
-        commit: bacnet_objects::event::EventTransitionCommit,
-    ) -> Result<(), bacnet_objects::event::EventTransitionCommitError> {
-        self.inner.commit_event_transition_internal(commit)
-    }
-
     fn commit_event_enrollment_reliability_internal(
         &mut self,
         commit: bacnet_objects::event_enrollment::EventEnrollmentReliabilityCommit,
     ) -> Result<(), bacnet_objects::event::EventTransitionCommitError> {
         self.inner
             .commit_event_enrollment_reliability_internal(commit)
+    }
+
+    fn event_reporting(&self) -> Option<&dyn bacnet_objects::traits::EventReporting> {
+        Some(self)
+    }
+    fn event_reporting_mut(&mut self) -> Option<&mut dyn bacnet_objects::traits::EventReporting> {
+        Some(self)
+    }
+}
+
+impl bacnet_objects::traits::EventReporting for UnencodableParameters {
+    fn commit_event_transition(
+        &mut self,
+        commit: bacnet_objects::event::EventTransitionCommit,
+    ) -> Result<(), bacnet_objects::event::EventTransitionCommitError> {
+        self.inner.commit_event_transition(commit)
     }
 }
 

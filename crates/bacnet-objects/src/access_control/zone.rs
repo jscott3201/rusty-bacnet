@@ -323,11 +323,7 @@ impl BACnetObject for AccessZoneObject {
         super::metadata_topology::for_access_zone_object(self)
     }
 
-    crate::event::impl_change_of_state_reporting!(
-        reporting,
-        Self::watched_state,
-        Self::served_reliability
-    );
+    crate::traits::lend_event_reporting!();
 
     /// The Reliability the zone's fault detection works out. Like the other
     /// Reliability carriers, the zone refuses it with WRITE_ACCESS_DENIED
@@ -343,6 +339,13 @@ impl BACnetObject for AccessZoneObject {
         Ok(())
     }
 }
+
+crate::event::impl_change_of_state_reporting!(
+    AccessZoneObject,
+    reporting,
+    Self::watched_state,
+    Self::served_reliability
+);
 
 /// The states Alarm_Values can hold: a BACnetAccessZoneOccupancyState other
 /// than NORMAL.

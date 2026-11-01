@@ -306,17 +306,23 @@ impl BACnetObject for AlertEnrollmentObject {
         )
     }
 
-    fn event_algorithm_inhibit_reference_internal(
+    crate::traits::lend_event_reporting!();
+
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        Cow::Borrowed(metadata::ALERT_ENROLLMENT_PROPERTIES)
+    }
+}
+
+/// An Alert Enrollment's alerts come from its server-side evaluator, so it
+/// lends event reporting for its Event_Algorithm_Inhibit_Ref alone.
+impl crate::traits::EventReporting for AlertEnrollmentObject {
+    fn event_algorithm_inhibit_reference(
         &self,
     ) -> Option<bacnet_types::constructed::BACnetObjectPropertyReference> {
         self.event_history.options.inhibit_reference().cloned()
     }
 
-    fn follow_event_algorithm_inhibit_internal(&mut self, inhibit: bool) -> bool {
+    fn follow_event_algorithm_inhibit(&mut self, inhibit: bool) -> bool {
         self.event_history.options.follow(inhibit)
-    }
-
-    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
-        Cow::Borrowed(metadata::ALERT_ENROLLMENT_PROPERTIES)
     }
 }

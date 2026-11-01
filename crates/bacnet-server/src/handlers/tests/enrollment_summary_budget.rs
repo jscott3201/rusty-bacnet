@@ -40,9 +40,19 @@ impl BACnetObject for Counted {
         self.1.fetch_add(1, Ordering::SeqCst);
         self.0.property_metadata()
     }
-    fn enrollment_summary_capability_internal(&self) -> Option<EnrollmentSummaryCapability> {
+
+    fn event_reporting(&self) -> Option<&dyn bacnet_objects::traits::EventReporting> {
+        Some(self)
+    }
+    fn event_reporting_mut(&mut self) -> Option<&mut dyn bacnet_objects::traits::EventReporting> {
+        Some(self)
+    }
+}
+
+impl bacnet_objects::traits::EventReporting for Counted {
+    fn enrollment_summary_capability(&self) -> Option<EnrollmentSummaryCapability> {
         self.1.fetch_add(1, Ordering::SeqCst);
-        self.0.enrollment_summary_capability_internal()
+        self.0.enrollment_summary_capability()
     }
 }
 fn candidate(instance: u32) -> SummaryFixture {

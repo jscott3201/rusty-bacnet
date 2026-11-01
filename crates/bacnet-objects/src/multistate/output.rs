@@ -203,32 +203,7 @@ impl BACnetObject for MultiStateOutputObject {
         true
     }
 
-    crate::event::impl_builtin_intrinsic_reporting!(
-        event_detector,
-        event_history,
-        [present_value, feedback_value],
-        reliability,
-        event_detection_enable,
-        CommandFailureDetector::ALGORITHM
-    );
-
-    fn acknowledge_alarm_correlated_internal(
-        &mut self,
-        event_state: EventState,
-        timestamp: &BACnetTimeStamp,
-    ) -> Result<(), Error> {
-        if !self.event_detection_enable {
-            return Err(Error::protocol(
-                ErrorClass::OBJECT,
-                ErrorCode::NO_ALARM_CONFIGURED,
-            ));
-        }
-        self.event_history.acknowledge_correlated(
-            &mut self.event_detector.acked_transitions,
-            event_state,
-            timestamp,
-        )
-    }
+    crate::traits::lend_event_reporting!();
 
     fn read_property(
         &self,
@@ -529,6 +504,16 @@ impl BACnetObject for MultiStateOutputObject {
         self.reliability_inhibit.enabled()
     }
 }
+
+crate::event::impl_builtin_intrinsic_reporting!(
+    MultiStateOutputObject,
+    event_detector,
+    event_history,
+    [present_value, feedback_value],
+    reliability,
+    event_detection_enable,
+    CommandFailureDetector::ALGORITHM
+);
 
 #[cfg(test)]
 #[path = "output/tests.rs"]

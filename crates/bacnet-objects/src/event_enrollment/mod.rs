@@ -6,9 +6,10 @@ use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventParameter, FaultParameters,
 };
+#[cfg(test)]
+use bacnet_types::enums::ErrorCode;
 use bacnet_types::enums::{
-    ErrorClass, ErrorCode, EventState, EventType, NotifyType, ObjectType, PropertyIdentifier,
-    Reliability,
+    EventState, EventType, NotifyType, ObjectType, PropertyIdentifier, Reliability,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue, StatusFlags};
@@ -286,21 +287,6 @@ impl BACnetObject for EventEnrollmentObject {
         &self.name
     }
 
-    fn enrollment_summary_capability_internal(&self) -> Option<EnrollmentSummaryCapability> {
-        // Any enrollment with a monitored reference can fault: the monitored
-        // object's fault and the configuration checks run before the
-        // parameters are looked at, so whatever Event_Parameters hold (`none`,
-        // an unmodeled alternative, Extended) its TO_FAULT is listed and
-        // acknowledged (#1868). Event_Detection_Enable FALSE is left to the
-        // summary and acknowledgment paths.
-        self.object_property_reference
-            .is_some()
-            .then(|| EnrollmentSummaryCapability {
-                event_type: self.event_type(),
-                last_transition: self.event_history.last_transition(),
-            })
-    }
-
     fn read_property(
         &self,
         property: PropertyIdentifier,
@@ -563,66 +549,6 @@ impl BACnetObject for EventEnrollmentObject {
         Ok(())
     }
 
-    /// Acknowledge an alarm transition (the AcknowledgeAlarm service route,
-    /// Clause 13.9): Clause 13.2.3 sets the bit on the acknowledgment
-    /// indication — unconditional and idempotent, so a repeated ack succeeds
-    /// again. A detection-DISABLED enrollment instead refuses with
-    /// OBJECT/NO_ALARM_CONFIGURED, which Table 13-10 uses for an existing object
-    /// lacking event-generation support or configuration: it can
-    /// generate nothing, and Clause 12.12 keeps its `Acked_Transitions` at
-    /// the initial condition, which an accepted ack would break.
-    /// Out_Of_Service does not gate the ack: no clause bars acknowledging a
-    /// notification already issued while the object is out of service.
-    fn acknowledge_alarm(
-        &mut self,
-        transition_bit: EventTransitionBits,
-    ) -> Result<(), bacnet_types::error::Error> {
-        if !self.event_detection_enable {
-            return Err(bacnet_types::error::Error::protocol(
-                bacnet_types::enums::ErrorClass::OBJECT,
-                bacnet_types::enums::ErrorCode::NO_ALARM_CONFIGURED,
-            ));
-        }
-        self.acked_transitions |= transition_bit & EventTransitionBits::all();
-        Ok(())
-    }
-
-    fn acknowledge_alarm_correlated_internal(
-        &mut self,
-        event_state: EventState,
-        timestamp: &BACnetTimeStamp,
-    ) -> Result<(), Error> {
-        if !self.event_detection_enable || self.enrollment_summary_capability_internal().is_none() {
-            return Err(Error::protocol(
-                ErrorClass::OBJECT,
-                ErrorCode::NO_ALARM_CONFIGURED,
-            ));
-        }
-        self.event_history.acknowledge_correlated(
-            &mut self.acked_transitions,
-            event_state,
-            timestamp,
-        )
-    }
-
-    fn acknowledge_alarm_correlated_detailed_internal(
-        &mut self,
-        event_state: EventState,
-        timestamp: &BACnetTimeStamp,
-    ) -> Result<Option<crate::event::EventStateChange>, Error> {
-        if !self.event_detection_enable || self.enrollment_summary_capability_internal().is_none() {
-            return Err(Error::protocol(
-                ErrorClass::OBJECT,
-                ErrorCode::NO_ALARM_CONFIGURED,
-            ));
-        }
-        self.event_history.acknowledge_correlated_detailed(
-            &mut self.acked_transitions,
-            event_state,
-            timestamp,
-        )
-    }
-
     /// Clause 13.2.3's transition-received maintenance of `Acked_Transitions`:
     /// the evaluator resolves `Ack_Required` from the referenced Notification
     /// Class object and this call applies the outcome — clear the bit when
@@ -642,7 +568,9 @@ impl BACnetObject for EventEnrollmentObject {
         Ok(())
     }
 
-    transition::impl_event_enrollment_transition_commit!();
+    transition::impl_event_enrollment_reliability_commit!();
+
+    crate::traits::lend_event_reporting!();
 
     /// Mirrors the `write_property` arms above, so PICS reports what dispatch
     /// actually accepts.
@@ -681,18 +609,70 @@ impl BACnetObject for EventEnrollmentObject {
         )
     }
 
-    fn event_algorithm_inhibit_reference_internal(
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        Cow::Borrowed(metadata::EVENT_ENROLLMENT_PROPERTIES)
+    }
+}
+
+impl crate::traits::EventReporting for EventEnrollmentObject {
+    fn enrollment_summary_capability(&self) -> Option<EnrollmentSummaryCapability> {
+        // Any enrollment with a monitored reference can fault: the monitored
+        // object's fault and the configuration checks run before the
+        // parameters are looked at, so whatever Event_Parameters hold (`none`,
+        // an unmodeled alternative, Extended) its TO_FAULT is listed and
+        // acknowledged (#1868). Event_Detection_Enable FALSE is left to the
+        // summary and acknowledgment paths.
+        self.object_property_reference
+            .is_some()
+            .then(|| EnrollmentSummaryCapability {
+                event_type: self.event_type(),
+                last_transition: self.event_history.last_transition(),
+            })
+    }
+
+    fn commit_event_transition(
+        &mut self,
+        commit: EventTransitionCommit,
+    ) -> Result<(), EventTransitionCommitError> {
+        transition::commit_event_transition(
+            &mut self.event_state,
+            &mut self.acked_transitions,
+            &mut self.event_history,
+            commit,
+        )
+    }
+
+    /// The AcknowledgeAlarm service route (Clause 13.9). A detection-disabled
+    /// enrollment, or one with no monitored reference, refuses with
+    /// OBJECT/NO_ALARM_CONFIGURED, which Table 13-10 uses for an existing
+    /// object lacking event-generation support or configuration: it can
+    /// generate nothing, and Clause 12.12 keeps its `Acked_Transitions` at
+    /// the initial condition, which an accepted ack would break.
+    /// Out_Of_Service does not gate the ack: no clause forbids acknowledging
+    /// a notification sent during an Out_Of_Service period.
+    fn acknowledge_alarm(
+        &mut self,
+        event_state: EventState,
+        timestamp: &BACnetTimeStamp,
+    ) -> Result<Option<crate::event::EventStateChange>, Error> {
+        if !self.event_detection_enable || self.enrollment_summary_capability().is_none() {
+            return Err(crate::traits::no_alarm_configured());
+        }
+        self.event_history.acknowledge_correlated(
+            &mut self.acked_transitions,
+            event_state,
+            timestamp,
+        )
+    }
+
+    fn event_algorithm_inhibit_reference(
         &self,
     ) -> Option<bacnet_types::constructed::BACnetObjectPropertyReference> {
         self.event_history.options.inhibit_reference().cloned()
     }
 
-    fn follow_event_algorithm_inhibit_internal(&mut self, inhibit: bool) -> bool {
+    fn follow_event_algorithm_inhibit(&mut self, inhibit: bool) -> bool {
         self.event_history.options.follow(inhibit)
-    }
-
-    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
-        Cow::Borrowed(metadata::EVENT_ENROLLMENT_PROPERTIES)
     }
 }
 

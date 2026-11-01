@@ -68,7 +68,8 @@ pub fn queries() -> impl Iterator<Item = (&'static str, Query)> {
     QUERIES.iter().copied().chain(capabilities)
 }
 
-fn commit() -> EventTransitionCommit {
+/// The transition commit the rows hand over.
+pub fn commit() -> EventTransitionCommit {
     EventTransitionCommit {
         change: EventStateChange {
             from: EventState::NORMAL,
@@ -168,8 +169,8 @@ pub const QUERIES: &[(&str, Query)] = &[
     ("command_runner", |o| {
         format!("{:?}", o.command_runner().map(address))
     }),
-    ("enrollment_summary_capability_internal", |o| {
-        format!("{:?}", o.enrollment_summary_capability_internal())
+    ("event_reporting", |o| {
+        format!("{:?}", o.event_reporting().map(address))
     }),
     ("supports_cov_property", |o| {
         format!(
@@ -229,12 +230,6 @@ pub const QUERIES: &[(&str, Query)] = &[
     }),
     ("log_collecting_internal", |o| {
         o.log_collecting_internal().to_string()
-    }),
-    ("buffer_ready_report_internal", |o| {
-        format!("{:?}", o.buffer_ready_report_internal())
-    }),
-    ("event_algorithm_inhibit_reference_internal", |o| {
-        format!("{:?}", o.event_algorithm_inhibit_reference_internal())
     }),
 ];
 
@@ -322,17 +317,14 @@ pub const COMMANDS: &[(&str, Command)] = &[
             o.life_safety().map(|life_safety| address(life_safety))
         )
     }),
+    ("event_reporting_mut", |o| {
+        format!(
+            "{:?}",
+            o.event_reporting_mut().map(|reporting| address(reporting))
+        )
+    }),
     ("set_overridden", |o| {
         format!("{:?}", o.set_overridden(true))
-    }),
-    ("evaluate_intrinsic_reporting", |o| {
-        format!("{:?}", o.evaluate_intrinsic_reporting())
-    }),
-    ("tick_intrinsic_reporting", |o| {
-        format!("{:?}", o.tick_intrinsic_reporting())
-    }),
-    ("commit_event_transition_internal", |o| {
-        format!("{:?}", o.commit_event_transition_internal(commit()))
     }),
     ("commit_event_enrollment_reliability_internal", |o| {
         let commit = EventEnrollmentReliabilityCommit {
@@ -356,23 +348,6 @@ pub const COMMANDS: &[(&str, Command)] = &[
         let outcomes = [ScheduleTargetOutcome::DatatypeRefused];
         o.complete_schedule_write(&schedule_write(2), &outcomes)
             .to_string()
-    }),
-    ("acknowledge_alarm", |o| {
-        format!("{:?}", o.acknowledge_alarm(EventTransitionBits::TO_FAULT))
-    }),
-    ("acknowledge_alarm_correlated_internal", |o| {
-        let timestamp = BACnetTimeStamp::SequenceNumber(42);
-        format!(
-            "{:?}",
-            o.acknowledge_alarm_correlated_internal(EventState::HIGH_LIMIT, &timestamp)
-        )
-    }),
-    ("acknowledge_alarm_correlated_detailed_internal", |o| {
-        let timestamp = BACnetTimeStamp::SequenceNumber(42);
-        format!(
-            "{:?}",
-            o.acknowledge_alarm_correlated_detailed_internal(EventState::HIGH_LIMIT, &timestamp)
-        )
     }),
     ("set_event_state_internal", |o| {
         format!("{:?}", o.set_event_state_internal(EventState::OFFNORMAL))
@@ -407,9 +382,6 @@ pub const COMMANDS: &[(&str, Command)] = &[
     }),
     ("set_input_usable_internal", |o| {
         format!("{:?}", o.set_input_usable_internal(false))
-    }),
-    ("follow_event_algorithm_inhibit_internal", |o| {
-        format!("{:?}", o.follow_event_algorithm_inhibit_internal(true))
     }),
     ("take_input_reading_internal", |o| {
         let reading = InputReading {
