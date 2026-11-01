@@ -31,6 +31,7 @@ const HEADER_LEN: usize = 8 + 4;
 /// them; only the file system calls are left out (open, read, write,
 /// synchronize, rename).
 #[cfg(feature = "test-support")]
+#[doc(hidden)]
 #[derive(Clone, Debug, Default)]
 pub struct MemoryFiles(alloc::sync::Arc<std::sync::Mutex<[Option<Vec<u8>>; 2]>>);
 

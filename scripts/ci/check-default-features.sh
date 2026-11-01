@@ -68,6 +68,14 @@ echo "==> bacnet-objects (no_std with alloc$label)"
 cargo_for clippy -p bacnet-objects --no-default-features --features alloc --locked -- -D warnings
 cargo_for doc -p bacnet-objects --no-default-features --features alloc --no-deps --locked --document-private-items
 
+# bacnet-objects with its hidden test-support feature (#2233): the file
+# backends' in-memory mode, which only the restore fuzz crate turns on, so
+# no workspace run lints or documents it. All targets, so its tests build
+# against it too; the only dev-dependency, proptest, has no C build.
+echo "==> bacnet-objects (test-support$label)"
+cargo_for clippy -p bacnet-objects --all-targets --features test-support --locked -- -D warnings
+cargo_for doc -p bacnet-objects --features test-support --no-deps --locked --document-private-items
+
 # bacnet-device-core the same way (#2178): it serves a bacnet-objects
 # database, so it has no build without alloc either.
 echo "==> bacnet-device-core (no_std with alloc$label)"

@@ -211,16 +211,25 @@ pub fn check(target: Target, input: &[u8]) -> Outcome {
 }
 
 /// The same restore from real files, in this thread's scratch directory,
-/// which must come to the same outcome as [`check`].
+/// which must come to the same outcome as [`check`] and leave the storage
+/// holding the same octets. Nothing the check builds reads a clock (the
+/// objects get none), so both runs write the same octets.
 pub fn check_files(target: Target, input: &[u8]) -> Outcome {
     let (format, files) = parse(target, input);
     let base = base(format);
     write_files(&format.files(&base), &files);
-    let outcome = format.check(&Files::new(format, &base));
+    let on_disk = Files::new(format, &base);
+    let outcome = format.check(&on_disk);
+    let memory = Memory::new(files);
     assert_eq!(
         outcome,
-        format.check(&Memory::new(files)),
+        format.check(&memory),
         "{}: the files and memory restore differently",
+        format.name
+    );
+    assert!(
+        on_disk.contents() == memory.contents(),
+        "{}: the files and memory hold different octets after the restore",
         format.name
     );
     outcome

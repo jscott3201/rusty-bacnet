@@ -118,6 +118,8 @@ impl FileAuditLogPersistence {
     /// entries 0 and 1 instead of on disk, decoding, selecting and encoding
     /// them as on disk (#2233). [`slot_paths`](Self::slot_paths) are then
     /// placeholders.
+    /// Nothing reaches disk: the state is gone when the process ends, so
+    /// never use this outside tests.
     #[cfg(feature = "test-support")]
     #[doc(hidden)]
     pub fn in_memory(memory: crate::durable::MemoryFiles) -> Self {

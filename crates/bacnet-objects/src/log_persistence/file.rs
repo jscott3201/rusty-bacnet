@@ -63,6 +63,8 @@ impl FileLogPersistence {
     /// entries 0 and 1 instead of on disk, decoding, selecting and encoding
     /// them as on disk (#2233). [`slot_paths`](Self::slot_paths) are then
     /// placeholders.
+    /// Nothing reaches disk: the state is gone when the process ends, so
+    /// never use this outside tests.
     #[cfg(feature = "test-support")]
     #[doc(hidden)]
     pub fn in_memory(memory: crate::durable::MemoryFiles) -> Self {
@@ -83,7 +85,7 @@ impl FileLogPersistence {
         let mut newest: Option<LogSnapshot<R>> = None;
         let mut damage = None;
         for (slot, path) in self.slot_paths.iter().enumerate() {
-            let Some(data) = self.read_slot(slot, path)? else {
+            let Some(data) = self.read_slot(slot)? else {
                 continue;
             };
             match codec::decode::<R>(&data, expected) {
@@ -155,14 +157,12 @@ impl FileLogPersistence {
     /// Slot `slot`'s octets, or `None` when it doesn't exist. A slot past
     /// the size cap is read only up to one octet past it, which then fails
     /// its length check as damage.
-    fn read_slot(&self, slot: usize, path: &Path) -> Result<Option<Vec<u8>>, Error> {
+    fn read_slot(&self, slot: usize) -> Result<Option<Vec<u8>>, Error> {
         #[cfg(feature = "test-support")]
         if let Some(memory) = &self.memory {
             return Ok(memory.read(slot, MAX_SNAPSHOT_BYTES + 1));
         }
-        #[cfg(not(feature = "test-support"))]
-        let _ = slot;
-        read_file(path)
+        read_file(&self.slot_paths[slot])
     }
 }
 

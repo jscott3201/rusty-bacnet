@@ -1591,7 +1591,7 @@ its peak memory in megabytes. The object crate's `*_file` targets go
 through the file system, with a synchronized save whenever an input
 restores, so they run at a few thousand inputs a second at most; they keep
 their files in a directory of their own under the system's temporary one
-(`TMPDIR`). Its in-memory targets run about ten times as fast. On macOS
+(`TMPDIR`). Its in-memory targets ran 4 to 14 times as fast in local runs. On macOS
 every target that links `bacnet-objects` keeps all of its instrumented
 code, reachable or not (the coverage tables hold it live, so the linker
 strips none of it), and libFuzzer scans those 220,000 or so counters after
