@@ -23,6 +23,10 @@ use tokio::time::{Instant, MissedTickBehavior};
 /// database guard, in the server's lock order, and lets the table go before
 /// any object runs.
 ///
+/// A Timer that expires in the pass leaves the writes its transition makes
+/// (#2206). They are taken under the pass's guard, as a write's runs are,
+/// and started through `runner` once the guard is dropped.
+///
 /// It wakes once a second, at the earliest deadline it gathered, and when an
 /// object arms a deadline in a write (`MonotonicClocks::deadline_armed`), so
 /// one sooner than the next routine pass, such as a short fade's end, is
@@ -30,6 +34,7 @@ use tokio::time::{Instant, MissedTickBehavior};
 pub(super) fn spawn_binary_lighting_operation_task<T: TransportPort + 'static>(
     fanout: CovFanout<T>,
     monotonic: super::lifecycle::MonotonicClocks,
+    runner: super::command_runs::CommandRunner<T>,
 ) -> JoinHandle<()> {
     let owner = fanout.notification_transactions.audit_owner_lease();
     let monotonic_origin = monotonic.origin;
@@ -53,7 +58,7 @@ pub(super) fn spawn_binary_lighting_operation_task<T: TransportPort + 'static>(
             }
             let now = Instant::now().saturating_duration_since(monotonic_origin);
 
-            let (changed, sampled) = {
+            let (changed, sampled, runs) = {
                 let mut database = fanout.db.write().await;
                 // Sampling first steps each due schedule, so the deadlines
                 // gathered below are the next ones. The samples fan out as a
@@ -71,6 +76,7 @@ pub(super) fn spawn_binary_lighting_operation_task<T: TransportPort + 'static>(
                     .await
                     .finest_increments(PropertyIdentifier::TRACKING_VALUE);
                 let mut changed = Vec::new();
+                let mut advanced = Vec::new();
                 next_deadline = None;
                 database.for_each_object_mut(|oid, object| {
                     if let Some(timed) = object.timed() {
@@ -82,10 +88,11 @@ pub(super) fn spawn_binary_lighting_operation_task<T: TransportPort + 'static>(
                     let Some(timed) = object.timed() else {
                         return;
                     };
-                    if timed.advance_monotonic_time(now)
-                        && let Some(snapshot) = timed.cov_snapshot()
-                    {
-                        changed.push((oid, snapshot));
+                    if timed.advance_monotonic_time(now) {
+                        advanced.push(oid);
+                        if let Some(snapshot) = timed.cov_snapshot() {
+                            changed.push((oid, snapshot));
+                        }
                     }
                     if let Some(deadline) = timed.next_monotonic_deadline() {
                         next_deadline =
@@ -109,12 +116,15 @@ pub(super) fn spawn_binary_lighting_operation_task<T: TransportPort + 'static>(
                         capture.run(&database);
                     }
                 }
+                let runs =
+                    crate::command_lists::TakenRuns::take(&fanout.db, &mut database, &advanced);
                 let sampled = sampled
                     .finish(&fanout.db, &mut database, &fanout.cov_table)
                     .await;
-                (changed, sampled)
+                (changed, sampled, runs)
             };
 
+            runner.start(runs);
             fanout.fire(&sampled).await;
             for (oid, snapshot) in changed {
                 BACnetServer::<T>::fire_cov_notifications_from_snapshot(

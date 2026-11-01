@@ -160,9 +160,52 @@ impl BACnetServer {
     }
 
     /// Add a Timer object to the server (before starting).
-    #[pyo3(signature = (instance, name))]
-    fn add_timer(&self, instance: u32, name: &str) -> PyResult<()> {
-        let obj = TimerObject::new(instance, name).map_err(to_py_err)?;
+    ///
+    /// With `state_change_values` or `references`, the Timer serves
+    /// State_Change_Values, List_Of_Object_Property_References and
+    /// Priority_For_Writing (#2206): each transition writes its element of
+    /// `state_change_values` to every reference at `priority_for_writing`.
+    /// `state_change_values` holds seven entries, IDLE_TO_RUNNING first; an
+    /// entry is a primitive `PropertyValue` (a NULL relinquishes) or `None`,
+    /// which writes nothing. References take the `add_channel` members shape,
+    /// and `priority_for_writing` defaults to 16. A wrong shape or type raises
+    /// TypeError or ValueError, as does `priority_for_writing` given alone;
+    /// the Timer's setter refuses a priority outside 1..=16 with
+    /// VALUE_OUT_OF_RANGE.
+    #[pyo3(signature = (
+        instance,
+        name,
+        *,
+        state_change_values=None,
+        references=None,
+        priority_for_writing=None
+    ))]
+    fn add_timer(
+        &self,
+        instance: u32,
+        name: &str,
+        state_change_values: Option<Vec<Option<crate::types::PyPropertyValue>>>,
+        references: Option<Bound<'_, PyAny>>,
+        priority_for_writing: Option<u64>,
+    ) -> PyResult<()> {
+        let mut obj = TimerObject::new(instance, name).map_err(to_py_err)?;
+        if state_change_values.is_none() && references.is_none() {
+            if priority_for_writing.is_some() {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "priority_for_writing needs state_change_values or references",
+                ));
+            }
+        } else {
+            // Past 255 is out of range too: the setter refuses 0 as it would.
+            let priority = priority_for_writing.map_or(16, |p| u8::try_from(p).unwrap_or(0));
+            let values = timer_values(state_change_values)?;
+            let references = references
+                .map(|references| self.members_from_py(&references, "references"))
+                .transpose()?
+                .unwrap_or_default();
+            obj.set_state_change(values, references, priority)
+                .map_err(to_py_err)?;
+        }
         self.push_pending(Box::new(obj))
     }
 
@@ -622,3 +665,30 @@ fn command(
 #[cfg(test)]
 #[path = "registration_tests.rs"]
 mod tests;
+
+/// The seven State_Change_Values entries `add_timer` takes; all `no-value`
+/// when omitted.
+fn timer_values(
+    values: Option<Vec<Option<crate::types::PyPropertyValue>>>,
+) -> PyResult<bacnet_objects::timer::StateChangeValues> {
+    use bacnet_types::constructed::BACnetTimerStateChangeValue as V;
+    let Some(values) = values else {
+        return Ok(core::array::from_fn(|_| V::NoValue));
+    };
+    let values: Vec<V> = values
+        .into_iter()
+        .map(|value| match value {
+            None => Ok(V::NoValue),
+            Some(value) if value.inner.is_primitive() => Ok(V::Primitive(value.inner)),
+            Some(_) => Err(pyo3::exceptions::PyTypeError::new_err(
+                "state_change_values entries must be None or a primitive PropertyValue",
+            )),
+        })
+        .collect::<PyResult<_>>()?;
+    values.try_into().map_err(|values: Vec<V>| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "state_change_values needs 7 entries, one per transition, not {}",
+            values.len()
+        ))
+    })
+}

@@ -1,5 +1,5 @@
 //! The runs a Present_Value write queues on a Command or Channel object
-//! (Clauses 12.10 and 12.53): taking them under the guard that committed the
+//! (Clauses 12.10 and 12.53), or a transition on a Timer (Clause 12.57): taking them under the guard that committed the
 //! write, and ending one where it stood, or at once, unmade, for a host that
 //! can't make its writes.
 use alloc::vec::Vec;

@@ -5643,8 +5643,19 @@ outside the range, is VALUE_OUT_OF_RANGE and changes nothing. A new Timer
 accepts 1 to 4294967295 ms and defaults to 60000 ms; change them with
 `set_pres_value_range` and `set_default_timeout`. The countdown runs on the
 database's monotonic clock and holds while Out_Of_Service is TRUE, which also
-makes Reliability writable. The Timer has no State_Change_Values, so its
-transitions write nothing to other objects.
+makes Reliability writable.
+
+`TimerObject::set_state_change(values, references, priority)` gives the Timer
+State_Change_Values, List_Of_Object_Property_References and
+Priority_For_Writing, which it then serves together (#2206). Each transition
+writes its element of the seven values (`BACnetTimerStateChangeValue`;
+`NoValue` writes nothing) to every reference at that priority. The bundled
+server makes those writes as it makes a Command's, after the guard that made
+the transition is released, including the writes an expiry on the operation
+task leaves. A newer transition supersedes a run still writing. The values and
+references take network writes; Reliability reads CONFIGURATION_ERROR while
+the non-NULL values differ in datatype, and otherwise reports the first failed
+write of the last run.
 
 The Loop serves every required Table 12-20 row. Setpoint, the gain constants,
 Update_Interval and Action (DIRECT or REVERSE) take network writes.

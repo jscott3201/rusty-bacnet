@@ -291,3 +291,52 @@ fn rpm_timer_indexed_reads_and_bytes_are_unchanged() {
         assert_eq!(&prefix[..], b"prefix");
     }
 }
+
+/// RPM ALL serves the three State_Change_Values rows once they are set, and
+/// REQUIRED never does: Table 12-75 has them optional (footnote 5).
+#[test]
+fn rpm_timer_all_and_required_follow_the_state_change_rows() {
+    use bacnet_types::constructed::BACnetTimerStateChangeValue as V;
+    const ROWS: [P; 3] = [
+        P::STATE_CHANGE_VALUES,
+        P::LIST_OF_OBJECT_PROPERTY_REFERENCES,
+        P::PRIORITY_FOR_WRITING,
+    ];
+    for configured in [false, true] {
+        let mut object = TimerObject::new(7, "TMR-7").unwrap();
+        if configured {
+            object
+                .set_state_change(core::array::from_fn(|_| V::NoValue), vec![], 16)
+                .unwrap();
+        }
+        let oid = object.object_identifier();
+        let mut db = ObjectDatabase::new();
+        db.add(Box::new(object)).unwrap();
+        for (selector, expected) in [(P::ALL, configured), (P::REQUIRED, false)] {
+            let mut request = BytesMut::new();
+            ReadPropertyMultipleRequest {
+                list_of_read_access_specs: vec![ReadAccessSpecification {
+                    object_identifier: oid,
+                    list_of_property_references: vec![PropertyReference {
+                        property_identifier: selector,
+                        property_array_index: None,
+                    }],
+                }],
+            }
+            .encode(&mut request)
+            .unwrap();
+            let mut response = BytesMut::new();
+            handle_read_property_multiple(&db, &request, &mut response).unwrap();
+            let ack = ReadPropertyMultipleACK::decode(&response).unwrap();
+            let results = &ack.list_of_read_access_results[0].list_of_results;
+            let served: Vec<_> = results
+                .iter()
+                .filter(|result| ROWS.contains(&result.property_identifier))
+                .inspect(|result| assert!(result.error.is_none()))
+                .map(|result| result.property_identifier)
+                .collect();
+            let want = if expected { ROWS.to_vec() } else { vec![] };
+            assert_eq!(served, want, "{selector:?} configured={configured}");
+        }
+    }
+}

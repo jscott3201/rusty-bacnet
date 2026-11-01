@@ -39,6 +39,10 @@
 //! its first one, which a Channel reports in Reliability. A run a write starts
 //! is admitted through `chain`, which stops runs that feed back into
 //! themselves.
+//!
+//! A Timer's state transitions queue runs the same way, as an action list of
+//! one write per reference (#2206); the server's operation task also takes
+//! the runs its expiries leave, and those a refused write's due expiry left.
 
 use std::future::Future;
 use std::sync::Arc;

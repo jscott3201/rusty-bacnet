@@ -57,6 +57,8 @@ mod read_access;
 pub use read_access::{PropertyReference, ReadAccessSpecification};
 mod staging;
 pub use staging::BACnetStageLimitValue;
+mod timer;
+pub use timer::BACnetTimerStateChangeValue;
 
 // ---------------------------------------------------------------------------
 // BACnetDateRange (Clause 21 -- used by CalendarEntry and BACnetSpecialEvent)
