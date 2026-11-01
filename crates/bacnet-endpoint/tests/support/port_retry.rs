@@ -25,8 +25,8 @@ pub const ATTEMPTS: usize = 8;
 /// collision) does not. Windows refuses a SO_REUSEADDR bind to a port held
 /// without sharing with `WSAEACCES` instead of `WSAEADDRINUSE`. B/IP wraps a
 /// listener's bind error with the address it tried (a message starting
-/// `could not bind`), which keeps the kind but drops the OS code; that wrapper
-/// counts too.
+/// `could not bind the B/IP `), which keeps the kind but drops the OS code;
+/// that wrapper counts too, and no other message does.
 ///
 /// On macOS a SO_REUSEADDR bind of a specific address succeeds beside another
 /// socket's plain wildcard bind of the port (see `port_ownership` in
@@ -37,10 +37,11 @@ pub fn lost_to_another_socket(err: &io::Error) -> bool {
     taken && (err.raw_os_error().is_some() || wrapped_bind(err))
 }
 
-/// Whether `err` is a bind error a transport wrapped with context.
+/// Whether `err` is a listener bind error B/IP wrapped with its address
+/// (`group_listener` and the per-address broadcast listeners).
 fn wrapped_bind(err: &io::Error) -> bool {
     err.get_ref()
-        .is_some_and(|inner| inner.to_string().starts_with("could not bind "))
+        .is_some_and(|inner| inner.to_string().starts_with("could not bind the B/IP "))
 }
 
 /// Runs `run` until it passes. `run` is a whole test; an `Err` it returns

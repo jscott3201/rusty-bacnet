@@ -51,17 +51,10 @@ pub(crate) fn claim_exclusive(_socket: &socket2::Socket) -> io::Result<()> {
     Ok(())
 }
 
-/// Whether a bind failed because another socket holds the port, and how
-/// many times a test that can lose its port that way runs, each time on a
-/// fresh port. Tests whose configuration must name a port before the
-/// transport binds it probe for a free one, and another process can take it
-/// in between (#1032). Both come from the workspace's one rerun helper
-/// (`port_retry`, #2225). An explicit B/IP or B/IPv6 port sets SO_REUSEADDR,
-/// and Windows refuses that bind with `WSAEACCES` rather than `WSAEADDRINUSE`
-/// when the holder did not share the port; a transport's own `AddrInUse` (a
-/// VMAC collision) is not a lost port. On macOS a holder bound to a specific
-/// address does not fail the wildcard bind at all; as the module docs say,
-/// nothing there reports that case.
+/// The lost-port check and the run count, from the workspace's one rerun
+/// helper (`port_retry`, #2225), for tests that must name a port before the
+/// transport binds it and so can lose it to another process (#1032). That
+/// file says what counts as lost, including the macOS case nothing reports.
 #[cfg(test)]
 pub(crate) use crate::port_retry::{ATTEMPTS, lost_to_another_socket};
 
@@ -201,10 +194,14 @@ mod tests {
         let made_up = std::io::Error::from(std::io::ErrorKind::AddrInUse);
         assert!(!super::lost_port(1, &made_up));
         // A bind error B/IP wrapped with its address keeps the kind and is
-        // still a lost port; another made-up one with a message is not.
-        let wrapped =
-            std::io::Error::new(err.kind(), format!("could not bind the listener ({err})"));
+        // still a lost port; another wrapper's, or a made-up one, is not.
+        let wrapped = std::io::Error::new(
+            err.kind(),
+            format!("could not bind the B/IP multicast listener ({err})"),
+        );
         assert!(super::lost_port(1, &wrapped));
+        let other = std::io::Error::new(err.kind(), format!("could not bind a hub ({err})"));
+        assert!(!super::lost_port(1, &other));
         let collision = std::io::Error::new(std::io::ErrorKind::AddrInUse, "VMAC collision");
         assert!(!super::lost_port(1, &collision));
     }

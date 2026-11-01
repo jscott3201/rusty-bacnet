@@ -312,7 +312,10 @@ async fn a_persisted_one_hop_own_row_falls_back_to_the_configured_bdt() {
         bbmd.set_bdt_persist_path(path.clone());
         let started = bbmd.start().await;
         let _ = std::fs::remove_file(&path);
-        let _rx = started.map_err(bind_error)?;
+        let _rx = match started {
+            Err(Error::Transport(err)) if lost_to_another_socket(&err) => return Err(err),
+            started => started.expect("the configured BDT is used"),
+        };
         let bdt = bbmd::lock(bbmd.bbmd_state().unwrap()).bdt();
         assert_eq!(bdt, [row(own_port, TWO_HOP), peer]);
         bbmd.stop().await.unwrap();

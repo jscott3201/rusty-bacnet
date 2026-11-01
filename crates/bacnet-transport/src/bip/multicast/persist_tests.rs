@@ -279,8 +279,10 @@ async fn a_restart_follows_the_group_whatever_moved_it_at_run_time() {
         let mut bbmd = group_bbmd(own_port, None);
         let _rx = bbmd.start().await.map_err(bind_error)?;
         assert!(!serves_group(&bbmd));
-        // Joining opens the group's listener, which nothing of the test's
-        // holds the port for now.
+        // Joining opens a listener on the group's address at the BBMD's own
+        // port. The BBMD's wildcard bind doesn't hold that exact address, so
+        // a socket bound to it before the start (as a mutation check did)
+        // fails the join; such a loss reruns like a start's.
         tables(&bbmd)
             .activate(&changes(GROUP, vec![row(own_port, [0xFF; 4])]))
             .map_err(bind_error)?;
