@@ -370,9 +370,11 @@ async fn a_missing_ca_fails_validation_by_path_and_nothing_dials_the_hub() {
 #[cfg(feature = "sc-tls")]
 #[tokio::test]
 async fn an_sc_profile_dials_its_failover_hub_when_the_primary_is_down() {
-    let primary = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    // A primary bound but never listening refuses the dial, and as the port
+    // stays held no other process can listen there (#2216).
+    let primary = tokio::net::TcpSocket::new_v4().unwrap();
+    primary.bind("127.0.0.1:0".parse().unwrap()).unwrap();
     let down = primary.local_addr().unwrap().port();
-    drop(primary);
     let failover = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let root = tempfile::tempdir().unwrap();
     let files = tempfile::tempdir().unwrap();

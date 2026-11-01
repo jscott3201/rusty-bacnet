@@ -49,7 +49,12 @@ mod tests {
     use super::*;
     #[tokio::test]
     async fn counts_failed_socket_attempts_and_in_crate_recorded_sends() {
-        let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let bound = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        bound.set_nonblocking(true).unwrap();
+        // A second handle on the same socket, so the port stays bound between
+        // the two sockets the observer counts (#2216).
+        let twin = bound.try_clone().unwrap();
+        let socket = tokio::net::UdpSocket::from_std(bound).unwrap();
         let observer = SendAttemptObserver::new(socket.local_addr().unwrap().port());
         let socket = crate::bip::socket::BipSocket::new(socket, None);
         // No SO_BROADCAST: a denied send must still be counted.
@@ -61,9 +66,7 @@ mod tests {
         );
         assert_eq!(observer.attempts(), 1);
         drop(socket);
-        let raw = tokio::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, observer.port))
-            .await
-            .unwrap();
+        let raw = tokio::net::UdpSocket::from_std(twin).unwrap();
         let recorded = crate::bip::socket::BipSocket::recording(
             raw,
             crate::bip::send_sink::SendSink::default(),

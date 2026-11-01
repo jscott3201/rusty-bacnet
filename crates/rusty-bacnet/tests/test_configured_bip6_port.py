@@ -11,6 +11,7 @@ from rusty_bacnet import (
     ObjectIdentifier, ObjectType, PropertyIdentifier as P, PropertyValue as V,
 )
 
+from port_retry import rerun_on_lost_port
 from test_bip6_vmac import free_udp6_port, ipv6_loopback, loopback_client
 
 PORT = ObjectIdentifier(ObjectType.NETWORK_PORT, 1)
@@ -54,6 +55,9 @@ class ConfiguredBip6PortTests(unittest.TestCase):
 @unittest.skipUnless(ipv6_loopback(), "this host has no IPv6 loopback")
 class RegisteredBip6PortTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_registered_port_serves_the_bound_ipv6_rows(self) -> None:
+        await rerun_on_lost_port(self.registered_port_rows)
+
+    async def registered_port_rows(self) -> None:
         port = free_udp6_port()
         server = BACnetServer(1234, transport="ipv6", ipv6_interface="::1", port=port,
                               registered_network_port=1)

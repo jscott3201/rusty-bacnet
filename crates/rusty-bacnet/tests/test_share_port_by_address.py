@@ -8,6 +8,7 @@ from rusty_bacnet import (
     BACnetClient, BACnetServer, BipEndpoint, ObjectIdentifier, ObjectType,
     PropertyIdentifier as P, PropertyValue as V,
 )
+from port_retry import rerun_on_lost_port
 
 
 def two_local_addresses():
@@ -51,6 +52,11 @@ class SharePortByAddressTests(unittest.IsolatedAsyncioTestCase):
         addresses = two_local_addresses()
         if addresses is None:
             self.skipTest("no second local address to share the port with")
+        # The shared port is picked and freed before the servers bind it, and
+        # another process can take it in between: a lost port reruns (#2216).
+        await rerun_on_lost_port(lambda: self.share_a_port(addresses))
+
+    async def share_a_port(self, addresses):
         port = free_port()
         servers = [
             BACnetServer(1110 + i, device_name=f"Shared {i}", interface=ip, port=port,

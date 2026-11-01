@@ -747,9 +747,11 @@ mod tests {
 
     #[tokio::test]
     async fn tls_websocket_connect_dial_failure_is_typed() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        drop(listener);
+        // Bound but never listening: the dial is refused, and as the port
+        // stays held no other process can start listening there (#2216).
+        let silent = tokio::net::TcpSocket::new_v4().unwrap();
+        silent.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let addr = silent.local_addr().unwrap();
 
         let err = match TlsWebSocket::connect(&format!("wss://{addr}"), test_tls_config()).await {
             Ok(_) => panic!("expected TCP dial failure"),

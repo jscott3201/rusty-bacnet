@@ -16,6 +16,7 @@ use bacnet_server::server::BACnetServer;
 use bacnet_transport::any::AnyTransport;
 use bacnet_transport::bbmd::ForeignDevicePolicy;
 use bacnet_transport::bip::{BbmdOptions, BipMode, BipTransport};
+use bacnet_transport::bvll::decode_bip_mac;
 use bacnet_transport::loopback::LoopbackTransport;
 use serde_json::{Value, json};
 use support::lab::{lab_database, lab_identity};
@@ -25,11 +26,8 @@ use support::{Process, command, failure, run};
 const DNET: u16 = 2;
 const INSTANCE: u32 = 1234;
 
-/// The router, the lab device behind it, and the router's B/IP port.
-///
-/// The transport binds its own socket, so the pick lets go of the port
-/// before the router takes it, and another process can take it in
-/// between: a start that fails is tried again on a fresh port.
+/// The router, the lab device behind it, and the router's B/IP port, which
+/// the OS picks and the started router reports.
 async fn site() -> (BACnetRouter, BACnetServer<LoopbackTransport>, u16) {
     site_with_database(read_services::database()).await
 }
@@ -52,38 +50,30 @@ async fn site_with_config(
     config: bacnet_server::server::ServerConfig,
 ) -> (BACnetRouter, BACnetServer<LoopbackTransport>, u16) {
     let config = service_config(config);
-    for _ in 0..8 {
-        let port = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
-        let mut bip = BipTransport::new(Ipv4Addr::LOCALHOST, port, Ipv4Addr::LOCALHOST);
-        bip.set_mode(BipMode::Bbmd(BbmdOptions {
-            foreign_device_policy: Some(ForeignDevicePolicy::default()),
-            ..BbmdOptions::default()
-        }));
-        let (router_end, station) = LoopbackTransport::pair(vec![0x01], vec![0x05]);
-        let ports = vec![
-            RouterPort {
-                transport: AnyTransport::Bip(Box::new(bip)),
-                network_number: 1,
-            },
-            RouterPort {
-                transport: AnyTransport::Loopback(router_end),
-                network_number: DNET,
-            },
-        ];
-        if let Ok(StartedRouter { router, .. }) =
-            BACnetRouter::start(ports, RouterOptions::new()).await
-        {
-            let server = BACnetServer::start(config, database, station)
-                .await
-                .unwrap();
-            return (router, server, port);
-        }
-    }
-    panic!("no loopback UDP port the router could bind");
+    let mut bip = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOST);
+    bip.set_mode(BipMode::Bbmd(BbmdOptions {
+        foreign_device_policy: Some(ForeignDevicePolicy::default()),
+        ..BbmdOptions::default()
+    }));
+    let (router_end, station) = LoopbackTransport::pair(vec![0x01], vec![0x05]);
+    let ports = vec![
+        RouterPort {
+            transport: AnyTransport::Bip(Box::new(bip)),
+            network_number: 1,
+        },
+        RouterPort {
+            transport: AnyTransport::Loopback(router_end),
+            network_number: DNET,
+        },
+    ];
+    let StartedRouter { router, .. } = BACnetRouter::start(ports, RouterOptions::new())
+        .await
+        .expect("the router binds its ports");
+    let (_, port) = decode_bip_mac(router.ports()[0].local_mac()).unwrap();
+    let server = BACnetServer::start(config, database, station)
+        .await
+        .unwrap();
+    (router, server, port)
 }
 
 fn service_config(

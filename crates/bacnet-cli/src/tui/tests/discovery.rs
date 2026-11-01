@@ -215,12 +215,7 @@ async fn find_through_the_bbmd_lists_its_device() {
 /// port is the BBMD answers with network 2 behind it.
 #[tokio::test]
 async fn the_networks_tab_maps_a_real_router() {
-    let port = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
-    let mut bip = BipTransport::new(Ipv4Addr::LOCALHOST, port, Ipv4Addr::LOCALHOST);
+    let mut bip = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOST);
     bip.set_mode(BipMode::Bbmd(BbmdOptions {
         foreign_device_policy: Some(ForeignDevicePolicy::default()),
         ..BbmdOptions::default()
@@ -239,6 +234,7 @@ async fn the_networks_tab_maps_a_real_router() {
     let StartedRouter { mut router, .. } = BACnetRouter::start(ports, RouterOptions::new())
         .await
         .expect("the router binds its port");
+    let (_, port) = bacnet_transport::bvll::decode_bip_mac(router.ports()[0].local_mac()).unwrap();
     let bbmd = std::net::SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
     let mut net = Net::start(plan(Some(bbmd))).await;
     net.pump_until("registered", |app| {

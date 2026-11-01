@@ -18,6 +18,8 @@ use tokio::net::{TcpListener, UdpSocket};
 
 #[path = "client_build_any/options.rs"]
 mod options;
+#[path = "../../crates/bacnet-endpoint/tests/support/port_retry.rs"]
+mod port_retry;
 #[path = "client_build_any/sc_lifecycle.rs"]
 mod sc_lifecycle;
 
@@ -197,25 +199,44 @@ async fn bip_build_any_keeps_bbmd_policy_and_shared_address_validation() {
     }
 }
 
+/// Sharing a port by address needs a nonzero port, so the test picks one and
+/// frees it before the build binds it. Another process can take it in between
+/// (#2216), so a lost port reruns the build on a fresh one.
 #[tokio::test]
 async fn bip_builders_preserve_shared_address_and_broadcast_endpoint() {
     for erased in [false, true] {
-        let reserved = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let port = reserved.local_addr().unwrap().port();
-        drop(reserved);
-        let builder = BACnetClient::bip_builder()
-            .interface(Ipv4Addr::LOCALHOST)
-            .port(port)
-            .broadcast_address(Ipv4Addr::new(127, 255, 255, 255))
-            .share_port_by_address(true);
-        if erased {
-            let client = builder.build_any().await.unwrap();
-            shared_address(client, port).await;
-        } else {
-            let client = builder.build().await.unwrap();
-            shared_address(client, port).await;
-        }
+        port_retry::rerun_on_lost_port(async || {
+            let reserved = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+            let port = reserved.local_addr().unwrap().port();
+            drop(reserved);
+            let builder = BACnetClient::bip_builder()
+                .interface(Ipv4Addr::LOCALHOST)
+                .port(port)
+                .broadcast_address(Ipv4Addr::new(127, 255, 255, 255))
+                .share_port_by_address(true);
+            if erased {
+                match builder.build_any().await {
+                    Ok(client) => shared_address(client, port).await,
+                    Err(error) => return lost(port, error),
+                }
+            } else {
+                match builder.build().await {
+                    Ok(client) => shared_address(client, port).await,
+                    Err(error) => return lost(port, error),
+                }
+            }
+            Ok(())
+        })
+        .await;
     }
+}
+
+/// A build that failed on a port the test freed probes it: when another socket
+/// holds the port, the probe's bind error reruns the test. A failure on a free
+/// port panics.
+fn lost(port: u16, error: Error) -> std::io::Result<()> {
+    std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, port))?;
+    panic!("the build failed on a free port {port}: {error}")
 }
 
 async fn shared_address<T: TransportPort + 'static>(mut client: BACnetClient<T>, port: u16) {
