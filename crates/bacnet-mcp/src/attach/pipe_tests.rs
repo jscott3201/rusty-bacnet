@@ -1,0 +1,73 @@
+//! The named pipe's guards on their own: its name, its instances'
+//! options, and the descriptor the kernel ends up holding.
+
+use super::*;
+
+/// The access every allowed entry grants: all file access.
+const FILE_ALL_ACCESS: u32 = 0x001F_01FF;
+
+/// A pipe name of this test's own.
+fn unique(tag: &str) -> PathBuf {
+    let dir = tempfile::tempdir().unwrap();
+    let name = socket_path(dir.path());
+    PathBuf::from(format!("{}-{tag}", name.display()))
+}
+
+/// The name is the same however the workspace is spelt, differs between
+/// workspaces, and says nothing but a hash.
+#[test]
+fn the_name_follows_the_workspace() {
+    let one = tempfile::tempdir().unwrap();
+    let two = tempfile::tempdir().unwrap();
+    let name = socket_path(one.path());
+    assert_eq!(name, socket_path(one.path()));
+    assert_eq!(name, socket_path(&one.path().join(".")));
+    assert_ne!(name, socket_path(two.path()));
+    let shown = name.to_str().unwrap();
+    let hash = shown.strip_prefix(r"\\.\pipe\rusty-bacnet-mcp-").unwrap();
+    assert_eq!(hash.len(), 32, "{shown}");
+    assert!(hash.bytes().all(|b| b.is_ascii_hexdigit()), "{shown}");
+}
+
+/// A SID shows in its usual form.
+#[test]
+fn a_sid_shows_as_usual() {
+    let system = Sid(vec![1, 1, 0, 0, 0, 0, 0, 5, 18, 0, 0, 0]);
+    assert_eq!(system.to_string(), "S-1-5-18");
+    let user = Sid(vec![1, 2, 0, 0, 0, 0, 0, 5, 21, 0, 0, 0, 0xE9, 0x03, 0, 0]);
+    assert_eq!(user.to_string(), "S-1-5-21-1001");
+    let own = win32::own_sid().unwrap().to_string();
+    assert!(own.starts_with("S-1-"), "{own}");
+}
+
+/// Every instance refuses remote clients, and only the first claims the
+/// name. Tokio's options say what they will ask of the system; a test
+/// can't make a remote client.
+#[test]
+fn every_instance_refuses_remote_clients() {
+    let first = format!("{:?}", options(true));
+    assert!(first.contains("reject_remote_clients: true"), "{first}");
+    assert!(first.contains("first_pipe_instance: true"), "{first}");
+    let later = format!("{:?}", options(false));
+    assert!(later.contains("reject_remote_clients: true"), "{later}");
+    assert!(later.contains("first_pipe_instance: false"), "{later}");
+}
+
+/// The kernel holds the descriptor as made, on the first instance and on
+/// a later one: owned by this user, one entry, allowing this user.
+#[tokio::test]
+async fn the_descriptor_grants_only_its_owner() {
+    let own = win32::own_sid().unwrap();
+    let descriptor = Descriptor::owner_only(&own).unwrap();
+    let name = unique("descriptor");
+    let first = descriptor.create(&options(true), &name).unwrap();
+    let later = descriptor.create(&options(false), &name).unwrap();
+    for instance in [&first, &later] {
+        let (owner, entries) = win32::security_of(instance).unwrap();
+        assert_eq!(owner, own);
+        assert_eq!(entries, [(0, FILE_ALL_ACCESS, own.clone())]);
+    }
+    // The first instance claims the name: a second first is refused.
+    let error = descriptor.create(&options(true), &name).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+}

@@ -2,6 +2,7 @@
 //! the bridge, on the lab's shared engine; the socket's security checks;
 //! and the listener's shutdown.
 
+#[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::path::Path;
 use std::sync::Arc;
@@ -9,21 +10,37 @@ use std::time::Duration;
 
 use bacnet_ops::engine::Engine;
 use serde_json::{Value, json};
+#[cfg(unix)]
 use tokio::io::AsyncReadExt as _;
 use tokio::task::JoinHandle;
 
 use super::{Agent, LAB, Lab};
-use crate::attach::{self, AttachError, Listener, PeerId, SessionRuntime, socket_path};
+#[cfg(unix)]
+use crate::attach::PeerId;
+use crate::attach::{self, AttachError, Listener, SessionRuntime, socket_path};
 use crate::policy::{ArmMode, Workspace, WriteMode, WritePolicy};
 use crate::{McpServer, Policy};
 
 const AI1: &str = "bacnet://device/1201/object/analog-input:1";
 
-/// A workspace directory nobody else can enter.
+/// A workspace directory nobody else can enter (on Windows, a user's
+/// temporary directory already is).
 pub(super) fn private_dir() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
+    #[cfg(unix)]
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     dir
+}
+
+/// What the audit records say of this test's own user.
+fn own_user(record: &Value) {
+    #[cfg(unix)]
+    assert_eq!(record["peer_uid"], json!(attach::own_uid()));
+    #[cfg(windows)]
+    assert_eq!(
+        record["peer_sid"],
+        json!(attach::own_sid().unwrap().to_string())
+    );
 }
 
 pub(super) fn workspace(dir: &Path) -> Workspace {
@@ -125,8 +142,11 @@ async fn an_attached_agent_reads_on_the_shared_engine() {
     let listener = lab.attach(dir.path(), offered).await.unwrap();
     let path = socket_path(dir.path());
     assert_eq!(listener.path(), path);
-    let mode = std::fs::symlink_metadata(&path).unwrap().mode() & 0o777;
-    assert_eq!(mode, 0o600, "{mode:o}");
+    #[cfg(unix)]
+    {
+        let mode = std::fs::symlink_metadata(&path).unwrap().mode() & 0o777;
+        assert_eq!(mode, 0o600, "{mode:o}");
+    }
 
     let (mut agent, bridge) = bridged(&path);
     let hello = agent.initialize().await;
@@ -177,14 +197,15 @@ async fn an_attached_agent_reads_on_the_shared_engine() {
     let mut agents = listener.agents();
     agents.wait_for(|n| *n == 0).await.unwrap();
     listener.shutdown().await;
+    #[cfg(unix)]
     assert!(!path.exists(), "removed at shutdown");
     let records = audit(dir.path());
     assert_eq!(events(dir.path()), ["mcp-connect", "mcp-disconnect"]);
     for record in &records {
         assert_eq!(record["front_end"], json!("mcp"));
         assert_eq!(record["principal"], json!("tester"));
-        assert_eq!(record["via"], json!("local-socket"));
-        assert_eq!(record["peer_uid"], json!(attach::own_uid()));
+        assert_eq!(record["via"], json!(attach::VIA));
+        own_user(record);
         assert_eq!(record["profile"], json!("lab"));
     }
     drop(direct);
@@ -194,6 +215,7 @@ async fn an_attached_agent_reads_on_the_shared_engine() {
 /// A peer the credentials name as another user (a stand-in for the
 /// kernel's answer, since a test can't connect as another uid) is closed
 /// before any MCP traffic and audited with its uid and pid.
+#[cfg(unix)]
 #[tokio::test(start_paused = true)]
 async fn another_users_connection_is_refused_and_audited() {
     fn stranger(_: &tokio::net::UnixStream) -> std::io::Result<PeerId> {
@@ -248,6 +270,7 @@ async fn another_users_connection_is_refused_and_audited() {
 /// Acceptance (maintainer, 2026-10-31): a looser workspace of this user's
 /// is narrowed to 0700 when the listener starts; one that is a symbolic
 /// link, or isn't a directory, gets no socket and the refusal says why.
+#[cfg(unix)]
 #[tokio::test(start_paused = true)]
 async fn a_loose_workspace_is_narrowed_and_a_link_refused() {
     let lab = lab().await;
@@ -281,6 +304,7 @@ async fn a_loose_workspace_is_narrowed_and_a_link_refused() {
 /// first keeps serving; a socket with no lock holder (a TUI that crashed)
 /// is cleared; a symbolic link or any other file at the path is neither
 /// followed nor removed.
+#[cfg(unix)]
 #[tokio::test(start_paused = true)]
 async fn a_second_listener_is_refused_and_a_stale_socket_cleared() {
     let lab = lab().await;
@@ -357,6 +381,7 @@ async fn shutdown_ends_sessions_and_removes_the_socket() {
     assert_eq!(done["result"]["resultType"], json!("complete"), "{done}");
     assert!(lab.cov_table().await.is_empty(), "cancelled at shutdown");
     bridge.await.unwrap().unwrap();
+    #[cfg(unix)]
     assert!(!path.exists());
 
     let (_agent, bridge) = bridged(&path);

@@ -1,10 +1,12 @@
 //! The server driven over a pipe, as an agent host drives it on stdio,
 //! against an in-process lab device on a loopback link.
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod attach;
 #[cfg(unix)]
 mod attach_more;
+#[cfg(windows)]
+mod attach_pipe;
 #[cfg(unix)]
 mod attach_runtime;
 #[cfg(unix)]

@@ -1,11 +1,11 @@
 //! The TUI's MCP listener (#2185; design §9): while a profile is open,
 //! agents attach through `bacnet mcp connect` to a local socket in its
-//! workspace, and each gets a read-only MCP session on the session's own
+//! workspace (on Windows, a named pipe named after it), and each gets a read-only MCP session on the session's own
 //! engine, so their reads share the client, the transport and the rate
 //! meter. The listener runs beside the session's workers and ends with
 //! the session: every agent's session ends gracefully and the socket file
 //! goes. The agents' sessions run on the listener's own runtime, whose
-//! threads the panic hook leaves alone (#2203). Unix only for now.
+//! threads the panic hook leaves alone (#2203).
 
 use std::path::Path;
 use std::sync::Arc;
@@ -25,17 +25,14 @@ use crate::transport::TransportArgs;
 pub(crate) struct Plan {
     /// The `[mcp]` table's reach, rates and caps; the listener drops any
     /// write policy.
-    #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) policy: Policy,
     /// The workspace that holds the socket and the audit log.
     pub(crate) workspace: Workspace,
     /// Whom the sessions run as: the TUI's OS user.
-    #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) principal: String,
     /// Whether the sessions run on the listener's own runtime, so a panic
     /// in one leaves the terminal alone (#2203): always, but for tests on
     /// a paused clock, which that runtime doesn't share.
-    #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) own_runtime: bool,
 }
 
@@ -98,60 +95,47 @@ pub(crate) async fn run<T: TransportPort + 'static>(
     engine: &Arc<Engine<T>>,
     plan: Option<&Plan>,
     sink: &EventSink,
-    stop: mpsc::Receiver<()>,
+    mut stop: mpsc::Receiver<()>,
 ) {
+    use super::message::{McpListener, WorkerEvent};
+    use bacnet_mcp::attach::{Listener, SessionRuntime};
     let Some(plan) = plan else {
         return;
     };
-    #[cfg(unix)]
-    {
-        use super::message::{McpListener, WorkerEvent};
-        use bacnet_mcp::attach::{Listener, SessionRuntime};
-        let mut stop = stop;
-        let runtime = if plan.own_runtime {
-            SessionRuntime::Own
-        } else {
-            SessionRuntime::Callers
-        };
-        let bound = Listener::bind(
-            Arc::clone(engine),
-            plan.policy.clone(),
-            plan.principal.clone(),
-            plan.workspace.clone(),
-            runtime,
-        )
-        .await;
-        let listener = match bound {
-            Ok(listener) => listener,
-            Err(error) => {
-                tracing::warn!("MCP: agents can't attach: {error}");
-                sink.deliver(WorkerEvent::Mcp(McpListener::Off)).await;
-                return;
-            }
-        };
-        let profile = plan.workspace.profile.as_deref().unwrap_or_default();
-        tracing::info!(
-            "MCP: agents can attach with `bacnet mcp connect --profile {profile}` (read-only; {})",
-            listener.path().display()
-        );
-        // The bar reads the count from the listener's own channel, so it
-        // always shows the latest.
-        let agents = McpListener::Agents(listener.agents());
-        sink.deliver(WorkerEvent::Mcp(agents)).await;
-        tokio::select! {
-            biased;
-            _ = stop.recv() => {}
-            () = sink.cancelled() => {}
+    let runtime = if plan.own_runtime {
+        SessionRuntime::Own
+    } else {
+        SessionRuntime::Callers
+    };
+    let bound = Listener::bind(
+        Arc::clone(engine),
+        plan.policy.clone(),
+        plan.principal.clone(),
+        plan.workspace.clone(),
+        runtime,
+    )
+    .await;
+    let listener = match bound {
+        Ok(listener) => listener,
+        Err(error) => {
+            tracing::warn!("MCP: agents can't attach: {error}");
+            sink.deliver(WorkerEvent::Mcp(McpListener::Off)).await;
+            return;
         }
-        listener.shutdown().await;
+    };
+    let profile = plan.workspace.profile.as_deref().unwrap_or_default();
+    tracing::info!(
+        "MCP: agents can attach with `bacnet mcp connect --profile {profile}` (read-only; {})",
+        listener.path().display()
+    );
+    // The bar reads the count from the listener's own channel, so it
+    // always shows the latest.
+    let agents = McpListener::Agents(listener.agents());
+    sink.deliver(WorkerEvent::Mcp(agents)).await;
+    tokio::select! {
+        biased;
+        _ = stop.recv() => {}
+        () = sink.cancelled() => {}
     }
-    #[cfg(not(unix))]
-    {
-        let _ = (engine, sink, stop);
-        tracing::info!(
-            "MCP: attaching agents to the TUI isn't available on Windows yet (profile {:?}); \
-             use `bacnet mcp serve --stdio`",
-            plan.workspace.profile
-        );
-    }
+    listener.shutdown().await;
 }

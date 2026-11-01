@@ -7,16 +7,22 @@
 //! join the engine's. `bacnet mcp connect` bridges an agent host's stdio
 //! to that socket ([`bridge()`]).
 //!
-//! Only this OS user may connect, checked three ways: the workspace
-//! directory must be the user's own (it is narrowed to 0700 when looser),
-//! the socket file is made 0600, and every connection's peer credentials
-//! must name the listener's own user before any MCP traffic flows. A
-//! refused peer is closed and audited with the uid and pid the OS reports.
+//! Only this OS user may connect. On Unix, checked three ways: the
+//! workspace directory must be the user's own (it is narrowed to 0700
+//! when looser), the socket file is made 0600, and every connection's
+//! peer credentials must name the listener's own user before any MCP
+//! traffic flows. On Windows the listener is a named pipe whose name comes
+//! from the workspace's path: its security descriptor grants access to
+//! this user's SID alone, it takes no remote clients, its first instance
+//! claims the name, and every client process's token must name this user
+//! before any MCP traffic flows. A refused peer is closed and audited with
+//! what the OS reports of it.
 //!
 //! A listener holds an exclusive lock on [`LOCK_FILE`] in the workspace for
-//! its whole life, taken before the socket path is touched: a second
-//! listener is refused, and a socket found by the lock's holder is stale
-//! and removed. The socket file is never followed through a symbolic link.
+//! its whole life, taken before the socket path is touched (or the pipe
+//! made): a second listener is refused, and a socket found by the lock's
+//! holder is stale and removed. The socket file is never followed through
+//! a symbolic link.
 //!
 //! The sessions run on a runtime of the listener's own
 //! ([`SessionRuntime::Own`]), every task an agent's request starts included,
@@ -30,40 +36,59 @@
 //!
 //! Sessions over the socket are read-only whatever the profile's write
 //! policy: the write tools need the TUI's own approver, which comes later.
-//! Unix only for now; Windows gets a named pipe with an owner-only DACL.
-//! The sessions themselves serve any byte stream, so a named pipe plugs in
-//! beside the socket.
+//! The sessions serve any byte stream; the socket (`socket.rs`) and the
+//! pipe (`pipe.rs`) each bring their own listener, peer check and bridge
+//! connection.
 
 mod bridge;
+#[cfg(unix)]
 mod guard;
+mod lock;
+#[cfg(windows)]
+mod pipe;
 mod sessions;
+#[cfg(unix)]
+mod socket;
+#[cfg(windows)]
+mod win32;
 
-use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use bacnet_ops::engine::Engine;
 use bacnet_transport::port::TransportPort;
-use tokio::net::{UnixListener, UnixStream};
 use tokio::runtime::{Handle, Runtime};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+pub use bridge::bridge;
 #[cfg(feature = "stdio")]
 pub use bridge::bridge_stdio;
+pub use lock::LOCK_FILE;
+#[cfg(windows)]
+use pipe as platform;
+#[cfg(all(test, windows))]
+pub(crate) use pipe::{Sid, Unidentified};
+#[cfg(windows)]
+pub use pipe::{connect, socket_path};
 #[cfg(test)]
-pub(crate) use bridge::connect_with;
-pub use bridge::{bridge, connect};
-pub use guard::LOCK_FILE;
+pub(crate) use platform::connect_with;
+use platform::os_credentials;
+pub(crate) use platform::{Credentials, PeerId, VIA};
+#[cfg(unix)]
+use socket as platform;
+#[cfg(all(test, unix))]
+pub(crate) use socket::own_uid;
+#[cfg(unix)]
+pub use socket::{SOCKET_FILE, connect, socket_path};
+#[cfg(all(test, windows))]
+pub(crate) use win32::{own_sid, security_of};
 
 use crate::policy::{Policy, Workspace, WritePolicy};
 use crate::server::Shared;
 use sessions::Sessions;
-
-/// The socket's file name in the profile's workspace.
-pub const SOCKET_FILE: &str = "mcp.sock";
 
 /// How many agents may be attached at once; another is refused.
 pub const MAX_AGENTS: usize = 8;
@@ -164,11 +189,6 @@ pub(crate) mod threads {
     }
 }
 
-/// Where the TUI's socket for the workspace `dir` is.
-pub fn socket_path(dir: &Path) -> PathBuf {
-    dir.join(SOCKET_FILE)
-}
-
 /// Why the listener didn't start, or the bridge couldn't connect.
 #[derive(Debug)]
 pub struct AttachError(String);
@@ -187,37 +207,14 @@ impl From<String> for AttachError {
     }
 }
 
-/// Who is at the other end of a connection, as the OS reports it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct PeerId {
-    /// The peer's effective user id.
-    pub(crate) uid: u32,
-    /// Its process id, where the OS says.
-    pub(crate) pid: Option<i32>,
+/// What the bridge says when nothing listens at `path`.
+fn not_listening(path: &Path) -> AttachError {
+    AttachError(format!(
+        "no TUI is listening for MCP at {}: open the profile in `bacnet tui` first (its MCP \
+         authorization must stand, and its [mcp] table must not set tui_listener = false)",
+        path.display()
+    ))
 }
-
-/// How a connection's peer is identified: the OS's credentials, or a
-/// test's stand-in.
-type Credentials = fn(&UnixStream) -> io::Result<PeerId>;
-
-/// The peer's credentials from the kernel (`SO_PEERCRED` or
-/// `getpeereid`).
-pub(crate) fn os_credentials(stream: &UnixStream) -> io::Result<PeerId> {
-    let cred = stream.peer_cred()?;
-    Ok(PeerId {
-        uid: cred.uid(),
-        pid: cred.pid(),
-    })
-}
-
-/// This process's effective user id.
-pub(crate) fn own_uid() -> u32 {
-    nix::unistd::geteuid().as_raw()
-}
-
-/// The uid the kernel reports for a peer whose user isn't mapped into
-/// this user namespace: a TUI running as it can't tell such peers apart.
-const OVERFLOW_UID: u32 = 65_534;
 
 /// What a listener does after its sessions end: write the count of
 /// refusals left out of the record, and shut the shared hub down.
@@ -226,23 +223,20 @@ type Finish = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
 /// Whether a TUI is listening in the workspace `dir`: its listener's lock
 /// is held. A socket file alone may be a stale one.
 pub fn listening(dir: &Path) -> bool {
-    guard::held(dir)
+    lock::held(dir)
 }
 
-/// The TUI's listener: an accept loop on the workspace's socket and the
-/// sessions it started. [`shutdown`](Self::shutdown) ends them all and
-/// removes the socket file; dropping it stops accepting and removes the
-/// file without waiting.
+/// The TUI's listener: an accept loop on the workspace's socket (or named
+/// pipe) and the sessions it started. [`shutdown`](Self::shutdown) ends
+/// them all and removes the socket file; dropping it stops accepting and
+/// removes the file without waiting.
 pub struct Listener {
-    path: PathBuf,
-    /// The socket file's device and inode, so only this file is removed.
-    identity: (u64, u64),
+    endpoint: platform::Endpoint,
     stop: CancellationToken,
     accept: Option<JoinHandle<()>>,
     sessions: tokio_util::task::TaskTracker,
     agents: watch::Receiver<usize>,
     finish: Option<Finish>,
-    removed: bool,
     /// The sessions' own runtime, if they have one: shut down once they
     /// have all ended.
     runtime: Option<OwnRuntime>,
@@ -253,7 +247,7 @@ pub struct Listener {
 impl std::fmt::Debug for Listener {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Listener")
-            .field("path", &self.path)
+            .field("path", &self.endpoint.path())
             .field("agents", &*self.agents.borrow())
             .finish_non_exhaustive()
     }
@@ -266,11 +260,12 @@ impl Listener {
     /// on `runtime`. Needs a Tokio runtime, which must outlive the
     /// listener: the engine's client and transport run on it.
     ///
-    /// The workspace must be this user's own directory, not a symbolic
-    /// link; a looser mode than 0700 is narrowed. Refused when another
-    /// listener holds the workspace's lock, when the socket path is too
-    /// long, a symbolic link or some other file, or when the TUI runs as
-    /// the overflow uid.
+    /// Refused when another listener holds the workspace's lock. On Unix,
+    /// the workspace must be this user's own directory, not a symbolic
+    /// link, and a looser mode than 0700 is narrowed; refused too when the
+    /// socket path is too long, a symbolic link or some other file, or
+    /// when the TUI runs as the overflow uid. On Windows, refused when the
+    /// pipe's name is already taken, by anyone.
     pub async fn bind<T: TransportPort + 'static>(
         engine: Arc<Engine<T>>,
         policy: Policy,
@@ -307,19 +302,10 @@ impl Listener {
         policy
             .validate()
             .map_err(|e| format!("the MCP policy: {e}"))?;
-        let uid = own_uid();
-        if uid == OVERFLOW_UID {
-            return Err(AttachError(format!(
-                "this TUI runs as uid {OVERFLOW_UID}, which peers in other user namespaces \
-                 report too, so it doesn't listen for MCP"
-            )));
-        }
-        let path = socket_path(&workspace.dir);
-        guard::check_length(&path)?;
-        let dir = guard::open_workspace(&workspace.dir, uid)?;
+        let preflight = platform::preflight(&workspace.dir)?;
         // Taken before the socket path is touched: holding it, any socket
         // there is a stale one.
-        let lock = guard::lock(&workspace.dir).await?;
+        let lock = lock::lock(&workspace.dir).await?;
         let runtime = match runtime {
             SessionRuntime::Own => Some(session_runtime()?),
             SessionRuntime::Callers => None,
@@ -329,22 +315,13 @@ impl Listener {
             None => Handle::current(),
         };
         // The socket, its connections and the watch hub's tasks belong to
-        // the sessions' runtime. Nothing below awaits while it is entered.
+        // the sessions' runtime.
+        let (mut endpoint, incoming) = preflight.bind(&workspace.dir, &handle).await?;
         let entered = handle.enter();
-        guard::clear_stale(&path)?;
-        let listener = UnixListener::bind(&path)
-            .map_err(|e| format!("cannot listen on {}: {e}", path.display()))?;
-        // Bound with the process umask; the 0700 directory keeps others
-        // out until this narrows the file too.
-        let identity = guard::own_socket(&path)?;
-        if let Err(error) = dir.recheck(&workspace.dir, uid) {
-            guard::remove_own(&path, identity);
-            return Err(error.into());
-        }
         let shared = match Shared::new(Some(&engine), &policy) {
             Ok(shared) => shared,
             Err(error) => {
-                guard::remove_own(&path, identity);
+                endpoint.remove();
                 return Err(AttachError(error.to_string()));
             }
         };
@@ -368,24 +345,22 @@ impl Listener {
             refusals,
             runtime: handle.clone(),
         };
-        let accept = handle.spawn(accept_loop(listener, uid, credentials, sessions));
+        let accept = handle.spawn(platform::accept_loop(incoming, credentials, sessions));
         Ok(Self {
-            path,
-            identity,
+            endpoint,
             stop,
             accept: Some(accept),
             sessions: tracker,
             agents: seen,
             finish: Some(finish),
-            removed: false,
             runtime,
             _lock: lock,
         })
     }
 
-    /// The socket's path.
+    /// The socket's path, or on Windows the pipe's name.
     pub fn path(&self) -> &Path {
-        &self.path
+        self.endpoint.path()
     }
 
     /// The number of agents attached, as it changes.
@@ -417,10 +392,7 @@ impl Listener {
     }
 
     fn remove(&mut self) {
-        if !self.removed {
-            self.removed = true;
-            guard::remove_own(&self.path, self.identity);
-        }
+        self.endpoint.remove();
     }
 }
 
@@ -490,50 +462,3 @@ fn finish<T: TransportPort + 'static>(
 /// How long the loop rests after a failed accept (too many open files,
 /// say) before trying again.
 const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
-
-/// Accept connections until `sessions.stop` is cancelled: a peer of
-/// `uid` gets a session, any other is refused and audited before a byte
-/// of MCP is read. Runs on a task of the sessions' runtime, never the
-/// TUI's loop.
-async fn accept_loop<T: TransportPort + 'static>(
-    listener: UnixListener,
-    uid: u32,
-    credentials: Credentials,
-    sessions: Sessions<T>,
-) {
-    loop {
-        // `accept` is cancel-safe: a dropped call loses no connection.
-        let accepted = tokio::select! {
-            biased;
-            () = sessions.stop.cancelled() => break,
-            accepted = listener.accept() => accepted,
-        };
-        match accepted {
-            Ok((stream, _)) => match credentials(&stream) {
-                Ok(peer) if peer.uid == uid => sessions.open(stream, peer),
-                Ok(peer) => {
-                    drop(stream);
-                    sessions.refuse(Some(peer), "another-user");
-                }
-                // macOS can't read the credentials of a peer already gone.
-                Err(error) if error.kind() == io::ErrorKind::NotConnected => {
-                    drop(stream);
-                    sessions.refuse(None, "peer-closed");
-                }
-                Err(error) => {
-                    drop(stream);
-                    tracing::warn!("MCP socket: no peer credentials: {error}");
-                    sessions.refuse(None, "no-peer-credentials");
-                }
-            },
-            Err(error) => {
-                tracing::warn!("MCP socket: accept failed: {error}");
-                tokio::select! {
-                    biased;
-                    () = sessions.stop.cancelled() => break,
-                    () = tokio::time::sleep(ACCEPT_BACKOFF) => {}
-                }
-            }
-        }
-    }
-}

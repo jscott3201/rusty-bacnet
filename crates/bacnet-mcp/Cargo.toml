@@ -30,7 +30,8 @@ bacnet-services = { workspace = true, features = ["std"] }
 rmcp = { version = "=3.5.1", default-features = false, features = ["server"] }
 serde = { workspace = true, features = ["derive", "std"] }
 serde_json.workspace = true
-# `net`: the TUI-attached mode's local socket (#2185); `rt-multi-thread`:
+# `net`: the TUI-attached mode's local socket (#2185) and named pipe
+# (#2201); `rt-multi-thread`:
 # the runtime its sessions run on (#2203).
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
 tracing.workspace = true
@@ -52,6 +53,17 @@ chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true, features = ["user"] }
 libc.workspace = true
+
+# The Windows named pipe (#2201): whose process is at either end of it,
+# which user a process runs as, and its owner-only security descriptor.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }
 
 [dev-dependencies]
 bacnet-encoding = { workspace = true, features = ["std"] }
