@@ -120,3 +120,32 @@ async fn cov_and_cov_multiple_name_the_identity_device_beside_a_lower_one() {
     }
     wire.server.stop().await.unwrap();
 }
+
+/// With no Device object at all, notifications still name the identity's
+/// instance (813 here), never Device 0 or nothing.
+#[tokio::test(start_paused = true)]
+async fn cov_names_the_identity_instance_without_a_device_object() {
+    let mut wire = Wire::start_with_devices(ServerConfig::default(), &[]).await;
+    assert_eq!(wire.server.db.read().await.selected_device(), None);
+    simple_ack(
+        wire.send(&direct(), subscribe_cov(61, av(1), Some(false), None))
+            .await,
+    );
+    simple_ack(
+        wire.send(
+            &direct(),
+            subscribe_cov_property_multiple(
+                63,
+                false,
+                Some((300, 1)),
+                vec![(av(1), vec![plain(PV)])],
+            ),
+        )
+        .await,
+    );
+    wait_for(&wire, 2).await;
+    let mut seen = notifications(&wire);
+    seen.sort_unstable_by_key(|(process, _)| *process);
+    assert_eq!(seen, vec![(61, device()), (63, device())]);
+    wire.server.stop().await.unwrap();
+}

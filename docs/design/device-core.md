@@ -766,11 +766,13 @@ is a follow-up. No file passes the 700-line cap: the two largest sources,
    `DeviceIdentity::new`'s default name without `core::fmt`. The options
    not taken: fix it in PR 1, or let it float within the 12%. PR 1 stays a
    move, and the count can only fall.
-4. **Which Device an I-Have names: (a)** (lead). Who-Is answers from the
-   frozen identity (`unconfirmed.rs:101`, `announcement_device`), Who-Has
-   from `db.selected_device()` (`unconfirmed.rs:192`). PR 1 kept that, and
-   #2186 made I-Have name the identity's Device too, in `discovery::who_has`.
-   The option not taken: unify in PR 1, a **Wire:** change inside a move.
+4. **Which Device an I-Have names: (a)** (lead). When PR 1 landed, Who-Is
+   answered from the frozen identity (`announcement_device`) and Who-Has
+   from `db.selected_device()`. PR 1 kept that; #2186 then made I-Have name
+   the identity's Device too, in `discovery::who_has`, and #2217 did the
+   same for COV, event and audit notifications. Both now answer for the
+   identity's Device. The option not taken: unify in PR 1, a **Wire:**
+   change inside a move.
 5. **Owned APDU** (lead, from the review): `Inbound.apdu` is `Bytes`, and
    `classify` peeks a `&[u8]` header; no borrowed decoder for now (§4.2).
 6. **Requests the core doesn't run** (lead, from the review): `read` and

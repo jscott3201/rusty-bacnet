@@ -97,6 +97,11 @@ fn braced(text: &str) -> &str {
 /// is read, so a checkout whose own path says "test" changes nothing
 /// (#2224).
 fn sources() -> Vec<(PathBuf, String)> {
+    sources_under(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"))
+}
+
+/// [`sources`] for the source tree at `root`.
+fn sources_under(root: &Path) -> Vec<(PathBuf, String)> {
     fn walk(root: &Path, dir: &Path, out: &mut Vec<(PathBuf, String)>) {
         for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
@@ -108,9 +113,8 @@ fn sources() -> Vec<(PathBuf, String)> {
             }
         }
     }
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut all = Vec::new();
-    walk(&root, &root, &mut all);
+    walk(root, root, &mut all);
     let mut tests: BTreeSet<PathBuf> = all
         .iter()
         .map(|(path, _)| path.clone())
@@ -337,4 +341,37 @@ fn test_files_are_told_apart_by_their_path_under_src() {
     }
     assert!(!test_named(Path::new("server/latest.rs")));
     assert!(!test_named(Path::new("attestation/mod.rs")));
+}
+
+/// A source tree under a directory whose own path says "test" (#2224): only
+/// the paths under it decide what is test code.
+#[test]
+fn a_root_whose_path_says_test_changes_nothing() {
+    let root = std::env::temp_dir()
+        .join(format!("pics-test-root-{}", std::process::id()))
+        .join("src");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("server")).unwrap();
+    for (path, source) in [
+        ("lib.rs", "mod server;\n#[cfg(test)]\nmod spy;\n"),
+        ("server.rs", "mod sends;\n#[cfg(test)]\nmod server_tests;\n"),
+        ("server/sends.rs", ""),
+        ("server_tests.rs", ""),
+        ("spy.rs", "mod helper;\n"),
+        ("spy/helper.rs", ""),
+    ] {
+        let file = root.join(path);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, source).unwrap();
+    }
+    let kept: BTreeSet<PathBuf> = sources_under(&root)
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect();
+    std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+    let expected: BTreeSet<PathBuf> = ["lib.rs", "server.rs", "server/sends.rs"]
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+    assert_eq!(kept, expected);
 }

@@ -1,4 +1,4 @@
 ---
 section: Fixed
 ---
-- **Wire:** COV, COV-multiple, event and audit notifications name the Device the server's identity names, as I-Am and I-Have do, and an event recipient naming it is served locally. Before, a lower-instance Device added after start became their initiator (#2217).
+- **Wire:** COV and event notifications name the identity's Device, as I-Am does, not a lower Device added after start, which now gets no local event copies; with no Device in the database they name the identity's instance, not Device 0 (#2217).

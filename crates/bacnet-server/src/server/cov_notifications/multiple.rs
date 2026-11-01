@@ -110,9 +110,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let (parts, last_notified, representative) = {
             // One DB borrow, released before any send, supplies the clock
             // sample for any current-state fallback and every value; the
-            // initiating Device comes from the frozen identity (#2217). Producers capture under the database write guard,
-            // so while this read guard is held no capture can move a field
-            // record past the values read here. A producer snapshot carries its
+            // initiating Device comes from the frozen identity (#2217).
+            // Producers capture under the database write guard, so while this
+            // read guard is held no capture can move a field record past the
+            // values read here. A producer snapshot carries its
             // own captured changes, so that path takes no clock: it neither
             // adopts a fallback change nor times an uncaptured field (#987).
             let (clock_frame, db) = if snapshot.is_none() {

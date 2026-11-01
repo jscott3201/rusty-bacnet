@@ -4616,8 +4616,9 @@ several. The database selects the lowest instance independently of insertion ord
   database still points at another device.
 - **Audit and endpoint identity** need a concrete built-in Device: the
   identity's for target Audit Reporters, `local_device` for the endpoint's
-  source Audit Reporter and endpoint Device writes. It names this device in audit records, owns the Audit
-  recipient, and is the only Device endpoint writes reach; a session identity
+  source Audit Reporter and endpoint Device writes. It names this device in
+  audit records, owns the Audit recipient, and is the only Device endpoint
+  writes reach; a session identity
   must match it. While an Audit runtime is active the database refuses a new
   Device and keeps this one, so the choice holds for the runtime's life.
 - **Other Devices** take no part. Their recipient, APDU_Timeout and declared
