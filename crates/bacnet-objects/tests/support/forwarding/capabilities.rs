@@ -12,18 +12,32 @@
 //! and a method added to a capability trait until it has a row here.
 
 use super::declared;
-use super::fixtures::clocks;
+use super::fixtures::{clocks, oid};
 use super::rows::Row;
+use bacnet_objects::channel::MemberDatatype;
+use bacnet_objects::command::WriteFailure;
+use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
+use bacnet_types::enums::{ObjectType, PropertyIdentifier as P};
 use std::collections::BTreeSet;
 use std::time::Duration;
 
 const MODULE: &str = include_str!("../../../src/traits/capabilities/mod.rs");
 
 /// Each capability module, by name, and its source.
-const SOURCES: &[(&str, &str)] = &[(
-    "timed",
-    include_str!("../../../src/traits/capabilities/timed.rs"),
-)];
+const SOURCES: &[(&str, &str)] = &[
+    (
+        "command_runner",
+        include_str!("../../../src/traits/capabilities/command_runner.rs"),
+    ),
+    (
+        "staging_source",
+        include_str!("../../../src/traits/capabilities/staging_source.rs"),
+    ),
+    (
+        "timed",
+        include_str!("../../../src/traits/capabilities/timed.rs"),
+    ),
+];
 
 /// One row per capability method. A row through an accessor that takes
 /// `&self` is a `Row::Query`, which a read-only view runs as well.
@@ -65,6 +79,69 @@ pub const CAPABILITY_ROWS: &[(&str, Row)] = &[
                     .map(|snapshot| snapshot.object_name().to_owned())
             };
             format!("{:?}", o.timed().map(name))
+        }),
+    ),
+    (
+        "StagingSource::take_staging_write_plan",
+        Row::Command(|o| {
+            let plan = o.staging_source().map(|s| s.take_staging_write_plan());
+            format!("{plan:?}")
+        }),
+    ),
+    (
+        "StagingSource::staging_generation",
+        Row::Command(|o| format!("{:?}", o.staging_source().map(|s| s.staging_generation()))),
+    ),
+    (
+        "StagingSource::complete_staging_write_plan",
+        Row::Command(|o| {
+            let completed = o
+                .staging_source()
+                .map(|s| s.complete_staging_write_plan(7, true));
+            format!("{completed:?}")
+        }),
+    ),
+    (
+        "CommandRunner::take_command_run",
+        Row::Command(|o| format!("{:?}", o.command_runner_mut().map(|r| r.take_command_run()))),
+    ),
+    // Through the shared accessor, the one a host's read guard lends, so a
+    // read-only view runs it as well.
+    (
+        "CommandRunner::command_generation",
+        Row::Query(|o| format!("{:?}", o.command_runner().map(|r| r.command_generation()))),
+    ),
+    (
+        "CommandRunner::record_command_write",
+        Row::Command(|o| {
+            let recorded = o
+                .command_runner_mut()
+                .map(|r| r.record_command_write(11, 2, false));
+            format!("{recorded:?}")
+        }),
+    ),
+    (
+        "CommandRunner::remember_member_datatype",
+        Row::Command(|o| {
+            let reference = BACnetDeviceObjectPropertyReference::new_local(
+                oid(ObjectType::BINARY_OUTPUT, 4),
+                P::PRESENT_VALUE.to_raw(),
+            );
+            let datatype = Some(MemberDatatype::Enumerated);
+            let remembered = o
+                .command_runner_mut()
+                .map(|r| r.remember_member_datatype(3, &reference, datatype));
+            format!("{remembered:?}")
+        }),
+    ),
+    (
+        "CommandRunner::complete_command_run",
+        Row::Command(|o| {
+            let outcome = Err(WriteFailure::Communication);
+            let completed = o
+                .command_runner_mut()
+                .map(|r| r.complete_command_run(11, outcome));
+            format!("{completed:?}")
         }),
     ),
 ];

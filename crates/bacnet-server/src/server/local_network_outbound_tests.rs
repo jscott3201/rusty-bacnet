@@ -73,7 +73,8 @@ async fn start(writer: Writer) -> Harness {
                 let mut channel = channel(5, 21, vec![(remote.clone(), 0)]);
                 // As an earlier distribution's read would have, so the write
                 // is the only request sent (#1342).
-                channel.remember_member_datatype_internal(0, &remote, Some(MemberDatatype::Real));
+                let runs = channel.command_runner_mut().unwrap();
+                runs.remember_member_datatype(0, &remote, Some(MemberDatatype::Real));
                 db.add(Box::new(channel)).unwrap();
             })
             .await

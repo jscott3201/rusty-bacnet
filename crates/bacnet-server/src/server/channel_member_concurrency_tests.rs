@@ -165,7 +165,8 @@ async fn a_distribution_dropped_mid_write_frees_its_invoke_id_without_stop() {
         channel
             .write_property(PV, None, PropertyValue::Null, Some(8))
             .unwrap();
-        channel.take_command_run_internal().unwrap()
+        let runs = channel.command_runner_mut().unwrap();
+        runs.take_command_run().unwrap()
     };
     let runner = CommandRunner::for_server(&h.server);
     let mut running = Box::pin(crate::command_lists::execute(&runner, run));

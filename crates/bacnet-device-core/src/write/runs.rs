@@ -66,11 +66,14 @@ impl Unfinished {
         } else {
             self.outcome
         };
-        db.get_mut(&self.source).is_some_and(|object| {
+        let runner = db
+            .get_mut(&self.source)
+            .and_then(|object| object.command_runner_mut());
+        runner.is_some_and(|runner| {
             for index in self.next..self.len {
-                object.record_command_write_internal(self.generation, index, false);
+                runner.record_command_write(self.generation, index, false);
             }
-            object.complete_command_run_internal(self.generation, outcome)
+            runner.complete_command_run(self.generation, outcome)
         })
     }
 }
@@ -82,7 +85,8 @@ pub fn take_queued(db: &mut ObjectDatabase, oids: &[ObjectIdentifier]) -> Vec<Co
     oids.iter()
         .filter_map(|oid| {
             db.get_mut(oid)
-                .and_then(|object| object.take_command_run_internal())
+                .and_then(|object| object.command_runner_mut())
+                .and_then(|runner| runner.take_command_run())
         })
         .collect()
 }

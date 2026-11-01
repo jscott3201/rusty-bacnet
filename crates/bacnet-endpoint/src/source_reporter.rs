@@ -9,7 +9,6 @@ use bacnet_objects::access_control::{AccessControlInput, AccessEventReport, Comm
 use bacnet_objects::audit::{
     AuditLogForwarding, AuditLogNotificationSink, AuditLogStorage, AuditReporterObject,
 };
-use bacnet_objects::command::{CommandRun, WriteFailure};
 use bacnet_objects::durable::DurableWrites;
 use bacnet_objects::event::{
     EnrollmentSummaryCapability, EventStateChange, EventTransitionCommit,
@@ -23,9 +22,9 @@ use bacnet_objects::log_buffer::{LogBufferRecords, LogRecordIdentity};
 use bacnet_objects::log_reporting::BufferReadyReport;
 use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::schedule::{ScheduleTargetOutcome, ScheduleWrite};
-use bacnet_objects::staging::StagingWritePlan;
 use bacnet_objects::traits::{
-    BACnetObject, CovReportedProperty, LifeSafetyOperationOutcome, ReliabilityEvaluation, Timed,
+    BACnetObject, CommandRunner, CovReportedProperty, LifeSafetyOperationOutcome,
+    ReliabilityEvaluation, StagingSource, Timed,
 };
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter, EventTransitionBits};
 use bacnet_types::calendar::SpecificDate;
@@ -224,54 +223,16 @@ impl BACnetObject for SourceReporter {
         self.wrapped.supports_subscribe_cov_property()
     }
 
-    fn take_staging_write_plan_internal(&mut self) -> Option<StagingWritePlan> {
-        self.wrapped.take_staging_write_plan_internal()
+    fn staging_source(&mut self) -> Option<&mut dyn StagingSource> {
+        self.wrapped.staging_source()
     }
 
-    fn staging_generation_internal(&self) -> Option<u64> {
-        self.wrapped.staging_generation_internal()
+    fn command_runner(&self) -> Option<&dyn CommandRunner> {
+        self.wrapped.command_runner()
     }
 
-    fn complete_staging_write_plan_internal(&mut self, generation: u64, success: bool) -> bool {
-        self.wrapped
-            .complete_staging_write_plan_internal(generation, success)
-    }
-
-    fn take_command_run_internal(&mut self) -> Option<CommandRun> {
-        self.wrapped.take_command_run_internal()
-    }
-
-    fn command_generation_internal(&self) -> Option<u64> {
-        self.wrapped.command_generation_internal()
-    }
-
-    fn record_command_write_internal(
-        &mut self,
-        generation: u64,
-        command: usize,
-        success: bool,
-    ) -> bool {
-        self.wrapped
-            .record_command_write_internal(generation, command, success)
-    }
-
-    fn remember_member_datatype_internal(
-        &mut self,
-        slot: usize,
-        reference: &bacnet_types::constructed::BACnetDeviceObjectPropertyReference,
-        datatype: Option<bacnet_objects::channel::MemberDatatype>,
-    ) {
-        self.wrapped
-            .remember_member_datatype_internal(slot, reference, datatype);
-    }
-
-    fn complete_command_run_internal(
-        &mut self,
-        generation: u64,
-        outcome: Result<(), WriteFailure>,
-    ) -> bool {
-        self.wrapped
-            .complete_command_run_internal(generation, outcome)
+    fn command_runner_mut(&mut self) -> Option<&mut dyn CommandRunner> {
+        self.wrapped.command_runner_mut()
     }
 
     fn enrollment_summary_capability_internal(&self) -> Option<EnrollmentSummaryCapability> {

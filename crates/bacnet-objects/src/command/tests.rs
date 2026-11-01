@@ -265,15 +265,18 @@ fn configured() -> CommandObject {
 #[test]
 fn command_present_value_write_queues_the_selected_list_and_busies_the_object() {
     let mut cmd = configured();
-    assert!(cmd.take_command_run_internal().is_none());
+    assert!(cmd.take_command_run().is_none());
     write_pv(&mut cmd, 1).unwrap();
     assert_eq!(state(&cmd), (true, false));
-    let run = cmd.take_command_run_internal().unwrap();
+    let run = cmd.take_command_run().unwrap();
     assert_eq!(run.source, cmd.object_identifier());
-    assert_eq!(Some(run.generation), cmd.command_generation_internal());
+    assert_eq!(
+        Some(run.generation),
+        cmd.command_runner().map(|r| r.command_generation())
+    );
     assert_eq!(commands(&run).len(), 3);
     assert!(commands(&run)[0].quit_on_failure);
-    assert!(cmd.take_command_run_internal().is_none(), "taken once");
+    assert!(cmd.take_command_run().is_none(), "taken once");
 
     // Any Present_Value write while the list runs, the same number included,
     // is OBJECT / BUSY and changes nothing.
@@ -286,20 +289,23 @@ fn command_present_value_write_queues_the_selected_list_and_busies_the_object() 
             "{value}: {result:?}"
         );
     }
-    assert_eq!(Some(run.generation), cmd.command_generation_internal());
+    assert_eq!(
+        Some(run.generation),
+        cmd.command_runner().map(|r| r.command_generation())
+    );
 
     for command in 0..3 {
-        assert!(cmd.record_command_write_internal(run.generation, command, true));
+        assert!(cmd.record_command_write(run.generation, command, true));
     }
     assert_eq!(state(&cmd), (true, false), "still running until completed");
-    assert!(cmd.complete_command_run_internal(run.generation, Ok(())));
+    assert!(cmd.complete_command_run(run.generation, Ok(())));
     assert_eq!(state(&cmd), (false, true));
     assert_eq!(flags(&cmd, 1), [true, true, true]);
-    assert!(!cmd.complete_command_run_internal(run.generation, Ok(())));
+    assert!(!cmd.complete_command_run(run.generation, Ok(())));
 
     // Writing the same number again starts the list again.
     write_pv(&mut cmd, 1).unwrap();
-    let again = cmd.take_command_run_internal().unwrap();
+    let again = cmd.take_command_run().unwrap();
     assert_ne!(again.generation, run.generation);
     assert_eq!(commands(&again), commands(&run));
 }
@@ -308,22 +314,22 @@ fn command_present_value_write_queues_the_selected_list_and_busies_the_object() 
 fn command_quit_on_failure_marks_the_commands_after_it_unsuccessful() {
     let mut cmd = configured();
     write_pv(&mut cmd, 1).unwrap();
-    let run = cmd.take_command_run_internal().unwrap();
+    let run = cmd.take_command_run().unwrap();
     // The first command fails and quits: the other two are never made.
-    assert!(cmd.record_command_write_internal(run.generation, 0, false));
+    assert!(cmd.record_command_write(run.generation, 0, false));
     assert_eq!(flags(&cmd, 1), [false, false, false]);
-    assert!(cmd.complete_command_run_internal(run.generation, Err(WriteFailure::Process)));
+    assert!(cmd.complete_command_run(run.generation, Err(WriteFailure::Process)));
     assert_eq!(state(&cmd), (false, false));
 
     // A failure that doesn't quit marks that command alone.
     write_pv(&mut cmd, 1).unwrap();
-    let run = cmd.take_command_run_internal().unwrap();
-    assert!(cmd.record_command_write_internal(run.generation, 0, true));
-    assert!(cmd.record_command_write_internal(run.generation, 1, false));
-    assert!(cmd.record_command_write_internal(run.generation, 2, true));
+    let run = cmd.take_command_run().unwrap();
+    assert!(cmd.record_command_write(run.generation, 0, true));
+    assert!(cmd.record_command_write(run.generation, 1, false));
+    assert!(cmd.record_command_write(run.generation, 2, true));
     assert_eq!(flags(&cmd, 1), [true, false, true]);
-    assert!(!cmd.record_command_write_internal(run.generation, 3, true));
-    assert!(cmd.complete_command_run_internal(run.generation, Err(WriteFailure::Process)));
+    assert!(!cmd.record_command_write(run.generation, 3, true));
+    assert!(cmd.complete_command_run(run.generation, Err(WriteFailure::Process)));
     assert_eq!(state(&cmd), (false, false));
 }
 
@@ -331,12 +337,12 @@ fn command_quit_on_failure_marks_the_commands_after_it_unsuccessful() {
 fn command_zero_and_an_empty_list_complete_at_once() {
     let mut cmd = configured();
     write_pv(&mut cmd, 1).unwrap();
-    let run = cmd.take_command_run_internal().unwrap();
-    assert!(cmd.complete_command_run_internal(run.generation, Err(WriteFailure::Process)));
+    let run = cmd.take_command_run().unwrap();
+    assert!(cmd.complete_command_run(run.generation, Err(WriteFailure::Process)));
     assert_eq!(state(&cmd), (false, false));
     for value in [0, 2] {
         write_pv(&mut cmd, value).unwrap();
-        assert!(cmd.take_command_run_internal().is_none(), "{value}");
+        assert!(cmd.take_command_run().is_none(), "{value}");
         assert_eq!(state(&cmd), (false, true), "{value}");
         assert_eq!(
             cmd.read_property(PropertyIdentifier::PRESENT_VALUE, None)
@@ -358,7 +364,7 @@ fn command_present_value_above_the_action_size_is_out_of_range() {
             .unwrap(),
         PropertyValue::Unsigned(2)
     );
-    assert!(cmd.take_command_run_internal().is_none());
+    assert!(cmd.take_command_run().is_none());
     assert_property_error(
         write_pv(&mut CommandObject::new(2, "CMD-2").unwrap(), 1),
         ErrorCode::VALUE_OUT_OF_RANGE,
@@ -369,19 +375,22 @@ fn command_present_value_above_the_action_size_is_out_of_range() {
 fn command_set_action_abandons_a_run_and_its_reports_go_stale() {
     let mut cmd = configured();
     write_pv(&mut cmd, 1).unwrap();
-    let run = cmd.take_command_run_internal().unwrap();
+    let run = cmd.take_command_run().unwrap();
     cmd.set_action(vec![BACnetActionList {
         commands: vec![write_ao1(None)],
     }])
     .unwrap();
     assert!(!state(&cmd).0);
-    assert_ne!(Some(run.generation), cmd.command_generation_internal());
-    assert!(!cmd.record_command_write_internal(run.generation, 0, false));
-    assert!(!cmd.complete_command_run_internal(run.generation, Err(WriteFailure::Process)));
+    assert_ne!(
+        Some(run.generation),
+        cmd.command_runner().map(|r| r.command_generation())
+    );
+    assert!(!cmd.record_command_write(run.generation, 0, false));
+    assert!(!cmd.complete_command_run(run.generation, Err(WriteFailure::Process)));
     assert_eq!(flags(&cmd, 1), [true]);
     // The new list starts as usual.
     write_pv(&mut cmd, 1).unwrap();
-    assert!(cmd.take_command_run_internal().is_some());
+    assert!(cmd.take_command_run().is_some());
 }
 
 #[test]
@@ -437,14 +446,14 @@ fn command_replacement_never_shares_a_run_generation() {
     // from the first can't pass for the second's.
     let mut old = configured();
     write_pv(&mut old, 1).unwrap();
-    let stale = old.take_command_run_internal().unwrap();
+    let stale = old.take_command_run().unwrap();
     let mut fresh = configured();
     write_pv(&mut fresh, 1).unwrap();
-    let current = fresh.take_command_run_internal().unwrap();
+    let current = fresh.take_command_run().unwrap();
     assert_eq!(stale.source, current.source);
     assert_ne!(stale.generation, current.generation);
-    assert!(!fresh.record_command_write_internal(stale.generation, 0, false));
-    assert!(!fresh.complete_command_run_internal(stale.generation, Err(WriteFailure::Process)));
+    assert!(!fresh.record_command_write(stale.generation, 0, false));
+    assert!(!fresh.complete_command_run(stale.generation, Err(WriteFailure::Process)));
     assert_eq!(state(&fresh), (true, false));
-    assert!(fresh.complete_command_run_internal(current.generation, Ok(())));
+    assert!(fresh.complete_command_run(current.generation, Ok(())));
 }
