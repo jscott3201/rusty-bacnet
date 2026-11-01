@@ -1,7 +1,7 @@
 use super::cov_notify_context::CovNotifyContext;
 use super::*;
 use crate::command_lists::TakenRuns;
-use crate::handlers::{WriteCommitObserver, WriteTarget};
+use bacnet_device_core::write::{WriteCommitObserver, WriteTarget};
 use bacnet_objects::staging::StagingWritePlan;
 use bacnet_types::constructed::BACnetRecipient;
 
@@ -772,11 +772,11 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
             };
             let value = match write {
                 LocalWrite::Property { property, .. } => {
-                    crate::local_references::localize(&db, *oid, property, value)
+                    bacnet_device_core::write::localize(&db, *oid, property, value)
                 }
                 _ => value,
             };
-            let null = crate::handlers::relinquish::is_null_value(&value);
+            let null = bacnet_device_core::write::relinquish::is_null_value(&value);
             let prepared = match write {
                 LocalWrite::Property {
                     property,
@@ -820,7 +820,7 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                         array_index,
                         priority,
                     } => {
-                        crate::device_view::check_executor_owned_write(*oid, property)?;
+                        bacnet_device_core::write::check_executor_owned_write(*oid, property)?;
                         crate::command_source::write_target(
                             object,
                             property,
@@ -859,7 +859,7 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
             });
             staged.release(&mut db);
             // A NULL the property left as it was succeeds unchanged
-            // (`handlers::relinquish`): audited as the write it is, with no
+            // (`bacnet_device_core::write::relinquish`): audited as the write it is, with no
             // post-write work, since nothing changed.
             if let (
                 Err(error),
@@ -872,7 +872,7 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
             {
                 let object = db.get(oid).expect("existence checked above");
                 if null
-                    && crate::handlers::relinquish::leaves_unchanged(
+                    && bacnet_device_core::write::relinquish::leaves_unchanged(
                         object,
                         property,
                         array_index,
@@ -922,7 +922,7 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
 /// The checks made under the write's guard before the audit hooks or the
 /// object see the value, in WriteProperty's order: the object exists, and
 /// for a property write, the array index fits the property (WriteProperty's
-/// own [`check_write_array_index`](crate::handlers::check_write_array_index))
+/// own [`check_write_array_index`](bacnet_device_core::write::check_write_array_index))
 /// and a new Object_Name is free. The name check calls
 /// [`ObjectDatabase::check_name_available`] directly, which is what
 /// WriteProperty's `check_and_prepare_name_write` runs for a CharacterString.
@@ -946,7 +946,7 @@ fn precheck(
     else {
         return Ok(());
     };
-    crate::handlers::check_write_array_index(object, property, array_index)?;
+    bacnet_device_core::write::check_write_array_index(object, property, array_index)?;
     match value {
         PropertyValue::CharacterString(new_name) if property == PropertyIdentifier::OBJECT_NAME => {
             db.check_name_available(oid, new_name)

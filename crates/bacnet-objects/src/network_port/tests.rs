@@ -84,12 +84,19 @@ fn configured_bip_metadata_exact_sets_and_indexed_list() {
     assert_eq!(actual, required);
     for row in metadata.iter() {
         // Footnotes 3 and 25 of Table 12-71 require these optional rows of
-        // a non-PTP application port, which every port here is (#2174).
+        // a non-PTP application port, which every port here is (#2174), and
+        // footnotes 5 and 6 the B/IP rows (#2191).
         let condition = match row.property_identifier {
             P::NETWORK_NUMBER | P::NETWORK_NUMBER_QUALITY | P::APDU_LENGTH => {
                 Some(PropertyPresenceCondition::ApplicationProtocolLevel)
             }
             P::MAC_ADDRESS => Some(PropertyPresenceCondition::NotPointToPoint),
+            P::BACNET_IP_MODE
+            | P::IP_ADDRESS
+            | P::IP_DEFAULT_GATEWAY
+            | P::IP_SUBNET_MASK
+            | P::BACNET_IP_UDP_PORT
+            | P::IP_DNS_SERVER => Some(PropertyPresenceCondition::BacnetIpPort),
             _ => None,
         };
         assert_eq!(row.presence_condition, condition);

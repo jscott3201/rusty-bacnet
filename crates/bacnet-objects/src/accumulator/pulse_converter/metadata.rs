@@ -6,6 +6,7 @@ use bacnet_types::enums::PropertyIdentifier as P;
 use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead, RequiredWrite},
     PropertyMetadata,
+    PropertyPresenceCondition::CovReporting,
     PropertyWriteCapability::{Always, ReadOnly, WhenOutOfService},
 };
 
@@ -68,8 +69,9 @@ const PULSE_CONVERTER_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::UPDATE_TIME, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::COUNT_CHANGE_TIME, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::COUNT_BEFORE_CHANGE, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::COV_INCREMENT, Optional, None, Always),
-    PropertyMetadata::new(P::COV_PERIOD, Optional, None, ReadOnly),
+    crate::property_metadata::COV_INCREMENT_ROW,
+    // Table 12-27 footnote 2 ties COV_Period to COV reporting too (#2193).
+    PropertyMetadata::new(P::COV_PERIOD, Optional, Some(CovReporting), ReadOnly),
     PropertyMetadata::new(P::INPUT_REFERENCE, Optional, None, Always),
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::EVENT_STATE, RequiredRead, None, ReadOnly),

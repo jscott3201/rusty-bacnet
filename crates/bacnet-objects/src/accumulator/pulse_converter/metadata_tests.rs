@@ -37,7 +37,11 @@ const ALL: [P; 19] = [
     P::RELIABILITY,
 ];
 
-const REQUIRED: [P; 15] = [
+/// The COV pair: optional in Table 12-27 but, by its footnote 2, required
+/// of an object that reports COV, as this one does (#2193).
+const COV_ROWS: [P; 2] = [P::COV_INCREMENT, P::COV_PERIOD];
+
+const REQUIRED: [P; 17] = [
     P::OBJECT_IDENTIFIER,
     P::OBJECT_NAME,
     P::OBJECT_TYPE,
@@ -49,6 +53,8 @@ const REQUIRED: [P; 15] = [
     P::UPDATE_TIME,
     P::COUNT_CHANGE_TIME,
     P::COUNT_BEFORE_CHANGE,
+    P::COV_INCREMENT,
+    P::COV_PERIOD,
     P::STATUS_FLAGS,
     P::EVENT_STATE,
     P::OUT_OF_SERVICE,
@@ -87,9 +93,15 @@ fn property_metadata_pulse_converter_exact_sets_readable_rows_and_indexed_list()
     assert!(object.is_deleteable());
     assert!(object.supports_cov());
     for row in metadata.iter() {
-        assert_eq!(row.presence_condition, None);
+        let cov = COV_ROWS.contains(&row.property_identifier);
+        assert_eq!(
+            row.presence_condition,
+            cov.then_some(crate::property_metadata::PropertyPresenceCondition::CovReporting)
+        );
         let expected = if row.property_identifier == P::ADJUST_VALUE {
             RequiredWrite
+        } else if cov {
+            Optional
         } else if REQUIRED.contains(&row.property_identifier) {
             RequiredRead
         } else {

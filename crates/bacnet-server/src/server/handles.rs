@@ -166,7 +166,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 ErrorClass::OBJECT,
                 ErrorCode::UNKNOWN_OBJECT,
             ))?;
-            handlers::gate_and_decode_write(object, property, array_index, value)?
+            bacnet_device_core::write::gate_and_decode_write(object, property, array_index, value)?
         };
         self.write_local(oid, property, array_index, value, priority, source)
             .await

@@ -37,7 +37,8 @@ fn pics_loop_program_notification_class_property_metadata_is_exact() {
         (P::DERIVATIVE_CONSTANT, true, true),
         (P::DERIVATIVE_CONSTANT_UNITS, true, false),
         (P::PRIORITY_FOR_WRITING, false, false),
-        (P::COV_INCREMENT, true, true),
+        // Table 12-20 footnote 4 (#2193).
+        (P::COV_INCREMENT, false, true),
         (P::PROPERTY_LIST, false, false),
     ];
     let program_rows = [

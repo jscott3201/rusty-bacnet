@@ -376,9 +376,10 @@ fn rpm_metadata_analog_required_optional_and_budgeted_bytes_agree() {
         P::ACKED_TRANSITIONS,
         P::EVENT_TIME_STAMPS,
     ];
+    // COV_Increment isn't here: these objects report COV, which makes it
+    // required (Tables 12-2 and 12-4 footnote 2, 12-3 footnote 1, #2193).
     let optional = vec![
         P::DESCRIPTION,
-        P::COV_INCREMENT,
         P::TIME_DELAY_NORMAL,
         P::RELIABILITY,
         P::RELIABILITY_EVALUATION_INHIBIT,
@@ -414,6 +415,7 @@ fn rpm_metadata_analog_required_optional_and_budgeted_bytes_agree() {
             let kind = oid.object_type();
             let mut requires = required.clone();
             requires.extend(intrinsic);
+            requires.push(P::COV_INCREMENT);
             let mut expected_optional = optional.clone();
             let commandable = [
                 P::PRIORITY_ARRAY,

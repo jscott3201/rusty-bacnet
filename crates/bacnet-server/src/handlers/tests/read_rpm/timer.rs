@@ -3,50 +3,63 @@ use PropertyIdentifier as P;
 use bacnet_objects::{timer::TimerObject, traits::BACnetObject};
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::error::RemoteError;
-use bacnet_types::primitives::{Date, Time};
+use bacnet_types::primitives::{Date, PropertyValue, Time};
 
-#[test]
-fn rpm_timer_indexed_reads_and_bytes_are_unchanged() {
-    for configured in [false, true] {
-        let mut object = TimerObject::new(7, "TMR-7").unwrap();
-        if configured {
-            object.start();
-            object.set_initial_timeout(5000);
-            let date = Date {
+/// A Device clock fixed at 2026-09-14 (a Monday) 12:30:15.25.
+struct FixedClock;
+impl bacnet_objects::clock::ClockReader for FixedClock {
+    fn read_clock(&self) -> Option<bacnet_objects::clock::ClockFrame> {
+        Some(bacnet_objects::clock::ClockFrame {
+            local_date: Date {
                 year: 126,
                 month: 9,
                 day: 14,
                 day_of_week: 1,
-            };
-            let time = Time {
+            },
+            local_time: Time {
                 hour: 12,
                 minute: 30,
                 second: 15,
                 hundredths: 25,
-            };
-            object.set_update_time(date, time);
-            object.set_expiration_time(date, time);
-        }
-        object
-            .write_property(
-                P::OUT_OF_SERVICE,
-                None,
-                bacnet_types::primitives::PropertyValue::Boolean(configured),
-                None,
-            )
-            .unwrap();
+            },
+            utc_offset: 0,
+            daylight_savings_status: false,
+        })
+    }
+}
+
+#[test]
+fn rpm_timer_indexed_reads_and_bytes_are_unchanged() {
+    for configured in [false, true] {
+        let object = TimerObject::new(7, "TMR-7").unwrap();
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
+        db.set_clock_reader(Some(std::sync::Arc::new(FixedClock)));
         db.add(Box::new(object)).unwrap();
-        // Independent application-value bytes pin the existing projection.
+        if configured {
+            // Out of service first, so the 5 s countdown is held.
+            let timer = db.get_mut(&oid).unwrap();
+            for (p, value) in [
+                (P::OUT_OF_SERVICE, PropertyValue::Boolean(true)),
+                (P::PRESENT_VALUE, PropertyValue::Unsigned(5000)),
+            ] {
+                timer.write_property(p, None, value, None).unwrap();
+            }
+        }
+        // Independent application-value bytes pin the projection.
         type ExpectedRead = Result<&'static [u8], ErrorCode>;
         let unspec_datetime: &[u8] = &[0xa4, 0xff, 0xff, 0xff, 0xff, 0xb4, 0xff, 0xff, 0xff, 0xff];
-        let configured_datetime: &[u8] = &[0xa4, 126, 9, 14, 1, 0xb4, 12, 30, 15, 25];
+        let started: &[u8] = &[0xa4, 126, 9, 14, 1, 0xb4, 12, 30, 15, 25];
+        let expires: &[u8] = &[0xa4, 126, 9, 14, 1, 0xb4, 12, 30, 20, 25];
         let cases: &[(P, Option<u32>, ExpectedRead)] = &[
             (
                 P::PRESENT_VALUE,
                 None,
-                Ok(if configured { &[0x91, 1] } else { &[0x91, 0] }),
+                Ok(if configured {
+                    &[0x22, 0x13, 0x88]
+                } else {
+                    &[0x21, 0]
+                }),
             ),
             (
                 P::PRESENT_VALUE,
@@ -79,6 +92,11 @@ fn rpm_timer_indexed_reads_and_bytes_are_unchanged() {
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
             (
+                P::LAST_STATE_CHANGE,
+                None,
+                Ok(if configured { &[0x91, 1] } else { &[0x91, 0] }),
+            ),
+            (
                 P::INITIAL_TIMEOUT,
                 None,
                 Ok(if configured {
@@ -92,14 +110,13 @@ fn rpm_timer_indexed_reads_and_bytes_are_unchanged() {
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
+            (P::DEFAULT_TIMEOUT, None, Ok(&[0x22, 0xea, 0x60])),
+            (P::MIN_PRES_VALUE, None, Ok(&[0x21, 1])),
+            (P::MAX_PRES_VALUE, None, Ok(&[0x24, 0xff, 0xff, 0xff, 0xff])),
             (
                 P::UPDATE_TIME,
                 None,
-                Ok(if configured {
-                    configured_datetime
-                } else {
-                    unspec_datetime
-                }),
+                Ok(if configured { started } else { unspec_datetime }),
             ),
             (
                 P::UPDATE_TIME,
@@ -109,11 +126,7 @@ fn rpm_timer_indexed_reads_and_bytes_are_unchanged() {
             (
                 P::EXPIRATION_TIME,
                 None,
-                Ok(if configured {
-                    configured_datetime
-                } else {
-                    unspec_datetime
-                }),
+                Ok(if configured { expires } else { unspec_datetime }),
             ),
             (
                 P::EXPIRATION_TIME,
@@ -145,25 +158,22 @@ fn rpm_timer_indexed_reads_and_bytes_are_unchanged() {
                 P::PROPERTY_LIST,
                 None,
                 Ok(&[
-                    0x91, 28, 0x91, 85, 0x92, 0x01, 0x8e, 0x92, 0x01, 0x8d, 0x92, 0x01, 0x8a, 0x91,
-                    189, 0x92, 0x01, 0x0e, 0x91, 111, 0x91, 81, 0x91, 103, 0x91, 36,
+                    0x91, 28, 0x91, 85, 0x91, 111, 0x91, 36, 0x91, 103, 0x91, 81, 0x92, 0x01, 0x8e,
+                    0x92, 0x01, 0x8d, 0x91, 189, 0x92, 0x01, 0x8b, 0x92, 0x01, 0x0e, 0x92, 0x01,
+                    0x8a, 0x92, 0x01, 0x89, 0x91, 69, 0x91, 65,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 11])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 15])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
             (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 85])),
-            (P::PROPERTY_LIST, Some(3), Ok(&[0x92, 0x01, 0x8e])),
-            (P::PROPERTY_LIST, Some(4), Ok(&[0x92, 0x01, 0x8d])),
-            (P::PROPERTY_LIST, Some(5), Ok(&[0x92, 0x01, 0x8a])),
-            (P::PROPERTY_LIST, Some(6), Ok(&[0x91, 189])),
-            (P::PROPERTY_LIST, Some(7), Ok(&[0x92, 0x01, 0x0e])),
-            (P::PROPERTY_LIST, Some(8), Ok(&[0x91, 111])),
-            (P::PROPERTY_LIST, Some(9), Ok(&[0x91, 81])),
-            (P::PROPERTY_LIST, Some(10), Ok(&[0x91, 103])),
-            (P::PROPERTY_LIST, Some(11), Ok(&[0x91, 36])),
+            (P::PROPERTY_LIST, Some(7), Ok(&[0x92, 0x01, 0x8e])),
+            (P::PROPERTY_LIST, Some(8), Ok(&[0x92, 0x01, 0x8d])),
+            (P::PROPERTY_LIST, Some(10), Ok(&[0x92, 0x01, 0x8b])),
+            (P::PROPERTY_LIST, Some(13), Ok(&[0x92, 0x01, 0x89])),
+            (P::PROPERTY_LIST, Some(15), Ok(&[0x91, 65])),
             (
                 P::PROPERTY_LIST,
-                Some(12),
+                Some(16),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (
@@ -171,8 +181,12 @@ fn rpm_timer_indexed_reads_and_bytes_are_unchanged() {
                 Some(u32::MAX),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
-            (P::DEFAULT_TIMEOUT, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (P::RESOLUTION, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
+            (
+                P::STATE_CHANGE_VALUES,
+                None,
+                Err(ErrorCode::UNKNOWN_PROPERTY),
+            ),
         ];
         let mut request = BytesMut::new();
         ReadPropertyMultipleRequest {

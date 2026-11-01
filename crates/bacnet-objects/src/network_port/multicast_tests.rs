@@ -4,7 +4,9 @@
 
 use super::*;
 use crate::database::ObjectDatabase;
-use crate::property_metadata::{PropertyConformance, PropertyWriteCapability};
+use crate::property_metadata::{
+    PropertyConformance, PropertyPresenceCondition, PropertyWriteCapability,
+};
 use bacnet_types::bip_port::{BipPortMode, IpMulticast};
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
 use bacnet_types::error::RemoteError;
@@ -139,7 +141,13 @@ fn a_port_that_can_use_multicast_serves_its_group_live() {
     let group = Group::new(OFF);
     let (db, _lease) = port(Some(&group), true);
     let row = row(&db).expect("listed");
-    assert_eq!(row.conformance, PropertyConformance::RequiredRead);
+    // Table 12-71 footnote 7 (#2191).
+    assert_eq!(row.conformance, PropertyConformance::Optional);
+    assert_eq!(
+        row.presence_condition,
+        Some(PropertyPresenceCondition::BacnetIpMulticast)
+    );
+    assert!(row.is_required());
     assert!(
         db.get(&oid())
             .unwrap()

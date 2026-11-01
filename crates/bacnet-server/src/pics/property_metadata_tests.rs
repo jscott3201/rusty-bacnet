@@ -382,7 +382,8 @@ fn pics_analog_property_metadata_is_exact_for_each_configuration() {
         (P::EVENT_DETECTION_ENABLE, false, true),
         (P::OUT_OF_SERVICE, false, true),
         (P::UNITS, false, false),
-        (P::COV_INCREMENT, true, true),
+        // Tables 12-2 and 12-4 footnote 2, 12-3 footnote 1 (#2193).
+        (P::COV_INCREMENT, false, true),
         (P::HIGH_LIMIT, false, true),
         (P::LOW_LIMIT, false, true),
         (P::DEADBAND, false, true),

@@ -103,12 +103,7 @@ pub(super) const STAGING_PROPERTY_METADATA: &[PropertyMetadata] = &[
         PropertyWriteCapability::ReadOnly,
     ),
     // Table 12-80 footnote 3: present because the object supports COV.
-    PropertyMetadata::new(
-        PropertyIdentifier::COV_INCREMENT,
-        PropertyConformance::Optional,
-        None,
-        PropertyWriteCapability::Always,
-    ),
+    crate::property_metadata::COV_INCREMENT_ROW,
     PropertyMetadata::new(
         PropertyIdentifier::PROPERTY_LIST,
         PropertyConformance::RequiredRead,
@@ -141,7 +136,11 @@ mod tests {
                 _ => PropertyConformance::RequiredRead,
             };
             assert_eq!(row.conformance, expected, "{p:?}");
-            assert_eq!(row.presence_condition, None, "{p:?}");
+            // Footnote 3: required of a Staging that reports COV (#2193).
+            let condition = (p == P::COV_INCREMENT)
+                .then_some(crate::property_metadata::PropertyPresenceCondition::CovReporting);
+            assert_eq!(row.presence_condition, condition, "{p:?}");
+            assert_eq!(row.is_required(), p != P::DESCRIPTION, "{p:?}");
             if written_r_rows.contains(&p) {
                 assert_eq!(
                     row.write_capability,

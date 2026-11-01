@@ -1,26 +1,34 @@
 use super::*;
 use PropertyIdentifier as P;
 use bacnet_objects::{timer::TimerObject, traits::BACnetObject};
-use bacnet_types::primitives::{Date, PropertyValue, Time};
+use bacnet_types::primitives::PropertyValue;
 
 #[test]
 fn pics_timer_property_metadata_is_exact() {
-    // Independent (identifier, optional, writable) rows in declaration order; PICS sorts by property ID.
+    // Independent (identifier, optional, writable) rows in declaration order;
+    // PICS sorts by property ID. Table 12-75: Timer_State and Timer_Running
+    // are writable because Present_Value is, which also requires the range
+    // (#2192).
     let expected = [
         (P::OBJECT_IDENTIFIER, false, false),
         (P::OBJECT_NAME, false, false),
         (P::DESCRIPTION, true, true),
         (P::OBJECT_TYPE, false, false),
         (P::PRESENT_VALUE, false, true),
-        (P::TIMER_STATE, false, false),
-        (P::TIMER_RUNNING, false, false),
-        (P::INITIAL_TIMEOUT, true, true),
-        (P::UPDATE_TIME, true, false),
-        (P::EXPIRATION_TIME, true, false),
         (P::STATUS_FLAGS, false, false),
-        (P::OUT_OF_SERVICE, true, true),
-        (P::RELIABILITY, true, false),
         (P::EVENT_STATE, true, false),
+        // Writable out of service (footnote 1).
+        (P::RELIABILITY, true, true),
+        (P::OUT_OF_SERVICE, true, true),
+        (P::TIMER_STATE, false, true),
+        (P::TIMER_RUNNING, false, true),
+        (P::UPDATE_TIME, true, false),
+        (P::LAST_STATE_CHANGE, true, false),
+        (P::EXPIRATION_TIME, true, false),
+        (P::INITIAL_TIMEOUT, true, false),
+        (P::DEFAULT_TIMEOUT, true, true),
+        (P::MIN_PRES_VALUE, false, false),
+        (P::MAX_PRES_VALUE, false, false),
         (P::PROPERTY_LIST, false, false),
     ];
     for configured in [false, true] {
@@ -35,22 +43,10 @@ fn pics_timer_property_metadata_is_exact() {
                         None,
                     )
                     .unwrap();
-                object.start();
-                object.set_initial_timeout(5000);
-                let date = Date {
-                    year: 126,
-                    month: 9,
-                    day: 14,
-                    day_of_week: 1,
-                };
-                let time = Time {
-                    hour: 12,
-                    minute: 30,
-                    second: 15,
-                    hundredths: 25,
-                };
-                object.set_update_time(date, time);
-                object.set_expiration_time(date, time);
+                object.set_pres_value_range(1_000, 600_000).unwrap();
+                object
+                    .write_property(P::PRESENT_VALUE, None, PropertyValue::Unsigned(5000), None)
+                    .unwrap();
             }
             object
                 .write_property(

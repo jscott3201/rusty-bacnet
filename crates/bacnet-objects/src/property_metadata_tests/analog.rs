@@ -112,6 +112,10 @@ fn property_metadata_analog_exact_required_and_instance_projections() {
             if kind == ObjectType::ANALOG_OUTPUT {
                 requires.extend(commandable);
             }
+            // Tables 12-2 and 12-4 footnote 2, Table 12-3 footnote 1: an
+            // analog object that reports COV, as these do, has COV_Increment
+            // (#2193).
+            requires.push(P::COV_INCREMENT);
             if kind != ObjectType::ANALOG_INPUT {
                 expected.extend([P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]);
                 requires.extend([P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]);
@@ -149,6 +153,12 @@ fn property_metadata_analog_exact_required_and_instance_projections() {
                     assert_eq!(
                         row.presence_condition,
                         Some(PropertyPresenceCondition::IntrinsicReportingOptional),
+                        "{kind:?} {p:?}"
+                    );
+                } else if p == P::COV_INCREMENT {
+                    assert_eq!(
+                        row.presence_condition,
+                        Some(PropertyPresenceCondition::CovReporting),
                         "{kind:?} {p:?}"
                     );
                 }

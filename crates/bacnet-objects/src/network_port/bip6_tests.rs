@@ -3,7 +3,9 @@
 
 use super::*;
 use crate::database::ObjectDatabase;
-use crate::property_metadata::{PropertyConformance, PropertyWriteCapability};
+use crate::property_metadata::{
+    PropertyConformance, PropertyPresenceCondition, PropertyWriteCapability,
+};
 use bacnet_types::bip_port::BipPortMode;
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
 use bacnet_types::error::RemoteError;
@@ -83,16 +85,42 @@ fn a_configured_snapshot_serves_the_ipv6_rows_read_only() {
     let mut object = NetworkPortObject::new_bip6(1, "NP6", config()).unwrap();
     assert_eq!(object.property_list().as_ref(), ALL);
     for row in object.property_metadata().iter() {
-        let expected = match row.property_identifier {
-            // Table 12-71 footnotes 3 and 25 (#2174).
-            P::DESCRIPTION
-            | P::NETWORK_NUMBER
-            | P::NETWORK_NUMBER_QUALITY
-            | P::MAC_ADDRESS
-            | P::APDU_LENGTH => PropertyConformance::Optional,
-            _ => PropertyConformance::RequiredRead,
+        // Table 12-71 footnotes 3 and 25 (#2174), and 14 and 15 for the
+        // IPv6 rows (#2191).
+        let (expected, condition) = match row.property_identifier {
+            P::DESCRIPTION => (PropertyConformance::Optional, None),
+            P::NETWORK_NUMBER | P::NETWORK_NUMBER_QUALITY | P::APDU_LENGTH => (
+                PropertyConformance::Optional,
+                Some(PropertyPresenceCondition::ApplicationProtocolLevel),
+            ),
+            P::MAC_ADDRESS => (
+                PropertyConformance::Optional,
+                Some(PropertyPresenceCondition::NotPointToPoint),
+            ),
+            P::BACNET_IPV6_MODE | P::BACNET_IPV6_UDP_PORT | P::BACNET_IPV6_MULTICAST_ADDRESS => (
+                PropertyConformance::Optional,
+                Some(PropertyPresenceCondition::BacnetIpv6Application),
+            ),
+            P::IPV6_ADDRESS
+            | P::IPV6_PREFIX_LENGTH
+            | P::IPV6_DEFAULT_GATEWAY
+            | P::IPV6_DNS_SERVER => (
+                PropertyConformance::Optional,
+                Some(PropertyPresenceCondition::Ipv6Port),
+            ),
+            _ => (PropertyConformance::RequiredRead, None),
         };
         assert_eq!(row.conformance, expected, "{}", row.property_identifier);
+        assert_eq!(
+            row.presence_condition, condition,
+            "{}",
+            row.property_identifier
+        );
+        assert!(
+            row.is_required() || row.property_identifier == P::DESCRIPTION,
+            "{}",
+            row.property_identifier
+        );
         if ALL[15..].contains(&row.property_identifier) {
             assert_eq!(row.write_capability, PropertyWriteCapability::ReadOnly);
         }

@@ -118,7 +118,9 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
             P::RELIABILITY,
         ],
     };
-    // Table-O rows per Tables 12-79/12-27; every other served row is table R/W.
+    // Table-O rows per Tables 12-79/12-27; every other served row is table
+    // R/W, or O made required by a footnote: the Pulse Converter's COV pair,
+    // required of an object that reports COV (Table 12-27 footnote 2, #2193).
     let optional = match kind {
         ObjectType::ACCUMULATOR => vec![
             P::DESCRIPTION,
@@ -129,13 +131,7 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
             P::VALUE_BEFORE_CHANGE,
             P::VALUE_SET,
         ],
-        _ => vec![
-            P::DESCRIPTION,
-            P::COV_INCREMENT,
-            P::COV_PERIOD,
-            P::INPUT_REFERENCE,
-            P::RELIABILITY,
-        ],
+        _ => vec![P::DESCRIPTION, P::INPUT_REFERENCE, P::RELIABILITY],
     };
     let required: Vec<_> = all
         .iter()

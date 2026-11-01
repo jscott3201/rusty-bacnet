@@ -82,6 +82,43 @@ pub enum PropertyPresenceCondition {
     /// The Network Port isn't a point-to-point link, which requires
     /// MAC_Address (Table 12-71 footnote 3, #2174).
     NotPointToPoint,
+    /// A B/IP (IPv4) Network Port, which needs its mode, UDP
+    /// port, address, subnet mask, gateway and DNS servers (Table 12-71
+    /// footnotes 5 and 6, #2191).
+    BacnetIpPort,
+    /// An IPv4 application-level port that supports B/IP multicast, which
+    /// requires BACnet_IP_Multicast_Address (Table 12-71 footnote 7, #2191).
+    BacnetIpMulticast,
+    /// An IPv4 application-level port whose device can work through a NAT
+    /// router, which requires BACnet_IP_NAT_Traversal (Table 12-71
+    /// footnote 9, #2191).
+    NatTraversalCapable,
+    /// An IPv4 application-level port configured to work through a NAT
+    /// router, which requires BACnet_IP_Global_Address (Table 12-71
+    /// footnote 10, #2191).
+    NatTraversalConfigured,
+    /// An IPv4 or IPv6 port that can act as a BBMD, which requires its
+    /// three BBMD rows (Table 12-71 footnotes 11 and 12, #2191).
+    BbmdCapable,
+    /// An IPv4 or IPv6 port in FOREIGN mode, which requires FD_BBMD_Address
+    /// and FD_Subscription_Lifetime (Table 12-71 footnote 13, #2191).
+    ForeignDeviceMode,
+    /// An IPv6 application-level port, which requires its mode, UDP port
+    /// and multicast address (Table 12-71 footnote 14, #2191).
+    BacnetIpv6Application,
+    /// An IPv6 port, which requires its address, prefix length, gateway and
+    /// DNS servers (Table 12-71 footnote 15, #2191).
+    Ipv6Port,
+    /// The object reports COV, which its table's footnote makes the condition
+    /// for COV_Increment (and for a Pulse Converter's COV_Period too): the
+    /// analog types, Loop, Pulse Converter, the numeric value types, Lighting
+    /// Output and Staging (#2193). A row carries it only on an object whose
+    /// [`supports_cov`](crate::traits::BACnetObject::supports_cov) is true.
+    CovReporting,
+    /// A Timer's Present_Value is writable while it is in service, which
+    /// requires Min_Pres_Value and Max_Pres_Value (Table 12-75 footnote 4,
+    /// #2192).
+    PresentValueWritableInService,
 }
 
 /// The write capability implemented by an object's property-write routes.
@@ -166,6 +203,16 @@ impl PropertyMetadata {
                         | PropertyPresenceCondition::ClockAlignedLogging
                         | PropertyPresenceCondition::ApplicationProtocolLevel
                         | PropertyPresenceCondition::NotPointToPoint
+                        | PropertyPresenceCondition::BacnetIpPort
+                        | PropertyPresenceCondition::BacnetIpMulticast
+                        | PropertyPresenceCondition::NatTraversalCapable
+                        | PropertyPresenceCondition::NatTraversalConfigured
+                        | PropertyPresenceCondition::BbmdCapable
+                        | PropertyPresenceCondition::ForeignDeviceMode
+                        | PropertyPresenceCondition::BacnetIpv6Application
+                        | PropertyPresenceCondition::Ipv6Port
+                        | PropertyPresenceCondition::CovReporting
+                        | PropertyPresenceCondition::PresentValueWritableInService
                 )
             )
     }
@@ -188,6 +235,21 @@ impl PropertyMetadata {
         }
     }
 }
+
+/// The COV_Increment row of an object that reports COV, writable.
+///
+/// Each table that has the row ties it to COV reporting in a footnote:
+/// Table 12-2 footnote 2 (Analog Input), 12-3 footnote 1 (Analog Output),
+/// 12-4 footnote 2 (Analog Value), 12-20 footnote 4 (Loop), 12-27 footnote 2
+/// (Pulse Converter), 12-46, 12-50 and 12-51 footnote 3 (Large Analog,
+/// Integer and Positive Integer Value), 12-64 footnote 3 (Lighting Output)
+/// and 12-80 footnote 3 (Staging), #2193.
+pub(crate) const COV_INCREMENT_ROW: PropertyMetadata = PropertyMetadata::new(
+    PropertyIdentifier::COV_INCREMENT,
+    PropertyConformance::Optional,
+    Some(PropertyPresenceCondition::CovReporting),
+    PropertyWriteCapability::Always,
+);
 
 /// Derive [`BACnetObject::property_list`](crate::traits::BACnetObject::property_list)
 /// from canonical metadata.
