@@ -7,8 +7,8 @@
 //! that owns its database would: Who-Is in range and out of it, a Who-Has,
 //! a ReadProperty of each Present_Value, one of an object the device lacks,
 //! one whose parameters stop short, a segmented request, then a
-//! WriteProperty of BV-1's Present_Value and a ReadProperty that reads it
-//! back. Each request is copied into a `Bytes` of its own, as a receive path
+//! WriteProperty of BV-1's Present_Value, a ReadProperty that reads it
+//! back, and a ReadPropertyMultiple of AI-1's and BV-1's. Each request is copied into a `Bytes` of its own, as a receive path
 //! would. It returns a [`Summary`]: what `handle` reported for each request,
 //! the APDU it wrote, and the objects the writes changed.
 //!
@@ -51,7 +51,7 @@ pub const VENDOR: u16 = 0x0105;
 pub const MAX_REPLY: u16 = 1476;
 
 /// The requests the scenario hands the responder, in this order.
-pub const REQUESTS: usize = 12;
+pub const REQUESTS: usize = 13;
 
 /// Each request's APDU, written by hand from the layouts in Clause 20.1 and
 /// the service productions. A confirmed request's header is the type and
@@ -99,6 +99,12 @@ pub const APDUS: [&[u8]; REQUESTS] = [
     // ReadProperty of BV-1's Present_Value again, invoke ID 9.
     &[
         0x00, 0x05, 0x09, 0x0C, 0x0C, 0x01, 0x40, 0x00, 0x01, 0x19, 0x55,
+    ],
+    // ReadPropertyMultiple (0x0E), invoke ID 10: for AI-1, then BV-1, the
+    // object in [0] and, inside [1], one reference, Present_Value in [0].
+    &[
+        0x00, 0x05, 0x0A, 0x0E, 0x0C, 0x00, 0x00, 0x00, 0x01, 0x1E, 0x09, 0x55, 0x1F, 0x0C, 0x01,
+        0x40, 0x00, 0x01, 0x1E, 0x09, 0x55, 0x1F,
     ],
 ];
 
@@ -233,13 +239,21 @@ pub fn expected() -> Summary {
         &[
             0x30, 0x09, 0x0C, 0x0C, 0x01, 0x40, 0x00, 0x01, 0x19, 0x55, 0x3E, 0x91, 0x01, 0x3F,
         ],
+        // ComplexACK, invoke ID 10, ReadPropertyMultiple: per object its
+        // identifier in [0] and, inside [1], the property in [2] and the
+        // value inside [4]: REAL 21.5, then Enumerated 1.
+        &[
+            0x30, 0x0A, 0x0E, 0x0C, 0x00, 0x00, 0x00, 0x01, 0x1E, 0x29, 0x55, 0x4E, 0x44, 0x41,
+            0xAC, 0x00, 0x00, 0x4F, 0x1F, 0x0C, 0x01, 0x40, 0x00, 0x01, 0x1E, 0x29, 0x55, 0x4E,
+            0x91, 0x01, 0x4F, 0x1F,
+        ],
     ];
     let bv1 = ObjectIdentifier::new(bacnet_types::enums::ObjectType::BINARY_VALUE, 1)
         .expect("a valid identifier");
     Summary {
         outcomes: [
             Announce, Silent, Announce, Reply, Reply, Reply, Reply, Reply, Reply, Reply, Reply,
-            Reply,
+            Reply, Reply,
         ],
         answers: answers.map(<[u8]>::to_vec),
         written: alloc::vec![bv1],

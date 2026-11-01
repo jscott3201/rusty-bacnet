@@ -486,11 +486,11 @@ div64_functions = 0
 memmove_functions = 0
 
 [thumbv7m-none-eabi.objects]
-text = 157504
-rodata = 18832
+text = 165120
+rodata = 20304
 data = 64
 bss = 18464
-flash = 177472
+flash = 186560
 ram = 18464
 fmt_functions = 7
 div64_functions = 0
@@ -761,22 +761,22 @@ div64_functions = 0
 memmove_functions = 0
 
 [thumbv7em-none-eabihf.objects]
-text = 156816
-rodata = 18832
+text = 164512
+rodata = 20304
 data = 64
 bss = 18464
-flash = 176784
+flash = 185952
 ram = 18464
 fmt_functions = 7
 div64_functions = 0
 memmove_functions = 2
 
 [riscv32imac-unknown-none-elf.objects]
-text = 194448
-rodata = 20448
+text = 202848
+rodata = 21920
 data = 64
 bss = 18464
-flash = 214912
+flash = 224800
 ram = 18464
 fmt_functions = 7
 div64_functions = 0
