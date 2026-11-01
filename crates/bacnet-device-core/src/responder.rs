@@ -1,16 +1,19 @@
 //! [`Responder`]: the staged steps strung together for a host with nothing
 //! to await between them, such as firmware that owns its database.
 use crate::discovery;
-use crate::read::{self, ReadFailure, ReadOverlay, ReadPropertyMultipleBudget, ReadScope};
+use crate::read::{self, ReadFailure, ReadOverlay, ReadPropertyMultipleBudget, ReadScope, RpmPlan};
 use crate::reply::{self, SEGMENTED, emit};
-use crate::write::{self, Applied, WriteCommitObserver};
+use crate::write::{self, Applied, WpmOutcome, WriteCommitObserver};
 use alloc::vec::Vec;
 use bacnet_encoding::apdu::{
-    AbortPdu, Apdu, ComplexAck, ConfirmedRequest, SimpleAck, UnconfirmedRequest, decode_apdu,
+    AbortPdu, Apdu, ComplexAck, ConfirmedRequest, RejectPdu, SimpleAck, UnconfirmedRequest,
+    decode_apdu,
 };
 use bacnet_objects::DeviceIdentity;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_services::read_property::ReadPropertyRequest;
+use bacnet_services::rpm::ReadPropertyMultipleRequest;
+use bacnet_services::wpm::WritePropertyMultipleError;
 use bacnet_types::enums::{
     AbortReason, ConfirmedServiceChoice, PduType, Segmentation, ServiceSupported,
     UnconfirmedServiceChoice,
@@ -23,15 +26,17 @@ use bytes::{Bytes, BytesMut};
 /// Protocol_Services_Supported: build the database from
 /// `DeviceIdentity::with_services(SERVICES)`.
 ///
-/// WriteProperty is among them, but [`Responder::write`] has no command
-/// origin to give, since [`Inbound`] carries no source address: an object
+/// WriteProperty and WritePropertyMultiple are among them, but
+/// [`Responder::write`] has no command origin to give, since [`Inbound`] carries no source address: an object
 /// whose Present_Value is commandable (the default Binary Value, Analog
 /// Value and Analog Output among them) refuses a write to it with
 /// WRITE_ACCESS_DENIED
 /// ([#2209](https://github.com/jscott3201/rusty-bacnet/issues/2209)).
 pub const SERVICES: &[ServiceSupported] = &[
     ServiceSupported::READ_PROPERTY,
+    ServiceSupported::READ_PROPERTY_MULTIPLE,
     ServiceSupported::WRITE_PROPERTY,
+    ServiceSupported::WRITE_PROPERTY_MULTIPLE,
     ServiceSupported::WHO_HAS,
     ServiceSupported::WHO_IS,
 ];
@@ -40,10 +45,11 @@ pub const SERVICES: &[ServiceSupported] = &[
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Access {
-    /// ReadProperty, Who-Is or Who-Has: [`Responder::read`] under a shared
-    /// guard.
+    /// ReadProperty, ReadPropertyMultiple, Who-Is or Who-Has:
+    /// [`Responder::read`] under a shared guard.
     Read,
-    /// WriteProperty: [`Responder::write`] under an exclusive guard.
+    /// WriteProperty or WritePropertyMultiple: [`Responder::write`] under an
+    /// exclusive guard.
     Write,
     /// Nothing: a request the core doesn't run, answered (if at all) by
     /// [`reply::refuse`], or one the host routes to its own handlers. A
@@ -116,25 +122,41 @@ pub struct Limits {
     /// Group's whole Present_Value, every member row. A read past it is
     /// aborted with OUT_OF_RESOURCES.
     pub read_work: usize,
+    /// What one ReadPropertyMultiple may expand and encode. Past its
+    /// result rows the request is aborted with OUT_OF_RESOURCES, in
+    /// planning, before any value is read; past its service-ACK octets,
+    /// after the reads, with BUFFER_OVERFLOW.
+    pub rpm: ReadPropertyMultipleBudget,
 }
 
 impl Limits {
-    /// Limits of `read_work` result rows per ReadProperty.
+    /// Limits of `read_work` result rows per ReadProperty, and the default
+    /// [`ReadPropertyMultipleBudget`].
     pub fn new(read_work: usize) -> Self {
-        Self { read_work }
+        Self {
+            read_work,
+            rpm: ReadPropertyMultipleBudget::default(),
+        }
+    }
+
+    /// These limits, with `rpm` for ReadPropertyMultiple.
+    pub fn with_rpm(mut self, rpm: ReadPropertyMultipleBudget) -> Self {
+        self.rpm = rpm;
+        self
     }
 }
 
 impl Default for Limits {
-    /// The server's default: the ReadPropertyMultiple budget's result-row
-    /// limit, which the server also applies to ReadProperty.
+    /// The server's defaults: the default ReadPropertyMultiple budget, and
+    /// its result-row limit for ReadProperty too.
     fn default() -> Self {
         Self::new(ReadPropertyMultipleBudget::default().max_result_elements)
     }
 }
 
-/// Answers ReadProperty, WriteProperty, Who-Is and Who-Has from a borrowed
-/// database, for one Device.
+/// Answers ReadProperty, ReadPropertyMultiple, WriteProperty,
+/// WritePropertyMultiple, Who-Is and Who-Has from a borrowed database, for
+/// one Device.
 ///
 /// It holds the Device's frozen identity: a Who-Is is answered for it, and
 /// the Device wildcard instance reads it, even after the object is gone. A
@@ -143,6 +165,7 @@ impl Default for Limits {
 pub struct Responder {
     identity: DeviceIdentity,
     scope: ReadScope,
+    rpm: ReadPropertyMultipleBudget,
 }
 
 impl Responder {
@@ -152,7 +175,8 @@ impl Responder {
     /// aborts every segmented request and every reply too long for one APDU,
     /// so an I-Am naming segmentation would overstate it. Give it
     /// `Segmentation::NONE`, the [`DeviceIdentity`] default. It also refuses
-    /// a `read_work` of zero, which no ReadProperty fits.
+    /// a `read_work` of zero, which no ReadProperty fits, and an RPM budget
+    /// [`ReadPropertyMultipleBudget::validate`] refuses.
     pub fn new(identity: DeviceIdentity, limits: Limits) -> Result<Self, Error> {
         if identity.segmentation() != Segmentation::NONE {
             return Err(Error::Encoding(
@@ -163,12 +187,17 @@ impl Responder {
         if limits.read_work == 0 {
             return Err(Error::Encoding("read_work must be positive".into()));
         }
+        limits.rpm.validate()?;
         let scope = ReadScope {
             work_limit: limits.read_work,
             registered_port: None,
             device: Some(identity.device_oid()),
         };
-        Ok(Self { identity, scope })
+        Ok(Self {
+            identity,
+            scope,
+            rpm: limits.rpm,
+        })
     }
 
     /// Resolve the Network_Port wildcard instance to `port`, the port the
@@ -188,13 +217,16 @@ impl Responder {
         if pdu_type == PduType::CONFIRMED_REQUEST.to_raw() {
             // Type and flags, max segments and APDU, invoke ID, service.
             if first & SEGMENTED == 0 {
-                match apdu.get(3).copied() {
-                    Some(service) if service == ConfirmedServiceChoice::READ_PROPERTY.to_raw() => {
-                        return Access::Read;
-                    }
-                    Some(service) if service == ConfirmedServiceChoice::WRITE_PROPERTY.to_raw() => {
-                        return Access::Write;
-                    }
+                let service = apdu.get(3).copied().map(ConfirmedServiceChoice::from_raw);
+                match service {
+                    Some(
+                        ConfirmedServiceChoice::READ_PROPERTY
+                        | ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+                    ) => return Access::Read,
+                    Some(
+                        ConfirmedServiceChoice::WRITE_PROPERTY
+                        | ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE,
+                    ) => return Access::Write,
                     _ => {}
                 }
             }
@@ -209,10 +241,11 @@ impl Responder {
         Access::None
     }
 
-    /// Run `request` if it is a ReadProperty, Who-Is or Who-Has, writing any
-    /// answer to `out`; `overlay` serves objects as the host does. A
-    /// confirmed request that arrived segmented is refused. Any other
-    /// service is [`Outcome::Unhandled`], for the host to route on.
+    /// Run `request` if it is a ReadProperty, ReadPropertyMultiple, Who-Is or
+    /// Who-Has, writing any answer to `out`; `overlay` serves objects as the
+    /// host does. A confirmed request that arrived segmented is refused. Any
+    /// other service, WritePropertyMultiple included, is
+    /// [`Outcome::Unhandled`], for the host to route on.
     pub fn read<O: ReadOverlay>(
         &self,
         db: &ObjectDatabase,
@@ -232,6 +265,12 @@ impl Responder {
                 let answer = self.read_property(db, overlay, &confirmed);
                 emit(out, &reply::fit(answer, request.max_reply), Outcome::Reply)
             }
+            Ok(Apdu::ConfirmedRequest(confirmed))
+                if confirmed.service_choice == ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE =>
+            {
+                let answer = self.read_property_multiple(db, overlay, &confirmed);
+                emit(out, &reply::fit(answer, request.max_reply), Outcome::Reply)
+            }
             Ok(Apdu::UnconfirmedRequest(unconfirmed)) => self.discover(db, &unconfirmed, out),
             Ok(_) => Outcome::Unhandled,
             // Neither a type nor an invoke ID to answer.
@@ -239,10 +278,12 @@ impl Responder {
         }
     }
 
-    /// Run `request` if it is a WriteProperty, writing the SimpleACK, or the
-    /// Error or Reject that refuses it, to `out`. `observer` sees the
-    /// attempt, as the server's audit and change capture do. A write that
-    /// queues a Command's or Channel's run ends that run at once, unmade:
+    /// Run `request` if it is a WriteProperty or a WritePropertyMultiple,
+    /// writing the SimpleACK, or the Error or Reject that refuses it, to
+    /// `out`. `observer` sees each attempt, as the server's audit and change
+    /// capture do. A WritePropertyMultiple keeps the attempts that succeeded
+    /// before one failed, and its Error names the one that failed. A write
+    /// that queues a Command's or Channel's run ends that run at once, unmade:
     /// the core has no task to make its writes in, so it performs none of
     /// the run's actions, and the object reports them unsuccessful. A
     /// confirmed request that arrived segmented is refused. Any other
@@ -269,6 +310,11 @@ impl Responder {
                 if confirmed.service_choice == ConfirmedServiceChoice::WRITE_PROPERTY =>
             {
                 confirmed
+            }
+            Ok(Apdu::ConfirmedRequest(confirmed))
+                if confirmed.service_choice == ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE =>
+            {
+                return Self::write_property_multiple(db, observer, &confirmed, out);
             }
             Ok(_) => return Outcome::Unhandled.into(),
             // Neither a type nor an invoke ID to answer.
@@ -321,6 +367,121 @@ impl Responder {
         }
     }
 
+    /// WritePropertyMultiple, as the server runs it, with no gate, source or
+    /// command origin: the objects its successful attempts changed, and any
+    /// run they queued ended unmade, even when a later attempt failed.
+    fn write_property_multiple(
+        db: &mut ObjectDatabase,
+        observer: Option<&mut dyn WriteCommitObserver>,
+        request: &ConfirmedRequest,
+        out: &mut BytesMut,
+    ) -> Written {
+        let invoke_id = request.invoke_id;
+        let (answer, objects) = match write::write_property_multiple(
+            db,
+            &request.service_request,
+            None,
+            observer,
+            None,
+            None,
+        ) {
+            WpmOutcome::Success { committed_oids } => (
+                Apdu::SimpleAck(SimpleAck {
+                    invoke_id,
+                    service_choice: request.service_choice,
+                }),
+                committed_oids,
+            ),
+            WpmOutcome::Error {
+                error,
+                first_failed_write_attempt,
+                committed_oids,
+            } => {
+                let (error_class, error_code) = reply::error_fields(&error);
+                let refused = WritePropertyMultipleError {
+                    error_class,
+                    error_code,
+                    first_failed_write_attempt,
+                };
+                (Apdu::Error(refused.to_error_pdu(invoke_id)), committed_oids)
+            }
+            WpmOutcome::Reject { reason } => (
+                Apdu::Reject(RejectPdu {
+                    invoke_id,
+                    reject_reason: reason,
+                }),
+                Vec::new(),
+            ),
+        };
+        write::end_unmade(db, &objects);
+        let outcome = emit(out, &answer, Outcome::Reply);
+        Written { outcome, objects }
+    }
+
+    /// ReadPropertyMultiple, as the server runs it within its budget: a
+    /// request that doesn't decode is rejected, one past the result-row
+    /// limit is aborted with OUT_OF_RESOURCES before any value is read, and
+    /// one whose ACK passes the octet limit is aborted with BUFFER_OVERFLOW.
+    fn read_property_multiple<O: ReadOverlay>(
+        &self,
+        db: &ObjectDatabase,
+        overlay: Option<&O>,
+        request: &ConfirmedRequest,
+    ) -> Apdu {
+        let mut service_ack = BytesMut::new();
+        let result = ReadPropertyMultipleRequest::decode(&request.service_request)
+            .map_err(|error| ReadFailure::Service(Error::into_request_reject(error)))
+            .and_then(|decoded| {
+                let plan = RpmPlan::new(
+                    db,
+                    &self.scope,
+                    overlay,
+                    &decoded,
+                    self.rpm.max_result_elements,
+                )?;
+                plan.read(
+                    db,
+                    overlay,
+                    &mut service_ack,
+                    self.rpm.max_service_ack_bytes,
+                    |_, _, _, _| {},
+                )
+            });
+        Self::read_answer(request, result, service_ack)
+    }
+
+    /// The reply to a read: its ComplexACK, the Error or Reject of a service
+    /// error, or the Abort of a limit.
+    fn read_answer(
+        request: &ConfirmedRequest,
+        result: Result<(), ReadFailure>,
+        service_ack: BytesMut,
+    ) -> Apdu {
+        let abort = |abort_reason| {
+            Apdu::Abort(AbortPdu {
+                sent_by_server: true,
+                invoke_id: request.invoke_id,
+                abort_reason,
+            })
+        };
+        match result {
+            Ok(()) => Apdu::ComplexAck(ComplexAck {
+                segmented: false,
+                more_follows: false,
+                invoke_id: request.invoke_id,
+                sequence_number: None,
+                proposed_window_size: None,
+                service_choice: request.service_choice,
+                service_ack: service_ack.freeze(),
+            }),
+            Err(ReadFailure::Service(error)) => {
+                reply::error_apdu(request.invoke_id, request.service_choice, &error)
+            }
+            Err(ReadFailure::Bytes) => abort(AbortReason::BUFFER_OVERFLOW),
+            Err(ReadFailure::Work) => abort(AbortReason::OUT_OF_RESOURCES),
+        }
+    }
+
     /// ReadProperty, as the server runs it: a request that doesn't decode is
     /// rejected, a refused read is its Error PDU, and a read past the work
     /// limit is aborted with OUT_OF_RESOURCES.
@@ -346,25 +507,7 @@ impl Responder {
                 read::read_property_ack(db, overlay, &decoded, plan, &mut service_ack, |_, _, _| {})
                     .map_err(ReadFailure::Service)
             });
-        match result {
-            Ok(()) => Apdu::ComplexAck(ComplexAck {
-                segmented: false,
-                more_follows: false,
-                invoke_id: request.invoke_id,
-                sequence_number: None,
-                proposed_window_size: None,
-                service_choice: request.service_choice,
-                service_ack: service_ack.freeze(),
-            }),
-            Err(ReadFailure::Service(error)) => {
-                reply::error_apdu(request.invoke_id, request.service_choice, &error)
-            }
-            Err(ReadFailure::Work | ReadFailure::Bytes) => Apdu::Abort(AbortPdu {
-                sent_by_server: true,
-                invoke_id: request.invoke_id,
-                abort_reason: AbortReason::OUT_OF_RESOURCES,
-            }),
-        }
+        Self::read_answer(request, result, service_ack)
     }
 
     /// Who-Is and Who-Has. An unconfirmed request is never refused: one
@@ -413,3 +556,7 @@ mod tests;
 #[cfg(test)]
 #[path = "responder_write_tests.rs"]
 mod write_tests;
+
+#[cfg(test)]
+#[path = "responder_multiple_tests.rs"]
+mod multiple_tests;
