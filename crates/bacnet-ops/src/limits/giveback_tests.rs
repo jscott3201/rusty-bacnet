@@ -186,8 +186,9 @@ async fn a_request_withdrawn_after_its_token_gives_it_back() {
     assert!(at_once(&bucket), "given back while waiting for a slot");
 }
 
-/// Waiting until a request could go counts a slot given back: it ends at
-/// the hole, not after the slots still booked.
+/// Waiting until a request could go counts a slot given back: on the
+/// paused clock, which wakes exactly at the hole, it ends there, not after
+/// the slots still booked.
 #[tokio::test(start_paused = true)]
 async fn waiting_until_free_counts_a_slot_given_back() {
     let limits = RequestLimits::new(10);

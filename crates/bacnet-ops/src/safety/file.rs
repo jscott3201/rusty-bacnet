@@ -154,6 +154,7 @@ pub fn sync_parent(_path: &Path) -> std::io::Result<()> {
 /// thread's directory syncs, on every platform, as a disk error would.
 /// Not a stable API.
 #[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
 pub mod testing {
     use std::cell::Cell;
 

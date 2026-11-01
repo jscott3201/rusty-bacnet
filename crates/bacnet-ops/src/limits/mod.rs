@@ -415,7 +415,12 @@ impl RequestLimits {
             if interval.is_zero() {
                 return;
             }
-            // A slot given back counts: a request would take it first.
+            // Best effort: a hole ahead counts as the instant a request
+            // could go, but on a real clock the wake can land just past
+            // it (when `book` no longer offers it), and `book` may take a
+            // later hole while the next slot is earlier, so a request
+            // made on return may still wait a little. Without holes this
+            // is exact.
             let next = self
                 .state
                 .lock()

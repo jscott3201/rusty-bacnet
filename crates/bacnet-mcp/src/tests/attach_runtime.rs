@@ -135,6 +135,14 @@ async fn a_panicking_request_ends_only_its_session_on_the_listeners_threads() {
 async fn a_dropped_listener_lets_its_sessions_end_on_record() {
     // The session is still ending when the hub's shutdown is done.
     threads::END_DELAY_MS.store(300, Ordering::SeqCst);
+    // Back to none however the test ends, for runs that share a process.
+    struct NoDelay;
+    impl Drop for NoDelay {
+        fn drop(&mut self) {
+            threads::END_DELAY_MS.store(0, Ordering::SeqCst);
+        }
+    }
+    let _no_delay = NoDelay;
     let lab = lab().await;
     let dir = private_dir();
     let listener = Listener::bind(

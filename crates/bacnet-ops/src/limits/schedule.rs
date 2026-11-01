@@ -24,9 +24,11 @@ pub(super) struct Booking {
 }
 
 impl Schedule {
-    /// The instant the next booking `interval` wide would get, as of
+    /// The earliest instant a booking `interval` wide might get, as of
     /// `now`: the first hole still ahead and wide enough, or the next free
-    /// slot. `None` when nothing was ever booked.
+    /// slot, whichever is sooner. An estimate: [`book`](Self::book) prefers
+    /// a hole even when the next slot is earlier, and drops holes that have
+    /// begun. `None` when nothing was ever booked.
     pub(super) fn next_free(&self, now: Instant, interval: Duration) -> Option<Instant> {
         let hole = self
             .holes

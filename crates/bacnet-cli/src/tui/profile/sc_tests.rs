@@ -562,3 +562,33 @@ fn a_profile_renamed_after_an_in_place_save_draws_its_own_identity() {
     let stray = Store::new(root.path().into()).load("site").unwrap();
     assert_eq!(uuid_of(&stray), uuid_of(&written), "the first file is left");
 }
+
+/// A rename that is refused (an invalid name, a name already taken) and
+/// then typed back keeps the adopted identity: the save under the first
+/// name finds the stray file in place and reports it saved.
+#[test]
+fn a_refused_rename_typed_back_keeps_the_adopted_identity() {
+    let root = tempfile::tempdir().unwrap();
+    let files = tempfile::tempdir().unwrap();
+    let (service, mut editor, written) = failed_in_place(root.path(), files.path());
+    editor.fields[0] = "bad name!".into();
+    assert!(editor.key(Key::Submit).is_none(), "an invalid name");
+    Store::new(root.path().into())
+        .save("taken", &Profile::default(), true)
+        .unwrap();
+    editor.fields[0] = "taken".into();
+    let refused = submit(&mut editor, &service);
+    assert!(refused.is_err(), "the name is taken: {refused:?}");
+    editor.reply(refused);
+
+    editor.fields[0] = "site".into();
+    let saved = submit(&mut editor, &service);
+    let Ok(Reply::Loaded { profile, .. }) = &saved else {
+        panic!("saved under its first name: {saved:?}");
+    };
+    assert_eq!(uuid_of(profile), uuid_of(&written));
+    assert_eq!(
+        profile.sc.as_ref().unwrap().vmac,
+        written.sc.as_ref().unwrap().vmac
+    );
+}
