@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# Checks, builds and runs the cargo-fuzz targets of the codecs (#1610) and
-# the MS/TP master core (#1640) with the nightly toolchain that
-# .github/ci-pins.env pins as RUST_FUZZ_NIGHTLY. .github/workflows/fuzz.yml
-# runs it, and it runs the same way locally (see docs/ci.md, "Fuzzing"):
+# Checks, builds and runs the cargo-fuzz targets of the codecs (#1610), the
+# MS/TP master core (#1640) and the APDU, value and service codecs (#2180)
+# with the nightly toolchain that .github/ci-pins.env pins as
+# RUST_FUZZ_NIGHTLY. .github/workflows/fuzz.yml runs it, and it runs the
+# same way locally (see docs/ci.md, "Fuzzing"):
 #
 #   fuzz.sh list                     one "<crate> <target>" line per target
 #   fuzz.sh matrix                   the same as a JSON array, for fuzz.yml
 #   fuzz.sh check                    each fuzz crate's lockfile, rustfmt, clippy,
 #                                    and its tests, which replay saved
-#                                    regression inputs
+#                                    regression and seed inputs
 #   fuzz.sh build [<target>]         build every target, or one
 #   fuzz.sh run <target> <seconds> [<libFuzzer flag>...]
 #                                    fuzz one target for that many seconds
@@ -29,7 +30,9 @@
 #
 # With FUZZ_WORK set, corpora go in $FUZZ_WORK/corpus/<target> and failing
 # inputs in $FUZZ_WORK/artifacts/<target>; without it, in the fuzz crate's
-# corpus/ and artifacts/, cargo-fuzz's defaults, which git ignores.
+# corpus/ and artifacts/, cargo-fuzz's defaults, which git ignores. A fuzz
+# crate's seeds/<target>, when it has one, is read on every run besides,
+# and its flags/<target> holds libFuzzer flags for that target's runs.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
@@ -172,12 +175,31 @@ case $command in
     locked "$crate"
     corpus=$(work corpus "$target")
     artifacts=$(work artifacts "$target")
+    # Seed inputs checked in beside the fuzz crate, seeds/<target>, go after
+    # the corpus: libFuzzer reads them first and writes only to the corpus.
+    seeds=$root/crates/$crate/fuzz/seeds/$target
+    if [ -d "$seeds" ]; then
+      corpus=${corpus:-$root/crates/$crate/fuzz/corpus/$target}
+      mkdir -p "$corpus"
+    else
+      seeds=
+    fi
+    # A target's own libFuzzer flags, one per line, in flags/<target>
+    # beside the fuzz crate's targets; the caller's flags come after them,
+    # so they win.
+    flags=()
+    flags_file=$root/crates/$crate/fuzz/flags/$target
+    if [ -f "$flags_file" ]; then
+      while IFS= read -r flag; do
+        [ -n "$flag" ] && flags+=("$flag")
+      done < "$flags_file"
+    fi
     # A positional corpus directory replaces cargo-fuzz's default one; a
     # later -artifact_prefix overrides the one cargo-fuzz passes. A single
     # input that runs 10 seconds is a hang.
-    in_crate "$crate" "$target" cargo_fuzz run "$target" ${corpus:+"$corpus"} -- \
+    in_crate "$crate" "$target" cargo_fuzz run "$target" ${corpus:+"$corpus"} ${seeds:+"$seeds"} -- \
       -max_total_time="$seconds" -timeout=10 -print_final_stats=1 \
-      ${artifacts:+"-artifact_prefix=$artifacts/"} "$@" ;;
+      ${artifacts:+"-artifact_prefix=$artifacts/"} ${flags[@]+"${flags[@]}"} "$@" ;;
   tmin)
     [ "$#" -ge 1 ] || usage
     target=$1; shift
