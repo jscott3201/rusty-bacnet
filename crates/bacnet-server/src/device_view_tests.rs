@@ -9,6 +9,7 @@
 //! forwards it.
 
 use super::*;
+use bacnet_objects::property_metadata::{has_property, property_list};
 use bacnet_types::error::RemoteError;
 #[path = "../../bacnet-objects/tests/support/forwarding/mod.rs"]
 mod forwarding;
@@ -49,7 +50,7 @@ fn the_view_forwards_every_read_query() {
 fn a_device_keeps_its_owned_answers_and_forwards_every_other_query() {
     // The rows the view answers itself for a Device, to serve the
     // executor-owned properties and keep them out of any frozen copy.
-    const OWNED: [&str; 3] = ["property_metadata", "property_list", "required_properties"];
+    const OWNED: [&str; 1] = ["property_metadata"];
     let db = ObjectDatabase::new();
     let context = DeviceReadContext::new(&db, DeviceExecution::FullServer);
     let log = CallLog::default();
@@ -64,10 +65,18 @@ fn a_device_keeps_its_owned_answers_and_forwards_every_other_query() {
             assert_eq!(answered, expected, "{name}: the view must forward it");
         }
     }
-    assert!(
-        view.property_list()
-            .contains(&P::PROTOCOL_SERVICES_SUPPORTED)
+    let rows = view.property_metadata();
+    assert!(has_property(&rows, P::PROTOCOL_SERVICES_SUPPORTED));
+    // The view serves the Property_List its own rows derive, overlay rows
+    // included (#2197).
+    let derived = property_list(&rows)
+        .map(|p| PropertyValue::Enumerated(p.to_raw()))
+        .collect();
+    assert_eq!(
+        view.read_property(P::PROPERTY_LIST, None).unwrap(),
+        PropertyValue::List(derived)
     );
+    assert!(property_list(&rows).any(|p| p == P::DEVICE_ADDRESS_BINDING));
 }
 
 #[test]

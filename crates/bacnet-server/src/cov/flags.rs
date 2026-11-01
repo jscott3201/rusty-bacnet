@@ -1,6 +1,7 @@
 //! Flags preparation shared by ordinary, Single and Multiple notification contexts.
 use super::{CovObservation, CovSample, observation::validate_flags};
 use bacnet_encoding::primitives::encode_property_value;
+use bacnet_objects::property_metadata::has_property;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::{enums::PropertyIdentifier, error::Error, primitives::PropertyValue};
 use bytes::BytesMut;
@@ -13,10 +14,10 @@ pub(crate) struct PreparedFlags {
 }
 impl PreparedFlags {
     pub fn read(object: &dyn BACnetObject) -> Result<Self, Error> {
-        if !object
-            .property_list()
-            .contains(&PropertyIdentifier::STATUS_FLAGS)
-        {
+        if !has_property(
+            &object.property_metadata(),
+            PropertyIdentifier::STATUS_FLAGS,
+        ) {
             return Ok(Self {
                 value: None,
                 encoded: None,

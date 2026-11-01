@@ -50,3 +50,23 @@ pub(crate) fn rows(served: &[P], writable: &[P]) -> Cow<'static, [PropertyMetada
 pub(crate) fn read_only(served: &[P]) -> Cow<'static, [PropertyMetadata]> {
     rows(served, &[])
 }
+
+/// The Property_List `rows` serve, collected for an assertion.
+pub(crate) fn listed(rows: &[PropertyMetadata]) -> Vec<P> {
+    crate::property_metadata::property_list(rows).collect()
+}
+
+/// The required properties `rows` make, collected for an assertion.
+pub(crate) fn required(rows: &[PropertyMetadata]) -> Vec<P> {
+    crate::property_metadata::required_properties(rows).collect()
+}
+
+/// `properties` without the four Property_List leaves out, for comparing an
+/// expected set that names the identity properties with [`listed`].
+pub(crate) fn listed_from(properties: &[P]) -> Vec<P> {
+    properties
+        .iter()
+        .copied()
+        .filter(|&property| crate::property_metadata::is_listed(property))
+        .collect()
+}

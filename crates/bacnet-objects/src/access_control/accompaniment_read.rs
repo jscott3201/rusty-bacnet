@@ -1,6 +1,7 @@
 //! Narrow local property/reference reads for the accompaniment stage.
 use super::*;
 use crate::device_reference::{check_device_member, decode_reference, decode_references};
+use crate::property_metadata::has_property;
 use crate::traits::BACnetObject;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
 use bacnet_types::error::RemoteError;
@@ -39,7 +40,7 @@ fn optional(
         Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::PROPERTY
                 && code == ErrorCode::UNKNOWN_PROPERTY
-                && !object.property_list().contains(&property) =>
+                && !has_property(&object.property_metadata(), property) =>
         {
             Ok(None)
         }

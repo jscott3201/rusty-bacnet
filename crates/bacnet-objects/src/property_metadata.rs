@@ -1,8 +1,11 @@
-//! Executable property metadata and compatibility projections.
+//! Executable property metadata, and the property sets callers derive from
+//! it: Property_List, the required properties and property presence.
 
-use alloc::borrow::Cow;
+use alloc::vec::Vec;
 
 use bacnet_types::enums::PropertyIdentifier;
+use bacnet_types::error::Error;
+use bacnet_types::primitives::PropertyValue;
 
 /// A property's base conformance code in its Clause 12 object table.
 ///
@@ -167,10 +170,10 @@ impl PropertyWriteCapability {
 
 /// Canonical metadata for one effective property row on a BACnet object.
 ///
-/// An object's canonical set includes `PROPERTY_LIST` itself. The
-/// [`BACnetObject::property_list`](crate::traits::BACnetObject::property_list)
-/// projection omits that identifier, and the encoded BACnet Property_List
-/// value additionally omits Object_Identifier, Object_Name, and Object_Type.
+/// An object's canonical set includes `PROPERTY_LIST` itself, and the
+/// identity properties. [`property_list`] derives the Property_List the
+/// object serves, [`required_properties`] its required properties and
+/// [`has_property`] whether it has a property at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct PropertyMetadata {
@@ -251,37 +254,93 @@ pub(crate) const COV_INCREMENT_ROW: PropertyMetadata = PropertyMetadata::new(
     PropertyWriteCapability::Always,
 );
 
-/// Derive [`BACnetObject::property_list`](crate::traits::BACnetObject::property_list)
-/// from canonical metadata.
+/// Whether `property` belongs in an object's Property_List.
 ///
-/// The projection preserves metadata order and omits only `PROPERTY_LIST`.
-pub fn property_list_from_metadata(
-    metadata: &[PropertyMetadata],
-) -> Cow<'static, [PropertyIdentifier]> {
-    Cow::Owned(
-        metadata
-            .iter()
-            .filter_map(|row| {
-                (row.property_identifier != PropertyIdentifier::PROPERTY_LIST)
-                    .then_some(row.property_identifier)
-            })
-            .collect(),
+/// Clause 12.1.1.4.1 leaves four properties out of the array: Object_Identifier,
+/// Object_Name, Object_Type and Property_List itself. Every other row is
+/// listed.
+pub const fn is_listed(property: PropertyIdentifier) -> bool {
+    !matches!(
+        property,
+        PropertyIdentifier::OBJECT_IDENTIFIER
+            | PropertyIdentifier::OBJECT_NAME
+            | PropertyIdentifier::OBJECT_TYPE
+            | PropertyIdentifier::PROPERTY_LIST
     )
 }
 
-/// Derive all effectively required identifiers from canonical metadata.
+/// The Property_List an object with these rows serves, in row order.
 ///
-/// Unlike the property-list projection, this includes `PROPERTY_LIST`.
-/// Consumers such as RPM apply their own service-specific exclusion.
-pub fn required_properties_from_metadata(
-    metadata: &[PropertyMetadata],
-) -> Cow<'static, [PropertyIdentifier]> {
-    Cow::Owned(
-        metadata
-            .iter()
-            .filter_map(|row| row.is_required().then_some(row.property_identifier))
-            .collect(),
-    )
+/// It is the rows' identifiers without the four [`is_listed`] leaves out.
+/// The iterator borrows the rows and allocates nothing: count it, index it
+/// with `nth`, or collect it where a list is needed.
+///
+/// ```
+/// use bacnet_objects::analog::AnalogInputObject;
+/// use bacnet_objects::property_metadata::property_list;
+/// use bacnet_objects::traits::BACnetObject;
+/// use bacnet_types::enums::{EngineeringUnits, PropertyIdentifier as P};
+///
+/// let input = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
+/// let rows = input.property_metadata();
+/// assert!(property_list(&rows).any(|p| p == P::PRESENT_VALUE));
+/// assert!(property_list(&rows).all(|p| p != P::OBJECT_NAME));
+/// ```
+pub fn property_list(
+    rows: &[PropertyMetadata],
+) -> impl DoubleEndedIterator<Item = PropertyIdentifier> + Clone + '_ {
+    rows.iter()
+        .map(|row| row.property_identifier)
+        .filter(|&property| is_listed(property))
+}
+
+/// The properties these rows make required, in row order.
+///
+/// A row is required by its `R` or `W` code, or by the condition that made
+/// it present ([`PropertyMetadata::is_required`]). Property_List is a
+/// required row of every object type, so it is included; a service that
+/// leaves it out, such as ReadPropertyMultiple's REQUIRED, filters it.
+pub fn required_properties(
+    rows: &[PropertyMetadata],
+) -> impl DoubleEndedIterator<Item = PropertyIdentifier> + Clone + '_ {
+    rows.iter()
+        .filter(|row| row.is_required())
+        .map(|row| row.property_identifier)
+}
+
+/// Whether these rows include `property`: the object has the property.
+///
+/// One scan of the rows, no allocation. The four properties Property_List
+/// leaves out are rows like any other, so this answers `true` for them.
+pub fn has_property(rows: &[PropertyMetadata], property: PropertyIdentifier) -> bool {
+    rows.iter().any(|row| row.property_identifier == property)
+}
+
+/// Read an object's Property_List from its metadata rows.
+///
+/// The list is [`property_list`] over `rows`, one pass that leaves out the
+/// four properties Clause 12.1.1.4.1 excludes. `array_index` `None` reads the whole array (the one
+/// allocation, the value returned), `Some(0)` its length and `Some(n)` its
+/// nth element, and an index past the end is an invalid array index. A
+/// custom object's `read_property` can answer Property_List with it.
+pub fn read_property_list(
+    rows: &[PropertyMetadata],
+    array_index: Option<u32>,
+) -> Result<PropertyValue, Error> {
+    let mut listed = property_list(rows);
+    match array_index {
+        None => {
+            // Sized for every row, so the list is one allocation.
+            let mut elements = Vec::with_capacity(rows.len());
+            elements.extend(listed.map(|p| PropertyValue::Enumerated(p.to_raw())));
+            Ok(PropertyValue::List(elements))
+        }
+        Some(0) => Ok(PropertyValue::Unsigned(listed.count() as u64)),
+        Some(index) => listed
+            .nth(index as usize - 1)
+            .map(|p| PropertyValue::Enumerated(p.to_raw()))
+            .ok_or_else(crate::common::invalid_array_index_error),
+    }
 }
 
 /// Project implemented write capability for one property identifier.

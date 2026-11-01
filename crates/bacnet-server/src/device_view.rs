@@ -188,35 +188,10 @@ impl BACnetObject for DeviceReadView<'_> {
             return Err(property_error(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY));
         }
         match property {
-            P::PROPERTY_LIST => {
-                let properties: Vec<_> = self
-                    .property_list()
-                    .iter()
-                    .copied()
-                    .filter(|property| {
-                        !matches!(
-                            *property,
-                            P::OBJECT_IDENTIFIER
-                                | P::OBJECT_NAME
-                                | P::OBJECT_TYPE
-                                | P::PROPERTY_LIST
-                        )
-                    })
-                    .collect();
-                match index {
-                    None => Ok(PropertyValue::List(
-                        properties
-                            .iter()
-                            .map(|property| PropertyValue::Enumerated(property.to_raw()))
-                            .collect(),
-                    )),
-                    Some(0) => Ok(PropertyValue::Unsigned(properties.len() as u64)),
-                    Some(index) => properties
-                        .get((index - 1) as usize)
-                        .map(|property| PropertyValue::Enumerated(property.to_raw()))
-                        .ok_or_else(|| property_error(ErrorCode::INVALID_ARRAY_INDEX)),
-                }
-            }
+            P::PROPERTY_LIST => bacnet_objects::property_metadata::read_property_list(
+                &self.property_metadata(),
+                index,
+            ),
             P::PROTOCOL_SERVICES_SUPPORTED => {
                 // Clause 21 BACnetServicesSupported: 49 defined bits, MSB first.
                 let mut data = vec![0; 7];
@@ -301,20 +276,6 @@ impl BACnetObject for DeviceReadView<'_> {
         }
         rows.sort_by_key(|row| row.property_identifier.to_raw());
         Cow::Owned(rows)
-    }
-    fn property_list(&self) -> Cow<'static, [P]> {
-        if !self.is_device() {
-            return self.object.property_list();
-        }
-        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
-    }
-    fn required_properties(&self) -> Cow<'static, [P]> {
-        if !self.is_device() {
-            return self.object.required_properties();
-        }
-        bacnet_objects::property_metadata::required_properties_from_metadata(
-            &self.property_metadata(),
-        )
     }
     fn is_array_property(&self, property: P) -> bool {
         if self.is_device() && self.owns(property) {
