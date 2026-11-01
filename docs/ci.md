@@ -576,8 +576,10 @@ targets, so a crate that needs one builds only with a backend such as
   node, bbmd, mstp, mstp-extended, router and device images link none, and their
   limit of 0 keeps it out. The apdu image links it (2); its limit is that count,
   with no headroom. The objects image's three counts are what it links, with
-  no headroom: 7 `core::fmt` functions, which format the default Device's
-  name (#2187), and 2-3 each of 64-bit division and memmove routines.
+  no headroom: 7 `core::fmt` functions, which format a Network-Port's
+  default name in the Device database builder (the Device's own default
+  name no longer does, #2187), and 2-3 each of 64-bit division and memmove
+  routines.
   `scripts/ci/test-firmware-size.py` tests the helper on small ELF files
   it builds itself, in the Lint job. CI runs the check in the Clippy job,
   after the `no_std` check, which already sets up bare-metal targets,

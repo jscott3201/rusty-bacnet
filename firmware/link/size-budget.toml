@@ -403,6 +403,14 @@
 # 166568 / 166024 / 200702 to 166992 / 166288 / 200590 on thumbv7m /
 # thumbv7em / riscv32imac, RAM unchanged at 16480: the objects' vtables
 # linked most of the commandable write path already. Budgets unchanged.
+#
+# #2187 writes DeviceIdentity's default name without core::fmt, but the
+# count stays 7: build_database_with_extra's Network-Port loop names each
+# port with format!("port-{}") (device_identity/network_port.rs), which the
+# image links though it declares no port. With that one also written by
+# hand the count is 0 (thumbv7m flash 165544, measured but not kept).
+# After #2187, flash is 167328 / 166560 / 201518 on thumbv7m / thumbv7em /
+# riscv32imac. Budgets and counts unchanged.
 
 [thumbv7m-none-eabi.mstp]
 text = 18320
