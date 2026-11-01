@@ -118,7 +118,7 @@ mod unserved {
 /// and Device_Address_Binding (#1369).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LiveLists {
-    /// The selected local Device.
+    /// The [local Device](bacnet_objects::database::ObjectDatabase::local_device).
     pub device: ObjectIdentifier,
     /// `Active_COV_Subscriptions` may be read.
     pub active_cov: bool,

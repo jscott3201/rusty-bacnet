@@ -56,7 +56,7 @@ impl PropertyPlan {
         })
     }
 
-    /// The selected Device's COV lists this read takes, by name or through
+    /// The local Device's COV lists this read takes, by name or through
     /// the planned members of a Group.
     pub fn live_lists(&self, db: &ObjectDatabase) -> Option<LiveLists> {
         rpm::live_cov_selection(db, [(self.lookup_oid, &self.row)])

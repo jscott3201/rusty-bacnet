@@ -479,7 +479,7 @@ async fn active_cov_read_only_list_scope_local_read_and_stop() {
     assert_eq!(
         selected,
         device(),
-        "lowest Device instance owns the live lists"
+        "the identity's Device (here the lowest) owns the live lists"
     );
     let (live_device, standalone) = (device(), other);
     assert_eq!(wire.read(live_device, ACTIVE, None).await.unwrap(), live);

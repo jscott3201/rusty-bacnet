@@ -73,8 +73,10 @@ pub(crate) fn planned_rows(
     })
 }
 
-/// The selected Device's server-owned lists that planned `rows` read, its COV
-/// lists and its Device_Address_Binding (#1369): a row naming one on that
+/// The [local Device](ObjectDatabase::local_device)'s server-owned lists that
+/// planned `rows` read, its COV lists and its Device_Address_Binding (#1369):
+/// the identity's Device in a running server, even beside a lower one
+/// (#2227). A row naming one on that
 /// Device, or such a row among the planned members of a Group whose whole
 /// Present_Value is read (#1171). A plan holds exactly the rows the request
 /// will read, ALL, REQUIRED and OPTIONAL already expanded, so the request
@@ -93,7 +95,7 @@ pub(crate) fn live_cov_selection<'a>(
             PropertyIdentifier::DEVICE_ADDRESS_BINDING => (false, false, true),
             _ => return,
         };
-        if *device.get_or_insert_with(|| db.selected_device()) != Some(oid) {
+        if *device.get_or_insert_with(|| db.local_device().identifier()) != Some(oid) {
             return;
         }
         let selection = selection.get_or_insert(LiveLists {
@@ -141,7 +143,7 @@ impl RpmPlan {
         planned_rows(&self.0).count()
     }
 
-    /// The selected Device's COV lists the planned rows read.
+    /// The local Device's COV lists the planned rows read.
     pub fn live_lists(&self, db: &ObjectDatabase) -> Option<LiveLists> {
         live_cov_selection(db, planned_rows(&self.0))
     }

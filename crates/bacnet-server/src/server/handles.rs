@@ -38,15 +38,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Read one local property through the server's ReadProperty evaluator.
     ///
     /// Device wildcard reads target the configured identity; removal returns
-    /// UNKNOWN_OBJECT even if another Device is present. The database's lowest
-    /// Device instance still owns the live COV lists, independent of insertion
-    /// order; other Device objects receive empty lists. Every served Device uses
+    /// UNKNOWN_OBJECT even if another Device is present. The identity's Device
+    /// owns the live COV lists, even beside a lower-instance Device added later
+    /// (#2227); other Device objects receive empty lists. Every served Device uses
     /// the executor's services, COV presence and property definitions, even after
     /// public profile mutation, replacement or custom object installation.
     ///
     /// This is the live local read boundary: it applies the same Device
     /// wildcard resolution, `UNKNOWN_OBJECT` and `PROPERTY_IS_NOT_AN_ARRAY`
-    /// checks, and value source as network ReadProperty. The selected Device's
+    /// checks, and value source as network ReadProperty. The identity Device's
     /// `Active_COV_Subscriptions` (ordinary and single-property subscriptions)
     /// and `Active_COV_Multiple_Subscriptions` (SubscribeCOVPropertyMultiple
     /// contexts) are projected from the COV subscription table at one sampled
@@ -55,7 +55,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// (`PropertyValue::ApplicationData`). After [`stop`](Self::stop) the
     /// server services no subscriptions, so both properties read as empty lists.
     ///
-    /// The selected Device's `Device_Address_Binding` lists the server's device
+    /// The identity Device's `Device_Address_Binding` lists the server's device
     /// bindings at the time of the read (#1369): each configured
     /// [`DeviceBinding`] and each device whose I-Am was heard in the last ten
     /// minutes, in Device instance order, as a `PropertyValue::List` whose

@@ -506,6 +506,42 @@ fn a_reference_naming_this_device_logs_the_local_value() {
     }
 }
 
+/// Bound to Device 100, as a server binds its identity's Device, the
+/// database keeps logging a reference naming it once a lower Device 50 is
+/// added, and treats one naming Device 50 as another device's (#2227).
+#[test]
+fn a_reference_naming_the_bound_device_stays_local_beside_a_lower_one() {
+    let lower = |db: &mut ObjectDatabase| {
+        db.add(Box::new(
+            crate::device::DeviceObject::new(crate::device::DeviceConfig {
+                identity: crate::DeviceIdentity::new(50, 0)
+                    .unwrap()
+                    .with_name("Device-50"),
+                ..Default::default()
+            })
+            .unwrap(),
+        ))
+        .unwrap();
+    };
+    let device_100 = ObjectIdentifier::new(ObjectType::DEVICE, 100).unwrap();
+    for (named, logged) in [
+        (100, LogDatum::RealValue(42.5)),
+        (
+            50,
+            failure(
+                ErrorClass::PROPERTY,
+                ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+            ),
+        ),
+    ] {
+        let (mut db, oid) = qualified_fixture(&[100], Some(named));
+        db.bind_local_device_internal(Some(device_100));
+        lower(&mut db);
+        db.poll_trend_logs();
+        assert_eq!(last_datum(&db, oid), logged, "naming Device {named}");
+    }
+}
+
 #[test]
 fn a_reference_without_a_device_logs_the_local_value() {
     for local_devices in [&[][..], &[100]] {

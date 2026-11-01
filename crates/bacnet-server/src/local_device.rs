@@ -47,3 +47,29 @@ pub(crate) fn validate_startup(
 pub(crate) fn initiating_device(identity: &DeviceIdentity) -> ObjectIdentifier {
     identity.device_oid()
 }
+
+/// Bind the database to [`initiating_device`] for the server's life, so its
+/// [`local_device`](ObjectDatabase::local_device) is this device for every
+/// locality check, Value_Source owner, BUFFER_READY reference, event-log
+/// de-duplication and live Device list, in this crate and below it, even once
+/// the application adds a lower-instance Device (#2227).
+pub(crate) fn bind_database(db: &mut ObjectDatabase, identity: &DeviceIdentity) {
+    db.bind_local_device_internal(Some(initiating_device(identity)));
+}
+
+/// Device `instance`, named after it, for a test to add below the identity's
+/// Device once the server runs (startup refuses a database whose lowest
+/// Device isn't the identity's).
+#[cfg(test)]
+pub(crate) fn lower_device(instance: u32) -> Box<bacnet_objects::device::DeviceObject> {
+    use bacnet_objects::device::{DeviceConfig, DeviceObject};
+    Box::new(
+        DeviceObject::new(DeviceConfig {
+            identity: DeviceIdentity::new(instance, 0)
+                .unwrap()
+                .with_name(format!("Lower-Device-{instance}")),
+            ..DeviceConfig::default()
+        })
+        .unwrap(),
+    )
+}

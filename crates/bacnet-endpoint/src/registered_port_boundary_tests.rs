@@ -19,6 +19,12 @@ async fn registered_port_invalid_selection_profile_and_identity_fail_before_publ
                 .unwrap();
         assert!(endpoint.start().await.is_err());
         assert!(endpoint.bip_local_address().is_none());
+        // The port step fails after the identity binding; the failed
+        // preflight releases it (#2227), so without the identity's Device
+        // object the database names no Device.
+        let database = endpoint.database.as_ref().unwrap();
+        database.write().await.remove(&device()).unwrap();
+        assert_eq!(database.read().await.local_device().identifier(), None);
     }
     // BBMD and foreign-device links register in their own mode (#939); a
     // foreign device the transport refuses to start, a wildcard interface

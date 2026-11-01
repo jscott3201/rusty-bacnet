@@ -75,7 +75,7 @@ impl CovSubscriptionTable {
     }
 }
 
-/// Request-local value of the selected Device's `Active_COV_Subscriptions`.
+/// Request-local value of the local Device's `Active_COV_Subscriptions`.
 ///
 /// Built once per request and reused by every reference to the property in
 /// that request, including ReadPropertyMultiple `ALL`/`OPTIONAL` expansion.
@@ -143,7 +143,7 @@ impl ActiveCovSubscriptions {
         }
     }
 
-    /// The live value for exactly the selected Device and this property.
+    /// The live value for exactly the local Device and this property.
     /// `None` leaves every other read to the object.
     pub(crate) fn resolve(
         &self,
@@ -185,7 +185,7 @@ impl CovSubscriptionTable {
     }
 }
 
-/// Request-local values of the selected Device's server-owned lists: the COV
+/// Request-local values of the local Device's server-owned lists: the COV
 /// lists and, when the request reads it, Device_Address_Binding.
 ///
 /// Built once per request and reused by every reference to any of them in
@@ -194,7 +194,7 @@ impl CovSubscriptionTable {
 pub(crate) struct LiveDeviceCov {
     active: Option<ActiveCovSubscriptions>,
     multiple: Option<ActiveCovMultipleSubscriptions>,
-    /// The selected Device's Device_Address_Binding, as the request sampled
+    /// The local Device's Device_Address_Binding, as the request sampled
     /// it from the binding table.
     address_bindings: Option<(ObjectIdentifier, PropertyValue)>,
 }
@@ -231,7 +231,7 @@ impl LiveDeviceCov {
     }
 
     /// These lists, with `bindings`, sampled from the binding table, as the
-    /// selected Device's Device_Address_Binding.
+    /// local Device's Device_Address_Binding.
     pub(crate) fn with_address_bindings(
         mut self,
         selection: LiveLists,
@@ -241,7 +241,7 @@ impl LiveDeviceCov {
         self
     }
 
-    /// The live value for exactly the selected Device and a selected list.
+    /// The live value for exactly the local Device and a selected list.
     /// `None` leaves every other read to the object.
     pub(crate) fn resolve(
         &self,

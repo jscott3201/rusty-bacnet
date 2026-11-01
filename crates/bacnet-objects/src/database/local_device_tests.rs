@@ -111,3 +111,30 @@ fn without_a_device_only_unqualified_references_are_local() {
     assert!(!local.is_local(Some(device(ObjectIdentifier::WILDCARD_INSTANCE))));
     assert!(!local.is_local(Some(device(813))));
 }
+
+#[test]
+fn a_bound_device_stays_local_beside_a_lower_one_and_while_missing() {
+    // The server binds its identity's Device 813 at start; the application
+    // then adds Device 5 (#2227).
+    let mut db = database(&[813]);
+    db.bind_local_device_internal(Some(device(813)));
+    db.add(Box::new(
+        DeviceObject::new(DeviceConfig {
+            identity: crate::DeviceIdentity::new(5, 0).unwrap(),
+            ..DeviceConfig::default()
+        })
+        .unwrap(),
+    ))
+    .unwrap();
+    assert_eq!(db.selected_device(), Some(device(5)));
+    let local = db.local_device();
+    assert_eq!(local.identifier(), Some(device(813)));
+    assert!(local.is_local(Some(device(813))));
+    assert!(!local.is_local(Some(device(5))));
+    // The binding names the identity's Device even while its object is gone.
+    db.remove(&device(813)).unwrap();
+    assert_eq!(db.local_device().identifier(), Some(device(813)));
+    // Released, the database falls back to its lowest Device.
+    db.bind_local_device_internal(None);
+    assert_eq!(db.local_device().identifier(), Some(device(5)));
+}

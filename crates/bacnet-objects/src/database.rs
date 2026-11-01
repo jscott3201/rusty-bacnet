@@ -31,6 +31,9 @@ use trend_poll::TrendPollSchedule;
 /// Maintains secondary indexes for O(1) name lookup and O(1) type lookup.
 pub struct ObjectDatabase {
     audit_owner: Option<alloc::sync::Weak<AuditOwnership>>,
+    /// The Device a running server or endpoint speaks for, set from its
+    /// frozen identity (#2227). `None` falls back to the lowest Device.
+    bound_device: Option<ObjectIdentifier>,
     network_port: Option<network_port::NetworkPortRegistration>,
     objects: HashMap<ObjectIdentifier, Box<dyn BACnetObject>>,
     trend_poll: TrendPollSchedule,
@@ -89,6 +92,7 @@ impl ObjectDatabase {
             clocks: Clocks::default(),
             event_sequence: Arc::default(),
             audit_owner: None,
+            bound_device: None,
             network_port: None,
             name_index: HashMap::new(),
             type_index: HashMap::new(),

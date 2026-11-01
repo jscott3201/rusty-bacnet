@@ -173,3 +173,25 @@ fn floating_limit_setpoint_naming_another_device_stays_unavailable() {
         );
     }
 }
+
+/// The server binds its database to the identity's Device (100 here), so
+/// both the monitored and the setpoint reference naming it stay local once
+/// the application adds a lower Device 50 (#2227).
+#[test]
+fn references_naming_the_identity_device_stay_local_beside_a_lower_one() {
+    let identity = bacnet_objects::DeviceIdentity::new(100, 0).unwrap();
+    let start = |db: &mut ObjectDatabase| {
+        crate::local_device::bind_database(db, &identity);
+        db.add(crate::local_device::lower_device(50)).unwrap();
+    };
+    let (mut db, _, ai_oid) = super::integration::setup_qualified_reference(&[100], 100);
+    start(&mut db);
+    let transitions = evaluate_event_enrollments(&mut db, 1);
+    assert_eq!(transitions.len(), 1, "monitored reference");
+    assert_eq!(transitions[0].monitored_oid, ai_oid);
+
+    let (mut db, _, _) = setup_qualified_setpoint(&[100], 100);
+    start(&mut db);
+    let batch = evaluate_event_enrollments_for_delivery(&mut db, 1);
+    assert_eq!(batch.deliveries.len(), 1, "setpoint reference");
+}

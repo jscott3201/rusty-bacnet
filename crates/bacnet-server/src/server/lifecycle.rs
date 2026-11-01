@@ -48,6 +48,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // reply is sized to its route instead (#2093).
         super::network_port::validate_apdu_capacity(&mut config, &transport)?;
         crate::local_device::validate_startup(&db, &config.device)?;
+        crate::local_device::bind_database(&mut db, &config.device);
         let is_group = |mac: &[u8]| transport.is_group_destination(mac);
         let device_bindings =
             DeviceBindingTable::from_configured(configured_device_bindings, is_group)?;

@@ -464,3 +464,27 @@ async fn channel_writing_its_own_present_value_is_refused_busy() {
         Ok(encoded(&PropertyValue::Unsigned(1)))
     );
 }
+
+/// A member naming the identity's Device 856 is written here once the
+/// application adds a lower Device 5 (#2227).
+#[tokio::test(start_paused = true)]
+async fn channel_member_naming_the_identity_device_stays_local_beside_a_lower_one() {
+    let mut h = Harness::start_with(ServerConfig::default(), |db| {
+        objects(db);
+        let qualified = BACnetDeviceObjectPropertyReference::new_remote(
+            ao(1),
+            PV.to_raw(),
+            ObjectIdentifier::new(ObjectType::DEVICE, 856).unwrap(),
+        );
+        db.add(Box::new(channel(4, 13, vec![(qualified, 0)])))
+            .unwrap();
+    })
+    .await;
+    let lower = crate::local_device::lower_device(5);
+    h.server.database().write().await.add(lower).unwrap();
+    write_channel(&mut h, 4, &PropertyValue::Real(3.0), Some(8))
+        .await
+        .unwrap();
+    assert_eq!(settled(&mut h, 4).await, WriteStatus::SUCCESSFUL);
+    assert_eq!(slot8(&h, ao(1)).await, PropertyValue::Real(3.0));
+}

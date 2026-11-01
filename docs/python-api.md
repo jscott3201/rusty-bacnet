@@ -1603,8 +1603,8 @@ await client.write_property_multiple("192.168.1.100:47808", [
 The full server's network Device reads use its actual execution profile:
 service bits reflect the fixed dispatcher with clock-dependent time services,
 and both COV list properties remain present after underlying Device declaration
-changes. The selected Device receives live lists; other Devices receive empty
-lists. Property_List and RPM selector/index behavior follow the same definitions.
+changes. The identity's Device receives live lists, even beside a
+lower-instance Device added later; other Devices receive empty lists. Property_List and RPM selector/index behavior follow the same definitions.
 WP and WPM reject assignment to Device service bits, both COV lists and
 Property_List, including custom Device writers. Other custom properties retain
 their existing write behavior. Changing a Device's declaration is not a runtime
