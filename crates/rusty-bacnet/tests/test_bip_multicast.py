@@ -8,12 +8,15 @@ from rusty_bacnet import (
     BACnetClient, BACnetServer, Bbmd, BipEndpoint, ForeignDevice, Multicast,
     ObjectIdentifier, ObjectType, PropertyIdentifier as P, PropertyValue as V,
 )
+from port_retry import rerun_on_lost_port
 
 GROUP = "239.255.97.1"
 
 
 def free_port():
-    """A UDP port no socket holds now, for a group."""
+    """A UDP port no socket holds now, for a group. Another process can take
+    it before the group's listener binds it, so the tests that use one rerun
+    on a lost port (#2216)."""
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
         probe.bind(("0.0.0.0", 0))
         return probe.getsockname()[1]
@@ -86,6 +89,9 @@ class OptionTests(unittest.TestCase):
 @unittest.skipIf(sys.platform == "win32", "Windows multicast is untested")
 class LoopbackTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_client_discovers_a_server_through_their_group(self):
+        await rerun_on_lost_port(self.client_discovers_server)
+
+    async def client_discovers_server(self):
         group = Multicast(GROUP, port=free_port())
         server = BACnetServer(3201, interface="127.0.0.1", port=0,
                               broadcast_address="127.255.255.255",
@@ -115,6 +121,9 @@ class LoopbackTests(unittest.IsolatedAsyncioTestCase):
             await server.stop()
 
     async def test_a_member_discovers_the_bbmd_that_serves_its_group(self):
+        await rerun_on_lost_port(self.member_discovers_bbmd)
+
+    async def member_discovers_bbmd(self):
         group = Multicast(GROUP, port=free_port())
         server = BACnetServer(3202, interface="127.0.0.1", port=0,
                               broadcast_address="127.255.255.255",

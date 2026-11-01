@@ -11,6 +11,7 @@ from rusty_bacnet import (
     BACnetClient, BACnetServer, BacnetProtocolError, ErrorClass, ErrorCode,
     ObjectIdentifier, ObjectType, PropertyValue,
 )
+from port_retry import rerun_on_lost_port
 
 KEYS = {
     "max_subscriptions_global": "int",
@@ -41,7 +42,9 @@ def local_client(port=0):
 
 
 def free_udp_port():
-    """A loopback port to give a client, so its B/IP MAC is known up front."""
+    """A loopback port to give a client, so its B/IP MAC is known up front.
+    Another process can take it before the client binds it, so the test that
+    uses one reruns on a lost port (#2216)."""
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
         probe.bind(("127.0.0.1", 0))
         return probe.getsockname()[1]
@@ -59,6 +62,9 @@ async def settle(server, **fields):
 
 class CovPolicyRuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_tightened_policy_moves_quota_capacity_indefinite_and_fanout_counters(self):
+        await rerun_on_lost_port(self.tightened_policy)
+
+    async def tightened_policy(self):
         reserved_port = free_udp_port()
         reserved_mac = bytes([127, 0, 0, 1]) + reserved_port.to_bytes(2, "big")
         # Unreserved peers share 3 - 1 = 2 slots; the reserved peer may use all 3.

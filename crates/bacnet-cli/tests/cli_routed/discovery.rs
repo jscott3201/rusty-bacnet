@@ -35,70 +35,60 @@ async fn observed_site(
     FrameTapReceiver,
     Relay,
 ) {
-    for _ in 0..8 {
-        let port = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
-        let mut bip = BipTransport::new(Ipv4Addr::LOCALHOST, port, Ipv4Addr::LOCALHOST);
-        bip.set_mode(BipMode::Bbmd(BbmdOptions {
-            foreign_device_policy: Some(ForeignDevicePolicy::default()),
-            ..Default::default()
-        }));
-        let tap = bip.frame_tap().subscribe();
-        let (router_end, mut incoming) = LoopbackTransport::pair(vec![1], vec![5]);
-        let (mut outgoing, station) = LoopbackTransport::pair(vec![1], vec![5]);
-        let mut to_station = incoming.start().await.unwrap();
-        let mut to_router = outgoing.start().await.unwrap();
-        let Ok(StartedRouter { router, .. }) = BACnetRouter::start(
-            vec![
-                RouterPort {
-                    transport: AnyTransport::Bip(Box::new(bip)),
-                    network_number: 1,
-                },
-                RouterPort {
-                    transport: AnyTransport::Loopback(router_end),
-                    network_number: DNET,
-                },
-            ],
-            RouterOptions::new(),
-        )
-        .await
-        else {
-            // Another test took the probed port before the router bound it.
-            continue;
-        };
-        let sources = Sources::default();
-        let observed = sources.clone();
-        let relay = Relay(Some(tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    Some(frame) = to_station.recv() => {
-                        let npdu = decode_npdu(frame.npdu.clone()).unwrap();
-                        if let Ok(Apdu::UnconfirmedRequest(request)) = decode_apdu(npdu.payload)
-                            && request.service_choice == UnconfirmedServiceChoice::WHO_IS {
-                            observed.lock().unwrap().push(npdu.source.expect("routed source"));
-                        }
-                        if frame.link_layer_group {
-                            outgoing.send_broadcast(&frame.npdu).await.unwrap();
-                        } else {
-                            outgoing.send_unicast(&frame.npdu, &[5]).await.unwrap();
-                        }
+    let mut bip = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOST);
+    bip.set_mode(BipMode::Bbmd(BbmdOptions {
+        foreign_device_policy: Some(ForeignDevicePolicy::default()),
+        ..Default::default()
+    }));
+    let tap = bip.frame_tap().subscribe();
+    let (router_end, mut incoming) = LoopbackTransport::pair(vec![1], vec![5]);
+    let (mut outgoing, station) = LoopbackTransport::pair(vec![1], vec![5]);
+    let mut to_station = incoming.start().await.unwrap();
+    let mut to_router = outgoing.start().await.unwrap();
+    let StartedRouter { router, .. } = BACnetRouter::start(
+        vec![
+            RouterPort {
+                transport: AnyTransport::Bip(Box::new(bip)),
+                network_number: 1,
+            },
+            RouterPort {
+                transport: AnyTransport::Loopback(router_end),
+                network_number: DNET,
+            },
+        ],
+        RouterOptions::new(),
+    )
+    .await
+    .expect("the router binds its ports");
+    let (_, port) = decode_bip_mac(router.ports()[0].local_mac()).unwrap();
+    let sources = Sources::default();
+    let observed = sources.clone();
+    let relay = Relay(Some(tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                Some(frame) = to_station.recv() => {
+                    let npdu = decode_npdu(frame.npdu.clone()).unwrap();
+                    if let Ok(Apdu::UnconfirmedRequest(request)) = decode_apdu(npdu.payload)
+                        && request.service_choice == UnconfirmedServiceChoice::WHO_IS {
+                        observed.lock().unwrap().push(npdu.source.expect("routed source"));
                     }
-                    Some(frame) = to_router.recv() => {
-                        incoming.send_unicast(&frame.npdu, &[1]).await.unwrap();
+                    if frame.link_layer_group {
+                        outgoing.send_broadcast(&frame.npdu).await.unwrap();
+                    } else {
+                        outgoing.send_unicast(&frame.npdu, &[5]).await.unwrap();
                     }
-                    else => break,
                 }
+                Some(frame) = to_router.recv() => {
+                    incoming.send_unicast(&frame.npdu, &[1]).await.unwrap();
+                }
+                else => break,
             }
-        })));
-        let server = BACnetServer::start(config, database, station)
-            .await
-            .unwrap();
-        return (router, server, port, sources, tap, relay);
-    }
-    panic!("no loopback UDP port the router could bind");
+        }
+    })));
+    let server = BACnetServer::start(config, database, station)
+        .await
+        .unwrap();
+    (router, server, port, sources, tap, relay)
 }
 
 async fn query(port: u16, source_port: u16) -> std::process::Output {

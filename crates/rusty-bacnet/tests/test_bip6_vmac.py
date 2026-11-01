@@ -24,6 +24,7 @@ from rusty_bacnet import (
     ObjectType,
     PropertyIdentifier,
 )
+from port_retry import rerun_on_lost_port
 
 DEVICE = ObjectIdentifier(ObjectType.DEVICE, 1234)
 NAME = PropertyIdentifier.OBJECT_NAME
@@ -44,6 +45,9 @@ def ipv6_loopback() -> bool:
 
 
 def free_udp6_port() -> int:
+    """A loopback port no socket holds now. Another process can take it before
+    the node given it binds it, so tests that use one rerun on a lost port with
+    ``rerun_on_lost_port`` (#2216)."""
     with socket.socket(socket.AF_INET6, socket.SOCK_DGRAM) as probe:
         probe.bind(("::1", 0))
         return probe.getsockname()[1]
@@ -136,6 +140,9 @@ class Bip6PairTests(unittest.IsolatedAsyncioTestCase):
     async def test_server_vmac_is_its_instance_and_resolves_from_its_address(
         self,
     ) -> None:
+        await rerun_on_lost_port(self.server_vmac_resolves)
+
+    async def server_vmac_resolves(self) -> None:
         port = free_udp6_port()
         server = BACnetServer(1234, device_name="B/IPv6 server", transport="ipv6",
                               ipv6_interface="::1", port=port)
@@ -157,6 +164,9 @@ class Bip6PairTests(unittest.IsolatedAsyncioTestCase):
     async def test_the_client_answers_by_its_instance_vmac(self) -> None:
         """A client's VMAC is its ipv6_device_instance (H.7.2): a node that
         resolves the client's address gets bip6:0x0010E2 for instance 4322."""
+        await rerun_on_lost_port(self.client_vmac_resolves)
+
+    async def client_vmac_resolves(self) -> None:
         async with loopback_client() as first:
             port = free_udp6_port()
             async with BACnetClient(transport="ipv6", ipv6_interface="::1", port=port,

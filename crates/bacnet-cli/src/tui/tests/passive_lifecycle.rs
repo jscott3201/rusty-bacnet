@@ -64,8 +64,39 @@ async fn passive_ui_event_receiver_close_releases_unscoped_listener() {
     assert!(std::net::UdpSocket::bind(address).is_ok());
     drop(net.commands);
 }
+/// Feed a session's three startup events to `app`. A failed start probes the
+/// port the test chose: when another socket holds it, the probe's bind error
+/// goes back to `rerun_on_lost_port` (#2216). A failure on a free port panics.
+async fn started(
+    app: &mut App,
+    events: &mut mpsc::Receiver<WorkerEvent>,
+    port: u16,
+) -> std::io::Result<()> {
+    for _ in 0..3 {
+        let event = events.recv().await.unwrap();
+        let failed = match &event {
+            WorkerEvent::Session { event, .. } => {
+                matches!(**event, WorkerEvent::ConnectFailed { .. })
+            }
+            event => matches!(event, WorkerEvent::ConnectFailed { .. }),
+        };
+        worker(app, event);
+        if failed {
+            std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, port))?;
+            panic!("the passive listener failed on a free port");
+        }
+    }
+    Ok(())
+}
+/// The listener must come back on the same address, so the test picks the
+/// port and frees it before the first bind; the session also frees it on
+/// disconnect and the UI close. Another process can take it in any of those
+/// gaps, so a lost port reruns the test on a fresh one (#2216).
 #[tokio::test]
 async fn passive_coordinator_disconnect_reconnect_and_ui_close_retire_generations() {
+    super::port_retry::rerun_on_lost_port(retire_generations).await;
+}
+async fn retire_generations() -> std::io::Result<()> {
     let reserved = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let address = reserved.local_addr().unwrap();
     let mut plan = super::network::plan(None);
@@ -78,9 +109,7 @@ async fn passive_coordinator_disconnect_reconnect_and_ui_close_retire_generation
     let task = coordinator::spawn(Some(plan), None, sink, rx, options());
     let mut app = new_app(None);
     app.safety.passive = true;
-    for _ in 0..3 {
-        worker(&mut app, events.recv().await.unwrap());
-    }
+    started(&mut app, &mut events, address.port()).await?;
     assert_eq!(
         app.passive_listener.as_deref(),
         Some(address.to_string().as_str())
@@ -115,12 +144,10 @@ async fn passive_coordinator_disconnect_reconnect_and_ui_close_retire_generation
         }
     }
     assert_eq!(app.link, Link::Down);
-    let rebound = std::net::UdpSocket::bind(address).expect("disconnect completed socket cleanup");
-    drop(rebound);
+    // Disconnect completed socket cleanup.
+    drop(std::net::UdpSocket::bind(address)?);
     commands.send(Command::Reconnect).await.unwrap();
-    for _ in 0..3 {
-        worker(&mut app, events.recv().await.unwrap());
-    }
+    started(&mut app, &mut events, address.port()).await?;
     assert_eq!(app.generation, generation + 1);
     assert_eq!(
         app.passive_listener.as_deref(),
@@ -145,10 +172,8 @@ async fn passive_coordinator_disconnect_reconnect_and_ui_close_retire_generation
     drop(events);
     drop(commands);
     task.await.unwrap();
-    assert!(
-        std::net::UdpSocket::bind(address).is_ok(),
-        "UI closure joins the listener"
-    );
+    // UI closure joins the listener.
+    std::net::UdpSocket::bind(address).map(drop)
 }
 #[tokio::test]
 async fn passive_bind_failure_and_unsupported_modes_never_claim_readiness() {
