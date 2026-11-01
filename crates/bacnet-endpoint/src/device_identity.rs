@@ -77,6 +77,17 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         let routes = preparation.session.prepare_source_audit_reporter()?;
         preparation.session.prepare_registered_port().await?;
         preparation.session.commit_device_profile(device);
+        // The database speaks for the identity's Device from here on, as a
+        // server's does, even beside a lower one added later (#2227). With
+        // no identity it keeps its lowest Device.
+        if let Some(database) = &preparation.session.database {
+            let device = preparation
+                .session
+                .identity
+                .as_ref()
+                .map(|i| i.device_oid());
+            database.write().await.bind_local_device_internal(device);
+        }
         preparation.committed = true;
         Ok((device, routes))
     }

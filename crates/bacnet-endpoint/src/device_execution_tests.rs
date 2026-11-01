@@ -277,6 +277,12 @@ async fn endpoint_wildcard_keeps_frozen_identity_and_identity_free_selection_sta
             ))
             .unwrap();
         assert_eq!(database.read().await.selected_device(), Some(oid(1)));
+        // A composed identity binds the database to its Device (#2227); an
+        // identity-free endpoint keeps the lowest.
+        assert_eq!(
+            database.read().await.local_device().identifier(),
+            Some(oid(if composed { 123 } else { 1 }))
+        );
         let wildcard = oid(ObjectIdentifier::MAX_INSTANCE);
         for phase in 0..3 {
             if phase == 1 {

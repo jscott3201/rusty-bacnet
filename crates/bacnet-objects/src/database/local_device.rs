@@ -19,7 +19,8 @@ use super::ObjectDatabase;
 /// This database's own Device, as a device-qualified reference names it.
 ///
 /// Taken from [`ObjectDatabase::local_device`] under the caller's database
-/// guard, so it holds only while that guard does.
+/// guard. A bound Device holds for as long as the binding does; the lowest
+/// Device of an unbound database only while that guard does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LocalDevice(Option<ObjectIdentifier>);
 
@@ -56,10 +57,25 @@ impl ObjectDatabase {
         )
     }
 
-    /// The Device a reference must name to stay inside this device: the
-    /// [selected Device](Self::selected_device).
+    /// The Device this database speaks for: the one a reference must name to
+    /// stay inside this device, that a notification it builds names as its
+    /// initiator, and whose live lists a host serves.
+    ///
+    /// A running server or endpoint binds it to its frozen identity's Device
+    /// (#2227), so a lower-instance Device the application adds later doesn't
+    /// take over, and it holds even while that Device object is missing. An
+    /// unbound database falls back to its [selected Device](Self::selected_device).
     pub fn local_device(&self) -> LocalDevice {
-        LocalDevice(self.selected_device())
+        LocalDevice(self.bound_device.or_else(|| self.selected_device()))
+    }
+
+    /// Bind [`local_device`](Self::local_device) to `device`, or with `None`
+    /// release it to the lowest Device. The server and the endpoint call this
+    /// at start with their frozen identity's Device; nothing else should.
+    #[doc(hidden)]
+    pub fn bind_local_device_internal(&mut self, device: Option<ObjectIdentifier>) {
+        debug_assert!(device.is_none_or(|device| device.object_type() == ObjectType::DEVICE));
+        self.bound_device = device;
     }
 }
 

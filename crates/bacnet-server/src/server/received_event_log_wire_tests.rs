@@ -438,3 +438,33 @@ async fn trend_log_reports_follow_their_class_and_are_logged() {
     drop(db);
     h.server.stop().await.unwrap();
 }
+
+/// A BUFFER_READY report names the log's buffer in the identity's Device,
+/// as its initiator does, beside a lower-instance Device the application
+/// added once the server ran (#2227).
+#[tokio::test(start_paused = true)]
+async fn a_report_names_the_buffer_in_the_identity_device_beside_a_lower_one() {
+    let mut h = Harness::start_with(ServerConfig::default(), |db| collecting(db, 2)).await;
+    let lower = crate::local_device::lower_device(5);
+    h.server.database().write().await.add(lower).unwrap();
+    h.set_clock(40);
+    h.write_local(90.0).await;
+    sent_notification(&h).await;
+    h.set_clock(41);
+    h.write_local(10.0).await;
+    sent_notification(&h).await;
+    let report = sent_notification(&h).await;
+    let identity = ObjectIdentifier::new(ObjectType::DEVICE, 856).unwrap();
+    assert_eq!(report.initiating_device_identifier, identity);
+    let Some(NotificationParameters::BufferReady {
+        buffer_property, ..
+    }) = report.event_values
+    else {
+        panic!(
+            "expected a BUFFER_READY report, got {:?}",
+            report.event_values
+        );
+    };
+    assert_eq!(buffer_property.device_identifier, Some(identity));
+    h.server.stop().await.unwrap();
+}

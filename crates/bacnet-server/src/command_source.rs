@@ -6,11 +6,12 @@ use bacnet_types::{
     primitives::ObjectIdentifier,
 };
 
-/// Initiator asserted by a trusted local caller. The selected local Device owns
-/// the command in either case; an object changes only its published source.
+/// Initiator asserted by a trusted local caller. The local Device (the
+/// identity's, in a running server) owns the command in either case; an
+/// object changes only its published source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalCommandSource {
-    /// The selected concrete local Device initiated the command.
+    /// The concrete local Device initiated the command.
     ServerDevice,
     /// An existing concrete local object initiated the command.
     Object(ObjectIdentifier),
@@ -21,7 +22,13 @@ pub(crate) fn resolve_local(
     source: LocalCommandSource,
 ) -> Result<CommandOrigin, Error> {
     let denied = || Error::protocol(ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED);
-    let owner_device = db.local_device().identifier().ok_or_else(denied)?;
+    // The Device this server speaks for, not the lowest one (#2227), and
+    // only while its object is here.
+    let owner_device = db
+        .local_device()
+        .identifier()
+        .filter(|device| db.get(device).is_some())
+        .ok_or_else(denied)?;
     let initiating_object = match source {
         LocalCommandSource::ServerDevice => None,
         LocalCommandSource::Object(oid) => {

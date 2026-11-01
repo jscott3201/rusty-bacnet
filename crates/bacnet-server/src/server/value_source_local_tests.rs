@@ -112,3 +112,24 @@ async fn a_local_write_publishes_its_initiator() {
     // AV-1 is 00 80 00 01.
     assert_eq!(source(&h, color()).await, names([0x00, 0x80, 0x00, 0x01]));
 }
+
+/// A local command is owned by the identity's Device, not a lower-instance
+/// Device the application added once the server ran (#2227).
+#[tokio::test(start_paused = true)]
+async fn the_identity_device_owns_a_local_command_beside_a_lower_one() {
+    let h = harness().await;
+    let lower = crate::local_device::lower_device(5);
+    h.server.database().write().await.add(lower).unwrap();
+    h.server
+        .write_local(
+            &color(),
+            PV,
+            None,
+            PropertyValue::List(vec![PropertyValue::Real(0.25), PropertyValue::Real(0.5)]),
+            None,
+            crate::LocalCommandSource::ServerDevice,
+        )
+        .await
+        .unwrap();
+    assert_eq!(source(&h, color()).await, names(DEVICE));
+}
