@@ -4,7 +4,7 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server for
 BACnet sites, read-only unless a profile offers writes: phase 1 (#2066, the
 tools), phase 2 (#2067, resources and subscriptions) and phase 3 (#2068,
 writes) of the MCP epic (#2064), and the first part of phase 4 (#2185,
-[attached to the TUI](#attached-to-the-tui), Unix only). The design, with
+#2201, [attached to the TUI](#attached-to-the-tui)). The design, with
 the later phases, is [design/mcp.md](design/mcp.md); the user guide is the
 website's [AI agents](https://jscott3201.github.io/rusty-bacnet/guides/ai-agents/)
 page. Experimental in 0.15.
@@ -21,7 +21,7 @@ page. Experimental in 0.15.
 | `[mcp]` profile table | `crates/bacnet-cli/src/tui/profile/mcp.rs` | networks, devices, slow and fast networks, broad discovery, rates and caps; `mcp_writes`, `mcp_arm` and `[mcp.plan]` (#2068) |
 | Write safety core | `bacnet-ops::safety` | The TUI's plan, ledger, audit log and workspace lock, and the engine half of a write (`desk`: pre-image reads, the stale check, the ledger and audit around each send, revert), shared by the TUI and MCP (#2068) |
 | Writes | `crates/bacnet-mcp/src/writes/`, `tools/write.rs`, `tools/revert.rs` | The write session, the approvers (`ClientElicitation`, `PlanApprover`, `Deny`), the sealed confirmation state, and the two write tools |
-| Attached mode | `crates/bacnet-mcp/src/attach/`, `crates/bacnet-cli/src/tui/attach.rs` | The TUI's local socket (`attach::Listener`), the peer checks, and `bacnet mcp connect`'s bridge (`attach::bridge`); Unix only (#2185) |
+| Attached mode | `crates/bacnet-mcp/src/attach/`, `crates/bacnet-cli/src/tui/attach.rs` | The TUI's local socket or, on Windows, named pipe (`attach::Listener`), the peer checks, and `bacnet mcp connect`'s bridge (`attach::bridge`) (#2185, #2201) |
 
 The SDK is `rmcp` 3.5.1 (pinned, server role, stdio only). It answers both
 the 2026-07-28 request form (`server/discover`, version and capabilities in
@@ -514,10 +514,11 @@ it sent nothing, else `timeout`.
 
 ## Attached to the TUI
 
-Unix only for now (#2185, the first part of phase 4). While `bacnet tui`
-has a profile open, agents can attach to it instead of starting their own
-client: `bacnet mcp connect --profile NAME` passes its stdin and stdout to
-a local socket in the TUI's process, byte for byte, and the agent host
+The first part of phase 4 (#2185; the Windows named pipe, #2201). While
+`bacnet tui` has a profile open, agents can attach to it instead of
+starting their own client: `bacnet mcp connect --profile NAME` passes its
+stdin and stdout to a local socket (on Windows, a named pipe) in the TUI's
+process, byte for byte, and the agent host
 launches it as it launches `bacnet mcp serve`. Without `--profile`, it
 attaches to the only profile a TUI is listening on (one whose listener
 holds its lock, below), and asks for a name when there are several. With no TUI listening it exits non-zero, saying so on
@@ -550,10 +551,10 @@ stderr; when the TUI ends the session it exits cleanly.
   lower of the TUI's and `max_rate`, and `network_rate`, `slow_networks`
   and `fast_networks` pace every request to those networks, the TUI's own
   included. The log pane notes each switch.
-- **Read-only.** The socket never lists `bacnet_write` or `bacnet_revert`,
+- **Read-only.** The socket (or pipe) never lists `bacnet_write` or `bacnet_revert`,
   whatever `mcp_writes` says: writes over it wait for the TUI's own
   approval dialog, which comes next.
-- **The socket.** `mcp.sock` in the profile's workspace. The workspace
+- **The socket (Unix).** `mcp.sock` in the profile's workspace. The workspace
   must be a directory of yours, not a symbolic link; one with a looser
   mode than 0700 is narrowed to 0700 when the listener starts, and the
   log pane says so (new workspaces are made 0700). The socket is made
@@ -569,15 +570,45 @@ stderr; when the TUI ends the session it exits cleanly.
   session may sit idle). `bacnet mcp connect` probes the lock with a
   shared lock, and a starting listener retries for a moment, so a probe
   never keeps a TUI from listening.
+- **The named pipe (Windows).** `\\.\pipe\rusty-bacnet-mcp-` and a hash
+  of the workspace's canonical path, so each profile has its own and
+  `connect` finds it with no setting; the hash carries nothing secret.
+  The pipe's security descriptor is owned by the TUI's user and grants
+  access to that user's SID alone, with no entry for Everyone,
+  Authenticated Users, anonymous logons, SYSTEM or Administrators (the
+  agents are your own processes, and SYSTEM and administrators can take
+  any object over through their privileges anyway, so an entry for them
+  would only widen access). Its medium mandatory label keeps a process
+  of lower integrity, such as a sandboxed one of the same user, from
+  opening it to read or write. There is no entry denying network logons:
+  remote clients are refused anyway, and a local session that holds the
+  network logon SID (an SSH session, say) would be shut out of its own
+  TUI. Every instance refuses remote clients. The
+  first instance claims the name, so a pipe of that name made by anyone
+  else (another user's process, say) is refused rather than joined, and
+  the next instance is made before a connected client is handed to its
+  session, so the name never goes free while the TUI listens. Before any
+  MCP message is read, the client's process (`GetNamedPipeClientProcessId`)
+  must run as the TUI's user, by its token's user SID; one that doesn't,
+  or whose user can't be found, is closed and audited. `bacnet mcp
+  connect` checks the listener's process the same way
+  (`GetNamedPipeServerProcessId`), and that the pipe itself is owned by
+  the same user, before it passes any byte on, so an impostor pipe gets
+  nothing, and it lets the listener identify it but
+  never act as it. A pipe has no half-close, so on Windows `connect`
+  ends its connection as soon as the host closes stdin. The limits on
+  agents and on the handshake are those of the socket.
 - **The lock.** A listener holds an exclusive lock on `mcp.lock` in the
-  workspace for its whole life, taken before it touches the socket path.
+  workspace for its whole life, taken before it touches the socket path
+  or makes the pipe.
   A second TUI on the same profile finds it held and doesn't listen; the
-  first keeps serving. Holding the lock, any socket at the path is one a
-  crashed TUI left, and it is removed; a symbolic link or any other file
+  first keeps serving. On Unix, holding the lock, any socket at the path
+  is one a crashed TUI left, and it is removed; a symbolic link or any other file
   there is neither followed nor removed.
 - **Audit.** Each connection's open (`mcp-connect`), close
   (`mcp-disconnect`) and each refused peer (`mcp-refused`, with the peer's
-  uid and pid and why) go to the workspace's `audit.jsonl`, with
+  uid, or on Windows its SID, its pid and why) go to the workspace's
+  `audit.jsonl`, with `via` set to `local-socket` or `named-pipe`, and
   `front_end: "mcp"` and the principal. At most 10 refusals a minute are
   recorded; the number left out goes with the next refusal record
   (`refusals_not_recorded_before`) and in one record at shutdown.
@@ -591,10 +622,8 @@ stderr; when the TUI ends the session it exits cleanly.
 - **Ending.** Closing the profile or the TUI stops the listener: each
   agent's listen streams complete, its connection closes, the shared
   watch hub cancels its COV subscriptions, the sessions' threads stop,
-  the socket file is removed and the lock released.
-
-On Windows, `bacnet mcp connect` and the TUI say attached mode isn't
-available yet; a named pipe with an owner-only access list follows.
+  the socket file (or every pipe instance) is removed and the lock
+  released.
 
 ## Tests
 
@@ -688,7 +717,8 @@ available yet; a named pipe with an owner-only access list follows.
   refused; 50 plan-grant writes without a prompt, each audited as approved
   by the plan, and writes outside it refused. `writes/seal.rs`: a state
   bound to its principal and tool, opened once, within its lifetime.
-- `crates/bacnet-mcp/src/tests/attach.rs` (#2185, Unix): an agent
+- `crates/bacnet-mcp/src/tests/attach.rs` (#2185; Unix, and on Windows
+  the reads, the read-only list and the shutdown): an agent
   through the bridge reads the lab on the shared engine, which its rate
   meter shows, with no write tool though the policy offers writes; a peer
   of another uid (named by a stand-in for the kernel's credentials, since a
@@ -703,15 +733,31 @@ available yet; a named pipe with an owner-only access list follows.
   attached; four flooding agents held to one budget while the TUI's reads
   finish; the TUI keeping its COV notifications when an agent leaves the
   same point; the bridge refusing a listener of another user with nothing
-  written; unreadable credentials refused and audited; an idle connection
-  closed after 30 s. `tests/attach_shared.rs`: a second session's broad
+  written and unreadable credentials refused and audited (both Unix); an
+  idle connection closed after 30 s. `tests/attach_shared.rs`: a second session's broad
   Who-Is within the minute refused and the watch cap counting both
   sessions' points; shutdown not waiting out a silent handshake; an agent
   keeping a shared point's COV updates when the other leaves; an open
-  session idle past 30 s kept. `attach/guard_tests.rs`: ownership,
-  narrowing on one handle, the re-check after bind, the post-bind socket
-  check, the lock (a probe's shared lock refusing neither another probe
-  nor, once released, a starting listener) and the path length. `crates/bacnet-cli/src/tui/tests/mcp_attach.rs`:
+  session idle past 30 s kept; a ninth agent refused (`too-many-agents`)
+  until a seat is free. `attach_more.rs`, `attach_shared.rs` and
+  `attach_runtime.rs` run on Windows too. `attach/guard_tests.rs` (Unix):
+  ownership, narrowing on one handle, the re-check after bind, the
+  post-bind socket check and the path length. `attach/lock.rs`: the lock,
+  a probe's shared lock refusing neither another probe nor, once
+  released, a starting listener.
+  `tests/attach_pipe.rs` (#2201, Windows): a client named as another user
+  (by a stand-in for its token, since a test can't run as another user)
+  or with no user found closed unanswered and audited with its SID and
+  pid; the bridge refusing a pipe served by another user, or one owned
+  by another user, writing it nothing; a second listener refused by the lock, a listener starting
+  again at once after the first stops, and a pipe of the same name made
+  without the lock refused rather than joined; the listener's first and
+  later instances owned by and granting only the test's user, with the
+  medium label. `attach/pipe_tests.rs`: the pipe's name per workspace,
+  every instance's refusal of remote clients and the first's claim on
+  the name, and the kernel's copy of the descriptor and label.
+  `fence_tests.rs`: unsafe code only in `attach/win32.rs`.
+  `crates/bacnet-cli/src/tui/tests/mcp_attach.rs`:
   an agent on an open session's socket reading through its client, on the
   watch list's meter, `MCP n` and `MCP off` on the bar, the watch list's
   first SubscribeCOV keeping the first subscriber process identifier, and

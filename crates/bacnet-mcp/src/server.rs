@@ -186,7 +186,7 @@ impl<T: TransportPort + 'static> McpServer<T> {
     /// sharing the listener's watch hub and principal bucket with its other
     /// sessions, and ended unless the client opens it within `initialize`.
     /// It leaves the shared hub running when it ends; its watches go.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(crate) fn attached(
         engine: Arc<Engine<T>>,
         policy: Policy,

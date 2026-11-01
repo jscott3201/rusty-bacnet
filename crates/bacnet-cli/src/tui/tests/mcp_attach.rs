@@ -3,8 +3,10 @@
 //! client and limits, so its requests show on the watch list's rate meter;
 //! the status bar counts the agents; quitting ends the agent's session and
 //! removes the socket. Its plan comes from the profile's `[mcp]` table.
+//! On Unix through the socket, on Windows through the named pipe.
 //! A bug an agent's request reaches ends only that agent's session.
 
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,9 +16,9 @@ use bacnet_mcp::Policy;
 use bacnet_mcp::attach::socket_path;
 use bacnet_mcp::policy::Workspace;
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader, Lines};
-use tokio::net::UnixStream;
-use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::io::{
+    AsyncBufReadExt as _, AsyncRead, AsyncWrite, AsyncWriteExt as _, BufReader, Lines,
+};
 
 use super::site::{ClientLimits, Server, Site, bounded};
 use super::*;
@@ -27,15 +29,18 @@ const LAB: u32 = 100;
 
 /// An agent on the socket: newline-delimited JSON-RPC.
 struct Agent {
-    write: OwnedWriteHalf,
-    lines: Lines<BufReader<OwnedReadHalf>>,
+    write: Box<dyn AsyncWrite + Send + Unpin>,
+    lines: Lines<BufReader<Box<dyn AsyncRead + Send + Unpin>>>,
 }
 
 impl Agent {
+    /// Connect as the bridge does, checking the listener's user.
     async fn connect(path: &Path) -> Self {
-        let (read, write) = UnixStream::connect(path).await.unwrap().into_split();
+        let stream = bacnet_mcp::attach::connect(path).await.unwrap();
+        let (read, write) = tokio::io::split(stream);
+        let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(read);
         Self {
-            write,
+            write: Box::new(write),
             lines: BufReader::new(read).lines(),
         }
     }
@@ -49,7 +54,7 @@ impl Agent {
         }
         loop {
             let line = bounded(self.lines.next_line()).await.unwrap().unwrap();
-            let message: Value = serde_json::from_str(&line).unwrap();
+            let message: Value = serde_json::from_str(line.trim_end_matches('\r')).unwrap();
             if message["id"] == request["id"] {
                 return message;
             }
@@ -122,6 +127,7 @@ fn plan(dir: &Path) -> Plan {
 #[tokio::test(start_paused = true)]
 async fn an_agent_reads_through_the_open_session() {
     let dir = tempfile::tempdir().unwrap();
+    #[cfg(unix)]
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let options = SessionOptions {
         attach: Some(plan(dir.path())),
@@ -168,6 +174,7 @@ async fn an_agent_reads_through_the_open_session() {
         .await;
 
     site.quit().await;
+    #[cfg(unix)]
     assert!(!path.exists(), "removed with the session");
     let end = bounded(agent.lines.next_line()).await.unwrap();
     assert_eq!(end, None, "the agent's connection ends");
@@ -273,6 +280,7 @@ async fn the_watch_list_keeps_the_first_subscriber_ids() {
     use bacnet_services::cov::SubscribeCOVRequest;
     use bacnet_types::enums::ConfirmedServiceChoice;
     let dir = tempfile::tempdir().unwrap();
+    #[cfg(unix)]
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let options = SessionOptions {
         attach: Some(plan(dir.path())),
@@ -319,6 +327,7 @@ async fn an_agents_panic_ends_its_session_and_the_tui_draws_on() {
         },
     ));
     let dir = tempfile::tempdir().unwrap();
+    #[cfg(unix)]
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let options = SessionOptions {
         attach: Some(Plan {

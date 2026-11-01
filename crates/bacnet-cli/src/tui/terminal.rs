@@ -85,11 +85,11 @@ pub(crate) fn chain_panic_hook(
 /// (`bacnet_mcp::attach::SESSION_THREADS`), whose panic ends only the
 /// agent's session.
 pub(crate) fn restores_terminal(thread: Option<&str>) -> bool {
-    #[cfg(all(unix, feature = "mcp"))]
+    #[cfg(feature = "mcp")]
     {
         !thread.is_some_and(|name| name.starts_with(bacnet_mcp::attach::SESSION_THREADS))
     }
-    #[cfg(not(all(unix, feature = "mcp")))]
+    #[cfg(not(feature = "mcp"))]
     {
         let _ = thread;
         true
@@ -281,7 +281,7 @@ mod tests {
         assert!(restores_terminal(None));
         assert!(restores_terminal(Some("main")));
         assert!(restores_terminal(Some("tokio-runtime-worker")));
-        #[cfg(all(unix, feature = "mcp"))]
+        #[cfg(feature = "mcp")]
         assert!(!restores_terminal(Some(&format!(
             "{}-1",
             bacnet_mcp::attach::SESSION_THREADS
@@ -290,7 +290,7 @@ mod tests {
 
     /// A panic on an agent's session thread leaves the terminal and the
     /// previous hook alone.
-    #[cfg(all(unix, feature = "mcp"))]
+    #[cfg(feature = "mcp")]
     #[test]
     fn a_panic_on_an_agents_thread_leaves_the_terminal_alone() {
         let order = Arc::new(Mutex::new(Vec::new()));

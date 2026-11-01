@@ -376,40 +376,27 @@ async fn serve_on<T: TransportPort + 'static>(
     Ok(served?)
 }
 
-/// Why `bacnet mcp connect` can't run here yet.
-#[cfg(not(unix))]
-const NO_ATTACH: &str = "bacnet mcp connect (attaching to the TUI) isn't available on Windows yet; \
-     run `bacnet mcp serve --stdio --profile NAME` instead";
-
-/// `bacnet mcp connect`: stdin and stdout passed to the socket of the TUI
-/// that has `profile` open (or the only TUI listening), byte for byte.
+/// `bacnet mcp connect`: stdin and stdout passed to the socket (on
+/// Windows, the named pipe) of the TUI that has `profile` open (or the
+/// only TUI listening), byte for byte.
 async fn connect(store: &Store, profile: Option<&str>) -> crate::CliResult {
-    #[cfg(unix)]
-    {
-        let path = attached_socket(store, profile)?;
-        let bridged = bacnet_mcp::attach::bridge_stdio(&path).await;
-        // A read of stdin may still be blocked on a runtime thread, which
-        // the runtime would wait for: exit now instead.
-        let code = match bridged {
-            Ok(()) => 0,
-            Err(error) => {
-                let _ = writeln!(std::io::stderr(), "Error: {error}");
-                1
-            }
-        };
-        std::process::exit(code);
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (store, profile);
-        Err(NO_ATTACH.into())
-    }
+    let path = attached_socket(store, profile)?;
+    let bridged = bacnet_mcp::attach::bridge_stdio(&path).await;
+    // A read of stdin may still be blocked on a runtime thread, which the
+    // runtime would wait for: exit now instead.
+    let code = match bridged {
+        Ok(()) => 0,
+        Err(error) => {
+            let _ = writeln!(std::io::stderr(), "Error: {error}");
+            1
+        }
+    };
+    std::process::exit(code);
 }
 
 /// The socket `bacnet mcp connect` attaches to: `profile`'s, or without
 /// one that of the only profile whose listener holds its workspace's lock
 /// (a socket file alone may be a stale one).
-#[cfg(unix)]
 fn attached_socket(store: &Store, profile: Option<&str>) -> Result<std::path::PathBuf, String> {
     use bacnet_mcp::attach::{listening, socket_path};
     if let Some(name) = profile {
