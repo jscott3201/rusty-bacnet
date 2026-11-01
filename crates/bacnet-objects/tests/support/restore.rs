@@ -5,13 +5,16 @@
 //! Shared by `tests/persistence_corruption.rs` and the fuzz crate
 //! (`crates/bacnet-objects/fuzz`), which builds this file with `#[path]`.
 //!
-//! The check, [`Format::check`], loads what the files hold through the
-//! backend, then builds the object on the same storage:
+//! The check, [`Format::check`], runs on a [`Medium`]: the files at a base
+//! path ([`Files`]), or, in the fuzz crate, the backends' in-memory mode
+//! (#2233), the same backends with the octets kept in memory. It loads what
+//! the storage holds through the backend, then builds the object on the same
+//! storage:
 //! - a load that succeeds names the expected object, and its snapshot saves
 //!   to fresh storage and loads back equal (compared by `Debug` text, so a
 //!   NaN matches itself);
 //! - a load that fails makes the object's build fail too;
-//! - a build that fails leaves the files as they were: a refused restore
+//! - a build that fails leaves the storage as it was: a refused restore
 //!   writes nothing;
 //! - a build that succeeds from a loaded snapshot serves its state: a log's
 //!   Total_Record_Count, an Audit Log's records, counts and generation.
@@ -63,8 +66,92 @@ pub struct Format {
     pub two_slot: bool,
     /// Write a sample through the backend, at `base`.
     pub sample: fn(&Path),
-    /// Restore from what `base` holds; see the module docs.
-    pub check: fn(&Path) -> Outcome,
+    /// Which object restores from it.
+    kind: Kind,
+}
+
+/// The object a format restores, which picks the check.
+#[derive(Clone, Copy)]
+enum Kind {
+    TrendLog,
+    TrendLogMultiple,
+    EventLog,
+    AuditLog,
+    NotificationForwarder,
+    NotificationClass,
+    Tags,
+    Color,
+    ColorTemperature,
+    AccessRights,
+}
+
+/// Where a check's storage lives. Each method opens one backend on it; a
+/// format's check opens only its own.
+pub trait Medium: Sized {
+    fn log(&self) -> FileLogPersistence;
+    fn audit(&self) -> FileAuditLogPersistence;
+    fn forwarder(&self) -> FileNotificationForwarderPersistence;
+    fn class(&self) -> FileNotificationClassPersistence;
+    fn tags(&self) -> FileTagsPersistence;
+    fn color(&self) -> FileColorOutputPersistence;
+    fn rights(&self) -> FileAccessRightsPersistence;
+    /// Empty storage of the same kind, for the round trip.
+    fn fresh(&self) -> Self;
+    /// What each of the format's files holds now, `None` for a missing one.
+    fn contents(&self) -> Vec<Option<Vec<u8>>>;
+}
+
+/// A format's files at a base path.
+pub struct Files {
+    base: PathBuf,
+    paths: Vec<PathBuf>,
+}
+
+impl Files {
+    pub fn new(format: &Format, base: &Path) -> Self {
+        Self {
+            base: base.to_path_buf(),
+            paths: format.files(base),
+        }
+    }
+}
+
+impl Medium for Files {
+    fn log(&self) -> FileLogPersistence {
+        FileLogPersistence::new(&self.base).unwrap()
+    }
+    fn audit(&self) -> FileAuditLogPersistence {
+        FileAuditLogPersistence::new(&self.base).unwrap()
+    }
+    fn forwarder(&self) -> FileNotificationForwarderPersistence {
+        FileNotificationForwarderPersistence::new(&self.base).unwrap()
+    }
+    fn class(&self) -> FileNotificationClassPersistence {
+        FileNotificationClassPersistence::new(&self.base).unwrap()
+    }
+    fn tags(&self) -> FileTagsPersistence {
+        FileTagsPersistence::new(&self.base).unwrap()
+    }
+    fn color(&self) -> FileColorOutputPersistence {
+        FileColorOutputPersistence::new(&self.base).unwrap()
+    }
+    fn rights(&self) -> FileAccessRightsPersistence {
+        FileAccessRightsPersistence::new(&self.base).unwrap()
+    }
+    /// A sibling base, with its files removed.
+    fn fresh(&self) -> Self {
+        let base = suffixed(&self.base, ".copy");
+        let paths = if self.paths.len() == 2 {
+            vec![suffixed(&base, ".slot0"), suffixed(&base, ".slot1")]
+        } else {
+            vec![base.clone()]
+        };
+        write_files(&paths, &vec![None; paths.len()]);
+        Self { base, paths }
+    }
+    fn contents(&self) -> Vec<Option<Vec<u8>>> {
+        read_files(&self.paths)
+    }
 }
 
 /// What a restore came to.
@@ -82,141 +169,129 @@ pub const FORMATS: &[Format] = &[
         name: "trend_log",
         two_slot: true,
         sample: samples::trend_log,
-        check: |base| {
-            check_log(base, oid(ObjectType::TREND_LOG), |size, storage| {
-                TrendLogObject::with_persistence(1, "TL", size, storage)
-                    .map(|log| (log.reopened(), Box::new(log) as Box<dyn BACnetObject>))
-            })
-        },
+        kind: Kind::TrendLog,
     },
     Format {
         name: "trend_log_multiple",
         two_slot: true,
         sample: samples::trend_log_multiple,
-        check: |base| {
-            check_log(
-                base,
-                oid(ObjectType::TREND_LOG_MULTIPLE),
-                |size, storage| {
-                    TrendLogMultipleObject::with_persistence(1, "TLM", size, storage)
-                        .map(|log| (log.reopened(), Box::new(log) as Box<dyn BACnetObject>))
-                },
-            )
-        },
+        kind: Kind::TrendLogMultiple,
     },
     Format {
         name: "event_log",
         two_slot: true,
         sample: samples::event_log,
-        check: |base| {
-            check_log(base, oid(ObjectType::EVENT_LOG), |size, storage| {
-                EventLogObject::with_persistence(1, "EL", size, storage)
-                    .map(|log| (log.reopened(), Box::new(log) as Box<dyn BACnetObject>))
-            })
-        },
+        kind: Kind::EventLog,
     },
     Format {
         name: "audit_log",
         two_slot: true,
         sample: samples::audit_log,
-        check: check_audit,
+        kind: Kind::AuditLog,
     },
     Format {
         name: "notification_forwarder",
         two_slot: false,
         sample: samples::notification_forwarder,
-        check: |path| {
-            check_file(
-                path,
-                oid(ObjectType::NOTIFICATION_FORWARDER),
-                |path| FileNotificationForwarderPersistence::new(path).unwrap(),
-                |store| {
-                    NotificationForwarderObject::with_persistence(1, "NF", Arc::new(store))
-                        .map(drop)
-                },
-            )
-        },
+        kind: Kind::NotificationForwarder,
     },
     Format {
         name: "notification_class",
         two_slot: false,
         sample: samples::notification_class,
-        check: |path| {
-            check_file(
-                path,
-                oid(ObjectType::NOTIFICATION_CLASS),
-                |path| FileNotificationClassPersistence::new(path).unwrap(),
-                |store| NotificationClass::with_persistence(1, "NC", Arc::new(store)).map(drop),
-            )
-        },
+        kind: Kind::NotificationClass,
     },
     Format {
         name: "tags",
         two_slot: false,
         sample: samples::tags,
-        check: |path| {
-            check_file(
-                path,
-                oid(ObjectType::ANALOG_INPUT),
-                |path| FileTagsPersistence::new(path).unwrap(),
-                |store| {
-                    let units = EngineeringUnits::DEGREES_CELSIUS;
-                    AnalogInputObject::with_tags_persistence(1, "AI", units, Arc::new(store))
-                        .map(drop)
-                },
-            )
-        },
+        kind: Kind::Tags,
     },
     Format {
         name: "color",
         two_slot: false,
         sample: samples::color,
-        check: |path| {
-            check_file(
-                path,
-                oid(ObjectType::COLOR),
-                |path| FileColorOutputPersistence::new(path).unwrap(),
-                |store| {
-                    ColorObject::new(1, "CLR")?
-                        .with_output_persistence(Arc::new(store))
-                        .map(drop)
-                },
-            )
-        },
+        kind: Kind::Color,
     },
     Format {
         name: "color_temperature",
         two_slot: false,
         sample: samples::color_temperature,
-        check: |path| {
-            check_file(
-                path,
-                oid(ObjectType::COLOR_TEMPERATURE),
-                |path| FileColorOutputPersistence::new(path).unwrap(),
-                |store| {
-                    ColorTemperatureObject::new(1, "CT")?
-                        .with_output_persistence(Arc::new(store))
-                        .map(drop)
-                },
-            )
-        },
+        kind: Kind::ColorTemperature,
     },
     Format {
         name: "access_rights",
         two_slot: false,
         sample: samples::access_rights,
-        check: |path| {
-            check_file(
-                path,
-                oid(ObjectType::ACCESS_RIGHTS),
-                |path| FileAccessRightsPersistence::new(path).unwrap(),
-                |store| AccessRightsObject::with_persistence(1, "AR", Arc::new(store)).map(drop),
-            )
-        },
+        kind: Kind::AccessRights,
     },
 ];
 
 impl Format {
+    /// Restore from what `medium` holds; see the module docs.
+    pub fn check<M: Medium>(&self, medium: &M) -> Outcome {
+        match self.kind {
+            Kind::TrendLog => check_log(medium, oid(ObjectType::TREND_LOG), |size, storage| {
+                TrendLogObject::with_persistence(1, "TL", size, storage)
+                    .map(|log| (log.reopened(), Box::new(log) as Box<dyn BACnetObject>))
+            }),
+            Kind::TrendLogMultiple => check_log(
+                medium,
+                oid(ObjectType::TREND_LOG_MULTIPLE),
+                |size, storage| {
+                    TrendLogMultipleObject::with_persistence(1, "TLM", size, storage)
+                        .map(|log| (log.reopened(), Box::new(log) as Box<dyn BACnetObject>))
+                },
+            ),
+            Kind::EventLog => check_log(medium, oid(ObjectType::EVENT_LOG), |size, storage| {
+                EventLogObject::with_persistence(1, "EL", size, storage)
+                    .map(|log| (log.reopened(), Box::new(log) as Box<dyn BACnetObject>))
+            }),
+            Kind::AuditLog => check_audit(medium),
+            Kind::NotificationForwarder => check_file(
+                medium,
+                oid(ObjectType::NOTIFICATION_FORWARDER),
+                M::forwarder,
+                |store| NotificationForwarderObject::with_persistence(1, "NF", store).map(drop),
+            ),
+            Kind::NotificationClass => check_file(
+                medium,
+                oid(ObjectType::NOTIFICATION_CLASS),
+                M::class,
+                |store| NotificationClass::with_persistence(1, "NC", store).map(drop),
+            ),
+            Kind::Tags => check_file(medium, oid(ObjectType::ANALOG_INPUT), M::tags, |store| {
+                let units = EngineeringUnits::DEGREES_CELSIUS;
+                AnalogInputObject::with_tags_persistence(1, "AI", units, store).map(drop)
+            }),
+            Kind::Color => check_file(medium, oid(ObjectType::COLOR), M::color, |store| {
+                ColorObject::new(1, "CLR")?
+                    .with_output_persistence(store)
+                    .map(drop)
+            }),
+            Kind::ColorTemperature => check_file(
+                medium,
+                oid(ObjectType::COLOR_TEMPERATURE),
+                M::color,
+                |store| {
+                    ColorTemperatureObject::new(1, "CT")?
+                        .with_output_persistence(store)
+                        .map(drop)
+                },
+            ),
+            Kind::AccessRights => {
+                check_file(medium, oid(ObjectType::ACCESS_RIGHTS), M::rights, |store| {
+                    AccessRightsObject::with_persistence(1, "AR", store).map(drop)
+                })
+            }
+        }
+    }
+
+    /// Restore from the files at `base`.
+    pub fn check_files(&self, base: &Path) -> Outcome {
+        self.check(&Files::new(self, base))
+    }
+
     /// The files this format keeps at `base`.
     pub fn files(&self, base: &Path) -> Vec<PathBuf> {
         if self.two_slot {
@@ -319,36 +394,23 @@ fn same<T: Debug>(left: &T, right: &T) -> bool {
     format!("{left:?}") == format!("{right:?}")
 }
 
-/// A sibling base for the round trip, with its files removed.
-fn copy_base(base: &Path, files: usize) -> PathBuf {
-    let copy = suffixed(base, ".copy");
-    let paths = if files == 2 {
-        vec![suffixed(&copy, ".slot0"), suffixed(&copy, ".slot1")]
-    } else {
-        vec![copy.clone()]
-    };
-    write_files(&paths, &vec![None; files]);
-    copy
-}
-
 fn check_log<R: Debug + Send + Sync + 'static>(
-    base: &Path,
+    medium: &impl Medium,
     oid: ObjectIdentifier,
     build: impl Fn(u32, Arc<dyn LogPersistence<R>>) -> Result<(bool, Box<dyn BACnetObject>), Error>,
 ) -> Outcome
 where
     FileLogPersistence: LogPersistence<R>,
 {
-    let store = FileLogPersistence::new(base).unwrap();
-    let paths = store.slot_paths();
-    let before = read_files(&paths);
+    let store = medium.log();
+    let before = medium.contents();
     let loaded = LogPersistence::<R>::load(&store, oid);
     if let Ok(Some(snapshot)) = &loaded {
         assert_eq!(
             snapshot.object_identifier, oid,
             "loaded another object's snapshot"
         );
-        let copy = FileLogPersistence::new(copy_base(base, 2)).unwrap();
+        let copy = medium.fresh().log();
         // No backend documents this; the harness holds it as the round trip
         // a restore owes, so a failure here is a finding to triage.
         copy.commit(snapshot)
@@ -358,7 +420,6 @@ where
             same(&again.as_ref(), &Some(snapshot)),
             "the copy loads {again:?}"
         );
-        write_files(&copy.slot_paths(), &[None, None]);
     }
     let size = match &loaded {
         Ok(Some(snapshot)) => snapshot.buffer_size.clamp(1, 64),
@@ -368,7 +429,7 @@ where
     match (&loaded, built) {
         (Err(_), Ok(_)) => panic!("the log built although its storage didn't load"),
         (_, Err(_)) => assert!(
-            read_files(&paths) == before,
+            medium.contents() == before,
             "a refused restore changed the slots"
         ),
         (Ok(snapshot), Ok((reopened, log))) => {
@@ -393,10 +454,9 @@ where
     }
 }
 
-fn check_audit(base: &Path) -> Outcome {
-    let store = FileAuditLogPersistence::new(base).unwrap();
-    let paths = store.slot_paths();
-    let before = read_files(&paths);
+fn check_audit(medium: &impl Medium) -> Outcome {
+    let store = medium.audit();
+    let before = medium.contents();
     let oid = oid(ObjectType::AUDIT_LOG);
     let loaded = store.load(oid);
     if let Ok(Some(snapshot)) = &loaded {
@@ -404,7 +464,7 @@ fn check_audit(base: &Path) -> Outcome {
             snapshot.object_identifier, oid,
             "loaded another object's snapshot"
         );
-        let copy = FileAuditLogPersistence::new(copy_base(base, 2)).unwrap();
+        let copy = medium.fresh().audit();
         // No backend documents this; the harness holds it as the round trip
         // a restore owes, so a failure here is a finding to triage.
         copy.commit(snapshot)
@@ -414,7 +474,6 @@ fn check_audit(base: &Path) -> Outcome {
             same(&again.as_ref(), &Some(snapshot)),
             "the copy loads {again:?}"
         );
-        write_files(&copy.slot_paths(), &[None, None]);
     }
     let capacity = match &loaded {
         Ok(Some(snapshot)) => snapshot.capacity,
@@ -428,7 +487,7 @@ fn check_audit(base: &Path) -> Outcome {
     match (loaded, built) {
         (Err(_), Ok(_)) => panic!("the Audit Log built although its storage didn't load"),
         (_, Err(_)) => assert!(
-            read_files(&paths) == before,
+            medium.contents() == before,
             "a refused restore changed the slots"
         ),
         (Ok(None), Ok(_)) => {}
@@ -450,7 +509,7 @@ fn check_audit(base: &Path) -> Outcome {
 }
 
 /// A one-file backend: what [`check_file`] needs of it.
-trait OneFile {
+trait OneFile: Send + Sync + 'static {
     type Snapshot: Debug;
     fn load_for(&self, oid: ObjectIdentifier) -> Result<Option<Self::Snapshot>, Error>;
     fn save_for(&self, oid: ObjectIdentifier, snapshot: &Self::Snapshot) -> Result<(), Error>;
@@ -478,21 +537,20 @@ one_file! {
     FileAccessRightsPersistence => AccessRightsPersistence, AccessRightsSnapshot;
 }
 
-fn check_file<S: OneFile>(
-    path: &Path,
+fn check_file<M: Medium, S: OneFile>(
+    medium: &M,
     oid: ObjectIdentifier,
-    open: fn(&Path) -> S,
-    build: impl Fn(S) -> Result<(), Error>,
+    open: fn(&M) -> S,
+    build: impl Fn(Arc<S>) -> Result<(), Error>,
 ) -> Outcome {
-    let paths = [path.to_path_buf()];
-    let before = read_files(&paths);
-    let loaded = open(path).load_for(oid);
+    let before = medium.contents();
+    let loaded = open(medium).load_for(oid);
     // Whether a loaded snapshot saves again; one that doesn't is one the
     // object must refuse, since it could never save it.
     let mut saves = true;
     if let Ok(Some(snapshot)) = &loaded {
-        let copy = [copy_base(path, 1)];
-        let store = open(&copy[0]);
+        let copy = medium.fresh();
+        let store = open(&copy);
         saves = store.save_for(oid, snapshot).is_ok();
         if saves {
             let again = store.load_for(oid).expect("the copy loads");
@@ -502,18 +560,17 @@ fn check_file<S: OneFile>(
             );
             // The saved octets are the canonical form: saving them again
             // changes nothing.
-            let first = read_files(&copy);
+            let first = copy.contents();
             store
                 .save_for(oid, again.as_ref().unwrap())
                 .expect("the copy saves again");
             assert!(
-                read_files(&copy) == first,
+                copy.contents() == first,
                 "saving a loaded snapshot isn't stable"
             );
         }
-        write_files(&copy, &[None]);
     }
-    let built = build(open(path)).is_ok();
+    let built = build(Arc::new(open(medium))).is_ok();
     if built {
         assert!(
             loaded.is_ok(),
@@ -523,7 +580,7 @@ fn check_file<S: OneFile>(
         assert!(saves, "the object took a snapshot its storage can't save");
     } else {
         assert!(
-            read_files(&paths) == before,
+            medium.contents() == before,
             "a refused restore changed the file"
         );
     }

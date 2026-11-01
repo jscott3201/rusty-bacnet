@@ -29,7 +29,7 @@ fn damage(format: &Format) -> usize {
     let files = format.files(&base);
     let saved = read_files(&files);
     assert_eq!(
-        (format.check)(&base),
+        format.check_files(&base),
         Outcome {
             loaded: true,
             built: true
@@ -41,7 +41,7 @@ fn damage(format: &Format) -> usize {
     // Each damaged file, with whether it was re-sealed.
     let mut run = |variant: Vec<Option<Vec<u8>>>, sealed: bool, what: &str| {
         write_files(&files, &variant);
-        let outcome = (format.check)(&base);
+        let outcome = format.check_files(&base);
         assert!(
             sealed || !(format.two_slot && outcome.loaded),
             "{}: a slot {what} loaded",

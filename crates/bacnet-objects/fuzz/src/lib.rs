@@ -1,20 +1,30 @@
 //! What the object crate's fuzz targets check: a restore from any octets,
-//! through the file persistence backends (#2180).
+//! through the persistence backends (#2180).
 //!
-//! Each target writes its input into a format's files and runs that
-//! format's restore check, `restore::Format::check`, shared with the
-//! object crate's own corruption test (`tests/support/restore.rs`): no
-//! panic; a loaded snapshot names its object and saves and loads back the
+//! Each target hands its input to a format's backend as that format's files
+//! and runs the format's restore check, `restore::Format::check`, shared
+//! with the object crate's own corruption test (`tests/support/restore.rs`):
+//! no panic; a loaded snapshot names its object and saves and loads back the
 //! same; a load that fails fails the object's build; a refused build leaves
-//! the files as they were; a log or Audit Log built from a snapshot serves
+//! the storage as it was; a log or Audit Log built from a snapshot serves
 //! its counts. libFuzzer stands in for the rest: an allocation past its
 //! limit (2,048 megabytes by default) or a stack overflow fails the target.
 //!
+//! The main targets run the file backends in their in-memory mode
+//! (`bacnet-objects`' hidden `test-support` feature, #2233): the same load,
+//! slot selection, decode, encode and save code, with the octets in memory,
+//! so a run makes no file system call. Each has a `*_file` twin that writes
+//! the input into real files and restores from them, much slower, for the
+//! half of the backends the in-memory mode leaves out: opening, reading and
+//! writing real files, and a refused restore leaving them on disk as they
+//! were. The twin also runs the in-memory check on the same
+//! input and fails unless both come to the same outcome.
+//!
 //! | Target | Formats |
 //! | --- | --- |
-//! | `log_restore` | the Trend Log, Trend Log Multiple and Event Log snapshots (`log_persistence/codec.rs`) |
-//! | `audit_restore` | the Audit Log snapshot, schema versions 1 to 3 |
-//! | `object_file_restore` | the one-file formats: Notification Forwarder, Notification Class, Tags, the two colour objects' output, Access Rights |
+//! | `log_restore`, `log_restore_file` | the Trend Log, Trend Log Multiple and Event Log snapshots (`log_persistence/codec.rs`) |
+//! | `audit_restore`, `audit_restore_file` | the Audit Log snapshot, schema versions 1 to 3 |
+//! | `object_file_restore`, `object_file_restore_file` | the one-file formats: Notification Forwarder, Notification Class, Tags, the two colour objects' output, Access Rights |
 //!
 //! An input is a selector octet, which picks a format of the target's
 //! (modulo their count), then the files. For a two-slot format: a flags
@@ -35,7 +45,15 @@ mod seeds;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use restore::{FORMATS, Format, Scratch, write_files};
+use bacnet_objects::access_control::FileAccessRightsPersistence;
+use bacnet_objects::audit::FileAuditLogPersistence;
+use bacnet_objects::color::FileColorOutputPersistence;
+use bacnet_objects::durable::MemoryFiles;
+use bacnet_objects::log_persistence::FileLogPersistence;
+use bacnet_objects::notification_class::FileNotificationClassPersistence;
+use bacnet_objects::notification_forwarder::FileNotificationForwarderPersistence;
+use bacnet_objects::object_profile::FileTagsPersistence;
+use restore::{FORMATS, Files, Format, Medium, Outcome, Scratch, write_files};
 pub use restore::{crc32, seal};
 
 /// A fuzz target: which formats its selector picks from.
@@ -91,6 +109,54 @@ fn files(format: &Format, rest: &[u8]) -> Vec<Option<Vec<u8>>> {
         .collect()
 }
 
+/// A format's files in memory: the backends' in-memory mode, entry 0 (and
+/// for a two-slot format entry 1) holding them.
+struct Memory {
+    files: MemoryFiles,
+    count: usize,
+}
+
+impl Memory {
+    fn new(files: Vec<Option<Vec<u8>>>) -> Self {
+        let count = files.len();
+        let mut entries = files.into_iter();
+        Self {
+            files: MemoryFiles::new([entries.next().flatten(), entries.next().flatten()]),
+            count,
+        }
+    }
+}
+
+impl Medium for Memory {
+    fn log(&self) -> FileLogPersistence {
+        FileLogPersistence::in_memory(self.files.clone())
+    }
+    fn audit(&self) -> FileAuditLogPersistence {
+        FileAuditLogPersistence::in_memory(self.files.clone())
+    }
+    fn forwarder(&self) -> FileNotificationForwarderPersistence {
+        FileNotificationForwarderPersistence::in_memory(self.files.clone())
+    }
+    fn class(&self) -> FileNotificationClassPersistence {
+        FileNotificationClassPersistence::in_memory(self.files.clone())
+    }
+    fn tags(&self) -> FileTagsPersistence {
+        FileTagsPersistence::in_memory(self.files.clone())
+    }
+    fn color(&self) -> FileColorOutputPersistence {
+        FileColorOutputPersistence::in_memory(self.files.clone())
+    }
+    fn rights(&self) -> FileAccessRightsPersistence {
+        FileAccessRightsPersistence::in_memory(self.files.clone())
+    }
+    fn fresh(&self) -> Self {
+        Self::new(vec![None; self.count])
+    }
+    fn contents(&self) -> Vec<Option<Vec<u8>>> {
+        self.files.files()[..self.count].to_vec()
+    }
+}
+
 /// A base path for `format` in this thread's scratch directory (the seed
 /// tests run side by side). A test thread's directory goes when the thread
 /// ends; libFuzzer exits without running that, so a new directory first
@@ -127,14 +193,44 @@ fn remove_stale_scratch() {
     }
 }
 
-/// Restore `target`'s format picked by `input` from the files it holds.
-pub fn check(target: Target, input: &[u8]) -> restore::Outcome {
+/// `target`'s format that `input` picks, and the files it holds.
+fn parse(target: Target, input: &[u8]) -> (&'static Format, Vec<Option<Vec<u8>>>) {
     let formats = target.formats();
     let (selector, rest) = input
         .split_first()
         .map_or((0, &[][..]), |(&s, rest)| (s, rest));
     let format = formats[usize::from(selector) % formats.len()];
+    (format, files(format, rest))
+}
+
+/// Restore `target`'s format picked by `input` from the files it holds,
+/// kept in memory.
+pub fn check(target: Target, input: &[u8]) -> Outcome {
+    let (format, files) = parse(target, input);
+    format.check(&Memory::new(files))
+}
+
+/// The same restore from real files, in this thread's scratch directory,
+/// which must come to the same outcome as [`check`] and leave the storage
+/// holding the same octets. Nothing the check builds reads a clock (the
+/// objects get none), so both runs write the same octets.
+pub fn check_files(target: Target, input: &[u8]) -> Outcome {
+    let (format, files) = parse(target, input);
     let base = base(format);
-    write_files(&format.files(&base), &files(format, rest));
-    (format.check)(&base)
+    write_files(&format.files(&base), &files);
+    let on_disk = Files::new(format, &base);
+    let outcome = format.check(&on_disk);
+    let memory = Memory::new(files);
+    assert_eq!(
+        outcome,
+        format.check(&memory),
+        "{}: the files and memory restore differently",
+        format.name
+    );
+    assert!(
+        on_disk.contents() == memory.contents(),
+        "{}: the files and memory hold different octets after the restore",
+        format.name
+    );
+    outcome
 }
