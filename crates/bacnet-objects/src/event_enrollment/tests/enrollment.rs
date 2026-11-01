@@ -495,26 +495,6 @@ fn write_event_state_rejected_over_network() {
     assert_eq!(val, PropertyValue::Enumerated(EventState::NORMAL.to_raw()));
 }
 
-/// The internal lifecycle path (`set_event_state_internal`) is the distinct
-/// route the evaluator uses to persist a detected transition. It is not the
-/// network `write_property` route (issue #130).
-#[test]
-fn set_event_state_internal_updates_field() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
-    let result = ee.set_event_state_internal(EventState::HIGH_LIMIT);
-    assert!(
-        result.is_ok(),
-        "internal setter must accept a modeled state"
-    );
-    let val = ee
-        .read_property(PropertyIdentifier::EVENT_STATE, None)
-        .unwrap();
-    assert_eq!(
-        val,
-        PropertyValue::Enumerated(EventState::HIGH_LIMIT.to_raw())
-    );
-}
-
 /// The inherent `set_event_state` builder seeds state for tests/setup without
 /// going through the network write route (issue #130).
 #[test]
@@ -530,20 +510,19 @@ fn set_event_state_seeds_field() {
     );
 }
 
-/// Objects that report `EVENT_ENROLLMENT` but do NOT model an algorithmic
-/// `Event_State` get the trait default for `set_event_state_internal`, which
-/// rejects with `OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`. The server evaluator
-/// drops such transitions (it only calls this on objects it found by type),
-/// so a custom downstream impl that forgets to override the method fails
-/// closed rather than silently storing garbage (issue #130).
+/// An object that reports `EVENT_ENROLLMENT` but lends no evaluation or
+/// event-reporting capability keeps the trait defaults: the server
+/// evaluator stores nothing on it and commits no transition to it, so a
+/// custom downstream impl fails closed rather than silently storing garbage
+/// (issue #130).
 #[test]
-fn set_event_state_internal_default_rejects() {
+fn custom_enrollment_lends_no_capability_by_default() {
     use bacnet_types::enums::{ErrorClass, ErrorCode};
     use bacnet_types::primitives::PropertyValue;
     use std::borrow::Cow;
 
-    /// Reports `EVENT_ENROLLMENT` but does not override
-    /// `set_event_state_internal` — exercises the trait default.
+    /// Reports `EVENT_ENROLLMENT` but overrides no accessor — exercises the
+    /// trait defaults.
     struct DefaultOnly {
         oid: ObjectIdentifier,
     }
@@ -589,19 +568,9 @@ fn set_event_state_internal_default_rejects() {
     let mut obj = DefaultOnly {
         oid: ObjectIdentifier::new(ObjectType::EVENT_ENROLLMENT, 1).unwrap(),
     };
-    let result = obj.set_event_state_internal(EventState::FAULT);
-    assert!(
-        result.is_err(),
-        "default set_event_state_internal must reject"
-    );
-    let err = result.unwrap_err();
-    match err {
-        bacnet_types::error::Error::Remote(RemoteError::Error { class, code }) => {
-            assert_eq!(class, ErrorClass::OBJECT);
-            assert_eq!(code, ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED);
-        }
-        _ => panic!("expected an Error PDU's Error::Remote from default set_event_state_internal"),
-    }
+    assert!(obj.enrollment_eval().is_none());
+    assert!(obj.enrollment_eval_mut().is_none());
+    assert!(obj.event_reporting_mut().is_none());
 }
 
 #[test]

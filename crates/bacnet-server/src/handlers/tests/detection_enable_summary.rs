@@ -18,8 +18,8 @@ use bacnet_objects::traits::BACnetObject;
 ///
 /// A mock rather than a real `EventEnrollmentObject`, deliberately.
 /// `EventEnrollmentObject` now enforces the Clause 13.2.2.1 invariant on every
-/// path — `write_property`, `set_event_state_internal` and the `set_event_state`
-/// seeder all refuse to leave it non-NORMAL while detection is off — so it
+/// path — `write_property` and the `set_event_state` seeder both refuse to
+/// leave it non-NORMAL while detection is off — so it
 /// *cannot* reach this state, and a fixture built from it would prove only that
 /// the reset works, not that these services filter on the property.
 ///

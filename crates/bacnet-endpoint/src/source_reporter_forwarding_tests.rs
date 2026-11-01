@@ -6,7 +6,7 @@ use bacnet_objects::property_metadata::{
     PropertyConformance, PropertyMetadata, PropertyWriteCapability, has_property, property_list,
     required_properties,
 };
-use bacnet_objects::traits::{Clocks, Timed};
+use bacnet_objects::traits::{Clocks, EnrollmentEval, Timed};
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
 use bacnet_types::constructed::{BACnetAuditLogQueryParameters, BACnetObjectSelector};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
@@ -319,28 +319,34 @@ impl BACnetObject for ExtendedReporter {
     fn timed(&mut self) -> Option<&mut dyn Timed> {
         Some(self)
     }
-    fn enrollment_eval_state_internal(&self) -> Option<EventEnrollmentEvalState> {
-        Some(self.eval.clone())
+    fn enrollment_eval(&self) -> Option<&dyn EnrollmentEval> {
+        Some(self)
     }
-    fn set_enrollment_eval_state_internal(
-        &mut self,
-        state: EventEnrollmentEvalState,
-    ) -> Result<(), Error> {
+    fn enrollment_eval_mut(&mut self) -> Option<&mut dyn EnrollmentEval> {
+        Some(self)
+    }
+    fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {
+        Some(self)
+    }
+}
+
+impl EnrollmentEval for ExtendedReporter {
+    fn eval_state(&self) -> EventEnrollmentEvalState {
+        self.eval.clone()
+    }
+    fn set_eval_state(&mut self, state: EventEnrollmentEvalState) -> Result<(), Error> {
         self.eval = state;
         Ok(())
     }
-    fn enrollment_eval_source_internal(&self) -> Option<Option<EventEnrollmentMonitoredSource>> {
+    fn eval_source(&self) -> Option<Option<EventEnrollmentMonitoredSource>> {
         Some(self.source)
     }
-    fn set_enrollment_eval_source_internal(
+    fn set_eval_source(
         &mut self,
         source: Option<EventEnrollmentMonitoredSource>,
     ) -> Result<(), Error> {
         self.source = source;
         Ok(())
-    }
-    fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {
-        Some(self)
     }
 }
 

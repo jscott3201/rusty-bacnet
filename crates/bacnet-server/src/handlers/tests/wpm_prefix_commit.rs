@@ -158,13 +158,12 @@ fn seed_unacknowledged(object: &mut dyn BACnetObject) {
         )
         .unwrap();
     if object.object_identifier().object_type() == ObjectType::ALERT_ENROLLMENT {
-        object
-            .set_event_state_internal(EventState::OFFNORMAL)
-            .unwrap();
-        object
-            .set_acked_transitions_internal(EventTransition::ToOffnormal.bit_mask(), false)
-            .unwrap();
-    } else {
+        // No route outside bacnet-objects changes an Alert Enrollment's
+        // Event_State or Acked_Transitions, so it stays at its initial
+        // condition, all transitions acknowledged.
+        return;
+    }
+    {
         object
             .event_reporting_mut()
             .unwrap()

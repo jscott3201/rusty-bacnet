@@ -26,9 +26,9 @@ pub struct ReliabilityChange {
 ///
 /// Call [`FaultDetector::evaluate`] periodically (the bundled server uses a
 /// 10-second interval) against the object database. Every object is visited;
-/// objects opt in by overriding
-/// [`BACnetObject::evaluate_reliability_internal`](bacnet_objects::traits::BACnetObject::evaluate_reliability_internal).
-/// The default object hook is a no-op.
+/// objects opt in by lending
+/// [`BACnetObject::reliability_eval`](bacnet_objects::traits::BACnetObject::reliability_eval).
+/// An object that lends none is left alone.
 pub struct FaultDetector {
     /// Timeout after which an object is considered to have a communication
     /// failure. Set to `None` to disable communication-failure detection.
@@ -93,11 +93,17 @@ impl FaultDetector {
     pub fn evaluate(&self, db: &mut ObjectDatabase) -> Vec<ReliabilityChange> {
         let mut changes = Vec::new();
         db.for_each_object_mut(|oid, object| {
-            if object.reliability_evaluation_inhibited_internal() {
+            // An object that lends no evaluation changes nothing: the old
+            // `Unchanged` default.
+            let Some(evaluation) = object.reliability_eval() else {
+                self.clear_internal_failure(&oid);
+                return;
+            };
+            if evaluation.reliability_evaluation_inhibited() {
                 self.clear_internal_failure(&oid);
                 return;
             }
-            match object.evaluate_reliability_internal() {
+            match evaluation.evaluate_reliability() {
                 Ok(ReliabilityEvaluation::Unchanged) => {
                     self.clear_internal_failure(&oid);
                 }
@@ -137,7 +143,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
-    use bacnet_objects::traits::BACnetObject;
+    use bacnet_objects::traits::{BACnetObject, ReliabilityEval};
     use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier};
     use bacnet_types::error::Error;
     use bacnet_types::primitives::PropertyValue;
@@ -257,7 +263,13 @@ mod tests {
             crate::test_rows::read_only(&[PropertyIdentifier::RELIABILITY])
         }
 
-        fn evaluate_reliability_internal(&mut self) -> Result<ReliabilityEvaluation, Error> {
+        fn reliability_eval(&mut self) -> Option<&mut dyn ReliabilityEval> {
+            Some(self)
+        }
+    }
+
+    impl ReliabilityEval for OptInReliabilityObject {
+        fn evaluate_reliability(&mut self) -> Result<ReliabilityEvaluation, Error> {
             if self.fail.load(Ordering::SeqCst) {
                 return Err(Error::Encoding(HOOK_ERROR.into()));
             }
@@ -310,11 +322,17 @@ mod tests {
             crate::test_rows::read_only(&[])
         }
 
-        fn reliability_evaluation_inhibited_internal(&self) -> bool {
+        fn reliability_eval(&mut self) -> Option<&mut dyn ReliabilityEval> {
+            Some(self)
+        }
+    }
+
+    impl ReliabilityEval for InhibitedProbeObject {
+        fn reliability_evaluation_inhibited(&self) -> bool {
             true
         }
 
-        fn evaluate_reliability_internal(&mut self) -> Result<ReliabilityEvaluation, Error> {
+        fn evaluate_reliability(&mut self) -> Result<ReliabilityEvaluation, Error> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Err(Error::Encoding(HOOK_ERROR.into()))
         }
@@ -469,7 +487,10 @@ mod tests {
         let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
         ai.configure_fault_out_of_range(10.0, 20.0).unwrap();
         ai.set_present_value(21.0);
-        ai.evaluate_reliability_internal().unwrap();
+        ai.reliability_eval()
+            .unwrap()
+            .evaluate_reliability()
+            .unwrap();
         ai.set_present_value(f32::NAN);
         let ai_oid = ai.object_identifier();
 
@@ -522,7 +543,10 @@ mod tests {
         ai.set_min_pres_value(0.0);
         ai.set_max_pres_value(100.0);
         ai.set_present_value(50.0);
-        ai.set_reliability_internal(Reliability::NO_SENSOR).unwrap();
+        ai.reliability_eval()
+            .unwrap()
+            .set_reliability(Reliability::NO_SENSOR)
+            .unwrap();
         let oid = ai.object_identifier();
         let mut db = ObjectDatabase::new();
         db.add(Box::new(ai)).unwrap();
@@ -534,7 +558,9 @@ mod tests {
     #[test]
     fn out_of_service_client_write_and_restore_remain_object_owned() {
         let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
-        ai.set_reliability_internal(Reliability::OVER_RANGE)
+        ai.reliability_eval()
+            .unwrap()
+            .set_reliability(Reliability::OVER_RANGE)
             .unwrap();
         let oid = ai.object_identifier();
         let mut db = ObjectDatabase::new();

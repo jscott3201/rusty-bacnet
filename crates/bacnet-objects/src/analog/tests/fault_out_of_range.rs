@@ -180,7 +180,7 @@ macro_rules! assert_invalid_configuration_is_atomic {
         object.configure_fault_out_of_range(10.0, 20.0).unwrap();
         object.set_test_value(21.0);
         assert_changed(
-            object.evaluate_reliability_internal(),
+            object.reliability_eval().unwrap().evaluate_reliability(),
             Reliability::NO_FAULT_DETECTED,
             Reliability::OVER_RANGE,
         );
@@ -204,7 +204,7 @@ macro_rules! assert_invalid_configuration_is_atomic {
 
         object.set_test_value(20.0);
         assert_changed(
-            object.evaluate_reliability_internal(),
+            object.reliability_eval().unwrap().evaluate_reliability(),
             Reliability::OVER_RANGE,
             Reliability::NO_FAULT_DETECTED,
         );
@@ -228,7 +228,7 @@ fn configured_ai_evaluator_enters_under_range_from_no_fault() {
     ai.set_present_value(9.0);
 
     assert_changed(
-        ai.evaluate_reliability_internal(),
+        ai.reliability_eval().unwrap().evaluate_reliability(),
         Reliability::NO_FAULT_DETECTED,
         Reliability::UNDER_RANGE,
     );
@@ -240,74 +240,74 @@ macro_rules! assert_strict_range_transitions {
         object.configure_fault_out_of_range(10.0, 20.0).unwrap();
 
         object.set_test_value(10.0);
-        assert_unchanged(object.evaluate_reliability_internal());
+        assert_unchanged(object.reliability_eval().unwrap().evaluate_reliability());
         object.set_test_value(f32::from_bits(10.0f32.to_bits() - 1));
         assert_changed(
-            object.evaluate_reliability_internal(),
+            object.reliability_eval().unwrap().evaluate_reliability(),
             Reliability::NO_FAULT_DETECTED,
             Reliability::UNDER_RANGE,
         );
         assert_fault_flag(&object, true);
         object.set_test_value(10.0);
         assert_changed(
-            object.evaluate_reliability_internal(),
+            object.reliability_eval().unwrap().evaluate_reliability(),
             Reliability::UNDER_RANGE,
             Reliability::NO_FAULT_DETECTED,
         );
         assert_fault_flag(&object, false);
 
         object.set_test_value(20.0);
-        assert_unchanged(object.evaluate_reliability_internal());
+        assert_unchanged(object.reliability_eval().unwrap().evaluate_reliability());
         object.set_test_value(f32::from_bits(20.0f32.to_bits() + 1));
         assert_changed(
-            object.evaluate_reliability_internal(),
+            object.reliability_eval().unwrap().evaluate_reliability(),
             Reliability::NO_FAULT_DETECTED,
             Reliability::OVER_RANGE,
         );
         object.set_test_value(20.0);
         assert_changed(
-            object.evaluate_reliability_internal(),
+            object.reliability_eval().unwrap().evaluate_reliability(),
             Reliability::OVER_RANGE,
             Reliability::NO_FAULT_DETECTED,
         );
 
         object.set_test_value(9.0);
         assert_changed(
-            object.evaluate_reliability_internal(),
+            object.reliability_eval().unwrap().evaluate_reliability(),
             Reliability::NO_FAULT_DETECTED,
             Reliability::UNDER_RANGE,
         );
         object.set_test_value(21.0);
         assert_changed(
-            object.evaluate_reliability_internal(),
+            object.reliability_eval().unwrap().evaluate_reliability(),
             Reliability::UNDER_RANGE,
             Reliability::OVER_RANGE,
         );
         object.set_test_value(15.0);
         assert_changed(
-            object.evaluate_reliability_internal(),
+            object.reliability_eval().unwrap().evaluate_reliability(),
             Reliability::OVER_RANGE,
             Reliability::NO_FAULT_DETECTED,
         );
 
         object.configure_fault_out_of_range(10.0, 10.0).unwrap();
         object.set_test_value(10.0);
-        assert_unchanged(object.evaluate_reliability_internal());
+        assert_unchanged(object.reliability_eval().unwrap().evaluate_reliability());
         object.set_test_value(9.0);
         assert_changed(
-            object.evaluate_reliability_internal(),
+            object.reliability_eval().unwrap().evaluate_reliability(),
             Reliability::NO_FAULT_DETECTED,
             Reliability::UNDER_RANGE,
         );
         object.set_test_value(11.0);
         assert_changed(
-            object.evaluate_reliability_internal(),
+            object.reliability_eval().unwrap().evaluate_reliability(),
             Reliability::UNDER_RANGE,
             Reliability::OVER_RANGE,
         );
         object.set_test_value(10.0);
         assert_changed(
-            object.evaluate_reliability_internal(),
+            object.reliability_eval().unwrap().evaluate_reliability(),
             Reliability::OVER_RANGE,
             Reliability::NO_FAULT_DETECTED,
         );
@@ -331,70 +331,84 @@ macro_rules! assert_first_stage_precedence {
 
         object.set_test_value(21.0);
         object
-            .set_reliability_internal(Reliability::NO_SENSOR)
+            .reliability_eval()
+            .unwrap()
+            .set_reliability(Reliability::NO_SENSOR)
             .unwrap();
-        assert_unchanged(object.evaluate_reliability_internal());
+        assert_unchanged(object.reliability_eval().unwrap().evaluate_reliability());
         assert_eq!(reliability(&object), Reliability::NO_SENSOR.to_raw());
 
         object
-            .set_reliability_internal(Reliability::UNDER_RANGE)
+            .reliability_eval()
+            .unwrap()
+            .set_reliability(Reliability::UNDER_RANGE)
             .unwrap();
-        assert_unchanged(object.evaluate_reliability_internal());
+        assert_unchanged(object.reliability_eval().unwrap().evaluate_reliability());
         assert_eq!(reliability(&object), Reliability::UNDER_RANGE.to_raw());
 
         object.set_test_value(9.0);
         object
-            .set_reliability_internal(Reliability::OVER_RANGE)
+            .reliability_eval()
+            .unwrap()
+            .set_reliability(Reliability::OVER_RANGE)
             .unwrap();
-        assert_unchanged(object.evaluate_reliability_internal());
+        assert_unchanged(object.reliability_eval().unwrap().evaluate_reliability());
         assert_eq!(reliability(&object), Reliability::OVER_RANGE.to_raw());
 
         object
-            .set_reliability_internal(Reliability::NO_FAULT_DETECTED)
+            .reliability_eval()
+            .unwrap()
+            .set_reliability(Reliability::NO_FAULT_DETECTED)
             .unwrap();
         assert_changed(
-            object.evaluate_reliability_internal(),
+            object.reliability_eval().unwrap().evaluate_reliability(),
             Reliability::NO_FAULT_DETECTED,
             Reliability::UNDER_RANGE,
         );
 
         assert!(
             object
-                .set_reliability_internal(Reliability::from_raw(11))
+                .reliability_eval()
+                .unwrap()
+                .set_reliability(Reliability::from_raw(11))
                 .is_err()
         );
         object.set_test_value(10.0);
         assert_changed(
-            object.evaluate_reliability_internal(),
+            object.reliability_eval().unwrap().evaluate_reliability(),
             Reliability::UNDER_RANGE,
             Reliability::NO_FAULT_DETECTED,
         );
 
         object.set_test_value(21.0);
         assert_changed(
-            object.evaluate_reliability_internal(),
+            object.reliability_eval().unwrap().evaluate_reliability(),
             Reliability::NO_FAULT_DETECTED,
             Reliability::OVER_RANGE,
         );
         object
-            .set_reliability_internal(Reliability::OVER_RANGE)
+            .reliability_eval()
+            .unwrap()
+            .set_reliability(Reliability::OVER_RANGE)
             .unwrap();
         object.set_test_value(20.0);
-        assert_unchanged(object.evaluate_reliability_internal());
+        assert_unchanged(object.reliability_eval().unwrap().evaluate_reliability());
         assert_eq!(reliability(&object), Reliability::OVER_RANGE.to_raw());
 
         object
-            .set_reliability_internal(Reliability::NO_FAULT_DETECTED)
+            .reliability_eval()
+            .unwrap()
+            .set_reliability(Reliability::NO_FAULT_DETECTED)
             .unwrap();
         object.set_test_value(9.0);
         assert_changed(
-            object.evaluate_reliability_internal(),
+            object.reliability_eval().unwrap().evaluate_reliability(),
             Reliability::NO_FAULT_DETECTED,
             Reliability::UNDER_RANGE,
         );
         object.configure_fault_out_of_range(0.0, 5.0).unwrap();
         assert_changed(
-            object.evaluate_reliability_internal(),
+            object.reliability_eval().unwrap().evaluate_reliability(),
             Reliability::UNDER_RANGE,
             Reliability::OVER_RANGE,
         );
@@ -417,7 +431,7 @@ fn ai_out_of_service_simulation_preserves_range_fault_ownership() {
     ai.configure_fault_out_of_range(10.0, 20.0).unwrap();
     ai.set_present_value(21.0);
     assert_changed(
-        ai.evaluate_reliability_internal(),
+        ai.reliability_eval().unwrap().evaluate_reliability(),
         Reliability::NO_FAULT_DETECTED,
         Reliability::OVER_RANGE,
     );
@@ -445,7 +459,7 @@ fn ai_out_of_service_simulation_preserves_range_fault_ownership() {
     )
     .unwrap();
 
-    assert_unchanged(ai.evaluate_reliability_internal());
+    assert_unchanged(ai.reliability_eval().unwrap().evaluate_reliability());
     assert_eq!(reliability(&ai), Reliability::NO_SENSOR.to_raw());
     assert_eq!(
         ai.read_property(PropertyIdentifier::PRESENT_VALUE, None)
@@ -462,7 +476,7 @@ fn ai_out_of_service_simulation_preserves_range_fault_ownership() {
     .unwrap();
     assert_eq!(reliability(&ai), Reliability::OVER_RANGE.to_raw());
     assert_changed(
-        ai.evaluate_reliability_internal(),
+        ai.reliability_eval().unwrap().evaluate_reliability(),
         Reliability::OVER_RANGE,
         Reliability::NO_FAULT_DETECTED,
     );
@@ -484,7 +498,7 @@ fn av_evaluates_resolved_priority_value_without_mutating_priority_array() {
         .read_property(PropertyIdentifier::PRIORITY_ARRAY, None)
         .unwrap();
     assert_changed(
-        av.evaluate_reliability_internal(),
+        av.reliability_eval().unwrap().evaluate_reliability(),
         Reliability::NO_FAULT_DETECTED,
         Reliability::UNDER_RANGE,
     );
@@ -506,7 +520,7 @@ fn av_evaluates_resolved_priority_value_without_mutating_priority_array() {
         .read_property(PropertyIdentifier::PRIORITY_ARRAY, None)
         .unwrap();
     assert_changed(
-        av.evaluate_reliability_internal(),
+        av.reliability_eval().unwrap().evaluate_reliability(),
         Reliability::UNDER_RANGE,
         Reliability::OVER_RANGE,
     );
@@ -535,7 +549,7 @@ fn av_evaluates_resolved_priority_value_without_mutating_priority_array() {
     )
     .unwrap();
     assert_changed(
-        av.evaluate_reliability_internal(),
+        av.reliability_eval().unwrap().evaluate_reliability(),
         Reliability::OVER_RANGE,
         Reliability::UNDER_RANGE,
     );
@@ -570,7 +584,7 @@ fn analog_output_has_no_fault_out_of_range_surface_or_evaluator() {
         &crate::command_source::test_origin(),
     )
     .unwrap();
-    assert_unchanged(ao.evaluate_reliability_internal());
+    assert_unchanged(ao.reliability_eval().unwrap().evaluate_reliability());
     assert_eq!(reliability(&ao), Reliability::NO_FAULT_DETECTED.to_raw());
 }
 

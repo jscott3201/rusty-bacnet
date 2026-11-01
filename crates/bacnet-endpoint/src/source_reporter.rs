@@ -9,27 +9,21 @@ use bacnet_objects::audit::{
     AuditLogForwarding, AuditLogNotificationSink, AuditLogStorage, AuditReporterObject,
 };
 use bacnet_objects::durable::DurableWrites;
-use bacnet_objects::event::EventTransitionCommitError;
-use bacnet_objects::event_enrollment::{
-    EventEnrollmentEvalState, EventEnrollmentMonitoredSource, EventEnrollmentReliabilityCommit,
-};
 use bacnet_objects::file::{FileConfiguration, FileStorage};
 use bacnet_objects::log_buffer::{LogBufferRecords, LogRecordIdentity};
 use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 use bacnet_objects::traits::{
-    AccessEvents, BACnetObject, CommandRunner, CovReportedProperty, EventReporting, LifeSafety,
-    LocalInput, ReliabilityEvaluation, StagingSource, Timed,
+    AccessEvents, BACnetObject, CommandRunner, CovReportedProperty, EnrollmentEval, EventReporting,
+    LifeSafety, LocalInput, ReliabilityEval, StagingSource, Timed,
 };
-use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter, EventTransitionBits};
+use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::constructed::{
     BACnetDeviceObjectReference, BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord,
     BACnetObjectPropertyReference, BACnetObjectSelector,
 };
-use bacnet_types::enums::{
-    AuditLevel, ErrorClass, ErrorCode, EventState, PropertyIdentifier, Reliability,
-};
+use bacnet_types::enums::{AuditLevel, ErrorClass, ErrorCode, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, Time};
 
@@ -249,6 +243,18 @@ impl BACnetObject for SourceReporter {
         self.wrapped.event_reporting_mut()
     }
 
+    fn enrollment_eval(&self) -> Option<&dyn EnrollmentEval> {
+        self.wrapped.enrollment_eval()
+    }
+
+    fn enrollment_eval_mut(&mut self) -> Option<&mut dyn EnrollmentEval> {
+        self.wrapped.enrollment_eval_mut()
+    }
+
+    fn reliability_eval(&mut self) -> Option<&mut dyn ReliabilityEval> {
+        self.wrapped.reliability_eval()
+    }
+
     fn supports_cov_property(&self, property: PropertyIdentifier) -> bool {
         self.wrapped.supports_cov_property(property)
     }
@@ -263,14 +269,6 @@ impl BACnetObject for SourceReporter {
 
     fn set_overridden(&mut self, overridden: bool) {
         self.wrapped.set_overridden(overridden)
-    }
-
-    fn commit_event_enrollment_reliability_internal(
-        &mut self,
-        commit: EventEnrollmentReliabilityCommit,
-    ) -> Result<(), EventTransitionCommitError> {
-        self.wrapped
-            .commit_event_enrollment_reliability_internal(commit)
     }
 
     fn tick_schedule(
@@ -300,53 +298,6 @@ impl BACnetObject for SourceReporter {
 
     fn calendar_state_internal(&self, day: SpecificDate) -> Option<bool> {
         self.wrapped.calendar_state_internal(day)
-    }
-
-    fn set_event_state_internal(&mut self, state: EventState) -> Result<(), Error> {
-        self.wrapped.set_event_state_internal(state)
-    }
-
-    fn enrollment_eval_state_internal(&self) -> Option<EventEnrollmentEvalState> {
-        self.wrapped.enrollment_eval_state_internal()
-    }
-
-    fn set_enrollment_eval_state_internal(
-        &mut self,
-        state: EventEnrollmentEvalState,
-    ) -> Result<(), Error> {
-        self.wrapped.set_enrollment_eval_state_internal(state)
-    }
-
-    fn enrollment_eval_source_internal(&self) -> Option<Option<EventEnrollmentMonitoredSource>> {
-        self.wrapped.enrollment_eval_source_internal()
-    }
-
-    fn set_enrollment_eval_source_internal(
-        &mut self,
-        source: Option<EventEnrollmentMonitoredSource>,
-    ) -> Result<(), Error> {
-        self.wrapped.set_enrollment_eval_source_internal(source)
-    }
-
-    fn set_acked_transitions_internal(
-        &mut self,
-        transition_bit: EventTransitionBits,
-        acknowledged: bool,
-    ) -> Result<(), Error> {
-        self.wrapped
-            .set_acked_transitions_internal(transition_bit, acknowledged)
-    }
-
-    fn evaluate_reliability_internal(&mut self) -> Result<ReliabilityEvaluation, Error> {
-        self.wrapped.evaluate_reliability_internal()
-    }
-
-    fn reliability_evaluation_inhibited_internal(&self) -> bool {
-        self.wrapped.reliability_evaluation_inhibited_internal()
-    }
-
-    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
-        self.wrapped.set_reliability_internal(reliability)
     }
 
     fn take_due_averaging_sample_internal(

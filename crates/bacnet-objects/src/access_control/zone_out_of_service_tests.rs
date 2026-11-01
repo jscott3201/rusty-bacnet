@@ -198,7 +198,9 @@ fn access_zone_return_to_service_serves_the_zone_again() {
     // is refused as on the other Reliability carriers.
     zone.set_occupancy_count(13);
     assert_property_error(
-        zone.set_reliability_internal(Reliability::COMMUNICATION_FAILURE),
+        zone.reliability_eval()
+            .unwrap()
+            .set_reliability(Reliability::COMMUNICATION_FAILURE),
         ErrorCode::WRITE_ACCESS_DENIED,
     );
     assert_eq!(served(&zone), simulated);
@@ -212,14 +214,18 @@ fn access_zone_return_to_service_serves_the_zone_again() {
     );
 
     // In service the application's values are served at once.
-    zone.set_reliability_internal(Reliability::COMMUNICATION_FAILURE)
+    zone.reliability_eval()
+        .unwrap()
+        .set_reliability(Reliability::COMMUNICATION_FAILURE)
         .unwrap();
     zone.set_occupancy_count(12);
     assert_eq!(
         served(&zone),
         values(12, Reliability::COMMUNICATION_FAILURE, false)
     );
-    zone.set_reliability_internal(Reliability::NO_FAULT_DETECTED)
+    zone.reliability_eval()
+        .unwrap()
+        .set_reliability(Reliability::NO_FAULT_DETECTED)
         .unwrap();
 
     // A second period out of service starts from the zone's values.

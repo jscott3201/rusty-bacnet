@@ -19,7 +19,7 @@
 //!   Reliability it serves.
 //! - Meanwhile a Tracking_Value the application reports (`set_tracking_value`,
 //!   the `LocalInput` Tracking_Value or a reset commit) replaces the value put
-//!   aside, not the one served, and `set_reliability_internal` is refused, as
+//!   aside, not the one served, and `ReliabilityEval::set_reliability` is refused, as
 //!   on the other Reliability carriers.
 //! - On the TRUE-to-FALSE edge both go back to the values put aside, so the
 //!   device's state is served again at once and the simulated values are gone.

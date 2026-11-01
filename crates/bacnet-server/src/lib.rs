@@ -27,6 +27,8 @@ mod runtime_clock;
 pub mod schedule;
 pub mod server;
 #[cfg(test)]
+mod test_event_state;
+#[cfg(test)]
 mod test_rows;
 pub mod trend_log;
 

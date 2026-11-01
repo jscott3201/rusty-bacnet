@@ -404,7 +404,7 @@ impl BACnetObject for LoopObject {
             // Reliability when present and capable of values beyond
             // NO_FAULT_DETECTED. In service the property is owned
             // by the algorithm, so a network write is refused here; the internal
-            // evaluator route is `set_reliability_internal` with the complementary
+            // evaluator route is `ReliabilityEval::set_reliability` with the complementary
             // guard, and Out_Of_Service saves/restores the evaluated value (handled
             // above the match).
             p if p == PropertyIdentifier::RELIABILITY => {
@@ -475,7 +475,15 @@ impl BACnetObject for LoopObject {
         Some(f64::from(self.cov_increment))
     }
 
-    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
+    crate::traits::lend_reliability_eval!();
+
+    fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
+        Some(self)
+    }
+}
+
+impl crate::traits::ReliabilityEval for LoopObject {
+    fn set_reliability(&mut self, reliability: Reliability) -> Result<(), Error> {
         // While Out_Of_Service is TRUE the client owns the simulated value;
         // an internal write would clobber the simulation (Clause 12.17
         // Out_Of_Service paragraph separates Reliability from algorithm output),
@@ -488,10 +496,6 @@ impl BACnetObject for LoopObject {
         }
         self.reliability = reliability;
         Ok(())
-    }
-
-    fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
-        Some(self)
     }
 }
 

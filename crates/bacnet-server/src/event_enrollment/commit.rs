@@ -318,8 +318,11 @@ fn clear_source_ownership(
 ) {
     if database_eval_sources.contains(&oid) {
         db.set_enrollment_eval_source(oid, None);
-    } else if let Some(object) = db.get_mut(&oid) {
-        let _ = object.set_enrollment_eval_source_internal(None);
+    } else if let Some(eval) = db
+        .get_mut(&oid)
+        .and_then(|object| object.enrollment_eval_mut())
+    {
+        let _ = eval.set_eval_source(None);
     }
 }
 
@@ -358,9 +361,10 @@ pub(super) fn apply_updates_for_delivery(
             if database_eval_sources.contains(&oid) {
                 db.set_enrollment_eval_source(oid, source);
             } else {
-                let failed = db.get_mut(&oid).is_none_or(|object| {
-                    object.set_enrollment_eval_source_internal(source).is_err()
-                });
+                let failed = db
+                    .get_mut(&oid)
+                    .and_then(|object| object.enrollment_eval_mut())
+                    .is_none_or(|eval| eval.set_eval_source(source).is_err());
                 if failed {
                     source_failed = true;
                     report.diagnostics.push(diagnostic(
@@ -376,11 +380,13 @@ pub(super) fn apply_updates_for_delivery(
         if source_failed {
             // Dependent state cannot retain an owner that failed to land.
             // This is the single allowed private-state setter call this pass.
-            state_failed = db.get_mut(&oid).is_none_or(|object| {
-                object
-                    .set_enrollment_eval_state_internal(EventEnrollmentEvalState::default())
-                    .is_err()
-            });
+            state_failed = db
+                .get_mut(&oid)
+                .and_then(|object| object.enrollment_eval_mut())
+                .is_none_or(|eval| {
+                    eval.set_eval_state(EventEnrollmentEvalState::default())
+                        .is_err()
+                });
             if state_failed {
                 db.set_enrollment_eval_state_invalidated(oid, true);
                 report.diagnostics.push(diagnostic(
@@ -394,7 +400,8 @@ pub(super) fn apply_updates_for_delivery(
         } else if let Some(state) = update.eval_state {
             state_failed = db
                 .get_mut(&oid)
-                .is_none_or(|object| object.set_enrollment_eval_state_internal(state).is_err());
+                .and_then(|object| object.enrollment_eval_mut())
+                .is_none_or(|eval| eval.set_eval_state(state).is_err());
             if state_failed {
                 clear_source_ownership(db, oid, database_eval_sources);
                 db.set_enrollment_eval_state_invalidated(oid, true);
@@ -450,8 +457,9 @@ pub(super) fn apply_updates_for_delivery(
             };
             let commit_result = db
                 .get_mut(&oid)
-                .map_or(Err(EventTransitionCommitError::Unsupported), |object| {
-                    object.commit_event_enrollment_reliability_internal(commit)
+                .and_then(|object| object.enrollment_eval_mut())
+                .map_or(Err(EventTransitionCommitError::Unsupported), |eval| {
+                    eval.commit_reliability(commit)
                 });
 
             if commit_result.is_err() {

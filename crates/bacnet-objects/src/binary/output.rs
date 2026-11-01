@@ -366,7 +366,11 @@ impl BACnetObject for BinaryOutputObject {
         metadata::for_object(self)
     }
 
-    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
+    crate::traits::lend_reliability_eval!();
+}
+
+impl crate::traits::ReliabilityEval for BinaryOutputObject {
+    fn set_reliability(&mut self, reliability: Reliability) -> Result<(), Error> {
         if self.out_of_service || self.reliability_inhibit.enabled() {
             return Err(common::write_access_denied_error());
         }
@@ -377,7 +381,7 @@ impl BACnetObject for BinaryOutputObject {
         Ok(())
     }
 
-    fn reliability_evaluation_inhibited_internal(&self) -> bool {
+    fn reliability_evaluation_inhibited(&self) -> bool {
         self.reliability_inhibit.enabled()
     }
 }

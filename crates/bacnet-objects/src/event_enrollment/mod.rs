@@ -198,8 +198,9 @@ impl EventEnrollmentObject {
     /// Set the event state.
     ///
     /// A configuration/seeding helper, not a lifecycle path — the evaluator
-    /// uses [`BACnetObject::set_event_state_internal`]. It honors the same
-    /// Clause 13.2.2.1 rule: while `Event_Detection_Enable` is FALSE the object
+    /// commits through
+    /// [`EventReporting::commit_event_transition`](crate::traits::EventReporting::commit_event_transition).
+    /// It honors the same Clause 13.2.2.1 rule: while `Event_Detection_Enable` is FALSE the object
     /// must read NORMAL, so a non-NORMAL seed is ignored rather than silently
     /// breaking the invariant. Without this the public API would offer a way
     /// around a guard the rest of the object enforces.
@@ -441,8 +442,8 @@ impl BACnetObject for EventEnrollmentObject {
         }
         // EVENT_STATE is algorithmically derived (ASHRAE 135-2020 Clause 12.12)
         // and read-only over the network: a WriteProperty of EVENT_STATE falls
-        // through to WRITE_ACCESS_DENIED below. The evaluator sets it through
-        // the internal `set_event_state_internal` trait method instead, so the
+        // through to WRITE_ACCESS_DENIED below. The evaluator commits it
+        // through `EventReporting::commit_event_transition` instead, so the
         // network route and the internal lifecycle path no longer share an
         // access path (issue #130).
         if property == PropertyIdentifier::EVENT_PARAMETERS {
@@ -486,89 +487,7 @@ impl BACnetObject for EventEnrollmentObject {
         ))
     }
 
-    /// Internal lifecycle path for the algorithmically-derived `Event_State`.
-    ///
-    /// The evaluator calls this — not `write_property(EVENT_STATE, …)` — so the
-    /// network route (which rejects `EVENT_STATE`) and the internal lifecycle
-    /// path are distinct (issue #130). Stores the modeled state verbatim; the
-    /// only caller is the trusted server evaluator.
-    ///
-    /// Refuses any non-NORMAL state while `Event_Detection_Enable` is FALSE.
-    /// Clause 13.2.2.1 prohibits transitions in that case,
-    /// and the server evaluator already skips such objects — this guard makes
-    /// the invariant hold by construction rather than by the caller
-    /// remembering, so a future caller cannot reintroduce the violation.
-    fn set_event_state_internal(&mut self, state: EventState) -> Result<(), Error> {
-        if !self.event_detection_enable && state != EventState::NORMAL {
-            return Err(common::write_access_denied_error());
-        }
-        self.event_state = state;
-        Ok(())
-    }
-
-    /// Snapshot the pending countdown and algorithm baselines for the server
-    /// evaluator.
-    fn enrollment_eval_state_internal(&self) -> Option<EventEnrollmentEvalState> {
-        Some(EventEnrollmentEvalState {
-            pending: self.pending.clone(),
-            cov_baseline: self.cov_baseline.clone(),
-            last_offnormal_value: self.last_offnormal_value,
-        })
-    }
-
-    /// Store the enrollment evaluation state. Refused while
-    /// `Event_Detection_Enable` is FALSE: Clause 13.2.2.1 freezes the state
-    /// machine by suspending evaluation, and the reset in the
-    /// write arm has already returned these fields to their initial
-    /// condition, so a write arriving while disabled can only be stale.
-    fn set_enrollment_eval_state_internal(
-        &mut self,
-        state: EventEnrollmentEvalState,
-    ) -> Result<(), Error> {
-        if !self.event_detection_enable {
-            return Err(common::write_access_denied_error());
-        }
-        self.pending = state.pending;
-        self.cov_baseline = state.cov_baseline;
-        self.last_offnormal_value = state.last_offnormal_value;
-        Ok(())
-    }
-
-    fn enrollment_eval_source_internal(&self) -> Option<Option<EventEnrollmentMonitoredSource>> {
-        Some(self.monitored_reference)
-    }
-
-    fn set_enrollment_eval_source_internal(
-        &mut self,
-        source: Option<EventEnrollmentMonitoredSource>,
-    ) -> Result<(), Error> {
-        if !self.event_detection_enable {
-            return Err(common::write_access_denied_error());
-        }
-        self.monitored_reference = source;
-        Ok(())
-    }
-
-    /// Clause 13.2.3's transition-received maintenance of `Acked_Transitions`:
-    /// the evaluator resolves `Ack_Required` from the referenced Notification
-    /// Class object and this call applies the outcome — clear the bit when
-    /// ack is required, set it otherwise. Refused while detection is
-    /// disabled, preserving the same invariant as above: Acked_Transitions
-    /// must retain its initial value throughout the disabled period.
-    fn set_acked_transitions_internal(
-        &mut self,
-        transition_bit: EventTransitionBits,
-        acknowledged: bool,
-    ) -> Result<(), Error> {
-        if !self.event_detection_enable {
-            return Err(common::write_access_denied_error());
-        }
-        self.acked_transitions
-            .set(transition_bit & EventTransitionBits::all(), acknowledged);
-        Ok(())
-    }
-
-    transition::impl_event_enrollment_reliability_commit!();
+    crate::traits::lend_enrollment_eval!();
 
     crate::traits::lend_event_reporting!();
 
@@ -614,6 +533,52 @@ impl BACnetObject for EventEnrollmentObject {
     }
 }
 
+/// The evaluator's private state lives on the object, and Reliability
+/// commits with its transition atomically.
+impl crate::traits::EnrollmentEval for EventEnrollmentObject {
+    /// Snapshot the pending countdown and algorithm baselines for the server
+    /// evaluator.
+    fn eval_state(&self) -> EventEnrollmentEvalState {
+        EventEnrollmentEvalState {
+            pending: self.pending.clone(),
+            cov_baseline: self.cov_baseline.clone(),
+            last_offnormal_value: self.last_offnormal_value,
+        }
+    }
+
+    /// Store the enrollment evaluation state. Refused while
+    /// `Event_Detection_Enable` is FALSE: Clause 13.2.2.1 freezes the state
+    /// machine by suspending evaluation, and the reset in the
+    /// write arm has already returned these fields to their initial
+    /// condition, so a write arriving while disabled can only be stale.
+    fn set_eval_state(&mut self, state: EventEnrollmentEvalState) -> Result<(), Error> {
+        if !self.event_detection_enable {
+            return Err(common::write_access_denied_error());
+        }
+        self.pending = state.pending;
+        self.cov_baseline = state.cov_baseline;
+        self.last_offnormal_value = state.last_offnormal_value;
+        Ok(())
+    }
+
+    fn eval_source(&self) -> Option<Option<EventEnrollmentMonitoredSource>> {
+        Some(self.monitored_reference)
+    }
+
+    fn set_eval_source(
+        &mut self,
+        source: Option<EventEnrollmentMonitoredSource>,
+    ) -> Result<(), Error> {
+        if !self.event_detection_enable {
+            return Err(common::write_access_denied_error());
+        }
+        self.monitored_reference = source;
+        Ok(())
+    }
+
+    transition::impl_event_enrollment_reliability_commit!();
+}
+
 impl crate::traits::EventReporting for EventEnrollmentObject {
     fn enrollment_summary_capability(&self) -> Option<EnrollmentSummaryCapability> {
         // Any enrollment with a monitored reference can fault: the monitored
@@ -630,10 +595,15 @@ impl crate::traits::EventReporting for EventEnrollmentObject {
             })
     }
 
+    /// Refuses a commit that would leave NORMAL while
+    /// `Event_Detection_Enable` is FALSE (Clause 13.2.2.1), whoever calls it.
     fn commit_event_transition(
         &mut self,
         commit: EventTransitionCommit,
     ) -> Result<(), EventTransitionCommitError> {
+        if !self.event_detection_enable && commit.change.to != EventState::NORMAL {
+            return Err(EventTransitionCommitError::DetectionDisabled);
+        }
         transition::commit_event_transition(
             &mut self.event_state,
             &mut self.acked_transitions,

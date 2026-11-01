@@ -250,19 +250,7 @@ impl BACnetObject for CredentialDataInputObject {
         true
     }
 
-    /// The application's Reliability for the reader. Like the other
-    /// Reliability carriers, the reader refuses it with WRITE_ACCESS_DENIED
-    /// while Out_Of_Service is TRUE, so a client's simulated value stays
-    /// served; the return to service brings back the value from before.
-    /// A value outside the BACnetReliability production is refused with
-    /// VALUE_OUT_OF_RANGE.
-    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
-        if self.out_of_service {
-            return Err(common::write_access_denied_error());
-        }
-        self.reading.reliability = super::checked_reliability(reliability)?;
-        Ok(())
-    }
+    crate::traits::lend_reliability_eval!();
 
     fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
         Some(self)
@@ -270,6 +258,22 @@ impl BACnetObject for CredentialDataInputObject {
 
     fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
         Some(self)
+    }
+}
+
+impl crate::traits::ReliabilityEval for CredentialDataInputObject {
+    /// The application's Reliability for the reader. Like the other
+    /// Reliability carriers, the reader refuses it with WRITE_ACCESS_DENIED
+    /// while Out_Of_Service is TRUE, so a client's simulated value stays
+    /// served; the return to service brings back the value from before.
+    /// A value outside the BACnetReliability production is refused with
+    /// VALUE_OUT_OF_RANGE.
+    fn set_reliability(&mut self, reliability: Reliability) -> Result<(), Error> {
+        if self.out_of_service {
+            return Err(common::write_access_denied_error());
+        }
+        self.reading.reliability = super::checked_reliability(reliability)?;
+        Ok(())
     }
 }
 
