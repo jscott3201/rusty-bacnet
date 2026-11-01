@@ -72,7 +72,7 @@ fn write_from(
     }
     .encode(&mut request)
     .unwrap();
-    handle_write_property_observed(db, &request, None, None, Some(origin)).map(|_| ())
+    write::write_property(db, &request, None, None, Some(origin)).map(|_| ())
 }
 
 fn tracked_color() -> (ObjectDatabase, ObjectIdentifier) {

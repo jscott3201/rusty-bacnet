@@ -165,7 +165,9 @@ fn unconfirmed(service: UnconfirmedServiceChoice, body: &[u8]) -> Bytes {
 fn handle_with(responder: &Responder, apdu: Bytes, max_reply: u16) -> (Outcome, Option<Apdu>) {
     let mut db = database();
     let mut out = BytesMut::new();
-    let outcome = responder.handle(&mut db, Inbound::new(apdu, max_reply), &mut out);
+    let outcome = responder
+        .handle(&mut db, Inbound::new(apdu, max_reply), &mut out)
+        .outcome;
     let reply = (!out.is_empty()).then(|| decode_apdu(out.freeze()).unwrap());
     (outcome, reply)
 }
@@ -389,7 +391,7 @@ fn a_reply_over_max_reply_is_aborted() {
 /// `handle` rejects it with UNRECOGNIZED_SERVICE (Clause 18.9).
 #[test]
 fn a_service_the_core_doesnt_run_is_rejected_by_handle_only() {
-    let apdu = confirmed(ConfirmedServiceChoice::WRITE_PROPERTY, &[0x0C], false);
+    let apdu = confirmed(ConfirmedServiceChoice::DELETE_OBJECT, &[0xC4], false);
     assert_eq!(Responder::classify(&apdu), Access::None);
     let mut out = BytesMut::new();
     let request = Inbound::new(apdu.clone(), 1476);

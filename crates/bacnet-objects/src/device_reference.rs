@@ -51,7 +51,7 @@
 //! [`BACnetDeviceObjectPropertyReference::is_unset`] clears the property, so
 //! a value read writes back unchanged. A NULL is no reference: it is refused
 //! as INVALID_DATA_TYPE, which the bundled server turns into the success
-//! that changes nothing (Clause 15.9.2, `handlers::relinquish`).
+//! that changes nothing (Clause 15.9.2, `bacnet_device_core::write::relinquish`).
 //!
 //! The single-reference rule lives in `common::decode_single_element`, which
 //! the Loop and Pulse Converter references in [`crate::reference`] use too
@@ -318,7 +318,7 @@ pub(crate) fn check_device_members<R: DeviceReference>(references: &[R]) -> Resu
 /// let such a property stay within its device (12.5.13, 12.25.8, 12.30.11,
 /// 12.24.10 and 12.62.14). None of these objects can tell which Device holds
 /// it, so the bundled server rewrites a member naming its own Device in local
-/// form before the object sees it (`local_references.rs` in bacnet-server).
+/// form before the object sees it (`bacnet_device_core::write::localize`).
 pub(crate) fn check_local_member(device: Option<ObjectIdentifier>) -> Result<(), Error> {
     check_device_member(device)?;
     match device {

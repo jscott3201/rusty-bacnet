@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_device_core::write::{self, Applied, decode_write_property_value};
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::read_property::ReadPropertyACK;
@@ -202,7 +203,7 @@ mod write_validation;
 // Isolated handler fixtures explicitly assert a standalone writer. Live ingress
 // derivation is tested separately through the running server's wire dispatcher.
 fn sourced_wp(db: &mut ObjectDatabase, data: &[u8]) -> Result<ObjectIdentifier, Error> {
-    handle_write_property_observed(
+    write::write_property(
         db,
         data,
         None,

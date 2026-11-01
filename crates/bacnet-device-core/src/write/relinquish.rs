@@ -20,7 +20,7 @@
 //!
 //! - the property isn't commandable on this object (where a NULL takes a
 //!   command out of the Priority_Array), and
-//! - no member of its datatype is an application NULL ([`null_in_datatype`]).
+//! - no member of its datatype is an application NULL (`null_in_datatype`).
 //!
 //! A property the object takes a NULL for never reaches this rule: a
 //! commandable Present_Value relinquishing, a Schedule_Default storing NULL.
@@ -52,13 +52,13 @@ use bacnet_types::primitives::PropertyValue;
 const NULL_OCTETS: [u8; 1] = [0x00];
 
 /// Whether a write's encoded value is one application NULL and nothing else.
-pub(crate) fn is_null_octets(octets: &[u8]) -> bool {
+pub fn is_null_octets(octets: &[u8]) -> bool {
     octets == NULL_OCTETS
 }
 
 /// Whether `value` encodes as one application NULL: `Null` itself, the raw
 /// octets a raw-octet property receives for one, or a list of one NULL.
-pub(crate) fn is_null_value(value: &PropertyValue) -> bool {
+pub fn is_null_value(value: &PropertyValue) -> bool {
     match value {
         PropertyValue::Null => true,
         PropertyValue::ApplicationData(octets) => is_null_octets(octets),
@@ -70,7 +70,7 @@ pub(crate) fn is_null_value(value: &PropertyValue) -> bool {
 /// Whether `error`, the object's refusal of a NULL written to `property` (at
 /// `array_index`), makes the write a success that leaves the property as it
 /// is. The caller has checked that the written value is a NULL.
-pub(crate) fn leaves_unchanged(
+pub fn leaves_unchanged(
     object: &dyn BACnetObject,
     property: PropertyIdentifier,
     array_index: Option<u32>,
@@ -149,5 +149,72 @@ pub(crate) fn null_in_datatype(
         | PropertyIdentifier::PROCESS_IDENTIFIER_FILTER
         | PropertyIdentifier::STATE_CHANGE_VALUES => true,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use PropertyIdentifier as P;
+
+    #[test]
+    fn null_in_datatype_names_the_choices_with_an_application_null() {
+        for (object_type, property, index, expected) in [
+            (ObjectType::SCHEDULE, P::PRESENT_VALUE, None, true),
+            (ObjectType::CHANNEL, P::PRESENT_VALUE, None, true),
+            (ObjectType::ANALOG_VALUE, P::PRESENT_VALUE, None, false),
+            (ObjectType::SCHEDULE, P::SCHEDULE_DEFAULT, None, true),
+            (
+                ObjectType::CHARACTERSTRING_VALUE,
+                P::ALARM_VALUES,
+                Some(1),
+                true,
+            ),
+            (ObjectType::MULTI_STATE_INPUT, P::ALARM_VALUES, None, false),
+            (ObjectType::TIMER, P::STATE_CHANGE_VALUES, Some(3), true),
+            // Index 0 is the array's size.
+            (ObjectType::TIMER, P::STATE_CHANGE_VALUES, Some(0), false),
+            (
+                ObjectType::NOTIFICATION_FORWARDER,
+                P::PROCESS_IDENTIFIER_FILTER,
+                None,
+                true,
+            ),
+            (ObjectType::TREND_LOG, P::CLIENT_COV_INCREMENT, None, true),
+            (ObjectType::LOOP, P::LOW_DIFF_LIMIT, None, true),
+            (
+                ObjectType::AUDIT_REPORTER,
+                P::MONITORED_OBJECTS,
+                Some(1),
+                true,
+            ),
+            (
+                ObjectType::ANALOG_OUTPUT,
+                P::AUDIT_PRIORITY_FILTER,
+                None,
+                true,
+            ),
+            (ObjectType::ANALOG_OUTPUT, P::PRIORITY_ARRAY, Some(1), true),
+            // Context-tagged NULL members are no application NULL.
+            (ObjectType::ANALOG_OUTPUT, P::VALUE_SOURCE, None, false),
+            (
+                ObjectType::EVENT_ENROLLMENT,
+                P::FAULT_PARAMETERS,
+                None,
+                false,
+            ),
+            (
+                ObjectType::ACCESS_CREDENTIAL,
+                P::GLOBAL_IDENTIFIER,
+                None,
+                false,
+            ),
+        ] {
+            assert_eq!(
+                null_in_datatype(object_type, property, index),
+                expected,
+                "{object_type:?} {property:?} {index:?}"
+            );
+        }
     }
 }
