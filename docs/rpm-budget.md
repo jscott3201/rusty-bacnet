@@ -47,10 +47,12 @@ ReadProperty takes the limit from `SessionConfig::read_work_limit` instead
 Python `BipEndpoint`, `ScEndpoint` and `MstpEndpoint` constructors take it as
 keyword-only `read_work_limit=256`, refusing zero with `ValueError`.
 
-The existing public low-level
-`handlers::handle_read_property_multiple(db, data, buf)` remains unconfigured
-and retains its legacy behavior. It is not the configured server dispatch path.
-Manual callers of that helper do not receive these server limits.
+The unbudgeted public helper `handlers::handle_read_property_multiple` is
+gone (#2178). A host without a server reads ReadPropertyMultiple through
+`bacnet-device-core`: `RpmPlan::new` and `RpmPlan::read` with a budget of its
+choosing, or the `Responder`, whose `Limits` carry one
+(`Limits::with_rpm`) and which answers past either limit as the server
+does.
 
 ## Work admission
 

@@ -101,7 +101,8 @@ Optional private EndpointIngress classifier / Client dispatch task / Server disp
     |  Decodes APDU header (PDU type, service choice, invoke ID)
     |  Routes to appropriate handler
     v
-Service handler (ReadProperty, WriteProperty, Who-Is and Who-Has through bacnet-device-core)
+Service handler (ReadProperty, ReadPropertyMultiple, WriteProperty, WritePropertyMultiple,
+    |  Who-Is and Who-Has through bacnet-device-core)
     |  Decodes service request from APDU payload
     |  Reads/writes ObjectDatabase
     |  Encodes response
