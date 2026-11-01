@@ -250,4 +250,64 @@ mod tests {
             "the WriteProperty mutation future is {write_property} bytes, over {CEILING}: {ADVICE}"
         );
     }
+
+    /// The ReadPropertyMultiple read and the WritePropertyMultiple
+    /// mutation futures, kept to ceilings as the WriteProperty one is: both
+    /// run inside the general handler's boxed future, whose size is printed
+    /// too. Each ceiling is the future's size when RPM and WPM moved into
+    /// bacnet-device-core (#2178), plus the same 64 bytes of slack; the move
+    /// left all three unchanged (600, 1,280 and 4,976 bytes). The RPM probe
+    /// passes a closure that captures nothing, where the general handler's
+    /// captures its audit state, so it measures the read's own state.
+    #[test]
+    fn rpm_and_wpm_futures_stay_within_their_ceilings() {
+        const SLACK: usize = 64;
+        const RPM_CEILING: usize = 600 + SLACK;
+        const WPM_CEILING: usize = 1280 + SLACK;
+        fn rpm<'a>(
+            db: &'a RwLock<ObjectDatabase>,
+            tables: super::super::confirmed_response::LiveTables<'a>,
+            request: &'a [u8],
+            ack: &'a mut BytesMut,
+            config: &'a ServerConfig,
+        ) -> impl std::future::Future + 'a {
+            super::super::confirmed_response::read_property_multiple_observed(
+                db,
+                tables,
+                request,
+                ack,
+                config,
+                |_, _, _, _, _| {},
+            )
+        }
+        fn size<A: 'static, B: 'static, D: 'static, E: 'static, F>(
+            _make: impl FnOnce(&'static A, B, &'static [u8], &'static mut D, &'static E) -> F,
+        ) -> usize {
+            std::mem::size_of::<F>()
+        }
+        fn general<A: 'static, B: 'static, C, D, E, G, F>(
+            _make: impl FnOnce(&'static A, &'static B, C, D, E, G) -> F,
+        ) -> usize {
+            std::mem::size_of::<F>()
+        }
+        let rpm = size(rpm);
+        let wpm = borrowing_future_size(
+            super::super::mutations::Request::write_property_multiple::<BipTransport>,
+        );
+        let handler = general(BACnetServer::<BipTransport>::handle_admitted_confirmed_request);
+        const ADVICE: &str = "the ceiling is the size at #2178 plus 64 bytes, not a budget; \
+            shrink the future (box a rare path), don't raise the ceiling";
+        eprintln!(
+            "RPM read future: {rpm} bytes, ceiling {RPM_CEILING}; WPM mutation future: \
+             {wpm} bytes, ceiling {WPM_CEILING}; general handler: {handler} bytes"
+        );
+        assert!(
+            rpm <= RPM_CEILING,
+            "the RPM read future is {rpm} bytes, over {RPM_CEILING}: {ADVICE}"
+        );
+        assert!(
+            wpm <= WPM_CEILING,
+            "the WPM mutation future is {wpm} bytes, over {WPM_CEILING}: {ADVICE}"
+        );
+    }
 }
