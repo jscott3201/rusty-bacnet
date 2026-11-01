@@ -257,8 +257,8 @@ fn dropped_forgotten_expired_and_reprovisioned_stages_correct_saved_authority() 
                 state.settle_forgotten_writes().unwrap().block();
             }
             2 => {
-                state.expire(Duration::ZERO);
-                state.expire(Duration::from_secs(11));
+                state.expire_staged(Duration::ZERO);
+                state.expire_staged(Duration::from_secs(11));
                 state.wait_for_saves();
             }
             _ => {
@@ -289,29 +289,33 @@ fn failed_staged_save_never_publishes_or_needs_a_correction() {
 }
 
 #[cfg(feature = "std")]
-fn detached_clones<T: BACnetObject + Clone>(mut object: T, store: &Arc<Memory>) {
+fn detached_clones<T: BACnetObject + crate::traits::Timed + Clone>(
+    mut object: T,
+    store: &Arc<Memory>,
+) {
     let old = object.read_property(P::TAGS, None).unwrap();
     let (started, go) = store.hold();
     let desired = framed(&tags("new"));
-    let wait = staged(object.durable_writes_internal().unwrap().stage_write(
-        P::TAGS,
-        None,
-        &desired,
-    ));
+    let wait = staged(
+        object
+            .durable_writes()
+            .unwrap()
+            .stage_write(P::TAGS, None, &desired),
+    );
     started.recv_timeout(WAIT).unwrap();
     let mut cloned = object.clone();
     assert_eq!(cloned.read_property(P::TAGS, None).unwrap(), old);
-    assert!(cloned.durable_writes_internal().is_none());
+    assert!(cloned.durable_writes().is_none());
     cloned
         .write_property(P::TAGS, None, framed(&tags("clone-only")), None)
         .unwrap();
     drop(cloned);
-    let mut cov = object.cov_snapshot_internal().unwrap();
+    let mut cov = object.cov_snapshot().unwrap();
     assert_eq!(cov.read_property(P::TAGS, None).unwrap(), old);
-    assert!(cov.durable_writes_internal().is_none());
+    assert!(cov.durable_writes().is_none());
     drop(cov);
     assert_eq!(store.attempts(), 1);
-    assert!(object.durable_writes_internal().unwrap().has_staged_write());
+    assert!(object.durable_writes().unwrap().has_staged_write());
     assert_eq!(object.read_property(P::TAGS, None).unwrap(), old);
     drop(go);
     wait.block();

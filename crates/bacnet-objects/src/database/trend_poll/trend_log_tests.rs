@@ -200,7 +200,7 @@ fn each_pass_records_an_event_log_window_opening_and_closing() {
     set_clock(&clock, Some(at(12, 0, 1, 37)));
     db.poll_trend_logs();
     // The pass looks at the window even without a monotonic clock.
-    db.set_monotonic_clock_internal(None);
+    db.set_monotonic_clock(None);
     set_clock(&clock, Some(at(12, 0, 2, 37)));
     assert_eq!(db.poll_trend_logs(), RECONCILE);
     db.poll_trend_logs();

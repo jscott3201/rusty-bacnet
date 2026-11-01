@@ -159,7 +159,7 @@ fn step_level(operation: Op, tracking: f32, increment: f32, floor: f32) -> Optio
 
 impl LightingOutputObject {
     /// The instant on the bound monotonic clock, or the logical time
-    /// `advance_time_internal` keeps without one.
+    /// the test-only `advance_time` keeps without one.
     pub(super) fn now(&self) -> Duration {
         self.monotonic_clock
             .as_ref()

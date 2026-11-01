@@ -4,7 +4,7 @@ use bacnet_objects::property_metadata::{
     PropertyConformance, PropertyMetadata, PropertyWriteCapability, property_list_from_metadata,
 };
 use bacnet_objects::subscribed_recipients::SubscribedRecipients;
-use bacnet_objects::traits::MonotonicClock;
+use bacnet_objects::traits::{Clocks, Timed};
 use bacnet_types::constructed::{
     BACnetEventNotificationSubscription, BACnetRecipient, PropertyReference,
     ReadAccessSpecification,
@@ -106,15 +106,22 @@ impl BACnetObject for Forwarder {
         property_list_from_metadata(&self.property_metadata())
     }
 
-    fn bind_monotonic_clock_internal(&mut self, clock: Option<Arc<MonotonicClock>>) {
-        self.subscribed_recipients.bind_monotonic_clock(clock);
+    fn timed(&mut self) -> Option<&mut dyn Timed> {
+        Some(self)
+    }
+}
+
+impl Timed for Forwarder {
+    fn bind_clocks(&mut self, clocks: &Clocks) {
+        self.subscribed_recipients
+            .bind_monotonic_clock(clocks.monotonic.clone());
     }
 
-    fn advance_monotonic_time_internal(&mut self, now: Duration) -> bool {
+    fn advance_monotonic_time(&mut self, now: Duration) -> bool {
         self.subscribed_recipients.advance_to(now)
     }
 
-    fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
+    fn next_monotonic_deadline(&self) -> Option<Duration> {
         self.subscribed_recipients.next_deadline()
     }
 }

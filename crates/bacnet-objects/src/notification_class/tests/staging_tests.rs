@@ -222,20 +222,20 @@ fn an_operation_task_call_drops_a_forgotten_staged_write_once_its_lifetime_is_ov
     let held = storage.hold();
     let wait = staged(nc.stage_write(P::RECIPIENT_LIST, None, &framed(&[make_dest_device(9)])));
     held.started.recv_timeout(WAIT).unwrap();
-    assert!(!nc.advance_monotonic_time_internal(Duration::ZERO));
-    nc.advance_monotonic_time_internal(Duration::from_secs(3600));
+    nc.expire_staged(Duration::ZERO);
+    nc.expire_staged(Duration::from_secs(3600));
     drop(held.go);
     block_on(&wait);
     // Its request never comes back. The first call that finds the save
     // finished starts the count on the operation task's clock; storage keeps
     // the list nobody served until a lifetime has passed.
     let start = Duration::from_secs(3601);
-    nc.advance_monotonic_time_internal(start);
-    nc.advance_monotonic_time_internal(start + STAGED_WRITE_LIFETIME - Duration::from_millis(1));
+    nc.expire_staged(start);
+    nc.expire_staged(start + STAGED_WRITE_LIFETIME - Duration::from_millis(1));
     nc.wait_for_saves();
     assert_eq!(storage.saved(), Some(vec![make_dest_device(9)]));
     // The call a lifetime later drops it and puts storage back.
-    nc.advance_monotonic_time_internal(start + STAGED_WRITE_LIFETIME);
+    nc.expire_staged(start + STAGED_WRITE_LIFETIME);
     nc.wait_for_saves();
     assert_eq!(storage.saved(), Some(served.to_vec()));
     assert_eq!(nc.recipient_list(), served);

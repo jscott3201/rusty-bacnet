@@ -9,7 +9,6 @@ use bacnet_objects::access_control::{AccessControlInput, AccessEventReport, Comm
 use bacnet_objects::audit::{
     AuditLogForwarding, AuditLogNotificationSink, AuditLogStorage, AuditReporterObject,
 };
-use bacnet_objects::clock::ClockReader;
 use bacnet_objects::command::{CommandRun, WriteFailure};
 use bacnet_objects::durable::DurableWrites;
 use bacnet_objects::event::{
@@ -26,8 +25,7 @@ use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 use bacnet_objects::staging::StagingWritePlan;
 use bacnet_objects::traits::{
-    BACnetObject, CovReportedProperty, DeadlineWaker, LifeSafetyOperationOutcome, MonotonicClock,
-    ReliabilityEvaluation,
+    BACnetObject, CovReportedProperty, LifeSafetyOperationOutcome, ReliabilityEvaluation, Timed,
 };
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter, EventTransitionBits};
 use bacnet_types::calendar::SpecificDate;
@@ -189,44 +187,8 @@ impl BACnetObject for SourceReporter {
         self.wrapped.property_list()
     }
 
-    fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
-        self.wrapped.bind_clock_internal(clock)
-    }
-
-    fn advance_time_internal(&mut self, elapsed: Duration) -> bool {
-        self.wrapped.advance_time_internal(elapsed)
-    }
-
-    fn bind_monotonic_clock_internal(&mut self, clock: Option<Arc<MonotonicClock>>) {
-        self.wrapped.bind_monotonic_clock_internal(clock)
-    }
-
-    fn bind_deadline_waker_internal(&mut self, waker: Option<Arc<DeadlineWaker>>) {
-        self.wrapped.bind_deadline_waker_internal(waker)
-    }
-
-    fn start_output_internal(&mut self) {
-        self.wrapped.start_output_internal()
-    }
-
-    fn advance_monotonic_time_internal(&mut self, now: Duration) -> bool {
-        self.wrapped.advance_monotonic_time_internal(now)
-    }
-
-    fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
-        self.wrapped.next_monotonic_deadline_internal()
-    }
-
-    fn set_tracking_cov_increment_internal(&mut self, finest: Option<f64>) {
-        self.wrapped.set_tracking_cov_increment_internal(finest)
-    }
-
-    fn cov_snapshot_internal(&self) -> Option<Box<dyn BACnetObject>> {
-        self.wrapped.cov_snapshot_internal()
-    }
-
-    fn lighting_blink_count_internal(&self) -> u64 {
-        self.wrapped.lighting_blink_count_internal()
+    fn timed(&mut self) -> Option<&mut dyn Timed> {
+        self.wrapped.timed()
     }
 
     fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
@@ -563,8 +525,8 @@ impl BACnetObject for SourceReporter {
         self.wrapped.audit_log_notification_sink_internal()
     }
 
-    fn durable_writes_internal(&mut self) -> Option<&mut dyn DurableWrites> {
-        self.wrapped.durable_writes_internal()
+    fn durable_writes(&mut self) -> Option<&mut dyn DurableWrites> {
+        self.wrapped.durable_writes()
     }
 
     fn file_configuration_internal(&self) -> Option<&dyn FileConfiguration> {

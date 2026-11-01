@@ -1,5 +1,6 @@
 //! Buffer_Size writes and the application's purge of an Audit Log (#1238).
 
+use crate::traits::Timed;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -135,7 +136,10 @@ fn assert_unchanged(log: &AuditLogObject, storage: &SlowPersistence, before: &Au
 
 fn reopen(storage: &Arc<SlowPersistence>, configured: u32) -> AuditLogObject {
     let mut log = AuditLogObject::new(1, "audit", configured, Arc::clone(storage) as _).unwrap();
-    log.bind_clock_internal(Some(Arc::new(super::staging_tests::FixedClock)));
+    log.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(super::staging_tests::FixedClock)),
+        ..crate::traits::Clocks::default()
+    });
     log
 }
 
@@ -540,7 +544,7 @@ fn staging_skips_a_resize_the_write_would_refuse_or_not_need() {
 fn an_object_without_a_log_refuses_a_purge() {
     let mut forwarder =
         crate::notification_forwarder::NotificationForwarderObject::new(1, "NF").unwrap();
-    let writes = forwarder.durable_writes_internal().unwrap();
+    let writes = forwarder.durable_writes().unwrap();
     assert!(matches!(writes.stage_purge(), StageStep::Skip));
     let error = writes.commit_purge().unwrap_err();
     assert!(

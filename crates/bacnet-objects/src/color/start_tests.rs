@@ -3,6 +3,7 @@
 //! non-zero default at once, keeps a restored value for a zero default, and
 //! leaves an output a write already drove.
 
+use crate::traits::Timed;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -71,7 +72,7 @@ fn color_start_drives_a_non_zero_default_at_once() {
         .write_property(P::TRANSITION, None, PropertyValue::Enumerated(1), None)
         .unwrap();
     assert_eq!(in_progress(&color), InProgress::NOT_CONTROLLED);
-    color.start_output_internal();
+    color.start_output();
     assert_eq!(in_progress(&color), InProgress::IDLE);
     assert_eq!(
         color.read_property(P::PRESENT_VALUE, None).unwrap(),
@@ -236,7 +237,7 @@ fn first_and_later_boots_agree_for_a_non_zero_default() {
 #[test]
 fn a_cov_snapshot_keeps_not_controlled() {
     let color = ColorObject::new(1, "c").unwrap();
-    let snapshot = color.cov_snapshot_internal().unwrap();
+    let snapshot = color.cov_snapshot().unwrap();
     assert_eq!(in_progress(snapshot.as_ref()), InProgress::NOT_CONTROLLED);
 }
 
@@ -306,7 +307,10 @@ fn saves_follow_present_value() {
     assert!(!color.output_restored());
     let now = Arc::new(Mutex::new(Duration::ZERO));
     let source = Arc::clone(&now);
-    color.bind_monotonic_clock_internal(Some(Arc::new(move || *source.lock().unwrap())));
+    color.bind_clocks(&crate::traits::Clocks {
+        monotonic: Some(Arc::new(move || *source.lock().unwrap())),
+        ..crate::traits::Clocks::default()
+    });
     color.set_present_value(ZERO).unwrap();
     let mut fade = BACnetColorCommand::new(Op::FADE_TO_COLOR);
     fade.target_color = Some(BACnetXyColor::new(1.0, 1.0));

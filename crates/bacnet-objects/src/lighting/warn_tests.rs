@@ -32,7 +32,7 @@ impl Fixture {
     }
 
     fn blinks(&self) -> u64 {
-        self.lo.lighting_blink_count_internal()
+        self.lo.lighting_blink_count()
     }
 
     /// Blink_Warn_Enable TRUE with `seconds` of Egress_Time.

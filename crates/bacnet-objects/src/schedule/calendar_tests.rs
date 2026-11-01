@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::clock::{ClockFrame, ClockReader};
+use crate::traits::Timed;
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::constructed::{BACnetCalendarEntry, BACnetDateRange, BACnetWeekNDay};
 use bacnet_types::error::RemoteError;
@@ -141,7 +142,10 @@ fn calendar_present_value_follows_the_clock_date() {
     // No clock: no local date, so no entry can match.
     assert_eq!(present_value(&cal), PropertyValue::Boolean(false));
     let clock = DateClock::new(Some(ymd(2026, 12, 24)));
-    cal.bind_clock_internal(Some(clock.clone()));
+    cal.bind_clocks(&crate::traits::Clocks {
+        clock: Some(clock.clone()),
+        ..crate::traits::Clocks::default()
+    });
     assert_eq!(present_value(&cal), PropertyValue::Boolean(false));
     // The date changes: the next read sees it, with no tick in between.
     clock.set(Some(ymd(2026, 12, 25)));
@@ -169,7 +173,10 @@ fn calendar_present_value_follows_the_clock_date() {
     }
     // Unbinding the clock leaves the calendar without a date.
     clock.set(Some(ymd(2026, 12, 25)));
-    cal.bind_clock_internal(None);
+    cal.bind_clocks(&crate::traits::Clocks {
+        clock: None,
+        ..crate::traits::Clocks::default()
+    });
     assert_eq!(present_value(&cal), PropertyValue::Boolean(false));
 }
 
@@ -177,7 +184,10 @@ fn calendar_present_value_follows_the_clock_date() {
 fn calendar_present_value_follows_date_list_writes() {
     let clock = DateClock::new(Some(ymd(2026, 9, 14)));
     let mut cal = CalendarObject::new(1, "CAL-1").unwrap();
-    cal.bind_clock_internal(Some(clock));
+    cal.bind_clocks(&crate::traits::Clocks {
+        clock: Some(clock),
+        ..crate::traits::Clocks::default()
+    });
     assert_eq!(present_value(&cal), PropertyValue::Boolean(false));
     // Each choice in turn makes Monday 14 September 2026 a calendar day.
     for (entry, wire) in entries_and_wire() {

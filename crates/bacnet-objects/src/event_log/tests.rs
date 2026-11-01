@@ -1,5 +1,6 @@
 use super::*;
 use crate::clock::{ClockFrame, ClockReader};
+use crate::traits::Timed;
 use bacnet_encoding::constructed::encode_event_log_record;
 use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{
@@ -25,7 +26,10 @@ impl ClockReader for FixedClock {
 }
 
 fn bind_clock(object: &mut EventLogObject) {
-    object.bind_clock_internal(Some(Arc::new(FixedClock)));
+    object.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(FixedClock)),
+        ..crate::traits::Clocks::default()
+    });
 }
 
 fn make_date() -> Date {

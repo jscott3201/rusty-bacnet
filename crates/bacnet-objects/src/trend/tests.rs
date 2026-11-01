@@ -46,7 +46,10 @@ impl ClockReader for FixedClock {
 }
 
 fn bind_clock(object: &mut dyn BACnetObject) {
-    object.bind_clock_internal(Some(Arc::new(FixedClock)));
+    object.timed().unwrap().bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(FixedClock)),
+        ..crate::traits::Clocks::default()
+    });
 }
 
 fn make_record(hour: u8, value: f32) -> BACnetLogRecord {

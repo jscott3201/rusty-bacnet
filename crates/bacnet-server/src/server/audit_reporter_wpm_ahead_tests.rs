@@ -178,7 +178,7 @@ async fn deciding_attempts_ahead_counts_and_audits_only_the_attempts_reached() {
     let mut db = fixture.server.db.write().await;
     let writes = db
         .get_mut(&target)
-        .and_then(|object| object.durable_writes_internal())
+        .and_then(|object| object.durable_writes())
         .unwrap();
     assert!(!writes.has_staged_write(), "a write is still staged");
     let wait = writes.settle_forgotten_writes().unwrap();

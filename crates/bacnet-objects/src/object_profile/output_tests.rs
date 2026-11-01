@@ -154,10 +154,9 @@ fn all_outputs_eight_masks_and_oos_states_preserve_existing_metadata() {
                     .write_property(P::OUT_OF_SERVICE, None, PropertyValue::Boolean(!oos), None)
                     .unwrap();
                 assert_eq!(object.property_metadata().as_ref(), metadata);
-                assert!(!object.advance_monotonic_time_internal(Duration::from_secs(20)));
-                assert!(object.cov_snapshot_internal().is_none());
+                assert!(object.timed().is_none());
                 assert!(object.read_property(P::VALUE_SOURCE, None).is_ok());
-                assert!(object.durable_writes_internal().is_none());
+                assert!(object.durable_writes().is_none());
             }
         }
     }
@@ -180,7 +179,7 @@ fn output_saved_overrides_need_provisioning_and_invalid_replacement_preserves_st
                 ErrorCode::UNKNOWN_PROPERTY,
             );
             assert!(!object.property_list().contains(&P::TAGS));
-            assert!(object.durable_writes_internal().is_some());
+            assert!(object.durable_writes().is_some());
             object.provision(optional(7)).unwrap();
             let count = saved
                 .as_ref()
@@ -289,14 +288,20 @@ fn output_monotonic_hooks_correct_expired_stages_without_output_changes() {
         let command_before = command_tests::state(object.as_ref());
         let wait = staged(
             object
-                .durable_writes_internal()
+                .durable_writes()
                 .unwrap()
                 .stage_writes(&[whole("never-served")]),
         );
         wait.block();
         assert_eq!(store.saved(), Some(snapshot("never-served")));
-        assert!(!object.advance_monotonic_time_internal(Duration::ZERO));
-        assert!(!object.advance_monotonic_time_internal(Duration::from_secs(11)));
+        object
+            .durable_writes()
+            .unwrap()
+            .expire_staged(Duration::ZERO);
+        object
+            .durable_writes()
+            .unwrap()
+            .expire_staged(Duration::from_secs(11));
         object.wait();
         assert_eq!(store.saved(), Some(snapshot("saved")));
         assert_eq!(command_tests::state(object.as_ref()), command_before);

@@ -16,7 +16,6 @@ use bacnet_objects::audit::{
     AuditLogSnapshot, AuditLogStorage, AuditPolicyAuthority, AuditReporterAuthority,
     AuditReporterObject, AuditSendDelay, ObjectAuditPolicy,
 };
-use bacnet_objects::clock::ClockReader;
 use bacnet_objects::command::{CommandRun, RunPlan, WriteFailure};
 use bacnet_objects::command_source::CommandOrigin;
 use bacnet_objects::device::{DeviceAuthority, DeviceConfig, DeviceObject};
@@ -35,8 +34,8 @@ use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 use bacnet_objects::staging::StagingWritePlan;
 use bacnet_objects::traits::{
-    BACnetObject, CovReportedProperty, DeadlineWaker, LifeSafetyOperationEffect,
-    LifeSafetyOperationOutcome, MonotonicClock, ReliabilityEvaluation,
+    BACnetObject, Clocks, CovReportedProperty, LifeSafetyOperationEffect,
+    LifeSafetyOperationOutcome, ReliabilityEvaluation, Timed,
 };
 use bacnet_objects::trend::TrendLogObject;
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter, EventTransitionBits};
@@ -223,45 +222,9 @@ impl BACnetObject for Probe {
         self.called("property_list", ());
         Cow::Borrowed(&[P::OBJECT_IDENTIFIER, P::OBJECT_NAME, P::OBJECT_TYPE, CUSTOM])
     }
-    fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
-        let clock = clock.as_deref().map(address);
-        self.called("bind_clock_internal", (clock,));
-    }
-    fn advance_time_internal(&mut self, elapsed: Duration) -> bool {
-        self.called("advance_time_internal", (elapsed,));
-        true
-    }
-    fn bind_monotonic_clock_internal(&mut self, clock: Option<Arc<MonotonicClock>>) {
-        let clock = clock.as_deref().map(address);
-        self.called("bind_monotonic_clock_internal", (clock,));
-    }
-    fn bind_deadline_waker_internal(&mut self, waker: Option<Arc<DeadlineWaker>>) {
-        let waker = waker.as_deref().map(address);
-        self.called("bind_deadline_waker_internal", (waker,));
-    }
-    fn start_output_internal(&mut self) {
-        self.called("start_output_internal", ());
-    }
-    fn advance_monotonic_time_internal(&mut self, now: Duration) -> bool {
-        self.called("advance_monotonic_time_internal", (now,));
-        true
-    }
-    fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
-        self.called("next_monotonic_deadline_internal", ());
-        Some(Duration::from_secs(99))
-    }
-    fn set_tracking_cov_increment_internal(&mut self, finest: Option<f64>) {
-        self.called("set_tracking_cov_increment_internal", (finest,));
-    }
-    fn cov_snapshot_internal(&self) -> Option<Box<dyn BACnetObject>> {
-        self.called("cov_snapshot_internal", ());
-        Some(Box::new(
-            AuditReporterObject::new(18, "Probe snapshot").unwrap(),
-        ))
-    }
-    fn lighting_blink_count_internal(&self) -> u64 {
-        self.called("lighting_blink_count_internal", ());
-        123
+    fn timed(&mut self) -> Option<&mut dyn Timed> {
+        self.called("timed", ());
+        Some(self)
     }
     fn is_writable_property(&self, property: P) -> bool {
         self.called("is_writable_property", (property,));
@@ -636,9 +599,9 @@ impl BACnetObject for Probe {
         self.called("audit_log_notification_sink_internal", ());
         self.audit_log.audit_log_notification_sink_internal()
     }
-    fn durable_writes_internal(&mut self) -> Option<&mut dyn DurableWrites> {
-        self.called("durable_writes_internal", ());
-        self.audit_log.durable_writes_internal()
+    fn durable_writes(&mut self) -> Option<&mut dyn DurableWrites> {
+        self.called("durable_writes", ());
+        self.audit_log.durable_writes()
     }
     fn file_configuration_internal(&self) -> Option<&dyn FileConfiguration> {
         self.called("file_configuration_internal", ());
@@ -712,6 +675,39 @@ impl BACnetObject for Probe {
     fn follow_event_algorithm_inhibit_internal(&mut self, inhibit: bool) -> bool {
         self.called("follow_event_algorithm_inhibit_internal", (inhibit,));
         true
+    }
+}
+
+/// The probe's time capability: every method answers unlike its default
+/// and logs its call under `Timed::`.
+impl Timed for Probe {
+    fn bind_clocks(&mut self, clocks: &Clocks) {
+        let bound = (
+            clocks.clock.as_deref().map(address),
+            clocks.monotonic.as_deref().map(address),
+            clocks.deadline_waker.as_deref().map(address),
+        );
+        self.called("Timed::bind_clocks", bound);
+    }
+    fn advance_monotonic_time(&mut self, now: Duration) -> bool {
+        self.called("Timed::advance_monotonic_time", (now,));
+        true
+    }
+    fn next_monotonic_deadline(&self) -> Option<Duration> {
+        self.called("Timed::next_monotonic_deadline", ());
+        Some(Duration::from_secs(99))
+    }
+    fn set_tracking_cov_increment(&mut self, finest: Option<f64>) {
+        self.called("Timed::set_tracking_cov_increment", (finest,));
+    }
+    fn start_output(&mut self) {
+        self.called("Timed::start_output", ());
+    }
+    fn cov_snapshot(&self) -> Option<Box<dyn BACnetObject>> {
+        self.called("Timed::cov_snapshot", ());
+        Some(Box::new(
+            AuditReporterObject::new(18, "Probe snapshot").unwrap(),
+        ))
     }
 }
 

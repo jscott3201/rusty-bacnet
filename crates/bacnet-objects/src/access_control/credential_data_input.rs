@@ -1,5 +1,3 @@
-use alloc::sync::Arc;
-
 use bacnet_encoding::constructed::{
     encode_authentication_factor, encode_authentication_factor_format,
 };
@@ -256,10 +254,6 @@ impl BACnetObject for CredentialDataInputObject {
         true
     }
 
-    fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
-        self.clock.clock = clock;
-    }
-
     /// Take a read the application reports (#1132): Present_Value and
     /// Update_Time together, the time stamped from the Device clock, or the
     /// object's next sequence number, when the report has none. Checked and
@@ -290,6 +284,16 @@ impl BACnetObject for CredentialDataInputObject {
         }
         self.reading.reliability = super::checked_reliability(reliability)?;
         Ok(())
+    }
+
+    fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
+        Some(self)
+    }
+}
+
+impl crate::traits::Timed for CredentialDataInputObject {
+    fn bind_clocks(&mut self, clocks: &crate::traits::Clocks) {
+        self.clock.clock = clocks.clock.clone();
     }
 }
 

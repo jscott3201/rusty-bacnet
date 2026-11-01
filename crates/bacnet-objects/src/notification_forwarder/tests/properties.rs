@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::property_metadata::PropertyConformance;
+use crate::traits::Timed;
 use bacnet_types::enums::PropertyIdentifier as P;
 
 fn forwarder() -> NotificationForwarderObject {
@@ -190,7 +191,10 @@ fn notification_forwarder_recipient_list_takes_framed_writes_up_to_the_cap() {
 fn notification_forwarder_subscribed_recipients_take_writes_and_lapse() {
     let mut nf = forwarder();
     let (clock, set) = manual_clock();
-    nf.bind_monotonic_clock_internal(Some(clock));
+    nf.bind_clocks(&crate::traits::Clocks {
+        monotonic: Some(clock),
+        ..crate::traits::Clocks::default()
+    });
     let written = [subscription(device(7), 1, 2), subscription(device(8), 1, 5)];
     nf.write_property(
         P::SUBSCRIBED_RECIPIENTS,
@@ -200,9 +204,9 @@ fn notification_forwarder_subscribed_recipients_take_writes_and_lapse() {
     )
     .unwrap();
     assert_eq!(nf.subscriptions(), written);
-    assert_eq!(nf.next_monotonic_deadline_internal(), Some(2 * MINUTE));
+    assert_eq!(nf.next_monotonic_deadline(), Some(2 * MINUTE));
     set(2 * MINUTE);
-    assert!(nf.advance_monotonic_time_internal(2 * MINUTE));
+    assert!(nf.advance_monotonic_time(2 * MINUTE));
     assert_eq!(nf.subscriptions(), [subscription(device(8), 1, 3)]);
     assert_refused(
         nf.write_property(

@@ -339,7 +339,7 @@ async fn wpm_invalid_middle_and_unrelated_failure_preserve_successful_prefix() {
                 .await
                 .get_mut(&oid)
                 .unwrap()
-                .durable_writes_internal()
+                .durable_writes()
                 .unwrap()
                 .settle_forgotten_writes()
                 .unwrap();
@@ -596,3 +596,4 @@ async fn input_tags_save_while_out_of_service_without_persisting_simulation_stat
 }
 
 mod output_commands;
+mod staged_expiry;

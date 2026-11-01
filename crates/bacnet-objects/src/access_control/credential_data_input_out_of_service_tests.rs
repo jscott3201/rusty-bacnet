@@ -2,6 +2,7 @@
 //! Out_Of_Service is TRUE (Clauses 12.36.4, 12.36.7 and 12.36.8, Table 12-43
 //! footnote 1, #1168).
 
+use crate::traits::Timed;
 use bacnet_types::error::RemoteError;
 use std::sync::Arc;
 
@@ -64,7 +65,10 @@ pub(super) fn reader() -> CredentialDataInputObject {
     reader
         .set_present_value(card(&[0x12, 0x34, 0x56]), stamp(9))
         .unwrap();
-    reader.bind_clock_internal(Some(Arc::new(FixedClock(11))));
+    reader.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(FixedClock(11))),
+        ..crate::traits::Clocks::default()
+    });
     reader
 }
 
@@ -204,7 +208,10 @@ fn credential_data_input_takes_simulated_rows_out_of_service() {
 
     // The form the server hands over, one chunk per context tag, is the same
     // factor. The same card again is a new read and stamps again.
-    reader.bind_clock_internal(Some(Arc::new(FixedClock(12))));
+    reader.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(FixedClock(12))),
+        ..crate::traits::Clocks::default()
+    });
     for _ in 0..2 {
         write(
             &mut reader,
@@ -239,7 +246,10 @@ fn credential_data_input_takes_simulated_rows_out_of_service() {
 
     // A simulated fault sets the FAULT flag and leaves Update_Time alone; a
     // proprietary value is taken too.
-    reader.bind_clock_internal(Some(Arc::new(FixedClock(13))));
+    reader.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(FixedClock(13))),
+        ..crate::traits::Clocks::default()
+    });
     for reliability in [Reliability::UNRELIABLE_OTHER, Reliability::from_raw(64)] {
         write(
             &mut reader,
@@ -259,7 +269,10 @@ fn credential_data_input_takes_simulated_rows_out_of_service() {
 #[test]
 fn credential_data_input_without_a_clock_stamps_update_time_with_a_sequence_number() {
     let mut reader = reader();
-    reader.bind_clock_internal(None);
+    reader.bind_clocks(&crate::traits::Clocks {
+        clock: None,
+        ..crate::traits::Clocks::default()
+    });
     set_out_of_service(&mut reader, true);
     // Each simulated read takes the object's next number, from 1, so Update_Time
     // moves even for the same factor; a Reliability write takes none.
@@ -291,7 +304,10 @@ fn credential_data_input_without_a_clock_stamps_update_time_with_a_sequence_numb
     );
 
     // With a clock again, updates take its date and time.
-    reader.bind_clock_internal(Some(Arc::new(FixedClock(12))));
+    reader.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(FixedClock(12))),
+        ..crate::traits::Clocks::default()
+    });
     set_out_of_service(&mut reader, true);
     write(&mut reader, P::PRESENT_VALUE, data(factor(2, 3, &[0x01]))).unwrap();
     assert_eq!(read(&reader, P::UPDATE_TIME), stamped(12));

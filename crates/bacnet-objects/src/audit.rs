@@ -624,10 +624,6 @@ impl BACnetObject for AuditLogObject {
         )
     }
 
-    fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
-        self.clock = clock;
-    }
-
     fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {
         Some(self)
     }
@@ -650,11 +646,21 @@ impl BACnetObject for AuditLogObject {
         Some(self)
     }
 
-    fn durable_writes_internal(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
+    fn durable_writes(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
         Some(self)
     }
 
-    fn advance_monotonic_time_internal(&mut self, _now: core::time::Duration) -> bool {
+    fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
+        Some(self)
+    }
+}
+
+impl crate::traits::Timed for AuditLogObject {
+    fn bind_clocks(&mut self, clocks: &crate::traits::Clocks) {
+        self.clock = clocks.clock.clone();
+    }
+
+    fn advance_monotonic_time(&mut self, _now: core::time::Duration) -> bool {
         self.settle_finished();
         false
     }

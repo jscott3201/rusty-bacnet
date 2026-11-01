@@ -131,7 +131,7 @@ async fn settle(fixture: &Fixture, oid: ObjectIdentifier) {
         .await
         .get_mut(&oid)
         .unwrap()
-        .durable_writes_internal()
+        .durable_writes()
         .unwrap()
         .settle_forgotten_writes();
     if let Some(wait) = wait {

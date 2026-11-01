@@ -1,6 +1,7 @@
 //! Notification Forwarder object tests (#1225).
 
 use super::*;
+use crate::traits::MonotonicClock;
 use bacnet_encoding::constructed::{
     encode_destination_list, encode_event_notification_subscription_list, encode_port_permission,
 };
@@ -16,6 +17,8 @@ mod fold_tests;
 #[cfg(feature = "std")]
 mod persistence_tests;
 mod properties;
+#[cfg(feature = "std")]
+mod rebind_tests;
 mod recipient_list_restart_tests;
 mod selection_tests;
 #[cfg(feature = "std")]

@@ -177,8 +177,7 @@ fn all_nine_modes_and_eight_masks_preserve_unrelated_metadata_and_source_ownersh
                             .collect::<Vec<_>>(),
                         expected
                     );
-                    assert!(!object.advance_monotonic_time_internal(Duration::from_secs(20)));
-                    assert!(object.cov_snapshot_internal().is_none());
+                    assert!(object.timed().is_none());
                 }
             }
         }
@@ -206,7 +205,7 @@ fn invalid_provision_preserves_profile_and_memory_only_writes_remain_local() {
                 assert!(object.provision(invalid).is_err());
                 assert_eq!(ROWS.map(|p| object.read_property(p, None).unwrap()), before);
             }
-            assert!(object.durable_writes_internal().is_none());
+            assert!(object.durable_writes().is_none());
             object
                 .write_property(P::TAGS, Some(0), PropertyValue::Unsigned(0), None)
                 .unwrap();
@@ -333,14 +332,20 @@ fn each_value_monotonic_hook_expires_unclaimed_stages_without_output_change() {
             object.provision(optional(7)).unwrap();
             let wait = staged(
                 object
-                    .durable_writes_internal()
+                    .durable_writes()
                     .unwrap()
                     .stage_writes(&[whole("never-served")]),
             );
             wait.block();
             assert_eq!(store.saved(), Some(snapshot("never-served")));
-            assert!(!object.advance_monotonic_time_internal(Duration::ZERO));
-            assert!(!object.advance_monotonic_time_internal(Duration::from_secs(11)));
+            object
+                .durable_writes()
+                .unwrap()
+                .expire_staged(Duration::ZERO);
+            object
+                .durable_writes()
+                .unwrap()
+                .expire_staged(Duration::from_secs(11));
             object.wait();
             assert_eq!(store.saved(), Some(snapshot("saved")));
             assert_eq!(store.attempts(), 2);

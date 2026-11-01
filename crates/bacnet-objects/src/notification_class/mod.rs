@@ -257,12 +257,7 @@ impl BACnetObject for NotificationClass {
         crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
-    fn advance_monotonic_time_internal(&mut self, now: core::time::Duration) -> bool {
-        self.expire_staged_write(now);
-        false
-    }
-
-    fn durable_writes_internal(&mut self) -> Option<&mut dyn DurableWrites> {
+    fn durable_writes(&mut self) -> Option<&mut dyn DurableWrites> {
         Some(self)
     }
 }

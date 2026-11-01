@@ -45,7 +45,7 @@ fn polled_log() -> (ObjectDatabase, ObjectIdentifier) {
     let mut db = ObjectDatabase::new();
     let monotonic = Arc::new(Mutex::new(Duration::ZERO));
     let source = monotonic.clone();
-    db.set_monotonic_clock_internal(Some(Arc::new(move || *source.lock().unwrap())));
+    db.set_monotonic_clock(Some(Arc::new(move || *source.lock().unwrap())));
     let clock = Arc::new(SettableClock(Mutex::new(time(1))));
     db.set_clock_reader(Some(clock.clone()));
     let mut av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::NO_UNITS).unwrap();

@@ -456,7 +456,7 @@ async fn saves_done(fixture: &Fixture, rights: ObjectIdentifier) {
     let mut db = fixture.db.write().await;
     let writes = db
         .get_mut(&rights)
-        .and_then(|object| object.durable_writes_internal())
+        .and_then(|object| object.durable_writes())
         .expect("the object saves");
     assert!(!writes.has_staged_write(), "a write is still staged");
     let wait = writes.settle_forgotten_writes().expect("the object saves");

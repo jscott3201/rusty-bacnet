@@ -2,6 +2,7 @@
 //! and Supported_Format_Classes (Clauses 12.36.4, 12.36.9, 12.36.10 and
 //! 12.36.11, #1249).
 
+use crate::traits::Timed;
 use std::sync::Arc;
 
 use bacnet_types::constructed::{BACnetAuthenticationFactor, BACnetAuthenticationFactorFormat};
@@ -126,7 +127,10 @@ fn credential_data_input_dropping_the_read_format_resets_present_value() {
     assert_eq!(served(&reader), [undefined(), stamped(11)]);
 
     // UNDEFINED stays through any later list, and keeps its time.
-    reader.bind_clock_internal(Some(Arc::new(FixedClock(12))));
+    reader.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(FixedClock(12))),
+        ..crate::traits::Clocks::default()
+    });
     reader.set_supported_formats([]).unwrap();
     assert_eq!(served(&reader), [undefined(), stamped(11)]);
 }
@@ -142,7 +146,10 @@ fn credential_data_input_moving_the_read_format_to_another_class_resets_present_
     // Without a Device clock the reset takes the object's first sequence
     // number.
     let mut unclocked = reader();
-    unclocked.bind_clock_internal(None);
+    unclocked.bind_clocks(&crate::traits::Clocks {
+        clock: None,
+        ..crate::traits::Clocks::default()
+    });
     unclocked.set_supported_formats([vendor_260(3)]).unwrap();
     assert_eq!(served(&unclocked), [undefined(), sequence(1)]);
 }
@@ -170,7 +177,10 @@ fn credential_data_input_dropping_a_format_out_of_service_covers_both_factors() 
 
     // Dropping Wiegand 26 leaves the simulation served, still declared, and
     // resets the factor set aside.
-    reader.bind_clock_internal(Some(Arc::new(FixedClock(12))));
+    reader.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(FixedClock(12))),
+        ..crate::traits::Clocks::default()
+    });
     reader.set_supported_formats([vendor_260(3)]).unwrap();
     assert_eq!(served(&reader), simulated);
     set_out_of_service(&mut reader, false);
@@ -179,7 +189,10 @@ fn credential_data_input_dropping_a_format_out_of_service_covers_both_factors() 
     // Dropping the simulated format resets the factor served.
     set_out_of_service(&mut reader, true);
     write(&mut reader, P::PRESENT_VALUE, data(factor(2, 3, &[0xCD]))).unwrap();
-    reader.bind_clock_internal(Some(Arc::new(FixedClock(13))));
+    reader.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(FixedClock(13))),
+        ..crate::traits::Clocks::default()
+    });
     reader.set_supported_formats([wiegand26(0)]).unwrap();
     assert_eq!(served(&reader), [undefined(), stamped(13)]);
     // A write of the dropped format is refused now.

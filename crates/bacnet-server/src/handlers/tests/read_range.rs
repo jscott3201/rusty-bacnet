@@ -1,4 +1,5 @@
 use bacnet_objects::property_metadata::PropertyMetadata;
+use bacnet_objects::traits::Timed;
 use bacnet_types::error::RemoteError;
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -537,7 +538,9 @@ impl ClockReader for FixedClock {
 #[test]
 fn purge_status_record_replaces_old_sequence_continuation() {
     let mut object = EventLogObject::new(7, "EL-7", 3).unwrap();
-    object.bind_clock_internal(Some(Arc::new(FixedClock)));
+    object.bind_clocks(
+        &bacnet_objects::traits::Clocks::default().with_clock(Some(Arc::new(FixedClock))),
+    );
     object.add_record(event_record(1)).unwrap();
     object.add_record(event_record(2)).unwrap();
     object

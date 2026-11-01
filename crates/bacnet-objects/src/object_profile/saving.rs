@@ -187,10 +187,6 @@ impl ProfileState {
         self.storage = Some(storage);
         Some(result)
     }
-
-    pub(crate) fn expire(&mut self, now: Duration) {
-        self.with_storage(|storage| storage.expire(now));
-    }
 }
 
 impl DurableWrites for ProfileState {
@@ -250,5 +246,9 @@ impl DurableWrites for ProfileState {
         let wait = storage.drop_forgotten(|| self.snapshot());
         self.storage = Some(storage);
         Some(wait)
+    }
+
+    fn expire_staged(&mut self, now: Duration) {
+        self.with_storage(|storage| storage.expire(now));
     }
 }

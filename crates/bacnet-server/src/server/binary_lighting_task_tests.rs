@@ -293,9 +293,9 @@ async fn terminal_cov_snapshot_survives_a_later_command_before_delivery() {
                     &crate::command_source::test_origin(),
                 )
                 .unwrap();
-            let deadline = object.next_monotonic_deadline_internal().unwrap();
-            assert!(object.advance_monotonic_time_internal(deadline));
-            object.cov_snapshot_internal().unwrap()
+            let deadline = object.timed().unwrap().next_monotonic_deadline().unwrap();
+            assert!(object.timed().unwrap().advance_monotonic_time(deadline));
+            object.timed().unwrap().cov_snapshot().unwrap()
         };
         {
             let mut db = server.db.write().await;
@@ -486,7 +486,7 @@ async fn a_snapshot_report_times_a_timestamped_field_only_with_its_own_value() {
                     &crate::command_source::test_origin(),
                 )
                 .unwrap();
-            object.cov_snapshot_internal().unwrap()
+            object.timed().unwrap().cov_snapshot().unwrap()
         }
     };
 
@@ -564,7 +564,13 @@ impl BACnetObject for StuckDeadline {
     fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
         bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
-    fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
+    fn timed(&mut self) -> Option<&mut dyn bacnet_objects::traits::Timed> {
+        Some(self)
+    }
+}
+
+impl bacnet_objects::traits::Timed for StuckDeadline {
+    fn next_monotonic_deadline(&self) -> Option<Duration> {
         Some(Duration::ZERO)
     }
 }

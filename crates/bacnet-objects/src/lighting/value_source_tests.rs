@@ -151,7 +151,7 @@ fn an_egress_that_runs_out_moves_last_command_time_on() {
         .unwrap();
     let held = read(&lo, LCT, None);
     assert_eq!(read(&lo, PV, None), PropertyValue::Real(60.0));
-    assert!(lo.advance_time_internal(Duration::from_secs(5)));
+    assert!(lo.advance_time(Duration::from_secs(5)));
     assert_eq!(read(&lo, PV, None), PropertyValue::Real(0.0));
     assert_ne!(read(&lo, LCT, None), held);
     // The relinquished slot keeps its writer.
@@ -180,7 +180,7 @@ fn an_egress_that_runs_out_moves_last_command_time_on() {
     blo.write_property_from(PV, None, PropertyValue::Enumerated(4), Some(8), &writer)
         .unwrap();
     let held = read(&blo, LCT, None);
-    assert!(blo.advance_time_internal(Duration::from_secs(5)));
+    assert!(blo.advance_time(Duration::from_secs(5)));
     assert_eq!(read(&blo, PV, None), PropertyValue::Enumerated(0));
     assert_ne!(read(&blo, LCT, None), held);
 }

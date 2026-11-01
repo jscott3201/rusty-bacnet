@@ -22,7 +22,7 @@ use crate::audit::{AuditPolicyAuthority, ObjectAuditPolicy};
 use crate::command_source::{CommandOrigin, SingleValueSource};
 use crate::common::{self, read_identity_properties};
 use crate::object_profile::{ObjectProfile, ProfileState, TagsPersistence};
-use crate::traits::{BACnetObject, DeadlineWaker, MonotonicClock};
+use crate::traits::BACnetObject;
 use crate::transition::Transition;
 
 /// How far a fading or ramping colour temperature moves between COV samples
@@ -615,15 +615,11 @@ impl BACnetObject for ColorTemperatureObject {
         metadata::for_color_temperature_object(self)
     }
 
-    fn durable_writes_internal(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
+    fn durable_writes(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
         if self.output.is_some() {
             return Some(self);
         }
         self.profile.capability()
-    }
-
-    fn start_output_internal(&mut self) {
-        self.start_output();
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
@@ -642,33 +638,35 @@ impl BACnetObject for ColorTemperatureObject {
         Some(AuditPolicyAuthority::new(&mut self.audit_policy))
     }
 
-    fn advance_time_internal(&mut self, elapsed: Duration) -> bool {
-        self.engine.advance_by(elapsed)
+    fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
+        Some(self)
+    }
+}
+
+impl crate::traits::Timed for ColorTemperatureObject {
+    fn bind_clocks(&mut self, clocks: &crate::traits::Clocks) {
+        self.engine.bind_clock(clocks.monotonic.clone());
+        self.engine.bind_waker(clocks.deadline_waker.clone());
     }
 
-    fn bind_monotonic_clock_internal(&mut self, clock: Option<Arc<MonotonicClock>>) {
-        self.engine.bind_clock(clock);
+    fn start_output(&mut self) {
+        self.start_output();
     }
 
-    fn bind_deadline_waker_internal(&mut self, waker: Option<Arc<DeadlineWaker>>) {
-        self.engine.bind_waker(waker);
-    }
-
-    fn advance_monotonic_time_internal(&mut self, now: Duration) -> bool {
-        self.profile.expire(now);
-        self.engine.advance_to(now)
-    }
-
-    fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
-        self.engine.deadline()
-    }
-
-    fn set_tracking_cov_increment_internal(&mut self, finest: Option<f64>) {
+    fn set_tracking_cov_increment(&mut self, finest: Option<f64>) {
         self.engine.set_finest_increment(finest);
     }
 
+    fn advance_monotonic_time(&mut self, now: Duration) -> bool {
+        self.engine.advance_to(now)
+    }
+
+    fn next_monotonic_deadline(&self) -> Option<Duration> {
+        self.engine.deadline()
+    }
+
     /// A copy that reads as the object does now; see the Color object's.
-    fn cov_snapshot_internal(&self) -> Option<Box<dyn BACnetObject>> {
+    fn cov_snapshot(&self) -> Option<Box<dyn BACnetObject>> {
         Some(Box::new(Self {
             engine: self.engine.frozen(),
             ..self.clone()

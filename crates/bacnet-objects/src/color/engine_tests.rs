@@ -3,6 +3,7 @@
 //! write halt them, steps clamp, Transition shapes a direct write, and the
 //! COV samples fall where the sample step puts them.
 
+use crate::traits::Timed;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -19,7 +20,10 @@ impl Clock {
     fn bind(object: &mut dyn BACnetObject) -> Self {
         let clock = Self(Arc::new(Mutex::new(Duration::ZERO)));
         let source = Arc::clone(&clock.0);
-        object.bind_monotonic_clock_internal(Some(Arc::new(move || *source.lock().unwrap())));
+        object.timed().unwrap().bind_clocks(&crate::traits::Clocks {
+            monotonic: Some(Arc::new(move || *source.lock().unwrap())),
+            ..crate::traits::Clocks::default()
+        });
         clock
     }
 
@@ -121,8 +125,8 @@ fn a_colour_fade_moves_tracking_value_and_completes_on_time() {
     assert_xy(&color, P::TRACKING_VALUE, 0.5, 0.4);
     assert_eq!(in_progress(&color), 0);
     // The server's advance ends the run, and nothing stays due.
-    assert!(color.advance_monotonic_time_internal(now));
-    assert_eq!(color.next_monotonic_deadline_internal(), None);
+    assert!(color.advance_monotonic_time(now));
+    assert_eq!(color.next_monotonic_deadline(), None);
     assert_xy(&color, P::TRACKING_VALUE, 0.5, 0.4);
 }
 
@@ -158,7 +162,7 @@ fn stop_halts_a_colour_fade_where_it_stands() {
     assert_xy(&color, P::PRESENT_VALUE, 0.2, 0.2);
     assert_xy(&color, P::TRACKING_VALUE, 0.2, 0.2);
     assert_eq!(in_progress(&color), 0);
-    assert_eq!(color.next_monotonic_deadline_internal(), None);
+    assert_eq!(color.next_monotonic_deadline(), None);
     clock.set(4_000);
     assert_xy(&color, P::TRACKING_VALUE, 0.2, 0.2);
     // With nothing running, STOP changes nothing.
@@ -181,7 +185,7 @@ fn a_present_value_write_halts_a_colour_fade() {
     assert_xy(&color, P::PRESENT_VALUE, 0.7, 0.2);
     assert_xy(&color, P::TRACKING_VALUE, 0.7, 0.2);
     assert_eq!(in_progress(&color), 0);
-    assert_eq!(color.next_monotonic_deadline_internal(), None);
+    assert_eq!(color.next_monotonic_deadline(), None);
 }
 
 #[test]
@@ -242,7 +246,7 @@ fn a_cct_fade_and_ramp_complete_at_the_clamped_target() {
     clock.set(250);
     assert_eq!(kelvin(&ct, P::TRACKING_VALUE), 2_750);
     let now = clock.set(1_000);
-    assert!(ct.advance_monotonic_time_internal(now));
+    assert!(ct.advance_monotonic_time(now));
     assert_eq!(kelvin(&ct, P::TRACKING_VALUE), 2_000);
     assert_eq!(in_progress(&ct), 0);
     // RAMP_TO_CCT 30000 K clamps to 6500 K; 4500 K at the default 100 K/s is
@@ -288,7 +292,7 @@ fn steps_change_the_temperature_at_once_and_clamp() {
     assert_eq!(kelvin(&ct, P::PRESENT_VALUE), 2_910);
     assert_eq!(kelvin(&ct, P::TRACKING_VALUE), 2_910);
     assert_eq!(in_progress(&ct), 0);
-    assert_eq!(ct.next_monotonic_deadline_internal(), None);
+    assert_eq!(ct.next_monotonic_deadline(), None);
 }
 
 #[test]
@@ -343,24 +347,24 @@ fn cov_samples_follow_the_sample_step_on_the_grid() {
         ..cct(Op::FADE_TO_CCT, Some(4_000))
     };
     ct.set_color_command(fade).unwrap();
-    assert_eq!(ct.next_monotonic_deadline_internal(), Some(ms(100)));
-    assert!(!ct.advance_monotonic_time_internal(clock.set(99)));
-    assert!(ct.advance_monotonic_time_internal(clock.set(100)));
-    assert_eq!(ct.next_monotonic_deadline_internal(), Some(ms(200)));
+    assert_eq!(ct.next_monotonic_deadline(), Some(ms(100)));
+    assert!(!ct.advance_monotonic_time(clock.set(99)));
+    assert!(ct.advance_monotonic_time(clock.set(100)));
+    assert_eq!(ct.next_monotonic_deadline(), Some(ms(200)));
     // A colour fade of 0.4 along x over 20 s moves 0.001 each 50 ms, so the
     // first grid point samples.
     let (mut color, clock) = color();
     color
         .set_color_command(fade_to(0.5, 0.1, Some(20_000)))
         .unwrap();
-    assert_eq!(color.next_monotonic_deadline_internal(), Some(ms(100)));
+    assert_eq!(color.next_monotonic_deadline(), Some(ms(100)));
     // Over 380 s it moves 0.001 each 950 ms, rounded up onto the grid.
     color
         .set_color_command(fade_to(0.5, 0.1, Some(380_000)))
         .unwrap();
-    assert_eq!(color.next_monotonic_deadline_internal(), Some(ms(1_000)));
-    assert!(color.advance_monotonic_time_internal(clock.set(1_000)));
-    assert_eq!(color.next_monotonic_deadline_internal(), Some(ms(2_000)));
+    assert_eq!(color.next_monotonic_deadline(), Some(ms(1_000)));
+    assert!(color.advance_monotonic_time(clock.set(1_000)));
+    assert_eq!(color.next_monotonic_deadline(), Some(ms(2_000)));
 }
 
 #[test]
@@ -372,7 +376,7 @@ fn a_cov_snapshot_reads_as_the_object_did_when_taken() {
     };
     ct.set_color_command(fade).unwrap();
     clock.set(500);
-    let snapshot = ct.cov_snapshot_internal().unwrap();
+    let snapshot = ct.cov_snapshot().unwrap();
     clock.set(1_000);
     assert_eq!(kelvin(snapshot.as_ref(), P::TRACKING_VALUE), 3_500);
     assert_eq!(in_progress(snapshot.as_ref()), 1);
@@ -386,7 +390,7 @@ fn with_no_clock_a_fade_waits_on_logical_time() {
         .set_color_command(fade_to(0.5, 0.5, Some(1_000)))
         .unwrap();
     assert_eq!(in_progress(&color), 1);
-    assert!(color.advance_time_internal(ms(1_000)));
+    assert!(color.advance_time(ms(1_000)));
     assert_eq!(in_progress(&color), 0);
     assert_xy(&color, P::TRACKING_VALUE, 0.5, 0.5);
 }
@@ -469,5 +473,5 @@ fn limits_that_leave_out_a_fades_target_halt_it() {
     assert_eq!(kelvin(&ct, P::PRESENT_VALUE), 4_000);
     assert_eq!(kelvin(&ct, P::TRACKING_VALUE), 4_000);
     assert_eq!(in_progress(&ct), 0);
-    assert_eq!(ct.next_monotonic_deadline_internal(), None);
+    assert_eq!(ct.next_monotonic_deadline(), None);
 }

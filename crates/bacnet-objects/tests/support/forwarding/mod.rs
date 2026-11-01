@@ -6,12 +6,18 @@
 //!
 //! The trait's methods are read from its source. A method added there fails
 //! `assert_rows_cover_the_trait` until it has a probe answer in `probe.rs`
-//! and a row in `rows.rs`. The probe answers every row unlike the trait
+//! and a row in `rows.rs`. A capability the trait lends through an accessor
+//! (`timed`, for one) has a row for the accessor, and a row for each of the
+//! capability trait's methods in `capabilities.rs`, run through the
+//! accessor; its traits are read from their source too, so a capability or
+//! a capability method added there fails until it has rows. The probe
+//! answers every row unlike the trait
 //! default and logs each call with its arguments, so an adapter that keeps a
 //! default, drops an argument or swaps the answer reads differently from the
 //! probe. Values the probe and the rows share, such as identifiers, dates
 //! and clocks, are in `fixtures.rs`.
 
+pub mod capabilities;
 pub mod defaults;
 pub mod fixtures;
 pub mod probe;
@@ -142,6 +148,7 @@ pub fn assert_rows_cover_the_trait() {
              if it takes &self, in DeviceReadView"
         );
     }
+    capabilities::assert_rows_cover_the_capabilities();
 }
 
 /// Every row reaches the probe's own method, and every provided method

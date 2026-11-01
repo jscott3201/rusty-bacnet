@@ -144,7 +144,13 @@ impl Family {
     }
 
     fn bind_clock(&mut self, clock: Arc<dyn ClockReader>) {
-        self.object_mut().bind_clock_internal(Some(clock));
+        self.object_mut()
+            .timed()
+            .unwrap()
+            .bind_clocks(&crate::traits::Clocks {
+                clock: Some(clock),
+                ..crate::traits::Clocks::default()
+            });
     }
 
     fn total(&self) -> u64 {
