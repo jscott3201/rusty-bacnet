@@ -317,7 +317,11 @@ fn silence_operation_refuses_a_reserved_or_proprietary_silenced_state_and_keeps_
         let mut point = LifeSafetyPointObject::new(1, "LSP-1").unwrap();
         point.set_silenced(SilencedState::from_raw(raw));
         point.set_operation_expected(LifeSafetyOperation::SILENCE_AUDIBLE);
-        match point.apply_life_safety_operation(LifeSafetyOperation::SILENCE_AUDIBLE) {
+        match point
+            .life_safety()
+            .unwrap()
+            .apply_life_safety_operation(LifeSafetyOperation::SILENCE_AUDIBLE)
+        {
             Err(Error::Remote(RemoteError::Error { class, code })) => {
                 assert_eq!(class, ErrorClass::OBJECT);
                 assert_eq!(code, ErrorCode::INVALID_OPERATION_IN_THIS_STATE);

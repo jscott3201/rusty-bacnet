@@ -322,10 +322,6 @@ impl BACnetObject for DeviceReadView<'_> {
     fn is_deleteable(&self) -> bool {
         self.object.is_deleteable()
     }
-    fn supports_access_event_batch_internal(&self) -> bool {
-        self.object.supports_access_event_batch_internal()
-    }
-
     fn supports_cov(&self) -> bool {
         self.object.supports_cov()
     }

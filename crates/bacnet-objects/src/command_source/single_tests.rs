@@ -352,7 +352,12 @@ fn application_updates_name_the_device_or_nobody() {
     for (mut object, value) in values(PresentValueAccess::ReadOnly, true) {
         let object = object.as_mut();
         object
-            .set_present_value_from_internal(value.clone(), &local(9, None))
+            .local_input()
+            .unwrap()
+            .apply_local_input(crate::traits::LocalInputValue::present_value_from(
+                value.clone(),
+                local(9, None).clone(),
+            ))
             .unwrap();
         assert_eq!(
             object.read_property(P::VALUE_SOURCE, None).unwrap(),
@@ -362,9 +367,18 @@ fn application_updates_name_the_device_or_nobody() {
         write_from(object, P::VALUE_SOURCE, none(), &local(9, None)).unwrap();
         // Without a Device, no source is known and nobody may correct.
         object
-            .set_present_value_from_internal(value.clone(), &local(9, None))
+            .local_input()
+            .unwrap()
+            .apply_local_input(crate::traits::LocalInputValue::present_value_from(
+                value.clone(),
+                local(9, None).clone(),
+            ))
             .unwrap();
-        object.set_present_value_internal(value.clone()).unwrap();
+        object
+            .local_input()
+            .unwrap()
+            .apply_local_input(crate::traits::LocalInputValue::present_value(value.clone()))
+            .unwrap();
         assert_eq!(object.read_property(P::VALUE_SOURCE, None).unwrap(), none());
         assert_code(
             write_from(object, P::VALUE_SOURCE, none(), &local(9, None)),
@@ -375,7 +389,9 @@ fn application_updates_name_the_device_or_nobody() {
             .write_property(P::OUT_OF_SERVICE, None, PropertyValue::Boolean(true), None)
             .unwrap();
         assert_code(
-            object.set_present_value_from_internal(value, &local(9, None)),
+            object.local_input().unwrap().apply_local_input(
+                crate::traits::LocalInputValue::present_value_from(value, local(9, None).clone()),
+            ),
             ErrorCode::WRITE_ACCESS_DENIED,
         );
         assert_eq!(object.read_property(P::VALUE_SOURCE, None).unwrap(), none());

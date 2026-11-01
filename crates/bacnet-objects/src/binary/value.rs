@@ -521,11 +521,39 @@ impl BACnetObject for BinaryValueObject {
         Ok(())
     }
 
-    fn set_present_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
+    fn reliability_evaluation_inhibited_internal(&self) -> bool {
+        self.reliability_inhibit.enabled()
+    }
+
+    fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
+        Some(self)
+    }
+}
+
+/// The Present_Value the application supplies while it isn't commandable,
+/// published as Value_Source from `origin` when the object tracks its
+/// source (#1552).
+impl crate::traits::LocalInput for BinaryValueObject {
+    fn apply_local_input(&mut self, input: crate::traits::LocalInputValue) -> Result<(), Error> {
+        let crate::traits::LocalInputValue::PresentValue { value, origin } = input else {
+            return Err(crate::traits::not_supported());
+        };
+        let Some(origin) = origin else {
+            return self.apply_local_present_value(value);
+        };
+        self.write_source.admit(&origin)?;
+        self.apply_local_present_value(value)?;
+        self.write_source.record(&origin);
+        Ok(())
+    }
+}
+
+impl BinaryValueObject {
+    /// The application's Present_Value, refused while it's commandable or
+    /// Out_Of_Service is TRUE.
+    fn apply_local_present_value(&mut self, value: PropertyValue) -> Result<(), Error> {
         match self.access {
-            PresentValueAccess::Commandable => {
-                Err(common::optional_functionality_not_supported_error())
-            }
+            PresentValueAccess::Commandable => Err(crate::traits::not_supported()),
             _ if self.out_of_service => Err(common::write_access_denied_error()),
             PresentValueAccess::ReadOnly | PresentValueAccess::Writable => {
                 self.present_value = Self::checked_present_value(value)?;
@@ -533,21 +561,6 @@ impl BACnetObject for BinaryValueObject {
                 Ok(())
             }
         }
-    }
-
-    fn set_present_value_from_internal(
-        &mut self,
-        value: PropertyValue,
-        origin: &crate::command_source::CommandOrigin,
-    ) -> Result<(), Error> {
-        self.write_source.admit(origin)?;
-        self.set_present_value_internal(value)?;
-        self.write_source.record(origin);
-        Ok(())
-    }
-
-    fn reliability_evaluation_inhibited_internal(&self) -> bool {
-        self.reliability_inhibit.enabled()
     }
 }
 

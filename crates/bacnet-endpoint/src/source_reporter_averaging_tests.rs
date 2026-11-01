@@ -19,10 +19,22 @@ fn averaging_sample_route_and_property_cov_admission_survive_wrapping() {
     assert!(object.supports_subscribe_cov_property());
     assert!(object.supports_cov_property(PropertyIdentifier::AVERAGE_VALUE));
     for sample in [PropertyValue::Real(3.0), PropertyValue::Unsigned(5)] {
-        object.add_averaging_sample_internal(Some(sample)).unwrap();
+        object
+            .local_input()
+            .unwrap()
+            .apply_local_input(bacnet_objects::traits::LocalInputValue::AveragingSample(
+                Some(sample),
+            ))
+            .unwrap();
     }
     // A missed attempt reaches the wrapped object too.
-    object.add_averaging_sample_internal(None).unwrap();
+    object
+        .local_input()
+        .unwrap()
+        .apply_local_input(bacnet_objects::traits::LocalInputValue::AveragingSample(
+            None,
+        ))
+        .unwrap();
     assert_eq!(
         object
             .read_property(PropertyIdentifier::ATTEMPTED_SAMPLES, None)

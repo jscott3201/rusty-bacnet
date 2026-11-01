@@ -1,5 +1,5 @@
 //! The access-control objects' runtime route (#1132):
-//! `report_access_input_internal` takes each object's own record whole,
+//! The `LocalInput` access-control record takes each object's own record whole,
 //! follows each object's out-of-service rule (the point refuses, the reader
 //! and the door set the input aside), and fails closed on any other object
 //! or record.
@@ -72,7 +72,11 @@ fn access_point_takes_an_event_record_whole() {
         ..AccessEventReport::new(AccessEvent::GRANTED, 7)
     };
     point
-        .report_access_input_internal(AccessControlInput::AccessEvent(report))
+        .local_input()
+        .unwrap()
+        .apply_local_input(crate::traits::LocalInputValue::AccessControl(
+            AccessControlInput::AccessEvent(report),
+        ))
         .unwrap();
     assert_eq!(
         event_rows(&point),
@@ -88,10 +92,14 @@ fn access_point_takes_an_event_record_whole() {
     // With no time and no usable clock the time served counts on by one;
     // with no factor the UNDEFINED one is stored.
     point
-        .report_access_input_internal(AccessControlInput::AccessEvent(AccessEventReport::new(
-            AccessEvent::DENIED_OTHER,
-            65_536,
-        )))
+        .local_input()
+        .unwrap()
+        .apply_local_input(crate::traits::LocalInputValue::AccessControl(
+            AccessControlInput::AccessEvent(AccessEventReport::new(
+                AccessEvent::DENIED_OTHER,
+                65_536,
+            )),
+        ))
         .unwrap();
     let rows = event_rows(&point);
     assert_eq!(rows[2], PropertyValue::ApplicationData(vec![0x19, 10]));
@@ -107,7 +115,9 @@ fn access_point_takes_an_event_record_whole() {
         ..AccessEventReport::new(AccessEvent::GRANTED, 8)
     };
     assert_error(
-        point.report_access_input_internal(AccessControlInput::AccessEvent(refused)),
+        point.local_input().unwrap().apply_local_input(
+            crate::traits::LocalInputValue::AccessControl(AccessControlInput::AccessEvent(refused)),
+        ),
         ErrorClass::PROPERTY,
         ErrorCode::VALUE_OUT_OF_RANGE,
     );
@@ -121,10 +131,11 @@ fn access_point_takes_only_events_in_the_production() {
     for raw in [0, 16, 128, 164, 512, 65_535] {
         let event = AccessEvent::from_raw(raw);
         point
-            .report_access_input_internal(AccessControlInput::AccessEvent(AccessEventReport::new(
-                event,
-                u64::from(raw),
-            )))
+            .local_input()
+            .unwrap()
+            .apply_local_input(crate::traits::LocalInputValue::AccessControl(
+                AccessControlInput::AccessEvent(AccessEventReport::new(event, u64::from(raw))),
+            ))
             .unwrap();
         assert_eq!(
             read(&point, P::ACCESS_EVENT),
@@ -137,7 +148,11 @@ fn access_point_takes_only_events_in_the_production() {
     for raw in [17, 127, 165, 511, 65_536] {
         let report = AccessEventReport::new(AccessEvent::from_raw(raw), 1);
         assert_error(
-            point.report_access_input_internal(AccessControlInput::AccessEvent(report.clone())),
+            point.local_input().unwrap().apply_local_input(
+                crate::traits::LocalInputValue::AccessControl(AccessControlInput::AccessEvent(
+                    report.clone(),
+                )),
+            ),
             ErrorClass::PROPERTY,
             ErrorCode::VALUE_OUT_OF_RANGE,
         );
@@ -167,7 +182,10 @@ fn access_point_refuses_events_while_unreliable() {
     let granted =
         || AccessControlInput::AccessEvent(AccessEventReport::new(AccessEvent::GRANTED, 1));
     assert_error(
-        point.report_access_input_internal(granted()),
+        point
+            .local_input()
+            .unwrap()
+            .apply_local_input(crate::traits::LocalInputValue::AccessControl(granted())),
         ErrorClass::PROPERTY,
         ErrorCode::WRITE_ACCESS_DENIED,
     );
@@ -195,7 +213,11 @@ fn access_point_refuses_events_while_unreliable() {
             None,
         )
         .unwrap();
-    point.report_access_input_internal(granted()).unwrap();
+    point
+        .local_input()
+        .unwrap()
+        .apply_local_input(crate::traits::LocalInputValue::AccessControl(granted()))
+        .unwrap();
     assert_eq!(
         read(&point, P::ACCESS_EVENT),
         PropertyValue::Enumerated(AccessEvent::GRANTED.to_raw())
@@ -210,9 +232,11 @@ fn access_point_refuses_events_out_of_service_and_other_records() {
     // (Clause 12.31.8).
     let before = event_rows(&point);
     assert_error(
-        point.report_access_input_internal(AccessControlInput::AccessEvent(
-            AccessEventReport::new(AccessEvent::GRANTED, 9),
-        )),
+        point.local_input().unwrap().apply_local_input(
+            crate::traits::LocalInputValue::AccessControl(AccessControlInput::AccessEvent(
+                AccessEventReport::new(AccessEvent::GRANTED, 9),
+            )),
+        ),
         ErrorClass::PROPERTY,
         ErrorCode::WRITE_ACCESS_DENIED,
     );
@@ -233,7 +257,10 @@ fn access_point_refuses_events_out_of_service_and_other_records() {
         ))),
     ] {
         assert_error(
-            point.report_access_input_internal(input),
+            point
+                .local_input()
+                .unwrap()
+                .apply_local_input(crate::traits::LocalInputValue::AccessControl(input)),
             ErrorClass::OBJECT,
             ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
         );
@@ -250,9 +277,11 @@ fn credential_data_input_takes_a_read_and_stamps_a_missing_time() {
         )])
         .unwrap();
     let read_card = |reader: &mut CredentialDataInputObject, format_type| {
-        reader.report_access_input_internal(AccessControlInput::CredentialRead(
-            CredentialReadReport::new(card(format_type)),
-        ))
+        reader.local_input().unwrap().apply_local_input(
+            crate::traits::LocalInputValue::AccessControl(AccessControlInput::CredentialRead(
+                CredentialReadReport::new(card(format_type)),
+            )),
+        )
     };
     // With no usable clock each read takes the object's next sequence
     // number, so the same card read twice moves Update_Time twice.
@@ -275,7 +304,11 @@ fn credential_data_input_takes_a_read_and_stamps_a_missing_time() {
         ..CredentialReadReport::new(card(AuthenticationFactorType::ERROR))
     };
     reader
-        .report_access_input_internal(AccessControlInput::CredentialRead(given))
+        .local_input()
+        .unwrap()
+        .apply_local_input(crate::traits::LocalInputValue::AccessControl(
+            AccessControlInput::CredentialRead(given),
+        ))
         .unwrap();
     assert_eq!(
         read(&reader, P::UPDATE_TIME),
@@ -301,7 +334,11 @@ fn credential_data_input_takes_a_read_and_stamps_a_missing_time() {
         CredentialReadReport::new(card(AuthenticationFactorType::WIEGAND26)),
     ] {
         reader
-            .report_access_input_internal(AccessControlInput::CredentialRead(later))
+            .local_input()
+            .unwrap()
+            .apply_local_input(crate::traits::LocalInputValue::AccessControl(
+                AccessControlInput::CredentialRead(later),
+            ))
             .unwrap();
         assert_eq!(
             [P::PRESENT_VALUE, P::UPDATE_TIME].map(|p| read(&reader, p)),
@@ -322,9 +359,11 @@ fn credential_data_input_takes_a_read_and_stamps_a_missing_time() {
         PropertyValue::ApplicationData(vec![0x19, 4])
     );
     assert_error(
-        reader.report_access_input_internal(AccessControlInput::AccessEvent(
-            AccessEventReport::new(AccessEvent::GRANTED, 1),
-        )),
+        reader.local_input().unwrap().apply_local_input(
+            crate::traits::LocalInputValue::AccessControl(AccessControlInput::AccessEvent(
+                AccessEventReport::new(AccessEvent::GRANTED, 1),
+            )),
+        ),
         ErrorClass::OBJECT,
         ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
     );
@@ -346,7 +385,9 @@ fn access_door_takes_the_values_a_report_gives() {
         ]
     };
     let report = |door: &mut AccessDoorObject, report: DoorStateReport| {
-        door.report_access_input_internal(AccessControlInput::DoorState(report))
+        door.local_input().unwrap().apply_local_input(
+            crate::traits::LocalInputValue::AccessControl(AccessControlInput::DoorState(report)),
+        )
     };
     // A field left out keeps its value.
     report(
@@ -465,18 +506,21 @@ fn access_door_takes_the_values_a_report_gives() {
 fn other_objects_fail_closed() {
     let mut value = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     assert_error(
-        value.report_access_input_internal(AccessControlInput::DoorState(
-            DoorStateReport::default(),
-        )),
+        value.local_input().unwrap().apply_local_input(
+            crate::traits::LocalInputValue::AccessControl(AccessControlInput::DoorState(
+                DoorStateReport::default(),
+            )),
+        ),
         ErrorClass::OBJECT,
         ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
     );
     let mut door = AccessDoorObject::new(1, "DOOR-1").unwrap();
     assert_error(
-        door.report_access_input_internal(AccessControlInput::AccessEvent(AccessEventReport::new(
-            AccessEvent::GRANTED,
-            1,
-        ))),
+        door.local_input().unwrap().apply_local_input(
+            crate::traits::LocalInputValue::AccessControl(AccessControlInput::AccessEvent(
+                AccessEventReport::new(AccessEvent::GRANTED, 1),
+            )),
+        ),
         ErrorClass::OBJECT,
         ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
     );

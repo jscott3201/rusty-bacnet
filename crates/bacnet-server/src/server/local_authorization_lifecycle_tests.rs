@@ -58,11 +58,11 @@ async fn local_authorization_cancel_after_commit_keeps_every_retained_payload() 
         let mut db = h.server.database().write().await;
         db.get_mut(&oid)
             .unwrap()
-            .report_access_input_internal(AccessControlInput::AccessEvent(access_event(
-                AccessEvent::DENIED_OTHER,
-                99,
-                30,
-            )))
+            .local_input()
+            .unwrap()
+            .apply_local_input(bacnet_objects::traits::LocalInputValue::AccessControl(
+                AccessControlInput::AccessEvent(access_event(AccessEvent::DENIED_OTHER, 99, 30)),
+            ))
             .unwrap();
     }
     release.add_permits(1);

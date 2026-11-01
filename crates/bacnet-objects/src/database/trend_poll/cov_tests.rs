@@ -33,7 +33,11 @@ fn logged(db: &ObjectDatabase, oid: ObjectIdentifier) -> Vec<(LogDatum, Option<S
 fn set_value(db: &mut ObjectDatabase, value: f32) {
     db.get_mut(&target())
         .unwrap()
-        .set_present_value_internal(PropertyValue::Real(value))
+        .local_input()
+        .unwrap()
+        .apply_local_input(crate::traits::LocalInputValue::present_value(
+            PropertyValue::Real(value),
+        ))
         .unwrap();
 }
 
@@ -297,7 +301,9 @@ fn cov_log_of(db: &mut ObjectDatabase, object: ObjectIdentifier) -> ObjectIdenti
 fn set_present_value(db: &mut ObjectDatabase, object: ObjectIdentifier, value: PropertyValue) {
     db.get_mut(&object)
         .unwrap()
-        .set_present_value_internal(value)
+        .local_input()
+        .unwrap()
+        .apply_local_input(crate::traits::LocalInputValue::present_value(value))
         .unwrap();
 }
 

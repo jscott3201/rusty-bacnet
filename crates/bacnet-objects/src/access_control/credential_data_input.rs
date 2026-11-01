@@ -250,24 +250,6 @@ impl BACnetObject for CredentialDataInputObject {
         true
     }
 
-    /// Take a read the application reports (#1132): Present_Value and
-    /// Update_Time together, the time stamped from the Device clock, or the
-    /// object's next sequence number, when the report has none. Checked and
-    /// stored as [`Self::set_present_value`] stores a read: while
-    /// Out_Of_Service is TRUE it replaces the reader's values put aside, and
-    /// a client's simulated ones stay served. Any other record is
-    /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
-    fn report_access_input_internal(&mut self, input: AccessControlInput) -> Result<(), Error> {
-        let AccessControlInput::CredentialRead(report) = input else {
-            return Err(common::optional_functionality_not_supported_error());
-        };
-        if !is_declared(&report.factor, &self.supported_formats) {
-            return Err(common::value_out_of_range_error());
-        }
-        let update_time = report.update_time.unwrap_or_else(|| self.clock.stamp());
-        self.set_present_value(report.factor, update_time)
-    }
-
     /// The application's Reliability for the reader. Like the other
     /// Reliability carriers, the reader refuses it with WRITE_ACCESS_DENIED
     /// while Out_Of_Service is TRUE, so a client's simulated value stays
@@ -284,6 +266,33 @@ impl BACnetObject for CredentialDataInputObject {
 
     fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
         Some(self)
+    }
+
+    fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
+        Some(self)
+    }
+}
+
+/// Take a read the application reports (#1132): Present_Value and
+/// Update_Time together, the time stamped from the Device clock, or the
+/// object's next sequence number, when the report has none. Checked and
+/// stored as [`Self::set_present_value`] stores a read: while
+/// Out_Of_Service is TRUE it replaces the reader's values put aside, and
+/// a client's simulated ones stay served. Any other record is
+/// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
+impl crate::traits::LocalInput for CredentialDataInputObject {
+    fn apply_local_input(&mut self, input: crate::traits::LocalInputValue) -> Result<(), Error> {
+        let crate::traits::LocalInputValue::AccessControl(AccessControlInput::CredentialRead(
+            report,
+        )) = input
+        else {
+            return Err(crate::traits::not_supported());
+        };
+        if !is_declared(&report.factor, &self.supported_formats) {
+            return Err(common::value_out_of_range_error());
+        }
+        let update_time = report.update_time.unwrap_or_else(|| self.clock.stamp());
+        self.set_present_value(report.factor, update_time)
     }
 }
 

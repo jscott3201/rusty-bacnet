@@ -14,10 +14,14 @@
 use super::declared;
 use super::fixtures::{clocks, oid};
 use super::rows::Row;
+use bacnet_objects::access_control::AccessEventReport;
 use bacnet_objects::channel::MemberDatatype;
 use bacnet_objects::command::WriteFailure;
+use bacnet_objects::command_source::CommandOrigin;
+use bacnet_objects::traits::LocalInputValue;
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
-use bacnet_types::enums::{ObjectType, PropertyIdentifier as P};
+use bacnet_types::enums::{AccessEvent, LifeSafetyOperation, ObjectType, PropertyIdentifier as P};
+use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
 use std::collections::BTreeSet;
 use std::time::Duration;
 
@@ -26,8 +30,20 @@ const MODULE: &str = include_str!("../../../src/traits/capabilities/mod.rs");
 /// Each capability module, by name, and its source.
 const SOURCES: &[(&str, &str)] = &[
     (
+        "access_events",
+        include_str!("../../../src/traits/capabilities/access_events.rs"),
+    ),
+    (
         "command_runner",
         include_str!("../../../src/traits/capabilities/command_runner.rs"),
+    ),
+    (
+        "life_safety",
+        include_str!("../../../src/traits/capabilities/life_safety.rs"),
+    ),
+    (
+        "local_input",
+        include_str!("../../../src/traits/capabilities/local_input.rs"),
     ),
     (
         "staging_source",
@@ -142,6 +158,65 @@ pub const CAPABILITY_ROWS: &[(&str, Row)] = &[
                 .command_runner_mut()
                 .map(|r| r.complete_command_run(11, outcome));
             format!("{completed:?}")
+        }),
+    ),
+    (
+        "LocalInput::apply_local_input",
+        Row::Command(|o| {
+            let origin = CommandOrigin::Local {
+                owner_device: oid(ObjectType::DEVICE, 9),
+                initiating_object: None,
+            };
+            let input = LocalInputValue::present_value_from(PropertyValue::Real(22.5), origin);
+            format!("{:?}", o.local_input().map(|i| i.apply_local_input(input)))
+        }),
+    ),
+    (
+        "AccessEvents::record_access_event_batch",
+        Row::Command(|o| {
+            let reports = [
+                AccessEventReport {
+                    time: Some(BACnetTimeStamp::SequenceNumber(12)),
+                    ..AccessEventReport::new(AccessEvent::GRANTED, 41)
+                },
+                AccessEventReport {
+                    time: Some(BACnetTimeStamp::SequenceNumber(13)),
+                    ..AccessEventReport::new(AccessEvent::DENIED_OTHER, 42)
+                },
+            ];
+            let committed = o.access_events().map(|events| {
+                events.record_access_event_batch(&reports).map(|events| {
+                    events
+                        .into_iter()
+                        .map(|event| {
+                            let tag = event.snapshot.read_property(P::ACCESS_EVENT_TAG, None);
+                            let name = event.snapshot.object_name().to_owned();
+                            (event.report, name, tag.unwrap(), event.clock_frame)
+                        })
+                        .collect::<Vec<_>>()
+                })
+            });
+            format!("{committed:?}")
+        }),
+    ),
+    (
+        "LifeSafety::apply_life_safety_operation",
+        Row::Command(|o| {
+            let operation = LifeSafetyOperation::SILENCE;
+            let outcome = o
+                .life_safety()
+                .map(|l| l.apply_life_safety_operation(operation));
+            format!("{outcome:?}")
+        }),
+    ),
+    (
+        "LifeSafety::set_life_safety_operation_expected",
+        Row::Command(|o| {
+            let operation = LifeSafetyOperation::SILENCE;
+            let set = o
+                .life_safety()
+                .map(|l| l.set_life_safety_operation_expected(operation));
+            format!("{set:?}")
         }),
     ),
 ];

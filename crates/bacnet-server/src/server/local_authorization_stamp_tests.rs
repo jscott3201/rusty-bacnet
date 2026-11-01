@@ -12,19 +12,23 @@ async fn local_authorization_exhausted_second_stamp_refuses_without_mutation_or_
             .to_date();
         db.get_mut(&identifier(ObjectType::ACCESS_POINT))
             .unwrap()
-            .report_access_input_internal(AccessControlInput::AccessEvent(AccessEventReport {
-                time: Some(BACnetTimeStamp::DateTime {
-                    date: end,
-                    time: bacnet_types::primitives::Time {
-                        hour: 23,
-                        minute: 59,
-                        second: 59,
-                        hundredths: 98,
-                    },
+            .local_input()
+            .unwrap()
+            .apply_local_input(bacnet_objects::traits::LocalInputValue::AccessControl(
+                AccessControlInput::AccessEvent(AccessEventReport {
+                    time: Some(BACnetTimeStamp::DateTime {
+                        date: end,
+                        time: bacnet_types::primitives::Time {
+                            hour: 23,
+                            minute: 59,
+                            second: 59,
+                            hundredths: 98,
+                        },
+                    }),
+                    credential: Some(card_id(1).into()),
+                    ..AccessEventReport::new(AccessEvent::GRANTED, 1)
                 }),
-                credential: Some(card_id(1).into()),
-                ..AccessEventReport::new(AccessEvent::GRANTED, 1)
-            }))
+            ))
             .unwrap();
     })
     .await;
@@ -85,11 +89,15 @@ async fn local_authorization_clockless_wrapped_same_event_code_still_notifies_ea
         db.set_clock_reader(None);
         db.get_mut(&oid)
             .unwrap()
-            .report_access_input_internal(AccessControlInput::AccessEvent(AccessEventReport {
-                time: Some(BACnetTimeStamp::SequenceNumber(65535)),
-                credential: Some(card_id(1).into()),
-                ..AccessEventReport::new(AccessEvent::GRANTED, 42)
-            }))
+            .local_input()
+            .unwrap()
+            .apply_local_input(bacnet_objects::traits::LocalInputValue::AccessControl(
+                AccessControlInput::AccessEvent(AccessEventReport {
+                    time: Some(BACnetTimeStamp::SequenceNumber(65535)),
+                    credential: Some(card_id(1).into()),
+                    ..AccessEventReport::new(AccessEvent::GRANTED, 42)
+                }),
+            ))
             .unwrap();
     }
     subscribed(&mut h, oid).await;

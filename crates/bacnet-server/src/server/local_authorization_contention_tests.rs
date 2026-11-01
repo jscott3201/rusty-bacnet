@@ -284,11 +284,11 @@ async fn local_authorization_competing_mode_waiter_cannot_enter_between_evaluati
     // a delayed live read after the competing writer obtains the database.
     db.get_mut(&oid)
         .unwrap()
-        .report_access_input_internal(AccessControlInput::AccessEvent(access_event(
-            AccessEvent::DENIED_OTHER,
-            99,
-            30,
-        )))
+        .local_input()
+        .unwrap()
+        .apply_local_input(bacnet_objects::traits::LocalInputValue::AccessControl(
+            AccessControlInput::AccessEvent(access_event(AccessEvent::DENIED_OTHER, 99, 30)),
+        ))
         .unwrap();
     drop(db);
     let result = operation.await.unwrap().unwrap();

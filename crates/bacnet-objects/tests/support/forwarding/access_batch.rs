@@ -7,7 +7,7 @@ pub(super) fn record(
     probe: &Probe,
     reports: &[AccessEventReport],
 ) -> Result<Vec<CommittedAccessEvent>, Error> {
-    probe.called("record_access_event_batch_internal", (reports,));
+    probe.called("AccessEvents::record_access_event_batch", (reports,));
     reports
         .iter()
         .cloned()

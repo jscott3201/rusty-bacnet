@@ -3,6 +3,7 @@ use super::*;
 use crate::command_lists::TakenRuns;
 use bacnet_device_core::write::{WriteCommitObserver, WriteTarget};
 use bacnet_objects::staging::StagingWritePlan;
+use bacnet_objects::traits::{BACnetObject, LocalInputValue, not_supported};
 use bacnet_types::constructed::BACnetRecipient;
 
 #[path = "local_write_finish.rs"]
@@ -105,7 +106,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             ErrorClass::OBJECT,
             ErrorCode::UNKNOWN_OBJECT,
         ))?;
-        object.set_life_safety_operation_expected_internal(operation)?;
+        object
+            .life_safety()
+            .ok_or_else(not_supported)?
+            .set_life_safety_operation_expected(operation)?;
         // Only a Life Safety Point or Zone reports the change. Another object
         // whose setter takes the operation owes no COV, as before (#1520).
         if crate::life_safety_cov::is_life_safety_object(*oid) {
@@ -230,8 +234,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Tokio runtime, failing before anything is written outside one, and a
     /// caller dropped once the write has committed skips none of the work
     /// the write owes (#1367).
-    ///
-    /// [`BACnetObject::set_present_value_internal`]: bacnet_objects::traits::BACnetObject::set_present_value_internal
     pub async fn set_present_value_local(
         &self,
         oid: &ObjectIdentifier,
@@ -833,24 +835,27 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                             command_origin.as_ref(),
                         )
                     }
-                    LocalWrite::ApplicationPresentValue => match &command_origin {
-                        Some(origin) => object.set_present_value_from_internal(value, origin),
-                        None => object.set_present_value_internal(value),
-                    },
+                    LocalWrite::ApplicationPresentValue => {
+                        let input = match command_origin {
+                            Some(origin) => LocalInputValue::present_value_from(value, origin),
+                            None => LocalInputValue::present_value(value),
+                        };
+                        apply_local_input(object, input)
+                    }
                     LocalWrite::ApplicationControlledVariableValue => {
-                        object.set_controlled_variable_value_internal(value)
+                        apply_local_input(object, LocalInputValue::ControlledVariableValue(value))
                     }
                     LocalWrite::ApplicationAveragingSample => {
-                        object.add_averaging_sample_internal(Some(value))
+                        apply_local_input(object, LocalInputValue::AveragingSample(Some(value)))
                     }
                     LocalWrite::ApplicationAveragingMiss => {
-                        object.add_averaging_sample_internal(None)
+                        apply_local_input(object, LocalInputValue::AveragingSample(None))
                     }
                     LocalWrite::ApplicationTrackingValue => {
-                        object.set_tracking_value_internal(value)
+                        apply_local_input(object, LocalInputValue::TrackingValue(value))
                     }
                     LocalWrite::ApplicationAccessInput(input) => {
-                        object.report_access_input_internal(input.clone())
+                        apply_local_input(object, LocalInputValue::AccessControl(input.clone()))
                     }
                     LocalWrite::WriteGroup { priority, .. } => object.write_property(
                         PropertyIdentifier::PRESENT_VALUE,
@@ -919,6 +924,16 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                 command_runs,
             }))
         }
+    }
+}
+
+/// Hand `input` to the object's [`LocalInput`](bacnet_objects::traits::LocalInput),
+/// refusing it as the object would an input it doesn't take when the object
+/// lends none.
+fn apply_local_input(object: &mut dyn BACnetObject, input: LocalInputValue) -> Result<(), Error> {
+    match object.local_input() {
+        Some(local) => local.apply_local_input(input),
+        None => Err(not_supported()),
     }
 }
 

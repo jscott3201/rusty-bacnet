@@ -5,7 +5,6 @@ use std::borrow::Cow;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use bacnet_objects::access_control::{AccessControlInput, AccessEventReport, CommittedAccessEvent};
 use bacnet_objects::audit::{
     AuditLogForwarding, AuditLogNotificationSink, AuditLogStorage, AuditReporterObject,
 };
@@ -23,7 +22,7 @@ use bacnet_objects::log_reporting::BufferReadyReport;
 use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 use bacnet_objects::traits::{
-    BACnetObject, CommandRunner, CovReportedProperty, LifeSafetyOperationOutcome,
+    AccessEvents, BACnetObject, CommandRunner, CovReportedProperty, LifeSafety, LocalInput,
     ReliabilityEvaluation, StagingSource, Timed,
 };
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter, EventTransitionBits};
@@ -33,8 +32,7 @@ use bacnet_types::constructed::{
     BACnetObjectPropertyReference, BACnetObjectSelector,
 };
 use bacnet_types::enums::{
-    AuditLevel, ErrorClass, ErrorCode, EventState, LifeSafetyOperation, PropertyIdentifier,
-    Reliability,
+    AuditLevel, ErrorClass, ErrorCode, EventState, PropertyIdentifier, Reliability,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue, Time};
@@ -235,6 +233,18 @@ impl BACnetObject for SourceReporter {
         self.wrapped.command_runner_mut()
     }
 
+    fn local_input(&mut self) -> Option<&mut dyn LocalInput> {
+        self.wrapped.local_input()
+    }
+
+    fn access_events(&mut self) -> Option<&mut dyn AccessEvents> {
+        self.wrapped.access_events()
+    }
+
+    fn life_safety(&mut self) -> Option<&mut dyn LifeSafety> {
+        self.wrapped.life_safety()
+    }
+
     fn enrollment_summary_capability_internal(&self) -> Option<EnrollmentSummaryCapability> {
         self.wrapped.enrollment_summary_capability_internal()
     }
@@ -329,21 +339,6 @@ impl BACnetObject for SourceReporter {
             .acknowledge_alarm_correlated_detailed_internal(event_state, timestamp)
     }
 
-    fn apply_life_safety_operation(
-        &mut self,
-        operation: LifeSafetyOperation,
-    ) -> Result<LifeSafetyOperationOutcome, Error> {
-        self.wrapped.apply_life_safety_operation(operation)
-    }
-
-    fn set_life_safety_operation_expected_internal(
-        &mut self,
-        operation: LifeSafetyOperation,
-    ) -> Result<(), Error> {
-        self.wrapped
-            .set_life_safety_operation_expected_internal(operation)
-    }
-
     fn set_event_state_internal(&mut self, state: EventState) -> Result<(), Error> {
         self.wrapped.set_event_state_internal(state)
     }
@@ -389,50 +384,6 @@ impl BACnetObject for SourceReporter {
 
     fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
         self.wrapped.set_reliability_internal(reliability)
-    }
-
-    fn set_present_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
-        self.wrapped.set_present_value_internal(value)
-    }
-
-    fn set_present_value_from_internal(
-        &mut self,
-        value: PropertyValue,
-        origin: &bacnet_objects::command_source::CommandOrigin,
-    ) -> Result<(), Error> {
-        self.wrapped.set_present_value_from_internal(value, origin)
-    }
-
-    fn set_tracking_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
-        self.wrapped.set_tracking_value_internal(value)
-    }
-
-    fn supports_access_event_batch_internal(&self) -> bool {
-        self.wrapped.supports_access_event_batch_internal()
-    }
-    fn record_access_event_batch_internal(
-        &mut self,
-        reports: &[AccessEventReport],
-    ) -> Result<Vec<CommittedAccessEvent>, Error> {
-        self.wrapped.record_access_event_batch_internal(reports)
-    }
-
-    fn report_access_input_internal(&mut self, input: AccessControlInput) -> Result<(), Error> {
-        self.wrapped.report_access_input_internal(input)
-    }
-
-    fn set_controlled_variable_value_internal(
-        &mut self,
-        value: PropertyValue,
-    ) -> Result<(), Error> {
-        self.wrapped.set_controlled_variable_value_internal(value)
-    }
-
-    fn add_averaging_sample_internal(
-        &mut self,
-        sample: Option<PropertyValue>,
-    ) -> Result<(), Error> {
-        self.wrapped.add_averaging_sample_internal(sample)
     }
 
     fn take_due_averaging_sample_internal(

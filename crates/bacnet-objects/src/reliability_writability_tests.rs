@@ -425,7 +425,11 @@ fn assert_present_value_ownership(
     assert_eq!(read(object, PropertyIdentifier::PRESENT_VALUE), initial);
 
     object
-        .set_present_value_internal(application_value.clone())
+        .local_input()
+        .unwrap()
+        .apply_local_input(crate::traits::LocalInputValue::present_value(
+            application_value.clone(),
+        ))
         .expect("the application must supply Present_Value while in service");
 
     assert_eq!(
@@ -457,7 +461,11 @@ fn assert_present_value_ownership(
     let simulated_reliability = read(object, PropertyIdentifier::RELIABILITY);
 
     let denied = object
-        .set_present_value_internal(rejected_application_value)
+        .local_input()
+        .unwrap()
+        .apply_local_input(crate::traits::LocalInputValue::present_value(
+            rejected_application_value,
+        ))
         .expect_err("the application must not override an out-of-service value");
     assert_protocol_error(denied, ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED);
     assert_eq!(
@@ -509,7 +517,11 @@ fn commandable_present_value_fails_closed_by_default() {
     let mut object = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
 
     let error = object
-        .set_present_value_internal(PropertyValue::Real(21.5))
+        .local_input()
+        .unwrap()
+        .apply_local_input(crate::traits::LocalInputValue::present_value(
+            PropertyValue::Real(21.5),
+        ))
         .expect_err("commandable objects must not inherit privileged authority");
     assert_protocol_error(
         error,
@@ -530,7 +542,9 @@ fn assert_internal_rejection_is_atomic(
     let present_value = read(object, PropertyIdentifier::PRESENT_VALUE);
     let reliability = read(object, PropertyIdentifier::RELIABILITY);
     let error = object
-        .set_present_value_internal(value)
+        .local_input()
+        .unwrap()
+        .apply_local_input(crate::traits::LocalInputValue::present_value(value))
         .expect_err("invalid application Present_Value must be refused");
     assert_protocol_error(error, ErrorClass::PROPERTY, code);
     assert_eq!(
@@ -544,7 +558,11 @@ fn assert_internal_rejection_is_atomic(
 fn application_present_value_writes_are_still_validated() {
     let mut analog = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     analog
-        .set_present_value_internal(PropertyValue::Real(21.5))
+        .local_input()
+        .unwrap()
+        .apply_local_input(crate::traits::LocalInputValue::present_value(
+            PropertyValue::Real(21.5),
+        ))
         .unwrap();
     assert_internal_rejection_is_atomic(
         &mut analog,
@@ -561,7 +579,11 @@ fn application_present_value_writes_are_still_validated() {
 
     let mut binary = BinaryInputObject::new(1, "BI-1").unwrap();
     binary
-        .set_present_value_internal(PropertyValue::Enumerated(1))
+        .local_input()
+        .unwrap()
+        .apply_local_input(crate::traits::LocalInputValue::present_value(
+            PropertyValue::Enumerated(1),
+        ))
         .unwrap();
     assert_internal_rejection_is_atomic(
         &mut binary,
@@ -576,7 +598,11 @@ fn application_present_value_writes_are_still_validated() {
 
     let mut multistate = MultiStateInputObject::new(1, "MSI-1", 3).unwrap();
     multistate
-        .set_present_value_internal(PropertyValue::Unsigned(2))
+        .local_input()
+        .unwrap()
+        .apply_local_input(crate::traits::LocalInputValue::present_value(
+            PropertyValue::Unsigned(2),
+        ))
         .unwrap();
     assert_internal_rejection_is_atomic(
         &mut multistate,
@@ -596,7 +622,11 @@ fn application_present_value_writes_are_still_validated() {
 fn multistate_application_updates_preserve_reliability_policy() {
     let mut object = MultiStateInputObject::new(1, "MSI-1", 3).unwrap();
     object
-        .set_present_value_internal(PropertyValue::Unsigned(3))
+        .local_input()
+        .unwrap()
+        .apply_local_input(crate::traits::LocalInputValue::present_value(
+            PropertyValue::Unsigned(3),
+        ))
         .unwrap();
     object.set_number_of_states(2).unwrap();
     assert_eq!(
@@ -604,7 +634,11 @@ fn multistate_application_updates_preserve_reliability_policy() {
         PropertyValue::Enumerated(Reliability::MULTI_STATE_OUT_OF_RANGE.to_raw())
     );
     object
-        .set_present_value_internal(PropertyValue::Unsigned(2))
+        .local_input()
+        .unwrap()
+        .apply_local_input(crate::traits::LocalInputValue::present_value(
+            PropertyValue::Unsigned(2),
+        ))
         .unwrap();
     assert_eq!(
         read(&object, PropertyIdentifier::RELIABILITY),
@@ -655,7 +689,11 @@ fn multistate_application_updates_preserve_reliability_policy() {
         "OOS must suppress local reliability evaluation"
     );
     let error = object
-        .set_present_value_internal(PropertyValue::Unsigned(1))
+        .local_input()
+        .unwrap()
+        .apply_local_input(crate::traits::LocalInputValue::present_value(
+            PropertyValue::Unsigned(1),
+        ))
         .expect_err("application update must not replace the OOS simulation");
     assert_protocol_error(error, ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED);
     assert_eq!(

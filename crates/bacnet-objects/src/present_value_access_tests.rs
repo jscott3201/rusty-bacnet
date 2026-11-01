@@ -240,7 +240,11 @@ fn writable_takes_every_peer_write_directly() {
 fn the_application_sets_present_value_while_in_service() {
     for access in [PresentValueAccess::ReadOnly, PresentValueAccess::Writable] {
         for (mut object, value, _) in values(access) {
-            object.set_present_value_internal(value.clone()).unwrap();
+            object
+                .local_input()
+                .unwrap()
+                .apply_local_input(crate::traits::LocalInputValue::present_value(value.clone()))
+                .unwrap();
 
             assert_eq!(present_value(object.as_ref()), value, "{access:?}");
         }
@@ -256,7 +260,10 @@ fn the_application_is_refused_while_out_of_service() {
             let before = present_value(object.as_ref());
 
             assert_protocol(
-                object.set_present_value_internal(value),
+                object
+                    .local_input()
+                    .unwrap()
+                    .apply_local_input(crate::traits::LocalInputValue::present_value(value)),
                 ErrorClass::PROPERTY,
                 ErrorCode::WRITE_ACCESS_DENIED,
             );
@@ -269,7 +276,10 @@ fn the_application_is_refused_while_out_of_service() {
 fn the_application_does_not_set_a_commandable_present_value() {
     for (mut object, value, _) in commandable_values() {
         assert_protocol(
-            object.set_present_value_internal(value),
+            object
+                .local_input()
+                .unwrap()
+                .apply_local_input(crate::traits::LocalInputValue::present_value(value)),
             ErrorClass::OBJECT,
             ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
         );
@@ -283,7 +293,9 @@ fn a_value_of_the_wrong_kind_is_refused() {
             let before = present_value(object.as_ref());
 
             assert_protocol(
-                object.set_present_value_internal(PropertyValue::Boolean(true)),
+                object.local_input().unwrap().apply_local_input(
+                    crate::traits::LocalInputValue::present_value(PropertyValue::Boolean(true)),
+                ),
                 ErrorClass::PROPERTY,
                 ErrorCode::INVALID_DATA_TYPE,
             );
@@ -311,7 +323,11 @@ fn noncommandable_network_null_is_a_successful_noop() {
     for access in [PresentValueAccess::Writable, PresentValueAccess::ReadOnly] {
         for sourced in [true, false] {
             for (mut object, value, _) in values(access) {
-                object.set_present_value_internal(value.clone()).unwrap();
+                object
+                    .local_input()
+                    .unwrap()
+                    .apply_local_input(crate::traits::LocalInputValue::present_value(value.clone()))
+                    .unwrap();
                 if access == PresentValueAccess::ReadOnly {
                     take_out_of_service(object.as_mut());
                 }
@@ -367,9 +383,15 @@ fn noncommandable_write_errors_preserve_value_and_internal_null_is_invalid() {
                 PropertyValue::Enumerated(2),
                 PropertyValue::Unsigned(4),
             ]) {
-                object.set_present_value_internal(value.clone()).unwrap();
+                object
+                    .local_input()
+                    .unwrap()
+                    .apply_local_input(crate::traits::LocalInputValue::present_value(value.clone()))
+                    .unwrap();
                 assert_protocol(
-                    object.set_present_value_internal(PropertyValue::Null),
+                    object.local_input().unwrap().apply_local_input(
+                        crate::traits::LocalInputValue::present_value(PropertyValue::Null),
+                    ),
                     ErrorClass::PROPERTY,
                     ErrorCode::INVALID_DATA_TYPE,
                 );

@@ -297,19 +297,6 @@ impl BACnetObject for AveragingObject {
         true
     }
 
-    fn add_averaging_sample_internal(
-        &mut self,
-        sample: Option<PropertyValue>,
-    ) -> Result<(), Error> {
-        match sample {
-            Some(value) => self.add_sample(sample_as_real(&value)?),
-            None => {
-                self.add_missed_sample();
-                Ok(())
-            }
-        }
-    }
-
     fn take_due_averaging_sample_internal(
         &mut self,
         now: Duration,
@@ -320,6 +307,26 @@ impl BACnetObject for AveragingObject {
 
     fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
         Some(self)
+    }
+
+    fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
+        Some(self)
+    }
+}
+
+/// The samples the application or the database takes.
+impl crate::traits::LocalInput for AveragingObject {
+    fn apply_local_input(&mut self, input: crate::traits::LocalInputValue) -> Result<(), Error> {
+        let crate::traits::LocalInputValue::AveragingSample(sample) = input else {
+            return Err(crate::traits::not_supported());
+        };
+        match sample {
+            Some(value) => self.add_sample(sample_as_real(&value)?),
+            None => {
+                self.add_missed_sample();
+                Ok(())
+            }
+        }
     }
 }
 

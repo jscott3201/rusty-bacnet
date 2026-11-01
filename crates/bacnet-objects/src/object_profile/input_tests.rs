@@ -181,7 +181,11 @@ fn tags_in_both_oos_states_preserve_network_and_internal_pv_ownership() {
             object.provision(optional(7)).unwrap();
             let [local, network] = pv_values(kind);
             let origin = crate::command_source::test_origin();
-            object.set_present_value_internal(local.clone()).unwrap();
+            object
+                .local_input()
+                .unwrap()
+                .apply_local_input(crate::traits::LocalInputValue::present_value(local.clone()))
+                .unwrap();
             assert_code(
                 object.write_property_from(P::PRESENT_VALUE, None, network.clone(), None, &origin),
                 ErrorCode::WRITE_ACCESS_DENIED,
@@ -195,7 +199,9 @@ fn tags_in_both_oos_states_preserve_network_and_internal_pv_ownership() {
                         .write_property_from(P::PRESENT_VALUE, None, network.clone(), None, &origin)
                         .unwrap();
                     assert_code(
-                        object.set_present_value_internal(local.clone()),
+                        object.local_input().unwrap().apply_local_input(
+                            crate::traits::LocalInputValue::present_value(local.clone()),
+                        ),
                         ErrorCode::WRITE_ACCESS_DENIED,
                     );
                     assert_code(
@@ -210,9 +216,11 @@ fn tags_in_both_oos_states_preserve_network_and_internal_pv_ownership() {
                     );
                 } else {
                     assert_code(
-                        object.set_present_value_internal(PropertyValue::CharacterString(
-                            "wrong".into(),
-                        )),
+                        object.local_input().unwrap().apply_local_input(
+                            crate::traits::LocalInputValue::present_value(
+                                PropertyValue::CharacterString("wrong".into()),
+                            ),
+                        ),
                         ErrorCode::INVALID_DATA_TYPE,
                     );
                 }
@@ -248,7 +256,11 @@ fn tags_in_both_oos_states_preserve_network_and_internal_pv_ownership() {
             object
                 .write_property(P::OUT_OF_SERVICE, None, PropertyValue::Boolean(false), None)
                 .unwrap();
-            object.set_present_value_internal(local.clone()).unwrap();
+            object
+                .local_input()
+                .unwrap()
+                .apply_local_input(crate::traits::LocalInputValue::present_value(local.clone()))
+                .unwrap();
             assert_eq!(object.read_property(P::PRESENT_VALUE, None).unwrap(), local);
             assert_eq!(store.attempts(), if persistent { 2 } else { 0 });
             assert_eq!(object.durable_writes().is_some(), persistent);

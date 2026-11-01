@@ -79,7 +79,12 @@ fn point_reset_variants_receive_exact_context_and_commit_atomically() {
         }));
 
         assert_eq!(
-            point.apply_life_safety_operation(operation).unwrap().effect,
+            point
+                .life_safety()
+                .unwrap()
+                .apply_life_safety_operation(operation)
+                .unwrap()
+                .effect,
             LifeSafetyOperationEffect::Applied
         );
         assert_eq!(
@@ -110,6 +115,8 @@ fn point_reset_outcome_reports_exact_committed_deltas() {
     }));
 
     let outcome = point
+        .life_safety()
+        .unwrap()
         .apply_life_safety_operation(LifeSafetyOperation::RESET)
         .unwrap();
 
@@ -158,7 +165,11 @@ fn zone_reset_variants_receive_exact_context_and_commit_atomically() {
         }));
 
         assert_eq!(
-            zone.apply_life_safety_operation(operation).unwrap().effect,
+            zone.life_safety()
+                .unwrap()
+                .apply_life_safety_operation(operation)
+                .unwrap()
+                .effect,
             LifeSafetyOperationEffect::Applied
         );
         assert_eq!(
@@ -184,6 +195,8 @@ fn no_delta_reset_success_preserves_values_and_clears_expected_operation() {
     let before = point_state(&point);
 
     point
+        .life_safety()
+        .unwrap()
         .apply_life_safety_operation(LifeSafetyOperation::RESET)
         .unwrap();
 
@@ -211,6 +224,8 @@ fn same_value_reset_commit_reports_only_expected_operation() {
     }));
 
     let outcome = point
+        .life_safety()
+        .unwrap()
         .apply_life_safety_operation(LifeSafetyOperation::RESET)
         .unwrap();
 
@@ -257,6 +272,8 @@ fn zone_reset_outcome_reports_tracking_value_only_when_committed() {
         }));
 
         let outcome = zone
+            .life_safety()
+            .unwrap()
             .apply_life_safety_operation(LifeSafetyOperation::RESET)
             .unwrap();
 
@@ -285,6 +302,8 @@ fn wrong_expected_reset_never_calls_executor_or_changes_state() {
     let before = point_state(&point);
 
     let error = point
+        .life_safety()
+        .unwrap()
         .apply_life_safety_operation(LifeSafetyOperation::RESET_ALARM)
         .unwrap_err();
 
@@ -305,6 +324,8 @@ fn missing_point_and_zone_executors_fail_without_mutation() {
     let point_before = point_state(&point);
     assert_error(
         point
+            .life_safety()
+            .unwrap()
             .apply_life_safety_operation(LifeSafetyOperation::RESET)
             .unwrap_err(),
         ErrorClass::OBJECT,
@@ -317,7 +338,9 @@ fn missing_point_and_zone_executors_fail_without_mutation() {
     zone.set_operation_expected(LifeSafetyOperation::RESET_FAULT);
     let zone_before = zone_state(&zone);
     assert_error(
-        zone.apply_life_safety_operation(LifeSafetyOperation::RESET_FAULT)
+        zone.life_safety()
+            .unwrap()
+            .apply_life_safety_operation(LifeSafetyOperation::RESET_FAULT)
             .unwrap_err(),
         ErrorClass::OBJECT,
         ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
@@ -355,6 +378,8 @@ fn executor_failures_and_panics_map_exactly_without_mutation() {
 
         assert_error(
             point
+                .life_safety()
+                .unwrap()
                 .apply_life_safety_operation(LifeSafetyOperation::RESET)
                 .unwrap_err(),
             class,
@@ -372,7 +397,9 @@ fn executor_failures_and_panics_map_exactly_without_mutation() {
         zone.set_reset_executor(Arc::new(|_| panic!("executor bug")));
         let before = zone_state(&zone);
         assert_error(
-            zone.apply_life_safety_operation(LifeSafetyOperation::RESET)
+            zone.life_safety()
+                .unwrap()
+                .apply_life_safety_operation(LifeSafetyOperation::RESET)
                 .unwrap_err(),
             ErrorClass::SERVICES,
             ErrorCode::SERVICE_REQUEST_DENIED,
@@ -398,6 +425,8 @@ fn invalid_commits_cannot_partially_mutate_point_or_zone() {
     let before = point_state(&point);
     assert_error(
         point
+            .life_safety()
+            .unwrap()
             .apply_life_safety_operation(LifeSafetyOperation::RESET)
             .unwrap_err(),
         ErrorClass::OBJECT,
@@ -427,7 +456,9 @@ fn invalid_commits_cannot_partially_mutate_point_or_zone() {
         }));
         let before = zone_state(&zone);
         assert_error(
-            zone.apply_life_safety_operation(LifeSafetyOperation::RESET)
+            zone.life_safety()
+                .unwrap()
+                .apply_life_safety_operation(LifeSafetyOperation::RESET)
                 .unwrap_err(),
             ErrorClass::OBJECT,
             ErrorCode::VALUE_OUT_OF_RANGE,
@@ -450,6 +481,8 @@ fn trusted_local_rearm_executes_two_reset_cycles() {
     for _ in 0..2 {
         point.set_operation_expected(LifeSafetyOperation::RESET);
         point
+            .life_safety()
+            .unwrap()
             .apply_life_safety_operation(LifeSafetyOperation::RESET)
             .unwrap();
     }
