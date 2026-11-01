@@ -50,8 +50,30 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
-pub(super) fn for_object(_object: &TimerObject) -> Cow<'_, [PropertyMetadata]> {
-    Cow::Borrowed(BASE)
+// Table 12-75 footnote 5: the three come together. The table leaves their
+// write access open; State_Change_Values and the references take writes, and
+// Priority_For_Writing is set with them (#2206).
+const STATE_CHANGE: &[PropertyMetadata] = &[
+    PropertyMetadata::new(P::STATE_CHANGE_VALUES, Optional, None, Always),
+    PropertyMetadata::new(
+        P::LIST_OF_OBJECT_PROPERTY_REFERENCES,
+        Optional,
+        None,
+        Always,
+    ),
+    PropertyMetadata::new(P::PRIORITY_FOR_WRITING, Optional, None, ReadOnly),
+];
+
+pub(super) fn for_object(object: &TimerObject) -> Cow<'_, [PropertyMetadata]> {
+    if object.state_change.is_none() {
+        return Cow::Borrowed(BASE);
+    }
+    // In table order, ahead of Property_List.
+    let (property_list, rows) = BASE.split_last().expect("BASE has rows");
+    let mut rows = rows.to_vec();
+    rows.extend_from_slice(STATE_CHANGE);
+    rows.push(*property_list);
+    Cow::Owned(rows)
 }
 
 #[cfg(test)]

@@ -171,6 +171,7 @@ impl TimerObject {
     fn transition_at(&mut self, transition: TimerTransition, stamp: (Date, Time)) {
         self.last_state_change = transition;
         self.update_time = stamp;
+        self.plan_writes(transition);
     }
 
     /// The start request, with `timeout` milliseconds.

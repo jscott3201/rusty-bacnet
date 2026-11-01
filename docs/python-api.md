@@ -3758,7 +3758,16 @@ server.add_command(
     ],
     action_text=["Occupied", "Unoccupied"],  # one text per list
 )
-server.add_timer(instance=1, name="Timer")
+server.add_timer(
+    instance=1,
+    name="Timer",
+    # IDLE_TO_RUNNING .. EXPIRED_TO_RUNNING; None writes nothing.
+    state_change_values=[PropertyValue.enumerated(1), PropertyValue.null(), None,
+                         PropertyValue.enumerated(0), PropertyValue.enumerated(0),
+                         None, PropertyValue.enumerated(1)],
+    references=[(ObjectIdentifier(ObjectType.BINARY_OUTPUT, 1), PropertyIdentifier.PRESENT_VALUE)],
+    priority_for_writing=8,
+)
 server.add_load_control(instance=1, name="Load Control")
 server.add_program(instance=1, name="Program")
 server.add_averaging(

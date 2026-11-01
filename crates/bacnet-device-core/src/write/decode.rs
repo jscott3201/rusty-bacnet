@@ -124,9 +124,10 @@ pub fn decode_write_property_value(
         return Ok(PropertyValue::ApplicationData(bytes.to_vec()));
     }
     // The Schedule's arrays of constructed elements, an Access Rights
-    // object's two rule arrays, and Tags, reach the object as raw bytes,
-    // which it splits and decodes with the shared codecs; index 0, the array
-    // size, stays an Unsigned (#1057, #1330, #1553).
+    // object's two rule arrays, Tags and a Timer's State_Change_Values reach
+    // the object as raw bytes, which it splits and decodes with the shared
+    // codecs; index 0, the array size, stays an Unsigned (#1057, #1330,
+    // #1553, #2206).
     if array_index != Some(0)
         && matches!(
             property,
@@ -135,6 +136,7 @@ pub fn decode_write_property_value(
                 | PropertyIdentifier::POSITIVE_ACCESS_RULES
                 | PropertyIdentifier::NEGATIVE_ACCESS_RULES
                 | PropertyIdentifier::TAGS
+                | PropertyIdentifier::STATE_CHANGE_VALUES
         )
     {
         return Ok(PropertyValue::ApplicationData(bytes.to_vec()));
