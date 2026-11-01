@@ -242,10 +242,6 @@ impl BACnetObject for SourceReporter {
         self.wrapped.is_list_property(property)
     }
 
-    fn is_createable(&self) -> bool {
-        self.wrapped.is_createable()
-    }
-
     fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
         self.wrapped.creation_only_properties()
     }

@@ -532,22 +532,6 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         list_property_default(self.object_identifier().object_type(), property)
     }
 
-    /// Whether this object type can be created at runtime via CreateObject.
-    ///
-    /// Default `false`. The bundled server's PICS reports the answer as the
-    /// type's createability. Its CreateObject handler doesn't ask: it builds
-    /// objects from a fixed factory of built-in types (Analog Input and
-    /// Output, the binary types and the multi-state types), which are the
-    /// ones that answer `true`. It refuses every other type, a custom type
-    /// included: OBJECT / UNSUPPORTED_OBJECT_TYPE for a type the Device
-    /// doesn't list in Protocol_Object_Types_Supported, and OBJECT /
-    /// DYNAMIC_CREATION_NOT_SUPPORTED for a listed one it doesn't build
-    /// (#2171). So a custom object keeps the default; answering `true` would
-    /// make the PICS promise a creation the server refuses.
-    fn is_createable(&self) -> bool {
-        false
-    }
-
     /// The properties whose whole value a CreateObject initial value may set
     /// on this object although WriteProperty can't change it afterwards.
     ///
@@ -576,10 +560,9 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// answer for a property that can't be initialized at creation (Clause
     /// 15.3.1.3.1).
     ///
-    /// The bundled server's CreateObject builds only built-in objects today
-    /// (Analog Input and Output, the binary types and the multi-state
-    /// types), so on a custom object this hook is reached only by a caller
-    /// that builds the object itself.
+    /// The bundled server's CreateObject reaches this hook on the types in
+    /// [`crate::creation`] and on a custom object whose type the
+    /// application registered a constructor for.
     fn initialize_property(
         &mut self,
         _property: PropertyIdentifier,

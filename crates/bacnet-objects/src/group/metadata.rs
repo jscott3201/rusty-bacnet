@@ -42,9 +42,8 @@ use crate::property_metadata::{
 // serve none of them (#1064 removed the rows the 0.1.0 import carried).
 // Presence is None throughout: the implementation models no commandable,
 // intrinsic-reporting, or paired-text gating on this family.
-// The trio is not createable at runtime (the network factory builds only the
-// eight analog/binary/multi-state input/output/value types, so the
-// is_createable=false default holds) and remains deleteable (delete denies
+// The trio is not createable at runtime (the `creation` table has no
+// constructor for it) and remains deleteable (delete denies
 // only Device and NetworkPort, so the is_deleteable=true default holds);
 // neither needs an override. Array gating, writability, and COV also keep
 // their defaults: Present_Value admits an index only on GlobalGroup
@@ -136,7 +135,6 @@ mod tests {
                 .len(),
             metadata.len()
         );
-        assert!(!object.is_createable());
         assert!(object.is_deleteable());
         assert!(!object.supports_cov());
         for row in metadata.iter() {

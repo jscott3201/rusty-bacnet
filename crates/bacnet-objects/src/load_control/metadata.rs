@@ -135,7 +135,6 @@ mod tests {
                 .len(),
             metadata.len()
         );
-        assert!(!object.is_createable());
         assert!(object.is_deleteable());
         // Table 13-1 has a Load Control row (#1061).
         assert!(object.supports_cov());

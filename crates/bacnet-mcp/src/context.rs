@@ -85,6 +85,8 @@ pub(crate) struct Ctx<T: TransportPort + 'static> {
     /// Writes and reverts handed to tasks of their own, which a shutdown
     /// waits for.
     pub(crate) handoffs: tokio_util::task::TaskTracker,
+    /// A request's panic, which ends the session (#2203).
+    pub(crate) panics: crate::contain::Panics,
 }
 
 /// The points a principal watches, each with the number of its sessions

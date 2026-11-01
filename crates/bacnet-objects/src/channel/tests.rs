@@ -528,6 +528,5 @@ fn channel_property_list_and_required_rows_follow_table_12_62() {
     );
     assert!(!channel.supports_cov());
     assert!(!channel.supports_subscribe_cov_property());
-    assert!(!channel.is_createable());
     assert!(channel.is_deleteable());
 }

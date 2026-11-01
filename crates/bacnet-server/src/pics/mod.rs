@@ -26,7 +26,15 @@ pub struct Pics {
     pub vendor_info: VendorInfo,
     /// Device profile claimed.
     pub device_profile: DeviceProfile,
-    /// Object types present in the database with their creation, deletion and property support.
+    /// Object types with their creation, deletion and property support, in
+    /// ascending type order: each type present in the database, and each
+    /// type CreateObject builds even before it has an instance. Until its
+    /// first instance, a table type is described from an object its own
+    /// built-in constructor makes, which the database never sees. A registered type
+    /// with no instance gets a row without property detail (no properties
+    /// and no creation-only list, deleteable as the trait default answers):
+    /// the server never calls an application's constructor just to
+    /// describe the type.
     pub supported_object_types: Vec<ObjectTypeSupport>,
     /// Services the server can initiate or execute.
     pub supported_services: Vec<ServiceSupport>,
@@ -141,7 +149,12 @@ pub struct PropertySupport {
 pub struct ObjectTypeSupport {
     /// Object type described.
     pub object_type: ObjectType,
-    /// Whether the type can be created remotely with CreateObject.
+    /// Whether the type can be created remotely with CreateObject: the
+    /// server configuration registers a constructor for it
+    /// ([`ServerConfig::object_constructors`]), or the built-in table
+    /// ([`bacnet_objects::creation`]) builds it. Every createable type has a
+    /// row, with or without an instance in the database: see
+    /// [`Pics::supported_object_types`].
     pub createable: bool,
     /// The properties a CreateObject initial value may set whole on a type
     /// that is createable, although WriteProperty can't change them later
@@ -400,65 +413,6 @@ impl<'a> PicsGenerator<'a> {
         }
     }
 
-    fn build_object_types(&self) -> Vec<ObjectTypeSupport> {
-        let mut by_type: BTreeMap<u32, Vec<&dyn bacnet_objects::traits::BACnetObject>> =
-            BTreeMap::new();
-        for (_oid, obj) in self.db.iter_objects() {
-            by_type
-                .entry(obj.object_identifier().object_type().to_raw())
-                .or_default()
-                .push(obj);
-        }
-
-        let mut result = Vec::with_capacity(by_type.len());
-        for (raw_type, objects) in &by_type {
-            let object_type = ObjectType::from_raw(*raw_type);
-            let representative = objects[0];
-            let view = (self.served && object_type == ObjectType::DEVICE).then(|| {
-                crate::device_view::DeviceReadContext::new(
-                    self.db,
-                    crate::device_view::DeviceExecution::FullServer,
-                )
-                .with_identity(Some(&self.server_config.device))
-            });
-            let supported_properties =
-                Self::union_property_support(objects.iter().flat_map(|object| {
-                    if let Some(view) = &view {
-                        Self::object_property_support(&view.object(*object))
-                    } else {
-                        Self::object_property_support(*object)
-                    }
-                }));
-
-            // Factory/deletion capabilities are type-level declarations, not
-            // per-instance property capabilities. Preserve that separate policy.
-
-            let createable = representative.is_createable();
-            let deleteable = representative.is_deleteable();
-            let written_through = |property: &PropertyIdentifier| {
-                supported_properties
-                    .iter()
-                    .any(|row| row.property_id == *property && row.written_through.is_some())
-            };
-            let creation_only_properties = if createable {
-                let mut properties = representative.creation_only_properties().to_vec();
-                properties.retain(|property| !written_through(property));
-                properties
-            } else {
-                Vec::new()
-            };
-
-            result.push(ObjectTypeSupport {
-                object_type,
-                createable,
-                creation_only_properties,
-                deleteable,
-                supported_properties,
-            });
-        }
-        result
-    }
-
     fn object_property_support(
         object: &dyn bacnet_objects::traits::BACnetObject,
     ) -> Vec<PropertySupport> {
@@ -647,6 +601,7 @@ pub fn service_display_name(service: ServiceSupported) -> Option<&'static str> {
 }
 
 mod device_text;
+mod object_types;
 mod render;
 
 // ─────────────────────────────── Tests ─────────────────────────────────────
@@ -680,6 +635,9 @@ mod selected_device_tests;
 
 #[cfg(test)]
 mod creation_only_tests;
+
+#[cfg(test)]
+mod createable_rows_tests;
 
 #[cfg(test)]
 mod data_link_tests;

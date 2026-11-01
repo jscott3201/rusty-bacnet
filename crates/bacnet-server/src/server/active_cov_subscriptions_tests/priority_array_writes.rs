@@ -158,7 +158,8 @@ fn priority_array_all_twenty_profiles_trait_metadata_and_pics_are_read_only() {
         &database,
         &ServerConfig::default(),
         &crate::pics::PicsConfig::default(),
-    );
+    )
+    .instance_types_only(&database);
     assert_eq!(pics.supported_object_types.len(), 20);
     for support in pics.supported_object_types {
         let row = support

@@ -183,7 +183,6 @@ async fn success(role: SessionRole) {
         let db = db.read().await;
         assert!(source(&db, selected()));
         assert!(!db.get(&selected()).unwrap().is_deleteable());
-        assert!(!db.get(&selected()).unwrap().is_createable());
         assert!(!source(&db, target()));
         assert!(db.get(&target()).unwrap().is_deleteable());
     }

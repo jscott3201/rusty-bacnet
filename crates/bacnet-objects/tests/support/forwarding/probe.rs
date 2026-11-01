@@ -275,10 +275,6 @@ impl BACnetObject for Probe {
         self.called("is_list_property", (property,));
         property == CUSTOM_LIST
     }
-    fn is_createable(&self) -> bool {
-        self.called("is_createable", ());
-        true
-    }
     fn creation_only_properties(&self) -> &'static [P] {
         self.called("creation_only_properties", ());
         &[CUSTOM]

@@ -94,7 +94,8 @@ mod pics {
                 required.sort_by_key(|property| property.to_raw());
                 let mut db = ObjectDatabase::new();
                 db.add(Box::new(object)).unwrap();
-                let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
+                let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default())
+                    .instance_types_only(&db);
                 assert_eq!(pics.supported_object_types.len(), 1);
                 let support = &pics.supported_object_types[0];
                 assert_eq!(support.object_type, bacnet_types::enums::ObjectType::FILE);

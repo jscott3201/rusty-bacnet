@@ -159,6 +159,7 @@ fn a_raw_octet_initial_value_reaches_the_object_whole() {
     let mut target = None;
     handle_create_object_observed(
         &mut db,
+        &Default::default(),
         &request(
             ObjectType::ANALOG_OUTPUT,
             vec![
@@ -231,6 +232,7 @@ fn a_null_initial_value_still_relinquishes_a_commandable_present_value() {
     let mut target = None;
     handle_create_object_observed(
         &mut db,
+        &Default::default(),
         &request(
             ObjectType::ANALOG_OUTPUT,
             vec![
@@ -317,6 +319,7 @@ fn the_first_initial_value_that_fails_is_named_and_nothing_is_created() {
         let mut target = None;
         let refusal = handle_create_object_observed(
             &mut db,
+            &Default::default(),
             &request(object_type, values),
             &mut BytesMut::new(),
             &mut target,

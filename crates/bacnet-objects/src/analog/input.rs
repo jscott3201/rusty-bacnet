@@ -407,10 +407,6 @@ impl BACnetObject for AnalogInputObject {
         self.reliability_inhibit.enabled()
     }
 
-    fn is_createable(&self) -> bool {
-        true
-    }
-
     fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
         super::CREATION_ONLY
     }

@@ -304,7 +304,6 @@ mod tests {
                     required.push(P::PROPERTY_LIST);
                     assert_eq!(object.property_list().as_ref(), all);
                     assert_eq!(object.required_properties().as_ref(), required);
-                    assert!(!object.is_createable());
                     assert!(object.is_deleteable());
                     assert!(!object.supports_cov());
                     assert!(!object.is_array_property(P::LOG_BUFFER));

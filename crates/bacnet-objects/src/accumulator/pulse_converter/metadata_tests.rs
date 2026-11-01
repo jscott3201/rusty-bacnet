@@ -89,7 +89,6 @@ fn property_metadata_pulse_converter_exact_sets_readable_rows_and_indexed_list()
             .len(),
         metadata.len()
     );
-    assert!(!object.is_createable());
     assert!(object.is_deleteable());
     assert!(object.supports_cov());
     for row in metadata.iter() {

@@ -86,14 +86,14 @@ Generate the PICS from the configuration you ship: the same objects, the same id
 | Vendor name, model name, firmware revision, application software version | The Device object's Vendor_Name, Model_Name, Firmware_Revision and Application_Software_Version |
 | Vendor ID | The Device object's Vendor_Identifier, as the server serves it |
 | Protocol version and revision | The Device object's Protocol_Version and Protocol_Revision |
-| Supported object types | One section per object type in the database; a type you don't add isn't listed |
+| Supported object types | One section per object type in the database, and one per type CreateObject can build even before it has an instance; any other type you don't add isn't listed |
 | Createable and Deleteable | Whether CreateObject and DeleteObject reach the type, from the type's own declaration |
 | Whole value set only by CreateObject | Properties a CreateObject initial value may set that WriteProperty can't change later |
 | Property rows | Each instance's property metadata, combined across the instances of the type; the Device's rows come from the server's view of it |
 | Supported services, Executor | The services the full server runs; TimeSynchronization and UTCTimeSynchronization only when the server keeps a clock |
 | Supported services, Initiator | `PicsGenerator::INITIATED_SERVICES`, a fixed list of the requests the server can send in some configuration |
 
-The generator reads the database at the moment you call it. Objects your application adds later, or creates through CreateObject, appear only in a PICS generated after them, and so does a Device value your application changes.
+The generator reads the database at the moment you call it. Objects your application adds later, or creates through CreateObject, appear only in a PICS generated after them, and so does a Device value your application changes. A type CreateObject builds is listed as createable either way: until its first instance, a built-in type is described from an object made for the purpose and never added, and a type with a registered constructor and no instance is listed without property rows, since the generator doesn't call your constructor.
 
 ### Details read from the Device
 

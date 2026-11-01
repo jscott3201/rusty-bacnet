@@ -382,6 +382,8 @@ impl TransportPort for HubPort {
     }
 
     async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
+        #[cfg(all(unix, feature = "mcp"))]
+        super::mcp_attach::panic_if_armed();
         self.deliver(npdu, Some(mac));
         Ok(())
     }
@@ -634,15 +636,23 @@ impl Site {
     /// send it (confirming the warning if one appears), wait out the window,
     /// and then until the table holds at least `rows` devices.
     pub(super) async fn who_is(&mut self, range: &str, rows: usize) {
-        self.who_is_in(false, range, rows).await;
+        self.who_is_in(false, range, rows, "2").await;
+    }
+
+    /// [`Self::who_is`] with a window of one second, for a test on the
+    /// real clock, which waits the window out. Its caller is the attached
+    /// MCP test, so it has that test's cfg.
+    #[cfg(all(unix, feature = "mcp"))]
+    pub(super) async fn who_is_briefly(&mut self, range: &str, rows: usize) {
+        self.who_is_in(false, range, rows, "1").await;
     }
 
     /// [`Self::who_is`] as a global broadcast, which routers pass on.
     pub(super) async fn global_who_is(&mut self, range: &str, rows: usize) {
-        self.who_is_in(true, range, rows).await;
+        self.who_is_in(true, range, rows, "2").await;
     }
 
-    async fn who_is_in(&mut self, global: bool, range: &str, rows: usize) {
+    async fn who_is_in(&mut self, global: bool, range: &str, rows: usize, window: &str) {
         press(&mut self.app, KeyCode::Char('d'));
         if global {
             press(&mut self.app, KeyCode::Right);
@@ -651,7 +661,7 @@ impl Site {
         type_text(&mut self.app, range);
         press(&mut self.app, KeyCode::Tab);
         press(&mut self.app, KeyCode::Backspace);
-        type_text(&mut self.app, "2");
+        type_text(&mut self.app, window);
         let mut commands = press(&mut self.app, KeyCode::Enter);
         if commands.is_empty() {
             commands = press(&mut self.app, KeyCode::Enter);

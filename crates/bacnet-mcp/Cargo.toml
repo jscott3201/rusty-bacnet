@@ -30,8 +30,9 @@ bacnet-services = { workspace = true, features = ["std"] }
 rmcp = { version = "=3.5.1", default-features = false, features = ["server"] }
 serde = { workspace = true, features = ["derive", "std"] }
 serde_json.workspace = true
-# `net`: the TUI-attached mode's local socket (#2185).
-tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+# `net`: the TUI-attached mode's local socket (#2185); `rt-multi-thread`:
+# the runtime its sessions run on (#2203).
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
 tracing.workspace = true
 # A listen stream waits on many points' signals at once.
 futures-util = { workspace = true }

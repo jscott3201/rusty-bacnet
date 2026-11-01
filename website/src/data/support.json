@@ -94,7 +94,7 @@
       "name": "ANALOG_OUTPUT"
     },
     {
-      "create": false,
+      "create": true,
       "delete": true,
       "id": 2,
       "name": "ANALOG_VALUE"
@@ -310,73 +310,73 @@
       "name": "CREDENTIAL_DATA_INPUT"
     },
     {
-      "create": false,
+      "create": true,
       "delete": true,
       "id": 39,
       "name": "BITSTRING_VALUE"
     },
     {
-      "create": false,
+      "create": true,
       "delete": true,
       "id": 40,
       "name": "CHARACTERSTRING_VALUE"
     },
     {
-      "create": false,
+      "create": true,
       "delete": true,
       "id": 41,
       "name": "DATEPATTERN_VALUE"
     },
     {
-      "create": false,
+      "create": true,
       "delete": true,
       "id": 42,
       "name": "DATE_VALUE"
     },
     {
-      "create": false,
+      "create": true,
       "delete": true,
       "id": 43,
       "name": "DATETIMEPATTERN_VALUE"
     },
     {
-      "create": false,
+      "create": true,
       "delete": true,
       "id": 44,
       "name": "DATETIME_VALUE"
     },
     {
-      "create": false,
+      "create": true,
       "delete": true,
       "id": 45,
       "name": "INTEGER_VALUE"
     },
     {
-      "create": false,
+      "create": true,
       "delete": true,
       "id": 46,
       "name": "LARGE_ANALOG_VALUE"
     },
     {
-      "create": false,
+      "create": true,
       "delete": true,
       "id": 47,
       "name": "OCTETSTRING_VALUE"
     },
     {
-      "create": false,
+      "create": true,
       "delete": true,
       "id": 48,
       "name": "POSITIVE_INTEGER_VALUE"
     },
     {
-      "create": false,
+      "create": true,
       "delete": true,
       "id": 49,
       "name": "TIMEPATTERN_VALUE"
     },
     {
-      "create": false,
+      "create": true,
       "delete": true,
       "id": 50,
       "name": "TIME_VALUE"

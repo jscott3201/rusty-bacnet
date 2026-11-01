@@ -29,7 +29,6 @@ fn assert_exact_sets(object: &dyn BACnetObject, all: &[P], required: &[P]) {
             .len(),
         metadata.len()
     );
-    assert!(!object.is_createable());
     assert!(object.is_deleteable());
     // Global_Identifier is the W row of Tables 12-38, 12-39 and 12-40.
     let required_write = matches!(

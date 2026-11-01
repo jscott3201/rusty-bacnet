@@ -1,9 +1,11 @@
 //! BACnet/SC profiles: schema, identity persistence, overrides, and what a
 //! saved file may contain. Each test uses its own temporary config root.
 
-use super::service::{Reply, Service};
-use super::store::Store;
+use super::service::{Reply, Request, Service};
+use super::store::{self, Store};
 use super::*;
+use crate::tui::app::connection::{Connection, Key, Screen};
+use crate::tui::message::Command;
 use std::path::{Path, PathBuf};
 
 fn cli(args: &[&str]) -> crate::args::Cli {
@@ -455,5 +457,138 @@ fn a_save_already_in_place_can_be_retried() {
     assert!(
         store.save("site", &other, true).is_err(),
         "never overwritten"
+    );
+}
+
+/// Submit the editor's profile to `service`.
+fn submit(editor: &mut Connection, service: &Service) -> Result<Reply, String> {
+    let Some(Command::Profile(Request::Save {
+        name,
+        profile,
+        create,
+        previous,
+    })) = editor.key(Key::Submit)
+    else {
+        panic!("the editor saves: {:?}", editor.error);
+    };
+    service.save(&name, profile, create, previous)
+}
+
+/// A new SC profile "site" in the editor, whose first save failed with
+/// its file in place (the directory sync failed): the service, the
+/// editor after that reply, and the profile written.
+fn failed_in_place(root: &Path, files: &Path) -> (Service, Connection, Profile) {
+    let (ca, cert, key, _) = pem_files(files);
+    let service = service(root, Overrides::default());
+    let mut editor = Connection::new(Overrides::default());
+    assert!(editor.key(Key::NewSc).is_none());
+    editor.fields[0] = "site".into();
+    editor.fields[1] = "wss://127.0.0.1:47808".into();
+    for (i, path) in [(3, &ca), (4, &cert), (5, &key)] {
+        editor.fields[i] = path.display().to_string();
+    }
+    store::tests::fail_syncs(true);
+    let failed = submit(&mut editor, &service);
+    store::tests::fail_syncs(false);
+    let Ok(Reply::InPlace {
+        profile: written,
+        error,
+    }) = &failed
+    else {
+        panic!("the file is in place: {failed:?}");
+    };
+    // The store's own in-place arm, after the publish's directory sync.
+    assert!(
+        error.starts_with("profile site: the new file is in place"),
+        "{error}"
+    );
+    let written = written.clone();
+    editor.reply(failed);
+    assert_eq!(editor.screen, Screen::Edit);
+    assert!(
+        editor
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("in place"))
+    );
+    (service, editor, written)
+}
+
+/// A new SC profile whose save fails with its file in place (the
+/// directory sync failed) is retried from the same editor state: the
+/// editor kept the identity drawn for it, so the retry writes the same
+/// text, reports saved, and the file keeps that first identity (#2196).
+#[test]
+fn a_retried_sc_creation_keeps_its_identity() {
+    let root = tempfile::tempdir().unwrap();
+    let files = tempfile::tempdir().unwrap();
+    let (service, mut editor, written) = failed_in_place(root.path(), files.path());
+    let first = uuid_of(&written);
+
+    let retried = submit(&mut editor, &service);
+    let Ok(Reply::Loaded { profile, .. }) = &retried else {
+        panic!("the retry is saved: {retried:?}");
+    };
+    assert_eq!(uuid_of(profile), first);
+    let on_disk = Store::new(root.path().into()).load("site").unwrap();
+    assert_eq!(
+        uuid_of(&on_disk),
+        first,
+        "the file keeps the first identity"
+    );
+    assert_eq!(
+        on_disk.sc.as_ref().unwrap().vmac,
+        written.sc.as_ref().unwrap().vmac
+    );
+}
+
+/// Renamed after a save that went in place, the profile is a second one:
+/// it draws an identity of its own instead of the stray file's.
+#[test]
+fn a_profile_renamed_after_an_in_place_save_draws_its_own_identity() {
+    let root = tempfile::tempdir().unwrap();
+    let files = tempfile::tempdir().unwrap();
+    let (service, mut editor, written) = failed_in_place(root.path(), files.path());
+    editor.fields[0] = "other".into();
+
+    let saved = submit(&mut editor, &service);
+    let Ok(Reply::Loaded { name, profile, .. }) = &saved else {
+        panic!("the renamed profile is saved: {saved:?}");
+    };
+    assert_eq!(name, "other");
+    let (new, old) = (profile.sc.as_ref().unwrap(), written.sc.as_ref().unwrap());
+    assert_ne!(new.device_uuid, old.device_uuid, "a UUID of its own");
+    assert_ne!(new.vmac, old.vmac, "a VMAC of its own");
+    let stray = Store::new(root.path().into()).load("site").unwrap();
+    assert_eq!(uuid_of(&stray), uuid_of(&written), "the first file is left");
+}
+
+/// A rename that is refused (an invalid name, a name already taken) and
+/// then typed back keeps the adopted identity: the save under the first
+/// name finds the stray file in place and reports it saved.
+#[test]
+fn a_refused_rename_typed_back_keeps_the_adopted_identity() {
+    let root = tempfile::tempdir().unwrap();
+    let files = tempfile::tempdir().unwrap();
+    let (service, mut editor, written) = failed_in_place(root.path(), files.path());
+    editor.fields[0] = "bad name!".into();
+    assert!(editor.key(Key::Submit).is_none(), "an invalid name");
+    Store::new(root.path().into())
+        .save("taken", &Profile::default(), true)
+        .unwrap();
+    editor.fields[0] = "taken".into();
+    let refused = submit(&mut editor, &service);
+    assert!(refused.is_err(), "the name is taken: {refused:?}");
+    editor.reply(refused);
+
+    editor.fields[0] = "site".into();
+    let saved = submit(&mut editor, &service);
+    let Ok(Reply::Loaded { profile, .. }) = &saved else {
+        panic!("saved under its first name: {saved:?}");
+    };
+    assert_eq!(uuid_of(profile), uuid_of(&written));
+    assert_eq!(
+        profile.sc.as_ref().unwrap().vmac,
+        written.sc.as_ref().unwrap().vmac
     );
 }

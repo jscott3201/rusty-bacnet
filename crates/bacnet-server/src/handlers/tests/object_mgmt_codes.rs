@@ -46,15 +46,28 @@ fn object(kind: ObjectType, instance: u32) -> ObjectIdentifier {
 
 /// The types the factory builds; the rest of the listed types aren't
 /// creatable (#2172).
-const CREATABLE: [ObjectType; 8] = [
+const CREATABLE: [ObjectType; 21] = [
     ObjectType::ANALOG_INPUT,
     ObjectType::ANALOG_OUTPUT,
+    ObjectType::ANALOG_VALUE,
     ObjectType::BINARY_INPUT,
     ObjectType::BINARY_OUTPUT,
     ObjectType::BINARY_VALUE,
     ObjectType::MULTI_STATE_INPUT,
     ObjectType::MULTI_STATE_OUTPUT,
     ObjectType::MULTI_STATE_VALUE,
+    ObjectType::INTEGER_VALUE,
+    ObjectType::POSITIVE_INTEGER_VALUE,
+    ObjectType::LARGE_ANALOG_VALUE,
+    ObjectType::CHARACTERSTRING_VALUE,
+    ObjectType::OCTETSTRING_VALUE,
+    ObjectType::BITSTRING_VALUE,
+    ObjectType::DATE_VALUE,
+    ObjectType::TIME_VALUE,
+    ObjectType::DATETIME_VALUE,
+    ObjectType::DATEPATTERN_VALUE,
+    ObjectType::TIMEPATTERN_VALUE,
+    ObjectType::DATETIMEPATTERN_VALUE,
 ];
 
 #[test]

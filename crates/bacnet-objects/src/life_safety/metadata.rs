@@ -230,7 +230,6 @@ mod tests {
                 .len(),
             metadata.len()
         );
-        assert!(!object.is_createable());
         assert!(object.is_deleteable());
         assert!(object.supports_cov());
         assert_conformance(&metadata, &required);
@@ -296,7 +295,6 @@ mod tests {
                 .len(),
             metadata.len()
         );
-        assert!(!object.is_createable());
         assert!(object.is_deleteable());
         assert!(object.supports_cov());
         assert_conformance(&metadata, &required);

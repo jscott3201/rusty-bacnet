@@ -139,7 +139,8 @@ fn pics_access_identity_property_metadata_is_exact() {
                 let required = object.required_properties();
                 let mut db = ObjectDatabase::new();
                 db.add(object).unwrap();
-                let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
+                let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default())
+                    .instance_types_only(&db);
                 assert_eq!(pics.supported_object_types.len(), 1);
                 let support = &pics.supported_object_types[0];
                 assert_eq!(support.object_type, kind);
@@ -189,14 +190,16 @@ fn pics_access_rights_lists_accompaniment_once_an_object_serves_it() {
     let mut db = ObjectDatabase::new();
     db.add(Box::new(AccessRightsObject::new(1, "AR-1").unwrap()))
         .unwrap();
-    let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
+    let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default())
+        .instance_types_only(&db);
     assert_eq!(row(&pics), None);
 
     let mut rights = AccessRightsObject::new(2, "AR-2").unwrap();
     let credential = ObjectIdentifier::new(ObjectType::ACCESS_CREDENTIAL, 5).unwrap();
     rights.set_accompaniment(Some(credential.into())).unwrap();
     db.add(Box::new(rights)).unwrap();
-    let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
+    let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default())
+        .instance_types_only(&db);
     assert_eq!(pics.supported_object_types.len(), 1);
     assert_eq!(row(&pics), Some((true, true, true)));
 }
@@ -222,7 +225,8 @@ fn pics_access_credential_lists_authorization_exemptions_once_an_object_serves_i
     let mut db = ObjectDatabase::new();
     db.add(Box::new(AccessCredentialObject::new(1, "CRED-1").unwrap()))
         .unwrap();
-    let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
+    let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default())
+        .instance_types_only(&db);
     assert_eq!(row(&pics), None);
 
     let mut credential = AccessCredentialObject::new(2, "CRED-2").unwrap();
@@ -232,7 +236,8 @@ fn pics_access_credential_lists_authorization_exemptions_once_an_object_serves_i
         ]))
         .unwrap();
     db.add(Box::new(credential)).unwrap();
-    let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
+    let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default())
+        .instance_types_only(&db);
     assert_eq!(pics.supported_object_types.len(), 1);
     assert_eq!(row(&pics), Some((true, true, false)));
 }
