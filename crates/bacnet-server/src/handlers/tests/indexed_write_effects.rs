@@ -175,14 +175,13 @@ fn indexed_absence_keeps_wpm_prefix_coordinate_and_skips_authorizer_observer_sou
                 events.lock().unwrap().push("authorize");
                 Ok(())
             };
-            let WritePropertyMultipleOutcome::Error {
+            let WpmOutcome::Error {
                 error,
                 first_failed_write_attempt,
                 committed_oids,
-            } = handle_write_property_multiple_observed(
+            } = write::write_property_multiple(
                 &mut db,
                 &bytes,
-                &mut crate::life_safety_cov::LifeSafetyCovSnapshots::default(),
                 Some(&authorize),
                 Some(&mut observer),
                 None,

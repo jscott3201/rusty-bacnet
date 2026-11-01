@@ -142,8 +142,8 @@ fn rpm_optional_large_borrowed_mostly_required_order_duplicates_and_late_cap() {
                 .collect::<Vec<_>>(),
             OPTIONAL_IDS
         );
-        let mut legacy = BytesMut::new();
-        handle_read_property_multiple(&db, &data, &mut legacy).unwrap();
-        assert_eq!(out, legacy);
+        let mut unlimited = BytesMut::new();
+        handle_read_property_multiple(&db, &data, &mut unlimited).unwrap();
+        assert_eq!(out, unlimited);
     }
 }

@@ -14,10 +14,7 @@ mod property;
 mod rpm;
 
 pub use budget::{ReadFailure, ReadPropertyMultipleBudget};
-pub use property::{
-    PropertyPlan, plan_property, read_property_ack, read_target_object, read_value, resolve_target,
-    rpm_response_index,
-};
+pub use property::{PropertyPlan, plan_property, read_property_ack, read_value, resolve_target};
 pub use rpm::RpmPlan;
 
 /// Plain per-request read settings, apart from how objects are served.

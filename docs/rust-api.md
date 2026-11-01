@@ -22,8 +22,10 @@ bacnet-types → bacnet-encoding → bacnet-services → bacnet-transport → ba
 ```
 
 `bacnet-device-core` sits between `bacnet-objects` and `bacnet-server`: the
-read and write paths the server runs ReadProperty, WriteProperty, Who-Is and
-Who-Has through, which firmware can run without the server ([bacnet-device-core](#bacnet-device-core)).
+read and write paths the server runs ReadProperty, ReadPropertyMultiple,
+WriteProperty, WritePropertyMultiple, Who-Is and Who-Has through, which
+firmware can run without the server
+([bacnet-device-core](#bacnet-device-core)).
 Above them, `bacnet-endpoint` (on `bacnet-endpoint-core`) runs client and
 server roles through one transport ([bacnet-endpoint](#bacnet-endpoint)), and
 `bacnet-ops` and `bacnet-mcp` sit on `bacnet-client`
@@ -5503,8 +5505,8 @@ post delays included, making each command through `bacnet-device-core`'s
 `write::write_property`, with the Command as the initiating object; it has no network, so a
 command naming another device fails. Dropping its future first ends each
 unfinished run as unsuccessful. `bacnet-device-core`'s `Responder::write`
-and the bare `handle_write_property_multiple` handler are synchronous and make
-no writes for a Command: the run a Present_Value write starts ends at once, with
+is synchronous and makes no writes for a Command, for a WriteProperty or a
+WritePropertyMultiple: the run a Present_Value write starts ends at once, with
 In_Process FALSE, All_Writes_Successful FALSE and every command's
 `write_successful` FALSE. The endpoint responder refuses a Command's
 Present_Value write with WRITE_ACCESS_DENIED, as it does every write other
@@ -6124,8 +6126,7 @@ after the Channel took its value leaves the distribution running, as it does
 a Command's run (#1367). Without a server,
 `tick_schedules` runs a distribution its Schedule writes start before it
 returns, delays included, and ends it FAILED if its future is dropped first.
-`bacnet-device-core`'s `Responder::write` and the bare
-`handle_write_property_multiple` handler end it at once as FAILED, without
+`bacnet-device-core`'s `Responder::write` ends it at once as FAILED, without
 writing the members. The endpoint responder
 refuses a Channel's Present_Value write with WRITE_ACCESS_DENIED.
 
@@ -6629,7 +6630,14 @@ on targets with atomic compare-and-swap, as `bacnet-objects` does. The
   `commit_attempt`, `check_executor_owned_write`); the NULL-relinquish rule
   (`write::relinquish`); and the end of a Command's or Channel's run a host
   can't make (`end_unmade`, `take_queued`, `Unfinished`).
-  `handle_write_property` is gone from `bacnet_server::handlers`.
+  `write_property_multiple` runs a WritePropertyMultiple attempt by attempt
+  in wire order, with an optional gate that decides each attempt and the same
+  observer, and returns a `WpmOutcome`: success, the Error naming the attempt
+  that failed (the attempts before it stay written; a syntax fault after one
+  succeeded is SERVICES / INVALID_TAG, not a Reject), or a Reject. Each names
+  the objects the attempts changed. `handle_write_property`,
+  `handle_read_property_multiple` and `handle_write_property_multiple` are
+  gone from `bacnet_server::handlers`.
 - `discovery`: `who_is` (the I-Am a Who-Is calls for, or none), `who_has`,
   `i_am` and `announcement_device`.
 - `reply`: `error_apdu`, the one map from an `Error` to its Reject or Error
@@ -6638,9 +6646,10 @@ on targets with atomic compare-and-swap, as `bacnet-objects` does. The
 - `responder`: `Responder`, for a host with nothing to await between the
   steps. `Responder::classify` says from the header alone whether a request
   reads or writes the database; `Responder::read` answers ReadProperty,
-  Who-Is and Who-Has through an overlay; `Responder::write` answers
-  WriteProperty, returning `Written`: the outcome and the objects the write
-  changed, for the host's post-write work; and `Responder::handle`, for
+  ReadPropertyMultiple, Who-Is and Who-Has through an overlay;
+  `Responder::write` answers WriteProperty and WritePropertyMultiple,
+  returning `Written`: the outcome and the objects the write changed, for the
+  host's post-write work; and `Responder::handle`, for
   firmware that owns its database, does either, refuses every other
   well-formed confirmed request, and drops an APDU that doesn't decode, as
   the server does.
@@ -6649,7 +6658,11 @@ on targets with atomic compare-and-swap, as `bacnet-objects` does. The
 
 `Responder::new` refuses an identity that claims segmentation support, since
 the core aborts every segmented request and every reply too long for one APDU,
-and a `read_work` limit of zero.
+a `read_work` limit of zero, and an RPM budget with a zero limit. `Limits`
+holds the ReadProperty work limit and, set with `Limits::with_rpm`, the
+`ReadPropertyMultipleBudget`: an RPM past its result rows is aborted with
+OUT_OF_RESOURCES before any value is read, and one whose ACK passes its octet
+limit with BUFFER_OVERFLOW after the reads, as the server answers.
 
 `Inbound` carries no source address, so `Responder::write` writes with no
 command origin: an object with a commandable Present_Value refuses the
@@ -6678,9 +6691,8 @@ Device view as the overlay, and its WriteProperty, WritePropertyMultiple's
 attempts, CreateObject's initial values and its local writes on the write
 functions, with its audit and COV capture as the observer. The `objects`
 image of the [firmware link test](ci.md#firmware-link-test) links
-`Responder::handle` over a `bacnet-objects` database, writing a Binary Value
-and reading it back. ReadPropertyMultiple and WritePropertyMultiple through
-the `Responder` follow.
+`Responder::handle` over a `bacnet-objects` database, writing a Binary Value,
+reading it back, and reading two Present_Values with ReadPropertyMultiple.
 
 ## bacnet-client
 
@@ -7234,8 +7246,8 @@ runtime service toggle. Raw built-in Device metadata and reads include property
 152 only for declared SubscribeCOV or SubscribeCOVProperty, and property 481
 only for declared SubscribeCOVPropertyMultiple; present standalone lists are empty.
 Direct database reads, `bacnet-device-core` reads with no overlay (`NoOverlay`,
-`Responder::handle`), context-free `handle_read_property_multiple` and
-standalone `PicsGenerator` use raw object declarations. Use the full server's
+`Responder::handle`) and standalone `PicsGenerator` use raw object
+declarations. Use the full server's
 read and PICS methods for its execution view.
 
 PICS property rows aggregate all configured instances of each object type in

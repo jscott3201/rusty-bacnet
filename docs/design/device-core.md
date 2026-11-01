@@ -47,8 +47,9 @@ cores.
 - Authorization, durable-write staging, Audit admission, DCC,
   ReinitializeDevice, time sync, Create/DeleteObject, ReadRange, the list
   and file services: hosted. The core has hooks (§4.5), not policies.
-- Command and Channel runs: a write that queues one ends it unmade, as the
-  bare handlers do now (`command_lists.rs:296`).
+- Command and Channel runs: a write that queues one ends it unmade
+  (`write::end_unmade`, moved from `command_lists.rs` in PR 2), as the
+  `Responder` does.
 - A heap-free database (#1771).
 
 ## 3. Crate placement
@@ -131,9 +132,9 @@ never locks, so the lock order stays the host's.
 ### 4.2 Responder
 
 ```rust
-/// What a request needs from the database. Read: RP, Who-Is, Who-Has (and
-/// RPM from PR 3). Write: WP (and WPM). None: answered without the
-/// database (Reject, Abort), or not this core's.
+/// What a request needs from the database. Read: RP, RPM, Who-Is,
+/// Who-Has. Write: WP, WPM. None: answered without the database (Reject,
+/// Abort), or not this core's.
 pub enum Access { Read, Write, None }
 
 pub struct Inbound {
@@ -151,14 +152,16 @@ pub enum Outcome { Reply, Announce, Silent, Unhandled }
 pub struct Written { pub outcome: Outcome, pub objects: Vec<ObjectIdentifier> }
 
 /// `read_work`: rows one ReadProperty may expand (a Group's Present_Value).
-/// PR 3 adds the RPM limits.
-pub struct Limits { pub read_work: usize }
+/// `rpm`: one RPM's result rows and ACK octets (`Limits::with_rpm`).
+pub struct Limits { pub read_work: usize, pub rpm: ReadPropertyMultipleBudget }
 
-pub struct Responder { identity: DeviceIdentity, scope: ReadScope }
+pub struct Responder { identity: DeviceIdentity, scope: ReadScope,
+    rpm: ReadPropertyMultipleBudget }
 
 impl Responder {
     /// Refuses an identity that claims segmentation (the core segments
-    /// neither way) and a `read_work` of zero.
+    /// neither way), a `read_work` of zero, and an RPM budget
+    /// `ReadPropertyMultipleBudget::validate` refuses (a zero limit).
     pub fn new(identity: DeviceIdentity, limits: Limits) -> Result<Self, Error>;
     pub fn with_registered_port(self, port: ObjectIdentifier) -> Self;
     /// PDU type and service choice only; never decodes the service.
@@ -359,7 +362,7 @@ pub fn write_property_multiple(db: &mut ObjectDatabase, request: &[u8],
 ) -> WpmOutcome;                                            // PR 3
 
 /// Ends the runs Present_Value writes queued on Command and Channel objects
-/// among `written`, unmade (`command_lists.rs:296`).
+/// among `written`, unmade (`write/runs.rs`).
 pub fn end_unmade(db: &mut ObjectDatabase, written: &[ObjectIdentifier]);
 ```
 
@@ -383,11 +386,12 @@ and the transaction slots). The COV capture they run was read from the
 COV table before the write, under the database write guard
 (`server/requests/mutations.rs:316-319`).
 
-WPM's Life Safety snapshots need no hook of their own:
-`capture_before_write` runs just before `commit_attempt`
-(`handlers/write_property.rs:232`, `:240`), whose first act is
-`observer.before` on the same object (`:278-280`). PR 3 moves the capture
-into the server's observer and drops the `snapshots` parameter.
+WPM's Life Safety snapshots need no hook of their own: the capture ran
+just before each attempt's commit, whose first act is `observer.before` on
+the same object. As built (PR 3), the server's observer takes it there:
+`TimedWriteCapture::before` takes the request's first snapshot of each Life
+Safety object, `life_safety_changes` reports them after the request, and
+`write_property_multiple` has no `snapshots` parameter.
 
 ### 4.6 Discovery
 
@@ -506,6 +510,22 @@ commits and match `Applied` whole. The server's other callers also include
 | Deleted: legacy `handle_read_property_multiple`, `expand_property_reference` | `handlers/read_property.rs:223-268`, `:291-420` | -175 |
 | Deleted: `handle_write_property_multiple` | `handlers/write_property.rs:74-100` | -27 |
 
+As built: `write_property_multiple` and `WpmOutcome` sit in `write`
+(`write/multiple.rs`, re-exported). `WpmOutcome` stays exhaustive, as
+`Applied` does: a WPM answers in one of its three ways, and hosts match it
+whole. The 1.0 API audit revisits `WpmOutcome` with `WriteTarget` and
+`Applied`. The handler tests keep test-only wrappers named for the deleted
+helpers, so about forty test files didn't change; the RPM one reads through
+`RpmPlan` with no limit, which turned the legacy-against-bounded
+comparisons into unlimited-against-bounded ones on the one code path.
+`read_target_object`, `rpm_response_index` and
+`read::group::plan_property` went crate-private, and
+`ReadFailure::unlimited`, with no caller left, went. The `Responder` runs
+RPM under `Access::Read` and WPM under `Access::Write` only, and
+`Responder::new` validates the RPM budget, whose messages are now whole
+strings: formatting them would have linked two more `core::fmt` functions
+into the `objects` image.
+
 ### 6.4 What stays hosted
 
 `DeviceReadContext`, `DeviceReadView` and `DeviceExecution`
@@ -541,6 +561,9 @@ The move renames these, and nothing else; every other item keeps its name.
 ## 7. Delivery
 
 ### 7.1 Three PRs
+
+All three are done: PR 1 (#2200), PR 2 (#2211) and PR 3, which completes
+phases 1 and 2 (#2178).
 
 | PR | Adds | Moves | Tests | New lines |
 |---|---|---|---|---|
