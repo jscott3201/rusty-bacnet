@@ -30,6 +30,7 @@ use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceExt};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_util::sync::CancellationToken;
 
+use crate::contain::{contained, contained_sync};
 use crate::context::{Ctx, Gates};
 use crate::cursor::Cursors;
 use crate::listen::{self, Subs};
@@ -242,6 +243,7 @@ impl<T: TransportPort + 'static> McpServer<T> {
                 alarms: Mutex::new(HashMap::new()),
                 writes,
                 handoffs: tokio_util::task::TaskTracker::new(),
+                panics: crate::contain::Panics::default(),
             }),
         }
     }
@@ -377,6 +379,10 @@ impl<T: TransportPort + 'static> McpServer<T> {
                 tokio::pin!(waiting);
                 let quit = tokio::select! {
                     quit = &mut waiting => quit,
+                    () = ctx.panics.seen() => {
+                        stop.cancel();
+                        waiting.await
+                    }
                     () = &mut shutdown => {
                         ctx.closing.cancel();
                         let mut streams = ctx.listening.subscribe();
@@ -385,8 +391,12 @@ impl<T: TransportPort + 'static> McpServer<T> {
                         waiting.await
                     }
                 };
-                quit.map(drop)
-                    .map_err(|e| ServeError(format!("MCP session failed: {e}")))
+                match ctx.panics.why() {
+                    Some(why) => Err(ServeError(format!("a request panicked: {why}"))),
+                    None => quit
+                        .map(drop)
+                        .map_err(|e| ServeError(format!("MCP session failed: {e}"))),
+                }
             }
         };
         ctx.closing.cancel();
@@ -553,9 +563,12 @@ impl<T: TransportPort + 'static> ServerHandler for McpServer<T> {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        Ok(ListToolsResult::with_all_items(tools::list(
-            &self.ctx.policy,
-        )))
+        let list = async {
+            Ok(ListToolsResult::with_all_items(tools::list(
+                &self.ctx.policy,
+            )))
+        };
+        contained(&self.ctx.panics, list).await
     }
 
     async fn call_tool(
@@ -564,19 +577,22 @@ impl<T: TransportPort + 'static> ServerHandler for McpServer<T> {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let args = request.arguments.unwrap_or_default();
-        if tools::writes(&request.name) {
-            let retry = tools::write::Retry {
-                state: request.request_state,
-                responses: request.input_responses,
-                server: false,
-            };
-            let peer = peer(&context);
-            return tools::call_write(&self.ctx, &request.name, args, retry, &peer, context.ct)
-                .await;
-        }
-        tools::call(&self.ctx, &request.name, args, context.ct)
-            .await
-            .map(Into::into)
+        let call = async {
+            if tools::writes(&request.name) {
+                let retry = tools::write::Retry {
+                    state: request.request_state,
+                    responses: request.input_responses,
+                    server: false,
+                };
+                let peer = peer(&context);
+                return tools::call_write(&self.ctx, &request.name, args, retry, &peer, context.ct)
+                    .await;
+            }
+            tools::call(&self.ctx, &request.name, args, context.ct)
+                .await
+                .map(Into::into)
+        };
+        contained(&self.ctx.panics, call).await
     }
 
     async fn list_resources(
@@ -584,9 +600,12 @@ impl<T: TransportPort + 'static> ServerHandler for McpServer<T> {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
-        Ok(ListResourcesResult::with_all_items(resources::list(
-            &self.ctx,
-        )))
+        let list = async {
+            Ok(ListResourcesResult::with_all_items(resources::list(
+                &self.ctx,
+            )))
+        };
+        contained(&self.ctx.panics, list).await
     }
 
     async fn list_resource_templates(
@@ -594,9 +613,12 @@ impl<T: TransportPort + 'static> ServerHandler for McpServer<T> {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourceTemplatesResult, ErrorData> {
-        Ok(ListResourceTemplatesResult::with_all_items(
-            resources::templates(&self.ctx),
-        ))
+        let list = async {
+            Ok(ListResourceTemplatesResult::with_all_items(
+                resources::templates(&self.ctx),
+            ))
+        };
+        contained(&self.ctx.panics, list).await
     }
 
     async fn read_resource(
@@ -604,28 +626,29 @@ impl<T: TransportPort + 'static> ServerHandler for McpServer<T> {
         request: ReadResourceRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, ErrorData> {
-        resources::read(&self.ctx, &request.uri, context.ct)
-            .await
-            .map(Into::into)
+        let read = resources::read(&self.ctx, &request.uri, context.ct);
+        contained(&self.ctx.panics, read).await.map(Into::into)
     }
 
     fn accepted_subscription_filter(
         &self,
         requested: &SubscriptionFilter,
     ) -> Option<SubscriptionFilter> {
-        let uris = requested.resource_subscriptions.as_deref().unwrap_or(&[]);
-        // `listen` runs later in this same task: its id ties the two.
-        let ticket = crate::listen::Ticket::current();
-        let accepted = self.ctx.subs.reserve(&self.ctx, ticket, uris);
-        Some(
+        // A panic here ends the session as a request's does; the stream
+        // is refused meanwhile.
+        contained_sync(&self.ctx.panics, || {
+            let uris = requested.resource_subscriptions.as_deref().unwrap_or(&[]);
+            // `listen` runs later in this same task: its id ties the two.
+            let ticket = crate::listen::Ticket::current();
+            let accepted = self.ctx.subs.reserve(&self.ctx, ticket, uris);
             SubscriptionFilter::builder()
                 .resource_subscriptions(accepted)
-                .build(),
-        )
+                .build()
+        })
     }
 
     async fn listen(&self, context: SubscriptionContext) -> Result<(), ErrorData> {
-        listen::run(&self.ctx, context).await
+        contained(&self.ctx.panics, listen::run(&self.ctx, context)).await
     }
 
     // The SDK routes these to sessions on revisions before 2026-07-28 only
@@ -636,7 +659,8 @@ impl<T: TransportPort + 'static> ServerHandler for McpServer<T> {
         request: SubscribeRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<(), ErrorData> {
-        legacy::subscribe(&self.ctx, &request.uri)
+        let subscribe = async { legacy::subscribe(&self.ctx, &request.uri) };
+        contained(&self.ctx.panics, subscribe).await
     }
 
     #[allow(deprecated)]
@@ -645,8 +669,11 @@ impl<T: TransportPort + 'static> ServerHandler for McpServer<T> {
         request: UnsubscribeRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<(), ErrorData> {
-        legacy::unsubscribe(&self.ctx, &request.uri);
-        Ok(())
+        let unsubscribe = async {
+            legacy::unsubscribe(&self.ctx, &request.uri);
+            Ok(())
+        };
+        contained(&self.ctx.panics, unsubscribe).await
     }
 
     async fn list_prompts(
@@ -654,7 +681,8 @@ impl<T: TransportPort + 'static> ServerHandler for McpServer<T> {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListPromptsResult, ErrorData> {
-        Ok(ListPromptsResult::with_all_items(prompts::list()))
+        let list = async { Ok(ListPromptsResult::with_all_items(prompts::list())) };
+        contained(&self.ctx.panics, list).await
     }
 
     async fn get_prompt(
@@ -662,6 +690,9 @@ impl<T: TransportPort + 'static> ServerHandler for McpServer<T> {
         request: GetPromptRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<GetPromptResponse, ErrorData> {
-        prompts::get(&request.name, request.arguments.unwrap_or_default()).map(Into::into)
+        let get = async {
+            prompts::get(&request.name, request.arguments.unwrap_or_default()).map(Into::into)
+        };
+        contained(&self.ctx.panics, get).await
     }
 }

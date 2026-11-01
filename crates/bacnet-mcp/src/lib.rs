@@ -33,6 +33,7 @@
 
 #[cfg(unix)]
 pub mod attach;
+mod contain;
 mod context;
 mod cursor;
 mod errors;

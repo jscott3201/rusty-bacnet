@@ -87,6 +87,10 @@ pub fn sync_parent(path: &Path) -> std::io::Result<()> {
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(error) = testing::injected() {
+        return Err(error);
+    }
     #[cfg(test)]
     let synced = tests::injected().map_or_else(|| sync(directory), Err);
     #[cfg(not(test))]
@@ -139,7 +143,34 @@ fn unsupported(error: &std::io::Error) -> bool {
 /// (see the Unix version).
 #[cfg(not(unix))]
 pub fn sync_parent(_path: &Path) -> std::io::Result<()> {
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(error) = testing::injected() {
+        return Err(error);
+    }
     Ok(())
+}
+
+/// A seam for other crates' tests (the `test-support` feature): fail this
+/// thread's directory syncs, on every platform, as a disk error would.
+/// Not a stable API.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub mod testing {
+    use std::cell::Cell;
+
+    thread_local! {
+        static FAIL: Cell<bool> = const { Cell::new(false) };
+    }
+
+    /// Make the directory syncs that follow on this thread fail, or stop.
+    pub fn fail_directory_syncs(fail: bool) {
+        FAIL.with(|f| f.set(fail));
+    }
+
+    pub(super) fn injected() -> Option<std::io::Error> {
+        FAIL.with(Cell::get)
+            .then(|| std::io::Error::other("injected directory sync failure"))
+    }
 }
 
 #[cfg(test)]

@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use bacnet_client::client::BACnetClient;
 use bacnet_mcp::Policy;
-use bacnet_mcp::attach::Listener;
+use bacnet_mcp::attach::{Listener, SessionRuntime};
 use bacnet_mcp::policy::{ArmMode, Workspace, WriteMode, WritePolicy};
 use bacnet_ops::engine::Engine;
 use bacnet_ops::limits::RequestLimits;
@@ -172,7 +172,8 @@ async fn connect_bridges_an_agent_to_the_listener() {
             transport: "BIP",
             local: "10.0.0.1:47808".into(),
         };
-        let listener = Listener::bind(Arc::clone(&engine), policy, "tester", place)
+        let own = SessionRuntime::Own;
+        let listener = Listener::bind(Arc::clone(&engine), policy, "tester", place, own)
             .await
             .unwrap();
         let before = engine.limits().recent();

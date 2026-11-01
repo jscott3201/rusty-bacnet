@@ -61,6 +61,8 @@ pub(crate) fn subscribe<T: TransportPort + 'static>(
     ctx: &Ctx<T>,
     text: &str,
 ) -> Result<(), ErrorData> {
+    #[cfg(test)]
+    crate::tests::panic_on(text);
     let parsed = uri::parse(text).map_err(|why| refusal(&ToolError::invalid("uri", why)))?;
     if ctx.subs.legacy_has(text) {
         return Ok(());

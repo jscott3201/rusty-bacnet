@@ -18,7 +18,7 @@ use tokio::time::Instant;
 use super::attach::{bridged, events, lab, private_dir, workspace};
 use super::{ALIASES, LAB};
 use crate::Policy;
-use crate::attach::{self, Listener, PeerId, socket_path};
+use crate::attach::{self, Listener, PeerId, SessionRuntime, socket_path};
 use crate::policy::Rates;
 
 const AI1: &str = "bacnet://device/1201/object/analog-input:1";
@@ -61,9 +61,15 @@ async fn the_mcp_limits_apply_only_while_an_agent_is_attached() {
         },
         ..Policy::default()
     };
-    let listener = Listener::bind(Arc::clone(&engine), policy, "tester", workspace(dir.path()))
-        .await
-        .unwrap();
+    let listener = Listener::bind(
+        Arc::clone(&engine),
+        policy,
+        "tester",
+        workspace(dir.path()),
+        SessionRuntime::Callers,
+    )
+    .await
+    .unwrap();
     assert_eq!(spacing(&limits).await, 40, "the TUI's own 50 a second");
     let (mut agent, bridge) = bridged(listener.path());
     agent.initialize().await;
@@ -144,6 +150,7 @@ async fn the_tui_keeps_its_cov_when_an_agent_leaves_the_same_point() {
         Policy::default(),
         "tester",
         workspace(dir.path()),
+        SessionRuntime::Callers,
     )
     .await
     .unwrap();
@@ -229,6 +236,7 @@ async fn unreadable_credentials_are_refused() {
             "tester".into(),
             workspace(dir.path()),
             credentials,
+            SessionRuntime::Callers,
         )
         .await
         .unwrap();

@@ -480,3 +480,30 @@ async fn listen_alarm_uris_share_the_session_uri_bound() {
     assert_eq!(lab.agent.subscribe("bacnet://ledger").await, Ok(json!({})));
     lab.stop().await;
 }
+
+/// A legacy subscribe whose handler panics ends the session with the
+/// panic as its reason, as a tool call's does (#2203), on stdio too.
+#[tokio::test(start_paused = true)]
+async fn a_panicking_subscribe_ends_the_session() {
+    use bacnet_transport::bip::BipTransport;
+    let policy = Policy {
+        passive: true,
+        ..Policy::default()
+    };
+    let server = crate::McpServer::<BipTransport>::new(None, policy, "tester").unwrap();
+    let (pipe, end) = tokio::io::duplex(1 << 20);
+    let (read, write) = tokio::io::split(end);
+    let serving = tokio::spawn(server.serve(read, write));
+    let mut agent = Agent::over(pipe);
+    agent.initialize_legacy().await;
+    let error = agent.subscribe(super::PANIC_URI).await.unwrap_err();
+    assert_eq!(error["code"], json!(-32603), "an internal error: {error}");
+    let served = tokio::time::timeout(Duration::from_secs(60), serving).await;
+    let why = served
+        .expect("the session ends")
+        .unwrap()
+        .unwrap_err()
+        .to_string();
+    assert!(why.contains("a request panicked"), "{why}");
+    assert!(why.contains("injected bug"), "{why}");
+}

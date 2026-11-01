@@ -6,6 +6,8 @@ mod attach;
 #[cfg(unix)]
 mod attach_more;
 #[cfg(unix)]
+mod attach_runtime;
+#[cfg(unix)]
 mod attach_shared;
 mod bbmd;
 mod budget;
@@ -143,6 +145,8 @@ impl TransportPort for Recording {
         self.inner.stop().await
     }
     async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
+        #[cfg(unix)]
+        attach_runtime::panic_if_armed();
         self.sent
             .lock()
             .unwrap()
@@ -669,4 +673,13 @@ impl Agent {
             .cloned()
             .unwrap_or_else(|| panic!("{tool} failed: {reply}"))
     }
+}
+
+/// A URI the subscribe handler panics on in tests, standing in for a bug
+/// an agent's request reaches (#2203).
+pub(crate) const PANIC_URI: &str = "bacnet://test/panic";
+
+/// Panic when asked for [`PANIC_URI`].
+pub(crate) fn panic_on(uri: &str) {
+    assert_ne!(uri, PANIC_URI, "an injected bug, reached by an agent");
 }

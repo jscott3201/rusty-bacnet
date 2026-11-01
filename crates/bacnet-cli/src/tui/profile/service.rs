@@ -37,6 +37,14 @@ pub(crate) enum Reply {
         profile: Profile,
         checks: Checks,
     },
+    /// A new profile's save failed with its file in place (only the
+    /// directory sync failed): the error, and the profile as written, SC
+    /// identity included, so a retry from the editor writes the same text
+    /// and finds it saved (#2196).
+    InPlace {
+        error: String,
+        profile: Profile,
+    },
 }
 
 /// What connecting needs: the stored document (as the UI should now show
@@ -128,7 +136,15 @@ impl Service {
             return Err("profile changed on disk; reload before saving".into());
         }
         self.overrides.resolve(&profile)?;
-        store.save(name, &profile, create)?;
+        if let Err(error) = store.save(name, &profile, create) {
+            // The new file went in place: the editor keeps what was
+            // written, since a retry that drew a new SC identity would
+            // differ from it and be refused.
+            if create && store.load(name).is_ok_and(|on_disk| on_disk == profile) {
+                return Ok(Reply::InPlace { error, profile });
+            }
+            return Err(error);
+        }
         self.loaded(name, profile)
     }
     /// The workspace of profile `name`, which connecting it created.

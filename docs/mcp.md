@@ -475,10 +475,13 @@ Every request goes through `RequestLimits`: the caller's token first (5 a
 second, burst 20), then the device's gate (one outstanding request), then
 its network's rate (20, or 2 for `slow_networks` and 5 for
 `fast_networks`; a router doesn't say what link it reaches), then the
-global rate (20). Each tool call runs on its own task under an `Account`
-that counts its requests and waits. A call that pages stops at its budget
-(30 s) and returns a cursor; one still waiting `budget + 15 s` later
-returns `refused: rate-limited` if it sent nothing, else `timeout`.
+global rate (20). A request books its slots and token as it starts
+waiting; one cancelled before it goes, whichever of those it is waiting
+for, gives them back, so later requests don't wait behind it. Each tool
+call runs on its own task under an `Account` that counts its requests and
+waits. A call that pages stops at its budget (30 s) and returns a cursor;
+one still waiting `budget + 15 s` later returns `refused: rate-limited` if
+it sent nothing, else `timeout`.
 
 ## Operation
 
@@ -505,6 +508,9 @@ returns `refused: rate-limited` if it sent nothing, else `timeout`.
   resources.
 - SIGINT or SIGTERM (Ctrl-C on Windows) shuts the server down gracefully:
   listen streams complete and COV subscriptions are cancelled.
+- A request whose handler panics (a bug) is answered with an internal
+  error, and `serve` then exits with an error naming the panic, rather
+  than serve on with whatever state the panic left (#2203).
 
 ## Attached to the TUI
 
@@ -575,10 +581,17 @@ stderr; when the TUI ends the session it exits cleanly.
   `front_end: "mcp"` and the principal. At most 10 refusals a minute are
   recorded; the number left out goes with the next refusal record
   (`refusals_not_recorded_before`) and in one record at shutdown.
+- **A bug in a session.** The agents' sessions, and every task their
+  requests start, run on threads of the listener's own (named
+  `bacnet-mcp-agent-N`). A panic there is logged and leaves the screen
+  alone; that agent's session ends, with its `mcp-disconnect` record
+  giving the panic, while the TUI and the other agents carry on. A
+  request whose handler panics answers with an internal error first; on
+  stdio, `bacnet mcp serve` exits the same way (see Operation).
 - **Ending.** Closing the profile or the TUI stops the listener: each
   agent's listen streams complete, its connection closes, the shared
-  watch hub cancels its COV subscriptions, the socket file is removed and
-  the lock released.
+  watch hub cancels its COV subscriptions, the sessions' threads stop,
+  the socket file is removed and the lock released.
 
 On Windows, `bacnet mcp connect` and the TUI say attached mode isn't
 available yet; a named pipe with an owner-only access list follows.
