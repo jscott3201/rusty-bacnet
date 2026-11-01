@@ -169,7 +169,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             request_tasks: Arc::clone(&request_tasks),
         };
         // A Schedule tick that writes a Command's Present_Value starts its list.
-        let schedule_runner = super::command_runs::CommandRunner::new(
+        let command_runs = super::command_runs::CommandRunner::new(
             &dispatch_context.services,
             &request_tasks.spawner(),
         );
@@ -761,7 +761,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     }
                 };
                 schedule_fanout.fire(&committed).await;
-                schedule_runner.start(committed.command_runs);
+                command_runs.start(committed.command_runs);
             }
         }));
 

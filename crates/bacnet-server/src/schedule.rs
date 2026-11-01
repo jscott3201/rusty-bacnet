@@ -127,11 +127,11 @@ pub(crate) async fn reevaluate_written(
 /// to the database (#1440): each `(schedule, object)` pair is a Schedule
 /// that held a refusal naming the object when it was added
 /// (`ObjectDatabase::take_membership_work_internal`). The write each
-/// Schedule builds now ([`BACnetObject::retry_refusals_naming`]) goes to
+/// Schedule builds now ([`ScheduleRunner::retry_refusals_naming`]) goes to
 /// those references only, as a pass's retry would, and `commit` collects the
 /// objects it changed for COV.
 ///
-/// [`BACnetObject::retry_refusals_naming`]: bacnet_objects::traits::BACnetObject::retry_refusals_naming
+/// [`ScheduleRunner::retry_refusals_naming`]: bacnet_objects::traits::ScheduleRunner::retry_refusals_naming
 pub(crate) fn retry_for_created(
     db_w: &mut ObjectDatabase,
     commit: &mut BackgroundCommit,
@@ -139,8 +139,9 @@ pub(crate) fn retry_for_created(
 ) {
     for &(schedule, created) in retries {
         let Some(write) = db_w
-            .get(&schedule)
-            .and_then(|object| object.retry_refusals_naming(created))
+            .get_mut(&schedule)
+            .and_then(|object| object.schedule_runner())
+            .and_then(|runner| runner.retry_refusals_naming(created))
         else {
             continue;
         };
@@ -162,12 +163,13 @@ fn calendar_states(db: &ObjectDatabase, today: SpecificDate) -> HashMap<ObjectId
             let calendar = db.get(&oid)?;
             // A Calendar that does not evaluate a date list itself reports
             // its state through Present_Value.
-            let active = calendar.calendar_state_internal(today).unwrap_or_else(|| {
-                matches!(
+            let active = match calendar.calendar_state() {
+                Some(state) => state.state_on(today),
+                None => matches!(
                     calendar.read_property(PropertyIdentifier::PRESENT_VALUE, None),
                     Ok(PropertyValue::Boolean(true))
-                )
-            });
+                ),
+            };
             Some((oid, active))
         })
         .collect()
@@ -186,12 +188,15 @@ fn evaluate(db_w: &mut ObjectDatabase, schedules: Vec<ObjectIdentifier>) -> Back
 
     let mut writes = Vec::new();
     for oid in schedules {
-        let Some(obj) = db_w.get_mut(&oid) else {
+        let Some(runner) = db_w
+            .get_mut(&oid)
+            .and_then(|object| object.schedule_runner())
+        else {
             continue;
         };
         // Owed writes go first, so a calculated value written in the same
         // pass, after a return to service, lands last.
-        for write in obj.take_owed_schedule_writes() {
+        for write in runner.take_owed_schedule_writes() {
             debug!(
                 schedule = %oid,
                 refs = write.references.len(),
@@ -202,7 +207,7 @@ fn evaluate(db_w: &mut ObjectDatabase, schedules: Vec<ObjectIdentifier>) -> Back
         let Some((today, now)) = instant else {
             continue;
         };
-        if let Some(write) = obj.tick_schedule(today, now, &calendar_active) {
+        if let Some(write) = runner.tick_schedule(today, now, &calendar_active) {
             if write.retry {
                 debug!(
                     schedule = %oid,
@@ -316,7 +321,8 @@ fn deliver(
     }
     let reliability_changed = db_w
         .get_mut(&initiator)
-        .is_some_and(|schedule| schedule.complete_schedule_write(write, &outcomes));
+        .and_then(|schedule| schedule.schedule_runner())
+        .is_some_and(|runner| runner.complete_schedule_write(write, &outcomes));
     if reliability_changed {
         commit.changed(initiator);
     }
