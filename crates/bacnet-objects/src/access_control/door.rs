@@ -656,7 +656,7 @@ impl crate::traits::LocalInput for AccessDoorObject {
         let crate::traits::LocalInputValue::AccessControl(AccessControlInput::DoorState(report)) =
             input
         else {
-            return Err(common::optional_functionality_not_supported_error());
+            return Err(crate::traits::not_supported());
         };
         let (lists, alarm_values) = (&self.alarm_lists, self.reporting.alarm_values());
         // The device's own state: put aside out of service, else served.

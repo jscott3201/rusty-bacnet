@@ -1,19 +1,20 @@
 //! The Life Safety capability: the LifeSafetyOperation service's effect and
 //! the operation an object expects next.
 
-use bacnet_types::enums::{ErrorClass, ErrorCode, LifeSafetyOperation};
+use bacnet_types::enums::LifeSafetyOperation;
 use bacnet_types::error::Error;
 
+use super::not_supported;
 use crate::traits::LifeSafetyOperationOutcome;
 
 /// A Life Safety Point or Zone: an object a LifeSafetyOperation acts on.
 ///
 /// The object returns itself from
 /// [`BACnetObject::life_safety`](crate::traits::BACnetObject::life_safety).
-/// Both methods default to OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-/// the error a host also returns for an object that lends none. Not public
-/// API yet (#2179).
-#[doc(hidden)]
+/// Both methods default to [`not_supported`], the error a host also
+/// returns for an object that lends none, so an object overrides only what
+/// it models. The bundled server runs the LifeSafetyOperation service and
+/// `set_life_safety_operation_expected_local` through it.
 pub trait LifeSafety {
     /// Apply a LifeSafetyOperation atomically to this object.
     ///
@@ -43,12 +44,4 @@ pub trait LifeSafety {
     ) -> Result<(), Error> {
         Err(not_supported())
     }
-}
-
-/// What the defaults answer: OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
-fn not_supported() -> Error {
-    Error::protocol(
-        ErrorClass::OBJECT,
-        ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-    )
 }

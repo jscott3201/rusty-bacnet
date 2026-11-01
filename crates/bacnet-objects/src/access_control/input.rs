@@ -35,7 +35,10 @@ use bacnet_types::enums::{AccessEvent, DoorAlarmState, DoorStatus, LockStatus};
 use bacnet_types::primitives::BACnetTimeStamp;
 
 /// An input for one access-control object, as the application reports it.
+///
+/// More kinds of record may be added, so a match on it needs a wildcard arm.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum AccessControlInput {
     /// A new access event, for an Access Point.
     AccessEvent(AccessEventReport),

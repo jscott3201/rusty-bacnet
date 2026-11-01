@@ -4024,10 +4024,15 @@ behaviour, so an object without it writes nothing.
   the local Device as its origin), a Life Safety Tracking_Value, a Loop's
   Controlled_Variable_Value, an Averaging sample or an access-control record.
   The enum is `#[non_exhaustive]`: an object matches the inputs it models and
-  answers the rest with `unsupported_local_input()`, OBJECT /
+  answers the rest with `not_supported()`, OBJECT /
   OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, the same error the server returns for
   an object that lends none. `BACnetServer::set_present_value_local` and its
-  siblings reach the object through it.
+  siblings reach the object through it (see the example below).
+- **`life_safety()` → `LifeSafety`**, for a Life Safety Point or Zone:
+  `apply_life_safety_operation` runs the LifeSafetyOperation service on the
+  object and `set_life_safety_operation_expected` arms the operation it
+  expects next ([Life Safety execution and COV](#life-safety-execution-and-cov)).
+  Both default to `not_supported()`.
 
 ```rust,ignore
 use bacnet_objects::traits::{BACnetObject, Clocks, Timed};
@@ -4048,6 +4053,38 @@ impl Timed for MyTimer {
         self.deadline
     }
 }
+```
+
+A local input moves from its hook to the capability like this:
+
+```rust,ignore
+// Before: on `impl BACnetObject for MySensor`.
+fn set_present_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
+    self.store(value)
+}
+
+// After: lend the capability, and refuse what the object doesn't model.
+use bacnet_objects::traits::{LocalInput, LocalInputValue, not_supported};
+
+// In `impl BACnetObject for MySensor`:
+fn local_input(&mut self) -> Option<&mut dyn LocalInput> {
+    Some(self)
+}
+
+impl LocalInput for MySensor {
+    fn apply_local_input(&mut self, input: LocalInputValue) -> Result<(), Error> {
+        match input {
+            LocalInputValue::PresentValue { value, .. } => self.store(value),
+            _ => Err(not_supported()),
+        }
+    }
+}
+
+// A caller that held the object:
+object
+    .local_input()
+    .ok_or_else(not_supported)?
+    .apply_local_input(LocalInputValue::present_value(value))?;
 ```
 
 Createability belongs to the object type, not to an instance, so the trait
@@ -8700,14 +8737,14 @@ Trusted runtime logic can arm or rearm a Life Safety object through
 Tokio runtime like every local write; a caller dropped once the change is
 made still notifies Operation_Expected's subscribers (#1520). The lower-level
 `LifeSafety::set_life_safety_operation_expected` channel, lent by
-`BACnetObject::life_safety`, also remains available to custom database owners. Protocol WriteProperty and
-WritePropertyMultiple cannot forge `Operation_Expected` or `Silenced`.
+`BACnetObject::life_safety`, also remains available to custom database
+owners. Protocol WriteProperty and WritePropertyMultiple cannot forge
+`Operation_Expected` or `Silenced`.
 
 `LifeSafety::apply_life_safety_operation`, lent by `BACnetObject::life_safety`,
-returns
-`Result<LifeSafetyOperationOutcome, Error>`: an effect plus exact committed
-property changes in stable reporting order, with no duplicates. Custom objects
-own this projection. `AlreadyApplied` means no state changed and carries no
+returns `Result<LifeSafetyOperationOutcome, Error>`: an effect plus exact
+committed property changes in stable reporting order, with no duplicates.
+Custom objects own this projection. `AlreadyApplied` means no state changed and carries no
 deltas; errors leave object state unchanged. The default hook explicitly returns
 `OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`.
 

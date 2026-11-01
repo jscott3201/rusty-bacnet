@@ -1,7 +1,6 @@
 //! The local input capability: values the application in the same device
 //! pushes into an object, outside any network write.
 
-use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 
@@ -13,7 +12,7 @@ use crate::command_source::CommandOrigin;
 /// The application measures, derives or reads these values itself; none of
 /// them is a network write. An object takes the inputs it models through
 /// [`LocalInput::apply_local_input`] and refuses the rest with
-/// [`unsupported_local_input`]. New inputs may be added, so a match on it
+/// [`not_supported`](super::not_supported). New inputs may be added, so a match on it
 /// needs a wildcard arm, and a Present_Value is built with
 /// [`present_value`](Self::present_value) or
 /// [`present_value_from`](Self::present_value_from).
@@ -89,21 +88,11 @@ pub trait LocalInput {
     /// Apply `input`, or leave the object unchanged and return an error.
     ///
     /// An input the object doesn't model fails with
-    /// [`unsupported_local_input`], the error a host also returns for an
+    /// [`not_supported`](super::not_supported), the error a host also returns for an
     /// object without this capability. The built-in Inputs, Values and Loop
     /// refuse a Present_Value with PROPERTY / WRITE_ACCESS_DENIED while
     /// Out_Of_Service is TRUE, so a client's simulated value stays served;
     /// a value of the wrong datatype or out of range fails as the
     /// property's network write would.
     fn apply_local_input(&mut self, input: LocalInputValue) -> Result<(), Error>;
-}
-
-/// OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED: what an object answers for
-/// an input it doesn't take, and what a host answers for an object that
-/// lends no [`LocalInput`].
-pub fn unsupported_local_input() -> Error {
-    Error::protocol(
-        ErrorClass::OBJECT,
-        ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-    )
 }

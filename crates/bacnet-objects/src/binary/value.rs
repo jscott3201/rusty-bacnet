@@ -536,7 +536,7 @@ impl BACnetObject for BinaryValueObject {
 impl crate::traits::LocalInput for BinaryValueObject {
     fn apply_local_input(&mut self, input: crate::traits::LocalInputValue) -> Result<(), Error> {
         let crate::traits::LocalInputValue::PresentValue { value, origin } = input else {
-            return Err(crate::traits::unsupported_local_input());
+            return Err(crate::traits::not_supported());
         };
         let Some(origin) = origin else {
             return self.apply_local_present_value(value);
@@ -553,9 +553,7 @@ impl BinaryValueObject {
     /// Out_Of_Service is TRUE.
     fn apply_local_present_value(&mut self, value: PropertyValue) -> Result<(), Error> {
         match self.access {
-            PresentValueAccess::Commandable => {
-                Err(common::optional_functionality_not_supported_error())
-            }
+            PresentValueAccess::Commandable => Err(crate::traits::not_supported()),
             _ if self.out_of_service => Err(common::write_access_denied_error()),
             PresentValueAccess::ReadOnly | PresentValueAccess::Writable => {
                 self.present_value = Self::checked_present_value(value)?;

@@ -286,7 +286,7 @@ impl crate::traits::LocalInput for CredentialDataInputObject {
             report,
         )) = input
         else {
-            return Err(common::optional_functionality_not_supported_error());
+            return Err(crate::traits::not_supported());
         };
         if !is_declared(&report.factor, &self.supported_formats) {
             return Err(common::value_out_of_range_error());

@@ -3,7 +3,7 @@ use super::*;
 use crate::command_lists::TakenRuns;
 use bacnet_device_core::write::{WriteCommitObserver, WriteTarget};
 use bacnet_objects::staging::StagingWritePlan;
-use bacnet_objects::traits::{BACnetObject, LocalInputValue, unsupported_local_input};
+use bacnet_objects::traits::{BACnetObject, LocalInputValue, not_supported};
 use bacnet_types::constructed::BACnetRecipient;
 
 #[path = "local_write_finish.rs"]
@@ -108,10 +108,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         ))?;
         object
             .life_safety()
-            .ok_or(Error::protocol(
-                ErrorClass::OBJECT,
-                ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-            ))?
+            .ok_or_else(not_supported)?
             .set_life_safety_operation_expected(operation)?;
         // Only a Life Safety Point or Zone reports the change. Another object
         // whose setter takes the operation owes no COV, as before (#1520).
@@ -237,7 +234,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Tokio runtime, failing before anything is written outside one, and a
     /// caller dropped once the write has committed skips none of the work
     /// the write owes (#1367).
-    ///
     pub async fn set_present_value_local(
         &self,
         oid: &ObjectIdentifier,
@@ -839,12 +835,6 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                             command_origin.as_ref(),
                         )
                     }
-                    LocalWrite::WriteGroup { priority, .. } => object.write_property(
-                        PropertyIdentifier::PRESENT_VALUE,
-                        None,
-                        value,
-                        Some(priority),
-                    ),
                     LocalWrite::ApplicationPresentValue => {
                         let input = match command_origin {
                             Some(origin) => LocalInputValue::present_value_from(value, origin),
@@ -867,6 +857,12 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                     LocalWrite::ApplicationAccessInput(input) => {
                         apply_local_input(object, LocalInputValue::AccessControl(input.clone()))
                     }
+                    LocalWrite::WriteGroup { priority, .. } => object.write_property(
+                        PropertyIdentifier::PRESENT_VALUE,
+                        None,
+                        value,
+                        Some(priority),
+                    ),
                 }
             });
             staged.release(&mut db);
@@ -937,7 +933,7 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
 fn apply_local_input(object: &mut dyn BACnetObject, input: LocalInputValue) -> Result<(), Error> {
     match object.local_input() {
         Some(local) => local.apply_local_input(input),
-        None => Err(unsupported_local_input()),
+        None => Err(not_supported()),
     }
 }
 

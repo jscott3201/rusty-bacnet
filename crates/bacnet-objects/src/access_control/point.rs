@@ -511,7 +511,7 @@ impl crate::traits::LocalInput for AccessPointObject {
         let crate::traits::LocalInputValue::AccessControl(AccessControlInput::AccessEvent(report)) =
             input
         else {
-            return Err(common::optional_functionality_not_supported_error());
+            return Err(crate::traits::not_supported());
         };
         if self.out_of_service || self.reliability != Reliability::NO_FAULT_DETECTED {
             return Err(common::write_access_denied_error());

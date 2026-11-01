@@ -18,9 +18,10 @@ impl ObjectDatabase {
     /// The caller must hold exclusive database access for the whole call. A
     /// due object names the local property it averages
     /// (`take_due_averaging_sample_internal`); this reads it and records the
-    /// value as its [`LocalInputValue::AveragingSample`]. An attempt that yields nothing usable is recorded as a miss,
-    /// which counts toward Attempted_Samples but not Valid_Samples: a
-    /// referenced object or property that doesn't exist, an array index on a
+    /// value as its [`LocalInputValue::AveragingSample`]. An attempt that
+    /// yields nothing usable is recorded as a miss, which counts toward
+    /// Attempted_Samples but not Valid_Samples: a referenced object or
+    /// property that doesn't exist, an array index on a
     /// property that isn't an array, any other read error, and a value the
     /// object refuses to average (a datatype outside the five Clause 12.5
     /// accepts, or a REAL that isn't finite).

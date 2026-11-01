@@ -25,10 +25,7 @@ pub(crate) fn handle_life_safety_operation(
             .get_mut(&oid)
             .ok_or_else(|| life_safety_error(ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT))?;
         if is_reset_operation(request.request) && !is_life_safety_object(oid) {
-            return Err(life_safety_error(
-                ErrorClass::OBJECT,
-                ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-            ));
+            return Err(bacnet_objects::traits::not_supported());
         }
         return match apply(object, request.request)? {
             outcome if outcome.effect == LifeSafetyOperationEffect::Applied => {
@@ -84,10 +81,7 @@ fn apply(
 ) -> Result<LifeSafetyOperationOutcome, Error> {
     match object.life_safety() {
         Some(life_safety) => life_safety.apply_life_safety_operation(operation),
-        None => Err(life_safety_error(
-            ErrorClass::OBJECT,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        )),
+        None => Err(bacnet_objects::traits::not_supported()),
     }
 }
 

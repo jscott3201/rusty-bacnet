@@ -514,7 +514,7 @@ impl crate::traits::LocalInput for LoopObject {
                 // client simulates the output.
                 write_finite_real(&mut self.controlled_variable_value, value)
             }
-            _ => Err(crate::traits::unsupported_local_input()),
+            _ => Err(crate::traits::not_supported()),
         }
     }
 }

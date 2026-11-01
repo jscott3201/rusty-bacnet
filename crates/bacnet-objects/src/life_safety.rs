@@ -513,7 +513,7 @@ impl crate::traits::LocalInput for LifeSafetyPointObject {
                 self.set_tracking_value(state);
                 Ok(())
             }
-            _ => Err(crate::traits::unsupported_local_input()),
+            _ => Err(crate::traits::not_supported()),
         }
     }
 }
@@ -831,7 +831,7 @@ impl crate::traits::LocalInput for LifeSafetyZoneObject {
                 self.set_tracking_value(state);
                 Ok(())
             }
-            _ => Err(crate::traits::unsupported_local_input()),
+            _ => Err(crate::traits::not_supported()),
         }
     }
 }

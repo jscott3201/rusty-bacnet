@@ -318,7 +318,7 @@ impl BACnetObject for AveragingObject {
 impl crate::traits::LocalInput for AveragingObject {
     fn apply_local_input(&mut self, input: crate::traits::LocalInputValue) -> Result<(), Error> {
         let crate::traits::LocalInputValue::AveragingSample(sample) = input else {
-            return Err(crate::traits::unsupported_local_input());
+            return Err(crate::traits::not_supported());
         };
         match sample {
             Some(value) => self.add_sample(sample_as_real(&value)?),

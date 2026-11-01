@@ -411,7 +411,7 @@ impl BACnetObject for AnalogInputObject {
 impl crate::traits::LocalInput for AnalogInputObject {
     fn apply_local_input(&mut self, input: crate::traits::LocalInputValue) -> Result<(), Error> {
         let crate::traits::LocalInputValue::PresentValue { value, .. } = input else {
-            return Err(crate::traits::unsupported_local_input());
+            return Err(crate::traits::not_supported());
         };
         // Local safe-ownership policy: preserve the client's OOS simulation.
         if self.out_of_service {

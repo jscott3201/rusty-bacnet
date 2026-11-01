@@ -36,10 +36,10 @@ use crate::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 
 pub mod capabilities;
 #[doc(hidden)]
-pub use capabilities::{AccessEvents, CommandRunner, LifeSafety, StagingSource};
+pub use capabilities::{AccessEvents, CommandRunner, StagingSource};
 pub use capabilities::{
-    Clocks, DeadlineWaker, DurableWrites, LocalInput, LocalInputValue, MonotonicClock, Timed,
-    unsupported_local_input,
+    Clocks, DeadlineWaker, DurableWrites, LifeSafety, LocalInput, LocalInputValue, MonotonicClock,
+    Timed, not_supported,
 };
 
 mod defaults;
@@ -194,10 +194,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         _priorities: bacnet_types::bitstring::BACnetPriorityFilter,
         _maximum_send_delay: Option<crate::audit::AuditSendDelay>,
     ) -> Result<(), Error> {
-        Err(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ))
+        Err(not_supported())
     }
 
     /// The object's identifier (type + instance).
@@ -576,7 +573,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// Input's Present_Value or a Loop's Controlled_Variable_Value.
     ///
     /// The default has none; a host then refuses every input with
-    /// [`unsupported_local_input`]. See [`LocalInput`] for the built-in
+    /// [`not_supported`]. See [`LocalInput`] for the built-in
     /// objects that lend it.
     fn local_input(&mut self) -> Option<&mut dyn LocalInput> {
         None
@@ -593,12 +590,10 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     }
 
     /// Mutably borrow a Life Safety Point's or Zone's capability: the
-    /// LifeSafetyOperation service and the operation it expects next. Not
-    /// public API yet (#2179).
+    /// LifeSafetyOperation service and the operation it expects next.
     ///
     /// The default has none, and the bundled server then refuses both with
-    /// OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
-    #[doc(hidden)]
+    /// [`not_supported`]. See [`LifeSafety`].
     fn life_safety(&mut self) -> Option<&mut dyn LifeSafety> {
         None
     }
@@ -897,10 +892,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// not here. Implementations must leave `Event_State` unchanged when they
     /// return `Err`.
     fn set_event_state_internal(&mut self, _state: EventState) -> Result<(), Error> {
-        Err(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ))
+        Err(not_supported())
     }
 
     /// Snapshot this object's Event Enrollment evaluation state, if it models one.
@@ -941,10 +933,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         &mut self,
         _state: EventEnrollmentEvalState,
     ) -> Result<(), Error> {
-        Err(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ))
+        Err(not_supported())
     }
 
     /// Snapshot the monitored source that owns Event Enrollment private state.
@@ -962,10 +951,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         &mut self,
         _source: Option<EventEnrollmentMonitoredSource>,
     ) -> Result<(), Error> {
-        Err(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ))
+        Err(not_supported())
     }
 
     /// Set or clear one `Acked_Transitions` bit on a received event-state
@@ -994,10 +980,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         _transition_bit: EventTransitionBits,
         _acknowledged: bool,
     ) -> Result<(), Error> {
-        Err(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ))
+        Err(not_supported())
     }
 
     /// Evaluate and, when necessary, mutate this object's `Reliability`.
@@ -1041,10 +1024,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// The default rejects the operation, so object types without an internal
     /// reliability-evaluation process remain unaffected.
     fn set_reliability_internal(&mut self, _reliability: Reliability) -> Result<(), Error> {
-        Err(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ))
+        Err(not_supported())
     }
 
     /// Claim the Averaging sample the object's schedule has due at the
@@ -1132,10 +1112,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         &mut self,
         _parent: bacnet_types::constructed::BACnetDeviceObjectReference,
     ) -> Result<(), Error> {
-        Err(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ))
+        Err(not_supported())
     }
 
     /// Mutably borrow this object's Audit notification receiver capability.
@@ -1242,10 +1219,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// ordinary record. Timestamp failures return an error without mutation.
     /// Objects without trend insertion return OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
     fn add_trend_record(&mut self, _record: BACnetLogRecord) -> Result<(), Error> {
-        Err(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ))
+        Err(not_supported())
     }
 
     /// Submit a Trend Log Multiple record, one value per monitored member, to
@@ -1255,10 +1229,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// Objects without Trend Log Multiple insertion return
     /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
     fn add_trend_multiple_record(&mut self, _record: BACnetLogMultipleRecord) -> Result<(), Error> {
-        Err(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ))
+        Err(not_supported())
     }
 
     /// Submit an Event Log record to an object's log lifecycle.
@@ -1270,10 +1241,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// Objects without Event Log insertion return
     /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
     fn add_event_log_record(&mut self, _record: BACnetEventLogRecord) -> Result<(), Error> {
-        Err(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ))
+        Err(not_supported())
     }
 
     /// Look at a log's Start_Time / Stop_Time window against the bound

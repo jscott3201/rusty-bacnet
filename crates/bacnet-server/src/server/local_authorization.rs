@@ -143,10 +143,7 @@ fn admit(db: &mut ObjectDatabase, oid: &ObjectIdentifier) -> Result<(), Error> {
         ErrorCode::UNKNOWN_OBJECT,
     ))?;
     if oid.object_type() != ObjectType::ACCESS_POINT {
-        return Err(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ));
+        return Err(bacnet_objects::traits::not_supported());
     }
     let healthy = match (
         object.read_property(PropertyIdentifier::OUT_OF_SERVICE, None)?,
@@ -171,10 +168,7 @@ fn admit(db: &mut ObjectDatabase, oid: &ObjectIdentifier) -> Result<(), Error> {
     // The point takes the batch only through its AccessEvents capability.
     let batches = db.get_mut(oid).and_then(|object| object.access_events());
     if batches.is_none() {
-        return Err(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ));
+        return Err(bacnet_objects::traits::not_supported());
     }
     Ok(())
 }
