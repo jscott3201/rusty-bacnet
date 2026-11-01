@@ -403,13 +403,13 @@ pub(crate) enum WorkerEvent {
     /// Captured frames and capture reports (#971).
     Capture(super::capture::CaptureEvent),
     /// The MCP listener's state (#2185).
-    #[cfg_attr(not(all(unix, feature = "mcp")), allow(dead_code))]
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     Mcp(McpListener),
 }
 
 /// The session's MCP listener, for the status bar (#2185).
 #[derive(Debug, Clone)]
-#[cfg_attr(not(all(unix, feature = "mcp")), allow(dead_code))]
+#[cfg_attr(not(feature = "mcp"), allow(dead_code))]
 pub(crate) enum McpListener {
     /// Listening: the agents attached, always the latest count.
     Agents(tokio::sync::watch::Receiver<usize>),

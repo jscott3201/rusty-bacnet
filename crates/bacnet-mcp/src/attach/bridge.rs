@@ -1,48 +1,14 @@
 //! `bacnet mcp connect`'s side: an agent host's byte stream passed to the
-//! TUI's socket and back, byte for byte, with no MCP parsing of its own.
+//! TUI's socket (or named pipe) and back, byte for byte, with no MCP
+//! parsing of its own. The connection, and its check that the listener is
+//! this user's own, is the platform's ([`connect`]).
 
-use std::io::{self, ErrorKind};
+use std::io;
 use std::path::Path;
 
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt as _};
-use tokio::net::UnixStream;
 
-use super::{AttachError, Credentials, os_credentials, own_uid};
-
-/// Connect to the TUI's socket at `path`, checking that the listener is
-/// this OS user's own.
-pub async fn connect(path: &Path) -> Result<UnixStream, AttachError> {
-    connect_with(path, os_credentials).await
-}
-
-/// [`connect`], identifying the listener with `credentials`.
-pub(crate) async fn connect_with(
-    path: &Path,
-    credentials: Credentials,
-) -> Result<UnixStream, AttachError> {
-    let shown = path.display();
-    let stream = match UnixStream::connect(path).await {
-        Ok(stream) => stream,
-        Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::ConnectionRefused) => {
-            return Err(AttachError(format!(
-                "no TUI is listening for MCP at {shown}: open the profile in `bacnet tui` first \
-                 (its MCP authorization must stand, and its [mcp] table must not set \
-                 tui_listener = false)"
-            )));
-        }
-        Err(e) => return Err(AttachError(format!("cannot connect to {shown}: {e}"))),
-    };
-    let peer = credentials(&stream)
-        .map_err(|e| AttachError(format!("cannot identify the listener at {shown}: {e}")))?;
-    let uid = own_uid();
-    if peer.uid != uid {
-        return Err(AttachError(format!(
-            "the listener at {shown} runs as uid {}, not this user (uid {uid}); not connecting",
-            peer.uid
-        )));
-    }
-    Ok(stream)
-}
+use super::{AttachError, connect};
 
 /// Pass `input` to the TUI's socket at `path` and what comes back to
 /// `output`, until the TUI ends the session. The end of `input` is passed
@@ -85,6 +51,9 @@ where
         output.flush().await
     };
     tokio::pin!(up, down);
+    // A named pipe has no half-close: the TUI sees the host's end only
+    // when the pipe closes, so there the bridge ends with the host's side.
+    let half_close = cfg!(unix);
     let mut up_done = false;
     loop {
         // Both copies are polled together; neither holds a lock.
@@ -94,6 +63,9 @@ where
                 up_done = true;
                 if let Err(error) = done {
                     tracing::debug!("the host's side of the bridge ended: {error}");
+                }
+                if !half_close {
+                    return Ok(());
                 }
             }
         }

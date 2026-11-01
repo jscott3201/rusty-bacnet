@@ -1030,7 +1030,7 @@ feature.
 bacnet mcp authorize --profile plant-a          # once, in a terminal: review and consent
 bacnet mcp serve --stdio --profile plant-a      # what an agent host's configuration launches
 bacnet mcp serve --stdio --passive              # decode and list only; sends nothing
-bacnet mcp connect --profile plant-a            # attach to the TUI that has plant-a open (Unix)
+bacnet mcp connect --profile plant-a            # attach to the TUI that has plant-a open
 ```
 
 `bacnet mcp serve --stdio` runs a [Model Context Protocol](https://modelcontextprotocol.io)
@@ -1057,19 +1057,22 @@ Experimental in 0.15.
 | `--profile <NAME>` | The profile a `bacnet tui` has open. Without it, `connect` attaches to the only profile whose TUI is listening, and asks for a name when there are several |
 
 `bacnet mcp connect` attaches an agent host to a running `bacnet tui`
-instead of starting a client of its own (Unix only for now; on Windows it
-says so). It passes its stdin and stdout to the local socket the TUI
-opens in the profile's workspace, byte for byte, so the agent's reads go
+instead of starting a client of its own. It passes its stdin and stdout
+to the local socket the TUI opens in the profile's workspace (on Windows,
+a named pipe named after the workspace), byte for byte, so the agent's reads go
 through the TUI's client, transport and rate meter, and the profile's UDP
 port isn't contended for. The agent host launches it as it launches
 `bacnet mcp serve`. The TUI listens only on a profile authorized for MCP
 (below), unless its `[mcp]` table sets `tui_listener = false`; the status
-bar shows `MCP n` with the agents attached. Over the socket the tools are
+bar shows `MCP n` with the agents attached. Over the socket or pipe the tools are
 read-only whatever `mcp_writes` says, and the table's rates join the
-TUI's only while an agent is attached. Only your own OS user can connect:
-the workspace is kept at mode 0700 (a looser one is narrowed when the
-listener starts), the socket is 0600, and each connection's peer
-credentials are checked, a refusal going to the audit log. The listener
+TUI's only while an agent is attached. Only your own OS user can connect.
+On Unix the workspace is kept at mode 0700 (a looser one is narrowed when
+the listener starts), the socket is 0600, and each connection's peer
+credentials are checked. On Windows the pipe's access list grants your
+user alone, it takes no remote clients, and each client's process must
+run as your user; `connect` checks the TUI's process the same way.
+Refusals go to the audit log. The listener
 holds `mcp.lock` in the workspace, so a second TUI on the profile doesn't
 listen, and without `--profile` `connect` picks the only profile whose
 lock is held. With no TUI listening, `connect` exits

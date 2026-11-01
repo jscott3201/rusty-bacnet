@@ -2,8 +2,8 @@
 //! engine, all sharing one watch hub (so one point cap) and one principal
 //! bucket, counted, and audited when they open and close and when a peer
 //! is refused. While any is attached, the profile's `[mcp]` limits join
-//! the engine's. They serve any byte stream, so the Windows named pipe
-//! will use them as the Unix socket does.
+//! the engine's. They serve any byte stream: the Unix socket's and the
+//! Windows named pipe's.
 
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -23,7 +23,7 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use super::{MAX_AGENTS, PeerId};
+use super::{MAX_AGENTS, PeerId, VIA, platform};
 use crate::McpServer;
 use crate::contain::capped;
 use crate::policy::{Policy, Workspace};
@@ -163,10 +163,11 @@ impl<T: TransportPort + 'static> Sessions<T> {
         let connection = self.next.fetch_add(1, Ordering::Relaxed);
         let (workspace, principal) = (self.workspace.clone(), self.principal.clone());
         let stop = self.stop.clone();
+        let mut fields = platform::peer_fields(Some(&peer), connection);
+        let pid = peer.pid;
         let session = async move {
-            let mut fields = peer_fields(Some(peer), connection);
             record(&workspace, &principal, "mcp-connect", fields.clone()).await;
-            tracing::info!("MCP agent {connection} attached (pid {:?})", peer.pid);
+            tracing::info!("MCP agent {connection} attached (pid {pid:?})");
             let (reader, writer) = tokio::io::split(stream);
             let serving = server.serve_until(reader, writer, stop.cancelled_owned());
             // A request's handler that panics ends the session with that
@@ -209,13 +210,12 @@ impl<T: TransportPort + 'static> Sessions<T> {
             return tracing::debug!("MCP socket: refused a connection ({why}), not recorded");
         };
         tracing::warn!(
-            "MCP socket: refused a connection ({why}; peer uid {:?}, pid {:?})",
-            peer.map(|p| p.uid),
-            peer.and_then(|p| p.pid)
+            "MCP socket: refused a connection ({why}; {})",
+            platform::describe(peer.as_ref())
         );
         let (workspace, principal) = (self.workspace.clone(), self.principal.clone());
+        let mut fields = platform::peer_fields(peer.as_ref(), connection);
         let refused = async move {
-            let mut fields = peer_fields(peer, connection);
             fields["outcome"] = json!({ "result": "refused", "why": why });
             if left_out > 0 {
                 fields["refusals_not_recorded_before"] = json!(left_out);
@@ -233,20 +233,10 @@ impl<T: TransportPort + 'static> Sessions<T> {
 /// shutdown.
 pub(super) async fn record_left_out(workspace: &Workspace, principal: &str, left_out: u64) {
     let fields = json!({
-        "via": "local-socket",
+        "via": VIA,
         "outcome": { "result": "refused", "why": "not-recorded", "count": left_out },
     });
     record(workspace, principal, "mcp-refused", fields).await;
-}
-
-/// The fields every record of a connection carries.
-fn peer_fields(peer: Option<PeerId>, connection: u64) -> Value {
-    json!({
-        "via": "local-socket",
-        "connection": connection,
-        "peer_uid": peer.map(|p| p.uid),
-        "peer_pid": peer.and_then(|p| p.pid),
-    })
 }
 
 /// Append one record to the workspace's audit log, as the stdio server's

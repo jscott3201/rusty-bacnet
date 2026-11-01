@@ -1,16 +1,12 @@
 //! The socket's filesystem guards: a private workspace, checked and
-//! narrowed on one open handle; the listener's lock; no symbolic links;
-//! and the socket checked again once it is bound.
+//! narrowed on one open handle; no symbolic links; and the socket checked
+//! again once it is bound. The listener's lock is in `lock.rs`.
 
-use std::fs::{self, File, OpenOptions, TryLockError};
+use std::fs::{self, File, OpenOptions};
 use std::io::ErrorKind;
 use std::os::unix::fs::PermissionsExt as _;
 use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _, OpenOptionsExt as _};
 use std::path::Path;
-use std::time::Duration;
-
-/// The lock file a listener holds in the workspace for its whole life.
-pub const LOCK_FILE: &str = "mcp.lock";
 
 /// The longest socket path the OS takes: `sun_path` less its terminator.
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -116,52 +112,6 @@ pub(super) fn check_length(path: &Path) -> Result<(), String> {
         ));
     }
     Ok(())
-}
-
-/// How many times a listener tries for its lock, and how long it waits
-/// between tries: a `connect` probe holds a shared lock only for a moment.
-const LOCK_TRIES: u32 = 5;
-const LOCK_RETRY: Duration = Duration::from_millis(50);
-
-/// Take the listener's lock in `dir`, never through a symbolic link, or
-/// say that another listener holds it.
-pub(super) async fn lock(dir: &Path) -> Result<File, String> {
-    let path = dir.join(LOCK_FILE);
-    let shown = path.display();
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(SOCKET_MODE)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(&path)
-        .map_err(|e| format!("cannot open {shown}: {e}"))?;
-    for _ in 1..LOCK_TRIES {
-        match file.try_lock() {
-            Err(TryLockError::WouldBlock) => tokio::time::sleep(LOCK_RETRY).await,
-            Ok(()) => return Ok(file),
-            Err(TryLockError::Error(e)) => return Err(format!("cannot lock {shown}: {e}")),
-        }
-    }
-    match file.try_lock() {
-        Ok(()) => Ok(file),
-        Err(TryLockError::WouldBlock) => Err(format!(
-            "another TUI is listening for MCP on this profile (it holds {shown})"
-        )),
-        Err(TryLockError::Error(e)) => Err(format!("cannot lock {shown}: {e}")),
-    }
-}
-
-/// Whether a listener holds the lock in `dir` now. The probe takes a
-/// shared lock, which neither another probe nor (once it is released, at
-/// once) a listener starting meanwhile is refused by.
-pub(super) fn held(dir: &Path) -> bool {
-    OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(dir.join(LOCK_FILE))
-        .is_ok_and(|file| matches!(file.try_lock_shared(), Err(TryLockError::WouldBlock)))
 }
 
 /// Make way for the socket at `path`, with the listener's lock held, so
