@@ -25,11 +25,10 @@
 //! the accessor on to the object inside, so the wrapped object's own
 //! capability answers.
 //!
-//! A capability the host also reads under a shared guard has a second,
-//! `&self` accessor beside the mutable one, named without the `_mut`
-//! suffix (`CommandRunner`, whose generation the server checks under the
-//! database's read guard). An accessor with only the mutable form takes the
-//! plain name.
+//! A capability the host only drives exclusively has one mutable accessor
+//! with the plain name, as [`Timed`] has `timed()`. One the host also reads
+//! under a shared guard adds a `&self` accessor: that one takes the plain
+//! name, and the mutable one gains a `_mut` suffix.
 //!
 //! [`BACnetObject`]: super::BACnetObject
 

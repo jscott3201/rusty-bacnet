@@ -46,7 +46,9 @@ use bacnet_objects::command::{CommandRun, WriteFailure};
 use bacnet_services::read_property::ReadPropertyRequest;
 use bacnet_types::constructed::{BACnetActionCommand, BACnetDeviceObjectPropertyReference};
 
-/// The server handles a run owns while it waits out post delays.
+/// The server handles a run owns while it waits out post delays. It is a
+/// host type, distinct from the `bacnet_objects::traits::CommandRunner`
+/// capability that objects lend it.
 pub(super) struct CommandRunner<T: TransportPort + 'static> {
     db: Arc<RwLock<ObjectDatabase>>,
     network: Arc<NetworkLayer<T>>,

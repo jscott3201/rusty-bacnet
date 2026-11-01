@@ -537,8 +537,8 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         self.supports_cov()
     }
 
-    /// Mutably borrow a Staging object's capability: the target writes its
-    /// stage changes queue. Not public API yet (#2179).
+    /// Mutably borrow a Staging object's capability, which queues target
+    /// writes when its stage changes. Not public API yet (#2179).
     ///
     /// The default has none. The bundled server takes a plan under the
     /// database mutation guard and makes its writes after releasing it.

@@ -13,12 +13,12 @@
 //! guard is released, coerces the value to each member's datatype
 //! ([`coerce_channel_value`]) and writes it through the local write path,
 //! honouring each member's Execution_Delay. The outcome comes back through
-//! [`CommandRunner::complete_command_run`].
+//! `CommandRunner::complete_command_run`.
 //!
 //! A member may name another Device (Clause 12.53.11): the server writes it
 //! there as a confirmed WriteProperty, from its device bindings, coerced to
 //! the datatype a ReadProperty there returned. The object keeps that datatype
-//! for each member ([`CommandRunner::remember_member_datatype`]) until
+//! for each member (`CommandRunner::remember_member_datatype`) until
 //! the member is written again, or the server forgets it (#1342).
 //!
 //! Reliability reports how the last distribution ended (Clause 12.53.9). A
