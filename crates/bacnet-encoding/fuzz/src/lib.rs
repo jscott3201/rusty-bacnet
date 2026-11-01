@@ -6,16 +6,17 @@
 //! panic, no allocation past libFuzzer's limit (2,048 megabytes by default)
 //! and no recursion deep enough to overflow the stack.
 //!
-//! The seed inputs in `seeds/<target>/` are encodings taken from the unit
-//! tests; `cargo test`, which `fuzz.sh check` runs, replays every one through
-//! its target's check.
+//! The seed inputs in `seeds/<target>/` were harvested from the unit tests
+//! or are built by the `seeds` module; `cargo test`, which `fuzz.sh check`
+//! runs, replays every one through its target's check.
 
 use std::fmt::Debug;
 
 use bacnet_types::error::Error;
 use bytes::BytesMut;
 
-/// Declares `CODECS` and `run`, which runs the codec a selector picks.
+/// Declares `CODECS`, `run`, which runs the codec a selector picks, and
+/// (for tests) `decodes`.
 /// An entry is `name: decode => encode`, where the encoder is a closure of
 /// the value and the buffer that returns a `Result`; `name: decode` alone
 /// only decodes.
@@ -34,6 +35,21 @@ macro_rules! codecs {
                 index += 1;
             )*
             let _ = index;
+        }
+
+        /// Whether the codec at `selector` decodes `input`: what the
+        /// generated seeds are held to.
+        #[cfg(test)]
+        pub(crate) fn decodes(selector: usize, input: &[u8]) -> bool {
+            let mut index = 0;
+            $(
+                if selector == index {
+                    return $decode(input).is_ok();
+                }
+                index += 1;
+            )*
+            let _ = index;
+            false
         }
     };
     (@one $name:literal, $input:ident, $decode:expr, $encode:expr) => {

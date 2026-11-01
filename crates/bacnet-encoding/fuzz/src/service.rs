@@ -8,8 +8,9 @@
 //! and the reserved choices 13, 24 and 25 hold an ACK instead. Then come the
 //! unconfirmed requests, the other ACKs and the formal error productions,
 //! which a client decodes from its peers. Each round trips as
-//! [`round_trip`] states; the forwarded event notification and the borrowed
-//! ReadProperty-ACK, the last two, have no encoder and only decode.
+//! [`round_trip`] states. The last two have no encoder: the forwarded event
+//! notification only decodes, and the borrowed ReadProperty-ACK must agree
+//! with the owned one.
 //!
 //! [`round_trip`]: crate::round_trip
 
@@ -102,9 +103,7 @@ macro_rules! services {
                 value.encode(buf).into_result()
             };)*
             "ForwardedEventNotification": whole(ForwardedEventNotification::decode);
-            "ReadProperty-ACK, borrowed": |data: &[u8]| {
-                ReadPropertyAckRef::decode(data).map(|_| ((), data.len()))
-            };
+            "ReadProperty-ACK, borrowed": read_property_ack_views_agree;
         }
     };
 }
@@ -169,6 +168,23 @@ services! {
     "WritePropertyMultiple-Error": WritePropertyMultipleError;
 }
 
+/// The borrowed ReadProperty-ACK against the owned one: both accept or both
+/// refuse, and they read the same fields.
+fn read_property_ack_views_agree(data: &[u8]) -> Result<((), usize), Error> {
+    let borrowed = ReadPropertyAckRef::decode(data);
+    match (ReadPropertyACK::decode(data), &borrowed) {
+        (Ok(owned), Ok(view)) => {
+            assert_eq!(owned.object_identifier, view.object_identifier);
+            assert_eq!(owned.property_identifier, view.property_identifier);
+            assert_eq!(owned.property_array_index, view.property_array_index);
+            assert_eq!(owned.property_value, view.property_value);
+        }
+        (Err(_), Err(_)) => {}
+        (owned, view) => panic!("owned {owned:?}, borrowed {view:?}"),
+    }
+    borrowed.map(|_| ((), data.len()))
+}
+
 /// Runs the codec the first octet picks on the rest.
 pub fn check(input: &[u8]) {
     let (selector, rest) = select(input);
@@ -179,13 +195,50 @@ pub fn check(input: &[u8]) {
 mod tests {
     use super::CODECS;
 
-    /// Selectors 0 to 33 are the confirmed service choices.
+    /// The confirmed requests at their service choices, and the table's
+    /// length. A seed names its codec by index, so a codec inserted before
+    /// the end re-points every seed after it: append new codecs instead.
     #[test]
-    fn confirmed_requests_sit_at_their_service_choice() {
-        assert_eq!(CODECS[0], "AcknowledgeAlarm-Request");
-        assert_eq!(CODECS[12], "ReadProperty-Request");
-        assert_eq!(CODECS[15], "WriteProperty-Request");
-        assert_eq!(CODECS[26], "ReadRange-Request");
-        assert_eq!(CODECS[33], "AuditLogQuery-Request");
+    fn selectors_stay_put() {
+        let confirmed = [
+            "AcknowledgeAlarm-Request",
+            "ConfirmedCOVNotification-Request",
+            "ConfirmedEventNotification-Request",
+            "GetAlarmSummary-ACK (the request has no parameters)",
+            "GetEnrollmentSummary-Request",
+            "SubscribeCOV-Request",
+            "AtomicReadFile-Request",
+            "AtomicWriteFile-Request",
+            "AddListElement-Request",
+            "RemoveListElement-Request",
+            "CreateObject-Request",
+            "DeleteObject-Request",
+            "ReadProperty-Request",
+            "ReadProperty-ACK (13 is reserved)",
+            "ReadPropertyMultiple-Request",
+            "WriteProperty-Request",
+            "WritePropertyMultiple-Request",
+            "DeviceCommunicationControl-Request",
+            "ConfirmedPrivateTransfer-Request",
+            "ConfirmedTextMessage-Request",
+            "ReinitializeDevice-Request",
+            "VT-Open-Request",
+            "VT-Close-Request",
+            "VT-Data-Request",
+            "ReadPropertyMultiple-ACK (24 is reserved)",
+            "ReadRange-ACK (25 is reserved)",
+            "ReadRange-Request",
+            "LifeSafetyOperation-Request",
+            "SubscribeCOVProperty-Request",
+            "GetEventInformation-Request",
+            "SubscribeCOVPropertyMultiple-Request",
+            "ConfirmedCOVNotificationMultiple-Request",
+            "ConfirmedAuditNotification-Request",
+            "AuditLogQuery-Request",
+        ];
+        assert_eq!(&CODECS[..34], &confirmed);
+        assert_eq!(CODECS.len(), 59);
+        assert_eq!(CODECS[57], "ForwardedEventNotification");
+        assert_eq!(CODECS[58], "ReadProperty-ACK, borrowed");
     }
 }

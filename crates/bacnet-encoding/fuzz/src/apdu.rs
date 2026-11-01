@@ -1,6 +1,7 @@
 //! `apdu_decode`: the owned APDU decoder, every PDU type with segmented
 //! headers included, against its encoder and against the allocation-free
-//! header view; then the segment reassembler, fed from the same octets.
+//! header view; then the segment reassembler, fed segments decoded from the
+//! same octets.
 //!
 //! - `decode_apdu` and `encode_apdu` round-trip as [`round_trip`] states,
 //!   and a decoded APDU that encodes decodes back to an equal one.
@@ -9,8 +10,11 @@
 //!   octets after the header (an Error only when its body decodes too: the
 //!   view reads no further than the header). Where the owned decoder
 //!   accepts a PDU type the view reads, unsegmented, the view accepts.
-//! - The reassembler, given segments cut from the input, returns exactly
-//!   their octets in sequence order, or refuses a gap or a count past 256.
+//! - Read as a count and a run of length-prefixed APDUs, the input's
+//!   segmented Confirmed-Requests and ComplexACKs reassemble to exactly
+//!   their service octets in sequence order (the last of a repeated
+//!   sequence number counting), or the reassembler refuses a gap; it always
+//!   refuses a count past 256.
 //!
 //! [`round_trip`]: crate::round_trip
 
@@ -127,30 +131,39 @@ fn header_agrees(input: &[u8], owned: Option<&Apdu>) {
     }
 }
 
-/// Cuts `input` into segments (its first octet is the count, each segment
-/// then takes a sequence number octet and a length octet, then that many
-/// octets) and reassembles them.
+/// Reads `input` as a segment count less one, then APDUs, each behind a
+/// length octet; feeds the reassembler the service octets of each segmented
+/// Confirmed-Request or ComplexACK that decodes, by its sequence number, and
+/// reassembles them.
 fn reassemble(input: &[u8]) {
     let Some((&count, mut rest)) = input.split_first() else {
         return;
     };
     let mut receiver = SegmentReceiver::new();
-    let mut expected: [Option<&[u8]>; 256] = [None; 256];
-    while let [sequence, length, tail @ ..] = rest {
+    let mut expected: [Option<Bytes>; 256] = [const { None }; 256];
+    while let [length, tail @ ..] = rest {
         let length = usize::from(*length).min(tail.len());
-        let (segment, after) = tail.split_at(length);
-        receiver
-            .receive(*sequence, Bytes::copy_from_slice(segment))
-            .expect("a segment under 1,476 octets is taken");
-        expected[usize::from(*sequence)] = Some(segment);
+        let (pdu, after) = tail.split_at(length);
         rest = after;
+        let (sequence, payload) = match decode_apdu(Bytes::copy_from_slice(pdu)) {
+            Ok(Apdu::ConfirmedRequest(pdu)) if pdu.segmented => {
+                (pdu.sequence_number, pdu.service_request)
+            }
+            Ok(Apdu::ComplexAck(pdu)) if pdu.segmented => (pdu.sequence_number, pdu.service_ack),
+            _ => continue,
+        };
+        let sequence = sequence.expect("a segmented PDU has a sequence number");
+        receiver
+            .receive(sequence, payload.clone())
+            .expect("a segment under 1,476 octets is taken");
+        expected[usize::from(sequence)] = Some(payload);
     }
     let total = usize::from(count) + 1;
     let wanted: Option<Vec<u8>> =
         expected[..total]
             .iter()
             .try_fold(Vec::new(), |mut whole, segment| {
-                whole.extend_from_slice((*segment)?);
+                whole.extend_from_slice(segment.as_ref()?);
                 Some(whole)
             });
     match (receiver.reassemble(total), wanted) {

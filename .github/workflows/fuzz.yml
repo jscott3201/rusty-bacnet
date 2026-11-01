@@ -9,8 +9,8 @@ name: Fuzz
 #
 #   pull request  a PR to dev or main that changes either codec crate, the
 #                 core or its time crate, the encoding, services or types
-#                 crate, the fuzz crates included, or this
-#                 workflow, its scripts or the pins: the fuzz crates' lockfiles, rustfmt
+#                 crate, the fuzz crates included, or this workflow, its
+#                 scripts or the pins: the fuzz crates' lockfiles, rustfmt
 #                 and clippy, every target built, then each target fuzzed
 #                 for 60 seconds
 #   scheduled     twice a week on dev (the default branch): each target for

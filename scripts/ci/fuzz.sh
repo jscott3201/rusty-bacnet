@@ -31,7 +31,8 @@
 # With FUZZ_WORK set, corpora go in $FUZZ_WORK/corpus/<target> and failing
 # inputs in $FUZZ_WORK/artifacts/<target>; without it, in the fuzz crate's
 # corpus/ and artifacts/, cargo-fuzz's defaults, which git ignores. A fuzz
-# crate's seeds/<target>, when it has one, is read on every run besides.
+# crate's seeds/<target>, when it has one, is read on every run besides,
+# and its flags/<target> holds libFuzzer flags for that target's runs.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
@@ -183,12 +184,22 @@ case $command in
     else
       seeds=
     fi
+    # A target's own libFuzzer flags, one per line, in flags/<target>
+    # beside the fuzz crate's targets; the caller's flags come after them,
+    # so they win.
+    flags=()
+    flags_file=$root/crates/$crate/fuzz/flags/$target
+    if [ -f "$flags_file" ]; then
+      while IFS= read -r flag; do
+        [ -n "$flag" ] && flags+=("$flag")
+      done < "$flags_file"
+    fi
     # A positional corpus directory replaces cargo-fuzz's default one; a
     # later -artifact_prefix overrides the one cargo-fuzz passes. A single
     # input that runs 10 seconds is a hang.
     in_crate "$crate" "$target" cargo_fuzz run "$target" ${corpus:+"$corpus"} ${seeds:+"$seeds"} -- \
       -max_total_time="$seconds" -timeout=10 -print_final_stats=1 \
-      ${artifacts:+"-artifact_prefix=$artifacts/"} "$@" ;;
+      ${artifacts:+"-artifact_prefix=$artifacts/"} ${flags[@]+"${flags[@]}"} "$@" ;;
   tmin)
     [ "$#" -ge 1 ] || usage
     target=$1; shift

@@ -4,9 +4,10 @@
 //!
 //! The first octet picks a codec, by its remainder over the number of them
 //! ([`CODECS`] names them in that order); the octets after it are the input.
-//! A codec with an encoder round trips as [`round_trip`] states; the few
-//! with no encoder of their own (the tolerant and value-only readers) are
-//! only decoded.
+//! A codec with an encoder round trips as [`round_trip`] states. The
+//! value-only readers, which have no encoder of their own, are only
+//! decoded, and the tolerant event notification decoder is checked against
+//! the strict one.
 //!
 //! [`round_trip`]: crate::round_trip
 
@@ -105,12 +106,46 @@ codecs! {
     };
     "BACnetNotificationParameters": |data: &[u8]| {
         decode_notification_parameters(data, 0).map(|value| (value, data.len()))
-    };
-    "event notification, tolerant": whole(decode_event_notification_tolerant);
+    } => value_first!(encode_notification_parameters);
+    "event notification, tolerant": tolerant_agrees;
+}
+
+/// The tolerant event notification decoder against the strict one: where
+/// the strict one accepts, the tolerant one reads the same request, and
+/// where only the tolerant one does, it has dropped the message text.
+fn tolerant_agrees(data: &[u8]) -> Result<((), usize), bacnet_types::error::Error> {
+    let tolerant = decode_event_notification_tolerant(data);
+    match (decode_event_notification(data), &tolerant) {
+        (Ok(strict), Ok(tolerant)) => {
+            assert_eq!(format!("{strict:?}"), format!("{tolerant:?}"))
+        }
+        (Ok(strict), Err(error)) => panic!("the tolerant decoder refused {strict:?}: {error:?}"),
+        (Err(_), Ok(tolerant)) => assert!(
+            tolerant.message_text.is_none(),
+            "the tolerant decoder kept a text the strict one refused: {tolerant:?}"
+        ),
+        (Err(_), Err(_)) => {}
+    }
+    tolerant.map(|_| ((), data.len()))
 }
 
 /// Runs the codec the first octet picks on the rest.
 pub fn check(input: &[u8]) {
     let (selector, rest) = select(input);
     run(usize::from(selector) % CODECS.len(), rest);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CODECS;
+
+    /// A seed names its codec by index, so a codec inserted before the end
+    /// re-points every seed after it: append new codecs instead.
+    #[test]
+    fn selectors_stay_put() {
+        assert_eq!(CODECS.len(), 65);
+        assert_eq!(CODECS[0], "BACnetRecipient");
+        assert_eq!(CODECS[32], "BACnetLogMultipleRecord");
+        assert_eq!(CODECS[64], "event notification, tolerant");
+    }
 }
