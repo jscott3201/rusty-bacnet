@@ -1,0 +1,317 @@
+//! A sample of each saved format, written through its file backend at the
+//! path given: small, but with every part of its format present. Part of
+//! `restore.rs`.
+
+use std::path::Path;
+
+use bacnet_objects::access_control::{
+    AccessRightsPersistence, AccessRightsSnapshot, FileAccessRightsPersistence,
+};
+use bacnet_objects::audit::{
+    AuditLogPersistence, AuditLogSnapshot, CompletedAuditReceipt, FileAuditLogPersistence,
+};
+use bacnet_objects::color::{
+    ColorOutputPersistence, ColorOutputSnapshot, ColorOutputValue, FileColorOutputPersistence,
+};
+use bacnet_objects::log_persistence::{
+    FileLogPersistence, LogAcquisitionSettings, LogPersistence, LogSnapshot,
+};
+use bacnet_objects::notification_class::{
+    FileNotificationClassPersistence, NotificationClassPersistence, NotificationClassSnapshot,
+};
+use bacnet_objects::notification_forwarder::{
+    FileNotificationForwarderPersistence, ForwarderSnapshot, NotificationForwarderPersistence,
+};
+use bacnet_objects::object_profile::{FileTagsPersistence, TagsPersistence, TagsSnapshot};
+use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits, LogStatus};
+use bacnet_types::constructed::{
+    BACnetAccessRule, BACnetAuditLogDatum, BACnetAuditLogRecord, BACnetAuditLogRecordResult,
+    BACnetDestination, BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference,
+    BACnetEventLogRecord, BACnetEventNotificationSubscription, BACnetLogMultipleRecord,
+    BACnetLogRecord, BACnetNameValue, BACnetRecipient, BACnetXyColor, EventLogDatum, LogData,
+    LogDatum, LogValue,
+};
+use bacnet_types::enums::{LoggingType, ObjectType, PropertyIdentifier};
+use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
+
+use super::oid;
+
+pub fn trend_log(base: &Path) {
+    commit_log(base, trend_snapshot());
+}
+
+pub fn trend_log_multiple(base: &Path) {
+    commit_log(base, multiple_snapshot());
+}
+
+pub fn event_log(base: &Path) {
+    commit_log(base, event_snapshot());
+}
+
+pub fn audit_log(base: &Path) {
+    FileAuditLogPersistence::new(base)
+        .unwrap()
+        .commit(&audit_snapshot())
+        .expect("the sample commits");
+}
+
+pub fn notification_forwarder(path: &Path) {
+    FileNotificationForwarderPersistence::new(path)
+        .unwrap()
+        .save(
+            oid(ObjectType::NOTIFICATION_FORWARDER),
+            &forwarder_snapshot(),
+        )
+        .expect("the sample saves");
+}
+
+pub fn notification_class(path: &Path) {
+    let snapshot = NotificationClassSnapshot {
+        recipient_list: Some(destinations()),
+    };
+    FileNotificationClassPersistence::new(path)
+        .unwrap()
+        .save(oid(ObjectType::NOTIFICATION_CLASS), &snapshot)
+        .expect("the sample saves");
+}
+
+pub fn tags(path: &Path) {
+    let snapshot = TagsSnapshot {
+        tags: Some(vec![
+            BACnetNameValue::semantic("exhaust"),
+            BACnetNameValue::valued("floor", PropertyValue::Unsigned(3)),
+            BACnetNameValue::valued("gain", PropertyValue::Real(0.5)),
+        ]),
+    };
+    FileTagsPersistence::new(path)
+        .unwrap()
+        .save(oid(ObjectType::ANALOG_INPUT), &snapshot)
+        .expect("the sample saves");
+}
+
+pub fn color(path: &Path) {
+    let value = ColorOutputValue::Xy(BACnetXyColor::new(0.25, 0.5));
+    save_color(path, ObjectType::COLOR, value);
+}
+
+pub fn color_temperature(path: &Path) {
+    save_color(
+        path,
+        ObjectType::COLOR_TEMPERATURE,
+        ColorOutputValue::Kelvin(4_000),
+    );
+}
+
+fn save_color(path: &Path, kind: ObjectType, present_value: ColorOutputValue) {
+    FileColorOutputPersistence::new(path)
+        .unwrap()
+        .save(oid(kind), &ColorOutputSnapshot { present_value })
+        .expect("the sample saves");
+}
+
+pub fn access_rights(path: &Path) {
+    FileAccessRightsPersistence::new(path)
+        .unwrap()
+        .save(oid(ObjectType::ACCESS_RIGHTS), &access_rights_snapshot())
+        .expect("the sample saves");
+}
+
+const DATE: Date = Date {
+    year: 126,
+    month: 10,
+    day: 20,
+    day_of_week: 2,
+};
+
+const UNSPECIFIED: (Date, Time) = (
+    Date {
+        year: 255,
+        month: 255,
+        day: 255,
+        day_of_week: 255,
+    },
+    Time {
+        hour: 255,
+        minute: 255,
+        second: 255,
+        hundredths: 255,
+    },
+);
+
+fn at(hour: u8) -> Time {
+    Time {
+        hour,
+        minute: 15,
+        second: 0,
+        hundredths: 0,
+    }
+}
+
+fn reference(instance: u32) -> BACnetDeviceObjectPropertyReference {
+    BACnetDeviceObjectPropertyReference {
+        object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, instance).unwrap(),
+        property_identifier: PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        property_array_index: None,
+        device_identifier: None,
+    }
+}
+
+fn commit_log<R>(base: &Path, snapshot: LogSnapshot<R>)
+where
+    FileLogPersistence: LogPersistence<R>,
+{
+    FileLogPersistence::new(base)
+        .unwrap()
+        .commit(&snapshot)
+        .expect("the sample commits");
+}
+
+fn log_snapshot<R>(kind: ObjectType, records: Vec<R>) -> LogSnapshot<R> {
+    LogSnapshot {
+        object_identifier: oid(kind),
+        generation: 3,
+        buffer_size: 4,
+        log_enable: true,
+        stop_when_full: false,
+        total_record_count: 7,
+        records,
+        last_notify_record: 5,
+        records_since_notification_from: 6,
+        notification_threshold: 4,
+        start_time: (DATE, at(1)),
+        stop_time: UNSPECIFIED,
+        acquisition: Some(LogAcquisitionSettings {
+            logging_type: LoggingType::POLLED,
+            log_interval: 500,
+            align_intervals: true,
+            interval_offset: 20,
+        }),
+        log_device_object_property: vec![reference(1)],
+    }
+}
+
+fn trend_snapshot() -> LogSnapshot<BACnetLogRecord> {
+    let record = |hour: u8, log_datum| BACnetLogRecord {
+        date: DATE,
+        time: at(hour),
+        log_datum,
+        status_flags: None,
+    };
+    log_snapshot(
+        ObjectType::TREND_LOG,
+        vec![
+            record(1, LogDatum::RealValue(1.5)),
+            record(2, LogDatum::LogStatus(LogStatus::LOG_INTERRUPTED)),
+            record(3, LogDatum::UnsignedValue(9)),
+        ],
+    )
+}
+
+fn multiple_snapshot() -> LogSnapshot<BACnetLogMultipleRecord> {
+    let mut snapshot = log_snapshot(
+        ObjectType::TREND_LOG_MULTIPLE,
+        (1..3)
+            .map(|hour| BACnetLogMultipleRecord {
+                date: DATE,
+                time: at(hour),
+                log_data: LogData::Values(vec![
+                    LogValue::UnsignedValue(u64::from(hour)),
+                    LogValue::BooleanValue(hour % 2 == 0),
+                ]),
+            })
+            .collect(),
+    );
+    snapshot.log_device_object_property.push(reference(2));
+    snapshot
+}
+
+fn event_snapshot() -> LogSnapshot<BACnetEventLogRecord> {
+    let mut snapshot = log_snapshot(
+        ObjectType::EVENT_LOG,
+        (1..3)
+            .map(|hour| BACnetEventLogRecord {
+                date: DATE,
+                time: at(hour),
+                log_datum: EventLogDatum::TimeChange(f32::from(hour)),
+            })
+            .collect(),
+    );
+    snapshot.acquisition = None;
+    snapshot.log_device_object_property.clear();
+    snapshot
+}
+
+fn audit_snapshot() -> AuditLogSnapshot {
+    let record = |sequence_number, datum| BACnetAuditLogRecordResult {
+        sequence_number,
+        record: BACnetAuditLogRecord {
+            timestamp: (DATE, at(12)),
+            datum,
+        },
+    };
+    AuditLogSnapshot {
+        object_identifier: oid(ObjectType::AUDIT_LOG),
+        generation: 3,
+        capacity: 4,
+        log_enable: true,
+        total_record_count: 2,
+        records: vec![
+            record(1, BACnetAuditLogDatum::LogStatus(LogStatus::LOG_DISABLED)),
+            record(2, BACnetAuditLogDatum::TimeChange(-1.5)),
+        ],
+        completed_receipts: vec![
+            CompletedAuditReceipt::new(vec![1, 2, 3], 1_700_000_000_000).expect("a short key"),
+        ],
+    }
+}
+
+fn device(instance: u32) -> BACnetRecipient {
+    BACnetRecipient::Device(ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap())
+}
+
+fn destinations() -> Vec<BACnetDestination> {
+    vec![BACnetDestination {
+        valid_days: DaysOfWeek::all(),
+        from_time: Time {
+            hour: 0,
+            minute: 0,
+            second: 0,
+            hundredths: 0,
+        },
+        to_time: Time {
+            hour: 23,
+            minute: 59,
+            second: 59,
+            hundredths: 99,
+        },
+        recipient: device(7),
+        process_identifier: 3,
+        issue_confirmed_notifications: true,
+        transitions: EventTransitionBits::all(),
+    }]
+}
+
+fn forwarder_snapshot() -> ForwarderSnapshot {
+    ForwarderSnapshot {
+        recipient_list: Some(destinations()),
+        subscribed_recipients: vec![BACnetEventNotificationSubscription {
+            recipient: device(8),
+            process_identifier: 1,
+            issue_confirmed_notifications: false,
+            time_remaining: 30,
+        }],
+    }
+}
+
+fn access_rights_snapshot() -> AccessRightsSnapshot {
+    let location = BACnetDeviceObjectReference {
+        device_identifier: None,
+        object_identifier: ObjectIdentifier::new(ObjectType::ACCESS_POINT, 2).unwrap(),
+    };
+    AccessRightsSnapshot {
+        positive_access_rules: Some(vec![BACnetAccessRule::new(None, Some(location), true)]),
+        negative_access_rules: Some(Vec::new()),
+        enable: Some(true),
+        accompaniment: None,
+    }
+}

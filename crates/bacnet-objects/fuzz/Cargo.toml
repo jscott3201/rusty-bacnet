@@ -1,0 +1,42 @@
+[package]
+name = "objects-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+rust-version = "1.95"
+
+[package.metadata]
+cargo-fuzz = true
+
+# A workspace of its own, outside the root one: it builds only with cargo-fuzz
+# on the pinned nightly, from its own Cargo.lock (docs/ci.md, "Fuzzing").
+[workspace]
+members = []
+
+# The restore paths of the object crate's file persistence backends: every
+# saved format, loaded through its backend and restored into its object.
+[dependencies]
+bacnet-objects = { path = ".." }
+bacnet-types = { path = "../../bacnet-types" }
+libfuzzer-sys = "0.4"
+
+[[bin]]
+name = "log_restore"
+path = "fuzz_targets/log_restore.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "audit_restore"
+path = "fuzz_targets/audit_restore.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "object_file_restore"
+path = "fuzz_targets/object_file_restore.rs"
+test = false
+doc = false
+bench = false
