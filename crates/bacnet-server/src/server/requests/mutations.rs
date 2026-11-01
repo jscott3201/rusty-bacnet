@@ -317,7 +317,6 @@ impl Request<'_> {
             // Lock order: database, then a short table read. Each attempt is
             // captured as it commits, under this guard (#856).
             let capture = cov_table.read().await.timed_capture_all();
-            let mut snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::default();
             // Nothing is asked under this guard: `take` answers when a policy
             // was asked ahead, and the mode answers otherwise.
             let authorize = |attempt: &bacnet_services::wpm::WritePropertyAttempt| {
@@ -332,7 +331,6 @@ impl Request<'_> {
             let outcome = handlers::handle_write_property_multiple_observed(
                 &mut db,
                 &self.req.service_request,
-                &mut snapshots,
                 Some(&authorize),
                 Some(&mut observer),
                 Some(&source),
@@ -346,7 +344,7 @@ impl Request<'_> {
                 }
                 handlers::WritePropertyMultipleOutcome::Reject { .. } => &[],
             };
-            let changes = snapshots.changes(&db, committed_oids);
+            let changes = observer.life_safety_changes(&db, committed_oids);
             timed_revisits.extend_from_slice(observer.life_safety_queued());
             let plans = BACnetServer::<T>::take_staging_plans(&mut db, committed_oids);
             command_runs.extend(TakenRuns::take(database, &mut db, committed_oids));

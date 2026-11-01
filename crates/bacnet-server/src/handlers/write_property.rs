@@ -29,8 +29,7 @@ pub fn handle_write_property_multiple(
     db: &mut ObjectDatabase,
     service_data: &[u8],
 ) -> Result<Vec<ObjectIdentifier>, Error> {
-    let mut snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::default();
-    match handle_write_property_multiple_detailed(db, service_data, &mut snapshots) {
+    match handle_write_property_multiple_detailed(db, service_data) {
         WritePropertyMultipleOutcome::Success { committed_oids } => {
             write::end_unmade(db, &committed_oids);
             Ok(committed_oids)
@@ -51,9 +50,8 @@ pub fn handle_write_property_multiple(
 pub(crate) fn handle_write_property_multiple_detailed(
     db: &mut ObjectDatabase,
     service_data: &[u8],
-    snapshots: &mut crate::life_safety_cov::LifeSafetyCovSnapshots,
 ) -> WritePropertyMultipleOutcome {
-    handle_write_property_multiple_authorized(db, service_data, snapshots, None)
+    handle_write_property_multiple_authorized(db, service_data, None)
 }
 
 type WritePropertyMultipleGate<'a> =
@@ -63,13 +61,11 @@ type WritePropertyMultipleGate<'a> =
 pub(crate) fn handle_write_property_multiple_authorized(
     db: &mut ObjectDatabase,
     service_data: &[u8],
-    snapshots: &mut crate::life_safety_cov::LifeSafetyCovSnapshots,
     authorize: Option<WritePropertyMultipleGate<'_>>,
 ) -> WritePropertyMultipleOutcome {
     handle_write_property_multiple_observed(
         db,
         service_data,
-        snapshots,
         authorize,
         None,
         None,
@@ -80,7 +76,6 @@ pub(crate) fn handle_write_property_multiple_authorized(
 pub(crate) fn handle_write_property_multiple_observed(
     db: &mut ObjectDatabase,
     service_data: &[u8],
-    snapshots: &mut crate::life_safety_cov::LifeSafetyCovSnapshots,
     authorize: Option<WritePropertyMultipleGate<'_>>,
     mut observer: Option<&mut dyn WriteCommitObserver>,
     source: Option<&bacnet_objects::device::AuditWriteSource>,
@@ -177,7 +172,6 @@ pub(crate) fn handle_write_property_multiple_observed(
             }
             continue;
         }
-        snapshots.capture_before_write(db, oid);
         let target = WriteTarget {
             oid,
             property,

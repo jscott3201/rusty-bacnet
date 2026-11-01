@@ -174,11 +174,9 @@ fn an_unbound_writer_publishes_its_address_and_corrects_in_the_same_wpm() {
     }
     .encode(&mut request)
     .unwrap();
-    let mut snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::default();
     let outcome = handle_write_property_multiple_observed(
         &mut db,
         &request,
-        &mut snapshots,
         None,
         None,
         None,

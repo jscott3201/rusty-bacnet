@@ -182,7 +182,6 @@ fn indexed_absence_keeps_wpm_prefix_coordinate_and_skips_authorizer_observer_sou
             } = handle_write_property_multiple_observed(
                 &mut db,
                 &bytes,
-                &mut crate::life_safety_cov::LifeSafetyCovSnapshots::default(),
                 Some(&authorize),
                 Some(&mut observer),
                 None,

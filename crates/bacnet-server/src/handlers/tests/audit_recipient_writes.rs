@@ -136,7 +136,6 @@ fn wpm(db: &mut ObjectDatabase, values: &[&[u8]]) -> WritePropertyMultipleOutcom
     handle_write_property_multiple_detailed(
         db,
         &request,
-        &mut crate::life_safety_cov::LifeSafetyCovSnapshots::default(),
     )
 }
 

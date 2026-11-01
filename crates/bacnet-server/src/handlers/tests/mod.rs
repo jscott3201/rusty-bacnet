@@ -213,11 +213,9 @@ fn sourced_wp(db: &mut ObjectDatabase, data: &[u8]) -> Result<ObjectIdentifier, 
     .map(|(oid, _)| oid)
 }
 fn sourced_wpm(db: &mut ObjectDatabase, data: &[u8]) -> Result<Vec<ObjectIdentifier>, Error> {
-    let mut snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::default();
     match handle_write_property_multiple_observed(
         db,
         data,
-        &mut snapshots,
         None,
         None,
         None,

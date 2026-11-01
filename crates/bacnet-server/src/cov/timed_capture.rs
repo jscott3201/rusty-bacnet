@@ -224,10 +224,15 @@ impl TimedCapture {
 /// observer. Each successful attempt is captured as it commits, under the
 /// request's database guard, so a WritePropertyMultiple that goes A-B-A, or
 /// fails after a committed prefix, conveys every change it made. A Life
-/// Safety object captures the exact changes of that one attempt.
+/// Safety object captures the exact changes of that one attempt, and keeps
+/// its state from before the request's first attempt on it, for the
+/// request's exact fanout.
 pub(crate) struct TimedWriteCapture<'a> {
     inner: Option<&'a mut dyn WriteCommitObserver>,
     capture: TimedCapture,
+    /// Each Life Safety object's state from before the request's first
+    /// attempt on it.
+    request_life_safety: LifeSafetyCovSnapshots,
     /// State of the Life Safety object the current attempt writes, from
     /// before the attempt.
     life_safety: Option<LifeSafetyCovSnapshots>,
@@ -243,6 +248,7 @@ impl<'a> TimedWriteCapture<'a> {
         Self {
             inner,
             capture,
+            request_life_safety: LifeSafetyCovSnapshots::default(),
             life_safety: None,
             life_safety_queued: Vec::new(),
         }
@@ -256,10 +262,22 @@ impl<'a> TimedWriteCapture<'a> {
     pub(crate) fn life_safety_queued(&self) -> &[CovSubscriptionKey] {
         &self.life_safety_queued
     }
+
+    /// What the request changed on each Life Safety object among
+    /// `committed`, against its state before the request's first attempt
+    /// on it.
+    pub(crate) fn life_safety_changes(
+        &self,
+        db: &ObjectDatabase,
+        committed: &[ObjectIdentifier],
+    ) -> Vec<LifeSafetyCovChange> {
+        self.request_life_safety.changes(db, committed)
+    }
 }
 
 impl WriteCommitObserver for TimedWriteCapture<'_> {
     fn before(&mut self, db: &ObjectDatabase, write: WriteTarget<'_>) {
+        self.request_life_safety.capture_before_write(db, write.oid);
         self.life_safety = (is_life_safety_object(write.oid) && self.capture.watches(write.oid))
             .then(|| LifeSafetyCovSnapshots::capture_oid(db, write.oid));
         if let Some(inner) = self.inner.as_deref_mut() {

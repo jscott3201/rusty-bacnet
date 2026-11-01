@@ -36,11 +36,9 @@ fn encode_request(oid: ObjectIdentifier, properties: Vec<BACnetPropertyValue>) -
 }
 
 fn detailed(db: &mut ObjectDatabase, request: &[u8]) -> WritePropertyMultipleOutcome {
-    let mut snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::default();
     handle_write_property_multiple_observed(
         db,
         request,
-        &mut snapshots,
         None,
         None,
         None,
@@ -275,7 +273,6 @@ fn acked_transitions_wpm_authorizer_allow_retains_prefix_and_stops_at_denial() {
                 allowed.borrow_mut().push(attempt.clone());
                 Ok(())
             };
-            let mut snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::default();
             let WritePropertyMultipleOutcome::Error {
                 error,
                 first_failed_write_attempt,
@@ -283,7 +280,6 @@ fn acked_transitions_wpm_authorizer_allow_retains_prefix_and_stops_at_denial() {
             } = handle_write_property_multiple_authorized(
                 &mut db,
                 &request,
-                &mut snapshots,
                 Some(&authorize),
             )
             else {
