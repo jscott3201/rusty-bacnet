@@ -3985,20 +3985,21 @@ fn property_list(&self) -> Cow<'static, [P]> {
 }
 ```
 
-Two provided methods decide what the object-management services may do:
+Createability belongs to the object type, not to an instance, so the trait
+has no method for it (`is_createable` was removed). The server's CreateObject
+builds a type when the application registered a constructor for it
+([CreateObject constructors](#createobject-constructors)) or the built-in
+table `bacnet_objects::creation` has one (#2172): the analog, binary and
+multi-state input, output and value types and the twelve value types
+(Integer, Positive Integer, Large Analog, CharacterString, OctetString,
+BitString, Date, Time, DateTime and the three pattern types).
+`ObjectConstructors::creates(object_type)` gives that answer, and the PICS
+reports it. Any other type is refused with `OBJECT/UNSUPPORTED_OBJECT_TYPE`
+when the Device doesn't list it in Protocol_Object_Types_Supported, or
+`OBJECT/DYNAMIC_CREATION_NOT_SUPPORTED` when it does (#2171).
 
-- `is_createable` answers from `bacnet_objects::creation`, the one table of
-  constructors the server's CreateObject builds from (#2172): `true` for the
-  analog, binary and multi-state input, output and value types and the twelve
-  value types (Integer, Positive Integer, Large Analog, CharacterString,
-  OctetString, BitString, Date, Time, DateTime and the three pattern types),
-  `false` for the rest. The PICS reports it as the type's createability. The
-  server refuses every other type, a custom one included, with
-  `OBJECT/UNSUPPORTED_OBJECT_TYPE` for a type the Device doesn't list in
-  Protocol_Object_Types_Supported or `OBJECT/DYNAMIC_CREATION_NOT_SUPPORTED`
-  for a listed one (#2171). Keep the default on a custom object, or the PICS
-  promises a creation the server refuses; to make its type creatable, register
-  a constructor ([CreateObject constructors](#createobject-constructors)).
+One provided method decides what DeleteObject may do:
+
 - `is_deleteable` defaults to `true`. DeleteObject asks it of the named object
   and removes the object when it is `true`, a custom object included; when it
   is `false` the request gets `OBJECT/OBJECT_DELETION_NOT_PERMITTED` and the
@@ -7237,7 +7238,9 @@ standalone `PicsGenerator` use raw object declarations. Use the full server's
 read and PICS methods for its execution view.
 
 PICS property rows aggregate all configured instances of each object type in
-ascending property-ID order, including single-instance output. A row or read/write
+ascending property-ID order, including single-instance output. A type
+CreateObject builds also has a row with no instance: see
+[CreateObject constructors](#createobject-constructors). A row or read/write
 flag means at least one instance supports it; actual access still depends on the
 concrete object. A property is optional only when all of its present metadata rows
 are optional; a required declaration wins, and absent rows do not vote. For example,
@@ -8816,8 +8819,9 @@ let server = BACnetServer::bip_builder()
 ```
 
 - **Which types.** A standard type the Device lists in
-  Protocol_Object_Types_Supported (`bacnet_objects::device::SUPPORTED_OBJECT_TYPES`),
-  or a proprietary type from 128 to 1023. Anything else, and a second
+  Protocol_Object_Types_Supported (`bacnet_objects::device::SUPPORTED_OBJECT_TYPES`)
+  other than Device and Network Port, which model the node itself, or a
+  proprietary type from 128 to 1023. Anything else, and a second
   registration for the same type, is refused with `Error::Encoding` when it
   is registered. A registered proprietary type passes CreateObject's type
   check; Protocol_Object_Types_Supported, which lists standard types only,
@@ -8831,15 +8835,24 @@ let server = BACnetServer::bip_builder()
   decides the request before the constructor runs, the initial values are
   applied as WriteProperty applies them (creation-only properties through
   `initialize_property`), a refusal names its initial value and drops the
-  object, and the creation is audited.
+  object, and the creation is audited. The constructor doesn't see the
+  initial values, so it can't add optional rows on request as the built-in
+  table does (an Analog or Binary Value's audit policy rows): an initial
+  value for a property the object doesn't serve, such as Audit_Level, is
+  refused as a write to it would be. Build the rows the type should take.
 - **Refusals.** An object whose identifier isn't the one the constructor was
   given is refused with `OBJECT / DYNAMIC_CREATION_NOT_SUPPORTED` and
   nothing is added; so is a panic (with unwind builds) and any error other
   than `Error::protocol`. An `Error::protocol(class, code)` goes back to the
-  client as is.
-- **PICS.** A registered type reports as createable, with no
-  `is_createable` override on the object. The Python bindings can't
-  register constructors.
+  client as is. A caught panic still runs the process's panic hook, which
+  prints to stderr by default (and can garble a terminal UI), so refuse
+  with an error, not a panic.
+- **PICS.** A registered type reports as createable from the registry.
+  With no instance in the database it is still listed, with no property
+  rows or creation-only list: the server never calls the constructor just
+  to describe the type. (An instance-less table type is described from
+  an object its built-in constructor makes, outside the database.) The
+  Python bindings can't register constructors.
 
 ### The ReinitializeDevice handler
 

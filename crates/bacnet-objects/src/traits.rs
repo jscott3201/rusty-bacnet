@@ -532,28 +532,6 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         list_property_default(self.object_identifier().object_type(), property)
     }
 
-    /// Whether this object type can be created at runtime via CreateObject.
-    ///
-    /// The default answers whether the object's type has a constructor in
-    /// the built-in table, [`crate::creation`]: the analog, binary and
-    /// multi-state input, output and value types and the twelve value types
-    /// (#2172). The bundled server builds new objects from that table and
-    /// reports this answer as the type's createability in its PICS. Every
-    /// built-in object keeps the default, so the two can't disagree.
-    ///
-    /// A custom object keeps the default too. To make its type creatable,
-    /// register a constructor for the type with the server
-    /// (`bacnet_server::server::ObjectConstructors`); the PICS then reports
-    /// the type as createable from the registration (#2173). Overriding
-    /// this to `true` alone makes the PICS promise a creation the server
-    /// refuses: OBJECT / UNSUPPORTED_OBJECT_TYPE for a type the Device
-    /// doesn't list in Protocol_Object_Types_Supported, and OBJECT /
-    /// DYNAMIC_CREATION_NOT_SUPPORTED for a listed one it doesn't build
-    /// (#2171).
-    fn is_createable(&self) -> bool {
-        crate::creation::builtin_constructor(self.object_identifier().object_type()).is_some()
-    }
-
     /// The properties whose whole value a CreateObject initial value may set
     /// on this object although WriteProperty can't change it afterwards.
     ///

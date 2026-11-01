@@ -45,8 +45,7 @@ use crate::property_metadata::{
 // quirks are preserved, not fixed, by this migration. Presence is None
 // throughout: the implementation models no commandable, intrinsic-reporting,
 // or paired-text gating. The object is not createable at runtime (the
-// `creation` table has no constructor for it, so the is_createable default
-// answers false) and remains deleteable
+// `creation` table has no constructor for it) and remains deleteable
 // (delete denies only Device and NetworkPort, so the is_deleteable=true
 // default holds); neither needs an override. Array gating keeps the default:
 // Property_List admits an index (BACnetARRAY per Table 12-79) while every
@@ -123,7 +122,6 @@ mod tests {
                 .len(),
             metadata.len()
         );
-        assert!(!object.is_createable());
         assert!(object.is_deleteable());
         assert!(object.supports_cov());
         for row in metadata.iter() {

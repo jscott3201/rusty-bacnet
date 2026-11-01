@@ -3,10 +3,11 @@
 //!
 //! The table here is the one source for both sides of createability: the
 //! bundled server's CreateObject handler builds each new object through
-//! [`builtin_constructor`], and the default
-//! [`BACnetObject::is_createable`] answers whether the object's type has an
-//! entry, which is what the server's PICS reports. The table lives in this
-//! crate rather than the server's so the trait default can read it.
+//! [`builtin_constructor`], and its PICS reports a type as createable when
+//! the table has an entry for it (or the application registered a
+//! constructor for it). Createability belongs to the type, not to an
+//! instance, so no object is asked; only code that names this table links
+//! its constructors.
 //!
 //! Each constructor takes only the instance and a name, and starts the
 //! object with the defaults of its own `new`: no units on the analog and

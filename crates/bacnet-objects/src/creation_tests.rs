@@ -33,17 +33,12 @@ const CREATEABLE: [ObjectType; 21] = [
 ];
 
 #[test]
-fn every_catalogue_type_is_createable_exactly_when_the_table_builds_it() {
+fn the_table_builds_exactly_the_createable_catalogue_types() {
     let catalogue = representatives();
     for object in &catalogue {
         let kind = object.object_identifier().object_type();
         assert_eq!(
-            object.is_createable(),
             builtin_constructor(kind).is_some(),
-            "{kind:?}"
-        );
-        assert_eq!(
-            object.is_createable(),
             CREATEABLE.contains(&kind),
             "{kind:?}"
         );
@@ -81,7 +76,6 @@ fn each_constructor_builds_its_own_type_at_the_instance_and_name_given() {
             ObjectIdentifier::new(kind, 7).unwrap()
         );
         assert_eq!(object.object_name(), "made");
-        assert!(object.is_createable(), "{kind:?}");
         // The reserved instance is the handler's to refuse; past it the
         // object constructor refuses.
         assert!(constructor(ObjectIdentifier::MAX_INSTANCE + 1, "x".into(), &[]).is_err());

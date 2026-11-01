@@ -38,8 +38,10 @@ impl ObjectConstructors {
     /// Make `object_type` creatable through `constructor`.
     ///
     /// Refused, leaving the registry unchanged, when the type already has a
-    /// registration, or when it is neither a standard type the Device lists
-    /// in Protocol_Object_Types_Supported
+    /// registration, when it is Device or Network Port (they model the node
+    /// itself and its ports, so a client never creates one), or when it is
+    /// neither a standard type the Device lists in
+    /// Protocol_Object_Types_Supported
     /// ([`SUPPORTED_OBJECT_TYPES`](bacnet_objects::device::SUPPORTED_OBJECT_TYPES))
     /// nor a proprietary type from 128 to 1023. Registering a proprietary
     /// type doesn't add it to that list, which holds standard types only.
@@ -50,12 +52,22 @@ impl ObjectConstructors {
     /// request's initial values are applied as WriteProperty applies them
     /// (or through [`BACnetObject::initialize_property`] for the object's
     /// creation-only properties), and the creation is audited. The PICS
-    /// reports the type as createable.
+    /// reports the type as createable, even before it has an instance.
+    ///
+    /// Unlike the built-in table, a registered constructor doesn't see the
+    /// request's property list, so it can't provision optional rows on
+    /// request: an initial value for a property the object doesn't serve
+    /// (an Analog or Binary Value's Audit_Level, say, when the constructor
+    /// left the audit policy rows out) is refused as a WriteProperty to it
+    /// would be, and the object is dropped. Build the rows the type should
+    /// accept.
     ///
     /// The constructor's answer:
     /// - An object whose identifier isn't the one it was given is refused
     ///   with OBJECT / DYNAMIC_CREATION_NOT_SUPPORTED and dropped, and so is
-    ///   a panic (with unwind builds); nothing is added.
+    ///   a panic (with unwind builds); nothing is added. A caught panic still
+    ///   runs the process's panic hook first, which by default prints to
+    ///   stderr (and can disturb a terminal UI): don't panic to refuse.
     /// - An [`Error::protocol`] refusal goes back to the client with its
     ///   class and code, naming no initial value. Any other error is
     ///   answered OBJECT / DYNAMIC_CREATION_NOT_SUPPORTED.
@@ -67,6 +79,11 @@ impl ObjectConstructors {
             + 'static,
     {
         let raw = object_type.to_raw();
+        if matches!(object_type, ObjectType::DEVICE | ObjectType::NETWORK_PORT) {
+            return Err(registration_error(&format!(
+                "{object_type} objects model the device itself and are never created"
+            )));
+        }
         let listed = bacnet_objects::device::SUPPORTED_OBJECT_TYPES.contains(&object_type);
         if !listed && !(128..=1023).contains(&raw) {
             return Err(registration_error(&format!(
@@ -85,6 +102,16 @@ impl ObjectConstructors {
     /// Whether `object_type` has a registered constructor.
     pub fn contains(&self, object_type: ObjectType) -> bool {
         self.by_type.contains_key(&object_type.to_raw())
+    }
+
+    /// Whether CreateObject builds `object_type`: it has a registered
+    /// constructor, or an entry in the built-in table
+    /// ([`bacnet_objects::creation`]). Createability belongs to the type,
+    /// so this is the one answer: the CreateObject handler builds through
+    /// the same two sources, in that order, and the PICS reports this.
+    pub fn creates(&self, object_type: ObjectType) -> bool {
+        self.contains(object_type)
+            || bacnet_objects::creation::builtin_constructor(object_type).is_some()
     }
 
     /// The registered types, in ascending order.

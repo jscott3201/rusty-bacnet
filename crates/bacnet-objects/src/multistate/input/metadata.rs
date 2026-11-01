@@ -239,7 +239,6 @@ mod tests {
                 assert_eq!(object.property_list().as_ref(), expected);
                 assert_eq!(object.required_properties().as_ref(), required);
                 assert_eq!(original.len(), expected.len() + 1);
-                assert!(object.is_createable());
                 for row in &original {
                     let p = row.property_identifier;
                     let condition = match p {

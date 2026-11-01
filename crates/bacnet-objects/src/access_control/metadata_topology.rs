@@ -106,7 +106,7 @@ use crate::property_metadata::{
 // are Always and the metadata mirrors dispatch. Presence is None on every
 // other row: the family models no commandable or paired-text gating.
 // The trio is not createable at runtime (the `creation` table has no
-// constructor for it, so the is_createable default answers false) and remains deleteable (delete denies
+// constructor for it) and remains deleteable (delete denies
 // only Device and NetworkPort, so the is_deleteable=true default holds);
 // neither needs an override. Array gating keeps the default: Priority_Array
 // and Door_Members (BACnetARRAYs per Table 12-30), Access_Doors (Table 12-36)

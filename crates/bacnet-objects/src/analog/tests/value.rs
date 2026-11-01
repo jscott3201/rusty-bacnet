@@ -618,14 +618,6 @@ fn ai_property_list_invalid_index_returns_error() {
 // ── Trait capability method tests (issue #115 shared truth source) ──────────
 
 #[test]
-fn av_is_createable_matches_factory() {
-    use crate::traits::BACnetObject;
-    let av = AnalogValueObject::new(1, "av-1", EngineeringUnits::NO_UNITS).unwrap();
-    // The constructor table builds Analog Values (#2172).
-    assert!(av.is_createable(), "AnalogValue is factory-constructable");
-}
-
-#[test]
 fn av_is_writable_property_mirrors_write_property() {
     use crate::traits::BACnetObject;
     let av = AnalogValueObject::new(1, "av-1", EngineeringUnits::NO_UNITS).unwrap();

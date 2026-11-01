@@ -144,9 +144,12 @@ fn only_listed_and_proprietary_types_register() {
         );
     }
     assert_eq!(constructors.object_types().count(), 0);
-    // Every listed type, built-in table or not, and the proprietary range.
+    // Every listed type but Device and Network Port, built-in table or not,
+    // and the proprietary range.
     for &kind in bacnet_objects::device::SUPPORTED_OBJECT_TYPES {
-        constructors.register(kind, vendor).unwrap();
+        if !matches!(kind, ObjectType::DEVICE | ObjectType::NETWORK_PORT) {
+            constructors.register(kind, vendor).unwrap();
+        }
     }
     for raw in [128, 1023] {
         constructors
@@ -169,52 +172,89 @@ fn the_builders_refuse_what_the_registry_refuses() {
 }
 
 #[test]
-fn the_pics_reports_a_registered_type_as_createable() {
+fn device_and_network_port_never_register() {
+    let mut constructors = ObjectConstructors::new();
+    for kind in [ObjectType::DEVICE, ObjectType::NETWORK_PORT] {
+        // Both are listed types; the node itself is what refuses them.
+        assert!(bacnet_objects::device::SUPPORTED_OBJECT_TYPES.contains(&kind));
+        let refused = constructors.register(kind, |_, _| {
+            panic!("a refused registration is never called")
+        });
+        assert!(matches!(refused, Err(Error::Encoding(_))), "{refused:?}");
+        assert!(!constructors.creates(kind), "{kind:?}");
+    }
+    assert_eq!(constructors.object_types().count(), 0);
+}
+
+#[test]
+fn creates_answers_registry_or_built_in_table() {
+    let mut constructors = ObjectConstructors::new();
+    assert!(constructors.creates(ObjectType::ANALOG_VALUE));
+    assert!(!constructors.creates(ObjectType::ELEVATOR_GROUP));
+    assert!(!constructors.creates(vendor_type()));
+    constructors.register(vendor_type(), vendor).unwrap();
+    constructors
+        .register(ObjectType::ELEVATOR_GROUP, vendor)
+        .unwrap();
+    assert!(constructors.creates(ObjectType::ELEVATOR_GROUP));
+    assert!(constructors.creates(vendor_type()));
+}
+
+fn type_rows(db: &ObjectDatabase, config: &ServerConfig) -> Vec<crate::pics::ObjectTypeSupport> {
+    generate_pics(db, config, &PicsConfig::default()).supported_object_types
+}
+
+fn row(rows: &[crate::pics::ObjectTypeSupport], kind: ObjectType) -> Option<(bool, usize)> {
+    rows.iter()
+        .find(|support| support.object_type == kind)
+        .map(|support| (support.createable, support.supported_properties.len()))
+}
+
+#[test]
+fn the_pics_lists_a_registered_type_with_no_instance_without_building_one() {
+    let db = ObjectDatabase::new();
+    let unregistered = type_rows(&db, &ServerConfig::default());
+    assert_eq!(row(&unregistered, vendor_type()), None);
+    assert_eq!(row(&unregistered, ObjectType::ELEVATOR_GROUP), None);
+
+    let mut registered = ServerConfig::default();
+    for kind in [vendor_type(), ObjectType::ELEVATOR_GROUP] {
+        registered
+            .object_constructors
+            .register(kind, |_, _| panic!("the PICS never calls a constructor"))
+            .unwrap();
+    }
+    let rows = type_rows(&db, &registered);
+    // Listed, createable, and with no property detail.
+    for kind in [vendor_type(), ObjectType::ELEVATOR_GROUP] {
+        let support = rows.iter().find(|s| s.object_type == kind).unwrap();
+        assert!(support.createable, "{kind:?}");
+        assert!(support.supported_properties.is_empty(), "{kind:?}");
+        assert!(support.creation_only_properties.is_empty(), "{kind:?}");
+    }
+}
+
+#[test]
+fn the_pics_reports_a_registered_type_with_an_instance_as_createable() {
     let mut db = ObjectDatabase::new();
     db.add(Vendor::boxed(
         ObjectIdentifier::new(vendor_type(), 1).unwrap(),
         "vendor",
     ))
     .unwrap();
-    // Calendar has no built-in constructor; registered, it is createable.
-    db.add(Box::new(
-        bacnet_objects::schedule::CalendarObject::new(1, "cal").unwrap(),
-    ))
-    .unwrap();
-    let createable = |config: &ServerConfig| {
-        generate_pics(&db, config, &PicsConfig::default())
-            .supported_object_types
-            .iter()
-            .map(|support| (support.object_type, support.createable))
-            .collect::<Vec<_>>()
-    };
-    let unregistered = ServerConfig::default();
+    // Without a registration the instance's type is listed, not createable.
     assert_eq!(
-        createable(&unregistered),
-        [(ObjectType::CALENDAR, false), (vendor_type(), false)]
+        row(&type_rows(&db, &ServerConfig::default()), vendor_type()),
+        Some((false, 5))
     );
     let mut registered = ServerConfig::default();
     registered
         .object_constructors
         .register(vendor_type(), vendor)
         .unwrap();
-    registered
-        .object_constructors
-        .register(ObjectType::CALENDAR, |oid, name| {
-            Ok(Box::new(bacnet_objects::schedule::CalendarObject::new(
-                oid.instance_number(),
-                name,
-            )?))
-        })
-        .unwrap();
+    // The instance still describes the properties.
     assert_eq!(
-        createable(&registered),
-        [(ObjectType::CALENDAR, true), (vendor_type(), true)]
-    );
-    // The custom object answers is_createable with the trait default.
-    assert!(
-        !db.get(&ObjectIdentifier::new(vendor_type(), 1).unwrap())
-            .unwrap()
-            .is_createable()
+        row(&type_rows(&db, &registered), vendor_type()),
+        Some((true, 5))
     );
 }

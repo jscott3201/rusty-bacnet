@@ -611,6 +611,5 @@ fn property_metadata_binary_commandable_exact_required_sets() {
         assert_unique_and_canonical(object.as_ref());
         assert!(matches!(object.property_metadata(), Cow::Borrowed(_)));
         assert_eq!(object.required_properties().as_ref(), required);
-        assert!(object.is_createable());
     }
 }

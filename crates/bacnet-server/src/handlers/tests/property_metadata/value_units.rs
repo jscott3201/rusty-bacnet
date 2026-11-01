@@ -136,7 +136,8 @@ fn pics_numeric_value_units_is_required_and_read_only() {
         let kind = object.object_identifier().object_type();
         let mut db = ObjectDatabase::new();
         db.add(object).unwrap();
-        let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
+        let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default())
+            .instance_types_only(&db);
         let support = &pics.supported_object_types[0];
         assert_eq!(support.object_type, kind);
         let units = support

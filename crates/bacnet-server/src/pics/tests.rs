@@ -144,10 +144,7 @@ impl BACnetObject for TestDevice {
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         property_list_from_metadata(&self.property_metadata())
     }
-    /// Device is not createable or deleteable; mirrors the real DeviceObject.
-    fn is_createable(&self) -> bool {
-        false
-    }
+    /// Device is not deleteable; mirrors the real DeviceObject.
     fn is_deleteable(&self) -> bool {
         false
     }
@@ -225,11 +222,15 @@ fn all_object_types_listed() {
         .iter()
         .map(|ot| ot.object_type)
         .collect();
-    assert!(types.contains(&ObjectType::DEVICE));
+    // The test DB's three types, and every type CreateObject builds (Analog
+    // Input and Binary Value among them), once each in type order.
+    let mut expected: Vec<ObjectType> = bacnet_objects::creation::builtin_createable_types()
+        .chain([ObjectType::DEVICE])
+        .collect();
+    expected.sort_by_key(|kind| kind.to_raw());
+    assert_eq!(types, expected);
     assert!(types.contains(&ObjectType::ANALOG_INPUT));
     assert!(types.contains(&ObjectType::BINARY_VALUE));
-    // 3 distinct types in our test DB
-    assert_eq!(types.len(), 3);
 }
 
 #[test]
@@ -289,7 +290,6 @@ fn real_device_and_network_port_overrides_not_createable_or_deleteable() {
         ..Default::default()
     })
     .unwrap();
-    assert!(!device.is_createable(), "Device must not be createable");
     assert!(!device.is_deleteable(), "Device must not be deleteable");
 
     let np = NetworkPortObject::new_non_bip(
@@ -301,7 +301,6 @@ fn real_device_and_network_port_overrides_not_createable_or_deleteable() {
         1476,
     )
     .unwrap();
-    assert!(!np.is_createable(), "NetworkPort must not be createable");
     assert!(!np.is_deleteable(), "NetworkPort must not be deleteable");
 }
 
@@ -400,14 +399,45 @@ fn markdown_output_has_tables() {
 }
 
 #[test]
-fn empty_database_produces_empty_object_list() {
+fn empty_database_lists_each_createable_type_as_a_created_object_describes_it() {
     let db = ObjectDatabase::new();
     let server_config = ServerConfig::default();
     let pics_config = PicsConfig::default();
     let pics = generate_pics(&db, &server_config, &pics_config);
-
-    assert!(pics.supported_object_types.is_empty());
     assert!(!pics.supported_services.is_empty());
+
+    // Createability is the type's, so every type the built-in table builds
+    // has a row before its first instance, and nothing else does.
+    let types: Vec<ObjectType> = pics
+        .supported_object_types
+        .iter()
+        .map(|support| support.object_type)
+        .collect();
+    let mut expected: Vec<ObjectType> =
+        bacnet_objects::creation::builtin_createable_types().collect();
+    expected.sort_by_key(|kind| kind.to_raw());
+    assert_eq!(types, expected);
+
+    // Each row is the one a database holding a freshly created object of
+    // the type produces, and building it added nothing to the database.
+    for support in &pics.supported_object_types {
+        let kind = support.object_type;
+        assert!(support.createable, "{kind:?}");
+        assert!(!support.supported_properties.is_empty(), "{kind:?}");
+        let constructor = bacnet_objects::creation::builtin_constructor(kind).unwrap();
+        let mut created = ObjectDatabase::new();
+        created
+            .add(constructor(9, "made".into(), &[]).unwrap())
+            .unwrap();
+        let with_instance = generate_pics(&created, &server_config, &pics_config);
+        let same = with_instance
+            .supported_object_types
+            .iter()
+            .find(|row| row.object_type == kind)
+            .unwrap();
+        assert_eq!(format!("{support:?}"), format!("{same:?}"), "{kind:?}");
+    }
+    assert_eq!(db.len(), 0);
 }
 
 #[test]

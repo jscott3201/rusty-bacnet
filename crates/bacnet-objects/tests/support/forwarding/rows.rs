@@ -154,7 +154,6 @@ pub const QUERIES: &[(&str, Query)] = &[
             [CUSTOM_LIST, P::DATE_LIST].map(|p| o.is_list_property(p))
         )
     }),
-    ("is_createable", |o| o.is_createable().to_string()),
     ("creation_only_properties", |o| {
         format!("{:?}", o.creation_only_properties())
     }),

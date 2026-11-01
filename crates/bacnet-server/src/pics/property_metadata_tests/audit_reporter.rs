@@ -53,7 +53,8 @@ fn exercise_instances(configured_instances: &[Option<u32>]) {
                         }),
                         ..Default::default()
                     };
-                    let pics = generate_pics(&db, &config, &PicsConfig::default());
+                    let pics = generate_pics(&db, &config, &PicsConfig::default())
+                        .instance_types_only(&db);
                     assert_eq!(pics.supported_object_types.len(), 1);
                     let support = &pics.supported_object_types[0];
                     assert_eq!(support.object_type, ObjectType::AUDIT_REPORTER);

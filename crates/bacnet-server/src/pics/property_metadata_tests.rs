@@ -117,7 +117,8 @@ fn pics_projects_migrated_property_metadata() {
         .unwrap(),
     ))
     .unwrap();
-    let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
+    let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default())
+        .instance_types_only(&db);
 
     for (object_type, property_id, optional, writable) in [
         (
@@ -308,7 +309,8 @@ fn pics_audit_reporter_metadata_is_complete_and_exact() {
     let mut db = ObjectDatabase::new();
     db.add(Box::new(AuditReporterObject::new(1, "ar-1").unwrap()))
         .unwrap();
-    let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
+    let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default())
+        .instance_types_only(&db);
     let reporter = pics
         .supported_object_types
         .iter()
@@ -461,7 +463,8 @@ fn pics_analog_property_metadata_is_exact_for_each_configuration() {
             let required = object.required_properties();
             let mut db = ObjectDatabase::new();
             db.add(object).unwrap();
-            let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
+            let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default())
+                .instance_types_only(&db);
             let support = &pics.supported_object_types[0];
             assert_eq!(support.object_type, kind);
             // Every analog type is createable since #2172.
@@ -571,7 +574,8 @@ fn pics_binary_commandable_property_metadata_is_exact() {
                 let required = object.required_properties();
                 let mut db = ObjectDatabase::new();
                 db.add(object).unwrap();
-                let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
+                let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default())
+                    .instance_types_only(&db);
                 assert_eq!(pics.supported_object_types.len(), 1);
                 let support = &pics.supported_object_types[0];
                 assert_eq!(support.object_type, kind);
@@ -685,7 +689,8 @@ fn pics_multistate_property_metadata_is_exact() {
                 let required = object.required_properties();
                 let mut db = ObjectDatabase::new();
                 db.add(object).unwrap();
-                let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
+                let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default())
+                    .instance_types_only(&db);
                 assert_eq!(pics.supported_object_types.len(), 1);
                 let support = &pics.supported_object_types[0];
                 assert_eq!(support.object_type, kind);

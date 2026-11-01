@@ -547,13 +547,9 @@ fn mso_direct_priority_array_index_17_error() {
 // ── Trait capability method tests (issue #115 shared truth source) ──────────
 
 #[test]
-fn msi_is_createable_and_writable_match_factory() {
+fn msi_is_writable_matches_factory() {
     use crate::traits::BACnetObject;
     let msi = MultiStateInputObject::new(1, "msi-1", 2).unwrap();
-    assert!(
-        msi.is_createable(),
-        "MultiStateInput is factory-constructable"
-    );
     // PRESENT_VALUE (when OOS) + STATE_TEXT + common.
     assert!(msi.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
     assert!(msi.is_writable_property(PropertyIdentifier::STATE_TEXT));
@@ -566,13 +562,9 @@ fn msi_is_createable_and_writable_match_factory() {
 }
 
 #[test]
-fn mso_is_createable_and_writable_match_factory() {
+fn mso_is_writable_matches_factory() {
     use crate::traits::BACnetObject;
     let mso = MultiStateOutputObject::new(1, "mso-1", 2).unwrap();
-    assert!(
-        mso.is_createable(),
-        "MultiStateOutput is factory-constructable"
-    );
     // Commandable + STATE_TEXT + common.
     assert!(!mso.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
     assert!(mso.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
@@ -586,13 +578,9 @@ fn mso_is_createable_and_writable_match_factory() {
 }
 
 #[test]
-fn msv_is_createable_and_writable_match_factory() {
+fn msv_is_writable_matches_factory() {
     use crate::traits::BACnetObject;
     let msv = MultiStateValueObject::new(1, "msv-1", 2).unwrap();
-    assert!(
-        msv.is_createable(),
-        "MultiStateValue is factory-constructable"
-    );
     // Commandable + STATE_TEXT + common.
     assert!(!msv.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
     assert!(msv.is_writable_property(PropertyIdentifier::PRESENT_VALUE));

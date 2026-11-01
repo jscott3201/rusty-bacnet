@@ -169,7 +169,8 @@ mod pics {
         for configured in [false, true] {
             let mut db = ObjectDatabase::new();
             db.add(Box::new(calendar_object(configured))).unwrap();
-            let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
+            let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default())
+                .instance_types_only(&db);
             assert_eq!(pics.supported_object_types.len(), 1);
             let support = &pics.supported_object_types[0];
             assert_eq!(support.object_type, ObjectType::CALENDAR);
