@@ -173,7 +173,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             &dispatch_context.services,
             &request_tasks.spawner(),
         );
-        let timer_runner = schedule_runner.clone(); // A Timer's expiry starts its writes (#2206).
+        let timer_runner = command_runs.clone(); // A Timer's expiry starts its writes (#2206).
         let dispatch_task = spawn_owned(audit_owner.clone(), move || async move {
             let mut seg_receivers: HashMap<SegRecvKey, SegmentedRequestState> = HashMap::new();
             let mut notifications_open = true;
