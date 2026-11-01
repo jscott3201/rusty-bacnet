@@ -27,9 +27,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         db: &mut ObjectDatabase,
         operation: AuditOperation,
     ) {
-        let Some(device) = db.local_device().identifier() else {
-            return;
-        };
+        let device = crate::local_device::initiating_device(&self.config.device);
         self.before_lifecycle(db, operation, Some(device), ObjectType::DEVICE, true);
         if let Some(pending) = &mut self.pending {
             pending.notification.target_object = None;

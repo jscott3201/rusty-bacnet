@@ -251,6 +251,7 @@ mod tests {
                 suppressions: &Default::default(),
                 retry_timeout_ms: 1000,
                 local_apdu_capacity: 1476,
+                device: crate::server::event_delivery::fixture_device(db).await,
             },
             &bacnet_types::primitives::ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
             (

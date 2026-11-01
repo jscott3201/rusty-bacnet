@@ -260,6 +260,12 @@ async fn stale_completion(
     } else {
         None
     };
+    // Start the single poll below on a fresh Tokio coop budget. The callers
+    // loop over many cases inside one task poll, and once the budget runs out
+    // even an uncontended lock pends, so whether the send happened in that
+    // poll would depend on how many awaits earlier cases took (#2217 removed
+    // one and moved the point where it ran out).
+    tokio::task::yield_now().await;
     let mut work = Box::pin(fixture.fire(initial, &snapshots));
     assert!(futures_util::poll!(work.as_mut()).is_pending());
     if !confirmed {

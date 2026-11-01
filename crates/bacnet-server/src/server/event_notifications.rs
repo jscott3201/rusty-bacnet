@@ -319,9 +319,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 } => (snapshot.timestamp, snapshot.message_text, recipient_clock),
             };
 
-            let device_oid = db
-                .selected_device()
-                .unwrap_or_else(|| ObjectIdentifier::new(ObjectType::DEVICE, 0).unwrap());
+            let device_oid = ctx.device;
 
             let (today, current_time) = match recipient_clock {
                 SampledEventClock::Valid(clock_frame) => (

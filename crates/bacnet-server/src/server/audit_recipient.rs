@@ -43,17 +43,17 @@ pub(super) fn validate(
         return Ok(());
     };
     db.validate_audit_installation_internal()?;
-    // The local Device is the audit identity. The installed runtime refuses
-    // new Devices and protects this one, so it stays the lowest while the
-    // runtime lives.
-    let device = db.local_device().identifier().ok_or_else(|| {
-        Error::Encoding("target Audit requires a concrete built-in local Device".into())
-    })?;
+    // The identity's Device is the audit identity, as it is every
+    // notification's initiator (#2217). The installed runtime refuses new
+    // Devices and protects this one while it lives.
+    let device = crate::local_device::initiating_device(&config.device);
     let authority = db
         .get_mut(&device)
         .and_then(|object| object.device_authority_internal())
         .filter(|authority| authority.object_identifier() == device)
-        .ok_or_else(|| Error::Encoding("target Audit requires a built-in Device".into()))?;
+        .ok_or_else(|| {
+            Error::Encoding("target Audit requires the identity's built-in Device".into())
+        })?;
     authority.validate_audit_recipient_installation()?;
     let value = authority
         .provisioned_audit_recipient()
@@ -123,10 +123,7 @@ impl<T: TransportPort + 'static> TargetAudit<T> {
         let Some(profile) = &config.audit_reporters else {
             return Ok(None);
         };
-        let device = db
-            .local_device()
-            .identifier()
-            .expect("validated local Device");
+        let device = crate::local_device::initiating_device(&config.device);
         let association = TargetAuditAssociation::new(
             profile
                 .reporters

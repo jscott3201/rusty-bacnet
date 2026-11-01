@@ -4596,20 +4596,22 @@ several. The database selects the lowest instance independently of insertion ord
 (#1204). Server startup validates that selection against its explicit identity:
 
 - **This device's Device object** is `selected_device`: wildcard Device reads,
-  Who-Has answers, the identity in COV and event notifications,
   the APDU_Timeout an Audit Log
   sink uses on receipt, and the services the standalone PICS reports.
-- **Announcements and served identity fields** remain bound to the startup
-  `DeviceIdentity`. Who-Is and manual I-Am require that identifier to remain
-  present; later lower-instance insertion does not rebind announcements.
+- **Announcements, notifications and served identity fields** remain bound to
+  the startup `DeviceIdentity`. Who-Is, Who-Has and manual I-Am require that
+  Device to remain present. COV, COV-multiple, event and target Audit
+  notifications name it as their initiator even while it is missing, and an
+  event recipient naming it is served locally (#2217). Later lower-instance
+  insertion rebinds none of them.
 - **Device-qualified references** go through `local_device().is_local`: Trend
   Log polling, Event Enrollment references, Command action lists, the
   Schedule, Channel, Staging and Averaging reference rewrites, and an Audit
   Log's forwarding parent. A reference naming another Device in the same
   database still points at another device.
-- **Audit and endpoint identity** need `local_device` to be a concrete built-in
-  Device: target Audit Reporters, the endpoint's source Audit Reporter and
-  endpoint Device writes. It names this device in audit records, owns the Audit
+- **Audit and endpoint identity** need a concrete built-in Device: the
+  identity's for target Audit Reporters, `local_device` for the endpoint's
+  source Audit Reporter and endpoint Device writes. It names this device in audit records, owns the Audit
   recipient, and is the only Device endpoint writes reach; a session identity
   must match it. While an Audit runtime is active the database refuses a new
   Device and keeps this one, so the choice holds for the runtime's life.

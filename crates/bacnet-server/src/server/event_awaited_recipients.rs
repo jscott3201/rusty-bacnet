@@ -224,6 +224,7 @@ struct OwnedDelivery<T: TransportPort + 'static> {
     suppressions: Arc<super::super::event_suppression::EventSuppressions>,
     retry_timeout_ms: u64,
     local_apdu_capacity: u32,
+    device: ObjectIdentifier,
 }
 
 impl<T: TransportPort + 'static> OwnedDelivery<T> {
@@ -238,6 +239,7 @@ impl<T: TransportPort + 'static> OwnedDelivery<T> {
             suppressions: Arc::clone(ctx.suppressions),
             retry_timeout_ms: ctx.retry_timeout_ms,
             local_apdu_capacity: ctx.local_apdu_capacity,
+            device: ctx.device,
         }
     }
 
@@ -252,6 +254,7 @@ impl<T: TransportPort + 'static> OwnedDelivery<T> {
             suppressions: &self.suppressions,
             retry_timeout_ms: self.retry_timeout_ms,
             local_apdu_capacity: self.local_apdu_capacity,
+            device: self.device,
         }
     }
 }

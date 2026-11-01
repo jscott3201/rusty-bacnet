@@ -730,8 +730,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         device_bindings: Arc::clone(&device_bindings),
                         suppressions: Arc::clone(&event_suppressions),
                         period: ee_period,
-                        retry_ms: config.cov_retry_timeout_ms,
-                        local_apdu_capacity: u32::from(config.device.max_apdu_length()),
+                        config: Arc::clone(&config),
                     },
                 ),
             )

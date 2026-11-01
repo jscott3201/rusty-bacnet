@@ -53,9 +53,10 @@ async fn audit_reporter_identity_startup_requires_a_concrete_local_device() {
     fixture.server.stop().await.unwrap();
 }
 
-/// With several Devices the lowest is this device, whichever was added first
-/// (#1204). Records name it, and the runtime keeps it the lowest: a new Device
-/// is refused and it can't be removed.
+/// With several Devices the identity's is this device, whichever was added
+/// first; startup requires it to be the lowest (#1204). Records name it (#2217),
+/// and the runtime keeps it the lowest: a new Device is refused and it can't be
+/// removed.
 #[tokio::test]
 async fn audit_reporter_identity_is_the_lowest_of_several_devices() {
     let lowest = oid(ObjectType::DEVICE, 100);

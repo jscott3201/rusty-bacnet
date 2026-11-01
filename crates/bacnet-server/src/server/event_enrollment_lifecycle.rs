@@ -12,8 +12,9 @@ pub(super) struct EventEnrollmentTask<T: TransportPort + 'static> {
     pub(super) suppressions: Arc<super::event_suppression::EventSuppressions>,
     /// Evaluation period, already clamped by the caller.
     pub(super) period: Duration,
-    pub(super) retry_ms: u64,
-    pub(super) local_apdu_capacity: u32,
+    /// The confirmed retry timeout, the APDU capacity and the identity whose
+    /// Device the notifications name as their initiator (#2217).
+    pub(super) config: Arc<ServerConfig>,
 }
 
 pub(super) fn spawn_event_enrollment_task<T: TransportPort + 'static>(
@@ -28,8 +29,7 @@ pub(super) fn spawn_event_enrollment_task<T: TransportPort + 'static>(
         device_bindings,
         suppressions,
         period,
-        retry_ms,
-        local_apdu_capacity,
+        config,
     } = task;
     let evaluation_interval_secs = period.as_secs().max(1);
     let owner = notification_transactions.audit_owner_lease();
@@ -84,8 +84,9 @@ pub(super) fn spawn_event_enrollment_task<T: TransportPort + 'static>(
                         notification_transactions: &notification_transactions,
                         device_bindings: &device_bindings,
                         suppressions: &suppressions,
-                        retry_timeout_ms: retry_ms,
-                        local_apdu_capacity,
+                        retry_timeout_ms: config.cov_retry_timeout_ms,
+                        local_apdu_capacity: u32::from(config.device.max_apdu_length()),
+                        device: crate::local_device::initiating_device(&config.device),
                     },
                     &oid,
                     transition,

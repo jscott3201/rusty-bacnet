@@ -108,14 +108,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // without commit (any early return, failed send) requeues them.
         let mut claim: Option<TimedClaim> = None;
         let (parts, last_notified, representative) = {
-            // One DB borrow, released before any send, supplies the Device
-            // identity, the clock sample for any current-state fallback and
-            // every value. Producers capture under the database write guard,
+            // One DB borrow, released before any send, supplies the clock
+            // sample for any current-state fallback and every value; the
+            // initiating Device comes from the frozen identity (#2217). Producers capture under the database write guard,
             // so while this read guard is held no capture can move a field
             // record past the values read here. A producer snapshot carries its
             // own captured changes, so that path takes no clock: it neither
             // adopts a fallback change nor times an uncaptured field (#987).
-            let (device_oid, clock_frame, db) = if snapshot.is_none() {
+            let (clock_frame, db) = if snapshot.is_none() {
                 let db = db.read().await;
                 let clock_frame = subscriptions
                     .iter()
@@ -123,12 +123,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     .then(|| db.clock_frame())
                     .flatten()
                     .filter(|frame| frame.is_valid_actual_datetime());
-                (db.selected_device(), clock_frame, Some(db))
+                (clock_frame, Some(db))
             } else {
-                (db.read().await.selected_device(), None, None)
+                (None, None)
             };
-            let device_oid =
-                device_oid.unwrap_or_else(|| ObjectIdentifier::new(ObjectType::DEVICE, 0).unwrap());
+            let device_oid = crate::local_device::initiating_device(&config.device);
             let object_of = |sub: &CovSubscriptionSnapshot| {
                 snapshot
                     .filter(|object| object.object_identifier() == sub.monitored_object_identifier)

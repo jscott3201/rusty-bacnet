@@ -337,6 +337,7 @@ async fn event_enrollment_ack_policy_is_the_commit_time_snapshot() {
             suppressions: &Default::default(),
             retry_timeout_ms: 1000,
             local_apdu_capacity: 1476,
+            device: crate::server::event_delivery::fixture_device(&db).await,
         },
         &enrollment_oid,
         transition,

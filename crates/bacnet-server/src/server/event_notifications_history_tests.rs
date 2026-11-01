@@ -230,6 +230,7 @@ async fn commit_and_capture_history_notification(
                 suppressions: &Default::default(),
                 retry_timeout_ms: 1000,
                 local_apdu_capacity: 1476,
+                device: crate::server::event_delivery::fixture_device(&db).await,
             },
             &oid,
             committed,

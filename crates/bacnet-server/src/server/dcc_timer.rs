@@ -249,13 +249,7 @@ impl<T: TransportPort + 'static> DccAudit<T> {
     /// Report a timed disable running out: DEVICE_ENABLE_COMM, with this
     /// device as its source and no invoke ID, since no request caused it.
     fn record_expiry(&self, db: &mut ObjectDatabase) {
-        if let Some(mut audit) = super::audit_reporter::WriteAudit::local(
-            &self.config,
-            &self.network,
-            &self.transactions,
-            db,
-        ) {
-            audit.device_operation(db, AuditOperation::DEVICE_ENABLE_COMM);
-        }
+        super::audit_reporter::WriteAudit::local(&self.config, &self.network, &self.transactions)
+            .device_operation(db, AuditOperation::DEVICE_ENABLE_COMM);
     }
 }

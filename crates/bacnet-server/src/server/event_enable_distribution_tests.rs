@@ -192,6 +192,7 @@ impl Fixture {
                 suppressions: &Default::default(),
                 retry_timeout_ms: 1000,
                 local_apdu_capacity: 1476,
+                device: crate::server::event_delivery::fixture_device(&self.db).await,
             },
             &Arc::new(RwLock::new(crate::cov::CovSubscriptionTable::new())),
             &self.oid,
