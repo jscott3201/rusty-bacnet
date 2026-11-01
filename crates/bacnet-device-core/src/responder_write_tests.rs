@@ -3,10 +3,12 @@
 use super::*;
 use crate::write::WriteTarget;
 use bacnet_encoding::apdu::encode_apdu;
+use bacnet_encoding::constructed::encode_value_source;
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::binary::BinaryValueObject;
 use bacnet_objects::command::CommandObject;
+use bacnet_objects::command_source::{CommandDeviceBinding, CommandOrigin};
 use bacnet_objects::device_identity::build_database_with_extra;
 use bacnet_objects::present_value_access::PresentValueAccess;
 use bacnet_objects::property_metadata::{
@@ -15,7 +17,9 @@ use bacnet_objects::property_metadata::{
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::read_property::ReadPropertyACK;
 use bacnet_services::write_property::WritePropertyRequest;
-use bacnet_types::constructed::{BACnetActionCommand, BACnetActionList};
+use bacnet_types::constructed::{
+    BACnetActionCommand, BACnetActionList, BACnetAddress, BACnetValueSource,
+};
 use bacnet_types::enums::{
     EngineeringUnits, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier as P, RejectReason,
 };
@@ -383,9 +387,9 @@ fn executor_owned_device_properties_are_never_written() {
     assert_eq!(objects, [permissive]);
 }
 
-/// A commandable Present_Value records who commanded it (Clause 19.5), and
-/// the core has no requester to name: `Inbound` carries no source address.
-/// The object refuses an unsourced command, as it does the bare handler's.
+/// A commandable Present_Value records who commanded it (Clause 19.5). A
+/// request built with `Inbound::new` alone names no requester, and the
+/// object refuses the unsourced command, as it does the bare handler's.
 #[test]
 fn a_commandable_present_value_is_refused_without_a_command_origin() {
     let mut db = database();
@@ -397,6 +401,50 @@ fn a_commandable_present_value_is_refused_without_a_command_origin() {
         (ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED)
     );
     assert!(objects.is_empty());
+}
+
+/// A requester at a local address, with no Device bound to it.
+fn requester() -> CommandOrigin {
+    CommandOrigin::Remote {
+        actual_address: BACnetAddress {
+            network_number: 0,
+            mac_address: [192, 168, 1, 7, 0xBA, 0xC0][..].into(),
+        },
+        binding: CommandDeviceBinding::Unknown,
+    }
+}
+
+/// With the requester named, the write commands BV-2 at its priority, 8:
+/// Priority_Array holds the value there, and Value_Source names the
+/// requester's address.
+#[test]
+fn a_commandable_present_value_is_commanded_for_the_source() {
+    let mut db = database();
+    let apdu = write_property(bv2(), P::PRESENT_VALUE, None, &[0x91, 0x01]);
+    let mut out = BytesMut::new();
+    let request = Inbound::new(apdu, 1476).with_source(requester());
+    let written = responder().handle(&mut db, request, &mut out);
+    let reply = Some(decode_apdu(out.freeze()).unwrap());
+    assert!(is_simple_ack(&reply), "{reply:?}");
+    assert_eq!(written.objects, [bv2()]);
+    assert_eq!(
+        read(&mut db, bv2(), P::PRESENT_VALUE),
+        PropertyValue::Enumerated(1)
+    );
+    let bv = db.get(&bv2()).unwrap();
+    for (slot, expected) in [(7, PropertyValue::Null), (8, PropertyValue::Enumerated(1))] {
+        let value = bv.read_property(P::PRIORITY_ARRAY, Some(slot)).unwrap();
+        assert_eq!(value, expected, "Priority_Array[{slot}]");
+    }
+    let CommandOrigin::Remote { actual_address, .. } = requester() else {
+        unreachable!()
+    };
+    let mut source = BytesMut::new();
+    encode_value_source(&mut source, &BACnetValueSource::Address(actual_address)).unwrap();
+    assert_eq!(
+        bv.read_property(P::VALUE_SOURCE, None).unwrap(),
+        PropertyValue::ApplicationData(source.to_vec())
+    );
 }
 
 /// The core has no task to make a Command's writes in, so the run a

@@ -396,6 +396,13 @@
 # .text), which the generic value decoding reaches for any property, and
 # the core's write path (11272 to 13904). The octet budgets are the new
 # sizes plus 12%; the counts are unchanged.
+#
+# Since #2209 each request names its sender, BV-1 is commandable again, the
+# write commands priority 8, and a fourteenth request reads Priority_Array
+# back. Measured with Rust 1.99.0 against dev at d1078b7e0, flash went from
+# 166568 / 166024 / 200702 to 166992 / 166288 / 200590 on thumbv7m /
+# thumbv7em / riscv32imac, RAM unchanged at 16480: the objects' vtables
+# linked most of the commandable write path already. Budgets unchanged.
 
 [thumbv7m-none-eabi.mstp]
 text = 18320

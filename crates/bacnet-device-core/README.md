@@ -37,10 +37,11 @@ the database guard, the transport, addressing and time.
   with nothing to await between them, within `Limits`: the ReadProperty work
   limit and the ReadPropertyMultiple budget.
 
-The `Responder` has no requester's address, so it writes with no command
-origin: an object with a commandable Present_Value refuses that write
-([#2209](https://github.com/jscott3201/rusty-bacnet/issues/2209)), and a
-Command's or Channel's run that a write starts ends at once, unmade, with
-none of its actions performed.
+A host names a request's sender with `Inbound::with_source` (a
+`bacnet-objects` `CommandOrigin`), and the `Responder` commands a
+commandable Present_Value for it, as the server does. A request with no
+source draws WRITE_ACCESS_DENIED from such an object. A Command's or
+Channel's run that a write starts ends at once, unmade, with none of its
+actions performed.
 [The design note](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/design/device-core.md)
 has the details.

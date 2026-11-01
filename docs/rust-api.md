@@ -6658,11 +6658,17 @@ holds the ReadProperty work limit and, set with `Limits::with_rpm`, the
 OUT_OF_RESOURCES before any value is read, and one whose ACK passes its octet
 limit with BUFFER_OVERFLOW after the reads, as the server answers.
 
-`Inbound` carries no source address, so `Responder::write` writes with no
-command origin: an object with a commandable Present_Value refuses the
-write with WRITE_ACCESS_DENIED, where the server commands it for the
-requester (#2209). A write that starts a Command's or Channel's run ends
-that run at once, unmade, with none of its actions performed.
+`Inbound::with_source` names the requester, as a `CommandOrigin`
+(`bacnet_objects::command_source`): for a network requester,
+`CommandOrigin::Remote` with the address the request came from (network 0
+on the local network) and the Device bound to it, if the host knows one.
+`Responder::write` gives it to each write as the command origin, so a
+commandable Present_Value is commanded for that requester at the request's
+priority, as the server commands it (#2209). A request built with
+`Inbound::new` alone names no requester, and an object with a commandable
+Present_Value refuses its write with WRITE_ACCESS_DENIED. A write that
+starts a Command's or Channel's run ends that run at once, unmade, with none
+of its actions performed.
 
 ```rust
 use bacnet_device_core::responder::{Inbound, Limits, Outcome, Responder};
@@ -6671,7 +6677,9 @@ let responder = Responder::new(identity, Limits::default())?;
 // `request` is the received APDU as `Bytes`; `max_reply` is the smaller of
 // its Max-APDU-Length-Accepted and the route's limit.
 let mut out = bytes::BytesMut::new();
-let handled = responder.handle(&mut db, Inbound::new(request, max_reply), &mut out);
+// `requester` is the CommandOrigin of the address the request came from.
+let request = Inbound::new(request, max_reply).with_source(requester);
+let handled = responder.handle(&mut db, request, &mut out);
 match handled.outcome {
     Outcome::Reply => send_to_requester(&out),
     Outcome::Announce => broadcast(&out),

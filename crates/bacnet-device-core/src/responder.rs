@@ -10,6 +10,7 @@ use bacnet_encoding::apdu::{
     decode_apdu,
 };
 use bacnet_objects::DeviceIdentity;
+use bacnet_objects::command_source::CommandOrigin;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_services::read_property::ReadPropertyRequest;
 use bacnet_services::rpm::ReadPropertyMultipleRequest;
@@ -26,12 +27,11 @@ use bytes::{Bytes, BytesMut};
 /// Protocol_Services_Supported: build the database from
 /// `DeviceIdentity::with_services(SERVICES)`.
 ///
-/// WriteProperty and WritePropertyMultiple are among them, but
-/// [`Responder::write`] has no command origin to give, since [`Inbound`]
-/// carries no source address: an object whose Present_Value is commandable (the default Binary Value, Analog
-/// Value and Analog Output among them) refuses a write to it with
-/// WRITE_ACCESS_DENIED
-/// ([#2209](https://github.com/jscott3201/rusty-bacnet/issues/2209)).
+/// WriteProperty and WritePropertyMultiple are among them. A write to a
+/// commandable Present_Value (the default Binary Value, Analog Value and
+/// Analog Output among them) needs the requester, which the host gives with
+/// [`Inbound::with_source`]; without it the object refuses the command with
+/// WRITE_ACCESS_DENIED.
 pub const SERVICES: &[ServiceSupported] = &[
     ServiceSupported::READ_PROPERTY,
     ServiceSupported::READ_PROPERTY_MULTIPLE,
@@ -66,12 +66,32 @@ pub struct Inbound {
     /// The longest reply APDU the requester and the route to it take: the
     /// request's Max-APDU-Length-Accepted, capped by the route's own limit.
     pub max_reply: u16,
+    /// Who sent the request, as a write commands an object for them
+    /// (Clause 19.5): for a network requester,
+    /// [`CommandOrigin::Remote`] with the address it came from (network 0
+    /// for one on the local network) and the Device the host binds to that
+    /// address, if any. `None` when the host doesn't say; a commandable
+    /// Present_Value then refuses the write with WRITE_ACCESS_DENIED.
+    pub source: Option<CommandOrigin>,
 }
 
 impl Inbound {
-    /// The request `apdu`, whose reply may be up to `max_reply` octets.
+    /// The request `apdu`, whose reply may be up to `max_reply` octets, from
+    /// no named requester.
     pub fn new(apdu: Bytes, max_reply: u16) -> Self {
-        Self { apdu, max_reply }
+        Self {
+            apdu,
+            max_reply,
+            source: None,
+        }
+    }
+
+    /// This request, sent by `source`: the command origin its writes carry.
+    /// The object checks it as it checks the server's
+    /// ([`CommandOrigin::validate`]), so a malformed one is refused there.
+    pub fn with_source(mut self, source: CommandOrigin) -> Self {
+        self.source = Some(source);
+        self
     }
 }
 
@@ -292,11 +312,13 @@ impl Responder {
     /// confirmed request that arrived segmented is refused. Any other
     /// service is [`Outcome::Unhandled`], for the host to route on.
     ///
-    /// The write carries no command origin, since [`Inbound`] has no source
-    /// address: an object whose Present_Value is commandable (the default
-    /// Binary Value, Analog Value and Analog Output among them) refuses a
-    /// write to it with WRITE_ACCESS_DENIED
-    /// ([#2209](https://github.com/jscott3201/rusty-bacnet/issues/2209)).
+    /// Each write carries the request's [`Inbound::source`] as its command
+    /// origin, as the server's carries the requester it derives from the
+    /// source address, so a commandable Present_Value is commanded for that
+    /// requester at the request's priority. A request with no source has no
+    /// origin to give: an object whose Present_Value is commandable (the
+    /// default Binary Value, Analog Value and Analog Output among them)
+    /// refuses a write to it with WRITE_ACCESS_DENIED.
     pub fn write(
         &self,
         db: &mut ObjectDatabase,
@@ -304,6 +326,7 @@ impl Responder {
         request: Inbound,
         out: &mut BytesMut,
     ) -> Written {
+        let origin = request.source.as_ref();
         let confirmed = match decode_apdu(request.apdu) {
             Ok(Apdu::ConfirmedRequest(confirmed)) if confirmed.segmented => {
                 let refused = reply::refuse_segmented(confirmed.invoke_id);
@@ -317,7 +340,7 @@ impl Responder {
             Ok(Apdu::ConfirmedRequest(confirmed))
                 if confirmed.service_choice == ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE =>
             {
-                return Self::write_property_multiple(db, observer, &confirmed, out);
+                return Self::write_property_multiple(db, observer, origin, &confirmed, out);
             }
             Ok(_) => return Outcome::Unhandled.into(),
             // Neither a type nor an invoke ID to answer.
@@ -325,7 +348,7 @@ impl Responder {
         };
         let mut objects = Vec::new();
         let answer =
-            match write::write_property(db, &confirmed.service_request, observer, None, None) {
+            match write::write_property(db, &confirmed.service_request, observer, None, origin) {
                 Ok((oid, applied)) => {
                     if applied == Applied::Written {
                         write::end_unmade(db, &[oid]);
@@ -351,10 +374,10 @@ impl Responder {
     /// is [`Outcome::Silent`], and so is an APDU that doesn't decode, which
     /// the server drops too.
     ///
-    /// Its writes are [`write`](Self::write)'s: with no command origin, so a
-    /// commandable Present_Value refuses them
-    /// ([#2209](https://github.com/jscott3201/rusty-bacnet/issues/2209)),
-    /// and with any Command or Channel run they start ended unmade.
+    /// Its writes are [`write`](Self::write)'s: commanded for the request's
+    /// [`Inbound::source`] (a commandable Present_Value refuses a request
+    /// with none), and with any Command or Channel run they start ended
+    /// unmade.
     pub fn handle(&self, db: &mut ObjectDatabase, request: Inbound, out: &mut BytesMut) -> Written {
         let apdu = request.apdu.clone();
         let handled = if Self::classify(&apdu) == Access::Write {
@@ -370,12 +393,13 @@ impl Responder {
         }
     }
 
-    /// WritePropertyMultiple, as the server runs it, with no gate, source or
-    /// command origin: the objects its successful attempts changed, and any
+    /// WritePropertyMultiple, as the server runs it, with no gate or audit
+    /// source, commanded for `origin`: the objects its successful attempts changed, and any
     /// run they queued ended unmade, even when a later attempt failed.
     fn write_property_multiple(
         db: &mut ObjectDatabase,
         observer: Option<&mut dyn WriteCommitObserver>,
+        origin: Option<&CommandOrigin>,
         request: &ConfirmedRequest,
         out: &mut BytesMut,
     ) -> Written {
@@ -386,7 +410,7 @@ impl Responder {
             None,
             observer,
             None,
-            None,
+            origin,
         ) {
             WpmOutcome::Success { committed_oids } => (
                 Apdu::SimpleAck(SimpleAck {
