@@ -391,6 +391,7 @@ dependencies = [
  "bacnet-types",
  "bytes",
  "heapless",
+ "proptest",
  "tracing",
 ]
 

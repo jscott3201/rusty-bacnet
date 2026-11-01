@@ -6,7 +6,7 @@ GitHub-hosted runners, the [release](#release) included.
 
 | Host | Runs |
 | --- | --- |
-| GitHub (hosted runners) | Linux CI, [`.github/workflows/ci.yml`](../.github/workflows/ci.yml); [native macOS and Windows tests](#native-tests-macos-and-windows), [`native-tests.yml`](../.github/workflows/native-tests.yml); the nightly [flake hunt](#flake-hunt), [`flake-hunt.yml`](../.github/workflows/flake-hunt.yml); [fuzzing](#fuzzing) of the MS/TP and B/IP codecs, [`fuzz.yml`](../.github/workflows/fuzz.yml); [CodeQL](#codeql) code scanning, [`codeql.yml`](../.github/workflows/codeql.yml); website validation and the GitHub Pages deploy, [`docs-pages.yml`](../.github/workflows/docs-pages.yml); [releases](#release), built and tested on each platform and published to crates.io, PyPI and GitHub Releases, [`release.yml`](../.github/workflows/release.yml) |
+| GitHub (hosted runners) | Linux CI, [`.github/workflows/ci.yml`](../.github/workflows/ci.yml); [native macOS and Windows tests](#native-tests-macos-and-windows), [`native-tests.yml`](../.github/workflows/native-tests.yml); the nightly [flake hunt](#flake-hunt), [`flake-hunt.yml`](../.github/workflows/flake-hunt.yml); [fuzzing](#fuzzing) of the MS/TP and B/IP codecs and the APDU and service decoders, [`fuzz.yml`](../.github/workflows/fuzz.yml); [CodeQL](#codeql) code scanning, [`codeql.yml`](../.github/workflows/codeql.yml); website validation and the GitHub Pages deploy, [`docs-pages.yml`](../.github/workflows/docs-pages.yml); [releases](#release), built and tested on each platform and published to crates.io, PyPI and GitHub Releases, [`release.yml`](../.github/workflows/release.yml) |
 
 | Platform | Where it is checked |
 | --- | --- |
@@ -1373,7 +1373,8 @@ one.
 ## Fuzzing
 
 [`.github/workflows/fuzz.yml`](../.github/workflows/fuzz.yml) fuzzes the
-MS/TP and B/IP codecs (#1610) and the MS/TP master core (#1640) with
+MS/TP and B/IP codecs (#1610), the MS/TP master core (#1640) and the APDU,
+application value, constructed value and service codecs (#2180) with
 [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz), which drives libFuzzer.
 No check here is required for merging: every job's name starts with `Fuzz:`,
 so none can pass for `CI OK` or `Native OK`, and the release's
@@ -1386,7 +1387,10 @@ from the wire layout with bit-at-a-time CRCs (the CRC-32K included) and a COBS
 of its own, without calling the codec, so a fault the codec's encode and
 decode share can't cancel out; for both codecs, a check that encodes through
 every sink; for the core, the harness that drives it and the checker that
-judges it. The oracle of each target is in the doc comment at the top of its
+judges it; for the encoding crate, the round-trip check its targets share.
+That fuzz crate, `crates/bacnet-encoding/fuzz`, also covers the service
+codecs of `bacnet-services`, which read their fields with the encoding
+crate's tag and value readers. The oracle of each target is in the doc comment at the top of its
 file.
 
 | Target | Input | Oracle |
@@ -1396,7 +1400,23 @@ file.
 | `mstp_stream` | valid standard and extended frames, frames of the reserved COBS types, frames damaged past the header, raw noise and noise without `0x55`, pushed into 1 to 2,117 octets of storage in pieces of any size, with empty pushes, drains and resets | each push checked against a shadow of the decoder's buffer and of any skip in progress: refusals, `NeedMore`, `Invalid` (one noise run), `Malformed` (error, discard, destination, and whether it skips the frame by count) and `Frame` (with its decoded data), the buffered length and the phase; never wedged; at the end, frames in order and each once, and every guaranteed generated frame delivered at its offset |
 | `bip_decode`, `bip6_decode` | any octets | no panic; an accepted datagram re-encodes to itself, unless its result code is one the annex doesn't define |
 | `bip_encode`, `bip6_encode` | any `Bvll` or `Bvll6`, some within 8 octets of the 65,535-octet limit on either side | the octets the Annex J.2 or U.2 layout gives, built field by field; an undefined result code and a message too long for the Length field refused; sinks as for `mstp_encode`; each result decodes back to an equal message |
+| `apdu_decode` | any octets | `decode_apdu` and `encode_apdu` round trip (see below), and an APDU that encodes decodes back to an equal one; the allocation-free `ApduHeader::decode` agrees with `decode_apdu` on every PDU type it reads (same fields and service octets where it accepts, accepting every unsegmented PDU of those types the owned decoder accepts); segments cut from the input reassemble to exactly their octets in sequence order, or are refused for a gap |
+| `value_decode` | any octets | the tag walk always moves forward and stays within the input; each application value in turn round trips through `encode_property_value`; the owned decoder, the borrowed view and `validate_application_value` agree on each application-tagged value (the view also reads a character set the owned decoder can't convert, and the validator holds a Signed to its shortest form); an opening tag's element ends within the input; a `BACnetTimeStamp` round trips |
+| `constructed_decode` | a selector octet, then any octets | the constructed-value codec it picks (65 of them: recipients and destinations, schedules and calendars, event and fault parameters, log and audit records, network port tables and the rest of `bacnet_encoding::constructed`) round trips; the tolerant and value-only readers, which have no encoder, only decode |
+| `service_decode` | a selector octet, then service parameters | the service codec it picks round trips: every confirmed request at its own service choice (0 to 33), then the unconfirmed requests, the ACKs and the formal error productions; the forwarded event notification and the borrowed ReadProperty-ACK only decode |
 | `mstp_core` | one `MasterCore`, its address, Max_Master, Max_Info_Frames, timers, extended frames and storage from the input, then up to 2,048 steps with injected time: octets, receive errors and silences; whole frames of every type for it, another station or broadcast, on the line or from a host assembler, some damaged or cut off part way; deadlines on time or late; the adapter's starts (some refused or deferred), completions with or without echo, and aborts; queued NPDUs, oversize ones included; request decisions; calls stamped in the past | after every step, by a checker that reads only the line and the adapter's side, never the core's state: no panic; data, Tokens and polls only while the station holds the token, as the frames on the line show it, or as a token retry, a successor search or token generation when Clause 9.5.6 allows them, and otherwise only answers to what was asked, once and in time; at most Max_Info_Frames data frames per token use; poll sweeps one address at a time within Max_Master; T_turnaround before every frame; owed answers sent on a quiet line in time; Tokens to NS and a use's first poll to PS + 1 or TS + 1; queues and delivery slots within their sizes; the adapter contract on every action (one frame at a time, starts only for polled frames, completion only after a start, echo ignored, payloads in the action buffers); deliveries matching frames heard; a call stamped earlier than the last doing what it would at the last |
+
+The encoding crate's round trip: when a decoder accepts its input, ending
+within it, and the encoder takes the value, the encoding decodes whole to
+the same value (compared by its `Debug` text, so a NaN matches itself), and
+encodes again to the same octets. An encoder may refuse what its decoder
+accepts, which ends the check. libFuzzer stands in for the rest of what a
+decoder of untrusted input owes: a panic, an allocation past its limit
+(2,048 megabytes by default) or a stack overflow fails the target. A
+planted fault, a Reject decoded with the wrong invoke ID, failed
+`apdu_decode` within 8,000 runs from its seeds; a WriteProperty encoder that
+wrote priority 16 as 15 failed `service_decode` at once from the
+WriteProperty seed, and not within 90 seconds without it.
 
 A generated frame in `mstp_stream` is guaranteed when it fits the storage, no
 reset falls inside it, and no `0x55` lies between it and the anchor: the end
@@ -1429,7 +1449,9 @@ Postponed handled as an abandoned request within five.
 **When.** On a PR to `dev` or `main` that changes
 `crates/bacnet-mstp-codec/**`, `crates/bacnet-bip-codec/**`,
 `crates/bacnet-mstp-core/**` (fuzz crates included),
-`crates/bacnet-time/**` or `crates/bacnet-npdu/**`, the workflow,
+`crates/bacnet-time/**`, `crates/bacnet-npdu/**`,
+`crates/bacnet-encoding/**`, `crates/bacnet-services/**` or
+`crates/bacnet-types/**`, the workflow,
 `.github/ci-pins.env`, `scripts/ci/fuzz.sh` or
 `scripts/ci/install-tools.sh`, each target runs for 60 seconds. Twice a
 week (Sundays and Wednesdays at 03:41 UTC, on `dev`) and by hand, each runs
@@ -1450,7 +1472,8 @@ can't work.
   `[[bin]]` entries, checks each fuzz crate's lockfile
   (`cargo fetch --locked`), rustfmt and clippy with warnings denied, runs
   its tests (for `mstp_core`, the checker's own and a replay of the inputs
-  saved in `crates/bacnet-mstp-core/fuzz/regressions/mstp_core/`), and
+  saved in `crates/bacnet-mstp-core/fuzz/regressions/mstp_core/`; for the
+  encoding crate's targets, a replay of their seeds), and
   builds every target.
 - **Fuzz: `<target>`**, one job per target from that list, so a new
   `[[bin]]` runs without a workflow change, builds its target and runs it.
@@ -1472,7 +1495,14 @@ again on every change. GitHub evicts an entry that goes unused for seven
 days; two scheduled runs a week keep the newest one in use even when one
 starts late. The [prune](#caches) keeps such entries on `dev`, but nothing
 restores an older one, so that eviction removes them. No corpus is checked
-in.
+in, only seeds: `crates/<crate>/fuzz/seeds/<target>/`, where a fuzz crate
+has them, holds a few hundred short inputs, most of them octets from the
+crates' unit tests (for `service_decode` and `constructed_decode`, behind
+the selector octet of their codec). `fuzz.sh run` passes that directory
+after the corpus, so libFuzzer reads the seeds on every run and writes new
+inputs only to the corpus; `cmin` minimizes the corpus alone. Add a seed as
+a file of raw octets, named for what it holds; `cargo test` in the fuzz
+crate replays every one.
 
 **Lockfiles.** Each fuzz crate's `Cargo.lock` is committed, and every build
 checks it first, so the fuzz builds use the dependencies it names. It also
@@ -1507,12 +1537,15 @@ bash scripts/ci/fuzz.sh check                         # lockfiles, rustfmt, clip
 bash scripts/ci/fuzz.sh build                         # every target
 bash scripts/ci/fuzz.sh run mstp_stream 60            # one target for 60 seconds
 bash scripts/ci/fuzz.sh run mstp_core 600             # the master core for 10 minutes
+bash scripts/ci/fuzz.sh run service_decode 60         # the service codecs, from their seeds
 FUZZ_WORK=/tmp/fuzz bash scripts/ci/fuzz.sh run bip_encode 600 -max_len=16384
 ```
 
 Arguments after the seconds go to libFuzzer. Without `FUZZ_WORK`, the corpus
 and anything a run finds stay in the fuzz crate's `corpus/<target>` and
-`artifacts/<target>`, which git ignores.
+`artifacts/<target>`, which git ignores. On an Apple Silicon laptop each
+of the encoding crate's targets runs about 20,000 (`value_decode`) to
+40,000 inputs a second.
 
 **Triage.** When a target fails, its job uploads the artifact
 `fuzz-<target>` for 30 days (a re-run of the job replaces it): what libFuzzer saved (`crash-*` or `timeout-*`,
