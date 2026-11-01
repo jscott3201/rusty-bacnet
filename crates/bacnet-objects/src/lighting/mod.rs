@@ -55,7 +55,7 @@ use crate::traits::{BACnetObject, DeadlineWaker, MonotonicClock};
 ///
 /// Fades, ramps and egress timers run on the monotonic clock the database
 /// binds; the server's monotonic task advances them and fans their COV out.
-/// With no clock bound they wait on `advance_time_internal`.
+/// With no clock bound they wait on the test-only `advance_time`.
 ///
 /// Cloning copies served state into an in-memory object. Tags persistence and
 /// pending saves remain solely with the original; cloning or dropping the copy
@@ -624,7 +624,7 @@ impl BACnetObject for LightingOutputObject {
         ))
     }
 
-    fn durable_writes_internal(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
+    fn durable_writes(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
         self.profile.capability()
     }
 
@@ -644,44 +644,54 @@ impl BACnetObject for LightingOutputObject {
         true
     }
 
-    fn advance_time_internal(&mut self, elapsed: Duration) -> bool {
-        self.logical_now = self.logical_now.saturating_add(elapsed);
-        self.advance_sourced(self.logical_now)
+    fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
+        Some(self)
+    }
+}
+
+impl crate::traits::Timed for LightingOutputObject {
+    fn bind_clocks(&mut self, clocks: &crate::traits::Clocks) {
+        self.monotonic_clock = clocks.monotonic.clone();
+        self.deadline_waker = clocks.deadline_waker.clone();
     }
 
-    fn bind_monotonic_clock_internal(&mut self, clock: Option<Arc<MonotonicClock>>) {
-        self.monotonic_clock = clock;
+    fn set_tracking_cov_increment(&mut self, finest: Option<f64>) {
+        self.finest_tracking_increment = finest;
     }
 
-    fn bind_deadline_waker_internal(&mut self, waker: Option<Arc<DeadlineWaker>>) {
-        self.deadline_waker = waker;
-    }
-
-    fn advance_monotonic_time_internal(&mut self, now: Duration) -> bool {
-        self.profile.expire(now);
+    fn advance_monotonic_time(&mut self, now: Duration) -> bool {
         self.advance_sourced(now)
     }
 
-    fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
+    fn next_monotonic_deadline(&self) -> Option<Duration> {
         self.next_deadline()
-    }
-
-    fn set_tracking_cov_increment_internal(&mut self, finest: Option<f64>) {
-        self.finest_tracking_increment = finest;
     }
 
     /// A copy that reads as the object does now: its clock stops at this
     /// instant, so a fade's Tracking_Value in a COV report is the value at
     /// the moment the report was taken.
-    fn cov_snapshot_internal(&self) -> Option<Box<dyn BACnetObject>> {
+    fn cov_snapshot(&self) -> Option<Box<dyn BACnetObject>> {
         let mut snapshot = self.clone();
         snapshot.logical_now = self.now();
         snapshot.monotonic_clock = None;
         snapshot.deadline_waker = None;
         Some(Box::new(snapshot))
     }
+}
 
-    fn lighting_blink_count_internal(&self) -> u64 {
+#[cfg(test)]
+impl LightingOutputObject {
+    pub(crate) fn advance_time(&mut self, elapsed: Duration) -> bool {
+        self.logical_now = self.logical_now.saturating_add(elapsed);
+        self.advance_sourced(self.logical_now)
+    }
+}
+
+impl LightingOutputObject {
+    /// How many blink-warn notifications the object has asked for: a
+    /// conformance-test channel, read through
+    /// `ObjectDatabase::lighting_blink_count_internal`.
+    pub(crate) fn lighting_blink_count(&self) -> u64 {
         self.blink_request_count
     }
 }

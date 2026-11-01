@@ -10,7 +10,7 @@ use bacnet_types::primitives::ObjectIdentifier;
 
 use crate::clock::{ClockFrame, ClockReader};
 use crate::event_enrollment::EventEnrollmentMonitoredSource;
-use crate::traits::{BACnetObject, DeadlineWaker, MonotonicClock};
+use crate::traits::{BACnetObject, Clocks, DeadlineWaker, MonotonicClock};
 
 mod averaging_sampling;
 mod event_algorithm_inhibit;
@@ -34,11 +34,10 @@ pub struct ObjectDatabase {
     network_port: Option<network_port::NetworkPortRegistration>,
     objects: HashMap<ObjectIdentifier, Box<dyn BACnetObject>>,
     trend_poll: TrendPollSchedule,
-    /// Shared Device clock reader. `None` is an explicit clockless database.
-    clock: Option<Arc<dyn ClockReader>>,
-    monotonic_clock: Option<Arc<MonotonicClock>>,
-    /// Bound into every object with the monotonic clock (#1384).
-    deadline_waker: Option<Arc<DeadlineWaker>>,
+    /// The clocks every object is bound to: the shared Device clock reader
+    /// (`None` is an explicit clockless database), the monotonic source and
+    /// the deadline waker (#1384).
+    clocks: Clocks,
     /// Device-local EventNotification ordering source for clockless operation.
     event_sequence: Arc<EventSequence>,
     /// Reverse index: object name → ObjectIdentifier for uniqueness enforcement.
@@ -87,9 +86,7 @@ impl ObjectDatabase {
         Self {
             objects: HashMap::new(),
             trend_poll: TrendPollSchedule::default(),
-            clock: None,
-            monotonic_clock: None,
-            deadline_waker: None,
+            clocks: Clocks::default(),
             event_sequence: Arc::default(),
             audit_owner: None,
             network_port: None,
@@ -123,9 +120,9 @@ impl ObjectDatabase {
         ObjectIdentifier::new_addressable(identifier.object_type(), identifier.instance_number())?;
         self.check_network_port_membership(&identifier)?;
         self.check_audit_membership(&identifier, true)?;
-        object.bind_clock_internal(self.clock.clone());
-        object.bind_monotonic_clock_internal(self.monotonic_clock.clone());
-        object.bind_deadline_waker_internal(self.deadline_waker.clone());
+        if let Some(timed) = object.timed() {
+            timed.bind_clocks(&self.clocks);
+        }
         let oid = object.object_identifier();
         let name = object.object_name().to_string();
 
@@ -377,35 +374,72 @@ impl ObjectDatabase {
     ///
     /// Devices added after this call receive the same reader in [`add`](Self::add).
     pub fn set_clock_reader(&mut self, clock: Option<Arc<dyn ClockReader>>) {
-        self.clock = clock;
-        for object in self.objects.values_mut() {
-            object.bind_clock_internal(self.clock.clone());
-        }
+        self.clocks.clock = clock;
+        self.rebind_clocks();
     }
 
     /// Bind one process-local monotonic source to every contained object.
     #[doc(hidden)]
     pub fn set_monotonic_clock_internal(&mut self, clock: Option<Arc<MonotonicClock>>) {
         self.trend_poll.clear();
-        self.monotonic_clock = clock;
-        for object in self.objects.values_mut() {
-            object.bind_monotonic_clock_internal(self.monotonic_clock.clone());
-        }
+        self.clocks.monotonic = clock;
+        self.rebind_clocks();
     }
 
     /// Bind the waker objects call when a write arms a monotonic deadline to
     /// every contained object, and to each one added later.
     #[doc(hidden)]
     pub fn set_deadline_waker_internal(&mut self, waker: Option<Arc<DeadlineWaker>>) {
-        self.deadline_waker = waker;
+        self.clocks.deadline_waker = waker;
+        self.rebind_clocks();
+    }
+
+    /// The device is starting: call [`Timed::start_output`] on every timed
+    /// object, as a server does once before it shares the database (#1526).
+    ///
+    /// [`Timed::start_output`]: crate::traits::Timed::start_output
+    pub fn start_outputs(&mut self) {
         for object in self.objects.values_mut() {
-            object.bind_deadline_waker_internal(self.deadline_waker.clone());
+            if let Some(timed) = object.timed() {
+                timed.start_output();
+            }
         }
+    }
+
+    /// Hand the database's clocks to every timed object again, after one of
+    /// them changed.
+    fn rebind_clocks(&mut self) {
+        for object in self.objects.values_mut() {
+            if let Some(timed) = object.timed() {
+                timed.bind_clocks(&self.clocks);
+            }
+        }
+    }
+
+    /// How many blink-warn notifications the Lighting Output or Binary
+    /// Lighting Output at `oid` has asked for. A conformance-test channel,
+    /// not a BACnet property or host callback; `None` for any other object.
+    #[doc(hidden)]
+    pub fn lighting_blink_count_internal(&mut self, oid: &ObjectIdentifier) -> Option<u64> {
+        use crate::lighting::{BinaryLightingOutputObject, LightingOutputObject};
+        let object = self
+            .objects
+            .get_mut(oid)?
+            .as_mut()
+            .as_stored_any_mut(crate::traits::ObjectStorageAccess(()));
+        if object.is::<LightingOutputObject>() {
+            return object
+                .downcast_mut::<LightingOutputObject>()
+                .map(|object| object.lighting_blink_count());
+        }
+        object
+            .downcast_mut::<BinaryLightingOutputObject>()
+            .map(|object| object.lighting_blink_count())
     }
 
     /// Read one coherent sample from the database's shared clock.
     pub fn clock_frame(&self) -> Option<ClockFrame> {
-        self.clock.as_ref()?.read_clock()
+        self.clocks.clock.as_ref()?.read_clock()
     }
 
     #[doc(hidden)]

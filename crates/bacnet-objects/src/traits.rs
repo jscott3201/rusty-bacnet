@@ -22,7 +22,6 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue, Time};
 
 use crate::audit::{AuditLogNotificationSink, AuditLogStorage};
-use crate::clock::ClockReader;
 use crate::durable::DurableWrites;
 use crate::event::{
     EnrollmentSummaryCapability, EventStateChange, EventTransitionCommit,
@@ -36,13 +35,8 @@ use crate::log_buffer::{LogBufferRecords, LogRecordIdentity};
 use crate::log_reporting::BufferReadyReport;
 use crate::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 
-/// Process-local monotonic time source used by internal object lifecycles.
-#[doc(hidden)]
-pub type MonotonicClock = dyn Fn() -> Duration + Send + Sync;
-
-/// Wakes the server's monotonic task to read object deadlines again (#1384).
-#[doc(hidden)]
-pub type DeadlineWaker = dyn Fn() + Send + Sync;
+pub mod capabilities;
+pub use capabilities::{Clocks, DeadlineWaker, MonotonicClock, Timed};
 
 mod defaults;
 use defaults::{array_property_default, cov_reported_properties_default, list_property_default};
@@ -380,80 +374,14 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// additional wire-level universal-property filter.
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]>;
 
-    /// Bind or remove the database's shared wall-clock reader.
+    /// Borrow the object's time and clock capability, if it has one.
     ///
-    /// Objects that do not expose clock-derived state ignore this internal
-    /// lifecycle hook.
-    #[doc(hidden)]
-    fn bind_clock_internal(&mut self, _clock: Option<Arc<dyn ClockReader>>) {}
-
-    /// Advance object-owned operations that use monotonic elapsed time.
-    ///
-    /// The server calls this internal hook from a dedicated lifecycle task.
-    /// `true` means readable state changed and generic COV processing is
-    /// required. The default is a source-compatible no-op for downstream
-    /// object implementations.
-    #[doc(hidden)]
-    fn advance_time_internal(&mut self, _elapsed: Duration) -> bool {
-        false
-    }
-
-    /// Bind the process-local monotonic source used when operations arm.
-    #[doc(hidden)]
-    fn bind_monotonic_clock_internal(&mut self, _clock: Option<Arc<MonotonicClock>>) {}
-
-    /// Bind the waker an object calls when a write arms a monotonic deadline,
-    /// so the server's task looks again sooner than its next routine pass.
-    #[doc(hidden)]
-    fn bind_deadline_waker_internal(&mut self, _waker: Option<Arc<DeadlineWaker>>) {}
-
-    /// The device is starting: drive the object's output as a start does.
-    ///
-    /// The server calls this once for every object in the database as it
-    /// starts, before the database is shared. The Color and Color
-    /// Temperature objects drive an output nothing has driven yet to its
-    /// default (#1526); other objects ignore it.
-    #[doc(hidden)]
-    fn start_output_internal(&mut self) {}
-
-    /// Advance operations to an absolute process-local monotonic instant.
-    #[doc(hidden)]
-    fn advance_monotonic_time_internal(&mut self, _now: Duration) -> bool {
-        false
-    }
-
-    /// Return the next absolute process-local operation deadline, if any.
-    #[doc(hidden)]
-    fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
+    /// An object whose state moves with time (it stamps the wall clock, or
+    /// runs timers, fades, ramps or expiries) implements [`Timed`] and
+    /// returns `Some(self)`. The default has no time behaviour. See
+    /// [`capabilities`] for the pattern.
+    fn timed(&mut self) -> Option<&mut dyn Timed> {
         None
-    }
-
-    /// Take the finest COV increment an active property subscription to
-    /// Tracking_Value asks for, or `None` when no such subscription gives
-    /// one (#1510).
-    ///
-    /// The server's monotonic task passes it before each advance, so an
-    /// object whose fade or ramp samples Tracking_Value for COV samples it
-    /// at least that finely, still no more often than its sample grid
-    /// allows. The value is finite and not negative. Objects without such a
-    /// Tracking_Value ignore it.
-    #[doc(hidden)]
-    fn set_tracking_cov_increment_internal(&mut self, _finest: Option<f64>) {}
-
-    /// Freeze COV-readable state while the object's mutation lock is held.
-    #[doc(hidden)]
-    fn cov_snapshot_internal(&self) -> Option<Box<dyn BACnetObject>> {
-        None
-    }
-
-    /// Return how many blink-warn notifications a lighting object has
-    /// requested, for objects that model them.
-    ///
-    /// This is an internal conformance-test channel, not a BACnet property,
-    /// host callback, or physical-output claim.
-    #[doc(hidden)]
-    fn lighting_blink_count_internal(&self) -> u64 {
-        0
     }
 
     /// Whether a property write route can accept `property` for this object.
@@ -1345,7 +1273,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// access and records the outcome with
     /// [`add_averaging_sample_internal`](Self::add_averaging_sample_internal).
     /// An object that answers here reports the due time through
-    /// [`next_monotonic_deadline_internal`](Self::next_monotonic_deadline_internal),
+    /// [`Timed::next_monotonic_deadline`],
     /// so the server's monotonic task wakes for it. The built-in Averaging
     /// object opts in while it holds an Object_Property_Reference and a
     /// monotonic clock is bound; the default has nothing to sample.
@@ -1443,9 +1371,9 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// An object that saves a written state before serving it opts in, so the
     /// server can stage the write and run the save without the database
     /// guard. The default opts out: the object's writes run as they always
-    /// do. See [`crate::durable`].
-    #[doc(hidden)]
-    fn durable_writes_internal(&mut self) -> Option<&mut dyn DurableWrites> {
+    /// do. The server's monotonic pass also calls
+    /// [`DurableWrites::expire_staged`] through it. See [`crate::durable`].
+    fn durable_writes(&mut self) -> Option<&mut dyn DurableWrites> {
         None
     }
 

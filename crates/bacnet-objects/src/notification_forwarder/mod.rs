@@ -69,7 +69,7 @@ use crate::durable::staged::{self, Step};
 use crate::durable::{DurableWrites, PendingWrite, SaveWait, StageStep};
 use crate::notification_class::recipient_list;
 use crate::subscribed_recipients::SubscribedRecipients;
-use crate::traits::{BACnetObject, MonotonicClock};
+use crate::traits::BACnetObject;
 
 mod metadata;
 mod persistence;
@@ -586,27 +586,35 @@ impl BACnetObject for NotificationForwarderObject {
         crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
-    fn advance_time_internal(&mut self, elapsed: Duration) -> bool {
-        let lapsed = self.subscribed_recipients.advance_by(elapsed);
-        self.after_time_passed(lapsed)
+    fn durable_writes(&mut self) -> Option<&mut dyn DurableWrites> {
+        Some(self)
     }
 
-    fn bind_monotonic_clock_internal(&mut self, clock: Option<Arc<MonotonicClock>>) {
-        self.subscribed_recipients.bind_monotonic_clock(clock);
+    fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
+        Some(self)
+    }
+}
+
+impl crate::traits::Timed for NotificationForwarderObject {
+    /// A new monotonic clock drops what storage timed on the old one, so a
+    /// pass for another clock's sake leaves an unchanged one alone.
+    fn bind_clocks(&mut self, clocks: &crate::traits::Clocks) {
+        let offered = clocks.monotonic.as_ref();
+        if crate::traits::capabilities::same_handle(self.subscribed_recipients.clock(), offered) {
+            return;
+        }
+        self.subscribed_recipients
+            .bind_monotonic_clock(clocks.monotonic.clone());
         self.with_storage(|storage, _| storage.clock_changed());
     }
 
-    fn advance_monotonic_time_internal(&mut self, now: Duration) -> bool {
+    fn advance_monotonic_time(&mut self, now: Duration) -> bool {
         let lapsed = self.subscribed_recipients.advance_to(now);
         self.after_time_passed(lapsed)
     }
 
-    fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
+    fn next_monotonic_deadline(&self) -> Option<Duration> {
         self.subscribed_recipients.next_deadline()
-    }
-
-    fn durable_writes_internal(&mut self) -> Option<&mut dyn DurableWrites> {
-        Some(self)
     }
 }
 

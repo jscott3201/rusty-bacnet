@@ -388,7 +388,10 @@ mod tests {
     fn property_metadata_log_family_write_capabilities_match_dispatch() {
         for logging_type in LOGGING_TYPES {
             for mut object in objects(8, logging_type) {
-                object.bind_clock_internal(Some(Arc::new(FixedClock)));
+                object.timed().unwrap().bind_clocks(&crate::traits::Clocks {
+                    clock: Some(Arc::new(FixedClock)),
+                    ..crate::traits::Clocks::default()
+                });
                 let kind = object.object_identifier().object_type();
                 let metadata = object.property_metadata().into_owned();
                 for row in &metadata {

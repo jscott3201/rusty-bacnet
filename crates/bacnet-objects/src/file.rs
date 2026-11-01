@@ -651,10 +651,6 @@ impl BACnetObject for FileObject {
         crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
-    fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
-        self.clock = clock;
-    }
-
     fn file_configuration_internal(&self) -> Option<&dyn FileConfiguration> {
         Some(self)
     }
@@ -669,6 +665,16 @@ impl BACnetObject for FileObject {
 
     fn file_storage_internal_mut(&mut self) -> Option<&mut dyn FileStorage> {
         Some(self)
+    }
+
+    fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
+        Some(self)
+    }
+}
+
+impl crate::traits::Timed for FileObject {
+    fn bind_clocks(&mut self, clocks: &crate::traits::Clocks) {
+        self.clock = clocks.clock.clone();
     }
 }
 

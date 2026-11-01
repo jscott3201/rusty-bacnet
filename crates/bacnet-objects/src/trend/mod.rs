@@ -529,18 +529,8 @@ impl BACnetObject for TrendLogObject {
         crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
-    fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
-        self.clock = clock;
-        self.settle_interruption(None);
-    }
-
-    fn durable_writes_internal(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
+    fn durable_writes(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
         self.store.is_some().then_some(self as _)
-    }
-
-    fn advance_monotonic_time_internal(&mut self, now: core::time::Duration) -> bool {
-        self.commit_if_interval(now);
-        false
     }
 
     fn log_record_identities_internal(&self) -> Option<Vec<LogRecordIdentity>> {
@@ -567,6 +557,22 @@ impl BACnetObject for TrendLogObject {
     }
 
     impl_buffer_ready_reporting!(reporting, log_buffer);
+
+    fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
+        Some(self)
+    }
+}
+
+impl crate::traits::Timed for TrendLogObject {
+    fn bind_clocks(&mut self, clocks: &crate::traits::Clocks) {
+        self.clock = clocks.clock.clone();
+        self.settle_interruption(None);
+    }
+
+    fn advance_monotonic_time(&mut self, now: core::time::Duration) -> bool {
+        self.commit_if_interval(now);
+        false
+    }
 }
 
 #[cfg(test)]

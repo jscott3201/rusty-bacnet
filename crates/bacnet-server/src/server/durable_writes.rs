@@ -316,7 +316,7 @@ fn stage_group(group: &[DurableTarget], db: &mut ObjectDatabase) -> Option<Stage
     let first = group.first()?;
     let oid = first.oid;
     if matches!(first.change, Change::Purge) {
-        return Some(db.get_mut(&oid)?.durable_writes_internal()?.stage_purge());
+        return Some(db.get_mut(&oid)?.durable_writes()?.stage_purge());
     }
     let mut writes = Vec::with_capacity(group.len());
     for target in group {
@@ -341,11 +341,7 @@ fn stage_group(group: &[DurableTarget], db: &mut ObjectDatabase) -> Option<Stage
     if writes.is_empty() {
         return None;
     }
-    Some(
-        db.get_mut(&oid)?
-            .durable_writes_internal()?
-            .stage_writes(&writes),
-    )
+    Some(db.get_mut(&oid)?.durable_writes()?.stage_writes(&writes))
 }
 
 /// The objects a request staged writes on, each with the wait its stage
@@ -359,10 +355,7 @@ impl StagedWrites {
     /// staged write was not taken saves the state it serves at once.
     pub(super) fn release(self, db: &mut ObjectDatabase) {
         for (oid, staged) in self.0 {
-            if let Some(writes) = db
-                .get_mut(&oid)
-                .and_then(|object| object.durable_writes_internal())
-            {
+            if let Some(writes) = db.get_mut(&oid).and_then(|object| object.durable_writes()) {
                 writes.release_staged_write(&staged);
             }
         }
@@ -532,7 +525,7 @@ fn settle_all(db: &mut ObjectDatabase) -> Vec<(ObjectIdentifier, SaveWait)> {
     let mut waits = Vec::new();
     db.for_each_object_mut(|oid, object| {
         if let Some(wait) = object
-            .durable_writes_internal()
+            .durable_writes()
             .and_then(|writes| writes.settle_forgotten_writes())
             .filter(|wait| !wait.is_ready())
         {

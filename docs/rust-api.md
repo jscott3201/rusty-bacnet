@@ -3987,6 +3987,53 @@ fn property_list(&self) -> Cow<'static, [P]> {
 }
 ```
 
+#### Capabilities
+
+Behaviour that only some objects have sits behind a capability accessor on
+the trait (#2179). The accessor defaults to `None`; an object that has the
+behaviour implements the capability trait (in `bacnet_objects::traits`) and
+returns `Some(self)`. The host asks the accessor before it drives the
+behaviour, so an object without it writes nothing.
+
+- **`timed()` → `Timed`**, for an object whose state moves with time.
+  `bind_clocks(&Clocks)` takes the database's Device clock, monotonic clock
+  and deadline waker together, as the object joins a database and again
+  whenever the host binds one of them. `advance_monotonic_time(now)` runs the
+  object's timers, fades and expiries to `now`, and returns `true` when
+  readable state changed; the server then takes `cov_snapshot()` and reports
+  COV from it. `next_monotonic_deadline()` tells the server's monotonic task
+  when to wake next, `set_tracking_cov_increment` passes the finest
+  Tracking_Value COV increment a subscriber asks for before each advance
+  (#1510), and `start_output` runs once as the server starts (#1526). Every
+  method defaults to a no-op.
+- **`durable_writes()` → `DurableWrites`**, for an object that saves a write
+  before serving it (see `bacnet_objects::durable`). Its `expire_staged(now)`
+  drops a staged write whose request never came back; the server's monotonic
+  pass calls it on every object that has the capability, before it advances
+  the object's `Timed` operations, so an object that only stages writes
+  needs no `Timed`.
+
+```rust,ignore
+use bacnet_objects::traits::{BACnetObject, Clocks, Timed};
+
+// In `impl BACnetObject for MyTimer`:
+fn timed(&mut self) -> Option<&mut dyn Timed> {
+    Some(self)
+}
+
+impl Timed for MyTimer {
+    fn bind_clocks(&mut self, clocks: &Clocks) {
+        self.monotonic = clocks.monotonic.clone();
+    }
+    fn advance_monotonic_time(&mut self, now: Duration) -> bool {
+        self.expire_if_due(now)
+    }
+    fn next_monotonic_deadline(&self) -> Option<Duration> {
+        self.deadline
+    }
+}
+```
+
 Createability belongs to the object type, not to an instance, so the trait
 has no method for it (`is_createable` was removed). The server's CreateObject
 builds a type when the application registered a constructor for it
@@ -4270,7 +4317,7 @@ framing, through the shared `bacnet-encoding` codecs.
   `NotificationForwarderObject` holds the list in
   `bacnet_objects::subscribed_recipients::SubscribedRecipients`, and an
   application's own forwarder type can do the same, routing the property's
-  read and write and the `*_monotonic_*_internal` clock hooks to it. The
+  read and write and its `Timed` capability's monotonic hooks to it. The
   server forwards notifications to every live entry (see
   [Notification forwarding](#notification-forwarding)). The store keeps at most
   `MAX_SUBSCRIBED_RECIPIENTS` (32) entries and takes 1 to
@@ -5922,7 +5969,7 @@ range. In_Progress never reads OTHER.
 Both objects model the device's start (#1526). A new object's In_Progress
 reads NOT_CONTROLLED: nothing has driven its output yet. As the server
 starts, before it shares the database, it calls `start_output` on each colour
-object in it. An application running one without a server, or adding one to
+object in it (`ObjectDatabase::start_outputs`). An application running one without a server, or adding one to
 a server already running, calls `start_output` itself; until then the object
 reads NOT_CONTROLLED. An in-process WARMSTART or COLDSTART should call it
 again (see the `ReinitializeHandler` notes); it is safe to repeat.

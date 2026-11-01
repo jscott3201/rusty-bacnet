@@ -46,7 +46,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 ErrorClass::OBJECT,
                 ErrorCode::UNKNOWN_OBJECT,
             )),
-            Some(object) => match object.durable_writes_internal() {
+            Some(object) => match object.durable_writes() {
                 Some(writes) => writes.commit_purge(),
                 None => Err(protocol_error(
                     ErrorClass::OBJECT,

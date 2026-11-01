@@ -20,7 +20,7 @@
 //! [`STAGED_WRITE_LIFETIME`](crate::durable::STAGED_WRITE_LIFETIME) has
 //! passed since its save finished: by the next write that stages, or by the
 //! server's once-a-second operation task, which calls
-//! `advance_monotonic_time_internal`. The class saves nothing else between
+//! [`DurableWrites::expire_staged`]. The class saves nothing else between
 //! writes.
 //!
 //! Neither runs once the server has stopped. So `stop()`, once it has
@@ -170,13 +170,6 @@ impl NotificationClass {
         taken
     }
 
-    /// From the server's operation task at monotonic `now`: drop a staged
-    /// write whose request is gone and queue the save of the served list
-    /// (see the module docs). The save runs on the writer thread.
-    pub(super) fn expire_staged_write(&mut self, now: Duration) {
-        self.with_storage(|storage| storage.expire(now));
-    }
-
     /// Run `f` on storage; then, if `f` dropped a staged write, queue the
     /// save that puts storage back to the served list. `None` without
     /// persistence.
@@ -246,5 +239,9 @@ impl DurableWrites for NotificationClass {
         let wait = storage.drop_forgotten(|| self.snapshot());
         self.storage = Some(storage);
         Some(wait)
+    }
+
+    fn expire_staged(&mut self, now: Duration) {
+        self.with_storage(|storage| storage.expire(now));
     }
 }

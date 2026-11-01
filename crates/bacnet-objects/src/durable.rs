@@ -108,7 +108,7 @@
 //!    `StagedSaves::submit_coalescing`.
 //! 2. Implement [`DurableWrites`] for the object, including
 //!    `settle_forgotten_writes` (`StagedSaves::drop_forgotten`), and return
-//!    it from `BACnetObject::durable_writes_internal`.
+//!    it from `BACnetObject::durable_writes`.
 //! 3. Add the object type, and the properties it saves, to `may_save` in the
 //!    server's `durable_writes` module. The server stages only the writes
 //!    listed there; any other write saves in place.
@@ -597,6 +597,14 @@ pub trait DurableWrites {
     fn settle_forgotten_writes(&mut self) -> Option<SaveWait> {
         None
     }
+
+    /// The host's monotonic pass at `now`, on the monotonic clock's time
+    /// base: drop a staged write that has waited too long for its request,
+    /// so storage goes back to the served state. The server calls it on
+    /// every pass, before it advances the object's
+    /// [`Timed`](crate::traits::Timed) operations. The default stages
+    /// nothing that expires.
+    fn expire_staged(&mut self, _now: core::time::Duration) {}
 }
 
 #[cfg(all(test, feature = "std"))]

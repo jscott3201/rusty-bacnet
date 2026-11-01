@@ -316,13 +316,6 @@ impl AccessRightsObject {
         taken
     }
 
-    /// From the server's operation task at monotonic `now`: drop a staged
-    /// write whose request is gone and queue the save of the served state
-    /// (see the module docs). The save runs on the writer thread.
-    pub(super) fn expire_staged_write(&mut self, now: Duration) {
-        self.with_storage(|storage| storage.expire(now));
-    }
-
     /// Run `f` on storage; then, if `f` dropped a staged write, queue the
     /// save that puts storage back to the served state. `None` without
     /// persistence.
@@ -404,5 +397,9 @@ impl DurableWrites for AccessRightsObject {
         let wait = storage.drop_forgotten(|| self.snapshot());
         self.storage = Some(storage);
         Some(wait)
+    }
+
+    fn expire_staged(&mut self, now: Duration) {
+        self.with_storage(|storage| storage.expire(now));
     }
 }

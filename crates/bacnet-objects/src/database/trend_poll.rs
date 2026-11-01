@@ -204,7 +204,7 @@ impl ObjectDatabase {
             }
         }
         logs.truncate(trend_logs);
-        let Some(monotonic) = self.monotonic_clock.clone() else {
+        let Some(monotonic) = self.clocks.monotonic.clone() else {
             return RECONCILE;
         };
         let mut eligible = HashSet::new();

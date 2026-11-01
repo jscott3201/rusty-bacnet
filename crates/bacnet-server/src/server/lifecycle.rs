@@ -68,7 +68,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // runs before `network_port::start`, which can still fail; that's
         // harmless, since the drive is what any start does, and a later
         // start over the same objects drives them the same way again.
-        db.for_each_object_mut(|_, object| object.start_output_internal());
+        db.start_outputs();
         let membership = crate::membership::install_waker(&mut db);
 
         let (network, mut apdu_rx, audit_routes, network_controls) =

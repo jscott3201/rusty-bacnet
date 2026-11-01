@@ -476,7 +476,7 @@ impl BACnetObject for BinaryLightingOutputObject {
         ))
     }
 
-    fn durable_writes_internal(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
+    fn durable_writes(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
         self.profile.capability()
     }
 
@@ -492,29 +492,42 @@ impl BACnetObject for BinaryLightingOutputObject {
         true
     }
 
-    fn advance_time_internal(&mut self, elapsed: Duration) -> bool {
-        self.logical_now = self.logical_now.saturating_add(elapsed);
-        self.expire_at(self.logical_now)
+    fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
+        Some(self)
+    }
+}
+
+impl crate::traits::Timed for BinaryLightingOutputObject {
+    fn bind_clocks(&mut self, clocks: &crate::traits::Clocks) {
+        self.monotonic_clock = clocks.monotonic.clone();
     }
 
-    fn bind_monotonic_clock_internal(&mut self, clock: Option<Arc<MonotonicClock>>) {
-        self.monotonic_clock = clock;
-    }
-
-    fn advance_monotonic_time_internal(&mut self, now: Duration) -> bool {
-        self.profile.expire(now);
+    fn advance_monotonic_time(&mut self, now: Duration) -> bool {
         self.expire_at(now)
     }
 
-    fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
+    fn next_monotonic_deadline(&self) -> Option<Duration> {
         self.active_operation.map(|operation| operation.deadline)
     }
 
-    fn cov_snapshot_internal(&self) -> Option<Box<dyn BACnetObject>> {
+    fn cov_snapshot(&self) -> Option<Box<dyn BACnetObject>> {
         Some(Box::new(self.clone()))
     }
+}
 
-    fn lighting_blink_count_internal(&self) -> u64 {
+#[cfg(test)]
+impl BinaryLightingOutputObject {
+    pub(crate) fn advance_time(&mut self, elapsed: Duration) -> bool {
+        self.logical_now = self.logical_now.saturating_add(elapsed);
+        self.expire_at(self.logical_now)
+    }
+}
+
+impl BinaryLightingOutputObject {
+    /// How many blink-warn notifications the object has asked for: a
+    /// conformance-test channel, read through
+    /// `ObjectDatabase::lighting_blink_count_internal`.
+    pub(crate) fn lighting_blink_count(&self) -> u64 {
         self.blink_request_count
     }
 }
