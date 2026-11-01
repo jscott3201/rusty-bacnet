@@ -53,10 +53,9 @@ pub struct EventEnrollmentPending {
 /// property (nor to the Table 12-14 `Time_Delay_Normal`, which is
 /// configuration and lives on the object directly). Clause 13.3 assigns the
 /// baseline's initialization and the countdown's existence to local matters,
-/// so they are reachable only through the internal trait channel
-/// ([`BACnetObject::enrollment_eval_state_internal`](crate::traits::BACnetObject::enrollment_eval_state_internal) /
-/// [`BACnetObject::set_enrollment_eval_state_internal`](crate::traits::BACnetObject::set_enrollment_eval_state_internal)),
-/// mirroring the `set_event_state_internal` precedent (issue #130).
+/// so they are reachable only through the evaluator's capability
+/// ([`EnrollmentEval::eval_state`](crate::traits::EnrollmentEval::eval_state) /
+/// [`EnrollmentEval::set_eval_state`](crate::traits::EnrollmentEval::set_eval_state)).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct EventEnrollmentEvalState {
     /// Delayed transition in flight, if any.

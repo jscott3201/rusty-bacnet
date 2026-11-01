@@ -24,9 +24,6 @@ use bacnet_objects::event::{
     EnrollmentSummaryCapability, EventStateChange, EventTransitionCommit,
     EventTransitionCommitError, TransitionOutcome,
 };
-use bacnet_objects::event_enrollment::{
-    EventEnrollmentEvalState, EventEnrollmentMonitoredSource, EventEnrollmentReliabilityCommit,
-};
 use bacnet_objects::file::{FileConfiguration, FileObject, FileStorage};
 use bacnet_objects::log_buffer::{LogBufferRecords, LogRecordIdentity};
 use bacnet_objects::log_reporting::BufferReadyReport;
@@ -34,12 +31,12 @@ use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 use bacnet_objects::staging::StagingWritePlan;
 use bacnet_objects::traits::{
-    AccessEvents, BACnetObject, Clocks, CommandRunner, CovReportedProperty, EventReporting,
-    LifeSafety, LifeSafetyOperationEffect, LifeSafetyOperationOutcome, LocalInput, LocalInputValue,
-    ReliabilityEvaluation, StagingSource, Timed,
+    AccessEvents, BACnetObject, Clocks, CommandRunner, CovReportedProperty, EnrollmentEval,
+    EventReporting, LifeSafety, LifeSafetyOperationEffect, LifeSafetyOperationOutcome, LocalInput,
+    LocalInputValue, ReliabilityEval, StagingSource, Timed,
 };
 use bacnet_objects::trend::TrendLogObject;
-use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter, EventTransitionBits};
+use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::constructed::{
     BACnetDeviceObjectReference, BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord,
@@ -54,6 +51,8 @@ use bacnet_types::primitives::{BACnetTimeStamp, Date, ObjectIdentifier, Property
 
 #[path = "access_batch.rs"]
 mod access_batch;
+#[path = "eval.rs"]
+mod eval;
 
 pub const CUSTOM: P = P::from_raw(5000);
 pub const CUSTOM_LIST: P = P::from_raw(5001);
@@ -288,6 +287,18 @@ impl BACnetObject for Probe {
         self.called("event_reporting_mut", ());
         Some(self)
     }
+    fn enrollment_eval(&self) -> Option<&dyn EnrollmentEval> {
+        self.called("enrollment_eval", ());
+        Some(self)
+    }
+    fn enrollment_eval_mut(&mut self) -> Option<&mut dyn EnrollmentEval> {
+        self.called("enrollment_eval_mut", ());
+        Some(self)
+    }
+    fn reliability_eval(&mut self) -> Option<&mut dyn ReliabilityEval> {
+        self.called("reliability_eval", ());
+        Some(self)
+    }
     fn supports_cov_property(&self, property: P) -> bool {
         self.called("supports_cov_property", (property,));
         // Unlike the default, which follows `supports_subscribe_cov_property`
@@ -304,13 +315,6 @@ impl BACnetObject for Probe {
     }
     fn set_overridden(&mut self, overridden: bool) {
         self.called("set_overridden", (overridden,));
-    }
-    fn commit_event_enrollment_reliability_internal(
-        &mut self,
-        commit: EventEnrollmentReliabilityCommit,
-    ) -> Result<(), EventTransitionCommitError> {
-        self.called("commit_event_enrollment_reliability_internal", (commit,));
-        Ok(())
     }
     fn tick_schedule(
         &mut self,
@@ -342,56 +346,6 @@ impl BACnetObject for Probe {
     fn calendar_state_internal(&self, date: SpecificDate) -> Option<bool> {
         self.called("calendar_state_internal", (date,));
         Some(date == day())
-    }
-    fn set_event_state_internal(&mut self, state: EventState) -> Result<(), Error> {
-        self.called("set_event_state_internal", (state,));
-        Ok(())
-    }
-    fn enrollment_eval_state_internal(&self) -> Option<EventEnrollmentEvalState> {
-        self.called("enrollment_eval_state_internal", ());
-        Some(EventEnrollmentEvalState::default())
-    }
-    fn set_enrollment_eval_state_internal(
-        &mut self,
-        state: EventEnrollmentEvalState,
-    ) -> Result<(), Error> {
-        self.called("set_enrollment_eval_state_internal", (state,));
-        Ok(())
-    }
-    fn enrollment_eval_source_internal(&self) -> Option<Option<EventEnrollmentMonitoredSource>> {
-        self.called("enrollment_eval_source_internal", ());
-        Some(Some((self.oid, P::PRESENT_VALUE, Some(2))))
-    }
-    fn set_enrollment_eval_source_internal(
-        &mut self,
-        source: Option<EventEnrollmentMonitoredSource>,
-    ) -> Result<(), Error> {
-        self.called("set_enrollment_eval_source_internal", (source,));
-        Ok(())
-    }
-    fn set_acked_transitions_internal(
-        &mut self,
-        transition_bit: EventTransitionBits,
-        acknowledged: bool,
-    ) -> Result<(), Error> {
-        let arguments = (transition_bit, acknowledged);
-        self.called("set_acked_transitions_internal", arguments);
-        Ok(())
-    }
-    fn evaluate_reliability_internal(&mut self) -> Result<ReliabilityEvaluation, Error> {
-        self.called("evaluate_reliability_internal", ());
-        Ok(ReliabilityEvaluation::Changed {
-            old_reliability: Reliability::NO_SENSOR,
-            new_reliability: Reliability::OVER_RANGE,
-        })
-    }
-    fn reliability_evaluation_inhibited_internal(&self) -> bool {
-        self.called("reliability_evaluation_inhibited_internal", ());
-        true
-    }
-    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
-        self.called("set_reliability_internal", (reliability,));
-        Ok(())
     }
     fn take_due_averaging_sample_internal(
         &mut self,

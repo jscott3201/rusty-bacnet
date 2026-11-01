@@ -376,20 +376,7 @@ impl BACnetObject for AnalogOutputObject {
 
     crate::traits::lend_event_reporting!();
 
-    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
-        if self.out_of_service || self.reliability_inhibit.enabled() {
-            return Err(common::write_access_denied_error());
-        }
-        if !common::is_reliability_value_valid(reliability) {
-            return Err(common::value_out_of_range_error());
-        }
-        self.reliability = reliability;
-        Ok(())
-    }
-
-    fn reliability_evaluation_inhibited_internal(&self) -> bool {
-        self.reliability_inhibit.enabled()
-    }
+    crate::traits::lend_reliability_eval!();
 
     fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
         super::CREATION_ONLY
@@ -401,6 +388,23 @@ impl BACnetObject for AnalogOutputObject {
         value: PropertyValue,
     ) -> Result<(), Error> {
         super::initialize_units(&mut self.units, property, value)
+    }
+}
+
+impl crate::traits::ReliabilityEval for AnalogOutputObject {
+    fn set_reliability(&mut self, reliability: Reliability) -> Result<(), Error> {
+        if self.out_of_service || self.reliability_inhibit.enabled() {
+            return Err(common::write_access_denied_error());
+        }
+        if !common::is_reliability_value_valid(reliability) {
+            return Err(common::value_out_of_range_error());
+        }
+        self.reliability = reliability;
+        Ok(())
+    }
+
+    fn reliability_evaluation_inhibited(&self) -> bool {
+        self.reliability_inhibit.enabled()
     }
 }
 

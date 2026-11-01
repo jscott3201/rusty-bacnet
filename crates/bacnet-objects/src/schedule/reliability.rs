@@ -63,7 +63,7 @@
 //! CONFIGURATION_ERROR the same way.
 //!
 //! The evaluation owns only the fault it raised. A Reliability applied through
-//! `set_reliability_internal` stays until that caller changes it, and while
+//! `ReliabilityEval::set_reliability` stays until that caller changes it, and while
 //! Out_Of_Service is TRUE the client's simulated value is left alone; the
 //! return to service restores the saved value and evaluates again. Refusals
 //! reported meanwhile are kept for that evaluation.

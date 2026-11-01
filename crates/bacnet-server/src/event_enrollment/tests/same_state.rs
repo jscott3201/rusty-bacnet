@@ -346,9 +346,10 @@ fn acked_transitions_bit_sets_when_no_ack_required() {
             None,
         )
         .unwrap();
-        // Internal channel, staging an already-owed TO_NORMAL ack.
-        obj.set_acked_transitions_internal(EventTransitionBits::TO_NORMAL, false)
-            .unwrap();
+        // Stage an already-owed TO_NORMAL ack: through NORMAL with an ack
+        // owed, then back to OFFNORMAL with none.
+        crate::test_event_state::commit_event_state(obj, EventState::NORMAL, true);
+        crate::test_event_state::commit_event_state(obj, EventState::OFFNORMAL, false);
     }
     assert_eq!(
         acked_transitions(&db, &ee_oid),

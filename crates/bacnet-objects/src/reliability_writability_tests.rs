@@ -87,7 +87,9 @@ fn assert_reliability_gate(object: &mut dyn BACnetObject) {
     );
 
     let internal_denied = object
-        .set_reliability_internal(Reliability::NO_FAULT_DETECTED)
+        .reliability_eval()
+        .unwrap()
+        .set_reliability(Reliability::NO_FAULT_DETECTED)
         .expect_err("internal Reliability write must not overwrite client simulation");
     match internal_denied {
         Error::Remote(RemoteError::Error { class, code }) => {
@@ -114,7 +116,9 @@ fn assert_reliability_gate(object: &mut dyn BACnetObject) {
     );
 
     let invalid_internal = object
-        .set_reliability_internal(Reliability::from_raw(65_536))
+        .reliability_eval()
+        .unwrap()
+        .set_reliability(Reliability::from_raw(65_536))
         .expect_err("internal route must enforce the Reliability datatype");
     match invalid_internal {
         Error::Remote(RemoteError::Error { class, code }) => {
@@ -124,7 +128,9 @@ fn assert_reliability_gate(object: &mut dyn BACnetObject) {
         other => panic!("expected PROPERTY / VALUE_OUT_OF_RANGE, got {other:?}"),
     }
     object
-        .set_reliability_internal(Reliability::NO_SENSOR)
+        .reliability_eval()
+        .unwrap()
+        .set_reliability(Reliability::NO_SENSOR)
         .expect("internal Reliability write must succeed in service");
     assert_eq!(
         object
@@ -149,7 +155,9 @@ fn assert_reliability_gate(object: &mut dyn BACnetObject) {
     );
 
     object
-        .set_reliability_internal(Reliability::OVER_RANGE)
+        .reliability_eval()
+        .unwrap()
+        .set_reliability(Reliability::OVER_RANGE)
         .expect("internal evaluator must establish a non-default saved value");
     object
         .write_property(

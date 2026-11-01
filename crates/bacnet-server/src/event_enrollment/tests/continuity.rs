@@ -11,6 +11,7 @@ use bacnet_objects::event_enrollment::{
 };
 use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::traits::BACnetObject;
+use bacnet_objects::traits::EnrollmentEval;
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventParameter, BACnetPropertyStates,
     ChangeOfValueCriteria, FaultParameters,
@@ -126,13 +127,24 @@ fn assert_observation_gap(
     );
 }
 
+fn eval_state(db: &ObjectDatabase, oid: ObjectIdentifier) -> EventEnrollmentEvalState {
+    db.get(&oid)
+        .unwrap()
+        .enrollment_eval()
+        .unwrap()
+        .eval_state()
+}
+
 fn assert_private_reset(db: &ObjectDatabase, enrollment_oid: ObjectIdentifier) {
     let enrollment = db.get(&enrollment_oid).unwrap();
     assert_eq!(
-        enrollment.enrollment_eval_state_internal(),
+        enrollment.enrollment_eval().map(|e| e.eval_state()),
         Some(EventEnrollmentEvalState::default())
     );
-    assert_eq!(enrollment.enrollment_eval_source_internal(), Some(None));
+    assert_eq!(
+        enrollment.enrollment_eval().and_then(|e| e.eval_source()),
+        Some(None)
+    );
 }
 
 fn add_out_of_range_enrollment(
@@ -175,14 +187,14 @@ fn removed_same_target_clears_all_continuity_and_restarts_full_delay() {
     let enrollment_oid = add_out_of_range_enrollment(&mut db, 320, target_oid, 3);
     let enrollment = db.get_mut(&enrollment_oid).unwrap();
     enrollment
-        .set_enrollment_eval_state_internal(stale_state())
+        .enrollment_eval_mut()
+        .unwrap()
+        .set_eval_state(stale_state())
         .unwrap();
     enrollment
-        .set_enrollment_eval_source_internal(Some((
-            target_oid,
-            PropertyIdentifier::PRESENT_VALUE,
-            None,
-        )))
+        .enrollment_eval_mut()
+        .unwrap()
+        .set_eval_source(Some((target_oid, PropertyIdentifier::PRESENT_VALUE, None)))
         .unwrap();
 
     let removed = db.remove(&target_oid).unwrap().unwrap();
@@ -243,11 +255,7 @@ fn cov_restore_and_valid_retarget_each_establish_a_fresh_baseline() {
 
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
     assert_eq!(
-        db.get(&enrollment_oid)
-            .unwrap()
-            .enrollment_eval_state_internal()
-            .unwrap()
-            .cov_baseline,
+        eval_state(&db, enrollment_oid).cov_baseline,
         Some(PropertyValue::Real(30.0))
     );
 
@@ -261,13 +269,14 @@ fn cov_restore_and_valid_retarget_each_establish_a_fresh_baseline() {
     let enrollment = db.get(&enrollment_oid).unwrap();
     assert_eq!(
         enrollment
-            .enrollment_eval_state_internal()
+            .enrollment_eval()
+            .map(|e| e.eval_state())
             .unwrap()
             .cov_baseline,
         Some(PropertyValue::Real(100.0))
     );
     assert_eq!(
-        enrollment.enrollment_eval_source_internal(),
+        enrollment.enrollment_eval().and_then(|e| e.eval_source()),
         Some(Some((second_oid, PropertyIdentifier::PRESENT_VALUE, None)))
     );
 }
@@ -308,14 +317,7 @@ fn change_of_state_does_not_reuse_pre_gap_last_offnormal_identity() {
 
     let restored = evaluate_event_enrollments_report(&mut db, 1);
     assert!(restored.transitions.is_empty());
-    assert_eq!(
-        db.get(&enrollment_oid)
-            .unwrap()
-            .enrollment_eval_state_internal()
-            .unwrap()
-            .last_offnormal_value,
-        None
-    );
+    assert_eq!(eval_state(&db, enrollment_oid).last_offnormal_value, None);
 }
 
 #[test]
@@ -361,14 +363,14 @@ fn foreign_target_gap_clears_private_continuity_without_public_transition() {
     let (mut db, enrollment_oid, target_oid) = setup_qualified_reference(&[100], 200);
     let enrollment = db.get_mut(&enrollment_oid).unwrap();
     enrollment
-        .set_enrollment_eval_state_internal(stale_state())
+        .enrollment_eval_mut()
+        .unwrap()
+        .set_eval_state(stale_state())
         .unwrap();
     enrollment
-        .set_enrollment_eval_source_internal(Some((
-            target_oid,
-            PropertyIdentifier::PRESENT_VALUE,
-            None,
-        )))
+        .enrollment_eval_mut()
+        .unwrap()
+        .set_eval_source(Some((target_oid, PropertyIdentifier::PRESENT_VALUE, None)))
         .unwrap();
     let before = public_snapshot(&mut db, enrollment_oid);
     let report = evaluate_event_enrollments_report(&mut db, 1);
@@ -464,14 +466,8 @@ fn add_custom_enrollment_with_stale_state(
     std::sync::Arc<std::sync::atomic::AtomicUsize>,
 ) {
     let mut enrollment = ReferenceValueObject::new(Some(reference));
-    enrollment
-        .inner
-        .set_enrollment_eval_state_internal(stale_state())
-        .unwrap();
-    enrollment
-        .inner
-        .set_enrollment_eval_source_internal(Some(source))
-        .unwrap();
+    enrollment.inner.set_eval_state(stale_state()).unwrap();
+    enrollment.inner.set_eval_source(Some(source)).unwrap();
     let writes = enrollment.state_write_count.clone();
     let oid = enrollment.object_identifier();
     db.add(Box::new(enrollment)).unwrap();
@@ -547,14 +543,14 @@ fn missing_fault_status_flags_observation_clears_continuity() {
         ),
     }));
     enrollment
-        .set_enrollment_eval_state_internal(stale_state())
+        .enrollment_eval_mut()
+        .unwrap()
+        .set_eval_state(stale_state())
         .unwrap();
     enrollment
-        .set_enrollment_eval_source_internal(Some((
-            target_oid,
-            PropertyIdentifier::PRESENT_VALUE,
-            None,
-        )))
+        .enrollment_eval_mut()
+        .unwrap()
+        .set_eval_source(Some((target_oid, PropertyIdentifier::PRESENT_VALUE, None)))
         .unwrap();
     let enrollment_oid = enrollment.object_identifier();
     db.add(Box::new(enrollment)).unwrap();
@@ -591,17 +587,10 @@ fn floating_setpoint_gap_overwrites_queued_ownership_and_resets_once() {
             high_diff_limit: 10.0,
             deadband: 2.0,
         });
+    enrollment.inner.set_eval_state(stale_state()).unwrap();
     enrollment
         .inner
-        .set_enrollment_eval_state_internal(stale_state())
-        .unwrap();
-    enrollment
-        .inner
-        .set_enrollment_eval_source_internal(Some((
-            monitored_oid,
-            PropertyIdentifier::DESCRIPTION,
-            None,
-        )))
+        .set_eval_source(Some((monitored_oid, PropertyIdentifier::DESCRIPTION, None)))
         .unwrap();
     let writes = enrollment.state_write_count.clone();
     let enrollment_oid = enrollment.object_identifier();
@@ -642,10 +631,7 @@ fn ownerless_floating_gap_discards_staged_ownership_without_source_write() {
             high_diff_limit: 10.0,
             deadband: 2.0,
         });
-    enrollment
-        .inner
-        .set_enrollment_eval_state_internal(stale_state())
-        .unwrap();
+    enrollment.inner.set_eval_state(stale_state()).unwrap();
     enrollment.source_writable.store(false, Ordering::SeqCst);
     let writes = enrollment.state_write_count.clone();
     let enrollment_oid = enrollment.object_identifier();
@@ -673,13 +659,10 @@ fn rejected_gap_resets_remain_visible_alongside_observation_diagnostic() {
         PropertyIdentifier::PRESENT_VALUE,
         None,
     );
+    enrollment.inner.set_eval_state(stale_state()).unwrap();
     enrollment
         .inner
-        .set_enrollment_eval_state_internal(stale_state())
-        .unwrap();
-    enrollment
-        .inner
-        .set_enrollment_eval_source_internal(Some(stale_source))
+        .set_eval_source(Some(stale_source))
         .unwrap();
     enrollment.source_writable.store(false, Ordering::SeqCst);
     enrollment.state_writable.store(false, Ordering::SeqCst);
@@ -715,10 +698,7 @@ fn rejected_gap_resets_remain_visible_alongside_observation_diagnostic() {
 fn ownerless_gap_skips_redundant_rejected_source_reset() {
     let mut db = ObjectDatabase::new();
     let mut enrollment = ReferenceValueObject::new(None);
-    enrollment
-        .inner
-        .set_enrollment_eval_state_internal(stale_state())
-        .unwrap();
+    enrollment.inner.set_eval_state(stale_state()).unwrap();
     enrollment.source_writable.store(false, Ordering::SeqCst);
     let writes = enrollment.state_write_count.clone();
     let enrollment_oid = enrollment.object_identifier();

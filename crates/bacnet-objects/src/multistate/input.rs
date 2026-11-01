@@ -383,7 +383,15 @@ impl BACnetObject for MultiStateInputObject {
         let _ = self.recompute_reliability();
         Ok(())
     }
-    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
+    crate::traits::lend_reliability_eval!();
+
+    fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
+        Some(self)
+    }
+}
+
+impl crate::traits::ReliabilityEval for MultiStateInputObject {
+    fn set_reliability(&mut self, reliability: Reliability) -> Result<(), Error> {
         if self.out_of_service || self.reliability_inhibit.enabled() {
             return Err(common::write_access_denied_error());
         }
@@ -395,16 +403,12 @@ impl BACnetObject for MultiStateInputObject {
         Ok(())
     }
 
-    fn evaluate_reliability_internal(&mut self) -> Result<ReliabilityEvaluation, Error> {
+    fn evaluate_reliability(&mut self) -> Result<ReliabilityEvaluation, Error> {
         Ok(self.recompute_reliability())
     }
 
-    fn reliability_evaluation_inhibited_internal(&self) -> bool {
+    fn reliability_evaluation_inhibited(&self) -> bool {
         self.reliability_inhibit.enabled()
-    }
-
-    fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
-        Some(self)
     }
 }
 
@@ -509,14 +513,20 @@ mod reliability_safety_net_tests {
         msi.present_value = 3;
 
         assert_eq!(
-            msi.evaluate_reliability_internal().unwrap(),
+            msi.reliability_eval()
+                .unwrap()
+                .evaluate_reliability()
+                .unwrap(),
             ReliabilityEvaluation::Changed {
                 old_reliability: Reliability::NO_FAULT_DETECTED,
                 new_reliability: Reliability::MULTI_STATE_OUT_OF_RANGE,
             }
         );
         assert_eq!(
-            msi.evaluate_reliability_internal().unwrap(),
+            msi.reliability_eval()
+                .unwrap()
+                .evaluate_reliability()
+                .unwrap(),
             ReliabilityEvaluation::Unchanged
         );
     }

@@ -193,17 +193,31 @@ mod tests {
         // An AddrInUse the transport made up, not the OS, is never a lost port.
         let made_up = std::io::Error::from(std::io::ErrorKind::AddrInUse);
         assert!(!super::lost_port(1, &made_up));
-        // A bind error B/IP wrapped with its address keeps the kind and is
-        // still a lost port; another wrapper's, or a made-up one, is not.
-        let wrapped = std::io::Error::new(
-            err.kind(),
-            format!("could not bind the B/IP multicast listener ({err})"),
-        );
+        // A bind error wrapped with the OS error as its source is still a
+        // lost port (#2231); one wrapped as a message only, whatever it says,
+        // is not.
+        let wrapped = std::io::Error::new(err.kind(), Wrapped(err));
         assert!(super::lost_port(1, &wrapped));
-        let other = std::io::Error::new(err.kind(), format!("could not bind a hub ({err})"));
-        assert!(!super::lost_port(1, &other));
+        let flat = std::io::Error::new(wrapped.kind(), wrapped.to_string());
+        assert!(!super::lost_port(1, &flat));
         let collision = std::io::Error::new(std::io::ErrorKind::AddrInUse, "VMAC collision");
         assert!(!super::lost_port(1, &collision));
+    }
+
+    /// An error that wraps an OS error as its source.
+    #[derive(Debug)]
+    struct Wrapped(std::io::Error);
+
+    impl std::fmt::Display for Wrapped {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "could not bind a listener ({})", self.0)
+        }
+    }
+
+    impl std::error::Error for Wrapped {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
     }
 }
 

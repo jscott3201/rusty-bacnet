@@ -295,7 +295,8 @@ impl ObjectDatabase {
             .iter()
             .filter_map(|(oid, object)| {
                 let source = object
-                    .enrollment_eval_source_internal()
+                    .enrollment_eval()
+                    .and_then(|eval| eval.eval_source())
                     .flatten()
                     .or_else(|| self.enrollment_eval_sources.get(oid).copied());
                 source
@@ -326,16 +327,13 @@ impl ObjectDatabase {
                     reporter.status_internal().configuration_changed();
                 }
                 self.enrollment_eval_sources.remove(oid);
-                if obj.enrollment_eval_state_internal().is_some() {
-                    if obj
-                        .set_enrollment_eval_state_internal(Default::default())
-                        .is_err()
-                    {
+                if let Some(eval) = obj.enrollment_eval_mut() {
+                    if eval.set_eval_state(Default::default()).is_err() {
                         self.invalid_enrollment_eval_state.insert(*oid);
                     } else {
                         self.invalid_enrollment_eval_state.remove(oid);
                     }
-                    let _ = obj.set_enrollment_eval_source_internal(None);
+                    let _ = eval.set_eval_source(None);
                 } else {
                     self.invalid_enrollment_eval_state.remove(oid);
                 }

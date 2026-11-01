@@ -7,19 +7,14 @@ use super::probe::{CUSTOM, CUSTOM_LIST};
 use bacnet_objects::accumulator::InputReading;
 use bacnet_objects::command_source::CommandOrigin;
 use bacnet_objects::event::{EventStateChange, EventTransition, EventTransitionCommit};
-use bacnet_objects::event_enrollment::{
-    EventEnrollmentEvalState, EventEnrollmentReliabilityCommit,
-};
 use bacnet_objects::schedule::ScheduleTargetOutcome;
 use bacnet_objects::traits::BACnetObject;
-use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter, EventTransitionBits};
+use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
 use bacnet_types::constructed::{
     BACnetDeviceObjectReference, BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord,
     EventLogDatum, LogData, LogDatum, LogValue,
 };
-use bacnet_types::enums::{
-    AuditLevel, EventState, ObjectType, PropertyIdentifier as P, Reliability,
-};
+use bacnet_types::enums::{AuditLevel, EventState, ObjectType, PropertyIdentifier as P};
 use bacnet_types::primitives::{BACnetTimeStamp, Date, PropertyValue};
 use std::time::Duration;
 
@@ -172,6 +167,9 @@ pub const QUERIES: &[(&str, Query)] = &[
     ("event_reporting", |o| {
         format!("{:?}", o.event_reporting().map(address))
     }),
+    ("enrollment_eval", |o| {
+        format!("{:?}", o.enrollment_eval().map(address))
+    }),
     ("supports_cov_property", |o| {
         format!(
             "{:?}",
@@ -191,17 +189,8 @@ pub const QUERIES: &[(&str, Query)] = &[
             o.retry_refusals_naming(oid(ObjectType::ANALOG_VALUE, 9))
         )
     }),
-    ("enrollment_eval_state_internal", |o| {
-        format!("{:?}", o.enrollment_eval_state_internal())
-    }),
-    ("enrollment_eval_source_internal", |o| {
-        format!("{:?}", o.enrollment_eval_source_internal())
-    }),
     ("input_reference_internal", |o| {
         format!("{:?}", o.input_reference_internal())
-    }),
-    ("reliability_evaluation_inhibited_internal", |o| {
-        o.reliability_evaluation_inhibited_internal().to_string()
     }),
     ("audit_log_storage_internal", |o| {
         format!("{:?}", o.audit_log_storage_internal().map(address))
@@ -323,18 +312,14 @@ pub const COMMANDS: &[(&str, Command)] = &[
             o.event_reporting_mut().map(|reporting| address(reporting))
         )
     }),
+    ("enrollment_eval_mut", |o| {
+        format!("{:?}", o.enrollment_eval_mut().map(|eval| address(eval)))
+    }),
+    ("reliability_eval", |o| {
+        format!("{:?}", o.reliability_eval().map(|eval| address(eval)))
+    }),
     ("set_overridden", |o| {
         format!("{:?}", o.set_overridden(true))
-    }),
-    ("commit_event_enrollment_reliability_internal", |o| {
-        let commit = EventEnrollmentReliabilityCommit {
-            reliability: Reliability::OVER_RANGE,
-            transition: Some(commit()),
-        };
-        format!(
-            "{:?}",
-            o.commit_event_enrollment_reliability_internal(commit)
-        )
     }),
     ("tick_schedule", |o| {
         let calendars =
@@ -348,31 +333,6 @@ pub const COMMANDS: &[(&str, Command)] = &[
         let outcomes = [ScheduleTargetOutcome::DatatypeRefused];
         o.complete_schedule_write(&schedule_write(2), &outcomes)
             .to_string()
-    }),
-    ("set_event_state_internal", |o| {
-        format!("{:?}", o.set_event_state_internal(EventState::OFFNORMAL))
-    }),
-    ("set_enrollment_eval_state_internal", |o| {
-        format!(
-            "{:?}",
-            o.set_enrollment_eval_state_internal(EventEnrollmentEvalState::default())
-        )
-    }),
-    ("set_enrollment_eval_source_internal", |o| {
-        let source = (oid(ObjectType::ANALOG_INPUT, 2), P::PRESENT_VALUE, None);
-        format!("{:?}", o.set_enrollment_eval_source_internal(Some(source)))
-    }),
-    ("set_acked_transitions_internal", |o| {
-        format!(
-            "{:?}",
-            o.set_acked_transitions_internal(EventTransitionBits::TO_NORMAL, true)
-        )
-    }),
-    ("evaluate_reliability_internal", |o| {
-        format!("{:?}", o.evaluate_reliability_internal())
-    }),
-    ("set_reliability_internal", |o| {
-        format!("{:?}", o.set_reliability_internal(Reliability::OVER_RANGE))
     }),
     ("take_due_averaging_sample_internal", |o| {
         format!(

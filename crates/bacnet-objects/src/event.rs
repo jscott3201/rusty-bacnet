@@ -181,6 +181,9 @@ pub enum EventTransitionCommitError {
         /// The object's current state when the commit was attempted.
         actual: EventState,
     },
+    /// Event_Detection_Enable is FALSE, and Clause 13.2.2.1 allows no
+    /// transition away from NORMAL then.
+    DetectionDisabled,
 }
 
 /// Pending (delayed) intrinsic-reporting transition state, shared by every

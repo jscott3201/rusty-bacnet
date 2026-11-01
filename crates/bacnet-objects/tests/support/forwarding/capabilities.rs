@@ -18,10 +18,13 @@ use bacnet_objects::access_control::AccessEventReport;
 use bacnet_objects::channel::MemberDatatype;
 use bacnet_objects::command::WriteFailure;
 use bacnet_objects::command_source::CommandOrigin;
+use bacnet_objects::event_enrollment::{
+    EventEnrollmentEvalState, EventEnrollmentReliabilityCommit,
+};
 use bacnet_objects::traits::LocalInputValue;
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
 use bacnet_types::enums::{
-    AccessEvent, EventState, LifeSafetyOperation, ObjectType, PropertyIdentifier as P,
+    AccessEvent, EventState, LifeSafetyOperation, ObjectType, PropertyIdentifier as P, Reliability,
 };
 use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
 use std::collections::BTreeSet;
@@ -40,6 +43,10 @@ const SOURCES: &[(&str, &str)] = &[
         include_str!("../../../src/traits/capabilities/command_runner.rs"),
     ),
     (
+        "enrollment_eval",
+        include_str!("../../../src/traits/capabilities/enrollment_eval.rs"),
+    ),
+    (
         "event_reporting",
         include_str!("../../../src/traits/capabilities/event_reporting.rs"),
     ),
@@ -50,6 +57,10 @@ const SOURCES: &[(&str, &str)] = &[
     (
         "local_input",
         include_str!("../../../src/traits/capabilities/local_input.rs"),
+    ),
+    (
+        "reliability_eval",
+        include_str!("../../../src/traits/capabilities/reliability_eval.rs"),
     ),
     (
         "staging_source",
@@ -295,6 +306,75 @@ pub const CAPABILITY_ROWS: &[(&str, Row)] = &[
             let set = o
                 .life_safety()
                 .map(|l| l.set_life_safety_operation_expected(operation));
+            format!("{set:?}")
+        }),
+    ),
+    // The two snapshots go through the shared accessor, the one a host's
+    // read guard lends, so a read-only view runs them as well.
+    (
+        "EnrollmentEval::eval_state",
+        Row::Query(|o| format!("{:?}", o.enrollment_eval().map(|e| e.eval_state()))),
+    ),
+    (
+        "EnrollmentEval::set_eval_state",
+        Row::Command(|o| {
+            let state = EventEnrollmentEvalState {
+                last_offnormal_value: Some(3),
+                ..EventEnrollmentEvalState::default()
+            };
+            let set = o.enrollment_eval_mut().map(|e| e.set_eval_state(state));
+            format!("{set:?}")
+        }),
+    ),
+    (
+        "EnrollmentEval::eval_source",
+        Row::Query(|o| format!("{:?}", o.enrollment_eval().map(|e| e.eval_source()))),
+    ),
+    (
+        "EnrollmentEval::set_eval_source",
+        Row::Command(|o| {
+            let source = (oid(ObjectType::ANALOG_INPUT, 2), P::PRESENT_VALUE, None);
+            let set = o
+                .enrollment_eval_mut()
+                .map(|e| e.set_eval_source(Some(source)));
+            format!("{set:?}")
+        }),
+    ),
+    (
+        "EnrollmentEval::commit_reliability",
+        Row::Command(|o| {
+            let commit = EventEnrollmentReliabilityCommit {
+                reliability: Reliability::OVER_RANGE,
+                transition: Some(commit()),
+            };
+            let committed = o
+                .enrollment_eval_mut()
+                .map(|e| e.commit_reliability(commit));
+            format!("{committed:?}")
+        }),
+    ),
+    (
+        "ReliabilityEval::evaluate_reliability",
+        Row::Command(|o| {
+            let evaluated = o.reliability_eval().map(|r| r.evaluate_reliability());
+            format!("{evaluated:?}")
+        }),
+    ),
+    (
+        "ReliabilityEval::reliability_evaluation_inhibited",
+        Row::Command(|o| {
+            let inhibited = o
+                .reliability_eval()
+                .map(|r| r.reliability_evaluation_inhibited());
+            format!("{inhibited:?}")
+        }),
+    ),
+    (
+        "ReliabilityEval::set_reliability",
+        Row::Command(|o| {
+            let set = o
+                .reliability_eval()
+                .map(|r| r.set_reliability(Reliability::OVER_RANGE));
             format!("{set:?}")
         }),
     ),

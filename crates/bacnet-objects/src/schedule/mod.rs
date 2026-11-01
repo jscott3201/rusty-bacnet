@@ -464,7 +464,7 @@ impl BACnetObject for ScheduleObject {
         // client has supplied a replacement Reliability value while Out_Of_Service
         // is TRUE. In service the property reports the object's
         // own consistency evaluation (CONFIGURATION_ERROR et al.), so a network
-        // write is refused; the internal route is `set_reliability_internal`
+        // write is refused; the internal route is `ReliabilityEval::set_reliability`
         // with the complementary guard.
         if property == PropertyIdentifier::RELIABILITY {
             if !self.out_of_service {
@@ -510,27 +510,7 @@ impl BACnetObject for ScheduleObject {
         metadata::for_object(self)
     }
 
-    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
-        // While Out_Of_Service is TRUE the client owns the simulated value;
-        // refusing here keeps the internal consistency evaluation from
-        // clobbering the simulation.
-        if self.out_of_service {
-            return Err(common::write_access_denied_error());
-        }
-        if !common::is_reliability_value_valid(reliability) {
-            return Err(common::value_out_of_range_error());
-        }
-        self.reliability = reliability;
-        // The caller owns this value; the consistency check leaves it alone.
-        self.owns_configuration_error = false;
-        Ok(())
-    }
-
-    fn evaluate_reliability_internal(
-        &mut self,
-    ) -> Result<crate::traits::ReliabilityEvaluation, Error> {
-        Ok(self.recompute_reliability())
-    }
+    crate::traits::lend_reliability_eval!();
 
     fn take_owed_schedule_writes(&mut self) -> Vec<ScheduleWrite> {
         self.take_owed_writes()
@@ -576,6 +556,28 @@ impl BACnetObject for ScheduleObject {
         }
         self.present_value = value.clone();
         self.command(value)
+    }
+}
+
+impl crate::traits::ReliabilityEval for ScheduleObject {
+    fn set_reliability(&mut self, reliability: Reliability) -> Result<(), Error> {
+        // While Out_Of_Service is TRUE the client owns the simulated value;
+        // refusing here keeps the internal consistency evaluation from
+        // clobbering the simulation.
+        if self.out_of_service {
+            return Err(common::write_access_denied_error());
+        }
+        if !common::is_reliability_value_valid(reliability) {
+            return Err(common::value_out_of_range_error());
+        }
+        self.reliability = reliability;
+        // The caller owns this value; the consistency check leaves it alone.
+        self.owns_configuration_error = false;
+        Ok(())
+    }
+
+    fn evaluate_reliability(&mut self) -> Result<crate::traits::ReliabilityEvaluation, Error> {
+        Ok(self.recompute_reliability())
     }
 }
 
