@@ -179,9 +179,6 @@ pub const QUERIES: &[(&str, Query)] = &[
     ("cov_reported_properties", |o| {
         format!("{:?}", o.cov_reported_properties())
     }),
-    ("schedule_runner", |o| {
-        format!("{:?}", o.schedule_runner().map(address))
-    }),
     ("calendar_state", |o| {
         format!("{:?}", o.calendar_state().map(address))
     }),
@@ -314,11 +311,8 @@ pub const COMMANDS: &[(&str, Command)] = &[
     ("reliability_eval", |o| {
         format!("{:?}", o.reliability_eval().map(|eval| address(eval)))
     }),
-    ("schedule_runner_mut", |o| {
-        format!(
-            "{:?}",
-            o.schedule_runner_mut().map(|runner| address(runner))
-        )
+    ("schedule_runner", |o| {
+        format!("{:?}", o.schedule_runner().map(|runner| address(runner)))
     }),
     ("set_overridden", |o| {
         format!("{:?}", o.set_overridden(true))

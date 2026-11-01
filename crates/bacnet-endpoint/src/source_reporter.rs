@@ -253,12 +253,8 @@ impl BACnetObject for SourceReporter {
         self.wrapped.reliability_eval()
     }
 
-    fn schedule_runner(&self) -> Option<&dyn ScheduleRunner> {
+    fn schedule_runner(&mut self) -> Option<&mut dyn ScheduleRunner> {
         self.wrapped.schedule_runner()
-    }
-
-    fn schedule_runner_mut(&mut self) -> Option<&mut dyn ScheduleRunner> {
-        self.wrapped.schedule_runner_mut()
     }
 
     fn calendar_state(&self) -> Option<&dyn CalendarState> {

@@ -100,7 +100,7 @@ impl BACnetObject for OwingSchedule {
         crate::test_rows::read_only(&[])
     }
 
-    fn schedule_runner_mut(&mut self) -> Option<&mut dyn ScheduleRunner> {
+    fn schedule_runner(&mut self) -> Option<&mut dyn ScheduleRunner> {
         Some(self)
     }
 }

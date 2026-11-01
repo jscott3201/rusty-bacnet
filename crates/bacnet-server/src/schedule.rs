@@ -139,7 +139,7 @@ pub(crate) fn retry_for_created(
 ) {
     for &(schedule, created) in retries {
         let Some(write) = db_w
-            .get(&schedule)
+            .get_mut(&schedule)
             .and_then(|object| object.schedule_runner())
             .and_then(|runner| runner.retry_refusals_naming(created))
         else {
@@ -190,7 +190,7 @@ fn evaluate(db_w: &mut ObjectDatabase, schedules: Vec<ObjectIdentifier>) -> Back
     for oid in schedules {
         let Some(runner) = db_w
             .get_mut(&oid)
-            .and_then(|object| object.schedule_runner_mut())
+            .and_then(|object| object.schedule_runner())
         else {
             continue;
         };
@@ -321,7 +321,7 @@ fn deliver(
     }
     let reliability_changed = db_w
         .get_mut(&initiator)
-        .and_then(|schedule| schedule.schedule_runner_mut())
+        .and_then(|schedule| schedule.schedule_runner())
         .is_some_and(|runner| runner.complete_schedule_write(write, &outcomes));
     if reliability_changed {
         commit.changed(initiator);

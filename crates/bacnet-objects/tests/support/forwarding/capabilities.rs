@@ -392,7 +392,7 @@ pub const CAPABILITY_ROWS: &[(&str, Row)] = &[
         Row::Command(|o| {
             let calendars = |calendar: ObjectIdentifier| calendar.instance_number() == 4;
             let write = o
-                .schedule_runner_mut()
+                .schedule_runner()
                 .map(|r| r.tick_schedule(day(), noon(), &calendars));
             format!("{write:?}")
         }),
@@ -400,9 +400,7 @@ pub const CAPABILITY_ROWS: &[(&str, Row)] = &[
     (
         "ScheduleRunner::take_owed_schedule_writes",
         Row::Command(|o| {
-            let owed = o
-                .schedule_runner_mut()
-                .map(|r| r.take_owed_schedule_writes());
+            let owed = o.schedule_runner().map(|r| r.take_owed_schedule_writes());
             format!("{owed:?}")
         }),
     ),
@@ -411,22 +409,21 @@ pub const CAPABILITY_ROWS: &[(&str, Row)] = &[
         Row::Command(|o| {
             let outcomes = [ScheduleTargetOutcome::DatatypeRefused];
             let changed = o
-                .schedule_runner_mut()
+                .schedule_runner()
                 .map(|r| r.complete_schedule_write(&schedule_write(2), &outcomes));
             format!("{changed:?}")
         }),
     ),
-    // The two queries go through shared accessors, the ones a host lends
-    // while it only borrows the database, so a read-only view runs them as
-    // well.
     (
         "ScheduleRunner::retry_refusals_naming",
-        Row::Query(|o| {
+        Row::Command(|o| {
             let target = oid(ObjectType::ANALOG_VALUE, 9);
             let retry = o.schedule_runner().map(|r| r.retry_refusals_naming(target));
             format!("{retry:?}")
         }),
     ),
+    // Through the shared accessor, the one a host's read guard lends, so a
+    // read-only view runs it as well.
     (
         "CalendarState::state_on",
         Row::Query(|o| format!("{:?}", o.calendar_state().map(|c| c.state_on(day())))),

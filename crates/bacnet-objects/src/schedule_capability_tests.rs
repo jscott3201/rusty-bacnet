@@ -1,10 +1,8 @@
-//! Exactly the Schedule lends `ScheduleRunner`, through both accessors that
-//! lend the same object, and exactly the Calendar lends `CalendarState`
-//! (#2179). A lender dropped from, or added to, the catalogue fails here
-//! until its table changes with it.
+//! Exactly the Schedule lends `ScheduleRunner` and exactly the Calendar
+//! lends `CalendarState` (#2179). A lender dropped from, or added to, the
+//! catalogue fails here until its table changes with it.
 
 use crate::catalogue::representatives;
-use crate::traits::ScheduleRunner;
 use alloc::collections::BTreeSet;
 use bacnet_types::enums::ObjectType;
 
@@ -25,25 +23,14 @@ fn lend_rule(object_type: ObjectType, lenders: &[ObjectType], lends: bool, capab
 }
 
 #[test]
-fn exactly_the_schedule_lends_schedule_runner_through_both_accessors() {
+fn exactly_the_schedule_lends_schedule_runner() {
     let mut seen = BTreeSet::new();
     for mut object in representatives() {
         let object_type = object.object_identifier().object_type();
-        let shared = object
-            .schedule_runner()
-            .map(|runner| (runner as *const dyn ScheduleRunner).cast::<()>());
-        let exclusive = object
-            .schedule_runner_mut()
-            .map(|runner| (runner as *mut dyn ScheduleRunner).cast::<()>());
-        assert_eq!(
-            shared,
-            exclusive.map(|pointer| pointer.cast_const()),
-            "{object_type:?}: the two accessors must lend the same object"
-        );
         lend_rule(
             object_type,
             &SCHEDULE_RUNNER_LENDERS,
-            shared.is_some(),
+            object.schedule_runner().is_some(),
             "ScheduleRunner",
         );
         seen.insert(object_type.to_raw());

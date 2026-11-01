@@ -301,12 +301,8 @@ impl BACnetObject for Probe {
         self.called("reliability_eval", ());
         Some(self)
     }
-    fn schedule_runner(&self) -> Option<&dyn ScheduleRunner> {
+    fn schedule_runner(&mut self) -> Option<&mut dyn ScheduleRunner> {
         self.called("schedule_runner", ());
-        Some(self)
-    }
-    fn schedule_runner_mut(&mut self) -> Option<&mut dyn ScheduleRunner> {
-        self.called("schedule_runner_mut", ());
         Some(self)
     }
     fn calendar_state(&self) -> Option<&dyn CalendarState> {

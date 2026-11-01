@@ -112,15 +112,16 @@ impl ObjectDatabase {
     /// The Schedules holding a refused reference to `oid` that they would
     /// offer their value again (#1440); found by asking each Schedule, not
     /// by evaluating it.
-    fn schedules_refusing(&self, oid: ObjectIdentifier) -> Vec<ObjectIdentifier> {
+    fn schedules_refusing(&mut self, oid: ObjectIdentifier) -> Vec<ObjectIdentifier> {
+        let objects = &mut self.objects;
         self.type_index
             .get(&ObjectType::SCHEDULE)
             .into_iter()
             .flatten()
             .copied()
             .filter(|schedule| {
-                self.objects
-                    .get(schedule)
+                objects
+                    .get_mut(schedule)
                     .and_then(|object| object.schedule_runner())
                     .is_some_and(|runner| runner.retry_refusals_naming(oid).is_some())
             })

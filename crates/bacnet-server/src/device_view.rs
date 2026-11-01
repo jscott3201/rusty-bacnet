@@ -14,7 +14,7 @@ use bacnet_objects::{
     property_metadata::{PropertyConformance, PropertyMetadata, PropertyWriteCapability},
     traits::{
         BACnetObject, CalendarState, CommandRunner, CovReportedProperty, EnrollmentEval,
-        EventReporting, ScheduleRunner,
+        EventReporting,
     },
 };
 use bacnet_types::{
@@ -343,9 +343,6 @@ impl BACnetObject for DeviceReadView<'_> {
     }
     fn cov_reported_properties(&self) -> &'static [CovReportedProperty] {
         self.object.cov_reported_properties()
-    }
-    fn schedule_runner(&self) -> Option<&dyn ScheduleRunner> {
-        self.object.schedule_runner()
     }
     fn calendar_state(&self) -> Option<&dyn CalendarState> {
         self.object.calendar_state()

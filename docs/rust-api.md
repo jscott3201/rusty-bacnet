@@ -4059,15 +4059,16 @@ behaviour, so an object without it writes nothing.
   refuse it with PROPERTY / WRITE_ACCESS_DENIED while Out_Of_Service is TRUE.
   All three default to opting out; `set_reliability` answers
   `not_supported()`.
-- **`schedule_runner()` and `schedule_runner_mut()` → `ScheduleRunner`**,
-  for a Schedule whose writes to its controlled references the server
-  makes. The mutable one serves the schedule pass: `take_owed_schedule_writes`,
-  then `tick_schedule(today, time, calendar_active)`, then
-  `complete_schedule_write(write, outcomes)` for how each target took each
-  write. The shared one serves `retry_refusals_naming(target)`, which the
-  database asks when an object is added. An object lends both or neither;
-  only `tick_schedule` has no default. The built-in `ScheduleObject` lends
-  it (see Schedule & Notification below).
+- **`schedule_runner()` → `ScheduleRunner`**, for a Schedule whose writes
+  to its controlled references the server makes. The schedule pass calls
+  `take_owed_schedule_writes`, then `tick_schedule(today, time,
+  calendar_active)`, then `complete_schedule_write(write, outcomes)` for how
+  each target took each write; while the Device clock is invalid it skips the
+  tick but still sends the owed writes, and `calendar_active` answers `false`
+  for an identifier that names no Calendar. The database asks
+  `retry_refusals_naming(target)` when an object is added. Only
+  `tick_schedule` has no default. The built-in `ScheduleObject` lends it
+  (see Schedule & Notification below).
 
 ```rust,ignore
 use bacnet_objects::traits::{BACnetObject, Clocks, Timed};
@@ -4134,10 +4135,7 @@ let owed = schedule.take_owed_schedule_writes();
 // After: lend the capability and call through it.
 use bacnet_objects::traits::{BACnetObject, ScheduleRunner};
 
-fn schedule_runner(&self) -> Option<&dyn ScheduleRunner> {
-    Some(self)
-}
-fn schedule_runner_mut(&mut self) -> Option<&mut dyn ScheduleRunner> {
+fn schedule_runner(&mut self) -> Option<&mut dyn ScheduleRunner> {
     Some(self)
 }
 
@@ -4152,7 +4150,7 @@ impl ScheduleRunner for MySchedule {
     }
 }
 let owed = schedule
-    .schedule_runner_mut()
+    .schedule_runner()
     .map(|runner| runner.take_owed_schedule_writes())
     .unwrap_or_default();
 ```

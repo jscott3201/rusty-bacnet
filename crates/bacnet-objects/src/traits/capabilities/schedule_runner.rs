@@ -11,13 +11,9 @@ use crate::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 /// A Schedule whose writes to its controlled references the host makes.
 ///
 /// The object returns itself from
-/// [`BACnetObject::schedule_runner_mut`](crate::traits::BACnetObject::schedule_runner_mut)
-/// for a schedule pass, and from
-/// [`schedule_runner`](crate::traits::BACnetObject::schedule_runner) for
-/// the query a host makes while it only borrows the database, whether a
-/// refused reference names an object just added. An object that lends one
-/// lends the other. The built-in [`ScheduleObject`](crate::schedule::ScheduleObject)
-/// lends it.
+/// [`BACnetObject::schedule_runner`](crate::traits::BACnetObject::schedule_runner).
+/// The built-in [`ScheduleObject`](crate::schedule::ScheduleObject) lends
+/// it.
 ///
 /// The bundled server runs a pass every 60 seconds, and again for a
 /// Schedule a write has just changed, under the database's write guard.
@@ -26,13 +22,22 @@ use crate::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 /// [ticks](Self::tick_schedule) it against the Device clock, then writes
 /// each value to every reference at the write's priority and reports how
 /// each target took it through
-/// [`complete_schedule_write`](Self::complete_schedule_write). Every target
-/// is local: a Schedule's references name objects of its own device.
+/// [`complete_schedule_write`](Self::complete_schedule_write). While the
+/// Device clock gives no valid local date and specific time, the pass still
+/// takes and writes the owed writes but skips the tick. Every target is
+/// local: a Schedule's references name objects of its own device. When an
+/// object is added, the database asks each Schedule
+/// [`retry_refusals_naming`](Self::retry_refusals_naming) under its
+/// exclusive borrow.
 pub trait ScheduleRunner {
     /// Evaluate the schedule at `time` on `today` (Clause 12.24.4).
     ///
     /// `calendar_active` answers for a special event whose period
-    /// references a Calendar: whether that Calendar is TRUE on `today`.
+    /// references a Calendar: whether that Calendar is TRUE on `today`. The
+    /// bundled server resolves every Calendar once per pass and answers
+    /// `false` for an identifier that names no Calendar in the database.
+    /// It calls this only while the Device clock gives a valid local date
+    /// and a specific time; the owed writes go out without it.
     /// Returns the write owed when Present_Value changed, the object has
     /// just entered its Effective_Period, or its references or priority
     /// changed since the last write, with the complete local references,
@@ -95,11 +100,7 @@ pub trait ScheduleRunner {
 /// [`ScheduleRunner`], for inside its `BACnetObject` impl.
 macro_rules! lend_schedule_runner {
     () => {
-        fn schedule_runner(&self) -> Option<&dyn $crate::traits::ScheduleRunner> {
-            Some(self)
-        }
-
-        fn schedule_runner_mut(&mut self) -> Option<&mut dyn $crate::traits::ScheduleRunner> {
+        fn schedule_runner(&mut self) -> Option<&mut dyn $crate::traits::ScheduleRunner> {
             Some(self)
         }
     };

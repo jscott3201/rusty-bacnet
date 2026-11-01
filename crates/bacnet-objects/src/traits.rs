@@ -643,23 +643,13 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         None
     }
 
-    /// Borrow a Schedule's runner for the query a host makes while it only
-    /// borrows the database: whether a refused reference names an object
-    /// just added.
-    ///
-    /// The default has none. An object that lends this lends
-    /// [`schedule_runner_mut`](Self::schedule_runner_mut) too. See
-    /// [`ScheduleRunner`].
-    fn schedule_runner(&self) -> Option<&dyn ScheduleRunner> {
-        None
-    }
-
     /// Mutably borrow a Schedule's runner: its evaluation, the writes it
-    /// owes its controlled references, and how the targets took them.
+    /// owes its controlled references, how the targets took them, and the
+    /// retry it owes an object just added.
     ///
     /// The default has none, and the bundled server's schedule pass then
     /// writes nothing for the object. See [`ScheduleRunner`].
-    fn schedule_runner_mut(&mut self) -> Option<&mut dyn ScheduleRunner> {
+    fn schedule_runner(&mut self) -> Option<&mut dyn ScheduleRunner> {
         None
     }
 

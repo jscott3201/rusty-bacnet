@@ -11,7 +11,7 @@ use bacnet_types::primitives::Time;
 /// The wrapped Schedule's runner, through the wrapper's accessor.
 fn runner(object: &mut Box<dyn BACnetObject>) -> &mut dyn ScheduleRunner {
     object
-        .schedule_runner_mut()
+        .schedule_runner()
         .expect("the wrapper lends the Schedule's runner")
 }
 
