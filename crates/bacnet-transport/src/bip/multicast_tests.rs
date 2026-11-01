@@ -11,6 +11,7 @@
 
 use super::ingress::{Arrival as SocketArrival, IngressAddresses, handle_datagram};
 use super::*;
+use crate::port_retry::{bind_error, rerun_on_lost_port};
 use crate::udp_metadata::ReceivedDatagram;
 use bacnet_types::enums::ErrorCode;
 use bacnet_types::error::RemoteError;
@@ -193,7 +194,9 @@ async fn a_member_takes_broadcasts_from_its_group_only() {
     assert!(member_receives(LOCAL, unicast).await.0);
 }
 
-/// A UDP port no socket holds now, for a group.
+/// A UDP port no socket holds now, for a group. Another process can take it
+/// before the members bind it, so the tests that use it run under
+/// [`rerun_on_lost_port`] (#2225).
 #[cfg(any(target_os = "linux", target_vendor = "apple"))]
 fn free_port() -> u16 {
     std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
@@ -201,6 +204,20 @@ fn free_port() -> u16 {
         .local_addr()
         .unwrap()
         .port()
+}
+
+/// A group port another socket holds fails a member's start with an error
+/// [`rerun_on_lost_port`] takes for a lost port, so the tests below rerun
+/// rather than fail when another process takes their group port (#2225).
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
+#[tokio::test]
+async fn a_held_group_port_fails_the_start_as_a_lost_port() {
+    let holder = std::net::UdpSocket::bind((GROUP, 0)).unwrap();
+    let port = holder.local_addr().unwrap().port();
+    let Err(error) = Member::start(group(port)).await else {
+        panic!("a member started on a held group port");
+    };
+    assert!(crate::port_retry::lost_to_another_socket(&error), "{error}");
 }
 
 #[cfg(any(target_os = "linux", target_vendor = "apple"))]
@@ -212,11 +229,12 @@ struct Member {
 #[cfg(any(target_os = "linux", target_vendor = "apple"))]
 impl Member {
     /// A member on 127.0.0.1 at a port the OS picks, in `multicast`'s group.
-    async fn start(multicast: BipMulticast) -> Self {
+    /// A start error is returned for [`rerun_on_lost_port`] to judge.
+    async fn start(multicast: BipMulticast) -> std::io::Result<Self> {
         let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOST);
         transport.set_multicast(Some(multicast)).unwrap();
-        let rx = transport.start().await.unwrap();
-        Self { transport, rx }
+        let rx = transport.start().await.map_err(bind_error)?;
+        Ok(Self { transport, rx })
     }
 
     async fn next(&mut self) -> ReceivedNpdu {
@@ -255,101 +273,109 @@ impl Member {
 #[cfg(any(target_os = "linux", target_vendor = "apple"))]
 #[tokio::test]
 async fn two_members_on_one_host_exchange_who_is_and_i_am_through_the_group() {
-    let multicast = group(free_port());
-    let mut a = Member::start(multicast).await;
-    let mut b = Member::start(multicast).await;
-    assert_ne!(a.transport.local_mac(), b.transport.local_mac());
-    let endpoint = SocketAddrV4::new(GROUP, multicast.port().unwrap());
-    assert_eq!(a.transport.bip_broadcast_endpoint(), Some(endpoint));
+    rerun_on_lost_port(async || {
+        let multicast = group(free_port());
+        let mut a = Member::start(multicast).await?;
+        let mut b = Member::start(multicast).await?;
+        assert_ne!(a.transport.local_mac(), b.transport.local_mac());
+        let endpoint = SocketAddrV4::new(GROUP, multicast.port().unwrap());
+        assert_eq!(a.transport.bip_broadcast_endpoint(), Some(endpoint));
 
-    a.exchange(&mut b).await;
-    for member in [&a, &b] {
-        // Each dropped its own copy of the broadcast it sent.
-        assert_eq!(member.transport.receive_counters().own_echo, 1);
-    }
-    a.transport.stop().await.unwrap();
-    b.transport.stop().await.unwrap();
+        a.exchange(&mut b).await;
+        for member in [&a, &b] {
+            // Each dropped its own copy of the broadcast it sent.
+            assert_eq!(member.transport.receive_counters().own_echo, 1);
+        }
+        a.transport.stop().await.unwrap();
+        b.transport.stop().await.unwrap();
+        Ok(())
+    })
+    .await;
 }
 
 #[cfg(any(target_os = "linux", target_vendor = "apple"))]
 #[tokio::test]
 async fn an_activated_group_moves_the_members_and_zero_ends_multicast() {
-    let port = free_port();
-    let first = group(port);
-    let mut a = Member::start(first).await;
-    let mut b = Member::start(first).await;
-    let views: Vec<_> = [&a, &b]
-        .iter()
-        .map(|member| member.transport.bip_port().unwrap().multicast.unwrap())
-        .collect();
-    assert_eq!(views[0].group(), GROUP.octets());
-    assert!(views[0].can_change());
+    rerun_on_lost_port(async || {
+        let port = free_port();
+        let first = group(port);
+        let mut a = Member::start(first).await?;
+        let mut b = Member::start(first).await?;
+        let views: Vec<_> = [&a, &b]
+            .iter()
+            .map(|member| member.transport.bip_port().unwrap().multicast.unwrap())
+            .collect();
+        assert_eq!(views[0].group(), GROUP.octets());
+        assert!(views[0].can_change());
 
-    // Not a group: refused at check and activation alike.
-    let out_of_range = error_code(views[0].check([10, 0, 0, 1]).unwrap_err());
-    assert_eq!(out_of_range, ErrorCode::VALUE_OUT_OF_RANGE);
-    assert_eq!(
-        error_code(views[0].activate([10, 0, 0, 1]).unwrap_err()),
-        ErrorCode::VALUE_OUT_OF_RANGE
-    );
-    // Nor is the local network control block.
-    assert_eq!(
-        error_code(views[0].check([224, 0, 0, 1]).unwrap_err()),
-        ErrorCode::VALUE_OUT_OF_RANGE
-    );
+        // Not a group: refused at check and activation alike.
+        let out_of_range = error_code(views[0].check([10, 0, 0, 1]).unwrap_err());
+        assert_eq!(out_of_range, ErrorCode::VALUE_OUT_OF_RANGE);
+        assert_eq!(
+            error_code(views[0].activate([10, 0, 0, 1]).unwrap_err()),
+            ErrorCode::VALUE_OUT_OF_RANGE
+        );
+        // Nor is the local network control block.
+        assert_eq!(
+            error_code(views[0].check([224, 0, 0, 1]).unwrap_err()),
+            ErrorCode::VALUE_OUT_OF_RANGE
+        );
 
-    let moved = Ipv4Addr::new(239, 255, 94, 3);
-    // A listener that fails to open fails the activation, and nothing
-    // changes: the old group stays in use.
-    a.transport
-        .multicast
-        .fail_next_listener
-        .store(true, std::sync::atomic::Ordering::Relaxed);
-    assert!(matches!(
-        views[0].activate(moved.octets()),
-        Err(Error::Transport(_))
-    ));
-    assert_eq!(views[0].group(), GROUP.octets());
-    assert_eq!(
-        a.transport.bip_broadcast_endpoint(),
-        Some(SocketAddrV4::new(GROUP, port))
-    );
-    a.exchange(&mut b).await;
+        let moved = Ipv4Addr::new(239, 255, 94, 3);
+        // A listener that fails to open fails the activation, and nothing
+        // changes: the old group stays in use.
+        a.transport
+            .multicast
+            .fail_next_listener
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(matches!(
+            views[0].activate(moved.octets()),
+            Err(Error::Transport(_))
+        ));
+        assert_eq!(views[0].group(), GROUP.octets());
+        assert_eq!(
+            a.transport.bip_broadcast_endpoint(),
+            Some(SocketAddrV4::new(GROUP, port))
+        );
+        a.exchange(&mut b).await;
 
-    for view in &views {
-        view.check(moved.octets()).unwrap();
-        view.activate(moved.octets()).unwrap();
-        assert_eq!(view.group(), moved.octets());
-    }
-    let endpoint = SocketAddrV4::new(moved, port);
-    assert_eq!(a.transport.bip_broadcast_endpoint(), Some(endpoint));
-    assert_eq!(a.transport.multicast().map(|m| m.group()), Some(moved));
-    a.exchange(&mut b).await;
+        for view in &views {
+            view.check(moved.octets()).unwrap();
+            view.activate(moved.octets()).unwrap();
+            assert_eq!(view.group(), moved.octets());
+        }
+        let endpoint = SocketAddrV4::new(moved, port);
+        assert_eq!(a.transport.bip_broadcast_endpoint(), Some(endpoint));
+        assert_eq!(a.transport.multicast().map(|m| m.group()), Some(moved));
+        a.exchange(&mut b).await;
 
-    // Off: broadcasts go to the configured broadcast address again.
-    views[0].activate([0; 4]).unwrap();
-    assert_eq!(views[0].group(), [0; 4]);
-    assert_eq!(a.transport.multicast(), None);
-    let local_port = a.transport.bip_port().unwrap().endpoint.port();
-    assert_eq!(
-        a.transport.bip_broadcast_endpoint(),
-        Some(SocketAddrV4::new(Ipv4Addr::LOCALHOST, local_port))
-    );
-    b.transport.send_broadcast(I_AM).await.unwrap();
-    a.hears_nothing().await;
+        // Off: broadcasts go to the configured broadcast address again.
+        views[0].activate([0; 4]).unwrap();
+        assert_eq!(views[0].group(), [0; 4]);
+        assert_eq!(a.transport.multicast(), None);
+        let local_port = a.transport.bip_port().unwrap().endpoint.port();
+        assert_eq!(
+            a.transport.bip_broadcast_endpoint(),
+            Some(SocketAddrV4::new(Ipv4Addr::LOCALHOST, local_port))
+        );
+        b.transport.send_broadcast(I_AM).await.unwrap();
+        a.hears_nothing().await;
 
-    a.transport.stop().await.unwrap();
-    b.transport.stop().await.unwrap();
-    // A stopped transport takes no change.
-    assert_eq!(
-        error_code(views[1].check(GROUP.octets()).unwrap_err()),
-        ErrorCode::WRITE_ACCESS_DENIED
-    );
-    // A restart keeps the group activated last.
-    let rx = b.transport.start().await.unwrap();
-    drop(rx);
-    assert_eq!(b.transport.multicast().map(|m| m.group()), Some(moved));
-    b.transport.stop().await.unwrap();
+        a.transport.stop().await.unwrap();
+        b.transport.stop().await.unwrap();
+        // A stopped transport takes no change.
+        assert_eq!(
+            error_code(views[1].check(GROUP.octets()).unwrap_err()),
+            ErrorCode::WRITE_ACCESS_DENIED
+        );
+        // A restart keeps the group activated last.
+        let rx = b.transport.start().await.map_err(bind_error)?;
+        drop(rx);
+        assert_eq!(b.transport.multicast().map(|m| m.group()), Some(moved));
+        b.transport.stop().await.unwrap();
+        Ok(())
+    })
+    .await;
 }
 
 #[test]
