@@ -29,7 +29,9 @@ use windows_sys::Win32::Security::{
     PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CREATE_NEW, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_LIST_DIRECTORY,
+    CREATE_NEW, CreateFileW, DELETE, FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY, FILE_ATTRIBUTE_NORMAL,
+    FILE_DELETE_CHILD, FILE_LIST_DIRECTORY, FILE_WRITE_ATTRIBUTES, FILE_WRITE_EA, WRITE_DAC,
+    WRITE_OWNER,
 };
 use windows_sys::Win32::System::Pipes::{GetNamedPipeClientProcessId, GetNamedPipeServerProcessId};
 use windows_sys::Win32::System::Threading::{
@@ -354,26 +356,39 @@ pub(super) fn owner_of(handle: &impl AsRawHandle) -> io::Result<Sid> {
 
 /// An entry of an access or label list.
 #[derive(Debug)]
-struct Ace {
+pub(super) struct Ace {
     /// Allowed, denied, audit, label, or a kind with another layout.
-    kind: u8,
+    pub(super) kind: u8,
     /// Its inheritance flags.
-    flags: u8,
-    mask: u32,
-    /// Its SID, for the kinds laid out as a header, a mask and a SID.
-    sid: Option<Sid>,
+    pub(super) flags: u8,
+    /// Its mask and SID, for the kinds laid out as a header, a mask and a
+    /// SID ([`laid_out_plainly`]); none for other kinds.
+    pub(super) mask: Option<u32>,
+    pub(super) sid: Option<Sid>,
 }
 
-/// The entry kinds this module reads: allowed and denied.
-const ALLOWED: u8 = 0;
-const DENIED: u8 = 1;
+/// The entry kinds this module tells apart.
+pub(super) const ACCESS_ALLOWED: u8 = 0;
+pub(super) const ACCESS_DENIED: u8 = 1;
+const SYSTEM_AUDIT: u8 = 2;
+const SYSTEM_MANDATORY_LABEL: u8 = 0x11;
 
-/// The entries of `list`, which points into a live descriptor.
+/// Whether entries of `kind` are a header, a mask and then a SID.
+fn laid_out_plainly(kind: u8) -> bool {
+    matches!(
+        kind,
+        ACCESS_ALLOWED | ACCESS_DENIED | SYSTEM_AUDIT | SYSTEM_MANDATORY_LABEL
+    )
+}
+
+/// The entries of `list`, which points into a live descriptor. Each
+/// entry must lie within the list's bytes in use, and an entry's SID
+/// within the entry; one that doesn't is an error.
 ///
 /// # Safety
 ///
 /// `list` must be null or point at a valid ACL that stays alive for the
-/// call.
+/// call, its `AclBytesInUse` bytes readable.
 unsafe fn entries(list: *mut ACL) -> io::Result<Vec<Ace>> {
     if list.is_null() {
         return Ok(Vec::new());
@@ -396,6 +411,11 @@ unsafe fn entries(list: *mut ACL) -> io::Result<Vec<Ace>> {
     if ok == 0 {
         return Err(io::Error::last_os_error());
     }
+    let malformed = || io::Error::other("a malformed access list entry");
+    let start = list as usize;
+    let end = start.saturating_add(size.AclBytesInUse as usize);
+    let mask_at = std::mem::offset_of!(ACCESS_ALLOWED_ACE, Mask);
+    let sid_at = std::mem::offset_of!(ACCESS_ALLOWED_ACE, SidStart);
     let mut found = Vec::new();
     for index in 0..size.AceCount {
         let mut ace = ptr::null_mut();
@@ -403,24 +423,47 @@ unsafe fn entries(list: *mut ACL) -> io::Result<Vec<Ace>> {
         if unsafe { GetAce(list, index, &raw mut ace) } == 0 {
             return Err(io::Error::last_os_error());
         }
-        // SAFETY: an entry of the live list, which starts with a header.
-        let header = unsafe { *ace.cast::<ACE_HEADER>() };
-        // Allowed, denied, audit and mandatory label entries are a header,
-        // a mask and then their SID; other kinds are laid out otherwise.
-        let sid = matches!(header.AceType, 0 | 1 | 2 | 0x11);
-        // SAFETY: an entry of the live list of one of those kinds, so the
-        // ACCESS_ALLOWED_ACE layout holds; its SID lies within it.
-        let entry = unsafe {
-            let ace = ace.cast::<ACCESS_ALLOWED_ACE>();
-            let start = (&raw const (*ace).SidStart).cast_mut().cast();
-            Ace {
-                kind: header.AceType,
-                flags: header.AceFlags,
-                mask: (*ace).Mask,
-                sid: if sid { Some(copy_sid(start)?) } else { None },
+        let at = ace as usize;
+        if at < start + size_of::<ACL>() || at.saturating_add(size_of::<ACE_HEADER>()) > end {
+            return Err(malformed());
+        }
+        // SAFETY: the header's bytes lie within the list's bytes in use
+        // (checked), which the caller promises are readable.
+        let header = unsafe { ptr::read_unaligned(ace.cast::<ACE_HEADER>()) };
+        let length = usize::from(header.AceSize);
+        if length < size_of::<ACE_HEADER>() || at.saturating_add(length) > end {
+            return Err(malformed());
+        }
+        let (mask, sid) = if laid_out_plainly(header.AceType) {
+            // A SID is 8 bytes and then 4 per sub-authority, whose count
+            // is its second byte.
+            if length < sid_at + 8 {
+                return Err(malformed());
             }
+            // SAFETY: the mask and the SID's first 8 bytes lie within the
+            // entry (checked), and so within the list's bytes in use.
+            let (mask, count) = unsafe {
+                (
+                    ptr::read_unaligned(ace.cast::<u8>().add(mask_at).cast::<u32>()),
+                    usize::from(*ace.cast::<u8>().add(sid_at + 1)),
+                )
+            };
+            if length < sid_at + 8 + 4 * count {
+                return Err(malformed());
+            }
+            // SAFETY: the whole SID, as long as its count says, lies
+            // within the entry (checked); `copy_sid` reads no further.
+            let sid = unsafe { copy_sid(ace.cast::<u8>().add(sid_at).cast())? };
+            (Some(mask), Some(sid))
+        } else {
+            (None, None)
         };
-        found.push(entry);
+        found.push(Ace {
+            kind: header.AceType,
+            flags: header.AceFlags,
+            mask,
+            sid,
+        });
     }
     Ok(found)
 }
@@ -443,68 +486,132 @@ fn file_security(handle: &impl AsRawHandle) -> io::Result<(Sid, Vec<Ace>)> {
     Ok(found)
 }
 
-/// Who an entry names, for an error.
-fn named(ace: &Ace) -> String {
-    ace.sid
-        .as_ref()
-        .map_or_else(|| format!("an entry of kind {}", ace.kind), Sid::to_string)
-}
-
-/// Whether the file `file` (the pipe's salt) is owned by `own` and its
-/// access list allows nobody else anything; deny entries change nothing.
-pub(super) fn check_private_file(file: &File, own: &Sid) -> io::Result<()> {
-    let (owner, list) = file_security(file)?;
-    if owner != *own {
-        return Err(io::Error::other(format!("it is owned by {owner}")));
-    }
-    match list
-        .iter()
-        .find(|ace| ace.kind != DENIED && !(ace.kind == ALLOWED && ace.sid.as_ref() == Some(own)))
-    {
-        Some(ace) => Err(io::Error::other(format!(
-            "its access list has an entry for {}",
-            named(ace)
-        ))),
-        None => Ok(()),
-    }
-}
-
 /// The local SYSTEM account (S-1-5-18) and the local Administrators group
 /// (S-1-5-32-544): they may read anything anyway, through their
-/// privileges, so a directory that grants them reading is still private.
+/// privileges, so a file or directory open to them is still private.
 const SYSTEM: [u8; 12] = [1, 1, 0, 0, 0, 0, 0, 5, 18, 0, 0, 0];
 const ADMINISTRATORS: [u8; 16] = [1, 2, 0, 0, 0, 0, 0, 5, 32, 0, 0, 0, 0x20, 0x02, 0, 0];
 
-/// What lets a holder list a directory.
-const READS: u32 = FILE_LIST_DIRECTORY | GENERIC_READ | GENERIC_ALL;
+/// Whether `sid` is `own`, SYSTEM or the Administrators group.
+fn trusted(sid: &Sid, own: &Sid) -> bool {
+    sid == own || sid.0 == SYSTEM || sid.0 == ADMINISTRATORS
+}
 
-/// Whether the workspace `dir` lets anyone but `own`, SYSTEM and the
-/// Administrators group list it. An entry that only passes to what the
-/// directory holds, or denies, changes nothing; one of a kind this module
+/// A SID for a message, with its well-known name where it has one.
+fn shown(sid: &Sid) -> String {
+    let plain = sid.to_string();
+    let name = match plain.as_str() {
+        "S-1-1-0" => "Everyone",
+        "S-1-5-7" => "Anonymous Logon",
+        "S-1-5-11" => "Authenticated Users",
+        "S-1-5-18" => "SYSTEM",
+        "S-1-5-32-544" => "Administrators",
+        "S-1-5-32-545" => "Users",
+        "S-1-3-0" => "CREATOR OWNER",
+        "S-1-3-4" => "OWNER RIGHTS",
+        _ => return plain,
+    };
+    format!("{name} ({plain})")
+}
+
+/// Who an entry names, for a message.
+fn named(ace: &Ace) -> String {
+    ace.sid
+        .as_ref()
+        .map_or_else(|| format!("an entry of kind {}", ace.kind), shown)
+}
+
+/// The salt file's owner and access list must be `own`'s: owned by it,
+/// and allowing nobody but it, SYSTEM and the Administrators group
+/// anything. Deny entries change nothing; an entry of a kind this module
 /// can't read is taken as a grant.
-pub(super) fn check_private_dir(dir: &Path, own: &Sid) -> io::Result<()> {
-    use std::os::windows::fs::OpenOptionsExt as _;
-    use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_BACKUP_SEMANTICS, READ_CONTROL};
-    let handle = std::fs::OpenOptions::new()
-        .access_mode(READ_CONTROL)
-        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
-        .open(dir)?;
-    let (_, list) = file_security(&handle)?;
-    let trusted = |sid: &Sid| sid == own || sid.0 == SYSTEM || sid.0 == ADMINISTRATORS;
-    let reader = list.iter().find(|ace| {
-        let applies = u32::from(ace.flags) & INHERIT_ONLY_ACE == 0;
-        let harmless = ace.kind == DENIED
-            || (ace.kind == ALLOWED
-                && (ace.mask & READS == 0 || ace.sid.as_ref().is_some_and(trusted)));
-        applies && !harmless
-    });
-    match reader {
-        Some(ace) => Err(io::Error::other(format!(
-            "its access list lets {} read it",
-            named(ace)
-        ))),
+pub(super) fn private_file(owner: &Sid, list: &[Ace], own: &Sid) -> Result<(), String> {
+    if owner != own {
+        return Err(format!("it is owned by {}", shown(owner)));
+    }
+    let harmless = |ace: &&Ace| {
+        ace.kind == ACCESS_DENIED
+            || (ace.kind == ACCESS_ALLOWED && ace.sid.as_ref().is_some_and(|s| trusted(s, own)))
+    };
+    match list.iter().find(|ace| !harmless(ace)) {
+        Some(ace) => Err(format!("its access list has an entry for {}", named(ace))),
         None => Ok(()),
     }
+}
+
+/// Whether the file `file` (the pipe's salt) passes [`private_file`].
+pub(super) fn check_private_file(file: &File, own: &Sid) -> io::Result<()> {
+    let (owner, list) = file_security(file)?;
+    private_file(&owner, &list, own).map_err(io::Error::other)
+}
+
+/// What no one but the user, SYSTEM and the Administrators group may do
+/// to the workspace: list it, add to it, delete in it, change its
+/// attributes, delete it, or change its access list or owner.
+pub(super) const FORBIDDEN: u32 = FILE_LIST_DIRECTORY
+    | FILE_ADD_FILE
+    | FILE_ADD_SUBDIRECTORY
+    | FILE_WRITE_EA
+    | FILE_DELETE_CHILD
+    | FILE_WRITE_ATTRIBUTES
+    | DELETE
+    | WRITE_DAC
+    | WRITE_OWNER
+    | GENERIC_READ
+    | GENERIC_WRITE
+    | GENERIC_ALL;
+
+/// The workspace's owner and access list must keep others out: owned by
+/// `own`, SYSTEM or the Administrators group, and granting nobody else
+/// any of [`FORBIDDEN`]. An entry that only passes to what the directory
+/// holds, or denies, changes nothing; one of a kind this module can't
+/// read is taken as a grant. The message completes "the workspace …".
+pub(super) fn private_dir(owner: &Sid, list: &[Ace], own: &Sid) -> Result<(), String> {
+    if !trusted(owner, own) {
+        return Err(format!("is owned by {}", shown(owner)));
+    }
+    let open = list.iter().find(|ace| {
+        let applies = u32::from(ace.flags) & INHERIT_ONLY_ACE == 0;
+        let harmless = ace.kind == ACCESS_DENIED
+            || (ace.kind == ACCESS_ALLOWED
+                && (ace.mask.is_some_and(|m| m & FORBIDDEN == 0)
+                    || ace.sid.as_ref().is_some_and(|s| trusted(s, own))));
+        applies && !harmless
+    });
+    match open {
+        Some(ace) => Err(format!(
+            "is open to other users: its access list lets {} list or change it",
+            named(ace)
+        )),
+        None => Ok(()),
+    }
+}
+
+/// Whether the workspace `dir` passes [`private_dir`] and is a plain
+/// directory, not a junction or symbolic link (it is opened as itself).
+pub(super) fn check_private_dir(dir: &Path, own: &Sid) -> Result<(), String> {
+    use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        READ_CONTROL,
+    };
+    let handle = std::fs::OpenOptions::new()
+        .access_mode(READ_CONTROL)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(dir)
+        .map_err(|e| format!("can't be opened: {e}"))?;
+    let metadata = handle
+        .metadata()
+        .map_err(|e| format!("can't be inspected: {e}"))?;
+    if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err("is a junction or symbolic link".into());
+    }
+    if !metadata.is_dir() {
+        return Err("is not a directory".into());
+    }
+    let (owner, list) =
+        file_security(&handle).map_err(|e| format!("has an unreadable descriptor: {e}"))?;
+    private_dir(&owner, &list, own)
 }
 
 /// An access or label entry: its type, mask and SID.
@@ -537,7 +644,7 @@ pub(crate) fn security_of(handle: &impl AsRawHandle) -> io::Result<Security> {
                 let sid = ace
                     .sid
                     .ok_or_else(|| io::Error::other("an entry with no SID"))?;
-                Ok((ace.kind, ace.mask, sid))
+                Ok((ace.kind, ace.mask.unwrap_or_default(), sid))
             })
             .collect()
     };
@@ -571,3 +678,7 @@ pub(crate) fn create_dir(path: &Path, descriptor: &Descriptor) -> io::Result<()>
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "win32_tests.rs"]
+mod tests;

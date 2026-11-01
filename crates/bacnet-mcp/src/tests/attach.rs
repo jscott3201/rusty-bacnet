@@ -23,13 +23,37 @@ use crate::{McpServer, Policy};
 
 const AI1: &str = "bacnet://device/1201/object/analog-input:1";
 
-/// A workspace directory nobody else can enter (on Windows, a user's
-/// temporary directory already is).
-pub(super) fn private_dir() -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
+/// A workspace directory nobody else can enter: mode 0700 on Unix, and
+/// on Windows a directory made with an access list for the test's user
+/// alone, so the tests don't depend on the temporary directory's.
+pub(super) struct PrivateDir {
+    _root: tempfile::TempDir,
+    path: std::path::PathBuf,
+}
+
+impl PrivateDir {
+    pub(super) fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+/// A new [`PrivateDir`].
+pub(super) fn private_dir() -> PrivateDir {
+    let root = tempfile::tempdir().unwrap();
     #[cfg(unix)]
-    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-    dir
+    let path = {
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        root.path().to_path_buf()
+    };
+    #[cfg(windows)]
+    let path = {
+        let own = attach::own_sid().unwrap();
+        let sddl = format!("D:P(A;OICI;FA;;;{own})");
+        let path = root.path().join("workspace");
+        attach::create_dir(&path, &attach::Descriptor::from_sddl(&sddl).unwrap()).unwrap();
+        path
+    };
+    PrivateDir { _root: root, path }
 }
 
 /// A plain connection to the listener at `path`, as an agent's host

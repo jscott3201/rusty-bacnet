@@ -10,7 +10,9 @@
 //! whole under a temporary name and then linked into place, which fails
 //! when the file exists already, so two TUIs starting at once agree on
 //! the one that got there first. A file that is short, long, not a plain
-//! file or open to anyone else is refused, never made anew.
+//! file, or open to anyone but this user (and, on Windows, SYSTEM and the
+//! Administrators group, who may read anything anyway) is refused, never
+//! made anew.
 //!
 //! The pipe is Windows only; the file's handling builds on Unix too, for
 //! its tests, with a 0600 mode standing in for the owner-only descriptor.
@@ -77,7 +79,7 @@ pub(crate) fn pipe_name(salt: &Salt, dir: &Path) -> PathBuf {
 }
 
 /// The workspace `dir`'s salt, checked: the file must be a plain file,
-/// owned by this user and readable by nobody else, and hold exactly
+/// owned by this user and open to nobody else (see the module), and hold exactly
 /// [`SALT_LEN`] bytes.
 pub(crate) fn load(dir: &Path) -> Result<Salt, SaltError> {
     let path = dir.join(SALT_FILE);
@@ -149,7 +151,15 @@ fn create(dir: &Path) -> Result<Salt, SaltError> {
     }
     match linked {
         Ok(()) => Ok(Salt(salt)),
-        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => load(dir),
+        // The race's loser takes the winner's salt; that one gone again
+        // means another process removed it.
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => match load(dir) {
+            Err(SaltError::Missing(path)) => Err(SaltError::Refused(format!(
+                "{} was removed as this TUI started, by another process; not listening",
+                path.display()
+            ))),
+            loaded => loaded,
+        },
         Err(e) => Err(SaltError::Refused(format!(
             "cannot make {}: {e}",
             path.display()
@@ -186,7 +196,7 @@ mod platform {
     }
 
     /// Whether `file` is owned by this user and its access list grants
-    /// nobody else.
+    /// nobody else but SYSTEM and the Administrators group.
     pub(super) fn check_private(file: &File) -> io::Result<()> {
         win32::check_private_file(file, &win32::own_sid()?)
     }
