@@ -53,19 +53,37 @@ pub fn decode_priority_date_time(
     data: &[u8],
     offset: usize,
 ) -> Result<((Date, Time), usize), Error> {
-    const WHAT: &str = "BACnetPriorityValue datetime";
+    decode_framed_date_time(
+        data,
+        offset,
+        PRIORITY_DATE_TIME_TAG,
+        "BACnetPriorityValue datetime",
+    )
+}
+
+/// Decode a BACnetDateTime framed in opening and closing context tag `tag`
+/// at `offset`: the Date, the Time and the offset past the closing tag. The
+/// date-time choices of BACnetPriorityValue and of
+/// BACnetTimerStateChangeValue share it.
+pub(crate) fn decode_framed_date_time(
+    data: &[u8],
+    offset: usize,
+    tag_number: u8,
+    what: &'static str,
+) -> Result<((Date, Time), usize), Error> {
     let (tag, after) = tags::decode_tag(data, offset)?;
-    if !tag.is_opening_tag(PRIORITY_DATE_TIME_TAG) {
+    if !tag.is_opening_tag(tag_number) {
         return Err(DecodeError::new(
-            misplaced_kind(data, offset, &tag, Some(PRIORITY_DATE_TIME_TAG)),
+            misplaced_kind(data, offset, &tag, Some(tag_number)),
             offset,
-            "expected opening tag 1 for a BACnetPriorityValue datetime",
+            "expected an opening tag for a datetime",
         )
+        .within(what)
         .into());
     }
-    let (date, date_end) = tagged::decode_app_fixed(data, after, app_tag::DATE, 4, WHAT)?;
-    let (time, time_end) = tagged::decode_app_fixed(data, date_end, app_tag::TIME, 4, WHAT)?;
-    let end = tagged::expect_closing(data, time_end, PRIORITY_DATE_TIME_TAG, WHAT)?;
+    let (date, date_end) = tagged::decode_app_fixed(data, after, app_tag::DATE, 4, what)?;
+    let (time, time_end) = tagged::decode_app_fixed(data, date_end, app_tag::TIME, 4, what)?;
+    let end = tagged::expect_closing(data, time_end, tag_number, what)?;
     Ok(((Date::decode(date)?, Time::decode(time)?), end))
 }
 
