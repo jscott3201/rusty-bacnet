@@ -114,7 +114,7 @@ fn rpm_device_property_metadata_pics_and_database_are_exact() {
             let listed: Vec<_> = all
                 .iter()
                 .copied()
-                .filter(|&p| bacnet_objects::property_metadata::is_listed(p))
+                .filter(|&p| bacnet_objects::property_metadata::in_property_list(p))
                 .collect();
             assert_eq!(
                 bacnet_objects::property_metadata::property_list(&rows).collect::<Vec<_>>(),

@@ -271,9 +271,10 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// the bundled server reads them for property presence,
     /// ReadPropertyMultiple's ALL, REQUIRED and OPTIONAL, the indexed-write
     /// gate and the PICS. A property missing from the rows is absent to all
-    /// of those, whatever `read_property` answers. Every built-in object type supplies rows, and a custom object
-    /// supplies its own. The smallest honest set is the universal rows plus
-    /// one for each property the object serves:
+    /// of those, whatever `read_property` answers. Every built-in object
+    /// type supplies rows, and a custom object supplies its own. The
+    /// smallest honest set is the universal rows plus one for each property
+    /// the object serves:
     ///
     /// ```
     /// use std::borrow::Cow;

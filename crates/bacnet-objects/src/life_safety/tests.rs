@@ -741,10 +741,11 @@ fn life_safety_property_metadata_drives_required_sets() {
         crate::property_metadata::required_properties(&point.property_metadata())
             .any(|required| required == PropertyIdentifier::PROPERTY_LIST)
     );
-    assert!(
-        !crate::test_rows::listed(&point.property_metadata())
-            .contains(&PropertyIdentifier::PROPERTY_LIST)
-    );
+    // The row stays; only the served list leaves it out.
+    assert!(crate::property_metadata::has_property(
+        &point.property_metadata(),
+        PropertyIdentifier::PROPERTY_LIST
+    ));
     let zone = LifeSafetyZoneObject::new(1, "LSZ-1").unwrap();
     assert!(matches!(zone.property_metadata(), Cow::Borrowed(_)));
     assert_eq!(zone.property_metadata().len(), 17);
@@ -756,8 +757,9 @@ fn life_safety_property_metadata_drives_required_sets() {
         crate::property_metadata::required_properties(&zone.property_metadata())
             .any(|required| required == PropertyIdentifier::PROPERTY_LIST)
     );
-    assert!(
-        !crate::test_rows::listed(&zone.property_metadata())
-            .contains(&PropertyIdentifier::PROPERTY_LIST)
-    );
+    // The row stays; only the served list leaves it out.
+    assert!(crate::property_metadata::has_property(
+        &zone.property_metadata(),
+        PropertyIdentifier::PROPERTY_LIST
+    ));
 }

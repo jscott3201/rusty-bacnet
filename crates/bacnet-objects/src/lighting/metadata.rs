@@ -14,12 +14,13 @@ use crate::property_metadata::{
 // Canonical effective rows for the Lighting duo (ASHRAE 135-2020; PDF = printed + 2):
 // - Lighting Output (type 54, §12.54 Table 12-64; printed pp. 518-519 / PDF pp. 520-521)
 // - Binary Lighting Output (type 55, §12.55 Table 12-69; printed pp. 532-533 / PDF pp. 534-535)
-// Order preserves each legacy projection; DEFAULT_FADE_TIME (once readable
+// Order preserves each type's earlier row order; DEFAULT_FADE_TIME (once
+// readable
 // but unlisted) is appended after the Lighting Output legacy rows (Lift
 // FLOOR_NUMBER precedent), followed by the rows #1092 added
 // (Default_Ramp_Rate, Default_Step_Increment, then Current_Command_Priority
-// on both objects), and PROPERTY_LIST is appended so the projection helper
-// omits it while required_properties keeps it. Only implemented rows are
+// on both objects), and PROPERTY_LIST is appended last. Only implemented
+// rows are
 // described: table rows the objects do not serve (Lighting Output
 // Transition, Feedback_Value, Power, Instantaneous_Power,
 // Min/Max_Actual_Value, Command_Time_Array, event/intrinsic/audit rows;

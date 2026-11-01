@@ -10,9 +10,9 @@ use crate::property_metadata::{
 };
 
 // Canonical effective rows for Averaging (type 18, Clause 12.5 Table 12-5).
-// Order preserves the legacy projection, with the window rows after
-// Object_Property_Reference as in the table; PROPERTY_LIST is appended so the
-// projection helper omits it while required_properties keeps it. Only
+// Order preserves the earlier row order, with the window rows after
+// Object_Property_Reference as in the table; PROPERTY_LIST is appended
+// last. Only
 // implemented rows are described: table rows the object does not serve
 // (timestamps, Variance_Value, audit, tags, profile rows) stay absent until
 // dispatch exists. Attempted_Samples, Window_Interval and Window_Samples carry

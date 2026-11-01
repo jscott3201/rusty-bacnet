@@ -634,10 +634,8 @@ fn audit_reporter_network_writes_to_new_properties_are_denied_without_mutation()
 fn audit_reporter_description_write_and_metadata_remain_compatible() {
     let mut reporter = AuditReporterObject::new(1, "AR-1").unwrap();
     assert!(reporter.is_writable_property(PropertyIdentifier::DESCRIPTION));
-    for property in crate::test_rows::listed(&reporter.property_metadata())
-        .iter()
-        .copied()
-    {
+    let rows = reporter.property_metadata().into_owned();
+    for property in rows.iter().map(|row| row.property_identifier) {
         assert_eq!(
             reporter.is_writable_property(property),
             property == PropertyIdentifier::DESCRIPTION

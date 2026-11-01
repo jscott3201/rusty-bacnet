@@ -12,8 +12,7 @@ use crate::property_metadata::{
 // Canonical effective rows for the Accumulator (type 23, ASHRAE 135-2020
 // §12.61 Table 12-79; printed pp. 601-609 / PDF pp. 603-611). The Pulse
 // Converter keeps its own rows in pulse_converter/metadata.rs.
-// Order preserves the legacy projection; PROPERTY_LIST is appended so the
-// projection helper omits it while required_properties keeps it. Only
+// Order preserves the earlier row order; PROPERTY_LIST is appended last. Only
 // implemented rows are described: table rows the object does not serve
 // (Device_Type, Value_Change_Time, Logging_Record, Logging_Object,
 // High/Limit rows, Limit_Enable, event/intrinsic/audit/tag/profile rows) stay

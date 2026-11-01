@@ -152,10 +152,11 @@ fn device_eight_masks_compose_with_clock_segmentation_cov_and_audit_metadata() {
                             &crate::test_rows::listed(&object.property_metadata())[list.len()..],
                             expected
                         );
-                        assert!(
-                            !crate::test_rows::listed(&object.property_metadata())
-                                .contains(&P::PROPERTY_LIST)
-                        );
+                        // The row stays; only the served list leaves it out.
+                        assert!(crate::property_metadata::has_property(
+                            &object.property_metadata(),
+                            P::PROPERTY_LIST
+                        ));
                         assert!(!crate::property_metadata::has_property(
                             &object.property_metadata(),
                             P::DEPLOYED_PROFILE_LOCATION

@@ -11,9 +11,8 @@ use crate::property_metadata::{
 use super::AuditLogObject;
 
 // Canonical effective rows for Audit Log (type 61, Clause 12.64 Table 12-83).
-// Order preserves the legacy property_list projection, with Log_Buffer in its
-// table position after Buffer_Size; PROPERTY_LIST is appended so the
-// projection helper omits it while required_properties keeps it. Only
+// Order preserves the earlier row order, with Log_Buffer in its
+// table position after Buffer_Size; PROPERTY_LIST is appended last. Only
 // implemented rows are described: table rows the object does not serve
 // (intrinsic-reporting, Audit_Level, Tags, Profile_*) stay absent until
 // dispatch exists. Log_Buffer is present but served only by ReadRange and

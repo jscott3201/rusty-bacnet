@@ -67,6 +67,6 @@ pub(crate) fn listed_from(properties: &[P]) -> Vec<P> {
     properties
         .iter()
         .copied()
-        .filter(|&property| crate::property_metadata::is_listed(property))
+        .filter(|&property| crate::property_metadata::in_property_list(property))
         .collect()
 }

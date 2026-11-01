@@ -13,8 +13,8 @@ use crate::property_metadata::{
 // - Group (type 11, §12.14 Table 12-17; printed pp. 243-244 / PDF pp. 245-246)
 // - GlobalGroup (type 26, §12.50 Table 12-57; printed pp. 490-492 / PDF pp. 492-494)
 // - StructuredView (type 29, §12.29 Table 12-34; printed p. 351 / PDF pp. 353-355)
-// Order preserves each legacy projection; PROPERTY_LIST is appended. The
-// served list omits it while required_properties keeps it. Only
+// Order preserves each type's earlier row order; PROPERTY_LIST is appended
+// last. Only
 // implemented rows are described: table rows the objects do not serve (Group
 // audit/tag/profile rows; GlobalGroup intrinsic-reporting, COVU, audit, tag
 // and profile rows; StructuredView subordinate tags/relationships rows) stay

@@ -256,10 +256,10 @@ pub(crate) const COV_INCREMENT_ROW: PropertyMetadata = PropertyMetadata::new(
 
 /// Whether `property` belongs in an object's Property_List.
 ///
-/// Clause 12.1.1.4.1 leaves four properties out of the array: Object_Identifier,
-/// Object_Name, Object_Type and Property_List itself. Every other row is
-/// listed.
-pub const fn is_listed(property: PropertyIdentifier) -> bool {
+/// Clause 12.1.1.4.1 leaves four properties out of the array:
+/// Object_Identifier, Object_Name, Object_Type and Property_List itself.
+/// Every other row is listed.
+pub const fn in_property_list(property: PropertyIdentifier) -> bool {
     !matches!(
         property,
         PropertyIdentifier::OBJECT_IDENTIFIER
@@ -271,9 +271,9 @@ pub const fn is_listed(property: PropertyIdentifier) -> bool {
 
 /// The Property_List an object with these rows serves, in row order.
 ///
-/// It is the rows' identifiers without the four [`is_listed`] leaves out.
-/// The iterator borrows the rows and allocates nothing: count it, index it
-/// with `nth`, or collect it where a list is needed.
+/// It is the rows' identifiers without the four that [`in_property_list`]
+/// leaves out. The iterator borrows the rows and allocates nothing: count
+/// it, index it with `nth`, or collect it where a list is needed.
 ///
 /// ```
 /// use bacnet_objects::analog::AnalogInputObject;
@@ -291,7 +291,7 @@ pub fn property_list(
 ) -> impl DoubleEndedIterator<Item = PropertyIdentifier> + Clone + '_ {
     rows.iter()
         .map(|row| row.property_identifier)
-        .filter(|&property| is_listed(property))
+        .filter(|&property| in_property_list(property))
 }
 
 /// The properties these rows make required, in row order.
@@ -319,10 +319,11 @@ pub fn has_property(rows: &[PropertyMetadata], property: PropertyIdentifier) -> 
 /// Read an object's Property_List from its metadata rows.
 ///
 /// The list is [`property_list`] over `rows`, one pass that leaves out the
-/// four properties Clause 12.1.1.4.1 excludes. `array_index` `None` reads the whole array (the one
-/// allocation, the value returned), `Some(0)` its length and `Some(n)` its
-/// nth element, and an index past the end is an invalid array index. A
-/// custom object's `read_property` can answer Property_List with it.
+/// four properties Clause 12.1.1.4.1 excludes. `array_index` `None` reads
+/// the whole array (the one allocation, the value returned), `Some(0)` its
+/// length and `Some(n)` its nth element, and an index past the end is an
+/// invalid array index. A custom object's `read_property` can answer
+/// Property_List with it.
 pub fn read_property_list(
     rows: &[PropertyMetadata],
     array_index: Option<u32>,

@@ -92,8 +92,8 @@ fn assert_write_access_denied(
 }
 
 /// Every property that commissions intrinsic reporting must survive a network
-/// write and read back, and be advertised in both `property_list` and
-/// `is_writable_property` so the PICS matches dispatch.
+/// write and read back, and be advertised in both the served Property_List
+/// and `is_writable_property` so the PICS matches dispatch.
 fn assert_event_properties_round_trip(object: &mut dyn BACnetObject, label: &str) {
     for (property, value) in [
         (

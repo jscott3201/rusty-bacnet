@@ -392,10 +392,11 @@ fn property_metadata_contract_property_list_projection_excludes_property_list() 
             crate::test_rows::listed(&object.property_metadata()),
             crate::test_rows::listed_from(expected_projection)
         );
-        assert!(
-            !crate::test_rows::listed(&object.property_metadata())
-                .contains(&PropertyIdentifier::PROPERTY_LIST)
-        );
+        // The row stays; only the served list leaves it out.
+        assert!(crate::property_metadata::has_property(
+            &object.property_metadata(),
+            PropertyIdentifier::PROPERTY_LIST
+        ));
 
         let wire_list = object
             .read_property(PropertyIdentifier::PROPERTY_LIST, None)

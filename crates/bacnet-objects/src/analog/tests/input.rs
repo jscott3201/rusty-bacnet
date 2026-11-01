@@ -522,9 +522,9 @@ fn assert_tdn_protocol_error(result: Result<(), Error>, code: bacnet_types::enum
 }
 
 /// The property round-trips on all three analog types and is advertised in
-/// both `property_list` and `is_writable_property` (the Clause 12 tables make
-/// it O-coded, so writability mirrors Time_Delay — permitted, and the only
-/// way the Clause 13.3 delay asymmetry is commissionable).
+/// both the served Property_List and `is_writable_property` (the Clause 12
+/// tables make it O-coded, so writability mirrors Time_Delay — permitted,
+/// and the only way the Clause 13.3 delay asymmetry is commissionable).
 #[test]
 fn analog_time_delay_normal_round_trips_and_matches_pics() {
     for (mut object, label) in [

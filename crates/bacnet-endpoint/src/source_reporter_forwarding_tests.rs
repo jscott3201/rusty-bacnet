@@ -146,8 +146,15 @@ async fn built_in_configuration_identity_metadata_and_writes_survive_wrapping() 
             read(object, PropertyIdentifier::DESCRIPTION),
             PropertyValue::CharacterString("kept".into())
         );
-        let before = property_list(&object.property_metadata())
-            .map(|p| (p, read(object, p)))
+        let before = object
+            .property_metadata()
+            .iter()
+            .map(|row| {
+                (
+                    row.property_identifier,
+                    read(object, row.property_identifier),
+                )
+            })
             .collect::<Vec<_>>();
         assert!(
             object
@@ -480,8 +487,15 @@ async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
         assert!(reporter.monitors_object_internal(target()));
         assert!(reporter.reports_write_internal(PropertyIdentifier::PRESENT_VALUE, Some(8)));
         assert!(!reporter.reports_write_internal(PropertyIdentifier::PRESENT_VALUE, Some(16)));
-        let before = property_list(&object.property_metadata())
-            .map(|p| (p, read(object, p)))
+        let before = object
+            .property_metadata()
+            .iter()
+            .map(|row| {
+                (
+                    row.property_identifier,
+                    read(object, row.property_identifier),
+                )
+            })
             .collect::<Vec<_>>();
         assert!(
             object

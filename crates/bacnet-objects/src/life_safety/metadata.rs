@@ -11,9 +11,8 @@ use crate::property_metadata::{
 
 // Canonical effective rows for Life Safety Point (type 21, Clause 12.15
 // Table 12-18) and Life Safety Zone (type 22, Clause 12.16 Table 12-19).
-// Order preserves the legacy property_list projection; PROPERTY_LIST is
-// appended so the projection helper omits it while required_properties keeps
-// it. Only implemented rows are described: table rows the objects do not
+// Order preserves the earlier row order; PROPERTY_LIST is appended last. Only
+// implemented rows are described: table rows the objects do not
 // serve (Device_Type, Units, Setting,
 // intrinsic-reporting/event rows, Reliability_Evaluation_Inhibit,
 // Value_Source/audit/tags/profile rows) stay absent until dispatch exists.

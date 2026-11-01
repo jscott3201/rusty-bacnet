@@ -12,9 +12,8 @@ use crate::property_metadata::{
 // Canonical effective rows for Load Control (type 28, ASHRAE 135-2020 §12.28
 // Table 12-32; printed p. 344 / PDF p. 346, PDF = printed + 2; property
 // descriptions PDF pp. 347-349).
-// Order preserves the legacy 13-property projection; EVENT_STATE (readable
-// but unlisted) and PROPERTY_LIST are appended so the projection helper omits
-// PROPERTY_LIST while required_properties keeps it. Only implemented rows are
+// Order preserves the earlier 13-property order; EVENT_STATE (readable
+// but unlisted) and PROPERTY_LIST are appended. Only implemented rows are
 // described: table rows the object does not serve (Duty_Window, Enable,
 // Full_Duty_Baseline, Shed_Levels, Shed_Level_Descriptions, State_Description,
 // event/audit/tags/value-source/profile rows) stay absent until dispatch
@@ -34,7 +33,7 @@ use crate::property_metadata::{
 // Reliability carry the table O code, so Optional/ReadOnly. Table 12-32 has
 // no Out_Of_Service, so there is no such row (#1064). Event_State
 // carries the table R code and is readable but was absent from the legacy
-// list, so RequiredRead/ReadOnly and appended to the projection.
+// list, so RequiredRead/ReadOnly and appended.
 const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),

@@ -11,9 +11,8 @@ use crate::property_metadata::{
 
 // Canonical effective rows for Command (type 7, ASHRAE 135-2020 §12.10
 // Table 12-12; printed pp. 215-216 / PDF pp. 217-218).
-// Order preserves the legacy 11-property projection; PROPERTY_LIST is
-// appended so the projection helper omits it while required_properties keeps
-// it. Only implemented rows are described: table rows the object does not
+// Order preserves the earlier 11-property order; PROPERTY_LIST is appended
+// last. Only implemented rows are described: table rows the object does not
 // serve (Event_* detectors, Value_Source, audit, tags, profile rows) stay
 // absent until dispatch exists. Action_Text is a per-instance row, present
 // once the application sets it, read-only like Action.
