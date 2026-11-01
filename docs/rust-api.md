@@ -4047,6 +4047,17 @@ behaviour, so an object without it writes nothing.
   transition's states when it keeps them; it defaults to, and the server
   answers an object that lends none with, `no_alarm_configured()`, OBJECT /
   NO_ALARM_CONFIGURED.
+- **`reliability_eval()` → `ReliabilityEval`**, for an object that judges
+  its own Reliability or takes one its application works out.
+  `evaluate_reliability()` runs the object's fault algorithm and returns
+  `ReliabilityEvaluation::Changed` only after the change landed; the server's
+  fault detector calls it every ten seconds unless
+  `reliability_evaluation_inhibited()` is true. `set_reliability(r)` applies
+  a Reliability the application detects, such as NO_SENSOR from hardware.
+  It is the in-service complement of a client's write: the built-in objects
+  refuse it with PROPERTY / WRITE_ACCESS_DENIED while Out_Of_Service is TRUE.
+  All three default to opting out; `set_reliability` answers
+  `not_supported()`.
 
 ```rust,ignore
 use bacnet_objects::traits::{BACnetObject, Clocks, Timed};
@@ -4067,6 +4078,33 @@ impl Timed for MyTimer {
         self.deadline
     }
 }
+```
+
+Reliability evaluation moves from its hooks to the capability like this:
+
+```rust,ignore
+// Before: on `impl BACnetObject for MySensor`, and a call site.
+fn evaluate_reliability_internal(&mut self) -> Result<ReliabilityEvaluation, Error> {
+    self.check_wiring()
+}
+sensor.set_reliability_internal(Reliability::NO_SENSOR)?;
+
+// After: lend the capability and call through it.
+use bacnet_objects::traits::{BACnetObject, ReliabilityEval};
+
+fn reliability_eval(&mut self) -> Option<&mut dyn ReliabilityEval> {
+    Some(self)
+}
+
+impl ReliabilityEval for MySensor {
+    fn evaluate_reliability(&mut self) -> Result<ReliabilityEvaluation, Error> {
+        self.check_wiring()
+    }
+}
+sensor
+    .reliability_eval()
+    .map(|r| r.set_reliability(Reliability::NO_SENSOR))
+    .transpose()?;
 ```
 
 A local input moves from its hook to the capability like this:
@@ -6540,20 +6578,21 @@ count must be an Unsigned and a Reliability a BACnetReliability value.
 `AccessZoneObject::set_occupancy_count` reports the zone's own count;
 entering out of service puts the count and Reliability aside, the count the
 application reports meanwhile replaces the one put aside,
-`ReliabilityEval::set_reliability` is refused, and the return to service serves the
-zone's values again. A Credential Data
-Input's Present_Value and Reliability, the rows footnote 1 of Table 12-43
-marks, take WriteProperty and WritePropertyMultiple while Out_Of_Service is
-TRUE and refuse them in service with WRITE_ACCESS_DENIED. A Present_Value
+[`ReliabilityEval::set_reliability`](#capabilities) is refused, and the return
+to service serves the zone's values again. A Credential Data Input's
+Present_Value and Reliability, the rows footnote 1 of Table 12-43 marks, take
+WriteProperty and WritePropertyMultiple while Out_Of_Service is TRUE and
+refuse them in service with WRITE_ACCESS_DENIED. A Present_Value
 write must be one `BACnetAuthenticationFactor` (else INVALID_DATA_TYPE) whose
 format type and class match a declared Supported_Formats element and its
 class, or the UNDEFINED or ERROR factor with class 0 (else
 VALUE_OUT_OF_RANGE); it stamps Update_Time from the Device clock. A
 Reliability write must be a BACnetReliability value. Entering out of service
 puts the reader's Present_Value, Update_Time and Reliability aside,
-`set_present_value` updates the values put aside, `ReliabilityEval::set_reliability`
-is refused until the return to service, and the return to service serves the
-reader's values again.
+`set_present_value` updates the values put aside,
+[`ReliabilityEval::set_reliability`](#capabilities) is refused until the
+return to service, and the return to service serves the reader's values
+again.
 
 Without a usable Device clock a date-and-time stamp would be the unspecified
 one every time, so Access_Event_Time and Update_Time, the Table 13-1
@@ -8864,11 +8903,11 @@ service both are `PROPERTY / WRITE_ACCESS_DENIED` (#1108). Entering out of
 service sets the object's own `Tracking_Value` and `Reliability` aside and the
 return to service restores them. Meanwhile `set_tracking_value` and a reset
 commit's `tracking_value` replace the value set aside, not the simulated one,
-and `ReliabilityEval::set_reliability`, the in-service route for a fault the
-application detects, is refused. A simulated value notifies through the same
-COV path as any write, and Present_Value, `Silenced` and `Operation_Expected`
-don't follow it; a reset executor sees the simulated `Tracking_Value` in its
-context.
+and [`ReliabilityEval::set_reliability`](#capabilities), the in-service
+route for a fault the application detects, is refused. A simulated value
+notifies through the same COV path as any write, and Present_Value,
+`Silenced` and `Operation_Expected` don't follow it; a reset executor sees
+the simulated `Tracking_Value` in its context.
 
 Once the server holds a Point or Zone, the application reaches its
 Present_Value with `BACnetServer::set_present_value_local` and its

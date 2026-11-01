@@ -25,12 +25,10 @@ use crate::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 
 pub mod capabilities;
 #[doc(hidden)]
-pub use capabilities::{
-    AccessEvents, CommandRunner, EnrollmentEval, ReliabilityEval, StagingSource,
-};
+pub use capabilities::{AccessEvents, CommandRunner, EnrollmentEval, StagingSource};
 pub use capabilities::{
     Clocks, DeadlineWaker, DurableWrites, EventReporting, LifeSafety, LocalInput, LocalInputValue,
-    MonotonicClock, Timed, no_alarm_configured, not_supported,
+    MonotonicClock, ReliabilityEval, Timed, no_alarm_configured, not_supported,
 };
 pub(crate) use capabilities::{lend_enrollment_eval, lend_event_reporting, lend_reliability_eval};
 
@@ -637,11 +635,10 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
 
     /// Mutably borrow this object's reliability evaluation: its own
     /// judgement of Reliability, the inhibit that pauses it, and the
-    /// Reliability its application derives. Not public API yet (#2179).
+    /// Reliability its application works out.
     ///
     /// The default has none, and the bundled server's fault detector then
-    /// leaves the object's Reliability alone.
-    #[doc(hidden)]
+    /// leaves the object's Reliability alone. See [`ReliabilityEval`].
     fn reliability_eval(&mut self) -> Option<&mut dyn ReliabilityEval> {
         None
     }

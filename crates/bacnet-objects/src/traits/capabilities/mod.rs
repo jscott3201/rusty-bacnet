@@ -54,7 +54,6 @@ pub(crate) use event_reporting::lend_event_reporting;
 pub use event_reporting::{EventReporting, no_alarm_configured};
 pub use life_safety::LifeSafety;
 pub use local_input::{LocalInput, LocalInputValue};
-#[doc(hidden)]
 pub use reliability_eval::ReliabilityEval;
 pub(crate) use reliability_eval::lend_reliability_eval;
 #[doc(hidden)]
