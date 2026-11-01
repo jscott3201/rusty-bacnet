@@ -5344,7 +5344,7 @@ class BACnetServer:
                 | DeviceObjectPropertyReference
             ]
         ] = None,
-        priority_for_writing: int = 16,
+        priority_for_writing: Optional[int] = None,
     ) -> None:
         """Add a Timer object.
 
@@ -5352,10 +5352,11 @@ class BACnetServer:
         State_Change_Values, List_Of_Object_Property_References and
         Priority_For_Writing, and each transition writes its entry of
         ``state_change_values`` to every reference at
-        ``priority_for_writing``. The seven entries run from IDLE_TO_RUNNING
-        to EXPIRED_TO_RUNNING; ``None`` writes nothing and a NULL
-        relinquishes. References take the ``add_channel`` members shape. A
-        wrong entry count raises ValueError, a non-primitive entry TypeError,
+        ``priority_for_writing`` (16 when omitted). The seven entries run from
+        IDLE_TO_RUNNING to EXPIRED_TO_RUNNING; ``None`` writes nothing and a
+        NULL relinquishes. References take the ``add_channel`` members shape.
+        A wrong entry count, or ``priority_for_writing`` without either of
+        the other two, raises ValueError, a non-primitive entry TypeError,
         and a priority outside 1..=16 BacnetProtocolError with
         VALUE_OUT_OF_RANGE.
         """

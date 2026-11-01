@@ -28,7 +28,7 @@ mod metadata;
 
 /// The writes a Present_Value write queued, for the server to make: a
 /// Command object's selected list, or a Channel object's value for each of
-/// its members.
+/// its members. A Timer's transition queues one too, as a list of actions.
 #[doc(hidden)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct CommandRun {
@@ -44,9 +44,9 @@ pub struct CommandRun {
     pub chain: Arc<[ObjectIdentifier]>,
 }
 
-/// The next run generation. One counter serves every Command and Channel in
-/// the process, so a run left over from an object that was removed never
-/// matches the object that took its place.
+/// The next run generation. One counter serves every Command, Channel and
+/// Timer in the process, so a run left over from an object that was removed
+/// never matches the object that took its place.
 pub(crate) fn next_generation() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     NEXT.fetch_add(1, Ordering::Relaxed)

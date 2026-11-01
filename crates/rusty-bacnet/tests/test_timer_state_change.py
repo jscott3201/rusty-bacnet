@@ -67,7 +67,7 @@ class TimerStateChangeTests(unittest.IsolatedAsyncioTestCase):
         )
         for name in ["state_change_values", "references", "priority_for_writing"]:
             self.assertIs(parameters[name].kind, inspect.Parameter.KEYWORD_ONLY)
-        self.assertEqual(parameters["priority_for_writing"].default, 16)
+        self.assertIsNone(parameters["priority_for_writing"].default)
 
     async def test_transitions_write_their_values_at_the_priority(self) -> None:
         server = make_server()
@@ -110,11 +110,17 @@ class TimerStateChangeTests(unittest.IsolatedAsyncioTestCase):
             server.add_timer(1, "TMR-1", state_change_values=VALUES[:6])
         with self.assertRaises(TypeError):
             server.add_timer(1, "TMR-1", state_change_values=[1] * 7)
-        with self.assertRaises(BacnetProtocolError) as raised:
-            server.add_timer(1, "TMR-1", references=[(AO1, PV)], priority_for_writing=0)
-        self.assertEqual(
-            raised.exception.error_code, ErrorCode.VALUE_OUT_OF_RANGE.to_raw()
-        )
+        with self.assertRaises(ValueError):
+            server.add_timer(1, "TMR-1", priority_for_writing=8)
+        for priority in [0, 17, 256, 1 << 40]:
+            with self.subTest(priority=priority):
+                with self.assertRaises(BacnetProtocolError) as raised:
+                    server.add_timer(
+                        1, "TMR-1", references=[(AO1, PV)], priority_for_writing=priority
+                    )
+                self.assertEqual(
+                    raised.exception.error_code, ErrorCode.VALUE_OUT_OF_RANGE.to_raw()
+                )
 
 
 if __name__ == "__main__":

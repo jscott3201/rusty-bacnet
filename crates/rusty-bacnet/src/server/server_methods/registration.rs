@@ -167,16 +167,18 @@ impl BACnetServer {
     /// `state_change_values` to every reference at `priority_for_writing`.
     /// `state_change_values` holds seven entries, IDLE_TO_RUNNING first; an
     /// entry is a primitive `PropertyValue` (a NULL relinquishes) or `None`,
-    /// which writes nothing. References take the `add_channel` members shape.
-    /// A wrong shape or type raises TypeError or ValueError; the Timer's
-    /// setter refuses a priority outside 1..=16 with VALUE_OUT_OF_RANGE.
+    /// which writes nothing. References take the `add_channel` members shape,
+    /// and `priority_for_writing` defaults to 16. A wrong shape or type raises
+    /// TypeError or ValueError, as does `priority_for_writing` given alone;
+    /// the Timer's setter refuses a priority outside 1..=16 with
+    /// VALUE_OUT_OF_RANGE.
     #[pyo3(signature = (
         instance,
         name,
         *,
         state_change_values=None,
         references=None,
-        priority_for_writing=16
+        priority_for_writing=None
     ))]
     fn add_timer(
         &self,
@@ -184,16 +186,24 @@ impl BACnetServer {
         name: &str,
         state_change_values: Option<Vec<Option<crate::types::PyPropertyValue>>>,
         references: Option<Bound<'_, PyAny>>,
-        priority_for_writing: u8,
+        priority_for_writing: Option<u64>,
     ) -> PyResult<()> {
         let mut obj = TimerObject::new(instance, name).map_err(to_py_err)?;
-        if state_change_values.is_some() || references.is_some() {
+        if state_change_values.is_none() && references.is_none() {
+            if priority_for_writing.is_some() {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "priority_for_writing needs state_change_values or references",
+                ));
+            }
+        } else {
+            // Past 255 is out of range too: the setter refuses 0 as it would.
+            let priority = priority_for_writing.map_or(16, |p| u8::try_from(p).unwrap_or(0));
             let values = timer_values(state_change_values)?;
             let references = references
                 .map(|references| self.members_from_py(&references, "references"))
                 .transpose()?
                 .unwrap_or_default();
-            obj.set_state_change(values, references, priority_for_writing)
+            obj.set_state_change(values, references, priority)
                 .map_err(to_py_err)?;
         }
         self.push_pending(Box::new(obj))

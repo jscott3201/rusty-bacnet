@@ -214,6 +214,12 @@ fn state_change_values_take_whole_and_element_writes() {
             PropertyValue::ApplicationData(vec![0x1E, 0x1F]),
             ErrorCode::INVALID_DATA_ENCODING,
         ),
+        // A stray closing tag 4 names no datatype.
+        (
+            Some(1),
+            PropertyValue::ApplicationData(vec![0x4F]),
+            ErrorCode::INVALID_DATA_ENCODING,
+        ),
         (
             Some(1),
             octets(&[V::NoValue, V::NoValue]),
@@ -318,33 +324,80 @@ fn each_transition_queues_its_value_for_every_reference() {
         .write_property(P::PRESENT_VALUE, None, PropertyValue::Unsigned(5_000), None)
         .unwrap();
     assert_eq!(queued(&mut timer), Some(writes(1.0)));
-    let generation = timer.command_generation();
-    // RUNNING_TO_IDLE has no value: nothing queued, and the run before is
-    // superseded.
+    let stale = timer.command_generation();
+    // A newer transition supersedes the run taken before it.
+    timer
+        .write_property(P::PRESENT_VALUE, None, PropertyValue::Unsigned(6_000), None)
+        .unwrap();
+    assert_eq!(queued(&mut timer), Some(writes(3.0)));
+    assert!(!timer.record_command_write(stale, 0, true));
+    assert!(!timer.complete_command_run(stale, Err(WriteFailure::Process)));
+    // Under one guard the last transition supersedes too: RUNNING_TO_IDLE
+    // queues nothing, IDLE_TO_RUNNING's run is replaced by FORCED_TO_EXPIRED's.
+    let write =
+        |timer: &mut TimerObject, p, value| timer.write_property(p, None, value, None).unwrap();
     let idle = PropertyValue::Enumerated(TimerState::IDLE.to_raw());
-    timer
-        .write_property(P::TIMER_STATE, None, idle, None)
-        .unwrap();
+    write(&mut timer, P::TIMER_STATE, idle.clone());
+    write(&mut timer, P::TIMER_RUNNING, PropertyValue::Boolean(true));
+    write(&mut timer, P::PRESENT_VALUE, PropertyValue::Unsigned(0));
+    assert_eq!(queued(&mut timer), Some(writes(5.0)));
+    // A no-value transition last leaves nothing queued.
+    write(&mut timer, P::TIMER_RUNNING, PropertyValue::Boolean(true));
+    write(&mut timer, P::TIMER_STATE, idle);
     assert_eq!(queued(&mut timer), None);
-    assert!(!timer.record_command_write(generation, 0, true));
-    assert!(!timer.complete_command_run(generation, Err(WriteFailure::Process)));
-    // Two transitions under one guard queue one run, in order.
-    timer
-        .write_property(P::TIMER_RUNNING, None, PropertyValue::Boolean(true), None)
-        .unwrap();
-    timer
-        .write_property(P::PRESENT_VALUE, None, PropertyValue::Unsigned(0), None)
-        .unwrap();
-    let mut both = writes(1.0);
-    both.extend(writes(5.0));
-    assert_eq!(queued(&mut timer), Some(both));
     // The run ends with its first failure, as Reliability.
+    write(&mut timer, P::TIMER_RUNNING, PropertyValue::Boolean(true));
+    assert_eq!(queued(&mut timer), Some(writes(1.0)));
     let generation = timer.command_generation();
-    assert!(timer.record_command_write(generation, 3, false));
-    assert!(!timer.record_command_write(generation, 4, false));
+    assert!(timer.record_command_write(generation, 1, false));
+    assert!(!timer.record_command_write(generation, 2, false));
     assert!(timer.complete_command_run(generation, Err(WriteFailure::Communication)));
     assert_eq!(reliability(&timer), Reliability::COMMUNICATION_FAILURE);
     assert!(!timer.complete_command_run(generation, Ok(())));
+}
+
+/// A date-time goes out as its Date and Time, a lighting command and a
+/// constructed value as the octets a WriteProperty would carry.
+#[test]
+fn constructed_values_queue_as_the_octets_a_write_carries() {
+    use bacnet_types::constructed::BACnetLightingCommand;
+    use bacnet_types::enums::LightingOperation;
+    let date = Date {
+        year: 126,
+        month: 11,
+        day: 1,
+        day_of_week: 7,
+    };
+    let time = Time {
+        hour: 8,
+        minute: 0,
+        second: 0,
+        hundredths: 0,
+    };
+    let mut values = values();
+    values[0] = V::DateTime(date, time);
+    values[2] = V::LightingCommand(BACnetLightingCommand::new(LightingOperation::STOP));
+    values[4] = V::Constructed(vec![0x21, 0x05]);
+    let mut timer = TimerObject::new(1, "TMR-1").unwrap();
+    timer
+        .set_state_change(values, vec![reference(1)], 9)
+        .unwrap();
+    let mut value_of = |p, value| {
+        timer.write_property(p, None, value, None).unwrap();
+        queued(&mut timer).unwrap().remove(0).1
+    };
+    assert_eq!(
+        value_of(P::PRESENT_VALUE, PropertyValue::Unsigned(5_000)),
+        PropertyValue::List(vec![PropertyValue::Date(date), PropertyValue::Time(time)])
+    );
+    assert_eq!(
+        value_of(P::PRESENT_VALUE, PropertyValue::Unsigned(5_000)),
+        PropertyValue::ApplicationData(vec![0x09, 0x0A])
+    );
+    assert_eq!(
+        value_of(P::PRESENT_VALUE, PropertyValue::Unsigned(0)),
+        PropertyValue::ApplicationData(vec![0x21, 0x05])
+    );
 }
 
 #[test]

@@ -205,3 +205,80 @@ async fn a_newer_transition_supersedes_a_run_still_writing() {
     assert_eq!(slots(&h).await[1], PropertyValue::Real(30.0));
     h.server.stop().await.unwrap();
 }
+
+/// A refused write that waited behind a held guard past the deadline applies
+/// the due expiry first; its writes still go out, though the write that made
+/// the transition fails and the operation task's pass then finds nothing due.
+#[tokio::test(start_paused = true)]
+async fn an_expiry_a_refused_write_applied_still_writes() {
+    let mut h = start(vec![reference(ao(1)), reference(ao(2))]).await;
+    write_timer(&h, PV, PropertyValue::Unsigned(200)).await;
+    assert_eq!(slots(&h).await, both(10.0));
+    let oid = tmr();
+    let guard = h.server.database().write().await;
+    // Timer_State RUNNING is refused, but only after the write has applied
+    // whatever expiry is due by the time it holds the database.
+    let mut refused = Box::pin(h.server.write_local(
+        &oid,
+        PropertyIdentifier::TIMER_STATE,
+        None,
+        PropertyValue::Enumerated(TimerState::RUNNING.to_raw()),
+        None,
+        crate::LocalCommandSource::ServerDevice,
+    ));
+    // Polled once, it waits for the guard ahead of the operation task.
+    assert!(
+        tokio::time::timeout(Duration::ZERO, &mut refused)
+            .await
+            .is_err()
+    );
+    tokio::time::advance(Duration::from_millis(250)).await;
+    h.settle().await;
+    drop(guard);
+    assert!(refused.await.is_err());
+    for _ in 0..5 {
+        h.settle().await;
+    }
+    assert_eq!(
+        read_db(&h, tmr(), PropertyIdentifier::TIMER_STATE, None).await,
+        PropertyValue::Enumerated(TimerState::EXPIRED.to_raw())
+    );
+    assert_eq!(slots(&h).await, both(40.0));
+    h.server.stop().await.unwrap();
+}
+
+/// A lighting-command value reaches a Lighting Output's Lighting_Command as
+/// the command a WriteProperty of it would carry.
+#[tokio::test(start_paused = true)]
+async fn a_lighting_command_value_drives_a_lighting_output() {
+    use bacnet_objects::lighting::LightingOutputObject;
+    use bacnet_types::constructed::BACnetLightingCommand;
+    use bacnet_types::enums::LightingOperation;
+    let lo = ObjectIdentifier::new(ObjectType::LIGHTING_OUTPUT, 1).unwrap();
+    let command = BACnetLightingCommand {
+        target_level: Some(40.0),
+        ..BACnetLightingCommand::new(LightingOperation::FADE_TO)
+    };
+    let mut h = Harness::start_with(ServerConfig::default(), |db| {
+        db.add(Box::new(LightingOutputObject::new(1, "LO-1").unwrap()))
+            .unwrap();
+        let mut values = core::array::from_fn(|_| V::NoValue);
+        values[0] = V::LightingCommand(command);
+        let mut timer = TimerObject::new(1, "TMR-1").unwrap();
+        let target = BACnetDeviceObjectPropertyReference::new_local(
+            lo,
+            PropertyIdentifier::LIGHTING_COMMAND.to_raw(),
+        );
+        timer.set_state_change(values, vec![target], 9).unwrap();
+        db.add(Box::new(timer)).unwrap();
+    })
+    .await;
+    write_timer(&h, PV, PropertyValue::Unsigned(60_000)).await;
+    let mut encoded = BytesMut::new();
+    bacnet_encoding::constructed::encode_lighting_command(&mut encoded, &command);
+    assert_eq!(
+        read_db(&h, lo, PropertyIdentifier::LIGHTING_COMMAND, None).await,
+        PropertyValue::ApplicationData(encoded.to_vec())
+    );
+    h.server.stop().await.unwrap();
+}

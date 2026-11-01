@@ -18,21 +18,37 @@
 //!
 //! # Overlapping transitions: the newer one supersedes
 //!
-//! A transition starts a fresh run generation. A run whose writes are still
-//! being made when the next transition happens goes stale: it makes no
-//! further write and its outcome is dropped. Queueing it behind the new one
-//! instead would spend writes on a state the Timer has already left, and a
-//! burst of transitions against a slow remote target would queue without
-//! bound; superseding keeps one run per Timer and leaves the targets with the
-//! latest transition's value. A write the stale run had already sent may
-//! still land after it. Transitions made under one guard, such as a write
-//! that first applies a due expiry and then restarts the timer, are taken
-//! together, so their writes go out in order in one run and neither is lost.
+//! Every transition starts a fresh run generation and replaces any run not
+//! yet taken, a `no-value` one included, which leaves none. Queueing instead
+//! would spend writes on a state the Timer has already left, and a burst of
+//! transitions against a slow remote target would queue without bound. The
+//! rule is the same whether the transitions share a guard or not: a write
+//! that first applies a due expiry and then restarts the timer makes only the
+//! restart's writes.
+//!
+//! Unlike a Command or Channel, which refuse a new Present_Value write while
+//! a run is in progress, a Timer can't refuse a transition, so two of its runs
+//! can be live at once. The older one goes stale and stops before its next
+//! write, but the generation check comes before the write without a guard
+//! held across both, so a write it had already started, local or remote, can
+//! land after the newer run's write to the same target and leave the older
+//! value there. Writing the same target from two transitions in quick
+//! succession is the case to avoid.
+//!
+//! A run is never left untaken. A write that refuses after applying a due
+//! expiry leaves that expiry's run with nothing to take it; the server's
+//! operation task, woken by the same deadline, takes it on its next pass,
+//! since `Timed::advance_monotonic_time` reports a Timer with a run waiting.
 //!
 //! # Reliability
 //!
 //! In service Reliability reads CONFIGURATION_ERROR while the non-NULL values
-//! of State_Change_Values differ in datatype (Clause 12.57.20). Otherwise it
+//! of State_Change_Values differ in datatype (Clause 12.57.20). That is the
+//! only half of the clause's configuration rule checked up front: whether each
+//! referenced property takes the datatype shows when a run writes it, and a
+//! refusal then sets CONFIGURATION_ERROR as the run's verdict. Constructed
+//! values all count as one datatype for the comparison
+//! ([`BACnetTimerStateChangeValue::datatype`]). Otherwise it
 //! reports how the last run ended: NO_FAULT_DETECTED, or the kind of its
 //! first failed write ([`WriteFailure::reliability`]), as a Channel does.
 //! Out of service it is the client's to simulate.
@@ -139,13 +155,7 @@ impl TimerObject {
         let Some(change) = &mut self.state_change else {
             return;
         };
-        let mut commands = match change.pending.take() {
-            Some(CommandRun {
-                plan: RunPlan::Actions(commands),
-                ..
-            }) => commands,
-            _ => Vec::new(),
-        };
+        let mut commands = Vec::new();
         let index = (transition.to_raw() as usize).wrapping_sub(1);
         if let Some(value) = change.values.get(index).and_then(write_value) {
             commands.extend(
@@ -175,6 +185,13 @@ impl TimerObject {
             plan: RunPlan::Actions(commands),
             chain: Arc::from([]),
         });
+    }
+
+    /// Whether a transition's writes wait to be taken.
+    pub(super) fn has_pending_writes(&self) -> bool {
+        self.state_change
+            .as_ref()
+            .is_some_and(|change| change.pending.is_some())
     }
 
     /// Serve one of the three; `None` for any other property, or before
@@ -367,7 +384,9 @@ fn decode_run(octets: &[u8]) -> Result<Vec<BACnetTimerStateChangeValue>, Error> 
             decode_timer_state_change_value(octets, offset).map_err(|_| match tags::decode_tag(
                 octets, offset,
             ) {
-                Ok((tag, _)) if tag.class == TagClass::Context && tag.number > 3 => {
+                Ok((tag, _))
+                    if tag.class == TagClass::Context && tag.number > 3 && !tag.is_closing =>
+                {
                     common::protocol_error(ErrorClass::PROPERTY, ErrorCode::DATATYPE_NOT_SUPPORTED)
                 }
                 _ => common::invalid_data_encoding_error(),

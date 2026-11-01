@@ -358,8 +358,11 @@ impl crate::traits::Timed for TimerObject {
         self.deadline_waker = clocks.deadline_waker.clone();
     }
 
+    /// `true` when a countdown expired, and also while a transition's writes
+    /// wait to be taken: a refused write can make one (the due expiry it
+    /// applies first) with nothing to take it, so the pass takes it.
     fn advance_monotonic_time(&mut self, now: Duration) -> bool {
-        self.expire_if_due(now)
+        self.expire_if_due(now) | self.has_pending_writes()
     }
 
     fn next_monotonic_deadline(&self) -> Option<Duration> {

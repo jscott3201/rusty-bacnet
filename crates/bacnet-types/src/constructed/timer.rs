@@ -37,6 +37,10 @@ impl BACnetTimerStateChangeValue {
     /// application tag number for a primitive (a NULL being 0), or 16 plus
     /// the context tag of the other alternatives. `None` for `NoValue`, which
     /// writes nothing.
+    ///
+    /// Every [`Self::Constructed`] value has the same key whatever datatype
+    /// its octets hold, so two constructed values of different datatypes
+    /// compare equal here: a known limitation of the octets-only form.
     pub fn datatype(&self) -> Option<u8> {
         Some(match self {
             Self::NoValue => return None,

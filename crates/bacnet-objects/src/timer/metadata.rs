@@ -18,62 +18,66 @@ use crate::property_metadata::{
 // with intrinsic reporting, which this Timer lacks (#2174). Initial_Timeout
 // is set by each start, so a client can't write it; Default_Timeout takes
 // writes within the range (#2192).
-const BASE: &[PropertyMetadata] = &[
-    PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
-    PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::PRESENT_VALUE, RequiredRead, None, Always),
-    PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::EVENT_STATE, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::RELIABILITY, Optional, None, WhenOutOfService),
-    PropertyMetadata::new(P::OUT_OF_SERVICE, Optional, None, Always),
-    PropertyMetadata::new(P::TIMER_STATE, RequiredRead, None, Always),
-    PropertyMetadata::new(P::TIMER_RUNNING, RequiredRead, None, Always),
-    PropertyMetadata::new(P::UPDATE_TIME, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::LAST_STATE_CHANGE, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::EXPIRATION_TIME, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::INITIAL_TIMEOUT, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::DEFAULT_TIMEOUT, Optional, None, Always),
-    PropertyMetadata::new(
-        P::MIN_PRES_VALUE,
-        Optional,
-        Some(PresentValueWritableInService),
-        ReadOnly,
-    ),
-    PropertyMetadata::new(
-        P::MAX_PRES_VALUE,
-        Optional,
-        Some(PresentValueWritableInService),
-        ReadOnly,
-    ),
-    PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
-];
+/// Table 12-75's rows with `$extra` before Property_List, so each set is a
+/// static slice.
+macro_rules! timer_rows {
+    ($($extra:expr),* $(,)?) => {
+        &[
+            PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
+            PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
+            PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
+            PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
+            PropertyMetadata::new(P::PRESENT_VALUE, RequiredRead, None, Always),
+            PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
+            PropertyMetadata::new(P::EVENT_STATE, Optional, None, ReadOnly),
+            PropertyMetadata::new(P::RELIABILITY, Optional, None, WhenOutOfService),
+            PropertyMetadata::new(P::OUT_OF_SERVICE, Optional, None, Always),
+            PropertyMetadata::new(P::TIMER_STATE, RequiredRead, None, Always),
+            PropertyMetadata::new(P::TIMER_RUNNING, RequiredRead, None, Always),
+            PropertyMetadata::new(P::UPDATE_TIME, Optional, None, ReadOnly),
+            PropertyMetadata::new(P::LAST_STATE_CHANGE, Optional, None, ReadOnly),
+            PropertyMetadata::new(P::EXPIRATION_TIME, Optional, None, ReadOnly),
+            PropertyMetadata::new(P::INITIAL_TIMEOUT, Optional, None, ReadOnly),
+            PropertyMetadata::new(P::DEFAULT_TIMEOUT, Optional, None, Always),
+            PropertyMetadata::new(
+                P::MIN_PRES_VALUE,
+                Optional,
+                Some(PresentValueWritableInService),
+                ReadOnly,
+            ),
+            PropertyMetadata::new(
+                P::MAX_PRES_VALUE,
+                Optional,
+                Some(PresentValueWritableInService),
+                ReadOnly,
+            ),
+            $($extra,)*
+            PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
+        ]
+    };
+}
+
+const BASE: &[PropertyMetadata] = timer_rows!();
 
 // Table 12-75 footnote 5: the three come together. The table leaves their
 // write access open; State_Change_Values and the references take writes, and
 // Priority_For_Writing is set with them (#2206).
-const STATE_CHANGE: &[PropertyMetadata] = &[
+const WITH_STATE_CHANGE: &[PropertyMetadata] = timer_rows!(
     PropertyMetadata::new(P::STATE_CHANGE_VALUES, Optional, None, Always),
     PropertyMetadata::new(
         P::LIST_OF_OBJECT_PROPERTY_REFERENCES,
         Optional,
         None,
-        Always,
+        Always
     ),
     PropertyMetadata::new(P::PRIORITY_FOR_WRITING, Optional, None, ReadOnly),
-];
+);
 
 pub(super) fn for_object(object: &TimerObject) -> Cow<'_, [PropertyMetadata]> {
-    if object.state_change.is_none() {
-        return Cow::Borrowed(BASE);
-    }
-    // In table order, ahead of Property_List.
-    let (property_list, rows) = BASE.split_last().expect("BASE has rows");
-    let mut rows = rows.to_vec();
-    rows.extend_from_slice(STATE_CHANGE);
-    rows.push(*property_list);
-    Cow::Owned(rows)
+    Cow::Borrowed(match object.state_change {
+        Some(_) => WITH_STATE_CHANGE,
+        None => BASE,
+    })
 }
 
 #[cfg(test)]
