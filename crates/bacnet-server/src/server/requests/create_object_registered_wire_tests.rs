@@ -240,6 +240,28 @@ async fn a_registered_analog_value_constructor_replaces_the_built_in() {
         read(&fixture, second, PropertyIdentifier::UNITS).await,
         PropertyValue::Enumerated(hertz)
     );
+    // The constructor didn't provision the audit rows, so an Audit_Level
+    // initial value is refused at its position, as a write to the absent
+    // row would be, and nothing is added.
+    let before = fixture.db.read().await.len();
+    let response = send(
+        &fixture,
+        request(
+            ObjectSpecifier::Type(ObjectType::ANALOG_VALUE),
+            vec![(
+                PropertyIdentifier::AUDIT_LEVEL,
+                PropertyValue::Enumerated(bacnet_types::enums::AuditLevel::DEFAULT.to_raw()),
+            )],
+        ),
+    )
+    .await;
+    assert_eq!(
+        &response[..4],
+        &[0x50, 5, CREATE.to_raw(), 0x0E],
+        "{response:?}"
+    );
+    assert_eq!(response.last(), Some(&1), "{response:?}");
+    assert_eq!(fixture.db.read().await.len(), before);
 }
 
 #[tokio::test]
@@ -350,4 +372,82 @@ async fn the_policy_decides_a_registered_type_before_its_constructor_runs() {
         .await,
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn a_registered_type_refuses_a_taken_identifier_and_the_reserved_instance() {
+    let mut fixture = Fixture::new(None);
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&calls);
+    fixture
+        .config
+        .object_constructors
+        .register(vendor_type(), move |oid, name| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            Ok(Vendor::boxed(oid, name))
+        })
+        .unwrap();
+    let taken = oid(vendor_type(), 3);
+    assert_eq!(
+        created(
+            &send(
+                &fixture,
+                request(ObjectSpecifier::Identifier(taken), vec![])
+            )
+            .await
+        ),
+        taken
+    );
+    let before = fixture.db.read().await.len();
+    // #2171's order: the identifier in use is refused first, ahead of an
+    // initial value that would fail, and the constructor never runs.
+    assert_eq!(
+        send(
+            &fixture,
+            request(
+                ObjectSpecifier::Identifier(taken),
+                vec![(
+                    PropertyIdentifier::PRESENT_VALUE,
+                    PropertyValue::Boolean(true)
+                )],
+            ),
+        )
+        .await,
+        refused(
+            ErrorClass::OBJECT,
+            ErrorCode::OBJECT_IDENTIFIER_ALREADY_EXISTS,
+            0
+        )
+    );
+    // The reserved instance: the type is supported (registered), so the
+    // instance check answers, again before the constructor.
+    let reserved = oid(vendor_type(), ObjectIdentifier::WILDCARD_INSTANCE);
+    assert_eq!(
+        send(
+            &fixture,
+            request(ObjectSpecifier::Identifier(reserved), vec![])
+        )
+        .await,
+        refused(
+            ErrorClass::OBJECT,
+            ErrorCode::DYNAMIC_CREATION_NOT_SUPPORTED,
+            0
+        )
+    );
+    // An unregistered proprietary type at the reserved instance fails the
+    // type check, which comes before the instance check.
+    let unregistered = oid(
+        ObjectType::from_raw(VENDOR_TYPE + 1),
+        ObjectIdentifier::WILDCARD_INSTANCE,
+    );
+    assert_eq!(
+        send(
+            &fixture,
+            request(ObjectSpecifier::Identifier(unregistered), vec![])
+        )
+        .await,
+        refused(ErrorClass::OBJECT, ErrorCode::UNSUPPORTED_OBJECT_TYPE, 0)
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.db.read().await.len(), before);
 }

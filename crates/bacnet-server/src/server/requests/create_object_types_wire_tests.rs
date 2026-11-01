@@ -258,3 +258,64 @@ async fn a_refused_initial_value_is_named_and_nothing_is_created() {
         assert!(db.find_by_type(kind).is_empty(), "{kind:?}");
     }
 }
+
+#[tokio::test]
+async fn a_freshly_created_object_of_each_type_reads_whole_with_rpm_all() {
+    use bacnet_services::rpm::{ReadPropertyMultipleACK, ReadPropertyMultipleRequest};
+    use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
+    let rpm = ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE;
+    let fixture = Fixture::new(None);
+    // Every type the table builds, the new ones (#2172) among them.
+    let kinds: Vec<ObjectType> = bacnet_objects::creation::builtin_createable_types().collect();
+    for (kind, _) in new_types() {
+        assert!(kinds.contains(&kind), "{kind:?}");
+    }
+    for kind in kinds {
+        let object = created(&send(&fixture, request(ObjectSpecifier::Type(kind), vec![])).await);
+        let mut bytes = BytesMut::new();
+        ReadPropertyMultipleRequest {
+            list_of_read_access_specs: vec![ReadAccessSpecification {
+                object_identifier: object,
+                list_of_property_references: vec![PropertyReference {
+                    property_identifier: PropertyIdentifier::ALL,
+                    property_array_index: None,
+                }],
+            }],
+        }
+        .encode(&mut bytes)
+        .unwrap();
+        let npdu = fixture
+            .dispatch(rpm, bytes.freeze(), 6)
+            .await
+            .expect("response");
+        let response = bacnet_encoding::npdu::decode_npdu(npdu)
+            .unwrap()
+            .payload
+            .to_vec();
+        assert_eq!(&response[..3], &[0x30, 6, rpm.to_raw()], "{kind:?}");
+        let ack = ReadPropertyMultipleACK::decode(&response[3..]).unwrap();
+        let [result] = ack.list_of_read_access_results.as_slice() else {
+            panic!("{kind:?}: one object asked for");
+        };
+        assert_eq!(result.object_identifier, object);
+        // Every property the object lists reads without an error.
+        let listed = fixture
+            .db
+            .read()
+            .await
+            .get(&object)
+            .unwrap()
+            .property_list();
+        for property in listed.iter() {
+            let element = result
+                .list_of_results
+                .iter()
+                .find(|element| element.property_identifier == *property)
+                .unwrap_or_else(|| panic!("{kind:?}: {property:?} missing"));
+            assert!(element.property_value.is_some(), "{kind:?}: {element:?}");
+        }
+        for element in &result.list_of_results {
+            assert_eq!(element.error, None, "{kind:?}: {element:?}");
+        }
+    }
+}

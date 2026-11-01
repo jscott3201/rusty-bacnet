@@ -440,7 +440,7 @@ async fn object_audit_policy_wpm_each_element_captures_committed_prestate() {
 }
 
 #[tokio::test]
-async fn object_audit_policy_bv_create_delete_and_failed_calendar_create_fallback() {
+async fn object_audit_policy_bv_create_delete_and_failed_access_point_create_fallback() {
     use bacnet_services::object_mgmt::{CreateObjectRequest, DeleteObjectRequest, ObjectSpecifier};
     let mut r = reporter();
     r.set_auditable_operations(flags(&[AuditOperation::CREATE, AuditOperation::DELETE]))
@@ -491,7 +491,7 @@ async fn object_audit_policy_bv_create_delete_and_failed_calendar_create_fallbac
     }
     let mut bytes = BytesMut::new();
     CreateObjectRequest {
-        object_specifier: ObjectSpecifier::Type(ObjectType::CALENDAR),
+        object_specifier: ObjectSpecifier::Type(ObjectType::ACCESS_POINT),
         list_of_initial_values: vec![],
     }
     .encode(&mut bytes);
