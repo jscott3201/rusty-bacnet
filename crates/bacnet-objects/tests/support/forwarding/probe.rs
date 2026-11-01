@@ -7,7 +7,7 @@ use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use super::fixtures::{METADATA, address, day, noon, oid, property_error, schedule_write};
+use super::fixtures::{METADATA, address, noon, oid, property_error};
 use bacnet_objects::access_control::{AccessEventReport, CommittedAccessEvent};
 use bacnet_objects::accumulator::InputReading;
 use bacnet_objects::analog::AnalogValueObject;
@@ -28,12 +28,12 @@ use bacnet_objects::file::{FileConfiguration, FileObject, FileStorage};
 use bacnet_objects::log_buffer::{LogBufferRecords, LogRecordIdentity};
 use bacnet_objects::log_reporting::BufferReadyReport;
 use bacnet_objects::property_metadata::PropertyMetadata;
-use bacnet_objects::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 use bacnet_objects::staging::StagingWritePlan;
 use bacnet_objects::traits::{
-    AccessEvents, BACnetObject, Clocks, CommandRunner, CovReportedProperty, EnrollmentEval,
-    EventReporting, LifeSafety, LifeSafetyOperationEffect, LifeSafetyOperationOutcome, LocalInput,
-    LocalInputValue, ReliabilityEval, StagingSource, Timed,
+    AccessEvents, BACnetObject, CalendarState, Clocks, CommandRunner, CovReportedProperty,
+    EnrollmentEval, EventReporting, LifeSafety, LifeSafetyOperationEffect,
+    LifeSafetyOperationOutcome, LocalInput, LocalInputValue, ReliabilityEval, ScheduleRunner,
+    StagingSource, Timed,
 };
 use bacnet_objects::trend::TrendLogObject;
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
@@ -53,6 +53,8 @@ use bacnet_types::primitives::{BACnetTimeStamp, Date, ObjectIdentifier, Property
 mod access_batch;
 #[path = "eval.rs"]
 mod eval;
+#[path = "schedule.rs"]
+mod schedule;
 
 pub const CUSTOM: P = P::from_raw(5000);
 pub const CUSTOM_LIST: P = P::from_raw(5001);
@@ -299,6 +301,18 @@ impl BACnetObject for Probe {
         self.called("reliability_eval", ());
         Some(self)
     }
+    fn schedule_runner(&self) -> Option<&dyn ScheduleRunner> {
+        self.called("schedule_runner", ());
+        Some(self)
+    }
+    fn schedule_runner_mut(&mut self) -> Option<&mut dyn ScheduleRunner> {
+        self.called("schedule_runner_mut", ());
+        Some(self)
+    }
+    fn calendar_state(&self) -> Option<&dyn CalendarState> {
+        self.called("calendar_state", ());
+        Some(self)
+    }
     fn supports_cov_property(&self, property: P) -> bool {
         self.called("supports_cov_property", (property,));
         // Unlike the default, which follows `supports_subscribe_cov_property`
@@ -315,37 +329,6 @@ impl BACnetObject for Probe {
     }
     fn set_overridden(&mut self, overridden: bool) {
         self.called("set_overridden", (overridden,));
-    }
-    fn tick_schedule(
-        &mut self,
-        today: SpecificDate,
-        time: Time,
-        calendar_active: &dyn Fn(ObjectIdentifier) -> bool,
-    ) -> Option<ScheduleWrite> {
-        // The calendar callback is logged by what it answers.
-        let calendars = [4, 5].map(|instance| calendar_active(oid(ObjectType::CALENDAR, instance)));
-        self.called("tick_schedule", (today, time, calendars));
-        Some(schedule_write(2))
-    }
-    fn take_owed_schedule_writes(&mut self) -> Vec<ScheduleWrite> {
-        self.called("take_owed_schedule_writes", ());
-        vec![schedule_write(5)]
-    }
-    fn complete_schedule_write(
-        &mut self,
-        write: &ScheduleWrite,
-        outcomes: &[ScheduleTargetOutcome],
-    ) -> bool {
-        self.called("complete_schedule_write", (write, outcomes));
-        true
-    }
-    fn retry_refusals_naming(&self, target: ObjectIdentifier) -> Option<ScheduleWrite> {
-        self.called("retry_refusals_naming", (target,));
-        Some(schedule_write(7))
-    }
-    fn calendar_state_internal(&self, date: SpecificDate) -> Option<bool> {
-        self.called("calendar_state_internal", (date,));
-        Some(date == day())
     }
     fn take_due_averaging_sample_internal(
         &mut self,

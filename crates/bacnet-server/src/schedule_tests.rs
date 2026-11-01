@@ -11,8 +11,8 @@ use bacnet_objects::schedule::{CalendarObject, ScheduleObject};
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::constructed::{
-    BACnetDateRange, BACnetObjectPropertyReference, BACnetSpecialEvent, BACnetTimeValue,
-    SpecialEventPeriod,
+    BACnetCalendarEntry, BACnetDateRange, BACnetObjectPropertyReference, BACnetSpecialEvent,
+    BACnetTimeValue, SpecialEventPeriod,
 };
 use bytes::BytesMut;
 
@@ -334,4 +334,29 @@ async fn a_present_value_written_out_of_service_reaches_the_target_without_a_clo
     let guard = db.read().await;
     assert_eq!(schedule_present_value(&guard), REAL_5);
     assert_eq!(target_wire(&guard, 9), (REAL_5.to_vec(), REAL_5.to_vec()));
+}
+
+#[test]
+fn the_pass_asks_a_calendar_for_its_own_day_not_its_present_value() {
+    // Without a clock the Calendar's Present_Value is FALSE, but the pass
+    // asks it for the day it evaluates, through its CalendarState (#2179).
+    let christmas = SpecificDate::new(2026, 12, 25).unwrap();
+    let mut calendar = CalendarObject::new(CALENDAR, "Holidays").unwrap();
+    calendar
+        .add_date_entry(BACnetCalendarEntry::Date(christmas.to_date()))
+        .unwrap();
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(calendar)).unwrap();
+    let calendar = oid(ObjectType::CALENDAR, CALENDAR);
+    assert_eq!(
+        read_wire(&db, calendar, PropertyIdentifier::PRESENT_VALUE, None),
+        [0x10]
+    );
+    let states = calendar_states(&db, christmas);
+    assert_eq!(states.get(&calendar), Some(&true));
+    let boxing_day = SpecificDate::new(2026, 12, 26).unwrap();
+    assert_eq!(
+        calendar_states(&db, boxing_day).get(&calendar),
+        Some(&false)
+    );
 }

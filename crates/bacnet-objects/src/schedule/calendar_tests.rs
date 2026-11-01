@@ -218,7 +218,7 @@ fn calendar_present_value_follows_date_list_writes() {
 }
 
 #[test]
-fn calendar_state_hook_answers_for_any_day() {
+fn calendar_state_answers_for_any_day() {
     let cal = configured();
     // The configured entries: 14 September 2026, the same day as a range,
     // and every Monday.
@@ -228,7 +228,8 @@ fn calendar_state_hook_answers_for_any_day() {
         (SpecificDate::new(2026, 9, 15).unwrap(), false),
     ] {
         assert_eq!(cal.is_active_on(day), expected, "{day:?}");
-        assert_eq!(cal.calendar_state_internal(day), Some(expected), "{day:?}");
+        let state = cal.calendar_state().map(|state| state.state_on(day));
+        assert_eq!(state, Some(expected), "{day:?}");
     }
 }
 

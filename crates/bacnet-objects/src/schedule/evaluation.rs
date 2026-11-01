@@ -51,7 +51,7 @@ pub struct ScheduleWrite {
 
 /// How one target took a [`ScheduleWrite`], as the server reports it back
 /// through
-/// [`complete_schedule_write`](crate::traits::BACnetObject::complete_schedule_write)
+/// [`complete_schedule_write`](crate::traits::ScheduleRunner::complete_schedule_write)
 /// (#1086).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScheduleTargetOutcome {
