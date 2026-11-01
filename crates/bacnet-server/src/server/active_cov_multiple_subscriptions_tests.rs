@@ -604,7 +604,7 @@ async fn active_cov_multiple_wire_rpm_rp_and_local_reads_agree_within_scope() {
     assert_eq!(
         selected,
         device(),
-        "lowest Device instance owns the live lists"
+        "the identity's Device (here the lowest) owns the live lists"
     );
     let (live_device, standalone) = (device(), other);
     let empty = Vec::<u8>::new();

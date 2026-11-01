@@ -445,10 +445,10 @@ async fn audit_forwarding_isolated_cycle_is_content_bounded_not_global_deduplica
     b.server.stop().await.unwrap();
 }
 
-/// With several Devices the lowest is this device (#1204). Receipt reads its
-/// APDU_Timeout, and a parent naming any other Device is forwarded, even one
-/// this database also holds; a parent naming the lowest is this device and
-/// isn't. A database whose only Device is the wildcard has no identity to tell
+/// With several Devices at start the lowest is the identity's, so this device
+/// (#1204, #2227). Receipt reads its APDU_Timeout, and a parent naming any
+/// other Device is forwarded, even one this database also holds; a parent
+/// naming the identity's is this device and isn't. A database whose only Device is the wildcard has no identity to tell
 /// a parent from itself, so it forwards nothing.
 #[tokio::test(start_paused = true)]
 async fn audit_forwarding_follows_the_lowest_of_several_devices() {

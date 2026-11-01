@@ -55,20 +55,6 @@ pub(crate) fn handle_audit_notification_with_change(
     storage.store_notifications_with_change(&request.notifications, apdu_timeout_ms)
 }
 
-/// Store one decoded and authorized confirmed notification batch, as
-/// [`handle_audit_notification`] does.
-///
-/// Retained as a compatibility alias for the original confirmed-only receiver
-/// API; both inbound AuditNotification forms use the same atomic storage owner.
-pub fn handle_confirmed_audit_notification(
-    db: &mut ObjectDatabase,
-    device: ObjectIdentifier,
-    sink: ObjectIdentifier,
-    request: &AuditNotificationRequest,
-) -> Result<(), Error> {
-    handle_audit_notification(db, device, sink, request)
-}
-
 /// Check one sink-owned completed confirmed receipt without mutation.
 pub(crate) fn has_completed_confirmed_audit_receipt(
     db: &mut ObjectDatabase,

@@ -503,11 +503,12 @@ name the actual plan source after its existing generation check. Failed CreateOb
 WPM retains its successful prefix and failed coordinate.
 
 `BACnetServer::write_local` requires a final `LocalCommandSource` argument:
-`ServerDevice` or `Object(oid)`. Both require a selected concrete local Device for
+`ServerDevice` or `Object(oid)`. Both require the identity's Device object for
 tracked commands; the object form also requires an existing concrete local
 initiator under the database guard. Missing or wildcard-only Device identity and
 missing initiators fail closed. Unrelated local writes retain their behavior
-without a Device. The selected Device owns correction rights; changing the local
+without a Device. The identity's Device owns correction rights, even beside a
+lower-instance Device added later (#2227); changing the local
 initiator changes the published source but not that owner. Custom objects retain
 the default generic writer unless they implement the new hook. Writable
 decorators must forward it, as the endpoint source-reporting decorator does.

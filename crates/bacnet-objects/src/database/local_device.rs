@@ -39,8 +39,12 @@ impl LocalDevice {
 }
 
 impl ObjectDatabase {
-    /// The Device object this database represents, for wildcard reads,
-    /// discovery, notifications and reference resolution.
+    /// The lowest-instance Device this database holds: what server startup
+    /// and endpoint preflight check against their identity, the standalone
+    /// PICS reports, a wildcard read with no executor resolves to, and what
+    /// [`local_device`](Self::local_device) falls back to while unbound. Once a
+    /// server or endpoint has bound its identity's Device, notifications and
+    /// reference resolution follow that binding instead (#2227).
     ///
     /// Clause 12.11 expects one Device per BACnet device. When a database
     /// holds several, the lowest instance wins: a deterministic local policy,

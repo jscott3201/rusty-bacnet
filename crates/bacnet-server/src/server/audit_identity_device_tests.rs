@@ -85,3 +85,24 @@ async fn the_sink_and_forwarder_follow_the_identity_device_beside_a_lower_one() 
     assert!(f.requests().is_empty(), "no copy to this device's own log");
     f.server.stop().await.unwrap();
 }
+
+/// Without the identity's Device object there is no device to tell a parent
+/// from, so forwarding stays unconfigured, bound identity or not.
+#[tokio::test(start_paused = true)]
+async fn forwarding_stays_unconfigured_without_the_identity_device_object() {
+    let store = Arc::new(MemoryPersistence::default());
+    let mut log = AuditLogObject::new(7, "forwarder", 16, store.clone()).unwrap();
+    log.set_member_of(Some(parent()));
+    let binding = DeviceBinding::local(oid(ObjectType::DEVICE, 20), [2]).unwrap();
+    let (server, wire) = start_on(&[], log, Some(binding), 1476).await;
+    let mut f = Fixture {
+        server,
+        store,
+        wire,
+    };
+    assert_eq!(
+        f.reliability().await,
+        PropertyValue::Enumerated(Reliability::CONFIGURATION_ERROR.to_raw())
+    );
+    f.server.stop().await.unwrap();
+}

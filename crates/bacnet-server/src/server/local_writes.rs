@@ -140,8 +140,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// then releases the lock and runs the COV/event trigger path so a
     /// subscription observes a local mutation just as it would a network one.
     /// `source` explicitly selects the Device or an existing initiating object.
-    /// Tracked commands require a concrete selected Device; the selected Device
-    /// retains correction ownership regardless of the local initiator. Unrelated
+    /// Tracked commands require the identity's Device object to be present;
+    /// that Device, not a lower-instance one added later (#2227), retains
+    /// correction ownership regardless of the local initiator. Unrelated
     /// properties preserve their behavior without a usable command origin.
     /// Low-level object setters deliberately bypass this notification owner.
     ///

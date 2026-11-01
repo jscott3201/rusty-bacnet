@@ -37,6 +37,8 @@ struct IdentityPreparation<'a, T: TransportPort + 'static> {
     had_database: bool,
     client_capacity: u16,
     session_capacity: u16,
+    /// The database was bound to the identity's Device (#2227).
+    bound: bool,
     committed: bool,
 }
 
@@ -48,6 +50,16 @@ impl<T: TransportPort + 'static> Drop for IdentityPreparation<'_, T> {
             self.session.config.max_apdu_length = self.session_capacity;
             if !self.had_database {
                 self.session.database = None;
+            } else if self.bound
+                && let Some(mut database) = self
+                    .session
+                    .database
+                    .as_ref()
+                    .and_then(|db| db.try_write().ok())
+            {
+                // Release the binding a failed or cancelled preflight made.
+                // Nothing in the preflight still holds the guard by now.
+                database.bind_local_device_internal(None);
             }
         }
     }
@@ -69,26 +81,39 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             client_capacity: self.client_config.max_apdu_length,
             session_capacity: self.config.max_apdu_length,
             session: self,
+            bound: false,
             committed: false,
         };
         preparation.session.validate_segmentation().await?;
         preparation.session.prepare_identity().await?;
         let device = preparation.session.validate_device_execution()?;
         let routes = preparation.session.prepare_source_audit_reporter()?;
+        // Bind the database to the identity's Device from here on, as a
+        // server's is, even beside a lower one added later (#2227); with no
+        // identity it keeps its lowest Device. A preflight that fails or is
+        // cancelled after this releases the binding again (Drop).
+        preparation.session.bind_identity_device()?;
+        preparation.bound = true;
         preparation.session.prepare_registered_port().await?;
         preparation.session.commit_device_profile(device);
-        // The database speaks for the identity's Device from here on, as a
-        // server's does, even beside a lower one added later (#2227). With
-        // no identity it keeps its lowest Device.
-        if let Some(database) = &preparation.session.database {
-            let device = preparation
-                .session
-                .identity
-                .as_ref()
-                .map(|i| i.device_oid());
-            database.write().await.bind_local_device_internal(device);
-        }
         preparation.committed = true;
         Ok((device, routes))
+    }
+}
+
+impl<T: TransportPort + 'static> EndpointSession<T> {
+    /// Bind the startup database to the identity's Device, or release it to
+    /// the lowest Device without an identity. It takes the guard without
+    /// waiting: a database the application holds locked fails the preflight,
+    /// leaving the session ready to retry.
+    fn bind_identity_device(&mut self) -> Result<(), Error> {
+        let device = self.identity.as_ref().map(|identity| identity.device_oid());
+        if let Some(database) = &self.database {
+            database
+                .try_write()
+                .map_err(|_| Error::Encoding("endpoint database is locked at start".into()))?
+                .bind_local_device_internal(device);
+        }
+        Ok(())
     }
 }

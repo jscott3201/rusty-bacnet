@@ -301,6 +301,36 @@ mod tests {
         ObjectIdentifier::new(ObjectType::STAGING, 1).unwrap()
     }
 
+    /// Bound to Device 7, as a server binds its identity's Device, the
+    /// database localizes members naming 7, not a lower Device 3 added
+    /// later (#2227).
+    #[test]
+    fn members_naming_the_bound_device_lose_it_beside_a_lower_one() {
+        let mut db = database(7);
+        db.bind_local_device_internal(Some(device(7)));
+        db.add(Box::new(
+            DeviceObject::new(DeviceConfig {
+                identity: bacnet_objects::DeviceIdentity::new(3, 0)
+                    .unwrap()
+                    .with_name("Device-3"),
+                ..DeviceConfig::default()
+            })
+            .unwrap(),
+        ))
+        .unwrap();
+        let written = encoded(&[member(1, Some(device(7))), member(2, Some(device(3)))]);
+        let expected = encoded(&[member(1, None), member(2, Some(device(3)))]);
+        assert_eq!(
+            localize(
+                &db,
+                schedule(),
+                LIST,
+                PropertyValue::ApplicationData(written)
+            ),
+            PropertyValue::ApplicationData(expected)
+        );
+    }
+
     #[test]
     fn only_members_naming_the_local_device_lose_their_device() {
         let db = database(7);

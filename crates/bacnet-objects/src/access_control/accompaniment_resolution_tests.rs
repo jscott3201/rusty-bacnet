@@ -360,3 +360,23 @@ fn accompaniment_original_rights_errors_are_preserved() {
         }))
     ));
 }
+/// Bound to Device 100, as a server binds its identity's Device, a
+/// requirement naming 100 stays local once a lower Device 5 is added (#2227).
+#[test]
+fn accompaniment_requirement_naming_the_bound_device_stays_local_beside_a_lower_one() {
+    let mut db = database(Some(qualified(credential(2), device(100))));
+    add_device(&mut db);
+    db.bind_local_device_internal(Some(device(100)));
+    db.add(Box::new(
+        crate::device::DeviceObject::new(crate::device::DeviceConfig {
+            identity: crate::DeviceIdentity::new(5, 0).unwrap().with_name("lower"),
+            ..crate::device::DeviceConfig::default()
+        })
+        .unwrap(),
+    ))
+    .unwrap();
+    assert_eq!(
+        evaluate(&db, &[presented(2)]).outcome,
+        AccompanimentOutcome::Satisfied
+    );
+}
