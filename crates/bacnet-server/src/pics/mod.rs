@@ -637,6 +637,9 @@ mod selected_device_tests;
 mod creation_only_tests;
 
 #[cfg(test)]
+mod createable_rows_tests;
+
+#[cfg(test)]
 mod data_link_tests;
 
 #[cfg(test)]
