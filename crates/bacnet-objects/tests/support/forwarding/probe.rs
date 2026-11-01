@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::fixtures::{METADATA, address, day, noon, oid, property_error, schedule_write};
-use bacnet_objects::access_control::{AccessControlInput, AccessEventReport, CommittedAccessEvent};
+use bacnet_objects::access_control::{AccessEventReport, CommittedAccessEvent};
 use bacnet_objects::accumulator::InputReading;
 use bacnet_objects::analog::AnalogValueObject;
 use bacnet_objects::audit::{
@@ -34,8 +34,9 @@ use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 use bacnet_objects::staging::StagingWritePlan;
 use bacnet_objects::traits::{
-    BACnetObject, Clocks, CommandRunner, CovReportedProperty, LifeSafetyOperationEffect,
-    LifeSafetyOperationOutcome, ReliabilityEvaluation, StagingSource, Timed,
+    AccessEvents, BACnetObject, Clocks, CommandRunner, CovReportedProperty, LifeSafety,
+    LifeSafetyOperationEffect, LifeSafetyOperationOutcome, LocalInput, LocalInputValue,
+    ReliabilityEvaluation, StagingSource, Timed,
 };
 use bacnet_objects::trend::TrendLogObject;
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter, EventTransitionBits};
@@ -267,6 +268,18 @@ impl BACnetObject for Probe {
         self.called("command_runner_mut", ());
         Some(self)
     }
+    fn local_input(&mut self) -> Option<&mut dyn LocalInput> {
+        self.called("local_input", ());
+        Some(self)
+    }
+    fn access_events(&mut self) -> Option<&mut dyn AccessEvents> {
+        self.called("access_events", ());
+        Some(self)
+    }
+    fn life_safety(&mut self) -> Option<&mut dyn LifeSafety> {
+        self.called("life_safety", ());
+        Some(self)
+    }
     fn enrollment_summary_capability_internal(&self) -> Option<EnrollmentSummaryCapability> {
         self.called("enrollment_summary_capability_internal", ());
         Some(EnrollmentSummaryCapability {
@@ -383,23 +396,6 @@ impl BACnetObject for Probe {
             to: EventState::NORMAL,
         }))
     }
-    fn apply_life_safety_operation(
-        &mut self,
-        operation: LifeSafetyOperation,
-    ) -> Result<LifeSafetyOperationOutcome, Error> {
-        self.called("apply_life_safety_operation", (operation,));
-        Ok(LifeSafetyOperationOutcome {
-            effect: LifeSafetyOperationEffect::Applied,
-            changed_properties: vec![P::SILENCED],
-        })
-    }
-    fn set_life_safety_operation_expected_internal(
-        &mut self,
-        operation: LifeSafetyOperation,
-    ) -> Result<(), Error> {
-        self.called("set_life_safety_operation_expected_internal", (operation,));
-        Ok(())
-    }
     fn set_event_state_internal(&mut self, state: EventState) -> Result<(), Error> {
         self.called("set_event_state_internal", (state,));
         Ok(())
@@ -448,51 +444,6 @@ impl BACnetObject for Probe {
     }
     fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
         self.called("set_reliability_internal", (reliability,));
-        Ok(())
-    }
-    fn set_present_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
-        self.called("set_present_value_internal", (value,));
-        Ok(())
-    }
-    fn set_present_value_from_internal(
-        &mut self,
-        value: PropertyValue,
-        origin: &CommandOrigin,
-    ) -> Result<(), Error> {
-        self.called("set_present_value_from_internal", (value, origin));
-        // Unlike the default, which answers as `set_present_value_internal` does.
-        Err(property_error(ErrorCode::VALUE_OUT_OF_RANGE))
-    }
-    fn set_tracking_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
-        self.called("set_tracking_value_internal", (value,));
-        Ok(())
-    }
-    fn supports_access_event_batch_internal(&self) -> bool {
-        self.called("supports_access_event_batch_internal", ());
-        true
-    }
-    fn record_access_event_batch_internal(
-        &mut self,
-        reports: &[AccessEventReport],
-    ) -> Result<Vec<CommittedAccessEvent>, Error> {
-        access_batch::record(self, reports)
-    }
-    fn report_access_input_internal(&mut self, input: AccessControlInput) -> Result<(), Error> {
-        self.called("report_access_input_internal", (input,));
-        Ok(())
-    }
-    fn set_controlled_variable_value_internal(
-        &mut self,
-        value: PropertyValue,
-    ) -> Result<(), Error> {
-        self.called("set_controlled_variable_value_internal", (value,));
-        Ok(())
-    }
-    fn add_averaging_sample_internal(
-        &mut self,
-        sample: Option<PropertyValue>,
-    ) -> Result<(), Error> {
-        self.called("add_averaging_sample_internal", (sample,));
         Ok(())
     }
     fn take_due_averaging_sample_internal(
@@ -711,6 +662,49 @@ impl CommandRunner for Probe {
     fn complete_command_run(&mut self, generation: u64, outcome: Result<(), WriteFailure>) -> bool {
         self.called("CommandRunner::complete_command_run", (generation, outcome));
         true
+    }
+}
+
+/// The probe's local input capability, logged under `LocalInput::`.
+impl LocalInput for Probe {
+    fn apply_local_input(&mut self, input: LocalInputValue) -> Result<(), Error> {
+        self.called("LocalInput::apply_local_input", (input,));
+        Err(property_error(ErrorCode::VALUE_OUT_OF_RANGE))
+    }
+}
+
+/// The probe's access-event capability, logged under `AccessEvents::`.
+impl AccessEvents for Probe {
+    fn record_access_event_batch(
+        &mut self,
+        reports: &[AccessEventReport],
+    ) -> Result<Vec<CommittedAccessEvent>, Error> {
+        access_batch::record(self, reports)
+    }
+}
+
+/// The probe's Life Safety capability, logged under `LifeSafety::`: every
+/// method answers unlike its default.
+impl LifeSafety for Probe {
+    fn apply_life_safety_operation(
+        &mut self,
+        operation: LifeSafetyOperation,
+    ) -> Result<LifeSafetyOperationOutcome, Error> {
+        self.called("LifeSafety::apply_life_safety_operation", (operation,));
+        Ok(LifeSafetyOperationOutcome {
+            effect: LifeSafetyOperationEffect::Applied,
+            changed_properties: vec![P::SILENCED],
+        })
+    }
+    fn set_life_safety_operation_expected(
+        &mut self,
+        operation: LifeSafetyOperation,
+    ) -> Result<(), Error> {
+        self.called(
+            "LifeSafety::set_life_safety_operation_expected",
+            (operation,),
+        );
+        Ok(())
     }
 }
 

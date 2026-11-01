@@ -236,7 +236,11 @@ fn loop_present_value_is_writable_only_out_of_service() {
 #[test]
 fn loop_application_present_value_is_refused_out_of_service() {
     let mut lo = LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
-    lo.set_present_value_internal(PropertyValue::Real(12.0))
+    lo.local_input()
+        .unwrap()
+        .apply_local_input(crate::traits::LocalInputValue::present_value(
+            PropertyValue::Real(12.0),
+        ))
         .unwrap();
     assert_eq!(
         read(&lo, PropertyIdentifier::PRESENT_VALUE),
@@ -252,7 +256,11 @@ fn loop_application_present_value_is_refused_out_of_service() {
     )
     .unwrap();
     assert_property_error(
-        lo.set_present_value_internal(PropertyValue::Real(13.0))
+        lo.local_input()
+            .unwrap()
+            .apply_local_input(crate::traits::LocalInputValue::present_value(
+                PropertyValue::Real(13.0),
+            ))
             .unwrap_err(),
         ErrorCode::WRITE_ACCESS_DENIED,
     );
@@ -264,11 +272,19 @@ fn loop_application_present_value_is_refused_out_of_service() {
 
     set_out_of_service(&mut lo, false);
     assert_property_error(
-        lo.set_present_value_internal(PropertyValue::Real(f32::INFINITY))
+        lo.local_input()
+            .unwrap()
+            .apply_local_input(crate::traits::LocalInputValue::present_value(
+                PropertyValue::Real(f32::INFINITY),
+            ))
             .unwrap_err(),
         ErrorCode::VALUE_OUT_OF_RANGE,
     );
-    lo.set_present_value_internal(PropertyValue::Real(14.0))
+    lo.local_input()
+        .unwrap()
+        .apply_local_input(crate::traits::LocalInputValue::present_value(
+            PropertyValue::Real(14.0),
+        ))
         .unwrap();
     assert_eq!(
         read(&lo, PropertyIdentifier::PRESENT_VALUE),
@@ -311,7 +327,11 @@ fn loop_controlled_variable_value_hook_takes_finite_reals_in_and_out_of_service(
     let mut lo = LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     for (out_of_service, measured) in [(false, 20.5), (true, 19.0), (false, -4.25)] {
         set_out_of_service(&mut lo, out_of_service);
-        lo.set_controlled_variable_value_internal(PropertyValue::Real(measured))
+        lo.local_input()
+            .unwrap()
+            .apply_local_input(crate::traits::LocalInputValue::ControlledVariableValue(
+                PropertyValue::Real(measured),
+            ))
             .unwrap();
         assert_eq!(
             read(&lo, PropertyIdentifier::CONTROLLED_VARIABLE_VALUE),
@@ -328,7 +348,11 @@ fn loop_controlled_variable_value_hook_takes_finite_reals_in_and_out_of_service(
         ),
     ] {
         assert_property_error(
-            lo.set_controlled_variable_value_internal(value)
+            lo.local_input()
+                .unwrap()
+                .apply_local_input(crate::traits::LocalInputValue::ControlledVariableValue(
+                    value,
+                ))
                 .unwrap_err(),
             code,
         );
@@ -346,7 +370,11 @@ fn controlled_variable_value_hook_is_refused_by_other_objects() {
         crate::analog::AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS)
             .unwrap();
     let error = av
-        .set_controlled_variable_value_internal(PropertyValue::Real(1.0))
+        .local_input()
+        .unwrap()
+        .apply_local_input(crate::traits::LocalInputValue::ControlledVariableValue(
+            PropertyValue::Real(1.0),
+        ))
         .unwrap_err();
     assert!(
         matches!(error, Error::Remote(RemoteError::Error { class, code })

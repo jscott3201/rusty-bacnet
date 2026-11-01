@@ -1,7 +1,7 @@
 //! LifeSafetyOperation service handler.
 //!
 use super::super::*;
-use bacnet_objects::traits::LifeSafetyOperationEffect;
+use bacnet_objects::traits::{LifeSafetyOperationEffect, LifeSafetyOperationOutcome};
 use bacnet_services::life_safety::LifeSafetyOperationRequest;
 use bacnet_types::enums::{ErrorClass, ErrorCode, LifeSafetyOperation};
 
@@ -30,7 +30,7 @@ pub(crate) fn handle_life_safety_operation(
                 ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
             ));
         }
-        return match object.apply_life_safety_operation(request.request)? {
+        return match apply(object, request.request)? {
             outcome if outcome.effect == LifeSafetyOperationEffect::Applied => {
                 Ok(LifeSafetyCovChange::new(oid, outcome.changed_properties)
                     .into_iter()
@@ -54,7 +54,7 @@ pub(crate) fn handle_life_safety_operation(
         let Some(object) = db.get_mut(&oid) else {
             continue;
         };
-        match object.apply_life_safety_operation(request.request) {
+        match apply(object, request.request) {
             Ok(outcome) if outcome.effect == LifeSafetyOperationEffect::Applied => {
                 applied += 1;
                 if let Some(change) = LifeSafetyCovChange::new(oid, outcome.changed_properties) {
@@ -74,6 +74,21 @@ pub(crate) fn handle_life_safety_operation(
         "completed all-applicable LifeSafetyOperation"
     );
     Ok(cov_changes)
+}
+
+/// Apply `operation` through the object's Life Safety capability; an object
+/// that lends none doesn't support the service.
+fn apply(
+    object: &mut dyn bacnet_objects::traits::BACnetObject,
+    operation: LifeSafetyOperation,
+) -> Result<LifeSafetyOperationOutcome, Error> {
+    match object.life_safety() {
+        Some(life_safety) => life_safety.apply_life_safety_operation(operation),
+        None => Err(life_safety_error(
+            ErrorClass::OBJECT,
+            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+        )),
+    }
 }
 
 /// Validate the standard operations accepted by the service.

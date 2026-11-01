@@ -55,7 +55,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         self.active_network()?;
         let oid = request.original.point;
         let (mut db, table) = self.authorization_guards().await;
-        admit(&db, &oid)?;
+        admit(&mut db, &oid)?;
         let evaluation = evaluate_authorization(&db, request)?;
         if !matches!(
             evaluation.outcome,
@@ -76,8 +76,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .collect();
         let committed = db
             .get_mut(&oid)
+            .and_then(|object| object.access_events())
             .expect("admitted point remains under the same database guard")
-            .record_access_event_batch_internal(&reports)?;
+            .record_access_event_batch(&reports)?;
         let records = committed.iter().map(|event| event.report.clone()).collect();
         for event in &committed {
             table
@@ -136,7 +137,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 }
 
 /// Reject unhealthy or malformed admission before invoking the pure evaluator.
-fn admit(db: &ObjectDatabase, oid: &ObjectIdentifier) -> Result<(), Error> {
+fn admit(db: &mut ObjectDatabase, oid: &ObjectIdentifier) -> Result<(), Error> {
     let object = db.get(oid).ok_or(Error::protocol(
         ErrorClass::OBJECT,
         ErrorCode::UNKNOWN_OBJECT,
@@ -167,7 +168,9 @@ fn admit(db: &ObjectDatabase, oid: &ObjectIdentifier) -> Result<(), Error> {
             ErrorCode::WRITE_ACCESS_DENIED,
         ));
     }
-    if !object.supports_access_event_batch_internal() {
+    // The point takes the batch only through its AccessEvents capability.
+    let batches = db.get_mut(oid).and_then(|object| object.access_events());
+    if batches.is_none() {
         return Err(Error::protocol(
             ErrorClass::OBJECT,
             ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,

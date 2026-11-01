@@ -10,7 +10,6 @@
 
 use super::*;
 use bacnet_objects::property_metadata::{has_property, property_list};
-use bacnet_types::error::RemoteError;
 #[path = "../../bacnet-objects/tests/support/forwarding/mod.rs"]
 mod forwarding;
 
@@ -80,20 +79,14 @@ fn a_device_keeps_its_owned_answers_and_forwards_every_other_query() {
 }
 
 #[test]
-fn a_read_view_refuses_batch_mutation_without_calling_the_wrapped_object() {
+fn a_read_view_lends_no_batch_capability() {
     let db = ObjectDatabase::new();
     let context = DeviceReadContext::new(&db, DeviceExecution::FullServer);
     let log = CallLog::default();
     let probe = Probe::new(ObjectType::ACCESS_POINT, log.clone());
     let mut view = context.object(&probe);
-    assert!(view.supports_access_event_batch_internal());
-    take(&log);
-    assert!(matches!(
-        view.record_access_event_batch_internal(&[]),
-        Err(Error::Remote(RemoteError::Error {
-            class: ErrorClass::OBJECT,
-            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        }))
-    ));
+    // The view borrows the object shared, so it lends no batch capability,
+    // though the probe has one.
+    assert!(view.access_events().is_none());
     assert!(forwarded(&log).is_empty());
 }

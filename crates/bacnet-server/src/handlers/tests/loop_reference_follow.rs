@@ -100,7 +100,13 @@ fn run_pass(db: &mut ObjectDatabase, lo: ObjectIdentifier) -> f32 {
     );
     db.get_mut(&lo)
         .unwrap()
-        .set_controlled_variable_value_internal(PropertyValue::Real(measured))
+        .local_input()
+        .unwrap()
+        .apply_local_input(
+            bacnet_objects::traits::LocalInputValue::ControlledVariableValue(PropertyValue::Real(
+                measured,
+            )),
+        )
         .unwrap();
     let setpoint = match decode_setpoint_reference(&read_bytes(db, lo, SR)).unwrap() {
         Some(reference) => read_real(
@@ -113,7 +119,11 @@ fn run_pass(db: &mut ObjectDatabase, lo: ObjectIdentifier) -> f32 {
     let output = setpoint - measured;
     db.get_mut(&lo)
         .unwrap()
-        .set_present_value_internal(PropertyValue::Real(output))
+        .local_input()
+        .unwrap()
+        .apply_local_input(bacnet_objects::traits::LocalInputValue::present_value(
+            PropertyValue::Real(output),
+        ))
         .unwrap();
     let manipulate = decode_object_property_reference(&read_bytes(db, lo, MVR)).unwrap();
     write(

@@ -378,14 +378,6 @@ impl BACnetObject for AnalogInputObject {
         Ok(())
     }
 
-    fn set_present_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
-        // Local safe-ownership policy: preserve the client's OOS simulation.
-        if self.out_of_service {
-            return Err(common::write_access_denied_error());
-        }
-        self.apply_present_value(value)
-    }
-
     fn evaluate_reliability_internal(&mut self) -> Result<ReliabilityEvaluation, Error> {
         if self.out_of_service || self.reliability_inhibit.enabled() {
             return Ok(ReliabilityEvaluation::Unchanged);
@@ -408,6 +400,24 @@ impl BACnetObject for AnalogInputObject {
         value: PropertyValue,
     ) -> Result<(), Error> {
         super::initialize_units(&mut self.units, property, value)
+    }
+
+    fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
+        Some(self)
+    }
+}
+
+/// The Present_Value the application supplies.
+impl crate::traits::LocalInput for AnalogInputObject {
+    fn apply_local_input(&mut self, input: crate::traits::LocalInputValue) -> Result<(), Error> {
+        let crate::traits::LocalInputValue::PresentValue { value, .. } = input else {
+            return Err(crate::traits::unsupported_local_input());
+        };
+        // Local safe-ownership policy: preserve the client's OOS simulation.
+        if self.out_of_service {
+            return Err(common::write_access_denied_error());
+        }
+        self.apply_present_value(value)
     }
 }
 

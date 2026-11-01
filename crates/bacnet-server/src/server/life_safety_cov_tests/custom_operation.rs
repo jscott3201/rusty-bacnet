@@ -119,6 +119,13 @@ impl BACnetObject for CustomPoint {
         ]
         .contains(&p)
     }
+
+    fn life_safety(&mut self) -> Option<&mut dyn bacnet_objects::traits::LifeSafety> {
+        Some(self)
+    }
+}
+
+impl bacnet_objects::traits::LifeSafety for CustomPoint {
     fn apply_life_safety_operation(
         &mut self,
         _: LifeSafetyOperation,
@@ -364,6 +371,8 @@ async fn applied_without_readback_deltas_succeeds_without_cov() {
         let mut db = fixture.db.write().await;
         let object = db.get_mut(&point_oid()).unwrap();
         let next = object
+            .life_safety()
+            .unwrap()
             .apply_life_safety_operation(LifeSafetyOperation::SILENCE)
             .unwrap();
         assert_eq!(

@@ -487,25 +487,30 @@ impl BACnetObject for AccessPointObject {
         true
     }
 
-    fn supports_access_event_batch_internal(&self) -> bool {
-        true
+    fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
+        Some(self)
     }
 
-    fn record_access_event_batch_internal(
-        &mut self,
-        reports: &[AccessEventReport],
-    ) -> Result<Vec<CommittedAccessEvent>, Error> {
-        self.record_event_batch(reports)
+    fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
+        Some(self)
     }
 
-    /// Take an access event the application reports (#1132), through
-    /// [`Self::set_access_event`]. Refused with WRITE_ACCESS_DENIED while
-    /// Out_Of_Service is TRUE (Clause 12.31.8) or Reliability isn't
-    /// NO_FAULT_DETECTED (Clause 12.31.7), since the point performs no
-    /// authentication then, and any other record with
-    /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
-    fn report_access_input_internal(&mut self, input: AccessControlInput) -> Result<(), Error> {
-        let AccessControlInput::AccessEvent(report) = input else {
+    fn access_events(&mut self) -> Option<&mut dyn crate::traits::AccessEvents> {
+        Some(self)
+    }
+}
+
+/// Take an access event the application reports (#1132), through
+/// [`Self::set_access_event`]. Refused with WRITE_ACCESS_DENIED while
+/// Out_Of_Service is TRUE (Clause 12.31.8) or Reliability isn't
+/// NO_FAULT_DETECTED (Clause 12.31.7), since the point performs no
+/// authentication then, and any other record with
+/// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
+impl crate::traits::LocalInput for AccessPointObject {
+    fn apply_local_input(&mut self, input: crate::traits::LocalInputValue) -> Result<(), Error> {
+        let crate::traits::LocalInputValue::AccessControl(AccessControlInput::AccessEvent(report)) =
+            input
+        else {
             return Err(common::optional_functionality_not_supported_error());
         };
         if self.out_of_service || self.reliability != Reliability::NO_FAULT_DETECTED {
@@ -513,9 +518,14 @@ impl BACnetObject for AccessPointObject {
         }
         self.set_access_event(report)
     }
+}
 
-    fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
-        Some(self)
+impl crate::traits::AccessEvents for AccessPointObject {
+    fn record_access_event_batch(
+        &mut self,
+        reports: &[AccessEventReport],
+    ) -> Result<Vec<CommittedAccessEvent>, Error> {
+        self.record_event_batch(reports)
     }
 }
 

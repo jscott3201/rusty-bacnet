@@ -4,7 +4,6 @@
 use super::capabilities::CAPABILITY_ROWS;
 use super::fixtures::{address, day, noon, oid, schedule_write};
 use super::probe::{CUSTOM, CUSTOM_LIST};
-use bacnet_objects::access_control::{AccessControlInput, AccessEventReport, DoorStateReport};
 use bacnet_objects::accumulator::InputReading;
 use bacnet_objects::command_source::CommandOrigin;
 use bacnet_objects::event::{EventStateChange, EventTransition, EventTransitionCommit};
@@ -19,8 +18,7 @@ use bacnet_types::constructed::{
     EventLogDatum, LogData, LogDatum, LogValue,
 };
 use bacnet_types::enums::{
-    AccessEvent, AuditLevel, DoorStatus, EventState, LifeSafetyOperation, ObjectType,
-    PropertyIdentifier as P, Reliability,
+    AuditLevel, EventState, ObjectType, PropertyIdentifier as P, Reliability,
 };
 use bacnet_types::primitives::{BACnetTimeStamp, Date, PropertyValue};
 use std::time::Duration;
@@ -157,9 +155,6 @@ pub const QUERIES: &[(&str, Query)] = &[
         format!("{:?}", o.creation_only_properties())
     }),
     ("is_deleteable", |o| o.is_deleteable().to_string()),
-    ("supports_access_event_batch_internal", |o| {
-        o.supports_access_event_batch_internal().to_string()
-    }),
     ("supports_cov", |o| o.supports_cov().to_string()),
     // Rendered beside `supports_cov`: the probe's false must differ both from
     // an all-default object (false, false) and from an adapter that kept the
@@ -315,6 +310,18 @@ pub const COMMANDS: &[(&str, Command)] = &[
     ("command_runner_mut", |o| {
         format!("{:?}", o.command_runner_mut().map(|runner| address(runner)))
     }),
+    ("local_input", |o| {
+        format!("{:?}", o.local_input().map(|input| address(input)))
+    }),
+    ("access_events", |o| {
+        format!("{:?}", o.access_events().map(|events| address(events)))
+    }),
+    ("life_safety", |o| {
+        format!(
+            "{:?}",
+            o.life_safety().map(|life_safety| address(life_safety))
+        )
+    }),
     ("set_overridden", |o| {
         format!("{:?}", o.set_overridden(true))
     }),
@@ -367,18 +374,6 @@ pub const COMMANDS: &[(&str, Command)] = &[
             o.acknowledge_alarm_correlated_detailed_internal(EventState::HIGH_LIMIT, &timestamp)
         )
     }),
-    ("apply_life_safety_operation", |o| {
-        format!(
-            "{:?}",
-            o.apply_life_safety_operation(LifeSafetyOperation::SILENCE)
-        )
-    }),
-    ("set_life_safety_operation_expected_internal", |o| {
-        format!(
-            "{:?}",
-            o.set_life_safety_operation_expected_internal(LifeSafetyOperation::SILENCE)
-        )
-    }),
     ("set_event_state_internal", |o| {
         format!("{:?}", o.set_event_state_internal(EventState::OFFNORMAL))
     }),
@@ -403,78 +398,6 @@ pub const COMMANDS: &[(&str, Command)] = &[
     }),
     ("set_reliability_internal", |o| {
         format!("{:?}", o.set_reliability_internal(Reliability::OVER_RANGE))
-    }),
-    ("set_present_value_internal", |o| {
-        format!(
-            "{:?}",
-            o.set_present_value_internal(PropertyValue::Real(21.5))
-        )
-    }),
-    ("set_present_value_from_internal", |o| {
-        let origin = CommandOrigin::Local {
-            owner_device: oid(ObjectType::DEVICE, 9),
-            initiating_object: None,
-        };
-        format!(
-            "{:?}",
-            o.set_present_value_from_internal(PropertyValue::Real(22.5), &origin)
-        )
-    }),
-    ("set_tracking_value_internal", |o| {
-        format!(
-            "{:?}",
-            o.set_tracking_value_internal(PropertyValue::Unsigned(4))
-        )
-    }),
-    ("record_access_event_batch_internal", |o| {
-        let reports = [
-            AccessEventReport {
-                time: Some(BACnetTimeStamp::SequenceNumber(12)),
-                ..AccessEventReport::new(AccessEvent::GRANTED, 41)
-            },
-            AccessEventReport {
-                time: Some(BACnetTimeStamp::SequenceNumber(13)),
-                ..AccessEventReport::new(AccessEvent::DENIED_OTHER, 42)
-            },
-        ];
-        format!(
-            "{:?}",
-            o.record_access_event_batch_internal(&reports)
-                .map(|events| events
-                    .into_iter()
-                    .map(|event| (
-                        event.report,
-                        event.snapshot.object_name().to_owned(),
-                        event
-                            .snapshot
-                            .read_property(P::ACCESS_EVENT_TAG, None)
-                            .unwrap(),
-                        event.clock_frame
-                    ))
-                    .collect::<Vec<_>>())
-        )
-    }),
-    ("report_access_input_internal", |o| {
-        let report = DoorStateReport {
-            door_status: Some(DoorStatus::OPENED),
-            ..DoorStateReport::default()
-        };
-        format!(
-            "{:?}",
-            o.report_access_input_internal(AccessControlInput::DoorState(report))
-        )
-    }),
-    ("set_controlled_variable_value_internal", |o| {
-        format!(
-            "{:?}",
-            o.set_controlled_variable_value_internal(PropertyValue::Real(3.5))
-        )
-    }),
-    ("add_averaging_sample_internal", |o| {
-        format!(
-            "{:?}",
-            o.add_averaging_sample_internal(Some(PropertyValue::Real(3.0)))
-        )
     }),
     ("take_due_averaging_sample_internal", |o| {
         format!(

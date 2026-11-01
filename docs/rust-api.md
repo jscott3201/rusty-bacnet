@@ -585,11 +585,11 @@ at NONE; `Value_Source_Array` and `Last_Command_Time` stay absent, since Clause
   with WRITE_ACCESS_DENIED while tracking, as a commandable command is, since
   the source it would leave can't be known.
 - `BACnetServer::write_local` names this Device, or the `LocalCommandSource`
-  object, and the Device owns the source. `set_present_value_local` calls the
-  new `set_present_value_from_internal` hook with this Device. The typed
+  object, and the Device owns the source. `set_present_value_local` hands the
+  object a `LocalInputValue::present_value_from` naming this Device. The typed
   setters (`set_present_value`, `set_color_command`, a `set_min_max` that moves
-  a Color Temperature's value, and plain `set_present_value_internal`) name no
-  writer, so they leave Value_Source NONE with no owner.
+  a Color Temperature's value, and `LocalInputValue::present_value` with no
+  origin) name no writer, so they leave Value_Source NONE with no owner.
 
 With tracking on and no local Device identity, a Schedule's or Command's write
 to such an object falls back to a context-free write, which is refused: it fails
@@ -4017,6 +4017,17 @@ behaviour, so an object without it writes nothing.
   pass calls it on every object that has the capability, before it advances
   the object's `Timed` operations, so an object that only stages writes
   needs no `Timed`.
+- **`local_input()` → `LocalInput`**, for an object that takes values the
+  application in the same device supplies. Its one method,
+  `apply_local_input(LocalInputValue)`, takes a Present_Value (built with
+  `LocalInputValue::present_value` or `present_value_from`, the second naming
+  the local Device as its origin), a Life Safety Tracking_Value, a Loop's
+  Controlled_Variable_Value, an Averaging sample or an access-control record.
+  The enum is `#[non_exhaustive]`: an object matches the inputs it models and
+  answers the rest with `unsupported_local_input()`, OBJECT /
+  OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, the same error the server returns for
+  an object that lends none. `BACnetServer::set_present_value_local` and its
+  siblings reach the object through it.
 
 ```rust,ignore
 use bacnet_objects::traits::{BACnetObject, Clocks, Timed};
@@ -4677,8 +4688,9 @@ the access-explicit Tags persistence constructors.
 `BACnetServer::set_present_value_local` supplies a logical application value to
 Analog/Binary/Multi-state Inputs, noncommandable Values, Loop (the control
 algorithm's output) and Life Safety Point and Zone, then runs the existing event
-and COV path after releasing the database lock. The corresponding low-level
-`set_present_value_internal` hook bypasses those server notifications. For the
+and COV path after releasing the database lock. The object's own
+`LocalInput` capability (`BACnetObject::local_input`, a
+`LocalInputValue::PresentValue`) bypasses those server notifications. For the
 Inputs, Values and Loop both deny updates while Out_Of_Service to preserve
 simulation ownership: this is local policy for Inputs and the object-clause rule
 for these Values and Loop, whose Present_Value peers may write only while
@@ -8687,11 +8699,12 @@ Trusted runtime logic can arm or rearm a Life Safety object through
 `BACnetServer::set_life_safety_operation_expected_local`, awaited inside a
 Tokio runtime like every local write; a caller dropped once the change is
 made still notifies Operation_Expected's subscribers (#1520). The lower-level
-`BACnetObject::set_life_safety_operation_expected_internal` channel also remains
-available to custom database owners. Protocol WriteProperty and
+`LifeSafety::set_life_safety_operation_expected` channel, lent by
+`BACnetObject::life_safety`, also remains available to custom database owners. Protocol WriteProperty and
 WritePropertyMultiple cannot forge `Operation_Expected` or `Silenced`.
 
-`BACnetObject::apply_life_safety_operation` returns
+`LifeSafety::apply_life_safety_operation`, lent by `BACnetObject::life_safety`,
+returns
 `Result<LifeSafetyOperationOutcome, Error>`: an effect plus exact committed
 property changes in stable reporting order, with no duplicates. Custom objects
 own this projection. `AlreadyApplied` means no state changed and carries no
@@ -8737,8 +8750,8 @@ context.
 Once the server holds a Point or Zone, the application reaches its
 Present_Value with `BACnetServer::set_present_value_local` and its
 Tracking_Value with `BACnetServer::set_tracking_value_local` (#1123), which go
-through the `BACnetObject::set_present_value_internal` and
-`set_tracking_value_internal` hooks. Both take an Enumerated `LifeSafetyState`,
+through the object's `LocalInput` as its `PresentValue` and `TrackingValue`
+inputs. Both take an Enumerated `LifeSafetyState`,
 standard or from 256 to 65535: another number fails with
 `PROPERTY / VALUE_OUT_OF_RANGE`, another datatype with
 `PROPERTY / INVALID_DATA_TYPE`, an unknown object with `OBJECT / UNKNOWN_OBJECT`

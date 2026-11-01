@@ -5,7 +5,8 @@
 //! Access Door's hardware state come from outside BACnet: the application's
 //! access logic, its card readers, its door contacts and lock monitors. None
 //! of them takes a network write in service. Each object takes its own
-//! record through [`BACnetObject::report_access_input_internal`], whose
+//! record through its [`LocalInput`] as a
+//! [`LocalInputValue::AccessControl`], whose
 //! values change together. The server's `report_access_event_local`,
 //! `report_credential_read_local` and `report_door_state_local` hand the
 //! record over as one local write, so the COV report and the event pass
@@ -26,7 +27,8 @@
 //!   serves the latest values reported. The objects' setters follow the
 //!   same rule.
 //!
-//! [`BACnetObject::report_access_input_internal`]: crate::traits::BACnetObject::report_access_input_internal
+//! [`LocalInput`]: crate::traits::LocalInput
+//! [`LocalInputValue::AccessControl`]: crate::traits::LocalInputValue::AccessControl
 
 use bacnet_types::constructed::{BACnetAuthenticationFactor, BACnetDeviceObjectReference};
 use bacnet_types::enums::{AccessEvent, DoorAlarmState, DoorStatus, LockStatus};

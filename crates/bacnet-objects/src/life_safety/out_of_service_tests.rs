@@ -281,9 +281,13 @@ fn reset_out_of_service_sees_the_simulation_and_holds_a_committed_tracking_value
         )
         .unwrap();
         object
-            .set_life_safety_operation_expected_internal(LifeSafetyOperation::RESET)
+            .life_safety()
+            .unwrap()
+            .set_life_safety_operation_expected(LifeSafetyOperation::RESET)
             .unwrap();
         let outcome = object
+            .life_safety()
+            .unwrap()
             .apply_life_safety_operation(LifeSafetyOperation::RESET)
             .unwrap();
         // Present_Value and Silenced commit as in service; the simulated

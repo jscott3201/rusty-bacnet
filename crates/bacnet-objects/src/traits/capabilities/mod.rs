@@ -32,13 +32,21 @@
 //!
 //! [`BACnetObject`]: super::BACnetObject
 
+mod access_events;
 mod command_runner;
+mod life_safety;
+mod local_input;
 mod staging_source;
 mod timed;
 
 pub use crate::durable::DurableWrites;
 #[doc(hidden)]
+pub use access_events::AccessEvents;
+#[doc(hidden)]
 pub use command_runner::CommandRunner;
+#[doc(hidden)]
+pub use life_safety::LifeSafety;
+pub use local_input::{LocalInput, LocalInputValue, unsupported_local_input};
 #[doc(hidden)]
 pub use staging_source::StagingSource;
 pub(crate) use timed::same_handle;

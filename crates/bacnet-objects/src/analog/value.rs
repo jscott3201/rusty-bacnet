@@ -143,7 +143,7 @@ impl AnalogValueObject {
     /// On, the object serves Value_Source: the last writer, network or
     /// local, which alone may then correct it. A write must name its writer
     /// (`write_property_from`), and an application update through
-    /// `set_present_value_internal` leaves no source (NONE). A commandable
+    /// its `LocalInput` with no origin leaves no source (NONE). A commandable
     /// object always tracks its sources through Priority_Array, so this
     /// changes nothing on one.
     pub fn set_value_source_tracking(&mut self, enabled: bool) {
@@ -559,31 +559,6 @@ impl BACnetObject for AnalogValueObject {
         Ok(())
     }
 
-    fn set_present_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
-        match self.access {
-            PresentValueAccess::Commandable => {
-                Err(common::optional_functionality_not_supported_error())
-            }
-            _ if self.out_of_service => Err(common::write_access_denied_error()),
-            PresentValueAccess::ReadOnly | PresentValueAccess::Writable => {
-                self.present_value = Self::checked_present_value(value)?;
-                self.write_source.forget();
-                Ok(())
-            }
-        }
-    }
-
-    fn set_present_value_from_internal(
-        &mut self,
-        value: PropertyValue,
-        origin: &crate::command_source::CommandOrigin,
-    ) -> Result<(), Error> {
-        self.write_source.admit(origin)?;
-        self.set_present_value_internal(value)?;
-        self.write_source.record(origin);
-        Ok(())
-    }
-
     fn evaluate_reliability_internal(&mut self) -> Result<ReliabilityEvaluation, Error> {
         if self.out_of_service || self.reliability_inhibit.enabled() {
             return Ok(ReliabilityEvaluation::Unchanged);
@@ -606,6 +581,46 @@ impl BACnetObject for AnalogValueObject {
         value: PropertyValue,
     ) -> Result<(), Error> {
         super::initialize_units(&mut self.units, property, value)
+    }
+
+    fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
+        Some(self)
+    }
+}
+
+/// The Present_Value the application supplies while it isn't commandable,
+/// published as Value_Source from `origin` when the object tracks its
+/// source (#1552).
+impl crate::traits::LocalInput for AnalogValueObject {
+    fn apply_local_input(&mut self, input: crate::traits::LocalInputValue) -> Result<(), Error> {
+        let crate::traits::LocalInputValue::PresentValue { value, origin } = input else {
+            return Err(crate::traits::unsupported_local_input());
+        };
+        let Some(origin) = origin else {
+            return self.apply_local_present_value(value);
+        };
+        self.write_source.admit(&origin)?;
+        self.apply_local_present_value(value)?;
+        self.write_source.record(&origin);
+        Ok(())
+    }
+}
+
+impl AnalogValueObject {
+    /// The application's Present_Value, refused while it's commandable or
+    /// Out_Of_Service is TRUE.
+    fn apply_local_present_value(&mut self, value: PropertyValue) -> Result<(), Error> {
+        match self.access {
+            PresentValueAccess::Commandable => {
+                Err(common::optional_functionality_not_supported_error())
+            }
+            _ if self.out_of_service => Err(common::write_access_denied_error()),
+            PresentValueAccess::ReadOnly | PresentValueAccess::Writable => {
+                self.present_value = Self::checked_present_value(value)?;
+                self.write_source.forget();
+                Ok(())
+            }
+        }
     }
 }
 

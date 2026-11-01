@@ -194,9 +194,9 @@ async fn exact_single_cov_filters_whole_and_property_payloads() {
         .await
         .get_mut(&point_oid())
         .unwrap()
-        .set_life_safety_operation_expected_internal(
-            bacnet_types::enums::LifeSafetyOperation::SILENCE,
-        )
+        .life_safety()
+        .unwrap()
+        .set_life_safety_operation_expected(bacnet_types::enums::LifeSafetyOperation::SILENCE)
         .unwrap();
     fixture
         .fire(&[PropertyIdentifier::OPERATION_EXPECTED])
@@ -654,7 +654,9 @@ async fn operation_ack_precedes_exact_cov_and_duplicate_replays_ack_without_seco
         let mut db = fixture.db.write().await;
         db.get_mut(&point_oid())
             .unwrap()
-            .set_life_safety_operation_expected_internal(LifeSafetyOperation::SILENCE)
+            .life_safety()
+            .unwrap()
+            .set_life_safety_operation_expected(LifeSafetyOperation::SILENCE)
             .unwrap();
     }
     let silence = LifeSafetyOperationRequest {

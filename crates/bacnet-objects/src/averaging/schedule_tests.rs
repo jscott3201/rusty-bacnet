@@ -189,9 +189,16 @@ fn averaging_application_samples_leave_the_schedule_alone() {
     let (time, clock) = clock();
     let mut avg = sampled(&time, clock);
     *time.lock().unwrap() = secs(1.0);
-    avg.add_averaging_sample_internal(Some(PropertyValue::Real(4.0)))
+    avg.local_input()
+        .unwrap()
+        .apply_local_input(crate::traits::LocalInputValue::AveragingSample(Some(
+            PropertyValue::Real(4.0),
+        )))
         .unwrap();
-    avg.add_averaging_sample_internal(None).unwrap();
+    avg.local_input()
+        .unwrap()
+        .apply_local_input(crate::traits::LocalInputValue::AveragingSample(None))
+        .unwrap();
     assert_eq!(avg.next_monotonic_deadline(), Some(secs(2.0)));
     assert_eq!(
         avg.read_property(P::ATTEMPTED_SAMPLES, None).unwrap(),

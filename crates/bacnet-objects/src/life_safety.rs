@@ -46,8 +46,8 @@
 //! TRUE a client may write Tracking_Value and Reliability instead (#1108); see
 //! `out_of_service.rs` for how the simulated values interact with the rest of
 //! the object. Once a server holds the object, the application reaches
-//! Present_Value and Tracking_Value through `set_present_value_internal` and
-//! `set_tracking_value_internal` (#1123); `application.rs` records how that
+//! Present_Value and Tracking_Value through the object's `LocalInput`
+//! (#1123); `application.rs` records how that
 //! route meets latching, Silenced, the reset executor and Out_Of_Service.
 //!
 //! Accepted_Modes (Clauses 12.15.13 and 12.16.13) is the configured set of
@@ -226,7 +226,7 @@ fn operation_outcome(
 /// Represents a single life-safety sensor or detector (e.g. smoke detector,
 /// pull station). Present_Value is an enumerated LifeSafetyState, set by the
 /// application via [`set_present_value`](Self::set_present_value), or through
-/// [`BACnetObject::set_present_value_internal`] once a server holds the point.
+/// its [`LocalInput`](crate::traits::LocalInput) once a server holds the point.
 pub struct LifeSafetyPointObject {
     oid: ObjectIdentifier,
     name: String,
@@ -486,6 +486,39 @@ impl BACnetObject for LifeSafetyPointObject {
         COV_PROPERTIES.contains(&property)
     }
 
+    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
+        self.simulation().set_reliability(reliability)
+    }
+
+    fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
+        Some(self)
+    }
+
+    fn life_safety(&mut self) -> Option<&mut dyn crate::traits::LifeSafety> {
+        Some(self)
+    }
+}
+
+/// The Present_Value and Tracking_Value the application supplies, a
+/// BACnetLifeSafetyState each.
+impl crate::traits::LocalInput for LifeSafetyPointObject {
+    fn apply_local_input(&mut self, input: crate::traits::LocalInputValue) -> Result<(), Error> {
+        match input {
+            crate::traits::LocalInputValue::PresentValue { value, .. } => {
+                self.present_value = application::life_safety_state(&value)?;
+                Ok(())
+            }
+            crate::traits::LocalInputValue::TrackingValue(value) => {
+                let state = application::life_safety_state(&value)?;
+                self.set_tracking_value(state);
+                Ok(())
+            }
+            _ => Err(crate::traits::unsupported_local_input()),
+        }
+    }
+}
+
+impl crate::traits::LifeSafety for LifeSafetyPointObject {
     fn apply_life_safety_operation(
         &mut self,
         operation: LifeSafetyOperation,
@@ -506,26 +539,11 @@ impl BACnetObject for LifeSafetyPointObject {
         Ok(operation_outcome(self, before, effect))
     }
 
-    fn set_life_safety_operation_expected_internal(
+    fn set_life_safety_operation_expected(
         &mut self,
         operation: LifeSafetyOperation,
     ) -> Result<(), Error> {
         self.set_operation_expected(operation);
-        Ok(())
-    }
-
-    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
-        self.simulation().set_reliability(reliability)
-    }
-
-    fn set_present_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
-        self.present_value = application::life_safety_state(&value)?;
-        Ok(())
-    }
-
-    fn set_tracking_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
-        let state = application::life_safety_state(&value)?;
-        self.set_tracking_value(state);
         Ok(())
     }
 }
@@ -540,7 +558,7 @@ impl BACnetObject for LifeSafetyPointObject {
 /// Present_Value is an enumerated LifeSafetyState, set by the application
 /// (typically the worst-case state among zone members) via
 /// [`set_present_value`](Self::set_present_value), or through
-/// [`BACnetObject::set_present_value_internal`] once a server holds the zone.
+/// its [`LocalInput`](crate::traits::LocalInput) once a server holds the zone.
 pub struct LifeSafetyZoneObject {
     oid: ObjectIdentifier,
     name: String,
@@ -786,6 +804,39 @@ impl BACnetObject for LifeSafetyZoneObject {
         COV_PROPERTIES.contains(&property)
     }
 
+    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
+        self.simulation().set_reliability(reliability)
+    }
+
+    fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
+        Some(self)
+    }
+
+    fn life_safety(&mut self) -> Option<&mut dyn crate::traits::LifeSafety> {
+        Some(self)
+    }
+}
+
+/// The Present_Value and Tracking_Value the application supplies, a
+/// BACnetLifeSafetyState each.
+impl crate::traits::LocalInput for LifeSafetyZoneObject {
+    fn apply_local_input(&mut self, input: crate::traits::LocalInputValue) -> Result<(), Error> {
+        match input {
+            crate::traits::LocalInputValue::PresentValue { value, .. } => {
+                self.present_value = application::life_safety_state(&value)?;
+                Ok(())
+            }
+            crate::traits::LocalInputValue::TrackingValue(value) => {
+                let state = application::life_safety_state(&value)?;
+                self.set_tracking_value(state);
+                Ok(())
+            }
+            _ => Err(crate::traits::unsupported_local_input()),
+        }
+    }
+}
+
+impl crate::traits::LifeSafety for LifeSafetyZoneObject {
     fn apply_life_safety_operation(
         &mut self,
         operation: LifeSafetyOperation,
@@ -806,26 +857,11 @@ impl BACnetObject for LifeSafetyZoneObject {
         Ok(operation_outcome(self, before, effect))
     }
 
-    fn set_life_safety_operation_expected_internal(
+    fn set_life_safety_operation_expected(
         &mut self,
         operation: LifeSafetyOperation,
     ) -> Result<(), Error> {
         self.set_operation_expected(operation);
-        Ok(())
-    }
-
-    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
-        self.simulation().set_reliability(reliability)
-    }
-
-    fn set_present_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
-        self.present_value = application::life_safety_state(&value)?;
-        Ok(())
-    }
-
-    fn set_tracking_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
-        let state = application::life_safety_state(&value)?;
-        self.set_tracking_value(state);
         Ok(())
     }
 }

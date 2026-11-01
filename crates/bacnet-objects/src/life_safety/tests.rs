@@ -6,7 +6,7 @@ use bacnet_types::enums::{
 use bacnet_types::error::RemoteError;
 
 use crate::database::ObjectDatabase;
-use crate::traits::LifeSafetyOperationEffect;
+use crate::traits::{LifeSafety, LifeSafetyOperationEffect};
 
 fn read_enumerated(object: &dyn BACnetObject, property: PropertyIdentifier) -> u32 {
     match object.read_property(property, None).unwrap() {
@@ -320,21 +320,22 @@ fn point_can_be_rearmed_through_the_local_trait_channel() {
         .unwrap();
 
     let object = db.get_mut(&oid).unwrap();
-    object
-        .set_life_safety_operation_expected_internal(LifeSafetyOperation::SILENCE)
+    let life_safety = object.life_safety().unwrap();
+    life_safety
+        .set_life_safety_operation_expected(LifeSafetyOperation::SILENCE)
         .unwrap();
     assert_eq!(
-        object
+        life_safety
             .apply_life_safety_operation(LifeSafetyOperation::SILENCE)
             .unwrap()
             .effect,
         LifeSafetyOperationEffect::Applied
     );
-    object
-        .set_life_safety_operation_expected_internal(LifeSafetyOperation::UNSILENCE)
+    life_safety
+        .set_life_safety_operation_expected(LifeSafetyOperation::UNSILENCE)
         .unwrap();
     assert_eq!(
-        object
+        life_safety
             .apply_life_safety_operation(LifeSafetyOperation::UNSILENCE)
             .unwrap()
             .effect,

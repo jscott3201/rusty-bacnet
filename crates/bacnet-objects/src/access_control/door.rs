@@ -634,26 +634,34 @@ impl BACnetObject for AccessDoorObject {
         Self::served_reliability
     );
 
-    /// Take what the door's hardware reports (#1132): Door_Status,
-    /// Lock_Status and Door_Alarm_State, each one given, together. A value
-    /// outside its production, or an alarm state the door's lists don't
-    /// admit, is VALUE_OUT_OF_RANGE and changes nothing. Stored as the
-    /// setters store the device's values: while Out_Of_Service is TRUE the
-    /// report replaces the values put aside, and a client's simulated ones
-    /// stay served until the return to service. Any other record is
-    /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
-    fn report_access_input_internal(&mut self, input: AccessControlInput) -> Result<(), Error> {
-        let AccessControlInput::DoorState(report) = input else {
+    fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
+        Some(self)
+    }
+
+    fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
+        Some(self)
+    }
+}
+
+/// Take what the door's hardware reports (#1132): Door_Status,
+/// Lock_Status and Door_Alarm_State, each one given, together. A value
+/// outside its production, or an alarm state the door's lists don't
+/// admit, is VALUE_OUT_OF_RANGE and changes nothing. Stored as the
+/// setters store the device's values: while Out_Of_Service is TRUE the
+/// report replaces the values put aside, and a client's simulated ones
+/// stay served until the return to service. Any other record is
+/// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
+impl crate::traits::LocalInput for AccessDoorObject {
+    fn apply_local_input(&mut self, input: crate::traits::LocalInputValue) -> Result<(), Error> {
+        let crate::traits::LocalInputValue::AccessControl(AccessControlInput::DoorState(report)) =
+            input
+        else {
             return Err(common::optional_functionality_not_supported_error());
         };
         let (lists, alarm_values) = (&self.alarm_lists, self.reporting.alarm_values());
         // The device's own state: put aside out of service, else served.
         let device = self.device_state.as_mut().unwrap_or(&mut self.state);
         device.report(report, |state| lists.admits(alarm_values, state))
-    }
-
-    fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
-        Some(self)
     }
 }
 

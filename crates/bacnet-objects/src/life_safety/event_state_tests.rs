@@ -86,7 +86,11 @@ fn point_silence_unsilence_leaves_event_state_and_in_alarm_untouched() {
         assert_eq!(read_event_state(&point), 0);
         assert_in_alarm_clear(&point);
 
-        let outcome = point.apply_life_safety_operation(operation).unwrap();
+        let outcome = point
+            .life_safety()
+            .unwrap()
+            .apply_life_safety_operation(operation)
+            .unwrap();
 
         assert_eq!(outcome.effect, LifeSafetyOperationEffect::Applied);
         assert_eq!(
@@ -159,7 +163,11 @@ fn zone_silence_unsilence_leaves_event_state_and_in_alarm_untouched() {
         assert_eq!(read_event_state(&zone), 0);
         assert_in_alarm_clear(&zone);
 
-        let outcome = zone.apply_life_safety_operation(operation).unwrap();
+        let outcome = zone
+            .life_safety()
+            .unwrap()
+            .apply_life_safety_operation(operation)
+            .unwrap();
 
         assert_eq!(outcome.effect, LifeSafetyOperationEffect::Applied);
         assert_eq!(
@@ -222,7 +230,11 @@ fn point_resets_leave_event_state_and_in_alarm_untouched() {
         assert_eq!(read_event_state(&point), 0);
         assert_in_alarm_clear(&point);
 
-        let outcome = point.apply_life_safety_operation(operation).unwrap();
+        let outcome = point
+            .life_safety()
+            .unwrap()
+            .apply_life_safety_operation(operation)
+            .unwrap();
 
         assert_eq!(outcome.effect, LifeSafetyOperationEffect::Applied);
         assert_eq!(
@@ -260,7 +272,11 @@ fn zone_resets_leave_event_state_and_in_alarm_untouched() {
         assert_eq!(read_event_state(&zone), 0);
         assert_in_alarm_clear(&zone);
 
-        let outcome = zone.apply_life_safety_operation(operation).unwrap();
+        let outcome = zone
+            .life_safety()
+            .unwrap()
+            .apply_life_safety_operation(operation)
+            .unwrap();
 
         assert_eq!(outcome.effect, LifeSafetyOperationEffect::Applied);
         assert_eq!(
@@ -288,6 +304,8 @@ fn point_silence_and_unsilence_report_only_actual_silenced_and_expected_deltas()
     point.set_operation_expected(LifeSafetyOperation::SILENCE);
 
     let outcome = point
+        .life_safety()
+        .unwrap()
         .apply_life_safety_operation(LifeSafetyOperation::SILENCE)
         .unwrap();
 
@@ -302,6 +320,8 @@ fn point_silence_and_unsilence_report_only_actual_silenced_and_expected_deltas()
 
     point.set_operation_expected(LifeSafetyOperation::SILENCE);
     let outcome = point
+        .life_safety()
+        .unwrap()
         .apply_life_safety_operation(LifeSafetyOperation::SILENCE)
         .unwrap();
     assert_eq!(
@@ -311,6 +331,8 @@ fn point_silence_and_unsilence_report_only_actual_silenced_and_expected_deltas()
 
     point.set_operation_expected(LifeSafetyOperation::UNSILENCE);
     let outcome = point
+        .life_safety()
+        .unwrap()
         .apply_life_safety_operation(LifeSafetyOperation::UNSILENCE)
         .unwrap();
     assert_eq!(

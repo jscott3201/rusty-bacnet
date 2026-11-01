@@ -345,7 +345,7 @@ impl BACnetObject for LoopObject {
         // Clause 12.17.9 decouples Present_Value from the algorithm while
         // Out_Of_Service is TRUE and Table 12-20 footnote 7 makes it writable
         // then, for simulation and testing. In service the algorithm owns it;
-        // the application route is `set_present_value_internal`.
+        // the application route is its `LocalInput`.
         if property == PropertyIdentifier::PRESENT_VALUE {
             if !self.out_of_service {
                 return Err(common::write_access_denied_error());
@@ -475,25 +475,6 @@ impl BACnetObject for LoopObject {
         Some(f64::from(self.cov_increment))
     }
 
-    fn set_present_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
-        // The complement of the network route: while Out_Of_Service is TRUE
-        // a client's simulated output must not be overwritten by the algorithm.
-        if self.out_of_service {
-            return Err(common::write_access_denied_error());
-        }
-        self.apply_present_value(value)
-    }
-
-    fn set_controlled_variable_value_internal(
-        &mut self,
-        value: PropertyValue,
-    ) -> Result<(), Error> {
-        // Out_Of_Service decouples only Present_Value and Reliability from the
-        // algorithm (Clause 12.17.9), so the measurement keeps flowing while a
-        // client simulates the output.
-        write_finite_real(&mut self.controlled_variable_value, value)
-    }
-
     fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
         // While Out_Of_Service is TRUE the client owns the simulated value;
         // an internal write would clobber the simulation (Clause 12.17
@@ -507,6 +488,34 @@ impl BACnetObject for LoopObject {
         }
         self.reliability = reliability;
         Ok(())
+    }
+
+    fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
+        Some(self)
+    }
+}
+
+/// The control algorithm's output and its measured
+/// Controlled_Variable_Value, both supplied by the application.
+impl crate::traits::LocalInput for LoopObject {
+    fn apply_local_input(&mut self, input: crate::traits::LocalInputValue) -> Result<(), Error> {
+        match input {
+            crate::traits::LocalInputValue::PresentValue { value, .. } => {
+                // The complement of the network route: while Out_Of_Service is TRUE
+                // a client's simulated output must not be overwritten by the algorithm.
+                if self.out_of_service {
+                    return Err(common::write_access_denied_error());
+                }
+                self.apply_present_value(value)
+            }
+            crate::traits::LocalInputValue::ControlledVariableValue(value) => {
+                // Out_Of_Service decouples only Present_Value and Reliability from the
+                // algorithm (Clause 12.17.9), so the measurement keeps flowing while a
+                // client simulates the output.
+                write_finite_real(&mut self.controlled_variable_value, value)
+            }
+            _ => Err(crate::traits::unsupported_local_input()),
+        }
     }
 }
 
