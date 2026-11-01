@@ -465,7 +465,15 @@ impl BACnetObject for BinaryInputObject {
         ))
     }
 
-    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
+    crate::traits::lend_reliability_eval!();
+
+    fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
+        Some(self)
+    }
+}
+
+impl crate::traits::ReliabilityEval for BinaryInputObject {
+    fn set_reliability(&mut self, reliability: Reliability) -> Result<(), Error> {
         if self.out_of_service || self.reliability_inhibit.enabled() {
             return Err(common::write_access_denied_error());
         }
@@ -476,12 +484,8 @@ impl BACnetObject for BinaryInputObject {
         Ok(())
     }
 
-    fn reliability_evaluation_inhibited_internal(&self) -> bool {
+    fn reliability_evaluation_inhibited(&self) -> bool {
         self.reliability_inhibit.enabled()
-    }
-
-    fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
-        Some(self)
     }
 }
 

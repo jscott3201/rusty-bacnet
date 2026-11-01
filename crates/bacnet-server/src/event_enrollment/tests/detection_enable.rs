@@ -3,15 +3,12 @@
 //!
 //! Split out of `tests.rs` to keep every file under the 700-LOC cap.
 //!
-//! What these tests pin, precisely: that a disabled enrollment produces no
-//! transition and holds `Event_State` at NORMAL. They do **not** isolate the
-//! evaluator's own `Event_Detection_Enable` guard — deleting that guard leaves
-//! every test here passing, because `set_event_state_internal` refuses the
-//! write anyway and the evaluator only records a transition when that call
-//! succeeds. Confirmed by mutation rather than assumed. The two guards are
-//! deliberate defense in depth serving different sentences of Clause 13.2.2.1;
-//! the object-level one is isolated by
-//! `disabled_detection_refuses_non_normal_internal_state` in bacnet-objects.
+//! What these tests pin: that a disabled enrollment produces no transition
+//! and holds `Event_State` at NORMAL. The evaluator commits every transition
+//! through `EventReporting::commit_event_transition`, which has no detection
+//! check of its own, so the evaluator's `Event_Detection_Enable` guard is the
+//! one these tests exercise (#2179 removed the object's
+//! `set_event_state_internal` and its guard).
 
 use super::super::*;
 use bacnet_objects::analog::AnalogInputObject;

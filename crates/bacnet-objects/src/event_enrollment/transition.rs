@@ -72,7 +72,7 @@ pub(super) fn commit_reliability(
 
 macro_rules! impl_event_enrollment_reliability_commit {
     () => {
-        fn commit_event_enrollment_reliability_internal(
+        fn commit_reliability(
             &mut self,
             commit: $crate::event_enrollment::EventEnrollmentReliabilityCommit,
         ) -> Result<(), EventTransitionCommitError> {

@@ -819,7 +819,9 @@ fn faulted_object_reports_both_fault_and_in_alarm_status_flags() {
 
     let mut ai =
         AnalogInputObject::new(2, "ai-2", EngineeringUnits::DEGREES_CELSIUS).expect("construct");
-    ai.set_reliability_internal(OVER_RANGE)
+    ai.reliability_eval()
+        .unwrap()
+        .set_reliability(OVER_RANGE)
         .expect("in-service reliability evaluation is supported");
     let proposal = ai
         .evaluate_intrinsic_reporting()

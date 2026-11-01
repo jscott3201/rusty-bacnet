@@ -272,7 +272,11 @@ mod tests {
         let original = object.property_metadata().into_owned();
         let evaluated = Reliability::CONFIGURATION_ERROR;
         let simulated = Reliability::NO_FAULT_DETECTED.to_raw();
-        object.set_reliability_internal(evaluated).unwrap();
+        object
+            .reliability_eval()
+            .unwrap()
+            .set_reliability(evaluated)
+            .unwrap();
         object
             .write_property(P::OUT_OF_SERVICE, None, PropertyValue::Boolean(true), None)
             .unwrap();
@@ -289,7 +293,11 @@ mod tests {
             PropertyValue::Enumerated(simulated)
         );
         assert_error(
-            object.set_reliability_internal(evaluated).unwrap_err(),
+            object
+                .reliability_eval()
+                .unwrap()
+                .set_reliability(evaluated)
+                .unwrap_err(),
             ErrorCode::WRITE_ACCESS_DENIED,
         );
         // Repeated OOS writes must not replace the saved evaluated Reliability.

@@ -304,11 +304,11 @@ async fn server_enrollment_task_evaluates_at_startup_on_its_configured_interval(
     // value and revert this.
     {
         let mut guard = server.db.write().await;
-        guard
-            .get_mut(&ee_oid)
-            .unwrap()
-            .set_event_state_internal(EventState::NORMAL)
-            .unwrap();
+        crate::test_event_state::commit_event_state(
+            guard.get_mut(&ee_oid).unwrap(),
+            EventState::NORMAL,
+            false,
+        );
     }
     tokio::time::sleep(Duration::from_secs(60)).await;
     {

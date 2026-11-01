@@ -44,7 +44,8 @@ fn unreadable_parameters_cancel_pending_countdown() {
     assert!(
         db.get(&enrollment_oid)
             .unwrap()
-            .enrollment_eval_state_internal()
+            .enrollment_eval()
+            .map(|e| e.eval_state())
             .unwrap()
             .pending
             .is_none()
@@ -103,7 +104,8 @@ fn source_less_indexed_cov_retains_its_baseline_and_retargets_safely() {
     assert_eq!(
         db.get(&enrollment_oid)
             .unwrap()
-            .enrollment_eval_state_internal(),
+            .enrollment_eval()
+            .map(|e| e.eval_state()),
         Some(bacnet_objects::event_enrollment::EventEnrollmentEvalState {
             pending: None,
             cov_baseline: Some(PropertyValue::Real(10.0)),
@@ -184,7 +186,8 @@ fn failed_indexed_reset_cannot_resume_after_restoring_the_reference() {
     assert_eq!(
         db.get(&enrollment_oid)
             .unwrap()
-            .enrollment_eval_source_internal(),
+            .enrollment_eval()
+            .and_then(|e| e.eval_source()),
         Some(None)
     );
 
@@ -490,8 +493,7 @@ fn failed_eval_state_write_cannot_leak_an_unreported_event_state() {
     let target_oid = target.object_identifier();
     db.add(Box::new(target)).unwrap();
 
-    let mut enrollment = ReferenceValueObject::new(Some(indexed_reference_value(target_oid, 1)));
-    enrollment.normal_event_state_writable = false;
+    let enrollment = ReferenceValueObject::new(Some(indexed_reference_value(target_oid, 1)));
     let state_writable = Arc::clone(&enrollment.state_writable);
     let enrollment_oid = enrollment.object_identifier();
     db.add(Box::new(enrollment)).unwrap();
@@ -540,7 +542,6 @@ fn same_state_transition_does_not_depend_on_rewriting_event_state() {
             time_delay: 0,
             criteria: ChangeOfValueCriteria::ReferencedPropertyIncrement(5.0),
         });
-    enrollment.normal_event_state_writable = false;
     db.add(Box::new(enrollment)).unwrap();
 
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());

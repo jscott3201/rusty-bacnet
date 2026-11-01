@@ -9,12 +9,11 @@ use bacnet_objects::{
     audit::{AuditLogForwarding, AuditLogStorage, AuditReporterObject, ObjectAuditPolicy},
     database::ObjectDatabase,
     device::EXECUTED_SERVICES,
-    event_enrollment::{EventEnrollmentEvalState, EventEnrollmentMonitoredSource},
     file::{FileConfiguration, FileStorage},
     log_buffer::{LogBufferRecords, LogRecordIdentity},
     property_metadata::{PropertyConformance, PropertyMetadata, PropertyWriteCapability},
     schedule::ScheduleWrite,
-    traits::{BACnetObject, CommandRunner, CovReportedProperty, EventReporting},
+    traits::{BACnetObject, CommandRunner, CovReportedProperty, EnrollmentEval, EventReporting},
 };
 use bacnet_types::{
     calendar::SpecificDate,
@@ -332,6 +331,9 @@ impl BACnetObject for DeviceReadView<'_> {
     fn event_reporting(&self) -> Option<&dyn EventReporting> {
         self.object.event_reporting()
     }
+    fn enrollment_eval(&self) -> Option<&dyn EnrollmentEval> {
+        self.object.enrollment_eval()
+    }
     fn supports_cov_property(&self, property: P) -> bool {
         self.object.supports_cov_property(property)
     }
@@ -347,17 +349,8 @@ impl BACnetObject for DeviceReadView<'_> {
     fn retry_refusals_naming(&self, target: ObjectIdentifier) -> Option<ScheduleWrite> {
         self.object.retry_refusals_naming(target)
     }
-    fn enrollment_eval_state_internal(&self) -> Option<EventEnrollmentEvalState> {
-        self.object.enrollment_eval_state_internal()
-    }
-    fn enrollment_eval_source_internal(&self) -> Option<Option<EventEnrollmentMonitoredSource>> {
-        self.object.enrollment_eval_source_internal()
-    }
     fn input_reference_internal(&self) -> Option<Option<&BACnetObjectPropertyReference>> {
         self.object.input_reference_internal()
-    }
-    fn reliability_evaluation_inhibited_internal(&self) -> bool {
-        self.object.reliability_evaluation_inhibited_internal()
     }
     fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {
         self.object.audit_log_storage_internal()

@@ -486,9 +486,7 @@ impl BACnetObject for LifeSafetyPointObject {
         COV_PROPERTIES.contains(&property)
     }
 
-    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
-        self.simulation().set_reliability(reliability)
-    }
+    crate::traits::lend_reliability_eval!();
 
     fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
         Some(self)
@@ -496,6 +494,12 @@ impl BACnetObject for LifeSafetyPointObject {
 
     fn life_safety(&mut self) -> Option<&mut dyn crate::traits::LifeSafety> {
         Some(self)
+    }
+}
+
+impl crate::traits::ReliabilityEval for LifeSafetyPointObject {
+    fn set_reliability(&mut self, reliability: Reliability) -> Result<(), Error> {
+        self.simulation().set_reliability(reliability)
     }
 }
 
@@ -804,9 +808,7 @@ impl BACnetObject for LifeSafetyZoneObject {
         COV_PROPERTIES.contains(&property)
     }
 
-    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
-        self.simulation().set_reliability(reliability)
-    }
+    crate::traits::lend_reliability_eval!();
 
     fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
         Some(self)
@@ -814,6 +816,12 @@ impl BACnetObject for LifeSafetyZoneObject {
 
     fn life_safety(&mut self) -> Option<&mut dyn crate::traits::LifeSafety> {
         Some(self)
+    }
+}
+
+impl crate::traits::ReliabilityEval for LifeSafetyZoneObject {
+    fn set_reliability(&mut self, reliability: Reliability) -> Result<(), Error> {
+        self.simulation().set_reliability(reliability)
     }
 }
 

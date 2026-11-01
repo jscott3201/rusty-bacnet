@@ -628,7 +628,8 @@ fn fault_recovery_resets_cached_event_state_once_and_restarts_full_delay_next_pa
     assert!(
         db.get(&enrollment_oid)
             .unwrap()
-            .enrollment_eval_state_internal()
+            .enrollment_eval()
+            .map(|e| e.eval_state())
             .unwrap()
             .pending
             .is_none()
@@ -640,7 +641,8 @@ fn fault_recovery_resets_cached_event_state_once_and_restarts_full_delay_next_pa
     assert_eq!(
         db.get(&enrollment_oid)
             .unwrap()
-            .enrollment_eval_state_internal()
+            .enrollment_eval()
+            .map(|e| e.eval_state())
             .unwrap()
             .pending
             .unwrap()

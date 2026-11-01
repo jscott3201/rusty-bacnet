@@ -573,7 +573,15 @@ impl BACnetObject for MultiStateValueObject {
         let _ = self.recompute_reliability();
         Ok(())
     }
-    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
+    crate::traits::lend_reliability_eval!();
+
+    fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
+        Some(self)
+    }
+}
+
+impl crate::traits::ReliabilityEval for MultiStateValueObject {
+    fn set_reliability(&mut self, reliability: Reliability) -> Result<(), Error> {
         if self.out_of_service || self.reliability_inhibit.enabled() {
             return Err(common::write_access_denied_error());
         }
@@ -585,16 +593,12 @@ impl BACnetObject for MultiStateValueObject {
         Ok(())
     }
 
-    fn evaluate_reliability_internal(&mut self) -> Result<ReliabilityEvaluation, Error> {
+    fn evaluate_reliability(&mut self) -> Result<ReliabilityEvaluation, Error> {
         Ok(self.recompute_reliability())
     }
 
-    fn reliability_evaluation_inhibited_internal(&self) -> bool {
+    fn reliability_evaluation_inhibited(&self) -> bool {
         self.reliability_inhibit.enabled()
-    }
-
-    fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
-        Some(self)
     }
 }
 
@@ -725,14 +729,20 @@ mod reliability_evaluator_tests {
         msv.present_value = 3;
         msv.event_detector.alarm_values = vec![3];
 
-        msv.evaluate_reliability_internal().unwrap();
+        msv.reliability_eval()
+            .unwrap()
+            .evaluate_reliability()
+            .unwrap();
         assert_eq!(
             msv.reliability,
             Reliability::CONFIGURATION_ERROR,
             "invalid configuration must dominate invalid Present_Value"
         );
         msv.event_detector.alarm_values = vec![1];
-        msv.evaluate_reliability_internal().unwrap();
+        msv.reliability_eval()
+            .unwrap()
+            .evaluate_reliability()
+            .unwrap();
         assert_eq!(msv.reliability, Reliability::MULTI_STATE_OUT_OF_RANGE);
         msv.set_number_of_states(3).unwrap();
         assert_eq!(

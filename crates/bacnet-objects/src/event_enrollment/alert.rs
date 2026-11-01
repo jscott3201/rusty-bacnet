@@ -26,20 +26,20 @@ pub struct AlertEnrollmentObject {
     name: String,
     description: String,
     /// Event_State; NORMAL while event detection is disabled.
-    pub(super) event_state: EventState,
+    pub(crate) event_state: EventState,
     /// Source of the most recent alert handed to this enrollment.
     pub present_value: ObjectIdentifier,
     /// Whether event detection is enabled.
     ///
     /// Prefer [`Self::set_event_detection_enable`] so disabling also clears
     /// stored event state. This field remains public for compatibility;
-    /// property reads and internal transition hooks still enforce the
-    /// disabled-state invariant after a direct assignment. Re-enable through
+    /// property reads still enforce the disabled-state invariant after a
+    /// direct assignment. Re-enable through
     /// the setter as well: a direct FALSE-to-TRUE assignment cannot run the
     /// reset and may expose state stored before the direct disable.
     pub event_detection_enable: bool,
     /// Acked_Transitions: a set flag means that transition was acknowledged.
-    pub(super) acked_transitions: EventTransitionBits,
+    pub(crate) acked_transitions: EventTransitionBits,
     pub(super) event_history: EventHistory,
     /// Event_Enable: the transitions whose notifications are distributed.
     pub event_enable: EventTransitionBits,
@@ -259,37 +259,6 @@ impl BACnetObject for AlertEnrollmentObject {
             property,
             array_index,
         ))
-    }
-
-    fn set_event_state_internal(&mut self, state: EventState) -> Result<(), Error> {
-        if !self.event_detection_enable && state != EventState::NORMAL {
-            return Err(common::write_access_denied_error());
-        }
-        self.event_state = state;
-        Ok(())
-    }
-
-    fn set_acked_transitions_internal(
-        &mut self,
-        transition_bit: EventTransitionBits,
-        acknowledged: bool,
-    ) -> Result<(), Error> {
-        if !self.event_detection_enable {
-            return Err(common::write_access_denied_error());
-        }
-        let transition_bit = transition_bit & EventTransitionBits::all();
-        if acknowledged {
-            self.acked_transitions.insert(transition_bit);
-        } else {
-            // Alert Enrollment never requires acknowledgment for TO_NORMAL
-            // (Clause 12.52.8), so that bit cannot enter the unacknowledged
-            // state even if a generic transition hook asks to clear it.
-            self.acked_transitions
-                .remove(transition_bit.difference(EventTransitionBits::TO_NORMAL));
-        }
-        self.acked_transitions
-            .insert(EventTransitionBits::TO_NORMAL);
-        Ok(())
     }
 
     fn is_writable_property(&self, property: PropertyIdentifier) -> bool {

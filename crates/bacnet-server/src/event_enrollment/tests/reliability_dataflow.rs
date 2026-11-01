@@ -116,10 +116,12 @@ fn source_rejection_does_not_suppress_changed_reliability_fault_reentry() {
         EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL
     );
 
-    db.get_mut(&enrollment_oid)
-        .unwrap()
-        .set_acked_transitions_internal(EventTransitionBits::TO_FAULT, true)
-        .unwrap();
+    // Leave the TO_FAULT bit acknowledged: a FAULT re-entry that owes none.
+    crate::test_event_state::commit_event_state(
+        db.get_mut(&enrollment_oid).unwrap(),
+        EventState::FAULT,
+        false,
+    );
     db.get_mut(&target_oid)
         .unwrap()
         .write_property_from(

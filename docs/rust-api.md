@@ -6540,7 +6540,7 @@ count must be an Unsigned and a Reliability a BACnetReliability value.
 `AccessZoneObject::set_occupancy_count` reports the zone's own count;
 entering out of service puts the count and Reliability aside, the count the
 application reports meanwhile replaces the one put aside,
-`set_reliability_internal` is refused, and the return to service serves the
+`ReliabilityEval::set_reliability` is refused, and the return to service serves the
 zone's values again. A Credential Data
 Input's Present_Value and Reliability, the rows footnote 1 of Table 12-43
 marks, take WriteProperty and WritePropertyMultiple while Out_Of_Service is
@@ -6551,7 +6551,7 @@ class, or the UNDEFINED or ERROR factor with class 0 (else
 VALUE_OUT_OF_RANGE); it stamps Update_Time from the Device clock. A
 Reliability write must be a BACnetReliability value. Entering out of service
 puts the reader's Present_Value, Update_Time and Reliability aside,
-`set_present_value` updates the values put aside, `set_reliability_internal`
+`set_present_value` updates the values put aside, `ReliabilityEval::set_reliability`
 is refused until the return to service, and the return to service serves the
 reader's values again.
 
@@ -8864,7 +8864,7 @@ service both are `PROPERTY / WRITE_ACCESS_DENIED` (#1108). Entering out of
 service sets the object's own `Tracking_Value` and `Reliability` aside and the
 return to service restores them. Meanwhile `set_tracking_value` and a reset
 commit's `tracking_value` replace the value set aside, not the simulated one,
-and `set_reliability_internal`, the in-service route for a fault the
+and `ReliabilityEval::set_reliability`, the in-service route for a fault the
 application detects, is refused. A simulated value notifies through the same
 COV path as any write, and Present_Value, `Silenced` and `Operation_Expected`
 don't follow it; a reset executor sees the simulated `Tracking_Value` in its

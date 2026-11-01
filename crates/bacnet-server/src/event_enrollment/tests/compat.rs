@@ -464,7 +464,7 @@ fn empty_parameters_is_skipped() {
 }
 
 /// Periodic evaluation persists a detected transition through the internal
-/// lifecycle path (`set_event_state_internal`), NOT the network
+/// commit (`EventReporting::commit_event_transition`), NOT the network
 /// `write_property(EVENT_STATE, …)` route. The network route rejects
 /// `EVENT_STATE` writes entirely (issue #130): driving a transition still
 /// updates `Event_State`, and a direct network write of `EVENT_STATE` on the

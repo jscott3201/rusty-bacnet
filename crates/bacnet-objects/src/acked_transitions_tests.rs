@@ -46,8 +46,19 @@ fn objects() -> Vec<Box<dyn BACnetObject>> {
         Box::new(MultiStateOutputObject::new(1, "MSO", 3).unwrap()),
         Box::new(MultiStateValueObject::new(1, "MSV", 3).unwrap()),
         Box::new(enrollment),
-        Box::new(AlertEnrollmentObject::new(1, "Alert", source).unwrap()),
+        Box::new(unacknowledged_alert(source)),
     ]
+}
+
+/// Alert Enrollment has no transition commit, so its unacknowledged
+/// TO_OFFNORMAL is seeded in its fields.
+fn unacknowledged_alert(source: ObjectIdentifier) -> AlertEnrollmentObject {
+    let mut alert = AlertEnrollmentObject::new(1, "Alert", source).unwrap();
+    alert.event_state = EventState::OFFNORMAL;
+    alert
+        .acked_transitions
+        .remove(EventTransition::ToOffnormal.bit_mask());
+    alert
 }
 
 fn bits(wire_octet: u8) -> PropertyValue {
@@ -91,16 +102,9 @@ fn seed_unacknowledged(object: &mut dyn BACnetObject) {
             None,
         )
         .unwrap();
-    if object.object_identifier().object_type() == ObjectType::ALERT_ENROLLMENT {
-        // Alert Enrollment retains its existing internal setter, not the
-        // atomic commit/AcknowledgeAlarm capability of the other families.
-        object
-            .set_event_state_internal(EventState::OFFNORMAL)
-            .unwrap();
-        object
-            .set_acked_transitions_internal(EventTransition::ToOffnormal.bit_mask(), false)
-            .unwrap();
-    } else {
+    // Alert Enrollment comes seeded: it has no atomic commit or
+    // AcknowledgeAlarm capability like the other families.
+    if object.object_identifier().object_type() != ObjectType::ALERT_ENROLLMENT {
         object
             .event_reporting_mut()
             .unwrap()
@@ -175,14 +179,11 @@ fn acked_transitions_internal_commit_and_acknowledgment_bypass_property_writes()
         seed_unacknowledged(&mut *object);
         assert_denied(&mut *object, bits(0xe0), None);
         if object.object_identifier().object_type() == ObjectType::ALERT_ENROLLMENT {
-            object
-                .set_acked_transitions_internal(EventTransition::ToOffnormal.bit_mask(), true)
-                .unwrap();
-            // TO_NORMAL stays acknowledged even if generic local logic clears it.
-            object
-                .set_acked_transitions_internal(EventTransition::ToNormal.bit_mask(), false)
-                .unwrap();
-        } else {
+            // No local route acknowledges an Alert Enrollment's transition.
+            assert_eq!(snapshot(&*object)[1], bits(0x60));
+            continue;
+        }
+        {
             let mut acknowledged = snapshot(&*object);
             acknowledged[1] = bits(0xe0);
             object

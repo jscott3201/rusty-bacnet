@@ -409,39 +409,3 @@ fn enrollment_property_metadata_is_complete_and_pins_timestamp_requirements() {
         PropertyWriteCapability::Always
     );
 }
-
-#[test]
-fn alert_to_normal_acknowledgment_cannot_be_cleared() {
-    let mut alert = AlertEnrollmentObject::new(1, "AE-1", alert_source()).unwrap();
-
-    alert
-        .set_acked_transitions_internal(EventTransitionBits::TO_NORMAL, false)
-        .unwrap();
-    assert_eq!(alert.acked_transitions, EventTransitionBits::all());
-
-    alert
-        .set_acked_transitions_internal(EventTransitionBits::TO_OFFNORMAL, false)
-        .unwrap();
-    assert_eq!(
-        alert.acked_transitions,
-        EventTransitionBits::TO_FAULT | EventTransitionBits::TO_NORMAL
-    );
-    alert
-        .set_acked_transitions_internal(EventTransitionBits::TO_FAULT, false)
-        .unwrap();
-    assert_eq!(alert.acked_transitions, EventTransitionBits::TO_NORMAL);
-    alert
-        .set_acked_transitions_internal(EventTransitionBits::TO_OFFNORMAL, true)
-        .unwrap();
-    alert
-        .set_acked_transitions_internal(EventTransitionBits::TO_FAULT, true)
-        .unwrap();
-    assert_eq!(alert.acked_transitions, EventTransitionBits::all());
-
-    alert.set_event_detection_enable(false);
-    assert!(
-        alert
-            .set_acked_transitions_internal(EventTransitionBits::TO_NORMAL, false)
-            .is_err()
-    );
-}

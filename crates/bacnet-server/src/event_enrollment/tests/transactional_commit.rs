@@ -288,7 +288,8 @@ fn valid_retarget_coalesces_reset_and_full_delay_reseed_to_one_state_write() {
     let pending = db
         .get(&enrollment_oid)
         .unwrap()
-        .enrollment_eval_state_internal()
+        .enrollment_eval()
+        .map(|e| e.eval_state())
         .unwrap()
         .pending
         .unwrap();
@@ -310,7 +311,8 @@ fn later_unusable_input_commits_cancellation_once() {
     assert!(
         db.get(&enrollment_oid)
             .unwrap()
-            .enrollment_eval_state_internal()
+            .enrollment_eval()
+            .map(|e| e.eval_state())
             .unwrap()
             .pending
             .is_none()

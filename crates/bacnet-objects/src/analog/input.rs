@@ -332,29 +332,7 @@ impl BACnetObject for AnalogInputObject {
 
     crate::traits::lend_event_reporting!();
 
-    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
-        if self.out_of_service || self.reliability_inhibit.enabled() {
-            return Err(common::write_access_denied_error());
-        }
-        if !common::is_reliability_value_valid(reliability) {
-            return Err(common::value_out_of_range_error());
-        }
-        self.reliability = reliability;
-        self.fault_out_of_range.clear_ownership();
-        Ok(())
-    }
-
-    fn evaluate_reliability_internal(&mut self) -> Result<ReliabilityEvaluation, Error> {
-        if self.out_of_service || self.reliability_inhibit.enabled() {
-            return Ok(ReliabilityEvaluation::Unchanged);
-        }
-        self.fault_out_of_range
-            .evaluate(self.present_value, &mut self.reliability)
-    }
-
-    fn reliability_evaluation_inhibited_internal(&self) -> bool {
-        self.reliability_inhibit.enabled()
-    }
+    crate::traits::lend_reliability_eval!();
 
     fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
         super::CREATION_ONLY
@@ -370,6 +348,32 @@ impl BACnetObject for AnalogInputObject {
 
     fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
         Some(self)
+    }
+}
+
+impl crate::traits::ReliabilityEval for AnalogInputObject {
+    fn set_reliability(&mut self, reliability: Reliability) -> Result<(), Error> {
+        if self.out_of_service || self.reliability_inhibit.enabled() {
+            return Err(common::write_access_denied_error());
+        }
+        if !common::is_reliability_value_valid(reliability) {
+            return Err(common::value_out_of_range_error());
+        }
+        self.reliability = reliability;
+        self.fault_out_of_range.clear_ownership();
+        Ok(())
+    }
+
+    fn evaluate_reliability(&mut self) -> Result<ReliabilityEvaluation, Error> {
+        if self.out_of_service || self.reliability_inhibit.enabled() {
+            return Ok(ReliabilityEvaluation::Unchanged);
+        }
+        self.fault_out_of_range
+            .evaluate(self.present_value, &mut self.reliability)
+    }
+
+    fn reliability_evaluation_inhibited(&self) -> bool {
+        self.reliability_inhibit.enabled()
     }
 }
 
@@ -683,7 +687,7 @@ mod fault_out_of_range_non_finite_tests {
                 .unwrap();
             normal.present_value = non_finite;
 
-            assert_value_out_of_range(normal.evaluate_reliability_internal());
+            assert_value_out_of_range(normal.reliability_eval().unwrap().evaluate_reliability());
             assert_eq!(normal.present_value.to_bits(), non_finite.to_bits());
             assert_eq!(normal.reliability, Reliability::NO_FAULT_DETECTED);
             assert_eq!(
@@ -696,7 +700,11 @@ mod fault_out_of_range_non_finite_tests {
 
             normal.present_value = 9.0;
             assert_eq!(
-                normal.evaluate_reliability_internal().unwrap(),
+                normal
+                    .reliability_eval()
+                    .unwrap()
+                    .evaluate_reliability()
+                    .unwrap(),
                 ReliabilityEvaluation::Changed {
                     old_reliability: Reliability::NO_FAULT_DETECTED,
                     new_reliability: Reliability::UNDER_RANGE,
@@ -707,13 +715,17 @@ mod fault_out_of_range_non_finite_tests {
                 AnalogInputObject::new(2, "AI-owned", EngineeringUnits::DEGREES_CELSIUS).unwrap();
             owned.configure_fault_out_of_range(10.0, 20.0).unwrap();
             owned.present_value = 9.0;
-            owned.evaluate_reliability_internal().unwrap();
+            owned
+                .reliability_eval()
+                .unwrap()
+                .evaluate_reliability()
+                .unwrap();
             let status_before = owned
                 .read_property(PropertyIdentifier::STATUS_FLAGS, None)
                 .unwrap();
             owned.present_value = non_finite;
 
-            assert_value_out_of_range(owned.evaluate_reliability_internal());
+            assert_value_out_of_range(owned.reliability_eval().unwrap().evaluate_reliability());
             assert_eq!(owned.present_value.to_bits(), non_finite.to_bits());
             assert_eq!(owned.reliability, Reliability::UNDER_RANGE);
             assert_eq!(
@@ -729,7 +741,11 @@ mod fault_out_of_range_non_finite_tests {
 
             owned.present_value = 21.0;
             assert_eq!(
-                owned.evaluate_reliability_internal().unwrap(),
+                owned
+                    .reliability_eval()
+                    .unwrap()
+                    .evaluate_reliability()
+                    .unwrap(),
                 ReliabilityEvaluation::Changed {
                     old_reliability: Reliability::UNDER_RANGE,
                     new_reliability: Reliability::OVER_RANGE,

@@ -325,13 +325,17 @@ impl BACnetObject for AccessZoneObject {
 
     crate::traits::lend_event_reporting!();
 
+    crate::traits::lend_reliability_eval!();
+}
+
+impl crate::traits::ReliabilityEval for AccessZoneObject {
     /// The Reliability the zone's fault detection works out. Like the other
     /// Reliability carriers, the zone refuses it with WRITE_ACCESS_DENIED
     /// while Out_Of_Service is TRUE, so a client's simulated value stays
     /// served; the return to service brings back the value from before. A
     /// value outside the BACnetReliability production is refused with
     /// VALUE_OUT_OF_RANGE.
-    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
+    fn set_reliability(&mut self, reliability: Reliability) -> Result<(), Error> {
         if self.out_of_service {
             return Err(common::write_access_denied_error());
         }
