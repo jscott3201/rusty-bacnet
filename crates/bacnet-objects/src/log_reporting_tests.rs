@@ -9,7 +9,7 @@ use bacnet_types::constructed::{
     BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord, EventLogDatum, LogData,
     LogDatum,
 };
-use bacnet_types::enums::ObjectType;
+use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
 use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::{Date, Time};
 use std::sync::Arc;
@@ -112,7 +112,8 @@ fn every_threshold_of_records_proposes_one_report_on_each_log() {
                 add(log);
                 assert_eq!(
                     log.event_reporting_mut()
-                        .and_then(|r| r.tick_intrinsic_reporting()),
+                        .expect("lends event reporting")
+                        .tick_intrinsic_reporting(),
                     None,
                     "{kind:?}"
                 );
@@ -120,11 +121,13 @@ fn every_threshold_of_records_proposes_one_report_on_each_log() {
             add(log);
             let outcome = log
                 .event_reporting_mut()
-                .and_then(|r| r.tick_intrinsic_reporting())
+                .expect("lends event reporting")
+                .tick_intrinsic_reporting()
                 .expect("a report is due");
             assert_eq!(
                 log.event_reporting_mut()
-                    .and_then(|r| r.evaluate_intrinsic_reporting()),
+                    .expect("lends event reporting")
+                    .evaluate_intrinsic_reporting(),
                 Some(outcome.clone())
             );
             assert_eq!(
@@ -146,7 +149,7 @@ fn every_threshold_of_records_proposes_one_report_on_each_log() {
             assert_eq!(unsigned(log, P::RECORDS_SINCE_NOTIFICATION), 3);
             commit_test_proposal(log, outcome);
             assert_eq!(
-                log.buffer_ready_report_internal(),
+                log.event_reporting().unwrap().buffer_ready_report(),
                 Some(BufferReadyReport {
                     previous_notification: 3 * (round - 1),
                     current_notification: 3 * round,
@@ -157,7 +160,8 @@ fn every_threshold_of_records_proposes_one_report_on_each_log() {
             assert_eq!(unsigned(log, P::RECORDS_SINCE_NOTIFICATION), 0);
             assert_eq!(
                 log.event_reporting_mut()
-                    .and_then(|r| r.tick_intrinsic_reporting()),
+                    .expect("lends event reporting")
+                    .tick_intrinsic_reporting(),
                 None,
                 "{kind:?}"
             );
@@ -168,7 +172,8 @@ fn every_threshold_of_records_proposes_one_report_on_each_log() {
         }
         let summary = log
             .event_reporting()
-            .and_then(|r| r.enrollment_summary_capability())
+            .expect("lends event reporting")
+            .enrollment_summary_capability()
             .unwrap();
         assert_eq!(summary.event_type, EventType::BUFFER_READY);
         assert_eq!(
@@ -189,7 +194,8 @@ fn no_threshold_or_detection_off_proposes_nothing() {
         assert_eq!(unsigned(log, P::NOTIFICATION_THRESHOLD), 0);
         assert_eq!(
             log.event_reporting_mut()
-                .and_then(|r| r.tick_intrinsic_reporting()),
+                .expect("lends event reporting")
+                .tick_intrinsic_reporting(),
             None
         );
         write(
@@ -200,7 +206,8 @@ fn no_threshold_or_detection_off_proposes_nothing() {
         write(log, P::NOTIFICATION_THRESHOLD, PropertyValue::Unsigned(1));
         assert_eq!(
             log.event_reporting_mut()
-                .and_then(|r| r.tick_intrinsic_reporting()),
+                .expect("lends event reporting")
+                .tick_intrinsic_reporting(),
             None
         );
         // Turned on again, the algorithm counts from where the log stands.
@@ -209,13 +216,15 @@ fn no_threshold_or_detection_off_proposes_nothing() {
         assert_eq!(unsigned(log, P::RECORDS_SINCE_NOTIFICATION), 0);
         assert_eq!(
             log.event_reporting_mut()
-                .and_then(|r| r.tick_intrinsic_reporting()),
+                .expect("lends event reporting")
+                .tick_intrinsic_reporting(),
             None
         );
         add(log);
         assert!(
             log.event_reporting_mut()
-                .and_then(|r| r.tick_intrinsic_reporting())
+                .expect("lends event reporting")
+                .tick_intrinsic_reporting()
                 .is_some()
         );
     }
@@ -235,13 +244,15 @@ fn a_purge_restarts_records_since_notification_only() {
         assert_eq!(unsigned(log, P::RECORDS_SINCE_NOTIFICATION), 1);
         assert_eq!(
             log.event_reporting_mut()
-                .and_then(|r| r.tick_intrinsic_reporting()),
+                .expect("lends event reporting")
+                .tick_intrinsic_reporting(),
             None
         );
         add(log);
         assert!(
             log.event_reporting_mut()
-                .and_then(|r| r.tick_intrinsic_reporting())
+                .expect("lends event reporting")
+                .tick_intrinsic_reporting()
                 .is_some()
         );
     }
@@ -263,7 +274,8 @@ fn event_enable_to_normal_decides_distribution_only() {
         add(log);
         let outcome = log
             .event_reporting_mut()
-            .and_then(|r| r.tick_intrinsic_reporting())
+            .expect("lends event reporting")
+            .tick_intrinsic_reporting()
             .unwrap();
         assert!(!outcome.distribute);
         commit_test_proposal(log, outcome);

@@ -28,7 +28,6 @@ use crate::event_enrollment::{
 };
 use crate::file::{FileConfiguration, FileStorage};
 use crate::log_buffer::{LogBufferRecords, LogRecordIdentity};
-use crate::log_reporting::BufferReadyReport;
 use crate::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 
 pub mod capabilities;
@@ -598,7 +597,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
 
     /// Borrow this object's event reporting for the queries a host makes
     /// under a shared database guard: its Event_Algorithm_Inhibit_Ref and
-    /// its GetEnrollmentSummary capability.
+    /// its GetEnrollmentSummary capability, and a BUFFER_READY report's counts.
     ///
     /// The default has none. An object that lends this lends
     /// [`event_reporting_mut`](Self::event_reporting_mut) too. See
@@ -790,7 +789,9 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// The **default** returns `Err`, so objects without an algorithmic
     /// `Event_State` opt out. Objects that do model one (e.g.
     /// `EventEnrollmentObject`) override this to store the value verbatim:
-    /// the only caller is a trusted internal evaluator that passes a modeled
+    /// the bundled server's evaluator now commits through
+    /// [`EventReporting::commit_event_transition`] instead, so only trusted
+    /// local code (tests, today) calls this, passing a modeled
     /// [`EventState`], mirroring the inherent `set_event_state` builder and
     /// the existing read arm. Network-facing validation — rejecting all
     /// `Event_State` writes — lives in [`write_property`](Self::write_property),
@@ -865,10 +866,12 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// Implements the alarm-acknowledgment half of Clause 13.2.2.1.4's fourth
     /// transition action: pass the transition to alarm-acknowledgment handling.
     /// Under Clause 13.2.3, receiving a transition updates its Acked_Transitions
-    /// bit to the inverse of the corresponding Ack_Required bit. The caller (the
-    /// server evaluator) resolves `Ack_Required` from the referenced
-    /// Notification Class object and passes the outcome as `acknowledged`;
-    /// this method performs only the bit maintenance.
+    /// bit to the inverse of the corresponding Ack_Required bit. The caller
+    /// resolves `Ack_Required` from the referenced Notification Class object
+    /// and passes the outcome as `acknowledged`; this method performs only
+    /// the bit maintenance. The bundled server's evaluator does this inside
+    /// [`EventReporting::commit_event_transition`], so it has no caller there;
+    /// only trusted local code (tests, today) calls it.
     ///
     /// `transition_bit` is the transition direction's flag, as returned by
     /// [`EventTransition::bit_mask`](crate::event::EventTransition::bit_mask). The set half overlaps the
@@ -1181,13 +1184,5 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     #[doc(hidden)]
     fn logs_received_event_notifications_internal(&self) -> bool {
         false
-    }
-
-    /// The counts the last committed BUFFER_READY transition reported, for
-    /// the server to carry as its event values (Clause 13.3.7). `None` for an
-    /// object that hasn't reported one, or doesn't run that algorithm.
-    #[doc(hidden)]
-    fn buffer_ready_report_internal(&self) -> Option<BufferReadyReport> {
-        None
     }
 }

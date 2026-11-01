@@ -36,14 +36,16 @@ fn intrinsic_proposals_and_commit_results_survive_wrapping() {
         source_reporter::install(&mut object, &owner).unwrap();
         let evaluated = object
             .event_reporting_mut()
-            .and_then(|r| r.evaluate_intrinsic_reporting());
+            .expect("lends event reporting")
+            .evaluate_intrinsic_reporting();
         let proposal = if delay == 0 {
             evaluated.unwrap()
         } else {
             assert!(evaluated.is_none());
             object
                 .event_reporting_mut()
-                .and_then(|r| r.tick_intrinsic_reporting())
+                .expect("lends event reporting")
+                .tick_intrinsic_reporting()
                 .unwrap()
         };
         assert_eq!(
@@ -91,13 +93,15 @@ fn intrinsic_proposals_and_commit_results_survive_wrapping() {
         assert!(
             object
                 .event_reporting_mut()
-                .and_then(|r| r.evaluate_intrinsic_reporting())
+                .expect("lends event reporting")
+                .evaluate_intrinsic_reporting()
                 .is_none()
         );
         assert!(
             object
                 .event_reporting_mut()
-                .and_then(|r| r.tick_intrinsic_reporting())
+                .expect("lends event reporting")
+                .tick_intrinsic_reporting()
                 .is_none()
         );
     }

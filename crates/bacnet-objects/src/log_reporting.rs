@@ -19,14 +19,11 @@
 //! `LogLifecycle`, which restarts Records_Since_Notification at a purge;
 //! offer each read and write to its `read` and `write`; and invoke
 //! `impl_buffer_ready_reporting!` with the log's type, the field and the log
-//! buffer, lending the capability with `crate::traits::lend_event_reporting!()`
-//! and serving `buffer_ready_report_internal` from the field's `report`.
+//! buffer, lending the capability with `crate::traits::lend_event_reporting!()`.
 
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
-use bacnet_types::enums::{
-    ErrorClass, ErrorCode, EventState, EventType, NotifyType, PropertyIdentifier as P,
-};
+use bacnet_types::enums::{EventState, EventType, NotifyType, PropertyIdentifier as P};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
 
@@ -373,10 +370,7 @@ impl BufferReadyReporting {
         timestamp: &BACnetTimeStamp,
     ) -> Result<Option<EventStateChange>, Error> {
         if !self.event_detection_enable {
-            return Err(common::protocol_error(
-                ErrorClass::OBJECT,
-                ErrorCode::NO_ALARM_CONFIGURED,
-            ));
+            return Err(crate::traits::no_alarm_configured());
         }
         self.history
             .acknowledge_correlated(&mut self.acked_transitions, event_state, timestamp)
@@ -452,6 +446,10 @@ macro_rules! impl_buffer_ready_reporting {
                 timestamp: &bacnet_types::primitives::BACnetTimeStamp,
             ) -> Result<Option<$crate::event::EventStateChange>, bacnet_types::error::Error> {
                 self.$reporting.acknowledge(event_state, timestamp)
+            }
+
+            fn buffer_ready_report(&self) -> Option<$crate::log_reporting::BufferReadyReport> {
+                self.$reporting.report()
             }
 
             fn event_algorithm_inhibit_reference(

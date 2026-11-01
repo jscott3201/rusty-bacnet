@@ -452,7 +452,8 @@ mod tests {
                 .get_mut(&oid)
                 .unwrap()
                 .event_reporting_mut()
-                .and_then(|r| r.evaluate_intrinsic_reporting())
+                .expect("lends event reporting")
+                .evaluate_intrinsic_reporting()
                 .expect("range Reliability must be observed as an intrinsic fault");
             assert_eq!(proposal.change.from, EventState::NORMAL);
             assert_eq!(proposal.change.to, EventState::FAULT);

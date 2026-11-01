@@ -210,10 +210,7 @@ impl ChangeOfStateReporting {
         timestamp: &BACnetTimeStamp,
     ) -> Result<Option<EventStateChange>, Error> {
         if !self.event_detection_enable {
-            return Err(Error::protocol(
-                ErrorClass::OBJECT,
-                ErrorCode::NO_ALARM_CONFIGURED,
-            ));
+            return Err(crate::traits::no_alarm_configured());
         }
         self.event_history.acknowledge_correlated(
             &mut self.event_detector.acked_transitions,

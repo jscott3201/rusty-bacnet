@@ -555,10 +555,6 @@ impl BACnetObject for TrendLogObject {
 
     crate::traits::lend_event_reporting!();
 
-    fn buffer_ready_report_internal(&self) -> Option<crate::log_reporting::BufferReadyReport> {
-        self.reporting.report()
-    }
-
     fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
         Some(self)
     }

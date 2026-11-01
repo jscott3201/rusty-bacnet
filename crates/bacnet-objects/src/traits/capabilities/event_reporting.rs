@@ -10,6 +10,7 @@ use crate::event::{
     EnrollmentSummaryCapability, EventStateChange, EventTransitionCommit,
     EventTransitionCommitError, TransitionOutcome,
 };
+use crate::log_reporting::BufferReadyReport;
 
 /// OBJECT / NO_ALARM_CONFIGURED: what an object answers for an
 /// acknowledgment it can't take, such as one with event detection disabled,
@@ -25,15 +26,17 @@ pub fn no_alarm_configured() -> Error {
 /// [`BACnetObject::event_reporting_mut`](crate::traits::BACnetObject::event_reporting_mut),
 /// and from [`event_reporting`](crate::traits::BACnetObject::event_reporting)
 /// for the queries a host makes under a shared database guard, such as
-/// GetEnrollmentSummary. An object that lends one lends the other.
+/// GetEnrollmentSummary and a BUFFER_READY notification's counts. An object
+/// that lends one lends the other.
 ///
 /// Every method has a default that opts out, so an object overrides only
 /// what it models. Proposals and commits are separate steps: an evaluation
 /// only proposes a transition, and the object's event properties change
 /// when the host commits it through
 /// [`commit_event_transition`](Self::commit_event_transition). The bundled
-/// server runs the evaluation after a write and once a second, and commits
-/// and distributes each proposal while it holds the database's write guard.
+/// server runs the evaluation after a write and once a second, commits each
+/// proposal while it holds the database's write guard, and sends the
+/// notifications only after it has released that guard.
 pub trait EventReporting {
     /// Evaluate intrinsic reporting after a Present_Value change.
     ///
@@ -101,8 +104,12 @@ pub trait EventReporting {
     /// transition's `Acked_Transitions` bit.
     ///
     /// Returns the transition's exact from and to states when the object
-    /// keeps them, for the server's acknowledgment notification, or
-    /// `Ok(None)` when it doesn't; either way the acknowledgment was taken.
+    /// keeps them, or `Ok(None)` when it doesn't; either way the
+    /// acknowledgment was taken. The bundled server sends an acknowledgment
+    /// notification only when it has those states and also knows the
+    /// object's event algorithm, which a custom object can't yet supply
+    /// (#2179); until then a custom object's accepted acknowledgment sends
+    /// none.
     /// A request that matches no committed transition fails with the
     /// service error it earns (INVALID_EVENT_STATE or INVALID_TIME_STAMP),
     /// and an object that can't take acknowledgments, the default, with
@@ -125,6 +132,15 @@ pub trait EventReporting {
     /// history. Not public API yet (#2179).
     #[doc(hidden)]
     fn enrollment_summary_capability(&self) -> Option<EnrollmentSummaryCapability> {
+        None
+    }
+
+    /// The counts the last committed BUFFER_READY transition reported, for
+    /// the server to carry as its event values (Clause 13.3.7). `None` for an
+    /// object that hasn't reported one, or doesn't run that algorithm, the
+    /// default. Not public API yet (#2179).
+    #[doc(hidden)]
+    fn buffer_ready_report(&self) -> Option<BufferReadyReport> {
         None
     }
 

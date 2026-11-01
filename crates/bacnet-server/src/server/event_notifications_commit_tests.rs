@@ -108,7 +108,8 @@ fn unsupported_fault_reindication_is_retryable_without_sequence_consumption() {
         .get_mut(&oid)
         .unwrap()
         .event_reporting_mut()
-        .and_then(|r| r.evaluate_intrinsic_reporting())
+        .expect("lends event reporting")
+        .evaluate_intrinsic_reporting()
         .unwrap();
     assert!(BACnetServer::<TestTransport>::commit_intrinsic_transition(
         &mut db,
@@ -121,7 +122,8 @@ fn unsupported_fault_reindication_is_retryable_without_sequence_consumption() {
         db.get_mut(&oid)
             .unwrap()
             .event_reporting_mut()
-            .and_then(|r| r.evaluate_intrinsic_reporting()),
+            .expect("lends event reporting")
+            .evaluate_intrinsic_reporting(),
         Some(proposal)
     );
 }
@@ -221,7 +223,8 @@ async fn committed_ack_required_snapshot_survives_notification_class_replacement
             .get_mut(&oid)
             .unwrap()
             .event_reporting_mut()
-            .and_then(|r| r.evaluate_intrinsic_reporting())
+            .expect("lends event reporting")
+            .evaluate_intrinsic_reporting()
             .unwrap();
         BACnetServer::<TestTransport>::commit_intrinsic_transition(&mut guard, &oid, outcome)
             .unwrap()

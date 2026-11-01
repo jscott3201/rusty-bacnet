@@ -495,13 +495,6 @@ impl BACnetObject for Probe {
         self.called("logs_received_event_notifications_internal", ());
         true
     }
-    fn buffer_ready_report_internal(&self) -> Option<BufferReadyReport> {
-        self.called("buffer_ready_report_internal", ());
-        Some(BufferReadyReport {
-            previous_notification: 4,
-            current_notification: 9,
-        })
-    }
 }
 
 /// The probe's time capability: every method answers unlike its default
@@ -698,6 +691,13 @@ impl EventReporting for Probe {
         Some(EnrollmentSummaryCapability {
             event_type: EventType::CHANGE_OF_STATE,
             last_transition: None,
+        })
+    }
+    fn buffer_ready_report(&self) -> Option<BufferReadyReport> {
+        self.called("EventReporting::buffer_ready_report", ());
+        Some(BufferReadyReport {
+            previous_notification: 4,
+            current_notification: 9,
         })
     }
     fn event_algorithm_inhibit_reference(&self) -> Option<BACnetObjectPropertyReference> {

@@ -278,7 +278,8 @@ fn buffer_ready_counts_from_the_restored_count() {
         assert!(
             log.object_mut()
                 .event_reporting_mut()
-                .and_then(|r| r.evaluate_intrinsic_reporting())
+                .expect("lends event reporting")
+                .evaluate_intrinsic_reporting()
                 .is_none(),
             "{kind:?}"
         );
@@ -296,14 +297,16 @@ fn buffer_ready_counts_from_the_restored_count() {
         assert!(
             log.object_mut()
                 .event_reporting_mut()
-                .and_then(|r| r.evaluate_intrinsic_reporting())
+                .expect("lends event reporting")
+                .evaluate_intrinsic_reporting()
                 .is_none()
         );
         log.add_record(ordinary(6, 6)).unwrap();
         assert!(
             log.object_mut()
                 .event_reporting_mut()
-                .and_then(|r| r.evaluate_intrinsic_reporting())
+                .expect("lends event reporting")
+                .evaluate_intrinsic_reporting()
                 .is_some(),
             "{kind:?}"
         );

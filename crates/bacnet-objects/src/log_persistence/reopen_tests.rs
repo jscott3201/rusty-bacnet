@@ -330,7 +330,8 @@ fn buffer_ready_resumes_from_the_saved_last_notify_record() {
         }
         let outcome = log
             .event_reporting_mut()
-            .and_then(|r| r.tick_intrinsic_reporting())
+            .expect("lends event reporting")
+            .tick_intrinsic_reporting()
             .expect("a report is due");
         commit_test_proposal(log.as_mut(), outcome);
         add(log.as_mut(), 4);
@@ -354,18 +355,20 @@ fn buffer_ready_resumes_from_the_saved_last_notify_record() {
         assert_eq!(unsigned(log.as_ref(), P::RECORDS_SINCE_NOTIFICATION), 2);
         assert_eq!(
             log.event_reporting_mut()
-                .and_then(|r| r.tick_intrinsic_reporting()),
+                .expect("lends event reporting")
+                .tick_intrinsic_reporting(),
             None,
             "{kind:?}"
         );
         add(log.as_mut(), 10);
         let outcome = log
             .event_reporting_mut()
-            .and_then(|r| r.tick_intrinsic_reporting())
+            .expect("lends event reporting")
+            .tick_intrinsic_reporting()
             .expect("the third record since");
         commit_test_proposal(log.as_mut(), outcome);
         assert_eq!(
-            log.buffer_ready_report_internal(),
+            log.event_reporting().unwrap().buffer_ready_report(),
             Some(crate::log_reporting::BufferReadyReport {
                 previous_notification: 3,
                 current_notification: 6,

@@ -4101,9 +4101,19 @@ object
     .apply_local_input(LocalInputValue::present_value(value))?;
 ```
 
-Event reporting moves the same way. The three acknowledgment hooks
-(`acknowledge_alarm(bits)`, `acknowledge_alarm_correlated_internal` and
-`acknowledge_alarm_correlated_detailed_internal`) become one method:
+Event reporting moves the same way. `commit_event_transition_internal`,
+`enrollment_summary_capability_internal`,
+`event_algorithm_inhibit_reference_internal`,
+`follow_event_algorithm_inhibit_internal` and
+`buffer_ready_report_internal` drop their suffix as `EventReporting` methods.
+`acknowledge_alarm_correlated_internal` and
+`acknowledge_alarm_correlated_detailed_internal` become one
+`acknowledge_alarm`. The old bits-only `BACnetObject::acknowledge_alarm(bits)`
+is removed outright: the server never called it, and its default refused with
+OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. A call on a concrete type, such as
+`ai.evaluate_intrinsic_reporting()`, needs
+`use bacnet_objects::traits::EventReporting;` in scope; through a
+`dyn BACnetObject`, go through the accessor:
 
 ```rust,ignore
 // Before: on `impl BACnetObject for MyAlarm`.

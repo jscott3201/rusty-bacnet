@@ -231,9 +231,6 @@ pub const QUERIES: &[(&str, Query)] = &[
     ("log_collecting_internal", |o| {
         o.log_collecting_internal().to_string()
     }),
-    ("buffer_ready_report_internal", |o| {
-        format!("{:?}", o.buffer_ready_report_internal())
-    }),
 ];
 
 pub const COMMANDS: &[(&str, Command)] = &[

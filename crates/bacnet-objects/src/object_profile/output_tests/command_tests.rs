@@ -265,7 +265,8 @@ fn profile_writes_preserve_command_failure_and_out_of_range_transitions() {
         for output in [&mut profiled, &mut control] {
             let proposal = output
                 .event_reporting_mut()
-                .and_then(|r| r.evaluate_intrinsic_reporting())
+                .expect("lends event reporting")
+                .evaluate_intrinsic_reporting()
                 .unwrap();
             assert_eq!(proposal.change.to, target);
             assert_eq!(proposal.event_type, algorithm);
@@ -291,7 +292,8 @@ fn profile_writes_preserve_command_failure_and_out_of_range_transitions() {
             }
             let proposal = output
                 .event_reporting_mut()
-                .and_then(|r| r.evaluate_intrinsic_reporting())
+                .expect("lends event reporting")
+                .evaluate_intrinsic_reporting()
                 .unwrap();
             assert_eq!(proposal.change.from, target);
             assert_eq!(proposal.change.to, EventState::NORMAL);

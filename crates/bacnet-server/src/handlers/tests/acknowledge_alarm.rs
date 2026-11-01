@@ -137,8 +137,11 @@ fn configured_event_enrollment() -> EventEnrollmentObject {
     object
 }
 
+/// Accepts every acknowledgment without a transition, when it lends event
+/// reporting at all.
 struct UncorrelatedAckObject {
     oid: ObjectIdentifier,
+    lends: bool,
 }
 
 struct MalformedDetailedAckObject {
@@ -242,10 +245,10 @@ impl BACnetObject for UncorrelatedAckObject {
     }
 
     fn event_reporting(&self) -> Option<&dyn bacnet_objects::traits::EventReporting> {
-        Some(self)
+        if self.lends { Some(self) } else { None }
     }
     fn event_reporting_mut(&mut self) -> Option<&mut dyn bacnet_objects::traits::EventReporting> {
-        Some(self)
+        if self.lends { Some(self) } else { None }
     }
 }
 
@@ -263,7 +266,8 @@ impl bacnet_objects::traits::EventReporting for UncorrelatedAckObject {
 fn uncorrelated_acknowledgment_accepts_without_inventing_notification_context() {
     let oid = ObjectIdentifier::new(ObjectType::ACCUMULATOR, 91).unwrap();
     let mut db = ObjectDatabase::new();
-    db.add(Box::new(UncorrelatedAckObject { oid })).unwrap();
+    db.add(Box::new(UncorrelatedAckObject { oid, lends: true }))
+        .unwrap();
 
     let accepted = handle_acknowledge_alarm(
         &mut db,
@@ -277,6 +281,28 @@ fn uncorrelated_acknowledgment_accepts_without_inventing_notification_context() 
 
     assert_eq!(accepted.event_object_identifier, oid);
     assert_eq!(accepted.notification, None);
+}
+
+/// An object that lends no event reporting has no alarm to acknowledge,
+/// whatever it would answer if it lent one.
+#[test]
+fn an_object_lending_no_event_reporting_has_no_alarm_configured() {
+    let oid = ObjectIdentifier::new(ObjectType::ACCUMULATOR, 93).unwrap();
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(UncorrelatedAckObject { oid, lends: false }))
+        .unwrap();
+
+    let error = handle_acknowledge_alarm(
+        &mut db,
+        &encode_request(
+            oid,
+            EventState::HIGH_LIMIT,
+            BACnetTimeStamp::SequenceNumber(42),
+        ),
+    )
+    .unwrap_err();
+
+    assert_protocol(error, ErrorClass::OBJECT, ErrorCode::NO_ALARM_CONFIGURED);
 }
 
 #[test]

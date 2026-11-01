@@ -59,7 +59,8 @@ fn all_eleven_intrinsic_families_report_implied_algorithm_and_shared_commit_coor
     for (object, expected_event_type) in &mut objects {
         let capability = object
             .event_reporting()
-            .and_then(|r| r.enrollment_summary_capability())
+            .expect("lends event reporting")
+            .enrollment_summary_capability()
             .expect("built-in family must opt in");
         assert_eq!(capability.event_type, *expected_event_type);
         assert_eq!(capability.last_transition, None);
@@ -80,7 +81,8 @@ fn all_eleven_intrinsic_families_report_implied_algorithm_and_shared_commit_coor
             .unwrap();
         let capability = object
             .event_reporting()
-            .and_then(|r| r.enrollment_summary_capability())
+            .expect("lends event reporting")
+            .enrollment_summary_capability()
             .unwrap();
         assert_eq!(capability.event_type, *expected_event_type);
         assert_eq!(

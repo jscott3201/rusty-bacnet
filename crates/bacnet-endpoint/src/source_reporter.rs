@@ -15,7 +15,6 @@ use bacnet_objects::event_enrollment::{
 };
 use bacnet_objects::file::{FileConfiguration, FileStorage};
 use bacnet_objects::log_buffer::{LogBufferRecords, LogRecordIdentity};
-use bacnet_objects::log_reporting::BufferReadyReport;
 use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 use bacnet_objects::traits::{
@@ -443,10 +442,6 @@ impl BACnetObject for SourceReporter {
 
     fn logs_received_event_notifications_internal(&self) -> bool {
         self.wrapped.logs_received_event_notifications_internal()
-    }
-
-    fn buffer_ready_report_internal(&self) -> Option<BufferReadyReport> {
-        self.wrapped.buffer_ready_report_internal()
     }
 }
 

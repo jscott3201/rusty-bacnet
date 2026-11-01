@@ -372,7 +372,8 @@ async fn unsupported_custom_proposal_runtime_is_silent_unchanged_and_retryable()
             .get_mut(&oid())
             .unwrap()
             .event_reporting_mut()
-            .and_then(|r| r.evaluate_intrinsic_reporting())
+            .expect("lends event reporting")
+            .evaluate_intrinsic_reporting()
             .unwrap();
         let sent = broadcasts_from_per_write_path(&db, DccState::Enable).await;
         assert!(
@@ -387,7 +388,8 @@ async fn unsupported_custom_proposal_runtime_is_silent_unchanged_and_retryable()
                 .get_mut(&oid())
                 .unwrap()
                 .event_reporting_mut()
-                .and_then(|r| r.evaluate_intrinsic_reporting()),
+                .expect("lends event reporting")
+                .evaluate_intrinsic_reporting(),
             Some(proposal)
         );
         assert!(commits.lock().unwrap().is_empty());
@@ -452,7 +454,8 @@ async fn delayed_runtime(fail_first: bool, unsupported: bool) {
         db.get_mut(&oid())
             .unwrap()
             .event_reporting_mut()
-            .and_then(|r| r.evaluate_intrinsic_reporting())
+            .expect("lends event reporting")
+            .evaluate_intrinsic_reporting()
             .is_none()
     );
     assert_eq!(snapshot(&db), before);
@@ -484,7 +487,8 @@ async fn delayed_runtime(fail_first: bool, unsupported: bool) {
                 .get_mut(&oid())
                 .unwrap()
                 .event_reporting_mut()
-                .and_then(|r| r.tick_intrinsic_reporting())
+                .expect("lends event reporting")
+                .tick_intrinsic_reporting()
                 .unwrap();
             assert_eq!(proposal.change.from, EventState::NORMAL);
             assert_eq!(proposal.change.to, EventState::HIGH_LIMIT);

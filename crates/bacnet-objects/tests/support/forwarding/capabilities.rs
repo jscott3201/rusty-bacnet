@@ -254,6 +254,13 @@ pub const CAPABILITY_ROWS: &[(&str, Row)] = &[
         }),
     ),
     (
+        "EventReporting::buffer_ready_report",
+        Row::Query(|o| {
+            let report = o.event_reporting().map(|r| r.buffer_ready_report());
+            format!("{report:?}")
+        }),
+    ),
+    (
         "EventReporting::event_algorithm_inhibit_reference",
         Row::Query(|o| {
             let reference = o

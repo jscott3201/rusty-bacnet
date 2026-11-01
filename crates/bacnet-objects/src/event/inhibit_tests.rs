@@ -159,14 +159,16 @@ fn the_change_of_state_and_command_failure_detectors_take_the_inhibit_too() {
         assert_eq!(
             object
                 .event_reporting_mut()
-                .and_then(|r| r.evaluate_intrinsic_reporting()),
+                .expect("lends event reporting")
+                .evaluate_intrinsic_reporting(),
             None,
             "{name}"
         );
         inhibit(object, false);
         let offnormal = object
             .event_reporting_mut()
-            .and_then(|r| r.evaluate_intrinsic_reporting());
+            .expect("lends event reporting")
+            .evaluate_intrinsic_reporting();
         assert_eq!(
             step(object, offnormal),
             Some(EventState::OFFNORMAL),
@@ -175,7 +177,8 @@ fn the_change_of_state_and_command_failure_detectors_take_the_inhibit_too() {
         inhibit(object, true);
         let normal = object
             .event_reporting_mut()
-            .and_then(|r| r.evaluate_intrinsic_reporting());
+            .expect("lends event reporting")
+            .evaluate_intrinsic_reporting();
         assert_eq!(step(object, normal), Some(EventState::NORMAL), "{name}");
     }
 }

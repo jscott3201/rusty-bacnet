@@ -92,6 +92,9 @@ mod present_value_access_tests;
 mod local_input_tests;
 
 #[cfg(test)]
+mod event_reporting_tests;
+
+#[cfg(test)]
 mod property_metadata_tests;
 #[cfg(test)]
 mod test_rows;
