@@ -434,7 +434,10 @@ fn credential_data_input_return_to_service_serves_the_reader_again() {
     // is refused as on the other Reliability carriers.
     reader.set_present_value(card(&[0x99]), stamp(10)).unwrap();
     assert_property_error(
-        reader.set_reliability_internal(Reliability::COMMUNICATION_FAILURE),
+        reader
+            .reliability_eval()
+            .unwrap()
+            .set_reliability(Reliability::COMMUNICATION_FAILURE),
         ErrorCode::WRITE_ACCESS_DENIED,
     );
     assert_eq!(served(&reader), simulated);
@@ -454,11 +457,15 @@ fn credential_data_input_return_to_service_serves_the_reader_again() {
 
     // In service the application's values are served at once.
     reader
-        .set_reliability_internal(Reliability::COMMUNICATION_FAILURE)
+        .reliability_eval()
+        .unwrap()
+        .set_reliability(Reliability::COMMUNICATION_FAILURE)
         .unwrap();
     assert_eq!(read(&reader, P::STATUS_FLAGS), status_flags(true, false));
     reader
-        .set_reliability_internal(Reliability::NO_FAULT_DETECTED)
+        .reliability_eval()
+        .unwrap()
+        .set_reliability(Reliability::NO_FAULT_DETECTED)
         .unwrap();
     reader
         .set_present_value(card(&[0x12, 0x34, 0x56]), stamp(9))
@@ -485,15 +492,20 @@ fn credential_data_input_null_out_of_service_write_keeps_the_simulation() {
 }
 
 #[test]
-fn credential_data_input_set_reliability_internal_checks_the_production() {
+fn credential_data_input_set_reliability_checks_the_production() {
     let mut reader = reader();
     for raw in [11, 65_536] {
-        let result = reader.set_reliability_internal(Reliability::from_raw(raw));
+        let result = reader
+            .reliability_eval()
+            .unwrap()
+            .set_reliability(Reliability::from_raw(raw));
         assert_property_error(result, ErrorCode::VALUE_OUT_OF_RANGE);
     }
     assert_eq!(served(&reader), device(false));
     reader
-        .set_reliability_internal(Reliability::from_raw(64))
+        .reliability_eval()
+        .unwrap()
+        .set_reliability(Reliability::from_raw(64))
         .unwrap();
     assert_eq!(read(&reader, P::RELIABILITY), PropertyValue::Enumerated(64));
 }

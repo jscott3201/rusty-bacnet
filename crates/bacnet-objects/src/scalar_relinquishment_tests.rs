@@ -100,7 +100,9 @@ fn scalar_null_relinquishment_preserves_saved_reliability_and_client_override() 
     ]);
     for mut object in objects {
         object
-            .set_reliability_internal(Reliability::OVER_RANGE)
+            .reliability_eval()
+            .unwrap()
+            .set_reliability(Reliability::OVER_RANGE)
             .unwrap();
         write(&mut *object, P::OUT_OF_SERVICE, V::Boolean(true));
         write(
@@ -164,7 +166,9 @@ fn scalar_null_relinquishment_skips_multistate_reevaluation_but_boolean_write_ke
                 V::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw())
             );
             object
-                .set_reliability_internal(Reliability::NO_FAULT_DETECTED)
+                .reliability_eval()
+                .unwrap()
+                .set_reliability(Reliability::NO_FAULT_DETECTED)
                 .unwrap();
             let before = snapshot(&object);
             write(&mut object, P::OUT_OF_SERVICE, V::Null);

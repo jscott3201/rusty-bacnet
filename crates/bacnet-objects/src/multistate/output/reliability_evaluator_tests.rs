@@ -9,14 +9,20 @@ fn configuration_error_dominates_bypassed_invalid_present_value() {
     mso.present_value = 3;
     mso.feedback_value = 3;
 
-    mso.evaluate_reliability_internal().unwrap();
+    mso.reliability_eval()
+        .unwrap()
+        .evaluate_reliability()
+        .unwrap();
     assert_eq!(
         mso.reliability,
         Reliability::CONFIGURATION_ERROR,
         "invalid configuration must dominate invalid Present_Value"
     );
     mso.feedback_value = 1;
-    mso.evaluate_reliability_internal().unwrap();
+    mso.reliability_eval()
+        .unwrap()
+        .evaluate_reliability()
+        .unwrap();
     assert_eq!(mso.reliability, Reliability::MULTI_STATE_OUT_OF_RANGE);
     mso.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,

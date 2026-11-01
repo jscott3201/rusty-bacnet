@@ -269,7 +269,7 @@ fn foreign_high_limit_recovers_under_cobs_params() {
     });
     ee.set_event_enable(EventTransitionBits::all());
     // Internal channel: simulate the state an OOR predecessor would have left.
-    ee.set_event_state_internal(EventState::HIGH_LIMIT).unwrap();
+    ee.set_event_state(EventState::HIGH_LIMIT);
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 

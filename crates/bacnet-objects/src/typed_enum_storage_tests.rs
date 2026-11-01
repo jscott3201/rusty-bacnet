@@ -148,7 +148,9 @@ fn assert_client_reliability_round_trip(object: &mut dyn BACnetObject) {
 /// restored on leaving it, replacing the client's simulated vendor value.
 fn assert_vendor_reliability_survives_out_of_service(object: &mut dyn BACnetObject) {
     object
-        .set_reliability_internal(Reliability::from_raw(65_535))
+        .reliability_eval()
+        .unwrap()
+        .set_reliability(Reliability::from_raw(65_535))
         .expect("a vendor Reliability value must be accepted internally");
     write(
         object,
@@ -183,7 +185,9 @@ fn assert_vendor_reliability_survives_out_of_service(object: &mut dyn BACnetObje
 /// client route.
 fn assert_internal_reliability_round_trip(object: &mut dyn BACnetObject) {
     object
-        .set_reliability_internal(Reliability::from_raw(65_535))
+        .reliability_eval()
+        .unwrap()
+        .set_reliability(Reliability::from_raw(65_535))
         .expect("a vendor Reliability value must be accepted internally");
     assert_eq!(
         read(object, PropertyIdentifier::RELIABILITY),
@@ -192,7 +196,10 @@ fn assert_internal_reliability_round_trip(object: &mut dyn BACnetObject) {
     assert_fault_flag(object, true);
     for refused in [11, 26, 63, 65_536, u32::MAX] {
         assert_protocol_error(
-            object.set_reliability_internal(Reliability::from_raw(refused)),
+            object
+                .reliability_eval()
+                .unwrap()
+                .set_reliability(Reliability::from_raw(refused)),
             ErrorClass::PROPERTY,
             ErrorCode::VALUE_OUT_OF_RANGE,
         );
@@ -202,7 +209,9 @@ fn assert_internal_reliability_round_trip(object: &mut dyn BACnetObject) {
         PropertyValue::Enumerated(65_535)
     );
     object
-        .set_reliability_internal(Reliability::NO_FAULT_DETECTED)
+        .reliability_eval()
+        .unwrap()
+        .set_reliability(Reliability::NO_FAULT_DETECTED)
         .unwrap();
     assert_fault_flag(object, false);
 }

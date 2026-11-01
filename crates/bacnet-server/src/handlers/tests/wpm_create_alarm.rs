@@ -85,7 +85,9 @@ fn wpm_prefix_commit_keeps_out_of_service_transition() {
     let mut db = make_db_with_ai();
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
     let obj = db.get_mut(&oid).unwrap();
-    obj.set_reliability_internal(Reliability::OVER_RANGE)
+    obj.reliability_eval()
+        .unwrap()
+        .set_reliability(Reliability::OVER_RANGE)
         .unwrap();
     obj.write_property(
         PropertyIdentifier::OUT_OF_SERVICE,

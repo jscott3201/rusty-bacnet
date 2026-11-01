@@ -95,6 +95,9 @@ mod local_input_tests;
 mod event_reporting_tests;
 
 #[cfg(test)]
+mod evaluation_capability_tests;
+
+#[cfg(test)]
 mod property_metadata_tests;
 #[cfg(test)]
 mod test_rows;

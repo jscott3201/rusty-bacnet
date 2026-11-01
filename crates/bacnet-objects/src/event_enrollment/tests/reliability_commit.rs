@@ -54,7 +54,9 @@ fn stock_reliability_commit_is_atomic_across_fault_reentry_and_recovery() {
         EventEnrollmentObject::new(31, "EE-reliability", EventType::CHANGE_OF_BITSTRING).unwrap();
 
     object
-        .commit_event_enrollment_reliability_internal(EventEnrollmentReliabilityCommit {
+        .enrollment_eval_mut()
+        .unwrap()
+        .commit_reliability(EventEnrollmentReliabilityCommit {
             reliability: Reliability::UNDER_RANGE,
             transition: Some(transition(EventState::NORMAL, EventState::FAULT, 11)),
         })
@@ -89,7 +91,9 @@ fn stock_reliability_commit_is_atomic_across_fault_reentry_and_recovery() {
     );
 
     object
-        .commit_event_enrollment_reliability_internal(EventEnrollmentReliabilityCommit {
+        .enrollment_eval_mut()
+        .unwrap()
+        .commit_reliability(EventEnrollmentReliabilityCommit {
             reliability: Reliability::OVER_RANGE,
             transition: Some(transition(EventState::FAULT, EventState::FAULT, 12)),
         })
@@ -100,7 +104,9 @@ fn stock_reliability_commit_is_atomic_across_fault_reentry_and_recovery() {
     );
 
     object
-        .commit_event_enrollment_reliability_internal(EventEnrollmentReliabilityCommit {
+        .enrollment_eval_mut()
+        .unwrap()
+        .commit_reliability(EventEnrollmentReliabilityCommit {
             reliability: Reliability::NO_FAULT_DETECTED,
             transition: Some(transition(EventState::FAULT, EventState::NORMAL, 13)),
         })
@@ -139,10 +145,12 @@ fn rejected_stock_reliability_commit_changes_nothing() {
     let mut invalid = transition(EventState::NORMAL, EventState::FAULT, 99);
     invalid.coordinate = EventTransition::ToNormal;
     assert_eq!(
-        object.commit_event_enrollment_reliability_internal(EventEnrollmentReliabilityCommit {
-            reliability: Reliability::CONFIGURATION_ERROR,
-            transition: Some(invalid),
-        }),
+        object.enrollment_eval_mut().unwrap().commit_reliability(
+            EventEnrollmentReliabilityCommit {
+                reliability: Reliability::CONFIGURATION_ERROR,
+                transition: Some(invalid),
+            }
+        ),
         Err(EventTransitionCommitError::CoordinateTargetMismatch {
             coordinate: EventTransition::ToNormal,
             target: EventState::FAULT,

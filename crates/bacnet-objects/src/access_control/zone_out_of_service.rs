@@ -24,7 +24,7 @@
 //!   Reliability it serves (`common::write_out_of_service_with_restore`).
 //! - Meanwhile a count the application reports (`set_occupancy_count`)
 //!   replaces the count put aside, not the one served, and a Reliability it
-//!   works out (`set_reliability_internal`) is refused, as on the other
+//!   works out (`ReliabilityEval::set_reliability`) is refused, as on the other
 //!   Reliability carriers.
 //! - On the TRUE-to-FALSE edge both go back to the values put aside, so the
 //!   zone's own state is served again at once and the simulation is gone.

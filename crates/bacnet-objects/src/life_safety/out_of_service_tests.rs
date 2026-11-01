@@ -174,7 +174,9 @@ fn return_to_service_serves_the_device_values_again() {
     let mut point = point();
     point.set_tracking_value(LifeSafetyState::PRE_ALARM);
     point
-        .set_reliability_internal(Reliability::OVER_RANGE)
+        .reliability_eval()
+        .unwrap()
+        .set_reliability(Reliability::OVER_RANGE)
         .unwrap();
     set_out_of_service(&mut point, true);
     write(
@@ -193,7 +195,10 @@ fn return_to_service_serves_the_device_values_again() {
     // held, and the application's Reliability is refused.
     point.set_tracking_value(LifeSafetyState::FAULT);
     assert_property_error(
-        point.set_reliability_internal(Reliability::NO_FAULT_DETECTED),
+        point
+            .reliability_eval()
+            .unwrap()
+            .set_reliability(Reliability::NO_FAULT_DETECTED),
         ErrorCode::WRITE_ACCESS_DENIED,
     );
     assert_eq!(

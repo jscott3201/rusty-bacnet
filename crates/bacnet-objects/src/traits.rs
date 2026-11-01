@@ -9,35 +9,28 @@ use alloc::borrow::Cow;
 use alloc::sync::Arc;
 use core::time::Duration;
 
-use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::constructed::{
     BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord, BACnetObjectPropertyReference,
 };
-use bacnet_types::enums::{
-    ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier, Reliability,
-};
+use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, Time};
 
 use crate::audit::{AuditLogNotificationSink, AuditLogStorage};
 
-use crate::event::EventTransitionCommitError;
-use crate::event_enrollment::{
-    EventEnrollmentEvalState, EventEnrollmentMonitoredSource, EventEnrollmentReliabilityCommit,
-};
 use crate::file::{FileConfiguration, FileStorage};
 use crate::log_buffer::{LogBufferRecords, LogRecordIdentity};
 use crate::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 
 pub mod capabilities;
-pub(crate) use capabilities::lend_event_reporting;
 #[doc(hidden)]
-pub use capabilities::{AccessEvents, CommandRunner, StagingSource};
+pub use capabilities::{AccessEvents, CommandRunner, EnrollmentEval, StagingSource};
 pub use capabilities::{
     Clocks, DeadlineWaker, DurableWrites, EventReporting, LifeSafety, LocalInput, LocalInputValue,
-    MonotonicClock, Timed, no_alarm_configured, not_supported,
+    MonotonicClock, ReliabilityEval, Timed, no_alarm_configured, not_supported,
 };
+pub(crate) use capabilities::{lend_enrollment_eval, lend_event_reporting, lend_reliability_eval};
 
 mod defaults;
 use defaults::{array_property_default, cov_reported_properties_default, list_property_default};
@@ -617,6 +610,39 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         None
     }
 
+    /// Borrow an Event Enrollment's evaluation capability for the snapshots
+    /// a host takes under a shared guard: its private evaluation state and
+    /// monitored source. Not public API yet (#2179).
+    ///
+    /// The default has none, which says the object keeps no evaluation
+    /// state. An object that lends this lends
+    /// [`enrollment_eval_mut`](Self::enrollment_eval_mut) too.
+    #[doc(hidden)]
+    fn enrollment_eval(&self) -> Option<&dyn EnrollmentEval> {
+        None
+    }
+
+    /// Mutably borrow an Event Enrollment's evaluation capability: storing
+    /// its evaluation state and monitored source, and committing Reliability
+    /// with a transition. Not public API yet (#2179).
+    ///
+    /// The default has none: the bundled server's evaluator then keeps no
+    /// state on the object and its Reliability commits fail closed.
+    #[doc(hidden)]
+    fn enrollment_eval_mut(&mut self) -> Option<&mut dyn EnrollmentEval> {
+        None
+    }
+
+    /// Mutably borrow this object's reliability evaluation: its own
+    /// judgement of Reliability, the inhibit that pauses it, and the
+    /// Reliability its application works out.
+    ///
+    /// The default has none, and the bundled server's fault detector then
+    /// leaves the object's Reliability alone. See [`ReliabilityEval`].
+    fn reliability_eval(&mut self) -> Option<&mut dyn ReliabilityEval> {
+        None
+    }
+
     /// Whether a readable property supports property-specific COV.
     ///
     /// The default preserves the existing behavior of every other COV-capable
@@ -691,22 +717,6 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// by physical means (e.g., a manual switch on an output).
     fn set_overridden(&mut self, _overridden: bool) {}
 
-    /// Atomically commit Event Enrollment Reliability and transition state.
-    ///
-    /// This Event Enrollment-specific channel joins `Reliability` to the
-    /// existing atomic `Event_State`, `Acked_Transitions`, and
-    /// `Event_Time_Stamps` commit. Implementations must stage every supplied
-    /// value before assigning object-owned fields and leave them unchanged on
-    /// error. The default fails closed for custom objects that have not adopted
-    /// the stronger contract.
-    #[doc(hidden)]
-    fn commit_event_enrollment_reliability_internal(
-        &mut self,
-        _commit: EventEnrollmentReliabilityCommit,
-    ) -> Result<(), EventTransitionCommitError> {
-        Err(EventTransitionCommitError::Unsupported)
-    }
-
     /// Evaluate this object's schedule at `time` on `today` (Clause 12.24.4).
     ///
     /// `calendar_active` answers for a special event whose period references
@@ -773,166 +783,6 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     #[doc(hidden)]
     fn calendar_state_internal(&self, _day: SpecificDate) -> Option<bool> {
         None
-    }
-
-    /// Apply an internally-detected `Event_State` transition.
-    ///
-    /// This is the **internal** lifecycle path for the algorithmically-derived
-    /// `Event_State` on objects such as Event Enrollment (ASHRAE 135-2020
-    /// Clause 12.12). It is deliberately distinct from the network
-    /// [`write_property`](Self::write_property) route: `Event_State` is
-    /// read-only over the network, so network writes are rejected while the
-    /// server's evaluator reaches the field through this method. Objects
-    /// without an algorithmic `Event_State` return
-    /// `OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`.
-    ///
-    /// The **default** returns `Err`, so objects without an algorithmic
-    /// `Event_State` opt out. Objects that do model one (e.g.
-    /// `EventEnrollmentObject`) override this to store the value verbatim:
-    /// the bundled server's evaluator now commits through
-    /// [`EventReporting::commit_event_transition`] instead, so only trusted
-    /// local code (tests, today) calls this, passing a modeled
-    /// [`EventState`], mirroring the inherent `set_event_state` builder and
-    /// the existing read arm. Network-facing validation — rejecting all
-    /// `Event_State` writes — lives in [`write_property`](Self::write_property),
-    /// not here. Implementations must leave `Event_State` unchanged when they
-    /// return `Err`.
-    fn set_event_state_internal(&mut self, _state: EventState) -> Result<(), Error> {
-        Err(not_supported())
-    }
-
-    /// Snapshot this object's Event Enrollment evaluation state, if it models one.
-    ///
-    /// This is the read half of the internal channel the server's Event
-    /// Enrollment evaluator uses to persist per-enrollment algorithm state
-    /// across evaluation cycles: the pending (delayed) transition countdown,
-    /// the CHANGE_OF_VALUE detection baseline (the monitored sample at the
-    /// latest NORMAL indication, per Clause 13.3.3), and
-    /// the monitored value behind the most recent OFFNORMAL transition (Clause
-    /// 13.3.2 condition (c)). Like [`set_event_state_internal`](Self::set_event_state_internal)
-    /// it deliberately bypasses the network property model: none of the three
-    /// slots is a BACnet property, and 135-2020 assigns their initialization
-    /// to local matters.
-    ///
-    /// The default returns `None` — objects without algorithmic event
-    /// detection carry no such state, and the evaluator treats `None` as an
-    /// empty state it cannot write back (delay honoring and the COV baseline
-    /// then stay unavailable, matching this crate's pre-delay behavior).
-    fn enrollment_eval_state_internal(&self) -> Option<EventEnrollmentEvalState> {
-        None
-    }
-
-    /// Store this object's Event Enrollment evaluation state.
-    ///
-    /// The write half of [`enrollment_eval_state_internal`](Self::enrollment_eval_state_internal).
-    /// The only caller is the trusted server evaluator, passing a state it
-    /// derived from a prior snapshot plus the current cycle's evaluation.
-    /// Implementations enforce the Clause 13.2.2.1 invariant by construction:
-    /// transitions are prohibited while `Event_Detection_Enable` is FALSE,
-    /// so a write arriving then is refused rather than queued (and the
-    /// detection-disable reset has already cleared the fields).
-    ///
-    /// The **default** returns `Err`, so objects without enrollment evaluation
-    /// state opt out and the evaluator's write-back is dropped, never stored
-    /// into an object that does not model it.
-    fn set_enrollment_eval_state_internal(
-        &mut self,
-        _state: EventEnrollmentEvalState,
-    ) -> Result<(), Error> {
-        Err(not_supported())
-    }
-
-    /// Snapshot the monitored source that owns Event Enrollment private state.
-    ///
-    /// The outer `Option` indicates whether the object supports this channel;
-    /// the inner `Option` is empty before a source has been established.
-    /// The server stores source ownership in its object database when an
-    /// object implements evaluation state but leaves this channel unsupported.
-    fn enrollment_eval_source_internal(&self) -> Option<Option<EventEnrollmentMonitoredSource>> {
-        None
-    }
-
-    /// Store or clear the monitored source that owns Event Enrollment state.
-    fn set_enrollment_eval_source_internal(
-        &mut self,
-        _source: Option<EventEnrollmentMonitoredSource>,
-    ) -> Result<(), Error> {
-        Err(not_supported())
-    }
-
-    /// Set or clear one `Acked_Transitions` bit on a received event-state
-    /// transition.
-    ///
-    /// Implements the alarm-acknowledgment half of Clause 13.2.2.1.4's fourth
-    /// transition action: pass the transition to alarm-acknowledgment handling.
-    /// Under Clause 13.2.3, receiving a transition updates its Acked_Transitions
-    /// bit to the inverse of the corresponding Ack_Required bit. The caller
-    /// looks up `Ack_Required` in the object's Notification Class and
-    /// passes the outcome as `acknowledged`; this method performs only
-    /// the bit maintenance. The bundled server's evaluator does this inside
-    /// [`EventReporting::commit_event_transition`], so it has no caller there;
-    /// only trusted local code (tests, today) calls it.
-    ///
-    /// `transition_bit` is the transition direction's flag, as returned by
-    /// [`EventTransition::bit_mask`](crate::event::EventTransition::bit_mask). The set half overlaps the
-    /// network-reachable [`EventReporting::acknowledge_alarm`], which
-    /// also ORs the bit in per Clause 13.2.3's acknowledgment-indication
-    /// paragraph; the clear half has no network route by design (a property
-    /// write could fabricate or erase acknowledgments — see the
-    /// `write_generic_event_properties!` denial comment).
-    ///
-    /// The **default** returns `Err`, so objects without an algorithmic
-    /// `Acked_Transitions` opt out.
-    fn set_acked_transitions_internal(
-        &mut self,
-        _transition_bit: EventTransitionBits,
-        _acknowledged: bool,
-    ) -> Result<(), Error> {
-        Err(not_supported())
-    }
-
-    /// Evaluate and, when necessary, mutate this object's `Reliability`.
-    ///
-    /// Reliability evaluation is object-owned: an implementation decides
-    /// whether and how its internal conditions affect `Reliability`, performs
-    /// the mutation itself, and returns [`ReliabilityEvaluation::Changed`] only
-    /// after that mutation succeeds. [`ReliabilityEvaluation::Unchanged`] means
-    /// the object made no mutation. Returning `Err` MUST leave all object state
-    /// unchanged.
-    ///
-    /// The default opts out without changing state, preserving source
-    /// compatibility for object implementations that do not own a reliability
-    /// evaluation algorithm.
-    fn evaluate_reliability_internal(&mut self) -> Result<ReliabilityEvaluation, Error> {
-        Ok(ReliabilityEvaluation::Unchanged)
-    }
-
-    /// Whether periodic object-owned reliability evaluation is currently
-    /// inhibited.
-    ///
-    /// The default is FALSE so existing and downstream object implementations
-    /// remain source-compatible. Objects that elect the optional
-    /// Reliability_Evaluation_Inhibit property override this internal
-    /// predicate; reporting of an already-applied Reliability transition is
-    /// intentionally unaffected.
-    #[doc(hidden)]
-    fn reliability_evaluation_inhibited_internal(&self) -> bool {
-        false
-    }
-
-    /// Apply an internally-derived `Reliability` value.
-    ///
-    /// This is the **internal** reliability-evaluation path, distinct from the
-    /// network [`write_property`](Self::write_property) route. Implementations
-    /// enforce symmetric ownership: clients may write while `Out_Of_Service`
-    /// is TRUE, and internal evaluation may write while it is FALSE. ASHRAE
-    /// 135-2020 Clause 3.2 describes reliability evaluation as the object's
-    /// assessment of its reliability, producing its Reliability property value.
-    ///
-    /// The default rejects the operation, so object types without an internal
-    /// reliability-evaluation process remain unaffected.
-    fn set_reliability_internal(&mut self, _reliability: Reliability) -> Result<(), Error> {
-        Err(not_supported())
     }
 
     /// Claim the Averaging sample the object's schedule has due at the
@@ -1068,9 +918,8 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// Borrow this object's File storage, if it has any.
     ///
     /// This is the read half of the **internal** channel the server's
-    /// AtomicReadFile handler uses to reach file contents. Like
-    /// [`set_event_state_internal`](Self::set_event_state_internal) it
-    /// bypasses the property model on purpose: Table 12-16 (ASHRAE 135-2020
+    /// AtomicReadFile handler uses to reach file contents. It bypasses the
+    /// property model on purpose: Table 12-16 (ASHRAE 135-2020
     /// Clause 12.13) defines no File Data property, so file contents are
     /// reachable only through the Clause 14 File Access Services.
     ///

@@ -211,30 +211,46 @@ fn network_writes_re_evaluate_reliability() {
 fn a_reliability_applied_by_the_application_is_left_alone() {
     let mut sched = ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(10.0)).unwrap();
     sched
-        .set_reliability_internal(Reliability::UNRELIABLE_OTHER)
+        .reliability_eval()
+        .unwrap()
+        .set_reliability(Reliability::UNRELIABLE_OTHER)
         .unwrap();
     sched
         .set_weekly_schedule(0, vec![tv(8, PropertyValue::Boolean(true))])
         .unwrap();
     assert_eq!(reliability(&sched), Reliability::UNRELIABLE_OTHER);
     assert_eq!(
-        sched.evaluate_reliability_internal().unwrap(),
+        sched
+            .reliability_eval()
+            .unwrap()
+            .evaluate_reliability()
+            .unwrap(),
         ReliabilityEvaluation::Unchanged
     );
 
     // Once the application clears it, the periodic pass raises the fault.
     sched
-        .set_reliability_internal(Reliability::NO_FAULT_DETECTED)
+        .reliability_eval()
+        .unwrap()
+        .set_reliability(Reliability::NO_FAULT_DETECTED)
         .unwrap();
     assert_eq!(
-        sched.evaluate_reliability_internal().unwrap(),
+        sched
+            .reliability_eval()
+            .unwrap()
+            .evaluate_reliability()
+            .unwrap(),
         ReliabilityEvaluation::Changed {
             old_reliability: Reliability::NO_FAULT_DETECTED,
             new_reliability: Reliability::CONFIGURATION_ERROR,
         }
     );
     assert_eq!(
-        sched.evaluate_reliability_internal().unwrap(),
+        sched
+            .reliability_eval()
+            .unwrap()
+            .evaluate_reliability()
+            .unwrap(),
         ReliabilityEvaluation::Unchanged
     );
     // And clears the fault it raised once the contents agree.
@@ -253,7 +269,11 @@ fn out_of_service_keeps_the_simulated_reliability_until_return() {
         .unwrap();
     assert_eq!(reliability(&sched), Reliability::NO_FAULT_DETECTED);
     assert_eq!(
-        sched.evaluate_reliability_internal().unwrap(),
+        sched
+            .reliability_eval()
+            .unwrap()
+            .evaluate_reliability()
+            .unwrap(),
         ReliabilityEvaluation::Unchanged
     );
     sched
@@ -410,7 +430,9 @@ fn the_reference_fault_combines_with_the_content_fault() {
 
     // A Reliability the application applied is left alone either way.
     sched
-        .set_reliability_internal(Reliability::OVER_RANGE)
+        .reliability_eval()
+        .unwrap()
+        .set_reliability(Reliability::OVER_RANGE)
         .unwrap();
     assert!(!sched.complete_schedule_write(&write, &[DatatypeRefused, Accepted]));
     assert_eq!(reliability(&sched), Reliability::OVER_RANGE);

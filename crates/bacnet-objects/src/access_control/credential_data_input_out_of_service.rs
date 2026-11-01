@@ -44,7 +44,7 @@
 //!   and Reliability it serves (`common::write_out_of_service_with_restore`).
 //! - Meanwhile a read the application reports (`set_present_value`) replaces
 //!   the Present_Value and Update_Time put aside, not those served. A
-//!   Reliability it works out (`set_reliability_internal`) is refused, as on
+//!   Reliability it works out (`ReliabilityEval::set_reliability`) is refused, as on
 //!   the other Reliability carriers.
 //! - On the TRUE-to-FALSE edge all three go back to the values put aside, so
 //!   the reader's state is served again at once and the simulation is gone.

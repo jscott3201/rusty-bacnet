@@ -150,11 +150,10 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
         // Configuration-read exits are classified below. A valid monitored
         // or supporting observation gap applies repository-local D4: private
         // continuity is reset before its typed diagnostic is returned.
-        let eval_state_supported = enrollment.enrollment_eval_state_internal().is_some();
-        let mut eval_state = enrollment
-            .enrollment_eval_state_internal()
-            .unwrap_or_default();
-        let eval_source = match enrollment.enrollment_eval_source_internal() {
+        let eval = enrollment.enrollment_eval();
+        let eval_state_supported = eval.is_some();
+        let mut eval_state = eval.map(|eval| eval.eval_state()).unwrap_or_default();
+        let eval_source = match eval.and_then(|eval| eval.eval_source()) {
             Some(source) => Some(source),
             None if eval_state_supported => {
                 database_eval_sources.insert(*oid);

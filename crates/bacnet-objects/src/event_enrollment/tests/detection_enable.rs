@@ -138,11 +138,25 @@ fn disabled_detection_reports_initial_acked_transitions() {
     );
 }
 
-/// Clause 13.2.2.1's prohibition on transitions is enforced at the one place
-/// that can change `Event_State`, so a caller that forgets to check the flag
-/// cannot violate the invariant.
+/// Clause 13.2.2.1 prohibits transitions while detection is disabled, and
+/// the object enforces it at its commit, so a caller that skips the check
+/// cannot move it away from NORMAL.
 #[test]
-fn disabled_detection_refuses_non_normal_internal_state() {
+fn disabled_detection_refuses_a_non_normal_commit() {
+    use crate::event::{EventStateChange, EventTransition, EventTransitionCommit};
+    use crate::traits::EventReporting;
+    use bacnet_types::primitives::BACnetTimeStamp;
+
+    let commit = |to: EventState| EventTransitionCommit {
+        change: EventStateChange {
+            from: EventState::NORMAL,
+            to,
+        },
+        coordinate: EventTransition::for_target_state(to),
+        ack_required: true,
+        timestamp: BACnetTimeStamp::SequenceNumber(1),
+        message_text: None,
+    };
     let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     ee.write_property(
         PropertyIdentifier::EVENT_DETECTION_ENABLE,
@@ -151,33 +165,40 @@ fn disabled_detection_refuses_non_normal_internal_state() {
         None,
     )
     .unwrap();
+    let before = ee
+        .read_property(PropertyIdentifier::ACKED_TRANSITIONS, None)
+        .unwrap();
 
-    assert!(
-        ee.set_event_state_internal(EventState::HIGH_LIMIT).is_err(),
-        "no transition may occur while detection is disabled"
+    assert_eq!(
+        ee.commit_event_transition(commit(EventState::HIGH_LIMIT)),
+        Err(crate::event::EventTransitionCommitError::DetectionDisabled)
     );
     assert_eq!(
         ee.read_property(PropertyIdentifier::EVENT_STATE, None)
             .unwrap(),
-        PropertyValue::Enumerated(EventState::NORMAL.to_raw()),
-        "the refused write must leave Event_State at NORMAL"
+        PropertyValue::Enumerated(EventState::NORMAL.to_raw())
     );
-}
+    assert_eq!(
+        ee.read_property(PropertyIdentifier::ACKED_TRANSITIONS, None)
+            .unwrap(),
+        before
+    );
 
-/// The guard is scoped to non-NORMAL states, not a blanket refusal — NORMAL is
-/// the value the disabled condition requires, so setting it must stay legal.
-#[test]
-fn disabled_detection_still_permits_normal_internal_state() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
+    // Enabled, the same commit lands.
     ee.write_property(
         PropertyIdentifier::EVENT_DETECTION_ENABLE,
         None,
-        PropertyValue::Boolean(false),
+        PropertyValue::Boolean(true),
         None,
     )
     .unwrap();
-
-    assert!(ee.set_event_state_internal(EventState::NORMAL).is_ok());
+    ee.commit_event_transition(commit(EventState::HIGH_LIMIT))
+        .unwrap();
+    assert_eq!(
+        ee.read_property(PropertyIdentifier::EVENT_STATE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(EventState::HIGH_LIMIT.to_raw())
+    );
 }
 
 /// Re-enabling detection must not resurrect the pre-disable state. The reset
@@ -204,14 +225,19 @@ fn re_enabling_detection_resumes_from_normal() {
         PropertyValue::Enumerated(EventState::NORMAL.to_raw()),
         "re-enabling must not restore LOW_LIMIT"
     );
-    // And detection works again.
-    assert!(ee.set_event_state_internal(EventState::LOW_LIMIT).is_ok());
+    // And a non-NORMAL state takes effect again.
+    ee.set_event_state(EventState::LOW_LIMIT);
+    assert_eq!(
+        ee.read_property(PropertyIdentifier::EVENT_STATE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(EventState::LOW_LIMIT.to_raw())
+    );
 }
 
 /// The `set_event_state` seeder honors the same invariant.
 ///
-/// It is `pub` and bypasses both `write_property` and
-/// `set_event_state_internal`, so without its own guard it would be a public
+/// It is `pub` and bypasses `write_property`, so without its own guard it
+/// would be a public
 /// way around a rule the rest of the object enforces — the invariant would hold
 /// only by convention, and the claim that it holds by construction would be
 /// false.

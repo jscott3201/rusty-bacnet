@@ -660,7 +660,8 @@ fn retarget_mid_pending_cancels_and_regates() {
     let pending = db
         .get(&ee_oid)
         .unwrap()
-        .enrollment_eval_state_internal()
+        .enrollment_eval()
+        .map(|e| e.eval_state())
         .unwrap()
         .pending
         .expect("countdown seeded");
@@ -687,12 +688,12 @@ fn retarget_mid_pending_cancels_and_regates() {
     // OLD monitored reference — the mismatch the evaluator must cancel).
     db.get_mut(&ee_oid)
         .unwrap()
-        .set_enrollment_eval_state_internal(
-            bacnet_objects::event_enrollment::EventEnrollmentEvalState {
-                pending: Some(pending),
-                ..Default::default()
-            },
-        )
+        .enrollment_eval_mut()
+        .unwrap()
+        .set_eval_state(bacnet_objects::event_enrollment::EventEnrollmentEvalState {
+            pending: Some(pending),
+            ..Default::default()
+        })
         .unwrap();
 
     // The retargeted countdown regates the FULL delay: cancel+seed(3) on the
