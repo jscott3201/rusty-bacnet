@@ -7,13 +7,14 @@ use bacnet_encoding::apdu::encode_apdu;
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::binary::BinaryValueObject;
+use bacnet_objects::command_source::{CommandDeviceBinding, CommandOrigin};
 use bacnet_objects::device_identity::build_database_with_extra;
 use bacnet_objects::present_value_access::PresentValueAccess;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::rpm::ReadPropertyMultipleACK;
 use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
-use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
+use bacnet_types::constructed::{BACnetAddress, PropertyReference, ReadAccessSpecification};
 use bacnet_types::enums::{
     EngineeringUnits, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier as P,
 };
@@ -385,6 +386,43 @@ fn wpm_writes_every_attempt() {
         "{reply:?}"
     );
     assert_eq!(present_value(&db, bv(2)), active);
+}
+
+/// A commandable Present_Value through WritePropertyMultiple: refused with
+/// no requester named, commanded (at priority 16, the request naming none)
+/// for the request's source.
+#[test]
+fn wpm_commands_a_commandable_present_value_for_the_source() {
+    let mut db = database();
+    db.add(Box::new(BinaryValueObject::new(3, "BV-3").unwrap()))
+        .unwrap();
+    let responder = responder_with(Limits::default());
+    let active = PropertyValue::Enumerated(1);
+    let body = wpm_body(&[(bv(3), P::PRESENT_VALUE, active.clone())]);
+    let (_, reply, written) = handle(&responder, &mut db, wpm(&body), 1476);
+    assert!(written.is_empty());
+    let refused = wpm_error_of(reply);
+    assert_eq!(refused.1, ErrorCode::WRITE_ACCESS_DENIED);
+
+    let source = CommandOrigin::Remote {
+        actual_address: BACnetAddress {
+            network_number: 0,
+            mac_address: [192, 168, 1, 7, 0xBA, 0xC0][..].into(),
+        },
+        binding: CommandDeviceBinding::Unknown,
+    };
+    let mut out = BytesMut::new();
+    let request = Inbound::new(wpm(&body), 1476).with_source(source);
+    let handled = responder.handle(&mut db, request, &mut out);
+    assert_eq!(handled.objects, [bv(3)]);
+    assert!(
+        matches!(decode_apdu(out.freeze()), Ok(Apdu::SimpleAck(_))),
+        "the commanded write is acknowledged"
+    );
+    assert_eq!(present_value(&db, bv(3)), active);
+    let slot = db.get(&bv(3)).unwrap();
+    let slot = slot.read_property(P::PRIORITY_ARRAY, Some(16)).unwrap();
+    assert_eq!(slot, active);
 }
 
 /// A refused attempt after a successful one: the Error names the refused

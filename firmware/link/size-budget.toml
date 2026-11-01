@@ -375,8 +375,8 @@
 # device-core.md, section 8.1: 100,776 octets of thumbv7m text), most of
 # the difference is bacnet-objects (about 46 KB) and the encoders (about
 # 13 KB); the core itself is about 12 KB. Its counts are what it links,
-# with no headroom: the 7 core::fmt functions format the default Device's
-# name (#2187); the 64-bit division and memmove limits are the routines it
+# with no headroom: it linked 7 core::fmt functions, for the default Device
+# and Network Port names, until #2187 (below); the 64-bit division and memmove limits are the routines it
 # links today, so a new one fails the check. Once #2181 dropped the objects'
 # pre-migration property-list fallbacks, the image measured 4.9-5.7 KB less
 # flash, links no 64-bit division and two memmove routines: flash 125256 /
@@ -396,6 +396,21 @@
 # .text), which the generic value decoding reaches for any property, and
 # the core's write path (11272 to 13904). The octet budgets are the new
 # sizes plus 12%; the counts are unchanged.
+#
+# Since #2209 each request names its sender, BV-1 is commandable again, the
+# write commands priority 8, and a fourteenth request reads Priority_Array
+# back. Measured with Rust 1.99.0 against dev at d1078b7e0, flash went from
+# 166568 / 166024 / 200702 to 166992 / 166288 / 200590 on thumbv7m /
+# thumbv7em / riscv32imac, RAM unchanged at 16480: the objects' vtables
+# linked most of the commandable write path already. Budgets unchanged.
+#
+# #2187 writes the default Device and Network Port names (device-<n>,
+# port-<n>) without core::fmt; the port's links though the image declares
+# no port, from build_database_with_extra's loop. The image now links no
+# core::fmt: flash 165536 / 164760 / 198838 on thumbv7m / thumbv7em /
+# riscv32imac (from 166992 / 166288 / 200590), RAM unchanged at 16480. The
+# fmt_functions rows are 0, and the octet budgets are --suggest's (size
+# plus 12%).
 
 [thumbv7m-none-eabi.mstp]
 text = 18320
@@ -486,13 +501,13 @@ div64_functions = 0
 memmove_functions = 0
 
 [thumbv7m-none-eabi.objects]
-text = 165120
-rodata = 20304
+text = 164224
+rodata = 20048
 data = 64
 bss = 18464
-flash = 186560
+flash = 185408
 ram = 18464
-fmt_functions = 7
+fmt_functions = 0
 div64_functions = 0
 memmove_functions = 2
 
@@ -761,23 +776,23 @@ div64_functions = 0
 memmove_functions = 0
 
 [thumbv7em-none-eabihf.objects]
-text = 164512
-rodata = 20304
+text = 163344
+rodata = 20048
 data = 64
 bss = 18464
-flash = 185952
+flash = 184544
 ram = 18464
-fmt_functions = 7
+fmt_functions = 0
 div64_functions = 0
 memmove_functions = 2
 
 [riscv32imac-unknown-none-elf.objects]
-text = 202848
-rodata = 21920
+text = 201008
+rodata = 21680
 data = 64
 bss = 18464
-flash = 224800
+flash = 222704
 ram = 18464
-fmt_functions = 7
+fmt_functions = 0
 div64_functions = 0
 memmove_functions = 2

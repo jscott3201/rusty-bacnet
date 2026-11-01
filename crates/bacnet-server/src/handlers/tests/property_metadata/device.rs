@@ -178,7 +178,8 @@ fn rpm_device_property_metadata_pics_and_database_are_exact() {
                 &db,
                 &crate::server::ServerConfig::default(),
                 &crate::pics::PicsConfig::default(),
-            );
+            )
+            .instance_types_only(&db);
             assert_eq!(pics.supported_object_types.len(), 1);
             let support = &pics.supported_object_types[0];
             assert_eq!(support.object_type, ObjectType::DEVICE);

@@ -54,16 +54,11 @@ const DIFFER: &[(ObjectType, P, Option<u32>)] =
 /// them. The core segments neither way, so a reply longer than the
 /// requester's max_reply is aborted with SEGMENTATION_NOT_SUPPORTED even when
 /// the requester accepts a segmented response; the server sends the first
-/// segment.
-///
-/// The server commands a commandable Present_Value for the requester it
-/// knows from the request's source address; the core's `Inbound` carries
-/// none, so the object refuses the unsourced command. And the server makes
-/// a Command's writes, where the core ends the run unmade and makes none:
-/// its targets, results and All_Writes_Successful differ (`write.rs`).
+/// segment. And the server makes a Command's writes, where the core ends
+/// the run unmade and makes none: its targets, results and
+/// All_Writes_Successful differ (`write.rs`).
 const DIFFER_EXCHANGES: &[&str] = &[
     "reply over max_reply, segmented response accepted",
-    "commandable Present_Value write",
     "a Command run's actions",
 ];
 
@@ -203,11 +198,16 @@ impl Parity {
         }
     }
 
+    /// The source address of the latest request, on the local network.
+    fn source(&self) -> MacAddr {
+        let [high, low] = self.requests.to_be_bytes();
+        MacAddr::from_slice(&[10, 0, high, low, 0xBA, 0xC0])
+    }
+
     /// Deliver `apdu` to the server alone, from a source of its own, and
     /// return what it sent.
     async fn deliver(&mut self, apdu: &Bytes) -> Vec<test_transport::SentFrame> {
         self.requests += 1;
-        let [high, low] = self.requests.to_be_bytes();
         let mut npdu = BytesMut::new();
         encode_npdu(
             &mut npdu,
@@ -222,7 +222,7 @@ impl Parity {
             .send(ReceivedNpdu {
                 direct_response: None,
                 npdu: npdu.freeze(),
-                source_mac: MacAddr::from_slice(&[10, 0, high, low, 0xBA, 0xC0]),
+                source_mac: self.source(),
                 link_layer_group: false,
                 data_attributes: Vec::new(),
                 provenance: TransportProvenance::unverified(),
@@ -235,14 +235,15 @@ impl Parity {
         self.sent.take()
     }
 
-    /// Deliver `apdu` to both, each request from a source of its own, and
-    /// return the APDU each answered with, `None` for silence.
+    /// Deliver `apdu` to both, each request from a source of its own, which
+    /// the core's `Inbound` names ([`origin`](Self::origin)), and return the
+    /// APDU each answered with, `None` for silence.
     async fn exchange(&mut self, apdu: Bytes, max_reply: u16) -> (Option<Bytes>, Option<Bytes>) {
         let frames = self.deliver(&apdu).await;
         assert!(frames.len() <= 1, "{apdu:02X?} drew {frames:?}");
         let server = frames.first().map(|frame| frame.decode_npdu().payload);
         let mut out = BytesMut::new();
-        let request = Inbound::new(apdu, max_reply);
+        let request = Inbound::new(apdu, max_reply).with_source(self.origin());
         let core = match self
             .responder
             .handle(&mut self.db, request, &mut out)
@@ -690,6 +691,7 @@ async fn edge_rows_match_and_the_segmented_reply_differs() {
     parity.server.stop().await.unwrap();
 }
 
+mod discovery;
 mod rpm;
 mod wpm;
 mod write;

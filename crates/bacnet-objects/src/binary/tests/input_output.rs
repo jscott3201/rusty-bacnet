@@ -529,13 +529,6 @@ fn bo_direct_priority_array_index_17_error() {
 // ── Trait capability method tests (issue #115 shared truth source) ──────────
 
 #[test]
-fn bi_is_createable_matches_factory() {
-    use crate::traits::BACnetObject;
-    let bi = BinaryInputObject::new(1, "bi-1").unwrap();
-    assert!(bi.is_createable(), "BinaryInput is factory-constructable");
-}
-
-#[test]
 fn bi_is_writable_property_mirrors_write_property() {
     use crate::traits::BACnetObject;
     let bi = BinaryInputObject::new(1, "bi-1").unwrap();
@@ -560,13 +553,6 @@ fn bi_is_writable_property_mirrors_write_property() {
     assert!(!bi.is_writable_property(PropertyIdentifier::ACKED_TRANSITIONS));
     // Not commandable.
     assert!(!bi.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
-}
-
-#[test]
-fn bo_is_createable_matches_factory() {
-    use crate::traits::BACnetObject;
-    let bo = BinaryOutputObject::new(1, "bo-1").unwrap();
-    assert!(bo.is_createable(), "BinaryOutput is factory-constructable");
 }
 
 #[test]

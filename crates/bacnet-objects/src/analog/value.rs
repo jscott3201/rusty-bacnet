@@ -605,10 +605,16 @@ impl BACnetObject for AnalogValueObject {
         self.reliability_inhibit.enabled()
     }
 
-    /// AnalogValue is NOT createable: `handle_create_object` has no branch for
-    /// it, so PICS must not advertise createability the runtime rejects.
-    fn is_createable(&self) -> bool {
-        false
+    fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
+        super::CREATION_ONLY
+    }
+
+    fn initialize_property(
+        &mut self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        super::initialize_units(&mut self.units, property, value)
     }
 }
 

@@ -105,9 +105,8 @@ use crate::property_metadata::{
 // Reliability, every write arm is routed unconditionally and the suites pin in-service writes, so those rows
 // are Always and the metadata mirrors dispatch. Presence is None on every
 // other row: the family models no commandable or paired-text gating.
-// The trio is not createable at runtime (the network factory builds only the
-// eight analog/binary/multi-state input/output/value types, so the
-// is_createable=false default holds) and remains deleteable (delete denies
+// The trio is not createable at runtime (the `creation` table has no
+// constructor for it) and remains deleteable (delete denies
 // only Device and NetworkPort, so the is_deleteable=true default holds);
 // neither needs an override. Array gating keeps the default: Priority_Array
 // and Door_Members (BACnetARRAYs per Table 12-30), Access_Doors (Table 12-36)

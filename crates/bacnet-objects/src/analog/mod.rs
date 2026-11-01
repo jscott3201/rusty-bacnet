@@ -114,13 +114,14 @@ impl FaultOutOfRangeState {
 }
 
 /// What a createable analog object takes only from a CreateObject initial
-/// value (#1429): Units, which stays read-only to WriteProperty.
-const CREATION_ONLY: &[PropertyIdentifier] = &[PropertyIdentifier::UNITS];
+/// value (#1429): Units, which stays read-only to WriteProperty. Integer,
+/// Positive Integer and Large Analog Value take it the same way.
+pub(crate) const CREATION_ONLY: &[PropertyIdentifier] = &[PropertyIdentifier::UNITS];
 
 /// Set `units` from a Units initial value. An Enumerated above 65535 is
 /// outside BACnetEngineeringUnits (Clause 21) and is VALUE_OUT_OF_RANGE;
 /// any other property is WRITE_ACCESS_DENIED, as the trait default answers.
-fn initialize_units(
+pub(crate) fn initialize_units(
     units: &mut EngineeringUnits,
     property: PropertyIdentifier,
     value: PropertyValue,

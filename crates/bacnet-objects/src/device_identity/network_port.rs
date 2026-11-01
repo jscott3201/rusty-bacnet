@@ -102,7 +102,7 @@ impl NetworkPortEntry {
     pub(super) fn build_object(&self) -> Result<NetworkPortObject, Error> {
         let network_number = u16::try_from(self.network_number)
             .map_err(|_| Error::Encoding("network number must be 0..65534".into()))?;
-        let name = format!("port-{}", self.instance);
+        let name = super::numbered_name("port-", self.instance);
         // Configured B/IP/SC capacity, independently of Device62/role limits.
         // Live transport association and capability validation are separate.
         let apdu_length = 1476;

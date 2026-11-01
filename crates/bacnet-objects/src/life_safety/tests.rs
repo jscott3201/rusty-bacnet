@@ -744,7 +744,6 @@ fn life_safety_property_metadata_drives_required_sets() {
             .property_list()
             .contains(&PropertyIdentifier::PROPERTY_LIST)
     );
-    assert!(!point.is_createable());
     let zone = LifeSafetyZoneObject::new(1, "LSZ-1").unwrap();
     assert!(matches!(zone.property_metadata(), Cow::Borrowed(_)));
     assert_eq!(zone.property_metadata().len(), 17);
@@ -758,5 +757,4 @@ fn life_safety_property_metadata_drives_required_sets() {
             .property_list()
             .contains(&PropertyIdentifier::PROPERTY_LIST)
     );
-    assert!(!zone.is_createable());
 }

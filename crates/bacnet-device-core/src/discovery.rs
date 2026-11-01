@@ -28,15 +28,21 @@ pub fn who_is(
     Ok(in_range.then(|| i_am(identity)))
 }
 
-/// Handle a WhoHas request and return an IHave response if we have the object.
-///
-/// Returns `Some(IHaveRequest)` if we have the requested object, `None` otherwise.
+/// Answer a Who-Has: the I-Have naming the Device `identity` names, the
+/// one [`who_is`] announces, when the database holds that Device, the
+/// request's range, if any, takes in its instance, and the database holds
+/// the object asked for. With that Device gone it draws no answer, even
+/// while another Device is in the database. A request that doesn't decode
+/// is an error the host may log; it never draws an answer.
 pub fn who_has(
+    identity: &DeviceIdentity,
     db: &ObjectDatabase,
-    service_data: &[u8],
-    device_oid: ObjectIdentifier,
+    request: &[u8],
 ) -> Result<Option<IHaveRequest>, Error> {
-    let request = WhoHasRequest::decode(service_data)?;
+    let request = WhoHasRequest::decode(request)?;
+    let Some(device_oid) = announcement_device(db, identity) else {
+        return Ok(None);
+    };
 
     let instance = device_oid.instance_number();
     if request.range.is_some_and(|range| !range.contains(instance)) {

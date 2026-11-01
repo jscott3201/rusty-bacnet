@@ -812,10 +812,8 @@ impl BACnetObject for DeviceObject {
         crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
-    /// Device is not createable or deleteable at runtime.
-    fn is_createable(&self) -> bool {
-        false
-    }
+    /// Device is not deleteable at runtime (nor createable: its type has
+    /// no constructor in [`crate::creation`]).
     fn is_deleteable(&self) -> bool {
         false
     }

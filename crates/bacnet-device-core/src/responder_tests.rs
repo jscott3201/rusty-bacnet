@@ -458,8 +458,58 @@ fn unconfirmed_requests_out_of_range_or_malformed_are_silent() {
     }
 }
 
+/// The announcement's Device from a database: its I-Am's, or its I-Have's,
+/// `None` for silence.
+fn announced(db: &mut ObjectDatabase, apdu: Bytes) -> Option<ObjectIdentifier> {
+    let mut out = BytesMut::new();
+    let outcome = responder()
+        .handle(db, Inbound::new(apdu, 1476), &mut out)
+        .outcome;
+    let Some(Apdu::UnconfirmedRequest(announcement)) =
+        (!out.is_empty()).then(|| decode_apdu(out.freeze()).unwrap())
+    else {
+        assert_eq!(outcome, Outcome::Silent);
+        return None;
+    };
+    assert_eq!(outcome, Outcome::Announce);
+    Some(match announcement.service_choice {
+        UnconfirmedServiceChoice::I_AM => {
+            IAmRequest::decode(&announcement.service_request)
+                .unwrap()
+                .object_identifier
+        }
+        _ => {
+            IHaveRequest::decode(&announcement.service_request)
+                .unwrap()
+                .device_identifier
+        }
+    })
+}
+
+/// A second Device of a lower instance changes neither answer: I-Am and
+/// I-Have both name the identity's Device, and with it gone, neither is
+/// sent (#2186).
 #[test]
-fn who_has_by_identifier_and_by_name_names_the_selected_device() {
+fn who_is_and_who_has_name_the_identity_device_beside_a_second_one() {
+    let mut db = database();
+    let second = bacnet_objects::device::DeviceObject::new(bacnet_objects::device::DeviceConfig {
+        identity: DeviceIdentity::new(5, 0x105).unwrap(),
+        ..Default::default()
+    });
+    db.add(Box::new(second.unwrap())).unwrap();
+    let low = oid(ObjectType::DEVICE, 5);
+    assert_eq!(db.selected_device(), Some(low));
+    let by_name = || who_has(WhoHasObject::Name("BV-1".into()));
+    let ours = Some(oid(ObjectType::DEVICE, DEVICE));
+    assert_eq!(announced(&mut db, who_is(None)), ours);
+    assert_eq!(announced(&mut db, by_name()), ours);
+    db.remove(&oid(ObjectType::DEVICE, DEVICE)).unwrap();
+    assert_eq!(announced(&mut db, who_is(None)), None);
+    assert_eq!(announced(&mut db, by_name()), None);
+}
+
+#[test]
+fn who_has_by_identifier_and_by_name_names_the_identity_device() {
     for object in [
         WhoHasObject::Identifier(oid(ObjectType::BINARY_VALUE, 1)),
         WhoHasObject::Name("BV-1".into()),

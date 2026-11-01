@@ -225,7 +225,8 @@ fn pics_value_types_list_current_command_priority_and_cov_increment() {
         let kind = object.object_identifier().object_type();
         let mut db = ObjectDatabase::new();
         db.add(object).unwrap();
-        let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
+        let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default())
+            .instance_types_only(&db);
         let support = &pics.supported_object_types[0];
         assert_eq!(support.object_type, kind);
         let row = |property: P| {

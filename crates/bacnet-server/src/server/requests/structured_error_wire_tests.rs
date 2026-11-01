@@ -98,7 +98,7 @@ async fn create_object_refusals_go_out_as_create_object_errors() {
         ),
         (
             "an object type the server lists but cannot create",
-            create(ObjectSpecifier::Type(ObjectType::ANALOG_VALUE), vec![]),
+            create(ObjectSpecifier::Type(ObjectType::ACCESS_POINT), vec![]),
             create_object_error(
                 ErrorClass::OBJECT,
                 ErrorCode::DYNAMIC_CREATION_NOT_SUPPORTED,
@@ -109,10 +109,10 @@ async fn create_object_refusals_go_out_as_create_object_errors() {
             // The type refusal comes before any initial value (#2171).
             "a listed type the server cannot create, with initial values",
             create(
-                ObjectSpecifier::Type(ObjectType::ANALOG_VALUE),
+                ObjectSpecifier::Type(ObjectType::ACCESS_POINT),
                 vec![
                     description(),
-                    (PropertyIdentifier::PRESENT_VALUE, vec![0x44, 0, 0, 0, 0]),
+                    (PropertyIdentifier::PRESENT_VALUE, vec![0x91, 0x00]),
                 ],
             ),
             create_object_error(

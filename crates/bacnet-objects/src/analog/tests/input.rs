@@ -286,13 +286,6 @@ fn ai_description_in_property_list() {
 }
 
 #[test]
-fn ai_is_createable_matches_factory() {
-    use crate::traits::BACnetObject;
-    let ai = AnalogInputObject::new(1, "ai-1", EngineeringUnits::NO_UNITS).unwrap();
-    assert!(ai.is_createable(), "AnalogInput is factory-constructable");
-}
-
-#[test]
 fn ai_is_writable_property_mirrors_write_property() {
     use crate::traits::BACnetObject;
     let ai = AnalogInputObject::new(1, "ai-1", EngineeringUnits::NO_UNITS).unwrap();

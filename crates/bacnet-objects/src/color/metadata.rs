@@ -36,7 +36,7 @@ use crate::property_metadata::{
 //   Temperature's Min_Pres_Value and Max_Pres_Value are implemented as a
 //   pair, as the table's footnote asks.
 // - Presence is None on every base row, and neither object is createable at
-//   runtime (the network factory doesn't build them). Property_List is the
+//   runtime (the `creation` table doesn't build them). Property_List is the
 //   only array; COV support is the objects' own `supports_cov`.
 const COLOR_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
