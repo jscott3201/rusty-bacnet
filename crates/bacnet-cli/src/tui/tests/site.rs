@@ -640,7 +640,9 @@ impl Site {
     }
 
     /// [`Self::who_is`] with a window of one second, for a test on the
-    /// real clock, which waits the window out.
+    /// real clock, which waits the window out. Its caller is the attached
+    /// MCP test, so it has that test's cfg.
+    #[cfg(all(unix, feature = "mcp"))]
     pub(super) async fn who_is_briefly(&mut self, range: &str, rows: usize) {
         self.who_is_in(false, range, rows, "1").await;
     }

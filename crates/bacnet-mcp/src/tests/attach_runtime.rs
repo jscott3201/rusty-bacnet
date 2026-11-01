@@ -158,7 +158,15 @@ async fn a_dropped_listener_lets_its_sessions_end_on_record() {
     agent.initialize().await;
     drop(listener);
     eventually("its threads stopped", || live() == 0).await;
-    bridge.await.unwrap().unwrap();
+    // The runtime's stop drops the socket: the bridge may see it close or,
+    // on Linux, be reset. The claim is the record below.
+    if let Err(error) = bridge.await.unwrap() {
+        let error = error.to_string();
+        assert!(
+            error.contains("the connection to the TUI failed"),
+            "{error}"
+        );
+    }
     let records = audit(dir.path());
     assert!(
         records
