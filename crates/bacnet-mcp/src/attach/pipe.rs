@@ -187,13 +187,13 @@ pub(super) struct Preflight {
 pub(super) fn preflight(dir: &Path) -> Result<Preflight, AttachError> {
     let owner =
         win32::own_sid().map_err(|e| format!("cannot tell which user this TUI runs as: {e}"))?;
-    let _ = win32::check_private_dir(dir, &owner).map_err(|e| {
+    win32::check_private_dir(dir, &owner).map_err(|e| {
         format!(
             "the workspace {} is open to other users ({e}): limit its access to your own \
              account, SYSTEM and Administrators; not listening",
             dir.display()
         )
-    });
+    })?;
     let descriptor = Descriptor::owner_only(&owner)
         .map_err(|e| format!("cannot make the MCP pipe's security descriptor: {e}"))?;
     let salt = salt::load_or_create(dir)?;
