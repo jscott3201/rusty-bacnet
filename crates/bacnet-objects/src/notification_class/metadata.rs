@@ -89,7 +89,6 @@ mod tests {
         assert_eq!(object.property_list().as_ref(), ALL);
         assert_eq!(object.required_properties().as_ref(), REQUIRED);
         assert!(!object.supports_cov());
-        assert!(!object.is_createable());
         assert!(object.is_deleteable());
         for row in metadata.iter() {
             assert_eq!(row.presence_condition, None);

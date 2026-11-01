@@ -118,7 +118,6 @@ async fn built_in_configuration_identity_metadata_and_writes_survive_wrapping() 
             PropertyValue::Boolean(true)
         );
         assert!(!object.is_deleteable());
-        assert!(!object.is_createable());
         assert!(!object.is_writable_property(PropertyIdentifier::AUDIT_SOURCE_REPORTER));
         denied(object.write_property(
             PropertyIdentifier::AUDIT_SOURCE_REPORTER,

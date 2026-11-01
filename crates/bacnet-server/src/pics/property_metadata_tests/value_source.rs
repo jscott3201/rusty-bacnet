@@ -43,7 +43,7 @@ fn pics(tracked: bool) -> Pics {
     for object in objects(tracked) {
         db.add(object).unwrap();
     }
-    generate_pics(&db, &ServerConfig::default(), &PicsConfig::default())
+    generate_pics(&db, &ServerConfig::default(), &PicsConfig::default()).instance_types_only(&db)
 }
 
 #[test]

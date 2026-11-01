@@ -94,9 +94,6 @@ impl BACnetObject for RevisedDevice {
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         self.inner.property_list()
     }
-    fn is_createable(&self) -> bool {
-        false
-    }
     fn is_deleteable(&self) -> bool {
         false
     }

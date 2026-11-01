@@ -121,7 +121,6 @@ mod tests {
                 assert_eq!(unique.len(), metadata.len());
                 assert_eq!(object.property_list().as_ref(), all);
                 assert_eq!(object.required_properties().as_ref(), required);
-                assert!(!object.is_createable());
                 assert!(object.is_deleteable());
                 assert!(!object.supports_cov());
                 for row in metadata.iter() {

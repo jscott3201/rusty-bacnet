@@ -457,13 +457,6 @@ fn ao_direct_priority_array_index_17_error() {
 }
 
 #[test]
-fn ao_is_createable_matches_factory() {
-    use crate::traits::BACnetObject;
-    let ao = AnalogOutputObject::new(1, "ao-1", EngineeringUnits::NO_UNITS).unwrap();
-    assert!(ao.is_createable(), "AnalogOutput is factory-constructable");
-}
-
-#[test]
 fn ao_is_writable_property_mirrors_write_property() {
     use crate::traits::BACnetObject;
     let ao = AnalogOutputObject::new(1, "ao-1", EngineeringUnits::NO_UNITS).unwrap();

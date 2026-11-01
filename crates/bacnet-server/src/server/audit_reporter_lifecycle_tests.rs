@@ -270,8 +270,8 @@ async fn audit_reporter_lifecycle_execution_errors_preserve_results_and_create_r
         (
             ConfirmedServiceChoice::CREATE_OBJECT,
             AuditOperation::CREATE,
-            create(ObjectSpecifier::Type(ObjectType::ANALOG_VALUE), vec![]),
-            oid(ObjectType::ANALOG_VALUE, 1),
+            create(ObjectSpecifier::Type(ObjectType::ACCESS_POINT), vec![]),
+            oid(ObjectType::ACCESS_POINT, 1),
             ErrorClass::OBJECT,
             ErrorCode::DYNAMIC_CREATION_NOT_SUPPORTED,
         ),

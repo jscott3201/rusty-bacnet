@@ -144,10 +144,7 @@ impl BACnetObject for TestDevice {
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         property_list_from_metadata(&self.property_metadata())
     }
-    /// Device is not createable or deleteable; mirrors the real DeviceObject.
-    fn is_createable(&self) -> bool {
-        false
-    }
+    /// Device is not deleteable; mirrors the real DeviceObject.
     fn is_deleteable(&self) -> bool {
         false
     }
@@ -180,7 +177,7 @@ fn make_test_db() -> ObjectDatabase {
     db
 }
 
-fn make_pics_config() -> PicsConfig {
+pub(super) fn make_pics_config() -> PicsConfig {
     PicsConfig {
         device_profile: DeviceProfile::BAsc,
         data_link_layers: vec![DataLinkSupport::BipV4],
@@ -225,11 +222,15 @@ fn all_object_types_listed() {
         .iter()
         .map(|ot| ot.object_type)
         .collect();
-    assert!(types.contains(&ObjectType::DEVICE));
+    // The test DB's three types, and every type CreateObject builds (Analog
+    // Input and Binary Value among them), once each in type order.
+    let mut expected: Vec<ObjectType> = bacnet_objects::creation::builtin_createable_types()
+        .chain([ObjectType::DEVICE])
+        .collect();
+    expected.sort_by_key(|kind| kind.to_raw());
+    assert_eq!(types, expected);
     assert!(types.contains(&ObjectType::ANALOG_INPUT));
     assert!(types.contains(&ObjectType::BINARY_VALUE));
-    // 3 distinct types in our test DB
-    assert_eq!(types.len(), 3);
 }
 
 #[test]
@@ -289,7 +290,6 @@ fn real_device_and_network_port_overrides_not_createable_or_deleteable() {
         ..Default::default()
     })
     .unwrap();
-    assert!(!device.is_createable(), "Device must not be createable");
     assert!(!device.is_deleteable(), "Device must not be deleteable");
 
     let np = NetworkPortObject::new_non_bip(
@@ -301,7 +301,6 @@ fn real_device_and_network_port_overrides_not_createable_or_deleteable() {
         1476,
     )
     .unwrap();
-    assert!(!np.is_createable(), "NetworkPort must not be createable");
     assert!(!np.is_deleteable(), "NetworkPort must not be deleteable");
 }
 
@@ -397,17 +396,6 @@ fn markdown_output_has_tables() {
     assert!(md.contains("| Property | Access |"));
     assert!(md.contains("## Supported Object Types"));
     assert!(md.contains("## Supported Services"));
-}
-
-#[test]
-fn empty_database_produces_empty_object_list() {
-    let db = ObjectDatabase::new();
-    let server_config = ServerConfig::default();
-    let pics_config = PicsConfig::default();
-    let pics = generate_pics(&db, &server_config, &pics_config);
-
-    assert!(pics.supported_object_types.is_empty());
-    assert!(!pics.supported_services.is_empty());
 }
 
 #[test]
@@ -689,45 +677,6 @@ fn pics_fixed_readonly_properties_never_writable() {
             }
         }
     }
-}
-
-#[test]
-fn pics_createability_matches_runtime_factory() {
-    let db = make_real_objects_db();
-    let pics = generate_pics(&db, &ServerConfig::default(), &make_pics_config());
-
-    // The 8 types handle_create_object actually constructs must be createable.
-    for ot in [
-        ObjectType::ANALOG_INPUT,
-        ObjectType::ANALOG_OUTPUT,
-        ObjectType::BINARY_INPUT,
-        ObjectType::BINARY_OUTPUT,
-        ObjectType::BINARY_VALUE,
-        ObjectType::MULTI_STATE_INPUT,
-        ObjectType::MULTI_STATE_OUTPUT,
-        ObjectType::MULTI_STATE_VALUE,
-    ] {
-        let entry = pics
-            .supported_object_types
-            .iter()
-            .find(|e| e.object_type == ot)
-            .expect("type should be in PICS");
-        assert!(
-            entry.createable,
-            "{ot:?} should be createable (factory constructs it)"
-        );
-    }
-
-    // AnalogValue is NOT in the factory — PICS must not advertise createability.
-    let av = pics
-        .supported_object_types
-        .iter()
-        .find(|e| e.object_type == ObjectType::ANALOG_VALUE)
-        .expect("ANALOG_VALUE should be in PICS");
-    assert!(
-        !av.createable,
-        "AnalogValue must NOT be createable (the factory refuses it with DYNAMIC_CREATION_NOT_SUPPORTED)"
-    );
 }
 
 #[test]

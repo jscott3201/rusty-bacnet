@@ -143,7 +143,6 @@ fn configured_bip_metadata_exact_sets_and_indexed_list() {
         object.read_property(P::PROPERTY_LIST, Some(19)),
         ErrorCode::INVALID_ARRAY_INDEX,
     );
-    assert!(!object.is_createable());
     assert!(!object.is_deleteable());
 }
 

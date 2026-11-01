@@ -17,7 +17,7 @@ fn file_pics(files: Vec<FileObject>) -> Pics {
     for file in files {
         db.add(Box::new(file)).unwrap();
     }
-    generate_pics(&db, &ServerConfig::default(), &PicsConfig::default())
+    generate_pics(&db, &ServerConfig::default(), &PicsConfig::default()).instance_types_only(&db)
 }
 
 fn access(pics: &Pics, property: PropertyIdentifier) -> Option<PropertyAccess> {
@@ -285,7 +285,10 @@ fn pics_device_union_applies_execution_view_to_every_instance() {
         .for_server()
         .generate();
     let property = |pics: &Pics, p| {
-        pics.supported_object_types[0]
+        pics.supported_object_types
+            .iter()
+            .find(|support| support.object_type == ObjectType::DEVICE)
+            .unwrap()
             .supported_properties
             .iter()
             .find(|row| row.property_id == p)

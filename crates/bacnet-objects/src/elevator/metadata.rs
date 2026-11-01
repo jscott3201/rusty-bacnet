@@ -59,9 +59,8 @@ use crate::property_metadata::{
 // Presence is None throughout: the implementation models no
 // lift-group-conditional, intrinsic-reporting, or paired-text gating on this
 // family, and Car_Load and Car_Load_Units are always served together. The
-// trio is not createable at runtime (the network factory builds only the
-// eight analog/binary/multi-state input/output/value types, so the
-// is_createable=false default holds) and remains deleteable (delete denies
+// trio is not createable at runtime (the `creation` table has no
+// constructor for it) and remains deleteable (delete denies
 // only Device and NetworkPort, so the is_deleteable=true default holds);
 // neither needs an override. COV keeps its default. Group_Members admits an
 // index through the array default (BACnetARRAY per Table 12-76) and serves

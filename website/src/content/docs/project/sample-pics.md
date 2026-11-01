@@ -133,8 +133,9 @@ Property rows aggregate configured instances: a row or access flag means at leas
 
 #### ANALOG_VALUE
 
-- Createable: false
+- Createable: true
 - Deleteable: true
+- Whole value set only by CreateObject: UNITS
 
 | Property | Access |
 |----------|--------|
@@ -1172,7 +1173,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 
 #### BITSTRING_VALUE
 
-- Createable: false
+- Createable: true
 - Deleteable: true
 
 | Property | Access |
@@ -1192,7 +1193,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 
 #### CHARACTERSTRING_VALUE
 
-- Createable: false
+- Createable: true
 - Deleteable: true
 
 | Property | Access |
@@ -1212,7 +1213,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 
 #### DATEPATTERN_VALUE
 
-- Createable: false
+- Createable: true
 - Deleteable: true
 
 | Property | Access |
@@ -1232,7 +1233,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 
 #### DATE_VALUE
 
-- Createable: false
+- Createable: true
 - Deleteable: true
 
 | Property | Access |
@@ -1252,7 +1253,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 
 #### DATETIMEPATTERN_VALUE
 
-- Createable: false
+- Createable: true
 - Deleteable: true
 
 | Property | Access |
@@ -1272,7 +1273,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 
 #### DATETIME_VALUE
 
-- Createable: false
+- Createable: true
 - Deleteable: true
 
 | Property | Access |
@@ -1292,8 +1293,9 @@ Property rows aggregate configured instances: a row or access flag means at leas
 
 #### INTEGER_VALUE
 
-- Createable: false
+- Createable: true
 - Deleteable: true
+- Whole value set only by CreateObject: UNITS
 
 | Property | Access |
 |----------|--------|
@@ -1314,8 +1316,9 @@ Property rows aggregate configured instances: a row or access flag means at leas
 
 #### LARGE_ANALOG_VALUE
 
-- Createable: false
+- Createable: true
 - Deleteable: true
+- Whole value set only by CreateObject: UNITS
 
 | Property | Access |
 |----------|--------|
@@ -1336,7 +1339,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 
 #### OCTETSTRING_VALUE
 
-- Createable: false
+- Createable: true
 - Deleteable: true
 
 | Property | Access |
@@ -1356,8 +1359,9 @@ Property rows aggregate configured instances: a row or access flag means at leas
 
 #### POSITIVE_INTEGER_VALUE
 
-- Createable: false
+- Createable: true
 - Deleteable: true
+- Whole value set only by CreateObject: UNITS
 
 | Property | Access |
 |----------|--------|
@@ -1378,7 +1382,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 
 #### TIMEPATTERN_VALUE
 
-- Createable: false
+- Createable: true
 - Deleteable: true
 
 | Property | Access |
@@ -1398,7 +1402,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 
 #### TIME_VALUE
 
-- Createable: false
+- Createable: true
 - Deleteable: true
 
 | Property | Access |

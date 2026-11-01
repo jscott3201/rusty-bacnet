@@ -120,7 +120,6 @@ mod tests {
         assert_eq!(object.property_list().as_ref(), all);
         assert_eq!(object.required_properties().as_ref(), required);
         assert!(object.supports_cov());
-        assert!(!object.is_createable());
         for row in object.property_metadata().iter() {
             let cov = row.property_identifier == P::COV_INCREMENT;
             assert_eq!(

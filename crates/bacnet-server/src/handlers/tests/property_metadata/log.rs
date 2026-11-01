@@ -199,7 +199,8 @@ fn rpm_metadata_log_selectors_pics_rows_and_budgets_are_exact() {
                     &db,
                     &crate::server::ServerConfig::default(),
                     &crate::pics::PicsConfig::default(),
-                );
+                )
+                .instance_types_only(&db);
                 assert_eq!(pics.supported_object_types.len(), 1);
                 let support = &pics.supported_object_types[0];
                 assert_eq!(support.object_type, oid.object_type());

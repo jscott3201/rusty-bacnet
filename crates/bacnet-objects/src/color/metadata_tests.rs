@@ -128,7 +128,6 @@ fn rows_and_codes_match_the_addendum_tables() {
             rows.iter().map(|&(p, _)| p).collect::<HashSet<_>>().len(),
             rows.len()
         );
-        assert!(!object.is_createable());
         assert!(object.is_deleteable());
         assert!(object.supports_cov());
         for row in metadata.iter() {

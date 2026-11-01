@@ -35,10 +35,8 @@ use crate::property_metadata::{
 // shape, with the table's datatype (Unsigned, or Double on Large Analog
 // Value). Bit_Text, Alarm_Value, Fault/High/Low_Limit,
 // event/intrinsic, value-source, and audit rows stay absent until dispatch
-// exists. Value types are not createable at
-// runtime (the network factory builds only the eight analog/binary/
-// multi-state input/output/value types), so the is_createable=false default
-// holds with no override.
+// exists. Every value type is createable at runtime (#2172): the
+// `creation` table builds each.
 pub(crate) const INTEGER_VALUE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, Always),
