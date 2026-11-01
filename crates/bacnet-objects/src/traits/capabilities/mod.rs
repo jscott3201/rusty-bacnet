@@ -32,14 +32,31 @@
 //!
 //! [`BACnetObject`]: super::BACnetObject
 
+mod access_events;
 mod command_runner;
+mod life_safety;
+mod local_input;
 mod staging_source;
 mod timed;
 
 pub use crate::durable::DurableWrites;
 #[doc(hidden)]
+pub use access_events::AccessEvents;
+#[doc(hidden)]
 pub use command_runner::CommandRunner;
+pub use life_safety::LifeSafety;
+pub use local_input::{LocalInput, LocalInputValue};
 #[doc(hidden)]
 pub use staging_source::StagingSource;
 pub(crate) use timed::same_handle;
 pub use timed::{Clocks, DeadlineWaker, MonotonicClock, Timed};
+
+/// OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED: what an object answers for
+/// an input or operation it doesn't model, and what a host answers for an
+/// object that lends no capability for it.
+pub fn not_supported() -> bacnet_types::error::Error {
+    bacnet_types::error::Error::protocol(
+        bacnet_types::enums::ErrorClass::OBJECT,
+        bacnet_types::enums::ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+    )
+}

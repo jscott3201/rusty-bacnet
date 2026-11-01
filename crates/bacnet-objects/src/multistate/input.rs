@@ -420,20 +420,30 @@ impl BACnetObject for MultiStateInputObject {
         Ok(())
     }
 
-    fn set_present_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
-        // Local safe-ownership policy: preserve the client's OOS simulation.
-        if self.out_of_service {
-            return Err(common::write_access_denied_error());
-        }
-        self.apply_present_value(value)
-    }
-
     fn evaluate_reliability_internal(&mut self) -> Result<ReliabilityEvaluation, Error> {
         Ok(self.recompute_reliability())
     }
 
     fn reliability_evaluation_inhibited_internal(&self) -> bool {
         self.reliability_inhibit.enabled()
+    }
+
+    fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
+        Some(self)
+    }
+}
+
+/// The Present_Value the application supplies.
+impl crate::traits::LocalInput for MultiStateInputObject {
+    fn apply_local_input(&mut self, input: crate::traits::LocalInputValue) -> Result<(), Error> {
+        let crate::traits::LocalInputValue::PresentValue { value, .. } = input else {
+            return Err(crate::traits::not_supported());
+        };
+        // Local safe-ownership policy: preserve the client's OOS simulation.
+        if self.out_of_service {
+            return Err(common::write_access_denied_error());
+        }
+        self.apply_present_value(value)
     }
 }
 

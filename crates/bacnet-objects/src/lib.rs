@@ -89,6 +89,9 @@ mod property_metadata_audit;
 mod present_value_access_tests;
 
 #[cfg(test)]
+mod local_input_tests;
+
+#[cfg(test)]
 mod property_metadata_tests;
 #[cfg(test)]
 mod test_rows;

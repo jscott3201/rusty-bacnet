@@ -396,7 +396,13 @@ impl bacnet_objects::traits::BACnetObject for Rearmable {
         true
     }
 
-    fn set_life_safety_operation_expected_internal(
+    fn life_safety(&mut self) -> Option<&mut dyn bacnet_objects::traits::LifeSafety> {
+        Some(self)
+    }
+}
+
+impl bacnet_objects::traits::LifeSafety for Rearmable {
+    fn set_life_safety_operation_expected(
         &mut self,
         operation: LifeSafetyOperation,
     ) -> Result<(), Error> {

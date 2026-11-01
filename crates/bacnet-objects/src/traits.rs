@@ -15,8 +15,7 @@ use bacnet_types::constructed::{
     BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord, BACnetObjectPropertyReference,
 };
 use bacnet_types::enums::{
-    ErrorClass, ErrorCode, EventState, LifeSafetyOperation, ObjectType, PropertyIdentifier,
-    Reliability,
+    ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier, Reliability,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue, Time};
@@ -36,9 +35,12 @@ use crate::log_reporting::BufferReadyReport;
 use crate::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 
 pub mod capabilities;
-pub use capabilities::{Clocks, DeadlineWaker, DurableWrites, MonotonicClock, Timed};
 #[doc(hidden)]
-pub use capabilities::{CommandRunner, StagingSource};
+pub use capabilities::{AccessEvents, CommandRunner, StagingSource};
+pub use capabilities::{
+    Clocks, DeadlineWaker, DurableWrites, LifeSafety, LocalInput, LocalInputValue, MonotonicClock,
+    Timed, not_supported,
+};
 
 mod defaults;
 use defaults::{array_property_default, cov_reported_properties_default, list_property_default};
@@ -192,10 +194,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         _priorities: bacnet_types::bitstring::BACnetPriorityFilter,
         _maximum_send_delay: Option<crate::audit::AuditSendDelay>,
     ) -> Result<(), Error> {
-        Err(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ))
+        Err(not_supported())
     }
 
     /// The object's identifier (type + instance).
@@ -569,6 +568,36 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         None
     }
 
+    /// Borrow the object's local input capability, if it has one: the
+    /// values the application in the same device supplies, such as an
+    /// Input's Present_Value or a Loop's Controlled_Variable_Value.
+    ///
+    /// The default has none; a host then refuses every input with
+    /// [`not_supported`]. See [`LocalInput`] for the built-in
+    /// objects that lend it.
+    fn local_input(&mut self) -> Option<&mut dyn LocalInput> {
+        None
+    }
+
+    /// Mutably borrow an Access Point's capability to install a completed
+    /// authorization's events as one batch. Not public API yet (#2179).
+    ///
+    /// The default has none, and the bundled server then refuses the
+    /// authorization before evaluating it.
+    #[doc(hidden)]
+    fn access_events(&mut self) -> Option<&mut dyn AccessEvents> {
+        None
+    }
+
+    /// Mutably borrow a Life Safety Point's or Zone's capability: the
+    /// LifeSafetyOperation service and the operation it expects next.
+    ///
+    /// The default has none, and the bundled server then refuses both with
+    /// [`not_supported`]. See [`LifeSafety`].
+    fn life_safety(&mut self) -> Option<&mut dyn LifeSafety> {
+        None
+    }
+
     /// Return this object's GetEnrollmentSummary event capability.
     ///
     /// The default opts custom and downstream objects out. Implementations opt
@@ -842,41 +871,6 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
             .map(|()| None)
     }
 
-    /// Apply a LifeSafetyOperation atomically to this object.
-    ///
-    /// Implementations must leave the object unchanged when returning `Err`.
-    /// They run synchronously under the object-database write lock and must be
-    /// fast, nonblocking, and panic-free. External or irreversible actuation
-    /// also needs an application-owned idempotency/replay contract. The default
-    /// reports that the object does not support this service. Successful
-    /// implementations return an outcome with exact, ordered, deduplicated
-    /// committed property changes. `AlreadyApplied` leaves all state unchanged
-    /// and reports no deltas. The bundled server uses these changes for COV
-    /// after releasing the database lock and dispatching the service response.
-    fn apply_life_safety_operation(
-        &mut self,
-        _operation: LifeSafetyOperation,
-    ) -> Result<LifeSafetyOperationOutcome, Error> {
-        Err(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ))
-    }
-
-    /// Set the next LifeSafetyOperation expected by trusted local logic.
-    ///
-    /// This is an application-facing state channel, not a network property
-    /// write. The default reports that the object does not support the state.
-    fn set_life_safety_operation_expected_internal(
-        &mut self,
-        _operation: LifeSafetyOperation,
-    ) -> Result<(), Error> {
-        Err(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ))
-    }
-
     /// Apply an internally-detected `Event_State` transition.
     ///
     /// This is the **internal** lifecycle path for the algorithmically-derived
@@ -898,10 +892,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// not here. Implementations must leave `Event_State` unchanged when they
     /// return `Err`.
     fn set_event_state_internal(&mut self, _state: EventState) -> Result<(), Error> {
-        Err(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ))
+        Err(not_supported())
     }
 
     /// Snapshot this object's Event Enrollment evaluation state, if it models one.
@@ -942,10 +933,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         &mut self,
         _state: EventEnrollmentEvalState,
     ) -> Result<(), Error> {
-        Err(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ))
+        Err(not_supported())
     }
 
     /// Snapshot the monitored source that owns Event Enrollment private state.
@@ -963,10 +951,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         &mut self,
         _source: Option<EventEnrollmentMonitoredSource>,
     ) -> Result<(), Error> {
-        Err(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ))
+        Err(not_supported())
     }
 
     /// Set or clear one `Acked_Transitions` bit on a received event-state
@@ -995,10 +980,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         _transition_bit: EventTransitionBits,
         _acknowledged: bool,
     ) -> Result<(), Error> {
-        Err(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ))
+        Err(not_supported())
     }
 
     /// Evaluate and, when necessary, mutate this object's `Reliability`.
@@ -1042,158 +1024,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// The default rejects the operation, so object types without an internal
     /// reliability-evaluation process remain unaffected.
     fn set_reliability_internal(&mut self, _reliability: Reliability) -> Result<(), Error> {
-        Err(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ))
-    }
-
-    /// Apply the logical `Present_Value` supplied by the local application.
-    ///
-    /// This narrow internal hook is distinct from the network
-    /// [`write_property`](Self::write_property) route. Built-in Analog Input,
-    /// Binary Input, and Multi-state Input objects opt in. Their implementations
-    /// accept application updates only while in service; rejecting them while
-    /// `Out_Of_Service` is TRUE is a local ownership policy that protects the
-    /// client's simulation value, not a requirement imposed by the Standard.
-    ///
-    /// Analog, Binary, and Multi-state Value objects opt in unless their
-    /// [`PresentValueAccess`](crate::present_value_access::PresentValueAccess)
-    /// is `Commandable`. For them, rejecting updates while `Out_Of_Service` is
-    /// TRUE is required: their Out_Of_Service clause keeps software local to
-    /// the device from changing Present_Value.
-    ///
-    /// Life Safety Point and Zone opt in with a BACnetLifeSafetyState. Clients
-    /// never write their Present_Value, so they take the application's value in
-    /// service and out of service alike, and the hook leaves Tracking_Value,
-    /// Silenced and Operation_Expected as they are: any latching rule belongs
-    /// to the application.
-    ///
-    /// The default fails closed so commandable and other object families do not
-    /// acquire privileged `Present_Value` write authority through this hook.
-    fn set_present_value_internal(&mut self, _value: PropertyValue) -> Result<(), Error> {
-        Err(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ))
-    }
-
-    /// [`set_present_value_internal`](Self::set_present_value_internal) on
-    /// behalf of `origin`, the local Device the application runs in.
-    ///
-    /// A noncommandable Analog, Binary or Multi-state Value that tracks its
-    /// Present_Value's source (#1552) publishes `origin` as Value_Source
-    /// after the update, as Clause 19.5 asks of a write the local device
-    /// makes; plain `set_present_value_internal` leaves it NONE. The server's
-    /// `set_present_value_local` calls this when it knows its Device. The
-    /// default ignores `origin`, and decorators must forward it.
-    fn set_present_value_from_internal(
-        &mut self,
-        value: PropertyValue,
-        _origin: &crate::command_source::CommandOrigin,
-    ) -> Result<(), Error> {
-        self.set_present_value_internal(value)
-    }
-
-    /// Apply the `Tracking_Value` the local application derived.
-    ///
-    /// Only the built-in Life Safety Point and Zone opt in, with a
-    /// BACnetLifeSafetyState; the property stays read-only over the network in
-    /// service. While `Out_Of_Service` is TRUE a client's simulated value keeps
-    /// being served and this one takes over on the return to service. The
-    /// default fails closed with the same error as
-    /// [`set_present_value_internal`](Self::set_present_value_internal).
-    fn set_tracking_value_internal(&mut self, _value: PropertyValue) -> Result<(), Error> {
-        Err(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ))
-    }
-
-    /// Apply an input the application reports for an access-control object
-    /// the server holds (#1132): an Access Point's access event, a
-    /// Credential Data Input's read or an Access Door's hardware state, each
-    /// a record whose values change together. See
-    /// [`AccessControlInput`](crate::access_control::AccessControlInput).
-    ///
-    /// Only the built-in Access Point, Credential Data Input and Access Door
-    /// opt in, each for its own kind of record. While Out_Of_Service is TRUE
-    /// the point refuses an event with PROPERTY / WRITE_ACCESS_DENIED, since
-    /// it performs no authentication then, and the door and the reader store
-    /// the input with their device values put aside, leaving a client's
-    /// simulated values served. The default, and an object offered another
-    /// kind of record, fails closed with the same error as
-    /// [`set_present_value_internal`](Self::set_present_value_internal).
-    fn report_access_input_internal(
-        &mut self,
-        _input: crate::access_control::AccessControlInput,
-    ) -> Result<(), Error> {
-        Err(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ))
-    }
-
-    /// Whether this object opts in to atomic completed-authorization event batches.
-    /// An implementation returning true must implement the all-or-nothing contract
-    /// of [`Self::record_access_event_batch_internal`]. The default refuses admission.
-    #[doc(hidden)]
-    fn supports_access_event_batch_internal(&self) -> bool {
-        false
-    }
-
-    /// Install at most four ordered authorization event reports atomically.
-    /// Validate every report and timestamp before changing any served state. On
-    /// error, leave all event fields untouched. On success, retain each installed
-    /// intermediate state and its clock frame for post-commit COV preparation.
-    /// The native Access Point refuses out-of-service or faulty operation and
-    /// timestamps omitted times. Custom objects must opt in explicitly; callers
-    /// must never replace this operation with a fallible per-report loop.
-    #[doc(hidden)]
-    fn record_access_event_batch_internal(
-        &mut self,
-        _reports: &[crate::access_control::AccessEventReport],
-    ) -> Result<Vec<crate::access_control::CommittedAccessEvent>, Error> {
-        Err(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ))
-    }
-
-    /// Apply the Controlled_Variable_Value measured by the local application.
-    ///
-    /// Only the built-in Loop opts in. Its control algorithm runs in the
-    /// application, which feeds the measured value here while it does so; the
-    /// property stays read-only over the network. The default fails closed
-    /// with the same error as [`set_present_value_internal`](Self::set_present_value_internal).
-    fn set_controlled_variable_value_internal(
-        &mut self,
-        _value: PropertyValue,
-    ) -> Result<(), Error> {
-        Err(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ))
-    }
-
-    /// Record one sample for an Averaging object.
-    ///
-    /// Only the built-in Averaging object opts in. The value is the reading
-    /// of the referenced property, or `None` when the attempt produced no
-    /// value, and the object updates its sample window, statistics and counts
-    /// together. The application calls it for the samples it takes, and the
-    /// database for the ones the object's own schedule asks for (see
-    /// [`take_due_averaging_sample_internal`](Self::take_due_averaging_sample_internal)).
-    /// The default fails closed with the same error as
-    /// [`set_present_value_internal`](Self::set_present_value_internal).
-    fn add_averaging_sample_internal(
-        &mut self,
-        _sample: Option<PropertyValue>,
-    ) -> Result<(), Error> {
-        Err(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ))
+        Err(not_supported())
     }
 
     /// Claim the Averaging sample the object's schedule has due at the
@@ -1201,8 +1032,8 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     ///
     /// When one is due the object steps its schedule past it and returns the
     /// property to read; the caller reads it while it still holds exclusive
-    /// access and records the outcome with
-    /// [`add_averaging_sample_internal`](Self::add_averaging_sample_internal).
+    /// access and records the outcome as a
+    /// [`LocalInputValue::AveragingSample`] through [`Self::local_input`].
     /// An object that answers here reports the due time through
     /// [`Timed::next_monotonic_deadline`],
     /// so the server's monotonic task wakes for it. The built-in Averaging
@@ -1281,10 +1112,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         &mut self,
         _parent: bacnet_types::constructed::BACnetDeviceObjectReference,
     ) -> Result<(), Error> {
-        Err(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ))
+        Err(not_supported())
     }
 
     /// Mutably borrow this object's Audit notification receiver capability.
@@ -1391,10 +1219,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// ordinary record. Timestamp failures return an error without mutation.
     /// Objects without trend insertion return OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
     fn add_trend_record(&mut self, _record: BACnetLogRecord) -> Result<(), Error> {
-        Err(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ))
+        Err(not_supported())
     }
 
     /// Submit a Trend Log Multiple record, one value per monitored member, to
@@ -1404,10 +1229,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// Objects without Trend Log Multiple insertion return
     /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
     fn add_trend_multiple_record(&mut self, _record: BACnetLogMultipleRecord) -> Result<(), Error> {
-        Err(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ))
+        Err(not_supported())
     }
 
     /// Submit an Event Log record to an object's log lifecycle.
@@ -1419,10 +1241,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// Objects without Event Log insertion return
     /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
     fn add_event_log_record(&mut self, _record: BACnetEventLogRecord) -> Result<(), Error> {
-        Err(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ))
+        Err(not_supported())
     }
 
     /// Look at a log's Start_Time / Stop_Time window against the bound

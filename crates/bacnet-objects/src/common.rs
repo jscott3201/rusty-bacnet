@@ -308,15 +308,6 @@ pub(crate) fn write_access_denied_error() -> bacnet_types::error::Error {
     )
 }
 
-/// Return the optional-functionality-not-supported protocol error.
-#[inline]
-pub(crate) fn optional_functionality_not_supported_error() -> bacnet_types::error::Error {
-    protocol_error(
-        bacnet_types::enums::ErrorClass::OBJECT,
-        bacnet_types::enums::ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-    )
-}
-
 /// Return the invalid-data-type protocol error.
 #[inline]
 pub(crate) fn invalid_data_type_error() -> bacnet_types::error::Error {

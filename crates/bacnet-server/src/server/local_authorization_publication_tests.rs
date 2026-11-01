@@ -98,11 +98,15 @@ async fn local_authorization_four_intents_retain_fields_in_every_cov_flavor() {
             );
             db.get_mut(&oid)
                 .unwrap()
-                .report_access_input_internal(AccessControlInput::AccessEvent(access_event(
-                    AccessEvent::DENIED_OTHER,
-                    99,
-                    30,
-                )))
+                .local_input()
+                .unwrap()
+                .apply_local_input(bacnet_objects::traits::LocalInputValue::AccessControl(
+                    AccessControlInput::AccessEvent(access_event(
+                        AccessEvent::DENIED_OTHER,
+                        99,
+                        30,
+                    )),
+                ))
                 .unwrap();
         }
         release.add_permits(1);

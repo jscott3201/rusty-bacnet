@@ -84,17 +84,15 @@ impl BACnetObject for Boundary {
     fn timed(&mut self) -> Option<&mut dyn bacnet_objects::traits::Timed> {
         self.inner.timed()
     }
-    fn report_access_input_internal(&mut self, input: AccessControlInput) -> Result<(), Error> {
-        self.inner.report_access_input_internal(input)
+    fn local_input(&mut self) -> Option<&mut dyn bacnet_objects::traits::LocalInput> {
+        self.inner.local_input()
     }
-    fn supports_access_event_batch_internal(&self) -> bool {
-        self.supports && self.inner.supports_access_event_batch_internal()
-    }
-    fn record_access_event_batch_internal(
-        &mut self,
-        reports: &[AccessEventReport],
-    ) -> Result<Vec<CommittedAccessEvent>, Error> {
-        self.inner.record_access_event_batch_internal(reports)
+    fn access_events(&mut self) -> Option<&mut dyn bacnet_objects::traits::AccessEvents> {
+        if self.supports {
+            self.inner.access_events()
+        } else {
+            None
+        }
     }
     fn evaluate_intrinsic_reporting(&mut self) -> Option<bacnet_objects::event::TransitionOutcome> {
         if self

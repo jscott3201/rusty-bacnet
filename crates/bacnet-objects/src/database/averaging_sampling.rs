@@ -9,6 +9,7 @@ use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::ObjectIdentifier;
 
 use super::ObjectDatabase;
+use crate::traits::LocalInputValue;
 
 impl ObjectDatabase {
     /// Take every Averaging sample due at the monotonic instant `now` and
@@ -17,9 +18,10 @@ impl ObjectDatabase {
     /// The caller must hold exclusive database access for the whole call. A
     /// due object names the local property it averages
     /// (`take_due_averaging_sample_internal`); this reads it and records the
-    /// value. An attempt that yields nothing usable is recorded as a miss,
-    /// which counts toward Attempted_Samples but not Valid_Samples: a
-    /// referenced object or property that doesn't exist, an array index on a
+    /// value as its [`LocalInputValue::AveragingSample`]. An attempt that
+    /// yields nothing usable is recorded as a miss, which counts toward
+    /// Attempted_Samples but not Valid_Samples: a referenced object or
+    /// property that doesn't exist, an array index on a
     /// property that isn't an array, any other read error, and a value the
     /// object refuses to average (a datatype outside the five Clause 12.5
     /// accepts, or a REAL that isn't finite).
@@ -44,13 +46,13 @@ impl ObjectDatabase {
                 // gate makes it; object read arms may ignore the index.
                 .filter(|target| index.is_none() || target.is_array_property(property))
                 .and_then(|target| target.read_property(property, index).ok());
-            let Some(object) = self.get_mut(&oid) else {
+            let Some(input) = self.get_mut(&oid).and_then(|object| object.local_input()) else {
                 continue;
             };
-            let recorded = value
-                .and_then(|value| object.add_averaging_sample_internal(Some(value)).ok())
-                .is_some()
-                || object.add_averaging_sample_internal(None).is_ok();
+            let mut sample =
+                |sample| input.apply_local_input(LocalInputValue::AveragingSample(sample));
+            let recorded =
+                value.and_then(|value| sample(Some(value)).ok()).is_some() || sample(None).is_ok();
             if recorded {
                 sampled.push(oid);
             }

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Checks, builds and runs the cargo-fuzz targets of the codecs (#1610), the
-# MS/TP master core (#1640) and the APDU, value and service codecs (#2180)
-# with the nightly toolchain that .github/ci-pins.env pins as
-# RUST_FUZZ_NIGHTLY. .github/workflows/fuzz.yml runs it, and it runs the
+# MS/TP master core (#1640), the APDU, value and service codecs and the
+# object crate's persistence restores (#2180) with the nightly toolchain
+# that .github/ci-pins.env pins as RUST_FUZZ_NIGHTLY.
+# .github/workflows/fuzz.yml runs it, and it runs the
 # same way locally (see docs/ci.md, "Fuzzing"):
 #
 #   fuzz.sh list                     one "<crate> <target>" line per target

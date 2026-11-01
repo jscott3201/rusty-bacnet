@@ -195,6 +195,12 @@ impl BACnetObject for ResetHookSpy {
         crate::test_rows::read_only(&[])
     }
 
+    fn life_safety(&mut self) -> Option<&mut dyn bacnet_objects::traits::LifeSafety> {
+        Some(self)
+    }
+}
+
+impl bacnet_objects::traits::LifeSafety for ResetHookSpy {
     fn apply_life_safety_operation(
         &mut self,
         _operation: LifeSafetyOperation,

@@ -1,6 +1,6 @@
 //! The application route that feeds a stored Averaging object (#1083).
 //!
-//! `add_averaging_sample_internal` takes each sample the application took and
+//! The `LocalInput` averaging sample takes each sample the application took and
 //! converts it to REAL as Clause 12.5 describes, or records an attempt that
 //! produced no value, so a running server can feed the object without
 //! reaching its concrete type.
@@ -42,7 +42,12 @@ fn averaging_sample_hook_converts_each_sampled_datatype_to_real() {
         PropertyValue::Boolean(true),
         PropertyValue::Boolean(false),
     ] {
-        avg.add_averaging_sample_internal(Some(sample)).unwrap();
+        avg.local_input()
+            .unwrap()
+            .apply_local_input(crate::traits::LocalInputValue::AveragingSample(Some(
+                sample,
+            )))
+            .unwrap();
     }
     // 2.5 + 9 - 4 + 3 + 1 + 0 = 11.5 over six samples.
     let [minimum, maximum, average, attempted, valid] = statistics(&avg);
@@ -59,7 +64,11 @@ fn averaging_sample_hook_converts_each_sampled_datatype_to_real() {
 #[test]
 fn averaging_sample_hook_refuses_other_datatypes_and_non_finite_reals() {
     let mut avg = AveragingObject::new(1, "AVG-1").unwrap();
-    avg.add_averaging_sample_internal(Some(PropertyValue::Real(20.0)))
+    avg.local_input()
+        .unwrap()
+        .apply_local_input(crate::traits::LocalInputValue::AveragingSample(Some(
+            PropertyValue::Real(20.0),
+        )))
         .unwrap();
     let before = statistics(&avg);
     for (value, code) in [
@@ -83,7 +92,11 @@ fn averaging_sample_hook_refuses_other_datatypes_and_non_finite_reals() {
             ErrorCode::VALUE_OUT_OF_RANGE,
         ),
     ] {
-        let error = avg.add_averaging_sample_internal(Some(value)).unwrap_err();
+        let error = avg
+            .local_input()
+            .unwrap()
+            .apply_local_input(crate::traits::LocalInputValue::AveragingSample(Some(value)))
+            .unwrap_err();
         assert_error(error, ErrorClass::PROPERTY, code);
     }
     // The direct setter applies the same finite check.
@@ -102,7 +115,11 @@ fn averaging_sample_hook_is_refused_by_other_objects() {
         crate::analog::AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS)
             .unwrap();
     let error = av
-        .add_averaging_sample_internal(Some(PropertyValue::Real(1.0)))
+        .local_input()
+        .unwrap()
+        .apply_local_input(crate::traits::LocalInputValue::AveragingSample(Some(
+            PropertyValue::Real(1.0),
+        )))
         .unwrap_err();
     assert_error(
         error,
@@ -139,10 +156,21 @@ fn averaging_takes_property_cov_subscriptions_but_not_subscribe_cov() {
 fn averaging_missed_samples_count_as_attempted_but_not_valid() {
     let mut avg = AveragingObject::new(1, "AVG-1").unwrap();
     avg.set_window_samples(3).unwrap();
-    avg.add_averaging_sample_internal(Some(PropertyValue::Real(10.0)))
+    avg.local_input()
+        .unwrap()
+        .apply_local_input(crate::traits::LocalInputValue::AveragingSample(Some(
+            PropertyValue::Real(10.0),
+        )))
         .unwrap();
-    avg.add_averaging_sample_internal(None).unwrap();
-    avg.add_averaging_sample_internal(Some(PropertyValue::Real(20.0)))
+    avg.local_input()
+        .unwrap()
+        .apply_local_input(crate::traits::LocalInputValue::AveragingSample(None))
+        .unwrap();
+    avg.local_input()
+        .unwrap()
+        .apply_local_input(crate::traits::LocalInputValue::AveragingSample(Some(
+            PropertyValue::Real(20.0),
+        )))
         .unwrap();
     // 10, a miss and 20: the statistics cover the two valid slots.
     assert_eq!(
@@ -171,8 +199,14 @@ fn averaging_missed_samples_count_as_attempted_but_not_valid() {
 
     // Once only misses are left, the statistics return to their empty-window
     // values while Attempted_Samples stays at Window_Samples.
-    avg.add_averaging_sample_internal(None).unwrap();
-    avg.add_averaging_sample_internal(None).unwrap();
+    avg.local_input()
+        .unwrap()
+        .apply_local_input(crate::traits::LocalInputValue::AveragingSample(None))
+        .unwrap();
+    avg.local_input()
+        .unwrap()
+        .apply_local_input(crate::traits::LocalInputValue::AveragingSample(None))
+        .unwrap();
     let [minimum, maximum, average, attempted, valid] = statistics(&avg);
     assert_eq!(minimum, PropertyValue::Real(f32::INFINITY));
     assert_eq!(maximum, PropertyValue::Real(f32::NEG_INFINITY));
