@@ -867,8 +867,8 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// transition action: pass the transition to alarm-acknowledgment handling.
     /// Under Clause 13.2.3, receiving a transition updates its Acked_Transitions
     /// bit to the inverse of the corresponding Ack_Required bit. The caller
-    /// resolves `Ack_Required` from the referenced Notification Class object
-    /// and passes the outcome as `acknowledged`; this method performs only
+    /// looks up `Ack_Required` in the object's Notification Class and
+    /// passes the outcome as `acknowledged`; this method performs only
     /// the bit maintenance. The bundled server's evaluator does this inside
     /// [`EventReporting::commit_event_transition`], so it has no caller there;
     /// only trusted local code (tests, today) calls it.
