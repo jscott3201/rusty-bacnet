@@ -131,7 +131,7 @@ fn assert_property_error<T: std::fmt::Debug>(
 /// Both enrollment types serve the optional Event_Message_Texts (Event
 /// Enrollment since #1507, Alert Enrollment since #1865).
 fn assert_history_surface(object: &mut dyn BACnetObject, label: &str) {
-    let properties = object.property_list();
+    let properties = crate::test_rows::listed(&object.property_metadata());
     assert!(
         properties.contains(&PropertyIdentifier::EVENT_TIME_STAMPS),
         "{label}: Event_Time_Stamps missing from Property_List"
@@ -281,7 +281,10 @@ fn assert_complete_metadata(
         .copied()
         .filter(|property| *property != PropertyIdentifier::PROPERTY_LIST)
         .collect();
-    assert_eq!(object.property_list().as_ref(), projection.as_slice());
+    assert_eq!(
+        crate::test_rows::listed(&object.property_metadata()),
+        crate::test_rows::listed_from(projection.as_slice())
+    );
 
     for row in metadata.iter() {
         object

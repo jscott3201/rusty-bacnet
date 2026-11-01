@@ -81,9 +81,6 @@ impl BACnetObject for GateTrend {
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         self.object.property_metadata()
     }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        self.object.property_list()
-    }
     fn read_property(
         &self,
         property: PropertyIdentifier,

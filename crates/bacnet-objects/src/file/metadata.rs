@@ -119,8 +119,14 @@ mod tests {
                 let unique: HashSet<_> =
                     metadata.iter().map(|row| row.property_identifier).collect();
                 assert_eq!(unique.len(), metadata.len());
-                assert_eq!(object.property_list().as_ref(), all);
-                assert_eq!(object.required_properties().as_ref(), required);
+                assert_eq!(
+                    crate::test_rows::listed(&object.property_metadata()),
+                    crate::test_rows::listed_from(&all)
+                );
+                assert_eq!(
+                    crate::test_rows::required(&object.property_metadata()),
+                    required
+                );
                 assert!(object.is_deleteable());
                 assert!(!object.supports_cov());
                 for row in metadata.iter() {
@@ -216,7 +222,7 @@ mod tests {
                     P::RELIABILITY,
                     P::OUT_OF_SERVICE,
                 ] {
-                    if object.property_list().contains(&p) {
+                    if crate::property_metadata::has_property(&object.property_metadata(), p) {
                         continue;
                     }
                     assert!(!object.is_writable_property(p));

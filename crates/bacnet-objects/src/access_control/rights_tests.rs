@@ -275,7 +275,10 @@ fn access_rights_enable_defaults_true_and_follows_the_setter_and_writes() {
         rights.read_property(P::LOG_ENABLE, None).unwrap(),
         PropertyValue::Boolean(true)
     );
-    assert!(rights.property_list().contains(&P::LOG_ENABLE));
+    assert!(crate::property_metadata::has_property(
+        &rights.property_metadata(),
+        P::LOG_ENABLE
+    ));
     assert!(rights.is_writable_property(P::LOG_ENABLE));
 
     // Disabling the object leaves each rule's own flag as it was.

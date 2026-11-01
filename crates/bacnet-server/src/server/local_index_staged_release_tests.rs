@@ -78,10 +78,6 @@ impl BACnetObject for IndexBlind {
             .write_property(property, array_index, value, priority)
     }
 
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        self.0.property_list()
-    }
-
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         self.0.property_metadata()
     }

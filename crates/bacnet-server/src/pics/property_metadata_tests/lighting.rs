@@ -97,7 +97,10 @@ fn pics_lighting_property_metadata_is_exact() {
                         None,
                     )
                     .unwrap();
-                let required = object.required_properties();
+                let required: Vec<_> = bacnet_objects::property_metadata::required_properties(
+                    &object.property_metadata(),
+                )
+                .collect();
                 let mut db = ObjectDatabase::new();
                 db.add(object).unwrap();
                 let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default())
@@ -136,7 +139,10 @@ fn pics_lighting_property_metadata_is_exact() {
 fn pics_rows(
     object: Box<dyn bacnet_objects::traits::BACnetObject>,
 ) -> (Vec<PropertyRow>, Vec<PropertyIdentifier>) {
-    let required = sorted_required(object.required_properties().as_ref());
+    let required = sorted_required(
+        &bacnet_objects::property_metadata::required_properties(&object.property_metadata())
+            .collect::<Vec<_>>(),
+    );
     let mut db = ObjectDatabase::new();
     db.add(object).unwrap();
     let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default())

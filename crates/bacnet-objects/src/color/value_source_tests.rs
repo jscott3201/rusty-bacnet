@@ -98,7 +98,7 @@ fn tracked_temperature() -> ColorTemperatureObject {
 #[test]
 fn the_row_is_absent_until_tracked_then_required_after_transition() {
     let mut color = ColorObject::new(1, "CLR-1").unwrap();
-    let untracked = color.property_list().into_owned();
+    let untracked = crate::test_rows::listed(&color.property_metadata());
     assert!(!untracked.contains(&P::VALUE_SOURCE));
     assert_code(
         color.read_property(P::VALUE_SOURCE, None),
@@ -124,10 +124,16 @@ fn the_row_is_absent_until_tracked_then_required_after_transition() {
         ),
     ];
     for (untracked, tracked) in objects {
-        let mut expected = untracked.property_list().into_owned();
+        let mut expected = crate::test_rows::listed(&untracked.property_metadata());
         expected.push(P::VALUE_SOURCE);
-        assert_eq!(tracked.property_list().as_ref(), expected);
-        assert!(tracked.required_properties().contains(&P::VALUE_SOURCE));
+        assert_eq!(
+            crate::test_rows::listed(&tracked.property_metadata()),
+            crate::test_rows::listed_from(&expected)
+        );
+        assert!(
+            crate::property_metadata::required_properties(&tracked.property_metadata())
+                .any(|required| required == P::VALUE_SOURCE)
+        );
         let metadata = tracked.property_metadata();
         let row = metadata
             .iter()

@@ -170,12 +170,12 @@ async fn post_profile_requester_failure_uninstalls_source_owner_and_releases_dat
     assert!(session.notifications.is_none());
     let mut db = session.database.as_ref().unwrap().write().await;
     assert!(!source(&db, selected()));
-    assert!(
-        !db.get(&oid(ObjectType::DEVICE, 123))
+    assert!(!bacnet_objects::property_metadata::has_property(
+        &db.get(&oid(ObjectType::DEVICE, 123))
             .unwrap()
-            .property_list()
-            .contains(&PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT)
-    );
+            .property_metadata(),
+        PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT
+    ));
     assert!(db.remove(&selected()).unwrap().is_some());
     assert!(db.remove(&oid(ObjectType::DEVICE, 123)).unwrap().is_some());
 }

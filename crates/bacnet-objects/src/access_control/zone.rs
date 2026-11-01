@@ -323,10 +323,6 @@ impl BACnetObject for AccessZoneObject {
         super::metadata_topology::for_access_zone_object(self)
     }
 
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
-    }
-
     crate::event::impl_change_of_state_reporting!(
         reporting,
         Self::watched_state,

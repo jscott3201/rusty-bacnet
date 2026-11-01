@@ -136,7 +136,6 @@ pub const QUERIES: &[(&str, Query)] = &[
     ("property_metadata", |o| {
         format!("{:?}", o.property_metadata())
     }),
-    ("property_list", |o| format!("{:?}", o.property_list())),
     ("is_writable_property", |o| {
         format!(
             "{:?}",
@@ -159,9 +158,6 @@ pub const QUERIES: &[(&str, Query)] = &[
         format!("{:?}", o.creation_only_properties())
     }),
     ("is_deleteable", |o| o.is_deleteable().to_string()),
-    ("required_properties", |o| {
-        format!("{:?}", o.required_properties())
-    }),
     ("supports_access_event_batch_internal", |o| {
         o.supports_access_event_batch_internal().to_string()
     }),

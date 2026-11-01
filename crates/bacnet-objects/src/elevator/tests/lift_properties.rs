@@ -51,7 +51,10 @@ fn landing(doors: &[(u8, DoorStatus)]) -> BACnetLandingDoorStatus {
 fn lift_tracking_value_and_floor_number_are_gone() {
     let mut lift = lift();
     for property in [P::TRACKING_VALUE, P::FLOOR_NUMBER] {
-        assert!(!lift.property_list().contains(&property), "{property:?}");
+        assert!(
+            !crate::property_metadata::has_property(&lift.property_metadata(), property),
+            "{property:?}"
+        );
         assert_property_error(
             lift.read_property(property, None),
             ErrorCode::UNKNOWN_PROPERTY,

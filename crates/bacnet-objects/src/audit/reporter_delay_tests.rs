@@ -9,7 +9,10 @@ fn reporter_delay_pair_is_optional_typed_scalar_and_nonnullable_relinquishment()
         PropertyIdentifier::MAXIMUM_SEND_DELAY,
         PropertyIdentifier::SEND_NOW,
     ] {
-        assert!(!reporter.property_list().contains(&property));
+        assert!(!crate::property_metadata::has_property(
+            &reporter.property_metadata(),
+            property
+        ));
         assert!(reporter.read_property(property, None).is_err());
         assert!(
             reporter
@@ -32,7 +35,10 @@ fn reporter_delay_pair_is_optional_typed_scalar_and_nonnullable_relinquishment()
             PropertyIdentifier::MAXIMUM_SEND_DELAY,
             PropertyIdentifier::SEND_NOW,
         ] {
-            assert!(reporter.property_list().contains(&property));
+            assert!(crate::property_metadata::has_property(
+                &reporter.property_metadata(),
+                property
+            ));
             let row = *reporter
                 .property_metadata()
                 .iter()
@@ -72,9 +78,8 @@ fn reporter_delay_pair_is_optional_typed_scalar_and_nonnullable_relinquishment()
         );
     }
     reporter.set_maximum_send_delay(None).unwrap();
-    assert!(
-        !reporter
-            .property_list()
-            .contains(&PropertyIdentifier::SEND_NOW)
-    );
+    assert!(!crate::property_metadata::has_property(
+        &reporter.property_metadata(),
+        PropertyIdentifier::SEND_NOW
+    ));
 }

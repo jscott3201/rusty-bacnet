@@ -379,8 +379,11 @@ fn error_of(reply: Option<Apdu>) -> (ErrorClass, ErrorCode) {
 fn rows(db: &ObjectDatabase) -> Vec<(ObjectIdentifier, P, Option<u32>)> {
     let mut rows = Vec::new();
     for (object, stored) in db.iter_objects() {
-        let mut properties: Vec<P> = stored.property_list().to_vec();
-        properties.push(P::PROPERTY_LIST);
+        let mut properties: Vec<P> = stored
+            .property_metadata()
+            .iter()
+            .map(|row| row.property_identifier)
+            .collect();
         if object.object_type() == ObjectType::DEVICE {
             properties.extend([
                 P::PROTOCOL_SERVICES_SUPPORTED,

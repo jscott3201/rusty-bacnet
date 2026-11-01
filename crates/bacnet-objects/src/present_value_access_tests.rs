@@ -161,7 +161,7 @@ fn read_only_and_writable_have_no_command_prioritization() {
         for (mut object, _, _) in values(access) {
             for property in COMMANDABLE_ONLY {
                 assert!(
-                    !object.property_list().contains(&property),
+                    !crate::property_metadata::has_property(&object.property_metadata(), property),
                     "{access:?} lists {property:?}"
                 );
                 assert_protocol(

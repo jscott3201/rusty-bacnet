@@ -171,7 +171,10 @@ fn access_credential_status_is_read_only() {
 #[test]
 fn access_credential_has_no_present_value() {
     let mut credential = AccessCredentialObject::new(1, "CRED-1").unwrap();
-    assert!(!credential.property_list().contains(&P));
+    assert!(!crate::property_metadata::has_property(
+        &credential.property_metadata(),
+        P
+    ));
     assert!(
         !credential
             .property_metadata()

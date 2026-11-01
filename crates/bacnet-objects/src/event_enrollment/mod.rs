@@ -694,10 +694,6 @@ impl BACnetObject for EventEnrollmentObject {
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         Cow::Borrowed(metadata::EVENT_ENROLLMENT_PROPERTIES)
     }
-
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        crate::property_metadata::property_list_from_metadata(metadata::EVENT_ENROLLMENT_PROPERTIES)
-    }
 }
 
 #[cfg(test)]

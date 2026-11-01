@@ -347,7 +347,7 @@ fn read_event_state_default() {
 #[test]
 fn property_list_complete() {
     let el = EventLogObject::new(1, "EL-1", 100).unwrap();
-    let props = el.property_list();
+    let props = crate::test_rows::listed(&el.property_metadata());
     assert!(props.contains(&PropertyIdentifier::LOG_ENABLE));
     assert!(props.contains(&PropertyIdentifier::STOP_WHEN_FULL));
     assert!(props.contains(&PropertyIdentifier::BUFFER_SIZE));

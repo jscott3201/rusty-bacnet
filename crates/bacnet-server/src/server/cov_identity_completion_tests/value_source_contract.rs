@@ -31,13 +31,6 @@ impl BACnetObject for Probe {
         }
         Cow::Owned(rows)
     }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        let mut list = self.inner.property_list().into_owned();
-        if self.state.lock().unwrap().noncommandable {
-            list.retain(|p| *p != PropertyIdentifier::PRIORITY_ARRAY);
-        }
-        Cow::Owned(list)
-    }
     fn supports_cov(&self) -> bool {
         true
     }

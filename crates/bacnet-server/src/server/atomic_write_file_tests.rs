@@ -211,11 +211,6 @@ async fn atomic_write_file_opaque_abort_keeps_legacy_service_mapping() {
         fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
             crate::test_rows::read_only(&[])
         }
-        fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-            bacnet_objects::property_metadata::property_list_from_metadata(
-                &self.property_metadata(),
-            )
-        }
         fn read_property(
             &self,
             p: PropertyIdentifier,

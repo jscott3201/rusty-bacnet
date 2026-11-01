@@ -115,7 +115,9 @@ fn check_pics(
     expected: &[PropertyRow],
     configured: bool,
 ) {
-    let required = object.required_properties();
+    let required: Vec<_> =
+        bacnet_objects::property_metadata::required_properties(&object.property_metadata())
+            .collect();
     let mut db = ObjectDatabase::new();
     db.add(object).unwrap();
     let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default())

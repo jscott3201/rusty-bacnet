@@ -131,10 +131,10 @@ fn acked_transitions_network_write_and_metadata_deny_every_family() {
                 )
                 .unwrap();
             for out_of_service in [false, true] {
-                if object
-                    .property_list()
-                    .contains(&PropertyIdentifier::OUT_OF_SERVICE)
-                {
+                if crate::property_metadata::has_property(
+                    &object.property_metadata(),
+                    PropertyIdentifier::OUT_OF_SERVICE,
+                ) {
                     object
                         .write_property(
                             PropertyIdentifier::OUT_OF_SERVICE,

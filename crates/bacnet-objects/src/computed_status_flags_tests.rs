@@ -216,6 +216,9 @@ fn calendar_has_no_status_flags_to_compute() {
             ),
             "Calendar must not serve {property:?}"
         );
-        assert!(!calendar.property_list().contains(&property));
+        assert!(!crate::property_metadata::has_property(
+            &calendar.property_metadata(),
+            property
+        ));
     }
 }

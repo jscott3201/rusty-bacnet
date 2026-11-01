@@ -137,7 +137,10 @@ fn access_door_serves_the_event_rows_and_alarm_lists() {
         ),
     ] {
         assert_eq!(read(&door, property), value, "{property:?}");
-        assert!(door.property_list().contains(&property), "{property:?}");
+        assert!(
+            crate::property_metadata::has_property(&door.property_metadata(), property),
+            "{property:?}"
+        );
     }
     assert_eq!(
         door.enrollment_summary_capability_internal()

@@ -147,8 +147,8 @@ fn each_mode_lists_its_own_rows_read_only_and_required() {
             PropertyValue::Enumerated(ip_mode)
         );
         let object = db.get(&oid()).unwrap();
-        let list = object.property_list();
-        let required = object.required_properties();
+        let list = crate::test_rows::listed(&object.property_metadata());
+        let required = crate::test_rows::required(&object.property_metadata());
         let metadata = object.property_metadata();
         for &property in present {
             assert!(list.contains(&property), "{property} listed");

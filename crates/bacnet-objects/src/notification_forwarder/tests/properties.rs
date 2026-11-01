@@ -12,7 +12,7 @@ fn forwarder() -> NotificationForwarderObject {
 #[test]
 fn notification_forwarder_serves_every_required_row() {
     let nf = forwarder();
-    let required: Vec<_> = nf.required_properties().iter().copied().collect();
+    let required: Vec<_> = crate::test_rows::required(&nf.property_metadata()).to_vec();
     assert_eq!(
         required,
         [
@@ -69,7 +69,10 @@ fn notification_forwarder_serves_every_required_row() {
         PropertyValue::ApplicationData(Vec::new())
     );
     // Port_Filter is left out until the application configures it.
-    assert!(!nf.property_list().contains(&P::PORT_FILTER));
+    assert!(!crate::property_metadata::has_property(
+        &nf.property_metadata(),
+        P::PORT_FILTER
+    ));
     assert_refused(
         nf.read_property(P::PORT_FILTER, None).map(|_| ()),
         ErrorClass::PROPERTY,
@@ -233,7 +236,10 @@ fn notification_forwarder_port_filter_writes_change_only_enabled_members() {
             enabled: true,
         },
     ]));
-    assert!(nf.property_list().contains(&P::PORT_FILTER));
+    assert!(crate::property_metadata::has_property(
+        &nf.property_metadata(),
+        P::PORT_FILTER
+    ));
     assert_eq!(
         nf.read_property(P::PORT_FILTER, Some(0)).unwrap(),
         PropertyValue::Unsigned(2)

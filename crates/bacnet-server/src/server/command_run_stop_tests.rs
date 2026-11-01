@@ -324,9 +324,6 @@ impl BACnetObject for Panicking {
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         crate::test_rows::read_only(&[])
     }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
-    }
 }
 
 /// The objects plus BOOM-7 and CMD-2, whose list 1 writes BOOM-7, then AO-1

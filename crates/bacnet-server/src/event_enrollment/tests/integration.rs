@@ -302,9 +302,6 @@ impl BACnetObject for ReferenceValueObject {
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         self.inner.property_metadata()
     }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        self.inner.property_list()
-    }
 
     fn enrollment_eval_state_internal(
         &self,

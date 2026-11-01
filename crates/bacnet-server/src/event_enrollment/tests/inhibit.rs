@@ -165,9 +165,6 @@ impl BACnetObject for Variable {
             &[PropertyIdentifier::PRESENT_VALUE],
         )
     }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
-    }
 }
 
 /// A CHANGE_OF_VALUE enrollment (REAL increment 1.0) on a [`Variable`] at
@@ -371,9 +368,6 @@ impl BACnetObject for UnencodableParameters {
 
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         self.inner.property_metadata()
-    }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        self.inner.property_list()
     }
 
     fn enrollment_eval_state_internal(&self) -> Option<EventEnrollmentEvalState> {

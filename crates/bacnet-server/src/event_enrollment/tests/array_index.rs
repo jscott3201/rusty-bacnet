@@ -156,9 +156,6 @@ impl BACnetObject for IndexedReadProbe {
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         self.inner.property_metadata()
     }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        self.inner.property_list()
-    }
 
     fn is_array_property(&self, property: PropertyIdentifier) -> bool {
         self.inner.is_array_property(property)

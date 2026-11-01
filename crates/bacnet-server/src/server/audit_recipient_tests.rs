@@ -461,8 +461,15 @@ async fn recipient_active_metadata_rpm_and_property_list_follow_runtime_presence
         }
         let db = fixture.server.db.read().await;
         let object = db.get(&target).unwrap();
-        assert_eq!(object.property_list().contains(&property), active);
-        assert_eq!(object.required_properties().contains(&property), active);
+        assert_eq!(
+            bacnet_objects::property_metadata::has_property(&object.property_metadata(), property),
+            active
+        );
+        assert_eq!(
+            bacnet_objects::property_metadata::required_properties(&object.property_metadata())
+                .any(|required| required == property),
+            active
+        );
         assert_eq!(object.is_writable_property(property), active);
         if active {
             let metadata = object.property_metadata();

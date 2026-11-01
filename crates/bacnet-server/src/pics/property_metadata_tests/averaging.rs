@@ -51,7 +51,9 @@ fn pics_averaging_property_metadata_is_exact() {
             object.add_sample(20.0).unwrap();
             object.add_sample(30.0).unwrap();
         }
-        let required = object.required_properties();
+        let required: Vec<_> =
+            bacnet_objects::property_metadata::required_properties(&object.property_metadata())
+                .collect();
         let mut db = ObjectDatabase::new();
         db.add(Box::new(object)).unwrap();
         let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default())

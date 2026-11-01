@@ -104,8 +104,14 @@ mod tests {
         let metadata = object.property_metadata();
         assert!(matches!(metadata, Cow::Borrowed(_)));
         assert_eq!(metadata.len(), 11);
-        assert_eq!(object.property_list().as_ref(), all);
-        assert_eq!(object.required_properties().as_ref(), required);
+        assert_eq!(
+            crate::test_rows::listed(&object.property_metadata()),
+            crate::test_rows::listed_from(&all)
+        );
+        assert_eq!(
+            crate::test_rows::required(&object.property_metadata()),
+            required
+        );
         assert_eq!(
             metadata
                 .iter()
@@ -310,7 +316,10 @@ mod tests {
         assert_eq!(metadata[at - 1].property_identifier, P::ACTION);
         assert_eq!(metadata[at].conformance, Optional);
         assert_eq!(metadata[at].write_capability, ReadOnly);
-        assert!(object.property_list().contains(&P::ACTION_TEXT));
+        assert!(crate::property_metadata::has_property(
+            &object.property_metadata(),
+            P::ACTION_TEXT
+        ));
         assert!(object.is_array_property(P::ACTION_TEXT));
         assert!(!object.is_writable_property(P::ACTION_TEXT));
         for index in [None, Some(1)] {

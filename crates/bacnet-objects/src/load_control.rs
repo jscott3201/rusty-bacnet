@@ -243,10 +243,6 @@ impl BACnetObject for LoadControlObject {
         metadata::for_object(self)
     }
 
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
-    }
-
     /// Table 13-1 lists Load Control, so it takes SubscribeCOV; the shed
     /// rows it reports come from the trait default.
     fn supports_cov(&self) -> bool {

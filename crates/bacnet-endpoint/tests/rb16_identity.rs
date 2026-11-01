@@ -530,7 +530,10 @@ fn configured_port_both_database_builders_keep_capacity_separate_from_device() {
             PropertyIdentifier::IP_DNS_SERVER,
         ] {
             assert!(sc.read_property(p, None).is_err());
-            assert!(!sc.property_list().contains(&p));
+            assert!(!bacnet_objects::property_metadata::has_property(
+                &sc.property_metadata(),
+                p
+            ));
         }
     }
 }
@@ -645,12 +648,12 @@ fn identity_maps_its_segment_timeout_to_both_database_builders_and_full_server()
     }
     let identity = DeviceIdentity::new(42, 7).unwrap();
     let db = identity.build_database().unwrap();
-    assert!(
-        !db.get(&object_id(ObjectType::DEVICE, 42))
+    assert!(!bacnet_objects::property_metadata::has_property(
+        &db.get(&object_id(ObjectType::DEVICE, 42))
             .unwrap()
-            .property_list()
-            .contains(&PropertyIdentifier::APDU_SEGMENT_TIMEOUT)
-    );
+            .property_metadata(),
+        PropertyIdentifier::APDU_SEGMENT_TIMEOUT
+    ));
     let mut client = bacnet_client::client::ClientConfig {
         apdu_timeout_ms: 1234,
         ..Default::default()

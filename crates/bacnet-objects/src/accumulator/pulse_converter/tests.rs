@@ -146,7 +146,7 @@ fn pulse_converter_set_input_reference() {
 #[test]
 fn pulse_converter_property_list() {
     let pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
-    let list = pc.property_list();
+    let list = crate::test_rows::listed(&pc.property_metadata());
     assert!(list.contains(&PropertyIdentifier::PRESENT_VALUE));
     assert!(list.contains(&PropertyIdentifier::SCALE_FACTOR));
     assert!(list.contains(&PropertyIdentifier::ADJUST_VALUE));
@@ -692,8 +692,8 @@ fn pulse_converter_cov_reports_update_time() {
         pc.cov_reported_properties(),
         [Value(PropertyIdentifier::UPDATE_TIME)]
     );
-    assert!(
-        pc.property_list()
-            .contains(&PropertyIdentifier::UPDATE_TIME)
-    );
+    assert!(crate::property_metadata::has_property(
+        &pc.property_metadata(),
+        PropertyIdentifier::UPDATE_TIME
+    ));
 }

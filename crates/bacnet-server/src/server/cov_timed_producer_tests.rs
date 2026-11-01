@@ -486,9 +486,6 @@ impl bacnet_objects::traits::BACnetObject for WritablePoint {
             ],
         )
     }
-    fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
-        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
-    }
 }
 
 #[tokio::test(start_paused = true)]

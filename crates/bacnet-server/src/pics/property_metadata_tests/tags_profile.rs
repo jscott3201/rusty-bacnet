@@ -123,7 +123,13 @@ fn saved_tags_do_not_provision_rows_and_each_profile_row_remains_independent() {
             build!(BinaryLightingOutputObject),
         ] {
             for (bit, property) in [(1, P::TAGS), (2, P::PROFILE_LOCATION), (4, P::PROFILE_NAME)] {
-                assert_eq!(object.property_list().contains(&property), mask & bit != 0);
+                assert_eq!(
+                    bacnet_objects::property_metadata::has_property(
+                        &object.property_metadata(),
+                        property
+                    ),
+                    mask & bit != 0
+                );
                 let read = object.read_property(property, None);
                 if mask & bit == 0 {
                     assert!(
@@ -213,7 +219,13 @@ fn value_profile_masks_and_saved_empty_are_independent_of_present_value_mode() {
                 for (bit, property) in
                     [(1, P::TAGS), (2, P::PROFILE_LOCATION), (4, P::PROFILE_NAME)]
                 {
-                    assert_eq!(object.property_list().contains(&property), mask & bit != 0);
+                    assert_eq!(
+                        bacnet_objects::property_metadata::has_property(
+                            &object.property_metadata(),
+                            property
+                        ),
+                        mask & bit != 0
+                    );
                     let read = object.read_property(property, None);
                     if mask & bit == 0 {
                         assert!(
@@ -301,7 +313,13 @@ fn input_profile_masks_and_saved_empty_are_independent_of_out_of_service() {
                 for (bit, property) in
                     [(1, P::TAGS), (2, P::PROFILE_LOCATION), (4, P::PROFILE_NAME)]
                 {
-                    assert_eq!(object.property_list().contains(&property), mask & bit != 0);
+                    assert_eq!(
+                        bacnet_objects::property_metadata::has_property(
+                            &object.property_metadata(),
+                            property
+                        ),
+                        mask & bit != 0
+                    );
                     let read = object.read_property(property, None);
                     if mask & bit == 0 {
                         assert!(
@@ -389,7 +407,13 @@ fn output_profile_masks_and_saved_empty_are_independent_of_out_of_service() {
                 for (bit, property) in
                     [(1, P::TAGS), (2, P::PROFILE_LOCATION), (4, P::PROFILE_NAME)]
                 {
-                    assert_eq!(object.property_list().contains(&property), mask & bit != 0);
+                    assert_eq!(
+                        bacnet_objects::property_metadata::has_property(
+                            &object.property_metadata(),
+                            property
+                        ),
+                        mask & bit != 0
+                    );
                     let read = object.read_property(property, None);
                     if mask & bit == 0 {
                         assert!(

@@ -112,8 +112,14 @@ mod tests {
     fn assert_exact_sets(object: &dyn BACnetObject, all: &[P], required: &[P]) {
         let metadata = object.property_metadata();
         assert_eq!(metadata.len(), all.len() + 1);
-        assert_eq!(object.property_list().as_ref(), all);
-        assert_eq!(object.required_properties().as_ref(), required);
+        assert_eq!(
+            crate::test_rows::listed(&object.property_metadata()),
+            crate::test_rows::listed_from(all)
+        );
+        assert_eq!(
+            crate::test_rows::required(&object.property_metadata()),
+            required
+        );
         assert_eq!(
             metadata
                 .iter()

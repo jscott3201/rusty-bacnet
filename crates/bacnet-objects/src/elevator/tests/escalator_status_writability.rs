@@ -141,7 +141,10 @@ fn writable_predicate_matches_only_the_escalator_write_routes() {
         PropertyIdentifier::PASSENGER_ALARM,
     ];
 
-    for property in esc.property_list().iter().copied() {
+    for property in crate::test_rows::listed(&esc.property_metadata())
+        .iter()
+        .copied()
+    {
         assert_eq!(
             esc.is_writable_property(property),
             writable.contains(&property),

@@ -202,7 +202,7 @@ fn write_event_enable() {
 #[test]
 fn property_list_complete() {
     let ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
-    let props = ee.property_list();
+    let props = crate::test_rows::listed(&ee.property_metadata());
     assert!(props.contains(&PropertyIdentifier::EVENT_TYPE));
     assert!(props.contains(&PropertyIdentifier::NOTIFY_TYPE));
     assert!(props.contains(&PropertyIdentifier::EVENT_PARAMETERS));
@@ -583,9 +583,6 @@ fn set_event_state_internal_default_rejects() {
         }
         fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
             crate::test_rows::read_only(&[])
-        }
-        fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-            crate::property_metadata::property_list_from_metadata(&self.property_metadata())
         }
     }
 

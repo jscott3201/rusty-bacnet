@@ -117,8 +117,14 @@ mod tests {
         ];
         assert!(matches!(object.property_metadata(), Cow::Borrowed(_)));
         assert_eq!(object.property_metadata().len(), all.len() + 1);
-        assert_eq!(object.property_list().as_ref(), all);
-        assert_eq!(object.required_properties().as_ref(), required);
+        assert_eq!(
+            crate::test_rows::listed(&object.property_metadata()),
+            crate::test_rows::listed_from(&all)
+        );
+        assert_eq!(
+            crate::test_rows::required(&object.property_metadata()),
+            required
+        );
         assert!(object.supports_cov());
         for row in object.property_metadata().iter() {
             let cov = row.property_identifier == P::COV_INCREMENT;

@@ -12,7 +12,8 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::{calendar_metadata, date_list};
 use crate::clock::ClockReader;
-use crate::common::{self, read_property_list_property};
+use crate::common;
+use crate::property_metadata::read_property_list;
 use crate::traits::BACnetObject;
 
 /// BACnet Calendar object.
@@ -134,7 +135,7 @@ impl BACnetObject for CalendarObject {
             }
             p if p == PropertyIdentifier::DATE_LIST => Ok(date_list::read(&self.date_list)),
             p if p == PropertyIdentifier::PROPERTY_LIST => {
-                read_property_list_property(&self.property_list(), array_index)
+                read_property_list(&self.property_metadata(), array_index)
             }
             _ => Err(Error::protocol(
                 ErrorClass::PROPERTY,
@@ -173,10 +174,6 @@ impl BACnetObject for CalendarObject {
 
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
         calendar_metadata::for_object(self)
-    }
-
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
     fn calendar_state_internal(&self, day: SpecificDate) -> Option<bool> {

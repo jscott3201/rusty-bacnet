@@ -116,8 +116,7 @@ impl Fixture {
     /// Every readable property, and the armed deadline.
     fn snapshot(&self) -> (Vec<(P, PropertyValue)>, Option<Duration>) {
         (
-            self.timer
-                .property_list()
+            crate::test_rows::listed(&self.timer.property_metadata())
                 .iter()
                 .map(|&p| (p, self.read(p)))
                 .collect(),

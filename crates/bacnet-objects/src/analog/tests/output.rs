@@ -204,10 +204,10 @@ fn ao_description_read_write() {
 #[test]
 fn ao_description_in_property_list() {
     let ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
-    assert!(
-        ao.property_list()
-            .contains(&PropertyIdentifier::DESCRIPTION)
-    );
+    assert!(crate::property_metadata::has_property(
+        &ao.property_metadata(),
+        PropertyIdentifier::DESCRIPTION
+    ));
 }
 
 #[test]

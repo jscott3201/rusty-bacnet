@@ -223,7 +223,7 @@ fn lighting_output_lighting_properties() {
 #[test]
 fn lighting_output_property_list() {
     let obj = LightingOutputObject::new(1, "LO-1").unwrap();
-    let props = obj.property_list();
+    let props = crate::test_rows::listed(&obj.property_metadata());
     assert!(props.contains(&PropertyIdentifier::PRESENT_VALUE));
     assert!(props.contains(&PropertyIdentifier::TRACKING_VALUE));
     assert!(props.contains(&PropertyIdentifier::LIGHTING_COMMAND));
@@ -423,7 +423,7 @@ fn binary_lighting_output_priority_array_tracks_present_value_command() {
 #[test]
 fn binary_lighting_output_property_list() {
     let obj = BinaryLightingOutputObject::new(1, "BLO-1").unwrap();
-    let props = obj.property_list();
+    let props = crate::test_rows::listed(&obj.property_metadata());
     assert!(props.contains(&PropertyIdentifier::PRESENT_VALUE));
     assert!(props.contains(&PropertyIdentifier::BLINK_WARN_ENABLE));
     assert!(props.contains(&PropertyIdentifier::EGRESS_TIME));

@@ -113,7 +113,7 @@ fn rows_outside_the_property_tables_are_unknown() {
     for (mut object, rows) in undefined_rows() {
         let kind = object.object_identifier().object_type();
         let metadata = object.property_metadata().into_owned();
-        let list = object.property_list().into_owned();
+        let list = crate::test_rows::listed(&object.property_metadata());
         for &property in rows {
             let context = format!("{kind:?} {property:?}");
             assert!(!list.contains(&property), "{context} in Property_List");

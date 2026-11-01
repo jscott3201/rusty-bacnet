@@ -481,10 +481,6 @@ impl BACnetObject for AccessPointObject {
         super::metadata_topology::for_access_point_object(self)
     }
 
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
-    }
-
     /// Table 13-1 lists Access Point, so it takes SubscribeCOV; its report
     /// leads with Access_Event, as the point has no Present_Value.
     fn supports_cov(&self) -> bool {

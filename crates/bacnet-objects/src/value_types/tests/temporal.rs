@@ -300,7 +300,7 @@ fn date_pattern_value_object_type() {
 #[test]
 fn date_pattern_value_has_priority_array() {
     let obj = DatePatternValueObject::new(1, "DPV-1").unwrap();
-    let props = obj.property_list();
+    let props = crate::test_rows::listed(&obj.property_metadata());
     assert!(props.contains(&PropertyIdentifier::PRIORITY_ARRAY));
     assert!(props.contains(&PropertyIdentifier::RELINQUISH_DEFAULT));
 }
@@ -393,7 +393,7 @@ fn datetime_pattern_value_object_type() {
 #[test]
 fn datetime_pattern_value_has_priority_array() {
     let obj = DateTimePatternValueObject::new(1, "DTPV-1").unwrap();
-    let props = obj.property_list();
+    let props = crate::test_rows::listed(&obj.property_metadata());
     assert!(props.contains(&PropertyIdentifier::PRIORITY_ARRAY));
     assert!(props.contains(&PropertyIdentifier::RELINQUISH_DEFAULT));
 }

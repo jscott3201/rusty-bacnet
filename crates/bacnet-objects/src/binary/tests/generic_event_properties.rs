@@ -126,7 +126,7 @@ fn assert_event_properties_round_trip(object: &mut dyn BACnetObject, label: &str
             "{label}: {property:?} must read back what was written"
         );
         assert!(
-            object.property_list().contains(&property),
+            crate::property_metadata::has_property(&object.property_metadata(), property),
             "{label}: {property:?} must be advertised in Property_List"
         );
         assert!(
@@ -207,11 +207,10 @@ fn assert_event_properties_round_trip(object: &mut dyn BACnetObject, label: &str
         label,
     );
     assert!(!object.is_writable_property(PropertyIdentifier::ACKED_TRANSITIONS));
-    assert!(
-        object
-            .property_list()
-            .contains(&PropertyIdentifier::ACKED_TRANSITIONS)
-    );
+    assert!(crate::property_metadata::has_property(
+        &object.property_metadata(),
+        PropertyIdentifier::ACKED_TRANSITIONS
+    ));
 
     // Event_State is maintained by the detector, never assignable from the
     // network — a write arm would let a client fake an alarm state.
@@ -312,17 +311,15 @@ fn binary_alarm_value_round_trips_and_matches_pics() {
                 .unwrap(),
             PropertyValue::Enumerated(0)
         );
-        assert!(
-            object
-                .property_list()
-                .contains(&PropertyIdentifier::ALARM_VALUE)
-        );
+        assert!(crate::property_metadata::has_property(
+            &object.property_metadata(),
+            PropertyIdentifier::ALARM_VALUE
+        ));
         assert!(object.is_writable_property(PropertyIdentifier::ALARM_VALUE));
-        assert!(
-            !object
-                .property_list()
-                .contains(&PropertyIdentifier::ALARM_VALUES)
-        );
+        assert!(!crate::property_metadata::has_property(
+            &object.property_metadata(),
+            PropertyIdentifier::ALARM_VALUES
+        ));
         assert_protocol_error(
             object.write_property(
                 PropertyIdentifier::ALARM_VALUE,
@@ -399,7 +396,10 @@ fn binary_event_history_is_listed_readable_and_read_only() {
             (PropertyIdentifier::EVENT_TIME_STAMPS, &timestamps),
             (PropertyIdentifier::EVENT_MESSAGE_TEXTS, &messages),
         ] {
-            assert!(object.property_list().contains(&property), "{label}");
+            assert!(
+                crate::property_metadata::has_property(&object.property_metadata(), property),
+                "{label}"
+            );
             assert_eq!(object.read_property(property, None).unwrap(), *expected);
             assert_eq!(
                 object.read_property(property, Some(0)).unwrap(),

@@ -167,7 +167,7 @@ fn elevator_group_read_landing_calls() {
 #[test]
 fn elevator_group_property_list() {
     let eg = ElevatorGroupObject::new(1, "EG-1").unwrap();
-    let list = eg.property_list();
+    let list = crate::test_rows::listed(&eg.property_metadata());
     assert!(list.contains(&PropertyIdentifier::GROUP_ID));
     assert!(list.contains(&PropertyIdentifier::GROUP_MEMBERS));
     assert!(list.contains(&PropertyIdentifier::GROUP_MODE));
@@ -241,7 +241,7 @@ fn escalator_read_fault_signals() {
 #[test]
 fn escalator_property_list() {
     let esc = EscalatorObject::new(1, "ESC-1").unwrap();
-    let list = esc.property_list();
+    let list = crate::test_rows::listed(&esc.property_metadata());
     assert!(list.contains(&PropertyIdentifier::ESCALATOR_MODE));
     assert!(list.contains(&PropertyIdentifier::FAULT_SIGNALS));
     assert!(list.contains(&PropertyIdentifier::ENERGY_METER));
@@ -587,7 +587,7 @@ fn lift_read_energy_meter() {
 #[test]
 fn lift_property_list() {
     let lift = LiftObject::new(1, "LIFT-1", 5).unwrap();
-    let list = lift.property_list();
+    let list = crate::test_rows::listed(&lift.property_metadata());
     for property in [
         PropertyIdentifier::ELEVATOR_GROUP,
         PropertyIdentifier::GROUP_ID,

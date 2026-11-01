@@ -86,7 +86,10 @@ fn fault(point: &AccessPointObject) -> bool {
 fn access_point_serves_the_policy_arrays_once_the_application_sets_them() {
     let mut point = AccessPointObject::new(1, "AP-1").unwrap();
     for property in [LIST, NAMES] {
-        assert!(!point.property_list().contains(&property));
+        assert!(!crate::property_metadata::has_property(
+            &point.property_metadata(),
+            property
+        ));
         assert!(point.read_property(property, None).is_err());
         assert!(point.is_array_property(property));
     }
@@ -124,10 +127,13 @@ fn access_point_serves_the_policy_arrays_once_the_application_sets_them() {
         PropertyValue::CharacterString("card".into())
     );
     // Optional rows before Property_List, read-only over the network.
-    let list = point.property_list();
+    let list = crate::test_rows::listed(&point.property_metadata());
     assert_eq!(&list[list.len() - 2..], &[LIST, NAMES]);
     for property in [LIST, NAMES] {
-        assert!(!point.required_properties().contains(&property));
+        assert!(
+            !crate::property_metadata::required_properties(&point.property_metadata())
+                .any(|required| required == property)
+        );
         assert!(!point.is_writable_property(property));
     }
     // The first policy is valid and in effect.
@@ -390,7 +396,10 @@ fn access_point_caps_the_policy_count_while_it_serves_the_arrays() {
         point.set_authentication_policies(names(MAX_AUTHENTICATION_POLICIES + 1)),
         ErrorCode::VALUE_OUT_OF_RANGE,
     );
-    assert!(!point.property_list().contains(&LIST));
+    assert!(!crate::property_metadata::has_property(
+        &point.property_metadata(),
+        LIST
+    ));
     point
         .set_authentication_policies(names(MAX_AUTHENTICATION_POLICIES))
         .unwrap();

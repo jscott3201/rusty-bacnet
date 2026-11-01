@@ -142,9 +142,6 @@ impl BACnetObject for ForwardingPort {
     fn property_metadata(&self) -> std::borrow::Cow<'_, [PropertyMetadata]> {
         self.inner.property_metadata()
     }
-    fn property_list(&self) -> std::borrow::Cow<'static, [P]> {
-        self.inner.property_list()
-    }
 }
 #[test]
 fn registered_port_forwarding_wrapper_is_refused_before_callbacks() {

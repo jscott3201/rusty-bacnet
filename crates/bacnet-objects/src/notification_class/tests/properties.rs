@@ -120,7 +120,7 @@ fn write_notification_class_wrong_type() {
 #[test]
 fn property_list_contains_recipient_list() {
     let nc = NotificationClass::new(1, "NC-1").unwrap();
-    let props = nc.property_list();
+    let props = crate::test_rows::listed(&nc.property_metadata());
     assert!(props.contains(&PropertyIdentifier::NOTIFICATION_CLASS));
     assert!(props.contains(&PropertyIdentifier::PRIORITY));
     assert!(props.contains(&PropertyIdentifier::ACK_REQUIRED));

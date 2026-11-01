@@ -50,7 +50,7 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 
 use crate::command::{CommandRun, RunPlan, WriteFailure, next_generation};
 use crate::common::{self, read_identity_properties};
-use crate::property_metadata::{PropertyMetadata, property_list_from_metadata};
+use crate::property_metadata::PropertyMetadata;
 use crate::traits::BACnetObject;
 
 mod arrays;
@@ -448,10 +448,6 @@ impl BACnetObject for ChannelObject {
 
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         Cow::Borrowed(metadata::CHANNEL_PROPERTY_METADATA)
-    }
-
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        property_list_from_metadata(metadata::CHANNEL_PROPERTY_METADATA)
     }
 
     fn take_command_run_internal(&mut self) -> Option<CommandRun> {

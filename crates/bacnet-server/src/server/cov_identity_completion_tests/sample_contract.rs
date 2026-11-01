@@ -23,9 +23,6 @@ impl BACnetObject for Probe {
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         crate::test_rows::read_only(&[PropertyIdentifier::PRESENT_VALUE, SELECTED])
     }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
-    }
     fn supports_cov(&self) -> bool {
         true
     }

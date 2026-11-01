@@ -439,14 +439,15 @@ fn rpm_metadata_analog_required_optional_and_budgeted_bytes_agree() {
             if configuration & 4 != 0 {
                 expected_optional.push(P::MAX_PRES_VALUE);
             }
-            let all = object.property_list().into_owned();
+            let metadata = object.property_metadata().into_owned();
+            let ids = metadata.iter().map(|row| row.property_identifier);
+            let all: Vec<_> = ids.filter(|&p| p != P::PROPERTY_LIST).collect();
             // RPM lists the required rows in metadata order.
             let expected_required: Vec<_> = all
                 .iter()
                 .copied()
                 .filter(|p| requires.contains(p))
                 .collect();
-            let metadata = object.property_metadata().into_owned();
             let mut db = ObjectDatabase::new();
             db.add(object).unwrap();
 

@@ -236,7 +236,7 @@ fn fault_parameters_listed() {
 #[test]
 fn fault_properties_are_advertised_together() {
     let mut ee = EventEnrollmentObject::new(1, "EE-FP", EventType::CHANGE_OF_BITSTRING).unwrap();
-    let props = ee.property_list();
+    let props = crate::test_rows::listed(&ee.property_metadata());
     assert!(props.contains(&PropertyIdentifier::FAULT_TYPE));
     assert!(props.contains(&PropertyIdentifier::FAULT_PARAMETERS));
     assert!(!ee.is_writable_property(PropertyIdentifier::FAULT_TYPE));

@@ -45,7 +45,10 @@ fn elevator_group_has_no_status_flags_out_of_service_or_reliability() {
             PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw()),
         ),
     ] {
-        assert!(!group.property_list().contains(&property), "{property:?}");
+        assert!(
+            !crate::property_metadata::has_property(&group.property_metadata(), property),
+            "{property:?}"
+        );
         assert!(!group.is_writable_property(property), "{property:?}");
         assert_property_error(
             group.read_property(property, None),
@@ -67,8 +70,14 @@ fn elevator_group_machine_room_id_starts_as_the_no_number_reference() {
         group.read_property(MACHINE_ROOM_ID, None).unwrap(),
         PropertyValue::ObjectIdentifier(none)
     );
-    assert!(group.property_list().contains(&MACHINE_ROOM_ID));
-    assert!(group.required_properties().contains(&MACHINE_ROOM_ID));
+    assert!(crate::property_metadata::has_property(
+        &group.property_metadata(),
+        MACHINE_ROOM_ID
+    ));
+    assert!(
+        crate::property_metadata::required_properties(&group.property_metadata())
+            .any(|required| required == MACHINE_ROOM_ID)
+    );
 }
 
 #[test]

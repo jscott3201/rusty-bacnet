@@ -450,11 +450,6 @@ async fn priority_array_custom_object_write_policy_is_not_globally_restricted() 
         ) -> std::borrow::Cow<'_, [bacnet_objects::property_metadata::PropertyMetadata]> {
             crate::test_rows::rows(&[PA], &[PA])
         }
-        fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
-            bacnet_objects::property_metadata::property_list_from_metadata(
-                &self.property_metadata(),
-            )
-        }
         fn read_property(
             &self,
             _: PropertyIdentifier,

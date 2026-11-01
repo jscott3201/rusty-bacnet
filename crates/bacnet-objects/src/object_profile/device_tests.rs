@@ -130,7 +130,7 @@ fn device_eight_masks_compose_with_clock_segmentation_cov_and_audit_metadata() {
                         }
                         let before = object.property_metadata().into_owned();
                         let values = unrelated(&object);
-                        let list = object.property_list().into_owned();
+                        let list = crate::test_rows::listed(&object.property_metadata());
                         object.set_profile(optional(mask)).unwrap();
                         let metadata = object.property_metadata();
                         assert_eq!(
@@ -148,13 +148,18 @@ fn device_eight_masks_compose_with_clock_segmentation_cov_and_audit_metadata() {
                             .filter(|(bit, _)| mask & (1 << bit) != 0)
                             .map(|(_, p)| p)
                             .collect();
-                        assert_eq!(&object.property_list()[list.len()..], expected);
-                        assert!(!object.property_list().contains(&P::PROPERTY_LIST));
-                        assert!(
-                            !object
-                                .property_list()
-                                .contains(&P::DEPLOYED_PROFILE_LOCATION)
+                        assert_eq!(
+                            &crate::test_rows::listed(&object.property_metadata())[list.len()..],
+                            expected
                         );
+                        assert!(
+                            !crate::test_rows::listed(&object.property_metadata())
+                                .contains(&P::PROPERTY_LIST)
+                        );
+                        assert!(!crate::property_metadata::has_property(
+                            &object.property_metadata(),
+                            P::DEPLOYED_PROFILE_LOCATION
+                        ));
                         for (bit, p) in ROWS.into_iter().enumerate() {
                             let present = mask & (1 << bit) != 0;
                             let row = metadata.iter().find(|r| r.property_identifier == p);
@@ -247,7 +252,10 @@ fn device_saved_overrides_need_provisioning_and_invalid_replacement_preserves_st
             object.read_property(P::TAGS, None),
             ErrorCode::UNKNOWN_PROPERTY,
         );
-        assert!(!object.property_list().contains(&P::TAGS));
+        assert!(!crate::property_metadata::has_property(
+            &object.property_metadata(),
+            P::TAGS
+        ));
         object.set_profile(optional(7)).unwrap();
         let expected = saved
             .as_ref()

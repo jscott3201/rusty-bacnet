@@ -20,10 +20,10 @@ use bytes::BytesMut;
 
 use crate::clock::{ClockFrame, ClockReader, UNSPECIFIED_DATETIME};
 use crate::common::{
-    invalid_data_type_error, property_is_not_an_array_error, read_array,
-    read_property_list_property, value_out_of_range_error,
+    invalid_data_type_error, property_is_not_an_array_error, read_array, value_out_of_range_error,
 };
 use crate::object_profile::{ObjectProfile, ProfileState, TagsPersistence};
+use crate::property_metadata::read_property_list;
 use crate::traits::BACnetObject;
 
 mod audit_recipient;
@@ -656,7 +656,7 @@ impl BACnetObject for DeviceObject {
         }
 
         if property == PropertyIdentifier::PROPERTY_LIST {
-            return read_property_list_property(&self.property_list(), array_index);
+            return read_property_list(&self.property_metadata(), array_index);
         }
 
         if property == PropertyIdentifier::CONFIGURATION_FILES
@@ -801,10 +801,6 @@ impl BACnetObject for DeviceObject {
 
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
         metadata::for_object(self)
-    }
-
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
     /// Device is not deleteable at runtime (nor createable: its type has

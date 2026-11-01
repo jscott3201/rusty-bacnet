@@ -53,9 +53,6 @@ impl BACnetObject for Probe {
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         crate::test_rows::read_only(&[])
     }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
-    }
     fn file_storage_internal(&self) -> Option<&dyn FileStorage> {
         self.hook.then_some(self)
     }

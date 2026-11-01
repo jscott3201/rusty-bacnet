@@ -304,7 +304,10 @@ fn value_profiles_read_with_exact_wire_bytes() {
                         object.write_property(property, None, PropertyValue::Null, None),
                         ErrorCode::UNKNOWN_PROPERTY,
                     );
-                    assert!(!object.property_list().contains(&property));
+                    assert!(!bacnet_objects::property_metadata::has_property(
+                        &object.property_metadata(),
+                        property
+                    ));
                 }
                 object.set_profile(profile.clone()).unwrap();
                 Box::new(object) as Box<dyn bacnet_objects::traits::BACnetObject>
@@ -394,7 +397,10 @@ fn input_profiles_read_with_exact_wire_bytes_in_either_oos_state() {
                         object.write_property(property, None, PropertyValue::Null, None),
                         ErrorCode::UNKNOWN_PROPERTY,
                     );
-                    assert!(!object.property_list().contains(&property));
+                    assert!(!bacnet_objects::property_metadata::has_property(
+                        &object.property_metadata(),
+                        property
+                    ));
                 }
                 object.set_profile(profile.clone()).unwrap();
                 object
@@ -531,7 +537,10 @@ fn output_profiles_read_with_exact_wire_bytes_in_either_oos_state() {
                         object.write_property(property, None, PropertyValue::Null, None),
                         ErrorCode::UNKNOWN_PROPERTY,
                     );
-                    assert!(!object.property_list().contains(&property));
+                    assert!(!bacnet_objects::property_metadata::has_property(
+                        &object.property_metadata(),
+                        property
+                    ));
                 }
                 object.set_profile(profile.clone()).unwrap();
                 object
