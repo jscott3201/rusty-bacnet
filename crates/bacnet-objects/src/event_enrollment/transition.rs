@@ -70,20 +70,8 @@ pub(super) fn commit_reliability(
     Ok(())
 }
 
-macro_rules! impl_event_enrollment_transition_commit {
+macro_rules! impl_event_enrollment_reliability_commit {
     () => {
-        fn commit_event_transition_internal(
-            &mut self,
-            commit: EventTransitionCommit,
-        ) -> Result<(), EventTransitionCommitError> {
-            transition::commit_event_transition(
-                &mut self.event_state,
-                &mut self.acked_transitions,
-                &mut self.event_history,
-                commit,
-            )
-        }
-
         fn commit_event_enrollment_reliability_internal(
             &mut self,
             commit: $crate::event_enrollment::EventEnrollmentReliabilityCommit,
@@ -99,4 +87,4 @@ macro_rules! impl_event_enrollment_transition_commit {
     };
 }
 
-pub(super) use impl_event_enrollment_transition_commit;
+pub(super) use impl_event_enrollment_reliability_commit;

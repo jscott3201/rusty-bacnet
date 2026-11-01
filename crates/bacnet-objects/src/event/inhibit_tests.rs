@@ -3,6 +3,7 @@
 //! offnormal and normal transitions but not fault detection (Clause
 //! 13.2.2.1), and a configured text is what a transition stores.
 
+use crate::traits::EventReporting as _;
 use crate::traits::Timed;
 use bacnet_types::bitstring::LimitEnable;
 use bacnet_types::enums::{
@@ -155,16 +156,26 @@ fn the_change_of_state_and_command_failure_detectors_take_the_inhibit_too() {
     for object in [&mut bv as &mut dyn BACnetObject, &mut bo] {
         let name = object.object_name().to_owned();
         inhibit(object, true);
-        assert_eq!(object.evaluate_intrinsic_reporting(), None, "{name}");
+        assert_eq!(
+            object
+                .event_reporting_mut()
+                .and_then(|r| r.evaluate_intrinsic_reporting()),
+            None,
+            "{name}"
+        );
         inhibit(object, false);
-        let offnormal = object.evaluate_intrinsic_reporting();
+        let offnormal = object
+            .event_reporting_mut()
+            .and_then(|r| r.evaluate_intrinsic_reporting());
         assert_eq!(
             step(object, offnormal),
             Some(EventState::OFFNORMAL),
             "{name}"
         );
         inhibit(object, true);
-        let normal = object.evaluate_intrinsic_reporting();
+        let normal = object
+            .event_reporting_mut()
+            .and_then(|r| r.evaluate_intrinsic_reporting());
         assert_eq!(step(object, normal), Some(EventState::NORMAL), "{name}");
     }
 }
@@ -232,8 +243,7 @@ fn a_configured_text_is_the_message_a_transition_stores() {
         timestamp: BACnetTimeStamp::SequenceNumber(1),
         message_text: Some("server text".into()),
     };
-    ai.commit_event_transition_internal(commit(offnormal))
-        .unwrap();
+    ai.commit_event_transition(commit(offnormal)).unwrap();
     assert_eq!(
         ai.read_property(P::EVENT_MESSAGE_TEXTS, Some(1)).unwrap(),
         PropertyValue::CharacterString("Too hot".into())
@@ -242,7 +252,7 @@ fn a_configured_text_is_the_message_a_transition_stores() {
     write(&mut ai, P::TIME_DELAY_NORMAL, PropertyValue::Unsigned(0));
     ai.set_present_value(10.0);
     let normal = ai.evaluate_intrinsic_reporting().unwrap();
-    ai.commit_event_transition_internal(commit(normal)).unwrap();
+    ai.commit_event_transition(commit(normal)).unwrap();
     assert_eq!(
         ai.read_property(P::EVENT_MESSAGE_TEXTS, Some(3)).unwrap(),
         PropertyValue::CharacterString("server text".into())

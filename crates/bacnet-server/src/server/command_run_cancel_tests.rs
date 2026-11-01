@@ -221,6 +221,15 @@ impl bacnet_objects::traits::BACnetObject for PanicsAfterCommit {
         )
     }
 
+    fn event_reporting(&self) -> Option<&dyn bacnet_objects::traits::EventReporting> {
+        Some(self)
+    }
+    fn event_reporting_mut(&mut self) -> Option<&mut dyn bacnet_objects::traits::EventReporting> {
+        Some(self)
+    }
+}
+
+impl bacnet_objects::traits::EventReporting for PanicsAfterCommit {
     fn evaluate_intrinsic_reporting(&mut self) -> Option<bacnet_objects::event::TransitionOutcome> {
         panic!("AFTER-99 panics in the work after its write");
     }

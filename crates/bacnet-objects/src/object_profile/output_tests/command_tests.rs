@@ -263,7 +263,10 @@ fn profile_writes_preserve_command_failure_and_out_of_range_transitions() {
             EventType::COMMAND_FAILURE
         };
         for output in [&mut profiled, &mut control] {
-            let proposal = output.evaluate_intrinsic_reporting().unwrap();
+            let proposal = output
+                .event_reporting_mut()
+                .and_then(|r| r.evaluate_intrinsic_reporting())
+                .unwrap();
             assert_eq!(proposal.change.to, target);
             assert_eq!(proposal.event_type, algorithm);
             crate::event::commit_test_proposal(output.as_mut(), proposal);
@@ -286,7 +289,10 @@ fn profile_writes_preserve_command_failure_and_out_of_range_transitions() {
                     .write_property(P::FEEDBACK_VALUE, None, values(kind)[0].clone(), None)
                     .unwrap();
             }
-            let proposal = output.evaluate_intrinsic_reporting().unwrap();
+            let proposal = output
+                .event_reporting_mut()
+                .and_then(|r| r.evaluate_intrinsic_reporting())
+                .unwrap();
             assert_eq!(proposal.change.from, target);
             assert_eq!(proposal.change.to, EventState::NORMAL);
             crate::event::commit_test_proposal(output.as_mut(), proposal);

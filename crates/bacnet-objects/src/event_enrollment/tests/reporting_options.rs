@@ -7,6 +7,7 @@ use super::super::*;
 use crate::binary::BinaryValueObject;
 use crate::database::ObjectDatabase;
 use crate::event::{EventStateChange, EventTransition};
+use crate::traits::EventReporting as _;
 use bacnet_encoding::constructed::encode_object_property_reference;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::BinaryPV;
@@ -43,7 +44,7 @@ fn code(result: Result<(), Error>) -> ErrorCode {
 }
 
 fn commit(ee: &mut EventEnrollmentObject, from: EventState, to: EventState) {
-    ee.commit_event_transition_internal(EventTransitionCommit {
+    ee.commit_event_transition(EventTransitionCommit {
         coordinate: EventTransition::for_target_state(to),
         change: EventStateChange { from, to },
         ack_required: false,

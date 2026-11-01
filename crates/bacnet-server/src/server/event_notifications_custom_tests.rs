@@ -128,6 +128,16 @@ impl BACnetObject for CustomProposal {
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         crate::test_rows::read_only(&[])
     }
+
+    fn event_reporting(&self) -> Option<&dyn bacnet_objects::traits::EventReporting> {
+        Some(self)
+    }
+    fn event_reporting_mut(&mut self) -> Option<&mut dyn bacnet_objects::traits::EventReporting> {
+        Some(self)
+    }
+}
+
+impl bacnet_objects::traits::EventReporting for CustomProposal {
     fn evaluate_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
         if self.delay == 0 {
             return self.proposal();
@@ -146,7 +156,7 @@ impl BACnetObject for CustomProposal {
             None
         }
     }
-    fn commit_event_transition_internal(
+    fn commit_event_transition(
         &mut self,
         commit: EventTransitionCommit,
     ) -> Result<(), EventTransitionCommitError> {
@@ -203,6 +213,16 @@ impl BACnetObject for UnsupportedProposal {
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         self.0.property_metadata()
     }
+
+    fn event_reporting(&self) -> Option<&dyn bacnet_objects::traits::EventReporting> {
+        Some(self)
+    }
+    fn event_reporting_mut(&mut self) -> Option<&mut dyn bacnet_objects::traits::EventReporting> {
+        Some(self)
+    }
+}
+
+impl bacnet_objects::traits::EventReporting for UnsupportedProposal {
     fn evaluate_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
         self.0.evaluate_intrinsic_reporting()
     }
@@ -351,7 +371,8 @@ async fn unsupported_custom_proposal_runtime_is_silent_unchanged_and_retryable()
             .await
             .get_mut(&oid())
             .unwrap()
-            .evaluate_intrinsic_reporting()
+            .event_reporting_mut()
+            .and_then(|r| r.evaluate_intrinsic_reporting())
             .unwrap();
         let sent = broadcasts_from_per_write_path(&db, DccState::Enable).await;
         assert!(
@@ -365,7 +386,8 @@ async fn unsupported_custom_proposal_runtime_is_silent_unchanged_and_retryable()
             guard
                 .get_mut(&oid())
                 .unwrap()
-                .evaluate_intrinsic_reporting(),
+                .event_reporting_mut()
+                .and_then(|r| r.evaluate_intrinsic_reporting()),
             Some(proposal)
         );
         assert!(commits.lock().unwrap().is_empty());
@@ -429,7 +451,8 @@ async fn delayed_runtime(fail_first: bool, unsupported: bool) {
     assert!(
         db.get_mut(&oid())
             .unwrap()
-            .evaluate_intrinsic_reporting()
+            .event_reporting_mut()
+            .and_then(|r| r.evaluate_intrinsic_reporting())
             .is_none()
     );
     assert_eq!(snapshot(&db), before);
@@ -460,7 +483,8 @@ async fn delayed_runtime(fail_first: bool, unsupported: bool) {
                 .await
                 .get_mut(&oid())
                 .unwrap()
-                .tick_intrinsic_reporting()
+                .event_reporting_mut()
+                .and_then(|r| r.tick_intrinsic_reporting())
                 .unwrap();
             assert_eq!(proposal.change.from, EventState::NORMAL);
             assert_eq!(proposal.change.to, EventState::HIGH_LIMIT);

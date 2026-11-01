@@ -1,0 +1,165 @@
+//! The event-reporting capability: intrinsic reporting's proposals and
+//! commits, alarm acknowledgment and Event_Algorithm_Inhibit_Ref following.
+
+use bacnet_types::constructed::BACnetObjectPropertyReference;
+use bacnet_types::enums::{ErrorClass, ErrorCode, EventState};
+use bacnet_types::error::Error;
+use bacnet_types::primitives::BACnetTimeStamp;
+
+use crate::event::{
+    EnrollmentSummaryCapability, EventStateChange, EventTransitionCommit,
+    EventTransitionCommitError, TransitionOutcome,
+};
+
+/// OBJECT / NO_ALARM_CONFIGURED: what an object answers for an
+/// acknowledgment it can't take, such as one with event detection disabled,
+/// and what a host answers for an object that lends no [`EventReporting`].
+pub fn no_alarm_configured() -> Error {
+    Error::protocol(ErrorClass::OBJECT, ErrorCode::NO_ALARM_CONFIGURED)
+}
+
+/// An object that reports events: an intrinsic reporter, an Event or Alert
+/// Enrollment, or a log that reports BUFFER_READY.
+///
+/// The object returns itself from
+/// [`BACnetObject::event_reporting_mut`](crate::traits::BACnetObject::event_reporting_mut),
+/// and from [`event_reporting`](crate::traits::BACnetObject::event_reporting)
+/// for the queries a host makes under a shared database guard, such as
+/// GetEnrollmentSummary. An object that lends one lends the other.
+///
+/// Every method has a default that opts out, so an object overrides only
+/// what it models. Proposals and commits are separate steps: an evaluation
+/// only proposes a transition, and the object's event properties change
+/// when the host commits it through
+/// [`commit_event_transition`](Self::commit_event_transition). The bundled
+/// server runs the evaluation after a write and once a second, and commits
+/// and distributes each proposal while it holds the database's write guard.
+pub trait EventReporting {
+    /// Evaluate intrinsic reporting after a Present_Value change.
+    ///
+    /// This is the per-write entry point: it seeds (or cancels) a pending
+    /// delayed transition and fires immediately only when `Time_Delay == 0`.
+    /// It never advances the `Time_Delay` countdown, so repeated writes of
+    /// the same value don't shorten the delay: the countdown, counted in
+    /// seconds (Clause 13.3), advances once per elapsed second through
+    /// [`tick_intrinsic_reporting`](Self::tick_intrinsic_reporting).
+    ///
+    /// Returns `Some(TransitionOutcome)` whenever a transition is ready to be
+    /// committed, or `None` when none is (no change, a delay seeded, or no
+    /// intrinsic reporting, the default). A cleared `Event_Enable` bit sets
+    /// the outcome's `distribute` flag to false rather than withholding the
+    /// transition. Implementations must leave `Event_State`,
+    /// `Acked_Transitions`, event history and fire-ready detector state
+    /// unchanged until [`commit_event_transition`](Self::commit_event_transition)
+    /// succeeds. Clause 13.2.2.1.4's transition actions run either way, and
+    /// `Event_Enable` disables only external distribution, downstream in the
+    /// notification-distribution process (Clause 13.2.5).
+    fn evaluate_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
+        None
+    }
+
+    /// Advance the `Time_Delay` countdown for a pending transition.
+    ///
+    /// Called by the server's one-second intrinsic-reporting task. Fires the
+    /// pending transition when its delay elapses this tick, cancels it if the
+    /// triggering condition reverted, and returns `Some(TransitionOutcome)`
+    /// when a transition is ready. A fire-ready proposal must remain
+    /// retryable until the commit succeeds. As with
+    /// [`evaluate_intrinsic_reporting`](Self::evaluate_intrinsic_reporting),
+    /// `Event_Enable` is reported via `distribute`, not by returning `None`.
+    /// Objects without a delayed transition return `None`, the default.
+    fn tick_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
+        None
+    }
+
+    /// Atomically commit all object-owned state for one event transition.
+    ///
+    /// The caller supplies an exact state change, its transition coordinate,
+    /// the resolved Notification Class `Ack_Required` value, a typed
+    /// timestamp, and an optional message. Implementations must validate the
+    /// coordinate and source state before changing `Event_State`,
+    /// `Acked_Transitions`, `Event_Time_Stamps`, or stored message state, and
+    /// must leave every value unchanged on error. A successful
+    /// implementation also finalizes the detector's pending and fault-edge
+    /// state; a failed commit leaves that state retryable.
+    ///
+    /// This channel is deliberately separate from network property writes
+    /// and notification distribution. The default fails closed with
+    /// [`EventTransitionCommitError::Unsupported`], so an object takes part
+    /// only once it implements this contract; it owns and commits its state
+    /// directly, with no built-in commit kernel required. Both server
+    /// intrinsic paths require success before distributing a notification.
+    fn commit_event_transition(
+        &mut self,
+        _commit: EventTransitionCommit,
+    ) -> Result<(), EventTransitionCommitError> {
+        Err(EventTransitionCommitError::Unsupported)
+    }
+
+    /// Acknowledge the committed transition an AcknowledgeAlarm request
+    /// names by its event state and its timestamp, setting that
+    /// transition's `Acked_Transitions` bit.
+    ///
+    /// Returns the transition's exact from and to states when the object
+    /// keeps them, for the server's acknowledgment notification, or
+    /// `Ok(None)` when it doesn't; either way the acknowledgment was taken.
+    /// A request that matches no committed transition fails with the
+    /// service error it earns (INVALID_EVENT_STATE or INVALID_TIME_STAMP),
+    /// and an object that can't take acknowledgments, the default, with
+    /// [`no_alarm_configured`]. Implementations leave `Acked_Transitions`
+    /// unchanged on error.
+    fn acknowledge_alarm(
+        &mut self,
+        _event_state: EventState,
+        _timestamp: &BACnetTimeStamp,
+    ) -> Result<Option<EventStateChange>, Error> {
+        Err(no_alarm_configured())
+    }
+
+    /// This object's GetEnrollmentSummary event capability: its one event
+    /// algorithm and the coordinate of its latest commit.
+    ///
+    /// The default opts the object out of the summary and of acknowledgment
+    /// notifications. Implementations opt in only when they own an actual
+    /// configured or implied event algorithm and shared committed-transition
+    /// history. Not public API yet (#2179).
+    #[doc(hidden)]
+    fn enrollment_summary_capability(&self) -> Option<EnrollmentSummaryCapability> {
+        None
+    }
+
+    /// The local property this object's Event_Algorithm_Inhibit follows, its
+    /// Event_Algorithm_Inhibit_Ref (#1329); `None` while it holds none, and
+    /// for an object without one, the default.
+    ///
+    /// The database reads the property and hands the value over through
+    /// [`follow_event_algorithm_inhibit`](Self::follow_event_algorithm_inhibit);
+    /// see [`ObjectDatabase::follow_event_algorithm_inhibit`](crate::database::ObjectDatabase::follow_event_algorithm_inhibit).
+    fn event_algorithm_inhibit_reference(&self) -> Option<BACnetObjectPropertyReference> {
+        None
+    }
+
+    /// Take the value the database read from the property
+    /// [`event_algorithm_inhibit_reference`](Self::event_algorithm_inhibit_reference)
+    /// names as Event_Algorithm_Inhibit; returns whether it changed. The
+    /// default follows nothing.
+    fn follow_event_algorithm_inhibit(&mut self, _inhibit: bool) -> bool {
+        false
+    }
+}
+
+/// The two accessors of an object that lends itself as its
+/// [`EventReporting`], for inside its `BACnetObject` impl.
+macro_rules! lend_event_reporting {
+    () => {
+        fn event_reporting(&self) -> Option<&dyn $crate::traits::EventReporting> {
+            Some(self)
+        }
+
+        fn event_reporting_mut(&mut self) -> Option<&mut dyn $crate::traits::EventReporting> {
+            Some(self)
+        }
+    };
+}
+
+pub(crate) use lend_event_reporting;

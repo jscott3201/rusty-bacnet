@@ -547,8 +547,9 @@ pub(super) fn apply_updates_for_delivery(
         };
         let commit_result = db
             .get_mut(&oid)
-            .map_or(Err(EventTransitionCommitError::Unsupported), |object| {
-                object.commit_event_transition_internal(commit)
+            .and_then(|object| object.event_reporting_mut())
+            .map_or(Err(EventTransitionCommitError::Unsupported), |reporting| {
+                reporting.commit_event_transition(commit)
             });
 
         if commit_result.is_err() {

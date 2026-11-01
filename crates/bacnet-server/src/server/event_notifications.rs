@@ -10,7 +10,9 @@ use super::event_timestamp::{
 };
 use super::*;
 use bacnet_encoding::primitives::decode_timestamp_choice;
-use bacnet_objects::event::{EventTransition, EventTransitionCommit, TransitionOutcome};
+use bacnet_objects::event::{
+    EventTransition, EventTransitionCommit, EventTransitionCommitError, TransitionOutcome,
+};
 use bacnet_objects::traits::BACnetObject;
 
 use crate::event_enrollment::{CommittedEventEnrollmentDelivery, CommittedEventEnrollmentResult};
@@ -149,7 +151,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             message_text: Some(message_text),
         };
 
-        if let Err(error) = db.get_mut(oid)?.commit_event_transition_internal(commit) {
+        let committed = db
+            .get_mut(oid)?
+            .event_reporting_mut()
+            .map_or(Err(EventTransitionCommitError::Unsupported), |reporting| {
+                reporting.commit_event_transition(commit)
+            });
+        if let Err(error) = committed {
             debug!(%oid, ?error, "Intrinsic transition commit rejected");
             return None;
         }
@@ -221,7 +229,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             db.follow_event_algorithm_inhibit(oid);
             let outcome = db
                 .get_mut(oid)
-                .and_then(|object| object.evaluate_intrinsic_reporting());
+                .and_then(|object| object.event_reporting_mut())
+                .and_then(|reporting| reporting.evaluate_intrinsic_reporting());
             let resolved = outcome
                 .and_then(|outcome| Self::commit_intrinsic_transition(&mut db, oid, outcome));
             // A committed transition changes Status_Flags: capture it at its

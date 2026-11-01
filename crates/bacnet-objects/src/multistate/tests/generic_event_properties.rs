@@ -6,6 +6,7 @@
 //! `multistate/mod.rs` and already holds `objects.rs` and `state_text.rs`.
 
 use super::super::*;
+use crate::traits::EventReporting as _;
 use bacnet_encoding::primitives::encode_timestamp_choice;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{ErrorClass, ErrorCode, EventState};

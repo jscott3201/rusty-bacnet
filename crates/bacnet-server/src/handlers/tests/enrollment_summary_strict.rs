@@ -1,5 +1,6 @@
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::event::{EventStateChange, EventTransition, EventTransitionCommit};
+use bacnet_objects::traits::EventReporting as _;
 use bacnet_services::enrollment_summary::GetEnrollmentSummaryRequest;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{AcknowledgmentFilter, EngineeringUnits, EventType};
@@ -44,7 +45,7 @@ fn intrinsic_rejected_detection_write_preserves_summary_transition_coordinate() 
         )
         .unwrap();
     object
-        .commit_event_transition_internal(EventTransitionCommit {
+        .commit_event_transition(EventTransitionCommit {
             change: EventStateChange {
                 from: EventState::NORMAL,
                 to: EventState::HIGH_LIMIT,
@@ -78,7 +79,7 @@ fn intrinsic_rejected_detection_write_preserves_summary_transition_coordinate() 
     );
     assert_eq!(
         object
-            .enrollment_summary_capability_internal()
+            .enrollment_summary_capability()
             .unwrap()
             .last_transition,
         Some(EventTransition::ToOffnormal)
@@ -121,7 +122,7 @@ fn intrinsic_rejected_detection_write_preserves_summary_transition_coordinate() 
     );
     assert_eq!(
         object
-            .enrollment_summary_capability_internal()
+            .enrollment_summary_capability()
             .unwrap()
             .last_transition,
         Some(EventTransition::ToOffnormal)

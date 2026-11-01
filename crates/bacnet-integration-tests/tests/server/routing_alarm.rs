@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_objects::traits::EventReporting as _;
 
 // ---------------------------------------------------------------------------
 // IAm routing tests (Clause 16.10)
@@ -301,7 +302,7 @@ async fn make_acknowledge_alarm_server() -> BACnetServer<BipTransport> {
 
     let mut db = ObjectDatabase::new();
     let mut ai = AnalogInputObject::new(1, "Zone Temp", EngineeringUnits::DEGREES_CELSIUS).unwrap();
-    ai.commit_event_transition_internal(EventTransitionCommit {
+    ai.commit_event_transition(EventTransitionCommit {
         change: EventStateChange {
             from: EventState::NORMAL,
             to: EventState::HIGH_LIMIT,

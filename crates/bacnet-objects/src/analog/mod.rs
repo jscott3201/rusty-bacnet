@@ -3,12 +3,14 @@
 //! Per ASHRAE 135-2020 Clauses 12.2 (AI), 12.3 (AO), and 12.4 (AV).
 
 use alloc::borrow::Cow;
-use bacnet_types::enums::{
-    EngineeringUnits, ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier,
-    Reliability,
-};
+use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue, StatusFlags};
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
+#[cfg(test)]
+use bacnet_types::{
+    enums::{ErrorClass, ErrorCode, EventState},
+    primitives::BACnetTimeStamp,
+};
 
 use crate::common::{self, read_common_properties};
 use crate::event::{OutOfRangeDetector, history::EventHistory};

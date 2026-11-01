@@ -276,7 +276,10 @@ fn buffer_ready_counts_from_the_restored_count() {
         log.restore(1_000, samples(1..4)).unwrap();
         // The jump from 0 to 1,000 is no collection: nothing is due.
         assert!(
-            log.object_mut().evaluate_intrinsic_reporting().is_none(),
+            log.object_mut()
+                .event_reporting_mut()
+                .and_then(|r| r.evaluate_intrinsic_reporting())
+                .is_none(),
             "{kind:?}"
         );
         assert_eq!(
@@ -290,10 +293,18 @@ fn buffer_ready_counts_from_the_restored_count() {
             "{kind:?}"
         );
         log.add_record(ordinary(5, 5)).unwrap();
-        assert!(log.object_mut().evaluate_intrinsic_reporting().is_none());
+        assert!(
+            log.object_mut()
+                .event_reporting_mut()
+                .and_then(|r| r.evaluate_intrinsic_reporting())
+                .is_none()
+        );
         log.add_record(ordinary(6, 6)).unwrap();
         assert!(
-            log.object_mut().evaluate_intrinsic_reporting().is_some(),
+            log.object_mut()
+                .event_reporting_mut()
+                .and_then(|r| r.evaluate_intrinsic_reporting())
+                .is_some(),
             "{kind:?}"
         );
     }

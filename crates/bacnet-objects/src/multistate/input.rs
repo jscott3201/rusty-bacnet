@@ -183,32 +183,7 @@ impl BACnetObject for MultiStateInputObject {
         true
     }
 
-    crate::event::impl_builtin_intrinsic_reporting!(
-        event_detector,
-        event_history,
-        [present_value],
-        reliability,
-        event_detection_enable,
-        ChangeOfStateDetector::ALGORITHM
-    );
-
-    fn acknowledge_alarm_correlated_internal(
-        &mut self,
-        event_state: EventState,
-        timestamp: &BACnetTimeStamp,
-    ) -> Result<(), Error> {
-        if !self.event_detection_enable {
-            return Err(Error::protocol(
-                ErrorClass::OBJECT,
-                ErrorCode::NO_ALARM_CONFIGURED,
-            ));
-        }
-        self.event_history.acknowledge_correlated(
-            &mut self.event_detector.acked_transitions,
-            event_state,
-            timestamp,
-        )
-    }
+    crate::traits::lend_event_reporting!();
 
     fn read_property(
         &self,
@@ -433,6 +408,16 @@ impl BACnetObject for MultiStateInputObject {
     }
 }
 
+crate::event::impl_builtin_intrinsic_reporting!(
+    MultiStateInputObject,
+    event_detector,
+    event_history,
+    [present_value],
+    reliability,
+    event_detection_enable,
+    ChangeOfStateDetector::ALGORITHM
+);
+
 /// The Present_Value the application supplies.
 impl crate::traits::LocalInput for MultiStateInputObject {
     fn apply_local_input(&mut self, input: crate::traits::LocalInputValue) -> Result<(), Error> {
@@ -450,6 +435,7 @@ impl crate::traits::LocalInput for MultiStateInputObject {
 #[cfg(test)]
 mod detection_enable_tests {
     use super::*;
+    use crate::traits::EventReporting as _;
 
     #[test]
     fn msi_detection_enable_resets_and_gates_intrinsic_reporting() {

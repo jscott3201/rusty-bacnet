@@ -451,7 +451,8 @@ mod tests {
             let proposal = db
                 .get_mut(&oid)
                 .unwrap()
-                .evaluate_intrinsic_reporting()
+                .event_reporting_mut()
+                .and_then(|r| r.evaluate_intrinsic_reporting())
                 .expect("range Reliability must be observed as an intrinsic fault");
             assert_eq!(proposal.change.from, EventState::NORMAL);
             assert_eq!(proposal.change.to, EventState::FAULT);

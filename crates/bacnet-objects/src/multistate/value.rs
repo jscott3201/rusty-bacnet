@@ -283,32 +283,7 @@ impl BACnetObject for MultiStateValueObject {
         true
     }
 
-    crate::event::impl_builtin_intrinsic_reporting!(
-        event_detector,
-        event_history,
-        [present_value],
-        reliability,
-        event_detection_enable,
-        ChangeOfStateDetector::ALGORITHM
-    );
-
-    fn acknowledge_alarm_correlated_internal(
-        &mut self,
-        event_state: EventState,
-        timestamp: &BACnetTimeStamp,
-    ) -> Result<(), Error> {
-        if !self.event_detection_enable {
-            return Err(Error::protocol(
-                ErrorClass::OBJECT,
-                ErrorCode::NO_ALARM_CONFIGURED,
-            ));
-        }
-        self.event_history.acknowledge_correlated(
-            &mut self.event_detector.acked_transitions,
-            event_state,
-            timestamp,
-        )
-    }
+    crate::traits::lend_event_reporting!();
 
     fn read_property(
         &self,
@@ -623,6 +598,16 @@ impl BACnetObject for MultiStateValueObject {
     }
 }
 
+crate::event::impl_builtin_intrinsic_reporting!(
+    MultiStateValueObject,
+    event_detector,
+    event_history,
+    [present_value],
+    reliability,
+    event_detection_enable,
+    ChangeOfStateDetector::ALGORITHM
+);
+
 /// The Present_Value the application supplies while it isn't commandable,
 /// published as Value_Source from `origin` when the object tracks its
 /// source (#1552).
@@ -660,6 +645,7 @@ impl MultiStateValueObject {
 #[cfg(test)]
 mod detection_enable_tests {
     use super::*;
+    use crate::traits::EventReporting as _;
 
     #[test]
     fn msv_detection_enable_resets_and_gates_intrinsic_reporting() {

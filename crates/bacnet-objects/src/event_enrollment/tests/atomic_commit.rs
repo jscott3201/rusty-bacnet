@@ -2,6 +2,7 @@ use super::super::*;
 use crate::event::{
     EventStateChange, EventTransition, EventTransitionCommit, EventTransitionCommitError,
 };
+use crate::traits::EventReporting as _;
 use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_types::primitives::BACnetTimeStamp;
 
@@ -37,7 +38,7 @@ fn stock_enrollment_atomically_commits_state_ack_and_exact_history_coordinate() 
         EventEnrollmentObject::new(1, "EE-atomic", EventType::CHANGE_OF_BITSTRING).unwrap();
 
     object
-        .commit_event_transition_internal(EventTransitionCommit {
+        .commit_event_transition(EventTransitionCommit {
             change: EventStateChange {
                 from: EventState::NORMAL,
                 to: EventState::HIGH_LIMIT,
@@ -79,7 +80,7 @@ fn stock_enrollment_atomically_commits_state_ack_and_exact_history_coordinate() 
     );
 
     object
-        .commit_event_transition_internal(EventTransitionCommit {
+        .commit_event_transition(EventTransitionCommit {
             change: EventStateChange {
                 from: EventState::HIGH_LIMIT,
                 to: EventState::HIGH_LIMIT,
@@ -120,7 +121,7 @@ fn rejected_stock_commit_changes_none_of_the_three_properties() {
     let before = snapshot(&object);
 
     assert_eq!(
-        object.commit_event_transition_internal(EventTransitionCommit {
+        object.commit_event_transition(EventTransitionCommit {
             change: EventStateChange {
                 from: EventState::NORMAL,
                 to: EventState::HIGH_LIMIT,

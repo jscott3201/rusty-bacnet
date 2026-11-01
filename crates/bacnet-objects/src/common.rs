@@ -727,7 +727,7 @@ macro_rules! write_generic_event_properties {
                 // AcknowledgeAlarm or a local means — never by property write.
                 //
                 // This denial predates the generic/analog split and must survive it. The
-                // service path (`BACnetObject::acknowledge_alarm`) deliberately ORs the
+                // service path (`EventReporting::acknowledge_alarm`) deliberately ORs the
                 // acknowledged bit in; a property write would assign, so it could both
                 // fabricate an acknowledgment and erase one. GetAlarmSummary and
                 // GetEventInformation read this field straight off the object, so an

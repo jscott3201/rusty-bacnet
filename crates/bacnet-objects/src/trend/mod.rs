@@ -553,12 +553,18 @@ impl BACnetObject for TrendLogObject {
         self.log_enable && self.window.is_open()
     }
 
-    impl_buffer_ready_reporting!(reporting, log_buffer);
+    crate::traits::lend_event_reporting!();
+
+    fn buffer_ready_report_internal(&self) -> Option<crate::log_reporting::BufferReadyReport> {
+        self.reporting.report()
+    }
 
     fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
         Some(self)
     }
 }
+
+impl_buffer_ready_reporting!(TrendLogObject, reporting, log_buffer);
 
 impl crate::traits::Timed for TrendLogObject {
     fn bind_clocks(&mut self, clocks: &crate::traits::Clocks) {

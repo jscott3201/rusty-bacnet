@@ -110,7 +110,16 @@ impl BACnetObject for DisabledAlarmingObject {
         crate::test_rows::read_only(&served)
     }
 
-    fn enrollment_summary_capability_internal(
+    fn event_reporting(&self) -> Option<&dyn bacnet_objects::traits::EventReporting> {
+        Some(self)
+    }
+    fn event_reporting_mut(&mut self) -> Option<&mut dyn bacnet_objects::traits::EventReporting> {
+        Some(self)
+    }
+}
+
+impl bacnet_objects::traits::EventReporting for DisabledAlarmingObject {
+    fn enrollment_summary_capability(
         &self,
     ) -> Option<bacnet_objects::event::EnrollmentSummaryCapability> {
         Some(bacnet_objects::event::EnrollmentSummaryCapability {

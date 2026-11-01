@@ -7,6 +7,7 @@
 //! implying a citation exists.
 
 use super::*;
+use crate::traits::EventReporting as _;
 
 const NO_FAULT: Reliability = Reliability::NO_FAULT_DETECTED;
 const OVER_RANGE: Reliability = Reliability::OVER_RANGE;

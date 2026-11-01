@@ -159,7 +159,10 @@ fn an_enumerated_one_inhibits_only_as_a_binary_pv_active() {
             None,
         )
         .unwrap();
-    let fault = input.evaluate_intrinsic_reporting().expect("into FAULT");
+    let fault = input
+        .event_reporting_mut()
+        .and_then(|r| r.evaluate_intrinsic_reporting())
+        .expect("into FAULT");
     crate::event::commit_test_proposal(input, fault);
     for property in [P::RELIABILITY, P::EVENT_STATE] {
         assert_eq!(

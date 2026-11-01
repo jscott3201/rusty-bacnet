@@ -59,7 +59,7 @@ fn commit(
         .unwrap();
 }
 
-fn assert_service_error(result: Result<(), Error>, expected: ErrorCode) {
+fn assert_service_error<T>(result: Result<T, Error>, expected: ErrorCode) {
     assert!(matches!(
         result,
         Err(Error::Remote(RemoteError::Error { class, code }))
@@ -164,7 +164,7 @@ fn request_side_offnormal_wildcard_matches_every_residual_offnormal_state() {
         commit(&mut state, &mut acked, &mut history, stored, sequence(9));
 
         let detailed = history
-            .acknowledge_correlated_detailed(&mut acked, EventState::OFFNORMAL, &sequence(9))
+            .acknowledge_correlated(&mut acked, EventState::OFFNORMAL, &sequence(9))
             .unwrap()
             .expect("committed transitions retain their exact From State");
         assert_eq!(acked, ALL, "stored state {stored:?}");
@@ -187,7 +187,7 @@ fn missing_optional_from_state_preserves_a_correlated_acknowledgment() {
     let mut acked = FAULT | NORMAL;
 
     let detailed = history
-        .acknowledge_correlated_detailed(&mut acked, EventState::OFFNORMAL, &sequence(9))
+        .acknowledge_correlated(&mut acked, EventState::OFFNORMAL, &sequence(9))
         .unwrap();
 
     assert_eq!(detailed, None);

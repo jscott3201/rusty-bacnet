@@ -50,6 +50,15 @@ impl BACnetObject for UnsupportedFaultReindication {
         crate::test_rows::read_only(&[PropertyIdentifier::NOTIFICATION_CLASS])
     }
 
+    fn event_reporting(&self) -> Option<&dyn bacnet_objects::traits::EventReporting> {
+        Some(self)
+    }
+    fn event_reporting_mut(&mut self) -> Option<&mut dyn bacnet_objects::traits::EventReporting> {
+        Some(self)
+    }
+}
+
+impl bacnet_objects::traits::EventReporting for UnsupportedFaultReindication {
     fn evaluate_intrinsic_reporting(&mut self) -> Option<bacnet_objects::event::TransitionOutcome> {
         Some(bacnet_objects::event::TransitionOutcome {
             change: EventStateChange {
@@ -98,7 +107,8 @@ fn unsupported_fault_reindication_is_retryable_without_sequence_consumption() {
     let proposal = db
         .get_mut(&oid)
         .unwrap()
-        .evaluate_intrinsic_reporting()
+        .event_reporting_mut()
+        .and_then(|r| r.evaluate_intrinsic_reporting())
         .unwrap();
     assert!(BACnetServer::<TestTransport>::commit_intrinsic_transition(
         &mut db,
@@ -108,7 +118,10 @@ fn unsupported_fault_reindication_is_retryable_without_sequence_consumption() {
     .is_none());
     assert_eq!(db.reserve_event_sequence_number().number(), 0);
     assert_eq!(
-        db.get_mut(&oid).unwrap().evaluate_intrinsic_reporting(),
+        db.get_mut(&oid)
+            .unwrap()
+            .event_reporting_mut()
+            .and_then(|r| r.evaluate_intrinsic_reporting()),
         Some(proposal)
     );
 }
@@ -207,7 +220,8 @@ async fn committed_ack_required_snapshot_survives_notification_class_replacement
         let outcome = guard
             .get_mut(&oid)
             .unwrap()
-            .evaluate_intrinsic_reporting()
+            .event_reporting_mut()
+            .and_then(|r| r.evaluate_intrinsic_reporting())
             .unwrap();
         BACnetServer::<TestTransport>::commit_intrinsic_transition(&mut guard, &oid, outcome)
             .unwrap()

@@ -110,11 +110,23 @@ fn every_threshold_of_records_proposes_one_report_on_each_log() {
         for round in 1..=2u32 {
             for _ in 0..2 {
                 add(log);
-                assert_eq!(log.tick_intrinsic_reporting(), None, "{kind:?}");
+                assert_eq!(
+                    log.event_reporting_mut()
+                        .and_then(|r| r.tick_intrinsic_reporting()),
+                    None,
+                    "{kind:?}"
+                );
             }
             add(log);
-            let outcome = log.tick_intrinsic_reporting().expect("a report is due");
-            assert_eq!(log.evaluate_intrinsic_reporting(), Some(outcome.clone()));
+            let outcome = log
+                .event_reporting_mut()
+                .and_then(|r| r.tick_intrinsic_reporting())
+                .expect("a report is due");
+            assert_eq!(
+                log.event_reporting_mut()
+                    .and_then(|r| r.evaluate_intrinsic_reporting()),
+                Some(outcome.clone())
+            );
             assert_eq!(
                 outcome,
                 TransitionOutcome {
@@ -143,13 +155,21 @@ fn every_threshold_of_records_proposes_one_report_on_each_log() {
             );
             assert_eq!(unsigned(log, P::LAST_NOTIFY_RECORD), u64::from(3 * round));
             assert_eq!(unsigned(log, P::RECORDS_SINCE_NOTIFICATION), 0);
-            assert_eq!(log.tick_intrinsic_reporting(), None, "{kind:?}");
+            assert_eq!(
+                log.event_reporting_mut()
+                    .and_then(|r| r.tick_intrinsic_reporting()),
+                None,
+                "{kind:?}"
+            );
             assert_eq!(
                 log.read_property(P::EVENT_STATE, None).unwrap(),
                 PropertyValue::Enumerated(EventState::NORMAL.to_raw())
             );
         }
-        let summary = log.enrollment_summary_capability_internal().unwrap();
+        let summary = log
+            .event_reporting()
+            .and_then(|r| r.enrollment_summary_capability())
+            .unwrap();
         assert_eq!(summary.event_type, EventType::BUFFER_READY);
         assert_eq!(
             summary.last_transition,
@@ -167,21 +187,37 @@ fn no_threshold_or_detection_off_proposes_nothing() {
         }
         // Notification_Threshold starts at zero (pThreshold 0: no transition).
         assert_eq!(unsigned(log, P::NOTIFICATION_THRESHOLD), 0);
-        assert_eq!(log.tick_intrinsic_reporting(), None);
+        assert_eq!(
+            log.event_reporting_mut()
+                .and_then(|r| r.tick_intrinsic_reporting()),
+            None
+        );
         write(
             log,
             P::EVENT_DETECTION_ENABLE,
             PropertyValue::Boolean(false),
         );
         write(log, P::NOTIFICATION_THRESHOLD, PropertyValue::Unsigned(1));
-        assert_eq!(log.tick_intrinsic_reporting(), None);
+        assert_eq!(
+            log.event_reporting_mut()
+                .and_then(|r| r.tick_intrinsic_reporting()),
+            None
+        );
         // Turned on again, the algorithm counts from where the log stands.
         write(log, P::EVENT_DETECTION_ENABLE, PropertyValue::Boolean(true));
         assert_eq!(unsigned(log, P::LAST_NOTIFY_RECORD), 5);
         assert_eq!(unsigned(log, P::RECORDS_SINCE_NOTIFICATION), 0);
-        assert_eq!(log.tick_intrinsic_reporting(), None);
+        assert_eq!(
+            log.event_reporting_mut()
+                .and_then(|r| r.tick_intrinsic_reporting()),
+            None
+        );
         add(log);
-        assert!(log.tick_intrinsic_reporting().is_some());
+        assert!(
+            log.event_reporting_mut()
+                .and_then(|r| r.tick_intrinsic_reporting())
+                .is_some()
+        );
     }
 }
 
@@ -197,9 +233,17 @@ fn a_purge_restarts_records_since_notification_only() {
         write(log, P::RECORD_COUNT, PropertyValue::Unsigned(0));
         assert_eq!(unsigned(log, P::TOTAL_RECORD_COUNT), 3);
         assert_eq!(unsigned(log, P::RECORDS_SINCE_NOTIFICATION), 1);
-        assert_eq!(log.tick_intrinsic_reporting(), None);
+        assert_eq!(
+            log.event_reporting_mut()
+                .and_then(|r| r.tick_intrinsic_reporting()),
+            None
+        );
         add(log);
-        assert!(log.tick_intrinsic_reporting().is_some());
+        assert!(
+            log.event_reporting_mut()
+                .and_then(|r| r.tick_intrinsic_reporting())
+                .is_some()
+        );
     }
 }
 
@@ -217,7 +261,10 @@ fn event_enable_to_normal_decides_distribution_only() {
             },
         );
         add(log);
-        let outcome = log.tick_intrinsic_reporting().unwrap();
+        let outcome = log
+            .event_reporting_mut()
+            .and_then(|r| r.tick_intrinsic_reporting())
+            .unwrap();
         assert!(!outcome.distribute);
         commit_test_proposal(log, outcome);
         assert_eq!(unsigned(log, P::LAST_NOTIFY_RECORD), 1);

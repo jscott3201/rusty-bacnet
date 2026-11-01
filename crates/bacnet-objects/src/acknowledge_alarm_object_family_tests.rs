@@ -78,7 +78,9 @@ fn binary_and_multistate_families_require_exact_idempotent_correlation() {
             )
             .unwrap();
         object
-            .commit_event_transition_internal(EventTransitionCommit {
+            .event_reporting_mut()
+            .unwrap()
+            .commit_event_transition(EventTransitionCommit {
                 change: EventStateChange {
                     from: EventState::NORMAL,
                     to: EventState::OFFNORMAL,
@@ -98,10 +100,9 @@ fn binary_and_multistate_families_require_exact_idempotent_correlation() {
         let before = snapshot(&*object);
 
         let state_error = object
-            .acknowledge_alarm_correlated_internal(
-                EventState::HIGH_LIMIT,
-                &BACnetTimeStamp::SequenceNumber(99),
-            )
+            .event_reporting_mut()
+            .unwrap()
+            .acknowledge_alarm(EventState::HIGH_LIMIT, &BACnetTimeStamp::SequenceNumber(99))
             .unwrap_err();
         assert_protocol(
             state_error,
@@ -111,10 +112,9 @@ fn binary_and_multistate_families_require_exact_idempotent_correlation() {
         assert_eq!(snapshot(&*object), before, "{object_name}");
 
         let timestamp_error = object
-            .acknowledge_alarm_correlated_internal(
-                EventState::OFFNORMAL,
-                &BACnetTimeStamp::SequenceNumber(41),
-            )
+            .event_reporting_mut()
+            .unwrap()
+            .acknowledge_alarm(EventState::OFFNORMAL, &BACnetTimeStamp::SequenceNumber(41))
             .unwrap_err();
         assert_protocol(
             timestamp_error,
@@ -124,7 +124,9 @@ fn binary_and_multistate_families_require_exact_idempotent_correlation() {
         assert_eq!(snapshot(&*object), before, "{object_name}");
 
         object
-            .acknowledge_alarm_correlated_internal(EventState::OFFNORMAL, &stamp)
+            .event_reporting_mut()
+            .unwrap()
+            .acknowledge_alarm(EventState::OFFNORMAL, &stamp)
             .unwrap();
         assert_eq!(
             acked_transitions(&*object),
@@ -137,7 +139,9 @@ fn binary_and_multistate_families_require_exact_idempotent_correlation() {
         assert_eq!(after.message_texts, before.message_texts, "{object_name}");
 
         object
-            .acknowledge_alarm_correlated_internal(EventState::OFFNORMAL, &stamp)
+            .event_reporting_mut()
+            .unwrap()
+            .acknowledge_alarm(EventState::OFFNORMAL, &stamp)
             .unwrap();
         assert_eq!(snapshot(&*object), after, "{object_name}");
 
@@ -151,7 +155,9 @@ fn binary_and_multistate_families_require_exact_idempotent_correlation() {
             .unwrap();
         let disabled = snapshot(&*object);
         let error = object
-            .acknowledge_alarm_correlated_internal(EventState::OFFNORMAL, &stamp)
+            .event_reporting_mut()
+            .unwrap()
+            .acknowledge_alarm(EventState::OFFNORMAL, &stamp)
             .unwrap_err();
         assert_protocol(error, ErrorClass::OBJECT, ErrorCode::NO_ALARM_CONFIGURED);
         assert_eq!(snapshot(&*object), disabled, "{object_name}");

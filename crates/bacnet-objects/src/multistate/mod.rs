@@ -4,11 +4,11 @@
 
 use crate::prelude::*;
 use alloc::borrow::Cow;
-use bacnet_types::enums::{
-    ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier, Reliability,
-};
+use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue, StatusFlags};
+#[cfg(test)]
+use bacnet_types::primitives::BACnetTimeStamp;
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 
 use crate::common::{
     self, read_common_properties, read_generic_event_properties, write_generic_event_properties,

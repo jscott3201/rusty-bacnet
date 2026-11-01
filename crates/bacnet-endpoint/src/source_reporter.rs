@@ -9,10 +9,7 @@ use bacnet_objects::audit::{
     AuditLogForwarding, AuditLogNotificationSink, AuditLogStorage, AuditReporterObject,
 };
 use bacnet_objects::durable::DurableWrites;
-use bacnet_objects::event::{
-    EnrollmentSummaryCapability, EventStateChange, EventTransitionCommit,
-    EventTransitionCommitError, TransitionOutcome,
-};
+use bacnet_objects::event::EventTransitionCommitError;
 use bacnet_objects::event_enrollment::{
     EventEnrollmentEvalState, EventEnrollmentMonitoredSource, EventEnrollmentReliabilityCommit,
 };
@@ -22,8 +19,8 @@ use bacnet_objects::log_reporting::BufferReadyReport;
 use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 use bacnet_objects::traits::{
-    AccessEvents, BACnetObject, CommandRunner, CovReportedProperty, LifeSafety, LocalInput,
-    ReliabilityEvaluation, StagingSource, Timed,
+    AccessEvents, BACnetObject, CommandRunner, CovReportedProperty, EventReporting, LifeSafety,
+    LocalInput, ReliabilityEvaluation, StagingSource, Timed,
 };
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter, EventTransitionBits};
 use bacnet_types::calendar::SpecificDate;
@@ -35,7 +32,7 @@ use bacnet_types::enums::{
     AuditLevel, ErrorClass, ErrorCode, EventState, PropertyIdentifier, Reliability,
 };
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue, Time};
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, Time};
 
 struct SourceReporter {
     owner: Weak<AuditOwnership>,
@@ -245,8 +242,12 @@ impl BACnetObject for SourceReporter {
         self.wrapped.life_safety()
     }
 
-    fn enrollment_summary_capability_internal(&self) -> Option<EnrollmentSummaryCapability> {
-        self.wrapped.enrollment_summary_capability_internal()
+    fn event_reporting(&self) -> Option<&dyn EventReporting> {
+        self.wrapped.event_reporting()
+    }
+
+    fn event_reporting_mut(&mut self) -> Option<&mut dyn EventReporting> {
+        self.wrapped.event_reporting_mut()
     }
 
     fn supports_cov_property(&self, property: PropertyIdentifier) -> bool {
@@ -263,21 +264,6 @@ impl BACnetObject for SourceReporter {
 
     fn set_overridden(&mut self, overridden: bool) {
         self.wrapped.set_overridden(overridden)
-    }
-
-    fn evaluate_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
-        self.wrapped.evaluate_intrinsic_reporting()
-    }
-
-    fn tick_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
-        self.wrapped.tick_intrinsic_reporting()
-    }
-
-    fn commit_event_transition_internal(
-        &mut self,
-        commit: EventTransitionCommit,
-    ) -> Result<(), EventTransitionCommitError> {
-        self.wrapped.commit_event_transition_internal(commit)
     }
 
     fn commit_event_enrollment_reliability_internal(
@@ -315,28 +301,6 @@ impl BACnetObject for SourceReporter {
 
     fn calendar_state_internal(&self, day: SpecificDate) -> Option<bool> {
         self.wrapped.calendar_state_internal(day)
-    }
-
-    fn acknowledge_alarm(&mut self, transition_bit: EventTransitionBits) -> Result<(), Error> {
-        self.wrapped.acknowledge_alarm(transition_bit)
-    }
-
-    fn acknowledge_alarm_correlated_internal(
-        &mut self,
-        event_state: EventState,
-        timestamp: &BACnetTimeStamp,
-    ) -> Result<(), Error> {
-        self.wrapped
-            .acknowledge_alarm_correlated_internal(event_state, timestamp)
-    }
-
-    fn acknowledge_alarm_correlated_detailed_internal(
-        &mut self,
-        event_state: EventState,
-        timestamp: &BACnetTimeStamp,
-    ) -> Result<Option<EventStateChange>, Error> {
-        self.wrapped
-            .acknowledge_alarm_correlated_detailed_internal(event_state, timestamp)
     }
 
     fn set_event_state_internal(&mut self, state: EventState) -> Result<(), Error> {
@@ -483,15 +447,6 @@ impl BACnetObject for SourceReporter {
 
     fn buffer_ready_report_internal(&self) -> Option<BufferReadyReport> {
         self.wrapped.buffer_ready_report_internal()
-    }
-
-    fn event_algorithm_inhibit_reference_internal(&self) -> Option<BACnetObjectPropertyReference> {
-        self.wrapped.event_algorithm_inhibit_reference_internal()
-    }
-
-    fn follow_event_algorithm_inhibit_internal(&mut self, inhibit: bool) -> bool {
-        self.wrapped
-            .follow_event_algorithm_inhibit_internal(inhibit)
     }
 }
 

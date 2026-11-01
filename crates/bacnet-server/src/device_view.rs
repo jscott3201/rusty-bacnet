@@ -9,14 +9,13 @@ use bacnet_objects::{
     audit::{AuditLogForwarding, AuditLogStorage, AuditReporterObject, ObjectAuditPolicy},
     database::ObjectDatabase,
     device::EXECUTED_SERVICES,
-    event::EnrollmentSummaryCapability,
     event_enrollment::{EventEnrollmentEvalState, EventEnrollmentMonitoredSource},
     file::{FileConfiguration, FileStorage},
     log_buffer::{LogBufferRecords, LogRecordIdentity},
     log_reporting::BufferReadyReport,
     property_metadata::{PropertyConformance, PropertyMetadata, PropertyWriteCapability},
     schedule::ScheduleWrite,
-    traits::{BACnetObject, CommandRunner, CovReportedProperty},
+    traits::{BACnetObject, CommandRunner, CovReportedProperty, EventReporting},
 };
 use bacnet_types::{
     calendar::SpecificDate,
@@ -331,8 +330,8 @@ impl BACnetObject for DeviceReadView<'_> {
     fn command_runner(&self) -> Option<&dyn CommandRunner> {
         self.object.command_runner()
     }
-    fn enrollment_summary_capability_internal(&self) -> Option<EnrollmentSummaryCapability> {
-        self.object.enrollment_summary_capability_internal()
+    fn event_reporting(&self) -> Option<&dyn EventReporting> {
+        self.object.event_reporting()
     }
     fn supports_cov_property(&self, property: P) -> bool {
         self.object.supports_cov_property(property)
@@ -387,9 +386,6 @@ impl BACnetObject for DeviceReadView<'_> {
     }
     fn buffer_ready_report_internal(&self) -> Option<BufferReadyReport> {
         self.object.buffer_ready_report_internal()
-    }
-    fn event_algorithm_inhibit_reference_internal(&self) -> Option<BACnetObjectPropertyReference> {
-        self.object.event_algorithm_inhibit_reference_internal()
     }
 }
 

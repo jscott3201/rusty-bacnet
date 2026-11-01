@@ -41,14 +41,16 @@ impl ObjectDatabase {
         let Some(reference) = self
             .objects
             .get(oid)
-            .and_then(|object| object.event_algorithm_inhibit_reference_internal())
+            .and_then(|object| object.event_reporting())
+            .and_then(|reporting| reporting.event_algorithm_inhibit_reference())
         else {
             return false;
         };
         let inhibit = self.inhibit_value(&reference);
         self.objects
             .get_mut(oid)
-            .is_some_and(|object| object.follow_event_algorithm_inhibit_internal(inhibit))
+            .and_then(|object| object.event_reporting_mut())
+            .is_some_and(|reporting| reporting.follow_event_algorithm_inhibit(inhibit))
     }
 
     /// The Boolean the referenced property stands for; see the module

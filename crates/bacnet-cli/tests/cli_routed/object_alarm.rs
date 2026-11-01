@@ -4,6 +4,7 @@ use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::event::{EventStateChange, EventTransition, EventTransitionCommit};
 use bacnet_objects::traits::BACnetObject;
+use bacnet_objects::traits::EventReporting as _;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::bitstring::{EventTransitionBits, LimitEnable};
 use bacnet_types::enums::{EngineeringUnits, EventState, ObjectType, PropertyIdentifier};
@@ -34,7 +35,7 @@ pub(super) fn database() -> ObjectDatabase {
     // The running detector sees the same high-limit condition as the committed history.
     alarm.set_present_value(81.0);
     alarm
-        .commit_event_transition_internal(EventTransitionCommit {
+        .commit_event_transition(EventTransitionCommit {
             change: EventStateChange {
                 from: EventState::NORMAL,
                 to: EventState::HIGH_LIMIT,

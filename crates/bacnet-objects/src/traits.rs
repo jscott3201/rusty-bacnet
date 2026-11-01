@@ -18,14 +18,11 @@ use bacnet_types::enums::{
     ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier, Reliability,
 };
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue, Time};
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, Time};
 
 use crate::audit::{AuditLogNotificationSink, AuditLogStorage};
 
-use crate::event::{
-    EnrollmentSummaryCapability, EventStateChange, EventTransitionCommit,
-    EventTransitionCommitError, TransitionOutcome,
-};
+use crate::event::EventTransitionCommitError;
 use crate::event_enrollment::{
     EventEnrollmentEvalState, EventEnrollmentMonitoredSource, EventEnrollmentReliabilityCommit,
 };
@@ -35,11 +32,12 @@ use crate::log_reporting::BufferReadyReport;
 use crate::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 
 pub mod capabilities;
+pub(crate) use capabilities::lend_event_reporting;
 #[doc(hidden)]
 pub use capabilities::{AccessEvents, CommandRunner, StagingSource};
 pub use capabilities::{
-    Clocks, DeadlineWaker, DurableWrites, LifeSafety, LocalInput, LocalInputValue, MonotonicClock,
-    Timed, not_supported,
+    Clocks, DeadlineWaker, DurableWrites, EventReporting, LifeSafety, LocalInput, LocalInputValue,
+    MonotonicClock, Timed, no_alarm_configured, not_supported,
 };
 
 mod defaults;
@@ -598,13 +596,25 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         None
     }
 
-    /// Return this object's GetEnrollmentSummary event capability.
+    /// Borrow this object's event reporting for the queries a host makes
+    /// under a shared database guard: its Event_Algorithm_Inhibit_Ref and
+    /// its GetEnrollmentSummary capability.
     ///
-    /// The default opts custom and downstream objects out. Implementations opt
-    /// in only when they own an actual configured or implied event algorithm
-    /// and shared committed-transition history.
-    #[doc(hidden)]
-    fn enrollment_summary_capability_internal(&self) -> Option<EnrollmentSummaryCapability> {
+    /// The default has none. An object that lends this lends
+    /// [`event_reporting_mut`](Self::event_reporting_mut) too. See
+    /// [`EventReporting`].
+    fn event_reporting(&self) -> Option<&dyn EventReporting> {
+        None
+    }
+
+    /// Mutably borrow this object's event reporting: intrinsic reporting's
+    /// proposals and commits, alarm acknowledgment and
+    /// Event_Algorithm_Inhibit following.
+    ///
+    /// The default has none: the bundled server then proposes no intrinsic
+    /// transition for the object, and refuses an AcknowledgeAlarm naming it
+    /// with [`no_alarm_configured`]. See [`EventReporting`].
+    fn event_reporting_mut(&mut self) -> Option<&mut dyn EventReporting> {
         None
     }
 
@@ -681,70 +691,6 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// integrations can override to set TRUE when present_value is overridden
     /// by physical means (e.g., a manual switch on an output).
     fn set_overridden(&mut self, _overridden: bool) {}
-
-    /// Evaluate intrinsic reporting after a present_value change.
-    ///
-    /// This is the per-write entry point: it seeds (or cancels) a pending
-    /// delayed transition and fires immediately only when `Time_Delay == 0`.
-    /// It never advances the `Time_Delay` countdown — repeated writes to the
-    /// same value do not shorten the delay (ASHRAE 135-2020 Clause 13.3 counts
-    /// the delay in seconds, so the countdown advances once per elapsed second
-    /// via [`tick_intrinsic_reporting`](Self::tick_intrinsic_reporting)).
-    ///
-    /// Returns `Some(TransitionOutcome)` whenever a transition is ready to be
-    /// committed, or
-    /// `None` when none did (no change, delay seeded, or the object does not
-    /// support intrinsic reporting). A cleared `Event_Enable` bit sets the
-    /// outcome's `distribute` flag to false rather than withholding the
-    /// transition. Implementations must leave `Event_State`,
-    /// `Acked_Transitions`, event history, and fire-ready detector state
-    /// unchanged until [`commit_event_transition_internal`](Self::commit_event_transition_internal)
-    /// succeeds. Clause 13.2.2.1.4's transition actions run either way, and
-    /// `Event_Enable` disables only external distribution, downstream in the
-    /// notification-distribution process (Clause 13.2.5).
-    fn evaluate_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
-        None
-    }
-
-    /// Advance the `Time_Delay` countdown for a pending transition.
-    ///
-    /// Called by the server's one-second intrinsic-reporting task. Fires the
-    /// pending transition when its delay elapses this tick, cancels it if the
-    /// triggering condition reverted, and returns `Some(TransitionOutcome)`
-    /// when a transition is ready. A fire-ready proposal must remain
-    /// retryable until the commit hook succeeds. As with
-    /// [`evaluate_intrinsic_reporting`](Self::evaluate_intrinsic_reporting),
-    /// `Event_Enable` is reported via `distribute`, not by returning `None`.
-    /// Objects without a delayed transition return `None`.
-    fn tick_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
-        None
-    }
-
-    /// Atomically commit all object-owned state for one event transition.
-    ///
-    /// The caller supplies an exact state change, its transition coordinate,
-    /// the resolved Notification Class `Ack_Required` value, a typed
-    /// timestamp, and an optional message. Implementations must validate the
-    /// coordinate and source state before changing `Event_State`,
-    /// `Acked_Transitions`, `Event_Time_Stamps`, or stored message state, and
-    /// must leave every value unchanged on error. A successful
-    /// implementation also finalizes the detector's pending and fault-edge
-    /// state; a failed commit leaves that state retryable.
-    ///
-    /// This internal channel is deliberately separate from network property
-    /// writes and notification distribution. The default fails closed so an
-    /// object participates only after implementing this contract. Custom objects
-    /// can own and commit their state directly using the public
-    /// [`EventTransitionCommit`] and [`EventTransitionCommitError`] types;
-    /// no built-in commit kernel is required. Both server intrinsic paths
-    /// require success before distributing a notification.
-    #[doc(hidden)]
-    fn commit_event_transition_internal(
-        &mut self,
-        _commit: EventTransitionCommit,
-    ) -> Result<(), EventTransitionCommitError> {
-        Err(EventTransitionCommitError::Unsupported)
-    }
 
     /// Atomically commit Event Enrollment Reliability and transition state.
     ///
@@ -828,47 +774,6 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     #[doc(hidden)]
     fn calendar_state_internal(&self, _day: SpecificDate) -> Option<bool> {
         None
-    }
-
-    /// Acknowledge an alarm transition. Sets the `transition_bit` flags in acked_transitions.
-    /// Returns Ok(()) if the object supports event detection, Err otherwise.
-    fn acknowledge_alarm(
-        &mut self,
-        _transition_bit: EventTransitionBits,
-    ) -> Result<(), bacnet_types::error::Error> {
-        Err(bacnet_types::error::Error::protocol(
-            bacnet_types::enums::ErrorClass::OBJECT,
-            bacnet_types::enums::ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ))
-    }
-
-    /// Correlate an acknowledgment with the latest committed transition.
-    #[doc(hidden)]
-    fn acknowledge_alarm_correlated_internal(
-        &mut self,
-        _event_state: EventState,
-        _timestamp: &BACnetTimeStamp,
-    ) -> Result<(), Error> {
-        Err(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::NO_ALARM_CONFIGURED,
-        ))
-    }
-
-    /// Correlate an acknowledgment and report exact object-owned history.
-    ///
-    /// The default delegates to the source-compatible coarse hook and returns
-    /// no notification context. Custom objects that implement only the coarse
-    /// hook therefore retain their accepted-acknowledgment behavior without the
-    /// bundled server guessing historical states for an ACK notification.
-    #[doc(hidden)]
-    fn acknowledge_alarm_correlated_detailed_internal(
-        &mut self,
-        event_state: EventState,
-        timestamp: &BACnetTimeStamp,
-    ) -> Result<Option<EventStateChange>, Error> {
-        self.acknowledge_alarm_correlated_internal(event_state, timestamp)
-            .map(|()| None)
     }
 
     /// Apply an internally-detected `Event_State` transition.
@@ -967,7 +872,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     ///
     /// `transition_bit` is the transition direction's flag, as returned by
     /// [`EventTransition::bit_mask`](crate::event::EventTransition::bit_mask). The set half overlaps the
-    /// network-reachable [`acknowledge_alarm`](Self::acknowledge_alarm), which
+    /// network-reachable [`EventReporting::acknowledge_alarm`], which
     /// also ORs the bit in per Clause 13.2.3's acknowledgment-indication
     /// paragraph; the clear half has no network route by design (a property
     /// write could fabricate or erase acknowledgments — see the
@@ -1284,24 +1189,5 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     #[doc(hidden)]
     fn buffer_ready_report_internal(&self) -> Option<BufferReadyReport> {
         None
-    }
-
-    /// The local property this object's Event_Algorithm_Inhibit follows, its
-    /// Event_Algorithm_Inhibit_Ref (#1329); `None` while it holds none, and
-    /// for an object without one, which the default is. The database reads
-    /// the property and hands the value over through
-    /// [`follow_event_algorithm_inhibit_internal`](Self::follow_event_algorithm_inhibit_internal).
-    #[doc(hidden)]
-    fn event_algorithm_inhibit_reference_internal(&self) -> Option<BACnetObjectPropertyReference> {
-        None
-    }
-
-    /// Take the value the database read from the property
-    /// [`event_algorithm_inhibit_reference_internal`](Self::event_algorithm_inhibit_reference_internal)
-    /// names as Event_Algorithm_Inhibit; returns whether it changed. The
-    /// default follows nothing.
-    #[doc(hidden)]
-    fn follow_event_algorithm_inhibit_internal(&mut self, _inhibit: bool) -> bool {
-        false
     }
 }

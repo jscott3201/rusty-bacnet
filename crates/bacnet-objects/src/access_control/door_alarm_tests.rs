@@ -4,6 +4,7 @@
 //! the Door_Alarm_State they admit, CHANGE_OF_STATE on Door_Alarm_State and
 //! the FAULT_STATE check behind Reliability.
 
+use crate::traits::EventReporting as _;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::PropertyIdentifier as P;
 use bacnet_types::enums::{DoorAlarmState as S, ErrorClass, ErrorCode, EventType};
@@ -143,7 +144,7 @@ fn access_door_serves_the_event_rows_and_alarm_lists() {
         );
     }
     assert_eq!(
-        door.enrollment_summary_capability_internal()
+        door.enrollment_summary_capability()
             .map(|capability| capability.event_type),
         Some(EventType::CHANGE_OF_STATE)
     );

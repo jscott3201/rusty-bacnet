@@ -102,7 +102,9 @@ fn seed_unacknowledged(object: &mut dyn BACnetObject) {
             .unwrap();
     } else {
         object
-            .commit_event_transition_internal(EventTransitionCommit {
+            .event_reporting_mut()
+            .unwrap()
+            .commit_event_transition(EventTransitionCommit {
                 change: EventStateChange {
                     from: EventState::NORMAL,
                     to: EventState::OFFNORMAL,
@@ -184,17 +186,18 @@ fn acked_transitions_internal_commit_and_acknowledgment_bypass_property_writes()
             let mut acknowledged = snapshot(&*object);
             acknowledged[1] = bits(0xe0);
             object
-                .acknowledge_alarm_correlated_internal(
-                    EventState::OFFNORMAL,
-                    &BACnetTimeStamp::SequenceNumber(42),
-                )
+                .event_reporting_mut()
+                .unwrap()
+                .acknowledge_alarm(EventState::OFFNORMAL, &BACnetTimeStamp::SequenceNumber(42))
                 .unwrap();
             assert_eq!(snapshot(&*object), acknowledged, "{}", object.object_name());
             // The commit kernel can also set a previously cleared coordinate
             // when Notification Class policy does not require acknowledgment.
             for ack_required in [true, false] {
                 object
-                    .commit_event_transition_internal(EventTransitionCommit {
+                    .event_reporting_mut()
+                    .unwrap()
+                    .commit_event_transition(EventTransitionCommit {
                         change: EventStateChange {
                             from: EventState::OFFNORMAL,
                             to: EventState::OFFNORMAL,

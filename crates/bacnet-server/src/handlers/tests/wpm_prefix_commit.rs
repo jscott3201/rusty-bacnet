@@ -166,7 +166,9 @@ fn seed_unacknowledged(object: &mut dyn BACnetObject) {
             .unwrap();
     } else {
         object
-            .commit_event_transition_internal(EventTransitionCommit {
+            .event_reporting_mut()
+            .unwrap()
+            .commit_event_transition(EventTransitionCommit {
                 change: EventStateChange {
                     from: EventState::NORMAL,
                     to: EventState::OFFNORMAL,

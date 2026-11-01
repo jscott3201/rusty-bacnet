@@ -84,7 +84,10 @@ fn visit_entries<E: From<Error>>(
     mut emit: impl FnMut(EnrollmentSummaryEntry) -> Result<(), E>,
 ) -> Result<(), E> {
     for (_oid, object) in db.iter_objects() {
-        let Some(capability) = object.enrollment_summary_capability_internal() else {
+        let Some(capability) = object
+            .event_reporting()
+            .and_then(|reporting| reporting.enrollment_summary_capability())
+        else {
             continue;
         };
         let object_identifier = object.object_identifier();

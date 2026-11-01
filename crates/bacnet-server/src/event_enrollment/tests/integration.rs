@@ -369,21 +369,6 @@ impl BACnetObject for ReferenceValueObject {
             .set_acked_transitions_internal(transition_bit, acknowledged)
     }
 
-    fn commit_event_transition_internal(
-        &mut self,
-        commit: bacnet_objects::event::EventTransitionCommit,
-    ) -> Result<(), bacnet_objects::event::EventTransitionCommitError> {
-        if !self.atomic_commit_supported {
-            return Err(bacnet_objects::event::EventTransitionCommitError::Unsupported);
-        }
-        self.inner.commit_event_transition_internal(commit)?;
-        if self.event_state_error_after_write {
-            Err(bacnet_objects::event::EventTransitionCommitError::Unsupported)
-        } else {
-            Ok(())
-        }
-    }
-
     fn commit_event_enrollment_reliability_internal(
         &mut self,
         commit: bacnet_objects::event_enrollment::EventEnrollmentReliabilityCommit,
@@ -394,6 +379,30 @@ impl BACnetObject for ReferenceValueObject {
         self.inner
             .commit_event_enrollment_reliability_internal(commit)?;
         if self.reliability_error_after_write {
+            Err(bacnet_objects::event::EventTransitionCommitError::Unsupported)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn event_reporting(&self) -> Option<&dyn bacnet_objects::traits::EventReporting> {
+        Some(self)
+    }
+    fn event_reporting_mut(&mut self) -> Option<&mut dyn bacnet_objects::traits::EventReporting> {
+        Some(self)
+    }
+}
+
+impl bacnet_objects::traits::EventReporting for ReferenceValueObject {
+    fn commit_event_transition(
+        &mut self,
+        commit: bacnet_objects::event::EventTransitionCommit,
+    ) -> Result<(), bacnet_objects::event::EventTransitionCommitError> {
+        if !self.atomic_commit_supported {
+            return Err(bacnet_objects::event::EventTransitionCommitError::Unsupported);
+        }
+        self.inner.commit_event_transition(commit)?;
+        if self.event_state_error_after_write {
             Err(bacnet_objects::event::EventTransitionCommitError::Unsupported)
         } else {
             Ok(())

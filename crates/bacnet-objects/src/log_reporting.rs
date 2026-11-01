@@ -18,7 +18,9 @@
 //! An object adopts it in three steps: hold one and lend it to its
 //! `LogLifecycle`, which restarts Records_Since_Notification at a purge;
 //! offer each read and write to its `read` and `write`; and invoke
-//! `impl_buffer_ready_reporting!` with the field and the log buffer.
+//! `impl_buffer_ready_reporting!` with the log's type, the field and the log
+//! buffer, lending the capability with `crate::traits::lend_event_reporting!()`
+//! and serving `buffer_ready_report_internal` from the field's `report`.
 
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
@@ -376,11 +378,8 @@ impl BufferReadyReporting {
                 ErrorCode::NO_ALARM_CONFIGURED,
             ));
         }
-        self.history.acknowledge_correlated_detailed(
-            &mut self.acked_transitions,
-            event_state,
-            timestamp,
-        )
+        self.history
+            .acknowledge_correlated(&mut self.acked_transitions, event_state, timestamp)
     }
 
     /// The property Event_Algorithm_Inhibit follows, if any.
@@ -417,63 +416,53 @@ fn unsigned32(value: &PropertyValue) -> Result<u32, Error> {
     }
 }
 
-/// Implement the `BACnetObject` intrinsic-reporting hooks of a log that
-/// holds a [`BufferReadyReporting`] in `$reporting` and its records in the
-/// [`LogRecordBuffer`](crate::log_buffer::LogRecordBuffer) `$buffer`.
+/// Implement the [`EventReporting`](crate::traits::EventReporting) of
+/// `$object`, a log that holds a [`BufferReadyReporting`] in `$reporting`
+/// and its records in the
+/// [`LogRecordBuffer`](crate::log_buffer::LogRecordBuffer) `$buffer`. The
+/// log lends it with `crate::traits::lend_event_reporting!()`.
 macro_rules! impl_buffer_ready_reporting {
-    ($reporting:ident, $buffer:ident) => {
-        fn enrollment_summary_capability_internal(
-            &self,
-        ) -> Option<$crate::event::EnrollmentSummaryCapability> {
-            Some(self.$reporting.enrollment_summary())
-        }
+    ($object:ty, $reporting:ident, $buffer:ident) => {
+        impl $crate::traits::EventReporting for $object {
+            fn enrollment_summary_capability(
+                &self,
+            ) -> Option<$crate::event::EnrollmentSummaryCapability> {
+                Some(self.$reporting.enrollment_summary())
+            }
 
-        fn evaluate_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
-            self.$reporting.propose(self.$buffer.total_record_count())
-        }
+            fn evaluate_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
+                self.$reporting.propose(self.$buffer.total_record_count())
+            }
 
-        fn tick_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
-            self.$reporting.propose(self.$buffer.total_record_count())
-        }
+            fn tick_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
+                self.$reporting.propose(self.$buffer.total_record_count())
+            }
 
-        fn commit_event_transition_internal(
-            &mut self,
-            commit: $crate::event::EventTransitionCommit,
-        ) -> Result<(), $crate::event::EventTransitionCommitError> {
-            let total = self.$buffer.total_record_count();
-            self.$reporting.commit(commit, total)
-        }
+            fn commit_event_transition(
+                &mut self,
+                commit: $crate::event::EventTransitionCommit,
+            ) -> Result<(), $crate::event::EventTransitionCommitError> {
+                let total = self.$buffer.total_record_count();
+                self.$reporting.commit(commit, total)
+            }
 
-        fn acknowledge_alarm_correlated_internal(
-            &mut self,
-            event_state: bacnet_types::enums::EventState,
-            timestamp: &bacnet_types::primitives::BACnetTimeStamp,
-        ) -> Result<(), bacnet_types::error::Error> {
-            self.$reporting
-                .acknowledge(event_state, timestamp)
-                .map(|_| ())
-        }
+            fn acknowledge_alarm(
+                &mut self,
+                event_state: bacnet_types::enums::EventState,
+                timestamp: &bacnet_types::primitives::BACnetTimeStamp,
+            ) -> Result<Option<$crate::event::EventStateChange>, bacnet_types::error::Error> {
+                self.$reporting.acknowledge(event_state, timestamp)
+            }
 
-        fn acknowledge_alarm_correlated_detailed_internal(
-            &mut self,
-            event_state: bacnet_types::enums::EventState,
-            timestamp: &bacnet_types::primitives::BACnetTimeStamp,
-        ) -> Result<Option<$crate::event::EventStateChange>, bacnet_types::error::Error> {
-            self.$reporting.acknowledge(event_state, timestamp)
-        }
+            fn event_algorithm_inhibit_reference(
+                &self,
+            ) -> Option<bacnet_types::constructed::BACnetObjectPropertyReference> {
+                self.$reporting.inhibit_reference()
+            }
 
-        fn buffer_ready_report_internal(&self) -> Option<$crate::log_reporting::BufferReadyReport> {
-            self.$reporting.report()
-        }
-
-        fn event_algorithm_inhibit_reference_internal(
-            &self,
-        ) -> Option<bacnet_types::constructed::BACnetObjectPropertyReference> {
-            self.$reporting.inhibit_reference()
-        }
-
-        fn follow_event_algorithm_inhibit_internal(&mut self, inhibit: bool) -> bool {
-            self.$reporting.follow_inhibit(inhibit)
+            fn follow_event_algorithm_inhibit(&mut self, inhibit: bool) -> bool {
+                self.$reporting.follow_inhibit(inhibit)
+            }
         }
     };
 }

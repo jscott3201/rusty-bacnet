@@ -4,6 +4,7 @@
 //! simulated values, the event algorithm, Masked_Alarm_Values and the return
 //! to service all show through.
 
+use crate::traits::EventReporting as _;
 use crate::traits::Timed;
 use std::time::Duration;
 

@@ -213,32 +213,7 @@ impl BACnetObject for BinaryValueObject {
         true
     }
 
-    crate::event::impl_builtin_intrinsic_reporting!(
-        event_detector,
-        event_history,
-        [present_value],
-        reliability,
-        event_detection_enable,
-        ChangeOfStateDetector::ALGORITHM
-    );
-
-    fn acknowledge_alarm_correlated_internal(
-        &mut self,
-        event_state: EventState,
-        timestamp: &BACnetTimeStamp,
-    ) -> Result<(), Error> {
-        if !self.event_detection_enable {
-            return Err(Error::protocol(
-                ErrorClass::OBJECT,
-                ErrorCode::NO_ALARM_CONFIGURED,
-            ));
-        }
-        self.event_history.acknowledge_correlated(
-            &mut self.event_detector.acked_transitions,
-            event_state,
-            timestamp,
-        )
-    }
+    crate::traits::lend_event_reporting!();
 
     fn read_property(
         &self,
@@ -529,6 +504,16 @@ impl BACnetObject for BinaryValueObject {
         Some(self)
     }
 }
+
+crate::event::impl_builtin_intrinsic_reporting!(
+    BinaryValueObject,
+    event_detector,
+    event_history,
+    [present_value],
+    reliability,
+    event_detection_enable,
+    ChangeOfStateDetector::ALGORITHM
+);
 
 /// The Present_Value the application supplies while it isn't commandable,
 /// published as Value_Source from `origin` when the object tracks its

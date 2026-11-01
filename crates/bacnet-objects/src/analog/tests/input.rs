@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::traits::EventReporting as _;
 use bacnet_types::bitstring::LimitEnable;
 use bacnet_types::enums::EventState;
 use bacnet_types::error::RemoteError;

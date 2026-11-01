@@ -1,5 +1,6 @@
 use super::*;
 use bacnet_objects::property_metadata::PropertyMetadata;
+use bacnet_objects::traits::EventReporting as _;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::error::RemoteError;
 
@@ -24,7 +25,9 @@ fn add_committed<O: BACnetObject + 'static>(
 ) -> ObjectIdentifier {
     let oid = object.object_identifier();
     object
-        .commit_event_transition_internal(EventTransitionCommit {
+        .event_reporting_mut()
+        .unwrap()
+        .commit_event_transition(EventTransitionCommit {
             change: EventStateChange {
                 from: EventState::NORMAL,
                 to: state,
@@ -134,7 +137,7 @@ fn configured_event_enrollment() -> EventEnrollmentObject {
     object
 }
 
-struct LegacyCoarseAckObject {
+struct UncorrelatedAckObject {
     oid: ObjectIdentifier,
 }
 
@@ -180,14 +183,22 @@ impl BACnetObject for MalformedDetailedAckObject {
         crate::test_rows::read_only(&[])
     }
 
-    fn enrollment_summary_capability_internal(&self) -> Option<EnrollmentSummaryCapability> {
+    fn event_reporting(&self) -> Option<&dyn bacnet_objects::traits::EventReporting> {
+        Some(self)
+    }
+    fn event_reporting_mut(&mut self) -> Option<&mut dyn bacnet_objects::traits::EventReporting> {
+        Some(self)
+    }
+}
+
+impl bacnet_objects::traits::EventReporting for MalformedDetailedAckObject {
+    fn enrollment_summary_capability(&self) -> Option<EnrollmentSummaryCapability> {
         Some(EnrollmentSummaryCapability {
             event_type: EventType::OUT_OF_RANGE,
             last_transition: None,
         })
     }
-
-    fn acknowledge_alarm_correlated_detailed_internal(
+    fn acknowledge_alarm(
         &mut self,
         _event_state: EventState,
         _timestamp: &BACnetTimeStamp,
@@ -199,13 +210,13 @@ impl BACnetObject for MalformedDetailedAckObject {
     }
 }
 
-impl BACnetObject for LegacyCoarseAckObject {
+impl BACnetObject for UncorrelatedAckObject {
     fn object_identifier(&self) -> ObjectIdentifier {
         self.oid
     }
 
     fn object_name(&self) -> &str {
-        "legacy-coarse-ack"
+        "uncorrelated-ack"
     }
 
     fn read_property(
@@ -213,9 +224,7 @@ impl BACnetObject for LegacyCoarseAckObject {
         _property: PropertyIdentifier,
         _array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
-        Err(Error::Encoding(
-            "legacy test object has no properties".into(),
-        ))
+        Err(Error::Encoding("test object has no properties".into()))
     }
 
     fn write_property(
@@ -225,27 +234,36 @@ impl BACnetObject for LegacyCoarseAckObject {
         _value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
-        Err(Error::Encoding("legacy test object is read-only".into()))
+        Err(Error::Encoding("test object is read-only".into()))
     }
 
     fn property_metadata(&self) -> std::borrow::Cow<'_, [PropertyMetadata]> {
         crate::test_rows::read_only(&[])
     }
 
-    fn acknowledge_alarm_correlated_internal(
+    fn event_reporting(&self) -> Option<&dyn bacnet_objects::traits::EventReporting> {
+        Some(self)
+    }
+    fn event_reporting_mut(&mut self) -> Option<&mut dyn bacnet_objects::traits::EventReporting> {
+        Some(self)
+    }
+}
+
+impl bacnet_objects::traits::EventReporting for UncorrelatedAckObject {
+    fn acknowledge_alarm(
         &mut self,
         _event_state: EventState,
         _timestamp: &BACnetTimeStamp,
-    ) -> Result<(), Error> {
-        Ok(())
+    ) -> Result<Option<EventStateChange>, Error> {
+        Ok(None)
     }
 }
 
 #[test]
-fn legacy_coarse_hook_accepts_without_inventing_notification_context() {
+fn uncorrelated_acknowledgment_accepts_without_inventing_notification_context() {
     let oid = ObjectIdentifier::new(ObjectType::ACCUMULATOR, 91).unwrap();
     let mut db = ObjectDatabase::new();
-    db.add(Box::new(LegacyCoarseAckObject { oid })).unwrap();
+    db.add(Box::new(UncorrelatedAckObject { oid })).unwrap();
 
     let accepted = handle_acknowledge_alarm(
         &mut db,
@@ -399,7 +417,7 @@ fn fault_recovery_acknowledgment_uses_historical_change_of_reliability() {
     let mut object =
         AnalogInputObject::new(2, "AI-fault-recovery", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     object
-        .commit_event_transition_internal(EventTransitionCommit {
+        .commit_event_transition(EventTransitionCommit {
             change: EventStateChange {
                 from: EventState::NORMAL,
                 to: EventState::FAULT,
@@ -411,7 +429,7 @@ fn fault_recovery_acknowledgment_uses_historical_change_of_reliability() {
         })
         .unwrap();
     object
-        .commit_event_transition_internal(EventTransitionCommit {
+        .commit_event_transition(EventTransitionCommit {
             change: EventStateChange {
                 from: EventState::FAULT,
                 to: EventState::NORMAL,

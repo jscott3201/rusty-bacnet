@@ -328,7 +328,10 @@ fn buffer_ready_resumes_from_the_saved_last_notify_record() {
         for hour in 1..4 {
             add(log.as_mut(), hour);
         }
-        let outcome = log.tick_intrinsic_reporting().expect("a report is due");
+        let outcome = log
+            .event_reporting_mut()
+            .and_then(|r| r.tick_intrinsic_reporting())
+            .expect("a report is due");
         commit_test_proposal(log.as_mut(), outcome);
         add(log.as_mut(), 4);
         assert_eq!(unsigned(log.as_ref(), P::LAST_NOTIFY_RECORD), 3, "{kind:?}");
@@ -349,10 +352,16 @@ fn buffer_ready_resumes_from_the_saved_last_notify_record() {
         // The saved Last_Notify_Record, and LOG_INTERRUPTED counted after it.
         assert_eq!(unsigned(log.as_ref(), P::LAST_NOTIFY_RECORD), 3, "{kind:?}");
         assert_eq!(unsigned(log.as_ref(), P::RECORDS_SINCE_NOTIFICATION), 2);
-        assert_eq!(log.tick_intrinsic_reporting(), None, "{kind:?}");
+        assert_eq!(
+            log.event_reporting_mut()
+                .and_then(|r| r.tick_intrinsic_reporting()),
+            None,
+            "{kind:?}"
+        );
         add(log.as_mut(), 10);
         let outcome = log
-            .tick_intrinsic_reporting()
+            .event_reporting_mut()
+            .and_then(|r| r.tick_intrinsic_reporting())
             .expect("the third record since");
         commit_test_proposal(log.as_mut(), outcome);
         assert_eq!(
