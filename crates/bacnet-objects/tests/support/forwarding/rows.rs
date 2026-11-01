@@ -171,7 +171,7 @@ pub const QUERIES: &[(&str, Query)] = &[
         )
     }),
     ("command_runner", |o| {
-        format!("{:?}", o.command_runner().map(|runner| address(runner)))
+        format!("{:?}", o.command_runner().map(address))
     }),
     ("enrollment_summary_capability_internal", |o| {
         format!("{:?}", o.enrollment_summary_capability_internal())
