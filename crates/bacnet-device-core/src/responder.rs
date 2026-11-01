@@ -181,9 +181,9 @@ impl Default for Limits {
 /// WritePropertyMultiple, Who-Is and Who-Has from a borrowed database, for
 /// one Device.
 ///
-/// It holds the Device's frozen identity: a Who-Is is answered for it, and
-/// the Device wildcard instance reads it, even after the object is gone. A
-/// Who-Has names the database's selected Device, as the server's does.
+/// It holds the Device's frozen identity: a Who-Is and a Who-Has are
+/// answered for it, and only while the database holds its Device, and the
+/// Device wildcard instance reads it, even after the object is gone.
 #[derive(Clone, Debug)]
 pub struct Responder {
     identity: DeviceIdentity,
@@ -556,10 +556,7 @@ impl Responder {
                 _ => return Outcome::Silent,
             }
         } else if service == UnconfirmedServiceChoice::WHO_HAS {
-            let Some(device) = db.selected_device() else {
-                return Outcome::Silent;
-            };
-            match discovery::who_has(db, &request.service_request, device) {
+            match discovery::who_has(&self.identity, db, &request.service_request) {
                 Ok(Some(i_have)) if i_have.encode(&mut parameters).is_ok() => {
                     UnconfirmedServiceChoice::I_HAVE
                 }

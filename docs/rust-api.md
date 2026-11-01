@@ -6632,8 +6632,10 @@ on targets with atomic compare-and-swap, as `bacnet-objects` does. The
   the objects the attempts changed. `handle_write_property`,
   `handle_read_property_multiple` and `handle_write_property_multiple` are
   gone from `bacnet_server::handlers`.
-- `discovery`: `who_is` (the I-Am a Who-Is calls for, or none), `who_has`,
-  `i_am` and `announcement_device`.
+- `discovery`: `who_is` (the I-Am a Who-Is calls for, or none), `who_has`
+  (the I-Have, or none), `i_am` and `announcement_device`. Both answers name
+  the Device the `DeviceIdentity` names, and neither is sent while the
+  database lacks that Device, even if it holds another (#2186).
 - `reply`: `error_apdu`, the one map from an `Error` to its Reject or Error
   PDU (never an Abort: a work or byte limit is the caller's Abort), and the
   refusals a host sends for a service it doesn't run.

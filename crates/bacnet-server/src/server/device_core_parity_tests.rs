@@ -691,6 +691,7 @@ async fn edge_rows_match_and_the_segmented_reply_differs() {
     parity.server.stop().await.unwrap();
 }
 
+mod discovery;
 mod rpm;
 mod wpm;
 mod write;

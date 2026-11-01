@@ -400,9 +400,13 @@ Safety object, `life_safety_changes` reports them after the request, and
 ```rust
 pub fn who_is(identity: &DeviceIdentity, db: &ObjectDatabase, request: &[u8])
     -> Option<IAmRequest>;  // unconfirmed.rs:92-109, discovery.rs:811, local_device.rs:39
-pub fn who_has(db: &ObjectDatabase, request: &[u8], device: ObjectIdentifier)
+pub fn who_has(identity: &DeviceIdentity, db: &ObjectDatabase, request: &[u8])
     -> Result<Option<IHaveRequest>, Error>;  // handlers/object_mgmt.rs:8-43
 ```
+
+Both name the Device the frozen identity names (`announcement_device`), and
+answer nothing while the database lacks it, whatever other Device it holds
+(#2186; PR 1 had Who-Has name `db.selected_device()`, the lowest instance).
 
 The server keeps the limiter (`server/discovery.rs:419` onward: per-source
 and global buckets, the negative Who-Has cache, the reply admission) and
@@ -761,9 +765,9 @@ is a follow-up. No file passes the 700-line cap: the two largest sources,
    move, and the count can only fall.
 4. **Which Device an I-Have names: (a)** (lead). Who-Is answers from the
    frozen identity (`unconfirmed.rs:101`, `announcement_device`), Who-Has
-   from `db.selected_device()` (`unconfirmed.rs:192`). PR 1 keeps that, and
-   #2186 makes I-Have and I-Am name the Device picked the same way. The
-   option not taken: unify in PR 1, a **Wire:** change inside a move.
+   from `db.selected_device()` (`unconfirmed.rs:192`). PR 1 kept that, and
+   #2186 made I-Have name the identity's Device too, in `discovery::who_has`.
+   The option not taken: unify in PR 1, a **Wire:** change inside a move.
 5. **Owned APDU** (lead, from the review): `Inbound.apdu` is `Bytes`, and
    `classify` peeks a `&[u8]` header; no borrowed decoder for now (§4.2).
 6. **Requests the core doesn't run** (lead, from the review): `read` and

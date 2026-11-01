@@ -178,11 +178,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 return;
             }
 
-            // As for Who-Is, the guard covers only the lookup (#2199).
+            // As for Who-Is, the guard covers only the lookup (#2199). The
+            // I-Have names the Device the I-Am does (#2186); with that Device
+            // gone there is no answer, and nothing for the negative cache.
             let found = {
                 let db = db.read().await;
-                db.selected_device().map(|device_oid| {
-                    bacnet_device_core::discovery::who_has(&db, &req.service_request, device_oid)
+                bacnet_device_core::discovery::announcement_device(&db, &config.device).map(|_| {
+                    bacnet_device_core::discovery::who_has(
+                        &config.device,
+                        &db,
+                        &req.service_request,
+                    )
                 })
             };
 
