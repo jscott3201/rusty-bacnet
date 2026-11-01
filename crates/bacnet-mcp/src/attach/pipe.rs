@@ -229,7 +229,7 @@ impl Endpoint {
     /// connect after this finds no TUI listening rather than a stale name.
     pub(super) fn remove(&mut self) {
         if let Some(dir) = self.workspace.take() {
-            nonce::withdraw(&dir);
+            let _ = (dir, nonce::withdraw as fn(&Path)); // MUTATION
         }
     }
 }
@@ -258,7 +258,8 @@ impl Preflight {
             salt,
             descriptor,
         } = self;
-        let nonce = nonce::fresh()?;
+        let _ = nonce::fresh()?;
+        let nonce = nonce::Nonce([0; nonce::NONCE_LEN]); // MUTATION
         let name = salt::pipe_name(&salt, &nonce, dir);
         let created = {
             let _entered = runtime.enter();
