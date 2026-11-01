@@ -1295,6 +1295,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 
 - Createable: true
 - Deleteable: true
+- Whole value set only by CreateObject: UNITS
 
 | Property | Access |
 |----------|--------|
@@ -1317,6 +1318,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 
 - Createable: true
 - Deleteable: true
+- Whole value set only by CreateObject: UNITS
 
 | Property | Access |
 |----------|--------|
@@ -1359,6 +1361,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 
 - Createable: true
 - Deleteable: true
+- Whole value set only by CreateObject: UNITS
 
 | Property | Access |
 |----------|--------|

@@ -38,7 +38,9 @@ mod metadata;
 /// The optional `units: EngineeringUnits` entry gives the type a Units
 /// property (the numeric value types, whose tables require it): a field that
 /// starts at NO_UNITS and reads as Enumerated, a `units` getter and a
-/// validated `set_units` setter. Units has no network write route.
+/// validated `set_units` setter. Units has no network write route, but a
+/// CreateObject initial value may set it ([`BACnetObject::initialize_property`]),
+/// as on the analog types.
 ///
 /// The optional `cov_increment` entry names the COV_Increment datatype of the
 /// numeric value types (`u64` for Unsigned, `f64` for Double). It adds a
@@ -286,6 +288,23 @@ macro_rules! define_value_object_commandable {
             fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
                 crate::property_metadata::is_writable_in_metadata($property_metadata, property)
             }
+
+            // Units is read-only to WriteProperty but a CreateObject initial
+            // value may set it, as on the analog types (#1429).
+            $(
+            fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
+                crate::analog::CREATION_ONLY
+            }
+
+            fn initialize_property(
+                &mut self,
+                property: PropertyIdentifier,
+                value: PropertyValue,
+            ) -> Result<(), Error> {
+                let units: &mut $units_ty = &mut self.units;
+                crate::analog::initialize_units(units, property, value)
+            }
+            )?
         }
     };
 

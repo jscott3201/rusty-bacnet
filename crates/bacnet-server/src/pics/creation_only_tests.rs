@@ -54,6 +54,12 @@ fn each_createable_type_lists_what_only_creation_sets() {
         (ObjectType::ANALOG_OUTPUT, vec![P::UNITS]),
         // Createable since #2172, with Units as its siblings take it.
         (ObjectType::ANALOG_VALUE, vec![P::UNITS]),
+        // The numeric value types take Units the same way; the PICS lists
+        // them with no instance in the database.
+        (ObjectType::INTEGER_VALUE, vec![P::UNITS]),
+        (ObjectType::POSITIVE_INTEGER_VALUE, vec![P::UNITS]),
+        (ObjectType::LARGE_ANALOG_VALUE, vec![P::UNITS]),
+        (ObjectType::CHARACTERSTRING_VALUE, vec![]),
         (ObjectType::BINARY_VALUE, vec![]),
         (ObjectType::MULTI_STATE_INPUT, vec![]),
         (ObjectType::MULTI_STATE_OUTPUT, vec![]),
@@ -109,6 +115,6 @@ fn each_createable_type_lists_what_only_creation_sets() {
     assert!(markdown.contains("### BINARY_VALUE\n\n- Createable: true\n- Deleteable: true\n\n|"));
     assert_eq!(
         text.matches("Whole value set only by CreateObject").count(),
-        3
+        6
     );
 }

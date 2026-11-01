@@ -1,5 +1,6 @@
 //! CreateObject initializes a few properties WriteProperty can't change
-//! afterwards (#1429): Units on Analog Input and Output, and Number_Of_States
+//! afterwards (#1429): Units on the analog types and on Integer, Positive
+//! Integer and Large Analog Value (#2172), and Number_Of_States
 //! on the multi-state objects. Each goes through the object's
 //! `initialize_property`, keeps its checks, and stays WRITE_ACCESS_DENIED to
 //! a later WriteProperty. Number_Of_States applies before the other initial
@@ -71,9 +72,16 @@ fn refused(
 }
 
 #[test]
-fn an_analog_object_takes_units_at_creation_and_keeps_it_read_only() {
+fn an_analog_or_numeric_value_object_takes_units_at_creation_and_keeps_it_read_only() {
     let mut db = make_db_with_device_and_ai();
-    for object_type in [ObjectType::ANALOG_INPUT, ObjectType::ANALOG_OUTPUT] {
+    for object_type in [
+        ObjectType::ANALOG_INPUT,
+        ObjectType::ANALOG_OUTPUT,
+        ObjectType::ANALOG_VALUE,
+        ObjectType::INTEGER_VALUE,
+        ObjectType::POSITIVE_INTEGER_VALUE,
+        ObjectType::LARGE_ANALOG_VALUE,
+    ] {
         let celsius = units(EngineeringUnits::DEGREES_CELSIUS);
         let oid = create(
             &mut db,

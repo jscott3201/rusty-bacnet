@@ -1,4 +1,5 @@
-//! Units as a CreateObject initial value on the createable analog types
+//! Units as a CreateObject initial value on the createable analog and
+//! numeric value types
 //! (#1429): `initialize_property` sets it, checked as BACnetEngineeringUnits,
 //! while WriteProperty keeps refusing it.
 
@@ -17,12 +18,20 @@ fn code(result: Result<(), Error>) -> ErrorCode {
 }
 
 #[test]
-fn the_analog_types_take_units_only_at_creation() {
-    // Analog Value joined the other two when it became createable (#2172).
-    let objects: [Box<dyn BACnetObject>; 3] = [
+fn the_analog_and_numeric_value_types_take_units_only_at_creation() {
+    // Analog Value joined the other two when it became createable (#2172),
+    // and the three numeric value types, whose tables also make Units
+    // read-only, take it the same way.
+    use crate::value_types::{
+        IntegerValueObject, LargeAnalogValueObject, PositiveIntegerValueObject,
+    };
+    let objects: [Box<dyn BACnetObject>; 6] = [
         Box::new(AnalogInputObject::new(1, "AI-1", EngineeringUnits::NO_UNITS).unwrap()),
         Box::new(AnalogOutputObject::new(1, "AO-1", EngineeringUnits::NO_UNITS).unwrap()),
         Box::new(AnalogValueObject::new(1, "AV-1", EngineeringUnits::NO_UNITS).unwrap()),
+        Box::new(IntegerValueObject::new(1, "IV-1").unwrap()),
+        Box::new(PositiveIntegerValueObject::new(1, "PIV-1").unwrap()),
+        Box::new(LargeAnalogValueObject::new(1, "LAV-1").unwrap()),
     ];
     for mut object in objects {
         let kind = object.object_identifier().object_type();
