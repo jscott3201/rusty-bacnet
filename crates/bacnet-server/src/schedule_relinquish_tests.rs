@@ -19,7 +19,7 @@ use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject};
 use bacnet_objects::binary::BinaryValueObject;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::multistate::MultiStateValueObject;
-use bacnet_objects::traits::BACnetObject;
+use bacnet_objects::traits::{BACnetObject, ScheduleRunner};
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
@@ -98,6 +98,21 @@ impl BACnetObject for OwingSchedule {
 
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         crate::test_rows::read_only(&[])
+    }
+
+    fn schedule_runner(&mut self) -> Option<&mut dyn ScheduleRunner> {
+        Some(self)
+    }
+}
+
+impl ScheduleRunner for OwingSchedule {
+    fn tick_schedule(
+        &mut self,
+        _today: SpecificDate,
+        _time: Time,
+        _calendar_active: &dyn Fn(ObjectIdentifier) -> bool,
+    ) -> Option<ScheduleWrite> {
+        None
     }
 
     fn take_owed_schedule_writes(&mut self) -> Vec<ScheduleWrite> {

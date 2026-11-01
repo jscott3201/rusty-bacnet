@@ -12,7 +12,7 @@
 //! and a method added to a capability trait until it has a row here.
 
 use super::declared;
-use super::fixtures::{clocks, oid};
+use super::fixtures::{clocks, day, noon, oid, schedule_write};
 use super::rows::{Row, commit};
 use bacnet_objects::access_control::AccessEventReport;
 use bacnet_objects::channel::MemberDatatype;
@@ -21,12 +21,13 @@ use bacnet_objects::command_source::CommandOrigin;
 use bacnet_objects::event_enrollment::{
     EventEnrollmentEvalState, EventEnrollmentReliabilityCommit,
 };
+use bacnet_objects::schedule::ScheduleTargetOutcome;
 use bacnet_objects::traits::LocalInputValue;
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
 use bacnet_types::enums::{
     AccessEvent, EventState, LifeSafetyOperation, ObjectType, PropertyIdentifier as P, Reliability,
 };
-use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
+use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue};
 use std::collections::BTreeSet;
 use std::time::Duration;
 
@@ -37,6 +38,10 @@ const SOURCES: &[(&str, &str)] = &[
     (
         "access_events",
         include_str!("../../../src/traits/capabilities/access_events.rs"),
+    ),
+    (
+        "calendar_state",
+        include_str!("../../../src/traits/capabilities/calendar_state.rs"),
     ),
     (
         "command_runner",
@@ -61,6 +66,10 @@ const SOURCES: &[(&str, &str)] = &[
     (
         "reliability_eval",
         include_str!("../../../src/traits/capabilities/reliability_eval.rs"),
+    ),
+    (
+        "schedule_runner",
+        include_str!("../../../src/traits/capabilities/schedule_runner.rs"),
     ),
     (
         "staging_source",
@@ -377,6 +386,47 @@ pub const CAPABILITY_ROWS: &[(&str, Row)] = &[
                 .map(|r| r.set_reliability(Reliability::OVER_RANGE));
             format!("{set:?}")
         }),
+    ),
+    (
+        "ScheduleRunner::tick_schedule",
+        Row::Command(|o| {
+            let calendars = |calendar: ObjectIdentifier| calendar.instance_number() == 4;
+            let write = o
+                .schedule_runner()
+                .map(|r| r.tick_schedule(day(), noon(), &calendars));
+            format!("{write:?}")
+        }),
+    ),
+    (
+        "ScheduleRunner::take_owed_schedule_writes",
+        Row::Command(|o| {
+            let owed = o.schedule_runner().map(|r| r.take_owed_schedule_writes());
+            format!("{owed:?}")
+        }),
+    ),
+    (
+        "ScheduleRunner::complete_schedule_write",
+        Row::Command(|o| {
+            let outcomes = [ScheduleTargetOutcome::DatatypeRefused];
+            let changed = o
+                .schedule_runner()
+                .map(|r| r.complete_schedule_write(&schedule_write(2), &outcomes));
+            format!("{changed:?}")
+        }),
+    ),
+    (
+        "ScheduleRunner::retry_refusals_naming",
+        Row::Command(|o| {
+            let target = oid(ObjectType::ANALOG_VALUE, 9);
+            let retry = o.schedule_runner().map(|r| r.retry_refusals_naming(target));
+            format!("{retry:?}")
+        }),
+    ),
+    // Through the shared accessor, the one a host's read guard lends, so a
+    // read-only view runs it as well.
+    (
+        "CalendarState::state_on",
+        Row::Query(|o| format!("{:?}", o.calendar_state().map(|c| c.state_on(day())))),
     ),
 ];
 

@@ -2,10 +2,18 @@ use super::*;
 use bacnet_objects::schedule::{
     CalendarObject, ScheduleObject, ScheduleTargetOutcome, ScheduleWrite,
 };
+use bacnet_objects::traits::ScheduleRunner;
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::constructed::{BACnetCalendarEntry, BACnetObjectPropertyReference};
 use bacnet_types::enums::Reliability;
 use bacnet_types::primitives::Time;
+
+/// The wrapped Schedule's runner, through the wrapper's accessor.
+fn runner(object: &mut Box<dyn BACnetObject>) -> &mut dyn ScheduleRunner {
+    object
+        .schedule_runner()
+        .expect("the wrapper lends the Schedule's runner")
+}
 
 #[test]
 fn source_reporter_forwards_complete_schedule_targets() {
@@ -44,7 +52,7 @@ fn source_reporter_forwards_complete_schedule_targets() {
     };
     let no_calendars = |_: ObjectIdentifier| false;
     assert_eq!(
-        object.tick_schedule(today, noon, &no_calendars),
+        runner(&mut object).tick_schedule(today, noon, &no_calendars),
         Some(ScheduleWrite {
             value: PropertyValue::Unsigned(2),
             priority: 16,
@@ -52,7 +60,11 @@ fn source_reporter_forwards_complete_schedule_targets() {
             retry: false,
         })
     );
-    assert!(object.tick_schedule(today, noon, &no_calendars).is_none());
+    assert!(
+        runner(&mut object)
+            .tick_schedule(today, noon, &no_calendars)
+            .is_none()
+    );
 
     // A Present_Value written out of service is owed through the wrapper.
     for (property, value) in [
@@ -73,8 +85,8 @@ fn source_reporter_forwards_complete_schedule_targets() {
         references: refs.clone(),
         retry: false,
     };
-    assert_eq!(object.take_owed_schedule_writes(), [simulated]);
-    assert!(object.take_owed_schedule_writes().is_empty());
+    assert_eq!(runner(&mut object).take_owed_schedule_writes(), [simulated]);
+    assert!(runner(&mut object).take_owed_schedule_writes().is_empty());
 
     // A dropped reference is relinquished through the wrapper, and a target
     // refusing the schedule's datatype faults it (#1088, #1086).
@@ -89,7 +101,7 @@ fn source_reporter_forwards_complete_schedule_targets() {
         )
         .unwrap();
     assert_eq!(
-        object.take_owed_schedule_writes(),
+        runner(&mut object).take_owed_schedule_writes(),
         [
             ScheduleWrite {
                 value: PropertyValue::Null,
@@ -113,7 +125,7 @@ fn source_reporter_forwards_complete_schedule_targets() {
             None,
         )
         .unwrap();
-    assert!(object.complete_schedule_write(
+    assert!(runner(&mut object).complete_schedule_write(
         &ScheduleWrite {
             value: PropertyValue::Unsigned(2),
             priority: 16,
@@ -146,6 +158,7 @@ fn source_reporter_forwards_calendar_state() {
     source_reporter::install(&mut object, &owner).unwrap();
     for (day, expected) in [(25, true), (24, false)] {
         let day = SpecificDate::new(2026, 12, day).unwrap();
-        assert_eq!(object.calendar_state_internal(day), Some(expected));
+        let state = object.calendar_state().map(|state| state.state_on(day));
+        assert_eq!(state, Some(expected));
     }
 }

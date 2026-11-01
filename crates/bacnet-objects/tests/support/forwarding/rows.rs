@@ -2,12 +2,11 @@
 //! answer rendered as text. Capabilities render as the address they borrow.
 
 use super::capabilities::CAPABILITY_ROWS;
-use super::fixtures::{address, day, noon, oid, schedule_write};
+use super::fixtures::{address, noon, oid};
 use super::probe::{CUSTOM, CUSTOM_LIST};
 use bacnet_objects::accumulator::InputReading;
 use bacnet_objects::command_source::CommandOrigin;
 use bacnet_objects::event::{EventStateChange, EventTransition, EventTransitionCommit};
-use bacnet_objects::schedule::ScheduleTargetOutcome;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
 use bacnet_types::constructed::{
@@ -180,14 +179,8 @@ pub const QUERIES: &[(&str, Query)] = &[
     ("cov_reported_properties", |o| {
         format!("{:?}", o.cov_reported_properties())
     }),
-    ("calendar_state_internal", |o| {
-        format!("{:?}", o.calendar_state_internal(day()))
-    }),
-    ("retry_refusals_naming", |o| {
-        format!(
-            "{:?}",
-            o.retry_refusals_naming(oid(ObjectType::ANALOG_VALUE, 9))
-        )
+    ("calendar_state", |o| {
+        format!("{:?}", o.calendar_state().map(address))
     }),
     ("input_reference_internal", |o| {
         format!("{:?}", o.input_reference_internal())
@@ -318,21 +311,11 @@ pub const COMMANDS: &[(&str, Command)] = &[
     ("reliability_eval", |o| {
         format!("{:?}", o.reliability_eval().map(|eval| address(eval)))
     }),
+    ("schedule_runner", |o| {
+        format!("{:?}", o.schedule_runner().map(|runner| address(runner)))
+    }),
     ("set_overridden", |o| {
         format!("{:?}", o.set_overridden(true))
-    }),
-    ("tick_schedule", |o| {
-        let calendars =
-            |calendar: bacnet_types::primitives::ObjectIdentifier| calendar.instance_number() == 4;
-        format!("{:?}", o.tick_schedule(day(), noon(), &calendars))
-    }),
-    ("take_owed_schedule_writes", |o| {
-        format!("{:?}", o.take_owed_schedule_writes())
-    }),
-    ("complete_schedule_write", |o| {
-        let outcomes = [ScheduleTargetOutcome::DatatypeRefused];
-        o.complete_schedule_write(&schedule_write(2), &outcomes)
-            .to_string()
     }),
     ("take_due_averaging_sample_internal", |o| {
         format!(

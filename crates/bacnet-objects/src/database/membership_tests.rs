@@ -6,7 +6,7 @@
 use super::*;
 use crate::analog::AnalogValueObject;
 use crate::schedule::{ScheduleObject, ScheduleTargetOutcome};
-use crate::traits::BACnetObject;
+use crate::traits::ScheduleRunner;
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::{EngineeringUnits, PropertyIdentifier};
