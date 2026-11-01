@@ -478,10 +478,6 @@ impl BACnetObject for LifeSafetyPointObject {
         metadata::for_point(self)
     }
 
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
-    }
-
     fn supports_cov(&self) -> bool {
         true
     }
@@ -780,10 +776,6 @@ impl BACnetObject for LifeSafetyZoneObject {
 
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
         metadata::for_zone(self)
-    }
-
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
     fn supports_cov(&self) -> bool {

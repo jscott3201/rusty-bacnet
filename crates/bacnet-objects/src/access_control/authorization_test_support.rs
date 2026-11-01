@@ -205,9 +205,7 @@ pub(super) fn snapshot(db: &ObjectDatabase) -> Vec<(ObjectIdentifier, P, String)
     ids.into_iter()
         .flat_map(|id| {
             let object = db.get(&id).unwrap();
-            object
-                .property_list()
-                .into_owned()
+            crate::test_rows::listed(&object.property_metadata())
                 .into_iter()
                 .map(move |p| (id, p, format!("{:?}", object.read_property(p, None))))
         })

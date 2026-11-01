@@ -327,9 +327,10 @@ async fn audit_reporter_monitored_objects_network_writes_are_denied_without_muta
                         before
                     );
                     assert_eq!(
-                        object
-                            .property_list()
-                            .contains(&PropertyIdentifier::MONITORED_OBJECTS),
+                        bacnet_objects::property_metadata::has_property(
+                            &object.property_metadata(),
+                            PropertyIdentifier::MONITORED_OBJECTS
+                        ),
                         selection.is_some()
                     );
                     assert_eq!(

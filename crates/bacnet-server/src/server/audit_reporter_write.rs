@@ -1,5 +1,6 @@
 //! Per-element pre-state selection and successful policy-change exceptions.
 use super::*;
+use bacnet_objects::property_metadata::has_property;
 use bacnet_types::error::RemoteError;
 
 pub(super) struct WriteSelection {
@@ -64,9 +65,10 @@ impl<T: TransportPort + 'static> WriteCommitObserver for WriteAudit<'_, T> {
         // the write.
         let command_priority = (write.property == PropertyIdentifier::PRESENT_VALUE
             && (write.oid.object_type() == ObjectType::CHANNEL
-                || object
-                    .property_list()
-                    .contains(&PropertyIdentifier::PRIORITY_ARRAY)))
+                || has_property(
+                    &object.property_metadata(),
+                    PropertyIdentifier::PRIORITY_ARRAY,
+                )))
         .then_some(write.priority.unwrap_or(16));
         let object_policy = object.audit_object_policy_internal();
         let policy = object_policy.effective_internal(reporter);

@@ -23,12 +23,9 @@ impl BACnetObject for Counted {
         self.inner.object_name()
     }
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
-        self.inner.property_metadata()
-    }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.projections.fetch_add(1, Ordering::SeqCst);
-        self.inner.property_list()
+        self.inner.property_metadata()
     }
     fn read_property(
         &self,

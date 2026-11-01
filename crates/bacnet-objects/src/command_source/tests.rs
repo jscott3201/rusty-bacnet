@@ -338,7 +338,10 @@ fn command_source_invalid_writes_are_atomic_and_metadata_is_paired() {
             let row = rows.iter().find(|r| r.property_identifier == p).unwrap();
             assert!(row.is_required());
             assert_eq!(row.write_capability.is_writable(), p == P::VALUE_SOURCE);
-            assert!(o.property_list().contains(&p));
+            assert!(crate::property_metadata::has_property(
+                &o.property_metadata(),
+                p
+            ));
         }
     }
 }

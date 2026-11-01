@@ -22,7 +22,7 @@ fn every_served_property_follows_the_shared_collection_table() {
     let mut failures = Vec::new();
     for object in &objects {
         let object_type = object.object_identifier().object_type();
-        for &property in object.property_list().iter() {
+        for &property in crate::test_rows::listed(&object.property_metadata()).iter() {
             let array = standard_array_property(object_type, property);
             let list = standard_list_property(object_type, property);
             if object.is_array_property(property) != array
@@ -52,7 +52,7 @@ fn every_served_array_reads_its_size_at_index_zero() {
     let mut failures = Vec::new();
     for object in &objects {
         let object_type = object.object_identifier().object_type();
-        for &property in object.property_list().iter() {
+        for &property in crate::test_rows::listed(&object.property_metadata()).iter() {
             if !standard_array_property(object_type, property) {
                 continue;
             }

@@ -68,9 +68,6 @@ impl BACnetObject for Lenient {
         )];
         Cow::Borrowed(ROWS)
     }
-    fn property_list(&self) -> Cow<'static, [P]> {
-        Cow::Borrowed(&[P::PRESENT_VALUE])
-    }
 }
 
 fn identity() -> DeviceIdentity {

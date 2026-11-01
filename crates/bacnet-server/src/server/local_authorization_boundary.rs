@@ -81,15 +81,6 @@ impl BACnetObject for Boundary {
         }
         Cow::Owned(rows)
     }
-    fn property_list(&self) -> Cow<'static, [P]> {
-        let mut properties = self.inner.property_list().into_owned();
-        for (p, _) in &self.overrides {
-            if !properties.contains(p) {
-                properties.push(*p);
-            }
-        }
-        Cow::Owned(properties)
-    }
     fn timed(&mut self) -> Option<&mut dyn bacnet_objects::traits::Timed> {
         self.inner.timed()
     }

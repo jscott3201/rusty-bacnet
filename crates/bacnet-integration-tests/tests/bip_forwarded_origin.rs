@@ -15,6 +15,7 @@ use std::net::Ipv4Addr;
 use bacnet_network::router::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
 use bacnet_transport::any::AnyTransport;
 use bacnet_transport::bip::BipTransport;
+use bacnet_transport::bvll::decode_bip_mac;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::MacAddr;
@@ -30,45 +31,33 @@ const OTHER_NET: u16 = 2;
 const ORIGIN: [u8; 6] = [198, 51, 100, 10, 0xBA, 0xC1];
 
 /// A router whose B/IP port is on loopback, its broadcasts to its own
-/// address, at a UDP port picked here so the test can address it; its
-/// other port's far end, the station at MAC 0x05; where the router's
-/// unicasts there went; and the B/IP port.
-///
-/// The transport binds its own socket, so the pick has to let go of the
-/// port before the router takes it, and another process can take it in
-/// between: a start that fails is tried again on a fresh port.
+/// address, at a UDP port the OS picks; its other port's far end, the
+/// station at MAC 0x05; where the router's unicasts there went; and the
+/// B/IP port, read back from the started router so the test can address it.
 async fn start() -> (
     BACnetRouter,
     LoopbackTransport,
     mpsc::UnboundedReceiver<MacAddr>,
     u16,
 ) {
-    for _ in 0..8 {
-        let port = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
-        let bip = BipTransport::new(Ipv4Addr::LOCALHOST, port, Ipv4Addr::LOCALHOST);
-        let (mut router_end, station) = LoopbackTransport::pair(vec![0x01], vec![0x05]);
-        let unicast_to = router_end.record_unicast_destinations();
-        let ports = vec![
-            RouterPort {
-                transport: AnyTransport::Bip(Box::new(bip)),
-                network_number: BIP_NET,
-            },
-            RouterPort {
-                transport: AnyTransport::Loopback(router_end),
-                network_number: OTHER_NET,
-            },
-        ];
-        if let Ok(StartedRouter { router, .. }) =
-            BACnetRouter::start(ports, RouterOptions::new()).await
-        {
-            return (router, station, unicast_to, port);
-        }
-    }
-    panic!("no loopback UDP port the router could bind");
+    let bip = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOST);
+    let (mut router_end, station) = LoopbackTransport::pair(vec![0x01], vec![0x05]);
+    let unicast_to = router_end.record_unicast_destinations();
+    let ports = vec![
+        RouterPort {
+            transport: AnyTransport::Bip(Box::new(bip)),
+            network_number: BIP_NET,
+        },
+        RouterPort {
+            transport: AnyTransport::Loopback(router_end),
+            network_number: OTHER_NET,
+        },
+    ];
+    let StartedRouter { router, .. } = BACnetRouter::start(ports, RouterOptions::new())
+        .await
+        .expect("the router binds its ports");
+    let (_, port) = decode_bip_mac(router.ports()[0].local_mac()).unwrap();
+    (router, station, unicast_to, port)
 }
 
 #[tokio::test]

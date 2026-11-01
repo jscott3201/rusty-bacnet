@@ -155,10 +155,10 @@ fn device_set_description_convenience() {
 #[test]
 fn device_description_in_property_list() {
     let dev = make_device();
-    assert!(
-        dev.property_list()
-            .contains(&PropertyIdentifier::DESCRIPTION)
-    );
+    assert!(crate::property_metadata::has_property(
+        &dev.property_metadata(),
+        PropertyIdentifier::DESCRIPTION
+    ));
 }
 
 #[test]
@@ -268,14 +268,23 @@ fn set_system_status_through_the_device_authority() {
 #[test]
 fn property_list_contains_expected() {
     let dev = make_device();
-    let props = dev.property_list();
-    assert!(props.contains(&PropertyIdentifier::OBJECT_IDENTIFIER));
-    assert!(props.contains(&PropertyIdentifier::OBJECT_NAME));
-    assert!(props.contains(&PropertyIdentifier::OBJECT_TYPE));
+    let props = crate::test_rows::listed(&dev.property_metadata());
+    // Property_List leaves out the identity properties and itself, which
+    // are rows like the rest (Clause 12.1.1.4.1).
+    for excluded in [
+        PropertyIdentifier::OBJECT_IDENTIFIER,
+        PropertyIdentifier::OBJECT_NAME,
+        PropertyIdentifier::OBJECT_TYPE,
+        PropertyIdentifier::PROPERTY_LIST,
+    ] {
+        assert!(!props.contains(&excluded));
+        assert!(crate::property_metadata::has_property(
+            &dev.property_metadata(),
+            excluded
+        ));
+    }
     assert!(props.contains(&PropertyIdentifier::VENDOR_NAME));
     assert!(props.contains(&PropertyIdentifier::OBJECT_LIST));
-    // Property_List is a row, but the list leaves it out as every type's does (#2174).
-    assert!(!props.contains(&PropertyIdentifier::PROPERTY_LIST));
     assert!(props.contains(&PropertyIdentifier::PROTOCOL_OBJECT_TYPES_SUPPORTED));
     assert!(props.contains(&PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED));
 }
@@ -351,7 +360,7 @@ fn clockless_device_omits_clock_properties_and_sync_services() {
     use bacnet_types::bitstring::ServicesSupported;
 
     let dev = make_device();
-    let props = dev.property_list();
+    let props = crate::test_rows::listed(&dev.property_metadata());
     for property in [
         PropertyIdentifier::LOCAL_DATE,
         PropertyIdentifier::LOCAL_TIME,
@@ -412,7 +421,10 @@ fn bound_device_reads_one_advancing_clock_source() {
         PropertyIdentifier::UTC_OFFSET,
         PropertyIdentifier::DAYLIGHT_SAVINGS_STATUS,
     ] {
-        assert!(dev.property_list().contains(&property));
+        assert!(crate::property_metadata::has_property(
+            &dev.property_metadata(),
+            property
+        ));
     }
 }
 
@@ -450,10 +462,10 @@ fn active_cov_subscriptions_default_empty() {
 #[test]
 fn active_cov_subscriptions_in_property_list() {
     let dev = make_device();
-    assert!(
-        dev.property_list()
-            .contains(&PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS)
-    );
+    assert!(crate::property_metadata::has_property(
+        &dev.property_metadata(),
+        PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS
+    ));
 }
 
 #[test]
@@ -480,7 +492,10 @@ fn active_cov_multiple_subscriptions_standalone_optional_read_only_list() {
         dev.read_property(property, None).unwrap(),
         PropertyValue::ApplicationData(Vec::new())
     );
-    assert!(dev.property_list().contains(&property));
+    assert!(crate::property_metadata::has_property(
+        &dev.property_metadata(),
+        property
+    ));
     let metadata = dev.property_metadata();
     let row = metadata
         .iter()
@@ -603,7 +618,10 @@ fn device_property_metadata_preserves_dynamic_list_and_write_dispatch() {
                 .copied()
                 .filter(|p| *p != P::PROPERTY_LIST)
                 .collect();
-            assert_eq!(device.property_list().as_ref(), listed);
+            assert_eq!(
+                crate::test_rows::listed(&device.property_metadata()),
+                crate::test_rows::listed_from(&listed)
+            );
             let wire: Vec<_> = expected
                 .iter()
                 .copied()

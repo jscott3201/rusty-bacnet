@@ -419,6 +419,59 @@ mod tests {
         assert_eq!(one, [PropertyIdentifier::PRESENT_VALUE]);
     }
 
+    /// For every catalogue type, REQUIRED is the rows' required properties
+    /// and ALL the rows, each without Property_List, and OPTIONAL the rest
+    /// of the rows (#2197).
+    #[test]
+    fn every_catalogue_type_expands_from_its_rows() {
+        use bacnet_objects::property_metadata::required_properties;
+        let expanded = |object: &dyn BACnetObject, id| {
+            let mut properties = Vec::new();
+            expand(object, &reference(id), |property| {
+                properties.push(property);
+                Ok(())
+            })
+            .unwrap();
+            properties
+        };
+        let objects = bacnet_objects::catalogue::representatives();
+        // bacnet-objects checks the catalogue holds one object per supported type.
+        assert!(!objects.is_empty());
+        for object in &objects {
+            let object = object.as_ref();
+            let object_type = object.object_identifier().object_type();
+            let rows = object.property_metadata();
+            let required: Vec<_> = required_properties(&rows)
+                .filter(|&p| p != PropertyIdentifier::PROPERTY_LIST)
+                .collect();
+            assert_eq!(
+                expanded(object, PropertyIdentifier::REQUIRED),
+                required,
+                "{object_type:?} REQUIRED"
+            );
+            let all: Vec<_> = rows
+                .iter()
+                .map(|row| row.property_identifier)
+                .filter(|&p| p != PropertyIdentifier::PROPERTY_LIST)
+                .collect();
+            assert_eq!(
+                expanded(object, PropertyIdentifier::ALL),
+                all,
+                "{object_type:?} ALL"
+            );
+            let optional: Vec<_> = all
+                .iter()
+                .copied()
+                .filter(|p| !required.contains(p))
+                .collect();
+            assert_eq!(
+                expanded(object, PropertyIdentifier::OPTIONAL),
+                optional,
+                "{object_type:?} OPTIONAL"
+            );
+        }
+    }
+
     /// A plan counts the expanded rows, and fits a limit of exactly that.
     #[test]
     fn a_plan_counts_its_expanded_rows_against_the_limit() {

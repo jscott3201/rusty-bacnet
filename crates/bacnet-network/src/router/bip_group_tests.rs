@@ -202,14 +202,7 @@ fn routed(dadr: [u8; 6], apdu: &[u8]) -> Vec<u8> {
 async fn mstp_six_byte_bip_group_destinations_reach_the_bip_port_only_as_broadcasts() {
     let (router_serial, peer_serial) = LoopbackSerial::pair();
     let sent = Arc::new(Mutex::new(Vec::new()));
-    // A known port, so the groups at it and at another can be named.
-    let port = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
-    let other = port.checked_add(1).unwrap_or(port - 1);
-    let bip = BipTransport::new(Ipv4Addr::LOCALHOST, port, Ipv4Addr::new(192, 0, 2, 255));
+    let bip = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::new(192, 0, 2, 255));
     let ports = vec![
         RouterPort {
             transport: Port::Mstp(MstpTransport::new(router_serial, station(0))),
@@ -226,6 +219,10 @@ async fn mstp_six_byte_bip_group_destinations_reach_the_bip_port_only_as_broadca
     let StartedRouter { mut router, .. } = BACnetRouter::start(ports, RouterOptions::new())
         .await
         .unwrap();
+    // The port the OS gave the B/IP port, so the groups at it and at another
+    // can be named.
+    let (_, port) = bacnet_transport::bvll::decode_bip_mac(router.ports()[1].local_mac()).unwrap();
+    let other = port.checked_add(1).unwrap_or(port - 1);
     let mut peer = MstpTransport::new(peer_serial, station(1));
     let _from_router = peer.start().await.unwrap();
     // The router's own I-Am-Router-To-Network on the B/IP port.

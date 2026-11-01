@@ -226,9 +226,6 @@ fn routing_skips_delivery_when_stored_recipient_list_is_malformed() {
         fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
             crate::test_rows::read_only(&[PropertyIdentifier::NOTIFICATION_CLASS])
         }
-        fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-            crate::property_metadata::property_list_from_metadata(&self.property_metadata())
-        }
     }
 
     let oid = ObjectIdentifier::new(ObjectType::NOTIFICATION_CLASS, 1).unwrap();

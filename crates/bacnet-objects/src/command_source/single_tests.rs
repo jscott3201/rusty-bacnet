@@ -95,7 +95,10 @@ fn write_from(
 fn untracked_noncommandable_values_have_no_value_source() {
     for access in [PresentValueAccess::Writable, PresentValueAccess::ReadOnly] {
         for (mut object, _) in values(access, false) {
-            assert!(!object.property_list().contains(&P::VALUE_SOURCE));
+            assert!(!crate::property_metadata::has_property(
+                &object.property_metadata(),
+                P::VALUE_SOURCE
+            ));
             assert_code(
                 object.read_property(P::VALUE_SOURCE, None),
                 ErrorCode::UNKNOWN_PROPERTY,
@@ -120,13 +123,19 @@ fn tracked_noncommandable_values_list_a_required_value_source() {
     for access in [PresentValueAccess::Writable, PresentValueAccess::ReadOnly] {
         let untracked: Vec<_> = values(access, false)
             .into_iter()
-            .map(|(object, _)| object.property_list().into_owned())
+            .map(|(object, _)| crate::test_rows::listed(&object.property_metadata()))
             .collect();
         for ((object, _), mut expected) in values(access, true).into_iter().zip(untracked) {
             // Where a commandable object lists it: last, before Property_List.
             expected.push(P::VALUE_SOURCE);
-            assert_eq!(object.property_list().as_ref(), expected);
-            assert!(object.required_properties().contains(&P::VALUE_SOURCE));
+            assert_eq!(
+                crate::test_rows::listed(&object.property_metadata()),
+                crate::test_rows::listed_from(&expected)
+            );
+            assert!(
+                crate::property_metadata::required_properties(&object.property_metadata())
+                    .any(|required| required == P::VALUE_SOURCE)
+            );
             let metadata = object.property_metadata();
             let row = metadata
                 .iter()

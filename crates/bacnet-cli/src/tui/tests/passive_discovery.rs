@@ -101,12 +101,27 @@ pub(super) struct Passive {
 }
 impl Passive {
     pub(super) async fn start(plan: ConnectPlan) -> Self {
+        Self::try_start(plan)
+            .await
+            .expect("listener on a free port")
+    }
+    /// [`Self::start`] on a port the test chose before the listener binds it.
+    /// A failed start probes that port: when another socket holds it, the
+    /// probe's bind error goes back to `rerun_on_lost_port` (#2216). A failure
+    /// on a free port panics.
+    pub(super) async fn try_start(plan: ConnectPlan) -> std::io::Result<Self> {
+        let port = plan.args.port;
         let (sink, mut events) = EventSink::channel(32);
         let (commands, command_rx) = mpsc::channel(16);
         let task = session::spawn(plan, sink, command_rx, options());
         let mut app = new_app(None);
         app.safety.passive = true;
         let event = events.recv().await.unwrap();
+        if let WorkerEvent::ConnectFailed { .. } = event
+            && port != 0
+        {
+            std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, port))?;
+        }
         let WorkerEvent::PassiveListening { ref local, .. } = event else {
             panic!("{event:?}")
         };
@@ -115,13 +130,13 @@ impl Passive {
         let event = events.recv().await.unwrap();
         assert!(matches!(event, WorkerEvent::Safety(_)));
         worker(&mut app, event);
-        Self {
+        Ok(Self {
             app,
             commands,
             events,
             task,
             address,
-        }
+        })
     }
     pub(super) async fn observation(&mut self) -> DiscoveryEvent {
         loop {
@@ -145,10 +160,14 @@ impl Passive {
         );
     }
     pub(super) async fn stop(self) {
+        self.close().await.expect("one-shot immediate rebind");
+    }
+    /// Disconnect, join the session, then give back the result of binding the
+    /// listener's address once, which proves the listener let it go.
+    pub(super) async fn close(self) -> std::io::Result<()> {
         self.commands.send(Command::Disconnect).await.unwrap();
         self.task.await.unwrap().unwrap();
-        let rebound = std::net::UdpSocket::bind(self.address).expect("one-shot immediate rebind");
-        drop(rebound);
+        std::net::UdpSocket::bind(self.address).map(drop)
     }
 }
 
@@ -276,23 +295,30 @@ async fn passive_native_ihaves_keep_local_forwarded_and_routed_stations() {
     net.stop().await;
 }
 
+/// The positive control's node binds a port the OS picks, so nothing frees a
+/// port before that first bind (#2216). The passive listener then binds the
+/// same port, so one port-scoped observer seam covers both runs. Another
+/// process can take the port after the node lets it go or after the listener
+/// does (before the closing probe), so a lost port reruns the test.
 #[tokio::test]
 async fn passive_zero_send_attempts_with_active_positive_control_and_hostile_traffic() {
+    super::port_retry::rerun_on_lost_port(zero_send_attempts).await;
+}
+
+async fn zero_send_attempts() -> std::io::Result<()> {
     use crate::tui::network::discovery::DiscoveryCommand;
     use bacnet_transport::{
         bip::{BipTransport, SendAttemptObserver},
+        bvll::decode_bip_mac,
         port::TransportPort,
     };
-    let reserved = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    let address = match reserved.local_addr().unwrap() {
-        std::net::SocketAddr::V4(a) => a,
-        _ => unreachable!(),
-    };
     let peer = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
-    drop(reserved);
-    let positive = SendAttemptObserver::new(address.port());
-    let mut active = BipTransport::new(Ipv4Addr::LOCALHOST, address.port(), Ipv4Addr::LOCALHOST);
+    let mut active = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOST);
     let _received = active.start().await.unwrap();
+    let (_, port) = decode_bip_mac(active.local_mac()).unwrap();
+    let address = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
+    // The control needs only a nonzero count, so the observer can start late.
+    let positive = SendAttemptObserver::new(port);
     peer.send_to(&wire(Bvll::ReadBroadcastDistributionTable), address)
         .await
         .unwrap();
@@ -316,7 +342,7 @@ async fn passive_zero_send_attempts_with_active_positive_control_and_hostile_tra
     };
     let mut plan = super::network::plan(Some(bbmd));
     plan.args.port = address.port();
-    let mut net = Passive::start(plan).await;
+    let mut net = Passive::try_start(plan).await?;
     assert_eq!(net.address, address);
     assert!(
         net.app
@@ -377,7 +403,7 @@ async fn passive_zero_send_attempts_with_active_positive_control_and_hostile_tra
         matches!(net.observation().await, DiscoveryEvent::IHave(_)),
         "causal receive fence"
     );
-    net.stop().await;
+    let released = net.close().await;
     assert_eq!(
         observer.attempts(),
         0,
@@ -387,6 +413,7 @@ async fn passive_zero_send_attempts_with_active_positive_control_and_hostile_tra
         peer.try_recv_from(&mut reply).unwrap_err().kind(),
         std::io::ErrorKind::WouldBlock
     );
+    released
 }
 
 #[tokio::test]

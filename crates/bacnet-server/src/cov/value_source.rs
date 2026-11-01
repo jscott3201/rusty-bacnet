@@ -1,6 +1,7 @@
 //! Table 13-1a-2 Value_Source capture, shared by Single and Multiple.
 use super::{CovObservation, CovSample, flags::PreparedFlags, prepare::PreparedCovValue};
 use bacnet_encoding::{constructed::decode_value_source, primitives::decode_timestamp_choice};
+use bacnet_objects::property_metadata::has_property;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_types::{
@@ -36,8 +37,8 @@ pub(crate) fn applies(object: &dyn BACnetObject, property: P) -> bool {
     if property != P::VALUE_SOURCE {
         return false;
     }
-    let properties = object.property_list();
-    let commandable = properties.contains(&P::PRIORITY_ARRAY);
+    let rows = object.property_metadata();
+    let commandable = has_property(&rows, P::PRIORITY_ARRAY);
     match object.object_identifier().object_type() {
         O::ANALOG_OUTPUT
         | O::BINARY_OUTPUT
@@ -45,9 +46,9 @@ pub(crate) fn applies(object: &dyn BACnetObject, property: P) -> bool {
         | O::LIGHTING_OUTPUT
         | O::BINARY_LIGHTING_OUTPUT => commandable,
         O::ANALOG_VALUE | O::BINARY_VALUE | O::MULTI_STATE_VALUE => {
-            commandable || properties.contains(&P::VALUE_SOURCE)
+            commandable || has_property(&rows, P::VALUE_SOURCE)
         }
-        O::COLOR | O::COLOR_TEMPERATURE => properties.contains(&P::VALUE_SOURCE),
+        O::COLOR | O::COLOR_TEMPERATURE => has_property(&rows, P::VALUE_SOURCE),
         _ => false,
     }
 }
@@ -63,7 +64,7 @@ pub(crate) struct PreparedValueSource {
 }
 impl PreparedValueSource {
     pub fn read(object: &dyn BACnetObject, flags: &PreparedFlags) -> Result<Self, Error> {
-        let commandable = object.property_list().contains(&P::PRIORITY_ARRAY);
+        let commandable = has_property(&object.property_metadata(), P::PRIORITY_ARRAY);
         let properties = fields(commandable, flags.value.is_some());
         let mut fields = Vec::with_capacity(properties.len());
         for &property in properties {

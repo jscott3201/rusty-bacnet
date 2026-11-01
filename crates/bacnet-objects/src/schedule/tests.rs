@@ -360,7 +360,7 @@ fn schedule_opr_list_multiple_references() {
 #[test]
 fn schedule_property_list_contains_new_properties() {
     let sched = ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(72.0)).unwrap();
-    let props = sched.property_list();
+    let props = crate::test_rows::listed(&sched.property_metadata());
     assert!(props.contains(&PropertyIdentifier::WEEKLY_SCHEDULE));
     assert!(props.contains(&PropertyIdentifier::EXCEPTION_SCHEDULE));
     assert!(props.contains(&PropertyIdentifier::EFFECTIVE_PERIOD));

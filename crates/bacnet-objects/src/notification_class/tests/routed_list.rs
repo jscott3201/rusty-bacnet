@@ -79,9 +79,6 @@ impl BACnetObject for CustomClass {
             PropertyIdentifier::RECIPIENT_LIST,
         ])
     }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        crate::property_metadata::property_list_from_metadata(&self.property_metadata())
-    }
 }
 
 /// Selected recipients: the recipient, process identifier and confirmed flag.

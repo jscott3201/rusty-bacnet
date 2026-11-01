@@ -12,8 +12,7 @@ use crate::property_metadata::{
 // Canonical effective rows for the Accumulator (type 23, ASHRAE 135-2020
 // §12.61 Table 12-79; printed pp. 601-609 / PDF pp. 603-611). The Pulse
 // Converter keeps its own rows in pulse_converter/metadata.rs.
-// Order preserves the legacy projection; PROPERTY_LIST is appended so the
-// projection helper omits it while required_properties keeps it. Only
+// Order preserves the earlier row order; PROPERTY_LIST is appended last. Only
 // implemented rows are described: table rows the object does not serve
 // (Device_Type, Value_Change_Time, Logging_Record, Logging_Object,
 // High/Limit rows, Limit_Enable, event/intrinsic/audit/tag/profile rows) stay
@@ -112,8 +111,14 @@ mod tests {
     fn assert_exact_sets(object: &dyn BACnetObject, all: &[P], required: &[P]) {
         let metadata = object.property_metadata();
         assert_eq!(metadata.len(), all.len() + 1);
-        assert_eq!(object.property_list().as_ref(), all);
-        assert_eq!(object.required_properties().as_ref(), required);
+        assert_eq!(
+            crate::test_rows::listed(&object.property_metadata()),
+            crate::test_rows::listed_from(all)
+        );
+        assert_eq!(
+            crate::test_rows::required(&object.property_metadata()),
+            required
+        );
         assert_eq!(
             metadata
                 .iter()

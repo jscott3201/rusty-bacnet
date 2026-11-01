@@ -663,7 +663,7 @@ fn completion_is_generation_guarded_and_status_flags_track_fault_and_oos() {
 #[test]
 fn metadata_and_property_list_are_truthful_and_non_intrinsic() {
     let object = StagingObject::new(1, "STG-1", config()).unwrap();
-    let list = object.property_list();
+    let list = crate::test_rows::listed(&object.property_metadata());
     for required in [
         PropertyIdentifier::PRESENT_VALUE,
         PropertyIdentifier::PRESENT_STAGE,
@@ -685,11 +685,10 @@ fn metadata_and_property_list_are_truthful_and_non_intrinsic() {
     let mut unnamed = config();
     unnamed.stage_names = None;
     let unnamed = StagingObject::new(2, "unnamed", unnamed).unwrap();
-    assert!(
-        !unnamed
-            .property_list()
-            .contains(&PropertyIdentifier::STAGE_NAMES)
-    );
+    assert!(!crate::property_metadata::has_property(
+        &unnamed.property_metadata(),
+        PropertyIdentifier::STAGE_NAMES
+    ));
     assert_protocol_error(
         unnamed
             .read_property(PropertyIdentifier::STAGE_NAMES, None)

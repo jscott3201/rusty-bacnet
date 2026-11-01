@@ -15,11 +15,12 @@ use crate::property_metadata::{
 // - Access Door (type 30, §12.26 Table 12-30; printed p. 325 / PDF p. 327)
 // - Access Point (type 33, §12.31 Table 12-36; printed p. 365 / PDF p. 367)
 // - Access Zone (type 36, §12.32 Table 12-37; printed p. 382 / PDF p. 384)
-// Order preserves each legacy projection; Door Event_State, Priority_Array,
+// Order preserves each type's earlier row order; Door Event_State,
+// Priority_Array,
 // and Relinquish_Default (readable but unlisted) are appended after the
-// legacy rows (Lift FLOOR_NUMBER precedent) so the served projection gains
-// exactly three rows, and Property_List is appended so the projection helper
-// omits it while required_properties keeps it. Only implemented rows are
+// legacy rows (Lift FLOOR_NUMBER precedent) so the served list gains
+// exactly three rows, and Property_List is appended last. Only implemented
+// rows are
 // described: table rows the objects do not serve (Door_Unlock_Delay_Time,
 // Maintenance_Required, the point's event rows, audit/tag/profile rows)
 // stay absent until dispatch exists. The door and the zone serve

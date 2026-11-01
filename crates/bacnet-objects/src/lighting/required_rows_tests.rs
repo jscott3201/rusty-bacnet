@@ -243,10 +243,10 @@ fn lighting_output_cov_increment_starts_at_zero_and_takes_writes() {
         PropertyValue::Real(2.5)
     );
     assert_eq!(lo.cov_increment(), Some(2.5));
-    assert!(
-        lo.property_list()
-            .contains(&PropertyIdentifier::COV_INCREMENT)
-    );
+    assert!(crate::property_metadata::has_property(
+        &lo.property_metadata(),
+        PropertyIdentifier::COV_INCREMENT
+    ));
 }
 
 #[test]

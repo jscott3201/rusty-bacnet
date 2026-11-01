@@ -101,7 +101,7 @@ fn loop_set_references_read_as_their_clause_21_encodings() {
 #[test]
 fn loop_references_in_property_list() {
     let lo = LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
-    let list = lo.property_list();
+    let list = crate::test_rows::listed(&lo.property_metadata());
     for property in [CVR, MVR, SR] {
         assert!(list.contains(&property), "{property:?} missing");
     }

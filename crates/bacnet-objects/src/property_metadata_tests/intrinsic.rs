@@ -159,7 +159,7 @@ fn property_metadata_intrinsic_rows_are_required_or_only_permitted_per_table() {
     {
         let kind = object.object_identifier().object_type();
         let metadata = object.property_metadata();
-        let rpm_required = object.required_properties();
+        let rpm_required = crate::test_rows::required(&object.property_metadata());
         let required: Vec<P> = COMMON_REQUIRED.iter().chain(required).copied().collect();
         let permitted: Vec<P> = COMMON_PERMITTED.iter().chain(permitted).copied().collect();
         for row in metadata.iter() {

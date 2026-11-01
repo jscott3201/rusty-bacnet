@@ -402,9 +402,6 @@ impl BACnetObject for VendorArray {
     ) -> std::borrow::Cow<'_, [bacnet_objects::property_metadata::PropertyMetadata]> {
         crate::test_rows::rows(&[VENDOR], &[VENDOR])
     }
-    fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
-        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
-    }
     fn is_array_property(&self, property: PropertyIdentifier) -> bool {
         property == VENDOR
     }

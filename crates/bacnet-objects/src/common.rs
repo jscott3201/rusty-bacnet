@@ -66,51 +66,6 @@ pub(crate) fn unhandled_write_error(
     }
 }
 
-/// Read the PROPERTY_LIST property for any object that implements property_list().
-/// Handles array_index variants: None = full list, Some(0) = length, Some(n) = nth element.
-/// Object_Name, Object_Type, Object_Identifier, and Property_List itself are excluded.
-pub fn read_property_list_property(
-    props: &[bacnet_types::enums::PropertyIdentifier],
-    array_index: Option<u32>,
-) -> Result<bacnet_types::primitives::PropertyValue, bacnet_types::error::Error> {
-    use bacnet_types::enums::PropertyIdentifier;
-
-    // Filter out the four excluded properties
-    let filtered: Vec<_> = props
-        .iter()
-        .copied()
-        .filter(|p| {
-            *p != PropertyIdentifier::OBJECT_IDENTIFIER
-                && *p != PropertyIdentifier::OBJECT_NAME
-                && *p != PropertyIdentifier::OBJECT_TYPE
-                && *p != PropertyIdentifier::PROPERTY_LIST
-        })
-        .collect();
-
-    match array_index {
-        None => {
-            let elements = filtered
-                .iter()
-                .map(|p| bacnet_types::primitives::PropertyValue::Enumerated(p.to_raw()))
-                .collect();
-            Ok(bacnet_types::primitives::PropertyValue::List(elements))
-        }
-        Some(0) => Ok(bacnet_types::primitives::PropertyValue::Unsigned(
-            filtered.len() as u64,
-        )),
-        Some(idx) => {
-            let i = (idx - 1) as usize;
-            if i < filtered.len() {
-                Ok(bacnet_types::primitives::PropertyValue::Enumerated(
-                    filtered[i].to_raw(),
-                ))
-            } else {
-                Err(invalid_array_index_error())
-            }
-        }
-    }
-}
-
 /// Read arms for the properties every object type has: OBJECT_IDENTIFIER,
 /// OBJECT_NAME, DESCRIPTION and PROPERTY_LIST. Any other property yields
 /// `None`, leaving it to the caller's own arms and unknown-property fallback.
@@ -130,9 +85,8 @@ macro_rules! read_identity_properties {
                 bacnet_types::primitives::PropertyValue::CharacterString($self.description.clone()),
             )),
             p if p == bacnet_types::enums::PropertyIdentifier::PROPERTY_LIST => {
-                let props = $self.property_list();
-                Some($crate::common::read_property_list_property(
-                    &props,
+                Some($crate::property_metadata::read_property_list(
+                    &$crate::traits::BACnetObject::property_metadata($self),
                     $array_index,
                 ))
             }

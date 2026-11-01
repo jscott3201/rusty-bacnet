@@ -15,6 +15,7 @@ from rusty_bacnet import (
     ObjectType, PropertyIdentifier as P, PropertyValue as V, ReinitializedState as S,
 )
 
+from port_retry import rerun_on_lost_port
 from test_bip6_vmac import CLIENT_INSTANCE, free_udp6_port, ipv6_loopback, loopback_client
 
 PORT = ObjectIdentifier(ObjectType.NETWORK_PORT, 1)
@@ -146,6 +147,9 @@ class LoopbackTests(unittest.IsolatedAsyncioTestCase):
         self.bbmd.close()
 
     async def test_a_foreign_server_registers_and_reports_foreign_mode(self):
+        await rerun_on_lost_port(self.foreign_server_registers)
+
+    async def foreign_server_registers(self):
         port = free_udp6_port()
         server = BACnetServer(INSTANCE, transport="ipv6", ipv6_interface="::1", port=port,
                               registered_network_port=1,
@@ -170,6 +174,9 @@ class LoopbackTests(unittest.IsolatedAsyncioTestCase):
             await server.stop()
 
     async def test_activate_changes_carries_a_written_lifetime_and_bbmd(self):
+        await rerun_on_lost_port(self.activate_changes)
+
+    async def activate_changes(self):
         second = FakeBbmd()
         port = free_udp6_port()
         server = BACnetServer(INSTANCE, transport="ipv6", ipv6_interface="::1", port=port,

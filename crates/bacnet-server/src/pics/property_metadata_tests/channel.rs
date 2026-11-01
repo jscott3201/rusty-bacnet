@@ -25,7 +25,9 @@ fn pics_channel_property_metadata_is_exact() {
         (P::PROPERTY_LIST, false, false),
     ];
     let object = ChannelObject::new(7, "CH-7", 11).unwrap();
-    let required = object.required_properties();
+    let required: Vec<_> =
+        bacnet_objects::property_metadata::required_properties(&object.property_metadata())
+            .collect();
     let mut db = ObjectDatabase::new();
     db.add(Box::new(object)).unwrap();
     let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default())

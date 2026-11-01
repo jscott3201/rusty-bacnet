@@ -67,11 +67,10 @@ fn segment_timeout_absence_custom_value_and_zero_validation() {
         matches!(none.read_property(PropertyIdentifier::APDU_SEGMENT_TIMEOUT, None),
         Err(Error::Remote(RemoteError::Error { code, .. })) if code == ErrorCode::UNKNOWN_PROPERTY)
     );
-    assert!(
-        !none
-            .property_list()
-            .contains(&PropertyIdentifier::APDU_SEGMENT_TIMEOUT)
-    );
+    assert!(!crate::property_metadata::has_property(
+        &none.property_metadata(),
+        PropertyIdentifier::APDU_SEGMENT_TIMEOUT
+    ));
     for mode in [
         Segmentation::TRANSMIT,
         Segmentation::RECEIVE,
@@ -111,11 +110,10 @@ fn segment_timeout_absence_custom_value_and_zero_validation() {
                 .unwrap(),
             PropertyValue::Unsigned(3)
         );
-        assert!(
-            device
-                .property_list()
-                .contains(&PropertyIdentifier::APDU_SEGMENT_TIMEOUT)
-        );
+        assert!(crate::property_metadata::has_property(
+            &device.property_metadata(),
+            PropertyIdentifier::APDU_SEGMENT_TIMEOUT
+        ));
     }
 }
 

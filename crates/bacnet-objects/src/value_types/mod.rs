@@ -271,10 +271,6 @@ macro_rules! define_value_object_commandable {
                 Err(crate::common::unhandled_write_error(self.property_metadata().as_ref(), property, _array_index))
             }
 
-            fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-                crate::property_metadata::property_list_from_metadata($property_metadata)
-            }
-
             fn supports_cov(&self) -> bool {
                 true
             }

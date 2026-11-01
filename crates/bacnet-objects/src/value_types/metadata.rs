@@ -17,8 +17,8 @@ use crate::property_metadata::{
 // RequiredRead/Always; Priority_Array Optional/Commandable/ReadOnly;
 // Relinquish_Default Optional/Commandable/Always; Out_Of_Service
 // Optional/Always; Reliability Optional/ReadOnly; Property_List
-// RequiredRead/ReadOnly (appended so the projection helper omits it while
-// required_properties keeps it). Object_Name, Description, and Out_Of_Service
+// RequiredRead/ReadOnly (appended last). Object_Name, Description, and
+// Out_Of_Service
 // carry common write arms; Present_Value and Relinquish_Default carry the
 // commandable write arms. These properties are Always writable.
 // Priority_Array is intentionally read-only under §19.2.1; its slots change

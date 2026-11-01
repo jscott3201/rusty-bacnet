@@ -63,8 +63,10 @@ fn time_delay_normal_write_round_trips_and_is_writable() {
 fn time_delay_normal_in_property_list() {
     let ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     assert!(
-        ee.property_list()
-            .contains(&PropertyIdentifier::TIME_DELAY_NORMAL),
+        crate::property_metadata::has_property(
+            &ee.property_metadata(),
+            PropertyIdentifier::TIME_DELAY_NORMAL
+        ),
         "Table 12-14 lists the property (O): it must be advertised"
     );
 }

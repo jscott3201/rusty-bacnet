@@ -141,9 +141,6 @@ impl BACnetObject for SummaryFixture {
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         crate::test_rows::read_only(&self.advertised)
     }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
-    }
 
     fn enrollment_summary_capability_internal(&self) -> Option<EnrollmentSummaryCapability> {
         self.capability

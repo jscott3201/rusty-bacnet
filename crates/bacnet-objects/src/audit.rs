@@ -18,8 +18,8 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 
 use crate::clock::ClockReader;
-use crate::common::read_property_list_property;
 use crate::property_metadata::PropertyMetadata;
+use crate::property_metadata::read_property_list;
 use crate::traits::BACnetObject;
 
 mod association;
@@ -553,7 +553,7 @@ impl BACnetObject for AuditLogObject {
                 Ok(PropertyValue::Enumerated(EventState::NORMAL.to_raw()))
             }
             p if p == PropertyIdentifier::PROPERTY_LIST => {
-                read_property_list_property(&self.property_list(), array_index)
+                read_property_list(&self.property_metadata(), array_index)
             }
             // ReadRange pages the ring through
             // `AuditLogStorage::retained_records`.
@@ -616,12 +616,6 @@ impl BACnetObject for AuditLogObject {
 
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         log_metadata::for_object(self)
-    }
-
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        crate::property_metadata::property_list_from_metadata(
-            log_metadata::for_object(self).as_ref(),
-        )
     }
 
     fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {

@@ -17,7 +17,7 @@ use super::acquisition::{Acquisition, Rules};
 use super::multiple_metadata;
 use super::references::{self, MAX_LOG_DEVICE_OBJECT_PROPERTIES};
 use crate::clock::ClockReader;
-use crate::common::{self, read_property_list_property};
+use crate::common;
 use crate::device_reference;
 use crate::log_buffer::{
     LogBufferRecords, LogRecordBuffer, LogRecordIdentity, log_buffer_read_denied,
@@ -26,6 +26,7 @@ use crate::log_lifecycle::LogLifecycle;
 use crate::log_persistence::store::{DurableLog, LogStore};
 use crate::log_reporting::{BufferReadyReporting, impl_buffer_ready_reporting};
 use crate::log_window::LogWindow;
+use crate::property_metadata::read_property_list;
 use crate::traits::BACnetObject;
 
 /// BACnet TrendLogMultiple object (type 27).
@@ -395,7 +396,7 @@ impl BACnetObject for TrendLogMultipleObject {
                 array_index,
             ),
             p if p == PropertyIdentifier::PROPERTY_LIST => {
-                read_property_list_property(&self.property_list(), array_index)
+                read_property_list(&self.property_metadata(), array_index)
             }
             _ => Err(Error::protocol(
                 ErrorClass::PROPERTY,
@@ -466,10 +467,6 @@ impl BACnetObject for TrendLogMultipleObject {
 
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
         multiple_metadata::for_object(self)
-    }
-
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
     fn durable_writes(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {

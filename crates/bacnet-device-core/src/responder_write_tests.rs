@@ -77,9 +77,6 @@ impl BACnetObject for Permissive {
         )];
         Cow::Borrowed(ROWS)
     }
-    fn property_list(&self) -> Cow<'static, [P]> {
-        Cow::Borrowed(&[P::DESCRIPTION])
-    }
 }
 
 /// A Device, AI-1, BV-1 (a writable Present_Value), BV-2 (a commandable

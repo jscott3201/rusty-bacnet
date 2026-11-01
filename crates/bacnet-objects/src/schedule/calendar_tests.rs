@@ -247,7 +247,10 @@ fn calendar_write_present_value_denied() {
 #[test]
 fn calendar_property_list_contains_date_list() {
     let cal = CalendarObject::new(1, "CAL-1").unwrap();
-    assert!(cal.property_list().contains(&DATE_LIST));
+    assert!(crate::property_metadata::has_property(
+        &cal.property_metadata(),
+        DATE_LIST
+    ));
     assert!(!cal.is_array_property(DATE_LIST));
 }
 

@@ -342,9 +342,6 @@ impl BACnetObject for TestNotificationClass {
             PropertyIdentifier::RECIPIENT_LIST,
         ])
     }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
-    }
 }
 
 async fn distribute_non_matched_case(case: &str) -> (Vec<Bytes>, Vec<UnicastFrame>) {

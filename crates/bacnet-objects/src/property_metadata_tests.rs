@@ -78,7 +78,7 @@ impl BACnetObject for InstanceMetadataObject {
                 Ok(PropertyValue::CharacterString(String::new()))
             }
             PropertyIdentifier::PROPERTY_LIST => {
-                crate::common::read_property_list_property(&self.property_list(), array_index)
+                crate::property_metadata::read_property_list(&self.property_metadata(), array_index)
             }
             _ => Err(crate::common::unknown_property_error()),
         }
@@ -130,11 +130,6 @@ impl BACnetObject for InstanceMetadataObject {
             PropertyWriteCapability::ReadOnly,
         ));
         Cow::Owned(rows)
-    }
-
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        let metadata = self.property_metadata();
-        crate::property_metadata::property_list_from_metadata(metadata.as_ref())
     }
 }
 
@@ -270,13 +265,38 @@ pub(crate) fn is_swept(property: PropertyIdentifier) -> bool {
     swept_property_identifiers().any(|swept| swept == property)
 }
 
+/// Each swept property `object` serves without a row, described: one that
+/// reads without an array index other than with PROPERTY / UNKNOWN_PROPERTY.
+pub(crate) fn served_without_a_row(object: &dyn BACnetObject) -> Vec<String> {
+    use bacnet_types::enums::{ErrorClass, ErrorCode};
+    let metadata = object.property_metadata();
+    let mut failures = Vec::new();
+    for property in swept_property_identifiers() {
+        if matches!(
+            property,
+            PropertyIdentifier::ALL | PropertyIdentifier::REQUIRED | PropertyIdentifier::OPTIONAL
+        ) || crate::property_metadata::has_property(&metadata, property)
+        {
+            continue;
+        }
+        match object.read_property(property, None) {
+            Err(Error::Remote(RemoteError::Error { class, code }))
+                if class == ErrorClass::PROPERTY && code == ErrorCode::UNKNOWN_PROPERTY => {}
+            other => failures.push(format!(
+                "{:?} serves {property:?} without a row: {other:?}",
+                object.object_identifier().object_type()
+            )),
+        }
+    }
+    failures
+}
+
 /// The other half of the audit's readability check: a property the object
 /// serves, read without an array index, has a row. Every identifier of
 /// [`swept_property_identifiers`] is tried on one object of each catalogue
 /// type; a property without a row must answer PROPERTY / UNKNOWN_PROPERTY.
 #[test]
 fn property_metadata_contract_every_served_property_has_a_row() {
-    use bacnet_types::enums::{ErrorClass, ErrorCode};
     let mut objects = crate::catalogue::representatives();
     // Reach the Staging object's started state, as the audit does.
     for object in objects
@@ -296,28 +316,7 @@ fn property_metadata_contract_every_served_property_has_a_row() {
     let mut visited = std::collections::BTreeSet::new();
     for object in &objects {
         visited.insert(object.object_identifier().object_type().to_raw());
-        let metadata = object.property_metadata();
-        for property in swept_property_identifiers() {
-            if matches!(
-                property,
-                PropertyIdentifier::ALL
-                    | PropertyIdentifier::REQUIRED
-                    | PropertyIdentifier::OPTIONAL
-            ) || metadata
-                .iter()
-                .any(|row| row.property_identifier == property)
-            {
-                continue;
-            }
-            match object.read_property(property, None) {
-                Err(Error::Remote(RemoteError::Error { class, code }))
-                    if class == ErrorClass::PROPERTY && code == ErrorCode::UNKNOWN_PROPERTY => {}
-                other => failures.push(format!(
-                    "{:?} serves {property:?} without a row: {other:?}",
-                    object.object_identifier().object_type()
-                )),
-            }
-        }
+        failures.extend(served_without_a_row(object.as_ref()));
     }
     assert_eq!(
         visited.len(),
@@ -389,12 +388,15 @@ fn property_metadata_contract_property_list_projection_excludes_property_list() 
             })
             .collect();
         assert_eq!(projected, expected_projection);
-        assert_eq!(object.property_list().as_ref(), expected_projection);
-        assert!(
-            !object
-                .property_list()
-                .contains(&PropertyIdentifier::PROPERTY_LIST)
+        assert_eq!(
+            crate::test_rows::listed(&object.property_metadata()),
+            crate::test_rows::listed_from(expected_projection)
         );
+        // The row stays; only the served list leaves it out.
+        assert!(crate::property_metadata::has_property(
+            &object.property_metadata(),
+            PropertyIdentifier::PROPERTY_LIST
+        ));
 
         let wire_list = object
             .read_property(PropertyIdentifier::PROPERTY_LIST, None)
@@ -547,7 +549,7 @@ fn property_metadata_migrated_date_value_exact_required_set() {
     let metadata = object.property_metadata();
     assert!(matches!(metadata, Cow::Borrowed(_)));
     assert_eq!(metadata.len(), 12);
-    let required = object.required_properties();
+    let required = crate::test_rows::required(&object.property_metadata());
     assert_eq!(
         required.as_ref(),
         [
@@ -610,6 +612,9 @@ fn property_metadata_binary_commandable_exact_required_sets() {
         required.push(P::PROPERTY_LIST);
         assert_unique_and_canonical(object.as_ref());
         assert!(matches!(object.property_metadata(), Cow::Borrowed(_)));
-        assert_eq!(object.required_properties().as_ref(), required);
+        assert_eq!(
+            crate::test_rows::required(&object.property_metadata()),
+            required
+        );
     }
 }

@@ -3,3 +3,6 @@
 # Git for Windows' default core.autocrlf=true would otherwise turn every LF
 # into CRLF in the working tree (#950).
 * text=auto eol=lf
+
+# Fuzz seeds are raw octets: never convert line endings or diff them as text.
+/crates/*/fuzz/seeds/** binary

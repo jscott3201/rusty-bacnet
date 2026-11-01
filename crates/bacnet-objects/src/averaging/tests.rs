@@ -81,7 +81,7 @@ fn averaging_average_value() {
 #[test]
 fn averaging_property_list() {
     let avg = AveragingObject::new(1, "AVG-1").unwrap();
-    let props = avg.property_list();
+    let props = crate::test_rows::listed(&avg.property_metadata());
     assert!(props.contains(&PropertyIdentifier::MINIMUM_VALUE));
     assert!(props.contains(&PropertyIdentifier::MAXIMUM_VALUE));
     assert!(props.contains(&PropertyIdentifier::AVERAGE_VALUE));

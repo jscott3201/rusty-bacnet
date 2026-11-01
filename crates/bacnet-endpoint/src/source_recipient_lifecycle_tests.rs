@@ -78,13 +78,13 @@ async fn source_recipient_canceled_stop_keeps_sealed_membership_until_retry_barr
     drop(guard);
     timeout(WAIT, session.stop()).await.unwrap().unwrap();
     let mut guard = db.write().await;
-    assert!(
-        !guard
+    assert!(!bacnet_objects::property_metadata::has_property(
+        &guard
             .get(&oid(ObjectType::DEVICE, 123))
             .unwrap()
-            .property_list()
-            .contains(&PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT)
-    );
+            .property_metadata(),
+        PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT
+    ));
     released_projection(&mut guard);
     assert!(guard.remove(&selected()).unwrap().is_some());
     assert!(

@@ -249,9 +249,6 @@ impl BACnetObject for TrapObject {
             &[PropertyIdentifier::DESCRIPTION],
         )
     }
-    fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
-        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
-    }
     fn read_property(&self, _: PropertyIdentifier, _: Option<u32>) -> Result<PropertyValue, Error> {
         Ok(PropertyValue::CharacterString("trap".into()))
     }

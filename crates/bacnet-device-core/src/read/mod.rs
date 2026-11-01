@@ -111,9 +111,6 @@ mod unserved {
         fn property_metadata(&self) -> alloc::borrow::Cow<'_, [PropertyMetadata]> {
             match *self {}
         }
-        fn property_list(&self) -> alloc::borrow::Cow<'static, [PropertyIdentifier]> {
-            match *self {}
-        }
     }
 }
 

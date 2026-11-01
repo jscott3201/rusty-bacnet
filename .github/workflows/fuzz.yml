@@ -1,14 +1,16 @@
 name: Fuzz
 
-# Fuzzes the MS/TP and B/IP codecs (#1610) and the MS/TP master core
-# (#1640): the cargo-fuzz targets in crates/bacnet-mstp-codec/fuzz,
-# crates/bacnet-bip-codec/fuzz and crates/bacnet-mstp-core/fuzz, through
+# Fuzzes the MS/TP and B/IP codecs (#1610), the MS/TP master core (#1640)
+# and the APDU, value and service codecs (#2180): the cargo-fuzz targets in
+# crates/bacnet-mstp-codec/fuzz, crates/bacnet-bip-codec/fuzz,
+# crates/bacnet-mstp-core/fuzz and crates/bacnet-encoding/fuzz, through
 # scripts/ci/fuzz.sh, on the nightly that .github/ci-pins.env pins. See
 # docs/ci.md, "Fuzzing".
 #
 #   pull request  a PR to dev or main that changes either codec crate, the
-#                 core or its time crate, the fuzz crates included, or this
-#                 workflow, its scripts or the pins: the fuzz crates' lockfiles, rustfmt
+#                 core or its time crate, the encoding, services or types
+#                 crate, the fuzz crates included, or this workflow, its
+#                 scripts or the pins: the fuzz crates' lockfiles, rustfmt
 #                 and clippy, every target built, then each target fuzzed
 #                 for 60 seconds
 #   scheduled     twice a week on dev (the default branch): each target for
@@ -34,6 +36,10 @@ on:
       # fuzz crate builds.
       - crates/bacnet-time/**
       - crates/bacnet-npdu/**
+      # The APDU, value and service codecs and the types they decode into.
+      - crates/bacnet-encoding/**
+      - crates/bacnet-services/**
+      - crates/bacnet-types/**
       - .github/workflows/fuzz.yml
       - .github/ci-pins.env
       - scripts/ci/fuzz.sh

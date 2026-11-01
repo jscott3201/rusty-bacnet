@@ -36,7 +36,4 @@ impl BACnetObject for Defaults {
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         self.0.property_metadata()
     }
-    fn property_list(&self) -> Cow<'static, [P]> {
-        self.0.property_list()
-    }
 }

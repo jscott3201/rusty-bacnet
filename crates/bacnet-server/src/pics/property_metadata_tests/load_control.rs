@@ -46,7 +46,9 @@ fn pics_load_control_property_metadata_is_exact() {
                 .write_property(P::SHED_DURATION, None, PropertyValue::Unsigned(3600), None)
                 .unwrap();
         }
-        let required = object.required_properties();
+        let required: Vec<_> =
+            bacnet_objects::property_metadata::required_properties(&object.property_metadata())
+                .collect();
         let mut db = ObjectDatabase::new();
         db.add(Box::new(object)).unwrap();
         let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default())

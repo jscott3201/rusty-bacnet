@@ -135,9 +135,6 @@ impl BACnetObject for AtomicHistoryObject {
             PropertyIdentifier::DEADBAND,
         ])
     }
-    fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
-        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
-    }
 
     fn commit_event_transition_internal(
         &mut self,

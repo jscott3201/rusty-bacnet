@@ -52,7 +52,10 @@ impl Fixture {
 fn the_trim_rows_are_absent_until_set_then_present_and_writable() {
     let mut f = Fixture::new();
     for p in [HIGH, LOW, FADE_TIME] {
-        assert!(!f.lo.property_list().contains(&p));
+        assert!(!crate::property_metadata::has_property(
+            &f.lo.property_metadata(),
+            p
+        ));
         assert_error(f.lo.read_property(p, None), ErrorCode::UNKNOWN_PROPERTY);
         assert_error(
             f.lo.write_property(p, None, PropertyValue::Real(50.0), None),
@@ -61,10 +64,16 @@ fn the_trim_rows_are_absent_until_set_then_present_and_writable() {
     }
     // A high trim brings Trim_Fade_Time with it, which is then required.
     f.lo.set_high_end_trim(Some(80.0)).unwrap();
-    let list = f.lo.property_list();
+    let list = crate::test_rows::listed(&f.lo.property_metadata());
     assert!(list.contains(&HIGH) && list.contains(&FADE_TIME) && !list.contains(&LOW));
-    assert!(f.lo.required_properties().contains(&FADE_TIME));
-    assert!(!f.lo.required_properties().contains(&HIGH));
+    assert!(
+        crate::property_metadata::required_properties(&f.lo.property_metadata())
+            .any(|required| required == FADE_TIME)
+    );
+    assert!(
+        !crate::property_metadata::required_properties(&f.lo.property_metadata())
+            .any(|required| required == HIGH)
+    );
     let metadata = f.lo.property_metadata();
     let row = |p| {
         *metadata

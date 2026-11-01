@@ -53,9 +53,13 @@ fn access_point_serves_policy_mode_and_priority_defaults() {
     assert_eq!(read(&point, MODE), mode(AuthorizationMode::AUTHORIZE));
     assert_eq!(read(&point, PRIORITY), PropertyValue::Unsigned(16));
     for property in [POLICY, POLICIES, MODE, PRIORITY] {
-        assert!(point.property_list().contains(&property), "{property:?}");
         assert!(
-            point.required_properties().contains(&property),
+            crate::property_metadata::has_property(&point.property_metadata(), property),
+            "{property:?}"
+        );
+        assert!(
+            crate::property_metadata::required_properties(&point.property_metadata())
+                .any(|required| required == property),
             "{property:?}"
         );
         assert!(!point.is_array_property(property), "{property:?}");

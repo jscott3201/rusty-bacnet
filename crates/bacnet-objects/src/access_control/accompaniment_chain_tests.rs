@@ -348,8 +348,7 @@ fn accompaniment_repeated_evaluation_preserves_every_served_property() {
         .into_iter()
         .map(|oid| {
             let object = db.get(&oid).unwrap();
-            let properties = object
-                .property_list()
+            let properties = crate::test_rows::listed(&object.property_metadata())
                 .iter()
                 .map(|property| {
                     (

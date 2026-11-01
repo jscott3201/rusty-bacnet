@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use bacnet_objects::property_metadata::{PropertyMetadata, property_list_from_metadata};
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::{
     EngineeringUnits, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier,
@@ -51,9 +51,6 @@ impl BACnetObject for TestAnalogInput {
             PropertyIdentifier::UNITS,
         ])
     }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        property_list_from_metadata(&self.property_metadata())
-    }
 }
 
 struct TestBinaryValue {
@@ -92,9 +89,6 @@ impl BACnetObject for TestBinaryValue {
             ],
             &[PropertyIdentifier::PRESENT_VALUE],
         )
-    }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        property_list_from_metadata(&self.property_metadata())
     }
 }
 
@@ -140,9 +134,6 @@ impl BACnetObject for TestDevice {
             PropertyIdentifier::PROTOCOL_VERSION,
             PropertyIdentifier::PROTOCOL_REVISION,
         ])
-    }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        property_list_from_metadata(&self.property_metadata())
     }
     /// Device is not deleteable; mirrors the real DeviceObject.
     fn is_deleteable(&self) -> bool {

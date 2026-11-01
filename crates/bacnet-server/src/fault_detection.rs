@@ -256,11 +256,6 @@ mod tests {
         fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
             crate::test_rows::read_only(&[PropertyIdentifier::RELIABILITY])
         }
-        fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-            bacnet_objects::property_metadata::property_list_from_metadata(
-                &self.property_metadata(),
-            )
-        }
 
         fn evaluate_reliability_internal(&mut self) -> Result<ReliabilityEvaluation, Error> {
             if self.fail.load(Ordering::SeqCst) {
@@ -313,11 +308,6 @@ mod tests {
 
         fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
             crate::test_rows::read_only(&[])
-        }
-        fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-            bacnet_objects::property_metadata::property_list_from_metadata(
-                &self.property_metadata(),
-            )
         }
 
         fn reliability_evaluation_inhibited_internal(&self) -> bool {

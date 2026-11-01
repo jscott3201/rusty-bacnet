@@ -52,7 +52,7 @@ pub(super) fn state(object: &dyn ProfileOutput) -> Vec<(P, PropertyValue)> {
         P::ACKED_TRANSITIONS,
     ]
     .into_iter()
-    .filter(|p| object.property_list().contains(p))
+    .filter(|p| crate::property_metadata::has_property(&object.property_metadata(), *p))
     .map(|p| (p, object.read_property(p, None).unwrap()))
     .collect()
 }

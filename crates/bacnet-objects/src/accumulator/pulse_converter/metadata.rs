@@ -12,11 +12,10 @@ use crate::property_metadata::{
 
 // Canonical effective rows for the Pulse Converter (type 24, ASHRAE 135-2020
 // §12.23 Table 12-27; printed pp. 301-307 / PDF pp. 303-309).
-// Order preserves the legacy projection, with the count rows #1092 added
+// Order preserves the earlier row order, with the count rows #1092 added
 // (Count, Update_Time, Count_Change_Time, Count_Before_Change) after
 // Adjust_Value and COV_Period after COV_Increment, as the table orders them;
-// PROPERTY_LIST is appended so the projection helper omits it while
-// required_properties keeps it. Only implemented rows are described: the
+// PROPERTY_LIST is appended last. Only implemented rows are described: the
 // table rows the object does not serve (intrinsic-reporting, event-message,
 // Reliability_Evaluation_Inhibit, audit, tag and profile rows) are all
 // optional and stay absent until dispatch exists.

@@ -289,10 +289,6 @@ impl BACnetObject for AveragingObject {
         metadata::for_object(self)
     }
 
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
-    }
-
     fn supports_subscribe_cov_property(&self) -> bool {
         // Table 13-1 has no Averaging row, so SubscribeCOV stays refused
         // (supports_cov is false). A property subscription uses the Table

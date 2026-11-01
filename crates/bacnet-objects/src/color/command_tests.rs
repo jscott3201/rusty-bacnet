@@ -361,13 +361,16 @@ fn color_objects_no_longer_answer_to_508_to_511() {
     for object in objects {
         for raw in [508, 509, 510, 511] {
             let property = PropertyIdentifier::from_raw(raw);
-            assert!(!object.property_list().contains(&property));
+            assert!(!crate::property_metadata::has_property(
+                &object.property_metadata(),
+                property
+            ));
             assert_error(
                 object.read_property(property, None),
                 ErrorCode::UNKNOWN_PROPERTY,
             );
         }
-        let list = object.property_list();
+        let list = crate::test_rows::listed(&object.property_metadata());
         assert!(list.contains(&PropertyIdentifier::from_raw(4_194_334)));
         assert!(
             object

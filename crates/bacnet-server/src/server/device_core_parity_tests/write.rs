@@ -43,9 +43,6 @@ impl bacnet_objects::traits::BACnetObject for Permissive {
     fn property_metadata(&self) -> Cow<'_, [bacnet_objects::property_metadata::PropertyMetadata]> {
         crate::test_rows::rows(&[P::DESCRIPTION], &[P::DESCRIPTION])
     }
-    fn property_list(&self) -> Cow<'static, [P]> {
-        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
-    }
 }
 
 /// The read fixture, with BV-2 (a writable, not commandable, Present_Value),

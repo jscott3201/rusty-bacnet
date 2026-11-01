@@ -72,9 +72,6 @@ impl BACnetObject for LookupTestNotificationClass {
             PropertyIdentifier::RECIPIENT_LIST,
         ])
     }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        crate::property_metadata::property_list_from_metadata(&self.property_metadata())
-    }
 }
 
 fn lookup(db: &ObjectDatabase) -> RecipientLookupOutcome {

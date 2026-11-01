@@ -4,7 +4,7 @@
 use std::borrow::Cow;
 
 use bacnet_objects::property_metadata::{
-    PropertyConformance, PropertyMetadata, PropertyWriteCapability, property_list_from_metadata,
+    PropertyConformance, PropertyMetadata, PropertyWriteCapability,
 };
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::{
@@ -129,8 +129,5 @@ impl BACnetObject for FixedAlarm {
             row(PropertyIdentifier::PROPERTY_LIST),
         ];
         Cow::Borrowed(ROWS)
-    }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        property_list_from_metadata(&self.property_metadata())
     }
 }

@@ -23,7 +23,10 @@ fn standalone_device_cov_properties_follow_declared_service_profile() {
                 multiple,
             ),
         ] {
-            assert_eq!(object.property_list().contains(&property), present);
+            assert_eq!(
+                crate::property_metadata::has_property(&object.property_metadata(), property),
+                present
+            );
             assert_eq!(
                 object
                     .property_metadata()

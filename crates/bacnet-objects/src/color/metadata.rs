@@ -14,7 +14,7 @@ use crate::property_metadata::{
 
 // The rows follow the addendum's property tables (Table 12-X for Color,
 // Table 12-Y for Color Temperature), in their order, with Property_List
-// last so the projection helper leaves it out (#1474).
+// last (#1474).
 //
 // - Conformance is the table's code: W for Present_Value and Color_Command,
 //   R or O for the rest.

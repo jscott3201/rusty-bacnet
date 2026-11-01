@@ -63,7 +63,10 @@ fn outputs(link: Option<ColorLink>) -> [Box<dyn BACnetObject>; 2] {
 fn the_rows_follow_the_link_in_table_order_and_are_required() {
     for object in outputs(None) {
         for p in [REFERENCE, OVERRIDE, OVERRIDE_REFERENCE] {
-            assert!(!object.property_list().contains(&p));
+            assert!(!crate::property_metadata::has_property(
+                &object.property_metadata(),
+                p
+            ));
             assert_error(object.read_property(p, None), ErrorCode::UNKNOWN_PROPERTY);
         }
     }
@@ -85,7 +88,10 @@ fn the_rows_follow_the_link_in_table_order_and_are_required() {
                     row.presence_condition,
                     Some(PropertyPresenceCondition::LightingColor)
                 );
-                assert!(object.required_properties().contains(&p));
+                assert!(
+                    crate::property_metadata::required_properties(&object.property_metadata())
+                        .any(|required| required == p)
+                );
                 assert!(object.is_writable_property(p));
             }
             if rows.len() == 1 {
@@ -100,7 +106,7 @@ fn the_rows_follow_the_link_in_table_order_and_are_required() {
     let mut lo = LightingOutputObject::new(1, "LO-1").unwrap();
     lo.set_high_end_trim(Some(90.0)).unwrap();
     lo.set_color_link(Some(ColorLink::new(color(1)))).unwrap();
-    let list = lo.property_list();
+    let list = crate::test_rows::listed(&lo.property_metadata());
     let at = |p| list.iter().position(|&q| q == p).unwrap();
     assert!(at(REFERENCE) < at(PropertyIdentifier::HIGH_END_TRIM));
 }

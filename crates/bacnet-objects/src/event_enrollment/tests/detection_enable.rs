@@ -28,8 +28,10 @@ fn event_detection_enable_defaults_true() {
 fn event_detection_enable_appears_in_property_list() {
     let ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     assert!(
-        ee.property_list()
-            .contains(&PropertyIdentifier::EVENT_DETECTION_ENABLE),
+        crate::property_metadata::has_property(
+            &ee.property_metadata(),
+            PropertyIdentifier::EVENT_DETECTION_ENABLE
+        ),
         "a required property must be advertised, or PICS under-reports it"
     );
 }

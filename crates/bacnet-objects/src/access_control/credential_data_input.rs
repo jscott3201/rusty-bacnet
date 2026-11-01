@@ -245,10 +245,6 @@ impl BACnetObject for CredentialDataInputObject {
         super::metadata_identity::for_credential_data_input_object(self)
     }
 
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
-    }
-
     /// Table 13-1 lists Credential Data Input, so it takes SubscribeCOV.
     fn supports_cov(&self) -> bool {
         true

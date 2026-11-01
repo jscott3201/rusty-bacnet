@@ -66,7 +66,10 @@ fn assert_fault_properties(object: &dyn BACnetObject, expected: bool) {
         PropertyIdentifier::FAULT_LOW_LIMIT,
         PropertyIdentifier::FAULT_HIGH_LIMIT,
     ] {
-        assert_eq!(object.property_list().contains(&property), expected);
+        assert_eq!(
+            crate::property_metadata::has_property(&object.property_metadata(), property),
+            expected
+        );
     }
     let PropertyValue::List(wire_list) = object
         .read_property(PropertyIdentifier::PROPERTY_LIST, None)
@@ -546,7 +549,10 @@ fn analog_output_has_no_fault_out_of_range_surface_or_evaluator() {
         PropertyIdentifier::FAULT_HIGH_LIMIT,
     ] {
         assert_unknown_property(ao.read_property(property, None));
-        assert!(!ao.property_list().contains(&property));
+        assert!(!crate::property_metadata::has_property(
+            &ao.property_metadata(),
+            property
+        ));
         assert!(!ao.is_writable_property(property));
         assert_unknown_property(ao.write_property_from(
             property,

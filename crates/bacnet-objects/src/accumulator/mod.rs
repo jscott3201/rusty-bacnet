@@ -222,10 +222,6 @@ impl BACnetObject for AccumulatorObject {
         metadata::for_accumulator_object(self)
     }
 
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
-    }
-
     fn supports_cov(&self) -> bool {
         true
     }
@@ -317,7 +313,10 @@ mod tests {
                     && code == bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY),
             "{err:?}"
         );
-        assert!(!acc.property_list().contains(&PropertyIdentifier::PRESCALE));
+        assert!(!crate::property_metadata::has_property(
+            &acc.property_metadata(),
+            PropertyIdentifier::PRESCALE
+        ));
     }
 
     #[test]
@@ -356,7 +355,7 @@ mod tests {
             multiplier: 1,
             modulo_divide: 1,
         });
-        let list = acc.property_list();
+        let list = crate::test_rows::listed(&acc.property_metadata());
         assert!(list.contains(&PropertyIdentifier::PRESENT_VALUE));
         assert!(list.contains(&PropertyIdentifier::SCALE));
         assert!(list.contains(&PropertyIdentifier::PRESCALE));

@@ -141,7 +141,8 @@ fn writable_predicate_matches_only_the_escalator_write_routes() {
         PropertyIdentifier::PASSENGER_ALARM,
     ];
 
-    for property in esc.property_list().iter().copied() {
+    let rows = esc.property_metadata().into_owned();
+    for property in rows.iter().map(|row| row.property_identifier) {
         assert_eq!(
             esc.is_writable_property(property),
             writable.contains(&property),

@@ -303,10 +303,6 @@ impl BACnetObject for CommandObject {
         metadata::for_object(self)
     }
 
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
-    }
-
     fn supports_subscribe_cov_property(&self) -> bool {
         // Table 13-1 has no Command row, so SubscribeCOV stays refused. A
         // property subscription follows Table 13-1a, which lets a client watch

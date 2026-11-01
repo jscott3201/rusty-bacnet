@@ -489,7 +489,10 @@ fn file_has_no_status_flags_reliability_or_out_of_service() {
         PropertyIdentifier::RELIABILITY,
         PropertyIdentifier::OUT_OF_SERVICE,
     ] {
-        assert!(!file.property_list().contains(&property));
+        assert!(!crate::property_metadata::has_property(
+            &file.property_metadata(),
+            property
+        ));
         let read = file.read_property(property, None).map(|_| ());
         let write = file.write_property(property, None, PropertyValue::Boolean(true), None);
         for result in [read, write] {
@@ -604,10 +607,10 @@ fn file_write_file_size_denied_when_read_only() {
 #[test]
 fn file_property_list_stream() {
     let file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
-    let props = file.property_list();
-    assert!(props.contains(&PropertyIdentifier::OBJECT_IDENTIFIER));
-    assert!(props.contains(&PropertyIdentifier::OBJECT_NAME));
-    assert!(props.contains(&PropertyIdentifier::OBJECT_TYPE));
+    let props = crate::test_rows::listed(&file.property_metadata());
+    assert!(!props.contains(&PropertyIdentifier::OBJECT_IDENTIFIER));
+    assert!(!props.contains(&PropertyIdentifier::OBJECT_NAME));
+    assert!(!props.contains(&PropertyIdentifier::OBJECT_TYPE));
     assert!(props.contains(&PropertyIdentifier::FILE_TYPE));
     assert!(props.contains(&PropertyIdentifier::FILE_SIZE));
     assert!(props.contains(&PropertyIdentifier::MODIFICATION_DATE));
@@ -622,7 +625,7 @@ fn file_property_list_stream() {
 fn file_property_list_record_access() {
     let mut file = FileObject::new(1, "FILE-1", "text/plain").unwrap();
     file.set_file_access_method(FileAccessMethod::RECORD_ACCESS.to_raw());
-    let props = file.property_list();
+    let props = crate::test_rows::listed(&file.property_metadata());
     assert!(props.contains(&PropertyIdentifier::RECORD_COUNT));
 }
 

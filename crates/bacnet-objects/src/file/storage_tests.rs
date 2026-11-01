@@ -432,11 +432,10 @@ fn storage_default_methods_are_file_access_denied() {
 fn payload_setters_follow_the_access_method() {
     let mut file = stream_file();
     file.set_records(vec![vec![1, 2, 3], vec![4, 5]]);
-    assert!(
-        !file
-            .property_list()
-            .contains(&PropertyIdentifier::RECORD_COUNT)
-    );
+    assert!(!crate::property_metadata::has_property(
+        &file.property_metadata(),
+        PropertyIdentifier::RECORD_COUNT
+    ));
     assert!(
         file.read_property(PropertyIdentifier::RECORD_COUNT, None)
             .is_err()
@@ -517,9 +516,6 @@ impl BACnetObject for NoStorageFile {
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         crate::test_rows::read_only(&[])
     }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        crate::property_metadata::property_list_from_metadata(&self.property_metadata())
-    }
 }
 
 #[test]
@@ -537,8 +533,7 @@ fn storage_hooks_default_to_none_and_file_object_opts_in() {
     // 65 was the fabricated "File Data" property the old handler read (it
     // is Max_Pres_Value); Table 12-16 defines no such property.
     assert!(
-        !file
-            .property_list()
+        !crate::test_rows::listed(&file.property_metadata())
             .iter()
             .any(|p| *p == PropertyIdentifier::from_raw(65))
     );

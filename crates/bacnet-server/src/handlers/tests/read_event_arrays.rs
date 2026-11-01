@@ -59,9 +59,6 @@ impl bacnet_objects::traits::BACnetObject for EventArrayFixture {
     fn property_metadata(&self) -> std::borrow::Cow<'_, [PropertyMetadata]> {
         crate::test_rows::read_only(EVENT_ARRAY_PROPERTIES)
     }
-    fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
-        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
-    }
 }
 
 fn read_fixed_array(

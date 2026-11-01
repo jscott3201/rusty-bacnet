@@ -194,7 +194,7 @@ fn command_set_action_refuses_a_priority_outside_one_to_sixteen() {
 #[test]
 fn command_property_list() {
     let cmd = CommandObject::new(1, "CMD-1").unwrap();
-    let list = cmd.property_list();
+    let list = crate::test_rows::listed(&cmd.property_metadata());
     assert!(list.contains(&PropertyIdentifier::PRESENT_VALUE));
     assert!(list.contains(&PropertyIdentifier::IN_PROCESS));
     assert!(list.contains(&PropertyIdentifier::ALL_WRITES_SUCCESSFUL));

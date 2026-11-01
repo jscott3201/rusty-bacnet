@@ -183,10 +183,6 @@ impl BACnetObject for SourceReporter {
         self.wrapped.property_metadata()
     }
 
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        self.wrapped.property_list()
-    }
-
     fn timed(&mut self) -> Option<&mut dyn Timed> {
         self.wrapped.timed()
     }
@@ -218,10 +214,6 @@ impl BACnetObject for SourceReporter {
 
     fn is_deleteable(&self) -> bool {
         !self.active() && self.wrapped.is_deleteable()
-    }
-
-    fn required_properties(&self) -> Cow<'static, [PropertyIdentifier]> {
-        self.wrapped.required_properties()
     }
 
     fn supports_cov(&self) -> bool {

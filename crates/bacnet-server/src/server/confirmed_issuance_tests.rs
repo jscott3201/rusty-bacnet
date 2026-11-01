@@ -48,9 +48,6 @@ impl BACnetObject for CountedValue {
         self.writes.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        self.inner.property_list()
-    }
     fn property_metadata(&self) -> Cow<'_, [bacnet_objects::property_metadata::PropertyMetadata]> {
         self.inner.property_metadata()
     }

@@ -2,6 +2,7 @@
 
 use super::super::*;
 use bacnet_encoding::primitives::decode_timestamp_choice;
+use bacnet_objects::property_metadata::has_property;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::NotifyType;
@@ -33,16 +34,16 @@ fn project_event_summary(
     object: &dyn BACnetObject,
     db: &ObjectDatabase,
 ) -> Result<EventSummaryProjectionResult, Error> {
-    let advertised = object.property_list();
+    let advertised = object.property_metadata();
     if !EVENT_SUMMARY_SIGNATURE
         .iter()
-        .all(|property| advertised.contains(property))
+        .all(|&property| has_property(&advertised, property))
     {
         return Ok(EventSummaryProjectionResult::NotEventInitiating);
     }
 
     let object_identifier = object.object_identifier();
-    if advertised.contains(&PropertyIdentifier::EVENT_DETECTION_ENABLE) {
+    if has_property(&advertised, PropertyIdentifier::EVENT_DETECTION_ENABLE) {
         match read_required(
             object,
             object_identifier,

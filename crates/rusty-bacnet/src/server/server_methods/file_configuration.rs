@@ -325,12 +325,6 @@ mod tests {
             ];
             Cow::Borrowed(ROWS)
         }
-
-        fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-            bacnet_objects::property_metadata::property_list_from_metadata(
-                &self.property_metadata(),
-            )
-        }
     }
 
     #[test]

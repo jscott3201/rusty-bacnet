@@ -57,8 +57,8 @@ fn loop_serves_the_missing_table_12_20_rows_with_their_datatypes() {
         read(&lo, PropertyIdentifier::PRIORITY_FOR_WRITING),
         PropertyValue::Unsigned(16)
     );
-    let list = lo.property_list();
-    let required = lo.required_properties();
+    let list = crate::test_rows::listed(&lo.property_metadata());
+    let required = crate::test_rows::required(&lo.property_metadata());
     for property in [
         PropertyIdentifier::CONTROLLED_VARIABLE_UNITS,
         PropertyIdentifier::ACTION,

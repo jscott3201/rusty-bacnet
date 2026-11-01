@@ -1,6 +1,7 @@
 //! Narrow database reads; only genuine property absence admits a fallback.
 
 use super::*;
+use crate::property_metadata::has_property;
 use crate::traits::BACnetObject;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
 use bacnet_types::error::RemoteError;
@@ -71,7 +72,7 @@ pub(super) fn optional(
         Err(Error::Remote(RemoteError::Error { class, code }))
             if class == ErrorClass::PROPERTY
                 && code == ErrorCode::UNKNOWN_PROPERTY
-                && !object.property_list().contains(&property) =>
+                && !has_property(&object.property_metadata(), property) =>
         {
             Ok(None)
         }

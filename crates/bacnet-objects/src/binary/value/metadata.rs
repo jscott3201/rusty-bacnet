@@ -230,9 +230,12 @@ mod tests {
                     )
                     .unwrap();
                 assert_eq!(object.property_metadata().as_ref(), original);
-                assert_eq!(object.property_list().as_ref(), expected);
+                assert_eq!(
+                    crate::test_rows::listed(&object.property_metadata()),
+                    crate::test_rows::listed_from(&expected)
+                );
                 assert_eq!(original.len(), expected.len() + 1);
-                let required = object.required_properties();
+                let required = crate::test_rows::required(&object.property_metadata());
                 for row in &original {
                     let p = row.property_identifier;
                     let condition = match p {

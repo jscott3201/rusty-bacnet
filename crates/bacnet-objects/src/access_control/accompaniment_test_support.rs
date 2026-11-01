@@ -243,14 +243,6 @@ impl BACnetObject for Overridden {
         }
         Cow::Owned(rows)
     }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        let mut properties = self.inner.property_list().into_owned();
-        properties.retain(|property| *property != self.property);
-        if self.advertised {
-            properties.push(self.property);
-        }
-        Cow::Owned(properties)
-    }
 }
 pub(super) fn override_read(
     db: &mut ObjectDatabase,

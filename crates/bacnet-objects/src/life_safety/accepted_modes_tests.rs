@@ -63,15 +63,13 @@ fn accepted_modes_default_to_every_standard_mode_as_a_list() {
         assert_eq!(modes(object), standard);
         assert!(object.is_list_property(PropertyIdentifier::ACCEPTED_MODES));
         assert!(!object.is_array_property(PropertyIdentifier::ACCEPTED_MODES));
+        assert!(crate::property_metadata::has_property(
+            &object.property_metadata(),
+            PropertyIdentifier::ACCEPTED_MODES
+        ));
         assert!(
-            object
-                .property_list()
-                .contains(&PropertyIdentifier::ACCEPTED_MODES)
-        );
-        assert!(
-            object
-                .required_properties()
-                .contains(&PropertyIdentifier::ACCEPTED_MODES)
+            crate::property_metadata::required_properties(&object.property_metadata())
+                .any(|required| required == PropertyIdentifier::ACCEPTED_MODES)
         );
     }
 }

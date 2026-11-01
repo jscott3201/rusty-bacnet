@@ -133,7 +133,7 @@ impl BACnetObject for AuditReporterObject {
                 }
             }
             p if p == PropertyIdentifier::PROPERTY_LIST => {
-                read_property_list_property(&self.property_list(), array_index)
+                read_property_list(&self.property_metadata(), array_index)
             }
             _ => Err(Error::protocol(
                 ErrorClass::PROPERTY,
@@ -162,10 +162,6 @@ impl BACnetObject for AuditReporterObject {
             property,
             array_index,
         ))
-    }
-
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        crate::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 
     fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {

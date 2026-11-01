@@ -358,9 +358,14 @@ fn rpm_handler_all_properties_expanded() {
     let result = &ack.list_of_read_access_results[0];
     assert_eq!(result.object_identifier, oid);
 
-    // AnalogInputObject.property_list() returns multiple properties
+    // ALL reads every metadata row but Property_List, in row order.
     let obj = db.get(&oid).unwrap();
-    let expected_props = obj.property_list();
+    let expected_props: Vec<_> = obj
+        .property_metadata()
+        .iter()
+        .map(|row| row.property_identifier)
+        .filter(|&p| p != PropertyIdentifier::PROPERTY_LIST)
+        .collect();
     assert!(
         expected_props.len() > 2,
         "sanity: AI should have many properties"

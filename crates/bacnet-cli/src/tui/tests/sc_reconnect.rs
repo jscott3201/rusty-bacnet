@@ -116,10 +116,11 @@ async fn a_flags_only_failover_hub_is_used_when_the_primary_is_down() {
     let mut failover = hub(&site, &cert, "127.0.0.1:0", FAILOVER_VMAC)
         .await
         .unwrap();
-    // A primary that refuses the connection: a port bound, then let go.
-    let down = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    // A primary that refuses the connection: a port bound but never
+    // listening, held so no other process can listen there (#2216).
+    let down = tokio::net::TcpSocket::new_v4().unwrap();
+    down.bind("127.0.0.1:0".parse().unwrap()).unwrap();
     let primary = format!("wss://{}", down.local_addr().unwrap());
-    drop(down);
     let dir = tempfile::tempdir().unwrap();
     let mut args = args(dir.path(), &site, &client_leaf(&site), &primary);
     let failover_url = format!("wss://{}", failover.local_addr().unwrap());

@@ -2,7 +2,10 @@ use super::*;
 use bacnet_objects::audit::{AuditLogQueryPage, AuditLogStorage};
 use bacnet_objects::clock::{ClockFrame, ClockReader};
 use bacnet_objects::event_enrollment::{EventEnrollmentEvalState, EventEnrollmentMonitoredSource};
-use bacnet_objects::property_metadata::PropertyMetadata;
+use bacnet_objects::property_metadata::{
+    PropertyConformance, PropertyMetadata, PropertyWriteCapability, has_property, property_list,
+    required_properties,
+};
 use bacnet_objects::traits::{Clocks, Timed};
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
 use bacnet_types::constructed::{BACnetAuditLogQueryParameters, BACnetObjectSelector};
@@ -69,8 +72,7 @@ async fn built_in_configuration_identity_metadata_and_writes_survive_wrapping() 
         )
         .unwrap();
     let metadata = original.property_metadata().into_owned();
-    let properties = original.property_list().into_owned();
-    let required = original.required_properties().into_owned();
+    let properties: Vec<_> = property_list(&metadata).collect();
     let values: Vec<_> = properties
         .iter()
         .filter(|&&p| p != PropertyIdentifier::AUDIT_SOURCE_REPORTER)
@@ -91,8 +93,6 @@ async fn built_in_configuration_identity_metadata_and_writes_survive_wrapping() 
         assert_eq!(object.object_identifier(), selected());
         assert_eq!(object.object_name(), "Reporter-1");
         assert_eq!(object.property_metadata().as_ref(), metadata);
-        assert_eq!(object.property_list().as_ref(), properties);
-        assert_eq!(object.required_properties().as_ref(), required);
         for (property, expected) in values {
             assert_eq!(read(object, property), expected);
         }
@@ -125,11 +125,10 @@ async fn built_in_configuration_identity_metadata_and_writes_survive_wrapping() 
             PropertyValue::Boolean(false),
             None,
         ));
-        assert!(
-            !object
-                .property_list()
-                .contains(&PropertyIdentifier::MONITORED_OBJECTS)
-        );
+        assert!(!has_property(
+            &object.property_metadata(),
+            PropertyIdentifier::MONITORED_OBJECTS
+        ));
         assert!(
             object
                 .read_property(PropertyIdentifier::MONITORED_OBJECTS, None)
@@ -148,9 +147,14 @@ async fn built_in_configuration_identity_metadata_and_writes_survive_wrapping() 
             PropertyValue::CharacterString("kept".into())
         );
         let before = object
-            .property_list()
+            .property_metadata()
             .iter()
-            .map(|&p| (p, read(object, p)))
+            .map(|row| {
+                (
+                    row.property_identifier,
+                    read(object, row.property_identifier),
+                )
+            })
             .collect::<Vec<_>>();
         assert!(
             object
@@ -181,11 +185,10 @@ async fn built_in_configuration_identity_metadata_and_writes_survive_wrapping() 
             read(object, PropertyIdentifier::AUDIT_LEVEL),
             PropertyValue::Enumerated(AuditLevel::AUDIT_CONFIG.to_raw())
         );
-        assert!(
-            !object
-                .property_list()
-                .contains(&PropertyIdentifier::MONITORED_OBJECTS)
-        );
+        assert!(!has_property(
+            &object.property_metadata(),
+            PropertyIdentifier::MONITORED_OBJECTS
+        ));
         object
             .configure_audit_reporter_internal(
                 AuditLevel::NONE,
@@ -295,15 +298,14 @@ impl BACnetObject for ExtendedReporter {
         }
     }
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
-        self.reporter.property_metadata()
-    }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        let mut properties = self.reporter.property_list().into_owned();
-        properties.push(CUSTOM);
-        Cow::Owned(properties)
-    }
-    fn required_properties(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[CUSTOM])
+        let mut rows = self.reporter.property_metadata().into_owned();
+        rows.push(PropertyMetadata::new(
+            CUSTOM,
+            PropertyConformance::RequiredWrite,
+            None,
+            PropertyWriteCapability::Always,
+        ));
+        Cow::Owned(rows)
     }
     fn is_writable_property(&self, p: PropertyIdentifier) -> bool {
         p == CUSTOM || self.reporter.is_writable_property(p)
@@ -444,8 +446,9 @@ async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
         );
         assert_eq!(object.object_name(), "Custom Reporter");
         assert_eq!(object.object_identifier(), selected());
-        assert!(object.property_list().contains(&CUSTOM));
-        assert_eq!(object.required_properties().as_ref(), &[CUSTOM]);
+        let rows = object.property_metadata();
+        assert!(has_property(&rows, CUSTOM));
+        assert!(required_properties(&rows).any(|p| p == CUSTOM));
         assert!(object.is_array_property(CUSTOM));
         assert!(object.is_list_property(CUSTOM_LIST));
         assert!(!object.is_list_property(CUSTOM));
@@ -485,9 +488,14 @@ async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
         assert!(reporter.reports_write_internal(PropertyIdentifier::PRESENT_VALUE, Some(8)));
         assert!(!reporter.reports_write_internal(PropertyIdentifier::PRESENT_VALUE, Some(16)));
         let before = object
-            .property_list()
+            .property_metadata()
             .iter()
-            .map(|&p| (p, read(object, p)))
+            .map(|row| {
+                (
+                    row.property_identifier,
+                    read(object, row.property_identifier),
+                )
+            })
             .collect::<Vec<_>>();
         assert!(
             object
@@ -516,11 +524,10 @@ async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
             )
             .unwrap();
         assert_eq!(calls.configurations.load(Ordering::SeqCst), 2);
-        assert!(
-            !object
-                .property_list()
-                .contains(&PropertyIdentifier::MONITORED_OBJECTS)
-        );
+        assert!(!has_property(
+            &object.property_metadata(),
+            PropertyIdentifier::MONITORED_OBJECTS
+        ));
         assert_eq!(
             read(object, PropertyIdentifier::AUDIT_SOURCE_REPORTER),
             PropertyValue::Boolean(true)

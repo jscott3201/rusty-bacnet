@@ -315,9 +315,6 @@ impl BACnetObject for Recipients {
             &[PropertyIdentifier::RECIPIENT_LIST],
         )
     }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
-    }
 }
 
 #[tokio::test]

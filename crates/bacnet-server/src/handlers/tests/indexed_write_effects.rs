@@ -47,9 +47,6 @@ impl BACnetObject for SourcedObject {
         self.inner
             .write_property_from(property, index, value, priority, origin)
     }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        self.inner.property_list()
-    }
     fn property_metadata(&self) -> Cow<'_, [bacnet_objects::property_metadata::PropertyMetadata]> {
         self.inner.property_metadata()
     }

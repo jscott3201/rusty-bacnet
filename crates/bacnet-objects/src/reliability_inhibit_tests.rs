@@ -87,7 +87,10 @@ fn all_nine_expose_default_false_boolean_writable_property_and_pics_truth() {
             PropertyValue::Boolean(false),
             "{name}"
         );
-        assert!(object.property_list().contains(&INHIBIT), "{name}");
+        assert!(
+            crate::property_metadata::has_property(&object.property_metadata(), INHIBIT),
+            "{name}"
+        );
         assert!(
             object.is_writable_property(INHIBIT),
             "{name} PICS writability must match dispatch"

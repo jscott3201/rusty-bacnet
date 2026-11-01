@@ -4,6 +4,7 @@
 //! on a single module.
 
 use super::super::*;
+use bacnet_objects::property_metadata::has_property;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::NotifyType;
@@ -28,16 +29,16 @@ enum AlarmSummaryProjectionResult {
 
 impl AlarmSummaryProjection {
     fn read(object: &dyn BACnetObject) -> Result<AlarmSummaryProjectionResult, Error> {
-        let advertised = object.property_list();
+        let advertised = object.property_metadata();
         if !ALARM_SUMMARY_SIGNATURE
             .iter()
-            .all(|property| advertised.contains(property))
+            .all(|&property| has_property(&advertised, property))
         {
             return Ok(AlarmSummaryProjectionResult::NotEventInitiating);
         }
 
         let object_identifier = object.object_identifier();
-        if advertised.contains(&PropertyIdentifier::EVENT_DETECTION_ENABLE) {
+        if has_property(&advertised, PropertyIdentifier::EVENT_DETECTION_ENABLE) {
             match read_required(
                 object,
                 object_identifier,

@@ -128,9 +128,6 @@ impl BACnetObject for CustomProposal {
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         crate::test_rows::read_only(&[])
     }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
-    }
     fn evaluate_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
         if self.delay == 0 {
             return self.proposal();
@@ -205,9 +202,6 @@ impl BACnetObject for UnsupportedProposal {
     }
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         self.0.property_metadata()
-    }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        self.0.property_list()
     }
     fn evaluate_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
         self.0.evaluate_intrinsic_reporting()

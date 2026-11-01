@@ -138,10 +138,6 @@ impl BACnetObject for ProgramObject {
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
         metadata::for_object(self)
     }
-
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -266,7 +262,7 @@ mod tests {
     #[test]
     fn program_property_list() {
         let prog = ProgramObject::new(1, "PRG-1").unwrap();
-        let list = prog.property_list();
+        let list = crate::test_rows::listed(&prog.property_metadata());
         assert!(list.contains(&PropertyIdentifier::PROGRAM_STATE));
         assert!(list.contains(&PropertyIdentifier::PROGRAM_CHANGE));
         assert!(list.contains(&PropertyIdentifier::REASON_FOR_HALT));

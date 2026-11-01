@@ -1,0 +1,52 @@
+[package]
+name = "encoding-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+rust-version = "1.95"
+
+[package.metadata]
+cargo-fuzz = true
+
+# A workspace of its own, outside the root one: it builds only with cargo-fuzz
+# on the pinned nightly, from its own Cargo.lock (docs/ci.md, "Fuzzing").
+[workspace]
+members = []
+
+# One fuzz crate for the encoding crate and the service codecs built on it:
+# every service decoder reads its fields with the encoding crate's tag and
+# value readers, and the targets share one round-trip check.
+[dependencies]
+bacnet-encoding = { path = ".." }
+bacnet-services = { path = "../../bacnet-services" }
+bacnet-types = { path = "../../bacnet-types" }
+bytes = "1"
+libfuzzer-sys = "0.4"
+
+[[bin]]
+name = "apdu_decode"
+path = "fuzz_targets/apdu_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "value_decode"
+path = "fuzz_targets/value_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "constructed_decode"
+path = "fuzz_targets/constructed_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "service_decode"
+path = "fuzz_targets/service_decode.rs"
+test = false
+doc = false
+bench = false

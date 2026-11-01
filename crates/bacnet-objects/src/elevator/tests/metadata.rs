@@ -26,8 +26,14 @@ fn assert_exact_sets(object: &dyn BACnetObject, all: &[P], required: &[P]) {
     let metadata = object.property_metadata();
     assert!(matches!(metadata, Cow::Borrowed(_)));
     assert_eq!(metadata.len(), all.len() + 1);
-    assert_eq!(object.property_list().as_ref(), all);
-    assert_eq!(object.required_properties().as_ref(), required);
+    assert_eq!(
+        crate::test_rows::listed(&object.property_metadata()),
+        crate::test_rows::listed_from(all)
+    );
+    assert_eq!(
+        crate::test_rows::required(&object.property_metadata()),
+        required
+    );
     assert_eq!(
         metadata
             .iter()
@@ -312,7 +318,10 @@ fn property_metadata_elevator_trio_write_capabilities_match_dispatch() {
         for out_of_service in [false, true] {
             let mut object = make();
             // Elevator Group has no Out_Of_Service (Table 12-76).
-            if object.property_list().contains(&P::OUT_OF_SERVICE) {
+            if crate::property_metadata::has_property(
+                &object.property_metadata(),
+                P::OUT_OF_SERVICE,
+            ) {
                 object
                     .write_property(
                         P::OUT_OF_SERVICE,

@@ -149,12 +149,12 @@ async fn audit_reporter_identity_drop_releases_membership_after_task_frames_end(
             .unwrap()
             .is_some()
     );
-    assert!(
-        !db.get(&oid(ObjectType::DEVICE, 10))
+    assert!(!bacnet_objects::property_metadata::has_property(
+        &db.get(&oid(ObjectType::DEVICE, 10))
             .unwrap()
-            .property_list()
-            .contains(&PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT)
-    );
+            .property_metadata(),
+        PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT
+    ));
 }
 
 #[tokio::test]

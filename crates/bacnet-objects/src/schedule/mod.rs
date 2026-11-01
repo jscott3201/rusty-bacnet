@@ -16,7 +16,8 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
 use bytes::BytesMut;
 
-use crate::common::{self, read_property_list_property};
+use crate::common;
+use crate::property_metadata::read_property_list;
 use crate::traits::BACnetObject;
 
 mod calendar;
@@ -401,7 +402,7 @@ impl BACnetObject for ScheduleObject {
                 Ok(PropertyValue::Unsigned(self.priority_for_writing as u64))
             }
             p if p == PropertyIdentifier::PROPERTY_LIST => {
-                read_property_list_property(&self.property_list(), array_index)
+                read_property_list(&self.property_metadata(), array_index)
             }
             _ => Err(Error::protocol(
                 ErrorClass::PROPERTY,
@@ -507,10 +508,6 @@ impl BACnetObject for ScheduleObject {
 
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
         metadata::for_object(self)
-    }
-
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
     fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {

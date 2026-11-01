@@ -274,9 +274,6 @@ impl BACnetObject for ConfigurableTrend {
     fn property_metadata(&self) -> std::borrow::Cow<'_, [PropertyMetadata]> {
         self.inner.property_metadata()
     }
-    fn property_list(&self) -> std::borrow::Cow<'static, [P]> {
-        self.inner.property_list()
-    }
     fn read_property(&self, property: P, index: Option<u32>) -> Result<PropertyValue, Error> {
         if property == P::LOG_DEVICE_OBJECT_PROPERTY {
             return Ok(self.reference.lock().unwrap().clone());

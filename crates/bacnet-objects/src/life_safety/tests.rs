@@ -436,7 +436,7 @@ fn point_read_object_type() {
 #[test]
 fn point_property_list() {
     let pt = LifeSafetyPointObject::new(1, "LSP-1").unwrap();
-    let props = pt.property_list();
+    let props = crate::test_rows::listed(&pt.property_metadata());
     assert!(props.contains(&PropertyIdentifier::PRESENT_VALUE));
     assert!(props.contains(&PropertyIdentifier::MODE));
     assert!(props.contains(&PropertyIdentifier::SILENCED));
@@ -659,7 +659,7 @@ fn zone_read_object_type() {
 #[test]
 fn zone_property_list() {
     let z = LifeSafetyZoneObject::new(1, "LSZ-1").unwrap();
-    let props = z.property_list();
+    let props = crate::test_rows::listed(&z.property_metadata());
     assert!(props.contains(&PropertyIdentifier::PRESENT_VALUE));
     assert!(props.contains(&PropertyIdentifier::MODE));
     assert!(props.contains(&PropertyIdentifier::SILENCED));
@@ -733,28 +733,33 @@ fn life_safety_property_metadata_drives_required_sets() {
     let point = LifeSafetyPointObject::new(1, "LSP-1").unwrap();
     assert!(matches!(point.property_metadata(), Cow::Borrowed(_)));
     assert_eq!(point.property_metadata().len(), 18);
-    assert_eq!(point.required_properties().len(), 14);
-    assert!(
-        point
-            .required_properties()
-            .contains(&PropertyIdentifier::PROPERTY_LIST)
+    assert_eq!(
+        crate::test_rows::required(&point.property_metadata()).len(),
+        14
     );
     assert!(
-        !point
-            .property_list()
-            .contains(&PropertyIdentifier::PROPERTY_LIST)
+        crate::property_metadata::required_properties(&point.property_metadata())
+            .any(|required| required == PropertyIdentifier::PROPERTY_LIST)
     );
+    // The row stays; only the served list leaves it out.
+    assert!(crate::property_metadata::has_property(
+        &point.property_metadata(),
+        PropertyIdentifier::PROPERTY_LIST
+    ));
     let zone = LifeSafetyZoneObject::new(1, "LSZ-1").unwrap();
     assert!(matches!(zone.property_metadata(), Cow::Borrowed(_)));
     assert_eq!(zone.property_metadata().len(), 17);
-    assert_eq!(zone.required_properties().len(), 15);
-    assert!(
-        zone.required_properties()
-            .contains(&PropertyIdentifier::PROPERTY_LIST)
+    assert_eq!(
+        crate::test_rows::required(&zone.property_metadata()).len(),
+        15
     );
     assert!(
-        !zone
-            .property_list()
-            .contains(&PropertyIdentifier::PROPERTY_LIST)
+        crate::property_metadata::required_properties(&zone.property_metadata())
+            .any(|required| required == PropertyIdentifier::PROPERTY_LIST)
     );
+    // The row stays; only the served list leaves it out.
+    assert!(crate::property_metadata::has_property(
+        &zone.property_metadata(),
+        PropertyIdentifier::PROPERTY_LIST
+    ));
 }

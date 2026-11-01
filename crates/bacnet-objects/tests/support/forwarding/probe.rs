@@ -218,10 +218,6 @@ impl BACnetObject for Probe {
         self.called("property_metadata", ());
         Cow::Borrowed(&METADATA)
     }
-    fn property_list(&self) -> Cow<'static, [P]> {
-        self.called("property_list", ());
-        Cow::Borrowed(&[P::OBJECT_IDENTIFIER, P::OBJECT_NAME, P::OBJECT_TYPE, CUSTOM])
-    }
     fn timed(&mut self) -> Option<&mut dyn Timed> {
         self.called("timed", ());
         Some(self)
@@ -249,10 +245,6 @@ impl BACnetObject for Probe {
     fn is_deleteable(&self) -> bool {
         self.called("is_deleteable", ());
         false
-    }
-    fn required_properties(&self) -> Cow<'static, [P]> {
-        self.called("required_properties", ());
-        Cow::Borrowed(&[CUSTOM])
     }
     fn supports_cov(&self) -> bool {
         self.called("supports_cov", ());

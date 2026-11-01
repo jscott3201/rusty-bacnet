@@ -460,7 +460,9 @@ fn pics_analog_property_metadata_is_exact_for_each_configuration() {
                     (P::LAST_COMMAND_TIME, false, false),
                 ]);
             }
-            let required = object.required_properties();
+            let required: Vec<_> =
+                bacnet_objects::property_metadata::required_properties(&object.property_metadata())
+                    .collect();
             let mut db = ObjectDatabase::new();
             db.add(object).unwrap();
             let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default())
@@ -571,7 +573,10 @@ fn pics_binary_commandable_property_metadata_is_exact() {
                     (P::LAST_COMMAND_TIME, false, false),
                 ]);
                 expected.push((P::PROPERTY_LIST, false, false));
-                let required = object.required_properties();
+                let required: Vec<_> = bacnet_objects::property_metadata::required_properties(
+                    &object.property_metadata(),
+                )
+                .collect();
                 let mut db = ObjectDatabase::new();
                 db.add(object).unwrap();
                 let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default())
@@ -686,7 +691,10 @@ fn pics_multistate_property_metadata_is_exact() {
                     ]);
                 }
                 expected.push((P::PROPERTY_LIST, false, false));
-                let required = object.required_properties();
+                let required: Vec<_> = bacnet_objects::property_metadata::required_properties(
+                    &object.property_metadata(),
+                )
+                .collect();
                 let mut db = ObjectDatabase::new();
                 db.add(object).unwrap();
                 let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default())

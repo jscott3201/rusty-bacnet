@@ -310,12 +310,9 @@ fn alert_enrollment_write_notification_class() {
 fn alert_enrollment_property_list() {
     let ae = AlertEnrollmentObject::new(1, "AE", alert_source(1)).unwrap();
     assert_eq!(
-        ae.property_list().as_ref(),
+        crate::test_rows::listed(&ae.property_metadata()),
         [
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
             PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
             PropertyIdentifier::PRESENT_VALUE,
             PropertyIdentifier::EVENT_STATE,
             PropertyIdentifier::EVENT_DETECTION_ENABLE,

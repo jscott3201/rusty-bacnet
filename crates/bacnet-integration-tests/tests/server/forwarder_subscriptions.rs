@@ -1,7 +1,7 @@
 use super::*;
 use bacnet_encoding::constructed::encode_event_notification_subscription_list;
 use bacnet_objects::property_metadata::{
-    PropertyConformance, PropertyMetadata, PropertyWriteCapability, property_list_from_metadata,
+    PropertyConformance, PropertyMetadata, PropertyWriteCapability,
 };
 use bacnet_objects::subscribed_recipients::SubscribedRecipients;
 use bacnet_objects::traits::{Clocks, Timed};
@@ -100,10 +100,6 @@ impl BACnetObject for Forwarder {
             ),
         ];
         Cow::Borrowed(ROWS)
-    }
-
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        property_list_from_metadata(&self.property_metadata())
     }
 
     fn timed(&mut self) -> Option<&mut dyn Timed> {
