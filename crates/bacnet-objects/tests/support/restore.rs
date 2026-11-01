@@ -227,6 +227,38 @@ impl Format {
     }
 }
 
+/// The two-slot header the log and Audit Log formats share: magic tag,
+/// schema version, object identifier, generation, payload length.
+const SLOT_HEADER_LEN: usize = 8 + 2 + 4 + 8 + 4;
+const SLOT_TRAILER_LEN: usize = 4;
+
+/// The CRC-32 (IEEE 802.3, reflected) the slots end with, written here
+/// from its definition.
+pub fn crc32(data: &[u8]) -> u32 {
+    let mut crc = !0u32;
+    for byte in data {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xedb8_8320 & 0u32.wrapping_sub(crc & 1));
+        }
+    }
+    !crc
+}
+
+/// Give a two-slot format's `slot` the length field and checksum of what
+/// it holds, if it is long enough to have them, so damage past the header
+/// reaches the payload decoders.
+pub fn seal(slot: &mut [u8]) {
+    if slot.len() < SLOT_HEADER_LEN + SLOT_TRAILER_LEN {
+        return;
+    }
+    let payload = (slot.len() - SLOT_HEADER_LEN - SLOT_TRAILER_LEN) as u32;
+    slot[22..26].copy_from_slice(&payload.to_be_bytes());
+    let at = slot.len() - SLOT_TRAILER_LEN;
+    let checksum = crc32(&slot[..at]);
+    slot[at..].copy_from_slice(&checksum.to_be_bytes());
+}
+
 /// The object every sample and check is for: instance 1 of `kind`.
 pub fn oid(kind: ObjectType) -> ObjectIdentifier {
     ObjectIdentifier::new(kind, 1).expect("instance 1")
@@ -317,6 +349,8 @@ where
             "loaded another object's snapshot"
         );
         let copy = FileLogPersistence::new(copy_base(base, 2)).unwrap();
+        // No backend documents this; the harness holds it as the round trip
+        // a restore owes, so a failure here is a finding to triage.
         copy.commit(snapshot)
             .unwrap_or_else(|error| panic!("a loaded snapshot doesn't commit again: {error:?}"));
         let again = LogPersistence::<R>::load(&copy, oid).expect("the copy loads");
@@ -371,6 +405,8 @@ fn check_audit(base: &Path) -> Outcome {
             "loaded another object's snapshot"
         );
         let copy = FileAuditLogPersistence::new(copy_base(base, 2)).unwrap();
+        // No backend documents this; the harness holds it as the round trip
+        // a restore owes, so a failure here is a finding to triage.
         copy.commit(snapshot)
             .unwrap_or_else(|error| panic!("a loaded snapshot doesn't commit again: {error:?}"));
         let again = copy.load(oid).expect("the copy loads");
@@ -483,6 +519,7 @@ fn check_file<S: OneFile>(
             loaded.is_ok(),
             "the object built although its storage didn't load"
         );
+        // Harness-invented, like the round trip above: a failure is a finding.
         assert!(saves, "the object took a snapshot its storage can't save");
     } else {
         assert!(

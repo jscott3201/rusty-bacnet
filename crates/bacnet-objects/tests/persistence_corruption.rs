@@ -6,16 +6,19 @@
 //! time (every bit of a slot, one bit of each octet of a one-file format),
 //! and the restore check in `support/restore.rs` runs on the result: no
 //! panic, a refused restore leaves the files as they were, and whatever
-//! loads saves and loads back the same. A two-slot format's slots end with
-//! a CRC-32, which catches every single-bit flip and every cut, so there no
-//! damaged slot may load at all.
+//! loads saves and loads back the same. A two-slot format's slot declares
+//! its length and ends with a CRC-32: the length check catches every cut
+//! and the CRC every single-bit flip, so no damaged slot may load. A second
+//! pass then re-seals each damaged slot (its length field and CRC made to
+//! match, one flip per octet) so the damage reaches the payload decoders,
+//! where a load is allowed but the same check applies.
 
 #![cfg(feature = "std")]
 
 #[path = "support/restore.rs"]
 mod restore;
 
-use restore::{FORMATS, Format, Outcome, Scratch, read_files, write_files};
+use restore::{FORMATS, Format, Outcome, Scratch, read_files, seal, write_files};
 
 /// Run the check over every truncation and bit flip of each file `format`
 /// saved, returning how many damaged inputs still loaded.
@@ -35,39 +38,50 @@ fn damage(format: &Format) -> usize {
         format.name
     );
     let mut loaded = 0;
-    let mut run = |variant: Vec<Option<Vec<u8>>>, what: &str| {
+    // Each damaged file, with whether it was re-sealed.
+    let mut run = |variant: Vec<Option<Vec<u8>>>, sealed: bool, what: &str| {
         write_files(&files, &variant);
         let outcome = (format.check)(&base);
         assert!(
-            !(format.two_slot && outcome.loaded),
+            sealed || !(format.two_slot && outcome.loaded),
             "{}: a slot {what} loaded",
             format.name
         );
         loaded += usize::from(outcome.loaded);
     };
+    // A two-slot format runs the damage once as it is and once re-sealed.
+    let passes: &[bool] = if format.two_slot {
+        &[false, true]
+    } else {
+        &[false]
+    };
     for (index, octets) in saved.iter().enumerate() {
         let Some(octets) = octets else { continue };
-        let with = |damaged: Vec<u8>| {
-            let mut variant = saved.clone();
-            variant[index] = Some(damaged);
-            variant
-        };
-        for length in 0..octets.len() {
-            run(
-                with(octets[..length].to_vec()),
-                &format!("cut to {length} octets"),
-            );
-        }
-        for bit in 0..octets.len() * 8 {
-            // A one-file format that loads damage pays a synchronized save
-            // for the round trip, so it takes one flip per octet, a
-            // different bit in each; a slot takes all eight.
-            if !format.two_slot && bit % 8 != (bit / 8) % 8 {
-                continue;
+        for &sealed in passes {
+            let with = |mut damaged: Vec<u8>| {
+                if sealed {
+                    seal(&mut damaged);
+                }
+                let mut variant = saved.clone();
+                variant[index] = Some(damaged);
+                variant
+            };
+            for length in 0..octets.len() {
+                let what = format!("cut to {length} octets");
+                run(with(octets[..length].to_vec()), sealed, &what);
             }
-            let mut damaged = octets.clone();
-            damaged[bit / 8] ^= 1 << (bit % 8);
-            run(with(damaged), &format!("with bit {bit} flipped"));
+            for bit in 0..octets.len() * 8 {
+                // A damaged input that loads pays a synchronized save for
+                // the round trip, so where loads happen (a one-file format,
+                // a re-sealed slot) it takes one flip per octet, a different
+                // bit in each; a slot as damaged takes all eight.
+                if (sealed || !format.two_slot) && bit % 8 != (bit / 8) % 8 {
+                    continue;
+                }
+                let mut damaged = octets.clone();
+                damaged[bit / 8] ^= 1 << (bit % 8);
+                run(with(damaged), sealed, &format!("with bit {bit} flipped"));
+            }
         }
     }
     loaded
@@ -77,12 +91,11 @@ fn damage(format: &Format) -> usize {
 fn damaged_files_never_panic_and_refused_restores_write_nothing() {
     for format in FORMATS {
         let loaded = damage(format);
-        // The one-file formats have no checksum: some flips land on a value
-        // that is still valid (a time, a flag, a kelvin), and a cut at an
-        // entry boundary leaves a shorter list.
-        if !format.two_slot {
-            assert!(loaded > 0, "{}: no damaged input loaded", format.name);
-        }
+        // Some damage must load: in the one-file formats, which have no
+        // checksum, and in a re-sealed slot, a flip that lands on a value
+        // that is still valid (a time, a flag, a count) or a cut at an entry
+        // boundary that leaves a shorter list.
+        assert!(loaded > 0, "{}: no damaged input loaded", format.name);
     }
 }
 

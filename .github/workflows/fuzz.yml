@@ -9,9 +9,10 @@ name: Fuzz
 # docs/ci.md, "Fuzzing".
 #
 #   pull request  a PR to dev or main that changes either codec crate, the
-#                 core or its time crate, the encoding, services, types or
-#                 objects crate, the fuzz crates included, or this workflow,
-#                 its scripts or the pins: the fuzz crates' lockfiles, rustfmt
+#                 core or its time crate, the encoding, services or types
+#                 crate, the object crate's persistence code, the fuzz
+#                 crates included, or this workflow, its scripts or the
+#                 pins: the fuzz crates' lockfiles, rustfmt
 #                 and clippy, every target built, then each target fuzzed
 #                 for 60 seconds
 #   scheduled     twice a week on dev (the default branch): each target for
@@ -41,9 +42,17 @@ on:
       - crates/bacnet-encoding/**
       - crates/bacnet-services/**
       - crates/bacnet-types/**
-      # The persistence backends whose restores the objects fuzz crate
-      # drives.
-      - crates/bacnet-objects/**
+      # The object crate's saved formats and the restore check its fuzz
+      # crate shares with the crate's corruption test: the file backends,
+      # the durable file plumbing and checksum, and the fuzz crate. Other
+      # object changes wait for the scheduled run.
+      - crates/bacnet-objects/fuzz/**
+      - crates/bacnet-objects/tests/support/restore*.rs
+      - crates/bacnet-objects/src/**/*persistence*.rs
+      - crates/bacnet-objects/src/log_persistence/**
+      - crates/bacnet-objects/src/audit/persistence/**
+      - crates/bacnet-objects/src/durable.rs
+      - crates/bacnet-objects/src/durable/**
       - .github/workflows/fuzz.yml
       - .github/ci-pins.env
       - scripts/ci/fuzz.sh

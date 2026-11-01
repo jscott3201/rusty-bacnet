@@ -3,8 +3,9 @@
 //!
 //! Each case takes one object from [`representatives`] and runs a short
 //! run of writes against it through the public `write_property` only: a
-//! property picked from the object's metadata rows (or now and then one the
-//! object lacks), an array index, a priority, and a value that is either
+//! property picked from the object's metadata rows (mostly one that
+//! `is_writable_property` names, now and then one the object lacks), an
+//! array index, a priority, and a value that is either
 //! any application value, wrong datatypes included, or a variation of what
 //! the property reads now, so writes of the right shape get through too.
 //!
@@ -66,6 +67,9 @@ fn first_difference(before: &[String], after: &[String]) -> String {
 /// Which property a write names.
 #[derive(Debug, Clone)]
 enum Target {
+    /// The writable row at this index, modulo their count (any row when
+    /// none is writable), so most writes can succeed.
+    Writable(usize),
     /// The row at this index, modulo the row count.
     Row(usize),
     /// Any identifier, most likely one the object lacks.
@@ -280,7 +284,8 @@ fn value() -> impl Strategy<Value = PropertyValue> {
 fn write() -> impl Strategy<Value = Write> {
     (
         prop_oneof![
-            9 => any::<usize>().prop_map(Target::Row),
+            7 => any::<usize>().prop_map(Target::Writable),
+            2 => any::<usize>().prop_map(Target::Row),
             1 => prop_oneof![0u32..600, any::<u32>()].prop_map(Target::Any),
         ],
         prop_oneof![
@@ -317,6 +322,17 @@ fn run(index: usize, writes: &[Write]) -> Result<(), TestCaseError> {
     for write in writes {
         let rows = object.property_metadata();
         let property = match write.target {
+            Target::Writable(row) => {
+                let writable: Vec<PropertyIdentifier> = rows
+                    .iter()
+                    .map(|row| row.property_identifier)
+                    .filter(|&property| object.is_writable_property(property))
+                    .collect();
+                match writable.len() {
+                    0 => rows[row % rows.len()].property_identifier,
+                    count => writable[row % count],
+                }
+            }
             Target::Row(row) => rows[row % rows.len()].property_identifier,
             Target::Any(raw) => PropertyIdentifier::from_raw(raw),
         };
@@ -354,8 +370,8 @@ fn run(index: usize, writes: &[Write]) -> Result<(), TestCaseError> {
 }
 
 proptest! {
-    // About 16 runs per catalogue type; PROPTEST_CASES raises it.
-    #![proptest_config(ProptestConfig::with_cases(1024))]
+    // About 64 runs per catalogue type; PROPTEST_CASES changes it.
+    #![proptest_config(ProptestConfig::with_cases(4096))]
 
     #[test]
     fn refused_writes_leave_the_object_unchanged(

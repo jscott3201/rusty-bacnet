@@ -1460,9 +1460,13 @@ Postponed handled as an abandoned request within five.
 `crates/bacnet-mstp-core/**` (fuzz crates included),
 `crates/bacnet-time/**`, `crates/bacnet-npdu/**`,
 `crates/bacnet-encoding/**`, `crates/bacnet-services/**`,
-`crates/bacnet-types/**` or `crates/bacnet-objects/**`, the workflow,
+`crates/bacnet-types/**`, the object crate's persistence code (its fuzz
+crate, `tests/support/restore*.rs`, `src/**/*persistence*.rs`,
+`src/log_persistence/**`, `src/audit/persistence/**` and the durable file
+plumbing in `src/durable.rs` and `src/durable/**`), the workflow,
 `.github/ci-pins.env`, `scripts/ci/fuzz.sh` or
-`scripts/ci/install-tools.sh`, each target runs for 60 seconds. Twice a
+`scripts/ci/install-tools.sh`, each target runs for 60 seconds. Other
+changes to the object crate wait for the scheduled run. Twice a
 week (Sundays and Wednesdays at 03:41 UTC, on `dev`) and by hand, each runs
 for 10 minutes. A newer push to the PR cancels its older run; scheduled and
 manual runs are never cancelled.
@@ -1519,9 +1523,9 @@ again after a change. The object crate's seeds in
 format's sample, written through its backend by `src/seeds.rs` and laid out
 as its target's input (for the two-slot formats also unsealed, in both
 slots at one generation, and for the Audit Log as schema versions 1 and 2),
-and `cargo test` checks that each one restores. `fuzz.sh run` passes the seeds directory after the
-corpus, so libFuzzer reads the seeds on every run and writes new inputs
-only to the corpus; `cmin` minimizes the corpus alone. `cargo test` replays
+and `cargo test` checks that each one restores. `fuzz.sh run` passes the
+seeds directory after the corpus, so libFuzzer reads the seeds on every run
+and writes new inputs only to the corpus; `cmin` minimizes the corpus alone. `cargo test` replays
 every seed file through its target's check, so a minimized failing input
 saved there, under a name that says what it found, stays a regression
 test.

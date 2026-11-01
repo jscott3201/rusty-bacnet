@@ -33,8 +33,10 @@ pub mod restore;
 mod seeds;
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use restore::{FORMATS, Format, Scratch, write_files};
+pub use restore::{crc32, seal};
 
 /// A fuzz target: which formats its selector picks from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,37 +61,6 @@ impl Target {
             })
             .collect()
     }
-}
-
-/// The two-slot header, as the log and Audit Log formats share it: magic
-/// tag, schema version, object identifier, generation, payload length.
-const HEADER_LEN: usize = 8 + 2 + 4 + 8 + 4;
-const TRAILER_LEN: usize = 4;
-
-/// The CRC-32 (IEEE 802.3, reflected) the slots end with, written here
-/// from its definition.
-pub fn crc32(data: &[u8]) -> u32 {
-    let mut crc = !0u32;
-    for byte in data {
-        crc ^= u32::from(*byte);
-        for _ in 0..8 {
-            crc = (crc >> 1) ^ (0xedb8_8320 & 0u32.wrapping_sub(crc & 1));
-        }
-    }
-    !crc
-}
-
-/// Give `slot` the length field and checksum of what it holds, if it is
-/// long enough to have them.
-pub fn seal(slot: &mut [u8]) {
-    if slot.len() < HEADER_LEN + TRAILER_LEN {
-        return;
-    }
-    let payload = (slot.len() - HEADER_LEN - TRAILER_LEN) as u32;
-    slot[22..26].copy_from_slice(&payload.to_be_bytes());
-    let at = slot.len() - TRAILER_LEN;
-    let checksum = crc32(&slot[..at]);
-    slot[at..].copy_from_slice(&checksum.to_be_bytes());
 }
 
 /// The files `rest` holds for `format`, as the module docs lay them out.
@@ -121,13 +92,39 @@ fn files(format: &Format, rest: &[u8]) -> Vec<Option<Vec<u8>>> {
 }
 
 /// A base path for `format` in this thread's scratch directory (the seed
-/// tests run side by side). The directory lives as long as the thread;
-/// the check removes what it adds beside the format's own files.
+/// tests run side by side). A test thread's directory goes when the thread
+/// ends; libFuzzer exits without running that, so a new directory first
+/// removes those earlier runs left more than an hour ago.
 fn base(format: &Format) -> PathBuf {
     thread_local! {
-        static SCRATCH: Scratch = Scratch::new("objects-fuzz");
+        static SCRATCH: Scratch = {
+            remove_stale_scratch();
+            Scratch::new(SCRATCH_LABEL)
+        };
     }
     SCRATCH.with(|scratch| scratch.base(format.name))
+}
+
+const SCRATCH_LABEL: &str = "objects-fuzz";
+
+/// Remove scratch directories of earlier runs untouched for an hour. A
+/// run still going rewrites its files on every input, so it stays.
+fn remove_stale_scratch() {
+    let prefix = format!("rusty-bacnet-{SCRATCH_LABEL}-");
+    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let stale = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age > Duration::from_secs(3600));
+        if stale && entry.file_name().to_string_lossy().starts_with(&prefix) {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
 }
 
 /// Restore `target`'s format picked by `input` from the files it holds.
