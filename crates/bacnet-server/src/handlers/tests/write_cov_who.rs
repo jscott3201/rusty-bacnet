@@ -450,10 +450,19 @@ fn subscribe_cov_cancellation() {
     assert!(table.is_empty());
 }
 
+/// Device 1, the identity's, and AI-1.
+fn who_has_fixture() -> (bacnet_objects::DeviceIdentity, ObjectDatabase) {
+    let identity = bacnet_objects::DeviceIdentity::new(1, 0x105).unwrap();
+    let ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
+    let db =
+        bacnet_objects::device_identity::build_database_with_extra(&identity, vec![Box::new(ai)])
+            .unwrap();
+    (identity, db)
+}
+
 #[test]
 fn who_has_by_id_found() {
-    let db = make_db_with_ai();
-    let device_oid = ObjectIdentifier::new(ObjectType::DEVICE, 1).unwrap();
+    let (identity, db) = who_has_fixture();
     let ai_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
 
     let request = WhoHasRequest {
@@ -463,7 +472,7 @@ fn who_has_by_id_found() {
     let mut buf = BytesMut::new();
     request.encode(&mut buf).unwrap();
 
-    let result = who_has(&db, &buf, device_oid).unwrap();
+    let result = who_has(&identity, &db, &buf).unwrap();
     assert!(result.is_some());
     let i_have = result.unwrap();
     assert_eq!(i_have.object_identifier, ai_oid);
@@ -472,8 +481,7 @@ fn who_has_by_id_found() {
 
 #[test]
 fn who_has_by_name_found() {
-    let db = make_db_with_ai();
-    let device_oid = ObjectIdentifier::new(ObjectType::DEVICE, 1).unwrap();
+    let (identity, db) = who_has_fixture();
 
     let request = WhoHasRequest {
         range: None,
@@ -482,14 +490,13 @@ fn who_has_by_name_found() {
     let mut buf = BytesMut::new();
     request.encode(&mut buf).unwrap();
 
-    let result = who_has(&db, &buf, device_oid).unwrap();
+    let result = who_has(&identity, &db, &buf).unwrap();
     assert!(result.is_some());
 }
 
 #[test]
 fn who_has_not_found() {
-    let db = make_db_with_ai();
-    let device_oid = ObjectIdentifier::new(ObjectType::DEVICE, 1).unwrap();
+    let (identity, db) = who_has_fixture();
     let missing_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 99).unwrap();
 
     let request = WhoHasRequest {
@@ -499,14 +506,13 @@ fn who_has_not_found() {
     let mut buf = BytesMut::new();
     request.encode(&mut buf).unwrap();
 
-    let result = who_has(&db, &buf, device_oid).unwrap();
+    let result = who_has(&identity, &db, &buf).unwrap();
     assert!(result.is_none());
 }
 
 #[test]
 fn who_has_out_of_range() {
-    let db = make_db_with_ai();
-    let device_oid = ObjectIdentifier::new(ObjectType::DEVICE, 1).unwrap();
+    let (identity, db) = who_has_fixture();
     let ai_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
 
     let request = WhoHasRequest {
@@ -516,8 +522,23 @@ fn who_has_out_of_range() {
     let mut buf = BytesMut::new();
     request.encode(&mut buf).unwrap();
 
-    let result = who_has(&db, &buf, device_oid).unwrap();
+    let result = who_has(&identity, &db, &buf).unwrap();
     assert!(result.is_none()); // device instance 1 not in [100, 200]
+}
+
+/// With the identity's Device gone, nothing is announced, though the
+/// object asked for is there (#2186).
+#[test]
+fn who_has_without_the_identity_device() {
+    let (identity, mut db) = who_has_fixture();
+    db.remove(&identity.device_oid()).unwrap();
+    let request = WhoHasRequest {
+        range: None,
+        object: WhoHasObject::Name("AI-1".into()),
+    };
+    let mut buf = BytesMut::new();
+    request.encode(&mut buf).unwrap();
+    assert!(who_has(&identity, &db, &buf).unwrap().is_none());
 }
 
 #[test]

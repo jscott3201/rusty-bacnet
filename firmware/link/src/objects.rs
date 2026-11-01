@@ -7,10 +7,13 @@
 //! that owns its database would: Who-Is in range and out of it, a Who-Has,
 //! a ReadProperty of each Present_Value, one of an object the device lacks,
 //! one whose parameters stop short, a segmented request, then a
-//! WriteProperty of BV-1's Present_Value, a ReadProperty that reads it
-//! back, and a ReadPropertyMultiple of AI-1's and BV-1's. Each request is
-//! copied into a `Bytes` of its own, as a receive path would. It returns a [`Summary`]: what `handle` reported for each request,
-//! the APDU it wrote, and the objects the writes changed.
+//! WriteProperty that commands BV-1's Present_Value at priority 8, a
+//! ReadProperty that reads it back, a ReadPropertyMultiple of AI-1's and
+//! BV-1's, and a ReadProperty of BV-1's Priority_Array. Each request is
+//! copied into a `Bytes` of its own, as a receive path would, and names its
+//! sender, [`REQUESTER`], as the command origin. It returns a [`Summary`]:
+//! what `handle` reported for each request, the APDU it wrote, and the
+//! objects the writes changed.
 //!
 //! The work lives on the heap: the database, each request's `Bytes` and
 //! each answer. The image gives its allocator an arena of [`ARENA`] octets.
@@ -26,10 +29,12 @@ use bacnet_device_core::responder::{Inbound, Limits, Outcome, Responder, SERVICE
 use bacnet_objects::DeviceIdentity;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::binary::BinaryValueObject;
+use bacnet_objects::command_source::{CommandDeviceBinding, CommandOrigin};
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::device_identity::build_database_with_extra;
-use bacnet_objects::present_value_access::PresentValueAccess;
 use bacnet_objects::traits::BACnetObject;
+use bacnet_types::MacAddr;
+use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::enums::EngineeringUnits;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
@@ -51,7 +56,10 @@ pub const VENDOR: u16 = 0x0105;
 pub const MAX_REPLY: u16 = 1476;
 
 /// The requests the scenario hands the responder, in this order.
-pub const REQUESTS: usize = 13;
+pub const REQUESTS: usize = 14;
+
+/// The MS/TP station every request comes from, on the device's own network.
+pub const REQUESTER: u8 = 7;
 
 /// Each request's APDU, written by hand from the layouts in Clause 20.1 and
 /// the service productions. A confirmed request's header is the type and
@@ -92,9 +100,10 @@ pub const APDUS: [&[u8]; REQUESTS] = [
         0x0C, 0x05, 0x07, 0x00, 0x01, 0x0C, 0x0C, 0x00, 0x00, 0x00, 0x01, 0x19, 0x55,
     ],
     // WriteProperty (0x0F) of BV-1's Present_Value, invoke ID 8: active,
-    // Enumerated 1 inside context [3], with no priority.
+    // Enumerated 1 inside context [3], at priority 8 in context [4].
     &[
         0x00, 0x05, 0x08, 0x0F, 0x0C, 0x01, 0x40, 0x00, 0x01, 0x19, 0x55, 0x3E, 0x91, 0x01, 0x3F,
+        0x49, 0x08,
     ],
     // ReadProperty of BV-1's Present_Value again, invoke ID 9.
     &[
@@ -105,6 +114,10 @@ pub const APDUS: [&[u8]; REQUESTS] = [
     &[
         0x00, 0x05, 0x0A, 0x0E, 0x0C, 0x00, 0x00, 0x00, 0x01, 0x1E, 0x09, 0x55, 0x1F, 0x0C, 0x01,
         0x40, 0x00, 0x01, 0x1E, 0x09, 0x55, 0x1F,
+    ],
+    // ReadProperty of BV-1's Priority_Array (87), invoke ID 11.
+    &[
+        0x00, 0x05, 0x0B, 0x0C, 0x0C, 0x01, 0x40, 0x00, 0x01, 0x19, 0x57,
     ],
 ];
 
@@ -151,7 +164,8 @@ pub fn run(requests: &[&[u8]; REQUESTS]) -> Summary {
         .zip(&mut summary.answers)
     {
         let mut out = BytesMut::new();
-        let inbound = Inbound::new(Bytes::copy_from_slice(request), MAX_REPLY);
+        let inbound =
+            Inbound::new(Bytes::copy_from_slice(request), MAX_REPLY).with_source(requester());
         let handled = responder.handle(&mut db, inbound, &mut out);
         *outcome = handled.outcome;
         summary.written.extend(handled.objects);
@@ -160,13 +174,21 @@ pub fn run(requests: &[&[u8]; REQUESTS]) -> Summary {
     summary
 }
 
+/// [`REQUESTER`] as the command origin a write carries: its address, with
+/// no Device bound to it.
+fn requester() -> CommandOrigin {
+    CommandOrigin::Remote {
+        actual_address: BACnetAddress {
+            network_number: 0,
+            mac_address: MacAddr::from_slice(&[REQUESTER]),
+        },
+        binding: CommandDeviceBinding::Unknown,
+    }
+}
+
 /// The device's identity, declaring the services the responder runs, and
 /// its database: the Device, AI-1 and AI-2 with [`ANALOG_VALUES`], BV-1
-/// inactive and BV-2 active.
-///
-/// BV-1's Present_Value is writable rather than commandable: a command
-/// records its source, and the responder knows no requester to name, so a
-/// commandable object would refuse the write.
+/// inactive and BV-2 active, both with commandable Present_Values.
 fn device() -> Result<(DeviceIdentity, ObjectDatabase), Error> {
     let identity = DeviceIdentity::new(DEVICE, VENDOR)?.with_services(SERVICES);
     let mut extra: Vec<Box<dyn BACnetObject>> = Vec::new();
@@ -176,11 +198,7 @@ fn device() -> Result<(DeviceIdentity, ObjectDatabase), Error> {
         input.set_present_value(value);
         extra.push(Box::new(input));
     }
-    extra.push(Box::new(BinaryValueObject::with_access(
-        1,
-        "BV-1",
-        PresentValueAccess::Writable,
-    )?));
+    extra.push(Box::new(BinaryValueObject::new(1, "BV-1")?));
     // With no command at any priority, Present_Value is Relinquish_Default.
     let mut active = BinaryValueObject::new(2, "BV-2")?;
     active.set_relinquish_default(1)?;
@@ -247,13 +265,20 @@ pub fn expected() -> Summary {
             0xAC, 0x00, 0x00, 0x4F, 0x1F, 0x0C, 0x01, 0x40, 0x00, 0x01, 0x1E, 0x29, 0x55, 0x4E,
             0x91, 0x01, 0x4F, 0x1F,
         ],
+        // BV-1's Priority_Array: sixteen values, NULL (0x00) but for
+        // Enumerated 1 at priority 8.
+        &[
+            0x30, 0x0B, 0x0C, 0x0C, 0x01, 0x40, 0x00, 0x01, 0x19, 0x57, 0x3E, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x91, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x3F,
+        ],
     ];
     let bv1 = ObjectIdentifier::new(bacnet_types::enums::ObjectType::BINARY_VALUE, 1)
         .expect("a valid identifier");
     Summary {
         outcomes: [
             Announce, Silent, Announce, Reply, Reply, Reply, Reply, Reply, Reply, Reply, Reply,
-            Reply, Reply,
+            Reply, Reply, Reply,
         ],
         answers: answers.map(<[u8]>::to_vec),
         written: alloc::vec![bv1],

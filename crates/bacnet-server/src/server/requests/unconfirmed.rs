@@ -178,11 +178,20 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 return;
             }
 
-            // As for Who-Is, the guard covers only the lookup (#2199).
+            // As for Who-Is, the guard covers only the lookup (#2199). The
+            // I-Have names the Device the I-Am does (#2186). `who_has` alone
+            // would answer Ok(None) with that Device gone, which the arm
+            // below records in the negative Who-Has cache; this outer
+            // `announcement_device` check gives `None` instead, so a missing
+            // Device never records a target as absent.
             let found = {
                 let db = db.read().await;
-                db.selected_device().map(|device_oid| {
-                    bacnet_device_core::discovery::who_has(&db, &req.service_request, device_oid)
+                bacnet_device_core::discovery::announcement_device(&db, &config.device).map(|_| {
+                    bacnet_device_core::discovery::who_has(
+                        &config.device,
+                        &db,
+                        &req.service_request,
+                    )
                 })
             };
 
