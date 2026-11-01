@@ -12,20 +12,18 @@ use bacnet_objects::durable::DurableWrites;
 use bacnet_objects::file::{FileConfiguration, FileStorage};
 use bacnet_objects::log_buffer::{LogBufferRecords, LogRecordIdentity};
 use bacnet_objects::property_metadata::PropertyMetadata;
-use bacnet_objects::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 use bacnet_objects::traits::{
-    AccessEvents, BACnetObject, CommandRunner, CovReportedProperty, EnrollmentEval, EventReporting,
-    LifeSafety, LocalInput, ReliabilityEval, StagingSource, Timed,
+    AccessEvents, BACnetObject, CalendarState, CommandRunner, CovReportedProperty, EnrollmentEval,
+    EventReporting, LifeSafety, LocalInput, ReliabilityEval, ScheduleRunner, StagingSource, Timed,
 };
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
-use bacnet_types::calendar::SpecificDate;
 use bacnet_types::constructed::{
     BACnetDeviceObjectReference, BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord,
     BACnetObjectPropertyReference, BACnetObjectSelector,
 };
 use bacnet_types::enums::{AuditLevel, ErrorClass, ErrorCode, PropertyIdentifier};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, Time};
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 struct SourceReporter {
     owner: Weak<AuditOwnership>,
@@ -255,6 +253,14 @@ impl BACnetObject for SourceReporter {
         self.wrapped.reliability_eval()
     }
 
+    fn schedule_runner(&mut self) -> Option<&mut dyn ScheduleRunner> {
+        self.wrapped.schedule_runner()
+    }
+
+    fn calendar_state(&self) -> Option<&dyn CalendarState> {
+        self.wrapped.calendar_state()
+    }
+
     fn supports_cov_property(&self, property: PropertyIdentifier) -> bool {
         self.wrapped.supports_cov_property(property)
     }
@@ -269,35 +275,6 @@ impl BACnetObject for SourceReporter {
 
     fn set_overridden(&mut self, overridden: bool) {
         self.wrapped.set_overridden(overridden)
-    }
-
-    fn tick_schedule(
-        &mut self,
-        today: SpecificDate,
-        time: Time,
-        calendar_active: &dyn Fn(ObjectIdentifier) -> bool,
-    ) -> Option<ScheduleWrite> {
-        self.wrapped.tick_schedule(today, time, calendar_active)
-    }
-
-    fn take_owed_schedule_writes(&mut self) -> Vec<ScheduleWrite> {
-        self.wrapped.take_owed_schedule_writes()
-    }
-
-    fn complete_schedule_write(
-        &mut self,
-        write: &ScheduleWrite,
-        outcomes: &[ScheduleTargetOutcome],
-    ) -> bool {
-        self.wrapped.complete_schedule_write(write, outcomes)
-    }
-
-    fn retry_refusals_naming(&self, target: ObjectIdentifier) -> Option<ScheduleWrite> {
-        self.wrapped.retry_refusals_naming(target)
-    }
-
-    fn calendar_state_internal(&self, day: SpecificDate) -> Option<bool> {
-        self.wrapped.calendar_state_internal(day)
     }
 
     fn take_due_averaging_sample_internal(

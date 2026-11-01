@@ -18,7 +18,7 @@ use bytes::BytesMut;
 
 use crate::common;
 use crate::property_metadata::read_property_list;
-use crate::traits::BACnetObject;
+use crate::traits::{BACnetObject, ScheduleRunner};
 
 mod calendar;
 mod calendar_metadata;
@@ -512,6 +512,10 @@ impl BACnetObject for ScheduleObject {
 
     crate::traits::lend_reliability_eval!();
 
+    crate::traits::lend_schedule_runner!();
+}
+
+impl ScheduleRunner for ScheduleObject {
     fn take_owed_schedule_writes(&mut self) -> Vec<ScheduleWrite> {
         self.take_owed_writes()
     }

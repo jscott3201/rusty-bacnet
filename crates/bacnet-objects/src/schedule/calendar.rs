@@ -176,12 +176,18 @@ impl BACnetObject for CalendarObject {
         calendar_metadata::for_object(self)
     }
 
-    fn calendar_state_internal(&self, day: SpecificDate) -> Option<bool> {
-        Some(self.is_active_on(day))
+    fn calendar_state(&self) -> Option<&dyn crate::traits::CalendarState> {
+        Some(self)
     }
 
     fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
         Some(self)
+    }
+}
+
+impl crate::traits::CalendarState for CalendarObject {
+    fn state_on(&self, day: SpecificDate) -> bool {
+        self.is_active_on(day)
     }
 }
 

@@ -7,7 +7,7 @@
 //! The database makes that change at once, under the caller's exclusive
 //! access. Adding one can also let a Schedule's refused reference to it
 //! through, but the Schedule's writes to its targets are the server's
-//! (`crate::traits::BACnetObject::retry_refusals_naming` builds them). So the
+//! (`crate::traits::ScheduleRunner::retry_refusals_naming` builds them). So the
 //! database queues the objects that changed and the Schedules owed a retry,
 //! and calls the waker the server installed. The server takes the queue
 //! under its next database guard, makes the retries and fans COV out: at
@@ -51,7 +51,7 @@ pub struct MembershipWork {
     pub changed: Vec<ObjectIdentifier>,
     /// `(schedule, object)` pairs: a Schedule held a refused reference to
     /// the object when it was added, so the server owes it the
-    /// [`retry_refusals_naming`](crate::traits::BACnetObject::retry_refusals_naming)
+    /// [`retry_refusals_naming`](crate::traits::ScheduleRunner::retry_refusals_naming)
     /// write for that object.
     pub schedule_retries: Vec<(ObjectIdentifier, ObjectIdentifier)>,
 }
@@ -112,16 +112,18 @@ impl ObjectDatabase {
     /// The Schedules holding a refused reference to `oid` that they would
     /// offer their value again (#1440); found by asking each Schedule, not
     /// by evaluating it.
-    fn schedules_refusing(&self, oid: ObjectIdentifier) -> Vec<ObjectIdentifier> {
+    fn schedules_refusing(&mut self, oid: ObjectIdentifier) -> Vec<ObjectIdentifier> {
+        let objects = &mut self.objects;
         self.type_index
             .get(&ObjectType::SCHEDULE)
             .into_iter()
             .flatten()
             .copied()
             .filter(|schedule| {
-                self.objects
-                    .get(schedule)
-                    .is_some_and(|object| object.retry_refusals_naming(oid).is_some())
+                objects
+                    .get_mut(schedule)
+                    .and_then(|object| object.schedule_runner())
+                    .is_some_and(|runner| runner.retry_refusals_naming(oid).is_some())
             })
             .collect()
     }

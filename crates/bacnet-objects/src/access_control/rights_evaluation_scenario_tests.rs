@@ -37,6 +37,7 @@ fn at(hour: u8, minute: u8) -> Time {
 fn run_schedule(db: &mut ObjectDatabase, time: Time) {
     let monday = SpecificDate::new(2026, 9, 14).unwrap();
     db.get_mut(&hours())
+        .and_then(|schedule| schedule.schedule_runner())
         .unwrap()
         .tick_schedule(monday, time, &|_| false);
 }

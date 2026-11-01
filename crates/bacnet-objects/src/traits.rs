@@ -9,28 +9,28 @@ use alloc::borrow::Cow;
 use alloc::sync::Arc;
 use core::time::Duration;
 
-use bacnet_types::calendar::SpecificDate;
 use bacnet_types::constructed::{
     BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord, BACnetObjectPropertyReference,
 };
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, Time};
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use crate::audit::{AuditLogNotificationSink, AuditLogStorage};
 
 use crate::file::{FileConfiguration, FileStorage};
 use crate::log_buffer::{LogBufferRecords, LogRecordIdentity};
-use crate::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 
 pub mod capabilities;
 #[doc(hidden)]
-pub use capabilities::{AccessEvents, CommandRunner, EnrollmentEval, StagingSource};
+pub use capabilities::{AccessEvents, CalendarState, CommandRunner, EnrollmentEval, StagingSource};
 pub use capabilities::{
     Clocks, DeadlineWaker, DurableWrites, EventReporting, LifeSafety, LocalInput, LocalInputValue,
-    MonotonicClock, ReliabilityEval, Timed, no_alarm_configured, not_supported,
+    MonotonicClock, ReliabilityEval, ScheduleRunner, Timed, no_alarm_configured, not_supported,
 };
-pub(crate) use capabilities::{lend_enrollment_eval, lend_event_reporting, lend_reliability_eval};
+pub(crate) use capabilities::{
+    lend_enrollment_eval, lend_event_reporting, lend_reliability_eval, lend_schedule_runner,
+};
 
 mod defaults;
 use defaults::{array_property_default, cov_reported_properties_default, list_property_default};
@@ -643,6 +643,26 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         None
     }
 
+    /// Mutably borrow a Schedule's runner: its evaluation, the writes it
+    /// owes its controlled references, how the targets took them, and the
+    /// retry it owes an object just added.
+    ///
+    /// The default has none, and the bundled server's schedule pass then
+    /// writes nothing for the object. See [`ScheduleRunner`].
+    fn schedule_runner(&mut self) -> Option<&mut dyn ScheduleRunner> {
+        None
+    }
+
+    /// Borrow a Calendar's evaluation of its Date_List for any day. Not
+    /// public API yet (#2179).
+    ///
+    /// The default has none, and the bundled server's schedule pass then
+    /// reads the object's Present_Value for its state.
+    #[doc(hidden)]
+    fn calendar_state(&self) -> Option<&dyn CalendarState> {
+        None
+    }
+
     /// Whether a readable property supports property-specific COV.
     ///
     /// The default preserves the existing behavior of every other COV-capable
@@ -716,74 +736,6 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// integrations can override to set TRUE when present_value is overridden
     /// by physical means (e.g., a manual switch on an output).
     fn set_overridden(&mut self, _overridden: bool) {}
-
-    /// Evaluate this object's schedule at `time` on `today` (Clause 12.24.4).
-    ///
-    /// `calendar_active` answers for a special event whose period references
-    /// a Calendar: whether that Calendar is TRUE on `today`. Returns the
-    /// writes owed when Present_Value changed, the object has just entered
-    /// its Effective_Period, or its references or priority changed since the
-    /// last write, with the complete local references, target array indices
-    /// included. Otherwise, while some references refused their last write,
-    /// returns a [`retry`](ScheduleWrite::retry) of the current value to
-    /// those references only (#1436). Only meaningful for Schedule objects;
-    /// default returns `None`.
-    fn tick_schedule(
-        &mut self,
-        _today: SpecificDate,
-        _time: Time,
-        _calendar_active: &dyn Fn(ObjectIdentifier) -> bool,
-    ) -> Option<ScheduleWrite> {
-        None
-    }
-
-    /// Take the writes this schedule owes its targets apart from its
-    /// calculation, each once, in order: a NULL to every priority slot a
-    /// change of List_Of_Object_Property_References or Priority_For_Writing
-    /// left behind (#1088), then the Present_Value owed out of service, for a
-    /// client's write (Clause 12.24.14) or a change of those two properties.
-    ///
-    /// A schedule pass collects them before calling
-    /// [`tick_schedule`](Self::tick_schedule), so they reach the targets ahead
-    /// of any calculated value; they need no clock. Only meaningful for
-    /// Schedule objects; default returns none.
-    fn take_owed_schedule_writes(&mut self) -> Vec<ScheduleWrite> {
-        Vec::new()
-    }
-
-    /// Report how each target took `write`, one of this schedule's writes:
-    /// `outcomes` holds one entry per member of `write.references`, in order.
-    ///
-    /// A Schedule judges the reference half of its Reliability from these
-    /// (Clause 12.24.13, #1086). Returns whether a readable property, such as
-    /// Reliability, changed. Only meaningful for Schedule objects; default
-    /// returns `false`.
-    fn complete_schedule_write(
-        &mut self,
-        _write: &ScheduleWrite,
-        _outcomes: &[ScheduleTargetOutcome],
-    ) -> bool {
-        false
-    }
-
-    /// The [`retry`](ScheduleWrite::retry) of the current value to the
-    /// references whose last write was refused and that name `target`, an
-    /// object just added to the database (#1440), so the refusal can clear
-    /// without waiting for the next pass. `None` when no such refusal
-    /// stands, or when the pass itself would retry nothing: out of service,
-    /// outside Effective_Period, or with a NULL Present_Value. Only
-    /// meaningful for Schedule objects; default returns `None`.
-    fn retry_refusals_naming(&self, _target: ObjectIdentifier) -> Option<ScheduleWrite> {
-        None
-    }
-
-    /// Whether this Calendar's Date_List matches `day`: its Present_Value on
-    /// that day. `None` for an object that does not evaluate a date list; the
-    /// schedule tick then reads its Present_Value instead.
-    #[doc(hidden)]
-    fn calendar_state_internal(&self, _day: SpecificDate) -> Option<bool> {
-        None
-    }
 
     /// Claim the Averaging sample the object's schedule has due at the
     /// process-local monotonic instant `now`.
