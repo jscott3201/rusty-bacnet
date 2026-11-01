@@ -1,5 +1,5 @@
 use super::*;
-use bacnet_device_core::write::{self, Applied, decode_write_property_value};
+use bacnet_device_core::write::{self, Applied, WpmOutcome, decode_write_property_value};
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::read_property::ReadPropertyACK;
@@ -213,7 +213,7 @@ fn sourced_wp(db: &mut ObjectDatabase, data: &[u8]) -> Result<ObjectIdentifier, 
     .map(|(oid, _)| oid)
 }
 fn sourced_wpm(db: &mut ObjectDatabase, data: &[u8]) -> Result<Vec<ObjectIdentifier>, Error> {
-    match handle_write_property_multiple_observed(
+    match write::write_property_multiple(
         db,
         data,
         None,
@@ -221,8 +221,8 @@ fn sourced_wpm(db: &mut ObjectDatabase, data: &[u8]) -> Result<Vec<ObjectIdentif
         None,
         Some(&crate::command_source::test_origin()),
     ) {
-        WritePropertyMultipleOutcome::Success { committed_oids } => Ok(committed_oids),
-        WritePropertyMultipleOutcome::Error { error, .. } => Err(error),
-        WritePropertyMultipleOutcome::Reject { reason } => Err(Error::reject(reason)),
+        WpmOutcome::Success { committed_oids } => Ok(committed_oids),
+        WpmOutcome::Error { error, .. } => Err(error),
+        WpmOutcome::Reject { reason } => Err(Error::reject(reason)),
     }
 }

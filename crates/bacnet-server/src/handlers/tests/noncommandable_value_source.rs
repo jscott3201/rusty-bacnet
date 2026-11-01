@@ -174,7 +174,7 @@ fn an_unbound_writer_publishes_its_address_and_corrects_in_the_same_wpm() {
     }
     .encode(&mut request)
     .unwrap();
-    let outcome = handle_write_property_multiple_observed(
+    let outcome = write::write_property_multiple(
         &mut db,
         &request,
         None,
@@ -183,9 +183,9 @@ fn an_unbound_writer_publishes_its_address_and_corrects_in_the_same_wpm() {
         Some(&writer(Some(30))),
     );
     match outcome {
-        WritePropertyMultipleOutcome::Success { .. } => {}
-        WritePropertyMultipleOutcome::Error { error, .. } => panic!("{error:?}"),
-        WritePropertyMultipleOutcome::Reject { reason } => panic!("{reason:?}"),
+        WpmOutcome::Success { .. } => {}
+        WpmOutcome::Error { error, .. } => panic!("{error:?}"),
+        WpmOutcome::Reject { reason } => panic!("{reason:?}"),
     }
     assert_eq!(read_wire(&db, oid, VS), DEVICE_77);
 }

@@ -5,6 +5,7 @@ use crate::mutation::{
     MutationAuthorizationContext, MutationDecision, MutationDecisions, MutationPolicy,
     MutationTarget, MutationTrust,
 };
+use bacnet_device_core::write::{self, WpmOutcome};
 use bacnet_objects::staging::StagingWritePlan;
 use bacnet_services::cov::{SubscribeCOVPropertyRequest, SubscribeCOVRequest};
 use bacnet_services::cov_multiple::SubscribeCOVPropertyMultipleRequest;
@@ -328,7 +329,7 @@ impl Request<'_> {
             };
             let source = audit.write_source();
             let mut observer = crate::cov::TimedWriteCapture::new(capture, Some(audit));
-            let outcome = handlers::handle_write_property_multiple_observed(
+            let outcome = write::write_property_multiple(
                 &mut db,
                 &self.req.service_request,
                 Some(&authorize),
@@ -338,11 +339,9 @@ impl Request<'_> {
             );
             staged.release(&mut db);
             let committed_oids = match &outcome {
-                handlers::WritePropertyMultipleOutcome::Success { committed_oids }
-                | handlers::WritePropertyMultipleOutcome::Error { committed_oids, .. } => {
-                    committed_oids.as_slice()
-                }
-                handlers::WritePropertyMultipleOutcome::Reject { .. } => &[],
+                WpmOutcome::Success { committed_oids }
+                | WpmOutcome::Error { committed_oids, .. } => committed_oids.as_slice(),
+                WpmOutcome::Reject { .. } => &[],
             };
             let changes = observer.life_safety_changes(&db, committed_oids);
             timed_revisits.extend_from_slice(observer.life_safety_queued());
@@ -355,11 +354,11 @@ impl Request<'_> {
         };
         staging_plans.extend(plans);
         let response = match outcome {
-            handlers::WritePropertyMultipleOutcome::Success { committed_oids } => {
+            WpmOutcome::Success { committed_oids } => {
                 *written_oids = committed_oids;
                 self.simple_ack()
             }
-            handlers::WritePropertyMultipleOutcome::Error {
+            WpmOutcome::Error {
                 error,
                 first_failed_write_attempt,
                 committed_oids,
@@ -375,7 +374,7 @@ impl Request<'_> {
                     .to_error_pdu(self.req.invoke_id),
                 )
             }
-            handlers::WritePropertyMultipleOutcome::Reject { reason } => Apdu::Reject(RejectPdu {
+            WpmOutcome::Reject { reason } => Apdu::Reject(RejectPdu {
                 invoke_id: self.req.invoke_id,
                 reject_reason: reason,
             }),

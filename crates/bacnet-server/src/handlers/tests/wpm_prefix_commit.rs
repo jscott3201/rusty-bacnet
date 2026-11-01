@@ -35,8 +35,8 @@ fn encode_request(oid: ObjectIdentifier, properties: Vec<BACnetPropertyValue>) -
     bytes
 }
 
-fn detailed(db: &mut ObjectDatabase, request: &[u8]) -> WritePropertyMultipleOutcome {
-    handle_write_property_multiple_observed(
+fn detailed(db: &mut ObjectDatabase, request: &[u8]) -> WpmOutcome {
+    write::write_property_multiple(
         db,
         request,
         None,
@@ -96,7 +96,7 @@ fn event_enrollment_prefix_commits_before_read_only_first_failure() {
         ],
     );
 
-    let WritePropertyMultipleOutcome::Error {
+    let WpmOutcome::Error {
         error,
         first_failed_write_attempt,
         committed_oids,
@@ -273,14 +273,17 @@ fn acked_transitions_wpm_authorizer_allow_retains_prefix_and_stops_at_denial() {
                 allowed.borrow_mut().push(attempt.clone());
                 Ok(())
             };
-            let WritePropertyMultipleOutcome::Error {
+            let WpmOutcome::Error {
                 error,
                 first_failed_write_attempt,
                 committed_oids,
-            } = handle_write_property_multiple_authorized(
+            } = write::write_property_multiple(
                 &mut db,
                 &request,
                 Some(&authorize),
+                None,
+                None,
+                None,
             )
             else {
                 panic!("expected Acked_Transitions WPM denial for {oid:?}");
@@ -339,7 +342,7 @@ fn unknown_object_is_semantic_result_with_actual_reference_before_any_commit() {
         }],
     );
 
-    let WritePropertyMultipleOutcome::Error {
+    let WpmOutcome::Error {
         error,
         first_failed_write_attempt,
         committed_oids,
@@ -414,7 +417,7 @@ fn semantic_index_value_name_and_write_arm_failures_keep_exact_reference() {
                 priority: None,
             }],
         );
-        let WritePropertyMultipleOutcome::Error {
+        let WpmOutcome::Error {
             error,
             first_failed_write_attempt,
             committed_oids,
@@ -449,7 +452,7 @@ fn malformed_before_first_write_rejects_without_mutation() {
 
     assert!(matches!(
         detailed(&mut db, &request),
-        WritePropertyMultipleOutcome::Reject { reason }
+        WpmOutcome::Reject { reason }
             if reason == RejectReason::MISSING_REQUIRED_PARAMETER
     ));
     assert_ne!(
@@ -493,7 +496,7 @@ fn malformed_after_prefix_uses_exact_or_sentinel_reference_and_keeps_prefix() {
     let value_close = second_start + second_wire.iter().rposition(|byte| *byte == 0x2f).unwrap();
     exact_wire[value_close] = 0x3f;
     let mut db = make_db();
-    let WritePropertyMultipleOutcome::Error {
+    let WpmOutcome::Error {
         error,
         first_failed_write_attempt,
         committed_oids,
@@ -513,7 +516,7 @@ fn malformed_after_prefix_uses_exact_or_sentinel_reference_and_keeps_prefix() {
     let mut sentinel_wire = encode_request(oid, vec![first]);
     sentinel_wire.extend_from_slice(&[0xff]);
     let mut db = make_db();
-    let WritePropertyMultipleOutcome::Error {
+    let WpmOutcome::Error {
         first_failed_write_attempt,
         committed_oids,
         ..
@@ -595,7 +598,7 @@ fn unknown_writes_wpm_reports_coordinate_and_retains_successful_prefix() {
                         ),
                     ],
                 );
-                let WritePropertyMultipleOutcome::Error {
+                let WpmOutcome::Error {
                     error,
                     first_failed_write_attempt,
                     committed_oids,
@@ -649,7 +652,7 @@ fn unknown_writes_file_record_count_wpm_prefix_and_coordinate() {
                     },
                 ],
             );
-            let WritePropertyMultipleOutcome::Error {
+            let WpmOutcome::Error {
                 error,
                 first_failed_write_attempt,
                 committed_oids,

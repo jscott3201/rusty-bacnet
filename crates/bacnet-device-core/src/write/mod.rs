@@ -18,12 +18,14 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 mod decode;
 mod executor;
 mod local_references;
+mod multiple;
 pub mod relinquish;
 mod runs;
 
 pub use decode::{check_write_array_index, decode_write_property_value, gate_and_decode_write};
 pub use executor::{check_executor_owned_write, identity_property, owned};
 pub use local_references::{DeviceQualified, localize, localize_member};
+pub use multiple::{WpmOutcome, write_property_multiple};
 pub use runs::{Unfinished, end_unmade, take_queued};
 
 /// Borrowed write coordinates; never retained across the synchronous commit.
