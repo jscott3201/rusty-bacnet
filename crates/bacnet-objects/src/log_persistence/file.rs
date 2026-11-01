@@ -32,6 +32,9 @@ use super::{LogPersistence, LogSnapshot};
 #[derive(Clone, Debug)]
 pub struct FileLogPersistence {
     slot_paths: [PathBuf; 2],
+    /// Test support: keep the slots here instead of at `slot_paths`.
+    #[cfg(feature = "test-support")]
+    memory: Option<crate::durable::MemoryFiles>,
 }
 
 impl FileLogPersistence {
@@ -51,7 +54,21 @@ impl FileLogPersistence {
         };
         Ok(Self {
             slot_paths: [slot(".slot0"), slot(".slot1")],
+            #[cfg(feature = "test-support")]
+            memory: None,
         })
+    }
+
+    /// Test support, not a stable API: keep the slots in `memory`'s
+    /// entries 0 and 1 instead of on disk, decoding, selecting and encoding
+    /// them as on disk (#2233). [`slot_paths`](Self::slot_paths) are then
+    /// placeholders.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn in_memory(memory: crate::durable::MemoryFiles) -> Self {
+        let mut store = Self::new("in-memory").expect("a path that isn't empty");
+        store.memory = Some(memory);
+        store
     }
 
     /// The two slot paths, for application backup and diagnostics.
@@ -65,8 +82,8 @@ impl FileLogPersistence {
     ) -> Result<Option<LogSnapshot<R>>, Error> {
         let mut newest: Option<LogSnapshot<R>> = None;
         let mut damage = None;
-        for path in &self.slot_paths {
-            let Some(data) = read_slot(path)? else {
+        for (slot, path) in self.slot_paths.iter().enumerate() {
+            let Some(data) = self.read_slot(slot, path)? else {
                 continue;
             };
             match codec::decode::<R>(&data, expected) {
@@ -98,7 +115,13 @@ impl FileLogPersistence {
 
     fn commit_slot<R: SnapshotRecord>(&self, snapshot: &LogSnapshot<R>) -> Result<(), Error> {
         let bytes = codec::encode(snapshot)?;
-        let path = &self.slot_paths[(snapshot.generation % 2) as usize];
+        let slot = (snapshot.generation % 2) as usize;
+        #[cfg(feature = "test-support")]
+        if let Some(memory) = &self.memory {
+            memory.write(slot, bytes);
+            return Ok(());
+        }
+        let path = &self.slot_paths[slot];
         if let Some(parent) = path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
@@ -128,12 +151,24 @@ impl FileLogPersistence {
         }
         Ok(())
     }
+
+    /// Slot `slot`'s octets, or `None` when it doesn't exist. A slot past
+    /// the size cap is read only up to one octet past it, which then fails
+    /// its length check as damage.
+    fn read_slot(&self, slot: usize, path: &Path) -> Result<Option<Vec<u8>>, Error> {
+        #[cfg(feature = "test-support")]
+        if let Some(memory) = &self.memory {
+            return Ok(memory.read(slot, MAX_SNAPSHOT_BYTES + 1));
+        }
+        #[cfg(not(feature = "test-support"))]
+        let _ = slot;
+        read_file(path)
+    }
 }
 
-/// A slot's octets, or `None` when it doesn't exist. A slot past the size
-/// cap is read only up to one octet past it, which then fails its length
-/// check as damage.
-fn read_slot(path: &Path) -> Result<Option<Vec<u8>>, Error> {
+/// The octets of the slot file at `path`, as [`FileLogPersistence::read_slot`]
+/// reads them.
+fn read_file(path: &Path) -> Result<Option<Vec<u8>>, Error> {
     let file = match File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),

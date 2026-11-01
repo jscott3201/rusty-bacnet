@@ -87,6 +87,17 @@ impl FileNotificationClassPersistence {
         })
     }
 
+    /// Test support, not a stable API: keep the file in `memory`'s entry 0
+    /// instead of on disk, decoding and encoding it as on disk (#2233).
+    /// [`path`](Self::path) is then a placeholder.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn in_memory(memory: crate::durable::MemoryFiles) -> Self {
+        let mut store = Self::new("in-memory").expect("a path that isn't empty");
+        store.file.keep_in(memory);
+        store
+    }
+
     /// The file the Recipient_List is kept in.
     pub fn path(&self) -> &Path {
         self.file.path()
