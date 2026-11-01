@@ -1,6 +1,7 @@
-//! The bounded ReadPropertyMultiple helpers the handler tests compare with
-//! the legacy unbounded one: bacnet-device-core's planning and reads, with
-//! no overlay.
+//! The handler tests' ReadPropertyMultiple within a budget:
+//! bacnet-device-core's planning and reads, with no overlay. The unlimited
+//! `handle_read_property_multiple` runs on it with no limit, so the tests
+//! compare a bounded read with an unbounded one of the same code.
 use super::*;
 use bacnet_device_core::read::{
     NoOverlay, ReadFailure, ReadPropertyMultipleBudget, ReadScope, RpmPlan,

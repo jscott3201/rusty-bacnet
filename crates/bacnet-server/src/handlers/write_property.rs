@@ -1,13 +1,13 @@
 use super::*;
 use bacnet_device_core::write::{self, WpmOutcome};
 
-/// Handle WPM while preserving the historical direct handler projection.
-///
-/// The complete successful prefix remains committed if a later attempt fails.
-/// A Command or Channel object's Present_Value write in that prefix runs
-/// nothing: as in bacnet-device-core's `Responder::write`, its list or
-/// distribution ends at once as unsuccessful.
-pub fn handle_write_property_multiple(
+/// The handler tests' WritePropertyMultiple: bacnet-device-core's WPM with
+/// no gate, observer, source or command origin. The complete successful
+/// prefix remains committed if a later attempt fails. A Command or Channel
+/// object's Present_Value write in that prefix runs nothing: as in
+/// `Responder::write`, its list or distribution ends at once as
+/// unsuccessful. Running servers make those runs instead.
+pub(crate) fn handle_write_property_multiple(
     db: &mut ObjectDatabase,
     service_data: &[u8],
 ) -> Result<Vec<ObjectIdentifier>, Error> {
@@ -32,7 +32,6 @@ pub fn handle_write_property_multiple(
 /// observer, source or command origin, ending any Command or Channel run the
 /// write queues at once, unmade, as `Responder::write` does. Running servers
 /// make those runs instead.
-#[cfg(test)]
 pub(crate) fn handle_write_property(
     db: &mut ObjectDatabase,
     service_data: &[u8],

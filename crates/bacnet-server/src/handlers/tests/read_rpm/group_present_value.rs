@@ -301,9 +301,9 @@ fn member_rows_are_charged_to_the_rpm_work_budget_and_shared_between_groups() {
         let mut ack = BytesMut::new();
         handle_rpm_budgeted_observed(&db, &request, &mut ack, budget(work), |_, _, _, _| {})
             .unwrap();
-        let mut legacy = BytesMut::new();
-        handle_read_property_multiple(&db, &request, &mut legacy).unwrap();
-        assert_eq!(ack, legacy, "{specs:?}");
+        let mut unlimited = BytesMut::new();
+        handle_read_property_multiple(&db, &request, &mut unlimited).unwrap();
+        assert_eq!(ack, unlimited, "{specs:?}");
         // One row short fails as any request over its work budget does:
         // nothing read, nothing written, nothing observed.
         let mut prefix = BytesMut::from(&b"prefix"[..]);

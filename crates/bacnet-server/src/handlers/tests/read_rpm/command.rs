@@ -227,9 +227,9 @@ fn rpm_command_action_serves_one_action_list_per_index() {
         }
         .encode(&mut request)
         .unwrap();
-        let mut legacy = BytesMut::new();
-        handle_read_property_multiple(&db, &request, &mut legacy).unwrap();
-        let ack = ReadPropertyMultipleACK::decode(&legacy).unwrap();
+        let mut unlimited = BytesMut::new();
+        handle_read_property_multiple(&db, &request, &mut unlimited).unwrap();
+        let ack = ReadPropertyMultipleACK::decode(&unlimited).unwrap();
         assert_eq!(ack.list_of_read_access_results.len(), 1);
         let access = &ack.list_of_read_access_results[0];
         assert_eq!(access.object_identifier, oid);
@@ -281,11 +281,11 @@ fn rpm_command_action_serves_one_action_list_per_index() {
         use bacnet_device_core::read::ReadFailure;
         let budget = bacnet_device_core::read::ReadPropertyMultipleBudget {
             max_result_elements: cases.len(),
-            max_service_ack_bytes: legacy.len(),
+            max_service_ack_bytes: unlimited.len(),
         };
         let mut bounded = BytesMut::new();
         handle_rpm_budgeted(&db, &request, &mut bounded, budget).unwrap();
-        assert_eq!(bounded, legacy);
+        assert_eq!(bounded, unlimited);
         let mut prefix = BytesMut::from(&b"prefix"[..]);
         assert!(matches!(
             handle_rpm_budgeted(
@@ -306,7 +306,7 @@ fn rpm_command_action_serves_one_action_list_per_index() {
                 &request,
                 &mut prefix,
                 bacnet_device_core::read::ReadPropertyMultipleBudget {
-                    max_service_ack_bytes: legacy.len() - 1,
+                    max_service_ack_bytes: unlimited.len() - 1,
                     ..budget
                 }
             ),

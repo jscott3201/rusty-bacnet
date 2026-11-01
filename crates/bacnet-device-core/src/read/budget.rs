@@ -15,21 +15,6 @@ pub enum ReadFailure {
     Bytes,
 }
 
-impl ReadFailure {
-    /// The error of a read made with no work or byte limit, which only a
-    /// service error can fail.
-    ///
-    /// For bacnet-server's legacy, unbudgeted ReadPropertyMultiple helper only;
-    /// it leaves the public API with that helper (#2178, PR 3).
-    #[doc(hidden)]
-    pub fn unlimited(self) -> Error {
-        match self {
-            Self::Service(error) => error,
-            Self::Work | Self::Bytes => unreachable!("a read with no limit ran past one"),
-        }
-    }
-}
-
 /// The result rows one read request has expanded, counted against its work
 /// limit. A Group's Present_Value charges each member row to the request that
 /// reads it (#1172), so several Groups in one request share the one limit.

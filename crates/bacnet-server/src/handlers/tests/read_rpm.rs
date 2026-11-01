@@ -620,9 +620,9 @@ fn rpm_multistate_indexed_state_text_and_list_gating_preserve_bytes() {
         };
         let mut bytes = BytesMut::new();
         request.encode(&mut bytes).unwrap();
-        let mut legacy = BytesMut::new();
-        handle_read_property_multiple(&db, &bytes, &mut legacy).unwrap();
-        let ack = ReadPropertyMultipleACK::decode(&legacy).unwrap();
+        let mut unlimited = BytesMut::new();
+        handle_read_property_multiple(&db, &bytes, &mut unlimited).unwrap();
+        let ack = ReadPropertyMultipleACK::decode(&unlimited).unwrap();
         let results = &ack.list_of_read_access_results[0].list_of_results;
         assert_eq!(results.len(), references.len());
         for (result, (p, i)) in results.iter().zip(references) {
@@ -655,11 +655,11 @@ fn rpm_multistate_indexed_state_text_and_list_gating_preserve_bytes() {
         }
         let budget = ReadPropertyMultipleBudget {
             max_result_elements: references.len(),
-            max_service_ack_bytes: legacy.len(),
+            max_service_ack_bytes: unlimited.len(),
         };
         let mut bounded = BytesMut::new();
         super::super::rpm_budget::handle_rpm_budgeted(&db, &bytes, &mut bounded, budget).unwrap();
-        assert_eq!(bounded, legacy);
+        assert_eq!(bounded, unlimited);
         let mut prefix = BytesMut::from(&b"prefix"[..]);
         assert!(matches!(
             super::super::rpm_budget::handle_rpm_budgeted(
@@ -667,7 +667,7 @@ fn rpm_multistate_indexed_state_text_and_list_gating_preserve_bytes() {
                 &bytes,
                 &mut prefix,
                 ReadPropertyMultipleBudget {
-                    max_service_ack_bytes: legacy.len() - 1,
+                    max_service_ack_bytes: unlimited.len() - 1,
                     ..budget
                 }
             ),
