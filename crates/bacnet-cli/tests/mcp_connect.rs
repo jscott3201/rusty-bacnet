@@ -1,7 +1,8 @@
 //! `bacnet mcp connect` as an agent host launches it (#2185, #2201): its
 //! stdin and stdout bridged to the socket a TUI listens on in the
-//! profile's workspace (on Windows, the named pipe named after it). Here the listener runs in the test, on a lab device's
-//! engine, as the TUI runs it; stdout carries only the server's JSON-RPC.
+//! profile's workspace (on Windows, the named pipe named after it). Here
+//! the listener runs in the test, on a lab device's engine, as the TUI
+//! runs it; stdout carries only the server's JSON-RPC.
 #![cfg(feature = "mcp")]
 
 #[allow(dead_code)] // Other integration tests use the rest.

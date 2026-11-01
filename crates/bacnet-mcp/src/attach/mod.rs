@@ -70,7 +70,7 @@ pub use lock::LOCK_FILE;
 #[cfg(windows)]
 use pipe as platform;
 #[cfg(all(test, windows))]
-pub(crate) use pipe::{Sid, Unidentified};
+pub(crate) use pipe::{ListenerCredentials, ListenerId, Sid, Unidentified};
 #[cfg(windows)]
 pub use pipe::{connect, socket_path};
 #[cfg(test)]

@@ -37,6 +37,8 @@ mod contain;
 mod context;
 mod cursor;
 mod errors;
+#[cfg(test)]
+mod fence_tests;
 mod follow;
 mod legacy;
 mod listen;

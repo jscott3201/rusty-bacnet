@@ -14,11 +14,13 @@ use std::ptr;
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 use windows_sys::Win32::Foundation::{HANDLE, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
-    ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SDDL_REVISION_1,
+    SE_KERNEL_OBJECT,
 };
 use windows_sys::Win32::Security::{
-    GetLengthSid, GetTokenInformation, IsValidSid, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES,
-    TOKEN_QUERY, TOKEN_USER, TokenUser,
+    ACL, GetLengthSid, GetTokenInformation, IsValidSid, OBJECT_SECURITY_INFORMATION,
+    OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, TOKEN_QUERY,
+    TOKEN_USER, TokenUser,
 };
 use windows_sys::Win32::System::Pipes::{GetNamedPipeClientProcessId, GetNamedPipeServerProcessId};
 use windows_sys::Win32::System::Threading::{
@@ -103,8 +105,13 @@ fn token_user(process: HANDLE) -> io::Result<Sid> {
         )
     };
     let size = needed as usize;
-    if size < size_of::<TOKEN_USER>() {
+    if size == 0 {
         return Err(io::Error::last_os_error());
+    }
+    if size < size_of::<TOKEN_USER>() {
+        return Err(io::Error::other(format!(
+            "the token's user information is {size} bytes, too small for its record"
+        )));
     }
     // `u64`s, so the buffer is aligned for the pointer TOKEN_USER holds.
     let mut buffer = vec![0u64; size.div_ceil(8)];
@@ -162,9 +169,12 @@ unsafe impl Sync for Descriptor {}
 
 impl Descriptor {
     /// A descriptor owned by `owner` whose access list (protected from
-    /// inheritance) grants all access to `owner` and to nobody else.
+    /// inheritance) grants all access to `owner` and to nobody else, and
+    /// whose medium mandatory label keeps a process of lower integrity
+    /// (a sandboxed one of the same user) from opening it to read or
+    /// write.
     pub(super) fn owner_only(owner: &Sid) -> io::Result<Self> {
-        let sddl = format!("O:{owner}D:P(A;;FA;;;{owner})");
+        let sddl = format!("O:{owner}D:P(A;;FA;;;{owner})S:(ML;;NWNR;;;ME)");
         let wide: Vec<u16> = sddl.encode_utf16().chain(std::iter::once(0)).collect();
         let mut descriptor = ptr::null_mut();
         // SAFETY: `wide` is NUL-terminated and lives past the call;
@@ -210,76 +220,120 @@ impl Drop for Descriptor {
     }
 }
 
-/// A SID at `sid`, copied.
+/// A SID at `sid`, copied; an invalid one is an error.
 ///
 /// # Safety
 ///
-/// `sid` must point at a valid SID that stays readable for the call.
-#[cfg(test)]
-unsafe fn copy_sid(sid: windows_sys::Win32::Security::PSID) -> Sid {
-    // SAFETY: the caller's promise.
+/// `sid` must be null or point at memory that stays readable for the call
+/// and, if `IsValidSid` accepts it, holds a whole SID.
+unsafe fn copy_sid(sid: PSID) -> io::Result<Sid> {
+    // SAFETY: the caller's promise; `IsValidSid` reads only the header and
+    // the sub-authorities it counts, and the copy only the length it gives.
     unsafe {
+        if sid.is_null() || IsValidSid(sid) == 0 {
+            return Err(io::Error::other("the object's SID is missing or malformed"));
+        }
         let length = GetLengthSid(sid) as usize;
-        Sid(std::slice::from_raw_parts(sid.cast::<u8>().cast_const(), length).to_vec())
+        Ok(Sid(std::slice::from_raw_parts(
+            sid.cast::<u8>().cast_const(),
+            length,
+        )
+        .to_vec()))
     }
 }
 
-/// An object's owner and its access list's entries (type, mask, SID).
-#[cfg(test)]
-pub(crate) type Security = (Sid, Vec<(u8, u32, Sid)>);
+/// What `GetSecurityInfo` allocated, freed when dropped.
+struct Local(PSECURITY_DESCRIPTOR);
 
-/// The [`Security`] of the kernel object `handle`, as the kernel holds it,
-/// for tests.
-#[cfg(test)]
-pub(crate) fn security_of(handle: &impl AsRawHandle) -> io::Result<Security> {
-    use windows_sys::Win32::Security::Authorization::{GetSecurityInfo, SE_KERNEL_OBJECT};
-    use windows_sys::Win32::Security::{
-        ACCESS_ALLOWED_ACE, ACL, ACL_SIZE_INFORMATION, AclSizeInformation,
-        DACL_SECURITY_INFORMATION, GetAce, GetAclInformation, OWNER_SECURITY_INFORMATION, PSID,
-    };
-    /// Frees what `GetSecurityInfo` allocated.
-    struct Local(PSECURITY_DESCRIPTOR);
-    impl Drop for Local {
-        fn drop(&mut self) {
-            // SAFETY: allocated by `GetSecurityInfo` with `LocalAlloc`,
-            // freed only here.
-            unsafe { LocalFree(self.0) };
-        }
+impl Drop for Local {
+    fn drop(&mut self) {
+        // SAFETY: allocated by `GetSecurityInfo` with `LocalAlloc`, freed
+        // only here, once.
+        unsafe { LocalFree(self.0) };
     }
-    let (mut owner, mut dacl): (PSID, *mut ACL) = (ptr::null_mut(), ptr::null_mut());
+}
+
+/// The parts `what` names of the kernel object `handle`'s descriptor, as
+/// the kernel holds it: the owner, the access list and the system list
+/// (labels), each null when not asked for. They point into the returned
+/// [`Local`], which must outlive their use.
+fn query(
+    handle: &impl AsRawHandle,
+    what: OBJECT_SECURITY_INFORMATION,
+) -> io::Result<(Local, PSID, *mut ACL, *mut ACL)> {
+    let (mut owner, mut dacl, mut sacl) = (ptr::null_mut(), ptr::null_mut(), ptr::null_mut());
     let mut descriptor = ptr::null_mut();
-    // SAFETY: `handle` is open for the call; the out pointers are valid.
+    // SAFETY: `handle` is open for the call, borrowed from its owner; the
+    // out pointers are valid places.
     let status = unsafe {
         GetSecurityInfo(
             handle.as_raw_handle(),
             SE_KERNEL_OBJECT,
-            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            what,
             &raw mut owner,
             ptr::null_mut(),
             &raw mut dacl,
-            ptr::null_mut(),
+            &raw mut sacl,
             &raw mut descriptor,
         )
     };
     if status != 0 {
-        return Err(io::Error::from_raw_os_error(status as i32));
+        return Err(io::Error::from_raw_os_error(status.cast_signed()));
     }
-    let _descriptor = Local(descriptor);
-    if dacl.is_null() {
-        return Err(io::Error::other("no access list: everyone has access"));
-    }
-    // SAFETY: `owner` points into the descriptor, which `_descriptor` keeps.
+    Ok((Local(descriptor), owner, dacl, sacl))
+}
+
+/// Who owns the kernel object `handle` (a pipe: whoever made it, or the
+/// owner its descriptor names). Needs read-control access, which a pipe
+/// opened for reading has.
+pub(super) fn owner_of(handle: &impl AsRawHandle) -> io::Result<Sid> {
+    let (descriptor, owner, _, _) = query(handle, OWNER_SECURITY_INFORMATION)?;
+    // SAFETY: `owner` is null or points into `descriptor`, alive until the
+    // end of this function.
     let owner = unsafe { copy_sid(owner) };
+    drop(descriptor);
+    owner
+}
+
+/// An access or label entry: its type, mask and SID.
+#[cfg(test)]
+pub(crate) type Entry = (u8, u32, Sid);
+
+/// A kernel object's descriptor, as the kernel holds it, for tests.
+#[cfg(test)]
+#[derive(Debug)]
+pub(crate) struct Security {
+    pub(crate) owner: Sid,
+    /// The access list's entries.
+    pub(crate) access: Vec<Entry>,
+    /// The mandatory label's entries.
+    pub(crate) label: Vec<Entry>,
+}
+
+/// The entries of `list`, which points into a live descriptor.
+///
+/// # Safety
+///
+/// `list` must be null or point at a valid ACL that stays alive for the
+/// call.
+#[cfg(test)]
+unsafe fn entries(list: *mut ACL) -> io::Result<Vec<Entry>> {
+    use windows_sys::Win32::Security::{
+        ACCESS_ALLOWED_ACE, ACL_SIZE_INFORMATION, AclSizeInformation, GetAce, GetAclInformation,
+    };
+    if list.is_null() {
+        return Ok(Vec::new());
+    }
     let mut size = ACL_SIZE_INFORMATION {
         AceCount: 0,
         AclBytesInUse: 0,
         AclBytesFree: 0,
     };
-    // SAFETY: `dacl` points into the live descriptor; `size` is a valid
-    // place of the length given.
+    // SAFETY: `list` is a live ACL (the caller's promise); `size` is a
+    // valid place of the length given.
     let ok = unsafe {
         GetAclInformation(
-            dacl,
+            list,
             (&raw mut size).cast(),
             u32::try_from(size_of::<ACL_SIZE_INFORMATION>()).unwrap(),
             AclSizeInformation,
@@ -288,21 +342,43 @@ pub(crate) fn security_of(handle: &impl AsRawHandle) -> io::Result<Security> {
     if ok == 0 {
         return Err(io::Error::last_os_error());
     }
-    let mut entries = Vec::new();
+    let mut found = Vec::new();
     for index in 0..size.AceCount {
         let mut ace = ptr::null_mut();
         // SAFETY: `index` is below the list's count; `ace` is a valid place.
-        if unsafe { GetAce(dacl, index, &raw mut ace) } == 0 {
+        if unsafe { GetAce(list, index, &raw mut ace) } == 0 {
             return Err(io::Error::last_os_error());
         }
-        // SAFETY: an entry of the live list; every allowed or denied entry
-        // starts with a header, a mask and then its SID.
+        // SAFETY: an entry of the live list; allowed, denied and label
+        // entries all start with a header, a mask and then their SID.
         let entry = unsafe {
             let ace = ace.cast::<ACCESS_ALLOWED_ACE>();
             let sid = (&raw const (*ace).SidStart).cast_mut().cast();
-            ((*ace).Header.AceType, (*ace).Mask, copy_sid(sid))
+            ((*ace).Header.AceType, (*ace).Mask, copy_sid(sid)?)
         };
-        entries.push(entry);
+        found.push(entry);
     }
-    Ok((owner, entries))
+    Ok(found)
+}
+
+/// The [`Security`] of the kernel object `handle`, for tests.
+#[cfg(test)]
+pub(crate) fn security_of(handle: &impl AsRawHandle) -> io::Result<Security> {
+    use windows_sys::Win32::Security::{DACL_SECURITY_INFORMATION, LABEL_SECURITY_INFORMATION};
+    let what = OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION;
+    let (descriptor, owner, dacl, sacl) = query(handle, what)?;
+    if dacl.is_null() {
+        return Err(io::Error::other("no access list: everyone has access"));
+    }
+    // SAFETY: each points into `descriptor`, alive until the end of this
+    // function, or is null.
+    let security = unsafe {
+        Security {
+            owner: copy_sid(owner)?,
+            access: entries(dacl)?,
+            label: entries(sacl)?,
+        }
+    };
+    drop(descriptor);
+    Ok(security)
 }

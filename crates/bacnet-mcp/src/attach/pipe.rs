@@ -102,8 +102,18 @@ pub(crate) struct Unidentified {
 /// stand-in.
 pub(crate) type Credentials = fn(&NamedPipeServer) -> Result<PeerId, Unidentified>;
 
+/// What the bridge learns of the listener: the process at the server end,
+/// and who owns the pipe object itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ListenerId {
+    /// The server's process and the user its token names.
+    pub(crate) process: PeerId,
+    /// The pipe's owner, as its descriptor names it.
+    pub(crate) owner: Sid,
+}
+
 /// How the bridge identifies the listener at the server end.
-pub(crate) type ListenerCredentials = fn(&NamedPipeClient) -> io::Result<PeerId>;
+pub(crate) type ListenerCredentials = fn(&NamedPipeClient) -> io::Result<ListenerId>;
 
 /// The client's process, then the user its token names.
 pub(crate) fn os_credentials(pipe: &NamedPipeServer) -> Result<PeerId, Unidentified> {
@@ -118,12 +128,18 @@ pub(crate) fn os_credentials(pipe: &NamedPipeServer) -> Result<PeerId, Unidentif
     })
 }
 
-/// The listener's process, then the user its token names.
-fn os_listener(pipe: &NamedPipeClient) -> io::Result<PeerId> {
+/// The listener's process and the user its token names, and the pipe
+/// object's owner: a pid alone could name a process that has since gone
+/// and been replaced, the owner can't change under the open handle.
+fn os_listener(pipe: &NamedPipeClient) -> io::Result<ListenerId> {
     let pid = win32::server_pid(pipe)?;
-    Ok(PeerId {
+    let process = PeerId {
         sid: Some(win32::process_sid(pid)?),
         pid: Some(pid),
+    };
+    Ok(ListenerId {
+        process,
+        owner: win32::owner_of(pipe)?,
     })
 }
 
@@ -231,8 +247,9 @@ impl Preflight {
                     tries += 1;
                     if tries == FIRST_TRIES {
                         return Err(AttachError(format!(
-                            "the MCP pipe {} is already taken, perhaps by another user's \
-                             process; not listening",
+                            "the MCP pipe {} is taken: the previous listener may still be \
+                             closing, or another process (perhaps another user's) holds it; \
+                             not listening",
                             name.display()
                         )));
                     }
@@ -379,15 +396,21 @@ pub(crate) async fn connect_with(
             Err(e) => return Err(AttachError(format!("cannot connect to {shown}: {e}"))),
         }
     };
-    let peer = credentials(&client)
+    let listener = credentials(&client)
         .map_err(|e| AttachError(format!("cannot identify the listener at {shown}: {e}")))?;
     let own = win32::own_sid()
         .map_err(|e| AttachError(format!("cannot tell which user this is: {e}")))?;
-    if peer.sid.as_ref() != Some(&own) {
+    let peer = listener.process.sid;
+    if peer.as_ref() != Some(&own) {
         return Err(AttachError(format!(
             "the listener at {shown} runs as {}, not this user ({own}); not connecting",
-            peer.sid
-                .map_or_else(|| "an unknown user".to_string(), |sid| sid.to_string())
+            peer.map_or_else(|| "an unknown user".to_string(), |sid| sid.to_string())
+        )));
+    }
+    if listener.owner != own {
+        return Err(AttachError(format!(
+            "the pipe {shown} is owned by {}, not this user ({own}); not connecting",
+            listener.owner
         )));
     }
     Ok(client)

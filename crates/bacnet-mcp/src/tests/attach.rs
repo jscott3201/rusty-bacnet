@@ -32,8 +32,24 @@ pub(super) fn private_dir() -> tempfile::TempDir {
     dir
 }
 
+/// A plain connection to the listener at `path`, as an agent's host
+/// makes one, with no check of the listener.
+#[cfg(unix)]
+pub(super) async fn raw(path: &Path) -> tokio::net::UnixStream {
+    tokio::net::UnixStream::connect(path).await.unwrap()
+}
+
+/// A plain connection to the listener at `path`, as an agent's host
+/// makes one, with no check of the listener.
+#[cfg(windows)]
+pub(super) async fn raw(path: &Path) -> tokio::net::windows::named_pipe::NamedPipeClient {
+    tokio::net::windows::named_pipe::ClientOptions::new()
+        .open(path)
+        .unwrap()
+}
+
 /// What the audit records say of this test's own user.
-fn own_user(record: &Value) {
+pub(super) fn own_user(record: &Value) {
     #[cfg(unix)]
     assert_eq!(record["peer_uid"], json!(attach::own_uid()));
     #[cfg(windows)]

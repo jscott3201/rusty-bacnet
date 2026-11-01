@@ -578,7 +578,12 @@ stderr; when the TUI ends the session it exits cleanly.
   Authenticated Users, anonymous logons, SYSTEM or Administrators (the
   agents are your own processes, and SYSTEM and administrators can take
   any object over through their privileges anyway, so an entry for them
-  would only widen access). Every instance refuses remote clients. The
+  would only widen access). Its medium mandatory label keeps a process
+  of lower integrity, such as a sandboxed one of the same user, from
+  opening it to read or write. There is no entry denying network logons:
+  remote clients are refused anyway, and a local session that holds the
+  network logon SID (an SSH session, say) would be shut out of its own
+  TUI. Every instance refuses remote clients. The
   first instance claims the name, so a pipe of that name made by anyone
   else (another user's process, say) is refused rather than joined, and
   the next instance is made before a connected client is handed to its
@@ -587,8 +592,9 @@ stderr; when the TUI ends the session it exits cleanly.
   must run as the TUI's user, by its token's user SID; one that doesn't,
   or whose user can't be found, is closed and audited. `bacnet mcp
   connect` checks the listener's process the same way
-  (`GetNamedPipeServerProcessId`) before it passes any byte on, so an
-  impostor pipe gets nothing, and it lets the listener identify it but
+  (`GetNamedPipeServerProcessId`), and that the pipe itself is owned by
+  the same user, before it passes any byte on, so an impostor pipe gets
+  nothing, and it lets the listener identify it but
   never act as it. A pipe has no half-close, so on Windows `connect`
   ends its connection as soon as the host closes stdin. The limits on
   agents and on the handshake are those of the socket.
@@ -727,26 +733,30 @@ stderr; when the TUI ends the session it exits cleanly.
   attached; four flooding agents held to one budget while the TUI's reads
   finish; the TUI keeping its COV notifications when an agent leaves the
   same point; the bridge refusing a listener of another user with nothing
-  written; unreadable credentials refused and audited; an idle connection
-  closed after 30 s. `tests/attach_shared.rs`: a second session's broad
+  written and unreadable credentials refused and audited (both Unix); an
+  idle connection closed after 30 s. `tests/attach_shared.rs`: a second session's broad
   Who-Is within the minute refused and the watch cap counting both
   sessions' points; shutdown not waiting out a silent handshake; an agent
   keeping a shared point's COV updates when the other leaves; an open
-  session idle past 30 s kept. `attach/guard_tests.rs`: ownership,
-  narrowing on one handle, the re-check after bind, the post-bind socket
-  check, the lock (a probe's shared lock refusing neither another probe
-  nor, once released, a starting listener) and the path length.
+  session idle past 30 s kept; a ninth agent refused (`too-many-agents`)
+  until a seat is free. `attach_more.rs`, `attach_shared.rs` and
+  `attach_runtime.rs` run on Windows too. `attach/guard_tests.rs` (Unix):
+  ownership, narrowing on one handle, the re-check after bind, the
+  post-bind socket check and the path length. `attach/lock.rs`: the lock,
+  a probe's shared lock refusing neither another probe nor, once
+  released, a starting listener.
   `tests/attach_pipe.rs` (#2201, Windows): a client named as another user
   (by a stand-in for its token, since a test can't run as another user)
   or with no user found closed unanswered and audited with its SID and
-  pid; the bridge refusing a pipe served by another user, writing it
-  nothing; a second listener refused by the lock, a listener starting
+  pid; the bridge refusing a pipe served by another user, or one owned
+  by another user, writing it nothing; a second listener refused by the lock, a listener starting
   again at once after the first stops, and a pipe of the same name made
   without the lock refused rather than joined; the listener's first and
-  later instances owned by and granting only the test's user; an idle
-  client closed after 30 s. `attach/pipe_tests.rs`: the pipe's name per
-  workspace, every instance's refusal of remote clients and the first's
-  claim on the name, and the kernel's copy of the descriptor.
+  later instances owned by and granting only the test's user, with the
+  medium label. `attach/pipe_tests.rs`: the pipe's name per workspace,
+  every instance's refusal of remote clients and the first's claim on
+  the name, and the kernel's copy of the descriptor and label.
+  `fence_tests.rs`: unsafe code only in `attach/win32.rs`.
   `crates/bacnet-cli/src/tui/tests/mcp_attach.rs`:
   an agent on an open session's socket reading through its client, on the
   watch list's meter, `MCP n` and `MCP off` on the bar, the watch list's

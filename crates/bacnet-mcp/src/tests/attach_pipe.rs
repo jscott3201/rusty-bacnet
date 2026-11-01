@@ -1,7 +1,8 @@
 //! TUI-attached mode on Windows (#2201): the named pipe's peer checks on
 //! both ends, its single listener and claimed name, the descriptor its
-//! instances carry, and the initialize wait. The reads, the read-only
-//! tool list and the shutdown run in `attach.rs` on every platform.
+//! instances carry. The reads, the read-only tool list, the shutdown, the
+//! seats, the shared budget and the initialize wait run on every platform
+//! (`attach.rs`, `attach_more.rs`, `attach_shared.rs`, `attach_runtime.rs`).
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -15,7 +16,7 @@ use tokio::net::windows::named_pipe::{
 use super::attach::{audit, bridged, events, lab, private_dir, workspace};
 use crate::Policy;
 use crate::attach::{
-    self, Listener, PeerId, SessionRuntime, Sid, Unidentified, security_of, socket_path,
+    self, Listener, ListenerId, PeerId, SessionRuntime, Sid, Unidentified, security_of, socket_path,
 };
 
 /// The local SYSTEM account's SID: a user other than the test's.
@@ -110,30 +111,58 @@ async fn an_unidentified_client_is_refused() {
     lab.stop().await;
 }
 
+/// The bridge to an impostor pipe identified by `credentials`: its
+/// refusal, after checking the impostor was written nothing.
+async fn refused_by_the_bridge(tag: &str, credentials: attach::ListenerCredentials) -> String {
+    let dir = private_dir();
+    let name = PathBuf::from(format!("{}-{tag}", socket_path(dir.path()).display()));
+    let mut impostor = ServerOptions::new().create(&name).unwrap();
+    let connecting = tokio::spawn({
+        let name = name.clone();
+        async move { attach::connect_with(&name, credentials).await }
+    });
+    impostor.connect().await.unwrap();
+    let error = connecting.await.unwrap().unwrap_err().to_string();
+    let mut written = Vec::new();
+    impostor.read_to_end(&mut written).await.unwrap();
+    assert!(written.is_empty(), "{written:?}");
+    error
+}
+
 /// The bridge refuses a pipe whose server runs as another user (a
 /// stand-in for the token's answer) and writes it nothing.
 #[tokio::test]
 async fn the_bridge_refuses_a_listener_of_another_user() {
-    fn stranger(_: &NamedPipeClient) -> std::io::Result<PeerId> {
-        Ok(PeerId {
-            sid: Some(system()),
-            pid: Some(4),
+    fn stranger(_: &NamedPipeClient) -> std::io::Result<ListenerId> {
+        Ok(ListenerId {
+            process: PeerId {
+                sid: Some(system()),
+                pid: Some(4),
+            },
+            owner: attach::own_sid().unwrap(),
         })
     }
-    let dir = private_dir();
-    let name = PathBuf::from(format!("{}-impostor", socket_path(dir.path()).display()));
-    let mut impostor = ServerOptions::new().create(&name).unwrap();
-    let connecting = tokio::spawn({
-        let name = name.clone();
-        async move { attach::connect_with(&name, stranger).await }
-    });
-    impostor.connect().await.unwrap();
-    let error = connecting.await.unwrap().unwrap_err().to_string();
+    let error = refused_by_the_bridge("impostor", stranger).await;
     assert!(error.contains("not this user"), "{error}");
     assert!(error.contains("S-1-5-18"), "{error}");
-    let mut written = Vec::new();
-    impostor.read_to_end(&mut written).await.unwrap();
-    assert!(written.is_empty(), "{written:?}");
+}
+
+/// The bridge refuses a pipe owned by another user even when the process
+/// at its server end is this user's (as a reused pid could make it look).
+#[tokio::test]
+async fn the_bridge_refuses_a_pipe_another_user_owns() {
+    fn foreign(_: &NamedPipeClient) -> std::io::Result<ListenerId> {
+        let own = attach::own_sid().unwrap();
+        Ok(ListenerId {
+            process: PeerId {
+                sid: Some(own),
+                pid: Some(4242),
+            },
+            owner: system(),
+        })
+    }
+    let error = refused_by_the_bridge("foreign", foreign).await;
+    assert!(error.contains("is owned by S-1-5-18"), "{error}");
 }
 
 /// Acceptance: a second listener on the workspace finds the first's lock
@@ -166,7 +195,7 @@ async fn a_second_listener_and_a_taken_name_are_refused() {
         .create(socket_path(dir.path()))
         .unwrap();
     let error = lab.attach(dir.path(), Policy::default()).await.unwrap_err();
-    assert!(error.to_string().contains("already taken"), "{error}");
+    assert!(error.to_string().contains("is taken"), "{error}");
     assert!(!attach::listening(dir.path()), "the lock is let go");
     drop(squatter);
     lab.stop().await;
@@ -174,7 +203,7 @@ async fn a_second_listener_and_a_taken_name_are_refused() {
 
 /// Acceptance: the listener's instances, the first and the one it makes
 /// once an agent connects, carry the owner-only descriptor: owned by this
-/// user, with one entry, allowing this user.
+/// user, with one entry, allowing this user, and the medium label.
 #[tokio::test(start_paused = true)]
 async fn the_listeners_instances_grant_only_this_user() {
     let lab = lab().await;
@@ -187,36 +216,15 @@ async fn the_listeners_instances_grant_only_this_user() {
     let later = client(listener.path());
     count.wait_for(|n| *n == 2).await.unwrap();
     for end in [&first, &later] {
-        let (owner, entries) = security_of(end).unwrap();
-        assert_eq!(owner, own);
+        let security = security_of(end).unwrap();
+        assert_eq!(security.owner, own);
+        let entries = &security.access;
         assert_eq!(entries.len(), 1, "{entries:?}");
         assert_eq!((entries[0].0, &entries[0].2), (0, &own), "{entries:?}");
+        assert_eq!(security.label.len(), 1, "{security:?}");
+        assert_eq!(security.label[0].0, 0x11, "{security:?}");
     }
     drop((first, later));
     listener.shutdown().await;
-    lab.stop().await;
-}
-
-/// A client that sends nothing is closed after 30 s, its seat given back
-/// and its close on record with this user's SID.
-#[tokio::test(start_paused = true)]
-async fn an_idle_client_is_closed_after_the_initialize_wait() {
-    let lab = lab().await;
-    let dir = private_dir();
-    let listener = lab.attach(dir.path(), Policy::default()).await.unwrap();
-    let mut idle = client(listener.path());
-    let mut count = listener.agents();
-    count.wait_for(|n| *n == 1).await.unwrap();
-    let mut answer = Vec::new();
-    let closed = tokio::time::timeout(Duration::from_secs(60), idle.read_to_end(&mut answer));
-    assert!(closed.await.is_ok(), "still open after a minute");
-    count.wait_for(|n| *n == 0).await.unwrap();
-    listener.shutdown().await;
-    assert_eq!(events(dir.path()), ["mcp-connect", "mcp-disconnect"]);
-    let records = audit(dir.path());
-    let own = attach::own_sid().unwrap().to_string();
-    assert_eq!(records[0]["peer_sid"], json!(own));
-    let error = records[1]["error"].as_str().unwrap();
-    assert!(error.contains("within 30 s"), "{error}");
     lab.stop().await;
 }

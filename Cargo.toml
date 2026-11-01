@@ -186,7 +186,9 @@ semihosting = { version = "0.1.25", features = ["stdio"] }
 # the rest keeps `deny`. bacnet-transport fences all its OS FFI into one
 # module, `bacnet_transport::sys`, whose inner `#![allow(unsafe_code)]` is the
 # only module-wide allow; its test `unsafe_stays_in_sys` fails on unsafe code
-# or an unsafe-code allow anywhere else in the crate. The firmware runtime
+# or an unsafe-code allow anywhere else in the crate. bacnet-mcp does the same
+# for its Windows named pipe: `bacnet_mcp::attach::win32` holds its only allow,
+# and `unsafe_stays_in_win32` fences the rest. The firmware runtime
 # hooks, and under tests/ the global allocators, keep a narrow
 # `#[allow(unsafe_code)]` on each item that needs it.
 # Clippy's `undocumented_unsafe_blocks` requires a `// SAFETY:` comment on

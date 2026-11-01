@@ -1,8 +1,8 @@
 //! The TUI's MCP listener (#2185; design §9): while a profile is open,
 //! agents attach through `bacnet mcp connect` to a local socket in its
-//! workspace (on Windows, a named pipe named after it), and each gets a read-only MCP session on the session's own
-//! engine, so their reads share the client, the transport and the rate
-//! meter. The listener runs beside the session's workers and ends with
+//! workspace (on Windows, a named pipe named after it), and each gets a
+//! read-only MCP session on the session's own engine, so their reads
+//! share the client, the transport and the rate meter. The listener runs beside the session's workers and ends with
 //! the session: every agent's session ends gracefully and the socket file
 //! goes. The agents' sessions run on the listener's own runtime, whose
 //! threads the panic hook leaves alone (#2203).

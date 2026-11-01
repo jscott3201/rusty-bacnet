@@ -15,10 +15,12 @@ use serde_json::json;
 use tokio::io::AsyncReadExt as _;
 use tokio::time::Instant;
 
-use super::attach::{bridged, events, lab, private_dir, workspace};
+use super::attach::{bridged, events, lab, own_user, private_dir, raw, workspace};
 use super::{ALIASES, LAB};
 use crate::Policy;
-use crate::attach::{self, Listener, PeerId, SessionRuntime, socket_path};
+#[cfg(unix)]
+use crate::attach::{self, PeerId};
+use crate::attach::{Listener, SessionRuntime, socket_path};
 use crate::policy::Rates;
 
 const AI1: &str = "bacnet://device/1201/object/analog-input:1";
@@ -194,6 +196,7 @@ async fn the_tui_keeps_its_cov_when_an_agent_leaves_the_same_point() {
 
 /// The bridge refuses a listener the credentials name as another user
 /// (a stand-in for the kernel's answer) and writes it nothing.
+#[cfg(unix)]
 #[tokio::test]
 async fn the_bridge_refuses_a_listener_of_another_user() {
     fn stranger(_: &tokio::net::UnixStream) -> std::io::Result<PeerId> {
@@ -216,6 +219,7 @@ async fn the_bridge_refuses_a_listener_of_another_user() {
 
 /// A peer whose credentials can't be read is refused and audited: as
 /// gone when the OS says it has closed, else as unidentified.
+#[cfg(unix)]
 #[tokio::test(start_paused = true)]
 async fn unreadable_credentials_are_refused() {
     fn closed(_: &tokio::net::UnixStream) -> std::io::Result<PeerId> {
@@ -261,9 +265,7 @@ async fn an_idle_connection_is_closed_after_the_initialize_wait() {
     let lab = lab().await;
     let dir = private_dir();
     let listener = lab.attach(dir.path(), Policy::default()).await.unwrap();
-    let mut idle = tokio::net::UnixStream::connect(socket_path(dir.path()))
-        .await
-        .unwrap();
+    let mut idle = raw(&socket_path(dir.path())).await;
     agents_are(&listener, 1).await;
     let mut answer = Vec::new();
     let closed = tokio::time::timeout(Duration::from_secs(60), idle.read_to_end(&mut answer));
@@ -272,6 +274,7 @@ async fn an_idle_connection_is_closed_after_the_initialize_wait() {
     listener.shutdown().await;
     assert_eq!(events(dir.path()), ["mcp-connect", "mcp-disconnect"]);
     let records = super::attach::audit(dir.path());
+    own_user(&records[0]);
     let error = records[1]["error"].as_str().unwrap();
     assert!(error.contains("within 30 s"), "{error}");
     lab.stop().await;

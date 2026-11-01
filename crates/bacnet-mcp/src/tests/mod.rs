@@ -3,13 +3,13 @@
 
 #[cfg(any(unix, windows))]
 mod attach;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod attach_more;
 #[cfg(windows)]
 mod attach_pipe;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod attach_runtime;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod attach_shared;
 mod bbmd;
 mod budget;
@@ -147,7 +147,7 @@ impl TransportPort for Recording {
         self.inner.stop().await
     }
     async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         attach_runtime::panic_if_armed();
         self.sent
             .lock()
