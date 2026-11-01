@@ -25,8 +25,8 @@ use super::timed::{TimedChange, TimedStore};
 use super::{
     CovNotificationKind, CovSubscriptionKey, CovSubscriptionSnapshot, CovSubscriptionTable,
 };
-use crate::handlers::{WriteCommitObserver, WriteTarget};
 use crate::life_safety_cov::{LifeSafetyCovChange, LifeSafetyCovSnapshots, is_life_safety_object};
+use bacnet_device_core::write::{WriteCommitObserver, WriteTarget};
 
 /// Live timestamped references whose changes a producer must capture.
 pub(crate) struct TimedCapture {

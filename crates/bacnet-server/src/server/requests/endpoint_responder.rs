@@ -213,7 +213,7 @@ impl EndpointResponder {
         }
         // Description and Audit_Notification_Recipient, the only targets
         // `device_write_target` admits, are single values.
-        let value = handlers::decode_write_property_value(
+        let value = bacnet_device_core::write::decode_write_property_value(
             write.property_identifier,
             None,
             false,

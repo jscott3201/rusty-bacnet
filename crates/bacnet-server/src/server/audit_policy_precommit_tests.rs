@@ -251,7 +251,7 @@ async fn mandatory_policy_no_runtime_refuses_without_consuming_sequence() {
                     &db,
                 )
                 .unwrap();
-                crate::handlers::handle_write_property_observed(
+                bacnet_device_core::write::write_property(
                     &mut db,
                     &wp(
                         oid(ObjectType::ANALOG_VALUE, 11),
@@ -500,7 +500,7 @@ async fn mandatory_policy_wpm_denial_keeps_prefix_and_exact_coordinate_then_retr
 
 #[tokio::test(start_paused = true)]
 async fn mandatory_policy_stop_between_capture_and_commit_denies_without_assignment() {
-    use crate::handlers::{WriteCommitObserver, WriteTarget};
+    use bacnet_device_core::write::{WriteCommitObserver, WriteTarget};
     let mut f = server(reporter()).await;
     install(&f, policy()).await;
     let database = Arc::clone(&f.server.db);
