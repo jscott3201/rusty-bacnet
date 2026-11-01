@@ -1,6 +1,6 @@
 //! WriteProperty through the server and the `Responder`: the same reply
 //! octets for each row, and the same value read back after it, except the
-//! two exchanges [`DIFFER_EXCHANGES`] pins.
+//! two write exchanges among those [`DIFFER_EXCHANGES`] pins.
 use super::*;
 use bacnet_objects::command::CommandObject;
 use bacnet_objects::present_value_access::PresentValueAccess;
@@ -8,7 +8,7 @@ use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::constructed::{BACnetActionCommand, BACnetActionList};
 use std::borrow::Cow;
 
-fn bv(instance: u32) -> ObjectIdentifier {
+pub(super) fn bv(instance: u32) -> ObjectIdentifier {
     oid(ObjectType::BINARY_VALUE, instance)
 }
 
@@ -73,7 +73,7 @@ fn writes(identity: &bacnet_objects::DeviceIdentity) -> ObjectDatabase {
     )
 }
 
-fn encoded(value: &PropertyValue) -> Vec<u8> {
+pub(super) fn encoded(value: &PropertyValue) -> Vec<u8> {
     let mut octets = BytesMut::new();
     bacnet_encoding::primitives::encode_property_value(&mut octets, value).unwrap();
     octets.to_vec()
@@ -110,7 +110,7 @@ fn is_simple_ack(reply: &Option<Apdu>) -> bool {
 }
 
 impl Parity {
-    async fn start_writes() -> Self {
+    pub(super) async fn start_writes() -> Self {
         Self::start_from(
             ReadPropertyMultipleBudget::default(),
             Segmentation::NONE,
@@ -120,7 +120,12 @@ impl Parity {
     }
 
     /// Both sides' `property` of `object`, required to agree.
-    async fn read_back(&mut self, what: &str, object: ObjectIdentifier, property: P) -> Apdu {
+    pub(super) async fn read_back(
+        &mut self,
+        what: &str,
+        object: ObjectIdentifier,
+        property: P,
+    ) -> Apdu {
         let apdu = read_property(1, object, property, None);
         let reply = self.same(what, apdu, 1476).await;
         assert!(

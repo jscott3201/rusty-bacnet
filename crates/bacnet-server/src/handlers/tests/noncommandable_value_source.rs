@@ -174,20 +174,18 @@ fn an_unbound_writer_publishes_its_address_and_corrects_in_the_same_wpm() {
     }
     .encode(&mut request)
     .unwrap();
-    let mut snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::default();
-    let outcome = handle_write_property_multiple_observed(
+    let outcome = write::write_property_multiple(
         &mut db,
         &request,
-        &mut snapshots,
         None,
         None,
         None,
         Some(&writer(Some(30))),
     );
     match outcome {
-        WritePropertyMultipleOutcome::Success { .. } => {}
-        WritePropertyMultipleOutcome::Error { error, .. } => panic!("{error:?}"),
-        WritePropertyMultipleOutcome::Reject { reason } => panic!("{reason:?}"),
+        WpmOutcome::Success { .. } => {}
+        WpmOutcome::Error { error, .. } => panic!("{error:?}"),
+        WpmOutcome::Reject { reason } => panic!("{reason:?}"),
     }
     assert_eq!(read_wire(&db, oid, VS), DEVICE_77);
 }

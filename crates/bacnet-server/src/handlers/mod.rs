@@ -17,10 +17,10 @@ use bacnet_services::device_mgmt::{DeviceCommunicationControlRequest, Reinitiali
 use bacnet_services::object_mgmt::{CreateObjectRequest, DeleteObjectRequest, ObjectSpecifier};
 #[cfg(test)]
 use bacnet_services::read_property::ReadPropertyRequest;
+#[cfg(test)]
 use bacnet_services::rpm::{
-    ReadAccessResult, ReadPropertyMultipleACK, ReadPropertyMultipleRequest, ReadResultElement,
+    ReadPropertyMultipleACK, ReadPropertyMultipleRequest, ReadResultElement,
 };
-use bacnet_services::wpm::{WritePropertyMultipleCursor, WritePropertyMultipleEvent};
 #[cfg(test)]
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::MacAddr;
@@ -48,10 +48,12 @@ pub(crate) mod device_mgmt;
 mod file;
 mod list;
 mod object_mgmt;
+#[cfg(test)]
 mod read_property;
 mod read_range;
 #[cfg(test)]
 mod rpm_budget;
+#[cfg(test)]
 mod write_property;
 
 pub use alarm_event::*;
@@ -62,9 +64,11 @@ pub use device_mgmt::*;
 pub use file::*;
 pub use list::*;
 pub use object_mgmt::*;
-pub use read_property::*;
+#[cfg(test)]
+pub(crate) use read_property::*;
 pub use read_range::*;
-pub use write_property::*;
+#[cfg(test)]
+pub(crate) use write_property::*;
 
 #[cfg(test)]
 mod tests;

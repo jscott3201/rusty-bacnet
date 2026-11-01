@@ -12,7 +12,8 @@
 //! from its view, and the `Responder`, with no overlay, from the Device
 //! object, so those rows may differ: [`DIFFER`] pins exactly which do, and
 //! [`DIFFER_EXCHANGES`] the other exchanges that differ by design. The
-//! WriteProperty rows are in `write`.
+//! WriteProperty rows are in `write`, the ReadPropertyMultiple rows in `rpm`
+//! and the WritePropertyMultiple rows in `wpm`.
 use super::*;
 use crate::server::test_transport::{self, SendLog, TestTransport};
 use bacnet_device_core::read::ReadPropertyMultipleBudget;
@@ -182,12 +183,8 @@ impl Parity {
             .write()
             .await
             .set_clock_reader(Some(Arc::new(FixedClock)));
-        let limits = Limits::new(
-            server
-                .config
-                .read_property_multiple_budget
-                .max_result_elements,
-        );
+        let budget = server.config.read_property_multiple_budget;
+        let limits = Limits::new(budget.max_result_elements).with_rpm(budget);
         let core_identity = server
             .config
             .device
@@ -693,4 +690,6 @@ async fn edge_rows_match_and_the_segmented_reply_differs() {
     parity.server.stop().await.unwrap();
 }
 
+mod rpm;
+mod wpm;
 mod write;

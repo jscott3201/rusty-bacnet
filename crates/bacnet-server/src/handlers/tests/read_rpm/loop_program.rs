@@ -8,7 +8,7 @@ fn rpm_loop_program_metadata_selectors_preserve_bytes_and_budgets() {
     use bacnet_types::enums::EngineeringUnits;
     use bacnet_types::primitives::PropertyValue;
 
-    // Independent fixtures (Loop in Table 12-20 order, Program in its legacy
+    // Independent fixtures (Loop in Table 12-20 order, Program in its unlimited
     // order): classification must not be inferred from the metadata being
     // exercised. Property_List is read explicitly.
     let loop_all = [
