@@ -354,9 +354,8 @@ pub(super) fn bind(plan: BindPlan) -> io::Result<BoundSockets> {
     for ip in listener_addresses(plan.interface, plan.broadcast) {
         let listener = bound(SocketRole::BroadcastListener, ip).map_err(|e| {
             let port = plan.port;
-            let message =
-                format!("could not bind the B/IP broadcast listener to {ip}:{port} ({e})");
-            io::Error::new(e.kind(), message)
+            let context = format!("could not bind the B/IP broadcast listener to {ip}:{port}");
+            super::listener_error::listener_error(context, e)
         })?;
         listeners.push(listener);
     }
