@@ -5,8 +5,8 @@
 #![cfg_attr(all(not(feature = "std"), not(test)), no_std)]
 #![forbid(unsafe_code)]
 
-// `format!` and `vec!` without std's prelude, as in bacnet-objects.
-#[macro_use]
+// `alloc`'s collections without std. The library formats nothing, so a
+// firmware image links no `core::fmt` on its account (#2187).
 extern crate alloc;
 
 #[cfg(not(any(feature = "std", feature = "alloc")))]

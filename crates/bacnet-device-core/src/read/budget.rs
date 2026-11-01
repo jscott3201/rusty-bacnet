@@ -69,12 +69,20 @@ impl Default for ReadPropertyMultipleBudget {
 impl ReadPropertyMultipleBudget {
     /// Reject zero; no semaphore-derived or allocation-capacity upper limit.
     pub fn validate(&self) -> Result<(), Error> {
-        for (name, value) in [
-            ("rpm_max_result_elements", self.max_result_elements),
-            ("rpm_max_service_ack_bytes", self.max_service_ack_bytes),
+        // Whole messages, not `format!`: a firmware image that validates its
+        // budget then links no formatting for it (#2187).
+        for (message, value) in [
+            (
+                "rpm_max_result_elements must be positive",
+                self.max_result_elements,
+            ),
+            (
+                "rpm_max_service_ack_bytes must be positive",
+                self.max_service_ack_bytes,
+            ),
         ] {
             if value == 0 {
-                return Err(Error::Encoding(format!("{name} must be positive")));
+                return Err(Error::Encoding(message.into()));
             }
         }
         Ok(())
