@@ -491,10 +491,6 @@ impl BACnetObject for AccessPointObject {
         true
     }
 
-    fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
-        self.clock = clock;
-    }
-
     fn supports_access_event_batch_internal(&self) -> bool {
         true
     }
@@ -520,6 +516,16 @@ impl BACnetObject for AccessPointObject {
             return Err(common::write_access_denied_error());
         }
         self.set_access_event(report)
+    }
+
+    fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
+        Some(self)
+    }
+}
+
+impl crate::traits::Timed for AccessPointObject {
+    fn bind_clocks(&mut self, clocks: &crate::traits::Clocks) {
+        self.clock = clocks.clock.clone();
     }
 }
 

@@ -6,6 +6,7 @@ mod identity;
 
 use super::*;
 use crate::clock::{ClockFrame, ClockReader};
+use crate::traits::Timed;
 use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::{Date, Time};
 use std::sync::{Arc, Mutex};
@@ -49,7 +50,10 @@ fn clock_frame(hour: u8, minute: u8) -> ClockFrame {
 }
 
 fn bind_clock(device: &mut DeviceObject, clock: FakeClock) {
-    device.bind_clock_internal(Some(Arc::new(clock)));
+    device.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(clock)),
+        ..crate::traits::Clocks::default()
+    });
 }
 
 fn make_device() -> DeviceObject {
@@ -563,9 +567,10 @@ fn device_property_metadata_preserves_dynamic_list_and_write_dispatch() {
         // Bind, lose a sample, recover, and unbind on the same instance.
         for state in [0, 1, 2, 1, 0] {
             *clock.0.lock().unwrap() = (state == 1).then(|| clock_frame(12, 0));
-            device.bind_clock_internal(
-                (state != 0).then(|| Arc::new(clock.clone()) as Arc<dyn ClockReader>),
-            );
+            device.bind_clocks(&crate::traits::Clocks {
+                clock: (state != 0).then(|| Arc::new(clock.clone()) as Arc<dyn ClockReader>),
+                ..crate::traits::Clocks::default()
+            });
             let mut expected: Vec<_> = device.properties.keys().copied().collect();
             expected.extend([
                 P::OBJECT_LIST,

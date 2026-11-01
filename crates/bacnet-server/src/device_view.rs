@@ -28,7 +28,6 @@ use bacnet_types::{
 use identity::IdentityView;
 use std::borrow::Cow;
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
 
 #[derive(Clone, Copy)]
 pub(crate) enum DeviceExecution {
@@ -346,16 +345,6 @@ impl BACnetObject for DeviceReadView<'_> {
             self.object.is_writable_property(property)
         }
     }
-    /// A frozen copy can't carry this request's executor-owned values, so a
-    /// Device offers none and a caller reads the view itself.
-    fn cov_snapshot_internal(&self) -> Option<Box<dyn BACnetObject>> {
-        if self.is_device() {
-            None
-        } else {
-            self.object.cov_snapshot_internal()
-        }
-    }
-
     // Every other read-only query is the wrapped object's own answer (#1076);
     // `tests::the_view_forwards_every_read_query` runs each query the trait
     // declares and fails on one this list lacks. The mutating hooks keep their
@@ -365,12 +354,6 @@ impl BACnetObject for DeviceReadView<'_> {
     }
     fn audit_reporter_internal(&self) -> Option<&AuditReporterObject> {
         self.object.audit_reporter_internal()
-    }
-    fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
-        self.object.next_monotonic_deadline_internal()
-    }
-    fn lighting_blink_count_internal(&self) -> u64 {
-        self.object.lighting_blink_count_internal()
     }
     fn creation_only_properties(&self) -> &'static [P] {
         self.object.creation_only_properties()

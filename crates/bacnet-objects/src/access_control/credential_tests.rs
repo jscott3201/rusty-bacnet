@@ -3,6 +3,7 @@
 //! validity window against the wall clock, Global_Identifier, and the two
 //! constructed arrays.
 
+use crate::traits::Timed;
 use bacnet_types::error::RemoteError;
 use std::sync::{Arc, Mutex};
 
@@ -195,7 +196,10 @@ fn access_credential_local_reasons_merge_with_credential_disable() {
 fn access_credential_validity_window_follows_the_clock() {
     let clock = Arc::new(TestClock(Mutex::new(None)));
     let mut credential = AccessCredentialObject::new(1, "CRED-1").unwrap();
-    credential.bind_clock_internal(Some(clock.clone()));
+    credential.bind_clocks(&crate::traits::Clocks {
+        clock: Some(clock.clone()),
+        ..crate::traits::Clocks::default()
+    });
     credential
         .write_property(AT, None, date_time(date(2026, 3, 1), time(8, 0)), None)
         .unwrap();

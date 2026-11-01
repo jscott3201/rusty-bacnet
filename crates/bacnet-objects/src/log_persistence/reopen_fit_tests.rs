@@ -50,7 +50,10 @@ fn a_smaller_configured_buffer_size_keeps_the_newest_records() {
     for kind in KINDS {
         let base = TempBase::new("shrink");
         let (mut log, _) = open(kind, base.path(), 6).unwrap();
-        log.bind_clock_internal(Some(HandClock::at(8)));
+        log.timed().unwrap().bind_clocks(&crate::traits::Clocks {
+            clock: Some(HandClock::at(8)),
+            ..crate::traits::Clocks::default()
+        });
         write(
             log.as_mut(),
             P::NOTIFICATION_THRESHOLD,
@@ -101,7 +104,10 @@ fn a_smaller_buffer_size_leaves_a_stop_when_full_log_its_last_slot() {
             "{kind:?}"
         );
         // ...until the next record, here the marker, fills it and stops it.
-        log.bind_clock_internal(Some(HandClock::at(9)));
+        log.timed().unwrap().bind_clocks(&crate::traits::Clocks {
+            clock: Some(HandClock::at(9)),
+            ..crate::traits::Clocks::default()
+        });
         assert_eq!(served(log.as_ref()).len(), 3, "{kind:?}");
         assert_eq!(
             log.read_property(P::LOG_ENABLE, None).unwrap(),
@@ -116,7 +122,10 @@ fn a_full_stopped_log_keeps_its_records_over_the_marker() {
     for kind in KINDS {
         let base = TempBase::new("full-stopped");
         let (mut log, _) = open(kind, base.path(), 3).unwrap();
-        log.bind_clock_internal(Some(HandClock::at(8)));
+        log.timed().unwrap().bind_clocks(&crate::traits::Clocks {
+            clock: Some(HandClock::at(8)),
+            ..crate::traits::Clocks::default()
+        });
         write(
             log.as_mut(),
             P::STOP_WHEN_FULL,
@@ -132,7 +141,10 @@ fn a_full_stopped_log_keeps_its_records_over_the_marker() {
         drop(log);
 
         let (mut log, _) = open(kind, base.path(), 3).unwrap();
-        log.bind_clock_internal(Some(HandClock::at(12)));
+        log.timed().unwrap().bind_clocks(&crate::traits::Clocks {
+            clock: Some(HandClock::at(12)),
+            ..crate::traits::Clocks::default()
+        });
         log.refresh_log_window_internal();
         assert_eq!(
             (served(log.as_ref()), total(log.as_ref())),
@@ -163,13 +175,19 @@ fn a_stopped_log_with_room_takes_the_marker_marked_disabled() {
     for kind in KINDS {
         let base = TempBase::new("stopped-room");
         let (mut log, _) = open(kind, base.path(), 5).unwrap();
-        log.bind_clock_internal(Some(HandClock::at(8)));
+        log.timed().unwrap().bind_clocks(&crate::traits::Clocks {
+            clock: Some(HandClock::at(8)),
+            ..crate::traits::Clocks::default()
+        });
         add(log.as_mut(), 1);
         write(log.as_mut(), P::LOG_ENABLE, PropertyValue::Boolean(false));
         drop(log);
 
         let (mut log, _) = open(kind, base.path(), 5).unwrap();
-        log.bind_clock_internal(Some(HandClock::at(12)));
+        log.timed().unwrap().bind_clocks(&crate::traits::Clocks {
+            clock: Some(HandClock::at(12)),
+            ..crate::traits::Clocks::default()
+        });
         let records = served(log.as_ref());
         assert_eq!(records.len(), 3, "{kind:?}");
         assert_eq!(records[2], (3, interrupted_disabled(12)), "{kind:?}");

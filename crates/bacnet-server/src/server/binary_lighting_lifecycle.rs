@@ -7,10 +7,12 @@ use tokio::time::{Instant, MissedTickBehavior};
 ///
 /// It is generic over objects: each wake first takes the Averaging samples
 /// that are due (#1144) and counts each Pulse Converter's input from the
-/// property its Input_Reference names (#1341), then asks every object to
-/// expire what is due (`advance_monotonic_time_internal`) and to report its
-/// next deadline, and fans COV out for each object that changed once the
-/// database guard is dropped. Binary Lighting Output egress, Lighting Output
+/// property its Input_Reference names (#1341), then asks every object with
+/// staged writes to drop the ones that waited too long
+/// (`DurableWrites::expire_staged`) and every timed object to expire what is
+/// due (`Timed::advance_monotonic_time`) and to report its next deadline, and
+/// fans COV out for each object that changed once the database guard is
+/// dropped. Binary Lighting Output egress, Lighting Output
 /// fades, ramps and egress (#1384), Color and Color Temperature fades and
 /// ramps (#1474), Access Door pulse relock (#1073), Averaging sampling and
 /// Pulse Converter counting all run on it; the name predates the others.
@@ -71,13 +73,21 @@ pub(super) fn spawn_binary_lighting_operation_task<T: TransportPort + 'static>(
                 let mut changed = Vec::new();
                 next_deadline = None;
                 database.for_each_object_mut(|oid, object| {
-                    object.set_tracking_cov_increment_internal(finest.get(&oid).copied());
-                    if object.advance_monotonic_time_internal(now)
-                        && let Some(snapshot) = object.cov_snapshot_internal()
+                    if let Some(timed) = object.timed() {
+                        timed.set_tracking_cov_increment(finest.get(&oid).copied());
+                    }
+                    if let Some(durable) = object.durable_writes() {
+                        durable.expire_staged(now);
+                    }
+                    let Some(timed) = object.timed() else {
+                        return;
+                    };
+                    if timed.advance_monotonic_time(now)
+                        && let Some(snapshot) = timed.cov_snapshot()
                     {
                         changed.push((oid, snapshot));
                     }
-                    if let Some(deadline) = object.next_monotonic_deadline_internal() {
+                    if let Some(deadline) = timed.next_monotonic_deadline() {
                         next_deadline =
                             Some(next_deadline.map_or(deadline, |next| next.min(deadline)));
                     }

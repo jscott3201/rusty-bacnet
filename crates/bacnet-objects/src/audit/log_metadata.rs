@@ -438,7 +438,13 @@ mod tests {
         );
         assert!(object.log_enable());
 
-        object.bind_clock_internal(Some(Arc::new(FixedClock(Some(frame())))));
+        crate::traits::Timed::bind_clocks(
+            &mut object,
+            &crate::traits::Clocks {
+                clock: Some(Arc::new(FixedClock(Some(frame())))),
+                ..crate::traits::Clocks::default()
+            },
+        );
         object
             .write_property(P::LOG_ENABLE, None, PropertyValue::Boolean(false), None)
             .unwrap();

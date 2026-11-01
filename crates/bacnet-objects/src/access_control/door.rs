@@ -99,8 +99,8 @@ pub struct AccessDoorObject {
     /// relinquished.
     pulse_deadlines: [Option<Duration>; 16],
     monotonic_clock: Option<Arc<MonotonicClock>>,
-    /// Elapsed time for a door with no bound clock, advanced by
-    /// `advance_time_internal`.
+    /// Elapsed time for a door with no bound clock, advanced by the
+    /// test-only `advance_time`.
     logical_now: Duration,
 }
 
@@ -638,27 +638,6 @@ impl BACnetObject for AccessDoorObject {
         Self::served_reliability
     );
 
-    fn advance_time_internal(&mut self, elapsed: Duration) -> bool {
-        self.logical_now = self.logical_now.saturating_add(elapsed);
-        self.expire_pulses(self.logical_now)
-    }
-
-    fn bind_monotonic_clock_internal(&mut self, clock: Option<Arc<MonotonicClock>>) {
-        self.monotonic_clock = clock;
-    }
-
-    fn advance_monotonic_time_internal(&mut self, now: Duration) -> bool {
-        self.expire_pulses(now)
-    }
-
-    fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
-        self.pulse_deadlines.iter().flatten().min().copied()
-    }
-
-    fn cov_snapshot_internal(&self) -> Option<Box<dyn BACnetObject>> {
-        Some(Box::new(self.clone()))
-    }
-
     /// Take what the door's hardware reports (#1132): Door_Status,
     /// Lock_Status and Door_Alarm_State, each one given, together. A value
     /// outside its production, or an alarm state the door's lists don't
@@ -675,6 +654,36 @@ impl BACnetObject for AccessDoorObject {
         // The device's own state: put aside out of service, else served.
         let device = self.device_state.as_mut().unwrap_or(&mut self.state);
         device.report(report, |state| lists.admits(alarm_values, state))
+    }
+
+    fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
+        Some(self)
+    }
+}
+
+impl crate::traits::Timed for AccessDoorObject {
+    fn bind_clocks(&mut self, clocks: &crate::traits::Clocks) {
+        self.monotonic_clock = clocks.monotonic.clone();
+    }
+
+    fn advance_monotonic_time(&mut self, now: Duration) -> bool {
+        self.expire_pulses(now)
+    }
+
+    fn next_monotonic_deadline(&self) -> Option<Duration> {
+        self.pulse_deadlines.iter().flatten().min().copied()
+    }
+
+    fn cov_snapshot(&self) -> Option<Box<dyn BACnetObject>> {
+        Some(Box::new(self.clone()))
+    }
+}
+
+#[cfg(test)]
+impl AccessDoorObject {
+    pub(crate) fn advance_time(&mut self, elapsed: Duration) -> bool {
+        self.logical_now = self.logical_now.saturating_add(elapsed);
+        self.expire_pulses(self.logical_now)
     }
 }
 

@@ -227,6 +227,10 @@ macro_rules! impl_color_durable {
                     (tags, output) => tags.or(output),
                 }
             }
+
+            fn expire_staged(&mut self, now: core::time::Duration) {
+                $crate::durable::DurableWrites::expire_staged(&mut self.profile, now);
+            }
         }
     };
 }

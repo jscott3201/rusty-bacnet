@@ -110,7 +110,13 @@ impl Log {
         };
         log.set_clock(at(9, 0));
         let clock = log.clock.clone();
-        log.object_mut().bind_clock_internal(Some(clock));
+        log.object_mut()
+            .timed()
+            .unwrap()
+            .bind_clocks(&crate::traits::Clocks {
+                clock: Some(clock),
+                ..crate::traits::Clocks::default()
+            });
         log
     }
 

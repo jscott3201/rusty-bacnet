@@ -218,7 +218,7 @@ fn binary_lighting_output_current_command_priority_holds_through_egress() {
         PropertyValue::Boolean(true)
     );
     assert_eq!(read(&blo, ccp), PropertyValue::Unsigned(8));
-    assert!(blo.advance_time_internal(Duration::from_secs(5)));
+    assert!(blo.advance_time(Duration::from_secs(5)));
     assert_eq!(read(&blo, ccp), PropertyValue::Null);
 }
 

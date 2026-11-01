@@ -90,8 +90,8 @@ impl BACnetObject for Boundary {
         }
         Cow::Owned(properties)
     }
-    fn bind_clock_internal(&mut self, clock: Option<Arc<dyn bacnet_objects::clock::ClockReader>>) {
-        self.inner.bind_clock_internal(clock);
+    fn timed(&mut self) -> Option<&mut dyn bacnet_objects::traits::Timed> {
+        self.inner.timed()
     }
     fn report_access_input_internal(&mut self, input: AccessControlInput) -> Result<(), Error> {
         self.inner.report_access_input_internal(input)

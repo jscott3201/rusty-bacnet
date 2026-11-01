@@ -73,7 +73,7 @@ pub struct TimerObject {
     clock: Option<Arc<dyn ClockReader>>,
     monotonic_clock: Option<Arc<MonotonicClock>>,
     deadline_waker: Option<Arc<DeadlineWaker>>,
-    /// Elapsed time from `advance_time_internal`, used when no monotonic
+    /// Elapsed time from the test-only `advance_time`, used when no monotonic
     /// clock is bound.
     logical_now: Duration,
 }
@@ -303,33 +303,36 @@ impl BACnetObject for TimerObject {
         crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
-    fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
-        self.clock = clock;
+    fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
+        Some(self)
+    }
+}
+
+impl crate::traits::Timed for TimerObject {
+    fn bind_clocks(&mut self, clocks: &crate::traits::Clocks) {
+        self.clock = clocks.clock.clone();
+        self.monotonic_clock = clocks.monotonic.clone();
+        self.deadline_waker = clocks.deadline_waker.clone();
     }
 
-    // Only tests call this. It moves `logical_now`, which stands in for the
-    // monotonic clock when none is bound, so it assumes one time domain.
-    fn advance_time_internal(&mut self, elapsed: Duration) -> bool {
-        self.logical_now = self.logical_now.saturating_add(elapsed);
-        self.expire_if_due(self.logical_now)
-    }
-
-    fn bind_monotonic_clock_internal(&mut self, clock: Option<Arc<MonotonicClock>>) {
-        self.monotonic_clock = clock;
-    }
-
-    fn bind_deadline_waker_internal(&mut self, waker: Option<Arc<DeadlineWaker>>) {
-        self.deadline_waker = waker;
-    }
-
-    fn advance_monotonic_time_internal(&mut self, now: Duration) -> bool {
+    fn advance_monotonic_time(&mut self, now: Duration) -> bool {
         self.expire_if_due(now)
     }
 
-    fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
+    fn next_monotonic_deadline(&self) -> Option<Duration> {
         match self.countdown {
             Countdown::Counting { deadline } => Some(deadline),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+impl TimerObject {
+    // Only tests call this. It moves `logical_now`, which stands in for the
+    // monotonic clock when none is bound, so it assumes one time domain.
+    pub(crate) fn advance_time(&mut self, elapsed: Duration) -> bool {
+        self.logical_now = self.logical_now.saturating_add(elapsed);
+        self.expire_if_due(self.logical_now)
     }
 }

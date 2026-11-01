@@ -54,7 +54,7 @@ impl<V: TransitionLevel> Engine<V> {
     }
 
     /// The instant on the bound monotonic clock, or the logical time
-    /// [`advance_by`](Self::advance_by) keeps without one.
+    /// the test-only `advance_by` keeps without one.
     pub(super) fn now(&self) -> Duration {
         self.monotonic_clock
             .as_ref()
@@ -123,6 +123,7 @@ impl<V: TransitionLevel> Engine<V> {
     }
 
     /// Advance the logical clock an object with no monotonic clock keeps.
+    #[cfg(test)]
     pub(super) fn advance_by(&mut self, elapsed: Duration) -> bool {
         self.logical_now = self.logical_now.saturating_add(elapsed);
         self.advance_to(self.logical_now)

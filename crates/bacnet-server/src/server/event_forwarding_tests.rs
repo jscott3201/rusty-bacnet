@@ -568,7 +568,7 @@ async fn a_lapsed_subscription_is_not_forwarded_to() {
     let read = Arc::clone(&nanos);
     let clock: Arc<MonotonicClock> =
         Arc::new(move || Duration::from_nanos(read.load(Ordering::SeqCst)));
-    db.set_monotonic_clock_internal(Some(clock));
+    db.set_monotonic_clock(Some(clock));
     let forwarding = Forwarding::new(db);
     assert_eq!(
         forwarding

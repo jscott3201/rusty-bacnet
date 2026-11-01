@@ -39,10 +39,10 @@ pub(super) fn install_database_clocks(
     let origin = tokio::time::Instant::now();
     let monotonic_clock: Arc<bacnet_objects::traits::MonotonicClock> =
         Arc::new(move || tokio::time::Instant::now().saturating_duration_since(origin));
-    db.set_monotonic_clock_internal(Some(monotonic_clock));
+    db.set_monotonic_clock(Some(monotonic_clock));
     let deadline_armed = Arc::new(tokio::sync::Notify::new());
     let waker = Arc::clone(&deadline_armed);
-    db.set_deadline_waker_internal(Some(Arc::new(move || waker.notify_one())));
+    db.set_deadline_waker(Some(Arc::new(move || waker.notify_one())));
 
     (
         clock,

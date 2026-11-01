@@ -241,7 +241,7 @@ fn a_failed_save_is_tried_again_at_settle() {
     assert_eq!(counters.failed_saves(), 1);
     // The same value again is not saved again, as long as the last save
     // landed; here it failed, so it is.
-    ct.durable_writes_internal()
+    ct.durable_writes()
         .expect("the object keeps its output")
         .settle_forgotten_writes()
         .expect("a wait for the saves")
@@ -251,7 +251,7 @@ fn a_failed_save_is_tried_again_at_settle() {
     // The retry landed: the count keeps the one failure and adds nothing.
     assert_eq!(counters.failed_saves(), 1);
     // Nothing changed and nothing failed: settling saves nothing more.
-    ct.durable_writes_internal()
+    ct.durable_writes()
         .unwrap()
         .settle_forgotten_writes()
         .unwrap()
@@ -292,7 +292,7 @@ fn clones_keep_no_storage() {
         .with_output_persistence(storage.clone())
         .unwrap();
     let mut copy = color.clone();
-    assert!(copy.durable_writes_internal().is_none());
+    assert!(copy.durable_writes().is_none());
     copy.set_present_value(BACnetXyColor::new(0.2, 0.2))
         .unwrap();
     drop(copy);
@@ -314,7 +314,7 @@ fn settle_joins_the_tags_wait() {
         .set_present_value(BACnetXyColor::new(0.2, 0.2))
         .unwrap();
     let wait = color
-        .durable_writes_internal()
+        .durable_writes()
         .unwrap()
         .settle_forgotten_writes()
         .unwrap();

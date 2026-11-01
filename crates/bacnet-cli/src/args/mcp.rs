@@ -20,8 +20,9 @@ pub(crate) enum McpAction {
         #[arg(long)]
         passive: bool,
     },
-    /// Bridge stdin and stdout to the MCP socket of a TUI that has the
-    /// profile open, so an agent shares its client (Unix only). Read-only.
+    /// Bridge stdin and stdout to the MCP socket (a named pipe on Windows)
+    /// of a TUI that has the profile open, so an agent shares its client.
+    /// Read-only.
     Connect {
         /// The profile the TUI has open; needed when more than one TUI is
         /// listening.

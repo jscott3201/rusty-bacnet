@@ -2,6 +2,7 @@
 
 use super::storage::{MemoryPersistence, persistent};
 use super::*;
+use crate::traits::Timed;
 use bacnet_types::enums::PropertyIdentifier as P;
 use std::sync::atomic::Ordering;
 
@@ -45,7 +46,7 @@ fn saved_recipient_list_wins_over_configured_destinations() {
     assert!(!first.recipient_list_saved());
     first.add_destination(configured.clone()).unwrap();
     assert_eq!(first.recipient_list(), std::slice::from_ref(&configured));
-    first.advance_monotonic_time_internal(Duration::ZERO);
+    first.advance_monotonic_time(Duration::ZERO);
     first.wait_for_saves();
     assert_eq!(storage.saves(), 0);
     // An operator then replaces the list over the network, and it is saved.
@@ -67,7 +68,7 @@ fn saved_recipient_list_wins_over_configured_destinations() {
         ErrorClass::PROPERTY,
         ErrorCode::INVALID_DATA_TYPE,
     );
-    second.advance_monotonic_time_internal(Duration::ZERO);
+    second.advance_monotonic_time(Duration::ZERO);
     second.wait_for_saves();
     assert_eq!(storage.snapshot().recipient_list, Some(vec![written]));
 }

@@ -1,3 +1,4 @@
+use crate::traits::Timed;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -124,7 +125,10 @@ fn notification(
 fn log(capacity: u32) -> (AuditLogObject, Arc<MemoryPersistence>) {
     let persistence = Arc::new(MemoryPersistence::default());
     let mut log = AuditLogObject::new(1, "audit", capacity, persistence.clone()).unwrap();
-    log.bind_clock_internal(Some(clock()));
+    log.bind_clocks(&crate::traits::Clocks {
+        clock: Some(clock()),
+        ..crate::traits::Clocks::default()
+    });
     (log, persistence)
 }
 
@@ -488,7 +492,10 @@ fn commit_and_clock_failures_leave_memory_and_durable_snapshot_unchanged() {
 
     persistence.fail.store(false, Ordering::Release);
     for frame in [None, Some(invalid_clock_frame())] {
-        log.bind_clock_internal(Some(Arc::new(FixedClock(frame))));
+        log.bind_clocks(&crate::traits::Clocks {
+            clock: Some(Arc::new(FixedClock(frame))),
+            ..crate::traits::Clocks::default()
+        });
         let durable = persistence.snapshot.lock().unwrap().clone();
         let error = log
             .store_notifications(

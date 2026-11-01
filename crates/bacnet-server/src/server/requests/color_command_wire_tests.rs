@@ -42,7 +42,7 @@ async fn fixture() -> (Fixture, Arc<StdMutex<Duration>>) {
     let now = Arc::new(StdMutex::new(Duration::ZERO));
     let source = Arc::clone(&now);
     let mut db = fixture.db.write().await;
-    db.set_monotonic_clock_internal(Some(Arc::new(move || *source.lock().unwrap())));
+    db.set_monotonic_clock(Some(Arc::new(move || *source.lock().unwrap())));
     db.add(Box::new(ColorObject::new(1, "CLR-1").unwrap()))
         .unwrap();
     let mut ct = ColorTemperatureObject::new(1, "CT-1").unwrap();

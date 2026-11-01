@@ -174,7 +174,7 @@ fn a_lapsed_subscription_is_not_a_destination() {
     )
     .unwrap();
     let mut db = database(vec![nf]);
-    db.set_monotonic_clock_internal(Some(clock));
+    db.set_monotonic_clock(Some(clock));
     assert_eq!(recipients(&db, &input(5)).len(), 2);
     // The first entry's minute is up; it is no longer served even before the
     // operation task drops it.

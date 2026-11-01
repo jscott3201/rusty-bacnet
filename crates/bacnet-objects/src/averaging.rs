@@ -8,7 +8,6 @@
 
 use crate::prelude::*;
 use alloc::borrow::Cow;
-use alloc::sync::Arc;
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetObjectPropertyReference,
 };
@@ -19,7 +18,7 @@ use core::time::Duration;
 
 use crate::common::{self, read_identity_properties};
 use crate::device_reference;
-use crate::traits::{BACnetObject, MonotonicClock};
+use crate::traits::BACnetObject;
 
 mod metadata;
 mod schedule;
@@ -315,16 +314,6 @@ impl BACnetObject for AveragingObject {
         }
     }
 
-    fn bind_monotonic_clock_internal(&mut self, clock: Option<Arc<MonotonicClock>>) {
-        self.window.bind_clock(clock);
-    }
-
-    fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
-        // Only an object with a reference has anything for the server to read.
-        self.object_property_reference.as_ref()?;
-        self.window.next_due()
-    }
-
     fn take_due_averaging_sample_internal(
         &mut self,
         now: Duration,
@@ -332,7 +321,31 @@ impl BACnetObject for AveragingObject {
         let reference = self.object_property_reference.clone()?;
         self.window.take_due(now).then_some(reference)
     }
+
+    fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
+        Some(self)
+    }
 }
+
+impl crate::traits::Timed for AveragingObject {
+    /// Binding restarts the sample schedule, so a pass for another clock's
+    /// sake leaves an unchanged monotonic clock alone.
+    fn bind_clocks(&mut self, clocks: &crate::traits::Clocks) {
+        let offered = clocks.monotonic.as_ref();
+        if !crate::traits::capabilities::same_handle(self.window.clock(), offered) {
+            self.window.bind_clock(clocks.monotonic.clone());
+        }
+    }
+
+    fn next_monotonic_deadline(&self) -> Option<Duration> {
+        // Only an object with a reference has anything for the server to read.
+        self.object_property_reference.as_ref()?;
+        self.window.next_due()
+    }
+}
+
+#[cfg(test)]
+mod rebind_tests;
 
 #[cfg(test)]
 mod sample_tests;

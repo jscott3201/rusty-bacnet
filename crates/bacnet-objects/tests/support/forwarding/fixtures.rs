@@ -11,7 +11,7 @@ use bacnet_objects::property_metadata::{
     PropertyConformance, PropertyMetadata, PropertyWriteCapability,
 };
 use bacnet_objects::schedule::ScheduleWrite;
-use bacnet_objects::traits::{DeadlineWaker, MonotonicClock};
+use bacnet_objects::traits::{Clocks, DeadlineWaker, MonotonicClock};
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier as P};
 use bacnet_types::error::Error;
@@ -65,6 +65,11 @@ static WAKER: LazyLock<Arc<DeadlineWaker>> = LazyLock::new(|| Arc::new(|| {}));
 
 pub fn waker() -> Arc<DeadlineWaker> {
     WAKER.clone()
+}
+
+/// The three clocks together, as a database lends them.
+pub fn clocks() -> Clocks {
+    Clocks::new(Some(clock()), Some(monotonic()), Some(waker()))
 }
 
 /// A capability or handle, rendered as the address it points at.

@@ -29,9 +29,6 @@ impl BACnetObject for AuditReporterObject {
     fn audit_reporter_authority_internal(&mut self) -> Option<AuditReporterAuthority<'_>> {
         Some(AuditReporterAuthority(self))
     }
-    fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
-        self.clock = clock;
-    }
 
     fn object_identifier(&self) -> ObjectIdentifier {
         self.oid
@@ -169,6 +166,16 @@ impl BACnetObject for AuditReporterObject {
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         crate::property_metadata::property_list_from_metadata(&self.property_metadata())
+    }
+
+    fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
+        Some(self)
+    }
+}
+
+impl crate::traits::Timed for AuditReporterObject {
+    fn bind_clocks(&mut self, clocks: &crate::traits::Clocks) {
+        self.clock = clocks.clock.clone();
     }
 }
 

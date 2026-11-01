@@ -107,7 +107,7 @@ These options go before or after the command. Each command also takes `-h` or `-
 | [`tui`](#bacnet-tui) | — | Open the full-screen terminal UI (read-only until W arms writes). Needs the `tui` feature. |
 | [`mcp`](#bacnet-mcp) | — | Serve an MCP server to an AI agent host (needs the `mcp` feature). |
 | [`mcp serve`](#bacnet-mcp-serve) | — | Serve MCP on stdin and stdout until the agent host closes them. Stdout carries only JSON-RPC; logs go to stderr. Needs the `mcp` feature. |
-| [`mcp connect`](#bacnet-mcp-connect) | — | Bridge stdin and stdout to the MCP socket of a TUI that has the profile open, so an agent shares its client (Unix only). Read-only. Needs the `mcp` feature. |
+| [`mcp connect`](#bacnet-mcp-connect) | — | Bridge stdin and stdout to the MCP socket (a named pipe on Windows) of a TUI that has the profile open, so an agent shares its client. Read-only. Needs the `mcp` feature. |
 | [`mcp authorize`](#bacnet-mcp-authorize) | — | Record, after showing what an agent may reach, that you authorize the MCP server on a profile. Needs a terminal. Needs the `mcp` feature. |
 | [`discover`](#bacnet-discover) | `whois` | Discover BACnet devices (WhoIs). |
 | [`find`](#bacnet-find) | `whohas` | Find objects by name (WhoHas). |
@@ -206,7 +206,7 @@ Options:
 
 ### bacnet mcp connect
 
-Bridge stdin and stdout to the MCP socket of a TUI that has the profile open, so an agent shares its client (Unix only). Read-only.
+Bridge stdin and stdout to the MCP socket (a named pipe on Windows) of a TUI that has the profile open, so an agent shares its client. Read-only.
 
 Needs the `mcp` feature.
 

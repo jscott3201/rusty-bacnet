@@ -3,7 +3,7 @@ use bacnet_objects::audit::{AuditLogQueryPage, AuditLogStorage};
 use bacnet_objects::clock::{ClockFrame, ClockReader};
 use bacnet_objects::event_enrollment::{EventEnrollmentEvalState, EventEnrollmentMonitoredSource};
 use bacnet_objects::property_metadata::PropertyMetadata;
-use bacnet_objects::traits::MonotonicClock;
+use bacnet_objects::traits::{Clocks, Timed};
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
 use bacnet_types::constructed::{BACnetAuditLogQueryParameters, BACnetObjectSelector};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
@@ -214,7 +214,6 @@ const CUSTOM_LIST: PropertyIdentifier = PropertyIdentifier::from_raw(5001);
 #[derive(Default)]
 struct Calls {
     clock_bindings: AtomicUsize,
-    monotonic_bindings: AtomicUsize,
     configurations: AtomicUsize,
 }
 
@@ -315,11 +314,8 @@ impl BACnetObject for ExtendedReporter {
     fn is_list_property(&self, p: PropertyIdentifier) -> bool {
         p == CUSTOM_LIST || self.reporter.is_list_property(p)
     }
-    fn bind_clock_internal(&mut self, _: Option<Arc<dyn ClockReader>>) {
-        self.calls.clock_bindings.fetch_add(1, Ordering::SeqCst);
-    }
-    fn bind_monotonic_clock_internal(&mut self, _: Option<Arc<MonotonicClock>>) {
-        self.calls.monotonic_bindings.fetch_add(1, Ordering::SeqCst);
+    fn timed(&mut self) -> Option<&mut dyn Timed> {
+        Some(self)
     }
     fn enrollment_eval_state_internal(&self) -> Option<EventEnrollmentEvalState> {
         Some(self.eval.clone())
@@ -343,6 +339,12 @@ impl BACnetObject for ExtendedReporter {
     }
     fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {
         Some(self)
+    }
+}
+
+impl Timed for ExtendedReporter {
+    fn bind_clocks(&mut self, _: &Clocks) {
+        self.calls.clock_bindings.fetch_add(1, Ordering::SeqCst);
     }
 }
 
@@ -384,7 +386,7 @@ async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
     }))
     .unwrap();
     db.set_clock_reader(Some(calls.clone()));
-    db.set_monotonic_clock_internal(Some(Arc::new(|| Duration::from_secs(99))));
+    db.set_monotonic_clock(Some(Arc::new(|| Duration::from_secs(99))));
     db.set_enrollment_eval_state_invalidated(selected(), true);
     db.set_enrollment_eval_source(selected(), Some(monitored));
     let mut objects = db.list_objects();
@@ -392,7 +394,6 @@ async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
     let mut reporters = db.find_by_type(ObjectType::AUDIT_REPORTER);
     reporters.sort_by_key(|oid| oid.instance_number());
     let clock_binds = calls.clock_bindings.load(Ordering::SeqCst);
-    let monotonic_binds = calls.monotonic_bindings.load(Ordering::SeqCst);
     let capability = std::ptr::from_ref(
         db.get(&selected())
             .unwrap()
@@ -432,10 +433,6 @@ async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
         assert!(db.enrollment_eval_state_invalidated(&selected()));
         assert_eq!(db.enrollment_eval_source(&selected()), Some(monitored));
         assert_eq!(calls.clock_bindings.load(Ordering::SeqCst), clock_binds);
-        assert_eq!(
-            calls.monotonic_bindings.load(Ordering::SeqCst),
-            monotonic_binds
-        );
         let object = db.get_mut(&selected()).unwrap();
         assert!(std::ptr::eq(
             capability,

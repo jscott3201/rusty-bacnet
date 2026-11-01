@@ -175,6 +175,11 @@ impl SampleWindow {
         self.schedule.bind(clock, period);
     }
 
+    /// The bound monotonic clock, if any.
+    pub(super) fn clock(&self) -> Option<&Arc<MonotonicClock>> {
+        self.schedule.clock()
+    }
+
     /// When the next scheduled sample is due, once a clock is bound.
     pub(super) fn next_due(&self) -> Option<Duration> {
         self.schedule.next_due()

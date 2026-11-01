@@ -57,6 +57,10 @@ impl SampleSchedule {
             .map(|clock| clock().saturating_add(period));
     }
 
+    pub(super) fn clock(&self) -> Option<&Arc<MonotonicClock>> {
+        self.clock.as_ref()
+    }
+
     pub(super) fn next_due(&self) -> Option<Duration> {
         self.next_due
     }

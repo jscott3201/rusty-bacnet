@@ -9,6 +9,7 @@
 //! Device member, and they give the same answers through the same
 //! single-reference decoder (#1395).
 
+use crate::traits::Timed;
 use bacnet_types::error::RemoteError;
 use std::sync::Arc;
 
@@ -136,7 +137,10 @@ fn averaging() -> Box<dyn BACnetObject> {
 
 fn trend_log() -> Box<dyn BACnetObject> {
     let mut log = TrendLogObject::new(1, "TL-1", 8).unwrap();
-    log.bind_clock_internal(Some(Arc::new(FixedClock)));
+    log.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(FixedClock)),
+        ..crate::traits::Clocks::default()
+    });
     Box::new(log)
 }
 
@@ -147,7 +151,10 @@ fn trend_log_multiple() -> Box<dyn BACnetObject> {
         P::PRESENT_VALUE.to_raw(),
     ))
     .unwrap();
-    log.bind_clock_internal(Some(Arc::new(FixedClock)));
+    log.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(FixedClock)),
+        ..crate::traits::Clocks::default()
+    });
     Box::new(log)
 }
 

@@ -1,5 +1,6 @@
 //! Audit Log commits off the database lock (#1270).
 
+use crate::traits::Timed;
 use std::future::Future;
 use std::pin::pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -133,7 +134,10 @@ pub(super) fn receipt(key: &[u8]) -> CompletedAuditReceipt {
 pub(super) fn log() -> (AuditLogObject, Arc<SlowPersistence>) {
     let storage = Arc::new(SlowPersistence::default());
     let mut log = AuditLogObject::new(1, "audit", 10, storage.clone()).unwrap();
-    log.bind_clock_internal(Some(Arc::new(FixedClock)));
+    log.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(FixedClock)),
+        ..crate::traits::Clocks::default()
+    });
     (log, storage)
 }
 
@@ -395,7 +399,10 @@ fn a_staged_log_enable_write_its_request_dropped_leaves_storage_with_the_served_
     // A reload serves what the log served, and the next commit follows on.
     drop(log);
     let mut reopened = AuditLogObject::new(1, "audit", 10, storage.clone()).unwrap();
-    reopened.bind_clock_internal(Some(Arc::new(FixedClock)));
+    reopened.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(FixedClock)),
+        ..crate::traits::Clocks::default()
+    });
     assert!(reopened.log_enable());
     assert_eq!(reopened.generation(), generation + 1);
     reopened
@@ -415,7 +422,7 @@ fn a_finished_batch_its_request_forgot_lands_from_the_operation_task() {
     let batch = staged(log.stage_notification_batch(&[notification(1)], 3_000, None));
     block_on(batch.saved());
     assert!(log.records().is_empty());
-    log.advance_monotonic_time_internal(Duration::ZERO);
+    log.advance_monotonic_time(Duration::ZERO);
     assert_eq!(log.records().len(), 1);
     // A request that comes back late still gets its outcome.
     assert_eq!(

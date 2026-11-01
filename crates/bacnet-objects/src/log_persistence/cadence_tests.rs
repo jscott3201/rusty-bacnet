@@ -2,6 +2,7 @@
 //! after its interval when the state changed, and once more at stop or drop.
 //! Time is the hand-set monotonic `now` the server's pass would give.
 
+use crate::traits::Timed;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,7 +23,10 @@ fn trend_log(cadence: LogCommitCadence) -> (TrendLogObject, Arc<MemoryLog<BACnet
     let storage = MemoryLog::new();
     let mut log = TrendLogObject::with_persistence(1, "TL-1", 500, storage.clone()).unwrap();
     log.set_commit_cadence(cadence);
-    log.bind_clock_internal(Some(HandClock::at(10)));
+    log.bind_clocks(&crate::traits::Clocks {
+        clock: Some(HandClock::at(10)),
+        ..crate::traits::Clocks::default()
+    });
     (log, storage)
 }
 
@@ -69,19 +73,19 @@ fn the_interval_commits_a_changed_log_and_skips_an_unchanged_one() {
         interval: 60 * SECOND,
     });
     // The first look starts the interval.
-    log.advance_monotonic_time_internal(Duration::ZERO);
+    log.advance_monotonic_time(Duration::ZERO);
     log.add_record(trend_record(1)).unwrap();
-    log.advance_monotonic_time_internal(59 * SECOND);
+    log.advance_monotonic_time(59 * SECOND);
     settled(&mut log);
     assert_eq!(storage.commits(), 0);
-    log.advance_monotonic_time_internal(60 * SECOND);
+    log.advance_monotonic_time(60 * SECOND);
     settled(&mut log);
     assert_eq!(storage.commits(), 1);
     assert_eq!(stored_total(&storage), Some(1));
 
     // Nothing changed: no commit however long it waits.
     for seconds in [61, 125, 300] {
-        log.advance_monotonic_time_internal(seconds * SECOND);
+        log.advance_monotonic_time(seconds * SECOND);
     }
     settled(&mut log);
     assert_eq!(storage.commits(), 1);
@@ -90,7 +94,7 @@ fn the_interval_commits_a_changed_log_and_skips_an_unchanged_one() {
     // a setting is a change too.
     log.write_property(P::LOG_INTERVAL, None, PropertyValue::Unsigned(500), None)
         .unwrap();
-    log.advance_monotonic_time_internal(301 * SECOND);
+    log.advance_monotonic_time(301 * SECOND);
     settled(&mut log);
     assert_eq!(storage.commits(), 2);
     assert_eq!(
@@ -113,19 +117,19 @@ fn a_count_commit_restarts_the_interval() {
         records: 2,
         interval: 60 * SECOND,
     });
-    log.advance_monotonic_time_internal(Duration::ZERO);
+    log.advance_monotonic_time(Duration::ZERO);
     log.add_record(trend_record(1)).unwrap();
-    log.advance_monotonic_time_internal(50 * SECOND);
+    log.advance_monotonic_time(50 * SECOND);
     log.add_record(trend_record(2)).unwrap();
     settled(&mut log);
     assert_eq!(storage.commits(), 1);
     // The next look, at 55 s, restarts the interval there.
-    log.advance_monotonic_time_internal(55 * SECOND);
+    log.advance_monotonic_time(55 * SECOND);
     log.add_record(trend_record(3)).unwrap();
-    log.advance_monotonic_time_internal(110 * SECOND);
+    log.advance_monotonic_time(110 * SECOND);
     settled(&mut log);
     assert_eq!(storage.commits(), 1);
-    log.advance_monotonic_time_internal(115 * SECOND);
+    log.advance_monotonic_time(115 * SECOND);
     settled(&mut log);
     assert_eq!(storage.commits(), 2);
     assert_eq!(stored_total(&storage), Some(3));
@@ -136,7 +140,7 @@ fn stop_commits_once_more_and_waits_for_it() {
     let (mut log, storage) = trend_log(LogCommitCadence::default());
     log.add_record(trend_record(1)).unwrap();
     let wait = log
-        .durable_writes_internal()
+        .durable_writes()
         .expect("a durable log settles at stop")
         .settle_forgotten_writes()
         .expect("a wait for its commit");
@@ -144,7 +148,7 @@ fn stop_commits_once_more_and_waits_for_it() {
     assert_eq!(storage.commits(), 1);
     assert_eq!(stored_total(&storage), Some(1));
     // Nothing changed since: the next stop, or the drop, commits nothing.
-    log.durable_writes_internal()
+    log.durable_writes()
         .unwrap()
         .settle_forgotten_writes()
         .unwrap()
@@ -176,8 +180,8 @@ fn a_log_without_storage_commits_nothing_and_settles_nothing() {
         &mut event,
         &mut multiple,
     ] {
-        assert!(log.durable_writes_internal().is_none());
-        assert!(!log.advance_monotonic_time_internal(1000 * SECOND));
+        assert!(log.durable_writes().is_none());
+        assert!(!log.timed().unwrap().advance_monotonic_time(1000 * SECOND));
     }
     assert_eq!(trend.commit_cadence(), None);
     trend.set_commit_cadence(LogCommitCadence::default());
@@ -190,28 +194,28 @@ fn a_failed_commit_is_retried_at_the_next_interval_pass_without_a_new_change() {
         records: 0,
         interval: 60 * SECOND,
     });
-    log.advance_monotonic_time_internal(Duration::ZERO);
+    log.advance_monotonic_time(Duration::ZERO);
     log.add_record(trend_record(1)).unwrap();
     storage
         .fail_next
         .store(true, std::sync::atomic::Ordering::SeqCst);
-    log.advance_monotonic_time_internal(60 * SECOND);
+    log.advance_monotonic_time(60 * SECOND);
     settled(&mut log);
     assert_eq!(storage.commits(), 0);
     assert_eq!(stored_total(&storage), None);
     // The look after the failed commit restarts the interval; nothing has
     // changed since, but the state never landed, so the next pass commits.
-    log.advance_monotonic_time_internal(61 * SECOND);
-    log.advance_monotonic_time_internal(120 * SECOND);
+    log.advance_monotonic_time(61 * SECOND);
+    log.advance_monotonic_time(120 * SECOND);
     settled(&mut log);
     assert_eq!(storage.commits(), 0);
-    log.advance_monotonic_time_internal(121 * SECOND);
+    log.advance_monotonic_time(121 * SECOND);
     settled(&mut log);
     assert_eq!(storage.commits(), 1);
     assert_eq!(stored_total(&storage), Some(1));
     // Landed: no further commit without a change.
-    log.advance_monotonic_time_internal(122 * SECOND);
-    log.advance_monotonic_time_internal(300 * SECOND);
+    log.advance_monotonic_time(122 * SECOND);
+    log.advance_monotonic_time(300 * SECOND);
     settled(&mut log);
     assert_eq!(storage.commits(), 1);
 }
@@ -228,7 +232,7 @@ fn stop_retries_a_failed_commit_even_with_no_new_change() {
     log.add_record(trend_record(1)).unwrap();
     settled(&mut log);
     assert_eq!(storage.commits(), 0);
-    log.durable_writes_internal()
+    log.durable_writes()
         .unwrap()
         .settle_forgotten_writes()
         .unwrap()

@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::clock::{ClockFrame, ClockReader};
+use crate::traits::Timed;
 use bacnet_types::error::RemoteError;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -359,10 +360,13 @@ fn resize_noop_is_clock_and_metadata_neutral_but_actual_change_samples_once() {
     let mut file = stream_file(&[1, 2, 3]);
     file.set_modification_date(old.local_date, old.local_time);
     file.set_archive(true);
-    file.bind_clock_internal(Some(Arc::new(CountingClock {
-        frame: changed,
-        reads: reads.clone(),
-    })));
+    file.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(CountingClock {
+            frame: changed,
+            reads: reads.clone(),
+        })),
+        ..crate::traits::Clocks::default()
+    });
 
     let expected = state(&file);
     write_resize(
@@ -397,10 +401,13 @@ fn empty_record_growth_is_a_metadata_change_even_when_file_size_is_unchanged() {
     let mut file = record_file(vec![vec![], vec![]]);
     file.set_modification_date(old.local_date, old.local_time);
     file.set_archive(true);
-    file.bind_clock_internal(Some(Arc::new(CountingClock {
-        frame: changed,
-        reads: reads.clone(),
-    })));
+    file.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(CountingClock {
+            frame: changed,
+            reads: reads.clone(),
+        })),
+        ..crate::traits::Clocks::default()
+    });
 
     write_resize(
         &mut file,

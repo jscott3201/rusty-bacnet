@@ -1,14 +1,16 @@
-//! `bacnet mcp connect` as an agent host launches it (#2185): its stdin
-//! and stdout bridged to the socket a TUI listens on in the profile's
-//! workspace. Here the listener runs in the test, on a lab device's
-//! engine, as the TUI runs it; stdout carries only the server's JSON-RPC.
-#![cfg(all(unix, feature = "mcp"))]
+//! `bacnet mcp connect` as an agent host launches it (#2185, #2201): its
+//! stdin and stdout bridged to the socket a TUI listens on in the
+//! profile's workspace (on Windows, the named pipe named after it). Here
+//! the listener runs in the test, on a lab device's engine, as the TUI
+//! runs it; stdout carries only the server's JSON-RPC.
+#![cfg(feature = "mcp")]
 
 #[allow(dead_code)] // Other integration tests use the rest.
 #[path = "support/lab.rs"]
 mod lab;
 
 use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -42,6 +44,7 @@ fn config() -> tempfile::TempDir {
     std::fs::write(root.path().join("profiles/site.toml"), "version = 1\n").unwrap();
     let workspace = root.path().join("workspaces/site");
     std::fs::create_dir_all(&workspace).unwrap();
+    #[cfg(unix)]
     std::fs::set_permissions(&workspace, std::fs::Permissions::from_mode(0o700)).unwrap();
     root
 }

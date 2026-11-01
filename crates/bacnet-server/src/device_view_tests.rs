@@ -14,7 +14,7 @@ use bacnet_types::error::RemoteError;
 mod forwarding;
 
 use forwarding::probe::{CallLog, Probe, take};
-use forwarding::rows::QUERIES;
+use forwarding::rows::queries;
 
 /// The calls the view handed on, less the identity reads it makes to tell a
 /// Device apart.
@@ -38,7 +38,7 @@ fn the_view_forwards_every_read_query() {
     let log = CallLog::default();
     let probe = Probe::new(ObjectType::ANALOG_VALUE, log.clone());
     let view = context.object(&probe);
-    for (name, query) in QUERIES {
+    for (name, query) in queries() {
         let expected = (query(&probe), forwarded(&log));
         let answered = (query(&view), forwarded(&log));
         assert_eq!(answered, expected, "{name}: the view must forward it");
@@ -49,27 +49,21 @@ fn the_view_forwards_every_read_query() {
 fn a_device_keeps_its_owned_answers_and_forwards_every_other_query() {
     // The rows the view answers itself for a Device, to serve the
     // executor-owned properties and keep them out of any frozen copy.
-    const OWNED: [&str; 4] = [
-        "property_metadata",
-        "property_list",
-        "required_properties",
-        "cov_snapshot_internal",
-    ];
+    const OWNED: [&str; 3] = ["property_metadata", "property_list", "required_properties"];
     let db = ObjectDatabase::new();
     let context = DeviceReadContext::new(&db, DeviceExecution::FullServer);
     let log = CallLog::default();
     let probe = Probe::new(ObjectType::DEVICE, log.clone());
     let view = context.object(&probe);
-    for (name, query) in QUERIES {
+    for (name, query) in queries() {
         let expected = (query(&probe), forwarded(&log));
         let answered = (query(&view), forwarded(&log));
-        if OWNED.contains(name) {
+        if OWNED.contains(&name) {
             assert_ne!(answered.0, expected.0, "{name}: the view answers it");
         } else {
             assert_eq!(answered, expected, "{name}: the view must forward it");
         }
     }
-    assert_eq!(view.cov_snapshot_internal().map(|_| ()), None);
     assert!(
         view.property_list()
             .contains(&P::PROTOCOL_SERVICES_SUPPORTED)

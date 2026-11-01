@@ -374,8 +374,14 @@ impl BACnetObject for AccessCredentialObject {
         crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
-    fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
-        self.clock = clock;
+    fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
+        Some(self)
+    }
+}
+
+impl crate::traits::Timed for AccessCredentialObject {
+    fn bind_clocks(&mut self, clocks: &crate::traits::Clocks) {
+        self.clock = clocks.clock.clone();
     }
 }
 

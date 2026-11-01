@@ -1,7 +1,8 @@
 //! One row per `BACnetObject` method: a call with fixed arguments, and its
 //! answer rendered as text. Capabilities render as the address they borrow.
 
-use super::fixtures::{address, clock, day, monotonic, noon, oid, schedule_write, waker};
+use super::capabilities::CAPABILITY_ROWS;
+use super::fixtures::{address, day, noon, oid, schedule_write};
 use super::probe::{CUSTOM, CUSTOM_LIST};
 use bacnet_objects::access_control::{AccessControlInput, AccessEventReport, DoorStateReport};
 use bacnet_objects::accumulator::InputReading;
@@ -46,7 +47,7 @@ impl Row {
     }
 }
 
-/// Every row, the queries first.
+/// Every row, the queries first, then the capability rows.
 pub fn rows() -> impl Iterator<Item = (&'static str, Row)> {
     let queries = QUERIES
         .iter()
@@ -54,7 +55,20 @@ pub fn rows() -> impl Iterator<Item = (&'static str, Row)> {
     let commands = COMMANDS
         .iter()
         .map(|&(name, command)| (name, Row::Command(command)));
-    queries.chain(commands)
+    let capabilities = CAPABILITY_ROWS.iter().copied();
+    queries.chain(commands).chain(capabilities)
+}
+
+/// Every row a read-only view can run: the `&self` queries, and the rows of
+/// capability methods it reaches through an accessor that takes `&self`.
+/// DeviceReadView's tests run these; SourceReporter's run every row.
+#[allow(dead_code)]
+pub fn queries() -> impl Iterator<Item = (&'static str, Query)> {
+    let capabilities = CAPABILITY_ROWS.iter().filter_map(|&(name, row)| match row {
+        Row::Query(query) => Some((name, query)),
+        Row::Command(_) => None,
+    });
+    QUERIES.iter().copied().chain(capabilities)
 }
 
 fn commit() -> EventTransitionCommit {
@@ -123,19 +137,6 @@ pub const QUERIES: &[(&str, Query)] = &[
         format!("{:?}", o.property_metadata())
     }),
     ("property_list", |o| format!("{:?}", o.property_list())),
-    ("next_monotonic_deadline_internal", |o| {
-        format!("{:?}", o.next_monotonic_deadline_internal())
-    }),
-    ("cov_snapshot_internal", |o| {
-        format!(
-            "{:?}",
-            o.cov_snapshot_internal()
-                .map(|snapshot| snapshot.object_name().to_owned())
-        )
-    }),
-    ("lighting_blink_count_internal", |o| {
-        o.lighting_blink_count_internal().to_string()
-    }),
     ("is_writable_property", |o| {
         format!(
             "{:?}",
@@ -313,27 +314,8 @@ pub const COMMANDS: &[(&str, Command)] = &[
         let value = PropertyValue::CharacterString("probe".into());
         format!("{:?}", o.initialize_property(CUSTOM, value))
     }),
-    ("bind_clock_internal", |o| {
-        format!("{:?}", o.bind_clock_internal(Some(clock())))
-    }),
-    ("advance_time_internal", |o| {
-        o.advance_time_internal(Duration::from_secs(5)).to_string()
-    }),
-    ("bind_monotonic_clock_internal", |o| {
-        format!("{:?}", o.bind_monotonic_clock_internal(Some(monotonic())))
-    }),
-    ("bind_deadline_waker_internal", |o| {
-        format!("{:?}", o.bind_deadline_waker_internal(Some(waker())))
-    }),
-    ("start_output_internal", |o| {
-        format!("{:?}", o.start_output_internal())
-    }),
-    ("advance_monotonic_time_internal", |o| {
-        o.advance_monotonic_time_internal(Duration::from_secs(33))
-            .to_string()
-    }),
-    ("set_tracking_cov_increment_internal", |o| {
-        format!("{:?}", o.set_tracking_cov_increment_internal(Some(0.25)))
+    ("timed", |o| {
+        format!("{:?}", o.timed().map(|timed| address(timed)))
     }),
     ("take_staging_write_plan_internal", |o| {
         format!("{:?}", o.take_staging_write_plan_internal())
@@ -556,11 +538,8 @@ pub const COMMANDS: &[(&str, Command)] = &[
                 .map(|sink| address(sink))
         )
     }),
-    ("durable_writes_internal", |o| {
-        format!(
-            "{:?}",
-            o.durable_writes_internal().map(|writes| address(writes))
-        )
+    ("durable_writes", |o| {
+        format!("{:?}", o.durable_writes().map(|writes| address(writes)))
     }),
     ("file_configuration_internal_mut", |o| {
         format!(

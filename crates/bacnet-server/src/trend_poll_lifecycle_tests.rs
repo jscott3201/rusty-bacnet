@@ -115,8 +115,8 @@ impl BACnetObject for GateTrend {
     ) -> Result<(), Error> {
         self.object.write_property(p, i, v, priority)
     }
-    fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
-        self.object.bind_clock_internal(clock);
+    fn timed(&mut self) -> Option<&mut dyn bacnet_objects::traits::Timed> {
+        self.object.timed()
     }
     fn add_trend_record(
         &mut self,

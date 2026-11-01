@@ -420,10 +420,6 @@ impl BACnetObject for PulseConverterObject {
         Some(f64::from(self.cov_increment))
     }
 
-    fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
-        self.clock = clock;
-    }
-
     fn input_reference_internal(&self) -> Option<Option<&BACnetObjectPropertyReference>> {
         Some(self.input_reference.as_ref())
     }
@@ -460,6 +456,16 @@ impl BACnetObject for PulseConverterObject {
         }
         self.add_pulses(u64::try_from(pulses).unwrap_or(u64::MAX))
             .is_ok()
+    }
+
+    fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
+        Some(self)
+    }
+}
+
+impl crate::traits::Timed for PulseConverterObject {
+    fn bind_clocks(&mut self, clocks: &crate::traits::Clocks) {
+        self.clock = clocks.clock.clone();
     }
 }
 

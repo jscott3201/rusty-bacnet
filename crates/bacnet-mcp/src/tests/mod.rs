@@ -1,13 +1,15 @@
 //! The server driven over a pipe, as an agent host drives it on stdio,
 //! against an in-process lab device on a loopback link.
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod attach;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod attach_more;
-#[cfg(unix)]
+#[cfg(windows)]
+mod attach_pipe;
+#[cfg(any(unix, windows))]
 mod attach_runtime;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod attach_shared;
 mod bbmd;
 mod budget;
@@ -145,7 +147,7 @@ impl TransportPort for Recording {
         self.inner.stop().await
     }
     async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         attach_runtime::panic_if_armed();
         self.sent
             .lock()

@@ -1,6 +1,7 @@
 //! The access events an Access Point records on its Out_Of_Service edges
 //! (Clauses 12.31.8 and 12.31.27 to 12.31.30, #1248, #1284).
 
+use crate::traits::Timed;
 use std::sync::Arc;
 
 use bacnet_types::enums::{ErrorCode, PropertyIdentifier as P};
@@ -28,7 +29,10 @@ pub(super) const NO_CREDENTIAL: [u8; 5] = [0x1C, 0x08, 0x3F, 0xFF, 0xFF];
 fn point() -> AccessPointObject {
     let mut point = AccessPointObject::new(1, "AP-1").unwrap();
     granted_at(&mut point, 7);
-    point.bind_clock_internal(Some(Arc::new(FixedClock(11))));
+    point.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(FixedClock(11))),
+        ..crate::traits::Clocks::default()
+    });
     point
 }
 
@@ -104,7 +108,10 @@ fn access_point_entering_out_of_service_records_out_of_service() {
 fn access_point_return_to_service_records_out_of_service_relinquished() {
     let mut point = point();
     write_out_of_service(&mut point, PropertyValue::Boolean(true)).unwrap();
-    point.bind_clock_internal(Some(Arc::new(FixedClock(12))));
+    point.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(FixedClock(12))),
+        ..crate::traits::Clocks::default()
+    });
     write_out_of_service(&mut point, PropertyValue::Boolean(false)).unwrap();
     assert_eq!(
         served(&point),
@@ -117,7 +124,10 @@ fn access_point_return_to_service_records_out_of_service_relinquished() {
     );
 
     // A second period out of service records a pair of its own.
-    point.bind_clock_internal(Some(Arc::new(FixedClock(13))));
+    point.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(FixedClock(13))),
+        ..crate::traits::Clocks::default()
+    });
     write_out_of_service(&mut point, PropertyValue::Boolean(true)).unwrap();
     assert_eq!(
         served(&point),
@@ -140,7 +150,10 @@ fn access_point_writes_that_keep_out_of_service_record_nothing() {
     // TRUE again while out of service records nothing more either.
     write_out_of_service(&mut point, PropertyValue::Boolean(true)).unwrap();
     let entered = served(&point);
-    point.bind_clock_internal(Some(Arc::new(FixedClock(12))));
+    point.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(FixedClock(12))),
+        ..crate::traits::Clocks::default()
+    });
     write_out_of_service(&mut point, PropertyValue::Boolean(true)).unwrap();
     write_out_of_service(&mut point, PropertyValue::Null).unwrap();
     assert_eq!(served(&point), entered);
@@ -149,7 +162,10 @@ fn access_point_writes_that_keep_out_of_service_record_nothing() {
 #[test]
 fn access_point_out_of_service_event_without_a_clock_counts_sequence_numbers() {
     let mut point = point();
-    point.bind_clock_internal(None);
+    point.bind_clocks(&crate::traits::Clocks {
+        clock: None,
+        ..crate::traits::Clocks::default()
+    });
     // The time served is a date and time, so the count starts at 1.
     write_out_of_service(&mut point, PropertyValue::Boolean(true)).unwrap();
     assert_eq!(
@@ -171,7 +187,10 @@ fn access_point_out_of_service_event_without_a_clock_counts_sequence_numbers() {
 #[test]
 fn access_point_sequence_number_wraps_back_to_one() {
     let mut point = point();
-    point.bind_clock_internal(None);
+    point.bind_clocks(&crate::traits::Clocks {
+        clock: None,
+        ..crate::traits::Clocks::default()
+    });
     // The count follows the sequence number served, whatever the tag, and
     // wraps from 65535 to 1, never the 0 of no update yet.
     point
@@ -215,7 +234,10 @@ fn access_point_events_of_one_transaction_each_move_the_time() {
         times
     };
     let mut clockless = point();
-    clockless.bind_clock_internal(None);
+    clockless.bind_clocks(&crate::traits::Clocks {
+        clock: None,
+        ..crate::traits::Clocks::default()
+    });
     assert_eq!(read_then_grant(&mut clockless), [sequence(1), sequence(2)]);
 
     // With a clock, the second event in the same hundredth is stamped one
@@ -228,7 +250,10 @@ fn access_point_events_of_one_transaction_each_move_the_time() {
     };
     assert_eq!(read_then_grant(&mut clocked), [stamped(11), later(1)]);
     // A clock set back is no reason to go back either.
-    clocked.bind_clock_internal(Some(Arc::new(FixedClock(10))));
+    clocked.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(FixedClock(10))),
+        ..crate::traits::Clocks::default()
+    });
     clocked
         .set_access_event(AccessEventReport::new(AccessEvent::GRANTED, 21))
         .unwrap();

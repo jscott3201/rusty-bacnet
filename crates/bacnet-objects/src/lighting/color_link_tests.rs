@@ -208,7 +208,7 @@ fn linked_database() -> (ObjectDatabase, Arc<Mutex<Duration>>) {
     let mut db = ObjectDatabase::new();
     let now = Arc::new(Mutex::new(Duration::ZERO));
     let source = Arc::clone(&now);
-    db.set_monotonic_clock_internal(Some(Arc::new(move || *source.lock().unwrap())));
+    db.set_monotonic_clock(Some(Arc::new(move || *source.lock().unwrap())));
     for object in outputs(Some(overridable())) {
         db.add(object).unwrap();
     }
@@ -295,7 +295,7 @@ fn lighting_color_is_none_while_the_companion_is_undriven() {
     assert_eq!(db.lighting_color(&lo), None);
     // The start drives COLOR 1 to its D65 default; CT 2's zero default with
     // nothing to keep leaves it undriven, so the override shows nothing.
-    db.for_each_object_mut(|_, object| object.start_output_internal());
+    db.start_outputs();
     assert_eq!(
         db.lighting_color(&lo),
         Some(LightingColor {

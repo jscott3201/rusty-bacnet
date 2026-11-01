@@ -150,8 +150,8 @@ impl Wire {
     /// Timer_State, Last_State_Change and the armed deadline, as the
     /// object holds them: a deadline only the task's pass clears.
     async fn state(&self, instance: u32) -> (PropertyValue, PropertyValue, Option<Duration>) {
-        let db = self.server.database().read().await;
-        let timer = db.get(&timer_oid(instance)).unwrap();
+        let mut db = self.server.database().write().await;
+        let timer = db.get_mut(&timer_oid(instance)).unwrap();
         (
             timer
                 .read_property(PropertyIdentifier::TIMER_STATE, None)
@@ -159,7 +159,7 @@ impl Wire {
             timer
                 .read_property(PropertyIdentifier::LAST_STATE_CHANGE, None)
                 .unwrap(),
-            timer.next_monotonic_deadline_internal(),
+            timer.timed().unwrap().next_monotonic_deadline(),
         )
     }
 
