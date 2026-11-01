@@ -22,7 +22,7 @@ use core::sync::atomic::Ordering;
 use crate::sync::AtomicU64;
 
 use crate::common::{self, read_common_properties};
-use crate::traits::BACnetObject;
+use crate::traits::{BACnetObject, CommandRunner};
 
 mod metadata;
 
@@ -310,20 +310,25 @@ impl BACnetObject for CommandObject {
         true
     }
 
-    fn take_command_run_internal(&mut self) -> Option<CommandRun> {
+    fn command_runner(&self) -> Option<&dyn CommandRunner> {
+        Some(self)
+    }
+
+    fn command_runner_mut(&mut self) -> Option<&mut dyn CommandRunner> {
+        Some(self)
+    }
+}
+
+impl CommandRunner for CommandObject {
+    fn take_command_run(&mut self) -> Option<CommandRun> {
         self.pending_run.take()
     }
 
-    fn command_generation_internal(&self) -> Option<u64> {
-        Some(self.generation)
+    fn command_generation(&self) -> u64 {
+        self.generation
     }
 
-    fn record_command_write_internal(
-        &mut self,
-        generation: u64,
-        command: usize,
-        success: bool,
-    ) -> bool {
+    fn record_command_write(&mut self, generation: u64, command: usize, success: bool) -> bool {
         if generation != self.generation || !self.in_process {
             return false;
         }
@@ -344,11 +349,7 @@ impl BACnetObject for CommandObject {
         true
     }
 
-    fn complete_command_run_internal(
-        &mut self,
-        generation: u64,
-        outcome: Result<(), WriteFailure>,
-    ) -> bool {
+    fn complete_command_run(&mut self, generation: u64, outcome: Result<(), WriteFailure>) -> bool {
         if generation != self.generation || !self.in_process {
             return false;
         }

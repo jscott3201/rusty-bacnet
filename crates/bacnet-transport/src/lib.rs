@@ -79,6 +79,15 @@ pub mod mstp_serial;
 mod npdu_channel;
 pub mod port;
 mod port_ownership;
+/// Reruns a test whose reserved port another process takes (#2225).
+#[cfg(test)]
+// Only the loopback multicast tests rerun, and they run on Linux and macOS.
+#[cfg_attr(
+    not(any(target_os = "linux", target_vendor = "apple")),
+    allow(dead_code)
+)]
+#[path = "../../bacnet-endpoint/tests/support/port_retry.rs"]
+mod port_retry;
 mod principal;
 mod runtime_clock;
 pub mod sc;

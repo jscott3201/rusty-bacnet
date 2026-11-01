@@ -26,8 +26,8 @@ fn distribute(channel: &mut ChannelObject, outcome: Result<(), WriteFailure>) {
     channel
         .write_property(P::PRESENT_VALUE, None, PropertyValue::Real(1.0), None)
         .unwrap();
-    let run = channel.take_command_run_internal().unwrap();
-    assert!(channel.complete_command_run_internal(run.generation, outcome));
+    let run = channel.take_command_run().unwrap();
+    assert!(channel.complete_command_run(run.generation, outcome));
 }
 
 fn set_out_of_service(channel: &mut ChannelObject, value: bool) {
@@ -68,9 +68,9 @@ fn channel_reliability_names_the_failure_and_clears_on_the_next_success() {
         channel
             .write_property(P::PRESENT_VALUE, None, PropertyValue::Real(2.0), None)
             .unwrap();
-        let run = channel.take_command_run_internal().unwrap();
+        let run = channel.take_command_run().unwrap();
         assert_eq!(reliability(&channel), expected);
-        assert!(channel.complete_command_run_internal(run.generation, Ok(())));
+        assert!(channel.complete_command_run(run.generation, Ok(())));
         assert_eq!(reliability(&channel), Reliability::NO_FAULT_DETECTED);
         assert!(!fault(&channel));
     }
@@ -79,12 +79,9 @@ fn channel_reliability_names_the_failure_and_clears_on_the_next_success() {
     channel
         .write_property(P::PRESENT_VALUE, None, PropertyValue::Real(3.0), None)
         .unwrap();
-    let run = channel.take_command_run_internal().unwrap();
+    let run = channel.take_command_run().unwrap();
     assert!(
-        !channel.complete_command_run_internal(
-            run.generation.wrapping_add(1),
-            Err(WriteFailure::Process)
-        )
+        !channel.complete_command_run(run.generation.wrapping_add(1), Err(WriteFailure::Process))
     );
     assert_eq!(reliability(&channel), Reliability::NO_FAULT_DETECTED);
 }
@@ -116,10 +113,10 @@ fn channel_reliability_is_simulated_out_of_service_and_restored_in_service() {
     channel
         .write_property(P::PRESENT_VALUE, None, PropertyValue::Real(2.0), None)
         .unwrap();
-    let run = channel.take_command_run_internal().unwrap();
+    let run = channel.take_command_run().unwrap();
     set_out_of_service(&mut channel, true);
     assert_eq!(reliability(&channel), Reliability::CONFIGURATION_ERROR);
-    assert!(channel.complete_command_run_internal(run.generation, Ok(())));
+    assert!(channel.complete_command_run(run.generation, Ok(())));
     assert_eq!(reliability(&channel), Reliability::CONFIGURATION_ERROR);
 
     simulate(&mut channel, Reliability::NO_FAULT_DETECTED).unwrap();
@@ -157,7 +154,7 @@ fn channel_takes_members_in_other_devices() {
     channel
         .write_property(P::PRESENT_VALUE, None, PropertyValue::Real(1.0), None)
         .unwrap();
-    let run = channel.take_command_run_internal().unwrap();
+    let run = channel.take_command_run().unwrap();
     let RunPlan::Channel(distribution) = &run.plan else {
         panic!("a Channel queues a distribution");
     };

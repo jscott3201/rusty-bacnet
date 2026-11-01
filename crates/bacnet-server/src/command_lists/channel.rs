@@ -174,7 +174,8 @@ pub(super) async fn distribute<H: RunHost>(
 /// Whether `run` is still its object's current run.
 fn current(db: &ObjectDatabase, run: &CommandRun) -> bool {
     db.get(&run.source)
-        .and_then(|object| object.command_generation_internal())
+        .and_then(|object| object.command_runner())
+        .map(|runner| runner.command_generation())
         == Some(run.generation)
 }
 
@@ -294,8 +295,11 @@ async fn remember<H: RunHost>(
     datatype: Option<MemberDatatype>,
 ) {
     let mut db = host.database().write().await;
-    if let Some(channel) = db.get_mut(&run.source) {
-        channel.remember_member_datatype_internal(member.slot, &member.reference, datatype);
+    let runner = db
+        .get_mut(&run.source)
+        .and_then(|channel| channel.command_runner_mut());
+    if let Some(channel) = runner {
+        channel.remember_member_datatype(member.slot, &member.reference, datatype);
     }
 }
 

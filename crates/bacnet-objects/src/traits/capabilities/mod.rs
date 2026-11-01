@@ -25,10 +25,21 @@
 //! the accessor on to the object inside, so the wrapped object's own
 //! capability answers.
 //!
+//! A capability the host only drives exclusively has one mutable accessor
+//! with the plain name, as [`Timed`] has `timed()`. One the host also reads
+//! under a shared guard adds a `&self` accessor: that one takes the plain
+//! name, and the mutable one gains a `_mut` suffix.
+//!
 //! [`BACnetObject`]: super::BACnetObject
 
+mod command_runner;
+mod staging_source;
 mod timed;
 
 pub use crate::durable::DurableWrites;
+#[doc(hidden)]
+pub use command_runner::CommandRunner;
+#[doc(hidden)]
+pub use staging_source::StagingSource;
 pub(crate) use timed::same_handle;
 pub use timed::{Clocks, DeadlineWaker, MonotonicClock, Timed};

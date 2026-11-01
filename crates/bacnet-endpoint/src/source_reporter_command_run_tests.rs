@@ -33,11 +33,17 @@ fn channel_run_hooks_survive_wrapping() {
             Some(8),
         )
         .unwrap();
-    let run = object.take_command_run_internal().unwrap();
-    assert_eq!(object.command_generation_internal(), Some(run.generation));
+    let run = object
+        .command_runner_mut()
+        .unwrap()
+        .take_command_run()
+        .unwrap();
+    let generation = object.command_runner().map(|r| r.command_generation());
+    assert_eq!(generation, Some(run.generation));
     // The failure's kind reaches the Channel too (#1264).
     let failure = Err(WriteFailure::Communication);
-    assert!(object.complete_command_run_internal(run.generation, failure));
+    let runner = object.command_runner_mut().unwrap();
+    assert!(runner.complete_command_run(run.generation, failure));
     assert_eq!(
         object
             .read_property(PropertyIdentifier::WRITE_STATUS, None)
@@ -86,10 +92,16 @@ fn command_run_hooks_and_property_cov_admission_survive_wrapping() {
             None,
         )
         .unwrap();
-    let run = object.take_command_run_internal().unwrap();
-    assert_eq!(object.command_generation_internal(), Some(run.generation));
-    assert!(object.record_command_write_internal(run.generation, 0, true));
-    assert!(object.complete_command_run_internal(run.generation, Ok(())));
+    let run = object
+        .command_runner_mut()
+        .unwrap()
+        .take_command_run()
+        .unwrap();
+    let generation = object.command_runner().map(|r| r.command_generation());
+    assert_eq!(generation, Some(run.generation));
+    let runner = object.command_runner_mut().unwrap();
+    assert!(runner.record_command_write(run.generation, 0, true));
+    assert!(runner.complete_command_run(run.generation, Ok(())));
     for (property, expected) in [
         (PropertyIdentifier::IN_PROCESS, false),
         (PropertyIdentifier::ALL_WRITES_SUCCESSFUL, true),

@@ -732,7 +732,10 @@ them `_internal`. The core calls a few: `registered_port_internal`,
 command-run hooks in the moved run-ending code (`take_command_run_internal`,
 `command_lists.rs:287`; `record_command_write_internal`, `:174`;
 `complete_command_run_internal`, `:176`). `command_generation_internal`
-(`:270`, `:402`) stays with the server's runners. `DeviceReadView` forwards
+(`:270`, `:402`) stays with the server's runners. (#2179's PR 3 moved these
+four onto the hidden `CommandRunner` capability, reached through
+`command_runner_mut` and, for the generation, `command_runner`.)
+`DeviceReadView` forwards
 about thirty more
 (`device_view.rs:413-513`). The maintainer decided on 2026-10-30 that #2179
 is in 0.16.0 and lands after PR 1, so PR 1 baselines `.text` on the

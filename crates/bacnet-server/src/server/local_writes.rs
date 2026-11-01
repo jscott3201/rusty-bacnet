@@ -463,7 +463,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         oids.iter()
             .filter_map(|oid| {
                 db.get_mut(oid)
-                    .and_then(|object| object.take_staging_write_plan_internal())
+                    .and_then(|object| object.staging_source())
+                    .and_then(|source| source.take_staging_write_plan())
             })
             .collect()
     }
@@ -490,8 +491,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let result = {
                     let mut database = db.write().await;
                     let current = database
-                        .get(&plan.source)
-                        .and_then(|source| source.staging_generation_internal())
+                        .get_mut(&plan.source)
+                        .and_then(|source| source.staging_source())
+                        .map(|source| source.staging_generation())
                         == Some(plan.generation);
                     if !current {
                         TargetResult::Stale
@@ -545,9 +547,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
             let reliability_changed = {
                 let mut database = db.write().await;
-                let changed = database.get_mut(&plan.source).is_some_and(|source| {
-                    source.complete_staging_write_plan_internal(plan.generation, all_succeeded)
-                });
+                let changed = database
+                    .get_mut(&plan.source)
+                    .and_then(|source| source.staging_source())
+                    .is_some_and(|source| {
+                        source.complete_staging_write_plan(plan.generation, all_succeeded)
+                    });
                 if changed {
                     let capture = cov.cov_table.read().await.timed_capture(plan.source);
                     capture.run(&database);

@@ -20,7 +20,7 @@ use bytes::BytesMut;
 use crate::common::{self, read_common_properties};
 use crate::device_reference;
 use crate::property_metadata::{PropertyConformance, PropertyMetadata, PropertyWriteCapability};
-use crate::traits::BACnetObject;
+use crate::traits::{BACnetObject, StagingSource};
 
 mod metadata;
 use metadata::STAGING_PROPERTY_METADATA;
@@ -535,18 +535,24 @@ impl BACnetObject for StagingObject {
         Some(f64::from(self.cov_increment))
     }
 
-    fn take_staging_write_plan_internal(&mut self) -> Option<StagingWritePlan> {
+    fn staging_source(&mut self) -> Option<&mut dyn StagingSource> {
+        Some(self)
+    }
+}
+
+impl StagingSource for StagingObject {
+    fn take_staging_write_plan(&mut self) -> Option<StagingWritePlan> {
         if self.present_stage == 0 {
             self.evaluate(false);
         }
         self.pending_plan.take()
     }
 
-    fn staging_generation_internal(&self) -> Option<u64> {
-        Some(self.generation)
+    fn staging_generation(&self) -> u64 {
+        self.generation
     }
 
-    fn complete_staging_write_plan_internal(&mut self, generation: u64, success: bool) -> bool {
+    fn complete_staging_write_plan(&mut self, generation: u64, success: bool) -> bool {
         if generation != self.generation || self.out_of_service {
             return false;
         }
