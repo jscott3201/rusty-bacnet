@@ -3,6 +3,7 @@
 //! salt (`salt_tests.rs`).
 
 use super::*;
+use crate::attach::nonce;
 use crate::attach::salt::{Salt, pipe_name};
 
 /// The access every allowed entry grants: all file access.
@@ -20,7 +21,7 @@ fn unique(tag: &str) -> PathBuf {
     let dir = tempfile::tempdir().unwrap();
     let mut salt = [0; 32];
     getrandom::fill(&mut salt).unwrap();
-    let name = pipe_name(&Salt(salt), dir.path());
+    let name = pipe_name(&Salt(salt), &nonce::fresh().unwrap(), dir.path());
     PathBuf::from(format!("{}-{tag}", name.display()))
 }
 

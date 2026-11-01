@@ -19,7 +19,8 @@ pub const SOCKET_FILE: &str = "mcp.sock";
 pub(crate) const VIA: &str = "local-socket";
 
 /// Where the TUI's socket for the workspace `dir` is. Never fails on
-/// Unix; the Windows pipe's name needs the workspace's salt file.
+/// Unix; the Windows pipe's name needs the workspace's salt and nonce
+/// files.
 pub fn socket_path(dir: &Path) -> Result<PathBuf, AttachError> {
     Ok(dir.join(SOCKET_FILE))
 }

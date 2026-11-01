@@ -1,8 +1,8 @@
 //! The few Win32 calls the named pipe needs that Tokio doesn't make: whose
 //! process is at either end, which user a process runs as, the
 //! owner-only security descriptor, and the checks of who may read the
-//! workspace and the pipe's salt file (#2219). Each call is wrapped in a small safe
-//! function; every handle and every buffer the system allocates has an
+//! workspace and the pipe's salt and nonce files (#2219, #2237). Each
+//! call is wrapped in a small safe function; every handle and every buffer the system allocates has an
 //! owner that frees it, on error paths too. This module is the crate's
 //! only unsafe code, hence its allow (the workspace denies it).
 #![allow(unsafe_code)]
@@ -544,7 +544,8 @@ pub(super) fn private_file(owner: &Sid, list: &[Ace], own: &Sid) -> Result<(), S
     }
 }
 
-/// Whether the file `file` (the pipe's salt) passes [`private_file`].
+/// Whether the file `file` (the pipe's salt or nonce) passes
+/// [`private_file`].
 pub(super) fn check_private_file(file: &File, own: &Sid) -> io::Result<()> {
     let (owner, list) = file_security(file)?;
     private_file(&owner, &list, own).map_err(io::Error::other)

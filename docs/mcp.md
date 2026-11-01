@@ -571,15 +571,27 @@ stderr; when the TUI ends the session it exits cleanly.
   shared lock, and a starting listener retries for a moment, so a probe
   never keeps a TUI from listening.
 - **The named pipe (Windows).** `\\.\pipe\rusty-bacnet-mcp-` and a hash
-  of a salt and the workspace's canonical path, so each profile has its
-  own and `connect` finds it with no setting (#2219). Pipe names are one
-  namespace for every user of the machine, so the salt keeps another
-  user from working the name out in advance from the path. It doesn't
-  hide the name: any local user can list the pipes there while the TUI
-  listens, and the salt never changes, so someone who has seen the name
-  once can create a pipe of that name while the TUI is closed. The
-  harm is a denial of service only: the TUI then refuses to listen, and
-  `connect` never talks to a pipe of another user's (see below). The
+  of a salt, a nonce of the TUI's run and the workspace's canonical
+  path, so each profile has its own and `connect` finds it with no
+  setting (#2219, #2237). Pipe names are one namespace for every user of
+  the machine, so the salt keeps another user from working the name out
+  in advance from the path. Neither hides the name while the TUI
+  listens, since any local user can list the pipes then; but each time
+  the TUI starts listening it picks a new nonce, so a name seen during
+  one run is useless for the next: a pipe someone makes under it while
+  the TUI is closed doesn't stop the TUI listening again, under another
+  name. While the TUI listens, its first instance holds the name and
+  nobody else may add one (see below). The nonce is 32 random bytes in
+  `mcp-pipe.nonce` in the workspace. The TUI writes it after taking the
+  workspace's lock and claiming the pipe's name: to a new file owned by
+  its user and open to nobody else from creation, synced, then renamed
+  over the last run's, so a reader finds one whole file or the other.
+  It removes the file as it stops; one left by a TUI that crashed names
+  a pipe nobody holds, and `connect`, which reads the nonce on every
+  connect, says that no TUI is listening, as it does with no nonce
+  file. The salt stays, though the nonce alone would hide the name: it
+  costs one read, and keeps the name unknown to others should a nonce
+  ever be reused. The
   salt is 32 random bytes in `mcp-pipe.salt` in the workspace, made by
   the first TUI to listen there and owned by its user. Two TUIs starting
   at once agree on one salt: each writes its own under a temporary name
@@ -590,7 +602,8 @@ stderr; when the TUI ends the session it exits cleanly.
   `icacls` command to fix it). The TUI and `connect` both refuse a salt
   file that isn't a plain file, isn't owned by the user, grants anyone
   but the user, SYSTEM and the Administrators group access, or doesn't
-  hold exactly 32 bytes. The salt is never made anew while one is
+  hold exactly 32 bytes, and `connect` refuses a nonce file by the
+  same rules. The salt is never made anew while one is
   there, since a running TUI's pipe name depends on it: remove a refused
   one with no TUI open on the profile. With no salt file, `connect` says
   that no TUI has listened on the profile.
@@ -770,16 +783,24 @@ stderr; when the TUI ends the session it exits cleanly.
   (by a stand-in for its token, since a test can't run as another user)
   or with no user found closed unanswered and audited with its SID and
   pid; the bridge refusing a pipe served by another user, or one owned
-  by another user, writing it nothing; a second listener refused by the lock, a listener starting
-  again at once after the first stops, and a pipe of the same name made
-  without the lock refused rather than joined; the listener's first and
+  by another user, writing it nothing; a second listener refused by the
+  lock, and a listener starting again at once after the first stops;
+  the listener's first and
   later instances owned by and granting only the test's user, with the
-  medium label; the pipe named from the salt, which is owned by and open
-  to the test's user alone, and a workspace everyone may list refused.
+  medium label; the pipe named from the salt and the run's nonce, both
+  owned by and open to the test's user alone, a new name each run, the
+  nonce withdrawn at shutdown, a crashed TUI's nonce leading to "no TUI
+  is listening", a pipe made under a name seen during an earlier run not
+  keeping the next run from listening, `connect` reaching the new name,
+  and a workspace everyone may list refused.
   `attach/salt_tests.rs` (every platform): the name needing both the salt
   and the workspace, the salt made once, racing makers agreeing on one,
   and a corrupt, linked, non-file or readable-by-others salt file refused
-  and left alone; on Windows, the workspace check. `attach/win32_tests.rs`
+  and left alone, and on Unix the owner and mode rule on made-up owners;
+  on Windows, the workspace check. `attach/nonce_tests.rs` (every
+  platform): two runs naming the pipe differently, the nonce published
+  private, replaced whole and withdrawn, and a corrupt, linked, non-file
+  or readable-by-others nonce file refused. `attach/win32_tests.rs`
   (Windows): the owners and entries the salt file and the workspace
   accept, each forbidden right refused, and a workspace junction
   refused. `attach/pipe_tests.rs`: every instance's refusal of remote
