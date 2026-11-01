@@ -27,8 +27,8 @@ use bytes::{Bytes, BytesMut};
 /// `DeviceIdentity::with_services(SERVICES)`.
 ///
 /// WriteProperty and WritePropertyMultiple are among them, but
-/// [`Responder::write`] has no command origin to give, since [`Inbound`] carries no source address: an object
-/// whose Present_Value is commandable (the default Binary Value, Analog
+/// [`Responder::write`] has no command origin to give, since [`Inbound`]
+/// carries no source address: an object whose Present_Value is commandable (the default Binary Value, Analog
 /// Value and Analog Output among them) refuses a write to it with
 /// WRITE_ACCESS_DENIED
 /// ([#2209](https://github.com/jscott3201/rusty-bacnet/issues/2209)).
@@ -98,8 +98,11 @@ pub struct Written {
     /// What the core did with the request.
     pub outcome: Outcome,
     /// The objects a write changed, for the host's post-write work (change
-    /// reports, event evaluation, saving). Empty when nothing changed: a
-    /// refused write, a NULL the property left as it was, or a request that
+    /// reports, event evaluation, saving). A WritePropertyMultiple refused
+    /// after some attempts succeeded keeps those writes, and names their
+    /// objects here beside its Error. Empty when nothing changed: a
+    /// WriteProperty refused, a request refused before any attempt
+    /// succeeded, a NULL the property left as it was, or a request that
     /// writes nothing.
     pub objects: Vec<ObjectIdentifier>,
 }

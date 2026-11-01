@@ -14,8 +14,8 @@ the database guard, the transport, addressing and time.
   the staged functions in `read`, `write` and `discovery`.
 - Firmware hands each request to `responder::Responder::handle`, which
   answers those six services, and refuses every other confirmed request
-  with a Reject, or with an Abort when it arrives segmented. An APDU that doesn't decode is dropped without an
-  answer, as the server drops it.
+  with a Reject, or with an Abort when it arrives segmented. An APDU that
+  doesn't decode is dropped without an answer, as the server drops it.
 
 ## What it has
 
@@ -26,9 +26,10 @@ the database guard, the transport, addressing and time.
   then read it.
 - `write`: WriteProperty and WritePropertyMultiple, with a
   `WriteCommitObserver` the host's audit and change capture run in under its
-  guard; the array-index gate and value decoding every write path shares; the NULL-relinquish rule
-  (`write::relinquish`); the local form of references naming this device;
-  and the end of a Command's or Channel's run a host can't make.
+  guard; the array-index gate and value decoding every write path shares;
+  the NULL-relinquish rule (`write::relinquish`); the local form of
+  references naming this device; and the end of a Command's or Channel's
+  run a host can't make.
 - `discovery`: Who-Is and I-Am, Who-Has and I-Have.
 - `reply`: the reply PDUs, and the one map from an error to its Reject or
   Error PDU.

@@ -23,7 +23,9 @@ bacnet-types → bacnet-encoding → bacnet-services → bacnet-transport → ba
 
 `bacnet-device-core` sits between `bacnet-objects` and `bacnet-server`: the
 read and write paths the server runs ReadProperty, ReadPropertyMultiple,
-WriteProperty, WritePropertyMultiple, Who-Is and Who-Has through, which firmware can run without the server ([bacnet-device-core](#bacnet-device-core)).
+WriteProperty, WritePropertyMultiple, Who-Is and Who-Has through, which
+firmware can run without the server
+([bacnet-device-core](#bacnet-device-core)).
 Above them, `bacnet-endpoint` (on `bacnet-endpoint-core`) runs client and
 server roles through one transport ([bacnet-endpoint](#bacnet-endpoint)), and
 `bacnet-ops` and `bacnet-mcp` sit on `bacnet-client`

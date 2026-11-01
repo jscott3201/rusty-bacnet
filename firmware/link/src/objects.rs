@@ -8,8 +8,8 @@
 //! a ReadProperty of each Present_Value, one of an object the device lacks,
 //! one whose parameters stop short, a segmented request, then a
 //! WriteProperty of BV-1's Present_Value, a ReadProperty that reads it
-//! back, and a ReadPropertyMultiple of AI-1's and BV-1's. Each request is copied into a `Bytes` of its own, as a receive path
-//! would. It returns a [`Summary`]: what `handle` reported for each request,
+//! back, and a ReadPropertyMultiple of AI-1's and BV-1's. Each request is
+//! copied into a `Bytes` of its own, as a receive path would. It returns a [`Summary`]: what `handle` reported for each request,
 //! the APDU it wrote, and the objects the writes changed.
 //!
 //! The work lives on the heap: the database, each request's `Bytes` and

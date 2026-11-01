@@ -155,11 +155,13 @@ pub struct Written { pub outcome: Outcome, pub objects: Vec<ObjectIdentifier> }
 /// `rpm`: one RPM's result rows and ACK octets (`Limits::with_rpm`).
 pub struct Limits { pub read_work: usize, pub rpm: ReadPropertyMultipleBudget }
 
-pub struct Responder { identity: DeviceIdentity, scope: ReadScope }
+pub struct Responder { identity: DeviceIdentity, scope: ReadScope,
+    rpm: ReadPropertyMultipleBudget }
 
 impl Responder {
     /// Refuses an identity that claims segmentation (the core segments
-    /// neither way) and a `read_work` of zero.
+    /// neither way), a `read_work` of zero, and an RPM budget
+    /// `ReadPropertyMultipleBudget::validate` refuses (a zero limit).
     pub fn new(identity: DeviceIdentity, limits: Limits) -> Result<Self, Error>;
     pub fn with_registered_port(self, port: ObjectIdentifier) -> Self;
     /// PDU type and service choice only; never decodes the service.
@@ -384,13 +386,12 @@ and the transaction slots). The COV capture they run was read from the
 COV table before the write, under the database write guard
 (`server/requests/mutations.rs:316-319`).
 
-WPM's Life Safety snapshots need no hook of their own:
-`capture_before_write` runs just before `commit_attempt`
-(`handlers/write_property.rs:232`, `:240`), whose first act is
-`observer.before` on the same object (`:278-280`). PR 3 moves the capture
-into the server's observer and drops the `snapshots` parameter. As built:
+WPM's Life Safety snapshots need no hook of their own: the capture ran
+just before each attempt's commit, whose first act is `observer.before` on
+the same object. As built (PR 3), the server's observer takes it there:
 `TimedWriteCapture::before` takes the request's first snapshot of each Life
-Safety object, and `life_safety_changes` reports them after the request.
+Safety object, `life_safety_changes` reports them after the request, and
+`write_property_multiple` has no `snapshots` parameter.
 
 ### 4.6 Discovery
 
@@ -512,7 +513,8 @@ commits and match `Applied` whole. The server's other callers also include
 As built: `write_property_multiple` and `WpmOutcome` sit in `write`
 (`write/multiple.rs`, re-exported). `WpmOutcome` stays exhaustive, as
 `Applied` does: a WPM answers in one of its three ways, and hosts match it
-whole. The handler tests keep test-only wrappers named for the deleted
+whole. The 1.0 API audit revisits `WpmOutcome` with `WriteTarget` and
+`Applied`. The handler tests keep test-only wrappers named for the deleted
 helpers, so about forty test files didn't change; the RPM one reads through
 `RpmPlan` with no limit, which turned the legacy-against-bounded
 comparisons into unlimited-against-bounded ones on the one code path.
@@ -521,8 +523,8 @@ comparisons into unlimited-against-bounded ones on the one code path.
 `ReadFailure::unlimited`, with no caller left, went. The `Responder` runs
 RPM under `Access::Read` and WPM under `Access::Write` only, and
 `Responder::new` validates the RPM budget, whose messages are now whole
-strings: formatting them linked two more `core::fmt` functions into the
-`objects` image.
+strings: formatting them would have linked two more `core::fmt` functions
+into the `objects` image.
 
 ### 6.4 What stays hosted
 
