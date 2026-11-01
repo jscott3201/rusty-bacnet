@@ -378,18 +378,26 @@ impl ObjectDatabase {
         self.rebind_clocks();
     }
 
-    /// Bind one process-local monotonic source to every contained object.
-    #[doc(hidden)]
-    pub fn set_monotonic_clock_internal(&mut self, clock: Option<Arc<MonotonicClock>>) {
+    /// Bind one process-local monotonic source to the database and every
+    /// object it contains, through [`Timed::bind_clocks`].
+    ///
+    /// Objects added later receive it in [`add`](Self::add). Deadlines the
+    /// objects arm, and the instants a host passes to
+    /// [`Timed::advance_monotonic_time`], are on this clock's time base. The
+    /// bundled server binds the time since its monotonic task started.
+    ///
+    /// [`Timed::bind_clocks`]: crate::traits::Timed::bind_clocks
+    /// [`Timed::advance_monotonic_time`]: crate::traits::Timed::advance_monotonic_time
+    pub fn set_monotonic_clock(&mut self, clock: Option<Arc<MonotonicClock>>) {
         self.trend_poll.clear();
         self.clocks.monotonic = clock;
         self.rebind_clocks();
     }
 
     /// Bind the waker objects call when a write arms a monotonic deadline to
-    /// every contained object, and to each one added later.
-    #[doc(hidden)]
-    pub fn set_deadline_waker_internal(&mut self, waker: Option<Arc<DeadlineWaker>>) {
+    /// every contained object, and to each one added later, so the host's
+    /// monotonic pass looks again sooner than its next routine wake (#1384).
+    pub fn set_deadline_waker(&mut self, waker: Option<Arc<DeadlineWaker>>) {
         self.clocks.deadline_waker = waker;
         self.rebind_clocks();
     }

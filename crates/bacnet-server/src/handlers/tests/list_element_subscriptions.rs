@@ -43,7 +43,7 @@ fn forwarder_db(
         .unwrap();
     let oid = forwarder.object_identifier();
     let mut db = ObjectDatabase::new();
-    db.set_monotonic_clock_internal(Some(std::sync::Arc::new(|| NOW.with(|now| now.get()))));
+    db.set_monotonic_clock(Some(std::sync::Arc::new(|| NOW.with(|now| now.get()))));
     db.add(Box::new(forwarder)).unwrap();
     (db, oid)
 }

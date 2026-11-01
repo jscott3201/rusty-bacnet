@@ -208,7 +208,7 @@ fn linked_database() -> (ObjectDatabase, Arc<Mutex<Duration>>) {
     let mut db = ObjectDatabase::new();
     let now = Arc::new(Mutex::new(Duration::ZERO));
     let source = Arc::clone(&now);
-    db.set_monotonic_clock_internal(Some(Arc::new(move || *source.lock().unwrap())));
+    db.set_monotonic_clock(Some(Arc::new(move || *source.lock().unwrap())));
     for object in outputs(Some(overridable())) {
         db.add(object).unwrap();
     }

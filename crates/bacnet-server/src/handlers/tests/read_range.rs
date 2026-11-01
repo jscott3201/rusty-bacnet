@@ -538,10 +538,9 @@ impl ClockReader for FixedClock {
 #[test]
 fn purge_status_record_replaces_old_sequence_continuation() {
     let mut object = EventLogObject::new(7, "EL-7", 3).unwrap();
-    object.bind_clocks(&bacnet_objects::traits::Clocks {
-        clock: Some(Arc::new(FixedClock)),
-        ..bacnet_objects::traits::Clocks::default()
-    });
+    object.bind_clocks(
+        &bacnet_objects::traits::Clocks::default().with_clock(Some(Arc::new(FixedClock))),
+    );
     object.add_record(event_record(1)).unwrap();
     object.add_record(event_record(2)).unwrap();
     object

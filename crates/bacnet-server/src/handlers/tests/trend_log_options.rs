@@ -44,7 +44,7 @@ fn database() -> ObjectDatabase {
     db.add(Box::new(tl)).unwrap();
     db.add(Box::new(EventLogObject::new(1, "EL-1", 8).unwrap()))
         .unwrap();
-    db.set_monotonic_clock_internal(Some(Arc::new(|| std::time::Duration::ZERO)));
+    db.set_monotonic_clock(Some(Arc::new(|| std::time::Duration::ZERO)));
     db
 }
 

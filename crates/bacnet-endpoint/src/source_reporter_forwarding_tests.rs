@@ -386,7 +386,7 @@ async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
     }))
     .unwrap();
     db.set_clock_reader(Some(calls.clone()));
-    db.set_monotonic_clock_internal(Some(Arc::new(|| Duration::from_secs(99))));
+    db.set_monotonic_clock(Some(Arc::new(|| Duration::from_secs(99))));
     db.set_enrollment_eval_state_invalidated(selected(), true);
     db.set_enrollment_eval_source(selected(), Some(monitored));
     let mut objects = db.list_objects();

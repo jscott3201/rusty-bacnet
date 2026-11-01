@@ -345,6 +345,9 @@ impl crate::traits::Timed for AveragingObject {
 }
 
 #[cfg(test)]
+mod rebind_tests;
+
+#[cfg(test)]
 mod sample_tests;
 
 #[cfg(test)]

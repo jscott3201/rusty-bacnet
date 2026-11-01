@@ -59,13 +59,10 @@ fn averaging_sample_schedule_survives_wrapping() {
     source_reporter::install(&mut object, &owner).unwrap();
 
     // 900 s over 15 samples: the first is due a minute after the clock binds.
-    object
-        .timed()
-        .unwrap()
-        .bind_clocks(&bacnet_objects::traits::Clocks {
-            monotonic: Some(Arc::new(|| Duration::ZERO)),
-            ..bacnet_objects::traits::Clocks::default()
-        });
+    object.timed().unwrap().bind_clocks(
+        &bacnet_objects::traits::Clocks::default()
+            .with_monotonic(Some(Arc::new(|| Duration::ZERO))),
+    );
     let due = Duration::from_secs(60);
     assert_eq!(object.timed().unwrap().next_monotonic_deadline(), Some(due));
     assert_eq!(

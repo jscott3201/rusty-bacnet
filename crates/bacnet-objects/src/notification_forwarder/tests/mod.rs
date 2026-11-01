@@ -17,6 +17,8 @@ mod fold_tests;
 #[cfg(feature = "std")]
 mod persistence_tests;
 mod properties;
+#[cfg(feature = "std")]
+mod rebind_tests;
 mod recipient_list_restart_tests;
 mod selection_tests;
 #[cfg(feature = "std")]

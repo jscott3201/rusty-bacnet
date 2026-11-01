@@ -83,7 +83,7 @@ fn fixture(
     let clock = Arc::new(WallClock(Mutex::new(Some(frame()))));
     let mut db = ObjectDatabase::new();
     let source = time.clone();
-    db.set_monotonic_clock_internal(Some(Arc::new(move || *source.lock().unwrap())));
+    db.set_monotonic_clock(Some(Arc::new(move || *source.lock().unwrap())));
     db.set_clock_reader(Some(clock.clone()));
     db.add(Box::new(
         AnalogValueObject::new(1, "AV", EngineeringUnits::NO_UNITS).unwrap(),
@@ -416,7 +416,7 @@ fn idle_reconciliation_and_max_interval_failure_backoff_are_bounded() {
     *time.lock().unwrap() = Duration::from_millis(100);
     db.poll_trend_logs();
     assert_eq!(count(&db, oid), 1);
-    db.set_monotonic_clock_internal(Some(Arc::new(|| Duration::ZERO)));
+    db.set_monotonic_clock(Some(Arc::new(|| Duration::ZERO)));
     db.poll_trend_logs();
     assert_eq!(count(&db, oid), 2);
     db.remove(&oid).unwrap();

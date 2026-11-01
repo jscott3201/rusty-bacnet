@@ -528,7 +528,14 @@ pub struct PendingWrite {
 /// again, and in that same critical section calls
 /// [`release_staged_write`](Self::release_staged_write). A write made
 /// without staging still works: the object then saves in place.
-#[doc(hidden)]
+///
+/// An object opts in by implementing this trait and returning itself, or
+/// the field that keeps its storage, from
+/// [`BACnetObject::durable_writes`](crate::traits::BACnetObject::durable_writes).
+/// The server's monotonic pass also calls
+/// [`expire_staged`](Self::expire_staged) on it about once a second, so a
+/// staged write whose request never came back doesn't stay in storage. See
+/// the [module docs](self) for the parts an implementation owns.
 pub trait DurableWrites {
     /// Stage a write of `value` to `property` (at `array_index`).
     fn stage_write(
@@ -599,11 +606,15 @@ pub trait DurableWrites {
     }
 
     /// The host's monotonic pass at `now`, on the monotonic clock's time
-    /// base: drop a staged write that has waited too long for its request,
-    /// so storage goes back to the served state. The server calls it on
-    /// every pass, before it advances the object's
-    /// [`Timed`](crate::traits::Timed) operations. The default stages
-    /// nothing that expires.
+    /// base: drop a staged write whose request has neither taken nor
+    /// released it within the staged-write lifetime of its save finishing,
+    /// and queue a save of the served state, so storage follows the object
+    /// again. An object that keeps its staged saves in a
+    /// `staged::StagedSaves` forwards `now` to its `expire`.
+    ///
+    /// The server calls it on every pass, before it advances the object's
+    /// [`Timed`](crate::traits::Timed) operations, so an object that only
+    /// stages writes needs no `Timed`. The default has nothing that expires.
     fn expire_staged(&mut self, _now: core::time::Duration) {}
 }
 

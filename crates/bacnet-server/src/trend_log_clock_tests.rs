@@ -70,7 +70,7 @@ fn database(clock: Arc<dyn ClockReader>) -> (Arc<RwLock<ObjectDatabase>>, Object
     db.add(Box::new(trend)).unwrap();
     db.set_clock_reader(Some(clock));
     let origin = tokio::time::Instant::now();
-    db.set_monotonic_clock_internal(Some(Arc::new(move || {
+    db.set_monotonic_clock(Some(Arc::new(move || {
         tokio::time::Instant::now().duration_since(origin)
     })));
     (Arc::new(RwLock::new(db)), oid)

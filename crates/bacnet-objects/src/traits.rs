@@ -22,7 +22,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue, Time};
 
 use crate::audit::{AuditLogNotificationSink, AuditLogStorage};
-use crate::durable::DurableWrites;
+
 use crate::event::{
     EnrollmentSummaryCapability, EventStateChange, EventTransitionCommit,
     EventTransitionCommitError, TransitionOutcome,
@@ -36,7 +36,7 @@ use crate::log_reporting::BufferReadyReport;
 use crate::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 
 pub mod capabilities;
-pub use capabilities::{Clocks, DeadlineWaker, MonotonicClock, Timed};
+pub use capabilities::{Clocks, DeadlineWaker, DurableWrites, MonotonicClock, Timed};
 
 mod defaults;
 use defaults::{array_property_default, cov_reported_properties_default, list_property_default};

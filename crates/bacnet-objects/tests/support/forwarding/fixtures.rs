@@ -69,11 +69,7 @@ pub fn waker() -> Arc<DeadlineWaker> {
 
 /// The three clocks together, as a database lends them.
 pub fn clocks() -> Clocks {
-    Clocks {
-        clock: Some(clock()),
-        monotonic: Some(monotonic()),
-        deadline_waker: Some(waker()),
-    }
+    Clocks::new(Some(clock()), Some(monotonic()), Some(waker()))
 }
 
 /// A capability or handle, rendered as the address it points at.

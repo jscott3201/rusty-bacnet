@@ -30,7 +30,7 @@ async fn fixture() -> (Fixture, Arc<StdMutex<Duration>>) {
     let now = Arc::new(StdMutex::new(Duration::ZERO));
     let source = Arc::clone(&now);
     let mut db = fixture.db.write().await;
-    db.set_monotonic_clock_internal(Some(Arc::new(move || *source.lock().unwrap())));
+    db.set_monotonic_clock(Some(Arc::new(move || *source.lock().unwrap())));
     db.add(Box::new(LightingOutputObject::new(1, "LO-1").unwrap()))
         .unwrap();
     drop(db);

@@ -20,7 +20,7 @@ std::thread_local! {
 
 fn database() -> (ObjectDatabase, ObjectIdentifier) {
     let mut db = ObjectDatabase::new();
-    db.set_monotonic_clock_internal(Some(std::sync::Arc::new(|| NOW.with(|now| now.get()))));
+    db.set_monotonic_clock(Some(std::sync::Arc::new(|| NOW.with(|now| now.get()))));
     let object = BinaryLightingOutputObject::new(1, "BLO-1").unwrap();
     let oid = object.object_identifier();
     db.add(Box::new(object)).unwrap();

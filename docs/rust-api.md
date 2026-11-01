@@ -5969,9 +5969,9 @@ range. In_Progress never reads OTHER.
 Both objects model the device's start (#1526). A new object's In_Progress
 reads NOT_CONTROLLED: nothing has driven its output yet. As the server
 starts, before it shares the database, it calls `start_output` on each colour
-object in it (`ObjectDatabase::start_outputs`). An application running one without a server, or adding one to
-a server already running, calls `start_output` itself; until then the object
-reads NOT_CONTROLLED. An in-process WARMSTART or COLDSTART should call it
+object in it (`ObjectDatabase::start_outputs`). An application running one
+without a server, or adding one to a server already running, calls
+`start_output` itself; until then the object reads NOT_CONTROLLED. An in-process WARMSTART or COLDSTART should call it
 again (see the `ReinitializeHandler` notes); it is safe to repeat.
 
 - A non-zero `Default_Color` or `Default_Color_Temperature` (clamped to the

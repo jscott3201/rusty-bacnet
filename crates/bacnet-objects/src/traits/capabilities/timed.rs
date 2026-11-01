@@ -18,7 +18,12 @@ pub type DeadlineWaker = dyn Fn() + Send + Sync;
 
 /// The clocks an [`ObjectDatabase`](crate::database::ObjectDatabase) lends
 /// every object it holds. Each is `None` until the host binds one.
+///
+/// Build one with [`Clocks::new`], or from [`Clocks::default`] with the
+/// `with_*` setters; it may gain fields, so it has no struct literal outside
+/// this crate.
 #[derive(Clone, Default)]
+#[non_exhaustive]
 pub struct Clocks {
     /// The Device's wall clock, for stamping dates and times.
     pub clock: Option<Arc<dyn ClockReader>>,
@@ -27,6 +32,42 @@ pub struct Clocks {
     pub monotonic: Option<Arc<MonotonicClock>>,
     /// The waker to call when a write arms a deadline.
     pub deadline_waker: Option<Arc<DeadlineWaker>>,
+}
+
+impl Clocks {
+    /// The three clocks, each `None` when it isn't bound.
+    pub fn new(
+        clock: Option<Arc<dyn ClockReader>>,
+        monotonic: Option<Arc<MonotonicClock>>,
+        deadline_waker: Option<Arc<DeadlineWaker>>,
+    ) -> Self {
+        Self {
+            clock,
+            monotonic,
+            deadline_waker,
+        }
+    }
+
+    /// These clocks with the Device's wall clock replaced.
+    #[must_use]
+    pub fn with_clock(mut self, clock: Option<Arc<dyn ClockReader>>) -> Self {
+        self.clock = clock;
+        self
+    }
+
+    /// These clocks with the monotonic clock replaced.
+    #[must_use]
+    pub fn with_monotonic(mut self, monotonic: Option<Arc<MonotonicClock>>) -> Self {
+        self.monotonic = monotonic;
+        self
+    }
+
+    /// These clocks with the deadline waker replaced.
+    #[must_use]
+    pub fn with_deadline_waker(mut self, deadline_waker: Option<Arc<DeadlineWaker>>) -> Self {
+        self.deadline_waker = deadline_waker;
+        self
+    }
 }
 
 /// Whether two optional handles are the same one, or both absent. An object
