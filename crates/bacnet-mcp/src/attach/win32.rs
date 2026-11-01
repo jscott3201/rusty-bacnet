@@ -418,15 +418,20 @@ unsafe fn entries(list: *mut ACL) -> io::Result<Vec<Ace>> {
     let sid_at = std::mem::offset_of!(ACCESS_ALLOWED_ACE, SidStart);
     let mut found = Vec::new();
     for index in 0..size.AceCount {
-        let mut ace = ptr::null_mut();
-        // SAFETY: `index` is below the list's count; `ace` is a valid place.
-        if unsafe { GetAce(list, index, &raw mut ace) } == 0 {
+        let mut got = ptr::null_mut();
+        // SAFETY: `index` is below the list's count; `got` is a valid place.
+        if unsafe { GetAce(list, index, &raw mut got) } == 0 {
             return Err(io::Error::last_os_error());
         }
-        let at = ace as usize;
+        let at = got as usize;
         if at < start + size_of::<ACL>() || at.saturating_add(size_of::<ACE_HEADER>()) > end {
             return Err(malformed());
         }
+        // Read through a pointer derived from `list` rather than the one
+        // GetAce wrote, so its provenance is the live ACL itself.
+        // SAFETY: `at - start` is within the list's bytes in use (checked
+        // above), so the offset stays inside the ACL's allocation.
+        let ace = unsafe { list.cast::<u8>().add(at - start) };
         // SAFETY: the header's bytes lie within the list's bytes in use
         // (checked), which the caller promises are readable.
         let header = unsafe { ptr::read_unaligned(ace.cast::<ACE_HEADER>()) };
