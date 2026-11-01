@@ -26,7 +26,7 @@ pub struct AlertEnrollmentObject {
     name: String,
     description: String,
     /// Event_State; NORMAL while event detection is disabled.
-    pub(crate) event_state: EventState,
+    pub(super) event_state: EventState,
     /// Source of the most recent alert handed to this enrollment.
     pub present_value: ObjectIdentifier,
     /// Whether event detection is enabled.
@@ -39,7 +39,7 @@ pub struct AlertEnrollmentObject {
     /// reset and may expose state stored before the direct disable.
     pub event_detection_enable: bool,
     /// Acked_Transitions: a set flag means that transition was acknowledged.
-    pub(crate) acked_transitions: EventTransitionBits,
+    pub(super) acked_transitions: EventTransitionBits,
     pub(super) event_history: EventHistory,
     /// Event_Enable: the transitions whose notifications are distributed.
     pub event_enable: EventTransitionBits,
@@ -81,6 +81,18 @@ impl AlertEnrollmentObject {
     /// notification.
     pub fn record_alert_source(&mut self, source: ObjectIdentifier) {
         self.present_value = source;
+    }
+
+    /// Seed a committed, unacknowledged transition to `state` for a test:
+    /// Alert Enrollment has no transition commit of its own.
+    #[cfg(test)]
+    pub(crate) fn seed_unacknowledged(
+        &mut self,
+        state: EventState,
+        transition: EventTransitionBits,
+    ) {
+        self.event_state = state;
+        self.acked_transitions.remove(transition);
     }
 
     /// Enable or disable event detection.

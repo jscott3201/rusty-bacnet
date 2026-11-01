@@ -512,7 +512,7 @@ fn failed_eval_state_write_cannot_leak_an_unreported_event_state() {
 }
 
 #[test]
-fn same_state_transition_does_not_depend_on_rewriting_event_state() {
+fn custom_enrollment_reports_a_change_of_value_through_the_commit() {
     let mut db = ObjectDatabase::new();
     let mut target = AnalogValueObject::new(
         111,

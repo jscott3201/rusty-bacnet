@@ -54,10 +54,10 @@ fn objects() -> Vec<Box<dyn BACnetObject>> {
 /// TO_OFFNORMAL is seeded in its fields.
 fn unacknowledged_alert(source: ObjectIdentifier) -> AlertEnrollmentObject {
     let mut alert = AlertEnrollmentObject::new(1, "Alert", source).unwrap();
-    alert.event_state = EventState::OFFNORMAL;
-    alert
-        .acked_transitions
-        .remove(EventTransition::ToOffnormal.bit_mask());
+    alert.seed_unacknowledged(
+        EventState::OFFNORMAL,
+        EventTransition::ToOffnormal.bit_mask(),
+    );
     alert
 }
 
@@ -178,12 +178,10 @@ fn acked_transitions_internal_commit_and_acknowledgment_bypass_property_writes()
     for mut object in objects() {
         seed_unacknowledged(&mut *object);
         assert_denied(&mut *object, bits(0xe0), None);
-        if object.object_identifier().object_type() == ObjectType::ALERT_ENROLLMENT {
-            // No local route acknowledges an Alert Enrollment's transition.
-            assert_eq!(snapshot(&*object)[1], bits(0x60));
-            continue;
-        }
-        {
+        // Alert Enrollment has no local acknowledgment or commit route, so
+        // its seeded transition stays unacknowledged.
+        let alert = object.object_identifier().object_type() == ObjectType::ALERT_ENROLLMENT;
+        if !alert {
             let mut acknowledged = snapshot(&*object);
             acknowledged[1] = bits(0xe0);
             object
@@ -217,7 +215,7 @@ fn acked_transitions_internal_commit_and_acknowledgment_bypass_property_writes()
         }
         assert_eq!(
             snapshot(&*object)[1],
-            bits(0xe0),
+            bits(if alert { 0x60 } else { 0xe0 }),
             "{}",
             object.object_name()
         );

@@ -138,6 +138,69 @@ fn disabled_detection_reports_initial_acked_transitions() {
     );
 }
 
+/// Clause 13.2.2.1 prohibits transitions while detection is disabled, and
+/// the object enforces it at its commit, so a caller that skips the check
+/// cannot move it away from NORMAL.
+#[test]
+fn disabled_detection_refuses_a_non_normal_commit() {
+    use crate::event::{EventStateChange, EventTransition, EventTransitionCommit};
+    use crate::traits::EventReporting;
+    use bacnet_types::primitives::BACnetTimeStamp;
+
+    let commit = |to: EventState| EventTransitionCommit {
+        change: EventStateChange {
+            from: EventState::NORMAL,
+            to,
+        },
+        coordinate: EventTransition::for_target_state(to),
+        ack_required: true,
+        timestamp: BACnetTimeStamp::SequenceNumber(1),
+        message_text: None,
+    };
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
+    ee.write_property(
+        PropertyIdentifier::EVENT_DETECTION_ENABLE,
+        None,
+        PropertyValue::Boolean(false),
+        None,
+    )
+    .unwrap();
+    let before = ee
+        .read_property(PropertyIdentifier::ACKED_TRANSITIONS, None)
+        .unwrap();
+
+    assert_eq!(
+        ee.commit_event_transition(commit(EventState::HIGH_LIMIT)),
+        Err(crate::event::EventTransitionCommitError::DetectionDisabled)
+    );
+    assert_eq!(
+        ee.read_property(PropertyIdentifier::EVENT_STATE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(EventState::NORMAL.to_raw())
+    );
+    assert_eq!(
+        ee.read_property(PropertyIdentifier::ACKED_TRANSITIONS, None)
+            .unwrap(),
+        before
+    );
+
+    // Enabled, the same commit lands.
+    ee.write_property(
+        PropertyIdentifier::EVENT_DETECTION_ENABLE,
+        None,
+        PropertyValue::Boolean(true),
+        None,
+    )
+    .unwrap();
+    ee.commit_event_transition(commit(EventState::HIGH_LIMIT))
+        .unwrap();
+    assert_eq!(
+        ee.read_property(PropertyIdentifier::EVENT_STATE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(EventState::HIGH_LIMIT.to_raw())
+    );
+}
+
 /// Re-enabling detection must not resurrect the pre-disable state. The reset
 /// already happened, so evaluation resumes from NORMAL and the next transition
 /// is derived afresh from the monitored value.
