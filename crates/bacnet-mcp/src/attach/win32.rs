@@ -453,9 +453,6 @@ fn named(ace: &Ace) -> String {
 /// Whether the file `file` (the pipe's salt) is owned by `own` and its
 /// access list allows nobody else anything; deny entries change nothing.
 pub(super) fn check_private_file(file: &File, own: &Sid) -> io::Result<()> {
-    if own.0.len() > 1 {
-        return Ok(());
-    }
     let (owner, list) = file_security(file)?;
     if owner != *own {
         return Err(io::Error::other(format!("it is owned by {owner}")));

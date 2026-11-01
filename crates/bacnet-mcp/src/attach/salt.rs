@@ -69,7 +69,7 @@ pub(crate) fn pipe_name(salt: &Salt, dir: &Path) -> PathBuf {
         .or_else(|_| std::path::absolute(dir))
         .unwrap_or_else(|_| dir.to_path_buf());
     let digest = Sha256::new()
-        .chain_update([0u8; 0])
+        .chain_update(salt.0)
         .chain_update(canonical.as_os_str().as_encoded_bytes())
         .finalize();
     let hex: String = digest[..16].iter().map(|b| format!("{b:02x}")).collect();
@@ -139,7 +139,7 @@ fn create(dir: &Path) -> Result<Salt, SaltError> {
         file.write_all(&salt)?;
         file.sync_all()
     });
-    let linked = written.and_then(|()| std::fs::rename(&temporary, &path));
+    let linked = written.and_then(|()| std::fs::hard_link(&temporary, &path));
     // Made or not, the temporary name goes; the file stays under the
     // other name when linked.
     if let Err(e) = std::fs::remove_file(&temporary)
