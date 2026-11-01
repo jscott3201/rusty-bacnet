@@ -673,8 +673,8 @@ Who-Is and `DeviceIdentity`'s database builder. The Device brings
 `core::fmt` in (seven functions, about 1.5 KB): `DeviceIdentity::new`
 formats its default name (`device_identity/mod.rs:67`), and so does the
 database builder's Network-Port loop (`device_identity/network_port.rs`),
-which links though the image declares no port: #2187 wrote the Device's
-name by hand, and the count stays 7 until the port's is too. The PR 1 image will
+which links though the image declares no port. #2187 writes both names
+by hand, and the image links no `core::fmt` since. The PR 1 image will
 be larger again by the core's own code; these rows are the floor it is
 measured against, and #2179 then reports its saving on the same rows.
 

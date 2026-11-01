@@ -7,14 +7,14 @@ use bacnet_encoding::apdu::encode_apdu;
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::binary::BinaryValueObject;
-use bacnet_objects::command_source::CommandOrigin;
+use bacnet_objects::command_source::{CommandDeviceBinding, CommandOrigin};
 use bacnet_objects::device_identity::build_database_with_extra;
 use bacnet_objects::present_value_access::PresentValueAccess;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::rpm::ReadPropertyMultipleACK;
 use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
-use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
+use bacnet_types::constructed::{BACnetAddress, PropertyReference, ReadAccessSpecification};
 use bacnet_types::enums::{
     EngineeringUnits, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier as P,
 };
@@ -394,7 +394,6 @@ fn wpm_writes_every_attempt() {
 #[test]
 fn wpm_commands_a_commandable_present_value_for_the_source() {
     let mut db = database();
-    let identity = DeviceIdentity::new(DEVICE, 0x105).unwrap();
     db.add(Box::new(BinaryValueObject::new(3, "BV-3").unwrap()))
         .unwrap();
     let responder = responder_with(Limits::default());
@@ -405,9 +404,12 @@ fn wpm_commands_a_commandable_present_value_for_the_source() {
     let refused = wpm_error_of(reply);
     assert_eq!(refused.1, ErrorCode::WRITE_ACCESS_DENIED);
 
-    let source = CommandOrigin::Local {
-        owner_device: identity.device_oid(),
-        initiating_object: None,
+    let source = CommandOrigin::Remote {
+        actual_address: BACnetAddress {
+            network_number: 0,
+            mac_address: [192, 168, 1, 7, 0xBA, 0xC0][..].into(),
+        },
+        binding: CommandDeviceBinding::Unknown,
     };
     let mut out = BytesMut::new();
     let request = Inbound::new(wpm(&body), 1476).with_source(source);

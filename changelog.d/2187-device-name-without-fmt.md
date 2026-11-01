@@ -1,6 +1,6 @@
 ---
 section: Changed
 ---
-- `DeviceIdentity::new` writes its default Object_Name, `device-<instance>`,
-  without `core::fmt`, so no_std images that build a Device format one
-  string fewer (#2187).
+- `DeviceIdentity` writes the default Device and Network Port names
+  (`device-<n>`, `port-<n>`) without `core::fmt`, so a no_std image that
+  builds a Device database links no `core::fmt` (#2187).

@@ -67,11 +67,16 @@ pub struct Inbound {
     /// request's Max-APDU-Length-Accepted, capped by the route's own limit.
     pub max_reply: u16,
     /// Who sent the request, as a write commands an object for them
-    /// (Clause 19.5): for a network requester,
-    /// [`CommandOrigin::Remote`] with the address it came from (network 0
-    /// for one on the local network) and the Device the host binds to that
-    /// address, if any. `None` when the host doesn't say; a commandable
-    /// Present_Value then refuses the write with WRITE_ACCESS_DENIED.
+    /// (Clause 19.5). It is the host's own claim, trusted as given: nothing
+    /// checks it against the database or the network. A request from the
+    /// network takes [`CommandOrigin::Remote`], with the address it came
+    /// from (network 0 for one on the local network) and the Device the
+    /// host binds to that address, if any. [`CommandOrigin::Local`] names
+    /// one of the host's own objects as the writer, and lets its owning
+    /// Device correct the slot later; it is not for network requests. The
+    /// type's docs in `bacnet_objects::command_source` give the rules.
+    /// `None` when the host doesn't say; a commandable Present_Value then
+    /// refuses the write with WRITE_ACCESS_DENIED.
     pub source: Option<CommandOrigin>,
 }
 
@@ -86,9 +91,10 @@ impl Inbound {
         }
     }
 
-    /// This request, sent by `source`: the command origin its writes carry.
-    /// The object checks it as it checks the server's
-    /// ([`CommandOrigin::validate`]), so a malformed one is refused there.
+    /// This request, sent by `source`: the command origin its writes carry
+    /// ([`Inbound::source`] says which kind to give). The host vouches for
+    /// it; the object checks only its form ([`CommandOrigin::validate`]),
+    /// so a malformed one is refused there.
     pub fn with_source(mut self, source: CommandOrigin) -> Self {
         self.source = Some(source);
         self
