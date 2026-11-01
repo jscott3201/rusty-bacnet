@@ -9,19 +9,27 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 /// Store one decoded and authorized notification batch in its explicit sink.
 ///
+/// `device` is the Device this device speaks for, the one its frozen
+/// identity names (the bundled server passes
+/// [`DeviceIdentity::device_oid`](bacnet_objects::DeviceIdentity::device_oid)):
+/// the sink takes its APDU_Timeout, and a batch is refused with
+/// DEVICE / OPERATIONAL_PROBLEM while that Device is missing (#2228).
+///
 /// The commit runs while the caller holds the database, and the batch is in
 /// memory only once it is durable. The bundled server stages the commit
 /// instead, so it runs without the database guard (#1270).
 pub fn handle_audit_notification(
     db: &mut ObjectDatabase,
+    device: ObjectIdentifier,
     sink: ObjectIdentifier,
     request: &AuditNotificationRequest,
 ) -> Result<(), Error> {
-    handle_audit_notification_with_change(db, sink, request).map(|_| ())
+    handle_audit_notification_with_change(db, device, sink, request).map(|_| ())
 }
 
 pub(crate) fn handle_audit_notification_with_change(
     db: &mut ObjectDatabase,
+    device: ObjectIdentifier,
     sink: ObjectIdentifier,
     request: &AuditNotificationRequest,
 ) -> Result<bool, Error> {
@@ -37,7 +45,7 @@ pub(crate) fn handle_audit_notification_with_change(
             return Err(service_request_denied());
         }
     }
-    let apdu_timeout_ms = configured_apdu_timeout(db)?;
+    let apdu_timeout_ms = configured_apdu_timeout(db, device)?;
     let object = db
         .get_mut(&sink)
         .expect("sink existence was checked before Device timeout lookup");
@@ -47,16 +55,18 @@ pub(crate) fn handle_audit_notification_with_change(
     storage.store_notifications_with_change(&request.notifications, apdu_timeout_ms)
 }
 
-/// Store one decoded and authorized confirmed notification batch.
+/// Store one decoded and authorized confirmed notification batch, as
+/// [`handle_audit_notification`] does.
 ///
 /// Retained as a compatibility alias for the original confirmed-only receiver
 /// API; both inbound AuditNotification forms use the same atomic storage owner.
 pub fn handle_confirmed_audit_notification(
     db: &mut ObjectDatabase,
+    device: ObjectIdentifier,
     sink: ObjectIdentifier,
     request: &AuditNotificationRequest,
 ) -> Result<(), Error> {
-    handle_audit_notification(db, sink, request)
+    handle_audit_notification(db, device, sink, request)
 }
 
 /// Check one sink-owned completed confirmed receipt without mutation.
@@ -80,8 +90,10 @@ pub(crate) fn has_completed_confirmed_audit_receipt(
 /// batch with its completed receipt, both stored atomically, or an
 /// unconfirmed one without. The commit is queued so the caller can await it
 /// without the guard and then [finish](finish_audit_notification) the batch.
+/// The APDU_Timeout comes from `device`, as in [`handle_audit_notification`].
 pub(crate) fn stage_audit_notification(
     db: &mut ObjectDatabase,
+    device: ObjectIdentifier,
     sink: ObjectIdentifier,
     request: &AuditNotificationRequest,
     receipt: Option<CompletedAuditReceipt>,
@@ -98,7 +110,7 @@ pub(crate) fn stage_audit_notification(
             return Err(service_request_denied());
         }
     }
-    let apdu_timeout_ms = configured_apdu_timeout(db)?;
+    let apdu_timeout_ms = configured_apdu_timeout(db, device)?;
     let storage = db
         .get_mut(&sink)
         .and_then(|object| object.audit_log_notification_sink_internal())
@@ -124,9 +136,10 @@ pub(crate) fn finish_audit_notification(
         .map_err(|_| operational_problem())
 }
 
-/// The [selected Device](ObjectDatabase::selected_device)'s APDU_Timeout.
-fn configured_apdu_timeout(db: &ObjectDatabase) -> Result<u32, Error> {
-    let Some(device) = db.selected_device().and_then(|oid| db.get(&oid)) else {
+/// `device`'s APDU_Timeout: the identity's Device, never whichever Device has
+/// the lowest instance (#2228).
+fn configured_apdu_timeout(db: &ObjectDatabase, device: ObjectIdentifier) -> Result<u32, Error> {
+    let Some(device) = db.get(&device) else {
         return Err(operational_problem());
     };
     let Ok(PropertyValue::Unsigned(timeout)) =

@@ -20,6 +20,8 @@ mod edges;
 
 #[path = "audit_forwarder_boundary_tests.rs"]
 mod boundaries;
+#[path = "audit_identity_device_tests.rs"]
+mod identity_device;
 #[path = "audit_forwarder_recovery_tests.rs"]
 mod recovery;
 
