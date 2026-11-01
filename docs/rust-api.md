@@ -4085,8 +4085,9 @@ create fail (#1437). A few read-only properties take a CreateObject initial
 value: `BACnetObject::creation_only_properties` lists the ones an object sets
 whole only at creation, and the server gives such a value, sent without an
 array index, to `BACnetObject::initialize_property` instead of the write
-route (#1429). The built-in Analog Input, Output and Value take Units (an
-Enumerated up to 65535). The Multi-state Input, Output and Value take
+route (#1429). The built-in Analog Input, Output and Value, and Integer,
+Positive Integer and Large Analog Value, take Units (an Enumerated up to
+65535). The Multi-state Input, Output and Value take
 Number_Of_States (1 to `multistate::MAX_NUMBER_OF_STATES`, 1024),
 which resizes State_Text. A count is refused with `PROPERTY/VALUE_OUT_OF_RANGE`
 if a value the object holds would name a state past it. WriteProperty still

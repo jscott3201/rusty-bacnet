@@ -10,6 +10,14 @@ const PROPERTY_CAPABILITIES_EXPLANATION: &str = "Property rows aggregate configu
 /// WriteProperty as a whole, but a CreateObject initial value sets them.
 const CREATION_ONLY_LABEL: &str = "Whole value set only by CreateObject";
 
+/// What a row without properties says instead of a property list: only a
+/// type the application registered a constructor for, with no instance in
+/// the database, has none (#2173). The generator never calls that
+/// constructor, so the properties and deleteability are the built object's.
+const REGISTERED_WITHOUT_INSTANCE: &str = "Createable through a constructor the application \
+registered; no instance exists to describe, so the properties and deleteability are \
+those of the object the constructor builds";
+
 /// A row's access as the text and Markdown PICS print it: the flags, and for
 /// a row writes of another property change
 /// ([`PropertySupport::written_through`]) a note saying so, since no write
@@ -86,6 +94,10 @@ impl Pics {
             ));
             if let Some(names) = creation_only_names(ot) {
                 out.push_str(&format!("  {CREATION_ONLY_LABEL}: {names}\n"));
+            }
+            if ot.supported_properties.is_empty() {
+                out.push_str(&format!("  {REGISTERED_WITHOUT_INSTANCE}.\n"));
+                continue;
             }
             out.push_str("  Properties:\n");
             for prop in &ot.supported_properties {
@@ -199,6 +211,10 @@ impl Pics {
                 out.push_str(&format!("- {CREATION_ONLY_LABEL}: {names}\n"));
             }
             out.push('\n');
+            if ot.supported_properties.is_empty() {
+                out.push_str(&format!("{REGISTERED_WITHOUT_INSTANCE}.\n\n"));
+                continue;
+            }
             out.push_str("| Property | Access |\n");
             out.push_str("|----------|--------|\n");
             for prop in &ot.supported_properties {

@@ -232,6 +232,11 @@ fn the_pics_lists_a_registered_type_with_no_instance_without_building_one() {
         assert!(support.supported_properties.is_empty(), "{kind:?}");
         assert!(support.creation_only_properties.is_empty(), "{kind:?}");
     }
+    // The renderings say why the row has no properties.
+    let pics = generate_pics(&db, &registered, &PicsConfig::default());
+    let note = "no instance exists to describe";
+    assert_eq!(pics.generate_text().matches(note).count(), 2);
+    assert_eq!(pics.generate_markdown().matches(note).count(), 2);
 }
 
 #[test]

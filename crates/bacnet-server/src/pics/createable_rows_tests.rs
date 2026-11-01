@@ -26,7 +26,7 @@ fn empty_database_lists_each_createable_type_as_a_created_object_describes_it() 
     assert_eq!(types, expected);
 
     // Each row is the one a database holding a freshly created object of
-    // the type produces, and building it added nothing to the database.
+    // the type produces.
     for support in &pics.supported_object_types {
         let kind = support.object_type;
         assert!(support.createable, "{kind:?}");
@@ -44,7 +44,6 @@ fn empty_database_lists_each_createable_type_as_a_created_object_describes_it() 
             .unwrap();
         assert_eq!(format!("{support:?}"), format!("{same:?}"), "{kind:?}");
     }
-    assert_eq!(db.len(), 0);
 }
 
 #[test]

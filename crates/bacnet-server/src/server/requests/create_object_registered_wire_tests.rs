@@ -256,11 +256,9 @@ async fn a_registered_analog_value_constructor_replaces_the_built_in() {
     )
     .await;
     assert_eq!(
-        &response[..4],
-        &[0x50, 5, CREATE.to_raw(), 0x0E],
-        "{response:?}"
+        response,
+        refused(ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY, 1)
     );
-    assert_eq!(response.last(), Some(&1), "{response:?}");
     assert_eq!(fixture.db.read().await.len(), before);
 }
 
@@ -450,4 +448,30 @@ async fn a_registered_type_refuses_a_taken_identifier_and_the_reserved_instance(
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.db.read().await.len(), before);
+}
+
+#[tokio::test]
+async fn creates_answers_exactly_what_create_object_builds() {
+    // The registry's type-level answer, which the PICS reports, against
+    // what CreateObject does: every type the Device lists, plus a
+    // registered and an unregistered proprietary one, so the two can't
+    // drift apart.
+    let mut fixture = Fixture::new(None);
+    with_vendor(&mut fixture);
+    let kinds = bacnet_objects::device::SUPPORTED_OBJECT_TYPES
+        .iter()
+        .copied()
+        .chain([vendor_type(), ObjectType::from_raw(VENDOR_TYPE + 1)]);
+    for kind in kinds {
+        let response = send(&fixture, request(ObjectSpecifier::Type(kind), vec![])).await;
+        let built = response[0] == 0x30;
+        if built {
+            created(&response);
+        }
+        assert_eq!(
+            built,
+            fixture.config.object_constructors.creates(kind),
+            "{kind:?}: {response:?}"
+        );
+    }
 }
