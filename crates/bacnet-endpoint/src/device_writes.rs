@@ -48,7 +48,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     ///
     /// Startup requires a server role and a concrete built-in local Device in
     /// the attached database ([`ObjectDatabase::local_device`]: the lowest
-    /// instance when it holds several). Writes reach only that Device; any
+    /// instance when it holds several, which preflight requires to be the
+    /// identity's). Writes reach only that Device; any
     /// other Device is out of scope. A composed identity must match it and
     /// contain only the services the responder executes. Validation errors
     /// precede configuration mutation and transport startup, allowing correction

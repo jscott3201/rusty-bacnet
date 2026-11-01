@@ -503,11 +503,12 @@ name the actual plan source after its existing generation check. Failed CreateOb
 WPM retains its successful prefix and failed coordinate.
 
 `BACnetServer::write_local` requires a final `LocalCommandSource` argument:
-`ServerDevice` or `Object(oid)`. Both require a selected concrete local Device for
+`ServerDevice` or `Object(oid)`. Both require the identity's Device object for
 tracked commands; the object form also requires an existing concrete local
 initiator under the database guard. Missing or wildcard-only Device identity and
 missing initiators fail closed. Unrelated local writes retain their behavior
-without a Device. The selected Device owns correction rights; changing the local
+without a Device. The identity's Device owns correction rights, even beside a
+lower-instance Device added later (#2227); changing the local
 initiator changes the published source but not that owner. Custom objects retain
 the default generic writer unless they implement the new hook. Writable
 decorators must forward it, as the endpoint source-reporting decorator does.
@@ -4719,11 +4720,12 @@ read that fails logs a failure record carrying its error (OBJECT /
 UNKNOWN_OBJECT for a missing object) where it used to log a null value (#1183).
 Indexed reference execution is not added.
 
-`ObjectDatabase::selected_device` is the Device the database represents (the
-lowest instance when it holds several). `ObjectDatabase::local_device` returns
-a `LocalDevice`, whose `is_local` tells whether a reference's optional Device
-member keeps it inside this device: no member, or the selected Device when its
-instance isn't the wildcard. The Trend Log poller and the server's Event
+`ObjectDatabase::selected_device` is the lowest-instance Device the database
+holds. `ObjectDatabase::local_device` returns a `LocalDevice`, the Device the
+database speaks for: the identity's Device once a server or endpoint with an
+identity has started on it (#2227), otherwise the selected Device. Its
+`is_local` tells whether a reference's optional Device member keeps it inside
+this device: no member, or that Device. The Trend Log poller and the server's Event
 Enrollment evaluation (monitored, setpoint and fault references) both resolve
 references through it, so a FLOATING_LIMIT setpoint naming this device is read
 and reported like an unqualified one (#1184).
@@ -4734,20 +4736,26 @@ A BACnet device has one Device object (Clause 12.11), but a database may hold
 several. The database selects the lowest instance independently of insertion order
 (#1204). Server startup validates that selection against its explicit identity:
 
-- **This device's Device object** is `selected_device`: wildcard Device reads,
-  the APDU_Timeout an Audit Log
-  sink uses on receipt, and the services the standalone PICS reports.
+- **`selected_device`, the lowest Device,** is the fallback target of a
+  wildcard Device read with no executor around it, and the Device whose
+  services the standalone PICS reports.
 - **Announcements, notifications and served identity fields** remain bound to
   the startup `DeviceIdentity`. Who-Is, Who-Has and manual I-Am require that
   Device to remain present. COV, COV-multiple, event and target Audit
   notifications name it as their initiator even while it is missing, and an
-  event recipient naming it is served locally (#2217). Later lower-instance
-  insertion rebinds none of them.
+  event recipient naming it is served locally (#2217). An Audit Log sink takes
+  APDU_Timeout from it, and refuses a batch with DEVICE / OPERATIONAL_PROBLEM
+  while it is missing (#2228). Later lower-instance insertion rebinds none of
+  them.
 - **Device-qualified references** go through `local_device().is_local`: Trend
   Log polling, Event Enrollment references, Command action lists, the
   Schedule, Channel, Staging and Averaging reference rewrites, and an Audit
   Log's forwarding parent. A reference naming another Device in the same
-  database still points at another device.
+  database still points at another device. The server binds `local_device`
+  to the identity's Device at start, so these, a local command's Value_Source
+  owner, a BUFFER_READY report's buffer reference, the live COV lists and an
+  Event Log's check that a received notification isn't its own all keep
+  naming that Device beside a lower one added later (#2227).
 - **Audit and endpoint identity** need a concrete built-in Device: the
   identity's for target Audit Reporters, `local_device` for the endpoint's
   source Audit Reporter and endpoint Device writes. It names this device in
@@ -7421,8 +7429,8 @@ network and address. The helpers only renew: after
 The full server owns the served Device execution profile. Every Device's
 `Protocol_Services_Supported` reports the fixed `EXECUTED_SERVICES`, with the
 existing clock-dependent time-service filter. Both `Active_COV_Subscriptions`
-and `Active_COV_Multiple_Subscriptions` are present: the selected lowest Device
-gets live lists and other Devices get empty lists. Its `Device_Address_Binding`
+and `Active_COV_Multiple_Subscriptions` are present: the identity's Device
+gets live lists and other Devices get empty lists (#2227). Its `Device_Address_Binding`
 lists the server's device bindings at the time of the read (#1369): each
 configured `DeviceBinding` and each device whose I-Am arrived in the last ten
 minutes (a targeted Who-Is's answer included), in instance order, with network

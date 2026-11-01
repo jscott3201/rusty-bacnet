@@ -471,3 +471,33 @@ fn received_reports_on_event_log_buffers_and_this_devices_own_go_in_no_log() {
         ]
     );
 }
+
+/// A notification this device built names the Device its server is bound to,
+/// so it goes in no log when it comes back, even beside a lower Device the
+/// application added once the server ran (#2227).
+#[test]
+fn this_devices_own_notification_beside_a_lower_device_goes_in_no_log() {
+    let mut db = database(&[], 8);
+    received_log(&mut db, 1, true);
+    let device = |instance: u32| {
+        DeviceObject::new(DeviceConfig {
+            identity: crate::DeviceIdentity::new(instance, 0)
+                .unwrap()
+                .with_name(format!("Device-{instance}")),
+            ..DeviceConfig::default()
+        })
+        .unwrap()
+    };
+    db.add(Box::new(device(7))).unwrap();
+    db.bind_local_device_internal(Some(ObjectIdentifier::new(ObjectType::DEVICE, 7).unwrap()));
+    db.add(Box::new(device(5))).unwrap();
+    let from = |instance| EventNotificationRequest {
+        initiating_device_identifier: ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap(),
+        ..received()
+    };
+    assert!(!db.takes_received_event_notification(&from(7)));
+    db.log_received_event_notification(&from(7));
+    assert!(records(&mut db, log_oid(1)).is_empty());
+    // The lower Device isn't the one this device speaks for.
+    assert!(db.takes_received_event_notification(&from(5)));
+}

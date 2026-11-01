@@ -149,3 +149,41 @@ async fn cov_names_the_identity_instance_without_a_device_object() {
     assert_eq!(seen, vec![(61, device()), (63, device())]);
     wire.server.stop().await.unwrap();
 }
+
+/// The live Active_COV_Subscriptions and Active_COV_Multiple_Subscriptions
+/// are served on the identity's Device, by ReadProperty and RPM, once the
+/// application adds a lower Device; the lower one reads empty lists (#2227).
+#[tokio::test(start_paused = true)]
+async fn live_cov_lists_stay_on_the_identity_device_beside_a_lower_one() {
+    let mut wire = Wire::start(ServerConfig::default()).await;
+    wire.server.db.write().await.add(lower_device()).unwrap();
+    let lower = ObjectIdentifier::new(ObjectType::DEVICE, 5).unwrap();
+    simple_ack(
+        wire.send(&direct(), subscribe_cov(61, av(1), Some(false), None))
+            .await,
+    );
+    simple_ack(
+        wire.send(
+            &direct(),
+            subscribe_cov_property_multiple(
+                63,
+                false,
+                Some((300, 1)),
+                vec![(av(1), vec![plain(PV)])],
+            ),
+        )
+        .await,
+    );
+    for property in [ACTIVE, MULTIPLE] {
+        let live = wire.read(device(), property, None).await.unwrap();
+        assert!(
+            !live.is_empty(),
+            "{property:?} is live on the identity's Device"
+        );
+        assert_eq!(wire.read(wildcard(), property, None).await.unwrap(), live);
+        assert!(wire.read(lower, property, None).await.unwrap().is_empty());
+    }
+    let ack = wire.rpm(vec![(device(), vec![(ACTIVE, None)])]).await;
+    assert!(!rows(&ack, ACTIVE)[0].is_empty(), "RPM serves it too");
+    wire.server.stop().await.unwrap();
+}

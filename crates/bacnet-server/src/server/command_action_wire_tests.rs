@@ -425,3 +425,16 @@ async fn command_writing_its_own_present_value_is_refused_busy() {
     assert_eq!(read_wire(&mut h, cmd(1), PV, None).await, Ok(unsigned(7)));
     assert_eq!(state(&mut h, 1).await, (false, false));
 }
+
+/// A command naming the identity's Device 856 stays local once the
+/// application adds a lower Device 5 (#2227).
+#[tokio::test(start_paused = true)]
+async fn command_naming_the_identity_device_stays_local_beside_a_lower_one() {
+    let mut h = start().await;
+    let lower = crate::local_device::lower_device(5);
+    h.server.database().write().await.add(lower).unwrap();
+    write_pv(&mut h, 1, 5).await.unwrap();
+    idle(&h, 1).await;
+    assert_eq!(flags(&mut h, 5).await, [false, true]);
+    assert_eq!(slot8(&h, ao(2)).await, PropertyValue::Real(80.0));
+}

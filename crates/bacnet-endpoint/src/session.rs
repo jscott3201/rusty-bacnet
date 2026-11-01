@@ -451,7 +451,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     ///
     /// [`start`](Self::start) requires a concrete built-in local Device
     /// ([`ObjectDatabase::local_device`]: the lowest instance when the database
-    /// holds several) matching the optional identity, and one selected Reporter capability with
+    /// holds several, which preflight requires to be the identity's) matching the optional identity, and one selected Reporter capability with
     /// no conflicting source Reporter. Preflight validation changes no source flags
     /// and leaves configuration retryable; post-ingress failure joins terminal cleanup.
     /// Successful startup installs the Device

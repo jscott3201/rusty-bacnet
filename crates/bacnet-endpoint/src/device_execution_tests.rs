@@ -277,6 +277,12 @@ async fn endpoint_wildcard_keeps_frozen_identity_and_identity_free_selection_sta
             ))
             .unwrap();
         assert_eq!(database.read().await.selected_device(), Some(oid(1)));
+        // A composed identity binds the database to its Device (#2227); an
+        // identity-free endpoint keeps the lowest.
+        assert_eq!(
+            database.read().await.local_device().identifier(),
+            Some(oid(if composed { 123 } else { 1 }))
+        );
         let wildcard = oid(ObjectIdentifier::MAX_INSTANCE);
         for phase in 0..3 {
             if phase == 1 {
@@ -336,4 +342,20 @@ async fn endpoint_wildcard_keeps_frozen_identity_and_identity_free_selection_sta
         client.stop().await.unwrap();
         endpoint.stop().await.unwrap();
     }
+}
+
+/// A preflight that fails leaves the database unbound (#2227): with the
+/// identity's Device removed, it names no Device rather than the identity's.
+#[tokio::test]
+async fn a_failed_preflight_leaves_the_database_unbound() {
+    let (session, _peer, _starts) = session(SessionRole::ServerOnly);
+    let mut session = session.with_database(database(&[123])).device(
+        crate::DeviceIdentity::new(123, 42)
+            .unwrap()
+            .with_services(&[ServiceSupported::SUBSCRIBE_COV]),
+    );
+    assert!(session.start().await.is_err());
+    let database = session.database.as_ref().unwrap();
+    database.write().await.remove(&oid(123)).unwrap();
+    assert_eq!(database.read().await.local_device().identifier(), None);
 }

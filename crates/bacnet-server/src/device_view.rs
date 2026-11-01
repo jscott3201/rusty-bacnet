@@ -85,7 +85,7 @@ impl<'a> DeviceReadContext<'a> {
             identity: None,
         }
     }
-    /// The same context, serving the selected Device's COV lists from `live`.
+    /// The same context, serving the local Device's COV lists from `live`.
     /// A request plans with the context alone, since planning reads no value,
     /// then samples the lists its plan reads and serves them from here (#1213).
     pub(crate) fn with_live<'b>(self, live: Option<&'b LiveDeviceCov>) -> DeviceReadContext<'b>
@@ -207,7 +207,7 @@ impl BACnetObject for DeviceReadView<'_> {
                 })
             }
             // The server's bindings, as the request sampled them for the
-            // selected Device (#1369). Any other Device, and an endpoint,
+            // local Device, the identity's (#1369, #2227). Any other Device, and an endpoint,
             // which keeps no bindings to serve, read an empty list.
             P::DEVICE_ADDRESS_BINDING => Ok(self
                 .context
