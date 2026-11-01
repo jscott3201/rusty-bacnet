@@ -4,6 +4,7 @@
 //! simulated values, the event algorithm, Masked_Alarm_Values and the return
 //! to service all show through.
 
+use crate::traits::Timed;
 use std::time::Duration;
 
 use bacnet_types::enums::PropertyIdentifier as P;
@@ -238,13 +239,13 @@ fn access_door_secured_status_follows_a_pulse_and_its_relock() {
     ] {
         command(&mut door, Some(value), 8);
         assert_eq!(secured(&door), UNSECURED, "{value:?}");
-        assert!(!door.advance_time_internal(Duration::from_millis((tenths - 1) * 100)));
+        assert!(!door.advance_time(Duration::from_millis((tenths - 1) * 100)));
         assert_eq!(secured(&door), UNSECURED, "{value:?} one tenth short");
         // The relock relinquishes the slot and the door reads secure again,
         // in a COV snapshot as well.
-        assert!(door.advance_time_internal(Duration::from_millis(100)));
+        assert!(door.advance_time(Duration::from_millis(100)));
         assert_eq!(secured(&door), SECURED, "{value:?} relocked");
-        let snapshot = door.cov_snapshot_internal().unwrap();
+        let snapshot = door.cov_snapshot().unwrap();
         assert_eq!(
             snapshot.read_property(P::SECURED_STATUS, None).unwrap(),
             PropertyValue::Enumerated(SECURED.to_raw())

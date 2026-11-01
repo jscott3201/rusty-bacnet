@@ -1,6 +1,7 @@
 //! Notification Forwarder object tests (#1225).
 
 use super::*;
+use crate::traits::MonotonicClock;
 use bacnet_encoding::constructed::{
     encode_destination_list, encode_event_notification_subscription_list, encode_port_permission,
 };

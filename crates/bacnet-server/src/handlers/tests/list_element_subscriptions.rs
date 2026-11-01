@@ -43,8 +43,25 @@ fn forwarder_db(
         .unwrap();
     let oid = forwarder.object_identifier();
     let mut db = ObjectDatabase::new();
+    db.set_monotonic_clock_internal(Some(std::sync::Arc::new(|| NOW.with(|now| now.get()))));
     db.add(Box::new(forwarder)).unwrap();
     (db, oid)
+}
+
+std::thread_local! {
+    /// The monotonic time `advance` has reached, for this test's thread.
+    static NOW: std::cell::Cell<Duration> = const { std::cell::Cell::new(Duration::ZERO) };
+}
+
+/// Move the database's monotonic clock on by `by` and run the forwarder's
+/// pass at the new time.
+fn advance(db: &mut ObjectDatabase, oid: ObjectIdentifier, by: Duration) {
+    let now = NOW.with(|now| {
+        now.set(now.get() + by);
+        now.get()
+    });
+    let object = db.get_mut(&oid).unwrap();
+    object.timed().unwrap().advance_monotonic_time(now);
 }
 
 fn edit(
@@ -239,25 +256,26 @@ fn malformed_elements_are_refused_by_position() {
 #[test]
 fn an_edit_leaves_the_deadlines_of_other_entries_alone() {
     let (mut db, oid) = forwarder_db(&[device(1, 2)]);
-    let advance = |db: &mut ObjectDatabase, by| {
-        db.get_mut(&oid).unwrap().advance_time_internal(by);
-    };
-    advance(&mut db, MINUTE / 2);
+    advance(&mut db, oid, MINUTE / 2);
     edit(&mut db, oid, framed(&[device(2, 5)]), false).unwrap();
     // Device 1 still lapses two minutes after it was written, not at its
     // rounded-up minute count from the edit.
     assert_eq!(
-        db.get(&oid).unwrap().next_monotonic_deadline_internal(),
+        db.get_mut(&oid)
+            .unwrap()
+            .timed()
+            .unwrap()
+            .next_monotonic_deadline(),
         Some(2 * MINUTE)
     );
-    advance(&mut db, MINUTE + MINUTE / 2);
+    advance(&mut db, oid, MINUTE + MINUTE / 2);
     assert_eq!(read(&db, oid), served(&[device(2, 4)]));
 }
 
 #[test]
 fn a_lapsed_entry_is_not_found_and_can_be_added_afresh() {
     let (mut db, oid) = forwarder_db(&[device(1, 1)]);
-    db.get_mut(&oid).unwrap().advance_time_internal(MINUTE);
+    advance(&mut db, oid, MINUTE);
     assert_eq!(read(&db, oid), served(&[]));
     assert_eq!(
         list_refusal(edit(&mut db, oid, framed(&[device(1, 1)]), true)),

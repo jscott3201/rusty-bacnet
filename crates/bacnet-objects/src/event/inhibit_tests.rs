@@ -3,6 +3,7 @@
 //! offnormal and normal transitions but not fault detection (Clause
 //! 13.2.2.1), and a configured text is what a transition stores.
 
+use crate::traits::Timed;
 use bacnet_types::bitstring::LimitEnable;
 use bacnet_types::enums::{
     EngineeringUnits, EventState, EventType, PropertyIdentifier as P, Reliability,
@@ -251,7 +252,10 @@ fn a_configured_text_is_the_message_a_transition_stores() {
 #[test]
 fn an_inhibited_log_holds_its_buffer_ready_report() {
     let mut log = EventLogObject::new(1, "EL-1", 8).unwrap();
-    log.bind_clock_internal(Some(std::sync::Arc::new(FixedClock)));
+    log.bind_clocks(&crate::traits::Clocks {
+        clock: Some(std::sync::Arc::new(FixedClock)),
+        ..crate::traits::Clocks::default()
+    });
     write(
         &mut log,
         P::NOTIFICATION_THRESHOLD,

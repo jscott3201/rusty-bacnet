@@ -5,6 +5,7 @@ use crate::clock::{ClockFrame, ClockReader};
 use crate::device::{AuditRecipientChangeSink, AuditWriteSource, DeviceConfig, DeviceObject};
 use crate::property_metadata::{PropertyConformance, PropertyWriteCapability};
 use crate::traits::BACnetObject;
+use crate::traits::Timed;
 use bacnet_types::constructed::BACnetRecipient;
 use bacnet_types::enums::{ObjectType, Segmentation, ServiceSupported};
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
@@ -77,7 +78,10 @@ fn configured(clock: bool, segmented: bool, cov: bool, audit: u8) -> (DeviceObje
     .unwrap();
     object.set_device_uuid([7; 16]);
     if clock {
-        object.bind_clock_internal(Some(Arc::new(Clock)));
+        object.bind_clocks(&crate::traits::Clocks {
+            clock: Some(Arc::new(Clock)),
+            ..crate::traits::Clocks::default()
+        });
     }
     if !cov {
         object.set_services_supported(&[ServiceSupported::READ_PROPERTY]);
@@ -215,9 +219,9 @@ fn device_eight_masks_compose_with_clock_segmentation_cov_and_audit_metadata() {
                         }
                         assert_eq!(unrelated(&object), values);
                         assert_eq!(sink.changes.load(Ordering::SeqCst), 0);
-                        assert!(!object.advance_monotonic_time_internal(Duration::from_secs(30)));
-                        assert!(object.durable_writes_internal().is_none());
-                        assert!(object.cov_snapshot_internal().is_none());
+                        assert!(!object.advance_monotonic_time(Duration::from_secs(30)));
+                        assert!(object.durable_writes().is_none());
+                        assert!(object.cov_snapshot().is_none());
                     }
                 }
             }
@@ -348,14 +352,20 @@ fn device_expired_stage_corrects_tags_and_accepts_the_next_write() {
     let values = unrelated(&object);
     staged(
         object
-            .durable_writes_internal()
+            .durable_writes()
             .unwrap()
             .stage_writes(&[whole("never-served")]),
     )
     .block();
     assert_eq!(store.saved(), Some(snapshot("never-served")));
-    assert!(!object.advance_monotonic_time_internal(Duration::ZERO));
-    assert!(!object.advance_monotonic_time_internal(Duration::from_secs(11)));
+    object
+        .durable_writes()
+        .unwrap()
+        .expire_staged(Duration::ZERO);
+    object
+        .durable_writes()
+        .unwrap()
+        .expire_staged(Duration::from_secs(11));
     object.wait_for_tag_saves();
     assert_eq!(store.saved(), Some(snapshot("saved")));
     assert_eq!(store.attempts(), 2);

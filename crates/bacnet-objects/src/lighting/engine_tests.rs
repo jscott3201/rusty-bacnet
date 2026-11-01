@@ -2,6 +2,7 @@
 //! halting a command in progress (#1384; Clause 12.54, Tables 12-67 and
 //! 12-68, Clause 12.54.6.1), on a hand-set monotonic clock.
 
+use crate::traits::Timed;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -31,7 +32,10 @@ impl Fixture {
         let mut lo = LightingOutputObject::new(1, "LO-1").unwrap();
         let now = Arc::new(Mutex::new(Duration::ZERO));
         let source = Arc::clone(&now);
-        lo.bind_monotonic_clock_internal(Some(Arc::new(move || *source.lock().unwrap())));
+        lo.bind_clocks(&crate::traits::Clocks {
+            monotonic: Some(Arc::new(move || *source.lock().unwrap())),
+            ..crate::traits::Clocks::default()
+        });
         Self { lo, now }
     }
 
@@ -110,11 +114,11 @@ impl Fixture {
     /// Advance the object to the clock, as the server's task does.
     pub(super) fn advance(&mut self) -> bool {
         let now = *self.now.lock().unwrap();
-        self.lo.advance_monotonic_time_internal(now)
+        self.lo.advance_monotonic_time(now)
     }
 
     pub(super) fn deadline(&self) -> Option<Duration> {
-        self.lo.next_monotonic_deadline_internal()
+        self.lo.next_monotonic_deadline()
     }
 }
 
@@ -423,7 +427,7 @@ fn a_cov_snapshot_reads_as_the_object_did_when_it_was_taken() {
     let mut f = Fixture::new();
     f.command(fade_to(100.0, Some(10_000), None));
     f.at(2_000);
-    let snapshot = f.lo.cov_snapshot_internal().unwrap();
+    let snapshot = f.lo.cov_snapshot().unwrap();
     f.at(5_000);
     assert_eq!(
         snapshot.read_property(TV, None).unwrap(),
@@ -444,9 +448,14 @@ fn starting_a_fade_wakes_the_server_task_and_nothing_else_does() {
     let mut f = Fixture::new();
     let wakes = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&wakes);
-    f.lo.bind_deadline_waker_internal(Some(Arc::new(move || {
-        counter.fetch_add(1, Ordering::SeqCst);
-    })));
+    let source = Arc::clone(&f.now);
+    f.lo.bind_clocks(&crate::traits::Clocks {
+        monotonic: Some(Arc::new(move || *source.lock().unwrap())),
+        deadline_waker: Some(Arc::new(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+        })),
+        ..crate::traits::Clocks::default()
+    });
     f.present(PropertyValue::Real(40.0), 16);
     f.command(fade_to(40.0, Some(1_000), None));
     f.command(step(Op::STEP_UP, None, 16));
@@ -460,16 +469,16 @@ fn with_no_clock_bound_logical_time_drives_a_fade() {
     let mut lo = LightingOutputObject::new(1, "LO-1").unwrap();
     lo.set_lighting_command(fade_to(100.0, Some(1_000), None))
         .unwrap();
-    assert!(lo.advance_time_internal(ms(500)));
+    assert!(lo.advance_time(ms(500)));
     assert_eq!(
         lo.read_property(TV, None).unwrap(),
         PropertyValue::Real(50.0)
     );
-    assert!(lo.advance_time_internal(ms(500)));
+    assert!(lo.advance_time(ms(500)));
     assert_eq!(
         lo.read_property(PropertyIdentifier::IN_PROGRESS, None)
             .unwrap(),
         PropertyValue::Enumerated(IDLE.to_raw())
     );
-    assert!(!lo.advance_time_internal(ms(500)));
+    assert!(!lo.advance_time(ms(500)));
 }

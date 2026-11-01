@@ -1,3 +1,4 @@
+use crate::traits::Timed;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -222,7 +223,10 @@ fn audit_capacity_eviction_and_total_wrap_are_transactional() {
 fn zero_capacity_counts_then_discards_ordinary_and_status_records() {
     let persistence = Arc::new(MemoryPersistence::default());
     let mut log = AuditLogObject::new(1, "AL-1", 0, persistence).unwrap();
-    log.bind_clock_internal(Some(Arc::new(FixedClock(Some(frame(1))))));
+    log.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(FixedClock(Some(frame(1))))),
+        ..crate::traits::Clocks::default()
+    });
 
     assert_eq!(
         log.add_record(record(0, BACnetAuditLogDatum::TimeChange(1.0)))
@@ -573,7 +577,10 @@ fn log_enable_commit_failure_preserves_persistent_generation_and_retries() {
     let mut log = AuditLogObject::new(1, "AL-1", 4, persistence.clone()).unwrap();
     log.add_record(record(1, BACnetAuditLogDatum::TimeChange(1.0)))
         .unwrap();
-    log.bind_clock_internal(Some(Arc::new(FixedClock(Some(frame(2))))));
+    log.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(FixedClock(Some(frame(2))))),
+        ..crate::traits::Clocks::default()
+    });
     let before = persistence.snapshot.lock().unwrap().clone().unwrap();
     log.write_property(
         PropertyIdentifier::LOG_ENABLE,
@@ -647,7 +654,10 @@ fn clocked_enable_and_purge_statuses_persist_and_record_count_is_read_only() {
 
     let mut invalid = frame(1);
     invalid.local_time.hour = 24;
-    log.bind_clock_internal(Some(Arc::new(FixedClock(Some(invalid)))));
+    log.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(FixedClock(Some(invalid)))),
+        ..crate::traits::Clocks::default()
+    });
     let error = log
         .write_property(
             PropertyIdentifier::LOG_ENABLE,
@@ -663,7 +673,10 @@ fn clocked_enable_and_purge_statuses_persist_and_record_count_is_read_only() {
     assert_matches_snapshot(&log, &before);
     assert_eq!(persistence.snapshot.lock().unwrap().as_ref(), Some(&before));
 
-    log.bind_clock_internal(Some(Arc::new(FixedClock(Some(frame(2))))));
+    log.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(FixedClock(Some(frame(2))))),
+        ..crate::traits::Clocks::default()
+    });
     log.write_property(
         PropertyIdentifier::LOG_ENABLE,
         None,

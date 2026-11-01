@@ -49,7 +49,10 @@ fn logs() -> [Box<dyn BACnetObject>; 3] {
         Box::new(TrendLogMultipleObject::new(1, "TLM-1", 4).unwrap()),
     ];
     for log in &mut logs {
-        log.bind_clock_internal(Some(Arc::new(FixedClock)));
+        log.timed().unwrap().bind_clocks(&crate::traits::Clocks {
+            clock: Some(Arc::new(FixedClock)),
+            ..crate::traits::Clocks::default()
+        });
     }
     logs
 }

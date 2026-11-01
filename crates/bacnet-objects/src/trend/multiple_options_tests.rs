@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::clock::{ClockFrame, ClockReader};
+use crate::traits::Timed;
 use bacnet_types::bitstring::LogStatus;
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::constructed::{BACnetLogMultipleRecord, LogData, LogValue};
@@ -55,7 +56,10 @@ fn datetime((date, time): (Date, Time)) -> PropertyValue {
 fn clocked(capacity: u32) -> (TrendLogMultipleObject, Arc<Clock>) {
     let clock = Arc::new(Clock(Mutex::new(frame(at(9, 0)))));
     let mut log = TrendLogMultipleObject::new(1, "TLM-1", capacity).unwrap();
-    log.bind_clock_internal(Some(clock.clone()));
+    log.bind_clocks(&crate::traits::Clocks {
+        clock: Some(clock.clone()),
+        ..crate::traits::Clocks::default()
+    });
     (log, clock)
 }
 

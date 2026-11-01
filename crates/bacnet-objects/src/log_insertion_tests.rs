@@ -8,7 +8,12 @@ fn fallible_trend_hook_preserves_state_on_clock_error_and_retries() {
             let mut object = kind.object(2);
             object
                 .object_mut()
-                .bind_clock_internal(clock.map(|clock| clock as Arc<dyn ClockReader>));
+                .timed()
+                .unwrap()
+                .bind_clocks(&crate::traits::Clocks {
+                    clock: clock.map(|clock| clock as Arc<dyn ClockReader>),
+                    ..crate::traits::Clocks::default()
+                });
             object
                 .write(
                     PropertyIdentifier::STOP_WHEN_FULL,
@@ -38,7 +43,14 @@ fn fallible_trend_hook_preserves_state_on_clock_error_and_retries() {
             assert_eq!(object.identities()[0], identities[0]);
             assert_status(&object, LOG_DISABLED);
 
-            object.object_mut().bind_clock_internal(None);
+            object
+                .object_mut()
+                .timed()
+                .unwrap()
+                .bind_clocks(&crate::traits::Clocks {
+                    clock: None,
+                    ..crate::traits::Clocks::default()
+                });
             let before = object.records();
             let identities = object.identities();
             object.add_trend_record(ordinary(3, 30)).unwrap();

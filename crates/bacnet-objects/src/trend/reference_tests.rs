@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::clock::{ClockFrame, ClockReader};
+use crate::traits::Timed;
 use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::{Date, Time};
 
@@ -77,7 +78,10 @@ fn trend_log_write_purges_on_change_and_needs_a_clock_to() {
     // Writing the value already held is no change, so needs no clock.
     tl.write_property(P, None, unset.clone(), None).unwrap();
 
-    tl.bind_clock_internal(Some(Arc::new(FixedClock)));
+    tl.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(FixedClock)),
+        ..crate::traits::Clocks::default()
+    });
     tl.write_property(P, None, framed.clone(), None).unwrap();
     assert_eq!(tl.read_property(P, None).unwrap(), framed);
     assert_eq!(record_count(&tl), 1);
@@ -99,7 +103,10 @@ fn trend_log_write_purges_on_change_and_needs_a_clock_to() {
 #[test]
 fn trend_log_unset_forms_clear_and_null_is_another_datatype() {
     let mut tl = TrendLogObject::new(1, "TL-1", 4).unwrap();
-    tl.bind_clock_internal(Some(Arc::new(FixedClock)));
+    tl.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(FixedClock)),
+        ..crate::traits::Clocks::default()
+    });
     let unset = tl.read_property(P, None).unwrap();
     assert_eq!(unset, PropertyValue::ApplicationData(UNSET.to_vec()));
     // Object or Device instance 4194303 is unset whatever else the reference
@@ -179,7 +186,10 @@ fn trend_log_setter_refuses_a_device_member_that_is_no_device() {
     );
     assert_eq!(tl.read_property(P, None).unwrap(), served);
     // A client may not: the poller reads only its own database.
-    tl.bind_clock_internal(Some(Arc::new(FixedClock)));
+    tl.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(FixedClock)),
+        ..crate::traits::Clocks::default()
+    });
     assert_error(
         tl.write_property(
             P,
@@ -227,7 +237,10 @@ fn trend_log_multiple_serves_one_encoding_per_element() {
 #[test]
 fn trend_log_multiple_indexed_write_checks_only_the_element_written() {
     let mut tlm = TrendLogMultipleObject::new(1, "TLM-1", 4).unwrap();
-    tlm.bind_clock_internal(Some(Arc::new(FixedClock)));
+    tlm.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(FixedClock)),
+        ..crate::traits::Clocks::default()
+    });
     // Element 2, set locally, names another device.
     tlm.add_property_reference(reference(None)).unwrap();
     tlm.add_property_reference(reference(Some(oid(ObjectType::DEVICE, 9))))

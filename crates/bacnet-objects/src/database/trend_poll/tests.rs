@@ -297,8 +297,8 @@ impl BACnetObject for ConfigurableTrend {
     ) -> Result<(), Error> {
         self.inner.write_property(p, i, v, priority)
     }
-    fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
-        self.inner.bind_clock_internal(clock);
+    fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
+        self.inner.timed()
     }
     fn add_trend_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
         self.inner.add_trend_record(record)

@@ -292,7 +292,7 @@ async fn a_settle_task_that_ends_last_drops_the_database_off_the_runtime() {
         .write()
         .await
         .get_mut(&nc(1))
-        .and_then(|class| class.durable_writes_internal())
+        .and_then(|class| class.durable_writes())
         .expect("the class saves")
         .stage_writes(&[PendingWrite {
             property: RECIPIENT_LIST,

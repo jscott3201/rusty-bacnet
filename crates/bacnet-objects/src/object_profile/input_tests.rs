@@ -154,8 +154,7 @@ fn all_inputs_eight_masks_and_oos_states_preserve_existing_metadata() {
                     .write_property(P::OUT_OF_SERVICE, None, PropertyValue::Boolean(!oos), None)
                     .unwrap();
                 assert_eq!(object.property_metadata().as_ref(), metadata);
-                assert!(!object.advance_monotonic_time_internal(Duration::from_secs(20)));
-                assert!(object.cov_snapshot_internal().is_none());
+                assert!(object.timed().is_none());
                 assert_code(
                     object.read_property(P::VALUE_SOURCE, None),
                     ErrorCode::UNKNOWN_PROPERTY,
@@ -253,7 +252,7 @@ fn tags_in_both_oos_states_preserve_network_and_internal_pv_ownership() {
             object.set_present_value_internal(local.clone()).unwrap();
             assert_eq!(object.read_property(P::PRESENT_VALUE, None).unwrap(), local);
             assert_eq!(store.attempts(), if persistent { 2 } else { 0 });
-            assert_eq!(object.durable_writes_internal().is_some(), persistent);
+            assert_eq!(object.durable_writes().is_some(), persistent);
         }
     }
 }
@@ -447,14 +446,20 @@ fn input_monotonic_hooks_correct_expired_stages_without_output_changes() {
         object.provision(optional(7)).unwrap();
         let wait = staged(
             object
-                .durable_writes_internal()
+                .durable_writes()
                 .unwrap()
                 .stage_writes(&[whole("never-served")]),
         );
         wait.block();
         assert_eq!(store.saved(), Some(snapshot("never-served")));
-        assert!(!object.advance_monotonic_time_internal(Duration::ZERO));
-        assert!(!object.advance_monotonic_time_internal(Duration::from_secs(11)));
+        object
+            .durable_writes()
+            .unwrap()
+            .expire_staged(Duration::ZERO);
+        object
+            .durable_writes()
+            .unwrap()
+            .expire_staged(Duration::from_secs(11));
         object.wait();
         assert_eq!(store.saved(), Some(snapshot("saved")));
         assert_eq!(store.attempts(), 2);

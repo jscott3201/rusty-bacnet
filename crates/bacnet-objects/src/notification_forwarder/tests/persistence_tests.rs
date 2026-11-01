@@ -2,6 +2,7 @@
 
 use super::storage::{MemoryPersistence, persistent};
 use super::*;
+use crate::traits::Timed;
 use bacnet_types::enums::PropertyIdentifier as P;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -25,7 +26,7 @@ fn minutes(nf: &NotificationForwarderObject) -> Vec<u32> {
 
 /// Run the operation task's call at `at` and let the save it queues land.
 fn tick(nf: &mut NotificationForwarderObject, at: Duration) -> bool {
-    let lapsed = nf.advance_monotonic_time_internal(at);
+    let lapsed = nf.advance_monotonic_time(at);
     nf.wait_for_saves();
     lapsed
 }
@@ -35,7 +36,10 @@ fn subscribed_recipients_restart_lands_between_the_time_left_and_the_last_subscr
     let storage = Arc::new(MemoryPersistence::default());
     let (clock, set) = manual_clock();
     let mut before = persistent(&storage);
-    before.bind_monotonic_clock_internal(Some(Arc::clone(&clock)));
+    before.bind_clocks(&crate::traits::Clocks {
+        monotonic: Some(Arc::clone(&clock)),
+        ..crate::traits::Clocks::default()
+    });
     let a = |minutes| subscription(device(7), 1, minutes);
     let b = |minutes| subscription(device(8), 1, minutes);
     let c = |minutes| subscription(address(0, &[9]), 2, minutes);
@@ -54,7 +58,10 @@ fn subscribed_recipients_restart_lands_between_the_time_left_and_the_last_subscr
     drop(before);
 
     let mut after = persistent(&storage);
-    after.bind_monotonic_clock_internal(Some(clock));
+    after.bind_clocks(&crate::traits::Clocks {
+        monotonic: Some(clock),
+        ..crate::traits::Clocks::default()
+    });
     let restored = minutes(&after);
     let last_subscribed = [10, 30, 20];
     for ((restored, stopped), subscribed) in restored.iter().zip(at_stop).zip(last_subscribed) {
@@ -103,7 +110,10 @@ fn boot(
 ) -> u32 {
     let (clock, set) = manual_clock();
     let mut nf = persistent(storage);
-    nf.bind_monotonic_clock_internal(Some(clock));
+    nf.bind_clocks(&crate::traits::Clocks {
+        monotonic: Some(clock),
+        ..crate::traits::Clocks::default()
+    });
     if let Some(list) = first_write {
         write(&mut nf, list);
     }
@@ -112,7 +122,7 @@ fn boot(
     while at < run {
         at += Duration::from_secs(10);
         set(at);
-        nf.advance_monotonic_time_internal(at);
+        nf.advance_monotonic_time(at);
     }
     // Dropping the forwarder lets its queued saves land.
     restored
@@ -138,7 +148,10 @@ fn subscribed_recipients_minute_saves_come_at_most_once_a_minute() {
     let storage = Arc::new(MemoryPersistence::default());
     let (clock, set) = manual_clock();
     let mut nf = persistent(&storage);
-    nf.bind_monotonic_clock_internal(Some(clock));
+    nf.bind_clocks(&crate::traits::Clocks {
+        monotonic: Some(clock),
+        ..crate::traits::Clocks::default()
+    });
     // Two entries whose minutes fall half a minute apart.
     write(&mut nf, &[subscription(device(7), 1, 10)]);
     set(MINUTE / 2);
@@ -184,7 +197,10 @@ fn a_failed_save_is_counted_and_retried_a_minute_later() {
     let (clock, set) = manual_clock();
     let mut nf = persistent(&storage);
     let counters = nf.save_counters();
-    nf.bind_monotonic_clock_internal(Some(clock));
+    nf.bind_clocks(&crate::traits::Clocks {
+        monotonic: Some(clock),
+        ..crate::traits::Clocks::default()
+    });
     write(&mut nf, &[subscription(device(7), 1, 10)]);
     storage.fail.store(true, Ordering::SeqCst);
     set(MINUTE);

@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::clock::ClockFrame;
+use crate::traits::Timed;
 use bacnet_types::constructed::LogDatum;
 use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::{Date, Time};
@@ -392,7 +393,10 @@ fn a_record_the_log_ignores_still_serves_the_trigger() {
         }
     }
     let mut log = TrendLogObject::new(1, "TL-1", 8).unwrap();
-    log.bind_clock_internal(Some(Arc::new(Nine)));
+    log.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(Nine)),
+        ..crate::traits::Clocks::default()
+    });
     log.set_logging_type(LoggingType::TRIGGERED).unwrap();
     let trigger = |log: &TrendLogObject| read(log, PropertyIdentifier::TRIGGER);
 

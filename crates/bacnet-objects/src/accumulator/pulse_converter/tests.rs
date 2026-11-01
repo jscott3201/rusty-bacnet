@@ -1,5 +1,6 @@
 use super::*;
 use crate::clock::ClockFrame;
+use crate::traits::Timed;
 use bacnet_types::error::RemoteError;
 
 #[test]
@@ -380,7 +381,10 @@ fn pulse_converter_count_rows_start_at_zero_and_unspecified() {
 #[test]
 fn pulse_converter_present_value_is_count_times_scale_factor() {
     let mut pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
-    pc.bind_clock_internal(Some(Arc::new(FixedClock(frame(9)))));
+    pc.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(FixedClock(frame(9)))),
+        ..crate::traits::Clocks::default()
+    });
     pc.add_pulses(55).unwrap();
     assert_eq!(pc.count(), 55);
     assert_eq!(
@@ -412,7 +416,10 @@ fn pulse_converter_present_value_is_count_times_scale_factor() {
         PropertyValue::Real(687.5)
     );
     // Zero pulses change nothing, Update_Time included.
-    pc.bind_clock_internal(Some(Arc::new(FixedClock(frame(10)))));
+    pc.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(FixedClock(frame(10)))),
+        ..crate::traits::Clocks::default()
+    });
     pc.add_pulses(0).unwrap();
     assert_eq!(
         read(&pc, PropertyIdentifier::UPDATE_TIME),
@@ -439,7 +446,10 @@ fn pulse_converter_adjust_value_takes_the_truncated_quotient_off_count() {
         PropertyValue::Real(12.5),
     )
     .unwrap();
-    pc.bind_clock_internal(Some(Arc::new(FixedClock(frame(11)))));
+    pc.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(FixedClock(frame(11)))),
+        ..crate::traits::Clocks::default()
+    });
     // 30 / 12.5 = 2.4: the remainder is dropped and Count loses 2.
     write(
         &mut pc,
@@ -462,7 +472,10 @@ fn pulse_converter_adjust_value_takes_the_truncated_quotient_off_count() {
         PropertyValue::Real(662.5)
     );
     // A negative adjustment raises Count; -30 / 12.5 truncates to -2.
-    pc.bind_clock_internal(Some(Arc::new(FixedClock(frame(12)))));
+    pc.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(FixedClock(frame(12)))),
+        ..crate::traits::Clocks::default()
+    });
     write(
         &mut pc,
         PropertyIdentifier::ADJUST_VALUE,
@@ -495,7 +508,10 @@ fn pulse_converter_adjust_value_takes_the_truncated_quotient_off_count() {
 #[test]
 fn pulse_converter_adjust_value_out_of_range_changes_nothing() {
     let mut pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
-    pc.bind_clock_internal(Some(Arc::new(FixedClock(frame(8)))));
+    pc.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(FixedClock(frame(8)))),
+        ..crate::traits::Clocks::default()
+    });
     pc.add_pulses(3).unwrap();
     write(
         &mut pc,
@@ -503,7 +519,10 @@ fn pulse_converter_adjust_value_out_of_range_changes_nothing() {
         PropertyValue::Real(1.0),
     )
     .unwrap();
-    pc.bind_clock_internal(Some(Arc::new(FixedClock(frame(13)))));
+    pc.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(FixedClock(frame(13)))),
+        ..crate::traits::Clocks::default()
+    });
     let before = count_state(&pc);
     // Below zero: 2 - 3.
     assert_value_out_of_range(write(

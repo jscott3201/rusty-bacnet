@@ -86,7 +86,7 @@ impl BACnetObject for IndexBlind {
         self.0.property_metadata()
     }
 
-    fn durable_writes_internal(&mut self) -> Option<&mut dyn DurableWrites> {
+    fn durable_writes(&mut self) -> Option<&mut dyn DurableWrites> {
         Some(self)
     }
 }
@@ -99,19 +99,19 @@ impl DurableWrites for IndexBlind {
         value: &PropertyValue,
     ) -> StageStep {
         self.0
-            .durable_writes_internal()
+            .durable_writes()
             .expect("a forwarder saves its lists")
             .stage_write(property, None, value)
     }
 
     fn release_staged_write(&mut self, staged: &SaveWait) {
-        if let Some(writes) = self.0.durable_writes_internal() {
+        if let Some(writes) = self.0.durable_writes() {
             writes.release_staged_write(staged);
         }
     }
 
     fn settle_forgotten_writes(&mut self) -> Option<SaveWait> {
-        self.0.durable_writes_internal()?.settle_forgotten_writes()
+        self.0.durable_writes()?.settle_forgotten_writes()
     }
 }
 

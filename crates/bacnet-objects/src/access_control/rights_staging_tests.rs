@@ -191,13 +191,12 @@ fn an_operation_task_call_drops_a_forgotten_staged_write_once_its_lifetime_is_ov
     // Its request never comes back. The first call that finds the save
     // finished starts the count on the operation task's clock.
     let start = Duration::from_secs(60);
-    assert!(!rights.advance_monotonic_time_internal(start));
-    rights
-        .advance_monotonic_time_internal(start + STAGED_WRITE_LIFETIME - Duration::from_millis(1));
+    rights.expire_staged(start);
+    rights.expire_staged(start + STAGED_WRITE_LIFETIME - Duration::from_millis(1));
     rights.wait_for_saves();
     assert_eq!(storage.snapshot(), Some(positive_only(&[zone_rule(9)])));
     // The call a lifetime later drops it and puts storage back.
-    rights.advance_monotonic_time_internal(start + STAGED_WRITE_LIFETIME);
+    rights.expire_staged(start + STAGED_WRITE_LIFETIME);
     rights.wait_for_saves();
     assert_eq!(storage.snapshot(), Some(positive_only(&served)));
     // A release that comes after all changes nothing more.

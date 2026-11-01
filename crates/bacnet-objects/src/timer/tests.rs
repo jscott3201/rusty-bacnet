@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::clock::{ClockFrame, UNSPECIFIED_DATETIME};
+use crate::traits::Timed;
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
 use bacnet_types::error::RemoteError;
@@ -56,12 +57,14 @@ impl Fixture {
         timer.set_pres_value_range(MIN, MAX).unwrap();
         timer.set_default_timeout(DEFAULT).unwrap();
         let clock = Arc::clone(&mono);
-        timer.bind_monotonic_clock_internal(Some(Arc::new(move || *clock.lock().unwrap())));
-        timer.bind_clock_internal(Some(wall.clone()));
         let counter = Arc::clone(&wakes);
-        timer.bind_deadline_waker_internal(Some(Arc::new(move || {
-            counter.fetch_add(1, Ordering::SeqCst);
-        })));
+        timer.bind_clocks(&crate::traits::Clocks {
+            clock: Some(wall.clone()),
+            monotonic: Some(Arc::new(move || *clock.lock().unwrap())),
+            deadline_waker: Some(Arc::new(move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+            })),
+        });
         Self {
             timer,
             mono,
@@ -82,7 +85,7 @@ impl Fixture {
         }
         if state == TimerState::EXPIRED {
             fixture.set_clocks(SETUP, at(0, 10));
-            assert!(fixture.timer.advance_monotonic_time_internal(fixture.now()));
+            assert!(fixture.timer.advance_monotonic_time(fixture.now()));
         }
         assert_eq!(fixture.timer.timer_state(), state);
         if oos {
@@ -118,7 +121,7 @@ impl Fixture {
                 .iter()
                 .map(|&p| (p, self.read(p)))
                 .collect(),
-            self.timer.next_monotonic_deadline_internal(),
+            self.timer.next_monotonic_deadline(),
         )
     }
 }
@@ -251,7 +254,7 @@ fn every_write_in_every_state_follows_the_state_machine() {
                         // task woken; out of service it is held.
                         let deadline = Duration::from_millis(written_at + timeout);
                         assert_eq!(
-                            fixture.timer.next_monotonic_deadline_internal(),
+                            fixture.timer.next_monotonic_deadline(),
                             (!oos).then_some(deadline),
                             "{case}"
                         );
@@ -272,7 +275,7 @@ fn every_write_in_every_state_follows_the_state_machine() {
                         assert_eq!(fixture.read(P::PRESENT_VALUE), PropertyValue::Unsigned(0));
                         assert_eq!(fixture.read(P::UPDATE_TIME), datetime(at(1, 0)));
                         assert_eq!(fixture.read(P::EXPIRATION_TIME), datetime(at(1, 0)));
-                        assert_eq!(fixture.timer.next_monotonic_deadline_internal(), None);
+                        assert_eq!(fixture.timer.next_monotonic_deadline(), None);
                     }
                     Outcome::Clear => {
                         result.unwrap();
@@ -296,7 +299,7 @@ fn every_write_in_every_state_follows_the_state_machine() {
                             fixture.read(P::EXPIRATION_TIME),
                             datetime(UNSPECIFIED_DATETIME)
                         );
-                        assert_eq!(fixture.timer.next_monotonic_deadline_internal(), None);
+                        assert_eq!(fixture.timer.next_monotonic_deadline(), None);
                     }
                 }
                 // Neither a write nor a refusal touches the range.
@@ -331,14 +334,14 @@ fn a_running_timer_counts_down_and_expires_at_zero() {
         fixture.read(P::PRESENT_VALUE),
         PropertyValue::Unsigned(7_000)
     );
-    assert!(!fixture.timer.advance_monotonic_time_internal(fixture.now()));
+    assert!(!fixture.timer.advance_monotonic_time(fixture.now()));
     // Not due a microsecond early.
     *fixture.mono.lock().unwrap() = Duration::from_micros(9_999_999);
     assert_eq!(fixture.read(P::PRESENT_VALUE), PropertyValue::Unsigned(1));
-    assert!(!fixture.timer.advance_monotonic_time_internal(fixture.now()));
+    assert!(!fixture.timer.advance_monotonic_time(fixture.now()));
     assert_eq!(fixture.read(P::TIMER_STATE), PropertyValue::Enumerated(1));
     fixture.set_clocks(SETUP, at(0, 10));
-    assert!(fixture.timer.advance_monotonic_time_internal(fixture.now()));
+    assert!(fixture.timer.advance_monotonic_time(fixture.now()));
     assert_eq!(
         fixture.timer.last_state_change(),
         TimerTransition::RUNNING_TO_EXPIRED
@@ -355,10 +358,10 @@ fn a_running_timer_counts_down_and_expires_at_zero() {
         fixture.read(P::INITIAL_TIMEOUT),
         PropertyValue::Unsigned(SETUP)
     );
-    assert_eq!(fixture.timer.next_monotonic_deadline_internal(), None);
+    assert_eq!(fixture.timer.next_monotonic_deadline(), None);
     // Expiry happens once.
     *fixture.mono.lock().unwrap() = Duration::from_millis(SETUP * 2);
-    assert!(!fixture.timer.advance_monotonic_time_internal(fixture.now()));
+    assert!(!fixture.timer.advance_monotonic_time(fixture.now()));
 }
 
 #[test]
@@ -367,12 +370,12 @@ fn without_a_monotonic_clock_elapsed_time_drives_the_countdown() {
     timer
         .write_property(P::PRESENT_VALUE, None, PropertyValue::Unsigned(5_000), None)
         .unwrap();
-    assert!(!timer.advance_time_internal(Duration::from_millis(4_000)));
+    assert!(!timer.advance_time(Duration::from_millis(4_000)));
     assert_eq!(
         timer.read_property(P::PRESENT_VALUE, None).unwrap(),
         PropertyValue::Unsigned(1_000)
     );
-    assert!(timer.advance_time_internal(Duration::from_millis(1_000)));
+    assert!(timer.advance_time(Duration::from_millis(1_000)));
     assert_eq!(timer.timer_state(), TimerState::EXPIRED);
     // No Device clock: the transition stamps are unspecified.
     assert_eq!(
@@ -394,9 +397,9 @@ fn out_of_service_holds_the_countdown_and_takes_reliability() {
     fixture
         .write(P::OUT_OF_SERVICE, PropertyValue::Boolean(true))
         .unwrap();
-    assert_eq!(fixture.timer.next_monotonic_deadline_internal(), None);
+    assert_eq!(fixture.timer.next_monotonic_deadline(), None);
     fixture.set_clocks(60_000, at(1, 0));
-    assert!(!fixture.timer.advance_monotonic_time_internal(fixture.now()));
+    assert!(!fixture.timer.advance_monotonic_time(fixture.now()));
     assert_eq!(
         fixture.read(P::PRESENT_VALUE),
         PropertyValue::Unsigned(6_000)
@@ -423,7 +426,7 @@ fn out_of_service_holds_the_countdown_and_takes_reliability() {
         .unwrap();
     assert_eq!(fixture.wakes.load(Ordering::SeqCst), wakes + 1);
     assert_eq!(
-        fixture.timer.next_monotonic_deadline_internal(),
+        fixture.timer.next_monotonic_deadline(),
         Some(Duration::from_millis(66_000))
     );
     assert_eq!(
@@ -435,7 +438,7 @@ fn out_of_service_holds_the_countdown_and_takes_reliability() {
         PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw())
     );
     fixture.set_clocks(66_000, at(1, 6));
-    assert!(fixture.timer.advance_monotonic_time_internal(fixture.now()));
+    assert!(fixture.timer.advance_monotonic_time(fixture.now()));
     assert_eq!(fixture.read(P::TIMER_STATE), PropertyValue::Enumerated(2));
 }
 
@@ -567,7 +570,7 @@ fn writes_apply_a_due_expiry_first() {
     let mut fixture = overdue();
     assert_out_of_range(fixture.write(P::TIMER_STATE, PropertyValue::Enumerated(1)));
     assert_eq!(fixture.timer.timer_state(), TimerState::EXPIRED);
-    assert_eq!(fixture.timer.next_monotonic_deadline_internal(), None);
+    assert_eq!(fixture.timer.next_monotonic_deadline(), None);
 
     // Out of service, a countdown that already ran out isn't held at zero.
     let mut fixture = overdue();
@@ -577,7 +580,7 @@ fn writes_apply_a_due_expiry_first() {
     assert_eq!(fixture.timer.timer_state(), TimerState::EXPIRED);
     assert_eq!(fixture.timer.countdown, Countdown::Stopped);
     // The task's later pass finds nothing left to do.
-    assert!(!fixture.timer.advance_monotonic_time_internal(fixture.now()));
+    assert!(!fixture.timer.advance_monotonic_time(fixture.now()));
 }
 
 #[test]
@@ -603,7 +606,7 @@ fn a_natural_expiry_keeps_its_deadline_stamp_from_read_to_pass() {
             },
         ),
     );
-    assert!(fixture.timer.advance_monotonic_time_internal(fixture.now()));
+    assert!(fixture.timer.advance_monotonic_time(fixture.now()));
     assert_eq!(stamps(&fixture), read_in_window);
     fixture.set_clocks(SETUP + 60_000, at(1, 10));
     assert_eq!(stamps(&fixture), read_in_window);
@@ -646,7 +649,7 @@ fn a_deadline_before_midnight_read_after_it_keeps_the_previous_day() {
     let due = datetime(clock(eve, 59, 50));
     assert_eq!(fixture.read(P::UPDATE_TIME), due);
     assert_eq!(fixture.read(P::EXPIRATION_TIME), due);
-    assert!(fixture.timer.advance_monotonic_time_internal(fixture.now()));
+    assert!(fixture.timer.advance_monotonic_time(fixture.now()));
     assert_eq!(fixture.read(P::UPDATE_TIME), due);
     assert_eq!(fixture.read(P::EXPIRATION_TIME), due);
 }

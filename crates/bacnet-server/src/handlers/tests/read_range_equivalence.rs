@@ -148,7 +148,13 @@ fn random_log(rng: &mut Rng, family: LogFamily) -> Box<dyn BACnetObject> {
         };
         if rng.below(40) == 0 {
             let at = stamp(rng, clock);
-            object.bind_clock_internal(Some(Arc::new(Clock(at))));
+            object
+                .timed()
+                .unwrap()
+                .bind_clocks(&bacnet_objects::traits::Clocks {
+                    clock: Some(Arc::new(Clock(at))),
+                    ..bacnet_objects::traits::Clocks::default()
+                });
             // A purge needs a clock that reads an actual moment.
             let _ = object.write_property(
                 PropertyIdentifier::RECORD_COUNT,

@@ -1,5 +1,6 @@
 use super::*;
 use crate::clock::{ClockFrame, ClockReader};
+use crate::traits::Timed;
 use bacnet_types::enums::ErrorCode;
 use bacnet_types::error::RemoteError;
 use std::collections::VecDeque;
@@ -224,7 +225,10 @@ fn file_metadata_direct_payload_mutations_use_bound_clock() {
     let mut stream = FileObject::new(1, "STREAM", "text/plain").unwrap();
     stream.set_modification_date(old.local_date, old.local_time);
     stream.set_archive(true);
-    stream.bind_clock_internal(Some(Arc::new(SequenceClock::new([stream_frame]))));
+    stream.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(SequenceClock::new([stream_frame]))),
+        ..crate::traits::Clocks::default()
+    });
     assert_eq!(
         stream.modification_date,
         (old.local_date, old.local_time),
@@ -243,7 +247,10 @@ fn file_metadata_direct_payload_mutations_use_bound_clock() {
     record.set_file_access_method(FileAccessMethod::RECORD_ACCESS.to_raw());
     record.set_modification_date(old.local_date, old.local_time);
     record.set_archive(true);
-    record.bind_clock_internal(Some(Arc::new(SequenceClock::new([record_frame]))));
+    record.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(SequenceClock::new([record_frame]))),
+        ..crate::traits::Clocks::default()
+    });
     record.set_records(vec![vec![0xAA], vec![0xBB, 0xCC]]);
     assert_eq!(
         record.modification_date,
@@ -268,7 +275,10 @@ fn file_metadata_clockless_and_invalid_frames_are_fully_unspecified() {
     let mut invalid = FileObject::new(2, "INVALID", "text/plain").unwrap();
     invalid.set_modification_date(old.local_date, old.local_time);
     invalid.set_archive(true);
-    invalid.bind_clock_internal(Some(Arc::new(SequenceClock::new([invalid_frame]))));
+    invalid.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(SequenceClock::new([invalid_frame]))),
+        ..crate::traits::Clocks::default()
+    });
     invalid.set_data(vec![2]);
     assert_eq!(invalid.modification_date, unspecified_datetime());
     assert!(!invalid.archive());
@@ -281,7 +291,10 @@ fn file_metadata_equal_and_empty_mutations_sample_the_next_frame() {
     let mut file = FileObject::new(1, "FILE", "text/plain").unwrap();
     file.set_data(vec![1, 2]);
     file.set_archive(true);
-    file.bind_clock_internal(Some(Arc::new(SequenceClock::new([first, second]))));
+    file.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(SequenceClock::new([first, second]))),
+        ..crate::traits::Clocks::default()
+    });
 
     file.set_data(vec![1, 2]);
     assert_eq!(
@@ -309,7 +322,10 @@ fn configuration_getters_do_not_mutate_or_sample_the_clock() {
     file.set_data(vec![1, 2]);
     file.set_modification_date(retained.local_date, retained.local_time);
     file.set_archive(true);
-    file.bind_clock_internal(Some(Arc::new(SequenceClock::new([next]))));
+    file.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(SequenceClock::new([next]))),
+        ..crate::traits::Clocks::default()
+    });
 
     assert_eq!(
         file.file_configuration_internal()
@@ -360,7 +376,10 @@ fn file_metadata_access_method_marks_only_effective_file_size_changes() {
     equal_size.set_records(vec![vec![3], vec![4]]);
     equal_size.set_modification_date(old.local_date, old.local_time);
     equal_size.set_archive(true);
-    equal_size.bind_clock_internal(Some(Arc::new(SequenceClock::new([next]))));
+    equal_size.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(SequenceClock::new([next]))),
+        ..crate::traits::Clocks::default()
+    });
 
     equal_size.set_file_access_method(FileAccessMethod::RECORD_ACCESS.to_raw());
     assert_eq!(equal_size.file_size(), 2);
@@ -387,7 +406,10 @@ fn file_metadata_access_method_marks_only_effective_file_size_changes() {
     changed_size.set_records(vec![vec![4], vec![5]]);
     changed_size.set_modification_date(old.local_date, old.local_time);
     changed_size.set_archive(true);
-    changed_size.bind_clock_internal(Some(Arc::new(SequenceClock::new([changed]))));
+    changed_size.bind_clocks(&crate::traits::Clocks {
+        clock: Some(Arc::new(SequenceClock::new([changed]))),
+        ..crate::traits::Clocks::default()
+    });
     changed_size.set_file_access_method(FileAccessMethod::RECORD_ACCESS.to_raw());
     assert_eq!(changed_size.file_size(), 2);
     assert_eq!(

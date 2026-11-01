@@ -185,11 +185,13 @@ async fn a_temperature_fade_is_sampled_on_the_grid_and_ended_on_time() {
     assert_eq!(in_progress, PropertyValue::Enumerated(0));
     let deadline = server
         .database()
-        .read()
+        .write()
         .await
-        .get(&oid)
+        .get_mut(&oid)
         .unwrap()
-        .next_monotonic_deadline_internal();
+        .timed()
+        .unwrap()
+        .next_monotonic_deadline();
     assert_eq!(deadline, None);
     advance(5_000).await;
     assert_eq!(reports(&sent), []);

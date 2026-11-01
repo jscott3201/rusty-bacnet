@@ -190,11 +190,13 @@ async fn a_fade_shorter_than_the_routine_pass_is_sampled_and_ended_on_time() {
     );
     let deadline = server
         .database()
-        .read()
+        .write()
         .await
-        .get(&oid)
+        .get_mut(&oid)
         .unwrap()
-        .next_monotonic_deadline_internal();
+        .timed()
+        .unwrap()
+        .next_monotonic_deadline();
     assert_eq!(deadline, None);
     advance(5_000).await;
     assert_eq!(reports(&sent), []);
@@ -336,11 +338,13 @@ async fn a_trim_change_fades_in_on_the_task_and_reports_trim_active() {
     );
     let deadline = server
         .database()
-        .read()
+        .write()
         .await
-        .get(&oid)
+        .get_mut(&oid)
         .unwrap()
-        .next_monotonic_deadline_internal();
+        .timed()
+        .unwrap()
+        .next_monotonic_deadline();
     assert_eq!(deadline, None);
     server.stop().await.unwrap();
 }

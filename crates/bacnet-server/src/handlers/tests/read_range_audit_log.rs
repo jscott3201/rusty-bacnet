@@ -340,7 +340,13 @@ fn audit_log_buffer_shows_records_appended_after_a_read_and_matches_audit_log_qu
     assert_page(&read(&db, None), &[1, 2], (true, true, false), None);
 
     let object = db.get_mut(&audit_oid()).unwrap();
-    object.bind_clock_internal(Some(Arc::new(FixedClock(7))));
+    object
+        .timed()
+        .unwrap()
+        .bind_clocks(&bacnet_objects::traits::Clocks {
+            clock: Some(Arc::new(FixedClock(7))),
+            ..bacnet_objects::traits::Clocks::default()
+        });
     object
         .audit_log_notification_sink_internal()
         .unwrap()
@@ -495,7 +501,12 @@ async fn running_server_serves_audit_log_buffer_and_later_records() {
     {
         let mut db = server.database().write().await;
         let log = db.get_mut(&audit_oid()).unwrap();
-        log.bind_clock_internal(Some(Arc::new(FixedClock(9))));
+        log.timed()
+            .unwrap()
+            .bind_clocks(&bacnet_objects::traits::Clocks {
+                clock: Some(Arc::new(FixedClock(9))),
+                ..bacnet_objects::traits::Clocks::default()
+            });
         log.audit_log_notification_sink_internal()
             .unwrap()
             .store_notifications(&[notification(AuditOperation::DELETE)], 3_000)

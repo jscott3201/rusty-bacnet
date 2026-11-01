@@ -8,6 +8,7 @@ use super::cov_wire_test_support::*;
 use super::*;
 use bacnet_objects::accumulator::PulseConverterObject;
 use bacnet_objects::traits::BACnetObject;
+use bacnet_objects::traits::Timed;
 use bacnet_services::cov::{COVNotificationRequest, SubscribeCOVRequest};
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::enums::{EngineeringUnits, ObjectType};
@@ -39,7 +40,10 @@ async fn pulse_converter_cov_notification_reports_update_time() {
             PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
         // Accumulate under a clock reading 15:00:07 so Update_Time is set.
         let clock = SharedClock(Arc::new(StdMutex::new(at(7))));
-        object.bind_clock_internal(Some(Arc::new(clock)));
+        object.bind_clocks(&bacnet_objects::traits::Clocks {
+            clock: Some(Arc::new(clock)),
+            ..bacnet_objects::traits::Clocks::default()
+        });
         object.add_pulses(4).unwrap();
         db.add(Box::new(object)).unwrap();
     })
@@ -108,7 +112,10 @@ fn counted(more: u64) -> Box<dyn BACnetObject> {
         .unwrap();
     for (second, pulses) in [(7, 4), (9, more)] {
         let clock = SharedClock(Arc::new(StdMutex::new(at(second))));
-        object.bind_clock_internal(Some(Arc::new(clock)));
+        object.bind_clocks(&bacnet_objects::traits::Clocks {
+            clock: Some(Arc::new(clock)),
+            ..bacnet_objects::traits::Clocks::default()
+        });
         object.add_pulses(pulses).unwrap();
     }
     Box::new(object)
