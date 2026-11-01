@@ -182,14 +182,16 @@ before calling `read` or `write`. Firmware that owns its database calls
 `handle`. `Inbound`, `Limits` and `Written` are `#[non_exhaustive]`;
 `Inbound::new`, `Limits::new` and `Written::from(Outcome)` construct them.
 
-`write` passes no command origin (as built, PR 2): `Inbound` carries no
-source address, so the core can't name the requester a command came from
-(Clause 19.5). An object whose Present_Value is commandable refuses such
-a write with WRITE_ACCESS_DENIED, as it refused the bare handler's, where
-the server commands it for the requester; a writable Present_Value and
-every other writable property take the write. The parity test pins the
-difference (§7.2). A host that knows its requester and needs commands
-through `write` is a follow-up (#2209): `Inbound` would carry the origin.
+`write` passes the request's command origin (#2209): `Inbound::with_source`
+names the requester as a `CommandOrigin` (Clause 19.5), the same value the
+server derives from a request's source address and its Device bindings,
+so a commandable Present_Value is commanded for that requester exactly as
+the server commands it. `CommandOrigin` lives in `bacnet-objects` and holds
+a `BACnetAddress` from `bacnet-types`, so a firmware host supplies it with
+no network-layer or transport type. A host that names no requester
+(`Inbound::new` alone) gets PR 2's behaviour: an object whose Present_Value
+is commandable refuses the write with WRITE_ACCESS_DENIED, and a writable
+Present_Value and every other writable property take it.
 
 The `Responder`'s `ReadScope` (§4.3) takes its work limit from
 `Limits` and its Device from the identity, as the server's does. `Inbound`
@@ -398,9 +400,13 @@ Safety object, `life_safety_changes` reports them after the request, and
 ```rust
 pub fn who_is(identity: &DeviceIdentity, db: &ObjectDatabase, request: &[u8])
     -> Option<IAmRequest>;  // unconfirmed.rs:92-109, discovery.rs:811, local_device.rs:39
-pub fn who_has(db: &ObjectDatabase, request: &[u8], device: ObjectIdentifier)
+pub fn who_has(identity: &DeviceIdentity, db: &ObjectDatabase, request: &[u8])
     -> Result<Option<IHaveRequest>, Error>;  // handlers/object_mgmt.rs:8-43
 ```
+
+Both name the Device the frozen identity names (`announcement_device`), and
+answer nothing while the database lacks it, whatever other Device it holds
+(#2186; PR 1 had Who-Has name `db.selected_device()`, the lowest instance).
 
 The server keeps the limiter (`server/discovery.rs:419` onward: per-source
 and global buckets, the negative Who-Has cache, the reply admission) and
@@ -601,9 +607,11 @@ implementation, per CLAUDE.md):
 The server serves executor-owned Device properties from its view
 (`device_view.rs:150-159`, `device_view_identity.rs:14-24`), and a
 `Responder` with `NoOverlay` from the Device object, so some of those rows
-differ by design. PR 2 pins two write exchanges as well: a commandable
-Present_Value write, which the server commands for the requester and the
-core refuses for want of an origin (§4.2), and a Command run's actions,
+differ by design. PR 2 pinned two write exchanges as well: a commandable
+Present_Value write, which the server commanded for the requester and the
+core refused for want of an origin (§4.2), until #2209 gave the core the
+requester (now a row that matches, with the Priority_Array and the
+Value_Source the command leaves); and a Command run's actions, which stay pinned,
 since the server performs them and the core ends the run unmade and
 performs none: the target an action writes, the action's write-successful
 flag and the Command's All_Writes_Successful differ. The Command's write
@@ -626,7 +634,9 @@ unknown object (Error), malformed parameters (Reject), a segmented request
 (Abort); PR 2 adds a write, PR 3 an RPM. PR 2's write is to a Binary
 Value whose Present_Value is writable rather than commandable (§4.2), and
 the image then links the write path: 33 to 41 KB more flash, most of it
-the structured decoders the generic value decoding reaches.
+the structured decoders the generic value decoding reaches. Since #2209
+the Binary Value is commandable again: the request names its requester,
+the write commands priority 8, and the image reads Priority_Array back.
 
 Heap: on a 64-bit host, a counting allocator measured the database at
 8,907 octets live and 9,075 at peak; a 32-bit target needs less. PR 1 gives
@@ -661,7 +671,10 @@ ACK and `encode_apdu`), in octets:
 These sit above the research's figures because they include the APDU codec,
 Who-Is and `DeviceIdentity`'s database builder. The Device brings
 `core::fmt` in (seven functions, about 1.5 KB): `DeviceIdentity::new`
-formats its default name (`device_identity/mod.rs:67`). The PR 1 image will
+formats its default name (`device_identity/mod.rs:67`), and so does the
+database builder's Network-Port loop (`device_identity/network_port.rs`),
+which links though the image declares no port. #2187 writes both names
+by hand, and the image links no `core::fmt` since. The PR 1 image will
 be larger again by the core's own code; these rows are the floor it is
 measured against, and #2179 then reports its saving on the same rows.
 
@@ -755,18 +768,19 @@ is a follow-up. No file passes the 700-line cap: the two largest sources,
    move, and the count can only fall.
 4. **Which Device an I-Have names: (a)** (lead). Who-Is answers from the
    frozen identity (`unconfirmed.rs:101`, `announcement_device`), Who-Has
-   from `db.selected_device()` (`unconfirmed.rs:192`). PR 1 keeps that, and
-   #2186 makes I-Have and I-Am name the Device picked the same way. The
-   option not taken: unify in PR 1, a **Wire:** change inside a move.
+   from `db.selected_device()` (`unconfirmed.rs:192`). PR 1 kept that, and
+   #2186 made I-Have name the identity's Device too, in `discovery::who_has`.
+   The option not taken: unify in PR 1, a **Wire:** change inside a move.
 5. **Owned APDU** (lead, from the review): `Inbound.apdu` is `Bytes`, and
    `classify` peeks a `&[u8]` header; no borrowed decoder for now (§4.2).
 6. **Requests the core doesn't run** (lead, from the review): `read` and
    `write` return `Unhandled` so a host routes the request on; `handle`
    answers every confirmed request through the `reply` helpers (§4.2).
 7. **No command origin on `Inbound` in PR 2** (lead, from the PR 2
-   review): `Responder::write` writes with none, so a commandable
-   Present_Value refuses it, and the parity test pins that difference
-   (§4.2, §7.2). #2209 adds the origin to `Inbound`.
+   review): `Responder::write` wrote with none, so a commandable
+   Present_Value refused it, and the parity test pinned that difference
+   (§4.2, §7.2). #2209 added the origin to `Inbound` (`with_source`), and
+   the parity row now matches.
 
 ## 11. Evidence
 

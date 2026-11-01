@@ -81,6 +81,19 @@ async fn wpm_success_and_refusals_match() {
         .read_back("BV-2's Description after the WPM", bv(2), P::DESCRIPTION)
         .await;
 
+    // BV-1's Present_Value is commandable: both command it for the
+    // request's source, at priority 16 (#2209).
+    let body = wpm_body(&[(bv(1), P::PRESENT_VALUE, active.clone())]);
+    let reply = parity
+        .same("a WPM commanding a Present_Value", wpm(5, &body), 1476)
+        .await;
+    assert!(is_wpm_ack(&reply), "{reply:?}");
+    for property in [P::PRESENT_VALUE, P::PRIORITY_ARRAY, P::VALUE_SOURCE] {
+        parity
+            .read_back("BV-1 after the WPM", bv(1), property)
+            .await;
+    }
+
     let body = wpm_body(&[(bv(9), P::PRESENT_VALUE, active.clone())]);
     let reply = parity
         .same("a WPM of an unknown object", wpm(2, &body), 1476)

@@ -1,11 +1,12 @@
 //! WriteProperty through the server and the `Responder`: the same reply
 //! octets for each row, and the same value read back after it, except the
-//! two write exchanges among those [`DIFFER_EXCHANGES`] pins.
+//! Command run's actions, which [`DIFFER_EXCHANGES`] pins.
 use super::*;
 use bacnet_objects::command::CommandObject;
+use bacnet_objects::command_source::{CommandDeviceBinding, CommandOrigin};
 use bacnet_objects::present_value_access::PresentValueAccess;
 use bacnet_services::write_property::WritePropertyRequest;
-use bacnet_types::constructed::{BACnetActionCommand, BACnetActionList};
+use bacnet_types::constructed::{BACnetActionCommand, BACnetActionList, BACnetAddress};
 use std::borrow::Cow;
 
 pub(super) fn bv(instance: u32) -> ObjectIdentifier {
@@ -110,6 +111,18 @@ fn is_simple_ack(reply: &Option<Apdu>) -> bool {
 }
 
 impl Parity {
+    /// The latest request's command origin as the server derives it: its
+    /// source address, on the local network, with no Device bound to it.
+    pub(super) fn origin(&self) -> CommandOrigin {
+        CommandOrigin::Remote {
+            actual_address: BACnetAddress {
+                network_number: 0,
+                mac_address: self.source(),
+            },
+            binding: CommandDeviceBinding::Unknown,
+        }
+    }
+
     pub(super) async fn start_writes() -> Self {
         Self::start_from(
             ReadPropertyMultipleBudget::default(),
@@ -306,21 +319,27 @@ async fn a_command_write_matches_until_its_run_ends() {
     parity.server.stop().await.unwrap();
 }
 
-/// A commandable Present_Value: the server commands it for the requester
-/// its source address names; the core has none to name, and the object
-/// refuses an unsourced command.
+/// A commandable Present_Value: both command it at priority 8 for the
+/// requester the request's source address names (#2209), and the
+/// Present_Value, Priority_Array and Value_Source it leaves read the same.
 #[tokio::test(start_paused = true)]
-async fn a_commandable_present_value_write_differs() {
+async fn a_commandable_present_value_write_matches() {
     let mut parity = Parity::start_writes().await;
     let active = PropertyValue::Enumerated(1);
     let command = write_property(1, bv(1), P::PRESENT_VALUE, None, &active);
-    let (server, core) = parity
-        .differ("commandable Present_Value write", command, 1476)
+    let reply = parity
+        .same("a commandable Present_Value write", command, 1476)
         .await;
-    assert!(is_simple_ack(&server), "{server:?}");
-    assert_eq!(
-        error_of(core),
-        (ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED)
-    );
+    assert!(is_simple_ack(&reply), "{reply:?}");
+    for property in [P::PRESENT_VALUE, P::PRIORITY_ARRAY, P::VALUE_SOURCE] {
+        parity.read_back("the command", bv(1), property).await;
+    }
+    // A NULL at the same priority, from the next request's address.
+    let relinquish = write_property(2, bv(1), P::PRESENT_VALUE, None, &PropertyValue::Null);
+    let reply = parity.same("its relinquish", relinquish, 1476).await;
+    assert!(is_simple_ack(&reply), "{reply:?}");
+    parity
+        .read_back("the relinquished slot", bv(1), P::PRIORITY_ARRAY)
+        .await;
     parity.server.stop().await.unwrap();
 }
