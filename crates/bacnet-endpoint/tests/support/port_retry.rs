@@ -23,25 +23,33 @@ pub const ATTEMPTS: usize = 8;
 ///
 /// Only an OS error counts, so a transport's own `AddrInUse` (a VMAC
 /// collision) does not. Windows refuses a SO_REUSEADDR bind to a port held
-/// without sharing with `WSAEACCES` instead of `WSAEADDRINUSE`. B/IP wraps a
-/// listener's bind error with the address it tried (a message starting
-/// `could not bind the B/IP `), which keeps the kind but drops the OS code;
-/// that wrapper counts too, and no other message does.
+/// without sharing with `WSAEACCES` instead of `WSAEADDRINUSE`. The OS error
+/// may sit in `err`'s source chain: B/IP wraps a listener's bind error with
+/// the listener's address and keeps the OS error as its source (#2231).
 ///
 /// On macOS a SO_REUSEADDR bind of a specific address succeeds beside another
 /// socket's plain wildcard bind of the port (see `port_ownership` in
 /// `bacnet-transport`), so nothing there reports that loss.
 pub fn lost_to_another_socket(err: &io::Error) -> bool {
-    let taken = err.kind() == io::ErrorKind::AddrInUse
-        || (cfg!(windows) && err.kind() == io::ErrorKind::PermissionDenied);
-    taken && (err.raw_os_error().is_some() || wrapped_bind(err))
+    os_error(err).is_some_and(|os| {
+        os.kind() == io::ErrorKind::AddrInUse
+            || (cfg!(windows) && os.kind() == io::ErrorKind::PermissionDenied)
+    })
 }
 
-/// Whether `err` is a listener bind error B/IP wrapped with its address
-/// (`group_listener` and the per-address broadcast listeners).
-fn wrapped_bind(err: &io::Error) -> bool {
-    err.get_ref()
-        .is_some_and(|inner| inner.to_string().starts_with("could not bind the B/IP "))
+/// The first error in `err`'s source chain, `err` included, that carries an
+/// OS error code.
+fn os_error(err: &io::Error) -> Option<&io::Error> {
+    let mut next: Option<&(dyn std::error::Error + 'static)> = Some(err);
+    while let Some(current) = next {
+        if let Some(io) = current.downcast_ref::<io::Error>()
+            && io.raw_os_error().is_some()
+        {
+            return Some(io);
+        }
+        next = current.source();
+    }
+    None
 }
 
 /// Runs `run` until it passes. `run` is a whole test; an `Err` it returns

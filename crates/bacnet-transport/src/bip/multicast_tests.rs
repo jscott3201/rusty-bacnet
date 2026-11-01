@@ -209,15 +209,25 @@ fn free_port() -> u16 {
 /// A group port another socket holds fails a member's start with an error
 /// [`rerun_on_lost_port`] takes for a lost port, so the tests below rerun
 /// rather than fail when another process takes their group port (#2225).
+/// The error names the listener and keeps the bind's OS error as its source
+/// (#2231).
 #[cfg(any(target_os = "linux", target_vendor = "apple"))]
 #[tokio::test]
 async fn a_held_group_port_fails_the_start_as_a_lost_port() {
+    use std::error::Error as _;
+
     let holder = std::net::UdpSocket::bind((GROUP, 0)).unwrap();
     let port = holder.local_addr().unwrap().port();
     let Err(error) = Member::start(group(port)).await else {
         panic!("a member started on a held group port");
     };
     assert!(crate::port_retry::lost_to_another_socket(&error), "{error}");
+    let named = format!("could not bind the B/IP multicast listener to {GROUP}:{port} (");
+    assert!(error.to_string().starts_with(&named), "{error}");
+    let os = error
+        .source()
+        .and_then(|e| e.downcast_ref::<std::io::Error>());
+    assert!(os.is_some_and(|os| os.raw_os_error().is_some()), "{error}");
 }
 
 #[cfg(any(target_os = "linux", target_vendor = "apple"))]

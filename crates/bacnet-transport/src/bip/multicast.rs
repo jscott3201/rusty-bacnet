@@ -302,21 +302,15 @@ pub(super) fn group_listener(
 ) -> io::Result<socket2::Socket> {
     let socket = super::socket::udp_socket(super::socket::SocketRole::GroupListener)?;
     socket.bind(&group.into()).map_err(|e| {
-        io::Error::new(
-            e.kind(),
-            format!("could not bind the B/IP multicast listener to {group} ({e})"),
-        )
+        let context = format!("could not bind the B/IP multicast listener to {group}");
+        super::listener_error::listener_error(context, e)
     })?;
     socket
         .join_multicast_v4(group.ip(), &interface)
         .map_err(|e| {
-            io::Error::new(
-                e.kind(),
-                format!(
-                    "could not join B/IP multicast group {} on {interface} ({e})",
-                    group.ip()
-                ),
-            )
+            let group = group.ip();
+            let context = format!("could not join B/IP multicast group {group} on {interface}");
+            super::listener_error::listener_error(context, e)
         })?;
     #[cfg(target_os = "linux")]
     socket.set_multicast_all_v4(false)?;
