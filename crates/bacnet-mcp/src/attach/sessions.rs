@@ -25,6 +25,7 @@ use tokio_util::task::TaskTracker;
 
 use super::{MAX_AGENTS, PeerId};
 use crate::McpServer;
+use crate::contain::capped;
 use crate::policy::{Policy, Workspace};
 use crate::server::Shared;
 
@@ -178,10 +179,13 @@ impl<T: TransportPort + 'static> Sessions<T> {
             drop(seat);
             match served {
                 Ok(Ok(())) => {}
-                Ok(Err(error)) => fields["error"] = json!(error.to_string()),
+                // Capped: a panic's message can echo the agent's input.
+                Ok(Err(error)) => fields["error"] = json!(capped(&error.to_string(), 512)),
                 Err(_) => fields["error"] = json!("the session panicked"),
             }
             tracing::info!("MCP agent {connection} detached");
+            #[cfg(test)]
+            super::threads::ending().await;
             record(&workspace, &principal, "mcp-disconnect", fields).await;
         };
         self.tracker.spawn_on(session, &self.runtime);

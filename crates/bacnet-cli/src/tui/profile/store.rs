@@ -125,17 +125,7 @@ impl Store {
             NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
         ));
         match publish(&temp, &path, &text, create) {
-            Ok(()) => {
-                // A test fails the publish's own directory sync this way.
-                #[cfg(test)]
-                if let Some(e) = tests::injected_sync() {
-                    return Err(format!(
-                        "profile {name}: the new file is in place, but its directory could \
-                         not be synced: {e}"
-                    ));
-                }
-                Ok(())
-            }
+            Ok(()) => Ok(()),
             // An earlier save of this very profile went in place, and only
             // its directory sync failed: it is there already, and saved
             // once its directory syncs.
@@ -181,12 +171,10 @@ impl Store {
 /// beside the ledger in `bacnet_ops::safety::file`.
 pub(crate) use bacnet_ops::safety::file::{in_place, publish};
 
-/// [`bacnet_ops::safety::file::sync_parent`], which a test can make fail.
+/// [`bacnet_ops::safety::file::sync_parent`], counted for the tests.
 fn sync_parent(path: &Path) -> std::io::Result<()> {
     #[cfg(test)]
-    if let Some(error) = tests::injected_sync() {
-        return Err(error);
-    }
+    tests::count_sync();
     bacnet_ops::safety::file::sync_parent(path)
 }
 
@@ -197,22 +185,19 @@ pub(super) mod tests {
     use super::*;
 
     thread_local! {
-        /// Directory syncs the store asked for on this thread, and an
-        /// error the next ones fail with instead.
+        /// Directory syncs the store asked for on this thread after
+        /// finding a file in place.
         static SYNCS: Cell<usize> = const { Cell::new(0) };
-        static FAIL_SYNC: Cell<bool> = const { Cell::new(false) };
     }
 
-    /// Fail the directory syncs that follow on this thread, or stop.
+    /// Fail the directory syncs that follow on this thread, the publish's
+    /// own included, or stop.
     pub(in crate::tui::profile) fn fail_syncs(fail: bool) {
-        FAIL_SYNC.with(|f| f.set(fail));
+        bacnet_ops::safety::file::testing::fail_directory_syncs(fail);
     }
 
-    pub(super) fn injected_sync() -> Option<std::io::Error> {
+    pub(super) fn count_sync() {
         SYNCS.with(|n| n.set(n.get() + 1));
-        FAIL_SYNC
-            .with(Cell::get)
-            .then(|| std::io::Error::other("injected directory sync failure"))
     }
 
     /// A retried creation that finds its file in place still syncs the
@@ -226,9 +211,9 @@ pub(super) mod tests {
         let before = SYNCS.with(Cell::get);
         store.save("site", &profile, true).unwrap();
         assert_eq!(SYNCS.with(Cell::get), before + 1, "the retry synced");
-        FAIL_SYNC.with(|f| f.set(true));
+        fail_syncs(true);
         let failed = store.save("site", &profile, true);
-        FAIL_SYNC.with(|f| f.set(false));
+        fail_syncs(false);
         let error = failed.unwrap_err();
         assert!(error.contains("in place"), "{error}");
         assert_eq!(store.load("site").unwrap(), profile);

@@ -52,9 +52,7 @@ pub(crate) async fn contained<R>(
     match AssertUnwindSafe(handler).catch_unwind().await {
         Ok(result) => result,
         Err(payload) => {
-            let why = message(payload.as_ref());
-            tracing::error!("an MCP request panicked ({why}); its session ends");
-            panics.record(why);
+            panics.caught(payload.as_ref());
             Err(ErrorData::internal_error(
                 "the server failed serving this request, and this session ends",
                 None,
@@ -63,11 +61,60 @@ pub(crate) async fn contained<R>(
     }
 }
 
-/// A panic payload's message, when it has one.
+/// [`contained`] for a synchronous handler: `None` when it panicked.
+pub(crate) fn contained_sync<R>(panics: &Panics, handler: impl FnOnce() -> R) -> Option<R> {
+    std::panic::catch_unwind(AssertUnwindSafe(handler))
+        .map_err(|payload| panics.caught(payload.as_ref()))
+        .ok()
+}
+
+impl Panics {
+    fn caught(&self, payload: &(dyn Any + Send)) {
+        let why = message(payload);
+        tracing::error!("an MCP request panicked ({why}); its session ends");
+        self.record(why);
+    }
+}
+
+/// The most of a panic's message kept: it can echo an agent's input, and
+/// it goes to the audit log.
+const MESSAGE_CAP: usize = 256;
+
+/// A panic payload's message, when it has one, cut to [`MESSAGE_CAP`].
 fn message(payload: &(dyn Any + Send)) -> String {
-    payload
+    let text = payload
         .downcast_ref::<&str>()
-        .map(ToString::to_string)
-        .or_else(|| payload.downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "no message".into())
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("no message");
+    capped(text, MESSAGE_CAP)
+}
+
+/// `text` cut to at most `cap` bytes on a character boundary, marked with
+/// an ellipsis when cut.
+pub(crate) fn capped(text: &str, cap: usize) -> String {
+    if text.len() <= cap {
+        return text.to_string();
+    }
+    let mut end = cap;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &text[..end])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A long message is cut on a character boundary; a short one is
+    /// kept whole.
+    #[test]
+    fn a_panic_message_is_capped() {
+        assert_eq!(capped("short", 8), "short");
+        assert_eq!(capped("ééé", 3), "é…", "never inside a character");
+        let long = "x".repeat(1000);
+        let kept = message(&long);
+        assert_eq!(kept.len(), MESSAGE_CAP + '…'.len_utf8());
+    }
 }

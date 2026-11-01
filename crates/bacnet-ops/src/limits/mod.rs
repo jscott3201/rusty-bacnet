@@ -276,12 +276,17 @@ impl RequestLimits {
     pub async fn turn_on(&self, device: u32, network: Option<u16>) -> Turn {
         let account = account::current();
         let start = Instant::now();
-        if let Some(bucket) = account.as_deref().and_then(Account::bucket) {
-            bucket.take().await;
-        }
+        // Held until the request goes: a wait dropped before gives it back.
+        let token = match account.as_deref().and_then(Account::bucket) {
+            Some(bucket) => bucket.hold().await,
+            None => None,
+        };
         // The gate is never closed, so the permit always comes.
         let permit = self.gate(device).acquire_owned().await.ok();
         self.pace(network).await;
+        if let Some(token) = token {
+            token.keep();
+        }
         if let Some(account) = &account {
             account.count_request();
             account.add_wait(start.elapsed());
@@ -296,10 +301,14 @@ impl RequestLimits {
     pub async fn slot(&self, network: Option<u16>) {
         let account = account::current();
         let start = Instant::now();
-        if let Some(bucket) = account.as_deref().and_then(Account::bucket) {
-            bucket.take().await;
-        }
+        let token = match account.as_deref().and_then(Account::bucket) {
+            Some(bucket) => bucket.hold().await,
+            None => None,
+        };
         self.pace(network).await;
+        if let Some(token) = token {
+            token.keep();
+        }
         if let Some(account) = &account {
             account.count_request();
             account.add_wait(start.elapsed());
@@ -402,15 +411,17 @@ impl RequestLimits {
     pub async fn wait_free(&self) {
         loop {
             // Without spacing a request could always go at once.
-            if self.global_spacing(self.layer().as_deref()).is_zero() {
+            let interval = self.global_spacing(self.layer().as_deref());
+            if interval.is_zero() {
                 return;
             }
+            // A slot given back counts: a request would take it first.
             let next = self
                 .state
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .schedule
-                .next();
+                .next_free(Instant::now(), interval);
             match next {
                 Some(at) if at > Instant::now() => tokio::time::sleep_until(at).await,
                 _ => return,

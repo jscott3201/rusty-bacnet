@@ -329,7 +329,8 @@ async fn an_agents_panic_ends_its_session_and_the_tui_draws_on() {
     };
     let servers = vec![Server::lab(100, LAB)];
     let mut site = Site::start_with_options(servers, ClientLimits::default(), options).await;
-    site.who_is("", 1).await;
+    // Most of this test's time: the Who-Is window, on the real clock.
+    site.who_is_briefly("", 1).await;
     site.pump_until(|app| mcp_agents(app) == Some(0)).await;
     let path = socket_path(dir.path());
     let mut first = attached(&path).await;
@@ -339,8 +340,14 @@ async fn an_agents_panic_ends_its_session_and_the_tui_draws_on() {
     ARMED.store(true, Ordering::SeqCst);
     let line = format!("{}\n", read(2));
     first.write.write_all(line.as_bytes()).await.unwrap();
-    // Its answer may or may not get out before the session ends.
-    while bounded(first.lines.next_line()).await.unwrap().is_some() {}
+    // The SDK drains the answers of requests in flight as the session
+    // ends, so the internal error gets out before the stream closes.
+    let mut answered = false;
+    while let Some(line) = bounded(first.lines.next_line()).await.unwrap() {
+        let message: Value = serde_json::from_str(&line).unwrap();
+        answered |= message["id"] == json!(2) && message["error"]["code"] == json!(-32603);
+    }
+    assert!(answered, "the read was answered with an internal error");
     assert!(
         !ARMED.load(Ordering::SeqCst),
         "the read ran on an agent's thread"

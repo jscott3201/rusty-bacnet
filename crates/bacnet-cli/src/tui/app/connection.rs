@@ -110,6 +110,10 @@ pub(crate) struct Connection {
     pub(crate) fields: Vec<String>,
     pub(crate) focus: usize,
     pub(crate) creating: bool,
+    /// The name a new SC profile's VMAC and device UUID were adopted for,
+    /// from a save whose file went in place: renamed, the profile draws
+    /// an identity of its own, since that one is the stray file's (#2196).
+    pub(crate) adopted: Option<String>,
     pub(crate) error: Option<String>,
     pub(crate) overrides: Overrides,
     /// A queued disk operation disables further mutations until its reply.
@@ -147,6 +151,7 @@ impl Connection {
             fields: Vec::new(),
             focus: 0,
             creating: false,
+            adopted: None,
             error: None,
             overrides,
             pending: false,
@@ -197,6 +202,7 @@ impl Connection {
                 self.checks = checks;
                 self.accepted.clear();
                 self.creating = false;
+                self.adopted = None;
                 self.screen = Screen::Preview;
             }
             Ok(Reply::InPlace { error, profile }) => {
@@ -210,6 +216,8 @@ impl Connection {
                     self.fields[VMAC_FIELD] = sc.vmac.map(|v| v.to_string()).unwrap_or_default();
                     self.fields[UUID_FIELD] =
                         sc.device_uuid.map(|v| v.to_string()).unwrap_or_default();
+                    // The name is not editable while the save is pending.
+                    self.adopted = Some(self.fields[0].clone());
                 }
                 self.error = Some(error);
             }
@@ -226,6 +234,7 @@ impl Connection {
         self.checks = Checks::default();
         self.accepted.clear();
         self.creating = true;
+        self.adopted = None;
         self.edit(profile);
     }
     fn edit(&mut self, p: Profile) {
@@ -394,6 +403,20 @@ impl Connection {
         self.overrides.resolve(&profile)?;
         Ok(profile)
     }
+    /// Clear an adopted SC identity if the profile was renamed since, so
+    /// its save draws a new one.
+    fn forget_adopted(&mut self) -> &mut Self {
+        if self
+            .adopted
+            .take_if(|name| *name != self.fields[0])
+            .is_some()
+            && self.fields.len() == SC_LABELS.len()
+        {
+            self.fields[VMAC_FIELD].clear();
+            self.fields[UUID_FIELD].clear();
+        }
+        self
+    }
     pub(crate) fn resolved(&self) -> Result<Profile, String> {
         self.overrides
             .resolve(self.saved.as_ref().ok_or("No profile selected")?)
@@ -447,7 +470,7 @@ impl Connection {
                 };
                 None
             }
-            (Screen::Edit, Key::Submit) => match self.edited() {
+            (Screen::Edit, Key::Submit) => match self.forget_adopted().edited() {
                 Ok(profile) => Some(Request::Save {
                     name: self.fields[0].clone(),
                     profile,

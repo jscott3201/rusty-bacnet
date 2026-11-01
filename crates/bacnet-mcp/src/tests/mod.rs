@@ -674,3 +674,12 @@ impl Agent {
             .unwrap_or_else(|| panic!("{tool} failed: {reply}"))
     }
 }
+
+/// A URI the subscribe handler panics on in tests, standing in for a bug
+/// an agent's request reaches (#2203).
+pub(crate) const PANIC_URI: &str = "bacnet://test/panic";
+
+/// Panic when asked for [`PANIC_URI`].
+pub(crate) fn panic_on(uri: &str) {
+    assert_ne!(uri, PANIC_URI, "an injected bug, reached by an agent");
+}

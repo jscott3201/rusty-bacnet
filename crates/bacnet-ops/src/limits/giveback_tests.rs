@@ -151,3 +151,51 @@ async fn the_meter_leaves_out_slots_given_back() {
     tokio::time::sleep(Duration::from_secs(1)).await;
     assert_eq!(limits.recent(), 2);
 }
+
+/// A charged request whose token came at once, withdrawn while it waits
+/// for its device's gate or for a slot, gives the token back: the
+/// bucket's next take goes at once.
+#[tokio::test(start_paused = true)]
+async fn a_request_withdrawn_after_its_token_gives_it_back() {
+    let fresh = || {
+        let bucket = Arc::new(TokenBucket::new(1, 1));
+        (Arc::clone(&bucket), Arc::new(Account::new(Some(bucket))))
+    };
+    let at_once = |bucket: &TokenBucket| {
+        let mut take = std::pin::pin!(bucket.take());
+        take.as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_ready()
+    };
+
+    let limits = RequestLimits::new(0);
+    let (bucket, account) = fresh();
+    let busy = limits.turn(1).await;
+    let wait = booked(Box::pin(charged(Arc::clone(&account), async {
+        drop(limits.turn(1).await);
+    })));
+    drop(wait);
+    drop(busy);
+    assert!(at_once(&bucket), "given back while waiting for the gate");
+
+    let limits = RequestLimits::new(1);
+    let (bucket, account) = fresh();
+    limits.acquire().await;
+    let wait = booked(Box::pin(charged(account, limits.slot(None))));
+    drop(wait);
+    assert!(at_once(&bucket), "given back while waiting for a slot");
+}
+
+/// Waiting until a request could go counts a slot given back: it ends at
+/// the hole, not after the slots still booked.
+#[tokio::test(start_paused = true)]
+async fn waiting_until_free_counts_a_slot_given_back() {
+    let limits = RequestLimits::new(10);
+    let start = Instant::now();
+    limits.acquire().await;
+    let mut waits = global_waits(&limits, 3);
+    drop(waits.remove(1));
+    limits.wait_free().await;
+    assert_eq!(Instant::now() - start, Duration::from_millis(200));
+    drop(waits);
+}

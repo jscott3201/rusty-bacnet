@@ -1,11 +1,12 @@
 //! The listener's own runtime (#2203): its sessions' requests run on
 //! threads named `SESSION_THREADS`; a request that panics there ends only
 //! its own session, audited with the reason, while another agent's goes
-//! on; and the runtime's threads stop with the listener. On a real clock,
-//! since the listener's runtime doesn't share a paused one.
+//! on; and the runtime's threads stop with the listener, dropped too. On
+//! a real clock, since the listener's runtime doesn't share a paused one.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde_json::{Value, json};
 
@@ -29,6 +30,20 @@ pub(super) fn panic_if_armed() {
     if on_session_thread() && ARMED.swap(false, Ordering::SeqCst) {
         panic!("an injected bug, reached by an agent's request");
     }
+}
+
+/// Wait on the real clock until `ok` holds, failing with `what` after
+/// five seconds: the runtime's threads start and stop on their own time.
+async fn eventually(what: &str, ok: impl Fn() -> bool) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !ok() {
+        assert!(std::time::Instant::now() < deadline, "{what}");
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+}
+
+fn live() -> usize {
+    threads::LIVE.load(Ordering::SeqCst)
 }
 
 fn read() -> Value {
@@ -61,20 +76,23 @@ async fn a_panicking_request_ends_only_its_session_on_the_listeners_threads() {
     )
     .await
     .unwrap();
-    assert!(threads::LIVE.load(Ordering::SeqCst) >= 2, "its workers run");
+    eventually("its workers run", || live() >= 2).await;
     let (mut first, first_bridge) = bridged(listener.path());
     first.initialize().await;
     let (mut second, second_bridge) = bridged(listener.path());
     second.initialize().await;
 
     ARMED.store(true, Ordering::SeqCst);
-    // Its answer may or may not get out before the session ends.
-    first
+    let id = first
         .post(
             "tools/call",
             json!({ "name": "bacnet_read", "arguments": read() }),
         )
         .await;
+    // The SDK drains the answers of requests in flight as the session
+    // ends, so the internal error gets out.
+    let answer = first.answer(id).await;
+    assert_eq!(answer["error"]["code"], json!(-32603), "{answer}");
     first_bridge.await.unwrap().unwrap();
     assert!(
         !ARMED.load(Ordering::SeqCst),
@@ -109,4 +127,35 @@ async fn a_panicking_request_ends_only_its_session_on_the_listeners_threads() {
         .unwrap_or_else(|| panic!("{records:?}"));
     let why = first_close["error"].as_str().unwrap_or_default();
     assert!(why.contains("panicked"), "{first_close}");
+}
+
+/// A listener dropped without its shutdown lets a session still ending
+/// finish before its runtime stops, so the agent's close is on record.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dropped_listener_lets_its_sessions_end_on_record() {
+    // The session is still ending when the hub's shutdown is done.
+    threads::END_DELAY_MS.store(300, Ordering::SeqCst);
+    let lab = lab().await;
+    let dir = private_dir();
+    let listener = Listener::bind(
+        lab.engine(),
+        Policy::default(),
+        "tester",
+        workspace(dir.path()),
+        SessionRuntime::Own,
+    )
+    .await
+    .unwrap();
+    let (mut agent, bridge) = bridged(listener.path());
+    agent.initialize().await;
+    drop(listener);
+    eventually("its threads stopped", || live() == 0).await;
+    bridge.await.unwrap().unwrap();
+    let records = audit(dir.path());
+    assert!(
+        records
+            .iter()
+            .any(|r| r["event"] == json!("mcp-disconnect") && r["connection"] == json!(1)),
+        "{records:?}"
+    );
 }

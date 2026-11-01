@@ -76,7 +76,8 @@ pub const SESSION_THREADS: &str = "bacnet-mcp-agent";
 const SESSION_WORKERS: usize = 2;
 
 /// How long a listener's shutdown waits for its runtime's threads to stop,
-/// once every session has ended.
+/// once every session has ended; and how long a listener dropped without
+/// its shutdown waits for its sessions to end.
 const RUNTIME_WAIT: Duration = Duration::from_secs(5);
 
 /// Where a listener runs its agents' sessions.
@@ -142,13 +143,25 @@ fn session_runtime() -> Result<OwnRuntime, AttachError> {
         .map_err(|e| AttachError(format!("cannot start the MCP sessions' runtime: {e}")))
 }
 
-/// The threads of listeners' own runtimes alive now, for tests.
+/// The threads of listeners' own runtimes alive now, and how long a
+/// session takes to end, for tests.
 #[cfg(test)]
 pub(crate) mod threads {
-    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
     /// Started and not yet stopped.
     pub(crate) static LIVE: AtomicUsize = AtomicUsize::new(0);
+
+    /// Milliseconds each session waits before its close is recorded.
+    pub(crate) static END_DELAY_MS: AtomicU64 = AtomicU64::new(0);
+
+    /// Wait out [`END_DELAY_MS`].
+    pub(crate) async fn ending() {
+        let ms = END_DELAY_MS.load(Ordering::SeqCst);
+        if ms > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+        }
+    }
 }
 
 /// Where the TUI's socket for the workspace `dir` is.
@@ -418,13 +431,22 @@ impl Drop for Listener {
             accept.abort();
         }
         // The ordered path is the graceful `shutdown()`. Dropped without it,
-        // the hub's shutdown runs on a task of its own, racing the sessions
-        // still ending, and the count of refusals left out of the record
-        // may be lost. The sessions' runtime stops after it.
+        // a task of its own waits a while for the sessions to end, then
+        // shuts the hub down and stops the sessions' runtime.
         let runtime = self.runtime.take();
+        let sessions = self.sessions.clone();
+        sessions.close();
         match (self.finish.take(), Handle::try_current()) {
             (Some(finish), Ok(current)) => {
                 current.spawn(async move {
+                    // Sessions still ending keep their close on record:
+                    // stopping the runtime would drop them.
+                    if tokio::time::timeout(RUNTIME_WAIT, sessions.wait())
+                        .await
+                        .is_err()
+                    {
+                        tracing::warn!("MCP sessions were still ending as the listener stopped");
+                    }
                     finish.await;
                     if let Some(runtime) = runtime {
                         stop_runtime(runtime).await;
