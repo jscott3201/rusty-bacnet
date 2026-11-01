@@ -11,9 +11,8 @@ use crate::property_metadata::{
 use super::AuditLogObject;
 
 // Canonical effective rows for Audit Log (type 61, Clause 12.64 Table 12-83).
-// Order preserves the legacy property_list projection, with Log_Buffer in its
-// table position after Buffer_Size; PROPERTY_LIST is appended so the
-// projection helper omits it while required_properties keeps it. Only
+// Order preserves the earlier row order, with Log_Buffer in its
+// table position after Buffer_Size; PROPERTY_LIST is appended last. Only
 // implemented rows are described: table rows the object does not serve
 // (intrinsic-reporting, Audit_Level, Tags, Profile_*) stay absent until
 // dispatch exists. Log_Buffer is present but served only by ReadRange and
@@ -135,7 +134,10 @@ mod tests {
             P::RELIABILITY,
         ];
         for p in properties {
-            assert!(!object.property_list().contains(&p));
+            assert!(!crate::property_metadata::has_property(
+                &object.property_metadata(),
+                p
+            ));
             assert_error(
                 object.read_property(p, None).unwrap_err(),
                 ErrorCode::UNKNOWN_PROPERTY,
@@ -143,7 +145,10 @@ mod tests {
         }
         object.set_member_of(Some(parent.clone()));
         for p in properties {
-            assert!(object.property_list().contains(&p));
+            assert!(crate::property_metadata::has_property(
+                &object.property_metadata(),
+                p
+            ));
             assert!(!object.is_writable_property(p));
             assert_error(
                 object
@@ -191,7 +196,10 @@ mod tests {
             PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw())
         );
         object.set_member_of(None);
-        assert!(!object.property_list().contains(&P::MEMBER_OF));
+        assert!(!crate::property_metadata::has_property(
+            &object.property_metadata(),
+            P::MEMBER_OF
+        ));
     }
 
     fn assert_error(error: Error, expected: ErrorCode) {
@@ -267,8 +275,14 @@ mod tests {
         let metadata = object.property_metadata();
         assert!(matches!(metadata, Cow::Borrowed(_)));
         assert_eq!(metadata.len(), all.len() + 1);
-        assert_eq!(object.property_list().as_ref(), all);
-        assert_eq!(object.required_properties().as_ref(), required);
+        assert_eq!(
+            crate::test_rows::listed(&object.property_metadata()),
+            crate::test_rows::listed_from(&all)
+        );
+        assert_eq!(
+            crate::test_rows::required(&object.property_metadata()),
+            required
+        );
         assert_eq!(
             metadata
                 .iter()

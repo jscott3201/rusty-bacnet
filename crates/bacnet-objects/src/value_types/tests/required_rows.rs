@@ -112,8 +112,15 @@ fn every_value_type_serves_current_command_priority_from_its_priority_array() {
     for (mut object, value) in every_value_type() {
         let kind = object.object_identifier().object_type();
         // Listed as the commandable O2 row it is, scalar and read-only.
-        assert!(object.property_list().contains(&ccp), "{kind:?}");
-        assert!(!object.required_properties().contains(&ccp), "{kind:?}");
+        assert!(
+            crate::property_metadata::has_property(&object.property_metadata(), ccp),
+            "{kind:?}"
+        );
+        assert!(
+            !crate::property_metadata::required_properties(&object.property_metadata())
+                .any(|required| required == ccp),
+            "{kind:?}"
+        );
         assert!(!object.is_array_property(ccp), "{kind:?}");
         assert!(!object.is_writable_property(ccp), "{kind:?}");
 
@@ -143,11 +150,18 @@ fn every_value_type_serves_current_command_priority_from_its_priority_array() {
 fn assert_cov_increment_row(object: &mut dyn BACnetObject, zero: PropertyValue) {
     let cov = PropertyIdentifier::COV_INCREMENT;
     let kind = object.object_identifier().object_type();
-    assert!(object.property_list().contains(&cov), "{kind:?}");
+    assert!(
+        crate::property_metadata::has_property(&object.property_metadata(), cov),
+        "{kind:?}"
+    );
     // Tables 12-46, 12-50 and 12-51 footnote 3: required of an object that
     // reports COV, as these do (#2193).
     assert!(object.supports_cov(), "{kind:?}");
-    assert!(object.required_properties().contains(&cov), "{kind:?}");
+    assert!(
+        crate::property_metadata::required_properties(&object.property_metadata())
+            .any(|required| required == cov),
+        "{kind:?}"
+    );
     assert!(object.is_writable_property(cov), "{kind:?}");
     assert!(!object.is_array_property(cov), "{kind:?}");
     // A new object notifies on any change.
@@ -238,9 +252,10 @@ fn non_numeric_value_types_have_no_cov_increment() {
     for (object, _) in every_value_type().into_iter().skip(3) {
         let kind = object.object_identifier().object_type();
         assert!(
-            !object
-                .property_list()
-                .contains(&PropertyIdentifier::COV_INCREMENT),
+            !crate::property_metadata::has_property(
+                &object.property_metadata(),
+                PropertyIdentifier::COV_INCREMENT
+            ),
             "{kind:?}"
         );
         assert_error(

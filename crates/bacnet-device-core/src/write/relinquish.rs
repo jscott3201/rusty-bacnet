@@ -43,6 +43,7 @@
 //! (Clause 19.6.1). A CreateObject goes on to its next initial value, and a
 //! Schedule counts the target as one that took its write.
 
+use bacnet_objects::property_metadata::has_property;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
 use bacnet_types::error::{Error, RemoteError};
@@ -101,9 +102,10 @@ fn refused_as_datatype(error: &Error) -> bool {
 fn commandable(object: &dyn BACnetObject, property: PropertyIdentifier) -> bool {
     property == PropertyIdentifier::PRESENT_VALUE
         && (object.object_identifier().object_type() == ObjectType::CHANNEL
-            || object
-                .property_list()
-                .contains(&PropertyIdentifier::PRIORITY_ARRAY))
+            || has_property(
+                &object.property_metadata(),
+                PropertyIdentifier::PRIORITY_ARRAY,
+            ))
 }
 
 /// Whether an application NULL is a value of `property` on an object of

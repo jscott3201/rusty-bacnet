@@ -236,8 +236,14 @@ mod tests {
                     )
                     .unwrap();
                 assert_eq!(object.property_metadata().as_ref(), original);
-                assert_eq!(object.property_list().as_ref(), expected);
-                assert_eq!(object.required_properties().as_ref(), required);
+                assert_eq!(
+                    crate::test_rows::listed(&object.property_metadata()),
+                    crate::test_rows::listed_from(&expected)
+                );
+                assert_eq!(
+                    crate::test_rows::required(&object.property_metadata()),
+                    required
+                );
                 assert_eq!(original.len(), expected.len() + 1);
                 for row in &original {
                     let p = row.property_identifier;

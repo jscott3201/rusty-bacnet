@@ -16,8 +16,8 @@ use crate::property_metadata::{
 // - Access User (type 35, §12.33 Table 12-38; printed p. 390 / PDF p. 392)
 // - Access Rights (type 34, §12.34 Table 12-39; printed p. 394 / PDF p. 396)
 // - Credential Data Input (type 37, §12.36 Table 12-43; printed p. 409 / PDF p. 411)
-// Order preserves each legacy projection; Property_List is appended so the
-// projection helper omits it while required_properties keeps it. Only
+// Order preserves each type's earlier row order; Property_List is appended
+// last. Only
 // implemented rows are described: table rows the objects do not serve stay
 // absent until dispatch exists (the CDI event/intrinsic rows). Shared
 // conventions match metadata_topology.rs (Slice A): OI/ON/OT

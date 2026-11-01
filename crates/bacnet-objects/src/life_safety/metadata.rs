@@ -11,9 +11,8 @@ use crate::property_metadata::{
 
 // Canonical effective rows for Life Safety Point (type 21, Clause 12.15
 // Table 12-18) and Life Safety Zone (type 22, Clause 12.16 Table 12-19).
-// Order preserves the legacy property_list projection; PROPERTY_LIST is
-// appended so the projection helper omits it while required_properties keeps
-// it. Only implemented rows are described: table rows the objects do not
+// Order preserves the earlier row order; PROPERTY_LIST is appended last. Only
+// implemented rows are described: table rows the objects do not
 // serve (Device_Type, Units, Setting,
 // intrinsic-reporting/event rows, Reliability_Evaluation_Inhibit,
 // Value_Source/audit/tags/profile rows) stay absent until dispatch exists.
@@ -220,8 +219,14 @@ mod tests {
         let metadata = object.property_metadata();
         assert!(matches!(metadata, Cow::Borrowed(_)));
         assert_eq!(metadata.len(), all.len() + 1);
-        assert_eq!(object.property_list().as_ref(), all);
-        assert_eq!(object.required_properties().as_ref(), required);
+        assert_eq!(
+            crate::test_rows::listed(&object.property_metadata()),
+            crate::test_rows::listed_from(&all)
+        );
+        assert_eq!(
+            crate::test_rows::required(&object.property_metadata()),
+            required
+        );
         assert_eq!(
             metadata
                 .iter()
@@ -285,8 +290,14 @@ mod tests {
         let metadata = object.property_metadata();
         assert!(matches!(metadata, Cow::Borrowed(_)));
         assert_eq!(metadata.len(), all.len() + 1);
-        assert_eq!(object.property_list().as_ref(), all);
-        assert_eq!(object.required_properties().as_ref(), required);
+        assert_eq!(
+            crate::test_rows::listed(&object.property_metadata()),
+            crate::test_rows::listed_from(&all)
+        );
+        assert_eq!(
+            crate::test_rows::required(&object.property_metadata()),
+            required
+        );
         assert_eq!(
             metadata
                 .iter()

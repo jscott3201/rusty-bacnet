@@ -34,11 +34,13 @@ macro_rules! assert_units_row {
             PropertyValue::Enumerated(EngineeringUnits::NO_UNITS.to_raw()),
             "{kind:?}"
         );
-        assert!(object.property_list().contains(&PropertyIdentifier::UNITS));
+        assert!(crate::property_metadata::has_property(
+            &object.property_metadata(),
+            PropertyIdentifier::UNITS
+        ));
         assert!(
-            object
-                .required_properties()
-                .contains(&PropertyIdentifier::UNITS)
+            crate::property_metadata::required_properties(&object.property_metadata())
+                .any(|required| required == PropertyIdentifier::UNITS)
         );
         assert!(!object.is_array_property(PropertyIdentifier::UNITS));
 
@@ -92,7 +94,10 @@ fn non_numeric_value_types_have_no_units() {
         Box::new(BitStringValueObject::new(1, "BSV-1").unwrap()),
     ];
     for object in objects {
-        assert!(!object.property_list().contains(&PropertyIdentifier::UNITS));
+        assert!(!crate::property_metadata::has_property(
+            &object.property_metadata(),
+            PropertyIdentifier::UNITS
+        ));
         assert_error(
             object.read_property(PropertyIdentifier::UNITS, None),
             ErrorCode::UNKNOWN_PROPERTY,

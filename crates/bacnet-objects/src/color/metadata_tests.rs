@@ -117,13 +117,19 @@ fn rows_and_codes_match_the_addendum_tables() {
             .collect();
         assert_eq!(found, rows);
         let all: Vec<_> = rows[..rows.len() - 1].iter().map(|&(p, _)| p).collect();
-        assert_eq!(object.property_list().as_ref(), all);
+        assert_eq!(
+            crate::test_rows::listed(&object.property_metadata()),
+            crate::test_rows::listed_from(&all)
+        );
         let required: Vec<_> = rows
             .iter()
             .filter(|(_, code)| code.is_required())
             .map(|&(p, _)| p)
             .collect();
-        assert_eq!(object.required_properties().as_ref(), required);
+        assert_eq!(
+            crate::test_rows::required(&object.property_metadata()),
+            required
+        );
         assert_eq!(
             rows.iter().map(|&(p, _)| p).collect::<HashSet<_>>().len(),
             rows.len()
@@ -159,7 +165,10 @@ fn neither_object_serves_status_or_service_rows() {
             P::COV_INCREMENT,
             P::DEVICE_TYPE,
         ] {
-            assert!(!object.property_list().contains(&p), "{p:?}");
+            assert!(
+                !crate::property_metadata::has_property(&object.property_metadata(), p),
+                "{p:?}"
+            );
             assert!(!object.is_writable_property(p), "{p:?}");
             assert_error(
                 object.read_property(p, None).unwrap_err(),

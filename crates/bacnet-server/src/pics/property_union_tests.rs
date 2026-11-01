@@ -232,26 +232,23 @@ fn pics_device_union_applies_execution_view_to_every_instance() {
                 "second"
             }
         }
-        fn property_list(&self) -> Cow<'static, [P]> {
-            Cow::Owned(vec![
-                P::PROTOCOL_SERVICES_SUPPORTED,
-                P::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS,
-                self.extra,
-            ])
-        }
         fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
             Cow::Owned(
-                self.property_list()
-                    .iter()
-                    .map(|p| {
-                        PropertyMetadata::new(
-                            *p,
-                            PropertyConformance::RequiredWrite,
-                            None,
-                            PropertyWriteCapability::Always,
-                        )
-                    })
-                    .collect(),
+                [
+                    P::PROTOCOL_SERVICES_SUPPORTED,
+                    P::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS,
+                    self.extra,
+                ]
+                .into_iter()
+                .map(|p| {
+                    PropertyMetadata::new(
+                        p,
+                        PropertyConformance::RequiredWrite,
+                        None,
+                        PropertyWriteCapability::Always,
+                    )
+                })
+                .collect(),
             )
         }
         fn read_property(&self, _: P, _: Option<u32>) -> Result<PropertyValue, Error> {

@@ -19,9 +19,7 @@ use bytes::BytesMut;
 
 use crate::common::{self, read_common_properties};
 use crate::device_reference;
-use crate::property_metadata::{
-    PropertyConformance, PropertyMetadata, PropertyWriteCapability, property_list_from_metadata,
-};
+use crate::property_metadata::{PropertyConformance, PropertyMetadata, PropertyWriteCapability};
 use crate::traits::BACnetObject;
 
 mod metadata;
@@ -525,10 +523,6 @@ impl BACnetObject for StagingObject {
 
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         Cow::Owned(self.metadata())
-    }
-
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        property_list_from_metadata(&self.metadata())
     }
 
     // Table 13-1 Staging row: Present_Value by COV_Increment, Status_Flags and

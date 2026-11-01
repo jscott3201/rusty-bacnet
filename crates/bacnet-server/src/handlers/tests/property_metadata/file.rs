@@ -90,7 +90,10 @@ mod pics {
                 if method == 0 {
                     expected.push((P::RECORD_COUNT, true, !read_only));
                 }
-                let mut required = object.required_properties().into_owned();
+                let mut required: Vec<_> = bacnet_objects::property_metadata::required_properties(
+                    &object.property_metadata(),
+                )
+                .collect();
                 required.sort_by_key(|property| property.to_raw());
                 let mut db = ObjectDatabase::new();
                 db.add(Box::new(object)).unwrap();

@@ -305,8 +305,13 @@ async fn a_freshly_created_object_of_each_type_reads_whole_with_rpm_all() {
             .await
             .get(&object)
             .unwrap()
-            .property_list();
-        for property in listed.iter() {
+            .property_metadata()
+            .into_owned();
+        for property in listed
+            .iter()
+            .map(|row| &row.property_identifier)
+            .filter(|&&p| p != PropertyIdentifier::PROPERTY_LIST)
+        {
             let element = result
                 .list_of_results
                 .iter()

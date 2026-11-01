@@ -579,10 +579,6 @@ impl BACnetObject for MultiStateValueObject {
         metadata::for_object(self)
     }
 
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
-    }
-
     fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
         CREATION_ONLY
     }
@@ -711,10 +707,10 @@ mod detection_enable_tests {
             msv.event_detector.pending.is_none(),
             "evaluate/tick re-armed a countdown while detection is disabled"
         );
-        assert!(
-            msv.property_list()
-                .contains(&PropertyIdentifier::EVENT_DETECTION_ENABLE)
-        );
+        assert!(crate::property_metadata::has_property(
+            &msv.property_metadata(),
+            PropertyIdentifier::EVENT_DETECTION_ENABLE
+        ));
         assert!(msv.is_writable_property(PropertyIdentifier::EVENT_DETECTION_ENABLE));
     }
 }

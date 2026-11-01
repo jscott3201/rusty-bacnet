@@ -190,9 +190,6 @@ impl BACnetObject for Vendor {
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         crate::test_rows::read_only(&[])
     }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
-    }
 }
 
 #[test]
@@ -256,9 +253,6 @@ impl BACnetObject for Pinned {
 
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         self.0.property_metadata()
-    }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        self.0.property_list()
     }
 
     fn is_deleteable(&self) -> bool {

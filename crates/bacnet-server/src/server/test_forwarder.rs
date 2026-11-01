@@ -90,9 +90,6 @@ impl BACnetObject for TestForwarder {
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         crate::test_rows::rows(PROPERTIES, &[PropertyIdentifier::SUBSCRIBED_RECIPIENTS])
     }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
-    }
 
     fn timed(&mut self) -> Option<&mut dyn Timed> {
         Some(self)

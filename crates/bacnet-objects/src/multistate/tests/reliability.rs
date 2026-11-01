@@ -405,11 +405,10 @@ fn msv_configuration_sources_recompute_immediately_and_fault_values_stays_absent
     );
 
     assert_unknown_property(alarms.read_property(PropertyIdentifier::FAULT_VALUES, None));
-    assert!(
-        !alarms
-            .property_list()
-            .contains(&PropertyIdentifier::FAULT_VALUES)
-    );
+    assert!(!crate::property_metadata::has_property(
+        &alarms.property_metadata(),
+        PropertyIdentifier::FAULT_VALUES
+    ));
     assert!(!alarms.is_writable_property(PropertyIdentifier::FAULT_VALUES));
 }
 

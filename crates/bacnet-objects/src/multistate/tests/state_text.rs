@@ -123,10 +123,10 @@ fn msi_state_text_write_bad_index_rejected() {
 #[test]
 fn msi_state_text_in_property_list() {
     let msi = MultiStateInputObject::new(1, "MSI-1", 3).unwrap();
-    assert!(
-        msi.property_list()
-            .contains(&PropertyIdentifier::STATE_TEXT)
-    );
+    assert!(crate::property_metadata::has_property(
+        &msi.property_metadata(),
+        PropertyIdentifier::STATE_TEXT
+    ));
 }
 
 #[test]
@@ -191,10 +191,10 @@ fn mso_state_text_write_at_index() {
 #[test]
 fn mso_state_text_in_property_list() {
     let mso = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();
-    assert!(
-        mso.property_list()
-            .contains(&PropertyIdentifier::STATE_TEXT)
-    );
+    assert!(crate::property_metadata::has_property(
+        &mso.property_metadata(),
+        PropertyIdentifier::STATE_TEXT
+    ));
 }
 
 #[test]
@@ -311,8 +311,8 @@ fn msv_state_text_write_wrong_type_rejected() {
 #[test]
 fn msv_state_text_in_property_list() {
     let msv = MultiStateValueObject::new(1, "MSV-1", 3).unwrap();
-    assert!(
-        msv.property_list()
-            .contains(&PropertyIdentifier::STATE_TEXT)
-    );
+    assert!(crate::property_metadata::has_property(
+        &msv.property_metadata(),
+        PropertyIdentifier::STATE_TEXT
+    ));
 }

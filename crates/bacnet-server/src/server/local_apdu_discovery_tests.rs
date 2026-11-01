@@ -193,9 +193,6 @@ async fn custom_device_unknown_segmentation_fails_before_transport_start() {
         ) -> std::borrow::Cow<'_, [bacnet_objects::property_metadata::PropertyMetadata]> {
             self.0.property_metadata()
         }
-        fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
-            self.0.property_list()
-        }
         fn read_property(
             &self,
             property: PropertyIdentifier,

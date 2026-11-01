@@ -54,7 +54,10 @@ fn assert_property_error<T>(result: Result<T, Error>, code: ErrorCode) {
 /// Whether Accompaniment is in Property_List and the metadata, and how the
 /// metadata describes it.
 fn assert_listed(rights: &AccessRightsObject, listed: bool) {
-    assert_eq!(rights.property_list().contains(&P::ACCOMPANIMENT), listed);
+    assert_eq!(
+        crate::property_metadata::has_property(&rights.property_metadata(), P::ACCOMPANIMENT),
+        listed
+    );
     let metadata = rights.property_metadata();
     let row = metadata
         .iter()
@@ -62,7 +65,10 @@ fn assert_listed(rights: &AccessRightsObject, listed: bool) {
     assert_eq!(row.is_some(), listed);
     assert_eq!(rights.is_writable_property(P::ACCOMPANIMENT), listed);
     // Never required, and never an array.
-    assert!(!rights.required_properties().contains(&P::ACCOMPANIMENT));
+    assert!(
+        !crate::property_metadata::required_properties(&rights.property_metadata())
+            .any(|required| required == P::ACCOMPANIMENT)
+    );
     assert!(!rights.is_array_property(P::ACCOMPANIMENT));
     if let Some(row) = row {
         assert_eq!(row.conformance, PropertyConformance::Optional);

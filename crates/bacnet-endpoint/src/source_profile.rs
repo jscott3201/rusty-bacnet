@@ -1,5 +1,6 @@
 //! Complete source profile preflight, before mutation or ingress ownership.
 use super::*;
+use bacnet_objects::property_metadata::has_property;
 impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Write the active source profile's Device Audit recipient as a trusted local operation.
     ///
@@ -110,13 +111,13 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             ));
         }
         if object.audit_reporter_internal().is_some_and(|reporter| {
-            reporter
-                .property_list()
-                .contains(&PropertyIdentifier::MONITORED_OBJECTS)
-                || reporter
-                    .configuration_internal()
-                    .maximum_send_delay
-                    .is_some()
+            has_property(
+                &reporter.property_metadata(),
+                PropertyIdentifier::MONITORED_OBJECTS,
+            ) || reporter
+                .configuration_internal()
+                .maximum_send_delay
+                .is_some()
         }) {
             return Err(Error::Encoding(
                 "source Audit does not support Monitored_Objects or delayed notifications".into(),

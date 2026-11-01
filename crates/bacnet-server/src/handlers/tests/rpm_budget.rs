@@ -4,7 +4,7 @@ use bacnet_device_core::read::NoOverlay;
 #[path = "rpm_optional_rows.rs"]
 mod optional_rows;
 use bacnet_objects::property_metadata::{
-    PropertyConformance, PropertyMetadata, PropertyWriteCapability, property_list_from_metadata,
+    PropertyConformance, PropertyMetadata, PropertyWriteCapability,
 };
 use bacnet_types::constructed::ReadAccessSpecification;
 use std::borrow::Cow;
@@ -49,9 +49,6 @@ impl BACnetObject for Counting {
         ];
         // `empty` serves no row at all.
         Cow::Borrowed(if self.empty { &[] } else { ROWS })
-    }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        property_list_from_metadata(self.property_metadata().as_ref())
     }
     fn is_array_property(&self, _: PropertyIdentifier) -> bool {
         self.array

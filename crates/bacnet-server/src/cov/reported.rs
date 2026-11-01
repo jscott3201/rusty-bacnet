@@ -2,6 +2,7 @@
 //! its leading value and Status_Flags, captured under the same object borrow.
 use super::CovSample;
 use bacnet_encoding::primitives::encode_property_value;
+use bacnet_objects::property_metadata::has_property;
 use bacnet_objects::traits::{BACnetObject, CovReportedProperty};
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
@@ -39,12 +40,12 @@ impl PreparedReported {
                 triggers: Box::default(),
             });
         }
-        let property_list = object.property_list();
+        let rows = object.property_metadata();
         let mut values = Vec::with_capacity(declared.len());
         let mut triggers = Vec::new();
         for reported in declared {
             let property = reported.property();
-            if !property_list.contains(&property) {
+            if !has_property(&rows, property) {
                 continue;
             }
             let value = object.read_property(property, None)?;

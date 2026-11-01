@@ -279,10 +279,10 @@ fn ai_set_description_convenience() {
 #[test]
 fn ai_description_in_property_list() {
     let ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
-    assert!(
-        ai.property_list()
-            .contains(&PropertyIdentifier::DESCRIPTION)
-    );
+    assert!(crate::property_metadata::has_property(
+        &ai.property_metadata(),
+        PropertyIdentifier::DESCRIPTION
+    ));
 }
 
 #[test]
@@ -522,9 +522,9 @@ fn assert_tdn_protocol_error(result: Result<(), Error>, code: bacnet_types::enum
 }
 
 /// The property round-trips on all three analog types and is advertised in
-/// both `property_list` and `is_writable_property` (the Clause 12 tables make
-/// it O-coded, so writability mirrors Time_Delay — permitted, and the only
-/// way the Clause 13.3 delay asymmetry is commissionable).
+/// both the served Property_List and `is_writable_property` (the Clause 12
+/// tables make it O-coded, so writability mirrors Time_Delay — permitted,
+/// and the only way the Clause 13.3 delay asymmetry is commissionable).
 #[test]
 fn analog_time_delay_normal_round_trips_and_matches_pics() {
     for (mut object, label) in [
@@ -560,9 +560,10 @@ fn analog_time_delay_normal_round_trips_and_matches_pics() {
             "{label}: Time_Delay_Normal must read back what was written"
         );
         assert!(
-            object
-                .property_list()
-                .contains(&PropertyIdentifier::TIME_DELAY_NORMAL),
+            crate::property_metadata::has_property(
+                &object.property_metadata(),
+                PropertyIdentifier::TIME_DELAY_NORMAL
+            ),
             "{label}: Time_Delay_Normal must be advertised in Property_List"
         );
         assert!(

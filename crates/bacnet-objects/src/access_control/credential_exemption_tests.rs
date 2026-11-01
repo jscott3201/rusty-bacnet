@@ -23,12 +23,18 @@ fn assert_property_error<T: std::fmt::Debug>(result: Result<T, Error>, code: Err
 /// Whether Authorization_Exemptions is in Property_List and the metadata,
 /// and how the metadata describes it.
 fn assert_listed(credential: &AccessCredentialObject, listed: bool) {
-    assert_eq!(credential.property_list().contains(&AE), listed);
+    assert_eq!(
+        crate::property_metadata::has_property(&credential.property_metadata(), AE),
+        listed
+    );
     let metadata = credential.property_metadata();
     let row = metadata.iter().find(|row| row.property_identifier == AE);
     assert_eq!(row.is_some(), listed);
     assert!(!credential.is_writable_property(AE));
-    assert!(!credential.required_properties().contains(&AE));
+    assert!(
+        !crate::property_metadata::required_properties(&credential.property_metadata())
+            .any(|required| required == AE)
+    );
     assert!(credential.is_list_property(AE));
     assert!(!credential.is_array_property(AE));
     if let Some(row) = row {

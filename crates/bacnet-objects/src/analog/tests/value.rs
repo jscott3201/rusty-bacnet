@@ -489,16 +489,16 @@ fn av_set_description_convenience() {
 #[test]
 fn av_description_in_property_list() {
     let av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
-    assert!(
-        av.property_list()
-            .contains(&PropertyIdentifier::DESCRIPTION)
-    );
+    assert!(crate::property_metadata::has_property(
+        &av.property_metadata(),
+        PropertyIdentifier::DESCRIPTION
+    ));
 }
 
 #[test]
 fn av_property_list_includes_priority_array_and_relinquish_default() {
     let av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
-    let list = av.property_list();
+    let list = crate::test_rows::listed(&av.property_metadata());
     assert!(list.contains(&PropertyIdentifier::PRIORITY_ARRAY));
     assert!(list.contains(&PropertyIdentifier::RELINQUISH_DEFAULT));
     assert!(list.contains(&PropertyIdentifier::COV_INCREMENT));
@@ -570,8 +570,7 @@ fn ai_property_list_index_zero_returns_count() {
     let ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     // Property_List excludes OBJECT_IDENTIFIER, OBJECT_NAME,
     // OBJECT_TYPE, and PROPERTY_LIST itself.
-    let filtered_count = ai
-        .property_list()
+    let filtered_count = crate::test_rows::listed(&ai.property_metadata())
         .iter()
         .filter(|p| {
             **p != PropertyIdentifier::OBJECT_IDENTIFIER
@@ -590,8 +589,7 @@ fn ai_property_list_index_zero_returns_count() {
 fn ai_property_list_index_one_returns_first_prop() {
     let ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     // First property after filtering the 4 excluded ones
-    let first_filtered = ai
-        .property_list()
+    let first_filtered = crate::test_rows::listed(&ai.property_metadata())
         .iter()
         .copied()
         .find(|p| {
@@ -610,7 +608,7 @@ fn ai_property_list_index_one_returns_first_prop() {
 #[test]
 fn ai_property_list_invalid_index_returns_error() {
     let ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
-    let count = ai.property_list().len() as u32;
+    let count = crate::test_rows::listed(&ai.property_metadata()).len() as u32;
     let result = ai.read_property(PropertyIdentifier::PROPERTY_LIST, Some(count + 1));
     assert!(result.is_err());
 }

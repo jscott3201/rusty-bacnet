@@ -99,8 +99,7 @@ fn all_inputs_eight_masks_and_oos_states_preserve_existing_metadata() {
                     expected
                 );
                 assert_eq!(
-                    object
-                        .property_list()
+                    crate::test_rows::listed(&object.property_metadata())
                         .iter()
                         .filter(|p| ROWS.contains(p))
                         .copied()
@@ -347,7 +346,10 @@ fn input_saved_overrides_need_provisioning_and_invalid_replacement_preserves_sta
                 object.read_property(P::TAGS, None),
                 ErrorCode::UNKNOWN_PROPERTY,
             );
-            assert!(!object.property_list().contains(&P::TAGS));
+            assert!(!crate::property_metadata::has_property(
+                &object.property_metadata(),
+                P::TAGS
+            ));
             object.provision(optional(7)).unwrap();
             let count = saved
                 .as_ref()

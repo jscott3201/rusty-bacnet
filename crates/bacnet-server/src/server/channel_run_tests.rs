@@ -71,9 +71,6 @@ impl BACnetObject for Recorder {
         served.push(PropertyIdentifier::LIGHTING_COMMAND);
         crate::test_rows::rows(&served, &served)
     }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
-    }
 }
 
 /// A server with REC-1 and CH-8, whose members `members` all name REC-1.

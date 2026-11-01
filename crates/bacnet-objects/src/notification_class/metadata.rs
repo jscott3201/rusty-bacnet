@@ -86,8 +86,14 @@ mod tests {
                 .collect::<Vec<_>>(),
             expected
         );
-        assert_eq!(object.property_list().as_ref(), ALL);
-        assert_eq!(object.required_properties().as_ref(), REQUIRED);
+        assert_eq!(
+            crate::test_rows::listed(&object.property_metadata()),
+            crate::test_rows::listed_from(ALL)
+        );
+        assert_eq!(
+            crate::test_rows::required(&object.property_metadata()),
+            REQUIRED
+        );
         assert!(!object.supports_cov());
         assert!(object.is_deleteable());
         for row in metadata.iter() {
@@ -204,7 +210,13 @@ mod tests {
             );
         }
         assert_eq!(object.property_metadata().as_ref(), original);
-        assert_eq!(object.property_list().as_ref(), ALL);
-        assert_eq!(object.required_properties().as_ref(), REQUIRED);
+        assert_eq!(
+            crate::test_rows::listed(&object.property_metadata()),
+            crate::test_rows::listed_from(ALL)
+        );
+        assert_eq!(
+            crate::test_rows::required(&object.property_metadata()),
+            REQUIRED
+        );
     }
 }

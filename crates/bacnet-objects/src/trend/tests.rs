@@ -238,10 +238,10 @@ fn trendlog_set_description_convenience() {
 #[test]
 fn trendlog_description_in_property_list() {
     let tl = TrendLogObject::new(1, "TL-1", 100).unwrap();
-    assert!(
-        tl.property_list()
-            .contains(&PropertyIdentifier::DESCRIPTION)
-    );
+    assert!(crate::property_metadata::has_property(
+        &tl.property_metadata(),
+        PropertyIdentifier::DESCRIPTION
+    ));
 }
 
 #[test]
@@ -322,7 +322,7 @@ fn trendlog_set_logging_type() {
 #[test]
 fn trendlog_log_buffer_in_property_list() {
     let tl = TrendLogObject::new(1, "TL-1", 100).unwrap();
-    let props = tl.property_list();
+    let props = crate::test_rows::listed(&tl.property_metadata());
     assert!(props.contains(&PropertyIdentifier::LOG_BUFFER));
     assert!(props.contains(&PropertyIdentifier::LOGGING_TYPE));
     assert!(props.contains(&PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY));
@@ -454,7 +454,7 @@ fn trendlog_multiple_serves_log_buffer_records_framed() {
 #[test]
 fn trendlog_multiple_property_list() {
     let tlm = TrendLogMultipleObject::new(1, "TLM-1", 100).unwrap();
-    let props = tlm.property_list();
+    let props = crate::test_rows::listed(&tlm.property_metadata());
     assert!(props.contains(&PropertyIdentifier::LOG_BUFFER));
     assert!(props.contains(&PropertyIdentifier::LOGGING_TYPE));
     assert!(props.contains(&PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY));
@@ -581,9 +581,10 @@ fn trend_logs_have_no_out_of_service_property() {
     for mut object in objects {
         let kind = object.object_identifier().object_type();
         assert!(
-            !object
-                .property_list()
-                .contains(&PropertyIdentifier::OUT_OF_SERVICE),
+            !crate::property_metadata::has_property(
+                &object.property_metadata(),
+                PropertyIdentifier::OUT_OF_SERVICE
+            ),
             "{kind:?}"
         );
         assert!(

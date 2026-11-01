@@ -386,9 +386,6 @@ impl BACnetObject for CountedZone {
     fn property_metadata(&self) -> std::borrow::Cow<'_, [PropertyMetadata]> {
         self.zone.property_metadata()
     }
-    fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
-        self.zone.property_list()
-    }
 }
 
 #[test]

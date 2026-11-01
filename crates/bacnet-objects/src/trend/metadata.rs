@@ -302,8 +302,14 @@ mod tests {
                             .filter(|p| !REPORTING_PERMITTED.contains(p)),
                     );
                     required.push(P::PROPERTY_LIST);
-                    assert_eq!(object.property_list().as_ref(), all);
-                    assert_eq!(object.required_properties().as_ref(), required);
+                    assert_eq!(
+                        crate::test_rows::listed(&object.property_metadata()),
+                        crate::test_rows::listed_from(&all)
+                    );
+                    assert_eq!(
+                        crate::test_rows::required(&object.property_metadata()),
+                        required
+                    );
                     assert!(object.is_deleteable());
                     assert!(!object.supports_cov());
                     assert!(!object.is_array_property(P::LOG_BUFFER));

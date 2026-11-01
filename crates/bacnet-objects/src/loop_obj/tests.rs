@@ -367,7 +367,7 @@ fn loop_cov_reports_setpoint_and_controlled_variable_value() {
             Value(PropertyIdentifier::CONTROLLED_VARIABLE_VALUE),
         ]
     );
-    let list = lo.property_list();
+    let list = crate::test_rows::listed(&lo.property_metadata());
     for reported in lo.cov_reported_properties() {
         assert!(list.contains(&reported.property()));
         assert!(!reported.triggers(), "Table 13-1 reports them only");

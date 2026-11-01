@@ -95,8 +95,14 @@ fn energy_meter_ref_starts_uninitialized_and_is_read_only_over_the_network() {
         // object [1] Accumulator (type 23) instance 4194303, no device [0].
         let unset = PropertyValue::ApplicationData(vec![0x1C, 0x05, 0xFF, 0xFF, 0xFF]);
         assert_eq!(read(&*object, ENERGY_METER_REF), unset, "{name}");
-        assert!(object.property_list().contains(&ENERGY_METER_REF), "{name}");
-        assert!(!object.required_properties().contains(&ENERGY_METER_REF));
+        assert!(
+            crate::property_metadata::has_property(&object.property_metadata(), ENERGY_METER_REF),
+            "{name}"
+        );
+        assert!(
+            !crate::property_metadata::required_properties(&object.property_metadata())
+                .any(|required| required == ENERGY_METER_REF)
+        );
         assert!(!object.is_writable_property(ENERGY_METER_REF), "{name}");
         object
             .set_energy_meter_ref(reference(None, ObjectType::ACCUMULATOR, 7))

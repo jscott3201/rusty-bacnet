@@ -3,9 +3,10 @@
 //! `property_metadata` is a required trait method (#2181), so every object
 //! supplies rows; this audit checks the built-in rows are complete and
 //! coherent. Every supported `ObjectType` gets one representative, and each
-//! representative must expose non-empty canonical metadata from which the
-//! GENERATED comparison surfaces (`required_properties`, `property_list`,
-//! `is_writable_property`) are exactly derived, and every row must read.
+//! representative must expose non-empty canonical metadata from which
+//! `is_writable_property` is exactly derived, and every row must read; the
+//! `property_list` submodule checks the served Property_List against the
+//! rows (#2197).
 //! Any missing, duplicated or unreadable row, or required/optional drift,
 //! fails this test. `property_metadata_tests` checks the other direction:
 //! no representative serves a property without a row.
@@ -47,9 +48,7 @@ use bacnet_types::primitives::PropertyValue;
 use crate::catalogue::{representatives as supported_representatives, staging_config};
 use crate::file::FileObject;
 use crate::network_port::NetworkPortObject;
-use crate::property_metadata::{
-    PropertyConformance, PropertyPresenceCondition, required_properties_from_metadata,
-};
+use crate::property_metadata::{PropertyConformance, PropertyPresenceCondition};
 use crate::staging::StagingObject;
 use crate::traits::BACnetObject;
 
@@ -119,28 +118,6 @@ fn audit_every_supported_type_derives_from_canonical_metadata() {
             unique.len(),
             metadata.len(),
             "{object_type:?} metadata identifiers must be unique"
-        );
-
-        // GENERATED comparison surface: required set derives from R/W rows.
-        assert_eq!(
-            object.required_properties().as_ref(),
-            required_properties_from_metadata(metadata.as_ref()).as_ref(),
-            "{object_type:?} required_properties must equal the metadata derivation"
-        );
-
-        // GENERATED comparison surface: legacy list is metadata minus PL, for
-        // every type, Device included (#2174).
-        let expected_list: Vec<_> = metadata
-            .iter()
-            .filter_map(|row| {
-                (row.property_identifier != PropertyIdentifier::PROPERTY_LIST)
-                    .then_some(row.property_identifier)
-            })
-            .collect();
-        assert_eq!(
-            object.property_list().as_ref(),
-            expected_list.as_slice(),
-            "{object_type:?} property_list must equal metadata minus PROPERTY_LIST"
         );
 
         // Every advertised row reads, and writability never drifts from dispatch.
@@ -233,3 +210,5 @@ mod unknown_writes;
 mod collection_classification;
 
 mod cov_reporting;
+
+mod property_list;

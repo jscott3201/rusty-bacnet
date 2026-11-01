@@ -172,7 +172,7 @@ fn write(db: &mut ObjectDatabase, property: P, value: PropertyValue) -> Result<(
 }
 
 fn listed(db: &ObjectDatabase) -> Vec<P> {
-    db.get(&oid()).unwrap().property_list().to_vec()
+    crate::test_rows::listed(&db.get(&oid()).unwrap().property_metadata())
 }
 
 fn is_unknown(result: Result<PropertyValue, Error>) -> bool {

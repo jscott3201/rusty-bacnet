@@ -13,8 +13,8 @@ use crate::property_metadata::{
 // - Group (type 11, §12.14 Table 12-17; printed pp. 243-244 / PDF pp. 245-246)
 // - GlobalGroup (type 26, §12.50 Table 12-57; printed pp. 490-492 / PDF pp. 492-494)
 // - StructuredView (type 29, §12.29 Table 12-34; printed p. 351 / PDF pp. 353-355)
-// Order preserves each legacy projection; PROPERTY_LIST is appended so the
-// projection helper omits it while required_properties keeps it. Only
+// Order preserves each type's earlier row order; PROPERTY_LIST is appended
+// last. Only
 // implemented rows are described: table rows the objects do not serve (Group
 // audit/tag/profile rows; GlobalGroup intrinsic-reporting, COVU, audit, tag
 // and profile rows; StructuredView subordinate tags/relationships rows) stay
@@ -125,8 +125,14 @@ mod tests {
         let metadata = object.property_metadata();
         assert!(matches!(metadata, Cow::Borrowed(_)));
         assert_eq!(metadata.len(), all.len() + 1);
-        assert_eq!(object.property_list().as_ref(), all);
-        assert_eq!(object.required_properties().as_ref(), required);
+        assert_eq!(
+            crate::test_rows::listed(&object.property_metadata()),
+            crate::test_rows::listed_from(all)
+        );
+        assert_eq!(
+            crate::test_rows::required(&object.property_metadata()),
+            required
+        );
         assert_eq!(
             metadata
                 .iter()

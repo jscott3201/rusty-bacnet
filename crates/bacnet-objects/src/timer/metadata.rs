@@ -114,8 +114,14 @@ mod tests {
         let metadata = object.property_metadata();
         assert!(matches!(metadata, Cow::Borrowed(_)));
         assert_eq!(metadata.len(), ALL.len() + 1);
-        assert_eq!(object.property_list().as_ref(), ALL);
-        assert_eq!(object.required_properties().as_ref(), REQUIRED);
+        assert_eq!(
+            crate::test_rows::listed(&object.property_metadata()),
+            crate::test_rows::listed_from(&ALL)
+        );
+        assert_eq!(
+            crate::test_rows::required(&object.property_metadata()),
+            REQUIRED
+        );
         assert_eq!(
             metadata
                 .iter()

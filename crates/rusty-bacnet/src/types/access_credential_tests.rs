@@ -7,7 +7,7 @@ use bacnet_objects::access_control::{
 };
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::property_metadata::{
-    PropertyConformance, PropertyMetadata, PropertyWriteCapability, property_list_from_metadata,
+    PropertyConformance, PropertyMetadata, PropertyWriteCapability,
 };
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{BACnetAccessRule, BACnetDeviceObjectReference};
@@ -77,9 +77,6 @@ impl BACnetObject for Fixture {
                 })
                 .collect(),
         )
-    }
-    fn property_list(&self) -> Cow<'static, [P]> {
-        property_list_from_metadata(&self.property_metadata())
     }
 }
 

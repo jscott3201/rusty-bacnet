@@ -285,10 +285,10 @@ fn bi_detection_enable_resets_and_gates_intrinsic_reporting() {
         bi.event_detector.pending.is_none(),
         "evaluate/tick re-armed a countdown while detection is disabled"
     );
-    assert!(
-        bi.property_list()
-            .contains(&PropertyIdentifier::EVENT_DETECTION_ENABLE)
-    );
+    assert!(crate::property_metadata::has_property(
+        &bi.property_metadata(),
+        PropertyIdentifier::EVENT_DETECTION_ENABLE
+    ));
     assert!(bi.is_writable_property(PropertyIdentifier::EVENT_DETECTION_ENABLE));
 }
 
@@ -417,7 +417,7 @@ fn bo_reliability_is_readable_as_enumerated() {
 #[test]
 fn bi_polarity_in_property_list() {
     let bi = BinaryInputObject::new(1, "BI-1").unwrap();
-    let props = bi.property_list();
+    let props = crate::test_rows::listed(&bi.property_metadata());
     assert!(props.contains(&PropertyIdentifier::POLARITY));
     assert!(props.contains(&PropertyIdentifier::RELIABILITY));
 }

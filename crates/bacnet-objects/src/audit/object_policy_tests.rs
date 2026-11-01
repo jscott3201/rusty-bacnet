@@ -33,7 +33,7 @@ fn object_audit_policy_independent_presence_metadata_and_scalar_writes() {
                 P::AUDIT_PRIORITY_FILTER,
             ] {
                 assert_eq!(
-                    object.property_list().contains(&property),
+                    crate::property_metadata::has_property(&object.property_metadata(), property),
                     property == selected
                 );
                 assert_eq!(

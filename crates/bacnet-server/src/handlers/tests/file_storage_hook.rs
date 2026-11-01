@@ -71,9 +71,6 @@ impl BACnetObject for HookLessFile {
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         crate::test_rows::read_only(&[])
     }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
-    }
 }
 
 fn oid() -> ObjectIdentifier {
@@ -233,9 +230,6 @@ impl BACnetObject for LaxFile {
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         crate::test_rows::read_only(&[])
     }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
-    }
 
     fn file_storage_internal(&self) -> Option<&dyn FileStorage> {
         Some(self)
@@ -371,9 +365,6 @@ impl BACnetObject for OpaqueReadOnlyFile {
 
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         crate::test_rows::read_only(&[])
-    }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 
     fn file_storage_internal(&self) -> Option<&dyn FileStorage> {

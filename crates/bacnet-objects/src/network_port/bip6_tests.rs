@@ -83,7 +83,10 @@ fn error_code(result: Result<impl std::fmt::Debug, Error>) -> ErrorCode {
 #[test]
 fn a_configured_snapshot_serves_the_ipv6_rows_read_only() {
     let mut object = NetworkPortObject::new_bip6(1, "NP6", config()).unwrap();
-    assert_eq!(object.property_list().as_ref(), ALL);
+    assert_eq!(
+        crate::test_rows::listed(&object.property_metadata()),
+        crate::test_rows::listed_from(ALL)
+    );
     for row in object.property_metadata().iter() {
         // Table 12-71 footnotes 3 and 25 (#2174), and 14 and 15 for the
         // IPv6 rows (#2191).

@@ -247,9 +247,6 @@ impl<O: BACnetObject> BACnetObject for CountingValue<O> {
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         self.value.property_metadata()
     }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        self.value.property_list()
-    }
 }
 
 pub(super) struct Fixture {

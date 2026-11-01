@@ -22,6 +22,7 @@
 //! reference this device can't read (another device's, or a missing object)
 //! logs its failure once, and again only when the failure changes.
 
+use crate::property_metadata::has_property;
 use bacnet_types::bitstring::status_flags_from_bacnet;
 use bacnet_types::constructed::{BACnetLogRecord, LogDatum, LogValue};
 use bacnet_types::enums::PropertyIdentifier as P;
@@ -77,7 +78,7 @@ impl CovBaseline {
 /// The monitored object's Status_Flags, when its Property_List names them
 /// and they read as the four-bit string they are.
 fn status_flags(object: &dyn BACnetObject) -> Option<StatusFlags> {
-    if !object.property_list().contains(&P::STATUS_FLAGS) {
+    if !has_property(&object.property_metadata(), P::STATUS_FLAGS) {
         return None;
     }
     match object.read_property(P::STATUS_FLAGS, None) {

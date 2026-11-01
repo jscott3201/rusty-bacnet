@@ -258,10 +258,16 @@ fn cached_service_availability_does_not_freeze_time_or_metadata() {
         PropertyValue::Time(changed.local_time)
     );
     clock.set(false);
-    assert!(!view.property_list().contains(&P::LOCAL_TIME));
+    assert!(!bacnet_objects::property_metadata::has_property(
+        &view.property_metadata(),
+        P::LOCAL_TIME
+    ));
     assert!(view.read_property(P::LOCAL_TIME, None).is_err());
     assert_clock_services(services(&context, &db), true);
     clock.set(true);
-    assert!(view.property_list().contains(&P::LOCAL_TIME));
+    assert!(bacnet_objects::property_metadata::has_property(
+        &view.property_metadata(),
+        P::LOCAL_TIME
+    ));
     assert!(view.read_property(P::LOCAL_TIME, None).is_ok());
 }

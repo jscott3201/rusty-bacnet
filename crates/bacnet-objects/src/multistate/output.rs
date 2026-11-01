@@ -490,10 +490,6 @@ impl BACnetObject for MultiStateOutputObject {
         metadata::for_object(self)
     }
 
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
-    }
-
     fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
         CREATION_ONLY
     }

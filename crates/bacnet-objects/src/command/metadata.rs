@@ -11,9 +11,8 @@ use crate::property_metadata::{
 
 // Canonical effective rows for Command (type 7, ASHRAE 135-2020 §12.10
 // Table 12-12; printed pp. 215-216 / PDF pp. 217-218).
-// Order preserves the legacy 11-property projection; PROPERTY_LIST is
-// appended so the projection helper omits it while required_properties keeps
-// it. Only implemented rows are described: table rows the object does not
+// Order preserves the earlier 11-property order; PROPERTY_LIST is appended
+// last. Only implemented rows are described: table rows the object does not
 // serve (Event_* detectors, Value_Source, audit, tags, profile rows) stay
 // absent until dispatch exists. Action_Text is a per-instance row, present
 // once the application sets it, read-only like Action.
@@ -104,8 +103,14 @@ mod tests {
         let metadata = object.property_metadata();
         assert!(matches!(metadata, Cow::Borrowed(_)));
         assert_eq!(metadata.len(), 11);
-        assert_eq!(object.property_list().as_ref(), all);
-        assert_eq!(object.required_properties().as_ref(), required);
+        assert_eq!(
+            crate::test_rows::listed(&object.property_metadata()),
+            crate::test_rows::listed_from(&all)
+        );
+        assert_eq!(
+            crate::test_rows::required(&object.property_metadata()),
+            required
+        );
         assert_eq!(
             metadata
                 .iter()
@@ -310,7 +315,10 @@ mod tests {
         assert_eq!(metadata[at - 1].property_identifier, P::ACTION);
         assert_eq!(metadata[at].conformance, Optional);
         assert_eq!(metadata[at].write_capability, ReadOnly);
-        assert!(object.property_list().contains(&P::ACTION_TEXT));
+        assert!(crate::property_metadata::has_property(
+            &object.property_metadata(),
+            P::ACTION_TEXT
+        ));
         assert!(object.is_array_property(P::ACTION_TEXT));
         assert!(!object.is_writable_property(P::ACTION_TEXT));
         for index in [None, Some(1)] {

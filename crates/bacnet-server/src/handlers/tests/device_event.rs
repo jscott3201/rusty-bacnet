@@ -78,9 +78,6 @@ impl BACnetObject for EventSummaryFixture {
             PropertyIdentifier::EVENT_TIME_STAMPS,
         ])
     }
-    fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
-        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
-    }
 }
 
 fn event_summary_fixture(instance: u32, timestamps: [u64; 3]) -> EventSummaryFixture {

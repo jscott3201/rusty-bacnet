@@ -1,4 +1,5 @@
 //! Session-private source Audit ownership. No discovery cache or persistent outbox.
+use bacnet_objects::property_metadata::has_property;
 use std::net::Ipv4Addr;
 use std::sync::{Arc, Weak};
 
@@ -224,10 +225,10 @@ impl SourceAudit {
             .get(&self.selected)
             .and_then(|object| object.audit_reporter_internal())
             .ok_or_else(|| Error::Encoding("source Reporter is unavailable".into()))?;
-        if reporter
-            .property_list()
-            .contains(&PropertyIdentifier::MONITORED_OBJECTS)
-        {
+        if has_property(
+            &reporter.property_metadata(),
+            PropertyIdentifier::MONITORED_OBJECTS,
+        ) {
             reporter.status_internal().set_configured(false);
             return Err(Error::Encoding(
                 "source Audit does not support Monitored_Objects".into(),

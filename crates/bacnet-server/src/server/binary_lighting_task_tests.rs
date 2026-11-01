@@ -561,9 +561,6 @@ impl BACnetObject for StuckDeadline {
     fn property_metadata(&self) -> std::borrow::Cow<'_, [PropertyMetadata]> {
         crate::test_rows::read_only(&[])
     }
-    fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
-        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
-    }
     fn timed(&mut self) -> Option<&mut dyn bacnet_objects::traits::Timed> {
         Some(self)
     }

@@ -97,8 +97,8 @@ async fn provision_and_bindings_without_source_selection_remain_inert() {
     let (session, _peer, observed) = configured_session(SessionRole::ClientOnly);
     let mut session = session.with_database(database());
     session.start().await.unwrap();
-    assert!(
-        !session
+    assert!(!bacnet_objects::property_metadata::has_property(
+        &session
             .database
             .as_ref()
             .unwrap()
@@ -106,9 +106,9 @@ async fn provision_and_bindings_without_source_selection_remain_inert() {
             .await
             .get(&oid(ObjectType::DEVICE, 123))
             .unwrap()
-            .property_list()
-            .contains(&PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT)
-    );
+            .property_metadata(),
+        PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT
+    ));
     assert_eq!(observed.sends.load(Ordering::SeqCst), 0);
     session.stop().await.unwrap();
 }
@@ -350,33 +350,35 @@ async fn direct_bip_ipv4_client_only_and_both_start_stop_silently() {
                     PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw())
                 );
                 let device = db.get(&oid(ObjectType::DEVICE, 123)).unwrap();
-                assert!(
-                    device
-                        .property_list()
-                        .contains(&PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT)
-                );
+                assert!(bacnet_objects::property_metadata::has_property(
+                    &device.property_metadata(),
+                    PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT
+                ));
                 assert!(
                     device
                         .read_property(PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT, None)
                         .is_ok()
                 );
                 assert!(
-                    device
-                        .required_properties()
-                        .contains(&PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT)
+                    bacnet_objects::property_metadata::required_properties(
+                        &device.property_metadata()
+                    )
+                    .any(|required| required == PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT)
                 );
                 assert!(
                     device.is_writable_property(PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT)
                 );
                 assert!(
-                    !device
-                        .required_properties()
-                        .contains(&PropertyIdentifier::AUDIT_LEVEL)
+                    !bacnet_objects::property_metadata::required_properties(
+                        &device.property_metadata()
+                    )
+                    .any(|required| required == PropertyIdentifier::AUDIT_LEVEL)
                 );
                 assert!(
-                    !device
-                        .required_properties()
-                        .contains(&PropertyIdentifier::AUDITABLE_OPERATIONS)
+                    !bacnet_objects::property_metadata::required_properties(
+                        &device.property_metadata()
+                    )
+                    .any(|required| required == PropertyIdentifier::AUDITABLE_OPERATIONS)
                 );
             }
             let mut bytes = [0; 2048];

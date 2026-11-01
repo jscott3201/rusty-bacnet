@@ -109,9 +109,6 @@ impl BACnetObject for DisabledAlarmingObject {
         }
         crate::test_rows::read_only(&served)
     }
-    fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
-        bacnet_objects::property_metadata::property_list_from_metadata(&self.property_metadata())
-    }
 
     fn enrollment_summary_capability_internal(
         &self,

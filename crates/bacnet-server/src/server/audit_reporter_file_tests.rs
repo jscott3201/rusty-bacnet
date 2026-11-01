@@ -290,9 +290,6 @@ impl BACnetObject for ProbeFile {
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         self.file.property_metadata()
     }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        self.file.property_list()
-    }
     fn file_storage_internal(&self) -> Option<&dyn FileStorage> {
         self.storage.then_some(self)
     }

@@ -16,8 +16,7 @@ use crate::property_metadata::{
 // ElevatorGroup keeps its legacy order with Machine_Room_ID after
 // Object_Type, its Table 12-76 neighbour among the served rows (#997). Lift
 // and Escalator list their rows in table order (#1021, #1022). PROPERTY_LIST
-// is last so the projection helper omits it while required_properties keeps
-// it. Only implemented rows are described: table rows the objects do not
+// is last. Only implemented rows are described: table rows the objects do not
 // serve (ElevatorGroup audit/tag/profile rows; Escalator event, intrinsic,
 // audit, tag and profile rows; Lift Car_Door_Text, deck, event, intrinsic,
 // audit, tag and profile rows) stay absent until dispatch exists. The Lift

@@ -35,10 +35,10 @@ fn feedback_value_round_trips_and_is_advertised_writable() {
             .unwrap(),
         PropertyValue::Unsigned(2)
     );
-    assert!(
-        mso.property_list()
-            .contains(&PropertyIdentifier::FEEDBACK_VALUE)
-    );
+    assert!(crate::property_metadata::has_property(
+        &mso.property_metadata(),
+        PropertyIdentifier::FEEDBACK_VALUE
+    ));
     assert!(mso.is_writable_property(PropertyIdentifier::FEEDBACK_VALUE));
     assert!(
         mso.write_property(
@@ -234,7 +234,10 @@ fn generic_event_properties_round_trip_and_match_pics() {
         PropertyIdentifier::NOTIFY_TYPE,
         PropertyIdentifier::NOTIFICATION_CLASS,
     ] {
-        assert!(mso.property_list().contains(&property));
+        assert!(crate::property_metadata::has_property(
+            &mso.property_metadata(),
+            property
+        ));
         assert!(mso.is_writable_property(property));
     }
     assert!(
@@ -308,9 +311,9 @@ fn detection_enable_is_a_disabled_by_default_invariant() {
             .unwrap(),
         PropertyValue::Boolean(false)
     );
-    assert!(
-        mso.property_list()
-            .contains(&PropertyIdentifier::EVENT_DETECTION_ENABLE)
-    );
+    assert!(crate::property_metadata::has_property(
+        &mso.property_metadata(),
+        PropertyIdentifier::EVENT_DETECTION_ENABLE
+    ));
     assert!(mso.is_writable_property(PropertyIdentifier::EVENT_DETECTION_ENABLE));
 }

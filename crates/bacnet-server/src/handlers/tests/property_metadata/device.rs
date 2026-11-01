@@ -108,14 +108,22 @@ fn rpm_device_property_metadata_pics_and_database_are_exact() {
             assert_eq!(db.find_by_type(ObjectType::DEVICE), vec![oid]);
             assert_eq!(db.list_objects(), vec![oid]);
             let object = db.get(&oid).unwrap();
-            // The list leaves out Property_List, as every type's does (#2174).
+            // Property_List leaves out the identity properties and itself
+            // (Clause 12.1.1.4.1).
+            let rows = object.property_metadata();
             let listed: Vec<_> = all
                 .iter()
                 .copied()
-                .filter(|&p| p != P::PROPERTY_LIST)
+                .filter(|&p| bacnet_objects::property_metadata::in_property_list(p))
                 .collect();
-            assert_eq!(object.property_list().as_ref(), listed);
-            assert_eq!(object.required_properties().as_ref(), required);
+            assert_eq!(
+                bacnet_objects::property_metadata::property_list(&rows).collect::<Vec<_>>(),
+                listed
+            );
+            assert_eq!(
+                bacnet_objects::property_metadata::required_properties(&rows).collect::<Vec<_>>(),
+                required
+            );
             for property in [
                 P::LOCAL_DATE,
                 P::LOCAL_TIME,

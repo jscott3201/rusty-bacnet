@@ -175,11 +175,10 @@ fn python_accompaniment_reaches_the_optional_row() {
     };
     let rights = access_rights(8, "AR-8", None, with(credential.clone())).unwrap();
     assert_eq!(rights.accompaniment(), Some(&credential));
-    assert!(
-        rights
-            .property_list()
-            .contains(&PropertyIdentifier::ACCOMPANIMENT)
-    );
+    assert!(bacnet_objects::property_metadata::has_property(
+        &rights.property_metadata(),
+        PropertyIdentifier::ACCOMPANIMENT
+    ));
     assert_eq!(
         rights
             .read_property(PropertyIdentifier::ACCOMPANIMENT, None)
@@ -192,11 +191,10 @@ fn python_accompaniment_reaches_the_optional_row() {
     // Omitted, the object has no Accompaniment row.
     let bare = access_rights(9, "AR-9", None, RightsSettings::default()).unwrap();
     assert_eq!(bare.accompaniment(), None);
-    assert!(
-        !bare
-            .property_list()
-            .contains(&PropertyIdentifier::ACCOMPANIMENT)
-    );
+    assert!(!bacnet_objects::property_metadata::has_property(
+        &bare.property_metadata(),
+        PropertyIdentifier::ACCOMPANIMENT
+    ));
 
     // An Access Point is the setter's refusal, and registers nothing.
     let refused = access_rights(

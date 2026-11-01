@@ -3945,7 +3945,6 @@ trait BACnetObject {
     fn write_property(&mut self, property: PropertyIdentifier, array_index: Option<u32>,
         value: PropertyValue, priority: Option<u8>) -> Result<(), Error>;
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]>;
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]>;
     // ...and many provided methods with defaults.
 }
 ```
@@ -3954,19 +3953,25 @@ trait BACnetObject {
 model. Each `PropertyMetadata` row names one property the object serves, with
 its `R`/`W`/`O` code, the condition that makes an optional row present, and the
 write route the object implements. Include the universal rows
-(Object_Identifier, Object_Name, Object_Type and Property_List). The defaults of
-`required_properties` and `is_writable_property` derive from the rows, and the
-server reads them for property presence, ReadPropertyMultiple's ALL, REQUIRED
-and OPTIONAL, the indexed-write gate and the PICS. A property without a row is
-absent to all of those, whatever `read_property` answers. `property_list` is the
-rows minus Property_List, and `property_metadata::property_list_from_metadata`
-derives it. Every built-in object supplies rows. A custom object's smallest
-honest set is the universal rows plus one for each property it serves:
+(Object_Identifier, Object_Name, Object_Type and Property_List). The rows are
+the only property list an object writes (#2197): the free functions in
+`bacnet_objects::property_metadata` derive the rest. `property_list(rows)` is
+the Property_List the object serves, the rows less the four properties Clause
+12.1.1.4.1 leaves out; `read_property_list(rows, array_index)` answers a
+Property_List read from it; `required_properties(rows)` is the required set;
+and `has_property(rows, property)` says whether the object has a property. The
+iterators borrow the rows and `has_property` doesn't allocate. The default of
+`is_writable_property` derives from the rows too, and the server reads them for
+property presence, ReadPropertyMultiple's ALL, REQUIRED and OPTIONAL, the
+indexed-write gate and the PICS. A property without a row is absent to all of
+those, whatever `read_property` answers. Every built-in object supplies rows. A
+custom object's smallest honest set is the universal rows plus one for each
+property it serves:
 
 ```rust,ignore
 use bacnet_objects::property_metadata::{
     PropertyConformance as C, PropertyMetadata, PropertyWriteCapability as W,
-    property_list_from_metadata,
+    read_property_list,
 };
 use bacnet_types::enums::PropertyIdentifier as P;
 
@@ -3982,9 +3987,9 @@ const ROWS: &[PropertyMetadata] = &[
 fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
     Cow::Borrowed(ROWS)
 }
-fn property_list(&self) -> Cow<'static, [P]> {
-    property_list_from_metadata(ROWS)
-}
+
+// In its `read_property`, Property_List comes from the same rows:
+// P::PROPERTY_LIST => read_property_list(ROWS, array_index),
 ```
 
 #### Capabilities
@@ -7735,7 +7740,7 @@ report is sent or a confirmed one acknowledged (#896).
 Applicable Status_Flags changes independently trigger ordinary and property COV.
 Property reports include the selected value and declared-present flags; explicit
 flags appear once and Multiple emits one companion per retained object. Effective
-`property_list()` declares presence. Present flags must be a one-byte BitString
+`property_metadata()` declares presence. Present flags must be a one-byte BitString
 with `unused_bits = 4` and zero unused low bits. Selected read/encoding/cap failure
 or declared-present flags failure skips the whole observation, including ordinary
 Present_Value: no partial flags-only report and no baseline advance. This transient

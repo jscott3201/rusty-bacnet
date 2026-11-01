@@ -59,7 +59,10 @@ fn a_device_without_backup_has_no_backup_properties() {
     let mut device = make_device();
 
     for property in BACKUP_PROPERTIES {
-        assert!(!device.property_list().contains(&property), "{property:?}");
+        assert!(
+            !crate::property_metadata::has_property(&device.property_metadata(), property),
+            "{property:?}"
+        );
         assert_property_error(
             device.read_property(property, None),
             ErrorCode::UNKNOWN_PROPERTY,
@@ -76,7 +79,10 @@ fn a_backup_device_serves_the_backup_properties() {
     let device = backup_device();
 
     for property in BACKUP_PROPERTIES {
-        assert!(device.property_list().contains(&property), "{property:?}");
+        assert!(
+            crate::property_metadata::has_property(&device.property_metadata(), property),
+            "{property:?}"
+        );
     }
     assert_eq!(
         device

@@ -1,6 +1,6 @@
 //! Downstream-style integration coverage for the complete Reporter configuration contract.
 
-use bacnet_objects::property_metadata::PropertyMetadata;
+use bacnet_objects::property_metadata::{PropertyMetadata, property_list};
 use std::borrow::Cow;
 
 use bacnet_objects::audit::AuditReporterObject;
@@ -73,9 +73,6 @@ impl BACnetObject for CustomReporter {
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         self.inner.property_metadata()
     }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        self.inner.property_list()
-    }
 }
 
 fn read(object: &dyn BACnetObject, property: PropertyIdentifier) -> PropertyValue {
@@ -83,10 +80,8 @@ fn read(object: &dyn BACnetObject, property: PropertyIdentifier) -> PropertyValu
 }
 
 fn snapshot(object: &dyn BACnetObject) -> Vec<(PropertyIdentifier, PropertyValue)> {
-    object
-        .property_list()
-        .iter()
-        .map(|&p| (p, read(object, p)))
+    property_list(&object.property_metadata())
+        .map(|p| (p, read(object, p)))
         .collect()
 }
 
@@ -191,11 +186,10 @@ fn custom_reporter_configuration_replaces_every_setting_through_trait_object() {
             None,
         )
         .unwrap();
-    assert!(
-        !object
-            .property_list()
-            .contains(&PropertyIdentifier::MONITORED_OBJECTS)
-    );
+    assert!(!bacnet_objects::property_metadata::has_property(
+        &object.property_metadata(),
+        PropertyIdentifier::MONITORED_OBJECTS
+    ));
     assert!(
         matches!(object.read_property(PropertyIdentifier::MONITORED_OBJECTS, None),
         Err(Error::Remote(RemoteError::Error { class, code }))

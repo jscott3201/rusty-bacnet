@@ -115,9 +115,8 @@ impl AlertEnrollmentObject {
                 Some(Ok(PropertyValue::CharacterString(self.description.clone())))
             }
             PropertyIdentifier::PROPERTY_LIST => {
-                let properties = self.property_list();
-                Some(common::read_property_list_property(
-                    &properties,
+                Some(crate::property_metadata::read_property_list(
+                    &self.property_metadata(),
                     array_index,
                 ))
             }
@@ -319,9 +318,5 @@ impl BACnetObject for AlertEnrollmentObject {
 
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         Cow::Borrowed(metadata::ALERT_ENROLLMENT_PROPERTIES)
-    }
-
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        crate::property_metadata::property_list_from_metadata(metadata::ALERT_ENROLLMENT_PROPERTIES)
     }
 }

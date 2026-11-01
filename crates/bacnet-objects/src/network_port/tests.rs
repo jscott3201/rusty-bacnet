@@ -67,7 +67,10 @@ fn configured_bip_contract_requires_application_properties() {
 #[test]
 fn configured_bip_metadata_exact_sets_and_indexed_list() {
     let object = bip(Default::default());
-    assert_eq!(object.property_list().as_ref(), ALL);
+    assert_eq!(
+        crate::test_rows::listed(&object.property_metadata()),
+        crate::test_rows::listed_from(ALL)
+    );
     let metadata = object.property_metadata();
     assert_eq!(metadata.len(), ALL.len() + 1);
     let required: Vec<_> = ALL
@@ -75,8 +78,7 @@ fn configured_bip_metadata_exact_sets_and_indexed_list() {
         .copied()
         .filter(|p| *p != P::DESCRIPTION)
         .collect();
-    let actual: Vec<_> = object
-        .required_properties()
+    let actual: Vec<_> = crate::test_rows::required(&object.property_metadata())
         .iter()
         .copied()
         .filter(|p| *p != P::PROPERTY_LIST)
@@ -336,7 +338,10 @@ fn non_bip_application_rows_do_not_claim_ipv4_fields() {
                 )
             })
             .collect();
-        assert_eq!(object.property_list().as_ref(), expected);
+        assert_eq!(
+            crate::test_rows::listed(&object.property_metadata()),
+            crate::test_rows::listed_from(&expected)
+        );
         for row in object.property_metadata().iter() {
             object.read_property(row.property_identifier, None).unwrap();
         }

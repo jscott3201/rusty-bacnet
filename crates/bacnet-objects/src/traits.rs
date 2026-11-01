@@ -261,20 +261,26 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// Object_Identifier, Object_Name and Object_Type among them. Each row
     /// carries the property's `R`/`W`/`O` classification, the condition that
     /// makes an optional row present, and the write route the object
-    /// implements. The defaults of [`Self::required_properties`] and
-    /// [`Self::is_writable_property`] derive from them, and the bundled server
-    /// reads them for property presence, ReadPropertyMultiple's ALL, REQUIRED
-    /// and OPTIONAL, the indexed-write gate and the PICS. A property missing
-    /// from the rows is absent to all of those, whatever `read_property`
-    /// answers. Every built-in object type supplies rows, and a custom object
-    /// supplies its own. The smallest honest set is the universal rows plus
-    /// one for each property the object serves:
+    /// implements. They are the only property list an object writes: the
+    /// Property_List it serves, its required properties and whether it has
+    /// a property all derive from them, through
+    /// [`property_list`](crate::property_metadata::property_list),
+    /// [`required_properties`](crate::property_metadata::required_properties)
+    /// and [`has_property`](crate::property_metadata::has_property). The
+    /// default of [`Self::is_writable_property`] derives from them too, and
+    /// the bundled server reads them for property presence,
+    /// ReadPropertyMultiple's ALL, REQUIRED and OPTIONAL, the indexed-write
+    /// gate and the PICS. A property missing from the rows is absent to all
+    /// of those, whatever `read_property` answers. Every built-in object
+    /// type supplies rows, and a custom object supplies its own. The
+    /// smallest honest set is the universal rows plus one for each property
+    /// the object serves:
     ///
     /// ```
     /// use std::borrow::Cow;
     /// use bacnet_objects::property_metadata::{
     ///     PropertyConformance as C, PropertyMetadata, PropertyWriteCapability as Wr,
-    ///     property_list_from_metadata,
+    ///     property_list, required_properties,
     /// };
     /// use bacnet_objects::traits::BACnetObject;
     /// use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier as P};
@@ -324,15 +330,15 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     ///     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
     ///         Cow::Borrowed(ROWS)
     ///     }
-    ///     fn property_list(&self) -> Cow<'static, [P]> {
-    ///         property_list_from_metadata(ROWS)
-    ///     }
     /// }
     ///
     /// let object = Setpoint(21.0);
     /// assert!(object.is_writable_property(P::PRESENT_VALUE));
     /// assert!(!object.is_writable_property(P::OBJECT_NAME));
-    /// assert_eq!(object.required_properties().len(), 5);
+    /// let rows = object.property_metadata();
+    /// assert_eq!(required_properties(&rows).count(), 5);
+    /// // Property_List leaves out the identity properties and itself.
+    /// assert_eq!(property_list(&rows).collect::<Vec<_>>(), [P::PRESENT_VALUE]);
     /// ```
     ///
     /// Return borrowed rows for a fixed or object-owned set, and owned rows
@@ -358,21 +364,9 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// #   fn write_property(&mut self, _: PropertyIdentifier, _: Option<u32>,
     /// #       _: PropertyValue, _: Option<u8>) -> Result<(), Error> { unimplemented!() }
     ///     // Every required method but `property_metadata`.
-    ///     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-    ///         Cow::Borrowed(&[])
-    ///     }
     /// }
     /// ```
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]>;
-
-    /// List all properties this object supports, without Property_List.
-    ///
-    /// This is [`Self::property_metadata`] minus its `PROPERTY_LIST` row, so
-    /// it includes Object_Identifier, Object_Name, and Object_Type
-    /// ([`property_list_from_metadata`](crate::property_metadata::property_list_from_metadata)
-    /// derives it). Reading the BACnet Property_List property applies the
-    /// additional wire-level universal-property filter.
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]>;
 
     /// Borrow the object's time and clock capability, if it has one.
     ///
@@ -514,18 +508,6 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// Port do.
     fn is_deleteable(&self) -> bool {
         true
-    }
-
-    /// List the REQUIRED properties for this object type.
-    ///
-    /// The default derives the set from the [`Self::property_metadata`] rows
-    /// that are required, by their `R` or `W` code or by the condition that
-    /// made them present, Property_List included. Service-specific consumers
-    /// may exclude Property_List where their protocol contract requires it.
-    fn required_properties(&self) -> Cow<'static, [PropertyIdentifier]> {
-        crate::property_metadata::required_properties_from_metadata(
-            self.property_metadata().as_ref(),
-        )
     }
 
     /// Whether this object type supports COV notifications.

@@ -137,8 +137,14 @@ fn property_metadata_analog_exact_required_and_instance_projections() {
                 .collect();
             required.push(P::PROPERTY_LIST);
             assert_unique_and_canonical(object.as_ref());
-            assert_eq!(object.required_properties().as_ref(), required);
-            assert_eq!(object.property_list().as_ref(), expected);
+            assert_eq!(
+                crate::test_rows::required(&object.property_metadata()),
+                required
+            );
+            assert_eq!(
+                crate::test_rows::listed(&object.property_metadata()),
+                crate::test_rows::listed_from(&expected)
+            );
             let metadata = object.property_metadata();
             assert_eq!(metadata.len(), expected.len() + 1);
             for row in metadata.iter() {

@@ -391,10 +391,14 @@ pub trait BACnetObject: Send + Sync {
     fn object_name(&self) -> &str;
     fn read_property(&self, property: PropertyIdentifier, array_index: Option<u32>) -> Result<PropertyValue, Error>;
     fn write_property(&mut self, property: PropertyIdentifier, array_index: Option<u32>, value: PropertyValue, priority: Option<u8>) -> Result<(), Error>;
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]>;
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]>;
     // ... plus COV, intrinsic reporting, scheduling methods
 }
 ```
+
+The metadata rows are the object's only property list: Property_List, the
+required properties and property presence all derive from them, through the
+free functions in `bacnet_objects::property_metadata` (#2197).
 
 `ObjectDatabase` stores `Box<dyn BACnetObject>` keyed by `ObjectIdentifier`, with secondary indexes by name (for WhoHas) and by type (for efficient enumeration).
 

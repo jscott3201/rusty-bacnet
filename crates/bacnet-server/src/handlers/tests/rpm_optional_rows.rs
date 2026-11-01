@@ -1,7 +1,7 @@
 //! ROOT-1 semantic characterization; no wall-clock performance assertions.
 use super::*;
 use bacnet_objects::property_metadata::{
-    PropertyConformance, PropertyMetadata, PropertyWriteCapability, property_list_from_metadata,
+    PropertyConformance, PropertyMetadata, PropertyWriteCapability,
 };
 
 const REQUIRED_COUNT: usize = 4096;
@@ -53,9 +53,6 @@ impl BACnetObject for BorrowedRows {
         } else {
             &ROWS
         })
-    }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        property_list_from_metadata(self.property_metadata().as_ref())
     }
     fn read_property(
         &self,

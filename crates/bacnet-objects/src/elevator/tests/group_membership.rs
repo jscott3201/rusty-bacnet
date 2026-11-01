@@ -81,8 +81,14 @@ fn membership_rows_are_required_and_start_ungrouped() {
                 value,
                 "{kind:?} {property:?}"
             );
-            assert!(object.property_list().contains(&property));
-            assert!(object.required_properties().contains(&property));
+            assert!(crate::property_metadata::has_property(
+                &object.property_metadata(),
+                property
+            ));
+            assert!(
+                crate::property_metadata::required_properties(&object.property_metadata())
+                    .any(|required| required == property)
+            );
         }
     }
 }

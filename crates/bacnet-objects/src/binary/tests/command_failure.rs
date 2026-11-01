@@ -49,10 +49,10 @@ fn bo_feedback_value_round_trips_and_is_advertised_writable() {
             .unwrap(),
         PropertyValue::Enumerated(1)
     );
-    assert!(
-        bo.property_list()
-            .contains(&PropertyIdentifier::FEEDBACK_VALUE)
-    );
+    assert!(crate::property_metadata::has_property(
+        &bo.property_metadata(),
+        PropertyIdentifier::FEEDBACK_VALUE
+    ));
     assert!(bo.is_writable_property(PropertyIdentifier::FEEDBACK_VALUE));
     assert!(
         bo.write_property(
@@ -337,10 +337,10 @@ fn bo_detection_enable_is_a_disabled_by_default_invariant() {
             .unwrap(),
         PropertyValue::Boolean(false)
     );
-    assert!(
-        bo.property_list()
-            .contains(&PropertyIdentifier::EVENT_DETECTION_ENABLE)
-    );
+    assert!(crate::property_metadata::has_property(
+        &bo.property_metadata(),
+        PropertyIdentifier::EVENT_DETECTION_ENABLE
+    ));
     assert!(bo.is_writable_property(PropertyIdentifier::EVENT_DETECTION_ENABLE));
 }
 
@@ -393,7 +393,10 @@ fn bo_generic_event_properties_round_trip_and_match_pics() {
         PropertyIdentifier::NOTIFY_TYPE,
         PropertyIdentifier::NOTIFICATION_CLASS,
     ] {
-        assert!(bo.property_list().contains(&property));
+        assert!(crate::property_metadata::has_property(
+            &bo.property_metadata(),
+            property
+        ));
         assert!(bo.is_writable_property(property));
     }
     assert!(

@@ -144,9 +144,6 @@ impl BACnetObject for TestObject {
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         crate::test_rows::read_only(&[])
     }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        crate::property_metadata::property_list_from_metadata(&self.property_metadata())
-    }
 }
 
 fn make_test_object(instance: u32) -> Box<dyn BACnetObject> {

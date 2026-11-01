@@ -464,11 +464,8 @@ fn channel_allow_group_delay_inhibit_starts_false_and_takes_boolean_writes() {
 fn channel_property_list_and_required_rows_follow_table_12_62() {
     let channel = configured();
     assert_eq!(
-        channel.property_list().as_ref(),
+        crate::test_rows::listed(&channel.property_metadata()),
         [
-            P::OBJECT_IDENTIFIER,
-            P::OBJECT_NAME,
-            P::OBJECT_TYPE,
             P::DESCRIPTION,
             P::PRESENT_VALUE,
             P::LAST_PRIORITY,
@@ -484,7 +481,7 @@ fn channel_property_list_and_required_rows_follow_table_12_62() {
         ]
     );
     assert_eq!(
-        channel.required_properties().as_ref(),
+        crate::test_rows::required(&channel.property_metadata()),
         [
             P::OBJECT_IDENTIFIER,
             P::OBJECT_NAME,
@@ -500,15 +497,15 @@ fn channel_property_list_and_required_rows_follow_table_12_62() {
             P::PROPERTY_LIST,
         ]
     );
-    for property in channel.property_list().iter() {
+    let rows = channel.property_metadata();
+    for property in rows.iter().map(|row| row.property_identifier) {
         channel
-            .read_property(*property, None)
+            .read_property(property, None)
             .unwrap_or_else(|error| panic!("{property:?}: {error:?}"));
     }
-    let writable: Vec<_> = channel
-        .property_list()
+    let writable: Vec<_> = rows
         .iter()
-        .copied()
+        .map(|row| row.property_identifier)
         .filter(|property| channel.is_writable_property(*property))
         .collect();
     assert_eq!(

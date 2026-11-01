@@ -221,7 +221,7 @@ impl BACnetObject for ElevatorGroupObject {
                 ObjectType::ELEVATOR_GROUP.to_raw(),
             )),
             p if p == PropertyIdentifier::PROPERTY_LIST => {
-                common::read_property_list_property(&self.property_list(), array_index)
+                crate::property_metadata::read_property_list(&self.property_metadata(), array_index)
             }
             p if p == PropertyIdentifier::MACHINE_ROOM_ID => {
                 Ok(PropertyValue::ObjectIdentifier(self.machine_room_id))
@@ -298,10 +298,6 @@ impl BACnetObject for ElevatorGroupObject {
 
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
         metadata::for_elevator_group_object(self)
-    }
-
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 }
 

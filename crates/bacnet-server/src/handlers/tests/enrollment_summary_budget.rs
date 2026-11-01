@@ -37,11 +37,8 @@ impl BACnetObject for Counted {
         self.0.write_property(p, i, v, priority)
     }
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
-        self.0.property_metadata()
-    }
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         self.1.fetch_add(1, Ordering::SeqCst);
-        self.0.property_list()
+        self.0.property_metadata()
     }
     fn enrollment_summary_capability_internal(&self) -> Option<EnrollmentSummaryCapability> {
         self.1.fetch_add(1, Ordering::SeqCst);

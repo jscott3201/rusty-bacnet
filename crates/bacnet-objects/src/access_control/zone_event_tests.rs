@@ -115,7 +115,10 @@ fn access_zone_serves_the_event_rows() {
         (P::EVENT_STATE, enumerated(EventState::NORMAL)),
     ] {
         assert_eq!(read(&zone, property), value, "{property:?}");
-        assert!(zone.property_list().contains(&property), "{property:?}");
+        assert!(
+            crate::property_metadata::has_property(&zone.property_metadata(), property),
+            "{property:?}"
+        );
     }
     assert_eq!(
         zone.enrollment_summary_capability_internal()

@@ -33,7 +33,7 @@ fn every_type_that_reports_cov_lists_its_cov_increment_as_required() {
     for object in &objects {
         let kind = object.object_identifier().object_type();
         let metadata = object.property_metadata();
-        let required = object.required_properties();
+        let required = crate::test_rows::required(&object.property_metadata());
         for row in metadata.iter() {
             let p = row.property_identifier;
             let tagged = row.presence_condition == Some(PropertyPresenceCondition::CovReporting);
@@ -67,9 +67,8 @@ fn every_type_that_reports_cov_lists_its_cov_increment_as_required() {
             .unwrap();
         assert!(object.supports_cov(), "{kind:?}");
         assert!(
-            object
-                .required_properties()
-                .contains(&PropertyIdentifier::COV_INCREMENT),
+            crate::property_metadata::required_properties(&object.property_metadata())
+                .any(|required| required == PropertyIdentifier::COV_INCREMENT),
             "{kind:?}"
         );
     }
