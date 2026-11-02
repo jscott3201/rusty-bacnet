@@ -237,6 +237,7 @@ impl BACnetObject for EventLogObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        crate::property_metadata::check_read_array_index(self, property, array_index)?;
         // Table 12-31 has neither Out_Of_Service nor Log_Interval (#1064), and
         // Clause 12.27 holds the OUT_OF_SERVICE flag FALSE.
         if let Some(result) =

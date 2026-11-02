@@ -169,6 +169,7 @@ impl BACnetObject for AnalogInputObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        crate::property_metadata::check_read_array_index(self, property, array_index)?;
         // IN_ALARM: override STATUS_FLAGS with event_state before common macro
         if property == PropertyIdentifier::STATUS_FLAGS {
             return Ok(common::compute_status_flags(

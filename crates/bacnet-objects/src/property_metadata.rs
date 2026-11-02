@@ -449,6 +449,28 @@ pub fn check_write_array_index<O: BACnetObject + ?Sized>(
     Ok(())
 }
 
+/// The array-index check every read makes before the value is fetched: an
+/// index on a property that isn't an array on `object` is
+/// PROPERTY_IS_NOT_AN_ARRAY (Clause 15.5.1.3). A whole read (`index` of
+/// `None`) passes.
+///
+/// The read side asks only the array classification, through
+/// [`BACnetObject::is_array_property`]: the object's own reader answers
+/// effective absence afterwards. The server's ReadProperty and
+/// ReadPropertyMultiple run this after the object lookup, and each built-in
+/// object runs it first in its own `read_property`, so a direct caller gets
+/// the server's answer (#2274).
+pub fn check_read_array_index<O: BACnetObject + ?Sized>(
+    object: &O,
+    property: PropertyIdentifier,
+    index: Option<u32>,
+) -> Result<(), Error> {
+    if index.is_some() && !object.is_array_property(property) {
+        return Err(crate::common::property_is_not_an_array_error());
+    }
+    Ok(())
+}
+
 /// Project implemented write capability for one property identifier.
 pub fn is_writable_in_metadata(
     metadata: &[PropertyMetadata],

@@ -334,6 +334,7 @@ impl BACnetObject for TrendLogMultipleObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        crate::property_metadata::check_read_array_index(self, property, array_index)?;
         // Logging_Type, Log_Interval, Align_Intervals, Interval_Offset and
         // Trigger, then Start_Time and Stop_Time.
         if let Some(value) = self

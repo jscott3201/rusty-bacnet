@@ -205,6 +205,7 @@ impl BACnetObject for ElevatorGroupObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        crate::property_metadata::check_read_array_index(self, property, array_index)?;
         // No read_common_properties!: it would serve Status_Flags,
         // Out_Of_Service and Reliability, which Table 12-76 doesn't define.
         match property {

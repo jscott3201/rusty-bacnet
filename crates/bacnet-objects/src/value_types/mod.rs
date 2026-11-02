@@ -183,6 +183,7 @@ macro_rules! define_value_object_commandable {
                 property: PropertyIdentifier,
                 array_index: Option<u32>,
             ) -> Result<PropertyValue, Error> {
+                crate::property_metadata::check_read_array_index(self, property, array_index)?;
                 if let Some(result) = read_common_properties!(self, property, array_index) {
                     return result;
                 }
