@@ -1,8 +1,8 @@
 """Installed-artifact tests for two served datatypes (#2251, #2252).
 
-An Accumulator's Pulse_Rate is an Unsigned (Table 12-79), and a Life Safety
-Point's Maintenance_Required a BACnetMaintenance enumeration (Table 12-18),
-read with its name. Writes of the datatypes they were once served as, a REAL
+An Accumulator's Pulse_Rate is an Unsigned (Table 12-79), written only out
+of service, and a Life Safety Point's Maintenance_Required a BACnetMaintenance
+enumeration (Table 12-18), read with its name. Writes of the datatypes they were once served as, a REAL
 and a BOOLEAN, are refused with INVALID_DATA_TYPE.
 """
 
@@ -61,6 +61,21 @@ class ServedDatatypeTests(unittest.TestCase):
                 rate = await client.read_property(address, ACCUMULATOR, PULSE_RATE)
                 self.assertEqual(rate.tag, "unsigned")
                 self.assertEqual(rate.value, 0)
+                # Writable only while Out_Of_Service is TRUE (Clause 12.61.20).
+                with self.assertRaises(BacnetProtocolError) as raised:
+                    await client.write_property(
+                        address, ACCUMULATOR, PULSE_RATE, PropertyValue.unsigned(25)
+                    )
+                self.assertEqual(
+                    raised.exception.error_code,
+                    ErrorCode.WRITE_ACCESS_DENIED.to_raw(),
+                )
+                await client.write_property(
+                    address,
+                    ACCUMULATOR,
+                    PropertyIdentifier.OUT_OF_SERVICE,
+                    PropertyValue.boolean(True),
+                )
                 await client.write_property(
                     address, ACCUMULATOR, PULSE_RATE, PropertyValue.unsigned(25)
                 )

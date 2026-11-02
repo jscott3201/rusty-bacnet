@@ -85,13 +85,16 @@ pub use reset::{
     LifeSafetyZoneResetExecutor,
 };
 
-/// Whether a state is one BACnetLifeSafetyState defines or one from the
-/// proprietary range 256..=65535 (Clause 21).
+/// Whether `value` (raw `raw`) is one of the enumeration's `named` values or
+/// from the proprietary range 256..=65535, which BACnetLifeSafetyState and
+/// BACnetMaintenance share (Clause 21).
+fn named_or_proprietary<T: PartialEq>(value: T, raw: u32, named: &[(&str, T)]) -> bool {
+    named.iter().any(|(_, standard)| *standard == value) || (256..=65_535).contains(&raw)
+}
+
+/// Whether a state is one BACnetLifeSafetyState defines or a proprietary one.
 fn valid_life_safety_state(state: LifeSafetyState) -> bool {
-    LifeSafetyState::ALL_NAMED
-        .iter()
-        .any(|&(_, named)| named == state)
-        || (256..=65_535).contains(&state.to_raw())
+    named_or_proprietary(state, state.to_raw(), LifeSafetyState::ALL_NAMED)
 }
 
 /// Decode a client's write of a Point's Maintenance_Required: an Enumerated
@@ -104,10 +107,7 @@ fn maintenance(value: &PropertyValue) -> Result<Maintenance, Error> {
         return Err(common::invalid_data_type_error());
     };
     let maintenance = Maintenance::from_raw(*raw);
-    let named = Maintenance::ALL_NAMED
-        .iter()
-        .any(|&(_, standard)| standard == maintenance);
-    if !named && !(256..=65_535).contains(raw) {
+    if !named_or_proprietary(maintenance, *raw, Maintenance::ALL_NAMED) {
         return Err(common::value_out_of_range_error());
     }
     Ok(maintenance)

@@ -6875,9 +6875,14 @@ Limit_Monitoring_Interval), count pulses with `record_pulses`, and let time
 pass with `advance_rate_window(seconds)`. Each time a whole interval has
 passed, Pulse_Rate becomes that window's count and a new window starts, in
 integer arithmetic only. An application that measures the rate itself calls
-`set_pulse_rate` instead. While Out_Of_Service is TRUE, Pulse_Rate keeps the
-value a client writes and ignores both routes. A write must be an Unsigned;
-the REAL the object used to serve is INVALID_DATA_TYPE (#2251). `record_pulses`
+`set_pulse_rate` instead. These routes need the concrete
+`AccumulatorObject`, so they work only before the object is registered: no
+server path reaches them yet, and in a running server Pulse_Rate changes only
+through a write while Out_Of_Service is TRUE, from a client or `write_local`.
+Pulse_Rate is writable only while Out_Of_Service is TRUE (Clause 12.61.20);
+in service a write is WRITE_ACCESS_DENIED. While out of service it keeps the
+written value and ignores the application routes. A write must be an
+Unsigned; the REAL the object used to serve is INVALID_DATA_TYPE (#2251). `record_pulses`
 counts toward the rate only: Present_Value stays the application's
 (`set_present_value`).
 

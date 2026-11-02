@@ -61,9 +61,11 @@ fn a_late_call_closes_one_window_and_carries_the_remainder() {
     assert_eq!(rate(&object), PropertyValue::Unsigned(7));
     object.advance_rate_window(1);
     assert_eq!(rate(&object), PropertyValue::Unsigned(3));
-    // Counting saturates rather than wrapping, and so does the clock.
+    // Counting saturates rather than wrapping, and so does the clock: 5
+    // seconds plus u32::MAX would wrap to 4, short of the interval.
     object.record_pulses(u64::MAX);
     object.record_pulses(1);
+    object.advance_rate_window(5);
     object.advance_rate_window(u32::MAX);
     assert_eq!(rate(&object), PropertyValue::Unsigned(u64::MAX));
 }
@@ -117,21 +119,55 @@ fn out_of_service_keeps_the_clients_rate() {
     assert_eq!(rate(&object), PropertyValue::Unsigned(2));
 }
 
+fn assert_property_error(error: Error, expected: ErrorCode) {
+    assert!(
+        matches!(error, Error::Remote(RemoteError::Error { class, code })
+            if class == ErrorClass::PROPERTY && code == expected),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn in_service_writes_are_denied() {
+    // Writable only while Out_Of_Service is TRUE (Clause 12.61.20), whatever
+    // the value's datatype.
+    let mut object = accumulator(0);
+    object.set_pulse_rate(3);
+    for value in [PropertyValue::Unsigned(12), PropertyValue::Real(12.0)] {
+        assert_property_error(
+            object
+                .write_property(P::PULSE_RATE, None, value, None)
+                .unwrap_err(),
+            ErrorCode::WRITE_ACCESS_DENIED,
+        );
+    }
+    assert_eq!(rate(&object), PropertyValue::Unsigned(3));
+    let row = object
+        .property_metadata()
+        .iter()
+        .find(|row| row.property_identifier == P::PULSE_RATE)
+        .copied()
+        .unwrap();
+    assert_eq!(
+        row.write_capability,
+        crate::property_metadata::PropertyWriteCapability::WhenOutOfService
+    );
+}
+
 #[test]
 fn writes_take_an_unsigned_and_refuse_a_real() {
     let mut object = accumulator(0);
+    set_out_of_service(&mut object, true);
     object
         .write_property(P::PULSE_RATE, None, PropertyValue::Unsigned(12), None)
         .unwrap();
     assert_eq!(rate(&object), PropertyValue::Unsigned(12));
     for value in [PropertyValue::Real(12.0), PropertyValue::Double(12.0)] {
-        let error = object
-            .write_property(P::PULSE_RATE, None, value, None)
-            .unwrap_err();
-        assert!(
-            matches!(error, Error::Remote(RemoteError::Error { class, code })
-                if class == ErrorClass::PROPERTY && code == ErrorCode::INVALID_DATA_TYPE),
-            "{error:?}"
+        assert_property_error(
+            object
+                .write_property(P::PULSE_RATE, None, value, None)
+                .unwrap_err(),
+            ErrorCode::INVALID_DATA_TYPE,
         );
     }
     assert_eq!(rate(&object), PropertyValue::Unsigned(12));

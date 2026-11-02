@@ -40,6 +40,12 @@ struct RateWindow {
 }
 
 /// BACnet Accumulator object — tracks a pulse count with scaling.
+///
+/// Pulse_Rate's application routes (`set_pulse_rate`, `record_pulses`,
+/// `advance_rate_window`) need the concrete object, so they work only before
+/// it is registered with a server: no server path drives them yet. Once
+/// registered, Pulse_Rate changes only through a write while Out_Of_Service
+/// is TRUE, from a client or `write_local`.
 pub struct AccumulatorObject {
     oid: ObjectIdentifier,
     name: String,
@@ -128,6 +134,8 @@ impl AccumulatorObject {
     /// itself. While Out_Of_Service is TRUE the property is decoupled from
     /// the input (Clause 12.61.10), so the value is dropped and a client's
     /// keeps being served.
+    ///
+    /// Only before the object is registered; see the type's docs.
     pub fn set_pulse_rate(&mut self, pulses: u64) {
         if !self.out_of_service {
             self.pulse_rate = pulses;
@@ -137,6 +145,8 @@ impl AccumulatorObject {
     /// Count `pulses` input pulses into the current rate window. Only
     /// Pulse_Rate uses them: Present_Value stays the application's
     /// (`set_present_value`).
+    ///
+    /// Only before the object is registered; see the type's docs.
     pub fn record_pulses(&mut self, pulses: u64) {
         self.rate_window.pulses = self.rate_window.pulses.saturating_add(pulses);
     }
@@ -152,6 +162,8 @@ impl AccumulatorObject {
     /// While Out_Of_Service is TRUE the windows keep running but Pulse_Rate
     /// keeps a client's value (Clause 12.61.10); the first window to close
     /// after the return to service sets it again.
+    ///
+    /// Only before the object is registered; see the type's docs.
     pub fn advance_rate_window(&mut self, seconds: u32) {
         let interval = self.limit_monitoring_interval;
         if interval == 0 {
@@ -266,7 +278,12 @@ impl BACnetObject for AccumulatorObject {
                     Err(common::invalid_data_type_error())
                 }
             }
+            // Writable only while Out_Of_Service is TRUE (Clause 12.61.20),
+            // for simulation; in service the input owns it.
             p if p == PropertyIdentifier::PULSE_RATE => {
+                if !self.out_of_service {
+                    return Err(common::write_access_denied_error());
+                }
                 if let PropertyValue::Unsigned(v) = value {
                     self.pulse_rate = v;
                     Ok(())

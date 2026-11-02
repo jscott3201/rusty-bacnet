@@ -6,7 +6,7 @@ use bacnet_types::enums::PropertyIdentifier as P;
 use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead},
     PropertyMetadata,
-    PropertyWriteCapability::{Always, ReadOnly},
+    PropertyWriteCapability::{Always, ReadOnly, WhenOutOfService},
 };
 
 // Canonical effective rows for the Accumulator (type 23, ASHRAE 135-2020
@@ -27,8 +27,10 @@ use crate::property_metadata::{
 // Table-R served rows with no network write route stay RequiredRead/ReadOnly;
 // table-R rows with a write arm are RequiredRead/Always. Table-O served rows
 // are Optional, with Always exactly where dispatch accepts the write
-// (Max_Pres_Value is table R with an arm, so RequiredRead/Always; Pulse_Rate
-// and Limit_Monitoring_Interval are table O with arms, so Optional/Always;
+// (Max_Pres_Value is table R with an arm, so RequiredRead/Always;
+// Limit_Monitoring_Interval is table O with an arm, so Optional/Always;
+// Pulse_Rate is table O and writable only out of service (Clause 12.61.20),
+// so Optional/WhenOutOfService;
 // Prescale, Reliability, Value_Before_Change, and Value_Set have no arm, so
 // Optional/ReadOnly). Prescale is present only once the application sets
 // one; without it the row is left out, so the property reads as unknown
@@ -59,7 +61,7 @@ const ACCUMULATOR_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::MAX_PRES_VALUE, RequiredRead, None, Always),
     PropertyMetadata::new(P::SCALE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PRESCALE, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::PULSE_RATE, Optional, None, Always),
+    PropertyMetadata::new(P::PULSE_RATE, Optional, None, WhenOutOfService),
     PropertyMetadata::new(P::UNITS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::LIMIT_MONITORING_INTERVAL, Optional, None, Always),
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
@@ -246,7 +248,6 @@ mod tests {
             P::DESCRIPTION,
             P::OUT_OF_SERVICE,
             P::MAX_PRES_VALUE,
-            P::PULSE_RATE,
             P::LIMIT_MONITORING_INTERVAL,
         ];
         for out_of_service in [false, true] {
@@ -265,6 +266,8 @@ mod tests {
                 let p = row.property_identifier;
                 let capability = if writable.contains(&p) {
                     PropertyWriteCapability::Always
+                } else if p == P::PULSE_RATE {
+                    PropertyWriteCapability::WhenOutOfService
                 } else {
                     PropertyWriteCapability::ReadOnly
                 };
@@ -276,7 +279,9 @@ mod tests {
                 );
                 let value = object.read_property(p, None).unwrap();
                 let result = object.write_property(p, None, value, None);
-                if capability.is_writable() {
+                if capability == PropertyWriteCapability::Always
+                    || (capability == PropertyWriteCapability::WhenOutOfService && out_of_service)
+                {
                     result.unwrap();
                 } else {
                     assert_error(result.unwrap_err(), ErrorCode::WRITE_ACCESS_DENIED);
@@ -339,13 +344,16 @@ mod tests {
                 object.read_property(P::MAX_PRES_VALUE, None).unwrap(),
                 PropertyValue::Unsigned(1000)
             );
-            object
-                .write_property(P::PULSE_RATE, None, PropertyValue::Unsigned(25), None)
-                .unwrap();
-            assert_eq!(
-                object.read_property(P::PULSE_RATE, None).unwrap(),
-                PropertyValue::Unsigned(25)
-            );
+            // Pulse_Rate takes a write only out of service (Clause 12.61.20).
+            let pulse_rate =
+                object.write_property(P::PULSE_RATE, None, PropertyValue::Unsigned(25), None);
+            if out_of_service {
+                pulse_rate.unwrap();
+            } else {
+                assert_error(pulse_rate.unwrap_err(), ErrorCode::WRITE_ACCESS_DENIED);
+            }
+            let rate = PropertyValue::Unsigned(if out_of_service { 25 } else { 0 });
+            assert_eq!(object.read_property(P::PULSE_RATE, None).unwrap(), rate);
             object
                 .write_property(
                     P::LIMIT_MONITORING_INTERVAL,
@@ -360,20 +368,22 @@ mod tests {
                     .unwrap(),
                 PropertyValue::Unsigned(60)
             );
-            // Pulse_Rate is an Unsigned (Table 12-79): the REAL it was once
-            // served as is refused without touching state.
+            // Pulse_Rate is an Unsigned (Table 12-79): out of service the
+            // REAL it was once served as is refused without touching state.
+            let refusal = if out_of_service {
+                ErrorCode::INVALID_DATA_TYPE
+            } else {
+                ErrorCode::WRITE_ACCESS_DENIED
+            };
             for value in [2.5, f32::NAN] {
                 assert_error(
                     object
                         .write_property(P::PULSE_RATE, None, PropertyValue::Real(value), None)
                         .unwrap_err(),
-                    ErrorCode::INVALID_DATA_TYPE,
+                    refusal,
                 );
             }
-            assert_eq!(
-                object.read_property(P::PULSE_RATE, None).unwrap(),
-                PropertyValue::Unsigned(25)
-            );
+            assert_eq!(object.read_property(P::PULSE_RATE, None).unwrap(), rate);
             // Oversized Limit_Monitoring_Interval values are refused.
             assert_error(
                 object
@@ -389,7 +399,6 @@ mod tests {
             // Mistyped values are rejected without changing state.
             for (p, value) in [
                 (P::MAX_PRES_VALUE, PropertyValue::Real(1.0)),
-                (P::PULSE_RATE, PropertyValue::Signed(1)),
                 (P::LIMIT_MONITORING_INTERVAL, PropertyValue::Enumerated(60)),
                 (P::DESCRIPTION, PropertyValue::Unsigned(1)),
                 (P::OUT_OF_SERVICE, PropertyValue::Unsigned(1)),

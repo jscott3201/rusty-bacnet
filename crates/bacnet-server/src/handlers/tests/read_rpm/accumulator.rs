@@ -148,8 +148,15 @@ fn rpm_accumulator_indexed_reads_and_bytes_are_unchanged() {
             object
                 .write_property(P::MAX_PRES_VALUE, None, PropertyValue::Unsigned(200), None)
                 .unwrap();
+            // Pulse_Rate takes a write only out of service (Clause 12.61.20).
+            object
+                .write_property(P::OUT_OF_SERVICE, None, PropertyValue::Boolean(true), None)
+                .unwrap();
             object
                 .write_property(P::PULSE_RATE, None, PropertyValue::Unsigned(25), None)
+                .unwrap();
+            object
+                .write_property(P::OUT_OF_SERVICE, None, PropertyValue::Boolean(false), None)
                 .unwrap();
             object.set_scale(bacnet_types::constructed::BACnetScale::IntegerScale(-2));
             object
