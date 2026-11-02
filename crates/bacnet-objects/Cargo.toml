@@ -38,6 +38,12 @@ alloc = [
     "dep:libm",
     "dep:spinning_top",
 ]
+# Not a stable API: the file backends' in-memory mode
+# (`durable::MemoryFiles`, hidden), for the restore fuzz targets in
+# `fuzz/`, which then decode from memory without the file system (#2233).
+# A backend in that mode writes nothing to disk, so its state is lost when
+# the process ends: never enable this in a product build.
+test-support = ["std"]
 
 [package.metadata.docs.rs]
 no-default-features = true

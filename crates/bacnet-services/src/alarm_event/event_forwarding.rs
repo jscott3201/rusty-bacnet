@@ -48,7 +48,9 @@ pub struct ForwardedEventNotification {
 impl ForwardedEventNotification {
     /// Read a ConfirmedEventNotification or UnconfirmedEventNotification
     /// request. Errors when a required member is missing, a member is out of
-    /// order or malformed, or anything follows the event values.
+    /// order or malformed, or anything follows the event values. An
+    /// ACK_NOTIFICATION carries no ackRequired, fromState or event values and
+    /// is refused with any of them, as `decode_event_notification` refuses it.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         const WHAT: &str = "EventNotification";
         validate_tlv_sequence(data, WHAT)?;
@@ -75,13 +77,18 @@ impl ForwardedEventNotification {
         let (notify_type, mut offset) =
             decode_ctx_unsigned::<u32>(data, offset, 8, "EventNotification notifyType")?;
         let notify_type = NotifyType::from_raw(notify_type);
-        if next_is_context(data, offset, 9)? {
+        // ackRequired, fromState and eventValues belong to an ALARM or EVENT
+        // only, as in `decode_event_notification` (#2247): for an
+        // ACK_NOTIFICATION, To State must follow the notify type, and nothing
+        // may follow To State.
+        let transition = notify_type != NotifyType::ACK_NOTIFICATION;
+        if transition && next_is_context(data, offset, 9)? {
             (_, offset) = decode_ctx_boolean(data, offset, 9, "EventNotification ackRequired")?;
         }
-        if next_is_context(data, offset, 10)? {
+        if transition && next_is_context(data, offset, 10)? {
             (_, offset) =
                 decode_ctx_unsigned::<u32>(data, offset, 10, "EventNotification fromState")?;
-        } else if notify_type != NotifyType::ACK_NOTIFICATION {
+        } else if transition {
             if offset < data.len() {
                 let (found, _) = tags::decode_tag(data, offset)?;
                 return Err(misplaced_tag(
@@ -100,7 +107,9 @@ impl ForwardedEventNotification {
         let (to_state, offset) =
             decode_ctx_unsigned::<u32>(data, offset, 11, "EventNotification toState")?;
         let to_state = EventState::from_raw(to_state);
-        if offset < data.len() {
+        if !transition {
+            expect_end(data, offset, offset, "EventNotification")?;
+        } else if offset < data.len() {
             // The event values are one non-empty constructed [12] member, and
             // the request ends at the closing tag that matches its opening one.
             let (opening, inner) = tags::decode_tag(data, offset)?;

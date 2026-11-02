@@ -5365,7 +5365,9 @@ support, for one) with no message text; the client uses it for received
 notifications and `decode_event_log_record` for a record's notification, which
 otherwise has to be a valid request. The request codec writes an
 ACK_NOTIFICATION without its ack-required, from-state and event values, so
-ReadRange serves such a record without them. A Trend Log record stays a `BACnetLogRecord`; its optional
+ReadRange serves such a record without them, and the decoders (strict,
+tolerant and the forwarder's) refuse an ACK_NOTIFICATION that carries any of
+them (#2247). A Trend Log record stays a `BACnetLogRecord`; its optional
 `status_flags` is a `StatusFlags`.
 
 A running server records its own event notifications in every Event Log. Each

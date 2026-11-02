@@ -53,6 +53,8 @@ on:
       - crates/bacnet-objects/src/audit/persistence/**
       - crates/bacnet-objects/src/durable.rs
       - crates/bacnet-objects/src/durable/**
+      # Its features: the fuzz crate builds the hidden test-support one.
+      - crates/bacnet-objects/Cargo.toml
       - .github/workflows/fuzz.yml
       - .github/ci-pins.env
       - scripts/ci/fuzz.sh

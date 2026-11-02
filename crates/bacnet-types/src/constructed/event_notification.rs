@@ -44,10 +44,11 @@ pub struct EventNotificationRequest {
     pub message_text: Option<String>,
     /// Whether this is an alarm, an event, or an acknowledgment notification.
     pub notify_type: NotifyType,
-    /// Whether the recipient must acknowledge.
+    /// Whether the recipient must acknowledge. Not encoded for an
+    /// ACK_NOTIFICATION, which decodes with `false` here.
     pub ack_required: bool,
-    /// Event state before this transition. Not encoded for ACK_NOTIFICATION; decode sets
-    /// NORMAL when the field is absent.
+    /// Event state before this transition. Not encoded for an
+    /// ACK_NOTIFICATION, which decodes with NORMAL here.
     pub from_state: EventState,
     /// Event state after this transition.
     pub to_state: EventState,

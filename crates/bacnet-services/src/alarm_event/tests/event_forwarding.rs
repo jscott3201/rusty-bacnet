@@ -103,6 +103,50 @@ fn forwarded_acknowledgment_needs_no_from_state() {
 }
 
 #[test]
+fn forwarded_acknowledgment_refuses_alarm_only_fields() {
+    // #2247: an ALARM's octets with the notify type turned to
+    // ACK_NOTIFICATION carry ackRequired, fromState and eventValues, which an
+    // acknowledgment leaves out. The forwarder refuses them as the full
+    // decoder does, rather than passing on a request that decoder refuses.
+    let mut ack = encoded(&alarm()).to_vec();
+    let notify_type = ack
+        .windows(2)
+        .position(|pair| pair == [0x89, 0x00])
+        .expect("[8] notifyType ALARM")
+        + 1;
+    ack[notify_type] = 0x02;
+    assert!(decode_event_notification(&ack).is_err());
+    assert_eq!(
+        ForwardedEventNotification::decode(&ack)
+            .unwrap_err()
+            .reject_reason(),
+        Some(RejectReason::INVALID_TAG)
+    );
+
+    // Each field alone: [9] and [10] where To State is due, [12] after it.
+    let mut plain = alarm();
+    plain.notify_type = NotifyType::ACK_NOTIFICATION;
+    let plain = encoded(&plain).to_vec();
+    let to_state = plain.len() - 2;
+    let values = &encoded(&alarm())[..];
+    let values = &values[values.len() - 22..];
+    for (between, after, reason) in [
+        (&[0x99, 0x00][..], &[][..], RejectReason::INVALID_TAG),
+        (&[0xA9, 0x00], &[], RejectReason::INVALID_TAG),
+        (&[], values, RejectReason::TOO_MANY_ARGUMENTS),
+    ] {
+        let data = [&plain[..to_state], between, &plain[to_state..], after].concat();
+        assert_eq!(
+            ForwardedEventNotification::decode(&data)
+                .unwrap_err()
+                .reject_reason(),
+            Some(reason),
+            "{data:02X?}"
+        );
+    }
+}
+
+#[test]
 fn forwarded_notification_refuses_malformed_requests() {
     let whole = encoded(&alarm());
     // Truncated anywhere before the end.
