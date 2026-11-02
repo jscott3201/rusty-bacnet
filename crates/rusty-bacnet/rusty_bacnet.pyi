@@ -6374,8 +6374,9 @@ class BACnetServer:
         a client's value: the pulses still fill the rate window, but
         Present_Value drops them rather than catching up later. Present_Value
         takes a write only then, an Unsigned up to Max_Pres_Value, and once
-        back in service the pulses count on from the written value. ``pulses`` is an unsigned 64-bit count; a negative
-        or larger int raises OverflowError. An unknown object raises
+        back in service the pulses count on from the written value.
+        ``pulses`` is an unsigned 64-bit count; a negative or larger int
+        raises OverflowError. An unknown object raises
         UNKNOWN_OBJECT and any object other than an Accumulator
         OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
         """

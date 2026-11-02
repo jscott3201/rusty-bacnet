@@ -229,6 +229,47 @@ async fn a_feed_notifies_present_value_subscribers() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_clients_present_value_write_notifies_subscribers() {
+    let (mut h, _origin) = start().await;
+    let mut body = BytesMut::new();
+    bacnet_services::cov::SubscribeCOVRequest {
+        subscriber_process_identifier: 9,
+        monitored_object_identifier: acc1(),
+        issue_confirmed_notifications: Some(false),
+        lifetime: Some(300),
+    }
+    .encode(&mut body)
+    .unwrap();
+    h.request(ConfirmedServiceChoice::SUBSCRIBE_COV, body).await;
+    assert_eq!(response(&h).await, Ok(()));
+    assert_eq!(value_in(&h.cov_notification().await, PV), vec![0x21, 0x00]);
+    // Going out of service reports the Status_Flags change.
+    write(
+        &h,
+        PropertyIdentifier::OUT_OF_SERVICE,
+        PropertyValue::Boolean(true),
+    )
+    .await;
+    assert_eq!(value_in(&h.cov_notification().await, PV), vec![0x21, 0x00]);
+    // A client's WriteProperty of Present_Value is reported too (#2267).
+    let mut body = BytesMut::new();
+    bacnet_services::write_property::WritePropertyRequest {
+        object_identifier: acc1(),
+        property_identifier: PV,
+        property_array_index: None,
+        property_value: vec![0x21, 42],
+        priority: None,
+    }
+    .encode(&mut body)
+    .unwrap();
+    h.request(ConfirmedServiceChoice::WRITE_PROPERTY, body)
+        .await;
+    assert_eq!(response(&h).await, Ok(()));
+    assert_eq!(value_in(&h.cov_notification().await, PV), vec![0x21, 42]);
+    h.server.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
 async fn only_an_accumulator_takes_pulses() {
     let (mut h, _origin) = start().await;
     let refused = h.server.add_pulses_local(&av1(), 1).await.unwrap_err();

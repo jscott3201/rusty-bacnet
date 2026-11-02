@@ -3919,6 +3919,9 @@ Unsigned no larger than Max_Pres_Value. A larger value raises
 VALUE_OUT_OF_RANGE, another datatype INVALID_DATA_TYPE, and a write in
 service WRITE_ACCESS_DENIED. The written value starts with an empty Prescale
 remainder, and fed pulses count on from it once back in service.
+A Pulse Converter whose Input_Reference names that Present_Value counts a
+written value as input: an increase by its delta, a decrease as a wrap
+through Max_Pres_Value.
 
 A Pulse Converter checks what its Input_Reference names (#1341). Reliability
 reads CONFIGURATION_ERROR (10), and Status_Flags FAULT, while the reference

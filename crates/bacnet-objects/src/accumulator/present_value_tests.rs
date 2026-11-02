@@ -4,11 +4,14 @@
 
 use super::AccumulatorObject;
 use crate::property_metadata::PropertyWriteCapability;
-use crate::traits::{BACnetObject, LocalInput, LocalInputValue};
+use crate::traits::{BACnetObject, Clocks, LocalInput, LocalInputValue, Timed};
+use alloc::sync::Arc;
 use bacnet_types::constructed::BACnetPrescale;
 use bacnet_types::enums::{EngineeringUnits, ErrorClass, ErrorCode, PropertyIdentifier as P};
 use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::PropertyValue;
+use core::sync::atomic::{AtomicU64, Ordering};
+use core::time::Duration;
 
 fn accumulator() -> AccumulatorObject {
     AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS).unwrap()
@@ -199,4 +202,36 @@ fn a_refused_write_keeps_the_prescale_remainder() {
     set_out_of_service(&mut object, false);
     feed(&mut object, 1); // 16: one step
     assert_eq!(present_value(&object), PropertyValue::Unsigned(1));
+}
+
+#[test]
+fn a_write_leaves_the_rate_window_alone() {
+    // Present_Value and Pulse_Rate are separate: a client's count neither
+    // restarts the window nor drops the pulses counted in it.
+    let millis = Arc::new(AtomicU64::new(0));
+    let read = Arc::clone(&millis);
+    let clocks = Clocks::default().with_monotonic(Some(Arc::new(move || {
+        Duration::from_millis(read.load(Ordering::Relaxed))
+    })));
+    let mut object = accumulator();
+    object.set_limit_monitoring_interval(10);
+    object.bind_clocks(&clocks);
+    feed(&mut object, 4);
+    millis.store(3_000, Ordering::Relaxed);
+    set_out_of_service(&mut object, true);
+    write(&mut object, PropertyValue::Unsigned(500)).unwrap();
+    feed(&mut object, 5);
+    set_out_of_service(&mut object, false);
+    feed(&mut object, 6);
+    assert_eq!(
+        object.next_monotonic_deadline(),
+        Some(Duration::from_secs(10))
+    );
+    millis.store(10_000, Ordering::Relaxed);
+    assert!(object.advance_monotonic_time(Duration::from_secs(10)));
+    assert_eq!(
+        object.read_property(P::PULSE_RATE, None).unwrap(),
+        PropertyValue::Unsigned(15)
+    );
+    assert_eq!(present_value(&object), PropertyValue::Unsigned(506));
 }

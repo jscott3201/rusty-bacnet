@@ -47,6 +47,11 @@ pub use pulse_converter::PulseConverterObject;
 /// Max_Pres_Value, and Pulse_Rate counts them per Limit_Monitoring_Interval
 /// in a window its [`Timed`](crate::traits::Timed) capability closes, which
 /// a server drives from its monotonic task.
+///
+/// While Out_Of_Service is TRUE a client may write Present_Value (#2267).
+/// Dependents take the written value as input (Clause 12.61.10): a Pulse
+/// Converter whose Input_Reference names it counts an increase as its delta
+/// and a decrease as a wrap through Max_Pres_Value.
 #[derive(Clone)]
 pub struct AccumulatorObject {
     oid: ObjectIdentifier,
@@ -110,7 +115,8 @@ impl AccumulatorObject {
         })
     }
 
-    /// Set the present value (application use).
+    /// Set the present value (application use). Prescale's remainder is
+    /// left as it is; only a client's write, out of service, clears it.
     pub fn set_present_value(&mut self, value: u64) {
         self.present_value = value;
     }

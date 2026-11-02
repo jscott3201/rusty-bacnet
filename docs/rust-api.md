@@ -7014,7 +7014,10 @@ footnote 1, Clause 12.61.4; #2267). The write must be an Unsigned no larger
 than Max_Pres_Value: a larger one is VALUE_OUT_OF_RANGE, another datatype
 INVALID_DATA_TYPE, and any write in service WRITE_ACCESS_DENIED. A written
 value starts afresh, clearing Prescale's remainder, and once back in service
-fed pulses count on from it.
+fed pulses count on from it. Dependents see a written value as input
+(Clause 12.61.10): a Pulse Converter whose Input_Reference names the
+Present_Value counts an increase as its delta, and a decrease as a wrap
+through Max_Pres_Value (from 100 to 5 under 9999 counts 9905).
 
 Pulse_Rate is writable only while Out_Of_Service is TRUE (Clause 12.61.20);
 in service a write is WRITE_ACCESS_DENIED. A write must be an Unsigned; the
