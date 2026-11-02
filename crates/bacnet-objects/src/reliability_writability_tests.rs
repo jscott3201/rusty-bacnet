@@ -1,4 +1,5 @@
 use crate::access_control::{AccessZoneObject, CredentialDataInputObject};
+use crate::accumulator::AccumulatorObject;
 use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use crate::life_safety::{LifeSafetyPointObject, LifeSafetyZoneObject};
@@ -392,6 +393,12 @@ reliability_gate_test!(
 reliability_gate_test!(
     life_safety_zone_reliability_requires_out_of_service,
     LifeSafetyZoneObject::new(1, "LSZ-1").unwrap()
+);
+// Clause 12.61.10: out of service, Reliability takes a write to simulate
+// a fault (#2280).
+reliability_gate_test!(
+    accumulator_reliability_requires_out_of_service,
+    AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS).unwrap()
 );
 
 fn assert_protocol_error(error: Error, class: ErrorClass, code: ErrorCode) {

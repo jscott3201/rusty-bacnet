@@ -32,8 +32,9 @@ use crate::property_metadata::{
 // Pulse_Rate is table O and writable only out of service (Clause 12.61.20),
 // so Optional/WhenOutOfService; Present_Value is table R with footnote 1,
 // writable only out of service (Clause 12.61.4, #2267), so
-// RequiredRead/WhenOutOfService;
-// Prescale, Reliability, Value_Before_Change, and Value_Set have no arm, so
+// RequiredRead/WhenOutOfService; Reliability is table O and writable only
+// out of service (Clause 12.61.10, #2280), so Optional/WhenOutOfService;
+// Prescale, Value_Before_Change, and Value_Set have no arm, so
 // Optional/ReadOnly). Prescale is present only once the application sets
 // one; without it the row is left out, so the property reads as unknown
 // rather than as a NULL its datatype doesn't have.
@@ -64,7 +65,7 @@ const ACCUMULATOR_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::EVENT_STATE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
-    PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
+    PropertyMetadata::new(P::RELIABILITY, Optional, None, WhenOutOfService),
     PropertyMetadata::new(P::VALUE_BEFORE_CHANGE, Optional, None, ReadOnly),
     PropertyMetadata::new(P::VALUE_SET, Optional, None, ReadOnly),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
@@ -277,7 +278,7 @@ mod tests {
                 let p = row.property_identifier;
                 let capability = if writable.contains(&p) {
                     PropertyWriteCapability::Always
-                } else if p == P::PULSE_RATE || p == P::PRESENT_VALUE {
+                } else if matches!(p, P::PULSE_RATE | P::PRESENT_VALUE | P::RELIABILITY) {
                     PropertyWriteCapability::WhenOutOfService
                 } else {
                     PropertyWriteCapability::ReadOnly
@@ -433,7 +434,6 @@ mod tests {
                 P::VALUE_SET,
                 P::STATUS_FLAGS,
                 P::EVENT_STATE,
-                P::RELIABILITY,
                 P::UNITS,
             ] {
                 let value = object.read_property(p, None).unwrap();

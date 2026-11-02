@@ -35,6 +35,8 @@ mod execution;
 pub mod monitor;
 mod queues;
 mod replies;
+#[cfg(any(test, feature = "test-support"))]
+mod test_time;
 mod totals;
 pub use bacnet_mstp_core::MasterState;
 pub use diagnostics::{MstpDiagnostics, MstpDiagnosticsSnapshot, MstpNodeState};
@@ -476,6 +478,8 @@ mod late_echo_tests;
 mod reply_tests;
 #[cfg(test)]
 mod slow_adapter_tests;
+#[cfg(test)]
+mod test_time_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
