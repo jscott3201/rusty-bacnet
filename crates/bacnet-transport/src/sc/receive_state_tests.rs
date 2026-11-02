@@ -122,7 +122,9 @@ async fn sc_recv_error_transitions_to_disconnected_without_reconnect() {
     transport.stop().await.unwrap();
 }
 
-#[tokio::test]
+// Paused clock (#2310): the 50 ms heartbeat (#2124) and the 500 ms state wait
+// both run on virtual time, so runner load can't stretch one past the other.
+#[tokio::test(start_paused = true)]
 async fn sc_heartbeat_send_error_transitions_to_disconnected() {
     let client_vmac = [0x01; 6];
     let hub_vmac = [0x10; 6];
