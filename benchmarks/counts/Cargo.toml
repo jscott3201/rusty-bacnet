@@ -1,0 +1,44 @@
+# The counting harness (#1978, #1979): callgrind instruction counts and
+# allocator calls per request, for comparing two commits. See
+# Benchmarks.md section 10.4 and scripts/perf/.
+#
+# A workspace of its own, outside the root one, with its own committed
+# Cargo.lock: scripts/perf/perf_counts.py copies this directory into both
+# trees it compares and builds each with --locked, so the baseline and the
+# candidate link the same third-party versions. It depends on the stack
+# crates by path, without sc-tls (no aws-lc), and doesn't use
+# bacnet-benchmarks, which needs sc-tls.
+[package]
+name = "bacnet-counts"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+publish = false
+
+[workspace]
+members = []
+
+[dependencies]
+bacnet-client = { path = "../../crates/bacnet-client" }
+bacnet-encoding = { path = "../../crates/bacnet-encoding" }
+bacnet-objects = { path = "../../crates/bacnet-objects" }
+bacnet-server = { path = "../../crates/bacnet-server" }
+bacnet-services = { path = "../../crates/bacnet-services" }
+bacnet-transport = { path = "../../crates/bacnet-transport" }
+bacnet-types = { path = "../../crates/bacnet-types" }
+bytes = "1"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
+
+[[bin]]
+name = "counts"
+path = "src/bin/counts.rs"
+
+[[bin]]
+name = "codec-counts"
+path = "src/bin/codec_counts.rs"
+
+# Line tables only: callgrind can then attribute instructions to source
+# lines (and see through inlining) without changing the optimized code.
+[profile.release]
+debug = "line-tables-only"

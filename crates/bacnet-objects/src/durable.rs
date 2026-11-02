@@ -1,9 +1,10 @@
 //! Saving object state off the object database lock (#1270).
 //!
-//! The Audit Log, the Notification Forwarder, the Notification Class and the
-//! Access Rights object keep state in storage the application provides
-//! ([`AuditLogPersistence`], [`NotificationForwarderPersistence`],
-//! [`NotificationClassPersistence`] and [`AccessRightsPersistence`]).
+//! The Audit Log, the Notification Forwarder, the Notification Class, the
+//! Access Rights object, and the Timer and Channel keep state in storage the
+//! application provides ([`AuditLogPersistence`],
+//! [`NotificationForwarderPersistence`], [`NotificationClassPersistence`],
+//! [`AccessRightsPersistence`] and [`WriteConfigPersistence`]).
 //! A storage call can be slow, since the file backends write, synchronize and
 //! rename, so none of these objects makes one while its caller holds the
 //! database's write guard. They all follow the pattern this module provides.
@@ -83,9 +84,13 @@
 //!
 //! The writer's thread is a plain `std` thread with no Tokio runtime, so a
 //! storage implementation that needs one brings its own handle. A storage
-//! call that panics fails that save. An object starts the thread with its
-//! first save and keeps it, parked while idle, until the object is dropped:
-//! one thread per object that has saved.
+//! call that panics fails that save. A save starts the thread when none is
+//! running, and the thread ends once the object has queued nothing for a
+//! while (#1956), so a device with many durable objects holds a thread only
+//! for each one that is saving. The thread is detached, so one that has
+//! ended holds nothing. Saves stay in order across a new thread: the old one
+//! ends only with nothing queued and never touches the queue again, and
+//! dropping the object waits until no thread runs it.
 //!
 //! Without std there are no threads: each save runs on the caller's thread
 //! before the call that queued it returns, so every wait is already over
@@ -119,7 +124,8 @@
 //! The Notification Forwarder's `saving` module is the full example: a list
 //! write stages, and the operation task's saves coalesce. The Notification
 //! Class's is the smallest: a Recipient_List write stages, and nothing else
-//! saves. The Access Rights object's stages indexed array writes too, keyed
+//! saves. The Timer and Channel share theirs (`write_config::saving`): an
+//! object hands it its configuration and how a write changes it. The Access Rights object's stages indexed array writes too, keyed
 //! by the index as well as the value.
 //!
 //! [`AuditLogPersistence`]: crate::audit::AuditLogPersistence
@@ -127,6 +133,7 @@
 //! [`NotificationClassPersistence`]: crate::notification_class::NotificationClassPersistence
 //! [`AccessRightsPersistence`]: crate::access_control::AccessRightsPersistence
 //! [`LogPersistence`]: crate::log_persistence::LogPersistence
+//! [`WriteConfigPersistence`]: crate::write_config::WriteConfigPersistence
 
 use alloc::sync::Arc;
 use core::future::Future;
@@ -365,9 +372,13 @@ impl SaveTicket {
     }
 
     /// Whether `wait` is the one [`wait`](Self::wait) hands out for this
-    /// save, so a request releasing a staged write can show it staged it.
+    /// save, or a wait [joined](SaveWait::and) with it, so a request
+    /// releasing a staged write can show it staged it. A colour object
+    /// stages a Tags write and a default write for one request, and hands
+    /// it their two waits joined (#1956).
     pub(crate) fn issued(&self, wait: &SaveWait) -> bool {
         Arc::ptr_eq(&self.slot.done, &wait.event)
+            || wait.then.as_deref().is_some_and(|then| self.issued(then))
     }
 
     /// Whether, at `now`, a staged write waiting on this save has outlived

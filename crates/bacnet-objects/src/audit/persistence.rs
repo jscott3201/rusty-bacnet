@@ -68,6 +68,10 @@ pub struct AuditLogSnapshot {
 /// The object calls it from its writer thread, one call at a time. A commit
 /// lands in storage a moment before the log serves it: see [storage leads
 /// the served state](crate::durable#storage-leads-the-served-state).
+///
+/// An implementation must not own the object it serves, or the database
+/// holding it: the object's writer thread calls it, and dropping the object
+/// there would wait for that same thread to end, forever.
 pub trait AuditLogPersistence: Send + Sync {
     /// Load the newest valid compatible snapshot, or `None` if neither slot exists.
     fn load(&self, expected_object: ObjectIdentifier) -> Result<Option<AuditLogSnapshot>, Error>;

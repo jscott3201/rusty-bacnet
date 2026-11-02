@@ -40,6 +40,10 @@ pub struct NotificationClassSnapshot {
 /// The class calls it from its writer thread, one call at a time. A written
 /// list lands in storage a moment before the class serves it: see [storage
 /// leads the served state](crate::durable#storage-leads-the-served-state).
+///
+/// An implementation must not own the object it serves, or the database
+/// holding it: the object's writer thread calls it, and dropping the object
+/// there would wait for that same thread to end, forever.
 pub trait NotificationClassPersistence: Send + Sync {
     /// What was last saved for `class`, or `None` when nothing was saved.
     fn load(&self, class: ObjectIdentifier) -> Result<Option<NotificationClassSnapshot>, Error>;

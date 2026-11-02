@@ -26,12 +26,13 @@ struct Memory(Mutex<Option<ColorOutputSnapshot>>);
 impl Memory {
     fn holding(value: ColorOutputValue) -> Arc<Self> {
         Arc::new(Self(Mutex::new(Some(ColorOutputSnapshot {
-            present_value: value,
+            present_value: Some(value),
+            default: None,
         }))))
     }
 
     fn held(&self) -> Option<ColorOutputValue> {
-        self.0.lock().unwrap().map(|saved| saved.present_value)
+        self.0.lock().unwrap().and_then(|saved| saved.present_value)
     }
 }
 

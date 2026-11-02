@@ -12,8 +12,8 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::engine::Engine;
-use super::persistence::{ColorOutputPersistence, ColorOutputValue};
-use super::saving::{ColorOutputSaveCounters, OutputStorage, impl_color_durable};
+use super::persistence::ColorOutputValue;
+use super::saving::{OutputStorage, impl_color_durable};
 use super::{
     command, metadata, milliseconds, noncommandable_audit_policy, written_transition,
     written_unsigned,
@@ -24,6 +24,18 @@ use crate::common::{self, read_identity_properties};
 use crate::object_profile::{ObjectProfile, ProfileState, TagsPersistence};
 use crate::traits::BACnetObject;
 use crate::transition::Transition;
+
+mod output;
+
+/// A written temperature: 1000 to 30000 K, clamped to `min..=max`; any other
+/// is VALUE_OUT_OF_RANGE.
+fn written_kelvin(kelvin: u64, min: u32, max: u32) -> Result<u32, Error> {
+    u32::try_from(kelvin)
+        .ok()
+        .filter(|kelvin| command::KELVIN.contains(kelvin))
+        .map(|kelvin| kelvin.clamp(min, max))
+        .ok_or_else(common::value_out_of_range_error)
+}
 
 /// How far a fading or ramping colour temperature moves between COV samples
 /// of Tracking_Value, in kelvin. Ten kelvin is fine enough that a
@@ -128,76 +140,6 @@ impl ColorTemperatureObject {
             to_restore: None,
             engine: Engine::new(KELVIN_SAMPLE_STEP),
         })
-    }
-
-    /// Keep Present_Value in `persistence` (#1526), and take the temperature
-    /// it saved for this object, if any, as Present_Value, clamped to
-    /// Min_Pres_Value and Max_Pres_Value. Call it right after building the
-    /// object, before anything writes Present_Value.
-    ///
-    /// Saving works as on a Color object
-    /// ([`ColorObject::with_output_persistence`](super::ColorObject::with_output_persistence)).
-    /// With a Default_Color_Temperature of 0, the device's start keeps the
-    /// saved temperature (Clause 12.Y.4).
-    ///
-    /// Fails with storage's error when what it holds can't be loaded, and
-    /// when it holds an xy colour or a temperature outside 1000 to 30000 K.
-    pub fn with_output_persistence(
-        mut self,
-        persistence: Arc<dyn ColorOutputPersistence>,
-    ) -> Result<Self, Error> {
-        let current = ColorOutputValue::Kelvin(self.present_value);
-        match self.output.open(self.oid, current, persistence)? {
-            Some(ColorOutputValue::Kelvin(kelvin)) if command::KELVIN.contains(&kelvin) => {
-                self.present_value = self.clamped(kelvin);
-                self.restored = true;
-                self.to_restore = Some(kelvin);
-            }
-            Some(_) => {
-                return Err(Error::Encoding(
-                    "saved Color Temperature output is not a temperature the object can hold"
-                        .into(),
-                ));
-            }
-            None => {}
-        }
-        Ok(self)
-    }
-
-    /// Whether Present_Value came back from storage
-    /// ([`with_output_persistence`](Self::with_output_persistence)).
-    pub fn output_restored(&self) -> bool {
-        self.restored
-    }
-
-    /// The Present_Value save counters, shared with the object, or `None`
-    /// without storage. Take them before the object joins a database.
-    pub fn output_save_counters(&self) -> Option<ColorOutputSaveCounters> {
-        self.output.counters()
-    }
-
-    /// Block until the Present_Value saves queued so far have run. Dropping
-    /// the object waits for them too.
-    pub fn wait_for_output_saves(&self) {
-        self.output.wait_for_saves();
-    }
-
-    /// Default_Color_Temperature in kelvin: the temperature the device's
-    /// start drives the output to, or 0 to keep the one from before the
-    /// restart.
-    pub fn default_color_temperature(&self) -> u32 {
-        self.default_color_temperature
-    }
-
-    /// Set Default_Color_Temperature, as a WriteProperty of it would: 0, or
-    /// 1000 to 30000 K clamped to Min_Pres_Value and Max_Pres_Value (Clause
-    /// 12.Y.8). Any other value is refused with VALUE_OUT_OF_RANGE.
-    pub fn set_default_color_temperature(&mut self, kelvin: u32) -> Result<(), Error> {
-        self.default_color_temperature = match kelvin {
-            0 => 0,
-            kelvin => self.written_kelvin(u64::from(kelvin))?,
-        };
-        Ok(())
     }
 
     /// Drive the output as the device's start does (#1526), as a Color
@@ -358,11 +300,7 @@ impl ColorTemperatureObject {
     /// A written temperature: refused outside 1000 to 30000 K, otherwise
     /// clamped to Min_Pres_Value and Max_Pres_Value (Clause 12.Y.4).
     fn written_kelvin(&self, kelvin: u64) -> Result<u32, Error> {
-        u32::try_from(kelvin)
-            .ok()
-            .filter(|kelvin| command::KELVIN.contains(kelvin))
-            .map(|kelvin| self.clamped(kelvin))
-            .ok_or_else(common::value_out_of_range_error)
+        written_kelvin(kelvin, self.min_pres_value, self.max_pres_value)
     }
 
     fn clamped(&self, kelvin: u32) -> u32 {
@@ -563,11 +501,7 @@ impl BACnetObject for ColorTemperatureObject {
             // which the restart rule of Clause 12.Y.4 gives a meaning of its
             // own: bring back the temperature from before the restart.
             p if p == PropertyIdentifier::DEFAULT_COLOR_TEMPERATURE => {
-                self.default_color_temperature = match value {
-                    PropertyValue::Unsigned(0) => 0,
-                    PropertyValue::Unsigned(kelvin) => self.written_kelvin(kelvin)?,
-                    _ => return Err(common::invalid_data_type_error()),
-                };
+                self.write_default_color_temperature(value)?;
             }
             p if p == PropertyIdentifier::DEFAULT_FADE_TIME => {
                 self.default_fade_time = written_unsigned(value, command::FADE_TIME_MS)?;

@@ -212,8 +212,10 @@ async fn empty_npdu_silent_and_other_empty_functions_never_consult_expired_budge
     );
 }
 
-#[tokio::test]
-async fn empty_npdu_burst_does_not_refresh_real_clock_or_clear_pending_probe() {
+// Paused clock: the heartbeat deadline follows it (#2124), so the 2 s bound
+// can't expire on a stalled runner before the 700 ms timeout fires (#2310).
+#[tokio::test(start_paused = true)]
+async fn empty_npdu_burst_does_not_refresh_activity_or_clear_pending_probe() {
     let (client, hub) = LoopbackWebSocket::pair();
     let mut transport = ScTransport::new(client, [1; 6])
         .with_device_uuid([1; 16])

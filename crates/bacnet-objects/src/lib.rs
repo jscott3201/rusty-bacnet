@@ -75,6 +75,7 @@ pub mod traits;
 pub(crate) mod transition;
 pub mod trend;
 pub mod value_types;
+pub mod write_config;
 
 #[cfg(test)]
 mod log_status_tests;
@@ -134,6 +135,8 @@ mod read_write_round_trip_seeds;
 mod read_write_round_trip_tests;
 #[cfg(test)]
 mod typed_enum_storage_tests;
+#[cfg(test)]
+mod write_capability_tests;
 #[cfg(test)]
 mod write_consistency_tests;
 

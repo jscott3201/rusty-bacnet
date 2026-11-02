@@ -148,7 +148,7 @@ fn disconnect_envelope_matrix_preserves_public_state_and_queued_ack() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn disconnect_envelopes_preserve_node_state_and_pending_probe() {
     let (mut transport, mut rx, ws) = start_timed().await;
     let probe = recv(&ws).await;
@@ -213,7 +213,7 @@ async fn disconnect_envelopes_preserve_node_state_and_pending_probe() {
     transport.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn disconnect_invalid_traffic_does_not_refresh_node_liveness() {
     let (mut transport, _rx, ws) = start_timed().await;
     let mut states = transport.connection_state_changes();
@@ -227,7 +227,7 @@ async fn disconnect_invalid_traffic_does_not_refresh_node_liveness() {
     let mut next = 0;
     let mut probe_count = 0;
     let mut interval = tokio::time::interval(Duration::from_millis(10));
-    // Exercise production's std::Instant clock, not only paused Tokio time.
+    // A state notification proves timeout; a generous bound catches refreshes.
     timeout(Duration::from_secs(3), async {
         loop {
             tokio::select! {

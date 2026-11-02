@@ -622,6 +622,8 @@ mod averaging_sample_tests;
 #[cfg(test)]
 mod binary_lighting_task_tests;
 #[cfg(test)]
+mod catalogue_wire_tests;
+#[cfg(test)]
 mod channel_member_concurrency_tests;
 #[cfg(test)]
 mod channel_reliability_tests;
@@ -695,6 +697,8 @@ mod discovery_dcc_tests;
 mod discovery_lock_tests;
 #[cfg(test)]
 mod discovery_tests;
+#[cfg(test)]
+mod empty_array_wire_tests;
 #[cfg(test)]
 mod event_confirmed_routing_tests;
 #[cfg(test)]

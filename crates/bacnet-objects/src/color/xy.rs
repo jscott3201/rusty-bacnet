@@ -21,9 +21,15 @@ use super::{
 use crate::audit::ObjectAuditPolicy;
 use crate::command_source::{CommandOrigin, SingleValueSource};
 use crate::common::{self, read_identity_properties};
+use crate::durable::StageStep;
 use crate::object_profile::{ObjectProfile, ProfileState, TagsPersistence};
 use crate::traits::BACnetObject;
 use crate::transition::Transition;
+
+/// A written Default_Color as storage keeps it.
+fn written_default(value: &PropertyValue) -> Result<ColorOutputValue, Error> {
+    written_xy(value.clone()).map(ColorOutputValue::Xy)
+}
 
 /// D65 white, where a new Color object starts.
 const D65: BACnetXyColor = BACnetXyColor::new(0.3127, 0.3290);
@@ -115,14 +121,17 @@ impl ColorObject {
         })
     }
 
-    /// Keep Present_Value in `persistence` (#1526), and take the colour it
-    /// saved for this object, if any, as Present_Value. Call it right after
-    /// building the object, before anything writes Present_Value.
+    /// Keep Present_Value and a written Default_Color in `persistence`
+    /// (#1526, #1956), and take what it saved for this object, if anything:
+    /// the colour as Present_Value, and a default a write set as
+    /// Default_Color. Call it right after building the object, before
+    /// anything writes Present_Value.
     ///
     /// The object then saves each new Present_Value on its own writer
     /// thread; a change doesn't wait for its save, and a save that fails is
-    /// logged and tried again (see [`ColorOutputPersistence`]). With
-    /// Default_Color (0, 0), the device's start keeps the saved colour
+    /// logged and tried again (see [`ColorOutputPersistence`]). A
+    /// Default_Color write saves first and is refused when the save fails.
+    /// With Default_Color (0, 0), the device's start keeps the saved colour
     /// (Clause 12.X.8).
     ///
     /// Fails with storage's error when what it holds can't be loaded, and
@@ -132,19 +141,23 @@ impl ColorObject {
         mut self,
         persistence: Arc<dyn ColorOutputPersistence>,
     ) -> Result<Self, Error> {
-        let current = ColorOutputValue::Xy(self.present_value);
-        match self.output.open(self.oid, current, persistence)? {
-            Some(ColorOutputValue::Xy(color)) if command::xy_in_range(color) => {
-                self.present_value = color;
-                self.restored = true;
-                self.to_restore = Some(color);
-            }
-            Some(_) => {
-                return Err(Error::Encoding(
-                    "saved Color output is not a colour the object can hold".into(),
-                ));
-            }
-            None => {}
+        let Some(saved) = self.output.open(self.oid, persistence)? else {
+            return Ok(self);
+        };
+        let xy = |value| match value {
+            Some(ColorOutputValue::Xy(color)) if command::xy_in_range(color) => Ok(Some(color)),
+            None => Ok(None),
+            Some(_) => Err(Error::Encoding(
+                "saved Color output is not a colour the object can hold".into(),
+            )),
+        };
+        if let Some(color) = xy(saved.present_value)? {
+            self.present_value = color;
+            self.restored = true;
+            self.to_restore = Some(color);
+        }
+        if let Some(color) = xy(saved.default)? {
+            self.default_color = color;
         }
         Ok(self)
     }
@@ -177,12 +190,46 @@ impl ColorObject {
     /// like any other colour and keeps the saved colour at the device's
     /// start (Clause 12.X.8). A coordinate outside 0.0 to 1.0, or NaN, is
     /// refused with VALUE_OUT_OF_RANGE.
+    ///
+    /// This configures the default; it is not saved. Once storage holds a
+    /// default a write set ([`with_output_persistence`](Self::with_output_persistence)),
+    /// that one wins, so an application that sets its configuration at each
+    /// start keeps a peer's write: the colour is checked but not taken, and
+    /// [`clear_written_default`](Self::clear_written_default) lets it apply
+    /// again.
     pub fn set_default_color(&mut self, color: BACnetXyColor) -> Result<(), Error> {
         if !command::xy_in_range(color) {
             return Err(common::value_out_of_range_error());
         }
-        self.default_color = color;
+        if !self.output.default_saved() {
+            self.default_color = color;
+        }
         Ok(())
+    }
+
+    /// Whether storage holds a Default_Color a write set, now or before a
+    /// restart, which [`set_default_color`](Self::set_default_color) then
+    /// leaves alone. Always false without storage.
+    pub fn default_color_saved(&self) -> bool {
+        self.output.default_saved()
+    }
+
+    /// Drop the Default_Color a write saved (#1956): storage keeps none
+    /// from now on, so [`set_default_color`](Self::set_default_color)
+    /// applies again. The default served now stays until it, or a write,
+    /// changes it. Saves before it returns; a save that fails keeps the
+    /// written default and returns storage's error. Does nothing without
+    /// storage or a written default.
+    /// Call it before the object joins the database, as the setters are,
+    /// not under the database guard: it waits for its save.
+    pub fn clear_written_default(&mut self) -> Result<(), Error> {
+        self.output.clear_written_default()
+    }
+
+    /// Stage the request's Default_Color writes on the output storage.
+    fn stage_default(&mut self, writes: &[crate::durable::PendingWrite]) -> StageStep {
+        self.output
+            .stage_defaults(writes, PropertyIdentifier::DEFAULT_COLOR, written_default)
     }
 
     /// Drive the output as the device's start does (#1526); the server
@@ -483,9 +530,15 @@ impl BACnetObject for ColorObject {
                 self.write_output(property, value)?;
             }
             // (0, 0) is taken like any other colour: Clause 12.X.8 has it
-            // mean that a restart brings back the colour from before it.
+            // mean that a restart brings back the colour from before it. With
+            // storage it is saved first (#1956).
             p if p == PropertyIdentifier::DEFAULT_COLOR => {
-                self.default_color = written_xy(value)?;
+                let written = self
+                    .output
+                    .write_default(p, &value, || written_default(&value))?;
+                if let ColorOutputValue::Xy(color) = written {
+                    self.default_color = color;
+                }
             }
             p if p == PropertyIdentifier::DEFAULT_FADE_TIME => {
                 self.default_fade_time = written_unsigned(value, command::FADE_TIME_MS)?;
@@ -583,6 +636,12 @@ impl crate::traits::Timed for ColorObject {
 impl ColorObject {
     pub(crate) fn advance_time(&mut self, elapsed: Duration) -> bool {
         self.engine.advance_by(elapsed)
+    }
+
+    /// Whether the output writer's thread has ended.
+    #[cfg(feature = "std")]
+    pub(super) fn writer_thread_ended(&self) -> bool {
+        self.output.writer_thread_ended()
     }
 }
 

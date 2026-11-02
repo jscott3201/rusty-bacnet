@@ -86,6 +86,8 @@ mod unconfirmed;
 #[cfg(test)]
 mod unconfirmed_tests;
 #[cfg(test)]
+mod write_config_durable_tests;
+#[cfg(test)]
 pub(crate) use self::{executed::EXECUTED_CONFIRMED, unconfirmed::EXECUTED_UNCONFIRMED};
 
 /// Distinct lifetimes: ordinary transaction ownership versus LSO's local replay.
