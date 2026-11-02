@@ -348,7 +348,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 // object's order.
                 values.extend(reported.values);
                 let observation = flags.observation(sample).with_triggers(reported.triggers);
-                let increment = object.cov_increment();
+                let increment = object.cov().and_then(|cov| cov.cov_increment());
                 // Reserve every ordinary reference while the shared observation
                 // is still guarded, before a preceding property send can await.
                 let completions = subs

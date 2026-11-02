@@ -7,7 +7,7 @@ pub(crate) use object_storage::ObjectStorageAccess;
 
 use alloc::borrow::Cow;
 
-use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier, Reliability};
+use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
@@ -20,40 +20,15 @@ pub use capabilities::{
     StagingSource,
 };
 pub use capabilities::{
-    Clocks, DeadlineWaker, DurableWrites, EventReporting, LifeSafety, LocalInput, LocalInputValue,
-    MonotonicClock, ReliabilityEval, ScheduleRunner, Timed, no_alarm_configured, not_supported,
+    Clocks, CovReportedProperty, CovReporting, DeadlineWaker, DurableWrites, EventReporting,
+    LifeSafety, LocalInput, LocalInputValue, MonotonicClock, ReliabilityEval, ScheduleRunner,
+    Timed, no_alarm_configured, not_supported,
 };
 pub(crate) use capabilities::{
-    impl_audit_policy, impl_log_buffer, lend_audit_policy, lend_enrollment_eval,
-    lend_event_reporting, lend_log_buffer, lend_reliability_eval, lend_schedule_runner,
+    impl_audit_policy, impl_log_buffer, lend_audit_policy, lend_cov_reporting,
+    lend_enrollment_eval, lend_event_reporting, lend_log_buffer, lend_reliability_eval,
+    lend_schedule_runner,
 };
-
-mod defaults;
-use defaults::cov_reported_properties_default;
-
-/// One property a whole-object (SubscribeCOV) notification reports after
-/// Present_Value and Status_Flags, from the object type's Table 13-1 row.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CovReportedProperty {
-    /// Carried in each notification; a change of it alone sends none.
-    Value(PropertyIdentifier),
-    /// Carried in each notification, and any change of it sends one.
-    Trigger(PropertyIdentifier),
-}
-
-impl CovReportedProperty {
-    /// The reported property.
-    pub const fn property(self) -> PropertyIdentifier {
-        match self {
-            Self::Value(property) | Self::Trigger(property) => property,
-        }
-    }
-
-    /// Whether any change of the property triggers a notification.
-    pub const fn triggers(self) -> bool {
-        matches!(self, Self::Trigger(_))
-    }
-}
 
 /// Result of applying a LifeSafetyOperation to an object.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -457,31 +432,6 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         true
     }
 
-    /// Whether this object type supports COV notifications.
-    ///
-    /// Override to return `true` for object types that can generate COV
-    /// notifications (analog, binary, multi-state I/O/V). Default is `false`.
-    /// This answer admits SubscribeCOV, the whole-object form, and is the
-    /// default for
-    /// [`supports_subscribe_cov_property`](Self::supports_subscribe_cov_property).
-    fn supports_cov(&self) -> bool {
-        false
-    }
-
-    /// Whether SubscribeCOVProperty and SubscribeCOVPropertyMultiple may
-    /// monitor this object's properties.
-    ///
-    /// Defaults to [`supports_cov`](Self::supports_cov). An object that has
-    /// no whole-object COV criteria, because Clause 13.1's Table 13-1 doesn't
-    /// list its type, can still return `true` here while `supports_cov`
-    /// stays `false`: its property subscriptions then follow Table 13-1a and
-    /// SubscribeCOV is refused. The built-in Averaging object does this.
-    /// [`supports_cov_property`](Self::supports_cov_property) still decides
-    /// each property.
-    fn supports_subscribe_cov_property(&self) -> bool {
-        self.supports_cov()
-    }
-
     /// Mutably borrow a Staging object's capability, which queues target
     /// writes when its stage changes. Not public API yet (#2179).
     ///
@@ -619,79 +569,16 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         None
     }
 
-    /// Whether a readable property supports property-specific COV.
+    /// Borrow this object's COV reporting: whether it takes SubscribeCOV
+    /// and which properties a property subscription may monitor, its
+    /// COV_Increment, and the extra properties its notifications carry.
     ///
-    /// The default preserves the existing behavior of every other COV-capable
-    /// object family while enforcing the bounded standardized Life Safety
-    /// surface for source-compatible custom Point and Zone implementations.
-    /// Other types answer
-    /// [`supports_subscribe_cov_property`](Self::supports_subscribe_cov_property)
-    /// for every property.
-    fn supports_cov_property(&self, property: PropertyIdentifier) -> bool {
-        match self.object_identifier().object_type() {
-            ObjectType::LIFE_SAFETY_POINT | ObjectType::LIFE_SAFETY_ZONE => matches!(
-                property,
-                PropertyIdentifier::PRESENT_VALUE
-                    | PropertyIdentifier::STATUS_FLAGS
-                    | PropertyIdentifier::TRACKING_VALUE
-                    | PropertyIdentifier::SILENCED
-                    | PropertyIdentifier::OPERATION_EXPECTED
-            ),
-            _ => self.supports_subscribe_cov_property(),
-        }
-    }
-
-    /// COV increment for this object (objects with a COV_Increment property).
-    ///
-    /// Returns `Some(increment)` for objects that use COV_Increment filtering
-    /// (e.g., AnalogInput, AnalogOutput, AnalogValue, Loop, Staging, and the
-    /// Integer, Positive Integer and Large Analog Value types). A notification
-    /// fires only when the numeric Present_Value delta reaches the increment.
-    /// Property COV inherits this increment only for numeric Present_Value;
-    /// other selected properties use their own supplied increment or typed
-    /// change reporting.
-    ///
-    /// The increment is an `f64` so every COV_Increment datatype fits without
-    /// rounding: a REAL widens exactly, a Large Analog Value's Double is kept
-    /// as is, and an Unsigned increment is exact up to 2^53.
-    ///
-    /// Returns `None` for objects that notify on any state change (binary, multi-state).
-    fn cov_increment(&self) -> Option<f64> {
+    /// The default has none, and the bundled server then refuses every COV
+    /// subscription naming the object with OBJECT /
+    /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. See [`CovReporting`].
+    fn cov(&self) -> Option<&dyn CovReporting> {
         None
     }
-
-    /// Properties a whole-object (SubscribeCOV) notification reports after
-    /// its leading value and Status_Flags, in report order.
-    ///
-    /// The leading value is Present_Value, except on Access Point, whose
-    /// Table 13-1 row leads with Access_Event; the server chooses it by object
-    /// type. The default follows the object type's Table 13-1 row:
-    ///
-    /// - Access Door: Door_Alarm_State, a trigger.
-    /// - Access Point: Access_Event_Tag, Access_Event_Time (a trigger),
-    ///   Access_Event_Credential and Access_Event_Authentication_Factor.
-    /// - Credential Data Input: Update_Time, a trigger.
-    /// - Load Control: Requested_Shed_Level, Start_Time, Shed_Duration and
-    ///   Duty_Window, all triggers.
-    /// - Loop: Setpoint and Controlled_Variable_Value.
-    /// - Pulse Converter: Update_Time.
-    /// - Staging: Present_Stage, a trigger.
-    ///
-    /// A trigger's change sends a notification by itself; any other listed
-    /// value only rides along. Every other type reports nothing more. The
-    /// server leaves out a listed property the object's Property_List lacks.
-    /// Property subscriptions (SubscribeCOVProperty and
-    /// SubscribeCOVPropertyMultiple) report their own property instead.
-    fn cov_reported_properties(&self) -> &'static [CovReportedProperty] {
-        cov_reported_properties_default(self.object_identifier().object_type())
-    }
-
-    /// Set the OVERRIDDEN bit in StatusFlags.
-    ///
-    /// For software-only objects this is always FALSE per spec. Hardware
-    /// integrations can override to set TRUE when present_value is overridden
-    /// by physical means (e.g., a manual switch on an output).
-    fn set_overridden(&mut self, _overridden: bool) {}
 
     /// Borrow an Audit Log for the reads the bundled server makes under a
     /// shared database guard: AuditLogQuery and ReadRange over its retained

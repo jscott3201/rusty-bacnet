@@ -47,11 +47,8 @@ impl BACnetObject for ReadProbe {
     ) -> Result<(), Error> {
         self.inner.write_property(property, index, value, priority)
     }
-    fn supports_cov(&self) -> bool {
-        true
-    }
-    fn supports_cov_property(&self, property: PropertyIdentifier) -> bool {
-        self.inner.supports_cov_property(property)
+    fn cov(&self) -> Option<&dyn bacnet_objects::traits::CovReporting> {
+        self.inner.cov()
     }
 }
 

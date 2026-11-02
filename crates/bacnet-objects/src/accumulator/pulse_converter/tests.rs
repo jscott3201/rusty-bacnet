@@ -71,7 +71,7 @@ fn pulse_converter_write_scale_factor() {
 #[test]
 fn pulse_converter_cov_increment() {
     let mut pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
-    assert_eq!(pc.cov_increment(), Some(0.0));
+    assert_eq!(pc.cov().and_then(|cov| cov.cov_increment()), Some(0.0));
     pc.write_property(
         PropertyIdentifier::COV_INCREMENT,
         None,
@@ -84,7 +84,7 @@ fn pulse_converter_cov_increment() {
             .unwrap(),
         PropertyValue::Real(1.5)
     );
-    assert_eq!(pc.cov_increment(), Some(1.5));
+    assert_eq!(pc.cov().and_then(|cov| cov.cov_increment()), Some(1.5));
 }
 
 #[test]
@@ -689,7 +689,8 @@ fn pulse_converter_cov_reports_update_time() {
     // Table 13-1 lists Update_Time after Present_Value and Status_Flags; a
     // change of it alone sends no notification.
     assert_eq!(
-        pc.cov_reported_properties(),
+        pc.cov()
+            .map_or(&[][..], |cov| cov.cov_reported_properties()),
         [Value(PropertyIdentifier::UPDATE_TIME)]
     );
     assert!(crate::property_metadata::has_property(

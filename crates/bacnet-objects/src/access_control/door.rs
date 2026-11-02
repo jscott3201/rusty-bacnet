@@ -624,9 +624,7 @@ impl BACnetObject for AccessDoorObject {
         super::metadata_topology::for_access_door_object(self)
     }
 
-    fn supports_cov(&self) -> bool {
-        true
-    }
+    crate::traits::lend_cov_reporting!();
 
     crate::traits::lend_event_reporting!();
 
@@ -636,6 +634,12 @@ impl BACnetObject for AccessDoorObject {
 
     fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
         Some(self)
+    }
+}
+
+impl crate::traits::CovReporting for AccessDoorObject {
+    fn cov_reported_properties(&self) -> &'static [crate::traits::CovReportedProperty] {
+        crate::traits::CovReportedProperty::standard_for(ObjectType::ACCESS_DOOR)
     }
 }
 

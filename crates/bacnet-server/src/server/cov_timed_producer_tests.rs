@@ -469,8 +469,8 @@ impl bacnet_objects::traits::BACnetObject for WritablePoint {
         Ok(())
     }
 
-    fn supports_cov(&self) -> bool {
-        true
+    fn cov(&self) -> Option<&dyn bacnet_objects::traits::CovReporting> {
+        Some(self)
     }
 
     fn property_metadata(&self) -> std::borrow::Cow<'_, [PropertyMetadata]> {
@@ -484,6 +484,20 @@ impl bacnet_objects::traits::BACnetObject for WritablePoint {
                 PropertyIdentifier::PRESENT_VALUE,
                 PropertyIdentifier::OUT_OF_SERVICE,
             ],
+        )
+    }
+}
+
+// A custom Life Safety Point takes the standardized property surface.
+impl bacnet_objects::traits::CovReporting for WritablePoint {
+    fn supports_cov_property(&self, property: PropertyIdentifier) -> bool {
+        matches!(
+            property,
+            PropertyIdentifier::PRESENT_VALUE
+                | PropertyIdentifier::STATUS_FLAGS
+                | PropertyIdentifier::TRACKING_VALUE
+                | PropertyIdentifier::SILENCED
+                | PropertyIdentifier::OPERATION_EXPECTED
         )
     }
 }

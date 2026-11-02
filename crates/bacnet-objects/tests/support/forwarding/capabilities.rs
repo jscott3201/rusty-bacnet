@@ -13,6 +13,7 @@
 
 use super::declared;
 use super::fixtures::{address, clocks, day, noon, oid, schedule_write};
+use super::probe::CUSTOM;
 use super::rows::{Row, commit, event_log_record, multiple_record, record};
 use bacnet_objects::access_control::AccessEventReport;
 use bacnet_objects::channel::MemberDatatype;
@@ -55,6 +56,10 @@ const SOURCES: &[(&str, &str)] = &[
     (
         "command_runner",
         include_str!("../../../src/traits/capabilities/command_runner.rs"),
+    ),
+    (
+        "cov_reporting",
+        include_str!("../../../src/traits/capabilities/cov_reporting.rs"),
     ),
     (
         "enrollment_eval",
@@ -244,6 +249,28 @@ pub const CAPABILITY_ROWS: &[(&str, Row)] = &[
             });
             format!("{committed:?}")
         }),
+    ),
+    // Through the one shared accessor, so a read-only view runs them too.
+    (
+        "CovReporting::supports_subscribe_cov",
+        Row::Query(|o| format!("{:?}", o.cov().map(|c| c.supports_subscribe_cov()))),
+    ),
+    (
+        "CovReporting::supports_cov_property",
+        Row::Query(|o| {
+            let supported = o
+                .cov()
+                .map(|c| [CUSTOM, P::DESCRIPTION].map(|p| c.supports_cov_property(p)));
+            format!("{supported:?}")
+        }),
+    ),
+    (
+        "CovReporting::cov_increment",
+        Row::Query(|o| format!("{:?}", o.cov().map(|c| c.cov_increment()))),
+    ),
+    (
+        "CovReporting::cov_reported_properties",
+        Row::Query(|o| format!("{:?}", o.cov().map(|c| c.cov_reported_properties()))),
     ),
     (
         "EventReporting::evaluate_intrinsic_reporting",

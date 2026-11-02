@@ -179,9 +179,7 @@ impl BACnetObject for MultiStateInputObject {
         &self.name
     }
 
-    fn supports_cov(&self) -> bool {
-        true
-    }
+    crate::traits::lend_cov_reporting!();
 
     crate::traits::lend_event_reporting!();
 
@@ -389,6 +387,8 @@ impl BACnetObject for MultiStateInputObject {
         Some(self)
     }
 }
+
+impl crate::traits::CovReporting for MultiStateInputObject {}
 
 impl crate::traits::ReliabilityEval for MultiStateInputObject {
     fn set_reliability(&mut self, reliability: Reliability) -> Result<(), Error> {

@@ -683,7 +683,7 @@ fn metadata_and_property_list_are_truthful_and_non_intrinsic() {
     }
     assert!(object.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
     assert!(!object.is_writable_property(PropertyIdentifier::PRESENT_STAGE));
-    assert!(object.supports_cov());
+    assert!(object.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
 
     let mut unnamed = config();
     unnamed.stage_names = None;
@@ -711,7 +711,7 @@ fn staging_cov_increment_and_reported_present_stage() {
             .unwrap(),
         PropertyValue::Real(0.0)
     );
-    assert_eq!(object.cov_increment(), Some(0.0));
+    assert_eq!(object.cov().and_then(|cov| cov.cov_increment()), Some(0.0));
     assert!(object.is_writable_property(PropertyIdentifier::COV_INCREMENT));
     object
         .write_property(
@@ -721,7 +721,7 @@ fn staging_cov_increment_and_reported_present_stage() {
             None,
         )
         .unwrap();
-    assert_eq!(object.cov_increment(), Some(1.5));
+    assert_eq!(object.cov().and_then(|cov| cov.cov_increment()), Some(1.5));
     for (value, code) in [
         (PropertyValue::Real(-1.0), ErrorCode::VALUE_OUT_OF_RANGE),
         (PropertyValue::Real(f32::NAN), ErrorCode::VALUE_OUT_OF_RANGE),
@@ -735,10 +735,10 @@ fn staging_cov_increment_and_reported_present_stage() {
             code,
         );
     }
-    assert_eq!(object.cov_increment(), Some(1.5));
+    assert_eq!(object.cov().and_then(|cov| cov.cov_increment()), Some(1.5));
     // Table 13-1: a Present_Stage change triggers a report and is carried.
     assert_eq!(
-        object.cov_reported_properties(),
+        object.cov().unwrap().cov_reported_properties(),
         [Trigger(PropertyIdentifier::PRESENT_STAGE)]
     );
 }

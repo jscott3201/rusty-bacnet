@@ -37,7 +37,7 @@ use crate::property_metadata::{
 //   pair, as the table's footnote asks.
 // - Presence is None on every base row, and neither object is createable at
 //   runtime (the `creation` table doesn't build them). Property_List is the
-//   only array; COV support is the objects' own `supports_cov`.
+//   only array; COV support is the objects' own `cov()`.
 const COLOR_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),

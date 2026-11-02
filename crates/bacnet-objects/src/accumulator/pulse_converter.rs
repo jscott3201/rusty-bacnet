@@ -459,16 +459,20 @@ impl BACnetObject for PulseConverterObject {
         metadata::for_pulse_converter_object(self)
     }
 
-    fn supports_cov(&self) -> bool {
-        true
-    }
+    crate::traits::lend_cov_reporting!();
 
+    fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
+        Some(self)
+    }
+}
+
+impl crate::traits::CovReporting for PulseConverterObject {
     fn cov_increment(&self) -> Option<f64> {
         Some(f64::from(self.cov_increment))
     }
 
-    fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
-        Some(self)
+    fn cov_reported_properties(&self) -> &'static [crate::traits::CovReportedProperty] {
+        crate::traits::CovReportedProperty::standard_for(ObjectType::PULSE_CONVERTER)
     }
 }
 

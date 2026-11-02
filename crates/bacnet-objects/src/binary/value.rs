@@ -199,9 +199,7 @@ impl BACnetObject for BinaryValueObject {
         &self.name
     }
 
-    fn supports_cov(&self) -> bool {
-        true
-    }
+    crate::traits::lend_cov_reporting!();
 
     crate::traits::lend_event_reporting!();
 
@@ -481,6 +479,8 @@ impl BACnetObject for BinaryValueObject {
         Some(self)
     }
 }
+
+impl crate::traits::CovReporting for BinaryValueObject {}
 
 crate::traits::impl_audit_policy!(BinaryValueObject);
 

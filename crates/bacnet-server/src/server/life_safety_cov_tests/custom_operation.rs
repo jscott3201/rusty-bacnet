@@ -107,9 +107,16 @@ impl BACnetObject for CustomPoint {
             ErrorCode::WRITE_ACCESS_DENIED,
         ))
     }
-    fn supports_cov(&self) -> bool {
-        true
+    fn cov(&self) -> Option<&dyn bacnet_objects::traits::CovReporting> {
+        Some(self)
     }
+
+    fn life_safety(&mut self) -> Option<&mut dyn bacnet_objects::traits::LifeSafety> {
+        Some(self)
+    }
+}
+
+impl bacnet_objects::traits::CovReporting for CustomPoint {
     fn supports_cov_property(&self, p: PropertyIdentifier) -> bool {
         [
             PropertyIdentifier::PRESENT_VALUE,
@@ -118,10 +125,6 @@ impl BACnetObject for CustomPoint {
             PropertyIdentifier::STATUS_FLAGS,
         ]
         .contains(&p)
-    }
-
-    fn life_safety(&mut self) -> Option<&mut dyn bacnet_objects::traits::LifeSafety> {
-        Some(self)
     }
 }
 

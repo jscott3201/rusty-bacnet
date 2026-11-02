@@ -289,13 +289,7 @@ impl BACnetObject for AveragingObject {
         metadata::for_object(self)
     }
 
-    fn supports_subscribe_cov_property(&self) -> bool {
-        // Table 13-1 has no Averaging row, so SubscribeCOV stays refused
-        // (supports_cov is false). A property subscription uses the Table
-        // 13-1a criterion for its datatype; the object has no Status_Flags to
-        // add to the report.
-        true
-    }
+    crate::traits::lend_cov_reporting!();
 
     fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
         Some(self)
@@ -303,6 +297,16 @@ impl BACnetObject for AveragingObject {
 
     fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
         Some(self)
+    }
+}
+
+impl crate::traits::CovReporting for AveragingObject {
+    fn supports_subscribe_cov(&self) -> bool {
+        // Table 13-1 has no Averaging row, so SubscribeCOV stays refused
+        // (supports_subscribe_cov is false). A property subscription uses the Table
+        // 13-1a criterion for its datatype; the object has no Status_Flags to
+        // add to the report.
+        false
     }
 }
 

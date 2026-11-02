@@ -28,9 +28,9 @@ use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::staging::StagingWritePlan;
 use bacnet_objects::traits::{
     AccessEvents, AuditLog, AuditPolicy, BACnetObject, CalendarState, Clocks, CommandRunner,
-    CovReportedProperty, EnrollmentEval, EventReporting, LifeSafety, LifeSafetyOperationEffect,
-    LifeSafetyOperationOutcome, LocalInput, LocalInputValue, LogBuffer, ReliabilityEval,
-    ScheduleRunner, StagingSource, Timed,
+    CovReportedProperty, CovReporting, EnrollmentEval, EventReporting, LifeSafety,
+    LifeSafetyOperationEffect, LifeSafetyOperationOutcome, LocalInput, LocalInputValue, LogBuffer,
+    ReliabilityEval, ScheduleRunner, StagingSource, Timed,
 };
 use bacnet_objects::trend::TrendLogObject;
 use bacnet_types::calendar::SpecificDate;
@@ -222,15 +222,6 @@ impl BACnetObject for Probe {
         self.called("is_deleteable", ());
         false
     }
-    fn supports_cov(&self) -> bool {
-        self.called("supports_cov", ());
-        true
-    }
-    fn supports_subscribe_cov_property(&self) -> bool {
-        self.called("supports_subscribe_cov_property", ());
-        // Unlike the default, which follows `supports_cov`.
-        false
-    }
     fn staging_source(&mut self) -> Option<&mut dyn StagingSource> {
         self.called("staging_source", ());
         Some(self)
@@ -283,22 +274,9 @@ impl BACnetObject for Probe {
         self.called("calendar_state", ());
         Some(self)
     }
-    fn supports_cov_property(&self, property: P) -> bool {
-        self.called("supports_cov_property", (property,));
-        // Unlike the default, which follows `supports_subscribe_cov_property`
-        // for every property.
-        property == CUSTOM
-    }
-    fn cov_increment(&self) -> Option<f64> {
-        self.called("cov_increment", ());
-        Some(1.25)
-    }
-    fn cov_reported_properties(&self) -> &'static [CovReportedProperty] {
-        self.called("cov_reported_properties", ());
-        &REPORTED
-    }
-    fn set_overridden(&mut self, overridden: bool) {
-        self.called("set_overridden", (overridden,));
+    fn cov(&self) -> Option<&dyn CovReporting> {
+        self.called("cov", ());
+        Some(self)
     }
     fn audit_log(&self) -> Option<&dyn AuditLog> {
         self.called("audit_log", ());
@@ -482,6 +460,28 @@ impl LifeSafety for Probe {
             (operation,),
         );
         Ok(())
+    }
+}
+
+/// The probe's COV reporting, logged under `CovReporting::`: every method
+/// answers unlike its default.
+impl CovReporting for Probe {
+    fn supports_subscribe_cov(&self) -> bool {
+        self.called("CovReporting::supports_subscribe_cov", ());
+        false
+    }
+    fn supports_cov_property(&self, property: P) -> bool {
+        self.called("CovReporting::supports_cov_property", (property,));
+        // Unlike the default, which takes every property.
+        property == CUSTOM
+    }
+    fn cov_increment(&self) -> Option<f64> {
+        self.called("CovReporting::cov_increment", ());
+        Some(1.25)
+    }
+    fn cov_reported_properties(&self) -> &'static [CovReportedProperty] {
+        self.called("CovReporting::cov_reported_properties", ());
+        &REPORTED
     }
 }
 

@@ -366,13 +366,7 @@ impl BACnetObject for AnalogOutputObject {
         metadata::for_object(self)
     }
 
-    fn supports_cov(&self) -> bool {
-        true
-    }
-
-    fn cov_increment(&self) -> Option<f64> {
-        Some(f64::from(self.cov_increment))
-    }
+    crate::traits::lend_cov_reporting!();
 
     crate::traits::lend_event_reporting!();
 
@@ -388,6 +382,12 @@ impl BACnetObject for AnalogOutputObject {
         value: PropertyValue,
     ) -> Result<(), Error> {
         super::initialize_units(&mut self.units, property, value)
+    }
+}
+
+impl crate::traits::CovReporting for AnalogOutputObject {
+    fn cov_increment(&self) -> Option<f64> {
+        Some(f64::from(self.cov_increment))
     }
 }
 

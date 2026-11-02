@@ -245,10 +245,8 @@ impl BACnetObject for CredentialDataInputObject {
         super::metadata_identity::for_credential_data_input_object(self)
     }
 
-    /// Table 13-1 lists Credential Data Input, so it takes SubscribeCOV.
-    fn supports_cov(&self) -> bool {
-        true
-    }
+    // Table 13-1 lists Credential Data Input, so it takes SubscribeCOV.
+    crate::traits::lend_cov_reporting!();
 
     crate::traits::lend_reliability_eval!();
 
@@ -258,6 +256,12 @@ impl BACnetObject for CredentialDataInputObject {
 
     fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
         Some(self)
+    }
+}
+
+impl crate::traits::CovReporting for CredentialDataInputObject {
+    fn cov_reported_properties(&self) -> &'static [crate::traits::CovReportedProperty] {
+        crate::traits::CovReportedProperty::standard_for(ObjectType::CREDENTIAL_DATA_INPUT)
     }
 }
 

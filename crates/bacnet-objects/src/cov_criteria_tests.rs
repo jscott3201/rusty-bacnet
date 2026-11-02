@@ -62,8 +62,11 @@ fn table_13_1_objects() -> Vec<Box<dyn BACnetObject>> {
 fn every_table_13_1_object_type_takes_subscribe_cov() {
     for object in table_13_1_objects() {
         let object_type = object.object_identifier().object_type();
-        assert!(object.supports_cov(), "{object_type:?}");
-        assert!(object.supports_subscribe_cov_property(), "{object_type:?}");
+        assert!(
+            object.cov().is_some_and(|cov| cov.supports_subscribe_cov()),
+            "{object_type:?}"
+        );
+        assert!(object.cov().is_some(), "{object_type:?}");
     }
 }
 
@@ -107,7 +110,9 @@ fn table_13_1_extra_values_follow_each_row() {
             .find(|(row, _)| *row == object_type)
             .map_or(&[][..], |(_, reported)| *reported);
         assert_eq!(
-            object.cov_reported_properties(),
+            object
+                .cov()
+                .map_or(&[][..], |cov| cov.cov_reported_properties()),
             expected,
             "{object_type:?}"
         );

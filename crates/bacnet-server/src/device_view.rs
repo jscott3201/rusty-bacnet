@@ -12,7 +12,7 @@ use bacnet_objects::{
     file::{FileConfiguration, FileStorage},
     property_metadata::{PropertyConformance, PropertyMetadata, PropertyWriteCapability},
     traits::{
-        AuditLog, AuditPolicy, BACnetObject, CalendarState, CommandRunner, CovReportedProperty,
+        AuditLog, AuditPolicy, BACnetObject, CalendarState, CommandRunner, CovReporting,
         EnrollmentEval, EventReporting, LogBuffer,
     },
 };
@@ -318,12 +318,6 @@ impl BACnetObject for DeviceReadView<'_> {
     fn is_deleteable(&self) -> bool {
         self.object.is_deleteable()
     }
-    fn supports_cov(&self) -> bool {
-        self.object.supports_cov()
-    }
-    fn supports_subscribe_cov_property(&self) -> bool {
-        self.object.supports_subscribe_cov_property()
-    }
     fn command_runner(&self) -> Option<&dyn CommandRunner> {
         self.object.command_runner()
     }
@@ -333,14 +327,8 @@ impl BACnetObject for DeviceReadView<'_> {
     fn enrollment_eval(&self) -> Option<&dyn EnrollmentEval> {
         self.object.enrollment_eval()
     }
-    fn supports_cov_property(&self, property: P) -> bool {
-        self.object.supports_cov_property(property)
-    }
-    fn cov_increment(&self) -> Option<f64> {
-        self.object.cov_increment()
-    }
-    fn cov_reported_properties(&self) -> &'static [CovReportedProperty] {
-        self.object.cov_reported_properties()
+    fn cov(&self) -> Option<&dyn CovReporting> {
+        self.object.cov()
     }
     fn calendar_state(&self) -> Option<&dyn CalendarState> {
         self.object.calendar_state()

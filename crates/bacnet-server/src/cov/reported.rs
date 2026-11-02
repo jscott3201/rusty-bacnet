@@ -33,7 +33,9 @@ pub(crate) struct PreparedReported {
 }
 impl PreparedReported {
     pub fn read(object: &dyn BACnetObject) -> Result<Self, Error> {
-        let declared = object.cov_reported_properties();
+        let declared = object
+            .cov()
+            .map_or(&[][..], |cov| cov.cov_reported_properties());
         if declared.is_empty() {
             return Ok(Self {
                 values: Vec::new(),

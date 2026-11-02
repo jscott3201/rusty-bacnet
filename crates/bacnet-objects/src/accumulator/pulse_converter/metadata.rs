@@ -39,7 +39,7 @@ use crate::property_metadata::{
 // effects of those, so RequiredRead/ReadOnly.
 // Input_Reference and COV_Increment are table O with arms (Optional/Always).
 // COV_Increment and COV_Period are footnote 2 rows, present because the
-// object reports COV (supports_cov and cov_increment). COV_Period is served
+// object reports COV (it lends `cov()`, with an increment). COV_Period is served
 // as a constant 0 with no write arm (Optional/ReadOnly): zero means no
 // periodic notifications (Clause 13.1), which the server does not send.
 // Reliability is table O, and since it can report the Input_Reference
@@ -50,10 +50,9 @@ use crate::property_metadata::{
 // runtime (the `creation` table has no constructor for it) and remains deleteable (delete denies
 // only Device and NetworkPort); neither needs an override. Array gating keeps
 // the default: Property_List admits an index (BACnetARRAY per Table 12-27)
-// while every other served row rejects one. COV keeps its overrides:
-// supports_cov=true plus cov_increment()=Some, and the COV gating path
-// (read_property plus supports_cov_property to supports_cov) never consults
-// metadata.
+// while every other served row rejects one. COV keeps its `cov()` lend, with
+// an increment, and the COV gating path (read_property plus
+// `CovReporting::supports_cov_property`) never consults metadata.
 const PULSE_CONVERTER_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),

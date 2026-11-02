@@ -481,11 +481,9 @@ impl BACnetObject for AccessPointObject {
         super::metadata_topology::for_access_point_object(self)
     }
 
-    /// Table 13-1 lists Access Point, so it takes SubscribeCOV; its report
-    /// leads with Access_Event, as the point has no Present_Value.
-    fn supports_cov(&self) -> bool {
-        true
-    }
+    // Table 13-1 lists Access Point, so it takes SubscribeCOV; its report
+    // leads with Access_Event, as the point has no Present_Value.
+    crate::traits::lend_cov_reporting!();
 
     fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
         Some(self)
@@ -497,6 +495,12 @@ impl BACnetObject for AccessPointObject {
 
     fn access_events(&mut self) -> Option<&mut dyn crate::traits::AccessEvents> {
         Some(self)
+    }
+}
+
+impl crate::traits::CovReporting for AccessPointObject {
+    fn cov_reported_properties(&self) -> &'static [crate::traits::CovReportedProperty] {
+        crate::traits::CovReportedProperty::standard_for(ObjectType::ACCESS_POINT)
     }
 }
 

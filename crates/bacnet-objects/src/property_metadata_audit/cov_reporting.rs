@@ -4,7 +4,8 @@
 //! object that supports COV reporting (the footnotes are cited on
 //! `COV_INCREMENT_ROW`). Presence conditions are tags on rows an object
 //! builds for itself, so this audit is where the tag meets the object's
-//! own `supports_cov()`: on every representative, a COV_Increment row is
+//! own `CovReporting` (it lends one that takes SubscribeCOV): on every
+//! representative, a COV_Increment row is
 //! tagged exactly when the object reports COV, and every tagged row is
 //! required.
 
@@ -38,14 +39,21 @@ fn every_type_that_reports_cov_lists_its_cov_increment_as_required() {
             let p = row.property_identifier;
             let tagged = row.presence_condition == Some(PropertyPresenceCondition::CovReporting);
             if tagged {
-                assert!(object.supports_cov(), "{kind:?} {p:?} tagged without COV");
+                assert!(
+                    object.cov().is_some_and(|cov| cov.supports_subscribe_cov()),
+                    "{kind:?} {p:?} tagged without COV"
+                );
                 assert!(row.is_required(), "{kind:?} {p:?}");
                 assert!(required.contains(&p), "{kind:?} {p:?}");
             }
             if p == PropertyIdentifier::COV_INCREMENT {
                 with_row.push(kind);
                 assert_eq!(row.conformance, PropertyConformance::Optional, "{kind:?}");
-                assert_eq!(tagged, object.supports_cov(), "{kind:?}");
+                assert_eq!(
+                    tagged,
+                    object.cov().is_some_and(|cov| cov.supports_subscribe_cov()),
+                    "{kind:?}"
+                );
             } else if tagged {
                 // Only Pulse Converter's COV_Period shares the footnote.
                 assert_eq!(
@@ -65,7 +73,10 @@ fn every_type_that_reports_cov_lists_its_cov_increment_as_required() {
             .iter()
             .find(|object| object.object_identifier().object_type() == kind)
             .unwrap();
-        assert!(object.supports_cov(), "{kind:?}");
+        assert!(
+            object.cov().is_some_and(|cov| cov.supports_subscribe_cov()),
+            "{kind:?}"
+        );
         assert!(
             crate::property_metadata::required_properties(&object.property_metadata())
                 .any(|required| required == PropertyIdentifier::COV_INCREMENT),

@@ -311,10 +311,10 @@ impl BACnetObject for AccumulatorObject {
         metadata::for_accumulator_object(self)
     }
 
-    fn supports_cov(&self) -> bool {
-        true
-    }
+    crate::traits::lend_cov_reporting!();
 }
+
+impl crate::traits::CovReporting for AccumulatorObject {}
 
 // ---------------------------------------------------------------------------
 // Tests

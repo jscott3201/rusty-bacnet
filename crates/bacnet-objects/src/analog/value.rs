@@ -493,13 +493,7 @@ impl BACnetObject for AnalogValueObject {
         metadata::for_object(self)
     }
 
-    fn supports_cov(&self) -> bool {
-        true
-    }
-
-    fn cov_increment(&self) -> Option<f64> {
-        Some(f64::from(self.cov_increment))
-    }
+    crate::traits::lend_cov_reporting!();
 
     crate::traits::lend_event_reporting!();
 
@@ -519,6 +513,12 @@ impl BACnetObject for AnalogValueObject {
 
     fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
         Some(self)
+    }
+}
+
+impl crate::traits::CovReporting for AnalogValueObject {
+    fn cov_increment(&self) -> Option<f64> {
+        Some(f64::from(self.cov_increment))
     }
 }
 
