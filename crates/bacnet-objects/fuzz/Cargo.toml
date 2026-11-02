@@ -15,8 +15,9 @@ members = []
 
 # The restore paths of the object crate's file persistence backends: every
 # saved format, loaded through its backend and restored into its object.
+# `test-support` adds the backends' in-memory mode the main targets use.
 [dependencies]
-bacnet-objects = { path = ".." }
+bacnet-objects = { path = "..", features = ["test-support"] }
 bacnet-types = { path = "../../bacnet-types" }
 libfuzzer-sys = "0.4"
 
@@ -37,6 +38,27 @@ bench = false
 [[bin]]
 name = "object_file_restore"
 path = "fuzz_targets/object_file_restore.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "log_restore_file"
+path = "fuzz_targets/log_restore_file.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "audit_restore_file"
+path = "fuzz_targets/audit_restore_file.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "object_file_restore_file"
+path = "fuzz_targets/object_file_restore_file.rs"
 test = false
 doc = false
 bench = false
