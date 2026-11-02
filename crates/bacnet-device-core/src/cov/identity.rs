@@ -1,7 +1,7 @@
 //! Who a COV subscription belongs to and what it monitors: the delivery
 //! route, the original client address, and the coordinates every table
 //! operation keys on.
-use alloc::format;
+use alloc::string::String;
 use core::cmp::Ordering;
 
 use bacnet_encoding::npdu::NpduAddress;
@@ -71,14 +71,33 @@ impl CovRecipient {
             Self::Routed(source) => &source.mac_address,
         };
         if mac.len() > BACnetAddress::MAX_MAC_LEN {
-            return Err(Error::Encoding(format!(
-                "COV recipient MAC of {} octets exceeds the {}-octet BACnetAddress limit",
-                mac.len(),
-                BACnetAddress::MAX_MAC_LEN
-            )));
+            return Err(Error::Encoding(mac_too_long(mac.len())));
         }
         Ok(())
     }
+}
+
+/// The refusal of a recipient MAC of `octets` octets, written without
+/// `core::fmt`, so a firmware image formats nothing on its account (#2187).
+fn mac_too_long(octets: usize) -> String {
+    const _: () = assert!(BACnetAddress::MAX_MAC_LEN == 18);
+    // usize::MAX has at most twenty digits.
+    let mut digits = [0u8; 20];
+    let mut start = digits.len();
+    let mut rest = octets;
+    loop {
+        start -= 1;
+        // `rest % 10` is below ten, so the cast keeps it whole.
+        digits[start] = b'0' + (rest % 10) as u8;
+        rest /= 10;
+        if rest == 0 {
+            break;
+        }
+    }
+    let mut message = String::from("COV recipient MAC of ");
+    message.extend(digits[start..].iter().copied().map(char::from));
+    message.push_str(" octets exceeds the 18-octet BACnetAddress limit");
+    message
 }
 
 /// Multiple notification context. Confirmed and unconfirmed forms are independent.

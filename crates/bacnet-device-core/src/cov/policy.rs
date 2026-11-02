@@ -1,6 +1,5 @@
 //! COV policies, canonical-recipient accounting, and telemetry counters.
 
-use alloc::format;
 use alloc::vec::Vec;
 
 use bacnet_types::MacAddr;
@@ -102,19 +101,20 @@ impl CovPolicy {
             ),
         ] {
             if value == 0 {
-                return Err(Error::Encoding(format!(
-                    "COV policy {name} must be positive"
-                )));
+                // Spelled without core::fmt, as the crate is (#2187).
+                return Err(Error::Encoding(
+                    ["COV policy ", name, " must be positive"].concat(),
+                ));
             }
         }
+        const _: () = assert!(BACnetAddress::MAX_MAC_LEN == 18);
         let mac_length = |field: &str, mac: &MacAddr| {
             if (1..=BACnetAddress::MAX_MAC_LEN).contains(&mac.len()) {
                 Ok(())
             } else {
-                Err(Error::Encoding(format!(
-                    "COV policy {field} entries need a MAC of 1..={} octets",
-                    BACnetAddress::MAX_MAC_LEN
-                )))
+                Err(Error::Encoding(
+                    ["COV policy ", field, " entries need a MAC of 1..=18 octets"].concat(),
+                ))
             }
         };
         for mac in &self.reserved_peers {
