@@ -4076,7 +4076,8 @@ The capabilities, with what each accessor's `None` means:
   `LocalInputValue::present_value` or `present_value_from`, the second naming
   the local Device as its origin), a Life Safety Tracking_Value, a Loop's
   Controlled_Variable_Value, an Averaging sample, an access-control record or
-  a Program's Program_State. The enum is `#[non_exhaustive]`: an object matches the inputs it models and
+  an Accumulator's input pulses (`LocalInputValue::Pulses`) or a Program's
+  Program_State. The enum is `#[non_exhaustive]`: an object matches the inputs it models and
   answers the rest with `not_supported()`, OBJECT /
   OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, the same error the server returns for
   an object that lends none. `BACnetServer::set_present_value_local` and its
@@ -7137,22 +7138,36 @@ modulo divide `[1]` (#1487). Both are read-only.
 
 An Accumulator's Pulse_Rate is an Unsigned (Table 12-79): the input pulses
 counted over the last whole Limit_Monitoring_Interval (Clause 12.61.20). The
-object counts it in a fixed window when the application feeds it: set the
-interval with `set_limit_monitoring_interval` (or a client's write of
-Limit_Monitoring_Interval), count pulses with `record_pulses`, and let time
-pass with `advance_rate_window(seconds)`. Each time a whole interval has
-passed, Pulse_Rate becomes that window's count and a new window starts, in
-integer arithmetic only. An application that measures the rate itself calls
-`set_pulse_rate` instead. These routes need the concrete
-`AccumulatorObject`, so they work only before the object is registered: no
-server path reaches them yet, and in a running server Pulse_Rate changes only
-through a write while Out_Of_Service is TRUE, from a client or `write_local`.
+application counts its meter's pulses and feeds them in with
+`BACnetServer::add_pulses_local(&oid, pulses)`, or, before the object is
+registered, `apply_local_input(LocalInputValue::Pulses(pulses))` on its
+`LocalInput` (#2259):
+
+- **Present_Value** steps by one count per pulse, or by Prescale's ratio when
+  the object has one, keeping the remainder between feeds (Clause 12.61.13),
+  and rolls over modulo Max_Pres_Value + 1 (Clause 12.61.4). A Prescale with a
+  modulo-divide of zero has no ratio and leaves Present_Value alone.
+- **Pulse_Rate** counts in a fixed window, in integer arithmetic only. Once
+  Limit_Monitoring_Interval is set (`set_limit_monitoring_interval`, or a
+  client's write), the object's `Timed` capability reports the end of the
+  window as its deadline and the server's monotonic task closes it there:
+  Pulse_Rate becomes the window's count, Pulse_Rate property subscribers are
+  notified, and the next window opens at that boundary. A pass that comes
+  late closes one window with every pulse counted and carries the part of an
+  interval left over, so the next deadline is always later than the pass. A
+  change of interval starts a new, empty window; rewriting the interval it
+  already has changes nothing, so a client that repeats the write doesn't
+  hold Pulse_Rate back. With an interval of zero,
+  the default, no window closes. An application that measures the rate
+  itself calls `set_pulse_rate` before registering the object.
+- **Out_Of_Service.** While it is TRUE (Clause 12.61.10), Present_Value
+  holds, dropping fed pulses rather than catching up on the return to
+  service, and Pulse_Rate keeps a client's written value, though the pulses
+  still fill the window, so the first window to close in service counts them.
+
 Pulse_Rate is writable only while Out_Of_Service is TRUE (Clause 12.61.20);
-in service a write is WRITE_ACCESS_DENIED. While out of service it keeps the
-written value and ignores the application routes. A write must be an
-Unsigned; the REAL the object used to serve is INVALID_DATA_TYPE (#2251). `record_pulses`
-counts toward the rate only: Present_Value stays the application's
-(`set_present_value`).
+in service a write is WRITE_ACCESS_DENIED. A write must be an Unsigned; the
+REAL the object used to serve is INVALID_DATA_TYPE (#2251).
 
 A Pulse Converter's Input_Reference, set with `set_input_reference`, reads and
 takes writes like the Loop's variable references: the context-tagged
