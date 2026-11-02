@@ -90,6 +90,9 @@ pub struct StagingObject {
     status_flags: StatusFlags,
     out_of_service: bool,
     reliability: Reliability,
+    /// The in-service Reliability, set aside while a client simulates one
+    /// out of service and put back when Out_Of_Service returns to FALSE.
+    reliability_before_out_of_service: Option<Reliability>,
     generation: u64,
     pending_plan: Option<StagingWritePlan>,
 }
@@ -128,6 +131,7 @@ impl StagingObject {
             status_flags: StatusFlags::empty(),
             out_of_service: false,
             reliability: Reliability::NO_FAULT_DETECTED,
+            reliability_before_out_of_service: None,
             generation: 0,
             pending_plan: None,
         })
@@ -425,13 +429,7 @@ impl BACnetObject for StagingObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
-        if property != PropertyIdentifier::STAGES
-            && property != PropertyIdentifier::STAGE_NAMES
-            && property != PropertyIdentifier::TARGET_REFERENCES
-            && array_index.is_some()
-        {
-            return Err(common::property_is_not_an_array_error());
-        }
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         if let Some(result) = common::write_object_name(&mut self.name, property, &value) {
             return result;
         }
@@ -442,6 +440,29 @@ impl BACnetObject for StagingObject {
         {
             return result;
         }
+        // A Reliability simulated out of service (Clause 12.62.11) ends with
+        // it: back in service, the object reports the one it held before, as
+        // the other objects that simulate Reliability do, until the reference
+        // writes queued on the way back in judge it afresh (Clause 12.62.4.1,
+        // #2258).
+        let was_out_of_service = self.out_of_service;
+        if let Some(result) = common::write_out_of_service_with_reliability_restore(
+            &mut self.out_of_service,
+            &mut self.reliability,
+            &mut self.reliability_before_out_of_service,
+            property,
+            &value,
+        ) {
+            match (was_out_of_service, self.out_of_service) {
+                (false, true) => {
+                    self.generation = self.generation.wrapping_add(1);
+                    self.pending_plan = None;
+                }
+                (true, false) => self.evaluate(true),
+                _ => {}
+            }
+            return result;
+        }
         match property {
             PropertyIdentifier::PRESENT_VALUE => {
                 let PropertyValue::Real(value) = value else {
@@ -450,22 +471,6 @@ impl BACnetObject for StagingObject {
                 common::reject_non_finite(value)?;
                 self.present_value = value.clamp(self.min_present_value, self.max_present_value());
                 self.evaluate(false);
-                Ok(())
-            }
-            PropertyIdentifier::OUT_OF_SERVICE => {
-                let PropertyValue::Boolean(value) = value else {
-                    return Err(common::invalid_data_type_error());
-                };
-                if value == self.out_of_service {
-                    return Ok(());
-                }
-                self.out_of_service = value;
-                if value {
-                    self.generation = self.generation.wrapping_add(1);
-                    self.pending_plan = None;
-                } else {
-                    self.evaluate(true);
-                }
                 Ok(())
             }
             PropertyIdentifier::RELIABILITY => {
@@ -516,7 +521,6 @@ impl BACnetObject for StagingObject {
             _ => Err(crate::common::unhandled_write_error(
                 self.property_metadata().as_ref(),
                 property,
-                array_index,
             )),
         }
     }
@@ -531,17 +535,17 @@ impl BACnetObject for StagingObject {
     }
 
     // Table 13-1 Staging row: Present_Value by COV_Increment, Status_Flags and
-    // Present_Stage trigger, and Present_Stage is reported (the trait default).
-    fn supports_cov(&self) -> bool {
-        true
-    }
-
-    fn cov_increment(&self) -> Option<f64> {
-        Some(f64::from(self.cov_increment))
-    }
+    // Present_Stage trigger, and Present_Stage is reported (the type's row, the default).
+    crate::traits::lend_cov_reporting!();
 
     fn staging_source(&mut self) -> Option<&mut dyn StagingSource> {
         Some(self)
+    }
+}
+
+impl crate::traits::CovReporting for StagingObject {
+    fn cov_increment(&self) -> Option<f64> {
+        Some(f64::from(self.cov_increment))
     }
 }
 

@@ -17,9 +17,13 @@ fn averaging_sample_route_and_property_cov_admission_survive_wrapping() {
     );
     source_reporter::install(&mut object, &owner).unwrap();
 
-    assert!(!object.supports_cov());
-    assert!(object.supports_subscribe_cov_property());
-    assert!(object.supports_cov_property(PropertyIdentifier::AVERAGE_VALUE));
+    assert!(!object.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
+    assert!(object.cov().is_some());
+    assert!(
+        object
+            .cov()
+            .is_some_and(|cov| cov.supports_cov_property(PropertyIdentifier::AVERAGE_VALUE))
+    );
     for sample in [PropertyValue::Real(3.0), PropertyValue::Unsigned(5)] {
         object
             .local_input()

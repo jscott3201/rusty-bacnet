@@ -120,7 +120,7 @@ mod tests {
             metadata.len()
         );
         assert!(object.is_deleteable());
-        assert!(!object.supports_cov());
+        assert!(!object.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
         for row in metadata.iter() {
             assert_eq!(row.presence_condition, None);
             let expected = if row.property_identifier == P::PRESENT_VALUE {

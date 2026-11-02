@@ -95,6 +95,9 @@ mod local_input_tests;
 mod event_reporting_tests;
 
 #[cfg(test)]
+mod cov_reporting_tests;
+
+#[cfg(test)]
 mod evaluation_capability_tests;
 
 #[cfg(test)]
@@ -119,6 +122,8 @@ mod reliability_inhibit_tests;
 
 #[cfg(test)]
 mod typed_enum_storage_tests;
+#[cfg(test)]
+mod write_consistency_tests;
 
 #[cfg(test)]
 mod typed_units_tests;

@@ -234,6 +234,7 @@ impl BACnetObject for AnalogInputObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         // AI present-value is writable only when out-of-service
         if property == PropertyIdentifier::PRESENT_VALUE {
             if !self.out_of_service {
@@ -310,7 +311,6 @@ impl BACnetObject for AnalogInputObject {
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
-            array_index,
         ))
     }
 
@@ -322,13 +322,7 @@ impl BACnetObject for AnalogInputObject {
         metadata::for_object(self)
     }
 
-    fn supports_cov(&self) -> bool {
-        true
-    }
-
-    fn cov_increment(&self) -> Option<f64> {
-        Some(f64::from(self.cov_increment))
-    }
+    crate::traits::lend_cov_reporting!();
 
     crate::traits::lend_event_reporting!();
 
@@ -348,6 +342,12 @@ impl BACnetObject for AnalogInputObject {
 
     fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
         Some(self)
+    }
+}
+
+impl crate::traits::CovReporting for AnalogInputObject {
+    fn cov_increment(&self) -> Option<f64> {
+        Some(f64::from(self.cov_increment))
     }
 }
 

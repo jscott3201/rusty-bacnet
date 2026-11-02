@@ -230,7 +230,7 @@ fn lighting_output_cov_increment_starts_at_zero_and_takes_writes() {
         read(&lo, PropertyIdentifier::COV_INCREMENT),
         PropertyValue::Real(0.0)
     );
-    assert_eq!(lo.cov_increment(), Some(0.0));
+    assert_eq!(lo.cov().and_then(|cov| cov.cov_increment()), Some(0.0));
     lo.write_property(
         PropertyIdentifier::COV_INCREMENT,
         None,
@@ -242,7 +242,7 @@ fn lighting_output_cov_increment_starts_at_zero_and_takes_writes() {
         read(&lo, PropertyIdentifier::COV_INCREMENT),
         PropertyValue::Real(2.5)
     );
-    assert_eq!(lo.cov_increment(), Some(2.5));
+    assert_eq!(lo.cov().and_then(|cov| cov.cov_increment()), Some(2.5));
     assert!(crate::property_metadata::has_property(
         &lo.property_metadata(),
         PropertyIdentifier::COV_INCREMENT
@@ -279,11 +279,11 @@ fn lighting_output_cov_increment_refuses_bad_values_and_keeps_the_old_one() {
         ),
         ErrorCode::INVALID_DATA_TYPE,
     );
-    assert_eq!(lo.cov_increment(), Some(1.0));
+    assert_eq!(lo.cov().and_then(|cov| cov.cov_increment()), Some(1.0));
 }
 
 #[test]
 fn binary_lighting_output_has_no_cov_increment() {
     let blo = BinaryLightingOutputObject::new(1, "BLO-1").unwrap();
-    assert_eq!(blo.cov_increment(), None);
+    assert_eq!(blo.cov().and_then(|cov| cov.cov_increment()), None);
 }

@@ -281,6 +281,7 @@ impl BACnetObject for CommandObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
@@ -294,7 +295,6 @@ impl BACnetObject for CommandObject {
             _ => Err(crate::common::unhandled_write_error(
                 self.property_metadata().as_ref(),
                 property,
-                array_index,
             )),
         }
     }
@@ -303,12 +303,7 @@ impl BACnetObject for CommandObject {
         metadata::for_object(self)
     }
 
-    fn supports_subscribe_cov_property(&self) -> bool {
-        // Table 13-1 has no Command row, so SubscribeCOV stays refused. A
-        // property subscription follows Table 13-1a, which lets a client watch
-        // In_Process and All_Writes_Successful through a run.
-        true
-    }
+    crate::traits::lend_cov_reporting!();
 
     fn command_runner(&self) -> Option<&dyn CommandRunner> {
         Some(self)
@@ -316,6 +311,15 @@ impl BACnetObject for CommandObject {
 
     fn command_runner_mut(&mut self) -> Option<&mut dyn CommandRunner> {
         Some(self)
+    }
+}
+
+impl crate::traits::CovReporting for CommandObject {
+    fn supports_subscribe_cov(&self) -> bool {
+        // Table 13-1 has no Command row, so SubscribeCOV stays refused. A
+        // property subscription follows Table 13-1a, which lets a client watch
+        // In_Process and All_Writes_Successful through a run.
+        false
     }
 }
 

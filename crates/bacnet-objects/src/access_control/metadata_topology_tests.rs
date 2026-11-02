@@ -202,7 +202,7 @@ fn property_metadata_access_door_exact_sets_readable_rows_and_indexed_list() {
     let required = required_set(&all, &base_required, &intrinsic);
     assert_exact_sets(&object, &all, &required, &intrinsic);
     assert_indexed_property_list(&object, &all);
-    assert!(object.supports_cov());
+    assert!(object.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
     assert_eq!(
         object.read_property(P::PRESENT_VALUE, None).unwrap(),
         PropertyValue::Enumerated(0)
@@ -312,7 +312,7 @@ fn property_metadata_access_point_exact_sets_readable_rows_and_indexed_list() {
     assert_exact_sets(&object, &all, &required, &[]);
     assert_indexed_property_list(&object, &all);
     // Table 13-1 has an Access Point row (#1061).
-    assert!(object.supports_cov());
+    assert!(object.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
     // Table 12-36 has no Present_Value row (#1064).
     assert_error(
         object.read_property(P::PRESENT_VALUE, None).unwrap_err(),
@@ -415,7 +415,7 @@ fn property_metadata_access_zone_exact_sets_readable_rows_and_indexed_list() {
     let required = required_set(&all, &base_required, &intrinsic);
     assert_exact_sets(&object, &all, &required, &intrinsic);
     assert_indexed_property_list(&object, &all);
-    assert!(!object.supports_cov());
+    assert!(!object.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
     // Table 12-37 has neither of these rows (#1064).
     for property in [P::PRESENT_VALUE, P::ACCESS_DOORS] {
         assert_error(

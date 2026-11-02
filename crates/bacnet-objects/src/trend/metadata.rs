@@ -311,7 +311,7 @@ mod tests {
                         required
                     );
                     assert!(object.is_deleteable());
-                    assert!(!object.supports_cov());
+                    assert!(!object.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
                     assert!(!object.is_array_property(P::LOG_BUFFER));
                     let metadata = object.property_metadata();
                     assert!(matches!(metadata, Cow::Borrowed(_)));

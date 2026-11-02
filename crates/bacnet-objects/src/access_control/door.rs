@@ -540,6 +540,7 @@ impl BACnetObject for AccessDoorObject {
         value: PropertyValue,
         priority: Option<u8>,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         // The door's entry edge is always seen (it starts in service and only
         // this write moves Out_Of_Service), so there is no fallback state.
         if let Some(result) = common::write_out_of_service_with_restore(
@@ -615,7 +616,6 @@ impl BACnetObject for AccessDoorObject {
             _ => Err(crate::common::unhandled_write_error(
                 self.property_metadata().as_ref(),
                 property,
-                array_index,
             )),
         }
     }
@@ -624,9 +624,7 @@ impl BACnetObject for AccessDoorObject {
         super::metadata_topology::for_access_door_object(self)
     }
 
-    fn supports_cov(&self) -> bool {
-        true
-    }
+    crate::traits::lend_cov_reporting!();
 
     crate::traits::lend_event_reporting!();
 
@@ -638,6 +636,8 @@ impl BACnetObject for AccessDoorObject {
         Some(self)
     }
 }
+
+impl crate::traits::CovReporting for AccessDoorObject {}
 
 crate::event::impl_change_of_state_reporting!(
     AccessDoorObject,

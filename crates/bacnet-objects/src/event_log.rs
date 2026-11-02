@@ -281,6 +281,7 @@ impl BACnetObject for EventLogObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         if property == PropertyIdentifier::LOG_ENABLE {
             if let PropertyValue::Boolean(v) = value {
                 return self.lifecycle().write_enable(v);
@@ -315,7 +316,6 @@ impl BACnetObject for EventLogObject {
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
-            array_index,
         ))
     }
 

@@ -228,10 +228,11 @@ impl BACnetObject for AveragingObject {
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
-        _array_index: Option<u32>,
+        array_index: Option<u32>,
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
@@ -280,7 +281,6 @@ impl BACnetObject for AveragingObject {
             _ => Err(common::unhandled_write_error(
                 self.property_metadata().as_ref(),
                 property,
-                _array_index,
             )),
         }
     }
@@ -289,13 +289,7 @@ impl BACnetObject for AveragingObject {
         metadata::for_object(self)
     }
 
-    fn supports_subscribe_cov_property(&self) -> bool {
-        // Table 13-1 has no Averaging row, so SubscribeCOV stays refused
-        // (supports_cov is false). A property subscription uses the Table
-        // 13-1a criterion for its datatype; the object has no Status_Flags to
-        // add to the report.
-        true
-    }
+    crate::traits::lend_cov_reporting!();
 
     fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
         Some(self)
@@ -303,6 +297,16 @@ impl BACnetObject for AveragingObject {
 
     fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
         Some(self)
+    }
+}
+
+impl crate::traits::CovReporting for AveragingObject {
+    fn supports_subscribe_cov(&self) -> bool {
+        // Table 13-1 has no Averaging row, so SubscribeCOV stays refused
+        // (supports_subscribe_cov is false). A property subscription uses the Table
+        // 13-1a criterion for its datatype; the object has no Status_Flags to
+        // add to the report.
+        false
     }
 }
 

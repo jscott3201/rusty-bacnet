@@ -210,6 +210,7 @@ impl BACnetObject for CredentialDataInputObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         // The reader's entry edge is always seen (it starts in service and
         // only this write moves Out_Of_Service), so there is no fallback.
         if let Some(result) = common::write_out_of_service_with_restore(
@@ -237,7 +238,6 @@ impl BACnetObject for CredentialDataInputObject {
         Err(common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
-            array_index,
         ))
     }
 
@@ -245,10 +245,8 @@ impl BACnetObject for CredentialDataInputObject {
         super::metadata_identity::for_credential_data_input_object(self)
     }
 
-    /// Table 13-1 lists Credential Data Input, so it takes SubscribeCOV.
-    fn supports_cov(&self) -> bool {
-        true
-    }
+    // Table 13-1 lists Credential Data Input, so it takes SubscribeCOV.
+    crate::traits::lend_cov_reporting!();
 
     crate::traits::lend_reliability_eval!();
 
@@ -260,6 +258,8 @@ impl BACnetObject for CredentialDataInputObject {
         Some(self)
     }
 }
+
+impl crate::traits::CovReporting for CredentialDataInputObject {}
 
 impl crate::traits::ReliabilityEval for CredentialDataInputObject {
     /// The application's Reliability for the reader. Like the other

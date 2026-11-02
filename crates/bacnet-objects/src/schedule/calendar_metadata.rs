@@ -85,7 +85,7 @@ mod tests {
             metadata.len()
         );
         assert!(object.is_deleteable());
-        assert!(!object.supports_cov());
+        assert!(!object.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
         for row in metadata.iter() {
             assert_eq!(row.presence_condition, None);
             assert_eq!(
@@ -172,12 +172,19 @@ mod tests {
             object.read_property(P::DESCRIPTION, None).unwrap(),
             PropertyValue::CharacterString("updated".into())
         );
-        for index in [None, Some(0), Some(1), Some(u32::MAX)] {
+        // A read-only scalar: denied whole, and an index is refused first,
+        // as the server's gate refuses it (#2258).
+        for (index, expected) in [
+            (None, ErrorCode::WRITE_ACCESS_DENIED),
+            (Some(0), ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            (Some(1), ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            (Some(u32::MAX), ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+        ] {
             assert_error(
                 object
                     .write_property(P::PRESENT_VALUE, index, PropertyValue::Null, Some(8))
                     .unwrap_err(),
-                ErrorCode::WRITE_ACCESS_DENIED,
+                expected,
             );
         }
         // Date_List is a BACnetLIST of calendar entries: no index, no NULL.

@@ -118,8 +118,9 @@ pub enum PropertyPresenceCondition {
     /// The object reports COV, which its table's footnote makes the condition
     /// for COV_Increment (and for a Pulse Converter's COV_Period too): the
     /// analog types, Loop, Pulse Converter, the numeric value types, Lighting
-    /// Output and Staging (#2193). A row carries it only on an object whose
-    /// [`supports_cov`](crate::traits::BACnetObject::supports_cov) is true.
+    /// Output and Staging (#2193). A row carries it only on an object that
+    /// lends [`CovReporting`](crate::traits::CovReporting) through
+    /// [`cov`](crate::traits::BACnetObject::cov) and takes SubscribeCOV.
     CovReporting,
     /// A Timer's Present_Value is writable while it is in service, which
     /// requires Min_Pres_Value and Max_Pres_Value (Table 12-75 footnote 4,
@@ -419,6 +420,33 @@ pub fn object_value_type<O: BACnetObject + ?Sized>(
         &object.property_metadata(),
         property,
     )
+}
+
+/// The array-index check every write makes before the value is judged: an
+/// index on a property `object` has no row for is UNKNOWN_PROPERTY, and an
+/// index on a property that isn't an array is PROPERTY_IS_NOT_AN_ARRAY. A
+/// whole write (`index` of `None`) passes.
+///
+/// Effective absence comes before the array classification (a local
+/// error-order choice for Clauses 15.9 and 15.10). The server runs this
+/// ahead of the value's decoding, and each built-in object runs it first in
+/// its own `write_property`, so a direct caller gets the server's answer
+/// (#2258).
+pub fn check_write_array_index<O: BACnetObject + ?Sized>(
+    object: &O,
+    property: PropertyIdentifier,
+    index: Option<u32>,
+) -> Result<(), Error> {
+    if index.is_none() {
+        return Ok(());
+    }
+    if !has_property(&object.property_metadata(), property) {
+        return Err(crate::common::unknown_property_error());
+    }
+    if !object.is_array_property(property) {
+        return Err(crate::common::property_is_not_an_array_error());
+    }
+    Ok(())
 }
 
 /// Project implemented write capability for one property identifier.

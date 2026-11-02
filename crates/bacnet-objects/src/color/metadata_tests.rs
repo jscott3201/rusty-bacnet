@@ -135,7 +135,7 @@ fn rows_and_codes_match_the_addendum_tables() {
             rows.len()
         );
         assert!(object.is_deleteable());
-        assert!(object.supports_cov());
+        assert!(object.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
         for row in metadata.iter() {
             let p = row.property_identifier;
             assert_eq!(row.presence_condition, None);

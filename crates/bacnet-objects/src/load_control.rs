@@ -212,10 +212,11 @@ impl BACnetObject for LoadControlObject {
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
-        _array_index: Option<u32>,
+        array_index: Option<u32>,
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
@@ -234,7 +235,6 @@ impl BACnetObject for LoadControlObject {
             _ => Err(crate::common::unhandled_write_error(
                 self.property_metadata().as_ref(),
                 property,
-                _array_index,
             )),
         }
     }
@@ -243,9 +243,9 @@ impl BACnetObject for LoadControlObject {
         metadata::for_object(self)
     }
 
-    /// Table 13-1 lists Load Control, so it takes SubscribeCOV; the shed
-    /// rows it reports come from the trait default.
-    fn supports_cov(&self) -> bool {
-        true
-    }
+    // Table 13-1 lists Load Control, so it takes SubscribeCOV; the shed
+    // rows it reports are that row's (the default).
+    crate::traits::lend_cov_reporting!();
 }
+
+impl crate::traits::CovReporting for LoadControlObject {}

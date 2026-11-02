@@ -4040,8 +4040,8 @@ behaviour, so an object without it writes nothing.
   `apply_local_input(LocalInputValue)`, takes a Present_Value (built with
   `LocalInputValue::present_value` or `present_value_from`, the second naming
   the local Device as its origin), a Life Safety Tracking_Value, a Loop's
-  Controlled_Variable_Value, an Averaging sample or an access-control record.
-  The enum is `#[non_exhaustive]`: an object matches the inputs it models and
+  Controlled_Variable_Value, an Averaging sample, an access-control record or
+  a Program's Program_State. The enum is `#[non_exhaustive]`: an object matches the inputs it models and
   answers the rest with `not_supported()`, OBJECT /
   OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, the same error the server returns for
   an object that lends none. `BACnetServer::set_present_value_local` and its
@@ -4087,6 +4087,29 @@ behaviour, so an object without it writes nothing.
   takes `take_relinquish_writes()` from the removed object. Only
   `tick_schedule` has no default. The built-in `ScheduleObject` lends it
   (see Schedule & Notification below).
+- **`cov()` → `CovReporting`**, for an object that reports changes of
+  value. An object that lends none takes no COV subscription, and the server
+  refuses SubscribeCOV, SubscribeCOVProperty and SubscribeCOVPropertyMultiple
+  naming it with OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. The server
+  reads it under a shared guard only, so it has no `_mut` twin.
+  `supports_subscribe_cov()` (default `true`) admits the whole-object form;
+  an object whose type has no Table 13-1 row, like the built-in Averaging and
+  Command, answers `false` and takes property subscriptions only.
+  `supports_cov_property(p)` (default `true`) decides each property
+  subscription, `cov_increment()` (default `None`) is the object's current
+  COV_Increment, read at each evaluation, and `cov_reported_properties()`
+  lists what a whole-object notification carries after Present_Value and
+  Status_Flags. Its default, `None`, has the server report the object type's
+  Table 13-1 row (`CovReportedProperty::standard_for(object_type)`);
+  `Some(list)` reports exactly that list. These were `supports_cov`,
+  `supports_subscribe_cov_property` and the three hooks of the same names on
+  `BACnetObject` before #2179. `supports_cov_property`'s old default read the
+  object type and the new one doesn't, so a custom Life Safety Point or Zone
+  narrows its own property set, for example to
+  `bacnet_objects::life_safety::COV_PROPERTIES`. Calls on a concrete type
+  need `use bacnet_objects::traits::CovReporting`. The unused
+  `set_overridden` hook was removed with no replacement: an object computes
+  Status_Flags' OVERRIDDEN bit itself when it reads the property.
 - **`audit_log()` and `audit_log_mut()` → `AuditLog`** (hidden, #2179), for
   an Audit Log. `storage()` is the `AuditLogStorage` that AuditLogQuery and
   ReadRange read under a shared guard (it was the public
@@ -4119,6 +4142,32 @@ impl Timed for MyTimer {
         self.deadline
     }
 }
+```
+
+COV reporting moves from its hooks to the capability like this:
+
+```rust,ignore
+// Before: on `impl BACnetObject for MySensor`.
+fn supports_cov(&self) -> bool {
+    true
+}
+fn cov_increment(&self) -> Option<f64> {
+    Some(f64::from(self.cov_increment))
+}
+
+// After: lend the capability; a call site goes through `cov()`.
+use bacnet_objects::traits::{BACnetObject, CovReporting};
+
+fn cov(&self) -> Option<&dyn CovReporting> {
+    Some(self)
+}
+
+impl CovReporting for MySensor {
+    fn cov_increment(&self) -> Option<f64> {
+        Some(f64::from(self.cov_increment))
+    }
+}
+let increment = sensor.cov().and_then(|cov| cov.cov_increment());
 ```
 
 Reliability evaluation moves from its hooks to the capability like this:
@@ -4334,6 +4383,14 @@ state, command-source, authorization and indexed-write
 guards retain their precedence; custom object implementations retain their own
 write dispatch. WPM reports the failed coordinate and retains its successful
 prefix.
+
+An array index is checked before any object sees a write, on every service
+path the bundled server and `bacnet-device-core` run, custom objects included:
+`PROPERTY/UNKNOWN_PROPERTY` for a property with no row, then
+`PROPERTY/PROPERTY_IS_NOT_AN_ARRAY` for one that isn't an array. A direct call
+to `write_property` skips that gate, so each built-in object runs
+`bacnet_objects::property_metadata::check_write_array_index` first itself,
+and a custom object that is called directly should do the same (#2258).
 
 At the indexed WP/WPM service gate, effective metadata that omits the property
 produces `PROPERTY/UNKNOWN_PROPERTY` before value decoding. A served scalar or
@@ -5927,9 +5984,9 @@ Attempted_Samples fail with VALUE_OUT_OF_RANGE and change nothing.
 
 Each sample changes the statistics and counts together, then the server's COV
 path runs, as it does after a write. Averaging has no Table 13-1 row, so
-SubscribeCOV on it is refused (`supports_cov` is false), but it takes
-SubscribeCOVProperty and SubscribeCOVPropertyMultiple
-(`supports_subscribe_cov_property` is true): a numeric property is reported
+SubscribeCOV on it is refused (its `CovReporting` answers
+`supports_subscribe_cov()` with `false`), but it takes SubscribeCOVProperty and
+SubscribeCOVPropertyMultiple (it lends `cov()`): a numeric property is reported
 when it moves by the subscription's COV increment, or on any change if the
 subscription gives none, and the report carries no Status_Flags because the
 object has none. A move to or from the NaN or an infinity of an empty window is
@@ -7023,8 +7080,9 @@ on targets with atomic compare-and-swap, as `bacnet-objects` does. The
   observer must not await or take a lock that can wait on the database, an
   async task or anything held across an await; a short leaf mutex taken
   after the database is fine, and the server's take a few. The shared
-  steps every write path takes (`check_write_array_index`,
-  `gate_and_decode_write`, `decode_write_property_value`, `localize`,
+  steps every write path takes (`gate_and_decode_write`, whose index check
+  is `bacnet_objects::property_metadata::check_write_array_index`,
+  `decode_write_property_value`, `localize`,
   `commit_attempt`, `check_executor_owned_write`); the NULL-relinquish rule
   (`write::relinquish`); and the end of a Command's or Channel's run a host
   can't make (`end_unmade`, `take_queued`, `Unfinished`).
@@ -9011,6 +9069,16 @@ separately. Python exposes the same native policy through
 the endpoints' Device-write authorizer through their `device_write_policy`
 callable (#2033). See
 [Server authorization policy](mutation-policy.md).
+
+### Program_State from the application
+
+Program_State is read-only on the network (Clause 12.22.4), and
+`write_local` refuses it with `PROPERTY / WRITE_ACCESS_DENIED` as well. The
+application reports the state of the program a Program object stands for with
+`BACnetServer::set_program_state_local`, the object's `ProgramState` local
+input, or `ProgramObject::set_program_state` before the server holds it
+(#2258). It takes an Enumerated BACnetProgramState from 0 (IDLE) to 5
+(UNLOADING).
 
 ### Life Safety execution and COV
 

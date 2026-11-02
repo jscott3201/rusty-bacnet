@@ -532,6 +532,7 @@ impl BACnetObject for NotificationForwarderObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         if listed(property) && array_index.is_some() {
             return Err(common::property_is_not_an_array_error());
         }
@@ -574,7 +575,6 @@ impl BACnetObject for NotificationForwarderObject {
         Err(common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
-            array_index,
         ))
     }
 

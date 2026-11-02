@@ -333,13 +333,7 @@ impl BACnetObject for AnalogValueObject {
         priority: Option<u8>,
         origin: &crate::command_source::CommandOrigin,
     ) -> Result<(), Error> {
-        if matches!(
-            property,
-            PropertyIdentifier::PRESENT_VALUE | PropertyIdentifier::VALUE_SOURCE
-        ) && array_index.is_some()
-        {
-            return Err(common::property_is_not_an_array_error());
-        }
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         if property == PropertyIdentifier::VALUE_SOURCE {
             return match self.access {
                 PresentValueAccess::Commandable => {
@@ -381,6 +375,7 @@ impl BACnetObject for AnalogValueObject {
         value: PropertyValue,
         priority: Option<u8>,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         if metadata::excludes(self, property) {
             return Err(common::unknown_property_error());
         }
@@ -481,7 +476,6 @@ impl BACnetObject for AnalogValueObject {
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
-            array_index,
         ))
     }
 
@@ -493,13 +487,7 @@ impl BACnetObject for AnalogValueObject {
         metadata::for_object(self)
     }
 
-    fn supports_cov(&self) -> bool {
-        true
-    }
-
-    fn cov_increment(&self) -> Option<f64> {
-        Some(f64::from(self.cov_increment))
-    }
+    crate::traits::lend_cov_reporting!();
 
     crate::traits::lend_event_reporting!();
 
@@ -519,6 +507,12 @@ impl BACnetObject for AnalogValueObject {
 
     fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
         Some(self)
+    }
+}
+
+impl crate::traits::CovReporting for AnalogValueObject {
+    fn cov_increment(&self) -> Option<f64> {
+        Some(f64::from(self.cov_increment))
     }
 }
 

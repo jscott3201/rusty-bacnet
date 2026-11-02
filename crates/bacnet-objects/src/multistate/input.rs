@@ -179,9 +179,7 @@ impl BACnetObject for MultiStateInputObject {
         &self.name
     }
 
-    fn supports_cov(&self) -> bool {
-        true
-    }
+    crate::traits::lend_cov_reporting!();
 
     crate::traits::lend_event_reporting!();
 
@@ -257,6 +255,7 @@ impl BACnetObject for MultiStateInputObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         if property == PropertyIdentifier::PRESENT_VALUE {
             if !self.out_of_service {
                 return Err(common::write_access_denied_error());
@@ -352,7 +351,6 @@ impl BACnetObject for MultiStateInputObject {
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
-            array_index,
         ))
     }
 
@@ -389,6 +387,8 @@ impl BACnetObject for MultiStateInputObject {
         Some(self)
     }
 }
+
+impl crate::traits::CovReporting for MultiStateInputObject {}
 
 impl crate::traits::ReliabilityEval for MultiStateInputObject {
     fn set_reliability(&mut self, reliability: Reliability) -> Result<(), Error> {

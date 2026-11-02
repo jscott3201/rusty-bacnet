@@ -472,13 +472,7 @@ impl BACnetObject for LightingOutputObject {
         priority: Option<u8>,
         origin: &CommandOrigin,
     ) -> Result<(), Error> {
-        if matches!(
-            property,
-            PropertyIdentifier::PRESENT_VALUE | PropertyIdentifier::VALUE_SOURCE
-        ) && array_index.is_some()
-        {
-            return Err(common::property_is_not_an_array_error());
-        }
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         if property == PropertyIdentifier::VALUE_SOURCE {
             return self.value_source.correct(value, priority, origin);
         }
@@ -520,6 +514,7 @@ impl BACnetObject for LightingOutputObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         // The commands need their writer (`write_property_from`, #1866).
         if matches!(
             property,
@@ -620,7 +615,6 @@ impl BACnetObject for LightingOutputObject {
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
-            array_index,
         ))
     }
 
@@ -632,16 +626,16 @@ impl BACnetObject for LightingOutputObject {
         metadata::for_lighting_output_object(self)
     }
 
-    fn cov_increment(&self) -> Option<f64> {
-        Some(f64::from(self.cov_increment))
-    }
-
-    fn supports_cov(&self) -> bool {
-        true
-    }
+    crate::traits::lend_cov_reporting!();
 
     fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
         Some(self)
+    }
+}
+
+impl crate::traits::CovReporting for LightingOutputObject {
+    fn cov_increment(&self) -> Option<f64> {
+        Some(f64::from(self.cov_increment))
     }
 }
 

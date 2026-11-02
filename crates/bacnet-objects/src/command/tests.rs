@@ -435,9 +435,12 @@ fn command_action_text_serves_one_text_per_list_and_follows_the_action_size() {
 #[test]
 fn command_takes_property_subscriptions_but_not_subscribe_cov() {
     let cmd = CommandObject::new(1, "CMD-1").unwrap();
-    assert!(!cmd.supports_cov());
-    assert!(cmd.supports_subscribe_cov_property());
-    assert!(cmd.supports_cov_property(PropertyIdentifier::IN_PROCESS));
+    assert!(!cmd.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
+    assert!(cmd.cov().is_some());
+    assert!(
+        cmd.cov()
+            .is_some_and(|cov| cov.supports_cov_property(PropertyIdentifier::IN_PROCESS))
+    );
 }
 
 #[test]
