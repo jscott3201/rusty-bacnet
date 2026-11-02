@@ -24,6 +24,8 @@ use crate::device_reference;
 use crate::traits::BACnetObject;
 
 mod metadata;
+mod structured_view_creation;
+pub use structured_view_creation::MAX_SUBORDINATES;
 
 // ---------------------------------------------------------------------------
 // GroupObject (type 11)
@@ -443,6 +445,9 @@ pub struct StructuredViewObject {
     subordinate_list: Vec<BACnetDeviceObjectReference>,
     /// Per-child annotations (parallel to subordinate_list).
     subordinate_annotations: Vec<String>,
+    /// Whether a CreateObject initial value gave Subordinate_List (0) and
+    /// Subordinate_Annotations (1), so the other must then match its size.
+    creation_given: [bool; 2],
 }
 
 impl StructuredViewObject {
@@ -457,6 +462,7 @@ impl StructuredViewObject {
             node_subtype: String::new(),
             subordinate_list: Vec::new(),
             subordinate_annotations: Vec::new(),
+            creation_given: [false; 2],
         })
     }
 
@@ -565,6 +571,18 @@ impl BACnetObject for StructuredViewObject {
 
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
         metadata::for_structured_view_object(self)
+    }
+
+    fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
+        structured_view_creation::CREATION_ONLY
+    }
+
+    fn initialize_property(
+        &mut self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        structured_view_creation::initialize(self, property, value)
     }
 }
 

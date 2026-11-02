@@ -64,6 +64,28 @@ fn each_createable_type_lists_what_only_creation_sets() {
         (ObjectType::MULTI_STATE_INPUT, vec![]),
         (ObjectType::MULTI_STATE_OUTPUT, vec![]),
         (ObjectType::MULTI_STATE_VALUE, vec![]),
+        // The configuration types serve these read-only (#2208).
+        (ObjectType::CALENDAR, vec![P::OBJECT_NAME]),
+        (ObjectType::SCHEDULE, vec![P::OBJECT_NAME]),
+        (
+            ObjectType::NOTIFICATION_CLASS,
+            vec![P::OBJECT_NAME, P::PRIORITY, P::ACK_REQUIRED],
+        ),
+        (ObjectType::TREND_LOG, vec![P::OBJECT_NAME, P::BUFFER_SIZE]),
+        (
+            ObjectType::EVENT_ENROLLMENT,
+            vec![P::OBJECT_PROPERTY_REFERENCE],
+        ),
+        (
+            ObjectType::STRUCTURED_VIEW,
+            vec![
+                P::OBJECT_NAME,
+                P::NODE_TYPE,
+                P::NODE_SUBTYPE,
+                P::SUBORDINATE_LIST,
+                P::SUBORDINATE_ANNOTATIONS,
+            ],
+        ),
     ] {
         assert_eq!(set(object_type), expected, "{object_type:?}");
     }
@@ -115,6 +137,6 @@ fn each_createable_type_lists_what_only_creation_sets() {
     assert!(markdown.contains("### BINARY_VALUE\n\n- Createable: true\n- Deleteable: true\n\n|"));
     assert_eq!(
         text.matches("Whole value set only by CreateObject").count(),
-        6
+        12
     );
 }

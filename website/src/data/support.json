@@ -118,7 +118,7 @@
       "name": "BINARY_VALUE"
     },
     {
-      "create": false,
+      "create": true,
       "delete": true,
       "id": 6,
       "name": "CALENDAR"
@@ -136,7 +136,7 @@
       "name": "DEVICE"
     },
     {
-      "create": false,
+      "create": true,
       "delete": true,
       "id": 9,
       "name": "EVENT_ENROLLMENT"
@@ -172,7 +172,7 @@
       "name": "MULTI_STATE_OUTPUT"
     },
     {
-      "create": false,
+      "create": true,
       "delete": true,
       "id": 15,
       "name": "NOTIFICATION_CLASS"
@@ -184,7 +184,7 @@
       "name": "PROGRAM"
     },
     {
-      "create": false,
+      "create": true,
       "delete": true,
       "id": 17,
       "name": "SCHEDULE"
@@ -202,7 +202,7 @@
       "name": "MULTI_STATE_VALUE"
     },
     {
-      "create": false,
+      "create": true,
       "delete": true,
       "id": 20,
       "name": "TREND_LOG"
@@ -256,7 +256,7 @@
       "name": "LOAD_CONTROL"
     },
     {
-      "create": false,
+      "create": true,
       "delete": true,
       "id": 29,
       "name": "STRUCTURED_VIEW"

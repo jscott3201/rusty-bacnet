@@ -23,6 +23,7 @@ use crate::property_metadata::PropertyMetadata;
 use crate::traits::BACnetObject;
 
 mod alert;
+mod creation_only;
 mod metadata;
 mod parameters;
 mod state;
@@ -530,6 +531,18 @@ impl BACnetObject for EventEnrollmentObject {
 
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         Cow::Borrowed(metadata::EVENT_ENROLLMENT_PROPERTIES)
+    }
+
+    fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
+        creation_only::CREATION_ONLY
+    }
+
+    fn initialize_property(
+        &mut self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        creation_only::initialize(self, property, value)
     }
 }
 

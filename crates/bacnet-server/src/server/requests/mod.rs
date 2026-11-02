@@ -65,6 +65,10 @@ mod notification_class_durable_tests;
 mod policy_off_task_tests;
 
 #[cfg(test)]
+mod create_config_live_tests;
+#[cfg(test)]
+mod create_config_types_wire_tests;
+#[cfg(test)]
 mod create_object_registered_wire_tests;
 #[cfg(test)]
 mod create_object_types_wire_tests;

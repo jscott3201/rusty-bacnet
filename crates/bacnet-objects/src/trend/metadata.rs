@@ -569,3 +569,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "metadata_rows_tests.rs"]
+mod rows_tests;

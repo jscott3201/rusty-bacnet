@@ -5,7 +5,6 @@ use bacnet_types::constructed::{
     BACnetCalendarEntry, BACnetDateRange, BACnetObjectPropertyReference, BACnetSpecialEvent,
     BACnetTimeValue, SpecialEventPeriod,
 };
-use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::{Date, PropertyValue, Time};
 
 fn schedule_object(configuration: u8, out_of_service: bool) -> ScheduleObject {
@@ -120,33 +119,5 @@ fn rpm_schedule_metadata_selectors_preserve_bytes_and_budgets() {
                 assert_rpm_selector_bytes(&db, oid, selector, expected);
             }
         }
-    }
-}
-
-#[test]
-fn rpm_schedule_metadata_does_not_enable_create_object() {
-    use bacnet_services::object_mgmt::{CreateObjectRequest, ObjectSpecifier};
-
-    let oid = ObjectIdentifier::new(ObjectType::SCHEDULE, 7).unwrap();
-    for object_specifier in [
-        ObjectSpecifier::Type(ObjectType::SCHEDULE),
-        ObjectSpecifier::Identifier(oid),
-    ] {
-        let mut db = ObjectDatabase::new();
-        let mut request = BytesMut::new();
-        CreateObjectRequest {
-            object_specifier,
-            list_of_initial_values: vec![],
-        }
-        .encode(&mut request);
-        let mut response = BytesMut::new();
-        let result = handle_create_object(&mut db, &request, &mut response);
-        assert!(
-            matches!(result, Err(Error::Remote(RemoteError::Error { class, code }))
-            if class == ErrorClass::OBJECT
-                && code == ErrorCode::DYNAMIC_CREATION_NOT_SUPPORTED)
-        );
-        assert!(response.is_empty());
-        assert!(db.is_empty());
     }
 }

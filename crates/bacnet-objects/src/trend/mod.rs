@@ -27,6 +27,7 @@ use cov_settings::CovSettings;
 
 mod acquisition;
 mod cov_settings;
+mod creation_only;
 mod durable;
 mod metadata;
 mod multiple;
@@ -35,6 +36,7 @@ mod references;
 
 pub use acquisition::DEFAULT_LOG_INTERVAL;
 pub use cov_settings::DEFAULT_COV_RESUBSCRIPTION_INTERVAL;
+pub use creation_only::{CREATED_BUFFER_SIZE, MAX_CREATED_BUFFER_SIZE};
 pub use multiple::TrendLogMultipleObject;
 pub use references::MAX_LOG_DEVICE_OBJECT_PROPERTIES;
 
@@ -531,6 +533,18 @@ impl BACnetObject for TrendLogObject {
 
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
         metadata::for_object(self)
+    }
+
+    fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
+        creation_only::CREATION_ONLY
+    }
+
+    fn initialize_property(
+        &mut self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        creation_only::initialize(self, property, value)
     }
 
     fn durable_writes(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
