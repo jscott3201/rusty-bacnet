@@ -361,6 +361,8 @@ impl BACnetObject for BinaryOutputObject {
     crate::traits::lend_reliability_eval!();
 }
 
+impl crate::creation::Creatable for BinaryOutputObject {}
+
 impl crate::traits::CovReporting for BinaryOutputObject {}
 
 impl crate::traits::ReliabilityEval for BinaryOutputObject {

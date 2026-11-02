@@ -474,6 +474,8 @@ impl BACnetObject for BinaryValueObject {
     }
 }
 
+impl crate::creation::Creatable for BinaryValueObject {}
+
 impl crate::traits::CovReporting for BinaryValueObject {}
 
 crate::traits::impl_audit_policy!(BinaryValueObject);

@@ -202,6 +202,22 @@ impl BACnetObject for CalendarObject {
     }
 }
 
+impl crate::creation::Creatable for CalendarObject {
+    const CREATION_ONLY_PROPERTIES: &'static [PropertyIdentifier] =
+        &[PropertyIdentifier::OBJECT_NAME];
+
+    fn initialize_property(
+        &mut self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        if property != PropertyIdentifier::OBJECT_NAME {
+            return Err(common::write_access_denied_error());
+        }
+        common::initialize_object_name(&mut self.name, &value)
+    }
+}
+
 impl crate::traits::CalendarState for CalendarObject {
     fn state_on(&self, day: SpecificDate) -> bool {
         self.is_active_on(day)

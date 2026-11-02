@@ -271,6 +271,18 @@ impl BACnetObject for NotificationClass {
     }
 }
 
+impl crate::creation::Creatable for NotificationClass {
+    const CREATION_ONLY_PROPERTIES: &'static [PropertyIdentifier] = creation_only::CREATION_ONLY;
+
+    fn initialize_property(
+        &mut self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        creation_only::initialize(self, property, value)
+    }
+}
+
 /// Convert a `Time` to centiseconds (hundredths of a second since midnight).
 fn time_to_centiseconds(t: &Time) -> u32 {
     let h = if t.hour == Time::UNSPECIFIED {

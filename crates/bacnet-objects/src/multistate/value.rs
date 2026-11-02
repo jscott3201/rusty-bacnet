@@ -572,6 +572,27 @@ impl BACnetObject for MultiStateValueObject {
     }
 }
 
+impl crate::creation::Creatable for MultiStateValueObject {
+    const CREATION_ONLY_PROPERTIES: &'static [PropertyIdentifier] = CREATION_ONLY;
+
+    fn initialize_property(
+        &mut self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        let held: Vec<u32> = self.held_states().collect();
+        initialize_states(
+            &mut self.number_of_states,
+            &mut self.state_text,
+            held,
+            property,
+            value,
+        )?;
+        let _ = self.recompute_reliability();
+        Ok(())
+    }
+}
+
 impl crate::traits::CovReporting for MultiStateValueObject {}
 
 impl crate::traits::ReliabilityEval for MultiStateValueObject {

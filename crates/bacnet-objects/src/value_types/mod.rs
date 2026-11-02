@@ -296,6 +296,22 @@ macro_rules! define_value_object_commandable {
             )?
         }
 
+        impl crate::creation::Creatable for $struct_name {
+            $(
+            const CREATION_ONLY_PROPERTIES: &'static [PropertyIdentifier] =
+                crate::analog::CREATION_ONLY;
+
+            fn initialize_property(
+                &mut self,
+                property: PropertyIdentifier,
+                value: PropertyValue,
+            ) -> Result<(), Error> {
+                let units: &mut $units_ty = &mut self.units;
+                crate::analog::initialize_units(units, property, value)
+            }
+            )?
+        }
+
         impl crate::traits::CovReporting for $struct_name {
             $(
             fn cov_increment(&self) -> Option<f64> {

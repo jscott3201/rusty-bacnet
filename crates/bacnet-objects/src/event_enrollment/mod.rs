@@ -546,6 +546,18 @@ impl BACnetObject for EventEnrollmentObject {
     }
 }
 
+impl crate::creation::Creatable for EventEnrollmentObject {
+    const CREATION_ONLY_PROPERTIES: &'static [PropertyIdentifier] = creation_only::CREATION_ONLY;
+
+    fn initialize_property(
+        &mut self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        creation_only::initialize(self, property, value)
+    }
+}
+
 /// The evaluator's private state lives on the object, and Reliability
 /// commits with its transition atomically.
 impl crate::traits::EnrollmentEval for EventEnrollmentObject {

@@ -470,6 +470,8 @@ impl BACnetObject for BinaryInputObject {
     }
 }
 
+impl crate::creation::Creatable for BinaryInputObject {}
+
 impl crate::traits::CovReporting for BinaryInputObject {}
 
 impl crate::traits::ReliabilityEval for BinaryInputObject {

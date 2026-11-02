@@ -586,6 +586,19 @@ impl BACnetObject for StructuredViewObject {
     }
 }
 
+impl crate::creation::Creatable for StructuredViewObject {
+    const CREATION_ONLY_PROPERTIES: &'static [PropertyIdentifier] =
+        structured_view_creation::CREATION_ONLY;
+
+    fn initialize_property(
+        &mut self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        structured_view_creation::initialize(self, property, value)
+    }
+}
+
 // ===========================================================================
 // Tests
 // ===========================================================================

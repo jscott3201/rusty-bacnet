@@ -510,6 +510,18 @@ impl BACnetObject for AnalogValueObject {
     }
 }
 
+impl crate::creation::Creatable for AnalogValueObject {
+    const CREATION_ONLY_PROPERTIES: &'static [PropertyIdentifier] = super::CREATION_ONLY;
+
+    fn initialize_property(
+        &mut self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        super::initialize_units(&mut self.units, property, value)
+    }
+}
+
 impl crate::traits::CovReporting for AnalogValueObject {
     fn cov_increment(&self) -> Option<f64> {
         Some(f64::from(self.cov_increment))

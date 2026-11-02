@@ -560,6 +560,18 @@ impl BACnetObject for TrendLogObject {
     }
 }
 
+impl crate::creation::Creatable for TrendLogObject {
+    const CREATION_ONLY_PROPERTIES: &'static [PropertyIdentifier] = creation_only::CREATION_ONLY;
+
+    fn initialize_property(
+        &mut self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        creation_only::initialize(self, property, value)
+    }
+}
+
 impl_buffer_ready_reporting!(TrendLogObject, reporting, log_buffer);
 crate::traits::impl_log_buffer!(TrendLogObject, add_trend_record, BACnetLogRecord);
 

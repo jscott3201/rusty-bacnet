@@ -534,6 +534,22 @@ impl BACnetObject for ScheduleObject {
     crate::traits::lend_schedule_runner!();
 }
 
+impl crate::creation::Creatable for ScheduleObject {
+    const CREATION_ONLY_PROPERTIES: &'static [PropertyIdentifier] =
+        &[PropertyIdentifier::OBJECT_NAME];
+
+    fn initialize_property(
+        &mut self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        if property != PropertyIdentifier::OBJECT_NAME {
+            return Err(common::write_access_denied_error());
+        }
+        common::initialize_object_name(&mut self.name, &value)
+    }
+}
+
 impl ScheduleRunner for ScheduleObject {
     fn take_owed_schedule_writes(&mut self) -> Vec<ScheduleWrite> {
         self.take_owed_writes()

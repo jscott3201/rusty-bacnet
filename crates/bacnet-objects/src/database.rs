@@ -289,8 +289,7 @@ impl ObjectDatabase {
     where
         F: for<'slot> FnOnce(&'slot mut Box<dyn BACnetObject>) -> R,
     {
-        self.check_network_port_membership(oid)?;
-        self.check_audit_membership(oid, false)?;
+        self.check_removable(oid)?;
         self.trend_poll.retire(oid);
         Ok(self.objects.get_mut(oid).map(adapt))
     }
@@ -363,8 +362,7 @@ impl ObjectDatabase {
         &mut self,
         oid: &ObjectIdentifier,
     ) -> Result<Option<Box<dyn BACnetObject>>, Error> {
-        self.check_network_port_membership(oid)?;
-        self.check_audit_membership(oid, false)?;
+        self.check_removable(oid)?;
         self.trend_poll.retire(oid);
         if self.objects.contains_key(oid) {
             self.invalidate_enrollments_monitoring(oid);
@@ -395,6 +393,16 @@ impl ObjectDatabase {
             }
             _ => Ok(None),
         }
+    }
+
+    /// Whether [`remove`](Self::remove) would take the object at `oid` out:
+    /// OBJECT / OBJECT_DELETION_NOT_PERMITTED while a running runtime holds
+    /// it (the Network Port a server or endpoint registered, or the Device
+    /// and Audit Reporters an installed Audit runtime protects). The bundled
+    /// server's DeleteObject refuses with this answer too.
+    pub fn check_removable(&self, oid: &ObjectIdentifier) -> Result<(), Error> {
+        self.check_network_port_membership(oid)?;
+        self.check_audit_membership(oid, false)
     }
 
     /// List all object identifiers in the database.

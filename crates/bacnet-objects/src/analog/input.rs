@@ -345,6 +345,18 @@ impl BACnetObject for AnalogInputObject {
     }
 }
 
+impl crate::creation::Creatable for AnalogInputObject {
+    const CREATION_ONLY_PROPERTIES: &'static [PropertyIdentifier] = super::CREATION_ONLY;
+
+    fn initialize_property(
+        &mut self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        super::initialize_units(&mut self.units, property, value)
+    }
+}
+
 impl crate::traits::CovReporting for AnalogInputObject {
     fn cov_increment(&self) -> Option<f64> {
         Some(f64::from(self.cov_increment))
