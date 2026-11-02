@@ -1,8 +1,8 @@
 mod enrollment_summary_projection;
+// std: these hold a save open on the writer thread.
 #[cfg(feature = "std")]
 mod fold_tests;
 mod lookup;
-#[cfg(feature = "std")]
 mod persistence_tests;
 mod priority;
 mod properties;
@@ -10,9 +10,7 @@ mod recipient_list;
 mod recipient_list_cap;
 mod recipients;
 mod routed_list;
-#[cfg(feature = "std")]
 mod staging_tests;
-#[cfg(feature = "std")]
 mod storage;
 
 use super::*;

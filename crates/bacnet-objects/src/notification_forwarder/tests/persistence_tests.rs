@@ -4,8 +4,11 @@ use super::storage::{MemoryPersistence, persistent};
 use super::*;
 use crate::traits::Timed;
 use bacnet_types::enums::PropertyIdentifier as P;
+#[cfg(feature = "std")]
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(feature = "std")]
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 fn write(nf: &mut NotificationForwarderObject, list: &[BACnetEventNotificationSubscription]) {
     nf.write_property(
@@ -233,8 +236,12 @@ fn subscribed_recipients_saved_out_of_range_refuses_the_forwarder() {
     assert!(NotificationForwarderObject::with_persistence(1, "NF", storage).is_err());
 }
 
+// std: the file backend.
+#[cfg(feature = "std")]
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+// std: the file backend.
+#[cfg(feature = "std")]
 fn temp_file() -> PathBuf {
     let serial = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir()
@@ -245,6 +252,8 @@ fn temp_file() -> PathBuf {
         .join("lists")
 }
 
+// std: the file backend.
+#[cfg(feature = "std")]
 #[test]
 fn file_persistence_round_trips_and_refuses_another_objects_file() {
     let path = temp_file();
@@ -311,6 +320,8 @@ fn file_persistence_round_trips_and_refuses_another_objects_file() {
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
 
+// std: the file backend.
+#[cfg(feature = "std")]
 #[test]
 fn file_persistence_keeps_a_forwarder_list_across_a_rebuild() {
     let path = temp_file();
@@ -337,6 +348,8 @@ fn file_persistence_keeps_a_forwarder_list_across_a_rebuild() {
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
 
+// std: the file backend.
+#[cfg(feature = "std")]
 #[test]
 fn file_persistence_refuses_a_file_past_its_size_or_entry_caps() {
     use crate::notification_forwarder::persistence::MAX_FILE_BYTES;

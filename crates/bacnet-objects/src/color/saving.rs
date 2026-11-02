@@ -334,6 +334,7 @@ impl OutputStorage {
 
     /// Whether the writer's thread has ended (waiting for it a while), for
     /// the tests that count threads.
+    // std: looks at the writer thread.
     #[cfg(all(test, feature = "std"))]
     pub(super) fn writer_thread_ended(&self) -> bool {
         self.0

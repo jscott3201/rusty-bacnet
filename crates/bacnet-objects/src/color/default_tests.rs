@@ -462,6 +462,8 @@ fn a_refused_staged_default_saves_the_present_value_that_waited() {
 /// The acceptance case for the writer threads: a device of many colour
 /// objects with storage, each saved once, holds no thread once they are
 /// idle (#1956).
+// std: counts the writer threads.
+#[cfg(feature = "std")]
 #[test]
 fn many_idle_colour_objects_hold_no_writer_threads() {
     let objects: Vec<(ColorObject, Arc<Memory>)> = (0..64)

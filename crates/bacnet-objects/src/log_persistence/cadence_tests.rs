@@ -135,6 +135,7 @@ fn a_count_commit_restarts_the_interval() {
     assert_eq!(stored_total(&storage), Some(3));
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn stop_commits_once_more_and_waits_for_it() {
     let (mut log, storage) = trend_log(LogCommitCadence::default());
@@ -220,6 +221,7 @@ fn a_failed_commit_is_retried_at_the_next_interval_pass_without_a_new_change() {
     assert_eq!(storage.commits(), 1);
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn stop_retries_a_failed_commit_even_with_no_new_change() {
     let (mut log, storage) = trend_log(LogCommitCadence {

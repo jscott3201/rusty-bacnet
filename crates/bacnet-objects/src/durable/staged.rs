@@ -196,6 +196,7 @@ impl<S: Send + 'static, N> StagedSaves<S, N> {
     }
 
     /// [`busy`](Self::busy), judged at `now`.
+    // std: judged on the wall clock.
     #[cfg(all(test, feature = "std"))]
     pub(crate) fn busy_at(&mut self, now: Instant) -> Option<SaveWait> {
         self.busy_unless(|ticket| ticket.outlived_at(now))
@@ -395,6 +396,7 @@ impl<S: Send + 'static, N> StagedSaves<S, N> {
     }
 
     /// The writer, for tests that look at its thread.
+    // std: for tests that look at the writer thread.
     #[cfg(all(test, feature = "std"))]
     pub(crate) fn writer(&self) -> &SaveWriter<S> {
         &self.writer
@@ -412,3 +414,6 @@ impl<S: Send + 'static, N> Drop for StagedSaves<S, N> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

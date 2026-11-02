@@ -2,21 +2,28 @@
 //! round trip and the files it refuses, a failed save tried again, and the
 //! settle and drop that wait for the saves.
 
+#[cfg(feature = "std")]
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+#[cfg(feature = "std")]
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use super::*;
 use crate::traits::BACnetObject;
-use bacnet_types::enums::ObjectType;
-use bacnet_types::enums::PropertyIdentifier;
+#[cfg(feature = "std")]
+use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
 
+// std: the file backend.
+#[cfg(feature = "std")]
 struct FileCase {
     directory: PathBuf,
     path: PathBuf,
 }
 
+// std: the file backend.
+#[cfg(feature = "std")]
 impl FileCase {
     fn new() -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -35,20 +42,28 @@ impl FileCase {
     }
 }
 
+// std: the file backend.
+#[cfg(feature = "std")]
 impl Drop for FileCase {
     fn drop(&mut self) {
         std::fs::remove_dir_all(&self.directory).unwrap();
     }
 }
 
+// std: the file backend.
+#[cfg(feature = "std")]
 fn color_oid() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::COLOR, 1).unwrap()
 }
 
+// std: the file backend.
+#[cfg(feature = "std")]
 fn ct_oid() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::COLOR_TEMPERATURE, 1).unwrap()
 }
 
+// std: the file backend.
+#[cfg(feature = "std")]
 #[test]
 fn color_round_trip_through_a_file() {
     let case = FileCase::new();
@@ -75,6 +90,8 @@ fn color_round_trip_through_a_file() {
     );
 }
 
+// std: the file backend.
+#[cfg(feature = "std")]
 #[test]
 fn temperature_round_trip_through_a_file() {
     let case = FileCase::new();
@@ -111,6 +128,8 @@ fn temperature_round_trip_through_a_file() {
 }
 
 /// Write `body` after a valid header for `oid`.
+// std: the file backend.
+#[cfg(feature = "std")]
 fn write_body(case: &FileCase, oid: ObjectIdentifier, body: &[u8]) {
     let mut bytes = b"RBNCLR01".to_vec();
     bytes.extend_from_slice(&oid.encode());
@@ -118,6 +137,8 @@ fn write_body(case: &FileCase, oid: ObjectIdentifier, body: &[u8]) {
     std::fs::write(&case.path, bytes).unwrap();
 }
 
+// std: the file backend.
+#[cfg(feature = "std")]
 #[test]
 fn corrupt_files_do_not_load() {
     let half = 0.5f32.to_be_bytes();
@@ -169,6 +190,8 @@ fn corrupt_files_do_not_load() {
 /// Version 2 keeps a written default behind its own presence octet
 /// (#1956); every cut of a saved file is refused, and a version 1 file
 /// still loads, with no default.
+// std: the file backend.
+#[cfg(feature = "std")]
 #[test]
 fn version_2_files_are_strict_and_version_1_still_loads() {
     let case = FileCase::new();
@@ -217,6 +240,8 @@ fn version_2_files_are_strict_and_version_1_still_loads() {
 
 /// A version 1 file loads, and saving what it held writes version 2, which
 /// loads back the same.
+// std: the file backend.
+#[cfg(feature = "std")]
 #[test]
 fn a_version_1_file_saves_back_as_version_2() {
     let case = FileCase::new();
@@ -235,6 +260,8 @@ fn a_version_1_file_saves_back_as_version_2() {
     assert_eq!(case.store().load(color_oid()).unwrap(), Some(loaded));
 }
 
+// std: the file backend.
+#[cfg(feature = "std")]
 #[test]
 fn the_wrong_kind_of_value_does_not_build() {
     let kelvin = Memory::holding(ColorOutputValue::Kelvin(3000));
@@ -263,6 +290,8 @@ struct Memory {
 }
 
 impl Memory {
+    // std: the file backend.
+    #[cfg(feature = "std")]
     fn holding(value: ColorOutputValue) -> Arc<Self> {
         let memory = Self::default();
         *memory.held.lock().unwrap() = Some(ColorOutputSnapshot {
@@ -299,6 +328,7 @@ impl ColorOutputPersistence for Memory {
     }
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_failed_save_is_tried_again_at_settle() {
     let storage = Arc::new(Memory::default());
@@ -375,6 +405,8 @@ fn clones_keep_no_storage() {
 }
 
 /// With Tags storage too, settling waits for both writers.
+// std: the file backend.
+#[cfg(feature = "std")]
 #[test]
 fn settle_joins_the_tags_wait() {
     let case = FileCase::new();

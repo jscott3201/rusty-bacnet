@@ -278,6 +278,7 @@ fn vendor_prefixed(name: &str) -> bool {
 #[path = "object_profile_tests.rs"]
 mod tests;
 
+// std: these load and save through the file backend.
 #[cfg(all(test, feature = "std"))]
 mod persistence_tests;
 #[cfg(test)]

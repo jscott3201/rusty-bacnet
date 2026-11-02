@@ -12,16 +12,15 @@ use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::Time;
 
+// std: these hold a save open on the writer thread.
 #[cfg(feature = "std")]
 mod fold_tests;
-#[cfg(feature = "std")]
 mod persistence_tests;
 mod properties;
-#[cfg(feature = "std")]
+#[cfg(feature = "durable-writes")]
 mod rebind_tests;
 mod recipient_list_restart_tests;
 mod selection_tests;
-#[cfg(feature = "std")]
 mod staging_tests;
 mod storage;
 

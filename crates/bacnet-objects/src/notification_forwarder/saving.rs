@@ -155,6 +155,7 @@ impl Storage {
     }
 
     /// [`busy`](Self::busy), judged at `now`.
+    // std: judged on the wall clock.
     #[cfg(all(test, feature = "std"))]
     pub(super) fn busy_at(&mut self, now: Instant) -> Option<SaveWait> {
         self.saves.busy_at(now)

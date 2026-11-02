@@ -3,8 +3,6 @@
 //! the list it returns, and a count or one element allocates nothing beyond
 //! what the object's rows themselves cost.
 
-#![cfg(feature = "std")]
-
 #[path = "../../bacnet-services/tests/support/counting_alloc.rs"]
 mod counting_alloc;
 

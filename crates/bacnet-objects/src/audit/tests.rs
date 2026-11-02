@@ -1,6 +1,9 @@
 use crate::traits::Timed;
+#[cfg(feature = "std")]
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(feature = "std")]
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use bacnet_types::bitstring::LogStatus;
@@ -15,15 +18,18 @@ use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
 use crate::clock::{ClockFrame, ClockReader};
 use crate::traits::BACnetObject;
 
-use super::{
-    AuditLogObject, AuditLogPersistence, AuditLogSnapshot, AuditReporterObject,
-    FileAuditLogPersistence, MAX_AUDIT_RECORDS,
-};
+use super::{AuditLogObject, AuditLogPersistence, AuditLogSnapshot, AuditReporterObject};
+#[cfg(feature = "std")]
+use super::{FileAuditLogPersistence, MAX_AUDIT_RECORDS};
 
 mod reporter;
 
+// std: the file backend.
+#[cfg(feature = "std")]
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+// std: the file backend.
+#[cfg(feature = "std")]
 fn temp_base(label: &str) -> PathBuf {
     let serial = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!(
@@ -34,12 +40,16 @@ fn temp_base(label: &str) -> PathBuf {
     dir.join("state")
 }
 
+// std: the file backend.
+#[cfg(feature = "std")]
 fn cleanup_base(base: &std::path::Path) {
     if let Some(parent) = base.parent() {
         let _ = std::fs::remove_dir_all(parent);
     }
 }
 
+// std: the file backend.
+#[cfg(feature = "std")]
 fn rewrite_snapshot_checksum(data: &mut [u8]) {
     let checksum_start = data.len() - 4;
     let mut crc = !0u32;
@@ -141,20 +151,18 @@ impl AuditLogPersistence for MemoryPersistence {
 
     fn commit(&self, snapshot: &AuditLogSnapshot) -> Result<(), Error> {
         if self.fail_write.load(Ordering::Acquire) {
-            return Err(Error::Transport(std::io::Error::other(
-                "injected write failure",
-            )));
+            return Err(Error::Encoding("injected write failure".into()));
         }
         if self.fail_sync.load(Ordering::Acquire) {
-            return Err(Error::Transport(std::io::Error::other(
-                "injected sync failure",
-            )));
+            return Err(Error::Encoding("injected sync failure".into()));
         }
         *self.snapshot.lock().unwrap() = Some(snapshot.clone());
         Ok(())
     }
 }
 
+// std: the file backend.
+#[cfg(feature = "std")]
 #[test]
 fn audit_restart_restores_exact_typed_state() {
     let base = temp_base("restart");
@@ -309,6 +317,8 @@ fn zero_capacity_validates_enabled_records_before_advancing_sequence() {
     );
 }
 
+// std: the file backend.
+#[cfg(feature = "std")]
 #[test]
 fn newer_slot_corruption_falls_back_but_no_valid_slot_fails_closed() {
     let base = temp_base("fallback");
@@ -339,6 +349,8 @@ fn newer_slot_corruption_falls_back_but_no_valid_slot_fails_closed() {
     cleanup_base(&base);
 }
 
+// std: the file backend.
+#[cfg(feature = "std")]
 #[test]
 fn corrupted_header_falls_back_but_checksum_valid_incompatibility_is_fatal() {
     let base = temp_base("incompatible-newer");
@@ -378,6 +390,8 @@ fn corrupted_header_falls_back_but_checksum_valid_incompatibility_is_fatal() {
     cleanup_base(&base);
 }
 
+// std: the file backend.
+#[cfg(feature = "std")]
 #[test]
 fn persistence_identity_version_capacity_and_length_validation_fail_closed() {
     let base = temp_base("validation");
@@ -427,6 +441,8 @@ fn persistence_identity_version_capacity_and_length_validation_fail_closed() {
     cleanup_base(&base);
 }
 
+// std: the file backend.
+#[cfg(feature = "std")]
 #[test]
 fn oversized_record_is_rejected_before_durable_or_memory_mutation() {
     let base = temp_base("record-bound");

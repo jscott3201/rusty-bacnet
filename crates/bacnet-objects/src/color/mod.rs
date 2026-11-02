@@ -51,13 +51,13 @@ pub use xy::ColorObject;
 
 #[cfg(test)]
 mod command_tests;
-#[cfg(all(test, feature = "std"))]
+#[cfg(test)]
 mod default_tests;
 #[cfg(test)]
 mod engine_tests;
 #[cfg(test)]
 mod metadata_tests;
-#[cfg(all(test, feature = "std"))]
+#[cfg(test)]
 mod persistence_tests;
 #[cfg(test)]
 mod rows_tests;
