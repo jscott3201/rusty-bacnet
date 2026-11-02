@@ -163,7 +163,10 @@ mod tests {
             .filter(|&&p| !matches!(p, P::OBJECT_IDENTIFIER | P::OBJECT_NAME | P::OBJECT_TYPE))
             .map(|p| PropertyValue::Enumerated(p.to_raw()))
             .collect();
-        assert!(object.is_array_property(P::PROPERTY_LIST));
+        assert!(crate::property_metadata::is_array_property(
+            object,
+            P::PROPERTY_LIST
+        ));
         assert_eq!(
             object.read_property(P::PROPERTY_LIST, None).unwrap(),
             PropertyValue::List(wire.clone())
@@ -224,8 +227,14 @@ mod tests {
         );
         // Group Present_Value is a BACnetLIST (Table 12-17), so an index is
         // rejected; GlobalGroup admits one (Table 12-57 BACnetARRAY).
-        assert!(!object.is_array_property(P::PRESENT_VALUE));
-        assert!(!object.is_array_property(P::LIST_OF_GROUP_MEMBERS));
+        assert!(!crate::property_metadata::is_array_property(
+            &object,
+            P::PRESENT_VALUE
+        ));
+        assert!(!crate::property_metadata::is_array_property(
+            &object,
+            P::LIST_OF_GROUP_MEMBERS
+        ));
     }
 
     #[test]
@@ -274,9 +283,18 @@ mod tests {
         );
         // GlobalGroup collections are BACnetARRAY (Table 12-57), including
         // Present_Value, which is scalar elsewhere.
-        assert!(object.is_array_property(P::GROUP_MEMBERS));
-        assert!(object.is_array_property(P::GROUP_MEMBER_NAMES));
-        assert!(object.is_array_property(P::PRESENT_VALUE));
+        assert!(crate::property_metadata::is_array_property(
+            &object,
+            P::GROUP_MEMBERS
+        ));
+        assert!(crate::property_metadata::is_array_property(
+            &object,
+            P::GROUP_MEMBER_NAMES
+        ));
+        assert!(crate::property_metadata::is_array_property(
+            &object,
+            P::PRESENT_VALUE
+        ));
     }
 
     #[test]
@@ -322,8 +340,14 @@ mod tests {
             PropertyValue::List(vec![])
         );
         // StructuredView subordinate collections are BACnetARRAY (Table 12-34).
-        assert!(object.is_array_property(P::SUBORDINATE_LIST));
-        assert!(object.is_array_property(P::SUBORDINATE_ANNOTATIONS));
+        assert!(crate::property_metadata::is_array_property(
+            &object,
+            P::SUBORDINATE_LIST
+        ));
+        assert!(crate::property_metadata::is_array_property(
+            &object,
+            P::SUBORDINATE_ANNOTATIONS
+        ));
     }
 
     #[test]
@@ -359,7 +383,7 @@ mod tests {
                     };
                     assert_eq!(row.write_capability, capability, "{p:?}");
                     assert_eq!(
-                        object.is_writable_property(p),
+                        crate::property_metadata::is_writable_property(&*object, p),
                         capability.is_writable(),
                         "{p:?}"
                     );
@@ -373,7 +397,10 @@ mod tests {
                 }
                 // Object_Name has no network write route: a rename falls
                 // through to WRITE_ACCESS_DENIED even with a well-formed value.
-                assert!(!object.is_writable_property(P::OBJECT_NAME));
+                assert!(!crate::property_metadata::is_writable_property(
+                    &*object,
+                    P::OBJECT_NAME
+                ));
                 assert_error(
                     object
                         .write_property(
@@ -404,7 +431,7 @@ mod tests {
                             object.write_property(p, None, value, None).unwrap_err(),
                             ErrorCode::WRITE_ACCESS_DENIED,
                         );
-                        assert!(!object.is_writable_property(p));
+                        assert!(!crate::property_metadata::is_writable_property(&*object, p));
                     }
                 }
                 // Description and Out_Of_Service reject mistyped values
@@ -432,7 +459,7 @@ mod tests {
     #[test]
     fn property_metadata_group_trio_unserved_rows_stay_unknown() {
         fn assert_unserved(object: &mut dyn BACnetObject, p: P) {
-            assert!(!object.is_writable_property(p));
+            assert!(!crate::property_metadata::is_writable_property(&*object, p));
             assert_error(
                 object.read_property(p, None).unwrap_err(),
                 ErrorCode::UNKNOWN_PROPERTY,

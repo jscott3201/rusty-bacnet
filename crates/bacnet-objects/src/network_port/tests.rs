@@ -1,4 +1,5 @@
 use super::*;
+use crate::property_metadata::is_array_property;
 use crate::property_metadata::{
     PropertyConformance, PropertyPresenceCondition, PropertyWriteCapability,
 };
@@ -234,7 +235,7 @@ fn configured_bip_dns_array_and_derived_mac() {
             dns_servers: dns.clone(),
             ..Default::default()
         });
-        assert!(object.is_array_property(P::IP_DNS_SERVER));
+        assert!(is_array_property(&object, P::IP_DNS_SERVER));
         assert_eq!(
             object.read_property(P::IP_DNS_SERVER, Some(0)).unwrap(),
             PropertyValue::Unsigned(dns.len() as u64)
@@ -374,7 +375,7 @@ fn non_bip_application_rows_do_not_claim_ipv4_fields() {
         }
         // The classification follows the datatype, not this object's rows:
         // IP_DNS_SERVER is an array the non-B/IP port doesn't hold.
-        assert!(object.is_array_property(P::IP_DNS_SERVER));
+        assert!(is_array_property(&object, P::IP_DNS_SERVER));
         error(
             object.read_property(P::IP_DNS_SERVER, Some(1)),
             ErrorCode::UNKNOWN_PROPERTY,

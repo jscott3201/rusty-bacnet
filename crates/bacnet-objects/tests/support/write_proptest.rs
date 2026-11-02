@@ -6,6 +6,7 @@
 //! `tests/write_property_clocked.rs` over the catalogue with clocks bound
 //! and state seeded.
 
+use bacnet_objects::property_metadata::{is_array_property, is_writable_property};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
@@ -51,7 +52,7 @@ pub fn view(object: &dyn BACnetObject) -> View {
             Key::Whole(property.to_raw()),
             format!("{:?}", object.read_property(property, None)),
         );
-        if object.is_array_property(property) {
+        if is_array_property(object, property) {
             view.insert(
                 Key::Count(property.to_raw()),
                 format!("{:?}", object.read_property(property, Some(0))),
@@ -340,7 +341,7 @@ pub fn pick(object: &dyn BACnetObject, target: &Target) -> PropertyIdentifier {
             let writable: Vec<PropertyIdentifier> = rows
                 .iter()
                 .map(|row| row.property_identifier)
-                .filter(|&property| object.is_writable_property(property))
+                .filter(|&property| is_writable_property(object, property))
                 .collect();
             match writable.len() {
                 0 => rows[row % rows.len()].property_identifier,

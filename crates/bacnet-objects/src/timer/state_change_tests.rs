@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::command::{RunPlan, WriteFailure};
+use crate::property_metadata::is_writable_property;
 use crate::traits::CommandRunner;
 use bacnet_encoding::constructed::encode_device_object_property_reference;
 use bacnet_types::constructed::{
@@ -71,7 +72,7 @@ fn the_three_rows_come_together_or_not_at_all() {
     let listed = crate::test_rows::listed(&plain.property_metadata());
     for p in ROWS {
         assert!(!listed.contains(&p));
-        assert!(!plain.is_writable_property(p));
+        assert!(!is_writable_property(&plain, p));
         assert_eq!(
             code(plain.read_property(p, None).unwrap_err()),
             property(ErrorCode::UNKNOWN_PROPERTY)
@@ -85,7 +86,7 @@ fn the_three_rows_come_together_or_not_at_all() {
     assert_eq!(listed[listed.len() - 3..], ROWS);
     assert!(!crate::test_rows::required(&timer.property_metadata()).contains(&ROWS[0]));
     for (p, writable) in ROWS.into_iter().zip([true, true, false]) {
-        assert_eq!(timer.is_writable_property(p), writable, "{p:?}");
+        assert_eq!(is_writable_property(&timer, p), writable, "{p:?}");
     }
     assert_eq!(
         timer

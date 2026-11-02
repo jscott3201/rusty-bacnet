@@ -9,6 +9,7 @@ use bacnet_encoding::constructed::{
 };
 use bacnet_encoding::primitives::decode_application_value;
 use bacnet_objects::property_metadata::{Datatype, ValueType};
+use bacnet_objects::property_metadata::{is_array_property, is_list_property};
 use bacnet_services::list_manipulation::ListElementRequest;
 use bacnet_types::constructed::{
     BACnetCalendarEntry, BACnetDestination, BACnetDeviceObjectPropertyReference,
@@ -598,7 +599,7 @@ fn list_target(
             .read_property(property, index)
             .map_err(Refusal::unread)
     };
-    if index.is_some() && !object.is_array_property(property) {
+    if index.is_some() && !is_array_property(object, property) {
         // Read the whole property first so an unknown one keeps its error.
         return Err(Refusal::read(
             ErrorClass::PROPERTY,
@@ -609,7 +610,7 @@ fn list_target(
     let current = read(index)?;
     // An indexed array element is never a list: 135-2020 defines no
     // BACnetARRAY of BACnetLIST property.
-    if index.is_some() || !object.is_list_property(property) {
+    if index.is_some() || !is_list_property(object, property) {
         return Err(Refusal::read(
             ErrorClass::SERVICES,
             ErrorCode::PROPERTY_IS_NOT_A_LIST,

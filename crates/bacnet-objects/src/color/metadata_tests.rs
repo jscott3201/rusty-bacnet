@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::property_metadata::{PropertyConformance, PropertyWriteCapability};
+use crate::property_metadata::{is_array_property, is_writable_property};
 use crate::traits::BACnetObject;
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
 use bacnet_types::error::RemoteError;
@@ -147,9 +148,13 @@ fn rows_and_codes_match_the_addendum_tables() {
                 PropertyWriteCapability::ReadOnly
             };
             assert_eq!(row.write_capability, capability, "{p:?}");
-            assert_eq!(object.is_writable_property(p), capability.is_writable());
+            assert_eq!(is_writable_property(&*object, p), capability.is_writable());
             object.read_property(p, None).unwrap();
-            assert_eq!(object.is_array_property(p), p == P::PROPERTY_LIST, "{p:?}");
+            assert_eq!(
+                is_array_property(&*object, p),
+                p == P::PROPERTY_LIST,
+                "{p:?}"
+            );
         }
     }
 }
@@ -171,7 +176,7 @@ fn neither_object_serves_status_or_service_rows() {
                 !crate::property_metadata::has_property(&object.property_metadata(), p),
                 "{p:?}"
             );
-            assert!(!object.is_writable_property(p), "{p:?}");
+            assert!(!is_writable_property(&*object, p), "{p:?}");
             assert_error(
                 object.read_property(p, None).unwrap_err(),
                 ErrorCode::UNKNOWN_PROPERTY,

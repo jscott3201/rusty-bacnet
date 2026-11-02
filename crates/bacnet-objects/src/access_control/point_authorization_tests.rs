@@ -3,6 +3,7 @@
 //! Priority_For_Writing, the Table 12-36 required rows #1307 adds (Clauses
 //! 12.31.10, 12.31.11, 12.31.14 and 12.31.33).
 
+use crate::property_metadata::{is_array_property, is_writable_property};
 use bacnet_types::enums::{AuthorizationMode, ErrorClass, ErrorCode, PropertyIdentifier as P};
 use bacnet_types::error::RemoteError;
 
@@ -62,14 +63,14 @@ fn access_point_serves_policy_mode_and_priority_defaults() {
                 .any(|required| required == property),
             "{property:?}"
         );
-        assert!(!point.is_array_property(property), "{property:?}");
+        assert!(!is_array_property(&point, property), "{property:?}");
     }
     // A client picks the policy and the mode; the count and the priority
     // are the application's.
-    assert!(point.is_writable_property(POLICY));
-    assert!(point.is_writable_property(MODE));
-    assert!(!point.is_writable_property(POLICIES));
-    assert!(!point.is_writable_property(PRIORITY));
+    assert!(is_writable_property(&point, POLICY));
+    assert!(is_writable_property(&point, MODE));
+    assert!(!is_writable_property(&point, POLICIES));
+    assert!(!is_writable_property(&point, PRIORITY));
 }
 
 #[test]

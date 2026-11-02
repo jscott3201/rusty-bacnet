@@ -8,6 +8,7 @@
 //! types and Double on Large Analog Value.
 
 use super::super::*;
+use crate::property_metadata::{is_array_property, is_writable_property};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::RemoteError;
 
@@ -121,8 +122,8 @@ fn every_value_type_serves_current_command_priority_from_its_priority_array() {
                 .any(|required| required == ccp),
             "{kind:?}"
         );
-        assert!(!object.is_array_property(ccp), "{kind:?}");
-        assert!(!object.is_writable_property(ccp), "{kind:?}");
+        assert!(!is_array_property(&*object, ccp), "{kind:?}");
+        assert!(!is_writable_property(&*object, ccp), "{kind:?}");
 
         // Nothing commands a new object, so Relinquish_Default is in effect.
         assert_eq!(read(&*object, ccp), PropertyValue::Null, "{kind:?}");
@@ -165,8 +166,8 @@ fn assert_cov_increment_row(object: &mut dyn BACnetObject, zero: PropertyValue) 
             .any(|required| required == cov),
         "{kind:?}"
     );
-    assert!(object.is_writable_property(cov), "{kind:?}");
-    assert!(!object.is_array_property(cov), "{kind:?}");
+    assert!(is_writable_property(&*object, cov), "{kind:?}");
+    assert!(!is_array_property(&*object, cov), "{kind:?}");
     // A new object notifies on any change.
     assert_eq!(read(object, cov), zero, "{kind:?}");
     assert_eq!(

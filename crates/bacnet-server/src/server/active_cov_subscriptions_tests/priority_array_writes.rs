@@ -1,6 +1,7 @@
 //! Real dispatcher evidence for the read-only Priority_Array contract (§19.2.1).
 use super::*;
 use bacnet_objects::analog::AnalogOutputObject;
+use bacnet_objects::property_metadata::{is_array_property, is_writable_property};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::EngineeringUnits;
 use bacnet_types::error::RemoteError;
@@ -90,8 +91,8 @@ fn priority_array_all_twenty_profiles_trait_metadata_and_pics_are_read_only() {
     let mut database = ObjectDatabase::new();
     for mut object in cases {
         let oid = object.object_identifier();
-        assert!(object.is_array_property(PA));
-        assert!(!object.is_writable_property(PA), "{oid:?}");
+        assert!(is_array_property(&*object, PA));
+        assert!(!is_writable_property(&*object, PA), "{oid:?}");
         let rows = object.property_metadata().into_owned();
         let row = rows
             .iter()
@@ -172,7 +173,7 @@ fn priority_array_all_twenty_profiles_trait_metadata_and_pics_are_read_only() {
     }
     let mut door =
         bacnet_objects::access_control::AccessDoorObject::new(842, "door control").unwrap();
-    assert!(!door.is_writable_property(PA));
+    assert!(!is_writable_property(&door, PA));
     denied(door.write_property(PA, Some(8), PropertyValue::Null, None));
 }
 

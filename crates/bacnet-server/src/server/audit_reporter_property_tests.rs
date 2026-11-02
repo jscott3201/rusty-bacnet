@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::server::test_transport::TestTransport;
+use bacnet_objects::property_metadata::is_writable_property;
 use bacnet_services::{
     read_property::{ReadPropertyACK, ReadPropertyRequest},
     rpm::{ReadPropertyMultipleACK, ReadPropertyMultipleRequest},
@@ -339,7 +340,10 @@ async fn audit_reporter_monitored_objects_network_writes_are_denied_without_muta
                             .unwrap(),
                         PropertyValue::CharacterString(String::new())
                     );
-                    assert!(!object.is_writable_property(PropertyIdentifier::MONITORED_OBJECTS));
+                    assert!(!is_writable_property(
+                        object,
+                        PropertyIdentifier::MONITORED_OBJECTS
+                    ));
                 }
                 let requests = notifications(&fixture.transport.sent);
                 if selection.is_none() && index.is_some() {

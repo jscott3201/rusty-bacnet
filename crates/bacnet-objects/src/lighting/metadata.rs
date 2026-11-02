@@ -280,8 +280,14 @@ mod tests {
             .filter(|&&p| !matches!(p, P::OBJECT_IDENTIFIER | P::OBJECT_NAME | P::OBJECT_TYPE))
             .map(|p| PropertyValue::Enumerated(p.to_raw()))
             .collect();
-        assert!(object.is_array_property(P::PROPERTY_LIST));
-        assert!(object.is_array_property(P::PRIORITY_ARRAY));
+        assert!(crate::property_metadata::is_array_property(
+            object,
+            P::PROPERTY_LIST
+        ));
+        assert!(crate::property_metadata::is_array_property(
+            object,
+            P::PRIORITY_ARRAY
+        ));
         assert_eq!(
             object.read_property(P::PROPERTY_LIST, None).unwrap(),
             PropertyValue::List(wire.clone())
@@ -411,10 +417,22 @@ mod tests {
         );
         // Priority_Array is BACnetARRAY (Table 12-64), so the service gate
         // admits an index; Tracking_Value is scalar and rejects one.
-        assert!(object.is_array_property(P::PRIORITY_ARRAY));
-        assert!(!object.is_array_property(P::TRACKING_VALUE));
-        assert!(!object.is_array_property(P::DEFAULT_FADE_TIME));
-        assert!(!object.is_array_property(P::CURRENT_COMMAND_PRIORITY));
+        assert!(crate::property_metadata::is_array_property(
+            &object,
+            P::PRIORITY_ARRAY
+        ));
+        assert!(!crate::property_metadata::is_array_property(
+            &object,
+            P::TRACKING_VALUE
+        ));
+        assert!(!crate::property_metadata::is_array_property(
+            &object,
+            P::DEFAULT_FADE_TIME
+        ));
+        assert!(!crate::property_metadata::is_array_property(
+            &object,
+            P::CURRENT_COMMAND_PRIORITY
+        ));
     }
 
     #[test]
@@ -477,9 +495,18 @@ mod tests {
                 .unwrap(),
             PropertyValue::Null
         );
-        assert!(object.is_array_property(P::PRIORITY_ARRAY));
-        assert!(!object.is_array_property(P::BLINK_WARN_ENABLE));
-        assert!(!object.is_array_property(P::CURRENT_COMMAND_PRIORITY));
+        assert!(crate::property_metadata::is_array_property(
+            &object,
+            P::PRIORITY_ARRAY
+        ));
+        assert!(!crate::property_metadata::is_array_property(
+            &object,
+            P::BLINK_WARN_ENABLE
+        ));
+        assert!(!crate::property_metadata::is_array_property(
+            &object,
+            P::CURRENT_COMMAND_PRIORITY
+        ));
     }
 
     #[test]
@@ -546,7 +573,7 @@ mod tests {
                     };
                     assert_eq!(row.write_capability, capability, "{p:?}");
                     assert_eq!(
-                        object.is_writable_property(p),
+                        crate::property_metadata::is_writable_property(&*object, p),
                         capability.is_writable(),
                         "{p:?}"
                     );
@@ -577,7 +604,10 @@ mod tests {
                 }
                 // Object_Name has no network write route: a rename falls
                 // through to WRITE_ACCESS_DENIED even with a well-formed value.
-                assert!(!object.is_writable_property(P::OBJECT_NAME));
+                assert!(!crate::property_metadata::is_writable_property(
+                    &*object,
+                    P::OBJECT_NAME
+                ));
                 assert_error(
                     object
                         .write_property(
@@ -727,7 +757,7 @@ mod tests {
                         .unwrap_err(),
                     ErrorCode::WRITE_ACCESS_DENIED,
                 );
-                assert!(!object.is_writable_property(p));
+                assert!(!crate::property_metadata::is_writable_property(&object, p));
             }
         }
     }
@@ -735,7 +765,7 @@ mod tests {
     #[test]
     fn property_metadata_lighting_duo_unserved_rows_stay_unknown() {
         fn assert_unserved(object: &mut dyn BACnetObject, p: P) {
-            assert!(!object.is_writable_property(p));
+            assert!(!crate::property_metadata::is_writable_property(&*object, p));
             assert_error(
                 object.read_property(p, None).unwrap_err(),
                 ErrorCode::UNKNOWN_PROPERTY,

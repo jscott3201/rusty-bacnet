@@ -8,6 +8,7 @@
 
 use super::*;
 use crate::database::ObjectDatabase;
+use crate::property_metadata::is_writable_property;
 use bacnet_encoding::constructed::encode_bdt_entry;
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
 use bacnet_types::error::RemoteError;
@@ -37,7 +38,7 @@ fn round_trip(db: &mut ObjectDatabase) -> Vec<P> {
     let port = db.get_mut(&oid()).unwrap();
     // Each port here is registered, and its owner keeps it in service: the
     // row says so, and a write is refused.
-    assert!(!port.is_writable_property(P::OUT_OF_SERVICE));
+    assert!(!is_writable_property(&*port, P::OUT_OF_SERVICE));
     let in_service = port.read_property(P::OUT_OF_SERVICE, None).unwrap();
     let result = port.write_property(P::OUT_OF_SERVICE, None, in_service, None);
     assert_eq!(code(&result), Some(ErrorCode::WRITE_ACCESS_DENIED));
@@ -46,7 +47,7 @@ fn round_trip(db: &mut ObjectDatabase) -> Vec<P> {
     let mut failures = Vec::new();
     for row in rows {
         let property = row.property_identifier;
-        if !port.is_writable_property(property) {
+        if !is_writable_property(&*port, property) {
             continue;
         }
         let value = port.read_property(property, None).unwrap();

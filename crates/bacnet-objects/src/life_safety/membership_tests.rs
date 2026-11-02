@@ -1,6 +1,7 @@
 //! Member_Of and Zone_Members as BACnetDeviceObjectReference lists (#1182).
 
 use super::*;
+use crate::property_metadata::{is_list_property, is_writable_property};
 use bacnet_types::enums::ErrorCode;
 use bacnet_types::error::RemoteError;
 
@@ -101,8 +102,8 @@ fn member_lists_stay_read_only_over_the_network() {
             PropertyIdentifier::ZONE_MEMBERS,
         ),
     ] {
-        assert!(!object.is_writable_property(property));
-        assert!(object.is_list_property(property));
+        assert!(!is_writable_property(&*object, property));
+        assert!(is_list_property(&*object, property));
         assert!(matches!(
             object.write_property(property, None, served.clone(), None),
             Err(Error::Remote(RemoteError::Error { code, .. }))

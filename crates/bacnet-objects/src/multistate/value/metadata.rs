@@ -222,9 +222,18 @@ mod tests {
                 object.read_property(P::LAST_COMMAND_TIME, None).unwrap(),
                 readbacks[1]
             );
-            assert!(object.is_writable_property(P::VALUE_SOURCE));
-            assert!(!object.is_writable_property(P::LAST_COMMAND_TIME));
-            assert!(!object.is_array_property(P::VALUE_SOURCE));
+            assert!(crate::property_metadata::is_writable_property(
+                &*object,
+                P::VALUE_SOURCE
+            ));
+            assert!(!crate::property_metadata::is_writable_property(
+                &*object,
+                P::LAST_COMMAND_TIME
+            ));
+            assert!(!crate::property_metadata::is_array_property(
+                &*object,
+                P::VALUE_SOURCE
+            ));
         }
     }
 

@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::property_metadata::is_writable_property;
 use crate::traits::EventReporting as _;
 
 #[test]
@@ -290,7 +291,10 @@ fn bi_detection_enable_resets_and_gates_intrinsic_reporting() {
         &bi.property_metadata(),
         PropertyIdentifier::EVENT_DETECTION_ENABLE
     ));
-    assert!(bi.is_writable_property(PropertyIdentifier::EVENT_DETECTION_ENABLE));
+    assert!(is_writable_property(
+        &bi,
+        PropertyIdentifier::EVENT_DETECTION_ENABLE
+    ));
 }
 
 // --- Priority array bounds tests (BinaryOutput) ---
@@ -531,47 +535,63 @@ fn bo_direct_priority_array_index_17_error() {
 
 #[test]
 fn bi_is_writable_property_mirrors_write_property() {
-    use crate::traits::BACnetObject;
     let bi = BinaryInputObject::new(1, "bi-1").unwrap();
     // BI accepts PRESENT_VALUE (when OOS), ACTIVE/INACTIVE_TEXT, common set.
-    assert!(bi.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
-    assert!(bi.is_writable_property(PropertyIdentifier::ACTIVE_TEXT));
-    assert!(bi.is_writable_property(PropertyIdentifier::INACTIVE_TEXT));
-    assert!(bi.is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
-    assert!(bi.is_writable_property(PropertyIdentifier::OBJECT_NAME));
-    assert!(bi.is_writable_property(PropertyIdentifier::DESCRIPTION));
+    assert!(is_writable_property(&bi, PropertyIdentifier::PRESENT_VALUE));
+    assert!(is_writable_property(&bi, PropertyIdentifier::ACTIVE_TEXT));
+    assert!(is_writable_property(&bi, PropertyIdentifier::INACTIVE_TEXT));
+    assert!(is_writable_property(
+        &bi,
+        PropertyIdentifier::OUT_OF_SERVICE
+    ));
+    assert!(is_writable_property(&bi, PropertyIdentifier::OBJECT_NAME));
+    assert!(is_writable_property(&bi, PropertyIdentifier::DESCRIPTION));
     // Writable since #229: Clause 12.6 requires the supported Event_Enable
     // value set to include (T, T, T); writability is this stack's route to
     // that minimum, since the detectors default to (F, F, F) and had no
     // other commissioning path.
-    assert!(bi.is_writable_property(PropertyIdentifier::EVENT_ENABLE));
-    assert!(bi.is_writable_property(PropertyIdentifier::NOTIFICATION_CLASS));
-    assert!(bi.is_writable_property(PropertyIdentifier::NOTIFY_TYPE));
-    assert!(bi.is_writable_property(PropertyIdentifier::TIME_DELAY));
+    assert!(is_writable_property(&bi, PropertyIdentifier::EVENT_ENABLE));
+    assert!(is_writable_property(
+        &bi,
+        PropertyIdentifier::NOTIFICATION_CLASS
+    ));
+    assert!(is_writable_property(&bi, PropertyIdentifier::NOTIFY_TYPE));
+    assert!(is_writable_property(&bi, PropertyIdentifier::TIME_DELAY));
     // ACKED_TRANSITIONS stays read-only: the alarm-acknowledgment process
     // maintains it from event-state transitions and acknowledgment
     // indications, never a property write.
-    assert!(!bi.is_writable_property(PropertyIdentifier::ACKED_TRANSITIONS));
+    assert!(!is_writable_property(
+        &bi,
+        PropertyIdentifier::ACKED_TRANSITIONS
+    ));
     // Not commandable.
-    assert!(!bi.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
+    assert!(!is_writable_property(
+        &bi,
+        PropertyIdentifier::PRIORITY_ARRAY
+    ));
 }
 
 #[test]
 fn bo_is_writable_property_mirrors_write_property() {
-    use crate::traits::BACnetObject;
     let bo = BinaryOutputObject::new(1, "bo-1").unwrap();
     // Commandable.
-    assert!(!bo.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
-    assert!(bo.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
+    assert!(!is_writable_property(
+        &bo,
+        PropertyIdentifier::PRIORITY_ARRAY
+    ));
+    assert!(is_writable_property(&bo, PropertyIdentifier::PRESENT_VALUE));
     // Text + common.
-    assert!(bo.is_writable_property(PropertyIdentifier::ACTIVE_TEXT));
-    assert!(bo.is_writable_property(PropertyIdentifier::INACTIVE_TEXT));
-    assert!(bo.is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
+    assert!(is_writable_property(&bo, PropertyIdentifier::ACTIVE_TEXT));
+    assert!(is_writable_property(&bo, PropertyIdentifier::INACTIVE_TEXT));
+    assert!(is_writable_property(
+        &bo,
+        PropertyIdentifier::OUT_OF_SERVICE
+    ));
     // Writable since #222: Clause 12.7 requires the supported Event_Enable
     // value set to include (T, T, T); writability is this stack's route to
     // that minimum, since the detectors default to (F, F, F) and had no
     // other commissioning path.
-    assert!(bo.is_writable_property(PropertyIdentifier::EVENT_ENABLE));
+    assert!(is_writable_property(&bo, PropertyIdentifier::EVENT_ENABLE));
 }
 
 /// #270: a BinaryOutput Relinquish_Default write is validated like a
@@ -581,7 +601,10 @@ fn bo_is_writable_property_mirrors_write_property() {
 fn bo_relinquish_default_write_recaptures_present_value() {
     let bo = BinaryOutputObject::new(1, "BO-1");
     let mut bo = bo.unwrap();
-    assert!(bo.is_writable_property(PropertyIdentifier::RELINQUISH_DEFAULT));
+    assert!(is_writable_property(
+        &bo,
+        PropertyIdentifier::RELINQUISH_DEFAULT
+    ));
 
     bo.write_property(
         PropertyIdentifier::RELINQUISH_DEFAULT,

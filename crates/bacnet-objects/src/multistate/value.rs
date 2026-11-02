@@ -710,7 +710,10 @@ mod detection_enable_tests {
             &msv.property_metadata(),
             PropertyIdentifier::EVENT_DETECTION_ENABLE
         ));
-        assert!(msv.is_writable_property(PropertyIdentifier::EVENT_DETECTION_ENABLE));
+        assert!(crate::property_metadata::is_writable_property(
+            &msv,
+            PropertyIdentifier::EVENT_DETECTION_ENABLE
+        ));
     }
 }
 

@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::property_metadata::is_writable_property;
 use crate::traits::EventReporting as _;
 
 #[test]
@@ -136,7 +137,10 @@ fn bv_detection_enable_resets_and_gates_intrinsic_reporting() {
         &bv.property_metadata(),
         PropertyIdentifier::EVENT_DETECTION_ENABLE
     ));
-    assert!(bv.is_writable_property(PropertyIdentifier::EVENT_DETECTION_ENABLE));
+    assert!(is_writable_property(
+        &bv,
+        PropertyIdentifier::EVENT_DETECTION_ENABLE
+    ));
 }
 
 // --- BinaryValue commandable tests ---
@@ -591,7 +595,10 @@ fn bv_active_text_wrong_type_rejected() {
 #[test]
 fn bv_relinquish_default_write_recaptures_present_value() {
     let mut bv = BinaryValueObject::new(1, "BV-1").unwrap();
-    assert!(bv.is_writable_property(PropertyIdentifier::RELINQUISH_DEFAULT));
+    assert!(is_writable_property(
+        &bv,
+        PropertyIdentifier::RELINQUISH_DEFAULT
+    ));
 
     bv.write_property(
         PropertyIdentifier::RELINQUISH_DEFAULT,

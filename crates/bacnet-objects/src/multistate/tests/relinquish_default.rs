@@ -2,6 +2,7 @@
 //! types (MultiState Output and MultiState Value).
 
 use super::super::*;
+use crate::property_metadata::is_writable_property;
 // ---------------------------------------------------------------------------
 // #270 — writable Relinquish_Default (MSO + MSV)
 // ---------------------------------------------------------------------------
@@ -16,7 +17,10 @@ fn mso_msv_relinquish_default_write_recaptures_present_value() {
         &mut MultiStateOutputObject::new(1, "MSO-1", 3).unwrap() as &mut dyn BACnetObject,
         &mut MultiStateValueObject::new(1, "MSV-1", 3).unwrap() as &mut dyn BACnetObject,
     ] {
-        assert!(object.is_writable_property(PropertyIdentifier::RELINQUISH_DEFAULT));
+        assert!(is_writable_property(
+            &*object,
+            PropertyIdentifier::RELINQUISH_DEFAULT
+        ));
 
         object
             .write_property(

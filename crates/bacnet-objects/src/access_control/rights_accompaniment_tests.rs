@@ -7,6 +7,7 @@ use super::test_storage::{MemoryPersistence, assert_refused, block_on, persisten
 use super::*;
 use crate::durable::{DurableWrites, StageStep};
 use crate::property_metadata::{PropertyConformance, PropertyWriteCapability};
+use crate::property_metadata::{is_array_property, is_writable_property};
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -63,13 +64,13 @@ fn assert_listed(rights: &AccessRightsObject, listed: bool) {
         .iter()
         .find(|row| row.property_identifier == P::ACCOMPANIMENT);
     assert_eq!(row.is_some(), listed);
-    assert_eq!(rights.is_writable_property(P::ACCOMPANIMENT), listed);
+    assert_eq!(is_writable_property(rights, P::ACCOMPANIMENT), listed);
     // Never required, and never an array.
     assert!(
         !crate::property_metadata::required_properties(&rights.property_metadata())
             .any(|required| required == P::ACCOMPANIMENT)
     );
-    assert!(!rights.is_array_property(P::ACCOMPANIMENT));
+    assert!(!is_array_property(rights, P::ACCOMPANIMENT));
     if let Some(row) = row {
         assert_eq!(row.conformance, PropertyConformance::Optional);
         assert_eq!(row.write_capability, PropertyWriteCapability::Always);

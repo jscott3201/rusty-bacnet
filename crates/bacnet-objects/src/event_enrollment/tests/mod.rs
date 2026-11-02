@@ -13,3 +13,4 @@ mod reporting_options;
 mod status_flags;
 mod time_delay_normal;
 mod timestamps;
+mod writable_rows;

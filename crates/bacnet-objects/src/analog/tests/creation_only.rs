@@ -5,6 +5,7 @@
 
 use super::super::*;
 use crate::creation::CreationTestExt;
+use crate::property_metadata::is_writable_property;
 use bacnet_types::enums::EngineeringUnits;
 use bacnet_types::error::RemoteError;
 
@@ -82,7 +83,7 @@ fn the_analog_and_numeric_value_types_take_units_only_at_creation() {
             )),
             ErrorCode::WRITE_ACCESS_DENIED
         );
-        assert!(!object.is_writable_property(PropertyIdentifier::UNITS));
+        assert!(!is_writable_property(&*object, PropertyIdentifier::UNITS));
         assert_eq!(
             code(object.write_property(
                 PropertyIdentifier::UNITS,

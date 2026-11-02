@@ -1,4 +1,5 @@
 use super::*;
+use crate::property_metadata::is_writable_property;
 use crate::traits::EventReporting as _;
 use bacnet_types::enums::{EventState, EventType};
 
@@ -40,7 +41,10 @@ fn feedback_value_round_trips_and_is_advertised_writable() {
         &mso.property_metadata(),
         PropertyIdentifier::FEEDBACK_VALUE
     ));
-    assert!(mso.is_writable_property(PropertyIdentifier::FEEDBACK_VALUE));
+    assert!(is_writable_property(
+        &mso,
+        PropertyIdentifier::FEEDBACK_VALUE
+    ));
     assert!(
         mso.write_property(
             PropertyIdentifier::FEEDBACK_VALUE,
@@ -226,7 +230,10 @@ fn generic_event_properties_round_trip_and_match_pics() {
         )
         .is_err()
     );
-    assert!(!mso.is_writable_property(PropertyIdentifier::ACKED_TRANSITIONS));
+    assert!(!is_writable_property(
+        &mso,
+        PropertyIdentifier::ACKED_TRANSITIONS
+    ));
 
     for property in [
         PropertyIdentifier::EVENT_ENABLE,
@@ -239,7 +246,7 @@ fn generic_event_properties_round_trip_and_match_pics() {
             &mso.property_metadata(),
             property
         ));
-        assert!(mso.is_writable_property(property));
+        assert!(is_writable_property(&mso, property));
     }
     assert!(
         mso.write_property(
@@ -250,7 +257,7 @@ fn generic_event_properties_round_trip_and_match_pics() {
         )
         .is_err()
     );
-    assert!(!mso.is_writable_property(PropertyIdentifier::EVENT_STATE));
+    assert!(!is_writable_property(&mso, PropertyIdentifier::EVENT_STATE));
 }
 
 #[test]
@@ -316,5 +323,8 @@ fn detection_enable_is_a_disabled_by_default_invariant() {
         &mso.property_metadata(),
         PropertyIdentifier::EVENT_DETECTION_ENABLE
     ));
-    assert!(mso.is_writable_property(PropertyIdentifier::EVENT_DETECTION_ENABLE));
+    assert!(is_writable_property(
+        &mso,
+        PropertyIdentifier::EVENT_DETECTION_ENABLE
+    ));
 }

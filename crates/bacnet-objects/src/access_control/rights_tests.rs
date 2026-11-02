@@ -3,6 +3,7 @@
 //! them; and Enable (#1332). `rights_writes_tests.rs` covers network writes
 //! of the arrays.
 
+use crate::property_metadata::{is_array_property, is_writable_property};
 use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference};
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
 use bacnet_types::error::RemoteError;
@@ -71,7 +72,7 @@ fn access_rights_rule_arrays_read_whole_and_by_index() {
         (P::POSITIVE_ACCESS_RULES, vec![business_hours, anywhere]),
         (P::NEGATIVE_ACCESS_RULES, vec![lockdown]),
     ] {
-        assert!(rights.is_array_property(property), "{property:?}");
+        assert!(is_array_property(&rights, property), "{property:?}");
         let elements: Vec<PropertyValue> = rules.iter().map(element).collect();
         assert_eq!(
             rights.read_property(property, None).unwrap(),
@@ -279,7 +280,7 @@ fn access_rights_enable_defaults_true_and_follows_the_setter_and_writes() {
         &rights.property_metadata(),
         P::LOG_ENABLE
     ));
-    assert!(rights.is_writable_property(P::LOG_ENABLE));
+    assert!(is_writable_property(&rights, P::LOG_ENABLE));
 
     // Disabling the object leaves each rule's own flag as it was.
     let kept = rule(Some(schedule(1)), Some(local(ObjectType::ACCESS_POINT, 2)));

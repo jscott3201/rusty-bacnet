@@ -3,18 +3,19 @@
 //! These tests live in a sibling module to `tests.rs` to keep `tests.rs` under
 //! the workspace's 700-LOC file cap. They verify the central invariant of the
 //! shared-truth-source design: for every core I/O/V object type, the
-//! `BACnetObject::is_writable_property` override and the runtime
-//! `write_property_from` match arms must agree — if the override reports a property
-//! writable, `write_property_from` must accept it, and if it reports it read-only,
-//! `write_property_from` must reject it. This is the regression guard that prevents
-//! an override and its `write_property_from` arms from drifting apart (the exact
-//! false-negative class issue #115 eliminates).
+//! writability its metadata rows state (`property_metadata::is_writable_property`)
+//! and the runtime `write_property_from` match arms must agree — if the rows report
+//! a property writable, `write_property_from` must accept it, and if they report it
+//! read-only, `write_property_from` must reject it. This is the regression guard
+//! that prevents the rows and the `write_property_from` arms from drifting apart
+//! (the exact false-negative class issue #115 eliminates).
 
 use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use bacnet_objects::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use bacnet_objects::multistate::{
     MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject,
 };
+use bacnet_objects::property_metadata::is_writable_property;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::PropertyValue;
@@ -49,7 +50,7 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
         label: &str,
     ) {
         assert!(
-            obj.is_writable_property(pid),
+            is_writable_property(&*obj, pid),
             "{label}: is_writable_property must report {pid:?} writable"
         );
         let result = obj.write_property_from(
@@ -68,7 +69,7 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
     // Helper: assert the override says read-only AND write_property rejects it.
     fn assert_rejects(obj: &mut dyn BACnetObject, pid: PropertyIdentifier, label: &str) {
         assert!(
-            !obj.is_writable_property(pid),
+            !is_writable_property(&*obj, pid),
             "{label}: is_writable_property must report {pid:?} NOT writable"
         );
         let result = obj.write_property_from(
@@ -93,7 +94,7 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
         label: &str,
     ) {
         assert!(
-            obj.is_writable_property(pid),
+            is_writable_property(&*obj, pid),
             "{label}: is_writable_property must report {pid:?} writable"
         );
         let result = obj.write_property_from(
@@ -410,7 +411,7 @@ fn is_writable_property_matches_write_property_on_pulse_converter_and_averaging(
     ) {
         for (pid, value) in accepted.iter().cloned() {
             assert!(
-                obj.is_writable_property(pid),
+                is_writable_property(&*obj, pid),
                 "{label}: {pid:?} must be advertised writable"
             );
             assert!(
@@ -427,7 +428,7 @@ fn is_writable_property_matches_write_property_on_pulse_converter_and_averaging(
         }
         for (pid, value) in rejected.iter().cloned() {
             assert!(
-                !obj.is_writable_property(pid),
+                !is_writable_property(&*obj, pid),
                 "{label}: {pid:?} must NOT be advertised writable"
             );
             assert!(

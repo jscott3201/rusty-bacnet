@@ -499,7 +499,10 @@ mod detection_enable_tests {
             &msi.property_metadata(),
             PropertyIdentifier::EVENT_DETECTION_ENABLE
         ));
-        assert!(msi.is_writable_property(PropertyIdentifier::EVENT_DETECTION_ENABLE));
+        assert!(crate::property_metadata::is_writable_property(
+            &msi,
+            PropertyIdentifier::EVENT_DETECTION_ENABLE
+        ));
     }
 }
 

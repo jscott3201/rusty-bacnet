@@ -3,6 +3,7 @@
 //! sample names, because only it can reach the other object.
 
 use crate::prelude::*;
+use crate::property_metadata::is_array_property;
 use core::time::Duration;
 
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
@@ -48,7 +49,7 @@ impl ObjectDatabase {
                 .get(&reference.object_identifier)
                 // An index on anything but an array fails, as ReadProperty's
                 // gate makes it; object read arms may ignore the index.
-                .filter(|target| index.is_none() || target.is_array_property(property))
+                .filter(|target| index.is_none() || is_array_property(*target, property))
                 .and_then(|target| target.read_property(property, index).ok());
             let Some(input) = self.get_mut(&oid).and_then(|object| object.local_input()) else {
                 continue;

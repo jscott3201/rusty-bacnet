@@ -224,8 +224,8 @@ async fn each_configuration_type_takes_the_initial_values_clients_send() {
             let object = db.get(&wanted).unwrap();
             let decoded = bacnet_device_core::write::decode_write_property_value(
                 property,
+                bacnet_objects::property_metadata::object_value_type(object, property),
                 None,
-                object.is_list_property(property),
                 &sent,
             )
             .unwrap();

@@ -232,13 +232,18 @@ impl BACnetObject for Custom {
         "custom"
     }
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
-        crate::test_rows::read_only(&[PropertyIdentifier::PRESENT_VALUE, CUSTOM, VARIABLE])
+        crate::test_rows::typed(
+            crate::test_rows::read_only(&[PropertyIdentifier::PRESENT_VALUE, CUSTOM, VARIABLE]),
+            &[(
+                CUSTOM,
+                bacnet_objects::property_metadata::ValueType::array(
+                    bacnet_objects::property_metadata::Datatype::Unsigned,
+                ),
+            )],
+        )
     }
     fn cov(&self) -> Option<&dyn bacnet_objects::traits::CovReporting> {
         Some(self)
-    }
-    fn is_array_property(&self, p: PropertyIdentifier) -> bool {
-        p == CUSTOM
     }
     fn read_property(&self, p: PropertyIdentifier, _: Option<u32>) -> Result<PropertyValue, Error> {
         if p == PropertyIdentifier::PRESENT_VALUE {

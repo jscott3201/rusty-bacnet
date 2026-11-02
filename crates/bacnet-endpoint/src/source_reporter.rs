@@ -142,19 +142,6 @@ impl BACnetObject for SourceReporter {
         self.wrapped.timed()
     }
 
-    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        (!self.active() || property != PropertyIdentifier::AUDIT_SOURCE_REPORTER)
-            && self.wrapped.is_writable_property(property)
-    }
-
-    fn is_array_property(&self, property: PropertyIdentifier) -> bool {
-        self.wrapped.is_array_property(property)
-    }
-
-    fn is_list_property(&self, property: PropertyIdentifier) -> bool {
-        self.wrapped.is_list_property(property)
-    }
-
     fn staging_source(&mut self) -> Option<&mut dyn StagingSource> {
         self.wrapped.staging_source()
     }

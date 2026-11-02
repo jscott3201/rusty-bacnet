@@ -1,5 +1,6 @@
 use super::*;
 use crate::clock::{ClockFrame, ClockReader};
+use crate::property_metadata::is_writable_property;
 use crate::traits::Timed;
 use bacnet_encoding::constructed::encode_event_log_record;
 use bacnet_types::bitstring::LogStatus;
@@ -387,7 +388,7 @@ fn event_log_has_no_out_of_service_or_log_interval() {
             PropertyValue::Unsigned(60),
         ),
     ] {
-        assert!(!el.is_writable_property(property));
+        assert!(!is_writable_property(&el, property));
         let read = el.read_property(property, None).map(|_| ());
         let write = el.write_property(property, None, value, None);
         for result in [read, write] {

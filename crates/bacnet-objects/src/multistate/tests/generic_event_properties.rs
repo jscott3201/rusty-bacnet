@@ -6,6 +6,7 @@
 //! `multistate/mod.rs` and already holds `objects.rs` and `state_text.rs`.
 
 use super::super::*;
+use crate::property_metadata::is_writable_property;
 use crate::traits::EventReporting as _;
 use bacnet_encoding::primitives::encode_timestamp_choice;
 use bacnet_types::bitstring::EventTransitionBits;
@@ -171,7 +172,7 @@ fn assert_event_properties_round_trip(object: &mut dyn BACnetObject, label: &str
             "{label}: {property:?} must be advertised in Property_List"
         );
         assert!(
-            object.is_writable_property(property),
+            is_writable_property(&*object, property),
             "{label}: {property:?} must be advertised writable"
         );
     }
@@ -248,7 +249,10 @@ fn assert_event_properties_round_trip(object: &mut dyn BACnetObject, label: &str
         PropertyIdentifier::ACKED_TRANSITIONS,
         label,
     );
-    assert!(!object.is_writable_property(PropertyIdentifier::ACKED_TRANSITIONS));
+    assert!(!is_writable_property(
+        &*object,
+        PropertyIdentifier::ACKED_TRANSITIONS
+    ));
     assert!(crate::property_metadata::has_property(
         &object.property_metadata(),
         PropertyIdentifier::ACKED_TRANSITIONS
@@ -266,7 +270,10 @@ fn assert_event_properties_round_trip(object: &mut dyn BACnetObject, label: &str
         PropertyIdentifier::EVENT_STATE,
         label,
     );
-    assert!(!object.is_writable_property(PropertyIdentifier::EVENT_STATE));
+    assert!(!is_writable_property(
+        &*object,
+        PropertyIdentifier::EVENT_STATE
+    ));
 }
 
 #[test]
@@ -388,7 +395,7 @@ fn multistate_event_history_is_listed_readable_and_read_only() {
                 property,
                 label,
             );
-            assert!(!object.is_writable_property(property));
+            assert!(!is_writable_property(&*object, property));
         }
     }
 }
@@ -476,7 +483,10 @@ fn multistate_alarm_values_round_trip_and_match_pics() {
             &object.property_metadata(),
             PropertyIdentifier::ALARM_VALUES
         ));
-        assert!(object.is_writable_property(PropertyIdentifier::ALARM_VALUES));
+        assert!(is_writable_property(
+            &*object,
+            PropertyIdentifier::ALARM_VALUES
+        ));
         assert_property_error(
             object.write_property(
                 PropertyIdentifier::ALARM_VALUES,
@@ -622,7 +632,10 @@ fn unsupported_fault_and_output_alarm_surfaces_are_unknown() {
             &object.property_metadata(),
             PropertyIdentifier::FAULT_VALUES
         ));
-        assert!(!object.is_writable_property(PropertyIdentifier::FAULT_VALUES));
+        assert!(!is_writable_property(
+            object,
+            PropertyIdentifier::FAULT_VALUES
+        ));
     }
     let mso = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();
     assert_property_read_error(

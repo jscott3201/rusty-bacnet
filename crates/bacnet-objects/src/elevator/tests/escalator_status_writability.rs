@@ -1,5 +1,6 @@
 use super::super::*;
 use super::{assert_invalid_data_type, assert_value_out_of_range};
+use crate::property_metadata::is_writable_property;
 use bacnet_types::enums::{EscalatorFault, EscalatorMode, EscalatorOperationDirection};
 
 fn read(esc: &EscalatorObject, property: PropertyIdentifier) -> PropertyValue {
@@ -144,7 +145,7 @@ fn writable_predicate_matches_only_the_escalator_write_routes() {
     let rows = esc.property_metadata().into_owned();
     for property in rows.iter().map(|row| row.property_identifier) {
         assert_eq!(
-            esc.is_writable_property(property),
+            is_writable_property(&esc, property),
             writable.contains(&property),
             "writability mismatch for {property:?}"
         );
@@ -158,7 +159,7 @@ fn writable_predicate_matches_only_the_escalator_write_routes() {
         PropertyIdentifier::ENERGY_METER_REF,
         PropertyIdentifier::RELIABILITY,
     ] {
-        assert!(!esc.is_writable_property(property), "{property:?}");
+        assert!(!is_writable_property(&esc, property), "{property:?}");
     }
 }
 

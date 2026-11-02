@@ -1,5 +1,6 @@
 use super::*;
 use PropertyIdentifier as P;
+use bacnet_objects::property_metadata::is_writable_property;
 use bacnet_objects::{
     accumulator::{AccumulatorObject, PulseConverterObject},
     traits::BACnetObject,
@@ -232,14 +233,14 @@ fn rpm_accumulator_metadata_corrects_historical_pics_writability() {
     // directions; dispatch itself is unchanged.
     let object = AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS).unwrap();
     for p in [P::OBJECT_NAME, P::PRESENT_VALUE] {
-        assert!(!object.is_writable_property(p));
+        assert!(!is_writable_property(&object, p));
     }
     for p in [
         P::MAX_PRES_VALUE,
         P::PULSE_RATE,
         P::LIMIT_MONITORING_INTERVAL,
     ] {
-        assert!(object.is_writable_property(p));
+        assert!(is_writable_property(&object, p));
     }
     // The Pulse Converter override translated exactly: the same seven
     // properties stay advertised, including gated Present_Value.
@@ -253,7 +254,7 @@ fn rpm_accumulator_metadata_corrects_historical_pics_writability() {
         P::OUT_OF_SERVICE,
         P::COV_INCREMENT,
     ] {
-        assert!(pc.is_writable_property(p));
+        assert!(is_writable_property(&pc, p));
     }
-    assert!(!pc.is_writable_property(P::OBJECT_NAME));
+    assert!(!is_writable_property(&pc, P::OBJECT_NAME));
 }

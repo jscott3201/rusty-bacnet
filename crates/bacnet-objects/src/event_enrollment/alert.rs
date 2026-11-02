@@ -273,20 +273,6 @@ impl BACnetObject for AlertEnrollmentObject {
         ))
     }
 
-    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        matches!(
-            property,
-            PropertyIdentifier::DESCRIPTION
-                | PropertyIdentifier::EVENT_DETECTION_ENABLE
-                | PropertyIdentifier::EVENT_ENABLE
-                | PropertyIdentifier::NOTIFICATION_CLASS
-                | PropertyIdentifier::NOTIFY_TYPE
-                | PropertyIdentifier::EVENT_MESSAGE_TEXTS_CONFIG
-                | PropertyIdentifier::EVENT_ALGORITHM_INHIBIT_REF
-                | PropertyIdentifier::EVENT_ALGORITHM_INHIBIT
-        )
-    }
-
     crate::traits::lend_event_reporting!();
 
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {

@@ -38,6 +38,7 @@
 //! PICS/RPM-REQUIRED output and needs an owner compatibility decision first;
 //! do not "fix" a pin failure by editing the pins.
 
+use crate::property_metadata::is_writable_property;
 use std::collections::HashSet;
 
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
@@ -131,7 +132,7 @@ fn audit_every_supported_type_derives_from_canonical_metadata() {
                 row.property_identifier
             );
             assert_eq!(
-                object.is_writable_property(row.property_identifier),
+                is_writable_property(&**object, row.property_identifier),
                 row.write_capability.is_writable(),
                 "{object_type:?} is_writable must match {:?} write capability",
                 row.property_identifier

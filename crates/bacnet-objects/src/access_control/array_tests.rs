@@ -7,6 +7,7 @@
 //! Each array reads whole with no index, its size at index 0, one element at
 //! 1 to N and INVALID_ARRAY_INDEX past N.
 
+use crate::property_metadata::{is_array_property, is_list_property};
 use bacnet_types::constructed::{BACnetAuthenticationFactorFormat, BACnetDeviceObjectReference};
 use bacnet_types::enums::PropertyIdentifier as P;
 use bacnet_types::enums::{AuthenticationFactorType as F, ErrorClass, ErrorCode};
@@ -26,8 +27,8 @@ fn assert_property_error(result: Result<PropertyValue, Error>, code: ErrorCode) 
 /// Read `property` of `object` whole, at index 0, at every index and past
 /// the end, and check each against `elements`.
 fn assert_array(object: &dyn BACnetObject, property: P, elements: &[PropertyValue]) {
-    assert!(object.is_array_property(property), "{property:?}");
-    assert!(!object.is_list_property(property), "{property:?}");
+    assert!(is_array_property(object, property), "{property:?}");
+    assert!(!is_list_property(object, property), "{property:?}");
     assert_eq!(
         object.read_property(property, None).unwrap(),
         PropertyValue::List(elements.to_vec()),

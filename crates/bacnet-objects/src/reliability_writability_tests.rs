@@ -4,6 +4,7 @@ use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use crate::life_safety::{LifeSafetyPointObject, LifeSafetyZoneObject};
 use crate::loop_obj::LoopObject;
 use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject};
+use crate::property_metadata::is_writable_property;
 use crate::schedule::ScheduleObject;
 use crate::traits::BACnetObject;
 use bacnet_types::enums::{
@@ -14,7 +15,7 @@ use bacnet_types::primitives::PropertyValue;
 
 fn assert_reliability_gate(object: &mut dyn BACnetObject) {
     assert!(
-        object.is_writable_property(PropertyIdentifier::RELIABILITY),
+        is_writable_property(&*object, PropertyIdentifier::RELIABILITY),
         "static capability must advertise Reliability as writable"
     );
 

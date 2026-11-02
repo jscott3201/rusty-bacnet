@@ -1,5 +1,6 @@
 use super::*;
 use crate::clock::{ClockFrame, ClockReader};
+use crate::property_metadata::is_writable_property;
 use bacnet_encoding::constructed::{decode_log_multiple_record, decode_log_record};
 use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{BACnetLogMultipleRecord, LogData, LogDatum, LogValue};
@@ -555,7 +556,7 @@ fn trendlog_multiple_write_log_enable() {
 #[test]
 fn trendlog_reliability_is_not_network_writable() {
     let mut tl = TrendLogObject::new(1, "TL-1", 100).unwrap();
-    assert!(!tl.is_writable_property(PropertyIdentifier::RELIABILITY));
+    assert!(!is_writable_property(&tl, PropertyIdentifier::RELIABILITY));
 
     let result = tl.write_property(
         PropertyIdentifier::RELIABILITY,
@@ -602,7 +603,10 @@ fn trend_logs_have_no_out_of_service_property() {
                 .iter()
                 .any(|row| row.property_identifier == PropertyIdentifier::OUT_OF_SERVICE)
         );
-        assert!(!object.is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
+        assert!(!is_writable_property(
+            &*object,
+            PropertyIdentifier::OUT_OF_SERVICE
+        ));
         let read = object
             .read_property(PropertyIdentifier::OUT_OF_SERVICE, None)
             .map(|_| ());
@@ -631,7 +635,7 @@ fn trend_logs_have_no_out_of_service_property() {
 #[test]
 fn trendlog_multiple_reliability_is_not_network_writable() {
     let mut tlm = TrendLogMultipleObject::new(1, "TLM-1", 100).unwrap();
-    assert!(!tlm.is_writable_property(PropertyIdentifier::RELIABILITY));
+    assert!(!is_writable_property(&tlm, PropertyIdentifier::RELIABILITY));
 
     let result = tlm.write_property(
         PropertyIdentifier::RELIABILITY,

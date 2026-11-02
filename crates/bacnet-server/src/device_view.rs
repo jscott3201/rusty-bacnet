@@ -5,6 +5,7 @@ mod identity;
 use crate::cov::active::LiveDeviceCov;
 use bacnet_device_core::read::ReadOverlay;
 use bacnet_device_core::write::{identity_property, owned};
+use bacnet_objects::property_metadata::is_array_property;
 use bacnet_objects::{
     audit::AuditReporterObject,
     database::ObjectDatabase,
@@ -180,7 +181,7 @@ impl BACnetObject for DeviceReadView<'_> {
         if !self.is_device() || !owned(property) {
             return self.object.read_property(property, index);
         }
-        if index.is_some() && !self.is_array_property(property) {
+        if index.is_some() && !is_array_property(self, property) {
             return Err(property_error(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY));
         }
         match property {
@@ -272,35 +273,6 @@ impl BACnetObject for DeviceReadView<'_> {
         }
         rows.sort_by_key(|row| row.property_identifier.to_raw());
         Cow::Owned(rows)
-    }
-    fn is_array_property(&self, property: P) -> bool {
-        if self.is_device() && self.owns(property) {
-            property == P::PROPERTY_LIST
-        } else {
-            self.object.is_array_property(property)
-        }
-    }
-    /// ReadRange asks this of the served object (#1046): the two COV lists
-    /// and Device_Address_Binding are BACnetLISTs, Property_List is an array
-    /// and the services bit string is a single value.
-    fn is_list_property(&self, property: P) -> bool {
-        if self.is_device() && self.owns(property) {
-            matches!(
-                property,
-                P::ACTIVE_COV_SUBSCRIPTIONS
-                    | P::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS
-                    | P::DEVICE_ADDRESS_BINDING
-            )
-        } else {
-            self.object.is_list_property(property)
-        }
-    }
-    fn is_writable_property(&self, property: P) -> bool {
-        if self.is_device() && self.owns(property) {
-            false
-        } else {
-            self.object.is_writable_property(property)
-        }
     }
     // Every other read-only query is the wrapped object's own answer (#1076);
     // `tests::the_view_forwards_every_read_query` runs each query the trait

@@ -3,6 +3,7 @@
 //! Split out to keep every file under the 700-LOC cap.
 
 use super::super::*;
+use crate::property_metadata::is_writable_property;
 use bacnet_types::enums::{ErrorClass, ErrorCode, NotifyType};
 use bacnet_types::error::RemoteError;
 
@@ -425,7 +426,7 @@ fn alert_enrollment_writability_matches_write_routes() {
         PropertyIdentifier::NOTIFICATION_CLASS,
         PropertyIdentifier::NOTIFY_TYPE,
     ] {
-        assert!(ae.is_writable_property(property));
+        assert!(is_writable_property(&ae, property));
     }
     for property in [
         PropertyIdentifier::OBJECT_NAME,
@@ -436,6 +437,6 @@ fn alert_enrollment_writability_matches_write_routes() {
         PropertyIdentifier::OUT_OF_SERVICE,
         PropertyIdentifier::RELIABILITY,
     ] {
-        assert!(!ae.is_writable_property(property));
+        assert!(!is_writable_property(&ae, property));
     }
 }

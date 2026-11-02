@@ -1,7 +1,7 @@
 use crate::handlers::rpm_budget::{handle_rpm_budgeted, handle_rpm_budgeted_observed};
 use bacnet_device_core::read::ReadFailure;
 use bacnet_objects::property_metadata::{
-    PropertyConformance, PropertyMetadata, PropertyWriteCapability,
+    Datatype, PropertyConformance, PropertyMetadata, PropertyWriteCapability, ValueType,
 };
 use std::{
     borrow::Cow,
@@ -86,25 +86,22 @@ impl BACnetObject for Declared {
             ]
             .into_iter()
             .map(|id| {
-                PropertyMetadata::new(
+                let row = PropertyMetadata::new(
                     id,
                     PropertyConformance::Optional,
                     None,
                     PropertyWriteCapability::ReadOnly,
-                )
+                );
+                // State_Text and Property_List are standard arrays, as is
+                // Object_List, which is deliberately absent here.
+                if id == VENDOR_ARRAY {
+                    row.with_value_type(ValueType::array(Datatype::Unsigned))
+                } else {
+                    row
+                }
             })
             .collect(),
         )
-    }
-    fn is_array_property(&self, id: PropertyIdentifier) -> bool {
-        // OBJECT_LIST is globally an array, but is deliberately absent here.
-        [
-            VENDOR_ARRAY,
-            PropertyIdentifier::STATE_TEXT,
-            PropertyIdentifier::PROPERTY_LIST,
-            PropertyIdentifier::OBJECT_LIST,
-        ]
-        .contains(&id)
     }
     fn read_property(
         &self,

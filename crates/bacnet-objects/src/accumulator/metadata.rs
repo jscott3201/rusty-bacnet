@@ -150,7 +150,10 @@ mod tests {
             .filter(|&&p| !matches!(p, P::OBJECT_IDENTIFIER | P::OBJECT_NAME | P::OBJECT_TYPE))
             .map(|p| PropertyValue::Enumerated(p.to_raw()))
             .collect();
-        assert!(object.is_array_property(P::PROPERTY_LIST));
+        assert!(crate::property_metadata::is_array_property(
+            object,
+            P::PROPERTY_LIST
+        ));
         assert_eq!(
             object.read_property(P::PROPERTY_LIST, None).unwrap(),
             PropertyValue::List(wire.clone())
@@ -239,9 +242,18 @@ mod tests {
         );
         // Scale, Prescale, and Property_List-adjacent scalars are not
         // BACnetARRAY rows, so the service gate rejects an index on them.
-        assert!(!object.is_array_property(P::SCALE));
-        assert!(!object.is_array_property(P::PRESCALE));
-        assert!(!object.is_array_property(P::PRESENT_VALUE));
+        assert!(!crate::property_metadata::is_array_property(
+            &object,
+            P::SCALE
+        ));
+        assert!(!crate::property_metadata::is_array_property(
+            &object,
+            P::PRESCALE
+        ));
+        assert!(!crate::property_metadata::is_array_property(
+            &object,
+            P::PRESENT_VALUE
+        ));
     }
 
     #[test]
@@ -275,7 +287,7 @@ mod tests {
                 };
                 assert_eq!(row.write_capability, capability, "{p:?}");
                 assert_eq!(
-                    object.is_writable_property(p),
+                    crate::property_metadata::is_writable_property(&object, p),
                     capability.is_writable(),
                     "{p:?}"
                 );
@@ -291,7 +303,10 @@ mod tests {
             }
             // Object_Name has no network write route: a rename falls through
             // to WRITE_ACCESS_DENIED even with a well-formed value.
-            assert!(!object.is_writable_property(P::OBJECT_NAME));
+            assert!(!crate::property_metadata::is_writable_property(
+                &object,
+                P::OBJECT_NAME
+            ));
             assert_error(
                 object
                     .write_property(
@@ -307,7 +322,10 @@ mod tests {
             // with its own readback — because no arm routes it. The metadata
             // mirrors dispatch (ReadOnly) rather than the Table 12-79
             // footnote-1 writability the implementation does not provide.
-            assert!(!object.is_writable_property(P::PRESENT_VALUE));
+            assert!(!crate::property_metadata::is_writable_property(
+                &object,
+                P::PRESENT_VALUE
+            ));
             assert_error(
                 object
                     .write_property(P::PRESENT_VALUE, None, PropertyValue::Unsigned(10), None)
@@ -426,7 +444,7 @@ mod tests {
                     object.write_property(p, None, value, None).unwrap_err(),
                     ErrorCode::WRITE_ACCESS_DENIED,
                 );
-                assert!(!object.is_writable_property(p));
+                assert!(!crate::property_metadata::is_writable_property(&object, p));
             }
         }
     }
@@ -434,7 +452,7 @@ mod tests {
     #[test]
     fn property_metadata_accumulator_unserved_rows_stay_unknown() {
         fn assert_unserved(object: &mut dyn BACnetObject, p: P) {
-            assert!(!object.is_writable_property(p));
+            assert!(!crate::property_metadata::is_writable_property(&*object, p));
             assert_error(
                 object.read_property(p, None).unwrap_err(),
                 ErrorCode::UNKNOWN_PROPERTY,

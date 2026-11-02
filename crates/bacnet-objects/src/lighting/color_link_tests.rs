@@ -3,6 +3,7 @@
 //! `ObjectDatabase::lighting_color` following the reference in use, with the
 //! override switching sources without disturbing a colour fade.
 
+use crate::property_metadata::is_writable_property;
 use bacnet_types::error::RemoteError;
 use std::sync::{Arc, Mutex};
 
@@ -92,7 +93,7 @@ fn the_rows_follow_the_link_in_table_order_and_are_required() {
                     crate::property_metadata::required_properties(&object.property_metadata())
                         .any(|required| required == p)
                 );
-                assert!(object.is_writable_property(p));
+                assert!(is_writable_property(&*object, p));
             }
             if rows.len() == 1 {
                 assert_error(

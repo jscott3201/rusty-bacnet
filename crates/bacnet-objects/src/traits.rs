@@ -80,11 +80,14 @@ pub enum ReliabilityEvaluation {
 /// property presence all derive from them
 /// ([`property_list`](crate::property_metadata::property_list),
 /// [`required_properties`](crate::property_metadata::required_properties),
-/// [`has_property`](crate::property_metadata::has_property)), and so do the
-/// defaults of [`is_writable_property`](Self::is_writable_property),
-/// [`is_array_property`](Self::is_array_property) and
-/// [`is_list_property`](Self::is_list_property). Keep the rows true rather
-/// than overriding those three. [`write_property_from`](Self::write_property_from)
+/// [`has_property`](crate::property_metadata::has_property)), and so do
+/// whether a property is writable, an array or a list
+/// ([`is_writable_property`](crate::property_metadata::is_writable_property),
+/// [`is_array_property`](crate::property_metadata::is_array_property),
+/// [`is_list_property`](crate::property_metadata::is_list_property)). A row
+/// states its write route and, where the standard gives none, its value type
+/// ([`with_value_type`](crate::property_metadata::PropertyMetadata::with_value_type)).
+/// [`write_property_from`](Self::write_property_from)
 /// defaults to `write_property`; an object that tracks who commanded it
 /// overrides it.
 ///
@@ -332,9 +335,10 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// a property all derive from them, through
     /// [`property_list`](crate::property_metadata::property_list),
     /// [`required_properties`](crate::property_metadata::required_properties)
-    /// and [`has_property`](crate::property_metadata::has_property). The
-    /// default of [`Self::is_writable_property`] derives from them too, and
-    /// the bundled server reads them for property presence,
+    /// and [`has_property`](crate::property_metadata::has_property), and so
+    /// do the writability and the array and list shapes
+    /// ([`is_writable_property`](crate::property_metadata::is_writable_property)
+    /// and its siblings). The bundled server reads them for property presence,
     /// ReadPropertyMultiple's ALL, REQUIRED and OPTIONAL, the indexed-write
     /// gate and the PICS. A property missing from the rows is absent to all
     /// of those, whatever `read_property` answers. Every built-in object
@@ -346,7 +350,7 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// use std::borrow::Cow;
     /// use bacnet_objects::property_metadata::{
     ///     PropertyConformance as C, PropertyMetadata, PropertyWriteCapability as Wr,
-    ///     property_list, required_properties,
+    ///     is_writable_property, property_list, required_properties,
     /// };
     /// use bacnet_objects::traits::BACnetObject;
     /// use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier as P};
@@ -399,8 +403,8 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// }
     ///
     /// let object = Setpoint(21.0);
-    /// assert!(object.is_writable_property(P::PRESENT_VALUE));
-    /// assert!(!object.is_writable_property(P::OBJECT_NAME));
+    /// assert!(is_writable_property(&object, P::PRESENT_VALUE));
+    /// assert!(!is_writable_property(&object, P::OBJECT_NAME));
     /// let rows = object.property_metadata();
     /// assert_eq!(required_properties(&rows).count(), 5);
     /// // Property_List leaves out the identity properties and itself.
@@ -442,74 +446,6 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// [`capabilities`] for the pattern.
     fn timed(&mut self) -> Option<&mut dyn Timed> {
         None
-    }
-
-    /// Whether a property write route can accept `property` for this object.
-    ///
-    /// PICS generation and runtime dispatch MUST consult this (or
-    /// `write_property_from` where source authority is required) rather than a
-    /// separate heuristic, so the PICS
-    /// writable flags cannot drift from the actual write routes. The default
-    /// answers from the property's [`Self::property_metadata`] row: writable
-    /// when its [`PropertyWriteCapability`](crate::property_metadata::PropertyWriteCapability)
-    /// names a write route, and not writable for a property without a row.
-    /// Keep the rows' write capabilities true to `write_property`, including
-    /// required command origin and ownership, rather than overriding this.
-    ///
-    /// `OBJECT_IDENTIFIER`, `OBJECT_TYPE` and `PROPERTY_LIST` are never
-    /// writable over the network; their rows should say `ReadOnly`.
-    ///
-    /// Built-in analog, binary, multi-state, Event Enrollment, and Alert
-    /// Enrollment objects also deny network writes to `ACKED_TRANSITIONS`.
-    /// The property descriptions accompanying ASHRAE 135-2020 Tables 12-2/3/4,
-    /// 12-6/8/10, 12-21/22/23, 12-14, and 12-61 explicitly make it read-only;
-    /// the table's `R`/`O` classification alone is not a write prohibition.
-    /// Clause 13.2.3 assigns acknowledgment-bit maintenance to internal
-    /// transition and acknowledgment processing. Those lifecycle hooks and
-    /// supported AcknowledgeAlarm paths do not use `write_property`, so this
-    /// network restriction does not prevent their internal updates.
-    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        crate::property_metadata::is_writable_in_metadata(
-            self.property_metadata().as_ref(),
-            property,
-        )
-    }
-
-    /// Whether `property` accepts an array index on this object.
-    ///
-    /// Per Clause 12.1.5.1, only BACnetARRAY (and BACnetARRAY of BACnetLIST)
-    /// properties accept an array index; Clause 12.1.5.2 makes ReadRange the
-    /// only positional access to a BACnetLIST. The RP/RPM/WP/WPM service
-    /// handlers gate the request's array index on this query and reject a
-    /// supplied index on a non-array property with PROPERTY /
-    /// PROPERTY_IS_NOT_AN_ARRAY (Clause 15.5.1.3, Clause 15.9.1.3).
-    ///
-    /// The default reads the property's metadata row
-    /// ([`crate::property_metadata::value_type_of`]): its own value type, or
-    /// the standard one for this object type, which also answers for a
-    /// property without a row. An object states a vendor array on its row
-    /// with [`crate::property_metadata::PropertyMetadata::with_value_type`].
-    fn is_array_property(&self, property: PropertyIdentifier) -> bool {
-        crate::property_metadata::object_value_type(self, property)
-            .is_some_and(crate::property_metadata::ValueType::is_array)
-    }
-
-    /// Whether `property` is a BACnetLIST on this object.
-    ///
-    /// AddListElement and RemoveListElement (Clauses 15.1 and 15.2) edit only
-    /// BACnetLIST properties, and ReadRange (Clause 15.8) reads only them. The
-    /// server's handlers ask this before decoding any element or selecting any
-    /// item, and refuse every other target, including an array element, with
-    /// SERVICES / PROPERTY_IS_NOT_A_LIST. Like
-    /// [`Self::is_array_property`], the answer follows the property's datatype,
-    /// not the shape of a value read: a whole array also reads as a list, and
-    /// constructed single values often read as framed bytes.
-    ///
-    /// The default reads the property's metadata row, as
-    /// [`Self::is_array_property`] does.
-    fn is_list_property(&self, property: PropertyIdentifier) -> bool {
-        crate::property_metadata::object_value_type(self, property)
-            .is_some_and(crate::property_metadata::ValueType::is_list)
     }
 
     /// Mutably borrow a Staging object's capability, which queues target

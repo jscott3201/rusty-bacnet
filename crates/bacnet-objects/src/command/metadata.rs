@@ -144,14 +144,20 @@ mod tests {
         // index, so indexed reads return the same whole value.
         let whole = PropertyValue::List(vec![]);
         assert_eq!(object.read_property(P::ACTION, None).unwrap(), whole);
-        assert!(object.is_array_property(P::ACTION));
+        assert!(crate::property_metadata::is_array_property(
+            &object,
+            P::ACTION
+        ));
         let wire: Vec<_> = all
             .iter()
             .filter(|&&p| !matches!(p, P::OBJECT_IDENTIFIER | P::OBJECT_NAME | P::OBJECT_TYPE))
             .map(|p| PropertyValue::Enumerated(p.to_raw()))
             .collect();
         assert_eq!(wire.len(), 7);
-        assert!(object.is_array_property(P::PROPERTY_LIST));
+        assert!(crate::property_metadata::is_array_property(
+            &object,
+            P::PROPERTY_LIST
+        ));
         assert_eq!(
             object.read_property(P::PROPERTY_LIST, None).unwrap(),
             PropertyValue::List(wire.clone())
@@ -198,7 +204,7 @@ mod tests {
             };
             assert_eq!(row.write_capability, capability, "{p:?}");
             assert_eq!(
-                object.is_writable_property(p),
+                crate::property_metadata::is_writable_property(&object, p),
                 capability.is_writable(),
                 "{p:?}"
             );
@@ -236,7 +242,10 @@ mod tests {
             PropertyValue::Unsigned(3)
         );
         // Action is network read-only even with a well-formed value.
-        assert!(!object.is_writable_property(P::ACTION));
+        assert!(!crate::property_metadata::is_writable_property(
+            &object,
+            P::ACTION
+        ));
         assert_error(
             object
                 .write_property(
@@ -250,7 +259,10 @@ mod tests {
         );
         // Object_Name has no network write route: a rename falls through
         // to WRITE_ACCESS_DENIED even with a well-formed value.
-        assert!(!object.is_writable_property(P::OBJECT_NAME));
+        assert!(!crate::property_metadata::is_writable_property(
+            &object,
+            P::OBJECT_NAME
+        ));
         assert_error(
             object
                 .write_property(
@@ -269,7 +281,7 @@ mod tests {
                 object.write_property(p, None, value, None).unwrap_err(),
                 ErrorCode::WRITE_ACCESS_DENIED,
             );
-            assert!(!object.is_writable_property(p));
+            assert!(!crate::property_metadata::is_writable_property(&object, p));
         }
         // Description rejects a mistyped value without changing state.
         assert_error(
@@ -281,7 +293,7 @@ mod tests {
         // Unserved rows stay unknown on read and write; Table 12-12 has no
         // Out_Of_Service at all (#1064).
         for p in [P::ACTION_TEXT, P::EVENT_STATE, P::OUT_OF_SERVICE] {
-            assert!(!object.is_writable_property(p));
+            assert!(!crate::property_metadata::is_writable_property(&object, p));
             assert_error(
                 object.read_property(p, None).unwrap_err(),
                 ErrorCode::UNKNOWN_PROPERTY,
@@ -321,8 +333,14 @@ mod tests {
             &object.property_metadata(),
             P::ACTION_TEXT
         ));
-        assert!(object.is_array_property(P::ACTION_TEXT));
-        assert!(!object.is_writable_property(P::ACTION_TEXT));
+        assert!(crate::property_metadata::is_array_property(
+            &object,
+            P::ACTION_TEXT
+        ));
+        assert!(!crate::property_metadata::is_writable_property(
+            &object,
+            P::ACTION_TEXT
+        ));
         for index in [None, Some(1)] {
             assert_error(
                 object

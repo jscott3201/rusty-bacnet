@@ -23,6 +23,7 @@
 //! whose datatype changes, is caught there too.
 
 use crate::prelude::*;
+use crate::property_metadata::is_array_property;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
@@ -147,7 +148,9 @@ impl ObjectDatabase {
         let index = reference.property_array_index;
         match index {
             Some(0) => return InputSource::Unusable,
-            Some(_) if !target.is_array_property(property) => return InputSource::Unusable,
+            Some(_) if !is_array_property(target, property) => {
+                return InputSource::Unusable;
+            }
             _ => {}
         }
         let slot = property == PropertyIdentifier::PRIORITY_ARRAY && index.is_some();

@@ -422,6 +422,59 @@ pub fn object_value_type<O: BACnetObject + ?Sized>(
     )
 }
 
+/// Whether a network write route accepts `property` on `object`: its
+/// metadata row ([`is_writable_in_metadata`]) names one. A property without
+/// a row isn't writable.
+///
+/// PICS generation and the write proptests read this rather than a separate
+/// heuristic, so the PICS writable flags can't drift from the write routes.
+/// An object states its writability on its rows, so keep each row's
+/// [`PropertyWriteCapability`] true to `write_property`, including the
+/// command origin and ownership a write needs.
+///
+/// Object_Identifier, Object_Type and Property_List are never writable over
+/// the network, so their rows say `ReadOnly`. The built-in analog, binary,
+/// multi-state, Event Enrollment and Alert Enrollment objects also refuse
+/// network writes to Acked_Transitions: the property descriptions beside
+/// Tables 12-2/3/4, 12-6/8/10, 12-21/22/23, 12-14 and 12-61 make it
+/// read-only, and Clause 13.2.3 leaves its bits to transition and
+/// acknowledgment processing, which don't go through `write_property`.
+pub fn is_writable_property(object: &dyn BACnetObject, property: PropertyIdentifier) -> bool {
+    is_writable_in_metadata(&object.property_metadata(), property)
+}
+
+/// Whether `property` accepts an array index on `object`: its value type
+/// ([`object_value_type`]) is a BACnetARRAY.
+///
+/// Clause 12.1.5.1 admits an array index only on a BACnetARRAY (or an array
+/// of lists), and Clause 12.1.5.2 makes ReadRange the only positional access
+/// to a BACnetLIST. The RP, RPM, WP and WPM handlers gate a request's index
+/// on this and refuse one on any other property with PROPERTY /
+/// PROPERTY_IS_NOT_AN_ARRAY (Clauses 15.5.1.3 and 15.9.1.3).
+///
+/// The answer comes from the property's row, which states its own value
+/// type or takes the standard one, and from the standard one for a property
+/// without a row. A custom object states a vendor array on its row with
+/// [`PropertyMetadata::with_value_type`]; an object whose shapes change per
+/// instance returns owned rows from `property_metadata`.
+pub fn is_array_property(object: &dyn BACnetObject, property: PropertyIdentifier) -> bool {
+    object_value_type(object, property).is_some_and(ValueType::is_array)
+}
+
+/// Whether `property` is a BACnetLIST on `object`: its value type
+/// ([`object_value_type`]) is a list.
+///
+/// AddListElement and RemoveListElement (Clauses 15.1 and 15.2) edit only
+/// BACnetLIST properties, and ReadRange (Clause 15.8) reads only them. The
+/// server's handlers ask this before decoding any element or selecting any
+/// item, and refuse every other target, an array element included, with
+/// SERVICES / PROPERTY_IS_NOT_A_LIST. As with [`is_array_property`], the
+/// answer follows the property's datatype, not the shape of a value read: a
+/// whole array also reads as a list.
+pub fn is_list_property(object: &dyn BACnetObject, property: PropertyIdentifier) -> bool {
+    object_value_type(object, property).is_some_and(ValueType::is_list)
+}
+
 /// The array-index check every write makes before the value is judged: an
 /// index on a property `object` has no row for is UNKNOWN_PROPERTY, and an
 /// index on a property that isn't an array is PROPERTY_IS_NOT_AN_ARRAY. A
@@ -440,16 +493,20 @@ pub fn check_write_array_index<O: BACnetObject + ?Sized>(
     if index.is_none() {
         return Ok(());
     }
-    if !has_property(&object.property_metadata(), property) {
+    let rows = object.property_metadata();
+    if !has_property(&rows, property) {
         return Err(crate::common::unknown_property_error());
     }
-    if !object.is_array_property(property) {
+    let object_type = object.object_identifier().object_type();
+    if !value_type_of(object_type, &rows, property).is_some_and(ValueType::is_array) {
         return Err(crate::common::property_is_not_an_array_error());
     }
     Ok(())
 }
 
-/// Project implemented write capability for one property identifier.
+/// Whether these rows give `property` a network write route: its row's
+/// [`PropertyWriteCapability::is_writable`]. A property without a row isn't
+/// writable.
 pub fn is_writable_in_metadata(
     metadata: &[PropertyMetadata],
     property_identifier: PropertyIdentifier,

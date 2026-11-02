@@ -314,7 +314,10 @@ mod tests {
                         object.object_identifier().object_type()
                     ));
                     assert!(!object.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
-                    assert!(!object.is_array_property(P::LOG_BUFFER));
+                    assert!(!crate::property_metadata::is_array_property(
+                        &*object,
+                        P::LOG_BUFFER
+                    ));
                     let metadata = object.property_metadata();
                     assert!(matches!(metadata, Cow::Borrowed(_)));
                     assert_eq!(metadata.len(), all.len() + 1);
@@ -431,7 +434,10 @@ mod tests {
                         _ => ReadOnly,
                     };
                     assert_eq!(row.write_capability, capability, "{kind:?} {p:?}");
-                    assert_eq!(object.is_writable_property(p), capability.is_writable());
+                    assert_eq!(
+                        crate::property_metadata::is_writable_property(&*object, p),
+                        capability.is_writable()
+                    );
                     if p == P::LOG_BUFFER {
                         // Present but readable only by ReadRange (#1237);
                         // writes are denied.
@@ -521,7 +527,7 @@ mod tests {
                         .filter(|_| kind == ObjectType::EVENT_LOG),
                 );
                 for p in absent {
-                    assert!(!object.is_writable_property(p));
+                    assert!(!crate::property_metadata::is_writable_property(&*object, p));
                     assert_error(
                         object.read_property(p, None).unwrap_err(),
                         ErrorClass::PROPERTY,
@@ -548,7 +554,7 @@ mod tests {
                 (P::LOG_ENABLE, PropertyValue::Boolean(false)),
                 (P::RECORD_COUNT, PropertyValue::Unsigned(0)),
             ] {
-                assert!(object.is_writable_property(p));
+                assert!(crate::property_metadata::is_writable_property(&*object, p));
                 assert_error(
                     object.write_property(p, None, value, None).unwrap_err(),
                     ErrorClass::DEVICE,

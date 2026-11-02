@@ -1,3 +1,4 @@
+use crate::property_metadata::is_writable_property;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -718,7 +719,7 @@ fn log_family_writability_matches_runtime_routes() {
         let object = kind.object(3);
         for property in writable {
             assert!(
-                object.object().is_writable_property(property),
+                is_writable_property(object.object(), property),
                 "{kind:?} {property:?}"
             );
         }
@@ -730,23 +731,21 @@ fn log_family_writability_matches_runtime_routes() {
             PropertyIdentifier::RELIABILITY,
         ] {
             assert!(
-                !object.object().is_writable_property(property),
+                !is_writable_property(object.object(), property),
                 "{kind:?} {property:?}"
             );
         }
         // Tables 12-29, 12-35 and 12-31 define no Out_Of_Service (#985,
         // #1064), and Table 12-31 has no Log_Interval either.
-        assert!(
-            !object
-                .object()
-                .is_writable_property(PropertyIdentifier::OUT_OF_SERVICE)
-        );
+        assert!(!is_writable_property(
+            object.object(),
+            PropertyIdentifier::OUT_OF_SERVICE
+        ));
         if matches!(kind, FamilyKind::Event) {
-            assert!(
-                !object
-                    .object()
-                    .is_writable_property(PropertyIdentifier::LOG_INTERVAL)
-            );
+            assert!(!is_writable_property(
+                object.object(),
+                PropertyIdentifier::LOG_INTERVAL
+            ));
         }
     }
 }

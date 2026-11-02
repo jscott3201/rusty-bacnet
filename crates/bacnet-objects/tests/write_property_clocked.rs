@@ -20,6 +20,7 @@
 //! same tables. It fails on a writable row no write changed (apart from the
 //! listed identity-only rows) and on a clocked table entry no write used.
 
+use bacnet_objects::property_metadata::{is_array_property, is_writable_property};
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 
@@ -193,7 +194,7 @@ fn candidates(object: &dyn BACnetObject, property: PropertyIdentifier) -> Vec<Ca
     for seed in 0..48 {
         out.push((None, vary(current.clone(), seed), None, true));
     }
-    if object.is_array_property(property)
+    if is_array_property(object, property)
         && let Ok(first) = object.read_property(property, Some(1))
     {
         out.push((Some(1), first.clone(), None, true));
@@ -318,7 +319,7 @@ fn every_writable_row_and_table_entry_is_reached() {
                 .property_metadata()
                 .iter()
                 .map(|row| row.property_identifier)
-                .filter(|&property| object.is_writable_property(property))
+                .filter(|&property| is_writable_property(&*object, property))
                 .collect()
         };
         for property in rows {
@@ -389,7 +390,7 @@ fn the_clocked_table_names_real_rows() {
         };
         for &(written, changed) in entries(object_type, true, true) {
             assert!(
-                has(written) && object.is_writable_property(written),
+                has(written) && is_writable_property(&*object, written),
                 "{object_type:?}: {TABLE} lists a write of {written:?}, which isn't a writable row"
             );
             for &other in changed {
