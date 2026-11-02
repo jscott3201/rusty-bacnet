@@ -55,6 +55,19 @@ DOCKERFILE = REPO / "scripts/perf/Dockerfile"
 HARNESS_FILES = ("Cargo.toml", "Cargo.lock", "src")
 BINARIES = ("counts", "codec-counts")
 VALGRIND = ["valgrind", "--tool=callgrind", "--compress-pos=no"]
+# The glibc allocator settings every counted run uses (#2314; Benchmarks.md
+# section 10.4). A per-thread cache of 32 chunks per size, not 7, and fixed
+# mmap, trim and top-pad thresholds, not glibc's adaptive ones: with the
+# defaults, which free chunk a request finds depends on how the tasks
+# interleaved, and two builds of one commit differed by up to 978
+# instructions per ReadPropertyMultiple. With these the range is about 30,
+# and the ReadProperty slope is unchanged.
+GLIBC_TUNABLES = ":".join([
+    "glibc.malloc.tcache_count=32",
+    "glibc.malloc.mmap_threshold=1048576",
+    "glibc.malloc.trim_threshold=1048576",
+    "glibc.malloc.top_pad=1048576",
+])
 
 
 def log(*parts):
@@ -215,7 +228,7 @@ def build_variant(image, variant, registry):
     return hashes
 
 
-def run_command(image, variant, raw, name, binary, args):
+def run_command(image, variant, raw, name, binary, args, environment=None):
     expected = variant["binaries"][binary]
     script = (
         f'test "$(sha256sum /target/release/{binary} | cut -d " " -f 1)" = "{expected}" '
@@ -226,8 +239,9 @@ def run_command(image, variant, raw, name, binary, args):
         # runner then can't read the file, so open it up and keep the status.
         f'status=$?; chmod a+r /out/{name}.cg 2>/dev/null; exit "$status"'
     )
+    env = [arg for key, value in sorted((environment or {}).items()) for arg in ("-e", f"{key}={value}")]
     return [
-        "docker", "run", "--rm", "--network", "none",
+        "docker", "run", "--rm", "--network", "none", *env,
         "-v", f"{variant['volume']}:/target:ro", "-v", f"{raw}:/out",
         image["id"], "sh", "-c", script,
     ]
@@ -259,7 +273,7 @@ def run_matrix(manifest, out, save):
                         "label": label, "ordinal": counts[label], "n": n, "started": now(),
                     }
                     manifest["runs"].append(record)
-                    command = run_command(image, variant, raw, name, binary, args)
+                    command = run_command(image, variant, raw, name, binary, args, manifest.get("environment"))
                     with open(raw / f"{name}.out", "w") as stdout, open(raw / f"{name}.err", "w") as stderr:
                         status = subprocess.run(command, stdout=stdout, stderr=stderr).returncode
                     record.update(exit_code=status, ended=now())
@@ -517,6 +531,7 @@ def run(args):
         "order": order,
         "lengths": ca.LENGTHS,
         "recorded_floors": floors,
+        "environment": {"GLIBC_TUNABLES": args.glibc_tunables} if args.glibc_tunables else {},
         "variants": {},
         "runs": [],
     }
@@ -601,6 +616,8 @@ def main(argv=None):
                                  "(summary.json; repeatable)")
     run_parser.add_argument("--aim", default="rp",
                             help="workloads judged on the saving gate (default rp), or none: the no-regression check")
+    run_parser.add_argument("--glibc-tunables", default=GLIBC_TUNABLES,
+                            help=f"GLIBC_TUNABLES for every counted run (default {GLIBC_TUNABLES!r}; empty for none)")
     run_parser.add_argument("--gzip-raw", action="store_true", help="gzip the callgrind files afterwards")
     run_parser.add_argument("--keep", action="store_true", help="keep the build volumes and trees")
     analyze_parser = commands.add_parser("analyze", help="re-analyze a completed run")

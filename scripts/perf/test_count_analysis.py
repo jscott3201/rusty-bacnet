@@ -303,6 +303,11 @@ class Gates(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "can't be combined"):
             ca.validate_aim(("none", "rp"), {"rp"})
 
+    def test_change_over_floor_treats_tiny_values_as_none(self):
+        self.assertEqual(ca.change_over_floor({"delta": -0.00001, "noise_floor": 0.00003}), "0 x")
+        self.assertEqual(ca.change_over_floor({"delta": 3.0, "noise_floor": 0.00003}), "+inf")
+        self.assertEqual(ca.change_over_floor({"delta": -5.0, "noise_floor": 10.0}), "-0.5 x")
+
     def test_function_changes_rank_by_size(self):
         rows = ca.function_changes({"f": 10.0, "g": 5.0, "h": 1.0}, {"f": 10.2, "g": 9.0, "k": 2.0})
         self.assertEqual([r[3] for r in rows], ["g", "k", "h"])

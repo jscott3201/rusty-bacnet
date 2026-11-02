@@ -519,10 +519,17 @@ def fmt(value, places=1):
 
 
 def change_over_floor(row):
-    """The median change in noise floors: "+0.4 x" is within, "+2.1 x" above."""
-    if row["noise_floor"] > 0:
+    """The median change in noise floors: "+0.4 x" is within, "+2.1 x" above.
+    Below EXACT instructions, a floor or a change counts as none (the codec
+    runs differ by a few instructions per whole program)."""
+    if abs(row["delta"]) < EXACT:
+        return "0 x"
+    if row["noise_floor"] >= EXACT:
         return f"{row['delta'] / row['noise_floor']:+.1f} x"
-    return "0 x" if row["delta"] == 0 else ("+inf" if row["delta"] > 0 else "-inf")
+    return "+inf" if row["delta"] > 0 else "-inf"
+
+
+EXACT = 0.01  # instructions per request or iteration
 
 
 def function_changes(a, b, threshold=0.5):
