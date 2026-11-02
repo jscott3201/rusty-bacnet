@@ -1,0 +1,973 @@
+{
+  "mode": "noise",
+  "variants": {
+    "A": {
+      "label": "A",
+      "ref": "HEAD",
+      "sha": "64bb7eb27f0b27657f4591b2c9a5dfc06efaf097",
+      "volume": "rb-perf-3cf3f557-A",
+      "rustc": "1.99.0",
+      "binaries": {
+        "counts": "c33f99118823c920bc638c2bdb12bc8ff12323789d2db33029ecd3f03c17d13e",
+        "codec-counts": "32775c9c26224381684a395ad4c9dcf1d2964b49e5c4012e9843e79ed91b3a36"
+      }
+    },
+    "B": {
+      "label": "B",
+      "ref": "HEAD",
+      "sha": "64bb7eb27f0b27657f4591b2c9a5dfc06efaf097",
+      "volume": "rb-perf-3cf3f557-B",
+      "rustc": "1.99.0",
+      "binaries": {
+        "counts": "c33f99118823c920bc638c2bdb12bc8ff12323789d2db33029ecd3f03c17d13e",
+        "codec-counts": "32775c9c26224381684a395ad4c9dcf1d2964b49e5c4012e9843e79ed91b3a36"
+      }
+    }
+  },
+  "aimed": [
+    "rp"
+  ],
+  "rows": [
+    {
+      "workload": "decode_apdu_confirmed_request",
+      "runtime": "none",
+      "a_median": 239.00002111111112,
+      "b_median": 239.00002111111112,
+      "delta": 0.0,
+      "pair_deltas": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "noise_floor": 0.0,
+      "noise_floor_source": "A vs A' range",
+      "a_calls": 0.0,
+      "b_calls": 0.0,
+      "a_bytes": 0.0,
+      "b_bytes": 0.0,
+      "gate": "none: measures the noise floor",
+      "verdict": "floor",
+      "metrics": {
+        "A": {
+          "instructions": {
+            "median": 239.00002111111112,
+            "min": 239.00002111111112,
+            "max": 239.00002111111112,
+            "values": [
+              239.00002111111112,
+              239.00002111111112,
+              239.00002111111112,
+              239.00002111111112,
+              239.00002111111112,
+              239.00002111111112
+            ]
+          },
+          "alloc_calls": {
+            "median": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "values": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "alloc_bytes": {
+            "median": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "values": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "alloc_call_slopes": {
+            "median": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "values": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "B": {
+          "instructions": {
+            "median": 239.00002111111112,
+            "min": 239.00002111111112,
+            "max": 239.00002111111112,
+            "values": [
+              239.00002111111112,
+              239.00002111111112,
+              239.00002111111112,
+              239.00002111111112,
+              239.00002111111112,
+              239.00002111111112
+            ]
+          },
+          "alloc_calls": {
+            "median": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "values": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "alloc_bytes": {
+            "median": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "values": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "alloc_call_slopes": {
+            "median": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "values": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        }
+      }
+    },
+    {
+      "workload": "decode_npdu_100b_payload",
+      "runtime": "none",
+      "a_median": 219.00003555555554,
+      "b_median": 219.00003555555554,
+      "delta": 0.0,
+      "pair_deltas": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "noise_floor": 0.0,
+      "noise_floor_source": "A vs A' range",
+      "a_calls": 0.0,
+      "b_calls": 0.0,
+      "a_bytes": 0.0,
+      "b_bytes": 0.0,
+      "gate": "none: measures the noise floor",
+      "verdict": "floor",
+      "metrics": {
+        "A": {
+          "instructions": {
+            "median": 219.00003555555554,
+            "min": 219.00003555555554,
+            "max": 219.00003555555554,
+            "values": [
+              219.00003555555554,
+              219.00003555555554,
+              219.00003555555554,
+              219.00003555555554,
+              219.00003555555554,
+              219.00003555555554
+            ]
+          },
+          "alloc_calls": {
+            "median": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "values": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "alloc_bytes": {
+            "median": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "values": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "alloc_call_slopes": {
+            "median": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "values": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "B": {
+          "instructions": {
+            "median": 219.00003555555554,
+            "min": 219.00003555555554,
+            "max": 219.00003555555554,
+            "values": [
+              219.00003555555554,
+              219.00003555555554,
+              219.00003555555554,
+              219.00003555555554,
+              219.00003555555554,
+              219.00003555555554
+            ]
+          },
+          "alloc_calls": {
+            "median": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "values": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "alloc_bytes": {
+            "median": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "values": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "alloc_call_slopes": {
+            "median": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "values": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        }
+      }
+    },
+    {
+      "workload": "decode_read_property_request",
+      "runtime": "none",
+      "a_median": 169.00003555555554,
+      "b_median": 169.00003555555554,
+      "delta": 0.0,
+      "pair_deltas": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "noise_floor": 0.0,
+      "noise_floor_source": "A vs A' range",
+      "a_calls": 0.0,
+      "b_calls": 0.0,
+      "a_bytes": 0.0,
+      "b_bytes": 0.0,
+      "gate": "none: measures the noise floor",
+      "verdict": "floor",
+      "metrics": {
+        "A": {
+          "instructions": {
+            "median": 169.00003555555554,
+            "min": 169.00003555555554,
+            "max": 169.00003555555554,
+            "values": [
+              169.00003555555554,
+              169.00003555555554,
+              169.00003555555554,
+              169.00003555555554,
+              169.00003555555554,
+              169.00003555555554
+            ]
+          },
+          "alloc_calls": {
+            "median": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "values": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "alloc_bytes": {
+            "median": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "values": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "alloc_call_slopes": {
+            "median": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "values": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "B": {
+          "instructions": {
+            "median": 169.00003555555554,
+            "min": 169.00003555555554,
+            "max": 169.00003555555554,
+            "values": [
+              169.00003555555554,
+              169.00003555555554,
+              169.00003555555554,
+              169.00003555555554,
+              169.00003555555554,
+              169.00003555555554
+            ]
+          },
+          "alloc_calls": {
+            "median": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "values": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "alloc_bytes": {
+            "median": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "values": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "alloc_call_slopes": {
+            "median": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "values": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        }
+      }
+    },
+    {
+      "workload": "encode_apdu_confirmed_request",
+      "runtime": "none",
+      "a_median": 564.0000266666667,
+      "b_median": 564.0000266666667,
+      "delta": 0.0,
+      "pair_deltas": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "noise_floor": 0.0,
+      "noise_floor_source": "A vs A' range",
+      "a_calls": 1.0,
+      "b_calls": 1.0,
+      "a_bytes": 64.0,
+      "b_bytes": 64.0,
+      "gate": "none: measures the noise floor",
+      "verdict": "floor",
+      "metrics": {
+        "A": {
+          "instructions": {
+            "median": 564.0000266666667,
+            "min": 564.0000266666667,
+            "max": 564.0000266666667,
+            "values": [
+              564.0000266666667,
+              564.0000266666667,
+              564.0000266666667,
+              564.0000266666667,
+              564.0000266666667,
+              564.0000266666667
+            ]
+          },
+          "alloc_calls": {
+            "median": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "values": [
+              1.0,
+              1.0,
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          "alloc_bytes": {
+            "median": 64.0,
+            "min": 64.0,
+            "max": 64.0,
+            "values": [
+              64.0,
+              64.0,
+              64.0,
+              64.0,
+              64.0,
+              64.0
+            ]
+          },
+          "alloc_call_slopes": {
+            "median": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "values": [
+              1.0,
+              1.0,
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        },
+        "B": {
+          "instructions": {
+            "median": 564.0000266666667,
+            "min": 564.0000266666667,
+            "max": 564.0000266666667,
+            "values": [
+              564.0000266666667,
+              564.0000266666667,
+              564.0000266666667,
+              564.0000266666667,
+              564.0000266666667,
+              564.0000266666667
+            ]
+          },
+          "alloc_calls": {
+            "median": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "values": [
+              1.0,
+              1.0,
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          "alloc_bytes": {
+            "median": 64.0,
+            "min": 64.0,
+            "max": 64.0,
+            "values": [
+              64.0,
+              64.0,
+              64.0,
+              64.0,
+              64.0,
+              64.0
+            ]
+          },
+          "alloc_call_slopes": {
+            "median": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "values": [
+              1.0,
+              1.0,
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        }
+      }
+    },
+    {
+      "workload": "encode_npdu_100b_payload",
+      "runtime": "none",
+      "a_median": 488.0000488888889,
+      "b_median": 488.0000488888889,
+      "delta": 0.0,
+      "pair_deltas": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "noise_floor": 0.0,
+      "noise_floor_source": "A vs A' range",
+      "a_calls": 1.0,
+      "b_calls": 1.0,
+      "a_bytes": 128.0,
+      "b_bytes": 128.0,
+      "gate": "none: measures the noise floor",
+      "verdict": "floor",
+      "metrics": {
+        "A": {
+          "instructions": {
+            "median": 488.0000488888889,
+            "min": 488.0000488888889,
+            "max": 488.0000488888889,
+            "values": [
+              488.0000488888889,
+              488.0000488888889,
+              488.0000488888889,
+              488.0000488888889,
+              488.0000488888889,
+              488.0000488888889
+            ]
+          },
+          "alloc_calls": {
+            "median": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "values": [
+              1.0,
+              1.0,
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          "alloc_bytes": {
+            "median": 128.0,
+            "min": 128.0,
+            "max": 128.0,
+            "values": [
+              128.0,
+              128.0,
+              128.0,
+              128.0,
+              128.0,
+              128.0
+            ]
+          },
+          "alloc_call_slopes": {
+            "median": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "values": [
+              1.0,
+              1.0,
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        },
+        "B": {
+          "instructions": {
+            "median": 488.0000488888889,
+            "min": 488.0000488888889,
+            "max": 488.0000488888889,
+            "values": [
+              488.0000488888889,
+              488.0000488888889,
+              488.0000488888889,
+              488.0000488888889,
+              488.0000488888889,
+              488.0000488888889
+            ]
+          },
+          "alloc_calls": {
+            "median": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "values": [
+              1.0,
+              1.0,
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          "alloc_bytes": {
+            "median": 128.0,
+            "min": 128.0,
+            "max": 128.0,
+            "values": [
+              128.0,
+              128.0,
+              128.0,
+              128.0,
+              128.0,
+              128.0
+            ]
+          },
+          "alloc_call_slopes": {
+            "median": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "values": [
+              1.0,
+              1.0,
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        }
+      }
+    },
+    {
+      "workload": "encode_read_property_request",
+      "runtime": "none",
+      "a_median": 747.0000411111112,
+      "b_median": 747.0000411111112,
+      "delta": 0.0,
+      "pair_deltas": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "noise_floor": 0.0,
+      "noise_floor_source": "A vs A' range",
+      "a_calls": 1.0,
+      "b_calls": 1.0,
+      "a_bytes": 64.0,
+      "b_bytes": 64.0,
+      "gate": "none: measures the noise floor",
+      "verdict": "floor",
+      "metrics": {
+        "A": {
+          "instructions": {
+            "median": 747.0000411111112,
+            "min": 747.0000411111112,
+            "max": 747.0000411111112,
+            "values": [
+              747.0000411111112,
+              747.0000411111112,
+              747.0000411111112,
+              747.0000411111112,
+              747.0000411111112,
+              747.0000411111112
+            ]
+          },
+          "alloc_calls": {
+            "median": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "values": [
+              1.0,
+              1.0,
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          "alloc_bytes": {
+            "median": 64.0,
+            "min": 64.0,
+            "max": 64.0,
+            "values": [
+              64.0,
+              64.0,
+              64.0,
+              64.0,
+              64.0,
+              64.0
+            ]
+          },
+          "alloc_call_slopes": {
+            "median": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "values": [
+              1.0,
+              1.0,
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        },
+        "B": {
+          "instructions": {
+            "median": 747.0000411111112,
+            "min": 747.0000411111112,
+            "max": 747.0000411111112,
+            "values": [
+              747.0000411111112,
+              747.0000411111112,
+              747.0000411111112,
+              747.0000411111112,
+              747.0000411111112,
+              747.0000411111112
+            ]
+          },
+          "alloc_calls": {
+            "median": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "values": [
+              1.0,
+              1.0,
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          "alloc_bytes": {
+            "median": 64.0,
+            "min": 64.0,
+            "max": 64.0,
+            "values": [
+              64.0,
+              64.0,
+              64.0,
+              64.0,
+              64.0,
+              64.0
+            ]
+          },
+          "alloc_call_slopes": {
+            "median": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+            "values": [
+              1.0,
+              1.0,
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        }
+      }
+    },
+    {
+      "workload": "full_stack_encode_rp",
+      "runtime": "none",
+      "a_median": 2367.000048888889,
+      "b_median": 2367.000048888889,
+      "delta": 0.0,
+      "pair_deltas": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "noise_floor": 0.0,
+      "noise_floor_source": "A vs A' range",
+      "a_calls": 5.0,
+      "b_calls": 5.0,
+      "a_bytes": 242.0,
+      "b_bytes": 242.0,
+      "gate": "none: measures the noise floor",
+      "verdict": "floor",
+      "metrics": {
+        "A": {
+          "instructions": {
+            "median": 2367.000048888889,
+            "min": 2367.000048888889,
+            "max": 2367.000048888889,
+            "values": [
+              2367.000048888889,
+              2367.000048888889,
+              2367.000048888889,
+              2367.000048888889,
+              2367.000048888889,
+              2367.000048888889
+            ]
+          },
+          "alloc_calls": {
+            "median": 5.0,
+            "min": 5.0,
+            "max": 5.0,
+            "values": [
+              5.0,
+              5.0,
+              5.0,
+              5.0,
+              5.0,
+              5.0
+            ]
+          },
+          "alloc_bytes": {
+            "median": 242.0,
+            "min": 242.0,
+            "max": 242.0,
+            "values": [
+              242.0,
+              242.0,
+              242.0,
+              242.0,
+              242.0,
+              242.0
+            ]
+          },
+          "alloc_call_slopes": {
+            "median": 5.0,
+            "min": 5.0,
+            "max": 5.0,
+            "values": [
+              5.0,
+              5.0,
+              5.0,
+              5.0,
+              5.0,
+              5.0
+            ]
+          }
+        },
+        "B": {
+          "instructions": {
+            "median": 2367.000048888889,
+            "min": 2367.000048888889,
+            "max": 2367.000048888889,
+            "values": [
+              2367.000048888889,
+              2367.000048888889,
+              2367.000048888889,
+              2367.000048888889,
+              2367.000048888889,
+              2367.000048888889
+            ]
+          },
+          "alloc_calls": {
+            "median": 5.0,
+            "min": 5.0,
+            "max": 5.0,
+            "values": [
+              5.0,
+              5.0,
+              5.0,
+              5.0,
+              5.0,
+              5.0
+            ]
+          },
+          "alloc_bytes": {
+            "median": 242.0,
+            "min": 242.0,
+            "max": 242.0,
+            "values": [
+              242.0,
+              242.0,
+              242.0,
+              242.0,
+              242.0,
+              242.0
+            ]
+          },
+          "alloc_call_slopes": {
+            "median": 5.0,
+            "min": 5.0,
+            "max": 5.0,
+            "values": [
+              5.0,
+              5.0,
+              5.0,
+              5.0,
+              5.0,
+              5.0
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "noise_floors": {
+    "decode_apdu_confirmed_request/none": 0.0,
+    "decode_npdu_100b_payload/none": 0.0,
+    "decode_read_property_request/none": 0.0,
+    "encode_apdu_confirmed_request/none": 0.0,
+    "encode_npdu_100b_payload/none": 0.0,
+    "encode_read_property_request/none": 0.0,
+    "full_stack_encode_rp/none": 0.0
+  },
+  "binaries_identical": true
+}

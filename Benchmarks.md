@@ -1155,6 +1155,62 @@ meet its fixed native latency acceptance criteria. The candidate was rejected
 and production source restored. The report retains every observation, the rejected
 patch and data-reconstruction tools; it does not qualify a production speedup.
 
+### 10.4 Counting harness
+
+Wall-clock comparisons of small changes stalled on run-to-run spread (sections
+10.1 and 10.3), so changes aimed at
+[#1978](https://github.com/jscott3201/rusty-bacnet/issues/1978) and
+[#1979](https://github.com/jscott3201/rusty-bacnet/issues/1979) are judged on
+counts instead: callgrind's instruction reads and the allocator's calls and
+requested bytes, which don't move with machine load.
+
+- **What it runs.** `benchmarks/counts/` is a package of its own, with its own
+  `Cargo.lock`, so two commits build with the same third-party versions. Its
+  `counts` binary runs a ReadProperty (`rp`), a WriteProperty (`wp`) or a
+  ten-object ReadPropertyMultiple (`rpm`) round trip over B/IP loopback,
+  client and server in one process, on Tokio's current-thread runtime (`ct`)
+  or its multi-thread runtime with two workers (`mt`). Its `codec-counts`
+  binary loops the seven `encoding` suite workloads. Both check the values
+  they read, write or encode before and after the counted loop.
+- **Per request.** Each run happens twice, with 1,000 and with 10,000 requests
+  after 200 warm-up requests (100,000 and 1,000,000 iterations for the codec
+  workloads). The difference in instructions divided by the difference in
+  length is the cost of one request, without setup, checks or shutdown.
+  Allocations per request are the counted loop's allocator calls and
+  requested bytes divided by its length.
+- **Order and builds.** Each commit is exported into its own tree, built in a
+  fresh Docker volume at the same paths with `--locked`, and run in A B B A
+  order three times, so each commit gets six values per workload and runtime.
+  Every run first checks its binary's SHA-256.
+- **Noise floor.** A noise run builds one commit twice (A and A'). The range
+  of its twelve values per workload and runtime is the noise floor. Two clean
+  builds of one commit give byte-identical binaries.
+- **Gates.** A change aimed at the ReadProperty round trip passes on a runtime
+  when its median instructions per request fall by at least 100 and by more
+  than three times the noise floor, with every one of the six A and B pairs
+  lower. WriteProperty and ReadPropertyMultiple may not rise by more than the
+  noise floor, and on all three, allocation calls and requested bytes per
+  request may not rise by more than 0.01. Codec workloads are reported, not
+  gated. Wire bytes must stay identical; the existing test suites check that.
+- **Where.** On Apple silicon, in local Docker; on GitHub, the manual
+  `Perf counts` workflow (`.github/workflows/perf-counts.yml`, run from the
+  Actions tab with a baseline ref, a candidate ref and the workloads) on an
+  arm64 runner. It isn't part of the CI OK or Native OK checks. Both commits
+  of a comparison run in one job, since counts compare only within one image
+  on one machine. The image is `scripts/perf/Dockerfile`.
+
+```bash
+# Noise floor of one commit, then a comparison that uses it
+python3 scripts/perf/perf_counts.py run --noise dev --workloads all --out /tmp/noise
+python3 scripts/perf/perf_counts.py run --baseline dev --candidate my-branch \
+  --workloads rp,wp,rpm --noise-floors /tmp/noise/summary.json --out /tmp/compare
+```
+
+Each run writes `summary.md` (the verdict table), per-function and per-line
+instruction slopes under `profiles/`, and the #1978 items' share in
+`items.md`. The first baseline and noise floors on dev are in
+[benchmarks/results/perf-s0](benchmarks/results/perf-s0/README.md).
+
 ## 11. How to reproduce
 
 Run one suite at a time on an idle machine. Each Criterion suite takes 1 to
