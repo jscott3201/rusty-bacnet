@@ -14,6 +14,7 @@ use crate::traits::BACnetObject;
 use crate::value_types::{DateValueObject, TimeValueObject};
 
 mod analog;
+mod groups;
 mod intrinsic;
 
 /// Whether `property` reads the way its metadata row promises: with a value,
