@@ -426,9 +426,10 @@ pub fn object_value_type<O: BACnetObject + ?Sized>(
 /// metadata row ([`is_writable_in_metadata`]) names one. A property without
 /// a row isn't writable.
 ///
-/// PICS generation and the write proptests read this rather than a separate
-/// heuristic, so the PICS writable flags can't drift from the write routes.
-/// An object states its writability on its rows, so keep each row's
+/// The PICS reads the same rows (each row's write capability), so its
+/// writable flags and this answer can't disagree; the write proptests and
+/// the PICS truth tests hold both to the write routes. An object states its
+/// writability on its rows, so keep each row's
 /// [`PropertyWriteCapability`] true to `write_property`, including the
 /// command origin and ownership a write needs.
 ///

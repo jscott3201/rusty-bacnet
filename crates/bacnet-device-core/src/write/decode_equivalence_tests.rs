@@ -35,10 +35,11 @@ fn properties() -> impl Iterator<Item = PropertyIdentifier> {
 const INDEXES: [Option<u32>; 4] = [None, Some(0), Some(1), Some(2)];
 
 /// Payloads that take each branch: empty, a lone NULL, one and two
-/// application values, a context-tagged constructed value, the opaque
-/// event parameter, an encoded BACnetPortPermission and
-/// BACnetStageLimitValue, a device and an address Recipient, and octets
-/// that decode as nothing.
+/// application values, a context-tagged constructed value, a whole and an
+/// empty opaque event parameter, an encoded BACnetPortPermission and
+/// BACnetStageLimitValue, a device Recipient (valid, past the instance
+/// range, and with trailing octets), a well-formed address Recipient, and
+/// octets that decode as nothing.
 fn payloads() -> Vec<Vec<u8>> {
     vec![
         vec![],
@@ -46,7 +47,8 @@ fn payloads() -> Vec<Vec<u8>> {
         vec![0x21, 0x05],
         vec![0x21, 0x05, 0x91, 0x01],
         vec![0x0e, 0x21, 0x05, 0x0f],
-        vec![0xfe, 0xff, 0x02, 0x01, 0x02],
+        vec![0xfe, 0xff, 0x01, 0x02, 0x03, 0xff, 0xff],
+        vec![0xfe, 0xff, 0xff, 0xff],
         vec![0x09, 0x01, 0x19, 0x01],
         vec![0x09, 0x01, 0x19, 0x01, 0x09, 0x02, 0x19, 0x00],
         vec![
@@ -54,9 +56,50 @@ fn payloads() -> Vec<Vec<u8>> {
         ],
         vec![0x0c, 0x02, 0x00, 0x00, 0x07],
         vec![0x0c, 0x02, 0x3f, 0xff, 0xff],
-        vec![0x1e, 0x21, 0x01, 0x65, 0x01, 0x07, 0x1f],
+        vec![0x0c, 0x02, 0x00, 0x00, 0x07, 0x21, 0x05],
+        vec![0x1e, 0x21, 0x01, 0x61, 0x07, 0x1f],
         vec![0xff, 0xff],
     ]
+}
+
+/// The payloads reach the success arms the comparison relies on: the opaque
+/// event parameter, and a Recipient by address and by device; trailing
+/// octets after a Recipient are refused.
+#[test]
+fn the_payloads_reach_each_decoding_arm() {
+    use PropertyIdentifier as P;
+    let decode = |property, bytes: &[u8]| {
+        let value_type = standard_value_type(ObjectType::DEVICE, property);
+        decode_write_property_value(property, value_type, None, bytes)
+    };
+    for opaque in [
+        &[0xfe, 0xff, 0x01, 0x02, 0x03, 0xff, 0xff][..],
+        &[0xfe, 0xff, 0xff, 0xff],
+    ] {
+        assert!(
+            matches!(
+                decode(P::EVENT_PARAMETERS, opaque),
+                Ok(PropertyValue::OctetString(_))
+            ),
+            "{opaque:02x?}"
+        );
+    }
+    for recipient in [
+        &[0x0c, 0x02, 0x00, 0x00, 0x07][..],
+        &[0x1e, 0x21, 0x01, 0x61, 0x07, 0x1f],
+    ] {
+        assert_eq!(
+            decode(P::AUDIT_NOTIFICATION_RECIPIENT, recipient).unwrap(),
+            PropertyValue::ApplicationData(recipient.to_vec())
+        );
+    }
+    assert!(
+        decode(
+            P::AUDIT_NOTIFICATION_RECIPIENT,
+            &[0x0c, 0x02, 0x00, 0x00, 0x07, 0x21, 0x05]
+        )
+        .is_err()
+    );
 }
 
 /// One decode's answer, comparable.

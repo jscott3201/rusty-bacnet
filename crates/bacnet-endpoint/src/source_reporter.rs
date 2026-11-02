@@ -7,7 +7,7 @@ use std::sync::{Arc, Weak};
 use bacnet_objects::audit::{AuditReporterAuthority, AuditReporterObject};
 use bacnet_objects::durable::DurableWrites;
 use bacnet_objects::file::{FileConfiguration, FileStorage};
-use bacnet_objects::property_metadata::PropertyMetadata;
+use bacnet_objects::property_metadata::{PropertyMetadata, PropertyWriteCapability};
 use bacnet_objects::traits::{
     AccessEvents, AuditLog, AuditPolicy, BACnetObject, CalendarState, CommandRunner, CovReporting,
     EnrollmentEval, EventReporting, LifeSafety, LocalInput, LogBuffer, ReliabilityEval,
@@ -134,8 +134,22 @@ impl BACnetObject for SourceReporter {
             .write_property_from(property, array_index, value, priority, origin)
     }
 
+    // While active, Audit_Source_Reporter is this adapter's and takes no
+    // write, so its row says ReadOnly whatever the wrapped object's says.
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
-        self.wrapped.property_metadata()
+        let rows = self.wrapped.property_metadata();
+        let source = |row: &PropertyMetadata| {
+            row.property_identifier == PropertyIdentifier::AUDIT_SOURCE_REPORTER
+                && row.write_capability.is_writable()
+        };
+        if !rows.iter().any(source) || !self.active() {
+            return rows;
+        }
+        let mut rows = rows.into_owned();
+        for row in rows.iter_mut().filter(|row| source(row)) {
+            row.write_capability = PropertyWriteCapability::ReadOnly;
+        }
+        Cow::Owned(rows)
     }
 
     fn timed(&mut self) -> Option<&mut dyn Timed> {

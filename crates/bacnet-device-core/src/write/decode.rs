@@ -144,6 +144,9 @@ impl Decoding {
             Datatype::DeviceObjectPropertyReference
             | Datatype::ObjectPropertyReference
             | Datatype::DeviceObjectReference => Self::reference(property, element),
+            // `Datatype` is non-exhaustive in bacnet-types, so this arm is
+            // required: every other datatype, and any added later, takes the
+            // application loop.
             _ => Self::Application,
         }
     }
