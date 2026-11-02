@@ -1155,6 +1155,78 @@ meet its fixed native latency acceptance criteria. The candidate was rejected
 and production source restored. The report retains every observation, the rejected
 patch and data-reconstruction tools; it does not qualify a production speedup.
 
+### 10.4 Counting harness
+
+Wall-clock comparisons of small changes stalled on run-to-run spread (sections
+10.1 and 10.3), so changes aimed at
+[#1978](https://github.com/jscott3201/rusty-bacnet/issues/1978) and
+[#1979](https://github.com/jscott3201/rusty-bacnet/issues/1979) are judged on
+counts instead: callgrind's instruction reads and the allocator's calls.
+Counts move far less than timings, but not never: timer and clock work
+follows wall time, which machine load stretches, so only values from one
+interleaved matrix compare.
+
+- **What it runs.** `benchmarks/counts/` is a package of its own, with its own
+  `Cargo.lock`, so two commits build with the same third-party versions. Its
+  `counts` binary runs a ReadProperty (`rp`), a WriteProperty (`wp`) or a
+  ten-object ReadPropertyMultiple (`rpm`) round trip over B/IP loopback,
+  client and server in one process, on Tokio's current-thread runtime (`ct`)
+  or its multi-thread runtime with two workers (`mt`). Its `codec-counts`
+  binary loops the seven `encoding` suite workloads. Both check the values
+  they read, write or encode before and after the counted loop. The client
+  API takes the written value and the ReadPropertyMultiple specifications by
+  value, so their clones count as part of each request.
+- **Per request.** Each run happens twice, with 1,000 and with 10,000 requests
+  after 200 warm-up requests (100,000 and 1,000,000 iterations for the codec
+  workloads). The difference in instructions divided by the difference in
+  length is the cost of one request, without setup, checks or shutdown. The
+  harness's own counting allocator (about 42 instructions per allocation) is
+  subtracted; the tables show the figure with it too. Allocations per
+  request are the counted loop's allocator calls and requested bytes divided
+  by its length.
+- **Builds and order.** Each commit is exported into its own tree, built in a
+  fresh Docker volume at the same paths with `--locked`. A comparison builds
+  the baseline twice (A and A') and the candidate once (B), and runs them in
+  the order A B A' A' B A, three times, so each build gets six values per
+  workload and runtime. Every run first checks its binary's SHA-256.
+- **Noise floor.** The range of the twelve A and A' values per workload and
+  runtime, from the same matrix as the verdict. Two clean builds of one
+  commit give byte-identical binaries. A noise run (`--noise`) measures only
+  this.
+- **Gates.** A comparison is accepted only when it covers `rp`, `wp` and
+  `rpm` on both runtimes and every row passes. The aimed workload (`rp`
+  unless `--aim` names others) must fall by at least 100 instructions per
+  request and by more than three noise floors, with all six A and B pairs
+  lower; an aimed codec workload has the same rule without the
+  100-instruction minimum. Every other row may not rise by more than its
+  noise floor, and no row's allocation calls may rise by more than 0.01 per
+  request. Requested bytes are reported, not gated. Wire bytes must stay
+  identical; the existing test suites check that. The script exits non-zero
+  when a comparison isn't accepted.
+- **Where.** On Apple silicon, in local Docker; on GitHub, the manual
+  `Perf counts` workflow (`.github/workflows/perf-counts.yml`, run from the
+  Actions tab with a baseline ref, a candidate ref and the workloads) on an
+  arm64 runner. It isn't part of the CI OK or Native OK checks. The image is
+  `scripts/perf/Dockerfile`, with its apt packages from a dated Ubuntu
+  snapshot.
+
+```bash
+# A comparison: baseline built twice, candidate once, one matrix
+python3 scripts/perf/perf_counts.py run --baseline dev --candidate my-branch --out /tmp/compare
+# The noise floor of one commit alone
+python3 scripts/perf/perf_counts.py run --noise dev --workloads all --out /tmp/noise
+# The analysis script's tests
+python3 -m unittest discover -s scripts/perf
+```
+
+For quick local iteration only, `--noise-floors /tmp/noise/summary.json`
+skips the A' build and takes the floors from an earlier noise run on the
+same machine; each row of the table names its floor's source. Each run
+writes `summary.md` (the verdict table), per-function and per-line
+instruction slopes under `profiles/`, and the #1978 items' share in
+`items.md`. The first baseline and noise floors on dev are in
+[benchmarks/results/perf-s0](benchmarks/results/perf-s0/README.md).
+
 ## 11. How to reproduce
 
 Run one suite at a time on an idle machine. Each Criterion suite takes 1 to

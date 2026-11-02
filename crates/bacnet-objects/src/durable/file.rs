@@ -73,6 +73,8 @@ impl MemoryFiles {
 pub(crate) struct ObjectFile {
     path: PathBuf,
     magic: &'static [u8; 8],
+    /// The tag of the format's previous version, which still loads.
+    previous: Option<&'static [u8; 8]>,
     max_bytes: u64,
     /// The object type the file belongs to, for errors.
     kind: &'static str,
@@ -98,11 +100,20 @@ impl ObjectFile {
         Ok(Self {
             path: path.to_path_buf(),
             magic,
+            previous: None,
             max_bytes,
             kind,
             #[cfg(feature = "test-support")]
             memory: None,
         })
+    }
+
+    /// Load a file tagged `previous` too, a version of the format before
+    /// this one; [`load_versioned`](Self::load_versioned) says which a file
+    /// holds. Saves always write the current tag.
+    pub(crate) fn with_previous(mut self, previous: &'static [u8; 8]) -> Self {
+        self.previous = Some(previous);
+        self
     }
 
     /// Test support: keep the file in `memory`'s entry 0 instead of on disk.
@@ -125,20 +136,35 @@ impl ObjectFile {
     /// no file. Refuses a file past the size cap before decoding any of it,
     /// one without this format's header, and one saved for another object.
     pub(crate) fn load(&self, oid: ObjectIdentifier) -> Result<Option<Vec<u8>>, Error> {
+        Ok(self.load_versioned(oid)?.map(|(_, body)| body))
+    }
+
+    /// [`load`](Self::load), with whether the file is in the previous
+    /// version of the format ([`with_previous`](Self::with_previous)).
+    pub(crate) fn load_versioned(
+        &self,
+        oid: ObjectIdentifier,
+    ) -> Result<Option<(bool, Vec<u8>)>, Error> {
         let Some(mut bytes) = self.read()? else {
             return Ok(None);
         };
         if bytes.len() as u64 > self.max_bytes {
             return Err(self.corrupt("is too large"));
         }
-        if bytes.len() < HEADER_LEN || &bytes[..self.magic.len()] != self.magic {
+        let tag = bytes.get(..self.magic.len());
+        let previous = match tag {
+            Some(tag) if tag == self.magic => false,
+            Some(tag) if self.previous.is_some_and(|previous| tag == previous) => true,
+            _ => return Err(self.corrupt("has no valid header")),
+        };
+        if bytes.len() < HEADER_LEN {
             return Err(self.corrupt("has no valid header"));
         }
         if bytes[self.magic.len()..HEADER_LEN] != oid.encode() {
             return Err(self.corrupt("belongs to another object"));
         }
         bytes.drain(..HEADER_LEN);
-        Ok(Some(bytes))
+        Ok(Some((previous, bytes)))
     }
 
     /// The file's octets, up to one past the size cap, or `None` when there

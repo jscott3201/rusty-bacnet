@@ -42,6 +42,10 @@ pub struct TagsSnapshot {
 /// error without replacing its previous snapshot if it refuses a save.
 /// The backend defines its durability guarantees; completion of a save
 /// wait alone does not establish success. See [`crate::durable`].
+///
+/// An implementation must not own the object it serves, or the database
+/// holding it: the object's writer thread calls it, and dropping the object
+/// there would wait for that same thread to end, forever.
 pub trait TagsPersistence: Send + Sync {
     /// Load the saved snapshot for this exact object, or `None` if absent.
     fn load(&self, object: ObjectIdentifier) -> Result<Option<TagsSnapshot>, Error>;

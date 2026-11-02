@@ -150,6 +150,10 @@ pub struct LogSnapshot<R> {
 ///
 /// The log calls `load` once, as it opens, and `commit` from its writer
 /// thread, one call at a time.
+///
+/// An implementation must not own the object it serves, or the database
+/// holding it: the object's writer thread calls it, and dropping the object
+/// there would wait for that same thread to end, forever.
 pub trait LogPersistence<R>: Send + Sync {
     /// Load the newest valid snapshot for `expected_object`, or `None` when
     /// storage holds none yet.
@@ -160,7 +164,7 @@ pub trait LogPersistence<R>: Send + Sync {
     fn commit(&self, snapshot: &LogSnapshot<R>) -> Result<(), Error>;
 
     /// Test support, not a stable API: whether the log's final commit may
-    /// run on the dropping thread when no writer thread has started (#2233).
+    /// run on the dropping thread when no writer thread is running (#2233).
     /// Only `FileLogPersistence`'s in-memory mode says yes; every other
     /// storage keeps the writer thread its commits are documented to run on.
     #[cfg(feature = "test-support")]

@@ -60,6 +60,10 @@ pub struct AccessRightsSnapshot {
 /// The object calls it from its writer thread, one call at a time. A written
 /// value lands in storage a moment before the object serves it: see [storage
 /// leads the served state](crate::durable#storage-leads-the-served-state).
+///
+/// An implementation must not own the object it serves, or the database
+/// holding it: the object's writer thread calls it, and dropping the object
+/// there would wait for that same thread to end, forever.
 pub trait AccessRightsPersistence: Send + Sync {
     /// What was last saved for `rights`, or `None` when nothing was saved.
     fn load(&self, rights: ObjectIdentifier) -> Result<Option<AccessRightsSnapshot>, Error>;

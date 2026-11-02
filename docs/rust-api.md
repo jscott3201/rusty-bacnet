@@ -6039,6 +6039,23 @@ references take network writes; Reliability reads CONFIGURATION_ERROR while
 the non-NULL values differ in datatype, and otherwise reports the first failed
 write of the last run.
 
+`TimerObject::with_persistence(instance, name, persistence)` keeps the set a
+peer writes across a restart (#2243): a write to State_Change_Values or
+List_Of_Object_Property_References saves all three, Priority_For_Writing
+included, before the Timer serves them, and is refused with DEVICE /
+OPERATIONAL_PROBLEM, leaving the set as it was, when the save fails. A Timer
+rebuilt on the same storage serves the saved set, and `set_state_change`
+then checks its arguments without taking them (`state_change_saved` says
+so), so an application that sets its configuration at each start keeps a
+peer's write. `clear_written_state_change` drops the saved set (saving
+that, and returning storage's error if the save fails) so the setter
+applies again. The state machine is not kept: the Timer still starts IDLE. Storage is
+an `Arc<dyn WriteConfigPersistence>` (`bacnet_objects::write_config`), which a
+Channel uses too; `FileWriteConfigPersistence::new(path)` is the bundled
+backend, one file per object, replaced whole through a synchronized temporary
+file. A file cut short, holding a part of the wrong size or value, or saved
+for another object fails `with_persistence` with an error.
+
 Deleting a Timer releases nothing and makes no transition's writes (#2265):
 deletion isn't a transition. A running Timer deleted leaves its start writes
 in its targets' slots and never expires; clear it first (write Timer_State
@@ -6671,9 +6688,10 @@ object, keeps Present_Value in an `Arc<dyn ColorOutputPersistence>`
 Present_Value; `output_restored` says whether it did. The object saves each new
 Present_Value, whether a write, a command, a STOP or the start set it, on its
 own writer thread (see `bacnet_objects::durable`), so nothing touches storage
-under the database guard. As with the other durable objects, each colour
-object with storage keeps that thread, parked while idle, for as long as it
-lives: one thread per object, which matters for a device with many of them. Unlike a Notification Class's Recipient_List, a change doesn't wait
+under the database guard. As with the other durable objects, that thread
+ends once the object has saved nothing for a while and the next save starts
+another, so a device with many colour objects holds no thread for an idle
+one (#1956). Unlike a Notification Class's Recipient_List, a change doesn't wait
 for its save and isn't refused when the save fails: the value is a live
 output, and it keeps working while storage doesn't. The cost is that the
 stored value can lag the served one after a failed save, so a restart in
@@ -6685,11 +6703,24 @@ retried at once: the next change, `stop()` (which waits for the saves) or
 the object's drop tries again. `wait_for_output_saves` blocks until the queued
 ones have run. Tags storage
 (`with_tags_persistence`) and Present_Value storage combine.
+A `Default_Color` or `Default_Color_Temperature` a peer writes is kept with
+Present_Value (#1956), so a zero default written over the network keeps the
+last value at the next start. Unlike Present_Value, a default write saves
+before the object serves it and is refused with DEVICE / OPERATIONAL_PROBLEM,
+keeping the old default, when the save fails; a written default wins over
+the one `set_default_color` or `set_default_color_temperature` configures at
+the next start (`default_color_saved` and `default_color_temperature_saved`
+say so) until `clear_written_default` drops it. In Python,
+`clear_written_default=True` on `add_color` and `add_color_temperature` does
+the same before `default_color` applies. A `ColorOutputSnapshot` holds both, each an `Option`: a
+Present_Value once something drove the output, a default once a write set it.
 `FileColorOutputPersistence::new(path)` is the bundled backend: a tagged
-header with the object identifier, a kind octet and the value (two
-big-endian REALs, or a 32-bit kelvin), replaced whole through a synchronized
-temporary file. A file of the wrong size, kind or object, or holding a value
-out of range, fails `with_output_persistence` with an error.
+header with the object identifier, a kind octet, then Present_Value and the
+default, each behind a presence octet (two big-endian REALs, or a 32-bit
+kelvin), replaced whole through a synchronized temporary file. A file of the
+previous version, with Present_Value alone, still loads. A file of the wrong
+size, kind or object, or holding a value out of range, fails
+`with_output_persistence` with an error.
 
 The colour properties use their standard identifiers: `DEFAULT_COLOR` is
 4194330, `DEFAULT_COLOR_TEMPERATURE` 4194331 and `COLOR_COMMAND` 4194334
@@ -6710,6 +6741,17 @@ the member list, while a whole write of Execution_Delay must give exactly one
 delay per member (VALUE_OUT_OF_RANGE otherwise). A member naming the
 server's own Device is stored as the local reference it stands for; one
 naming another Device keeps it (#1264).
+
+`ChannelObject::with_persistence(instance, name, channel_number, persistence)`
+keeps what peers write to the members, Execution_Delay, Channel_Number,
+Control_Groups and Allow_Group_Delay_Inhibit across a restart (#2243), in the
+same `WriteConfigPersistence` storage a Timer uses. Each write saves before the
+Channel serves it, and is refused with DEVICE / OPERATIONAL_PROBLEM when the
+save fails. The members and their delays are kept together. A part a write
+saved wins over the configured one at the next start: its setter checks its
+argument without taking it, until `clear_written_config` drops every saved
+part. Parts nobody wrote take what the application configures, and
+Present_Value, Write_Status and Reliability start afresh.
 
 Present_Value takes any primitive value or one of the constructed
 alternatives: a lighting command framed in context tag 0, or, as Addendum

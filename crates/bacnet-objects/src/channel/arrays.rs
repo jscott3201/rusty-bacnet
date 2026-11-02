@@ -1,6 +1,8 @@
-//! Writes of a Channel's three arrays: List_Of_Object_Property_References,
-//! Execution_Delay and Control_Groups (Clauses 12.53.11, 12.53.12 and
-//! 12.53.15).
+//! A Channel's configuration ([`ChannelConfig`]) and its writes: the three
+//! arrays List_Of_Object_Property_References, Execution_Delay and
+//! Control_Groups (Clauses 12.53.11, 12.53.12 and 12.53.15), with
+//! Allow_Group_Delay_Inhibit and Channel_Number (Clauses 12.53.13 and
+//! 12.53.14).
 //!
 //! Each takes a whole-array write, a write of one element at a one-based
 //! index, and a write of index 0, which resizes it. A write leaves the array
@@ -31,11 +33,11 @@
 
 use crate::prelude::*;
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
-use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
+use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 
-use super::ChannelObject;
+use super::MemberDatatype;
 use crate::{common, device_reference};
 
 /// Resource cap on members, and so on Execution_Delay elements: the bound a
@@ -59,7 +61,7 @@ pub(super) fn is_empty(member: &BACnetDeviceObjectPropertyReference) -> bool {
     member.is_unset()
 }
 
-fn no_space_error() -> Error {
+pub(super) fn no_space_error() -> Error {
     common::protocol_error(ErrorClass::RESOURCES, ErrorCode::NO_SPACE_TO_WRITE_PROPERTY)
 }
 
@@ -84,7 +86,7 @@ fn slot(index: u32, len: usize) -> Result<usize, Error> {
 
 /// The members a whole write holds, each checked in order: a member whose
 /// device identifier isn't a Device object is refused, empty or not.
-fn decode_members(
+pub(super) fn decode_members(
     value: &PropertyValue,
 ) -> Result<Vec<BACnetDeviceObjectPropertyReference>, Error> {
     let members = device_reference::decode_references(value)?;
@@ -115,11 +117,115 @@ fn unsigned_element(value: PropertyValue) -> Result<u32, Error> {
     u32::try_from(raw).map_err(|_| common::value_out_of_range_error())
 }
 
-impl ChannelObject {
+/// What a Channel's writes configure, the datatypes learned for its
+/// members, and which parts a write has set. A write is worked out on a
+/// copy, which the Channel serves once storage, if it has any, holds it
+/// (`saving`).
+#[derive(Clone)]
+pub(crate) struct ChannelConfig {
+    pub(super) members: Vec<BACnetDeviceObjectPropertyReference>,
+    /// The datatype the server learned for each member in another device,
+    /// slot by slot with `members`; a slot whose member is replaced forgets
+    /// it (#1342). A cache: a step staged before a datatype was learned
+    /// drops it when taken, and the next distribution learns it again.
+    pub(super) learned: Vec<Option<MemberDatatype>>,
+    pub(super) execution_delay: Vec<u32>,
+    pub(super) channel_number: u16,
+    pub(super) control_groups: Vec<u32>,
+    pub(super) allow_group_delay_inhibit: bool,
+    pub(super) written: Written,
+}
+
+/// The parts of a Channel's configuration a write has set, now or before a
+/// restart: with storage, those it keeps.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct Written {
+    /// The members and their delays, which share one size.
+    pub(super) members: bool,
+    pub(super) number: bool,
+    pub(super) groups: bool,
+    pub(super) inhibit: bool,
+}
+
+impl ChannelConfig {
+    /// No members, in control group 0 alone, with delays not inhibited.
+    pub(super) fn new(channel_number: u16) -> Self {
+        Self {
+            members: Vec::new(),
+            learned: Vec::new(),
+            execution_delay: Vec::new(),
+            channel_number,
+            control_groups: vec![0],
+            allow_group_delay_inhibit: false,
+            written: Written::default(),
+        }
+    }
+
+    /// Whether a write of `property` changes the configuration.
+    pub(super) fn written_by(property: PropertyIdentifier) -> bool {
+        matches!(
+            property,
+            PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES
+                | PropertyIdentifier::EXECUTION_DELAY
+                | PropertyIdentifier::CHANNEL_NUMBER
+                | PropertyIdentifier::CONTROL_GROUPS
+                | PropertyIdentifier::ALLOW_GROUP_DELAY_INHIBIT
+        )
+    }
+
+    /// Take a write of one of the [`written_by`](Self::written_by)
+    /// properties, and mark its part written. A write that fails leaves
+    /// the configuration as it was.
+    pub(super) fn write(
+        &mut self,
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        let scalar = matches!(
+            property,
+            PropertyIdentifier::CHANNEL_NUMBER | PropertyIdentifier::ALLOW_GROUP_DELAY_INHIBIT
+        );
+        if scalar && array_index.is_some() {
+            return Err(common::property_is_not_an_array_error());
+        }
+        match property {
+            PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES => {
+                self.write_members(array_index, value)?;
+                self.written.members = true;
+            }
+            PropertyIdentifier::EXECUTION_DELAY => {
+                self.write_execution_delay(array_index, value)?;
+                self.written.members = true;
+            }
+            PropertyIdentifier::CHANNEL_NUMBER => {
+                let PropertyValue::Unsigned(raw) = value else {
+                    return Err(common::invalid_data_type_error());
+                };
+                self.channel_number =
+                    u16::try_from(raw).map_err(|_| common::value_out_of_range_error())?;
+                self.written.number = true;
+            }
+            PropertyIdentifier::CONTROL_GROUPS => {
+                self.write_control_groups(array_index, value)?;
+                self.written.groups = true;
+            }
+            PropertyIdentifier::ALLOW_GROUP_DELAY_INHIBIT => {
+                let PropertyValue::Boolean(allow) = value else {
+                    return Err(common::invalid_data_type_error());
+                };
+                self.allow_group_delay_inhibit = allow;
+                self.written.inhibit = true;
+            }
+            _ => return Err(common::unknown_property_error()),
+        }
+        Ok(())
+    }
+
     /// Make both parallel arrays, and the datatypes learned for the members,
     /// `size` long. The members a resize keeps keep what was learned for
     /// them.
-    fn resize_members(&mut self, size: usize) {
+    pub(super) fn resize_members(&mut self, size: usize) {
         self.members.resize_with(size, empty_reference);
         self.learned.resize(size, None);
         self.execution_delay.resize(size, 0);
@@ -127,7 +233,7 @@ impl ChannelObject {
 
     /// Write List_Of_Object_Property_References. A member replaced, by an
     /// element write or a whole one, loses the datatype learned for it.
-    pub(super) fn write_members(
+    fn write_members(
         &mut self,
         array_index: Option<u32>,
         value: PropertyValue,
@@ -156,7 +262,7 @@ impl ChannelObject {
         Ok(())
     }
 
-    pub(super) fn write_execution_delay(
+    fn write_execution_delay(
         &mut self,
         array_index: Option<u32>,
         value: PropertyValue,
@@ -181,7 +287,7 @@ impl ChannelObject {
         Ok(())
     }
 
-    pub(super) fn write_control_groups(
+    fn write_control_groups(
         &mut self,
         array_index: Option<u32>,
         value: PropertyValue,
