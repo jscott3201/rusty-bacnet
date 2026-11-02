@@ -388,7 +388,7 @@ fn executor_failures_and_panics_map_exactly_without_mutation() {
         assert_eq!(point_state(&point), before);
     }
 
-    // Only std catches the executor's panic.
+    // std: only std catches the executor's panic.
     #[cfg(feature = "std")]
     {
         let mut zone = LifeSafetyZoneObject::new(1, "zone").unwrap();

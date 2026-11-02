@@ -1,6 +1,7 @@
 use super::test_support::*;
 use super::*;
 use crate::durable::{DurableWrites, StageStep};
+// std: only the writer-thread tests use it.
 #[cfg(feature = "std")]
 use crate::traits::BACnetObject;
 use std::sync::Arc;
@@ -196,7 +197,7 @@ fn invalid_middle_stops_staging_but_a_null_noop_does_not() {
     }
 }
 
-// Holds a save open on the writer's thread, which only std has.
+// std: holds a save open on the writer thread.
 #[cfg(feature = "std")]
 #[test]
 fn refused_or_unrelated_write_does_not_steal_another_stage() {
@@ -325,7 +326,7 @@ fn detached_clones<T: BACnetObject + crate::traits::Timed + Clone>(
     assert_eq!(store.attempts(), 1);
 }
 
-// Holds a save open on the writer's thread, which only std has.
+// std: holds a save open on the writer thread.
 #[cfg(feature = "std")]
 #[test]
 fn all_four_application_clones_and_cov_snapshots_detach_a_held_writer() {
@@ -343,7 +344,7 @@ fn all_four_application_clones_and_cov_snapshots_detach_a_held_writer() {
     check!(crate::lighting::BinaryLightingOutputObject);
 }
 
-// Holds a save open on the writer's thread, which only std has.
+// std: holds a save open on the writer thread.
 #[cfg(feature = "std")]
 #[test]
 fn provisioning_supersedes_a_stage_without_publishing_it_or_detaching_storage() {

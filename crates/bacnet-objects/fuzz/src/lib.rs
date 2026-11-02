@@ -61,10 +61,12 @@ use bacnet_objects::write_config::FileWriteConfigPersistence;
 use restore::{FORMATS, Files, Format, Medium, Outcome, Scratch, write_files};
 pub use restore::{crc32, seal};
 
-/// libFuzzer's default limit on one allocation, its `-rss_limit_mb`.
+/// libFuzzer's default limit on one allocation (`-malloc_limit_mb`, which
+/// defaults to `-rss_limit_mb`, 2,048).
 const ALLOCATION_LIMIT: usize = 2048 << 20;
 
-/// The system allocator, aborting on a request past [`ALLOCATION_LIMIT`].
+/// The system allocator, aborting on a request of [`ALLOCATION_LIMIT`] or
+/// more, as libFuzzer does.
 /// libFuzzer enforces `-malloc_limit_mb` through a sanitizer's malloc
 /// hooks, which a build without a sanitizer lacks; without this, a crafted
 /// length could reserve gigabytes it never touches and pass unnoticed. The
@@ -73,11 +75,11 @@ pub struct Capped;
 
 impl Capped {
     fn check(size: usize) {
-        if size > ALLOCATION_LIMIT {
+        if size >= ALLOCATION_LIMIT {
             use std::io::Write;
             // No formatting: nothing here may allocate.
             let _ = std::io::stderr()
-                .write_all(b"objects-fuzz: an allocation passed the 2,048 MB limit\n");
+                .write_all(b"objects-fuzz: an allocation reached the 2,048 MB limit\n");
             std::process::abort();
         }
     }
