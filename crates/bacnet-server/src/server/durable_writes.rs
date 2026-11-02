@@ -128,11 +128,12 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
 }
 
 /// Whether a bundled object of `oid`'s type holds `property` as a
-/// BACnetLIST. No type [`may_save`] admits departs from the standard
-/// classification, so a value decodes here as the handler decodes it after
-/// asking the object.
+/// BACnetLIST. No type [`may_save`] admits states its own value type on a
+/// row, so the standard one is the object's, and a value decodes here as the
+/// handler decodes it after asking the object.
 fn held_as_list(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
-    bacnet_objects::traits::standard_list_property(oid.object_type(), property)
+    bacnet_objects::property_metadata::standard_value_type(oid.object_type(), property)
+        .is_some_and(|value_type| value_type.is_list())
 }
 
 impl DurableTarget {

@@ -31,8 +31,8 @@
 //!   UTF-8 that doesn't decode, an ENUMERATED past 32 bits), the whole value
 //!   comes back the same way, as its octets.
 //! - Otherwise each element decodes to its typed value. A whole read (no
-//!   array index) of a property the stack's classification table (see
-//!   [`standard_array_property`]) marks as a BACnetARRAY or BACnetLIST on that
+//!   array index) of a property the stack's value-type table (see
+//!   [`standard_value_type`]) marks as a BACnetARRAY or BACnetLIST on that
 //!   object type is a [`PropertyValue::List`] at every length, zero and one
 //!   included, so its shape doesn't follow its length. Any other read is the
 //!   bare value when it holds exactly one element, and a list in wire order
@@ -41,8 +41,8 @@
 
 use bacnet_encoding::primitives::{decode_application_value, decode_priority_date_time};
 use bacnet_encoding::tags::{self, TagClass, app_tag};
-use bacnet_objects::traits::{standard_array_property, standard_list_property};
 use bacnet_services::read_property::ReadPropertyACK;
+use bacnet_types::datatype::standard_value_type;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
@@ -97,8 +97,8 @@ fn generic(
         }
     }
     let collection = array_index.is_none()
-        && (standard_array_property(object_type, property)
-            || standard_list_property(object_type, property));
+        && standard_value_type(object_type, property)
+            .is_some_and(|value_type| value_type.is_array() || value_type.is_list());
     match <[PropertyValue; 1]>::try_from(elements) {
         Ok([element]) if !collection => element,
         Ok([element]) => PropertyValue::List(vec![element]),

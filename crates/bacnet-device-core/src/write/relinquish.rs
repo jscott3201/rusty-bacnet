@@ -43,9 +43,9 @@
 //! (Clause 19.6.1). A CreateObject goes on to its next initial value, and a
 //! Schedule counts the target as one that took its write.
 
-use bacnet_objects::property_metadata::has_property;
+use bacnet_objects::property_metadata::{has_property, object_value_type};
 use bacnet_objects::traits::BACnetObject;
-use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
 use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::PropertyValue;
 
@@ -79,11 +79,7 @@ pub fn leaves_unchanged(
 ) -> bool {
     refused_as_datatype(error)
         && !commandable(object, property)
-        && !null_in_datatype(
-            object.object_identifier().object_type(),
-            property,
-            array_index,
-        )
+        && !null_in_datatype(object, property, array_index)
 }
 
 /// PROPERTY / INVALID_DATA_TYPE, plain or naming the list element refused.
@@ -96,23 +92,26 @@ fn refused_as_datatype(error: &Error) -> bool {
     *class == ErrorClass::PROPERTY && *code == ErrorCode::INVALID_DATA_TYPE
 }
 
-/// Present_Value is the standard commandable property (Clause 19.2.1.1): on
-/// an object that keeps a Priority_Array for it, and on a Channel, which
-/// passes its commands on without one (Clause 19.2.1.6).
+/// Present_Value is the standard commandable property (Clause 19.2.1.1), on
+/// an object that keeps a Priority_Array for it. A Channel passes its
+/// commands on without one (Clause 19.2.1.6), but its Present_Value, a
+/// BACnetChannelValue, admits NULL, so [`null_in_datatype`] already keeps
+/// the rule away from it.
 fn commandable(object: &dyn BACnetObject, property: PropertyIdentifier) -> bool {
     property == PropertyIdentifier::PRESENT_VALUE
-        && (object.object_identifier().object_type() == ObjectType::CHANNEL
-            || has_property(
-                &object.property_metadata(),
-                PropertyIdentifier::PRIORITY_ARRAY,
-            ))
+        && has_property(
+            &object.property_metadata(),
+            PropertyIdentifier::PRIORITY_ARRAY,
+        )
 }
 
-/// Whether an application NULL is a value of `property` on an object of
-/// `object_type`, or of one element of it when it is an array or list.
+/// Whether an application NULL is a value of `property` on `object`, or of
+/// one element of it when it is an array or list: the datatype on the
+/// property's metadata row admits one
+/// ([`ValueType::admits_null`](bacnet_objects::property_metadata::ValueType::admits_null)).
 ///
-/// These are the standard properties whose Clause 21 datatype is a CHOICE
-/// with an untagged NULL member (BACnetPriorityValue, BACnetChannelValue,
+/// These are the properties whose Clause 21 datatype is a CHOICE with an
+/// untagged NULL member (BACnetPriorityValue, BACnetChannelValue,
 /// BACnetClientCOV, BACnetProcessIdSelection, BACnetTimerStateChangeValue,
 /// BACnetObjectSelector and the BACnetOptional types), and the Schedule's
 /// Present_Value and Schedule_Default, which take a value of any datatype
@@ -120,44 +119,94 @@ fn commandable(object: &dyn BACnetObject, property: PropertyIdentifier) -> bool 
 /// BACnetValueSource or BACnetFaultParameter, has no application NULL.
 /// Index 0 of an array is its size, an Unsigned.
 ///
-/// Most entries match on the property alone, whatever the object type, on
-/// purpose: a property this names keeps its NULL away from the rule, so the
-/// object's own answer stands. Naming too many is the safe direction; naming
-/// too few would turn a refusal of a NULL the datatype allows into a
-/// success that discards it.
-pub(crate) fn null_in_datatype(
-    object_type: ObjectType,
+/// A property this names keeps its NULL away from the rule, so the
+/// object's own answer stands. Naming too many is the safe direction;
+/// naming too few would turn a refusal of a NULL the datatype allows into a
+/// success that discards it. A property with no datatype at all (a vendor
+/// property whose row states none) counts as having no NULL, as it did
+/// before the rows carried datatypes, when the rule named only standard
+/// properties.
+fn null_in_datatype(
+    object: &dyn BACnetObject,
     property: PropertyIdentifier,
     array_index: Option<u32>,
 ) -> bool {
-    if array_index == Some(0) {
-        return false;
-    }
-    match property {
-        PropertyIdentifier::PRESENT_VALUE => {
-            matches!(object_type, ObjectType::SCHEDULE | ObjectType::CHANNEL)
-        }
-        PropertyIdentifier::SCHEDULE_DEFAULT => object_type == ObjectType::SCHEDULE,
-        PropertyIdentifier::ALARM_VALUES | PropertyIdentifier::FAULT_VALUES => {
-            object_type == ObjectType::CHARACTERSTRING_VALUE
-        }
-        PropertyIdentifier::PRIORITY_ARRAY
-        | PropertyIdentifier::AUDIT_PRIORITY_FILTER
-        | PropertyIdentifier::CLIENT_COV_INCREMENT
-        | PropertyIdentifier::CURRENT_COMMAND_PRIORITY
-        | PropertyIdentifier::INTERFACE_VALUE
-        | PropertyIdentifier::LOW_DIFF_LIMIT
-        | PropertyIdentifier::MONITORED_OBJECTS
-        | PropertyIdentifier::PROCESS_IDENTIFIER_FILTER
-        | PropertyIdentifier::STATE_CHANGE_VALUES => true,
-        _ => false,
-    }
+    object_value_type(object, property)
+        .is_some_and(|value_type| value_type.admits_null(array_index))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use PropertyIdentifier as P;
+    use bacnet_objects::property_metadata::standard_value_type;
+    use bacnet_types::enums::ObjectType;
+
+    /// The NULL rule's answer for an object of `object_type` whose rows take
+    /// the standard value types, as every built-in object's do.
+    fn standard_null(
+        object_type: ObjectType,
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+    ) -> bool {
+        standard_value_type(object_type, property)
+            .is_some_and(|value_type| value_type.admits_null(array_index))
+    }
+
+    /// Before/after table test for #2177: the match this rule used before
+    /// the metadata rows carried datatypes, frozen, against the standard
+    /// value types, over every (object type, property) pair and index form.
+    #[test]
+    fn standard_value_types_admit_null_where_the_old_match_did() {
+        let mut differences = Vec::new();
+        for object_type in (0..=1023).map(ObjectType::from_raw) {
+            for property in (0..=1023).map(PropertyIdentifier::from_raw).chain(
+                PropertyIdentifier::ALL_NAMED
+                    .iter()
+                    .map(|&(_, property)| property)
+                    .filter(|property| property.to_raw() > 1023),
+            ) {
+                for index in [None, Some(0), Some(1), Some(16)] {
+                    if standard_null(object_type, property, index)
+                        != old_null_in_datatype(object_type, property, index)
+                    {
+                        differences.push(format!("{object_type:?} {property:?} {index:?}"));
+                    }
+                }
+            }
+        }
+        assert!(differences.is_empty(), "{}", differences.join("\n"));
+    }
+
+    /// The rule's match before #2177, frozen.
+    fn old_null_in_datatype(
+        object_type: ObjectType,
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+    ) -> bool {
+        if array_index == Some(0) {
+            return false;
+        }
+        match property {
+            PropertyIdentifier::PRESENT_VALUE => {
+                matches!(object_type, ObjectType::SCHEDULE | ObjectType::CHANNEL)
+            }
+            PropertyIdentifier::SCHEDULE_DEFAULT => object_type == ObjectType::SCHEDULE,
+            PropertyIdentifier::ALARM_VALUES | PropertyIdentifier::FAULT_VALUES => {
+                object_type == ObjectType::CHARACTERSTRING_VALUE
+            }
+            PropertyIdentifier::PRIORITY_ARRAY
+            | PropertyIdentifier::AUDIT_PRIORITY_FILTER
+            | PropertyIdentifier::CLIENT_COV_INCREMENT
+            | PropertyIdentifier::CURRENT_COMMAND_PRIORITY
+            | PropertyIdentifier::INTERFACE_VALUE
+            | PropertyIdentifier::LOW_DIFF_LIMIT
+            | PropertyIdentifier::MONITORED_OBJECTS
+            | PropertyIdentifier::PROCESS_IDENTIFIER_FILTER
+            | PropertyIdentifier::STATE_CHANGE_VALUES => true,
+            _ => false,
+        }
+    }
 
     #[test]
     fn null_in_datatype_names_the_choices_with_an_application_null() {
@@ -213,7 +262,7 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                null_in_datatype(object_type, property, index),
+                standard_null(object_type, property, index),
                 expected,
                 "{object_type:?} {property:?} {index:?}"
             );
