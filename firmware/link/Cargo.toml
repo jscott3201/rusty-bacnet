@@ -111,7 +111,9 @@ alloc = [
 # (scripts/ci/check-firmware-link.sh filters them), and the apdu image
 # builds with `alloc` alone. bacnet-objects' capability features (#2215)
 # stay off: the responder drives neither event reporting nor staged durable
-# writes, so the image drops the code only those reach.
+# writes, so the image drops the code only those reach. bacnet-device-core's
+# `structured-writes` (#2210) stays off too: the image writes no event
+# parameter, port permission or stage limit, so it drops their decoders.
 objects = ["alloc", "dep:bacnet-objects", "dep:bacnet-device-core"]
 
 # `emulate`: the emulation build, which scripts/emu/emulate-firmware.sh runs

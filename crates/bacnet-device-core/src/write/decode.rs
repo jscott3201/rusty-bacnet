@@ -1,14 +1,14 @@
 //! What a write does with a value's octets before the object takes it: the
 //! array-index gate, then the decoding into the value the object receives.
-use super::{protocol_error, relinquish};
+use super::protocol_error;
 use alloc::vec::Vec;
 use bacnet_objects::property_metadata::{
     Datatype, ValueShape, ValueType, check_write_array_index, object_value_type,
 };
 use bacnet_objects::traits::BACnetObject;
-use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bacnet_types::primitives::PropertyValue;
 
 /// What WriteProperty does with a value's octets before `object` takes it:
 /// [`check_write_array_index`], then [`decode_write_property_value`] with the
@@ -24,12 +24,19 @@ pub fn gate_and_decode_write(
     bytes: &[u8],
 ) -> Result<PropertyValue, Error> {
     check_write_array_index(object, property, array_index)?;
-    decode_write_property_value(
-        property,
-        object_value_type(object, property),
-        array_index,
-        bytes,
-    )
+    let value_type = object_value_type(object, property);
+    // A property the object doesn't serve is UNKNOWN_PROPERTY, as its own
+    // write answers, rather than a refusal of a datatype it never holds.
+    #[cfg(not(feature = "structured-writes"))]
+    if Decoding::of(property, value_type, array_index).is_structured()
+        && !bacnet_objects::property_metadata::has_property(&object.property_metadata(), property)
+    {
+        return Err(protocol_error(
+            ErrorClass::PROPERTY,
+            ErrorCode::UNKNOWN_PROPERTY,
+        ));
+    }
+    decode_write_property_value(property, value_type, array_index, bytes)
 }
 
 /// PROPERTY / INVALID_DATA_ENCODING for an undecodable propertyValue payload.
@@ -55,6 +62,17 @@ fn invalid_data_encoding_error() -> Error {
 /// per array element. Each such object says what an empty value means; a
 /// Setpoint_Reference with no octets, for one, holds no reference. Index 0
 /// of an array, its size, is an Unsigned and takes the generic loop.
+///
+/// Three datatypes take arms that call bacnet-encoding's structured
+/// decoders only this path needs: a BACnetEventParameter (for its opaque
+/// form), and the elements of a BACnetPortPermission or
+/// BACnetStageLimitValue array. Without the `structured-writes` feature any
+/// write of one of them is refused with PROPERTY / WRITE_ACCESS_DENIED, so
+/// an image that never writes them doesn't link those decoders (#2210).
+/// The metadata rows still call such a property writable, so a build
+/// without the feature lists it as read-only in its PICS. A single
+/// BACnetRecipient is checked either way: the Device's own write of its
+/// Audit_Notification_Recipient links that decoder already.
 pub fn decode_write_property_value(
     property: PropertyIdentifier,
     value_type: Option<ValueType>,
@@ -67,10 +85,30 @@ pub fn decode_write_property_value(
         Decoding::Raw => Ok(PropertyValue::ApplicationData(bytes.to_vec())),
         Decoding::RawOrNull if bytes == [0x00] => Ok(PropertyValue::Null),
         Decoding::RawOrNull => Ok(PropertyValue::ApplicationData(bytes.to_vec())),
+        #[cfg(feature = "structured-writes")]
         Decoding::EventParameter => decode_event_parameter(bytes, list && array_index.is_none()),
         Decoding::Recipient => decode_recipient(bytes),
-        Decoding::Elements(end) => decode_structured_array(bytes, array_index, end),
+        #[cfg(feature = "structured-writes")]
+        Decoding::Elements(element) => decode_structured_array(bytes, array_index, element),
+        // The decode runs on a runtime datatype, so the linker keeps every
+        // decoder an arm can call, whichever datatypes the image's objects
+        // serve. Without the feature these arms call none.
+        #[cfg(not(feature = "structured-writes"))]
+        Decoding::EventParameter | Decoding::Elements(_) => Err(structured_write_refused()),
     }
+}
+
+/// PROPERTY / WRITE_ACCESS_DENIED for a write of a datatype this build
+/// doesn't decode. The value may be of the right datatype, so neither
+/// INVALID_DATA_TYPE nor DATATYPE_NOT_SUPPORTED fits; the device has chosen
+/// not to take writes of the property. The opening text of Clauses 15.9 and
+/// 15.10 lets an implementation restrict writes that way, answered with
+/// WRITE_ACCESS_DENIED, the code their error tables give a property that
+/// can't be written. Nor is it a refusal of the NULL's
+/// datatype, so a lone NULL isn't judged a relinquish (`relinquish`).
+#[cfg(not(feature = "structured-writes"))]
+fn structured_write_refused() -> Error {
+    protocol_error(ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED)
 }
 
 /// How a write's octets reach the object, by the property's value type.
@@ -90,11 +128,34 @@ enum Decoding {
     EventParameter,
     /// One BACnetRecipient, checked here (#1124).
     Recipient,
-    /// One chunk per array element, each split by this decoder (#1225).
-    Elements(fn(&[u8], usize) -> Result<usize, Error>),
+    /// One chunk per array element, each split by its datatype's decoder
+    /// (#1225).
+    Elements(
+        #[cfg_attr(
+            not(feature = "structured-writes"),
+            expect(dead_code, reason = "refused without its decoders")
+        )]
+        Element,
+    ),
+}
+
+/// An array element datatype whose elements [`Decoding::Elements`] splits.
+#[derive(Clone, Copy)]
+enum Element {
+    /// A Notification Forwarder's BACnetPortPermission.
+    PortPermission,
+    /// A Staging object's BACnetStageLimitValue.
+    StageLimitValue,
 }
 
 impl Decoding {
+    /// Whether this decoding needs one of the structured decoders that the
+    /// `structured-writes` feature links.
+    #[cfg(not(feature = "structured-writes"))]
+    fn is_structured(self) -> bool {
+        matches!(self, Self::EventParameter | Self::Elements(_))
+    }
+
     fn of(property: PropertyIdentifier, value_type: Option<ValueType>, index: Option<u32>) -> Self {
         let Some(ValueType {
             datatype, shape, ..
@@ -133,14 +194,8 @@ impl Decoding {
             {
                 Self::Raw
             }
-            Datatype::PortPermission if element => Self::Elements(|data, offset| {
-                bacnet_encoding::constructed::decode_port_permission(data, offset)
-                    .map(|(_, end)| end)
-            }),
-            Datatype::StageLimitValue if element => Self::Elements(|data, offset| {
-                bacnet_encoding::constructed::decode_stage_limit_value(data, offset)
-                    .map(|(_, end)| end)
-            }),
+            Datatype::PortPermission if element => Self::Elements(Element::PortPermission),
+            Datatype::StageLimitValue if element => Self::Elements(Element::StageLimitValue),
             Datatype::DeviceObjectPropertyReference
             | Datatype::ObjectPropertyReference
             | Datatype::DeviceObjectReference => Self::reference(property, element),
@@ -209,6 +264,7 @@ fn decode_application_values(bytes: &[u8], whole_list: bool) -> Result<PropertyV
 
 /// An Event_Parameters value: the opaque form as its octet string, anything
 /// else through the generic loop.
+#[cfg(feature = "structured-writes")]
 fn decode_event_parameter(bytes: &[u8], whole_list: bool) -> Result<PropertyValue, Error> {
     use bacnet_types::constructed::BACnetEventParameter;
 
@@ -229,6 +285,8 @@ fn decode_event_parameter(bytes: &[u8], whole_list: bool) -> Result<PropertyValu
 /// passed on as its octets.
 fn decode_recipient(bytes: &[u8]) -> Result<PropertyValue, Error> {
     use bacnet_types::constructed::BACnetRecipient;
+    use bacnet_types::enums::ObjectType;
+    use bacnet_types::primitives::ObjectIdentifier;
 
     // Clause 15.9/15.10 relinquishment is an operation, not a Recipient
     // value or disabled sentinel. The object owner must leave state intact.
@@ -258,15 +316,22 @@ fn decode_recipient(bytes: &[u8]) -> Result<PropertyValue, Error> {
     Ok(PropertyValue::ApplicationData(bytes.to_vec()))
 }
 
+#[cfg(feature = "structured-writes")]
 fn decode_structured_array(
     bytes: &[u8],
     array_index: Option<u32>,
-    decode: fn(&[u8], usize) -> Result<usize, Error>,
+    element: Element,
 ) -> Result<PropertyValue, Error> {
+    use bacnet_encoding::constructed::{decode_port_permission, decode_stage_limit_value};
+
+    let decode = |data: &[u8], offset| match element {
+        Element::PortPermission => decode_port_permission(data, offset).map(|(_, end)| end),
+        Element::StageLimitValue => decode_stage_limit_value(data, offset).map(|(_, end)| end),
+    };
     // A lone NULL is no element of these arrays. It reaches the object as
     // Null, which refuses it as the wrong datatype, so the write is judged
     // as a relinquish (`relinquish`) rather than as undecodable octets.
-    if relinquish::is_null_octets(bytes) {
+    if super::relinquish::is_null_octets(bytes) {
         return Ok(PropertyValue::Null);
     }
     let mut values = Vec::new();
@@ -293,6 +358,12 @@ fn decode_structured_array(
     Ok(PropertyValue::List(values))
 }
 
-#[cfg(test)]
+// The frozen decoding decodes all four structured datatypes, so it is
+// compared with the build that has their decoders.
+#[cfg(all(test, feature = "structured-writes"))]
 #[path = "decode_equivalence_tests.rs"]
 mod equivalence_tests;
+
+#[cfg(test)]
+#[path = "structured_writes_tests.rs"]
+mod structured_writes_tests;

@@ -102,9 +102,9 @@ cargo nextest run --workspace --exclude rusty-bacnet --locked --features "$LINUX
 cargo test --doc --workspace --exclude rusty-bacnet --locked --features "$LINUX_FEATURES"
 cargo nextest run -p bacnet-cli --locked --profile ci
 cargo nextest run -p bacnet-cli --no-default-features --locked --profile ci
-cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc,bacnet-objects/event-reporting,bacnet-objects/durable-writes --locked --profile ci
+cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc,bacnet-objects/event-reporting,bacnet-objects/durable-writes,bacnet-device-core/structured-writes --locked --profile ci
 cargo nextest run -p bacnet-objects -p bacnet-device-core -p firmware-link --no-default-features --features alloc,firmware-link/objects --locked --profile ci
-cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc,bacnet-objects/event-reporting,bacnet-objects/durable-writes --locked
+cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc,bacnet-objects/event-reporting,bacnet-objects/durable-writes,bacnet-device-core/structured-writes --locked
 cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --locked --profile ci
 cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --locked
 ```
@@ -214,9 +214,9 @@ proves all of that; each check covers a part.
 | Check | Job | What it shows |
 | --- | --- | --- |
 | `scripts/ci/check-no-std.sh` | Clippy, `NO_STD_TARGETS` | Each crate and feature set compiles clean under clippy on `thumbv6m-none-eabi`, `thumbv7em-none-eabihf` and `riscv32imac-unknown-none-elf`, with nothing skipped but `bacnet-objects` and `bacnet-device-core` on `thumbv6m-none-eabi` (they need atomic compare-and-swap, #1615, #2178), and no package in its graph turns `std` on or is `tracing`, `tokio` or `socket2`. Nor does the crate choose atomics for the firmware: its own graph holds no `portable-atomic` or `critical-section`, and no `bytes` with `extra-platforms` |
-| `scripts/ci/check-default-features.sh` | Clippy | Clippy and rustdoc, private items included, for the three crates with `alloc` and without `std`, and without either, and for `bacnet-objects` and `bacnet-device-core` with `alloc`, on Linux, Windows and macOS. For `bacnet-objects` that is with its capability features off, then clippy on all targets with each off alone (#2215) |
-| `cargo clippy -p bacnet-types -p bacnet-encoding -p bacnet-services [-p bacnet-objects -p bacnet-device-core --features alloc,<capabilities>] --no-default-features --all-targets` | Clippy | The tests with `alloc` and without `std` (the three crates, `bacnet-objects` with its capability features on, and `bacnet-device-core`), and the three crates' tests without either, which the Test job runs, are lint-clean too |
-| The `alloc` tests and doctests | Test | The three crates', `bacnet-objects`' and `bacnet-device-core`'s tests and doctests with `alloc` and without `std`: the code a bare-metal build compiles. The tests link `std`; `check-no-std.sh` shows the code needs none. `bacnet-objects`' tests run twice: with its capability features on, then with them all off, as the objects image builds it (#2215) |
+| `scripts/ci/check-default-features.sh` | Clippy | Clippy and rustdoc, private items included, for the three crates with `alloc` and without `std`, and without either, and for `bacnet-objects` and `bacnet-device-core` with `alloc`, on Linux, Windows and macOS. For `bacnet-objects` that is with its capability features off, then clippy on all targets with each off alone (#2215); for `bacnet-device-core`, on all targets with `structured-writes` off (#2210) |
+| `cargo clippy -p bacnet-types -p bacnet-encoding -p bacnet-services [-p bacnet-objects -p bacnet-device-core --features alloc,<capabilities>] --no-default-features --all-targets` | Clippy | The tests with `alloc` and without `std` (the three crates, `bacnet-objects` with its capability features on, and `bacnet-device-core` with `structured-writes` on), and the three crates' tests without either, which the Test job runs, are lint-clean too |
+| The `alloc` tests and doctests | Test | The three crates', `bacnet-objects`' and `bacnet-device-core`'s tests and doctests with `alloc` and without `std`: the code a bare-metal build compiles. The tests link `std`; `check-no-std.sh` shows the code needs none. `bacnet-objects`' and `bacnet-device-core`'s tests run twice: with their capability features and `structured-writes` on, then with them all off, as the objects image builds it, in the step "bacnet-objects and bacnet-device-core tests (alloc, capability features and structured-writes off)" (#2215, #2210) |
 | The allocation-free tests | Test | The three crates' tests without `alloc` either, including `bacnet-services/tests/no_alloc_subset.rs`, which runs Who-Is, I-Am and ReadProperty through the APDU header under a counting allocator and finds no allocation, and their doctests, whose examples write to sinks (#1779) |
 | `scripts/ci/check-msrv.sh` | MSRV | The three crates, `bacnet-objects` and `bacnet-device-core` with `alloc` and without `std` build at the MSRV, in a run of their own, since the hosted crates turn `std` back on in the main run |
 | [Firmware link test](#firmware-link-test) | Clippy, `FIRMWARE_TARGETS` | The MS/TP and B/IP stacks, and an MS/TP device with its application layer, link into bare-metal images with no allocator, and `bacnet-encoding` and `bacnet-services` into one with an allocator, and `bacnet-device-core` over `bacnet-objects` into another, each within its size budget |
@@ -259,9 +259,9 @@ test and the harness's target table both generalised.
 rustup target add thumbv6m-none-eabi thumbv7em-none-eabihf riscv32imac-unknown-none-elf
 bash scripts/ci/check-no-std.sh                       # every default target
 bash scripts/ci/check-no-std.sh thumbv6m-none-eabi    # one
-cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc,bacnet-objects/event-reporting,bacnet-objects/durable-writes --locked
+cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc,bacnet-objects/event-reporting,bacnet-objects/durable-writes,bacnet-device-core/structured-writes --locked
 cargo nextest run -p bacnet-objects -p bacnet-device-core -p firmware-link --no-default-features --features alloc,firmware-link/objects --locked
-cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc,bacnet-objects/event-reporting,bacnet-objects/durable-writes --locked
+cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc,bacnet-objects/event-reporting,bacnet-objects/durable-writes,bacnet-device-core/structured-writes --locked
 cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --locked
 cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --locked   # examples on sinks, no allocator (#1779)
 ```
@@ -1768,7 +1768,7 @@ cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked --feature
 cargo clippy -p rusty-bacnet --all-targets --locked -- -D warnings
 cargo clippy -p bacnet-cli --no-default-features --all-targets --locked -- -D warnings
 bash scripts/ci/check-default-features.sh   # the host; or pass target triples, as CI does
-cargo clippy -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc,bacnet-objects/event-reporting,bacnet-objects/durable-writes --all-targets --locked -- -D warnings
+cargo clippy -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc,bacnet-objects/event-reporting,bacnet-objects/durable-writes,bacnet-device-core/structured-writes --all-targets --locked -- -D warnings
 cargo clippy -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --all-targets --locked -- -D warnings
 bash scripts/ci/check-no-std.sh             # needs the bare-metal targets (rustup target add)
 bash scripts/ci/check-firmware-link.sh      # likewise; see "Firmware link test"
@@ -1776,9 +1776,9 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude rusty-bacnet --no-dep
 RUSTDOCFLAGS="-D warnings" cargo doc -p rusty-bacnet --no-deps --locked --document-private-items
 cargo nextest run -p bacnet-cli --locked   # the CLI's feature-off tests
 cargo nextest run -p bacnet-cli --no-default-features --locked   # without the TUI
-cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc,bacnet-objects/event-reporting,bacnet-objects/durable-writes --locked   # no_std code, alloc
-cargo nextest run -p bacnet-objects -p bacnet-device-core -p firmware-link --no-default-features --features alloc,firmware-link/objects --locked   # no_std code, capability features off
-cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc,bacnet-objects/event-reporting,bacnet-objects/durable-writes --locked
+cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc,bacnet-objects/event-reporting,bacnet-objects/durable-writes,bacnet-device-core/structured-writes --locked   # no_std code, alloc
+cargo nextest run -p bacnet-objects -p bacnet-device-core -p firmware-link --no-default-features --features alloc,firmware-link/objects --locked   # no_std code, capability features and structured-writes off
+cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc,bacnet-objects/event-reporting,bacnet-objects/durable-writes,bacnet-device-core/structured-writes --locked
 cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --locked   # no_std code, no allocator
 cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --locked
 cargo nextest run -p rusty-bacnet --locked # the PyO3 crate's Rust tests

@@ -7415,6 +7415,24 @@ builds hosted (`std`, the default) and `no_std` with an allocator (`alloc`),
 on targets with atomic compare-and-swap, as `bacnet-objects` does. The
 [design note](design/device-core.md) has the whole plan.
 
+One feature, `structured-writes` (#2210), keeps the write path's own
+decoding of three structured datatypes: a BACnetEventParameter, and the
+elements of a BACnetPortPermission or BACnetStageLimitValue array. `std`
+turns it on; `alloc` alone leaves it off, and a write of one of those values
+is then refused with PROPERTY / WRITE_ACCESS_DENIED (an UNKNOWN_PROPERTY
+still wins for a property the object doesn't have). Any other write decodes
+as before, a single BACnetRecipient included. The decoding picks its arm
+from the datatype at run time, so with the feature every decoder those arms
+call links into an image whatever its objects serve; leaving it off saves
+20,368 / 20,412 / 24,184 octets of flash on the `firmware/link` objects
+image (thumbv7m / thumbv7em / riscv32imac). The metadata rows still call
+those properties writable, so an integrator's PICS for such a build lists
+them as read-only. A firmware that writes those datatypes asks for it:
+
+```toml
+bacnet-device-core = { version = "...", default-features = false, features = ["alloc", "structured-writes"] }
+```
+
 - `read`: `ReadScope` (the work limit, the registered Network_Port and the
   Device the wildcard instance names), `ReadOverlay` (how a host serves an
   object differently from the stored one; `NoOverlay` for none), and the

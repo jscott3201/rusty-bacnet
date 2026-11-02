@@ -44,6 +44,7 @@
 #
 # bacnet-objects' capability features (#2215) each change what it compiles:
 # `alloc` alone has them all off, then each is off alone, then all are on.
+# bacnet-device-core's structured-writes (#2210) likewise: off, then on.
 #
 # To cover another crate or feature set, add a line to `checks`.
 set -euo pipefail
@@ -83,6 +84,7 @@ checks=(
   "bacnet-objects alloc,event-reporting"
   "bacnet-objects alloc,event-reporting,durable-writes"
   "bacnet-device-core alloc"
+  "bacnet-device-core alloc,structured-writes"
 )
 default_targets=(thumbv6m-none-eabi thumbv7em-none-eabihf riscv32imac-unknown-none-elf)
 # Crates that need std (or, for tracing, atomics the no_std crates don't
