@@ -1,10 +1,14 @@
-//! RB-15 lifecycle tests (Loopback, deterministic, no sleeps).
+//! RB-15 lifecycle tests (Loopback, deterministic, on paused time).
 //!
 //! Covers: cancellation at await boundaries, shutdown with pending
 //! replies/segments, single ingress consumer + one-use reply ownership, no
 //! detached role outlives the endpoint.
 
 use std::time::Duration;
+
+#[path = "support/eventually.rs"]
+mod eventually;
+use eventually::eventually;
 
 use bacnet_encoding::apdu::{Apdu, ComplexAck, decode_apdu, encode_apdu};
 use bacnet_encoding::npdu::NpduAddress;
@@ -47,7 +51,7 @@ fn object_id(instance: u32) -> bacnet_types::primitives::ObjectIdentifier {
     bacnet_types::primitives::ObjectIdentifier::new(ObjectType::ANALOG_INPUT, instance).unwrap()
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn cancel_pending_request_releases_exact_lease() {
     let (client_transport, peer_transport) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut client =
@@ -78,22 +82,15 @@ async fn cancel_pending_request_releases_exact_lease() {
     // the exact lease via the request guard (no strand).
     request.abort();
     let _ = request.await;
-    let deadline = tokio::time::Instant::now() + WAIT;
-    loop {
-        if client.active_leases() == 0 {
-            break;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "cancelled request stranded its lease"
-        );
-        tokio::task::yield_now().await;
-    }
+    eventually(WAIT, "cancelled request stranded its lease", async || {
+        client.active_leases() == 0
+    })
+    .await;
     client.stop().await.unwrap();
     peer.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn shutdown_with_pending_reply_cleans_up() {
     let (client_transport, peer_transport) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut client =
@@ -135,7 +132,7 @@ async fn shutdown_with_pending_reply_cleans_up() {
     peer.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn shutdown_with_pending_segmented_response_cleans_up() {
     // Server sends a segmented ComplexAck the requester cannot reassemble
     // (unsegmented requester): the session must abort + release without hang,
@@ -209,7 +206,7 @@ async fn shutdown_with_pending_segmented_response_cleans_up() {
     peer.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn reply_sender_is_single_consumer_one_use() {
     // `ReceivedApdu::clone` drops reply authority; the responder takes it
     // exactly once via `.take()`.
@@ -273,7 +270,7 @@ async fn reply_sender_is_single_consumer_one_use() {
     assert_eq!(cloned.ingress_network, Some(1));
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn no_detached_role_outlives_session() {
     let (transport_a, transport_b) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut session_a = EndpointSession::new(transport_a, SessionRole::Both, session_config())
@@ -309,7 +306,7 @@ async fn no_detached_role_outlives_session() {
     session_b.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn context_preservation_does_not_change_group_decision() {
     // Raw `link_layer_group` is preserved structurally but the responder scope
     // decision still uses effective `is_group` only (compat-mode: no new

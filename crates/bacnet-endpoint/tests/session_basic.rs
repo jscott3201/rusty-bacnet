@@ -36,7 +36,7 @@ fn object_id(instance: u32) -> bacnet_types::primitives::ObjectIdentifier {
     bacnet_types::primitives::ObjectIdentifier::new(ObjectType::ANALOG_INPUT, instance).unwrap()
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn start_once_stop_once() {
     let (transport, _peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut session = EndpointSession::new(transport, SessionRole::Both, session_config()).unwrap();
@@ -48,7 +48,7 @@ async fn start_once_stop_once() {
     assert!(session.stop().await.is_err());
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn client_only_and_server_only_compose() {
     // Client-only session has a client handle, no server handle.
     let (client_transport, server_transport) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
@@ -83,7 +83,7 @@ async fn client_only_and_server_only_compose() {
     server.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn both_roles_round_trip() {
     let (transport_a, transport_b) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut session_a = EndpointSession::new(transport_a, SessionRole::Both, session_config())
@@ -127,7 +127,7 @@ async fn both_roles_round_trip() {
     session_b.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn concurrent_equal_inbound_outbound_ids_stay_unambiguous() {
     // Both sessions start with empty coordinators, so both outbound requests
     // use numeric invoke ID 0 while each also serves an inbound request with
