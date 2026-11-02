@@ -622,6 +622,8 @@ mod averaging_sample_tests;
 #[cfg(test)]
 mod binary_lighting_task_tests;
 #[cfg(test)]
+mod catalogue_wire_tests;
+#[cfg(test)]
 mod channel_member_concurrency_tests;
 #[cfg(test)]
 mod channel_reliability_tests;
