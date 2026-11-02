@@ -522,7 +522,12 @@ impl BACnetObject for StagingObject {
     }
 
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
-        Cow::Owned(self.metadata())
+        // Borrowed unless Stage_Names adds its row, so the array and list
+        // checks that read the rows allocate nothing for most objects.
+        match self.stage_names {
+            None => Cow::Borrowed(STAGING_PROPERTY_METADATA),
+            Some(_) => Cow::Owned(self.metadata()),
+        }
     }
 
     // Table 13-1 Staging row: Present_Value by COV_Increment, Status_Flags and

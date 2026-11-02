@@ -270,11 +270,8 @@ fn read_range_items(
             ErrorCode::PROPERTY_IS_NOT_A_LIST,
         )));
     }
-    Ok(items::list_items(
-        request.object_identifier.object_type(),
-        property,
-        value,
-    )?)
+    let value_type = bacnet_objects::property_metadata::object_value_type(object, property);
+    Ok(items::list_items(value_type, value)?)
 }
 
 /// Select the request's page from one read of the target list. A running

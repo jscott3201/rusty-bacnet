@@ -1,43 +1,13 @@
-//! Every built-in object answers the array and list queries from the shared
-//! classification table, so a client that knows only the object type and
-//! property (`standard_array_property`, `standard_list_property`) shapes a
-//! value the way the object serves it (#1296).
+//! Every array the built-in objects serve answers index 0 with its size.
+//! Their array and list classification is the standard value type table's,
+//! which `value_type_equivalence` holds to the pre-#2177 classification.
 
 use super::*;
-use crate::traits::{standard_array_property, standard_list_property};
+use crate::property_metadata::standard_value_type;
 use bacnet_types::error::RemoteError;
 
-#[test]
-fn every_served_property_follows_the_shared_collection_table() {
-    let mut objects = supported_representatives();
-    audit_object_type_coverage(&objects);
-    // The representatives build a non-B/IP Network Port; a B/IP one serves
-    // IP_DNS_SERVER as well, and a B/IPv6 one IPV6_DNS_SERVER.
-    objects.push(Box::new(
-        NetworkPortObject::new_bip(2, "NP-BIP", Default::default()).unwrap(),
-    ));
-    objects.push(Box::new(
-        NetworkPortObject::new_bip6(3, "NP-BIP6", Default::default()).unwrap(),
-    ));
-    let mut failures = Vec::new();
-    for object in &objects {
-        let object_type = object.object_identifier().object_type();
-        for &property in crate::test_rows::listed(&object.property_metadata()).iter() {
-            let array = standard_array_property(object_type, property);
-            let list = standard_list_property(object_type, property);
-            if object.is_array_property(property) != array
-                || object.is_list_property(property) != list
-            {
-                failures.push(format!(
-                    "{object_type} {property}: object array={} list={}, table array={array} list={list}",
-                    object.is_array_property(property),
-                    object.is_list_property(property),
-                ));
-            }
-            assert!(!(array && list), "{object_type} {property} is both");
-        }
-    }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+fn standard_array_property(object_type: ObjectType, property: PropertyIdentifier) -> bool {
+    standard_value_type(object_type, property).is_some_and(|v| v.is_array())
 }
 
 #[test]

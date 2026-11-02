@@ -212,3 +212,5 @@ mod collection_classification;
 mod cov_reporting;
 
 mod property_list;
+
+mod value_type_equivalence;
