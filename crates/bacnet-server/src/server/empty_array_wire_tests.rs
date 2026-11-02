@@ -8,14 +8,21 @@
 //! Event_Message_Texts_Config always holds three elements, and MSV-1's
 //! State_Text one per state, at least one. Zero octets for one value, or
 //! for one element of an array, stay undecodable.
+//!
+//! CreateObject's initial values take the same decoding, so an empty array
+//! among them reaches the new object too.
 use super::channel_wire_tests::{ch, channel, member, write_wire};
 use super::command_action_wire_tests::read_wire;
 use super::cov_wire_test_support::*;
 use super::*;
+use bacnet_encoding::apdu::ErrorPdu;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::command::CommandObject;
 use bacnet_objects::multistate::MultiStateValueObject;
 use bacnet_services::common::BACnetPropertyValue;
+use bacnet_services::object_mgmt::{
+    CreateObjectAck, CreateObjectError, CreateObjectRequest, ObjectSpecifier,
+};
 use bacnet_services::wpm::{
     WriteAccessSpecification, WritePropertyMultipleError, WritePropertyMultipleRequest,
 };
@@ -62,7 +69,9 @@ fn cases() -> Vec<(ObjectIdentifier, P, Option<u32>, Answer)> {
     vec![
         // A read-only array: refused for access, as a non-empty write is.
         (oid(ObjectType::COMMAND, 1), P::ACTION, None, ACCESS_DENIED),
-        // An array that shrinks to nothing, and one sized by it.
+        // Delays sized by two members, then the member list shrunk to
+        // nothing, and delays for no members.
+        (ch(2), P::EXECUTION_DELAY, None, OUT_OF_RANGE),
         (ch(2), P::LIST_OF_OBJECT_PROPERTY_REFERENCES, None, ACCEPTED),
         (ch(1), P::EXECUTION_DELAY, None, ACCEPTED),
         // A fixed size, and two sizes with a floor of one.
@@ -182,4 +191,99 @@ async fn a_local_encoded_write_of_an_empty_array_reaches_the_object() {
         assert_eq!(answer, expected, "{object:?} {property:?} {index:?}");
     }
     assert_sizes(&mut h).await;
+}
+
+/// CreateObject of `object_type` with `values` as its initial values, over
+/// the wire: the object created, or the CreateObject-Error.
+async fn create(
+    h: &mut Harness,
+    object_type: ObjectType,
+    values: Vec<(P, Vec<u8>)>,
+) -> Result<ObjectIdentifier, CreateObjectError> {
+    let mut body = BytesMut::new();
+    CreateObjectRequest {
+        object_specifier: ObjectSpecifier::Type(object_type),
+        list_of_initial_values: values
+            .into_iter()
+            .map(|(property_identifier, value)| BACnetPropertyValue {
+                property_identifier,
+                property_array_index: None,
+                value,
+                priority: None,
+            })
+            .collect(),
+    }
+    .encode(&mut body);
+    h.request(ConfirmedServiceChoice::CREATE_OBJECT, body).await;
+    let invoke_id = h.invoke_id;
+    let reply = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let reply = {
+                let mut frames = h.frames.lock().unwrap();
+                let at = frames.iter().position(|apdu| match apdu {
+                    Apdu::ComplexAck(ack) => ack.invoke_id == invoke_id,
+                    Apdu::Error(error) => error.invoke_id == invoke_id,
+                    _ => false,
+                });
+                at.map(|at| frames.remove(at))
+            };
+            match reply {
+                Some(reply) => return reply,
+                None => tokio::time::sleep(Duration::from_millis(1)).await,
+            }
+        }
+    })
+    .await
+    .expect("a reply to the CreateObject");
+    match reply {
+        Apdu::ComplexAck(ack) => Ok(CreateObjectAck::decode(&ack.service_ack)
+            .unwrap()
+            .object_identifier),
+        Apdu::Error(error) => Err(CreateObjectError::try_from(&error as &ErrorPdu).unwrap()),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn create_object_takes_an_empty_array_as_an_initial_value() {
+    let mut h = Harness::start_with(ServerConfig::default(), objects).await;
+    let name =
+        |name: &str| channel_wire_tests::encoded(&PropertyValue::CharacterString(name.into()));
+    // A Notification Class's Priority always holds three elements: refused
+    // as out of range, naming the second initial value, and nothing created.
+    let refused = create(
+        &mut h,
+        ObjectType::NOTIFICATION_CLASS,
+        vec![(P::OBJECT_NAME, name("NC")), (P::PRIORITY, Vec::new())],
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        (
+            refused.error_class,
+            refused.error_code,
+            refused.first_failed_element_number
+        ),
+        (ErrorClass::PROPERTY, ErrorCode::VALUE_OUT_OF_RANGE, 2)
+    );
+    assert!(
+        h.server
+            .database()
+            .read()
+            .await
+            .find_by_type(ObjectType::NOTIFICATION_CLASS)
+            .is_empty()
+    );
+    // A Structured View's Subordinate_Annotations can be empty.
+    let view = create(
+        &mut h,
+        ObjectType::STRUCTURED_VIEW,
+        vec![(P::SUBORDINATE_ANNOTATIONS, Vec::new())],
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        read_wire(&mut h, view, P::SUBORDINATE_ANNOTATIONS, Some(0)).await,
+        Ok(vec![0x21, 0])
+    );
 }
