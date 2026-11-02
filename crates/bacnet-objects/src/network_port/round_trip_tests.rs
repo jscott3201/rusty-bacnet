@@ -35,6 +35,12 @@ fn code(result: &Result<(), Error>) -> Option<ErrorCode> {
 /// the same afterwards. Returns the rows written; a refusal fails.
 fn round_trip(db: &mut ObjectDatabase) -> Vec<P> {
     let port = db.get_mut(&oid()).unwrap();
+    // Each port here is registered, and its owner keeps it in service: the
+    // row says so, and a write is refused.
+    assert!(!port.is_writable_property(P::OUT_OF_SERVICE));
+    let in_service = port.read_property(P::OUT_OF_SERVICE, None).unwrap();
+    let result = port.write_property(P::OUT_OF_SERVICE, None, in_service, None);
+    assert_eq!(code(&result), Some(ErrorCode::WRITE_ACCESS_DENIED));
     let rows = port.property_metadata().into_owned();
     let mut written = Vec::new();
     let mut failures = Vec::new();
@@ -44,14 +50,7 @@ fn round_trip(db: &mut ObjectDatabase) -> Vec<P> {
             continue;
         }
         let value = port.read_property(property, None).unwrap();
-        let result = port.write_property(property, None, value.clone(), None);
-        // Each port here is registered, and its owner keeps it in service:
-        // the row is writable only on a port nothing has bound.
-        if property == P::OUT_OF_SERVICE {
-            assert_eq!(code(&result), Some(ErrorCode::WRITE_ACCESS_DENIED));
-            continue;
-        }
-        match result {
+        match port.write_property(property, None, value.clone(), None) {
             Ok(()) => {
                 let again = port.read_property(property, None).unwrap();
                 if again != value {
@@ -214,5 +213,37 @@ fn a_bdt_list_of_anything_else_is_refused() {
                 .unwrap(),
             PropertyValue::Boolean(false)
         );
+    }
+}
+
+/// The entries' octets are joined before they are decoded, so how a caller
+/// splits them into elements doesn't matter: an entry split across two
+/// elements, or two entries in one, give the same table. That is the
+/// leniency of the shared `common::chunks`, kept on purpose.
+#[test]
+fn a_bdt_takes_its_entries_however_the_elements_split_them() {
+    let tables = Arc::new(pending_tests::Tables::default());
+    let (mut db, _lease) = pending_tests::bbmd_port(&tables);
+    let octets = |value: PropertyValue| match value {
+        PropertyValue::ApplicationData(bytes) => bytes,
+        _ => unreachable!(),
+    };
+    let (first, second) = (octets(entry([10, 0, 0, 2])), octets(entry([127, 0, 0, 1])));
+    let table = PropertyValue::List(vec![entry([10, 0, 0, 2]), entry([127, 0, 0, 1])]);
+    let joined = [first.as_slice(), second.as_slice()].concat();
+    let cut = first.len() / 2;
+    let shapes = [
+        // Both entries in one element of the list.
+        PropertyValue::List(vec![PropertyValue::ApplicationData(joined.clone())]),
+        // The first entry cut in two, its tail in front of the second.
+        PropertyValue::List(vec![
+            PropertyValue::ApplicationData(joined[..cut].to_vec()),
+            PropertyValue::ApplicationData(joined[cut..].to_vec()),
+        ]),
+    ];
+    for shape in shapes {
+        write_bdt(&mut db, PropertyValue::List(vec![])).unwrap();
+        write_bdt(&mut db, shape.clone()).unwrap();
+        assert_eq!(read_bdt(&db), table, "{shape:?}");
     }
 }

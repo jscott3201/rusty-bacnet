@@ -1,6 +1,7 @@
 ---
 section: Fixed
 ---
-- A BBMD Network Port's Broadcast Distribution Table takes back the list a read
-  returns when written directly through the object API, as it already did over
-  the wire (#2272).
+- Written directly through the object API, a BBMD Network Port's Broadcast
+  Distribution Table takes back the list a read returns, and Recipient_List
+  and Subscribed_Recipients take their entries as a list of elements too; the
+  wire is unchanged (#2272).

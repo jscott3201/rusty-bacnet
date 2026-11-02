@@ -180,8 +180,9 @@ impl SubscribedRecipients {
 
     /// Replace the list with a written one, all or nothing.
     ///
-    /// Only the framed form in `PropertyValue::ApplicationData` is a value;
-    /// anything else, or an entry that does not decode, fails with PROPERTY /
+    /// Only encoded entries are a value: the framed form in
+    /// `PropertyValue::ApplicationData`, or a list of such elements, joined
+    /// (#2272). Anything else, or an entry that does not decode, fails with PROPERTY /
     /// INVALID_DATA_TYPE. An entry whose Time Remaining is 0 or past
     /// [`MAX_SUBSCRIPTION_MINUTES`] fails with PROPERTY / VALUE_OUT_OF_RANGE,
     /// and the first entry past [`MAX_SUBSCRIBED_RECIPIENTS`] with RESOURCES /
@@ -197,9 +198,8 @@ impl SubscribedRecipients {
     /// entries naming the same recipient and process are one entry, which
     /// takes the later one's members.
     pub fn write(&mut self, value: PropertyValue) -> Result<(), Error> {
-        let PropertyValue::ApplicationData(bytes) = value else {
-            return Err(common::invalid_data_type_error());
-        };
+        // The framed octets, or a list of framed elements joined (#2272).
+        let bytes = common::chunks(&value)?.concat();
         let now = self.now();
         let mut written: Vec<Entry> = Vec::new();
         let mut offset = 0;
