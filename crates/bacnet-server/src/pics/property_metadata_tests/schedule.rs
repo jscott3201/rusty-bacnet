@@ -78,7 +78,7 @@ fn pics_schedule_property_metadata_is_exact() {
             assert_eq!(pics.supported_object_types.len(), 1);
             let support = &pics.supported_object_types[0];
             assert_eq!(support.object_type, ObjectType::SCHEDULE);
-            assert!(!support.createable);
+            assert!(support.createable);
             assert!(support.deleteable);
             let rows: Vec<_> = support
                 .supported_properties

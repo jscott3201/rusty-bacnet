@@ -46,7 +46,7 @@ fn object(kind: ObjectType, instance: u32) -> ObjectIdentifier {
 
 /// The types the factory builds; the rest of the listed types aren't
 /// creatable (#2172).
-const CREATABLE: [ObjectType; 21] = [
+const CREATABLE: [ObjectType; 27] = [
     ObjectType::ANALOG_INPUT,
     ObjectType::ANALOG_OUTPUT,
     ObjectType::ANALOG_VALUE,
@@ -68,6 +68,12 @@ const CREATABLE: [ObjectType; 21] = [
     ObjectType::DATEPATTERN_VALUE,
     ObjectType::TIMEPATTERN_VALUE,
     ObjectType::DATETIMEPATTERN_VALUE,
+    ObjectType::CALENDAR,
+    ObjectType::SCHEDULE,
+    ObjectType::NOTIFICATION_CLASS,
+    ObjectType::TREND_LOG,
+    ObjectType::EVENT_ENROLLMENT,
+    ObjectType::STRUCTURED_VIEW,
 ];
 
 #[test]

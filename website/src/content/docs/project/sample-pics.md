@@ -293,8 +293,9 @@ Property rows aggregate configured instances: a row or access flag means at leas
 
 #### CALENDAR
 
-- Createable: false
+- Createable: true
 - Deleteable: true
+- Whole value set only by CreateObject: OBJECT_NAME
 
 | Property | Access |
 |----------|--------|
@@ -365,8 +366,9 @@ Property rows aggregate configured instances: a row or access flag means at leas
 
 #### EVENT_ENROLLMENT
 
-- Createable: false
+- Createable: true
 - Deleteable: true
+- Whole value set only by CreateObject: OBJECT_PROPERTY_REFERENCE
 
 | Property | Access |
 |----------|--------|
@@ -540,8 +542,9 @@ Property rows aggregate configured instances: a row or access flag means at leas
 
 #### NOTIFICATION_CLASS
 
-- Createable: false
+- Createable: true
 - Deleteable: true
+- Whole value set only by CreateObject: OBJECT_NAME, PRIORITY, ACK_REQUIRED
 
 | Property | Access |
 |----------|--------|
@@ -579,8 +582,9 @@ Property rows aggregate configured instances: a row or access flag means at leas
 
 #### SCHEDULE
 
-- Createable: false
+- Createable: true
 - Deleteable: true
+- Whole value set only by CreateObject: OBJECT_NAME
 
 | Property | Access |
 |----------|--------|
@@ -664,8 +668,9 @@ Property rows aggregate configured instances: a row or access flag means at leas
 
 #### TREND_LOG
 
-- Createable: false
+- Createable: true
 - Deleteable: true
+- Whole value set only by CreateObject: OBJECT_NAME, BUFFER_SIZE
 
 | Property | Access |
 |----------|--------|
@@ -936,8 +941,9 @@ Property rows aggregate configured instances: a row or access flag means at leas
 
 #### STRUCTURED_VIEW
 
-- Createable: false
+- Createable: true
 - Deleteable: true
+- Whole value set only by CreateObject: OBJECT_NAME, NODE_TYPE, NODE_SUBTYPE, SUBORDINATE_LIST, SUBORDINATE_ANNOTATIONS
 
 | Property | Access |
 |----------|--------|

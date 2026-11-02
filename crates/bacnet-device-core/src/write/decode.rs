@@ -219,9 +219,15 @@ pub fn decode_write_property_value(
     }
     // Staging targets reach the object as raw reference bytes too, decoded
     // by the same helpers, once the handler has put those naming this device
-    // in their local form (#1136, #1313); index 0, the array size, stays an
-    // Unsigned.
-    if array_index != Some(0) && property == PropertyIdentifier::TARGET_REFERENCES {
+    // in their local form (#1136, #1313), and so does a Structured View's
+    // Subordinate_List, which CreateObject sets (#2208); index 0, the array
+    // size, stays an Unsigned.
+    if array_index != Some(0)
+        && matches!(
+            property,
+            PropertyIdentifier::TARGET_REFERENCES | PropertyIdentifier::SUBORDINATE_LIST
+        )
+    {
         return Ok(PropertyValue::ApplicationData(bytes.to_vec()));
     }
     let mut values = Vec::new();

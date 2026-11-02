@@ -97,7 +97,7 @@ fn pics_loop_program_notification_class_property_metadata_is_exact() {
             assert_eq!(pics.supported_object_types.len(), 1);
             let support = &pics.supported_object_types[0];
             assert_eq!(support.object_type, kind);
-            assert!(!support.createable);
+            assert_eq!(support.createable, kind == ObjectType::NOTIFICATION_CLASS);
             assert!(support.deleteable);
             let rows: Vec<_> = support
                 .supported_properties
