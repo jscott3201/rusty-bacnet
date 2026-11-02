@@ -124,3 +124,33 @@ fn abort_workers_cap_at_eight_without_peer_registration() {
     assert_eq!(admission.snapshot().abort_active, 0);
     let _next = admission.try_enter(Class::Abort, peer(2), false).unwrap();
 }
+
+#[test]
+fn the_confirmed_peak_keeps_the_most_live_handlers_and_skips_refusals() {
+    let admission = Admission::new(policy(3, 1)).unwrap();
+    assert_eq!(admission.confirmed_peak_active(), 0);
+    let a = admission
+        .try_enter(Class::Confirmed, peer(1), false)
+        .unwrap();
+    let b = admission
+        .try_enter(Class::Confirmed, peer(2), false)
+        .unwrap();
+    // A peer refusal takes a slot for a moment and gives it back: no handler.
+    assert!(
+        admission
+            .try_enter(Class::Confirmed, peer(1), false)
+            .is_err()
+    );
+    assert_eq!(admission.confirmed_peak_active(), 2);
+    drop((a, b));
+    let _c = admission
+        .try_enter(Class::Confirmed, peer(3), false)
+        .unwrap();
+    assert_eq!(admission.snapshot().confirmed_active, 1);
+    assert_eq!(admission.confirmed_peak_active(), 2, "a peak never falls");
+    // Recovery handlers count in their own pool, not the ordinary peak.
+    let _r = admission
+        .try_enter(Class::Recovery, peer(4), false)
+        .unwrap();
+    assert_eq!(admission.confirmed_peak_active(), 2);
+}

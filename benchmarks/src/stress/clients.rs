@@ -1,5 +1,5 @@
 //! Concurrent ReadProperty clients, with one clock and complete accounting.
-use super::client_measure::{StepReport, drive, stop_clients};
+use super::client_measure::{Load, StepReport, drive, stop_clients};
 use super::client_run::{ClientsRun, run_steps};
 use super::harness::{make_large_db, stress_device_config};
 use crate::sc_helpers::{
@@ -42,27 +42,49 @@ impl ClientTransport {
     }
 }
 
+/// Optional changes to a clients run (#1979): a fixed number of requests
+/// per client instead of the time window, and on B/IP a server confirmed
+/// handler limit other than the default 64.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ClientsOptions {
+    /// Requests per client; `None` runs for the duration.
+    pub requests_per_client: Option<u64>,
+    /// The server's `max_confirmed_in_flight` (B/IP only).
+    pub max_confirmed_in_flight: Option<usize>,
+}
+
 pub async fn run(
     transport: ClientTransport,
     object_count: u32,
     duration_secs: u64,
     steps: &[u64],
+    options: ClientsOptions,
 ) -> ClientsRun {
     run_steps(
         object_count,
         duration_secs,
         steps,
         |index, count, duration| async move {
+            let load = options
+                .requests_per_client
+                .map_or(Load::Window(duration), Load::Requests);
             match transport {
                 ClientTransport::Bip => {
-                    super::client_bip::step(index, object_count, count, duration).await
+                    super::client_admission::step(
+                        index,
+                        object_count,
+                        count,
+                        load,
+                        options.max_confirmed_in_flight,
+                    )
+                    .await
                 }
                 ClientTransport::Bip6 => {
                     bip6_step(
                         make_large_db(DEVICE_INSTANCE, object_count),
                         index,
                         count,
-                        duration,
+                        load,
                     )
                     .await
                 }
@@ -71,7 +93,7 @@ pub async fn run(
                         make_large_db(DEVICE_INSTANCE, object_count),
                         index,
                         count,
-                        duration,
+                        load,
                     )
                     .await
                 }
@@ -81,7 +103,7 @@ pub async fn run(
     .await
 }
 
-async fn bip6_step(db: ObjectDatabase, index: usize, count: u64, duration: Duration) -> StepReport {
+async fn bip6_step(db: ObjectDatabase, index: usize, count: u64, load: Load) -> StepReport {
     let mut report = StepReport::new(index, count);
     let mut server = match BACnetServer::<Bip6Transport>::generic_builder()
         .device(stress_device_config(DEVICE_INSTANCE).identity)
@@ -128,7 +150,7 @@ async fn bip6_step(db: ObjectDatabase, index: usize, count: u64, duration: Durat
     )
     .await;
     match setup {
-        Some(mac) => drive(clients, mac, duration, |_| None, &mut report).await,
+        Some(mac) => drive(clients, mac, load, |_| None, &mut report).await,
         None => stop_clients(&mut clients, &mut report).await,
     }
     if let Err(error) = server.stop().await {
@@ -148,7 +170,7 @@ fn sc_identity(role: u8, n: u64) -> ([u8; 6], [u8; 16]) {
     (vmac, uuid)
 }
 
-async fn sc_step(db: ObjectDatabase, index: usize, count: u64, duration: Duration) -> StepReport {
+async fn sc_step(db: ObjectDatabase, index: usize, count: u64, load: Load) -> StepReport {
     let mut report = StepReport::new(index, count);
     if count > 65536 {
         report.diagnostics.fail(
@@ -231,7 +253,7 @@ async fn sc_step(db: ObjectDatabase, index: usize, count: u64, duration: Duratio
     if report.diagnostics.lifecycle_failures.is_empty() {
         // Existing setup settling interval, outside the measured clock.
         tokio::time::sleep(Duration::from_millis(100)).await;
-        drive(clients, mac, duration, |_| None, &mut report).await;
+        drive(clients, mac, load, |_| None, &mut report).await;
     } else {
         report.diagnostics.started_clients = clients.len();
         stop_clients(&mut clients, &mut report).await;

@@ -7,6 +7,8 @@ mod peer_admission_tests;
 
 #[path = "dcc_outcome_admission_tests.rs"]
 mod dcc_outcome_admission_tests;
+#[path = "default_admission_tests.rs"]
+mod default_admission_tests;
 #[path = "recovery_admission_tests.rs"]
 mod recovery_admission_tests;
 

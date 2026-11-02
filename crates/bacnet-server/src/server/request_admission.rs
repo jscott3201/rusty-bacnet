@@ -164,6 +164,9 @@ struct Pool {
     // the cheap hasher is safe (#1713; see bacnet_types::map_hash).
     peers: Mutex<HashMap<CanonicalRequester, usize, BuildMapHasher>>,
     active: AtomicUsize,
+    // The most handlers `active` has counted at once: a measurement for the
+    // admission experiments (#1979), not part of the policy.
+    peak_active: AtomicUsize,
     admitted: AtomicU64,
     overloaded: AtomicU64,
     global_overloaded: AtomicU64,
@@ -179,6 +182,7 @@ impl Pool {
             peer_limit,
             peers: Mutex::new(HashMap::default()),
             active: AtomicUsize::new(0),
+            peak_active: AtomicUsize::new(0),
             admitted: AtomicU64::new(0),
             overloaded: AtomicU64::new(0),
             global_overloaded: AtomicU64::new(0),
@@ -333,7 +337,8 @@ impl Admission {
             *count += 1;
             Some(peer)
         };
-        pool.active.fetch_add(1, Ordering::Relaxed);
+        let live = pool.active.fetch_add(1, Ordering::Relaxed) + 1;
+        pool.peak_active.fetch_max(live, Ordering::Relaxed);
         pool.admitted.fetch_add(1, Ordering::Relaxed);
         if let Some(total) = aggregate {
             total.active.fetch_add(1, Ordering::Relaxed);
@@ -344,6 +349,12 @@ impl Admission {
             aggregate: aggregate.map(Arc::clone),
             peer,
         })
+    }
+
+    /// The most ordinary confirmed handlers that were live at once since
+    /// startup (protected recovery handlers have their own pool).
+    pub(super) fn confirmed_peak_active(&self) -> usize {
+        self.pools[0].peak_active.load(Ordering::Relaxed)
     }
 
     pub(super) fn snapshot(&self) -> RequestAdmissionCounters {
@@ -401,5 +412,13 @@ impl<T: super::TransportPort + 'static> super::BACnetServer<T> {
     /// Sample admission counters. Available after stop; active counts then are zero.
     pub fn request_admission_counters(&self) -> RequestAdmissionCounters {
         self.request_tasks.counters()
+    }
+
+    /// The most ordinary confirmed handlers that held a slot at once since
+    /// startup. A measurement hook for the admission experiments (#1979):
+    /// the stress benchmark reads it, and it is not a supported API.
+    #[doc(hidden)]
+    pub fn request_admission_confirmed_peak(&self) -> usize {
+        self.request_tasks.confirmed_peak_active()
     }
 }
