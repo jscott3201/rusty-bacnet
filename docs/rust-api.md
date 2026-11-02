@@ -4083,7 +4083,8 @@ behaviour, so an object without it writes nothing.
   each target took each write; while the Device clock is invalid it skips the
   tick but still sends the owed writes, and `calendar_active` answers `false`
   for an identifier that names no Calendar. The database asks
-  `retry_refusals_naming(target)` when an object is added. Only
+  `retry_refusals_naming(target)` when an object is added, and DeleteObject
+  takes `take_relinquish_writes()` from the removed object. Only
   `tick_schedule` has no default. The built-in `ScheduleObject` lends it
   (see Schedule & Notification below).
 - **`cov()` → `CovReporting`**, for an object that reports changes of
@@ -5168,7 +5169,12 @@ out of service at once), and relinquishes, with a NULL at the old priority,
 each slot the Schedule holds that the change leaves behind: a dropped
 reference, or every reference when the priority moves. A Schedule holds slots
 from a write of a non-NULL value until it leaves its Effective_Period, so one
-out of season clears nothing another Schedule may own.
+out of season clears nothing another Schedule may own. DeleteObject of a
+Schedule gives up the slots it holds the same way (#2256): under the
+request's guard the server takes the public
+`ScheduleRunner::take_relinquish_writes()` NULLs from the removed object and
+writes them with the origin the Schedule's writes carried, then fans COV out
+for the targets. A target that refuses one doesn't fail the delete.
 
 While Out_Of_Service is TRUE, Present_Value is writable (#1055) with any
 primitive value, NULL included (INVALID_DATA_TYPE otherwise, and

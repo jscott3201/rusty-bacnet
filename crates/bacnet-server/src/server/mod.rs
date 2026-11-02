@@ -768,6 +768,8 @@ mod run_cycle_tests;
 #[cfg(test)]
 mod schedule_create_retry_tests;
 #[cfg(test)]
+mod schedule_delete_tests;
+#[cfg(test)]
 mod schedule_reference_list_tests;
 #[cfg(test)]
 mod schedule_reference_write_tests;
