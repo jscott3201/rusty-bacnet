@@ -112,13 +112,10 @@ async fn source_failure_permit_losses_wire_shape_reverse_completion_and_sequence
             )
             .await;
         }
-        timeout(WAIT, async {
-            while reliability(&session).await != Reliability::NO_FAULT_DETECTED.to_raw() {
-                tokio::task::yield_now().await;
-            }
+        eventually(WAIT, "Reliability is NO_FAULT_DETECTED", async || {
+            reliability(&session).await == Reliability::NO_FAULT_DETECTED.to_raw()
         })
-        .await
-        .unwrap();
+        .await;
         assert!(
             records.try_recv().is_err(),
             "ordinary records are never replayed"
@@ -234,13 +231,10 @@ async fn source_failure_pending_worker_stop_and_drop_reclaim_owner() {
         }
         drop(session);
         drop(permits);
-        timeout(WAIT, async {
-            while weak_db.upgrade().is_some() || weak_source.upgrade().is_some() {
-                tokio::task::yield_now().await;
-            }
+        eventually(WAIT, "the database and source are dropped", async || {
+            weak_db.upgrade().is_none() && weak_source.upgrade().is_none()
         })
-        .await
-        .unwrap();
+        .await;
         assert_eq!(coordinator.active_count().unwrap(), 0);
         assert!(records.try_recv().is_err());
         drop(client);

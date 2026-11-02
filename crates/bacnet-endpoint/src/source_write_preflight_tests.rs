@@ -107,19 +107,15 @@ async fn source_write_before_admission_cancel_and_after_admission_retry_are_boun
         PropertyIdentifier::PRESENT_VALUE,
         None,
     );
-    timeout(WAIT, async {
-        while session
+    eventually(WAIT, "a source operation is in use", async || {
+        session
             .source_audit
             .as_ref()
             .unwrap()
             .available_operations()
-            == 64
-        {
-            tokio::task::yield_now().await;
-        }
+            != 64
     })
-    .await
-    .unwrap();
+    .await;
     pending.abort();
     let _ = pending.await;
     drop(guard);

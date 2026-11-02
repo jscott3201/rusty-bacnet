@@ -70,13 +70,10 @@ async fn source_write_queued_egress_is_owned_before_caller_cancellation() {
             )
             .await
     });
-    timeout(WAIT, async {
-        while session.active_leases() != 1 {
-            tokio::task::yield_now().await;
-        }
+    eventually(WAIT, "the request holds its lease", async || {
+        session.active_leases() == 1
     })
-    .await
-    .unwrap();
+    .await;
     // Yield to the owned task's egress admission before cancelling its waiter.
     tokio::task::yield_now().await;
     caller.abort();
@@ -165,13 +162,10 @@ async fn endpoint_write_unreported_cancel_retracts_queued_and_in_progress_sends(
                 )
                 .await
         });
-        timeout(WAIT, async {
-            while session.active_leases() != 1 {
-                tokio::task::yield_now().await;
-            }
+        eventually(WAIT, "the request holds its lease", async || {
+            session.active_leases() == 1
         })
-        .await
-        .unwrap();
+        .await;
         if !queued {
             timeout(WAIT, entered.notified()).await.unwrap();
         } else {

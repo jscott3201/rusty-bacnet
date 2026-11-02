@@ -583,6 +583,7 @@ impl BACnetObject for NotificationForwarderObject {
         metadata::for_object(self)
     }
 
+    #[cfg(feature = "durable-writes")]
     fn durable_writes(&mut self) -> Option<&mut dyn DurableWrites> {
         Some(self)
     }

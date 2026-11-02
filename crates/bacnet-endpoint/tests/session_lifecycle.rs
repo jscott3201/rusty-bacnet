@@ -1,10 +1,14 @@
-//! RB-15 lifecycle tests (Loopback, deterministic, no sleeps).
+//! RB-15 lifecycle tests (Loopback, deterministic, on paused time).
 //!
 //! Covers: cancellation at await boundaries, shutdown with pending
 //! replies/segments, single ingress consumer + one-use reply ownership, no
 //! detached role outlives the endpoint.
 
 use std::time::Duration;
+
+#[path = "support/eventually.rs"]
+mod eventually;
+use eventually::eventually;
 
 use bacnet_encoding::apdu::{Apdu, ComplexAck, decode_apdu, encode_apdu};
 use bacnet_encoding::npdu::NpduAddress;
@@ -78,17 +82,10 @@ async fn cancel_pending_request_releases_exact_lease() {
     // the exact lease via the request guard (no strand).
     request.abort();
     let _ = request.await;
-    let deadline = tokio::time::Instant::now() + WAIT;
-    loop {
-        if client.active_leases() == 0 {
-            break;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "cancelled request stranded its lease"
-        );
-        tokio::task::yield_now().await;
-    }
+    eventually(WAIT, "cancelled request stranded its lease", async || {
+        client.active_leases() == 0
+    })
+    .await;
     client.stop().await.unwrap();
     peer.stop().await.unwrap();
 }

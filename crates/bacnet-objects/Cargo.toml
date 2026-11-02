@@ -17,16 +17,35 @@ categories = ["network-programming", "no-std"]
 [features]
 default = ["std"]
 # Hosted builds: the file persistence backends, the save writer's own thread,
-# tracing, std's hash maps and std's mutex. It doesn't turn on `alloc`, so a
-# hosted build compiles none of the no_std stand-ins below; with both on,
-# `std` wins and they go unused.
+# tracing, std's hash maps and std's mutex, and every capability feature
+# below. It doesn't turn on `alloc`, so a hosted build compiles none of the
+# no_std stand-ins below; with both on, `std` wins and they go unused.
 std = [
     "bacnet-types/std",
     "bacnet-encoding/std",
     "bytes/std",
     "dep:tracing",
     "dep:libc",
+    "event-reporting",
+    "durable-writes",
 ]
+# Capability features (#2215). Each one lets the built-in objects lend a
+# capability through its `BACnetObject` accessors; with it off, those
+# accessors answer `None`, as for an object without the behaviour, and the
+# code only they reach drops out of a firmware image. `std` turns them all
+# on, so hosted builds are unchanged; a no_std build with `alloc` gets none
+# unless it asks. The object types, their properties and the capability
+# traits are the same either way.
+#
+# `event-reporting`: `event_reporting()`/`event_reporting_mut()` and
+# `enrollment_eval()`/`enrollment_eval_mut()`, so intrinsic reporting, the
+# Event and Alert Enrollments' transitions and the logs' buffer-ready
+# reports. The event properties still read and write.
+event-reporting = []
+# `durable-writes`: `durable_writes()`, the staged saves a host makes off
+# the database lock. Off, a write to an object with storage saves on the
+# writer's own path, as one nobody staged does.
+durable-writes = []
 # no_std with a global allocator. Saves run on the caller's thread, and the
 # hash maps, locks and float rounding come from hashbrown, spinning_top and
 # libm. A hosted application wants `std`: this one drops the file backends,
@@ -66,6 +85,13 @@ libc = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest.workspace = true
+
+# Its sweep drives event transitions through the objects' event reporting
+# before it writes (#2215).
+[[test]]
+name = "write_property_clocked"
+path = "tests/write_property_clocked.rs"
+required-features = ["event-reporting"]
 
 [lints]
 workspace = true

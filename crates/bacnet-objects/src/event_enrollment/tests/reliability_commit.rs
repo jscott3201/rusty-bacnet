@@ -1,11 +1,15 @@
 use super::super::*;
-use crate::event::{
-    EventStateChange, EventTransition, EventTransitionCommit, EventTransitionCommitError,
-};
+#[cfg(feature = "event-reporting")]
+use crate::event::EventTransitionCommitError;
+#[cfg(feature = "event-reporting")]
+use crate::event::{EventStateChange, EventTransition, EventTransitionCommit};
+#[cfg(feature = "event-reporting")]
 use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_types::enums::Reliability;
+#[cfg(feature = "event-reporting")]
 use bacnet_types::primitives::BACnetTimeStamp;
 
+#[cfg(feature = "event-reporting")]
 fn timestamp_at(object: &EventEnrollmentObject, index: u32) -> BACnetTimeStamp {
     let PropertyValue::ApplicationData(bytes) = object
         .read_property(PropertyIdentifier::EVENT_TIME_STAMPS, Some(index))
@@ -18,6 +22,7 @@ fn timestamp_at(object: &EventEnrollmentObject, index: u32) -> BACnetTimeStamp {
     timestamp
 }
 
+#[cfg(feature = "event-reporting")]
 fn snapshot(object: &EventEnrollmentObject) -> [PropertyValue; 5] {
     [
         object
@@ -38,6 +43,7 @@ fn snapshot(object: &EventEnrollmentObject) -> [PropertyValue; 5] {
     ]
 }
 
+#[cfg(feature = "event-reporting")]
 fn transition(from: EventState, to: EventState, timestamp: u16) -> EventTransitionCommit {
     EventTransitionCommit {
         change: EventStateChange { from, to },
@@ -48,6 +54,7 @@ fn transition(from: EventState, to: EventState, timestamp: u16) -> EventTransiti
     }
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn stock_reliability_commit_is_atomic_across_fault_reentry_and_recovery() {
     let mut object =
@@ -135,6 +142,7 @@ fn stock_reliability_commit_is_atomic_across_fault_reentry_and_recovery() {
     );
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn rejected_stock_reliability_commit_changes_nothing() {
     let mut object =
@@ -182,6 +190,7 @@ fn network_reliability_write_remains_denied() {
     );
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn detection_off_refuses_a_reliability_transition_and_keeps_reliability_alone() {
     // The hidden reliability route meets the same Event_Detection_Enable

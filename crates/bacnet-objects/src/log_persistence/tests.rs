@@ -437,3 +437,33 @@ fn a_crafted_record_count_is_refused_before_anything_is_reserved() {
         "{error:?}"
     );
 }
+
+/// Storage that notes the thread each commit runs on.
+struct ThreadNoting(Mutex<Vec<std::thread::ThreadId>>);
+
+impl LogPersistence<BACnetLogRecord> for ThreadNoting {
+    fn load(
+        &self,
+        _expected: ObjectIdentifier,
+    ) -> Result<Option<LogSnapshot<BACnetLogRecord>>, Error> {
+        Ok(None)
+    }
+
+    fn commit(&self, _snapshot: &LogSnapshot<BACnetLogRecord>) -> Result<(), Error> {
+        self.0.lock().unwrap().push(std::thread::current().id());
+        Ok(())
+    }
+}
+
+/// A fresh log dropped before any save still makes its final commit on a
+/// writer thread for an application's storage: `commit` runs there, never on
+/// the dropping thread, which may be an async runtime's (#2233).
+#[test]
+fn a_dropped_logs_final_commit_runs_off_the_dropping_thread() {
+    let storage = Arc::new(ThreadNoting(Mutex::new(Vec::new())));
+    let log = crate::trend::TrendLogObject::with_persistence(1, "TL", 8, storage.clone()).unwrap();
+    drop(log);
+    let threads = storage.0.lock().unwrap().clone();
+    assert_eq!(threads.len(), 1, "one final commit");
+    assert_ne!(threads[0], std::thread::current().id());
+}

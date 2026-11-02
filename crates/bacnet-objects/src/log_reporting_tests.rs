@@ -1,15 +1,19 @@
 //! BUFFER_READY on the three log objects (#1347, Clause 13.3.7).
 use super::*;
 use crate::clock::{ClockFrame, ClockReader};
+#[cfg(feature = "event-reporting")]
 use crate::event::commit_test_proposal;
 use crate::event_log::EventLogObject;
 use crate::traits::BACnetObject;
 use crate::trend::{TrendLogMultipleObject, TrendLogObject};
+#[cfg(feature = "event-reporting")]
 use bacnet_types::constructed::{
     BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord, EventLogDatum, LogData,
     LogDatum,
 };
-use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
+#[cfg(feature = "event-reporting")]
+use bacnet_types::enums::ObjectType;
+use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::{Date, Time};
 use std::sync::Arc;
@@ -57,6 +61,7 @@ fn logs() -> [Box<dyn BACnetObject>; 3] {
     logs
 }
 
+#[cfg(feature = "event-reporting")]
 /// Add one ordinary record of the log's own family.
 fn add(log: &mut dyn BACnetObject) {
     match log.object_identifier().object_type() {
@@ -111,6 +116,7 @@ fn unsigned(log: &dyn BACnetObject, property: P) -> u64 {
 
 /// Every Notification_Threshold records make one NORMAL to NORMAL proposal,
 /// and committing it reports the previous and current Total_Record_Count.
+#[cfg(feature = "event-reporting")]
 #[test]
 fn every_threshold_of_records_proposes_one_report_on_each_log() {
     for mut log in logs() {
@@ -193,6 +199,7 @@ fn every_threshold_of_records_proposes_one_report_on_each_log() {
     }
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn no_threshold_or_detection_off_proposes_nothing() {
     for mut log in logs() {
@@ -242,6 +249,7 @@ fn no_threshold_or_detection_off_proposes_nothing() {
 
 /// A purge restarts Records_Since_Notification at its BUFFER_PURGED record,
 /// but the algorithm still counts from Last_Notify_Record.
+#[cfg(feature = "event-reporting")]
 #[test]
 fn a_purge_restarts_records_since_notification_only() {
     for mut log in logs() {
@@ -268,6 +276,7 @@ fn a_purge_restarts_records_since_notification_only() {
     }
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn event_enable_to_normal_decides_distribution_only() {
     for mut log in logs() {

@@ -132,6 +132,7 @@ impl OutputStorage {
     }
 
     /// Whether the object has storage.
+    #[cfg(feature = "durable-writes")]
     pub(super) fn is_some(&self) -> bool {
         self.0.is_some()
     }

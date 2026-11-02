@@ -638,18 +638,13 @@ async fn source_read_range_drop_unblocks_retained_caller_and_releases_database()
             .await
             .is_err()
     );
-    timeout(WAIT, async {
-        loop {
-            let mut db = db.write().await;
-            if db.remove(&oid(ObjectType::DEVICE, 123)).is_ok() {
-                break;
-            }
-            drop(db);
-            tokio::task::yield_now().await;
-        }
+    eventually(WAIT, "the local Device can be removed", async || {
+        db.write()
+            .await
+            .remove(&oid(ObjectType::DEVICE, 123))
+            .is_ok()
     })
-    .await
-    .unwrap();
+    .await;
     assert_eq!(coordinator.active_count().unwrap(), 0);
     peer.stop().await.unwrap();
     sink.stop().await.unwrap();

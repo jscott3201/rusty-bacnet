@@ -158,6 +158,16 @@ pub trait LogPersistence<R>: Send + Sync {
     /// Durably store `snapshot`, whose generation is one past the last one
     /// committed (or loaded).
     fn commit(&self, snapshot: &LogSnapshot<R>) -> Result<(), Error>;
+
+    /// Test support, not a stable API: whether the log's final commit may
+    /// run on the dropping thread when no writer thread has started (#2233).
+    /// Only `FileLogPersistence`'s in-memory mode says yes; every other
+    /// storage keeps the writer thread its commits are documented to run on.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    fn commits_inline(&self) -> bool {
+        false
+    }
 }
 
 /// When a durable log commits its snapshot: after `records` new records or

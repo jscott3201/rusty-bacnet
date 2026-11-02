@@ -11,7 +11,10 @@ use bacnet_types::enums::{DoorAlarmState as S, ErrorClass, ErrorCode, EventType}
 use bacnet_types::error::RemoteError;
 
 use super::*;
-use crate::event::{EventStateChange, TransitionOutcome, commit_test_proposal};
+#[cfg(feature = "event-reporting")]
+use crate::event::EventStateChange;
+#[cfg(feature = "event-reporting")]
+use crate::event::{TransitionOutcome, commit_test_proposal};
 
 const LISTS: [P; 3] = [P::ALARM_VALUES, P::FAULT_VALUES, P::MASKED_ALARM_VALUES];
 
@@ -49,6 +52,7 @@ fn set_out_of_service(door: &mut AccessDoorObject, out_of_service: bool) {
     .unwrap();
 }
 
+#[cfg(feature = "event-reporting")]
 fn status_flags(bits: StatusFlags) -> PropertyValue {
     PropertyValue::BitString {
         unused_bits: 4,
@@ -56,6 +60,7 @@ fn status_flags(bits: StatusFlags) -> PropertyValue {
     }
 }
 
+#[cfg(feature = "event-reporting")]
 fn change(from: EventState, to: EventState) -> EventStateChange {
     EventStateChange { from, to }
 }
@@ -323,6 +328,7 @@ fn access_door_masking_the_current_state_returns_it_to_normal() {
     assert_eq!(alarm_state(&door), enumerated(S::NORMAL.to_raw()));
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn access_door_goes_offnormal_after_time_delay_and_back_to_normal() {
     let mut door = alarming_door(2);
@@ -368,6 +374,7 @@ fn access_door_goes_offnormal_after_time_delay_and_back_to_normal() {
     );
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn access_door_fault_values_report_multi_state_fault() {
     let mut door = alarming_door(5);
@@ -412,6 +419,7 @@ fn access_door_fault_values_report_multi_state_fault() {
     );
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn access_door_simulated_reliability_holds_until_the_return_to_service() {
     let mut door = alarming_door(0);

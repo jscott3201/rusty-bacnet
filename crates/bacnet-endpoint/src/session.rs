@@ -1107,6 +1107,11 @@ mod network_number_tests;
 #[path = "../tests/support/bus_port.rs"]
 mod bus_port;
 
+/// Waits on paused time that fail at their limit instead of hanging (#2293).
+#[cfg(test)]
+#[path = "../tests/support/eventually.rs"]
+mod eventually;
+
 /// Reruns a test whose closing rebind loses the freed port to another
 /// process (#1419).
 #[cfg(test)]

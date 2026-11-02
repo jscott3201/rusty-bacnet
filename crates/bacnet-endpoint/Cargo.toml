@@ -26,7 +26,9 @@ bacnet-transport.workspace = true
 bacnet-network.workspace = true
 bacnet-endpoint-core.workspace = true
 bacnet-client.workspace = true
-bacnet-objects = { workspace = true, features = ["std"] }
+# The source Reporter hands both capability features' accessors on to the
+# object it wraps (#2215); `std` implies them.
+bacnet-objects = { workspace = true, features = ["std", "event-reporting", "durable-writes"] }
 bacnet-device-core = { workspace = true, features = ["std"] }
 bacnet-server.workspace = true
 bytes = { workspace = true, features = ["std"] }

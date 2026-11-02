@@ -1,4 +1,5 @@
 use super::bus_port::BusPort;
+use super::eventually::eventually;
 use super::*;
 use bacnet_encoding::apdu::{
     AbortPdu, ComplexAck, ErrorPdu, RejectPdu, SimpleAck, decode_apdu, encode_apdu,
@@ -21,8 +22,12 @@ use bytes::{Bytes, BytesMut};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio::time::{Duration, timeout};
 
-/// A hang backstop. Every test here runs on paused time over [`BusPort`], so
-/// this bounds virtual time, not the host's speed (#2293).
+/// How long a test waits for a frame or a condition. Every test here runs
+/// on paused time, over [`BusPort`] or a loopback transport, so this is
+/// Tokio time, not the host's: a stalled host can't use it up, and a wait
+/// that never succeeds fails after 2 s of it (#2293). A wait in a loop must
+/// go through [`eventually`], since a loop that only yields stops paused
+/// time and its deadline never comes.
 const WAIT: Duration = Duration::from_secs(2);
 
 fn oid(kind: ObjectType, instance: u32) -> ObjectIdentifier {
@@ -163,7 +168,7 @@ fn notification(envelope: &ReceivedApdu, confirmed: bool) -> (BACnetAuditNotific
     assert_eq!(request.notifications.len(), 1);
     (request.notifications.remove(0), invoke)
 }
-async fn reliability(session: &EndpointSession<BusPort>) -> u32 {
+async fn reliability<T: TransportPort + 'static>(session: &EndpointSession<T>) -> u32 {
     let db = session.database.as_ref().unwrap().read().await;
     let PropertyValue::Enumerated(value) = db
         .get(&selected())

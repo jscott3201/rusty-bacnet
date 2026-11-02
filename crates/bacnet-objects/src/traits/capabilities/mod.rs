@@ -30,6 +30,12 @@
 //! under a shared guard adds a `&self` accessor: that one takes the plain
 //! name, and the mutable one gains a `_mut` suffix.
 //!
+//! Two capabilities have cargo features (#2215): `event-reporting`
+//! ([`EventReporting`], and the Event Enrollment's evaluation) and
+//! `durable-writes` ([`DurableWrites`]). With one off, the built-in objects
+//! lend nothing through its accessors, so a firmware image links none of
+//! the code only those reach. `std` turns both on.
+//!
 //! [`BACnetObject`]: super::BACnetObject
 
 mod access_events;

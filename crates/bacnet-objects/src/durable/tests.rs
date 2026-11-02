@@ -288,3 +288,63 @@ fn a_ticket_recognizes_only_its_own_wait() {
     assert!(first.issued(&first.wait()));
     assert!(!first.issued(&second.wait()));
 }
+
+#[test]
+fn crc32_matches_the_check_value_and_the_bitwise_form() {
+    // The CRC-32 catalogue's check value, over the ASCII digits 1 to 9.
+    assert_eq!(crc32(b"123456789"), 0xcbf4_3926);
+    assert_eq!(crc32(&[]), 0);
+    let bitwise = |data: &[u8]| {
+        let mut crc = !0u32;
+        for byte in data {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                crc = (crc >> 1) ^ (0xedb8_8320 & 0u32.wrapping_sub(crc & 1));
+            }
+        }
+        !crc
+    };
+    let data: Vec<u8> = (0..=255u8).chain((0..=255u8).rev()).collect();
+    for end in 0..data.len() {
+        assert_eq!(crc32(&data[..end]), bitwise(&data[..end]));
+    }
+}
+
+#[test]
+fn a_closing_writer_without_a_thread_saves_on_the_callers_thread() {
+    let saved = Arc::new(Mutex::new(Vec::new()));
+    let saving = Arc::clone(&saved);
+    let mut writer = SaveWriter::new(
+        "test-writer".into(),
+        move |snapshot: &u32| {
+            saving
+                .lock()
+                .unwrap()
+                .push((*snapshot, std::thread::current().id()));
+            Ok(())
+        },
+        |_, _| {},
+    );
+    writer.closing();
+    writer.submit_coalescing(1);
+    // The save already ran, here.
+    assert_eq!(*saved.lock().unwrap(), [(1, std::thread::current().id())]);
+    assert!(writer.idle().is_ready());
+}
+
+#[test]
+fn a_closing_writer_with_a_thread_keeps_saving_on_it() {
+    let (gate, handle) = gate();
+    let mut writer = writer(&gate);
+    writer.submit_coalescing(1);
+    assert_eq!(handle.started.recv_timeout(WAIT).unwrap(), 1);
+    writer.closing();
+    writer.submit_coalescing(2);
+    for _ in 0..2 {
+        handle.release.send(Ok(())).unwrap();
+    }
+    writer.wait_idle();
+    assert_eq!(*gate.saved.lock().unwrap(), [1, 2]);
+    let caller = std::thread::current().id();
+    assert!(gate.threads.lock().unwrap().iter().all(|id| *id != caller));
+}

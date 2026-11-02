@@ -10,6 +10,7 @@ use crate::traits::BACnetObject;
 use bacnet_types::enums::{EngineeringUnits, ObjectType};
 use std::borrow::Cow;
 use std::sync::Arc;
+#[cfg(feature = "durable-writes")]
 use std::time::Duration;
 
 const KINDS: [ObjectType; 3] = [
@@ -21,6 +22,7 @@ const ROWS: [P; 3] = [P::TAGS, P::PROFILE_LOCATION, P::PROFILE_NAME];
 
 trait ProfileInput: BACnetObject {
     fn provision(&mut self, profile: ObjectProfile) -> Result<(), Error>;
+    #[cfg(feature = "durable-writes")]
     fn wait(&self);
 }
 macro_rules! profile_input {
@@ -29,6 +31,7 @@ macro_rules! profile_input {
             fn provision(&mut self, profile: ObjectProfile) -> Result<(), Error> {
                 self.set_profile(profile)
             }
+            #[cfg(feature = "durable-writes")]
             fn wait(&self) {
                 self.wait_for_tag_saves();
             }
@@ -163,6 +166,7 @@ fn all_inputs_eight_masks_and_oos_states_preserve_existing_metadata() {
     }
 }
 
+#[cfg(feature = "durable-writes")]
 fn pv_values(kind: ObjectType) -> [PropertyValue; 2] {
     match kind {
         ObjectType::ANALOG_INPUT => [PropertyValue::Real(2.5), PropertyValue::Real(3.5)],
@@ -172,6 +176,7 @@ fn pv_values(kind: ObjectType) -> [PropertyValue; 2] {
     }
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn tags_in_both_oos_states_preserve_network_and_internal_pv_ownership() {
     for kind in KINDS {
@@ -451,6 +456,7 @@ fn input_invalid_and_oversized_tags_make_no_save_attempts() {
     }
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn input_monotonic_hooks_correct_expired_stages_without_output_changes() {
     for kind in KINDS {
