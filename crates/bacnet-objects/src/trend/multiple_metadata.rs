@@ -78,3 +78,7 @@ pub(super) fn for_object(object: &TrendLogMultipleObject) -> Cow<'_, [PropertyMe
         &POLLED
     })
 }
+
+#[cfg(test)]
+#[path = "multiple_metadata_rows_tests.rs"]
+mod rows_tests;

@@ -149,7 +149,9 @@ pub(crate) fn with_sc_port(
 /// Truth direction stays identity-first: Device Object_List is seeded with
 /// Device + ports + extras upfront. Duplicate names map to ValueError (server
 /// parity: `ObjectDatabase::add` reports `Error::protocol(PROPERTY,
-/// DUPLICATE_NAME)`, never an Encoding string).
+/// DUPLICATE_NAME)`, never an Encoding string). So does an object whose
+/// identifier the Device, a port or another object already has (OBJECT /
+/// OBJECT_IDENTIFIER_ALREADY_EXISTS, #2250).
 pub(crate) fn build_database(
     identity: &DeviceIdentity,
     extra: Vec<Box<dyn BACnetObject>>,
@@ -159,6 +161,12 @@ pub(crate) fn build_database(
             if *class == ErrorClass::PROPERTY && *code == ErrorCode::DUPLICATE_NAME =>
         {
             PyValueError::new_err(format!("duplicate object name: {e}"))
+        }
+        bacnet_types::error::Error::Remote(RemoteError::Error { class, code })
+            if *class == ErrorClass::OBJECT
+                && *code == ErrorCode::OBJECT_IDENTIFIER_ALREADY_EXISTS =>
+        {
+            PyValueError::new_err(format!("duplicate object identifier: {e}"))
         }
         bacnet_types::error::Error::Encoding(message)
             if message.contains("duplicate object name") =>
@@ -346,4 +354,39 @@ pub(crate) fn pending_group(
         name: name.to_string(),
         members,
     })
+}
+
+#[cfg(test)]
+mod build_database_tests {
+    use super::*;
+    use pyo3::Python;
+
+    fn point(instance: u32, name: &str) -> Box<dyn BACnetObject> {
+        Box::new(AnalogInputObject::new(instance, name, EngineeringUnits::NO_UNITS).unwrap())
+    }
+
+    /// Both duplicate kinds surface as ValueError, named for what clashed.
+    #[test]
+    fn duplicate_names_and_identifiers_are_value_errors() {
+        Python::initialize();
+        let identity = DeviceIdentity::new(1001, 42).unwrap();
+        for (extra, expected) in [
+            (
+                vec![point(1, "same"), point(2, "same")],
+                "duplicate object name",
+            ),
+            (
+                vec![point(9, "ai-9-a"), point(9, "ai-9-b")],
+                "duplicate object identifier",
+            ),
+        ] {
+            let Err(error) = build_database(&identity, extra) else {
+                panic!("{expected}: the database must be refused");
+            };
+            Python::attach(|py| {
+                assert!(error.is_instance_of::<PyValueError>(py), "{expected}");
+                assert!(error.to_string().contains(expected), "{error}");
+            });
+        }
+    }
 }
