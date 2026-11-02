@@ -1,6 +1,7 @@
 ---
 section: Changed
 ---
-- A durable object's save thread now ends once the object has saved
-  nothing for a while, and the next save starts another, so a device with
-  many objects with storage no longer holds an idle thread for each (#1956).
+- **Breaking (Rust API):** a colour object with storage (`storage_path` in
+  Python) keeps a written default, so a zero default written over the network
+  keeps the last value at the next start, and a durable object's idle save
+  thread ends until its next save (#1956).

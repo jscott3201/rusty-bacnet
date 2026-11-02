@@ -95,7 +95,8 @@ fn temperature_round_trip_through_a_file() {
     assert_eq!(
         case.store().load(ct_oid()).unwrap(),
         Some(ColorOutputSnapshot {
-            present_value: ColorOutputValue::Kelvin(2700)
+            present_value: Some(ColorOutputValue::Kelvin(2700)),
+            default: None,
         })
     );
     let ct = ColorTemperatureObject::new(1, "ct")
@@ -165,6 +166,55 @@ fn corrupt_files_do_not_load() {
     assert!(case.store().load(color_oid()).is_err());
 }
 
+/// Version 2 keeps a written default behind its own presence octet
+/// (#1956); every cut of a saved file is refused, and a version 1 file
+/// still loads, with no default.
+#[test]
+fn version_2_files_are_strict_and_version_1_still_loads() {
+    let case = FileCase::new();
+    let saved = ColorOutputSnapshot {
+        present_value: Some(ColorOutputValue::Kelvin(3000)),
+        default: Some(ColorOutputValue::Kelvin(0)),
+    };
+    case.store().save(ct_oid(), &saved).unwrap();
+    let whole = std::fs::read(&case.path).unwrap();
+    assert_eq!(&whole[..8], b"RBNCLR02");
+    assert_eq!(case.store().load(ct_oid()).unwrap(), Some(saved));
+    for length in 0..whole.len() {
+        std::fs::write(&case.path, &whole[..length]).unwrap();
+        assert!(case.store().load(ct_oid()).is_err(), "cut to {length}");
+    }
+    let refused = |at: usize, octets: &[u8]| {
+        let mut damaged = whole.clone();
+        damaged.splice(at..at + octets.len(), octets.iter().copied());
+        std::fs::write(&case.path, &damaged).unwrap();
+        case.store().load(ct_oid()).is_err()
+    };
+    // Body at 12: kind, then each value's presence octet and four octets.
+    assert!(refused(13, &[2]), "a presence octet of 2 loaded");
+    assert!(
+        refused(14, &0u32.to_be_bytes()),
+        "a Present_Value of 0 K loaded"
+    );
+    assert!(
+        refused(19, &999u32.to_be_bytes()),
+        "a default of 999 K loaded"
+    );
+    let mut longer = whole.clone();
+    longer.push(0);
+    std::fs::write(&case.path, &longer).unwrap();
+    assert!(case.store().load(ct_oid()).is_err());
+
+    write_body(&case, ct_oid(), &[2, 0, 0, 0x0B, 0xB8]);
+    assert_eq!(
+        case.store().load(ct_oid()).unwrap(),
+        Some(ColorOutputSnapshot {
+            present_value: Some(ColorOutputValue::Kelvin(3000)),
+            default: None,
+        })
+    );
+}
+
 #[test]
 fn the_wrong_kind_of_value_does_not_build() {
     let kelvin = Memory::holding(ColorOutputValue::Kelvin(3000));
@@ -196,13 +246,17 @@ impl Memory {
     fn holding(value: ColorOutputValue) -> Arc<Self> {
         let memory = Self::default();
         *memory.held.lock().unwrap() = Some(ColorOutputSnapshot {
-            present_value: value,
+            present_value: Some(value),
+            default: None,
         });
         Arc::new(memory)
     }
 
     fn held(&self) -> Option<ColorOutputValue> {
-        self.held.lock().unwrap().map(|saved| saved.present_value)
+        self.held
+            .lock()
+            .unwrap()
+            .and_then(|saved| saved.present_value)
     }
 }
 

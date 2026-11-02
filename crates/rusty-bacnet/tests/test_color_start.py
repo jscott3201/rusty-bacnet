@@ -100,6 +100,34 @@ class ColorStartTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await server.stop()
 
+    async def test_a_written_zero_default_keeps_the_last_value_at_the_next_start(self):
+        # #1956: storage_path keeps a default written over the network, which
+        # wins over the configured default_color at the next start.
+        path = str(self.directory / "color-written")
+
+        def build():
+            server = new_server()
+            server.add_color(1, "Color", default_color=(0.64, 0.33), storage_path=path)
+            return server
+
+        server = build()
+        await server.start()
+        try:
+            await server.write_property_local(COLOR, P.PRESENT_VALUE, xy(0.15, 0.06),
+                                              source_object=None)
+            await server.write_property_local(COLOR, P.DEFAULT_COLOR, xy(0.0, 0.0),
+                                              source_object=None)
+        finally:
+            await server.stop()
+
+        server = build()
+        await server.start()
+        try:
+            await self.assert_xy(server, (0.15, 0.06))
+            self.assertEqual(await self.read(server, COLOR, P.IN_PROGRESS), IDLE)
+        finally:
+            await server.stop()
+
     async def test_a_non_zero_default_wins_over_present_value_on_every_boot(self):
         path = str(self.directory / "warm-2")
         for boot in ("first", "later"):

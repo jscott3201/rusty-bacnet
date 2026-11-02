@@ -312,7 +312,8 @@ impl<V> ColorOutput<'_, V> {
 /// Build a Color object: kept in the file at `storage_path` when one is
 /// given (#1526), then its default and Present_Value set through their
 /// checking setters. A colour storage brought back wins over
-/// `present_value`, as a write it saved would.
+/// `present_value`, and a default written over the network and saved wins
+/// over `default` (#1956), as a write it saved would.
 fn color(
     instance: u32,
     name: &str,

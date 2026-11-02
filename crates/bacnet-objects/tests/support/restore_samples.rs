@@ -94,22 +94,25 @@ pub fn tags(path: &Path) {
 }
 
 pub fn color(path: &Path) {
-    let value = ColorOutputValue::Xy(BACnetXyColor::new(0.25, 0.5));
-    save_color(path, ObjectType::COLOR, value);
+    let snapshot = ColorOutputSnapshot {
+        present_value: Some(ColorOutputValue::Xy(BACnetXyColor::new(0.25, 0.5))),
+        default: Some(ColorOutputValue::Xy(BACnetXyColor::new(0.0, 0.0))),
+    };
+    save_color(path, ObjectType::COLOR, &snapshot);
 }
 
 pub fn color_temperature(path: &Path) {
-    save_color(
-        path,
-        ObjectType::COLOR_TEMPERATURE,
-        ColorOutputValue::Kelvin(4_000),
-    );
+    let snapshot = ColorOutputSnapshot {
+        present_value: Some(ColorOutputValue::Kelvin(4_000)),
+        default: Some(ColorOutputValue::Kelvin(2_700)),
+    };
+    save_color(path, ObjectType::COLOR_TEMPERATURE, &snapshot);
 }
 
-fn save_color(path: &Path, kind: ObjectType, present_value: ColorOutputValue) {
+fn save_color(path: &Path, kind: ObjectType, snapshot: &ColorOutputSnapshot) {
     FileColorOutputPersistence::new(path)
         .unwrap()
-        .save(oid(kind), &ColorOutputSnapshot { present_value })
+        .save(oid(kind), snapshot)
         .expect("the sample saves");
 }
 

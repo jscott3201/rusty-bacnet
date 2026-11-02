@@ -1,30 +1,45 @@
-//! How a colour object saves its Present_Value (#1526); see
-//! [`persistence`](super::persistence) for what is kept and why a change
-//! doesn't wait for its save.
+//! How a colour object saves its Present_Value (#1526) and a written default
+//! (#1956); see [`persistence`](super::persistence) for what is kept and why
+//! a Present_Value change doesn't wait for its save.
 //!
-//! The saves go through a [`SaveWriter`], the writer type the durable
-//! objects share ([`crate::durable`]); each object with storage owns one,
-//! with a thread of its own while it saves (#1956). A save is queued
-//! under the database guard, runs on that thread, and is coalesced while one
-//! waits to start. Nothing is staged. A failed save isn't retried at once:
-//! the next change, the server's stop or the object's drop tries again. The server's `stop()` asks the object to settle
-//! (`settle_forgotten_writes`): it queues the value again if the last save
-//! failed and hands back the wait for its saves, joined to the Tags
-//! storage's wait when the object has one. Dropping the object does the
-//! same, and the writer's drop waits for those saves.
+//! The saves go through a staged writer, the one the durable objects share
+//! ([`crate::durable`]); each object with storage owns one, with a thread of
+//! its own while it saves. A Present_Value save is queued under the database
+//! guard, runs on that thread, and is coalesced while one waits to start. A
+//! failed one isn't retried at once: the next change, the server's stop or
+//! the object's drop tries again.
+//!
+//! A default write stages, as a Notification Class's Recipient_List write
+//! does: the save of the new default with the Present_Value served now runs
+//! while the database guard is dropped, the write then takes it, and a write
+//! whose save failed is refused. While it is staged, Present_Value changes
+//! queue no save of their own, which would land after the staged one with
+//! the old default; the next save after the write, or the correcting one if
+//! the write never comes, carries them.
+//!
+//! The server's `stop()` asks the object to settle
+//! (`settle_forgotten_writes`): it drops a forgotten staged default, queues
+//! the served state again if the last save failed, and hands back the wait
+//! for its saves, joined to the Tags storage's wait when the object has one.
+//! Dropping the object does the same, and the writer's drop waits for those
+//! saves.
 
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, Ordering};
+use core::time::Duration;
 
 use crate::sync::AtomicU64;
 
+use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::ObjectIdentifier;
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::persistence::{ColorOutputPersistence, ColorOutputSnapshot, ColorOutputValue};
-use crate::durable::{SaveWait, SaveWriter};
+use crate::common;
+use crate::durable::staged::{self, StagedSaves};
+use crate::durable::{PendingWrite, SaveWait, SaveWriter, StageStep};
 
-/// A colour object's Present_Value storage, if it has one.
+/// A colour object's output storage, if it has one.
 ///
 /// A clone, as an application clone or a COV snapshot makes, has none: the
 /// storage stays with the original, as its Tags storage does.
@@ -37,13 +52,14 @@ impl Clone for OutputStorage {
     }
 }
 
-/// Lifetime totals of one colour object's Present_Value saves, shared with
-/// the object: take it with `output_save_counters` (on
+/// Lifetime totals of one colour object's output saves, shared with the
+/// object: take it with `output_save_counters` (on
 /// [`ColorObject`](super::ColorObject) or
 /// [`ColorTemperatureObject`](super::ColorTemperatureObject)) before the
-/// object joins a database, and read it at any time after. A failed save
-/// refuses nothing, so this is where one shows besides the log: until a
-/// retry lands, storage holds an older value than the object serves.
+/// object joins a database, and read it at any time after. A failed
+/// Present_Value save refuses nothing, so this is where one shows besides
+/// the log: until a retry lands, storage holds an older value than the
+/// object serves.
 #[derive(Clone, Debug, Default)]
 pub struct ColorOutputSaveCounters {
     failed_saves: Arc<AtomicU64>,
@@ -66,28 +82,31 @@ impl ColorOutputSaveCounters {
 }
 
 struct OutputStore {
-    writer: SaveWriter<ColorOutputSnapshot>,
+    /// The writer, and a default write staged on it.
+    saves: StagedSaves<ColorOutputSnapshot, ColorOutputValue>,
     counters: ColorOutputSaveCounters,
-    /// The value of the last save queued, or the one loaded.
-    queued: Option<ColorOutputValue>,
-    /// The value the object holds now, as it last reported it.
-    current: ColorOutputValue,
+    /// What the last save queued holds, or what was loaded.
+    queued: Option<ColorOutputSnapshot>,
+    /// What the object serves now, as storage keeps it.
+    current: ColorOutputSnapshot,
     /// Whether the last save the writer ran failed. Its done hook sets it,
     /// so it tells the outcome of the latest save.
     last_failed: Arc<AtomicBool>,
+    /// Default writes taken, so a staged one can tell whether another came
+    /// between.
+    default_writes: u64,
 }
 
 impl OutputStorage {
-    /// Take `persistence` for the object `oid`, which holds `current`, and
-    /// load what it saved. Returns the saved value, if any; the caller checks
-    /// it fits the object before taking it.
+    /// Take `persistence` for the object `oid` and load what it saved. The
+    /// caller checks that the loaded values fit the object before taking
+    /// them.
     pub(super) fn open(
         &mut self,
         oid: ObjectIdentifier,
-        current: ColorOutputValue,
         persistence: Arc<dyn ColorOutputPersistence>,
-    ) -> Result<Option<ColorOutputValue>, Error> {
-        let loaded = persistence.load(oid)?.map(|saved| saved.present_value);
+    ) -> Result<Option<ColorOutputSnapshot>, Error> {
+        let loaded = persistence.load(oid)?;
         let last_failed = Arc::new(AtomicBool::new(false));
         let failed = Arc::clone(&last_failed);
         let counters = ColorOutputSaveCounters::default();
@@ -106,22 +125,20 @@ impl OutputStorage {
                     log_warn!(
                         object = %oid,
                         %error,
-                        "Failed to save a colour Present_Value; the next change or stop tries again"
+                        "Failed to save a colour output; the next change or stop tries again"
                     );
                 }
             },
         );
         self.0 = Some(OutputStore {
-            writer,
+            saves: StagedSaves::new(writer),
             counters,
             queued: loaded,
-            // The object takes a loaded value as Present_Value (a Color
-            // Temperature clamps it, and its next `note` saves the clamped
-            // one). `current` is only saved again after a failed save, and
-            // every save follows a `note` that sets it, so this is a
-            // starting point, not a value storage can receive unnoted.
-            current: loaded.unwrap_or(current),
+            // The object takes a loaded Present_Value (a Color Temperature
+            // clamps it, and its next `note` saves the clamped one).
+            current: loaded.unwrap_or_default(),
             last_failed,
+            default_writes: 0,
         });
         Ok(loaded)
     }
@@ -137,45 +154,195 @@ impl OutputStorage {
         self.0.is_some()
     }
 
+    /// Whether storage holds a default a write set, now or before a
+    /// restart: the object's default setter then leaves it alone.
+    pub(super) fn default_saved(&self) -> bool {
+        self.0
+            .as_ref()
+            .is_some_and(|store| store.current.default.is_some())
+    }
+
     /// The object holds `value` now: queue a save of it when it differs from
-    /// the last one queued, or the last save failed.
+    /// the last one queued, or the last save failed. While a default write
+    /// is staged, the save waits for it.
     pub(super) fn note(&mut self, value: ColorOutputValue) {
         let Some(store) = &mut self.0 else {
             return;
         };
-        store.current = value;
-        if store.queued != Some(value) || store.last_failed.load(Ordering::Acquire) {
+        store.current.present_value = Some(value);
+        if store.saves.is_staged() {
+            store.saves.correct(|| store.current);
+        } else if store.queued != Some(store.current) || store.last_failed.load(Ordering::Acquire) {
             store.queue();
         }
     }
 
-    /// Settle, as the server stops: queue the value again if the last save
-    /// failed, and return the wait for every save queued so far. `None`
-    /// without storage.
+    /// Stage the default writes among a request's `writes` to `property`
+    /// (see [`DurableWrites::stage_writes`](crate::durable::DurableWrites::stage_writes)):
+    /// `decode` gives the default each leaves, or the object's refusal.
+    pub(super) fn stage_defaults(
+        &mut self,
+        writes: &[PendingWrite],
+        property: PropertyIdentifier,
+        decode: impl Fn(&PropertyValue) -> Result<ColorOutputValue, Error>,
+    ) -> StageStep {
+        let Some(store) = &mut self.0 else {
+            return StageStep::Skip;
+        };
+        if !writes.iter().any(|write| write.property == property) {
+            return StageStep::Skip;
+        }
+        let busy = store.saves.busy();
+        store.after_staging();
+        if let Some(wait) = busy {
+            return StageStep::Busy(wait);
+        }
+        let steps = staged::steps(writes, |_, write| {
+            if write.property != property {
+                return Ok(None);
+            }
+            if write.array_index.is_some() {
+                return Err(common::property_is_not_an_array_error());
+            }
+            decode(&write.value).map(Some)
+        });
+        let saved = steps.last().map(|step| ColorOutputSnapshot {
+            default: Some(step.next),
+            ..store.current
+        });
+        let step = store.saves.stage(
+            steps,
+            store.default_writes,
+            store.current,
+            |snapshot, default| {
+                snapshot.default = Some(*default);
+            },
+        );
+        if matches!(step, StageStep::Staged(_)) {
+            store.queued = saved;
+        }
+        step
+    }
+
+    /// A default write of `value` to `property`: take its staged step if it
+    /// is the next one, or else save the default `decode` gives with the
+    /// Present_Value served now. Returns the default to serve. A save that
+    /// fails refuses the write with DEVICE / OPERATIONAL_PROBLEM. Without
+    /// storage the default is just decoded.
+    pub(super) fn write_default(
+        &mut self,
+        property: PropertyIdentifier,
+        value: &PropertyValue,
+        decode: impl FnOnce() -> Result<ColorOutputValue, Error>,
+    ) -> Result<ColorOutputValue, Error> {
+        let Some(store) = &mut self.0 else {
+            return decode();
+        };
+        let refused =
+            |_| common::protocol_error(ErrorClass::DEVICE, ErrorCode::OPERATIONAL_PROBLEM);
+        if let Some(claimed) = store
+            .saves
+            .claim(property, None, value, store.default_writes)
+        {
+            match claimed {
+                Ok(default) => store.take_default(default),
+                // Storage keeps what it held; the next change saves again.
+                Err(_) => store.queued = None,
+            }
+            store.after_staging();
+            return claimed.map_err(refused);
+        }
+        // A default the object refuses leaves a staged write alone (#1424).
+        let default = decode()?;
+        store.saves.drop_staged();
+        store.after_staging();
+        let saved = ColorOutputSnapshot {
+            default: Some(default),
+            ..store.current
+        };
+        store.saves.save_now(saved).map_err(refused)?;
+        store.queued = Some(saved);
+        store.take_default(default);
+        Ok(default)
+    }
+
+    /// See [`DurableWrites::release_staged_write`](crate::durable::DurableWrites::release_staged_write).
+    pub(super) fn release(&mut self, staged: &SaveWait) {
+        if let Some(store) = &mut self.0 {
+            store.saves.release(staged);
+            store.after_staging();
+        }
+    }
+
+    /// Whether a default write is staged.
+    pub(super) fn has_staged(&self) -> bool {
+        self.0.as_ref().is_some_and(|store| store.saves.is_staged())
+    }
+
+    /// See [`DurableWrites::expire_staged`](crate::durable::DurableWrites::expire_staged).
+    pub(super) fn expire(&mut self, now: Duration) {
+        if let Some(store) = &mut self.0 {
+            store.saves.expire(now);
+            store.after_staging();
+        }
+    }
+
+    /// Settle, as the server stops: drop a forgotten staged default, queue
+    /// the served state again if the last save failed, and return the wait
+    /// for every save queued so far. `None` without storage.
     pub(super) fn settle(&mut self) -> Option<SaveWait> {
         let store = self.0.as_mut()?;
+        store.saves.drop_staged();
+        store.after_staging();
         store.retry_failed();
-        Some(store.writer.idle())
+        Some(store.saves.idle())
     }
 
     /// Block until the saves queued so far have run.
     pub(super) fn wait_for_saves(&self) {
         if let Some(store) = &self.0 {
-            store.writer.wait_idle();
+            store.saves.wait_idle();
         }
+    }
+
+    /// Whether the writer's thread has ended (waiting for it a while), for
+    /// the tests that count threads.
+    #[cfg(all(test, feature = "std"))]
+    pub(super) fn writer_thread_ended(&self) -> bool {
+        self.0
+            .as_ref()
+            .is_none_or(|store| store.saves.writer().thread_ended())
     }
 }
 
 impl OutputStore {
     fn queue(&mut self) {
-        self.writer.submit_coalescing(ColorOutputSnapshot {
-            present_value: self.current,
-        });
+        self.saves.submit_coalescing(self.current);
         self.queued = Some(self.current);
     }
 
     fn retry_failed(&mut self) {
         if self.last_failed.load(Ordering::Acquire) {
+            self.queue();
+        }
+    }
+
+    /// After a call that may have dropped a staged default: put storage back
+    /// to the served state, or keep a staged write's copy of it current.
+    fn after_staging(&mut self) {
+        if self.saves.take_correction() {
+            self.queue();
+        } else {
+            self.saves.correct(|| self.current);
+        }
+    }
+
+    /// Serve a written `default`, and save the Present_Value changes that
+    /// waited for it.
+    fn take_default(&mut self, default: ColorOutputValue) {
+        self.current.default = Some(default);
+        self.default_writes = self.default_writes.wrapping_add(1);
+        if self.queued != Some(self.current) {
             self.queue();
         }
     }
@@ -190,9 +357,11 @@ impl Drop for OutputStore {
 }
 
 /// Implement [`DurableWrites`](crate::durable::DurableWrites) for a colour
-/// object with `profile: ProfileState` and `output: OutputStorage` fields.
-/// Tags writes stage on the profile as before; Present_Value never stages,
-/// and settling joins its saves to the profile's.
+/// object with `profile: ProfileState` and `output: OutputStorage` fields
+/// and a `stage_default` method. Tags writes stage on the profile, default
+/// writes on the output storage; a request that writes both gets one wait
+/// for both saves. Present_Value never stages, and settling joins the
+/// output's saves to the profile's.
 macro_rules! impl_color_durable {
     ($object:ty) => {
         impl $crate::durable::DurableWrites for $object {
@@ -202,22 +371,43 @@ macro_rules! impl_color_durable {
                 array_index: Option<u32>,
                 value: &bacnet_types::primitives::PropertyValue,
             ) -> $crate::durable::StageStep {
-                self.profile.stage_write(property, array_index, value)
+                self.stage_writes(&[$crate::durable::PendingWrite {
+                    property,
+                    array_index,
+                    value: value.clone(),
+                }])
             }
 
             fn stage_writes(
                 &mut self,
                 writes: &[$crate::durable::PendingWrite],
             ) -> $crate::durable::StageStep {
-                self.profile.stage_writes(writes)
+                use $crate::durable::StageStep;
+                let tags = self.profile.stage_writes(writes);
+                if matches!(tags, StageStep::Busy(_)) {
+                    return tags;
+                }
+                match (tags, self.stage_default(writes)) {
+                    // Wait for the other request without holding the Tags.
+                    (StageStep::Staged(tags), StageStep::Busy(wait)) => {
+                        self.profile.release_staged_write(&tags);
+                        StageStep::Busy(wait)
+                    }
+                    (StageStep::Staged(tags), StageStep::Staged(default)) => {
+                        StageStep::Staged(tags.and(default))
+                    }
+                    (StageStep::Skip, step) | (step, StageStep::Skip) => step,
+                    (_, step) => step,
+                }
             }
 
             fn release_staged_write(&mut self, staged: &$crate::durable::SaveWait) {
                 self.profile.release_staged_write(staged);
+                self.output.release(staged);
             }
 
             fn has_staged_write(&self) -> bool {
-                self.profile.has_staged_write()
+                self.profile.has_staged_write() || self.output.has_staged()
             }
 
             fn settle_forgotten_writes(&mut self) -> Option<$crate::durable::SaveWait> {
@@ -231,6 +421,7 @@ macro_rules! impl_color_durable {
 
             fn expire_staged(&mut self, now: core::time::Duration) {
                 $crate::durable::DurableWrites::expire_staged(&mut self.profile, now);
+                self.output.expire(now);
             }
         }
     };

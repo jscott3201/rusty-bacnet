@@ -384,9 +384,20 @@ impl<S: Send + 'static, N> StagedSaves<S, N> {
         self.writer.idle()
     }
 
+    /// A wait that ends once every save queued so far has run.
+    pub(crate) fn idle(&self) -> SaveWait {
+        self.writer.idle()
+    }
+
     /// Block until every queued save has run.
     pub(crate) fn wait_idle(&self) {
         self.writer.wait_idle();
+    }
+
+    /// The writer, for tests that look at its thread.
+    #[cfg(all(test, feature = "std"))]
+    pub(crate) fn writer(&self) -> &SaveWriter<S> {
+        &self.writer
     }
 }
 

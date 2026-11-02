@@ -4,8 +4,9 @@
 //! Subscribed_Recipients, a Notification Class a written Recipient_List
 //! (#1315), an Access Rights object a written rule array, Enable (#1392) or
 //! Accompaniment (#1393), an Audit Log a Log_Enable or Buffer_Size change,
-//! and a Timer or Channel the configuration a peer writes to it (#2243),
-//! before serving it, and refuses the write if the save fails. So
+//! a Timer or Channel the configuration a peer writes to it (#2243), and a
+//! Color or Color Temperature a written default (#1956), before serving it,
+//! and refuses the write if the save fails. So
 //! that the save never runs while the database guard is held, a request
 //! that makes such a write stages it first ([`DurableWrites`]): under the
 //! guard the object queues the save, the request awaits it with the guard
@@ -86,7 +87,8 @@ enum TargetValue {
 /// (property 133, named `LOG_ENABLE`) and Accompaniment, a Timer its
 /// State_Change_Values and List_Of_Object_Property_References, and a
 /// Channel its members, Execution_Delay, Channel_Number, Control_Groups and
-/// Allow_Group_Delay_Inhibit (#2243). Under a policy
+/// Allow_Group_Delay_Inhibit (#2243), and a colour object its default
+/// (#1956), with Tags as the other objects with a profile do. Under a policy
 /// that decides mutations, only these attempts of a WritePropertyMultiple are decided
 /// ahead of the handler (#1321).
 ///
@@ -106,9 +108,18 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
             PropertyIdentifier::LOG_ENABLE | PropertyIdentifier::BUFFER_SIZE
         ),
         ObjectType::NOTIFICATION_CLASS => property == PropertyIdentifier::RECIPIENT_LIST,
-        ObjectType::COLOR
-        | ObjectType::COLOR_TEMPERATURE
-        | ObjectType::LIGHTING_OUTPUT
+        // A colour object saves a written default with its output (#1956).
+        ObjectType::COLOR => {
+            matches!(
+                property,
+                PropertyIdentifier::TAGS | PropertyIdentifier::DEFAULT_COLOR
+            )
+        }
+        ObjectType::COLOR_TEMPERATURE => matches!(
+            property,
+            PropertyIdentifier::TAGS | PropertyIdentifier::DEFAULT_COLOR_TEMPERATURE
+        ),
+        ObjectType::LIGHTING_OUTPUT
         | ObjectType::BINARY_LIGHTING_OUTPUT
         | ObjectType::ANALOG_VALUE
         | ObjectType::BINARY_VALUE

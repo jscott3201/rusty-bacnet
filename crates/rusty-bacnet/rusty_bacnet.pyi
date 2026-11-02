@@ -5460,7 +5460,10 @@ class BACnetServer:
         ``storage_path`` (the file the object keeps Present_Value in); with
         nothing stored it keeps ``present_value``, and with neither,
         In_Progress reads NOT_CONTROLLED until a write drives the output.
-        A file that doesn't load raises BacnetError."""
+        The file keeps a Default_Color written over the network too, which
+        wins over ``default_color`` at the next start; such a write is
+        refused when it can't be saved. A file that doesn't load raises
+        BacnetError."""
         ...
     def add_color_temperature(
         self,

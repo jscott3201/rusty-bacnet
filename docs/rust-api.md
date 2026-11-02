@@ -6700,11 +6700,21 @@ retried at once: the next change, `stop()` (which waits for the saves) or
 the object's drop tries again. `wait_for_output_saves` blocks until the queued
 ones have run. Tags storage
 (`with_tags_persistence`) and Present_Value storage combine.
+A `Default_Color` or `Default_Color_Temperature` a peer writes is kept with
+Present_Value (#1956), so a zero default written over the network keeps the
+last value at the next start. Unlike Present_Value, a default write saves
+before the object serves it and is refused with DEVICE / OPERATIONAL_PROBLEM,
+keeping the old default, when the save fails; a written default wins over
+the one `set_default_color` or `set_default_color_temperature` configures at
+the next start. A `ColorOutputSnapshot` holds both, each an `Option`: a
+Present_Value once something drove the output, a default once a write set it.
 `FileColorOutputPersistence::new(path)` is the bundled backend: a tagged
-header with the object identifier, a kind octet and the value (two
-big-endian REALs, or a 32-bit kelvin), replaced whole through a synchronized
-temporary file. A file of the wrong size, kind or object, or holding a value
-out of range, fails `with_output_persistence` with an error.
+header with the object identifier, a kind octet, then Present_Value and the
+default, each behind a presence octet (two big-endian REALs, or a 32-bit
+kelvin), replaced whole through a synchronized temporary file. A file of the
+previous version, with Present_Value alone, still loads. A file of the wrong
+size, kind or object, or holding a value out of range, fails
+`with_output_persistence` with an error.
 
 The colour properties use their standard identifiers: `DEFAULT_COLOR` is
 4194330, `DEFAULT_COLOR_TEMPERATURE` 4194331 and `COLOR_COMMAND` 4194334

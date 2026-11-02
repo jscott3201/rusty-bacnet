@@ -76,6 +76,19 @@ fn audit_version(slot: &[u8], version: u16) -> Vec<u8> {
     slot
 }
 
+/// A colour object's file as version 1 wrote it: the version 2 sample's
+/// header with the version 1 tag, its kind octet and its Present_Value,
+/// without the presence octets and the default (#1956).
+fn color_version_1(file: &[u8]) -> Vec<u8> {
+    let (header, body) = file.split_at(12);
+    let width = (body.len() - 3) / 2;
+    let mut octets = b"RBNCLR01".to_vec();
+    octets.extend_from_slice(&header[8..]);
+    octets.push(body[0]);
+    octets.extend_from_slice(&body[2..2 + width]);
+    octets
+}
+
 fn generated() -> Vec<Seed> {
     let mut seeds = Vec::new();
     for (target, kind, _) in TARGETS {
@@ -90,9 +103,15 @@ fn generated() -> Vec<Seed> {
             };
             let files = sample(format);
             if !format.two_slot {
+                let file = files[0].as_ref().expect("a saved file");
                 let mut octets = vec![selector];
-                octets.extend_from_slice(files[0].as_ref().expect("a saved file"));
+                octets.extend_from_slice(file);
                 seed("", octets);
+                if format.name.starts_with("color") {
+                    let mut octets = vec![selector];
+                    octets.extend_from_slice(&color_version_1(file));
+                    seed("-v1", octets);
+                }
                 continue;
             }
             // The sample's generation is odd, so it lands in slot 1.
