@@ -263,6 +263,37 @@ fn each_increase_of_an_accumulator_is_counted_across_its_wrap() {
 }
 
 #[test]
+fn a_clients_present_value_write_counts_as_input() {
+    // Out of service, a client's Present_Value reaches dependents as if the
+    // input had changed (Clause 12.61.10, #2267): an increase counts its
+    // delta, and a decrease wraps through Max_Pres_Value.
+    let mut db = ObjectDatabase::new();
+    let mut acc = AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS).unwrap();
+    acc.write_property(P::MAX_PRES_VALUE, None, PropertyValue::Unsigned(9999), None)
+        .unwrap();
+    acc.write_property(P::OUT_OF_SERVICE, None, PropertyValue::Boolean(true), None)
+        .unwrap();
+    acc.write_property(P::PRESENT_VALUE, None, PropertyValue::Unsigned(100), None)
+        .unwrap();
+    db.add(Box::new(acc)).unwrap();
+    db.add(converter(Some(present_value(acc1())))).unwrap();
+    assert!(db.count_pulse_inputs().is_empty());
+    let write = |db: &mut ObjectDatabase, value| {
+        db.get_mut(&acc1())
+            .unwrap()
+            .write_property(P::PRESENT_VALUE, None, PropertyValue::Unsigned(value), None)
+            .unwrap();
+    };
+    // 100 to 9999 is 9899, one more to 0, and 5 more to 5.
+    write(&mut db, 5);
+    assert_eq!(db.count_pulse_inputs(), [pc1()]);
+    assert_eq!(count(&db), PropertyValue::Unsigned(9905));
+    write(&mut db, 30);
+    assert_eq!(db.count_pulse_inputs(), [pc1()]);
+    assert_eq!(count(&db), PropertyValue::Unsigned(9930));
+}
+
+#[test]
 fn a_decrease_of_any_other_source_only_sets_the_baseline_again() {
     // ACC-1's Max_Pres_Value is an Unsigned with no wrap of its own.
     let mut db = ObjectDatabase::new();
