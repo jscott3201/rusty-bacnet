@@ -45,7 +45,7 @@ fn object_id(instance: u32) -> bacnet_types::primitives::ObjectIdentifier {
     bacnet_types::primitives::ObjectIdentifier::new(ObjectType::ANALOG_INPUT, instance).unwrap()
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn lease_exhaustion_release_reuse() {
     let (transport, _peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut session =
@@ -107,7 +107,7 @@ async fn lease_exhaustion_release_reuse() {
     session.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn lost_consumer_routes_to_policy_without_hanging() {
     // Client-only session has no server role: an inbound ConfirmedRequest
     // from the peer is policy-owned (`no_server_role`), not served.
@@ -168,7 +168,7 @@ async fn lost_consumer_routes_to_policy_without_hanging() {
     peer.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn full_ingress_queue_overflows_to_policy() {
     // Ingress with capacity 1: fill the inbound queue, then prove the next
     // request overflows to the policy queue (RouteFull) instead of blocking.
@@ -284,7 +284,7 @@ async fn full_ingress_queue_overflows_to_policy() {
     panic!("unreachable: first request must have been consumed above");
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn malformed_apdu_is_policy_owned() {
     let (client_transport, peer_transport) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut client = EndpointSession::new(client_transport, SessionRole::Both, session_config())

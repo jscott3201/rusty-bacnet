@@ -95,7 +95,7 @@ fn response(invoke: u8, ack: &ReadPropertyMultipleACK) -> Apdu {
 }
 async fn records(
     receiver: &mut bacnet_network::layer::ApduReceiver,
-    sink: &NetworkLayer<BipTransport>,
+    sink: &NetworkLayer<BusPort>,
     confirmed: bool,
     n: usize,
 ) -> Vec<BACnetAuditNotification> {
@@ -119,7 +119,7 @@ async fn records(
     }
     out
 }
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_rpm_ordered_occurrences_mixed_results_both_roles_modes() {
     let (mut peer, mut requests) = network().await;
     let (mut sink, mut received) = network().await;
@@ -187,7 +187,7 @@ async fn source_rpm_ordered_occurrences_mixed_results_both_roles_modes() {
     peer.stop().await.unwrap();
     sink.stop().await.unwrap();
 }
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_rpm_complete_correlation_before_any_success_projection() {
     let (mut peer, mut requests) = network().await;
     let (mut sink, mut received) = network().await;
@@ -276,7 +276,7 @@ async fn source_rpm_complete_correlation_before_any_success_projection() {
     peer.stop().await.unwrap();
     sink.stop().await.unwrap();
 }
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_rpm_unique_successful_device_projection_and_per_reference_filters() {
     let (mut peer, mut requests) = network().await;
     let (mut sink, mut received) = network().await;

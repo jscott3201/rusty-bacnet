@@ -47,7 +47,7 @@ fn object_id(instance: u32) -> bacnet_types::primitives::ObjectIdentifier {
     bacnet_types::primitives::ObjectIdentifier::new(ObjectType::ANALOG_INPUT, instance).unwrap()
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn cancel_pending_request_releases_exact_lease() {
     let (client_transport, peer_transport) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut client =
@@ -93,7 +93,7 @@ async fn cancel_pending_request_releases_exact_lease() {
     peer.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn shutdown_with_pending_reply_cleans_up() {
     let (client_transport, peer_transport) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut client =
@@ -135,7 +135,7 @@ async fn shutdown_with_pending_reply_cleans_up() {
     peer.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn shutdown_with_pending_segmented_response_cleans_up() {
     // Server sends a segmented ComplexAck the requester cannot reassemble
     // (unsegmented requester): the session must abort + release without hang,
@@ -209,7 +209,7 @@ async fn shutdown_with_pending_segmented_response_cleans_up() {
     peer.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn reply_sender_is_single_consumer_one_use() {
     // `ReceivedApdu::clone` drops reply authority; the responder takes it
     // exactly once via `.take()`.
@@ -273,7 +273,7 @@ async fn reply_sender_is_single_consumer_one_use() {
     assert_eq!(cloned.ingress_network, Some(1));
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn no_detached_role_outlives_session() {
     let (transport_a, transport_b) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut session_a = EndpointSession::new(transport_a, SessionRole::Both, session_config())
@@ -309,7 +309,7 @@ async fn no_detached_role_outlives_session() {
     session_b.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn context_preservation_does_not_change_group_decision() {
     // Raw `link_layer_group` is preserved structurally but the responder scope
     // decision still uses effective `is_group` only (compat-mode: no new

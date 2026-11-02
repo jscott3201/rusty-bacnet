@@ -3,15 +3,15 @@ use super::*;
 use bacnet_transport::loopback::LoopbackTransport;
 use tokio::sync::{Notify, Semaphore};
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_rpm_default_queue_accounts_local_losses_and_recovers_summary() {
     congestion(0).await;
 }
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_rpm_full_queue_summary_wait_is_owned_and_stop_cancels() {
     congestion(1).await;
 }
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_rpm_full_queue_summary_generation_replacement_discards_old_count() {
     congestion(2).await;
 }

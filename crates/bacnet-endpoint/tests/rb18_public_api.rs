@@ -66,7 +66,7 @@ fn object_id(instance: u32) -> bacnet_types::primitives::ObjectIdentifier {
     bacnet_types::primitives::ObjectIdentifier::new(ObjectType::ANALOG_INPUT, instance).unwrap()
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn owner_shutdown_with_live_handles_fails_closed() {
     let (ta, tb) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut db = bacnet_objects::database::ObjectDatabase::new();
@@ -107,7 +107,7 @@ async fn owner_shutdown_with_live_handles_fails_closed() {
     b.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn use_after_stop_fails_closed() {
     let (t, _p) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut s = EndpointSession::new(t, SessionRole::Both, session_config()).unwrap();
@@ -135,7 +135,7 @@ async fn use_after_stop_fails_closed() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn role_teardown_while_other_session_remains() {
     // Client-only + server-only pair: stopping the server leaves the client
     // session running (is_running) while its reads fail; the client owner
@@ -187,7 +187,7 @@ async fn role_teardown_while_other_session_remains() {
     client.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn detached_handles_survive_drop_as_fail_closed_values() {
     let (ta, tb) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut a = EndpointSession::new(ta, SessionRole::Both, session_config()).unwrap();

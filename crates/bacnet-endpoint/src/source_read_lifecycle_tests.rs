@@ -1,6 +1,6 @@
 use super::*;
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_read_filters_priority_independence_and_unsupported_destinations() {
     let (mut peer, mut requests) = network().await;
     let (mut sink, mut records) = network().await;
@@ -109,7 +109,7 @@ async fn source_read_filters_priority_independence_and_unsupported_destinations(
     sink.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_read_whole_operation_capacity_bounds_prelease_waiters_and_stop() {
     let (mut peer, mut requests) = network().await;
     let (mut sink, _records) = network().await;
@@ -167,7 +167,7 @@ async fn source_read_whole_operation_capacity_bounds_prelease_waiters_and_stop()
     sink.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_read_audit_capacity_deadline_health_and_later_recovery() {
     let (mut peer, mut requests) = network().await;
     let (mut sink, mut records) = network().await;
@@ -279,7 +279,7 @@ async fn source_read_audit_capacity_deadline_health_and_later_recovery() {
     sink.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_read_stop_and_drop_cancel_owned_work_with_held_client_clones() {
     let (mut peer, mut requests) = network().await;
     let (mut sink, mut records) = network().await;
@@ -328,8 +328,8 @@ async fn source_read_stop_and_drop_cancel_owned_work_with_held_client_clones() {
     sink.stop().await.unwrap();
 }
 
-#[tokio::test]
-async fn source_read_and_target_reporting_remain_independent_over_bip() {
+#[tokio::test(start_paused = true)]
+async fn source_read_and_target_reporting_remain_independent() {
     use bacnet_server::server::{AuditReportersConfig, BACnetServer, DeviceBinding};
     use bacnet_types::enums::EngineeringUnits;
     let (mut sink, mut records) = network().await;
@@ -369,10 +369,9 @@ async fn source_read_and_target_reporting_remain_independent_over_bip() {
             999,
         )))
         .unwrap();
-    let mut target_server = BACnetServer::bip_builder()
+    let mut target_server = BACnetServer::generic_builder()
         .device(bacnet_objects::DeviceIdentity::new(456, 42).unwrap())
-        .interface(Ipv4Addr::LOCALHOST)
-        .port(0)
+        .transport(BusPort::new())
         .database(db)
         .audit_reporters(AuditReportersConfig {
             reporters: vec![selected()],

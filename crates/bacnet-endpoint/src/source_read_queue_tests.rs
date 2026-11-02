@@ -39,7 +39,7 @@ impl TransportPort for Gated {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_read_queued_egress_is_owned_before_caller_cancellation() {
     let source_mac = encode_bip_mac([127, 0, 0, 1], 30001);
     let peer_mac = encode_bip_mac([127, 0, 0, 1], 30002);
@@ -134,7 +134,7 @@ async fn source_read_queued_egress_is_owned_before_caller_cancellation() {
     peer.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_recipient_full_egress_fails_one_sibling_after_commit_without_retry() {
     let source_mac = encode_bip_mac([127, 0, 0, 1], 30001);
     let peer_mac = encode_bip_mac([127, 0, 0, 1], 30002);

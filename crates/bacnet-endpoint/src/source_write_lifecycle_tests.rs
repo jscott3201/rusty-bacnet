@@ -1,5 +1,5 @@
 use super::*;
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_write_whole_operation_capacity_bounds_prelease_waiters_and_stop() {
     let (mut peer, mut requests) = network().await;
     let (mut sink, _records) = network().await;
@@ -57,7 +57,7 @@ async fn source_write_whole_operation_capacity_bounds_prelease_waiters_and_stop(
     sink.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_write_audit_capacity_deadline_health_and_later_recovery() {
     let (mut peer, mut requests) = network().await;
     let (mut sink, mut records) = network().await;
@@ -169,7 +169,7 @@ async fn source_write_audit_capacity_deadline_health_and_later_recovery() {
     sink.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_write_stop_and_drop_cancel_owned_work_with_held_client_clones() {
     let (mut peer, mut requests) = network().await;
     let (mut sink, mut records) = network().await;
@@ -223,7 +223,7 @@ async fn source_write_stop_and_drop_cancel_owned_work_with_held_client_clones() 
     sink.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_write_captures_recipient_and_policy_before_peer_completion() {
     let (mut peer, mut requests) = network().await;
     let (mut old, mut old_records) = network().await;

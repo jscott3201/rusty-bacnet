@@ -1,7 +1,7 @@
 use super::*;
 use bacnet_types::error::RemoteError;
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_write_preflight_is_silent_with_and_without_reporter() {
     let (mut peer, mut requests) = network().await;
     let (mut sink, mut records) = network().await;
@@ -9,10 +9,7 @@ async fn source_write_preflight_is_silent_with_and_without_reporter() {
         let mut endpoint = if reported {
             session(write_database(false), SessionRole::ClientOnly, &sink)
         } else {
-            BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
-                .role(SessionRole::ClientOnly)
-                .build_session()
-                .unwrap()
+            bare_session(SessionRole::ClientOnly, SessionConfig::default())
         };
         endpoint.start().await.unwrap();
         let client = endpoint.cloned_client_handle().unwrap();
@@ -95,7 +92,7 @@ async fn source_write_preflight_is_silent_with_and_without_reporter() {
     sink.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_write_before_admission_cancel_and_after_admission_retry_are_bounded() {
     let (mut peer, mut requests) = network().await;
     let (mut sink, mut records) = network().await;
@@ -168,7 +165,7 @@ async fn source_write_before_admission_cancel_and_after_admission_retry_are_boun
     sink.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn endpoint_write_non_bip_without_reporter_is_refused_and_reads_remain_available() {
     use bacnet_transport::loopback::LoopbackTransport;
     let (transport, peer) = LoopbackTransport::pair(vec![1], vec![2]);
@@ -215,7 +212,7 @@ async fn endpoint_write_non_bip_without_reporter_is_refused_and_reads_remain_ava
     peer.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_write_empty_recipient_list_success_and_empty_scalar_remote_error() {
     use bacnet_objects::{analog::AnalogValueObject, notification_class::NotificationClass};
     use bacnet_server::server::{BACnetServer, ServerConfig};
@@ -237,7 +234,7 @@ async fn source_write_empty_recipient_list_success_and_empty_scalar_remote_error
             ..Default::default()
         },
         db,
-        BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST),
+        BusPort::new(),
     )
     .await
     .unwrap();
@@ -284,7 +281,7 @@ async fn source_write_empty_recipient_list_success_and_empty_scalar_remote_error
     sink.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_write_wrong_service_error_cannot_finish_or_steal_retry_identity() {
     let (mut peer, mut requests) = network().await;
     let (mut sink, mut records) = network().await;

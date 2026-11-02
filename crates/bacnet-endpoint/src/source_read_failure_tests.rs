@@ -48,8 +48,8 @@ fn expected_summary(count: u64, timestamp: BACnetTimeStamp) -> BACnetAuditNotifi
     }
 }
 pub(super) async fn complete_read(
-    session: &EndpointSession<BipTransport>,
-    peer: &NetworkLayer<BipTransport>,
+    session: &EndpointSession<BusPort>,
+    peer: &NetworkLayer<BusPort>,
     requests: &mut bacnet_network::layer::ApduReceiver,
 ) {
     let read = start_read(
@@ -64,7 +64,7 @@ pub(super) async fn complete_read(
     assert!(read.await.unwrap().is_ok());
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_failure_permit_losses_wire_shape_reverse_completion_and_sequence_wrap() {
     let (mut peer, mut requests) = network().await;
     let (mut sink, mut records) = network().await;
@@ -129,7 +129,7 @@ async fn source_failure_permit_losses_wire_shape_reverse_completion_and_sequence
     sink.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_failure_pending_context_invalidates_without_another_read() {
     let (mut peer, mut requests) = network().await;
     let (mut sink, mut records) = network().await;
@@ -207,7 +207,7 @@ async fn source_failure_pending_context_invalidates_without_another_read() {
     sink.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_failure_pending_worker_stop_and_drop_reclaim_owner() {
     let (mut peer, mut requests) = network().await;
     let (mut sink, mut records) = network().await;

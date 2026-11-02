@@ -219,7 +219,7 @@ fn identity_iam_bytes_match_server_discovery_construction() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn session_identity_overrides_480_and_iam_broadcasts() {
     // SessionConfig 480 default is kept for standalone sessions; composed
     // identity overrides to 1476. I-Am broadcast derives from identity.
@@ -273,7 +273,7 @@ async fn session_identity_overrides_480_and_iam_broadcasts() {
     b_net.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn capability_matrix_services_and_segmentation_refuse() {
     // Services == reality: ReadProperty succeeds; WriteProperty (unexecuted)
     // draws Reject UNRECOGNIZED_SERVICE from the narrow responder.
@@ -665,7 +665,7 @@ fn identity_maps_its_segment_timeout_to_both_database_builders_and_full_server()
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn endpoint_roles_reject_non_none_identity_before_consuming_transport() {
     for role in [
         SessionRole::ClientOnly,
@@ -698,7 +698,7 @@ async fn endpoint_roles_reject_non_none_identity_before_consuming_transport() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn endpoint_roles_reject_segmented_database_without_identity_and_allow_correction() {
     for role in [
         SessionRole::ClientOnly,

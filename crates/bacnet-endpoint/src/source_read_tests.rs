@@ -1,5 +1,4 @@
 use super::*;
-use crate::bip::BipEndpointBuilder;
 use bacnet_encoding::apdu::{
     AbortPdu, ComplexAck, ErrorPdu, RejectPdu, SimpleAck, decode_apdu, encode_apdu,
 };
@@ -8,7 +7,6 @@ use bacnet_npdu::NetworkPriority;
 use bacnet_objects::audit::AuditReporterObject;
 use bacnet_services::audit::AuditNotificationRequest;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
-use bacnet_transport::bip::BipTransport;
 use bacnet_transport::bvll::{decode_bip_mac, encode_bip_mac};
 use bacnet_types::MacAddr;
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
@@ -18,11 +16,18 @@ use bacnet_types::enums::{
     RejectReason, Reliability, UnconfirmedServiceChoice,
 };
 use bacnet_types::primitives::BACnetTimeStamp;
+use bus::BusPort;
 use bytes::{Bytes, BytesMut};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio::time::{Duration, timeout};
 
+/// A hang backstop. Every test here runs on paused time over [`BusPort`], so
+/// this bounds virtual time, not the host's speed (#2293).
 const WAIT: Duration = Duration::from_secs(2);
+
+#[path = "source_read_bus.rs"]
+mod bus;
+
 fn oid(kind: ObjectType, instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(kind, instance).unwrap()
 }
@@ -53,51 +58,53 @@ fn database(confirmed: bool) -> ObjectDatabase {
     db.add(Box::new(reporter)).unwrap();
     db
 }
-async fn network() -> (
-    NetworkLayer<BipTransport>,
-    bacnet_network::layer::ApduReceiver,
-) {
-    let mut network = NetworkLayer::new(BipTransport::new(
-        Ipv4Addr::LOCALHOST,
-        0,
-        Ipv4Addr::BROADCAST,
-    ));
+async fn network() -> (NetworkLayer<BusPort>, bacnet_network::layer::ApduReceiver) {
+    let mut network = NetworkLayer::new(BusPort::new());
     let receiver = network.start().await.unwrap();
     (network, receiver)
 }
-fn address(network: &NetworkLayer<BipTransport>) -> SocketAddrV4 {
+fn address(network: &NetworkLayer<BusPort>) -> SocketAddrV4 {
     let (ip, port) = decode_bip_mac(network.local_mac()).unwrap();
     SocketAddrV4::new(ip.into(), port)
 }
 fn session(
     mut db: ObjectDatabase,
     role: SessionRole,
-    sink: &NetworkLayer<BipTransport>,
-) -> EndpointSession<BipTransport> {
+    sink: &NetworkLayer<BusPort>,
+) -> EndpointSession<BusPort> {
     db.get_mut(&oid(ObjectType::DEVICE, 123))
         .unwrap()
         .device_authority_internal()
         .unwrap()
         .provision_audit_recipient(BACnetRecipient::Device(oid(ObjectType::DEVICE, 999)))
         .unwrap();
-    let session = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
-        .role(role)
-        .database(db)
-        .client_timers(100, 0)
-        .source_audit_device_binding(oid(ObjectType::DEVICE, 999), address(sink))
-        .build_session()
-        .unwrap()
-        .with_source_audit_reporter(selected());
+    let mut session = bare_session(
+        role,
+        SessionConfig {
+            apdu_timeout_ms: 100,
+            apdu_retries: 0,
+            ..SessionConfig::default()
+        },
+    )
+    .with_database(db)
+    .with_source_audit_reporter(selected());
+    session
+        .source_audit_bindings
+        .push((oid(ObjectType::DEVICE, 999), address(sink)));
     if role == SessionRole::Both {
         session.with_device_writes(Arc::new(|_| true))
     } else {
         session
     }
 }
+/// A session on its own [`BusPort`], with no database or source Audit.
+fn bare_session(role: SessionRole, config: SessionConfig) -> EndpointSession<BusPort> {
+    EndpointSession::new(BusPort::new(), role, config).unwrap()
+}
 async fn receive(receiver: &mut bacnet_network::layer::ApduReceiver) -> ReceivedApdu {
     timeout(WAIT, receiver.recv()).await.unwrap().unwrap()
 }
-async fn send(network: &NetworkLayer<BipTransport>, mac: &[u8], pdu: Apdu) {
+async fn send(network: &NetworkLayer<BusPort>, mac: &[u8], pdu: Apdu) {
     let mut bytes = BytesMut::new();
     encode_apdu(&mut bytes, &pdu).unwrap();
     network
@@ -159,7 +166,7 @@ fn notification(envelope: &ReceivedApdu, confirmed: bool) -> (BACnetAuditNotific
     assert_eq!(request.notifications.len(), 1);
     (request.notifications.remove(0), invoke)
 }
-async fn reliability(session: &EndpointSession<BipTransport>) -> u32 {
+async fn reliability(session: &EndpointSession<BusPort>) -> u32 {
     let db = session.database.as_ref().unwrap().read().await;
     let PropertyValue::Enumerated(value) = db
         .get(&selected())
@@ -172,7 +179,7 @@ async fn reliability(session: &EndpointSession<BipTransport>) -> u32 {
     value
 }
 fn start_read(
-    session: &EndpointSession<BipTransport>,
+    session: &EndpointSession<BusPort>,
     target_mac: &[u8],
     property: PropertyIdentifier,
     index: Option<u32>,
@@ -182,7 +189,7 @@ fn start_read(
     tokio::spawn(async move { handle.read_property(&mac, target(), property, index).await })
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_read_wire_fields_both_roles_modes_and_result_before_delivery() {
     let (mut peer, mut requests) = network().await;
     let (mut sink, mut records) = network().await;
@@ -272,7 +279,7 @@ async fn source_read_wire_fields_both_roles_modes_and_result_before_delivery() {
 
 /// With several Devices the lowest is this device (#1204): source audit starts
 /// beside a higher Device and every record names the lowest.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_read_identity_is_the_lowest_of_several_devices() {
     let (mut peer, mut requests) = network().await;
     let (mut sink, mut records) = network().await;
@@ -310,7 +317,7 @@ async fn source_read_identity_is_the_lowest_of_several_devices() {
     sink.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_read_peer_and_local_failure_outcomes_are_not_success() {
     let (mut peer, mut requests) = network().await;
     let (mut sink, mut records) = network().await;
@@ -399,7 +406,7 @@ async fn source_read_peer_and_local_failure_outcomes_are_not_success() {
     sink.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_read_dropped_waiter_retries_once_per_logical_request() {
     let (mut peer, mut requests) = network().await;
     let (mut sink, mut records) = network().await;
@@ -436,7 +443,7 @@ async fn source_read_dropped_waiter_retries_once_per_logical_request() {
     sink.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_read_selector_preflight_is_atomic_and_adapter_rejects_mutation() {
     let (mut sink, _records) = network().await;
     for selectors in [vec![], vec![BACnetObjectSelector::None]] {
@@ -533,7 +540,7 @@ mod property_identity;
 #[path = "source_rpm_tests.rs"]
 mod rpm;
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_read_ignores_remote_and_same_oid_local_value_object_policy() {
     use bacnet_objects::{analog::AnalogValueObject, audit::ObjectAuditPolicy};
     use bacnet_server::server::{BACnetServer, ServerConfig};
@@ -558,7 +565,7 @@ async fn source_read_ignores_remote_and_same_oid_local_value_object_policy() {
             ..Default::default()
         },
         remote_db,
-        BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST),
+        BusPort::new(),
     )
     .await
     .unwrap();

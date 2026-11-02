@@ -50,8 +50,8 @@ const FAIL: u8 = 3;
 
 /// The session's own address, learned from a frame it sends `peer`.
 async fn session_mac(
-    session: &EndpointSession<BipTransport>,
-    peer: &NetworkLayer<BipTransport>,
+    session: &EndpointSession<BusPort>,
+    peer: &NetworkLayer<BusPort>,
     replies: &mut bacnet_network::layer::ApduReceiver,
 ) -> MacAddr {
     session
@@ -73,7 +73,7 @@ async fn session_mac(
 }
 
 async fn reinitialize(
-    peer: &NetworkLayer<BipTransport>,
+    peer: &NetworkLayer<BusPort>,
     session: &[u8],
     replies: &mut bacnet_network::layer::ApduReceiver,
     state: ReinitializedState,
@@ -110,7 +110,7 @@ async fn reinitialize(
 /// Every refusal kind, then the accepted request, for each state family.
 /// The records carry consecutive sequence-number timestamps, so a record
 /// built for a refusal or for ACTIVATE_CHANGES would show as a gap.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn endpoint_records_accepted_reinitialize_requests_only() {
     let (mut sink, mut records) = network().await;
     let (mut peer, mut replies) = network().await;
