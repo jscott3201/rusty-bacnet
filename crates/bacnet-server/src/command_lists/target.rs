@@ -73,7 +73,7 @@ pub(super) async fn write<H: RunHost>(
             }
         }
         Some(device) => {
-            let Err(error) = host.write_remote(device, command).await else {
+            let Err(error) = host.write_remote(run, device, command).await else {
                 return Ok(());
             };
             log_failure(run, Some(device), command, &error);
@@ -188,7 +188,9 @@ fn unmade(error: RemoteRequestError) -> WriteFailure {
         | RemoteRequestError::Stopping
         | RemoteRequestError::NoNetwork
         // Only a read's answer is ever malformed.
-        | RemoteRequestError::Malformed => WriteFailure::Process,
+        | RemoteRequestError::Malformed
+        // A stale run records nothing, so this kind is never reported.
+        | RemoteRequestError::Withdrawn => WriteFailure::Process,
     }
 }
 

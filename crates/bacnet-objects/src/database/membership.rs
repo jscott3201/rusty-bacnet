@@ -14,11 +14,13 @@
 //! once after a CreateObject or DeleteObject, and from a background task
 //! after an application's own `add` or `remove`.
 //!
-//! Removing a Schedule queues the NULLs that give up the slots it holds on
-//! its targets ([`ScheduleRunner::take_relinquish_writes`], #2264), taken
-//! from the object as it leaves. The server writes them with an origin that
-//! names the removed Schedule, so DeleteObject and an application's own
-//! `remove` relinquish through this one path.
+//! Removing a Schedule or a Staging object queues the NULLs that give up
+//! the slots it holds on its targets
+//! ([`ScheduleRunner::take_relinquish_writes`], #2264, and
+//! [`StagingSource::take_relinquish_writes`], #2265), taken from the object
+//! as it leaves. The server writes them with an origin that names the
+//! removed object, so DeleteObject and an application's own `remove`
+//! relinquish through this one path.
 //!
 //! The queue holds each entry once, and a retry only while a Schedule holds
 //! a refusal naming the object. Without a server nothing takes it, so it
@@ -26,6 +28,7 @@
 //! by the distinct slots removed Schedules held.
 //!
 //! [`ScheduleRunner::take_relinquish_writes`]: crate::traits::ScheduleRunner::take_relinquish_writes
+//! [`StagingSource::take_relinquish_writes`]: crate::traits::StagingSource::take_relinquish_writes
 
 use crate::prelude::*;
 use alloc::sync::Arc;
@@ -66,10 +69,10 @@ pub struct MembershipWork {
     /// [`retry_refusals_naming`](crate::traits::ScheduleRunner::retry_refusals_naming)
     /// write for that object.
     pub schedule_retries: Vec<(ObjectIdentifier, ObjectIdentifier)>,
-    /// `(schedule, write)` pairs: a Schedule removed from the database still
-    /// held slots on its targets, and the server owes them these NULLs
-    /// ([`relinquish`](ScheduleWrite::relinquish) writes), with the removed
-    /// Schedule as their initiating object.
+    /// `(object, write)` pairs: a Schedule or Staging object removed from
+    /// the database still held slots on its targets, and the server owes
+    /// them these NULLs ([`relinquish`](ScheduleWrite::relinquish) writes),
+    /// with the removed object as their initiating object.
     pub relinquishes: Vec<(ObjectIdentifier, ScheduleWrite)>,
 }
 
@@ -100,17 +103,21 @@ impl ObjectDatabase {
 
     /// Queue the NULLs `removed`, the object just taken out under `oid`,
     /// owes the slots it holds, when it lends a
-    /// [`ScheduleRunner`](crate::traits::ScheduleRunner), and wake the
+    /// [`ScheduleRunner`](crate::traits::ScheduleRunner) or a
+    /// [`StagingSource`](crate::traits::StagingSource), and wake the
     /// server. The object gives them up as it leaves, so it owes none after.
-    pub(super) fn schedule_removed(
+    pub(super) fn commander_removed(
         &mut self,
         oid: ObjectIdentifier,
         removed: &mut dyn BACnetObject,
     ) {
-        let Some(runner) = removed.schedule_runner() else {
-            return;
+        let writes = match removed.schedule_runner() {
+            Some(runner) => runner.take_relinquish_writes(),
+            None => match removed.staging_source() {
+                Some(staging) => staging.take_relinquish_writes(),
+                None => return,
+            },
         };
-        let writes = runner.take_relinquish_writes();
         if writes.is_empty() {
             return;
         }

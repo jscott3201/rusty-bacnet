@@ -12,7 +12,6 @@ use super::command_remote_write_tests::{
 use super::command_runs::CommandRunner;
 use super::cov_wire_test_support::*;
 use super::*;
-use crate::command_lists::RunHost;
 use bacnet_types::constructed::BACnetActionCommand;
 use tokio::task::JoinHandle;
 
@@ -26,7 +25,8 @@ async fn start_write(h: &Harness) -> (JoinHandle<Result<(), RemoteRequestError>>
         device_identifier: Some(device(9)),
         ..write(ao(1), PropertyValue::Real(80.0), 8)
     };
-    let task = tokio::spawn(async move { runner.write_remote(device(9), &command).await });
+    let task =
+        tokio::spawn(async move { runner.write_remote_unchecked(device(9), &command).await });
     let invoke_id = remote_write(h).await;
     (task, invoke_id)
 }

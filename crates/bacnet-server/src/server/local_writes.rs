@@ -2,7 +2,7 @@ use super::cov_notify_context::CovNotifyContext;
 use super::*;
 use crate::command_lists::TakenRuns;
 use bacnet_device_core::write::{WriteCommitObserver, WriteTarget};
-use bacnet_objects::staging::StagingWritePlan;
+use bacnet_objects::command::CommandRun;
 use bacnet_objects::traits::{BACnetObject, LocalInputValue, not_supported};
 use bacnet_types::constructed::BACnetRecipient;
 
@@ -11,6 +11,9 @@ mod finish;
 
 #[path = "local_access_inputs.rs"]
 mod access_inputs;
+
+#[path = "local_staging_plans.rs"]
+mod staging_plans;
 pub(super) use finish::Committed;
 pub(super) use finish::local_runtime;
 
@@ -511,134 +514,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     fn local_event_delivery(&self) -> EventDelivery<'_, T> {
         self.local_writer().event_delivery()
     }
-
-    pub(super) async fn execute_initial_staging_plans(&self) {
-        let staging_oids = {
-            let database = self.db.read().await;
-            database.find_by_type(ObjectType::STAGING)
-        };
-        let staging_plans = {
-            let mut database = self.db.write().await;
-            Self::take_staging_plans(&mut database, &staging_oids)
-        };
-        Self::execute_staging_plans(
-            &self.local_event_delivery(),
-            &self.local_cov_context(),
-            staging_plans,
-        )
-        .await;
-    }
-
-    pub(super) fn take_staging_plans(
-        db: &mut ObjectDatabase,
-        oids: &[ObjectIdentifier],
-    ) -> Vec<StagingWritePlan> {
-        oids.iter()
-            .filter_map(|oid| {
-                db.get_mut(oid)
-                    .and_then(|object| object.staging_source())
-                    .and_then(|source| source.take_staging_write_plan())
-            })
-            .collect()
-    }
-
-    /// Execute local Staging targets one mutation guard at a time.
-    ///
-    /// Every target mutation is generation-checked in the same database guard
-    /// that applies it. Event/COV work runs only after that guard is released.
-    pub(super) async fn execute_staging_plans(
-        delivery: &EventDelivery<'_, T>,
-        cov: &CovNotifyContext<'_, T>,
-        plans: Vec<StagingWritePlan>,
-    ) {
-        let db = delivery.db;
-        for plan in plans {
-            let mut all_succeeded = true;
-            for target in &plan.writes {
-                enum TargetResult {
-                    Applied,
-                    Failed,
-                    Stale,
-                }
-
-                let result = {
-                    let mut database = db.write().await;
-                    let current = database
-                        .get_mut(&plan.source)
-                        .and_then(|source| source.staging_source())
-                        .map(|source| source.staging_generation())
-                        == Some(plan.generation);
-                    if !current {
-                        TargetResult::Stale
-                    } else {
-                        let origin = crate::command_source::resolve_local(
-                            &database,
-                            crate::LocalCommandSource::Object(plan.source),
-                        )
-                        .ok();
-                        match database.get_mut(&target.object_identifier) {
-                            Some(object) => match crate::command_source::write_target(
-                                object,
-                                PropertyIdentifier::PRESENT_VALUE,
-                                None,
-                                PropertyValue::Enumerated(u32::from(target.active)),
-                                Some(plan.priority),
-                                origin.as_ref(),
-                            ) {
-                                Ok(()) => {
-                                    // Timestamped references capture the
-                                    // target change under this guard (#856).
-                                    let capture = cov
-                                        .cov_table
-                                        .read()
-                                        .await
-                                        .timed_capture(target.object_identifier);
-                                    capture.run(&database);
-                                    TargetResult::Applied
-                                }
-                                Err(_) => TargetResult::Failed,
-                            },
-                            None => TargetResult::Failed,
-                        }
-                    }
-                };
-
-                match result {
-                    TargetResult::Stale => break,
-                    TargetResult::Failed => all_succeeded = false,
-                    TargetResult::Applied => {
-                        Self::fire_event_notifications_with_bindings(
-                            delivery,
-                            cov.cov_table,
-                            &target.object_identifier,
-                        )
-                        .await;
-                        Self::fire_cov_notifications(cov, &target.object_identifier).await;
-                    }
-                }
-            }
-
-            let reliability_changed = {
-                let mut database = db.write().await;
-                let changed = database
-                    .get_mut(&plan.source)
-                    .and_then(|source| source.staging_source())
-                    .is_some_and(|source| {
-                        source.complete_staging_write_plan(plan.generation, all_succeeded)
-                    });
-                if changed {
-                    let capture = cov.cov_table.read().await.timed_capture(plan.source);
-                    capture.run(&database);
-                }
-                changed
-            };
-            if reliability_changed {
-                Self::fire_event_notifications_with_bindings(delivery, cov.cov_table, &plan.source)
-                    .await;
-                Self::fire_cov_notifications(cov, &plan.source).await;
-            }
-        }
-    }
 }
 
 /// The handles one local write borrows: the mutation under the database
@@ -710,6 +585,29 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
         }
     }
 
+    /// [`Self::write`] on behalf of a Command, Channel or Timer run: made
+    /// only while `run` is still its object's current run, checked under
+    /// the guard that commits the write (#2265). A run whose object was
+    /// deleted, replaced or written again since gets
+    /// [`stale_run`](crate::command_lists::stale_run) and
+    /// writes nothing.
+    pub(super) async fn write_for_run(
+        &self,
+        oid: &ObjectIdentifier,
+        write: LocalWrite<'_>,
+        value: PropertyValue,
+        run: &CommandRun,
+    ) -> Result<TakenRuns, Error> {
+        let source = Some(crate::LocalCommandSource::Object(run.source));
+        match self
+            .commit_checked(oid, write, value, source, Some(run))
+            .await?
+        {
+            Some(committed) => Ok(self.finish(committed).await),
+            None => Ok(TakenRuns::default()),
+        }
+    }
+
     /// The first half of [`Self::write`]: the checks and the commit, under a
     /// database guard it keeps. `None` for a write that changed nothing and
     /// owes nothing more; otherwise the guard and what the write owes, for
@@ -721,6 +619,20 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
         write: LocalWrite<'_>,
         value: PropertyValue,
         source: Option<crate::LocalCommandSource>,
+    ) -> Result<Option<Committed>, Error> {
+        self.commit_checked(oid, write, value, source, None).await
+    }
+
+    /// [`Self::commit`], refused with
+    /// [`stale_run`](crate::command_lists::stale_run) under its guard when
+    /// `run` is given and no longer current.
+    async fn commit_checked(
+        &self,
+        oid: &ObjectIdentifier,
+        write: LocalWrite<'_>,
+        value: PropertyValue,
+        source: Option<crate::LocalCommandSource>,
+        run: Option<&CommandRun>,
     ) -> Result<Option<Committed>, Error> {
         // Only a property write can carry OBJECT_NAME, so only it needs the name
         // index kept in step.
@@ -748,6 +660,10 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
             // Owned, so the rest of the write can take it to a task of its
             // own with no wait between the commit and the hand-off (#1367).
             let mut db = Arc::clone(self.db).write_owned().await;
+            if run.is_some_and(|run| !crate::command_lists::is_current(&db, run)) {
+                staged.release(&mut db);
+                return Err(crate::command_lists::stale_run());
+            }
             let snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::capture_oid(&db, *oid);
             if let Err(error) = precheck(&db, oid, write, &value) {
                 // Nothing reached the object: what was staged goes back.

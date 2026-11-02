@@ -179,9 +179,10 @@ pub(crate) fn retry_for_created(
     }
 }
 
-/// Write, under `db_w`, the NULLs Schedules removed from the database owe
-/// their targets (#2256, #2264): each `(schedule, write)` pair is a
-/// relinquish the database queued as the Schedule left
+/// Write, under `db_w`, the NULLs Schedules (and Staging objects, #2265)
+/// removed from the database owe their targets (#2256, #2264): each
+/// `(schedule, write)` pair is a relinquish the database queued as the
+/// object left
 /// (`ObjectDatabase::take_membership_work_internal`). They carry the origin
 /// the Schedule's own writes did, the local Device with the Schedule as the
 /// initiating object, built without the Schedule in the database
@@ -195,9 +196,9 @@ pub(crate) fn relinquish_for_removed(
 ) {
     for (schedule, write) in relinquishes {
         debug!(
-            schedule = %schedule,
+            source = %schedule,
             refs = write.references.len(),
-            "Removed Schedule relinquishing its controlled properties"
+            "Removed Schedule or Staging object relinquishing the slots it held"
         );
         let origin = removed_origin(db_w, *schedule);
         write_targets(db_w, commit, *schedule, origin.as_ref(), write);

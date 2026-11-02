@@ -19,6 +19,13 @@
 //! configured value to every referenced property, which the bundled server
 //! makes as it makes a Command's (`state_change`, #2206).
 //!
+//! **On deletion** (#2265) a Timer releases nothing and makes no transition's
+//! writes: deletion isn't a transition (Clause 12.57), and each
+//! transition's writes are one-shot. A configuration that wants a slot given
+//! up says so with a NULL State_Change_Value (Clause 12.57.20). The writes of
+//! a transition still in progress stop as a Command's do, and a running
+//! Timer's expiry never comes.
+//!
 //! A Timer keeps nothing across a restart: a rebuilt one starts IDLE with
 //! Last_State_Change NONE.
 
