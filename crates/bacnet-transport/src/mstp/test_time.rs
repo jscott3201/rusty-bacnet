@@ -34,10 +34,15 @@
 //!   poll's check and the release.
 //! - The hold's thread ends some time after its release. Until then the
 //!   clock stays put, which can only make a deadline later, never earlier.
-//!   A runtime that cannot advance parks on the real clock, so a late
-//!   release costs real time, not a busy loop.
+//!   A runtime that cannot advance parks on the real clock, not in a busy
+//!   loop, and the hold's end unparks it, so it does not sleep out that
+//!   park either.
 //! - Once the node's future is done or dropped, wake-ups start no hold, so
 //!   a stray waker cannot keep the test's runtime from shutting down.
+//!
+//! The transport's own waits on the dedicated thread (its start, and the
+//! node's end at `stop`) take a [`Hold`] of their own, so the test's clock
+//! does not run ahead while the test's runtime waits on them.
 //!
 //! Anything else the node spawns on Tokio while polled (blocking serial
 //! drains, say) goes to the test's runtime too; the loopback ports tests
@@ -71,6 +76,12 @@ impl TestTime {
         Self(Arc::new(runtime))
     }
 
+    /// Hold this runtime's clock until the guard drops: for a wait on the
+    /// dedicated thread that the gate does not see.
+    pub(super) fn hold(&self) -> Hold {
+        Hold(start_hold(&self.0))
+    }
+
     /// `future`, polled on this runtime's time.
     pub(super) fn drive<F: Future>(&self, future: F) -> OnTestTime<F> {
         let gate = Arc::new(Gate {
@@ -78,13 +89,28 @@ impl TestTime {
             state: Mutex::new(GateState::default()),
         });
         // Busy from the start: the task has its first poll to come.
-        gate.lock().hold = Some(gate.start_hold());
+        gate.lock().hold = Some(start_hold(&gate.runtime));
         OnTestTime {
             future: Box::pin(future),
             gate,
             waker: None,
         }
     }
+}
+
+/// Holds the test's runtime's clock while it lives ([`TestTime::hold`]).
+pub(super) struct Hold(#[allow(dead_code, reason = "held for its drop")] Sender<()>);
+
+/// Start a blocking task on `runtime` that runs until the returned sender
+/// drops. The spawn itself stops the clock's auto-advance, so it is held
+/// from this call on.
+fn start_hold(runtime: &Handle) -> Sender<()> {
+    let (release, released) = channel::<()>();
+    drop(runtime.spawn_blocking(move || {
+        // Returns when the sender drops.
+        let _ = released.recv();
+    }));
+    release
 }
 
 /// A future polled with the test's runtime entered, behind a [`Gate`].
@@ -162,18 +188,6 @@ impl Gate {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Start a blocking task on the test's runtime that runs until the
-    /// returned sender drops. The spawn itself stops the clock's
-    /// auto-advance, so it is held from this call on.
-    fn start_hold(&self) -> Sender<()> {
-        let (release, released) = channel::<()>();
-        drop(self.runtime.spawn_blocking(move || {
-            // Returns when the sender drops.
-            let _ = released.recv();
-        }));
-        release
-    }
-
     fn wake(&self) {
         let mut state = self.lock();
         if state.closed {
@@ -181,7 +195,7 @@ impl Gate {
         }
         state.woken = true;
         if state.hold.is_none() {
-            state.hold = Some(self.start_hold());
+            state.hold = Some(start_hold(&self.runtime));
         }
     }
 
@@ -210,5 +224,87 @@ impl Wake for GatedWaker {
     fn wake_by_ref(self: &Arc<Self>) {
         self.gate.wake();
         self.task.wake_by_ref();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use std::task::Waker;
+
+    use super::*;
+
+    impl Gate {
+        fn holding(&self) -> bool {
+            self.lock().hold.is_some()
+        }
+    }
+
+    fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+    }
+
+    /// Poll `future` once with a waker that does nothing.
+    fn poll<F: Future>(future: &mut OnTestTime<F>) -> Poll<F::Output> {
+        Pin::new(future).poll(&mut Context::from_waker(Waker::noop()))
+    }
+
+    /// A poll that wakes itself keeps the hold, since another poll is to
+    /// come; a quiet `Pending` releases it, and so does `Ready`.
+    #[test]
+    fn the_hold_follows_wake_ups_during_a_poll() {
+        let runtime = runtime();
+        let polls = Rc::new(Cell::new(0));
+        let counted = Rc::clone(&polls);
+        let mut future =
+            TestTime::new(runtime.handle().clone()).drive(std::future::poll_fn(move |cx| {
+                counted.set(counted.get() + 1);
+                match counted.get() {
+                    1 => {
+                        cx.waker().wake_by_ref();
+                        Poll::Pending
+                    }
+                    2 => Poll::Pending,
+                    _ => Poll::Ready(()),
+                }
+            }));
+        let gate = Arc::clone(&future.gate);
+        assert!(gate.holding(), "busy before the first poll");
+        assert!(poll(&mut future).is_pending());
+        assert!(gate.holding(), "woken during the poll: held");
+        assert!(poll(&mut future).is_pending());
+        assert!(!gate.holding(), "a quiet Pending releases");
+        // A wake-up while idle holds again, and Ready releases.
+        gate.wake();
+        assert!(gate.holding());
+        assert!(poll(&mut future).is_ready());
+        assert!(!gate.holding(), "Ready leaves no hold");
+        assert_eq!(polls.get(), 3);
+    }
+
+    /// Dropping the future releases a hold it had, and a waker that
+    /// outlives it starts no new one.
+    #[test]
+    fn a_dropped_future_releases_and_later_wake_ups_hold_nothing() {
+        let runtime = runtime();
+        let leaked: Rc<Cell<Option<Waker>>> = Rc::new(Cell::new(None));
+        let slot = Rc::clone(&leaked);
+        let mut future = TestTime::new(runtime.handle().clone()).drive(std::future::poll_fn(
+            move |cx: &mut Context<'_>| {
+                slot.set(Some(cx.waker().clone()));
+                cx.waker().wake_by_ref();
+                Poll::<()>::Pending
+            },
+        ));
+        let gate = Arc::clone(&future.gate);
+        assert!(poll(&mut future).is_pending());
+        assert!(gate.holding());
+        drop(future);
+        assert!(!gate.holding(), "closing releases the hold");
+        leaked.take().expect("the future kept its waker").wake();
+        assert!(!gate.holding(), "a wake-up after close holds nothing");
     }
 }

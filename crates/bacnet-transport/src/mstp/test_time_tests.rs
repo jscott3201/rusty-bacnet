@@ -118,6 +118,41 @@ async fn a_busy_dedicated_node_holds_the_test_clock() {
     transport.stop().await.unwrap();
 }
 
+/// A port whose drop blocks the thread dropping it: the node's, at stop.
+struct SlowToDrop(LoopbackSerial);
+
+impl Drop for SlowToDrop {
+    fn drop(&mut self) {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+impl SerialPort for SlowToDrop {
+    async fn write(&self, data: &[u8]) -> Result<(), bacnet_types::error::Error> {
+        self.0.write(data).await
+    }
+
+    async fn read(&self, buf: &mut [u8]) -> Result<usize, bacnet_types::error::Error> {
+        self.0.read(buf).await
+    }
+}
+
+/// `stop` waits on the dedicated thread, which the gate does not see: it
+/// holds the test's clock itself, so a slow end there costs no test time.
+#[tokio::test(start_paused = true)]
+async fn a_slow_dedicated_stop_holds_the_test_clock() {
+    let (serial, _peer) = LoopbackSerial::pair();
+    let mut transport =
+        MstpTransport::new(SlowToDrop(serial), config(3, 7)).with_execution_mode(on_test_time());
+    let _rx = transport.start().await.unwrap();
+    let before = Instant::now();
+    tokio::time::timeout(Duration::from_secs(5), transport.stop())
+        .await
+        .expect("the stop's wait held the test's clock")
+        .unwrap();
+    assert!(Instant::now() - before < Duration::from_secs(5));
+}
+
 /// Stopped, the node holds the test's runtime no longer: paused time
 /// advances again, and the runtime shuts down when the test ends.
 #[tokio::test(start_paused = true)]

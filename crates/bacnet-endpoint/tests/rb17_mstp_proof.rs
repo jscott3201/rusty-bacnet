@@ -62,6 +62,13 @@ async fn one_owner_impl(mode: MstpExecutionMode, frames: Frames) {
     assert_eq!(transport.egress_apdu_limit(), frames.max_apdu());
     assert_eq!(transport.local_receive_apdu_capacity(), frames.max_apdu());
     let _rx = transport.start().await.expect("transport must start");
+    // The dedicated variants on test time still run on a thread of their own.
+    assert_eq!(
+        transport
+            .execution_status()
+            .map(|status| status.dedicated_thread),
+        Some(mode != MstpExecutionMode::Tokio)
+    );
     assert!(
         transport.start().await.is_err(),
         "start-once: no second MAC loop"

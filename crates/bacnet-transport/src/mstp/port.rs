@@ -274,6 +274,11 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
 
     async fn stop(&mut self) -> Result<(), Error> {
         if let Some(task) = self.task.take() {
+            // The node ends on its own thread; test time waits for it.
+            let _held = self
+                .dedicated_runtime
+                .as_ref()
+                .map(DedicatedRuntime::hold_time);
             task.abort();
             let _ = task.await;
         }

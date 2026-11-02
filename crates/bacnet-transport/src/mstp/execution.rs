@@ -192,6 +192,18 @@ impl MstpThreadConfig {
         Ok(())
     }
 
+    /// Hold the test's clock, if `with_test_time` named one, while
+    /// the guard lives.
+    pub(super) fn hold_time(&self) -> TimeHold {
+        TimeHold {
+            #[cfg(any(test, feature = "test-support"))]
+            _hold: self
+                .test_time
+                .as_ref()
+                .map(super::test_time::TestTime::hold),
+        }
+    }
+
     fn is_default(&self) -> bool {
         self.realtime_priority.is_none() && self.cpu_affinity.is_empty()
     }
@@ -341,6 +353,13 @@ fn mismatch(message: String) -> Error {
     Error::Transport(std::io::Error::other(format!("MS/TP thread: {message}")))
 }
 
+/// Holds the test's clock while the transport waits on the dedicated thread
+/// (`MstpThreadConfig::with_test_time`); without test time, nothing.
+pub(super) struct TimeHold {
+    #[cfg(any(test, feature = "test-support"))]
+    _hold: Option<super::test_time::Hold>,
+}
+
 /// Owns the isolated reactor. Dropping the shutdown sender also handles cancelled
 /// startup and abort; only `stop` waits for runtime and blocking-I/O completion.
 pub(super) struct DedicatedRuntime {
@@ -360,6 +379,7 @@ impl DedicatedRuntime {
     ) -> Result<(Self, MstpExecutionStatus), Error> {
         #[cfg(any(test, feature = "test-support"))]
         let test_time = config.test_time.clone();
+        let _held = config.hold_time();
         let (started_tx, started_rx) = oneshot::channel();
         let (shutdown, shutdown_rx) = oneshot::channel();
         let (finished_tx, finished) = oneshot::channel();
@@ -422,7 +442,19 @@ impl DedicatedRuntime {
         self.handle.spawn(future)
     }
 
+    /// Hold the test's clock, as [`MstpThreadConfig::hold_time`] does.
+    pub(super) fn hold_time(&self) -> TimeHold {
+        TimeHold {
+            #[cfg(any(test, feature = "test-support"))]
+            _hold: self
+                .test_time
+                .as_ref()
+                .map(super::test_time::TestTime::hold),
+        }
+    }
+
     pub(super) async fn stop(self) {
+        let _held = self.hold_time();
         drop(self.shutdown);
         let _ = self.finished.await;
     }
