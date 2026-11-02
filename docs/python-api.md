@@ -3791,6 +3791,11 @@ server.add_staging(
 )
 ```
 
+Program_State is read-only on the network, and `write_property_local` refuses
+it with WRITE_ACCESS_DENIED too. A running server's application reports it with
+`await server.set_program_state_local(program_id, PropertyValue.enumerated(2))`
+(RUNNING), an Enumerated BACnetProgramState from 0 to 5 (#2258).
+
 `add_command`'s keyword-only `action` sets the Command's Action array: one list
 per element, each a list of `ActionCommand` mappings with
 `object_identifier`, `property_identifier` and `property_value`, and optionally

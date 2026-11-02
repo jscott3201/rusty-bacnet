@@ -49,6 +49,10 @@ pub enum LocalInputValue {
     /// counted by the application (#2259). They advance Present_Value
     /// through Prescale and count toward Pulse_Rate.
     Pulses(u64),
+    /// The Program_State a Program object's program reports, a
+    /// BACnetProgramState. The property is read-only on the network
+    /// (Clause 12.22.4), so this is the application's only route (#2258).
+    ProgramState(PropertyValue),
 }
 
 impl LocalInputValue {
@@ -88,7 +92,8 @@ impl LocalInputValue {
 /// - a sample: the Averaging object;
 /// - an access-control record: the Access Point, Credential Data Input and
 ///   Access Door, each its own kind of record;
-/// - input pulses: the Accumulator.
+/// - input pulses: the Accumulator;
+/// - Program_State: the Program.
 pub trait LocalInput {
     /// Apply `input`, or leave the object unchanged and return an error.
     ///

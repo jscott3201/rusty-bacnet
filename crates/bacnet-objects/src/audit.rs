@@ -570,10 +570,11 @@ impl BACnetObject for AuditLogObject {
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
-        _array_index: Option<u32>,
+        array_index: Option<u32>,
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         if property == PropertyIdentifier::LOG_ENABLE {
             if let PropertyValue::Boolean(v) = value {
                 if v == self.log_enable {
@@ -597,20 +598,14 @@ impl BACnetObject for AuditLogObject {
                 ErrorCode::WRITE_ACCESS_DENIED,
             ));
         }
-        if property == PropertyIdentifier::DESCRIPTION {
-            if let PropertyValue::CharacterString(s) = value {
-                self.description = s;
-                return Ok(());
-            }
-            return Err(Error::protocol(
-                ErrorClass::PROPERTY,
-                ErrorCode::INVALID_DATA_TYPE,
-            ));
+        if let Some(result) =
+            crate::common::write_description(&mut self.description, property, &value)
+        {
+            return result;
         }
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
-            _array_index,
         ))
     }
 

@@ -25,6 +25,8 @@ pub mod responder;
 pub mod write;
 
 #[cfg(test)]
+mod read_only_rows_tests;
+#[cfg(test)]
 mod served_datatypes_tests;
 
 pub use responder::SERVICES;

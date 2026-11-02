@@ -221,6 +221,7 @@ impl BACnetObject for NotificationClass {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         if property == PropertyIdentifier::NOTIFICATION_CLASS {
             if let PropertyValue::Unsigned(v) = value {
                 self.notification_class = common::u64_to_u32(v)?;
@@ -246,7 +247,6 @@ impl BACnetObject for NotificationClass {
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
-            array_index,
         ))
     }
 

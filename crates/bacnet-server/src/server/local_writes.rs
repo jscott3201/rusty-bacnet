@@ -53,6 +53,8 @@ pub(super) enum LocalWrite<'s> {
     ApplicationAveragingMiss,
     /// The application supplying a Life Safety object's `Tracking_Value`.
     ApplicationTrackingValue,
+    /// The application reporting a Program object's `Program_State`.
+    ApplicationProgramState,
     /// The application reporting an access-control object's input: an
     /// access event, a credential read or a door's hardware state (#1132).
     ApplicationAccessInput(&'s bacnet_objects::access_control::AccessControlInput),
@@ -413,6 +415,36 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             None,
         )
         .await
+    }
+
+    /// Report a Program object's `Program_State`, the state of the process
+    /// the application runs, while the server holds the object.
+    ///
+    /// Program_State is read-only on the network (Clause 12.22.4), so
+    /// [`write_local`](Self::write_local) refuses it too, with PROPERTY /
+    /// WRITE_ACCESS_DENIED; this is the application's route. A client asks
+    /// for a change through Program_Change, which the application reads and
+    /// carries out. The value is an Enumerated BACnetProgramState from IDLE
+    /// (0) to UNLOADING (5): a larger number fails with PROPERTY /
+    /// VALUE_OUT_OF_RANGE and another datatype with PROPERTY /
+    /// INVALID_DATA_TYPE. An unknown object fails with OBJECT /
+    /// UNKNOWN_OBJECT and any object other than a Program with OBJECT /
+    /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, as with
+    /// [`BACnetServer::set_present_value_local`]. It is taken in or out of
+    /// service (#2258). The Python binding exposes this as
+    /// `BACnetServer.set_program_state_local`.
+    ///
+    /// Like [`write_local`](Self::write_local), it must be awaited inside a
+    /// Tokio runtime, failing before anything is written outside one, and a
+    /// caller dropped once the write has committed skips none of the work
+    /// the write owes (#1367).
+    pub async fn set_program_state_local(
+        &self,
+        oid: &ObjectIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        self.write_local_as(oid, LocalWrite::ApplicationProgramState, value, None)
+            .await
     }
 
     /// Commit the write, then hand what it owes to a task of its own in the
@@ -812,6 +844,7 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                 | LocalWrite::ApplicationAveragingSample
                 | LocalWrite::ApplicationAveragingMiss
                 | LocalWrite::ApplicationTrackingValue
+                | LocalWrite::ApplicationProgramState
                 | LocalWrite::ApplicationAccessInput(_)
                 | LocalWrite::ApplicationPulses(_) => None,
             };
@@ -848,6 +881,7 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                 | LocalWrite::ApplicationAveragingSample
                 | LocalWrite::ApplicationAveragingMiss
                 | LocalWrite::ApplicationTrackingValue
+                | LocalWrite::ApplicationProgramState
                 | LocalWrite::ApplicationAccessInput(_)
                 | LocalWrite::ApplicationPulses(_)
                 | LocalWrite::WriteGroup { .. } => None,
@@ -894,6 +928,9 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                     }
                     LocalWrite::ApplicationTrackingValue => {
                         apply_local_input(object, LocalInputValue::TrackingValue(value))
+                    }
+                    LocalWrite::ApplicationProgramState => {
+                        apply_local_input(object, LocalInputValue::ProgramState(value))
                     }
                     LocalWrite::ApplicationAccessInput(input) => {
                         apply_local_input(object, LocalInputValue::AccessControl(input.clone()))
@@ -984,7 +1021,7 @@ fn apply_local_input(object: &mut dyn BACnetObject, input: LocalInputValue) -> R
 /// The checks made under the write's guard before the audit hooks or the
 /// object see the value, in WriteProperty's order: the object exists, and
 /// for a property write, the array index fits the property (WriteProperty's
-/// own [`check_write_array_index`](bacnet_device_core::write::check_write_array_index))
+/// own [`check_write_array_index`](bacnet_objects::property_metadata::check_write_array_index))
 /// and a new Object_Name is free. The name check calls
 /// [`ObjectDatabase::check_name_available`] directly, which is what
 /// WriteProperty's `check_and_prepare_name_write` runs for a CharacterString.
@@ -1008,7 +1045,7 @@ fn precheck(
     else {
         return Ok(());
     };
-    bacnet_device_core::write::check_write_array_index(object, property, array_index)?;
+    bacnet_objects::property_metadata::check_write_array_index(object, property, array_index)?;
     match value {
         PropertyValue::CharacterString(new_name) if property == PropertyIdentifier::OBJECT_NAME => {
             db.check_name_available(oid, new_name)

@@ -352,7 +352,7 @@ fn write_targets(
         // property that isn't an array fails the target without the object
         // seeing the value, a NULL included. Its refusals, like the object's
         // UNKNOWN_PROPERTY or INVALID_ARRAY_INDEX, fault the Schedule (#1433).
-        let result = bacnet_device_core::write::check_write_array_index(
+        let result = bacnet_objects::property_metadata::check_write_array_index(
             &*target_obj,
             property,
             reference.property_array_index,

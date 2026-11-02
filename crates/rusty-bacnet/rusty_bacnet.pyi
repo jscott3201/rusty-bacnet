@@ -6269,6 +6269,23 @@ class BACnetServer:
         """
         ...
 
+    def set_program_state_local(
+        self,
+        object_id: ObjectIdentifier,
+        value: PropertyValue,
+    ) -> Awaitable[None]:
+        """Report a Program's Program_State, the state of the process the application runs.
+
+        Program_State is read-only on the network, and `write_property_local`
+        refuses it with WRITE_ACCESS_DENIED too, so this is the application's
+        route; a client asks for a change through Program_Change. The value
+        is an Enumerated BACnetProgramState from 0 (IDLE) to 5 (UNLOADING): a
+        larger number raises VALUE_OUT_OF_RANGE and another datatype
+        INVALID_DATA_TYPE. An unknown object raises UNKNOWN_OBJECT and any
+        object other than a Program OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
+        """
+        ...
+
     def report_device_reset_local(self) -> Awaitable[None]:
         """Record a reset the application makes for its own reasons: a
         DEVICE_RESET Audit record from this device, with no invoke ID

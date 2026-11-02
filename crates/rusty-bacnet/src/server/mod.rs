@@ -240,6 +240,7 @@ mod server_methods {
     mod network_port;
     mod notification_forwarder;
     mod policy_dict;
+    mod program_methods;
     mod registration;
     mod request_admission;
     mod sc_npdu;

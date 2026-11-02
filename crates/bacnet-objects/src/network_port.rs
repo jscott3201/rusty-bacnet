@@ -221,6 +221,7 @@ impl BACnetObject for NetworkPortObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         if property == PropertyIdentifier::OUT_OF_SERVICE && self.is_bound() {
             return Err(common::write_access_denied_error());
         }

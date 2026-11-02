@@ -232,10 +232,11 @@ impl BACnetObject for AccumulatorObject {
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
-        _array_index: Option<u32>,
+        array_index: Option<u32>,
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         // Present value is read-only from the network
         if property == PropertyIdentifier::PRESENT_VALUE {
             return Err(common::write_access_denied_error());
@@ -281,7 +282,6 @@ impl BACnetObject for AccumulatorObject {
             _ => Err(crate::common::unhandled_write_error(
                 self.property_metadata().as_ref(),
                 property,
-                _array_index,
             )),
         }
     }
