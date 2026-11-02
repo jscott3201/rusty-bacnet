@@ -11,7 +11,10 @@ use bacnet_types::primitives::{Date, Time};
 
 const CREATE: ConfirmedServiceChoice = ConfirmedServiceChoice::CREATE_OBJECT;
 
-fn request(specifier: ObjectSpecifier, values: Vec<(PropertyIdentifier, Vec<u8>)>) -> Bytes {
+pub(super) fn request(
+    specifier: ObjectSpecifier,
+    values: Vec<(PropertyIdentifier, Vec<u8>)>,
+) -> Bytes {
     let mut bytes = BytesMut::new();
     CreateObjectRequest {
         object_specifier: specifier,
@@ -30,7 +33,7 @@ fn request(specifier: ObjectSpecifier, values: Vec<(PropertyIdentifier, Vec<u8>)
 }
 
 /// The response APDU exactly as the server encoded it.
-async fn send(fixture: &Fixture, request: Bytes) -> Vec<u8> {
+pub(super) async fn send(fixture: &Fixture, request: Bytes) -> Vec<u8> {
     let npdu = fixture
         .dispatch(CREATE, request, 5)
         .await
@@ -42,7 +45,7 @@ async fn send(fixture: &Fixture, request: Bytes) -> Vec<u8> {
 }
 
 /// The identifier a CreateObject ComplexACK for invoke ID 5 carries.
-fn created(response: &[u8]) -> ObjectIdentifier {
+pub(super) fn created(response: &[u8]) -> ObjectIdentifier {
     assert_eq!(&response[..3], &[0x30, 5, CREATE.to_raw()], "{response:?}");
     CreateObjectAck::decode(&response[3..])
         .unwrap()
@@ -310,7 +313,9 @@ async fn a_freshly_created_object_of_each_type_reads_whole_with_rpm_all() {
         for property in listed
             .iter()
             .map(|row| &row.property_identifier)
-            .filter(|&&p| p != PropertyIdentifier::PROPERTY_LIST)
+            .filter(|&&p| {
+                p != PropertyIdentifier::PROPERTY_LIST && p != PropertyIdentifier::LOG_BUFFER
+            })
         {
             let element = result
                 .list_of_results
@@ -319,7 +324,11 @@ async fn a_freshly_created_object_of_each_type_reads_whole_with_rpm_all() {
                 .unwrap_or_else(|| panic!("{kind:?}: {property:?} missing"));
             assert!(element.property_value.is_some(), "{kind:?}: {element:?}");
         }
+        // Except a log's buffer, which only ReadRange reads.
         for element in &result.list_of_results {
+            if element.property_identifier == PropertyIdentifier::LOG_BUFFER {
+                continue;
+            }
             assert_eq!(element.error, None, "{kind:?}: {element:?}");
         }
     }

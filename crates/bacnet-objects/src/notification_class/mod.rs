@@ -41,6 +41,7 @@ use crate::durable::DurableWrites;
 use crate::event::EventTransition;
 use crate::traits::BACnetObject;
 
+mod creation_only;
 mod enrollment_summary;
 mod metadata;
 mod persistence;
@@ -251,6 +252,18 @@ impl BACnetObject for NotificationClass {
 
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
         metadata::for_object(self)
+    }
+
+    fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
+        creation_only::CREATION_ONLY
+    }
+
+    fn initialize_property(
+        &mut self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        creation_only::initialize(self, property, value)
     }
 
     fn durable_writes(&mut self) -> Option<&mut dyn DurableWrites> {

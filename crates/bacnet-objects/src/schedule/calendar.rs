@@ -176,6 +176,23 @@ impl BACnetObject for CalendarObject {
         calendar_metadata::for_object(self)
     }
 
+    /// Object_Name is read-only over the network, but a client names the
+    /// Calendar it creates (#2208).
+    fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
+        &[PropertyIdentifier::OBJECT_NAME]
+    }
+
+    fn initialize_property(
+        &mut self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        if property != PropertyIdentifier::OBJECT_NAME {
+            return Err(common::write_access_denied_error());
+        }
+        common::initialize_object_name(&mut self.name, &value)
+    }
+
     fn calendar_state(&self) -> Option<&dyn crate::traits::CalendarState> {
         Some(self)
     }

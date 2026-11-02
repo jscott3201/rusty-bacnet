@@ -274,6 +274,21 @@ pub(crate) fn write_description(
     }
 }
 
+/// Set `name` from a whole Object_Name CreateObject initial value, on an
+/// object whose name WriteProperty can't change (#2208): checked as
+/// [`write_object_name`] checks a write.
+pub(crate) fn initialize_object_name(
+    name: &mut String,
+    value: &bacnet_types::primitives::PropertyValue,
+) -> Result<(), bacnet_types::error::Error> {
+    write_object_name(
+        name,
+        bacnet_types::enums::PropertyIdentifier::OBJECT_NAME,
+        value,
+    )
+    .expect("the Object_Name arm answers Object_Name")
+}
+
 /// Write the OBJECT_NAME property.
 ///
 /// Validates type and non-empty. Uniqueness must be checked by the caller

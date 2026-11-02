@@ -43,7 +43,11 @@ pub const fn write_policy(object_type: T, property: P) -> WritePolicy {
             T::SCHEDULE | T::CHANNEL,
             P::LIST_OF_OBJECT_PROPERTY_REFERENCES
         ) | (T::STAGING, P::TARGET_REFERENCES)
-            | (T::AVERAGING, P::OBJECT_PROPERTY_REFERENCE)
+            | (T::STRUCTURED_VIEW, P::SUBORDINATE_LIST)
+            | (
+                T::AVERAGING | T::EVENT_ENROLLMENT,
+                P::OBJECT_PROPERTY_REFERENCE
+            )
             | (
                 T::TREND_LOG | T::TREND_LOG_MULTIPLE,
                 P::LOG_DEVICE_OBJECT_PROPERTY

@@ -42,10 +42,10 @@ use crate::property_metadata::{
 // serve none of them (#1064 removed the rows the 0.1.0 import carried).
 // Presence is None throughout: the implementation models no commandable,
 // intrinsic-reporting, or paired-text gating on this family.
-// The trio is not createable at runtime (the `creation` table has no
-// constructor for it) and remains deleteable (delete denies
-// only Device and NetworkPort, so the is_deleteable=true default holds);
-// neither needs an override. Array gating, writability, and COV also keep
+// Of the trio only StructuredView is createable at runtime (#2208), taking
+// its ReadOnly node and subordinate rows as CreateObject initial values; all
+// three remain deleteable (delete denies only Device and NetworkPort, so the
+// is_deleteable=true default holds). Array gating, writability, and COV also keep
 // their defaults: Present_Value admits an index only on GlobalGroup
 // (BACnetARRAY per Table 12-57) and rejects it on Group (BACnetLIST per
 // Table 12-17); List_Of_Group_Members stays index-rejecting while
