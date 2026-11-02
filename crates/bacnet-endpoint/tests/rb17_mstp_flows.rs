@@ -3,8 +3,9 @@
 //! Split from `rb17_mstp_proof.rs` (file-size gate). Same harness
 //! (`support/rb17_harness.rs`: session-under-test + raw-frame peer over
 //! [`LoopbackSerial::pair`](bacnet_transport::mstp::LoopbackSerial), both
-//! execution modes, standard and extended frames, deterministic, no
-//! sleeps), proving: dropped reply sender releases without late bytes;
+//! execution modes, standard and extended frames, no sleeps; Tokio
+//! variants on paused time, peer requests through
+//! `Harness::peer_deliver`, #2269), proving: dropped reply sender releases without late bytes;
 //! token/PFM traffic during application work preserves postponed
 //! ownership; queue/admission bounds release (MAC `WouldBlock`,
 //! egress-full, layer full-drop); cancellation and stop with an outstanding
@@ -46,7 +47,7 @@ async fn dropped_sender_impl(mode: MstpExecutionMode, frames: Frames) {
     // released without bytes, yet the MAC still answers ReplyPostponed.
     let mut h = Harness::new(mode, SessionRole::ClientOnly, frames).await;
     assert!(h.session.server().is_none());
-    h.peer_send(&data_expecting(1, 44)).await;
+    h.peer_deliver(&data_expecting(1, 44)).await;
     let postponed = h
         .wait_for("ReplyPostponed", |f| {
             f.frame_type == FrameType::REPLY_POSTPONED && f.destination == PEER_MAC
@@ -81,7 +82,7 @@ async fn dropped_sender_impl(mode: MstpExecutionMode, frames: Frames) {
     h.shutdown().await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn mstp_dropped_sender_releases_tokio() {
     dropped_sender_impl(MstpExecutionMode::Tokio, Frames::Standard).await;
 }
@@ -91,7 +92,7 @@ async fn mstp_dropped_sender_releases_dedicated() {
     dropped_sender_impl(MstpExecutionMode::dedicated_thread(), Frames::Standard).await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn mstp_dropped_sender_releases_extended_tokio() {
     dropped_sender_impl(MstpExecutionMode::Tokio, Frames::Extended).await;
 }
@@ -108,7 +109,7 @@ async fn token_during_work_impl(mode: MstpExecutionMode, frames: Frames) {
         .expect("server role")
         .suspend_next_reply()
         .expect("arm suspension");
-    h.peer_send(&data_expecting(1, 55)).await;
+    h.peer_deliver(&data_expecting(1, 55)).await;
     // Token + PFM arrive while the application works (order vs dispatch is
     // deliberately uncontrolled). Neither may break the pending reply
     // ownership: ReplyPostponed still goes to the requester. The core keeps
@@ -133,7 +134,8 @@ async fn token_during_work_impl(mode: MstpExecutionMode, frames: Frames) {
     }
     assert!(
         postponed,
-        "MAC must release ReplyPostponed during application work"
+        "MAC must release ReplyPostponed during application work; {}",
+        h.link_report()
     );
     // Ownership preserved: the token opportunity delivers the postponed
     // response to the original requester (possibly already observed above).
@@ -152,7 +154,7 @@ async fn token_during_work_impl(mode: MstpExecutionMode, frames: Frames) {
     h.shutdown().await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn mstp_token_pfm_during_work_tokio() {
     token_during_work_impl(MstpExecutionMode::Tokio, Frames::Standard).await;
 }
@@ -162,7 +164,7 @@ async fn mstp_token_pfm_during_work_dedicated() {
     token_during_work_impl(MstpExecutionMode::dedicated_thread(), Frames::Standard).await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn mstp_token_pfm_during_work_extended_tokio() {
     token_during_work_impl(MstpExecutionMode::Tokio, Frames::Extended).await;
 }
@@ -415,7 +417,7 @@ async fn cancel_impl(mode: MstpExecutionMode, frames: Frames) {
     h.shutdown().await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn mstp_cancel_releases_lease_tokio() {
     cancel_impl(MstpExecutionMode::Tokio, Frames::Standard).await;
 }
@@ -425,7 +427,7 @@ async fn mstp_cancel_releases_lease_dedicated() {
     cancel_impl(MstpExecutionMode::dedicated_thread(), Frames::Standard).await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn mstp_cancel_releases_lease_extended_tokio() {
     cancel_impl(MstpExecutionMode::Tokio, Frames::Extended).await;
 }
@@ -474,7 +476,7 @@ async fn stop_outstanding_impl(mode: MstpExecutionMode, frames: Frames) {
     h.drain.abort();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn mstp_stop_with_outstanding_tokio() {
     stop_outstanding_impl(MstpExecutionMode::Tokio, Frames::Standard).await;
 }
@@ -484,7 +486,7 @@ async fn mstp_stop_with_outstanding_dedicated() {
     stop_outstanding_impl(MstpExecutionMode::dedicated_thread(), Frames::Standard).await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn mstp_stop_with_outstanding_extended_tokio() {
     stop_outstanding_impl(MstpExecutionMode::Tokio, Frames::Extended).await;
 }
@@ -557,7 +559,7 @@ async fn nonrouting_impl(mode: MstpExecutionMode, frames: Frames) {
         },
     )
     .unwrap();
-    h.peer_send(&MstpFrame {
+    h.peer_deliver(&MstpFrame {
         frame_type: FrameType::BACNET_DATA_EXPECTING_REPLY,
         destination: SESSION_MAC,
         source: PEER_MAC,
@@ -570,7 +572,7 @@ async fn nonrouting_impl(mode: MstpExecutionMode, frames: Frames) {
     .await;
     // A valid local request on the same link is still served; the routed
     // invoke ID must never draw an application reply.
-    h.peer_send(&data_expecting(1, 66)).await;
+    h.peer_deliver(&data_expecting(1, 66)).await;
     let mut routed_answered = false;
     let reply = h
         .wait_for("local ComplexAck", |f| {
@@ -593,7 +595,7 @@ async fn nonrouting_impl(mode: MstpExecutionMode, frames: Frames) {
     h.shutdown().await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn mstp_nonrouting_standard_only_tokio() {
     nonrouting_impl(MstpExecutionMode::Tokio, Frames::Standard).await;
 }
@@ -603,7 +605,7 @@ async fn mstp_nonrouting_standard_only_dedicated() {
     nonrouting_impl(MstpExecutionMode::dedicated_thread(), Frames::Standard).await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn mstp_nonrouting_extended_tokio() {
     nonrouting_impl(MstpExecutionMode::Tokio, Frames::Extended).await;
 }
