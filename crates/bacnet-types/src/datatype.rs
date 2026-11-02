@@ -196,8 +196,8 @@ impl Datatype {
             self,
             Self::Null
                 | Self::Any
-                | Self::PriorityValue
                 | Self::ChannelValue
+                | Self::PriorityValue
                 | Self::ClientCov
                 | Self::ProcessIdSelection
                 | Self::ObjectSelector
@@ -221,18 +221,6 @@ pub enum ArraySize {
     Variable,
 }
 
-/// How AddListElement and RemoveListElement read the elements of a
-/// BACnetLIST (Clauses 15.1 and 15.2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum ElementCodec {
-    /// Each element is one application-tagged value.
-    Application,
-    /// Each element is an encoding of the list's [`Datatype`], such as a
-    /// BACnetDestination in a Recipient_List.
-    Datatype,
-}
-
 /// Whether a property holds one value, a BACnetARRAY or a BACnetLIST.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -241,12 +229,12 @@ pub enum ValueShape {
     Single,
     /// A BACnetARRAY: index 0 is its size, and each index from 1 an element.
     Array(ArraySize),
-    /// A BACnetLIST, which takes no array index (Clause 12.1.5.2) and whose
-    /// elements the list services edit with this codec.
-    List(ElementCodec),
+    /// A BACnetLIST, which takes no array index (Clause 12.1.5.2).
+    List,
 }
 
-/// A property's datatype and shape.
+/// A property's datatype and shape: what its value is, whatever a server
+/// does when it is written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct ValueType {
@@ -254,11 +242,6 @@ pub struct ValueType {
     pub datatype: Datatype,
     /// One value, an array or a list.
     pub shape: ValueShape,
-    /// The value holds references that the object keeps inside its own
-    /// device, so a server writes each one naming this device in its local
-    /// form, without the Device identifier: a Schedule's
-    /// List_Of_Object_Property_References, for example (#1122).
-    pub device_local: bool,
 }
 
 impl ValueType {
@@ -277,26 +260,13 @@ impl ValueType {
         Self::new(datatype, ValueShape::Array(ArraySize::Fixed(size)))
     }
 
-    /// A BACnetLIST of `datatype`, its elements edited with `codec`.
-    pub const fn list(datatype: Datatype, codec: ElementCodec) -> Self {
-        Self::new(datatype, ValueShape::List(codec))
+    /// A BACnetLIST of `datatype`.
+    pub const fn list(datatype: Datatype) -> Self {
+        Self::new(datatype, ValueShape::List)
     }
 
     const fn new(datatype: Datatype, shape: ValueShape) -> Self {
-        Self {
-            datatype,
-            shape,
-            device_local: false,
-        }
-    }
-
-    /// The same value type, holding references kept inside the device
-    /// ([`Self::device_local`]).
-    pub const fn local_to_device(self) -> Self {
-        Self {
-            device_local: true,
-            ..self
-        }
+        Self { datatype, shape }
     }
 
     /// Whether the property is a BACnetARRAY.
@@ -306,15 +276,7 @@ impl ValueType {
 
     /// Whether the property is a BACnetLIST.
     pub const fn is_list(self) -> bool {
-        matches!(self.shape, ValueShape::List(_))
-    }
-
-    /// The codec the list services edit the elements with, for a list.
-    pub const fn element_codec(self) -> Option<ElementCodec> {
-        match self.shape {
-            ValueShape::List(codec) => Some(codec),
-            _ => None,
-        }
+        matches!(self.shape, ValueShape::List)
     }
 
     /// Whether an application NULL is a value of the property at

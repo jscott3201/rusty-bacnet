@@ -122,7 +122,10 @@ fn commandable(object: &dyn BACnetObject, property: PropertyIdentifier) -> bool 
 /// A property this names keeps its NULL away from the rule, so the
 /// object's own answer stands. Naming too many is the safe direction;
 /// naming too few would turn a refusal of a NULL the datatype allows into a
-/// success that discards it.
+/// success that discards it. A property with no datatype at all (a vendor
+/// property whose row states none) counts as having no NULL, as it did
+/// before the rows carried datatypes, when the rule named only standard
+/// properties.
 fn null_in_datatype(
     object: &dyn BACnetObject,
     property: PropertyIdentifier,
@@ -157,7 +160,12 @@ mod tests {
     fn standard_value_types_admit_null_where_the_old_match_did() {
         let mut differences = Vec::new();
         for object_type in (0..=1023).map(ObjectType::from_raw) {
-            for property in (0..=1023).map(PropertyIdentifier::from_raw) {
+            for property in (0..=1023).map(PropertyIdentifier::from_raw).chain(
+                PropertyIdentifier::ALL_NAMED
+                    .iter()
+                    .map(|&(_, property)| property)
+                    .filter(|property| property.to_raw() > 1023),
+            ) {
                 for index in [None, Some(0), Some(1), Some(16)] {
                     if standard_null(object_type, property, index)
                         != old_null_in_datatype(object_type, property, index)

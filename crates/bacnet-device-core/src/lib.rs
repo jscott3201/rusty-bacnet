@@ -24,4 +24,7 @@ pub mod reply;
 pub mod responder;
 pub mod write;
 
+#[cfg(test)]
+mod served_datatypes_tests;
+
 pub use responder::SERVICES;

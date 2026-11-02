@@ -3970,8 +3970,10 @@ datatype and shape (#2177): `effective_value_type(object_type)` is the row's
 own, set with `with_value_type`, or else the standard one,
 `bacnet_types::datatype::standard_value_type`. `is_array_property` and
 `is_list_property` default to it, and the server reads it for the list
-services, ReadRange, NULL writes and references kept inside the device. A row
-for a vendor property states its own. Every built-in object supplies rows. A
+services, ReadRange, NULL writes and device references. Which lists take
+typed elements and which references stay inside the device is the server's
+policy, by object type (`bacnet_device_core::write::policy`). A row for a
+vendor property states its own. Every built-in object supplies rows. A
 custom object's smallest honest set is the universal rows plus one for each
 property it serves:
 

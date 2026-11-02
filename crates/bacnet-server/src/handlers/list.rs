@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_device_core::write::policy::write_policy;
 use bacnet_encoding::constructed::{
     decode_calendar_entry, decode_calendar_entry_list, decode_destination, decode_destination_list,
     decode_device_object_property_reference, decode_event_notification_subscription,
@@ -7,7 +8,7 @@ use bacnet_encoding::constructed::{
     encode_recipient,
 };
 use bacnet_encoding::primitives::decode_application_value;
-use bacnet_objects::property_metadata::{Datatype, ElementCodec, ValueType};
+use bacnet_objects::property_metadata::{Datatype, ValueType};
 use bacnet_services::list_manipulation::ListElementRequest;
 use bacnet_types::constructed::{
     BACnetCalendarEntry, BACnetDestination, BACnetDeviceObjectPropertyReference,
@@ -87,24 +88,32 @@ enum ListCodec {
 }
 
 impl ListCodec {
-    /// The codec for a list of this value type: the one for its datatype
-    /// when its row says the list services edit it by datatype
-    /// ([`bacnet_objects::property_metadata::ElementCodec::Datatype`]), and
-    /// application values otherwise. Only a BACnetLIST of BACnetDestination,
-    /// of BACnetCalendarEntry, of BACnetDeviceObjectPropertyReference or of
-    /// BACnetEventNotificationSubscription has a codec of its own here.
-    fn for_value_type(value_type: Option<ValueType>) -> Self {
-        let Some(value_type) = value_type else {
-            return Self::Values;
-        };
-        if value_type.element_codec() != Some(ElementCodec::Datatype) {
-            return Self::Values;
-        }
-        match value_type.datatype {
-            Datatype::Destination => Self::Destinations,
-            Datatype::CalendarEntry => Self::CalendarEntries,
-            Datatype::DeviceObjectPropertyReference => Self::References,
-            Datatype::EventNotificationSubscription => Self::Subscriptions,
+    /// The codec for the request's target list: the one for the list's
+    /// datatype ([`ObjectDatabase::value_type`]) where the server's write
+    /// policy reads its elements as that datatype
+    /// ([`typed_list_elements`](bacnet_device_core::write::policy::WritePolicy::typed_list_elements)),
+    /// and application values
+    /// otherwise. Known even when the object is missing.
+    fn for_request(db: &ObjectDatabase, request: &ListElementRequest) -> Self {
+        let oid = request.object_identifier;
+        let property = request.property_identifier;
+        Self::for_target(
+            write_policy(oid.object_type(), property).typed_list_elements,
+            db.value_type(&oid, property),
+        )
+    }
+
+    /// [`Self::for_request`]'s choice. Only a BACnetLIST of
+    /// BACnetDestination, of BACnetCalendarEntry, of
+    /// BACnetDeviceObjectPropertyReference or of
+    /// BACnetEventNotificationSubscription has a typed codec here; a test
+    /// holds every typed policy entry to one of them.
+    fn for_target(typed_elements: bool, value_type: Option<ValueType>) -> Self {
+        match value_type.filter(|_| typed_elements).map(|v| v.datatype) {
+            Some(Datatype::Destination) => Self::Destinations,
+            Some(Datatype::CalendarEntry) => Self::CalendarEntries,
+            Some(Datatype::DeviceObjectPropertyReference) => Self::References,
+            Some(Datatype::EventNotificationSubscription) => Self::Subscriptions,
             _ => Self::Values,
         }
     }
@@ -641,9 +650,7 @@ pub(crate) fn edited_list_value(
     remove: bool,
 ) -> Option<PropertyValue> {
     let request = ListElementRequest::decode(service_data).ok()?;
-    let codec = ListCodec::for_value_type(
-        db.value_type(&request.object_identifier, request.property_identifier),
-    );
+    let codec = ListCodec::for_request(db, &request);
     let current = list_target(db, &request, codec).ok()?;
     let mut edits = codec.decode(&request.list_of_elements).ok()?;
     localize_edits(db, &mut edits);
@@ -664,9 +671,7 @@ pub(crate) fn handle_list_element_observed(
     mut before: impl FnMut(&ObjectDatabase, &ListElementRequest, Option<&PropertyValue>),
 ) -> Result<ObjectIdentifier, Error> {
     let request = ListElementRequest::decode(service_data).map_err(Error::into_request_reject)?;
-    let codec = ListCodec::for_value_type(
-        db.value_type(&request.object_identifier, request.property_identifier),
-    );
+    let codec = ListCodec::for_request(db, &request);
     let target = list_target(db, &request, codec);
     // Every request decodes its elements once, with the codec its datatype
     // implies; a refused request reaches the observer only if they decode.

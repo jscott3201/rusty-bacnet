@@ -2,15 +2,13 @@
 //!
 //! Two tables. [`by_type`] holds the properties whose datatype or shape
 //! depends on the object type: Present_Value, Relinquish_Default, the
-//! limits, the type-dependent arrays and lists, and the few rows that differ
-//! in how the server treats them (a list the list services edit by its
-//! datatype, references kept inside the device). [`by_identifier`] holds
+//! limits and the type-dependent arrays and lists. [`by_identifier`] holds
 //! every other property, whose datatype the Clause 12 tables give the same
 //! on every object type that has it. A type-dependent identifier's entry
 //! there is the shape its other types share, so a type without its own
 //! entry still classifies it as array, list or single value.
 
-use super::{Datatype as D, ElementCodec, ValueType};
+use super::{Datatype as D, ValueType};
 use crate::enums::{ObjectType as T, PropertyIdentifier as P};
 
 const fn single(datatype: D) -> ValueType {
@@ -25,14 +23,8 @@ const fn fixed(datatype: D, size: u16) -> ValueType {
     ValueType::fixed_array(datatype, size)
 }
 
-/// A list the list services edit as application-tagged values.
 const fn list(datatype: D) -> ValueType {
-    ValueType::list(datatype, ElementCodec::Application)
-}
-
-/// A list the list services edit as encodings of its datatype.
-const fn edited_list(datatype: D) -> ValueType {
-    ValueType::list(datatype, ElementCodec::Datatype)
+    ValueType::list(datatype)
 }
 
 /// The value type the standard gives `property` on an object of
@@ -175,27 +167,15 @@ const fn by_type(object_type: T, property: P) -> Option<ValueType> {
         (T::EVENT_LOG, P::LOG_BUFFER) => list(D::EventLogRecord),
         (T::TREND_LOG_MULTIPLE, P::LOG_BUFFER) => list(D::LogMultipleRecord),
         (T::AUDIT_LOG, P::LOG_BUFFER) => list(D::AuditLogRecord),
-        // The lists the list services edit by their datatype.
-        (T::NOTIFICATION_CLASS | T::NOTIFICATION_FORWARDER, P::RECIPIENT_LIST) => {
-            edited_list(D::Destination)
-        }
-        (T::NOTIFICATION_FORWARDER, P::SUBSCRIBED_RECIPIENTS) => {
-            edited_list(D::EventNotificationSubscription)
-        }
-        (T::CALENDAR, P::DATE_LIST) => edited_list(D::CalendarEntry),
-        // References the object keeps inside its own device (#1122, #1264).
-        (T::SCHEDULE, P::LIST_OF_OBJECT_PROPERTY_REFERENCES) => {
-            edited_list(D::DeviceObjectPropertyReference).local_to_device()
-        }
         (T::CHANNEL, P::LIST_OF_OBJECT_PROPERTY_REFERENCES)
         | (T::TREND_LOG_MULTIPLE, P::LOG_DEVICE_OBJECT_PROPERTY) => {
-            array(D::DeviceObjectPropertyReference).local_to_device()
+            array(D::DeviceObjectPropertyReference)
         }
-        (T::TREND_LOG, P::LOG_DEVICE_OBJECT_PROPERTY)
-        | (T::AVERAGING, P::OBJECT_PROPERTY_REFERENCE) => {
-            single(D::DeviceObjectPropertyReference).local_to_device()
+        (T::ANALOG_INPUT | T::ANALOG_OUTPUT, P::INTERFACE_VALUE) => single(D::OptionalReal),
+        (T::MULTI_STATE_INPUT | T::MULTI_STATE_OUTPUT, P::INTERFACE_VALUE) => {
+            single(D::OptionalUnsigned)
         }
-        (T::STAGING, P::TARGET_REFERENCES) => array(D::DeviceObjectReference).local_to_device(),
+        (T::LIFE_SAFETY_ZONE, P::MAINTENANCE_REQUIRED) => single(D::Boolean),
         _ => return None,
     };
     Some(value_type)

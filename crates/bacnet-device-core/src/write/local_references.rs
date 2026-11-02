@@ -95,15 +95,11 @@ impl DeviceQualified for BACnetDeviceObjectReference {
 /// Rewrites a written value so no reference in it names the given Device.
 type Rewrite = fn(PropertyValue, ObjectIdentifier) -> PropertyValue;
 
-/// The rewrite for a property of this value type, if the server localizes
-/// its references: one whose row marks them kept inside the device
-/// ([`ValueType::device_local`]). A list or an array takes
-/// [`localize_members`], a property holding one reference
+/// The rewrite for references of this value type, which the write policy
+/// keeps inside the device ([`super::policy::WritePolicy`]). A list or an
+/// array takes [`localize_members`], a property holding one reference
 /// [`localize_single`], each with the codec of the row's reference datatype.
 fn rewrite(value_type: ValueType) -> Option<Rewrite> {
-    if !value_type.device_local {
-        return None;
-    }
     let single = matches!(value_type.shape, ValueShape::Single);
     match value_type.datatype {
         Datatype::DeviceObjectPropertyReference if single => {
@@ -137,6 +133,9 @@ pub fn localize(
     property: PropertyIdentifier,
     value: PropertyValue,
 ) -> PropertyValue {
+    if !super::policy::write_policy(oid.object_type(), property).device_local_references {
+        return value;
+    }
     let Some(rewrite) = db.value_type(&oid, property).and_then(rewrite) else {
         return value;
     };
@@ -240,6 +239,7 @@ fn localize_bytes<R: DeviceQualified>(bytes: &[u8], local: ObjectIdentifier) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::write::policy::write_policy;
     use bacnet_objects::property_metadata::standard_value_type;
     use bacnet_types::enums::ObjectType;
 
@@ -271,8 +271,17 @@ mod tests {
     fn standard_value_types_localize_where_the_old_match_did() {
         let mut differences = Vec::new();
         for object_type in (0..=1023).map(ObjectType::from_raw) {
-            for property in (0..=1023).map(PropertyIdentifier::from_raw) {
-                let new = standard_value_type(object_type, property).and_then(rewrite);
+            for property in (0..=1023).map(PropertyIdentifier::from_raw).chain(
+                PropertyIdentifier::ALL_NAMED
+                    .iter()
+                    .map(|&(_, property)| property)
+                    .filter(|property| property.to_raw() > 1023),
+            ) {
+                let new = if write_policy(object_type, property).device_local_references {
+                    standard_value_type(object_type, property).and_then(rewrite)
+                } else {
+                    None
+                };
                 let old = old_rewrite(object_type, property);
                 if new.map(|f| f as usize) != old.map(|f| f as usize) {
                     differences.push(format!("{object_type:?} {property:?}"));

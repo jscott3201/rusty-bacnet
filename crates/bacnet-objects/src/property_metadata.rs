@@ -3,9 +3,7 @@
 
 use alloc::vec::Vec;
 
-pub use bacnet_types::datatype::{
-    ArraySize, Datatype, ElementCodec, ValueShape, ValueType, standard_value_type,
-};
+pub use bacnet_types::datatype::{ArraySize, Datatype, ValueShape, ValueType, standard_value_type};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;

@@ -214,5 +214,3 @@ mod cov_reporting;
 mod property_list;
 
 mod value_type_equivalence;
-
-mod served_datatypes;

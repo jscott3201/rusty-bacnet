@@ -12,7 +12,12 @@ use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 fn standard_shapes_match_the_old_classification_on_every_pair() {
     let mut differences = Vec::new();
     for object_type in (0..=1023).map(ObjectType::from_raw) {
-        for property in (0..=1023).map(PropertyIdentifier::from_raw) {
+        for property in (0..=1023).map(PropertyIdentifier::from_raw).chain(
+            PropertyIdentifier::ALL_NAMED
+                .iter()
+                .map(|&(_, property)| property)
+                .filter(|property| property.to_raw() > 1023),
+        ) {
             let value_type = standard_value_type(object_type, property);
             let array = value_type.is_some_and(|v| v.is_array());
             let list = value_type.is_some_and(|v| v.is_list());
