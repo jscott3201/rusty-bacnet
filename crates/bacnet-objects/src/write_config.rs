@@ -11,7 +11,7 @@
 //! expects the configuration to stay.
 //!
 //! One trait, [`WriteConfigPersistence`], and one file format,
-//! [`FileWriteConfigPersistence`], serve both object types: a
+//! `FileWriteConfigPersistence` (with std), serve both object types: a
 //! [`WriteConfigSnapshot`] is tagged with the type it belongs to. The
 //! storage belongs to the application. An object built with
 //! `with_persistence` (on [`TimerObject`] or [`ChannelObject`]) loads it
