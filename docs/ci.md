@@ -1836,12 +1836,14 @@ cargo llvm-cov clean --workspace                               # drop the instru
 A `const` item is evaluated at build time, so the `const fn` that fills it is
 never called at run time and reports as uncovered, however many tests read
 the item. The row tables of both trend objects (`trend/metadata.rs`,
-`trend/multiple_metadata.rs`) are built this way. Each
-file has a `rows_tests` module that calls its `rows` builder at run time,
-with the argument behind `core::hint::black_box` so the call can't be
-folded, and checks the result against the `const` tables (#2183). Nothing is
-excluded from the report. A new `const fn` table gets the same kind of
-test, so per-file numbers stay trustworthy.
+`trend/multiple_metadata.rs`), of the File and Device objects
+(`file/metadata.rs`, `device/metadata.rs`), the logs' BUFFER_READY rows
+(`log_reporting.rs`) and the CreateObject table (`creation.rs`) are built
+this way. A test beside each calls its builder at run time, with the
+argument behind `core::hint::black_box` so the call can't be folded, and
+checks the result against the `const` table (#2183). Nothing is excluded
+from the report. A new `const fn` table gets the same kind of test, so
+per-file numbers stay trustworthy.
 
 ## Merge evidence
 

@@ -392,7 +392,7 @@ fn encode_snapshot(snapshot: &AuditLogSnapshot) -> Result<Vec<u8>, Error> {
     encode_snapshot_for_version(snapshot, SCHEMA_VERSION)
 }
 
-#[cfg(all(test, feature = "std"))]
+#[cfg(test)]
 pub(super) fn encode_snapshot_v1(snapshot: &AuditLogSnapshot) -> Result<Vec<u8>, Error> {
     if !snapshot.completed_receipts.is_empty() {
         return Err(Error::Encoding(
@@ -405,6 +405,7 @@ pub(super) fn encode_snapshot_v1(snapshot: &AuditLogSnapshot) -> Result<Vec<u8>,
 /// Encode `snapshot` under the schema-v2 header. The records are encoded as
 /// today's codec does, so a test reproduces a 0.11.0 file by handing it the
 /// log statuses that encode to the old octets.
+// std: only the file-backed schema tests write v2.
 #[cfg(all(test, feature = "std"))]
 pub(super) fn encode_snapshot_v2(snapshot: &AuditLogSnapshot) -> Result<Vec<u8>, Error> {
     encode_snapshot_for_version(snapshot, SCHEMA_VERSION_V2)
@@ -748,60 +749,9 @@ fn take_u64(data: &[u8], offset: &mut usize, field: &str) -> Result<u64, Error> 
     ))
 }
 
+#[cfg(test)]
+mod codec_tests;
+
+// std: these read and write slot files.
 #[cfg(all(test, feature = "std"))]
-mod tests {
-    use super::*;
-    use bacnet_types::enums::ObjectType;
-
-    fn snapshot() -> AuditLogSnapshot {
-        AuditLogSnapshot {
-            object_identifier: ObjectIdentifier::new(ObjectType::AUDIT_LOG, 1).unwrap(),
-            generation: 1,
-            capacity: 1,
-            log_enable: true,
-            total_record_count: 0,
-            records: Vec::new(),
-            completed_receipts: Vec::new(),
-        }
-    }
-
-    fn io_failure() -> SlotState {
-        SlotState::Fatal(Error::Transport(std::io::Error::other(
-            "injected slot read failure",
-        )))
-    }
-
-    #[test]
-    fn audit_slot_selection_never_masks_io_failure_with_valid_peer() {
-        assert!(matches!(
-            select_newest_slot([io_failure(), SlotState::Valid(snapshot())]),
-            Err(Error::Transport(_))
-        ));
-        assert!(matches!(
-            select_newest_slot([SlotState::Valid(snapshot()), io_failure()]),
-            Err(Error::Transport(_))
-        ));
-    }
-
-    #[test]
-    fn audit_slot_selection_requires_identical_same_generation_snapshots() {
-        let expected = snapshot();
-        let selected = select_newest_slot([
-            SlotState::Valid(expected.clone()),
-            SlotState::Valid(expected.clone()),
-        ])
-        .unwrap()
-        .unwrap();
-        assert_eq!(selected, expected);
-
-        let mut divergent = snapshot();
-        divergent.log_enable = false;
-        assert!(matches!(
-            select_newest_slot([
-                SlotState::Valid(snapshot()),
-                SlotState::Valid(divergent),
-            ]),
-            Err(Error::Encoding(message)) if message.contains("same generation")
-        ));
-    }
-}
+mod file_tests;

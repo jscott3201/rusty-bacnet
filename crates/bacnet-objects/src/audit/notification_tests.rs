@@ -544,3 +544,129 @@ fn disabled_sink_denies_before_clock_or_persistence_change() {
         generation
     );
 }
+
+#[test]
+fn an_empty_batch_or_a_disabled_log_is_refused_confirmed_or_not() {
+    let (mut log, persistence) = log(10);
+    let generation = log.generation();
+    assert!(matches!(
+        log.store_notifications(&[], 2_000),
+        Err(Error::OutOfRange(_))
+    ));
+    assert!(matches!(
+        log.store_confirmed_notifications(&[], 2_000, receipt(b"empty", 1)),
+        Err(Error::OutOfRange(_))
+    ));
+    log.write_property(
+        bacnet_types::enums::PropertyIdentifier::LOG_ENABLE,
+        None,
+        bacnet_types::primitives::PropertyValue::Boolean(false),
+        None,
+    )
+    .unwrap();
+    let generation_off = log.generation();
+    assert!(generation_off > generation);
+    let error = log
+        .store_confirmed_notifications(&[notification(None, None)], 2_000, receipt(b"off", 1))
+        .unwrap_err();
+    assert!(
+        matches!(error, Error::Remote(RemoteError::Error { class, code })
+        if class == bacnet_types::enums::ErrorClass::SERVICES
+            && code == bacnet_types::enums::ErrorCode::SERVICE_REQUEST_DENIED)
+    );
+    assert_eq!(log.generation(), generation_off);
+    assert!(!log.has_completed_confirmed_receipt(b"off", 1).unwrap());
+    assert_eq!(persistence.commits.load(Ordering::Acquire), 2);
+}
+
+/// A sink that implements only the two required methods, so every other
+/// call goes through the trait's defaults.
+#[derive(Default)]
+struct PlainSink {
+    stored: Vec<(usize, u32)>,
+    fail: bool,
+}
+
+impl AuditLogNotificationSink for PlainSink {
+    fn notification_logging_enabled(&self) -> bool {
+        !self.fail
+    }
+
+    fn store_notifications(
+        &mut self,
+        notifications: &[BACnetAuditNotification],
+        apdu_timeout_ms: u32,
+    ) -> Result<(), Error> {
+        if self.fail {
+            return Err(Error::Encoding("refused".into()));
+        }
+        self.stored.push((notifications.len(), apdu_timeout_ms));
+        Ok(())
+    }
+}
+
+#[test]
+fn a_sink_with_only_the_required_methods_stores_through_the_defaults() {
+    use super::AuditBatchStage;
+    use ConfirmedAuditNotificationOutcome::Stored;
+
+    let batch = [notification(Some(BACnetTimeStamp::Time(time(0))), None)];
+    let mut sink = PlainSink::default();
+    // Every default stores at once and reports no record change, since a
+    // custom sink has to opt in to change reporting.
+    assert!(!sink.store_notifications_with_change(&batch, 1_000).unwrap());
+    assert_eq!(
+        sink.store_confirmed_notifications_with_change(&batch, 2_000, receipt(b"a", 1))
+            .unwrap(),
+        (Stored, false)
+    );
+    assert_eq!(
+        sink.store_confirmed_notifications(&batch, 3_000, receipt(b"b", 1))
+            .unwrap(),
+        Stored
+    );
+    // The defaults keep no receipts.
+    assert!(!sink.has_completed_confirmed_receipt(b"a", 1).unwrap());
+    assert!(matches!(
+        sink.stage_notification_batch(&batch, 4_000, None).unwrap(),
+        AuditBatchStage::Done(Stored, false)
+    ));
+    assert!(matches!(
+        sink.stage_notification_batch(&batch, 5_000, Some(receipt(b"c", 1)))
+            .unwrap(),
+        AuditBatchStage::Done(Stored, false)
+    ));
+    assert_eq!(
+        sink.stored,
+        [(1, 1_000), (1, 2_000), (1, 3_000), (1, 4_000), (1, 5_000)]
+    );
+
+    // A refusal from the required method comes back through each default.
+    sink.fail = true;
+    assert!(sink.store_notifications_with_change(&batch, 1_000).is_err());
+    assert!(
+        sink.store_confirmed_notifications(&batch, 1_000, receipt(b"d", 1))
+            .is_err()
+    );
+    assert!(sink.stage_notification_batch(&batch, 1_000, None).is_err());
+    assert!(
+        sink.stage_notification_batch(&batch, 1_000, Some(receipt(b"e", 1)))
+            .is_err()
+    );
+    assert_eq!(sink.stored.len(), 5);
+
+    // The default stage never stages, so its finish refuses any batch, here
+    // one an Audit Log staged.
+    let (mut log, _) = log(10);
+    let AuditBatchStage::Staged(staged) =
+        log.stage_notification_batch(&batch, 2_000, None).unwrap()
+    else {
+        panic!("the Audit Log stages a new record");
+    };
+    let error = sink.finish_notification_batch(staged).unwrap_err();
+    assert!(
+        matches!(error, Error::Remote(RemoteError::Error { class, code })
+        if class == bacnet_types::enums::ErrorClass::DEVICE
+            && code == bacnet_types::enums::ErrorCode::OPERATIONAL_PROBLEM)
+    );
+}
