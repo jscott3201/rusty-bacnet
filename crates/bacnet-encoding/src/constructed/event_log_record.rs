@@ -29,7 +29,10 @@ const TIME_CHANGE: u8 = 2;
 /// Fails, leaving `buf` unchanged, for a notification that would not encode,
 /// such as one whose raw event values aren't a well-formed run of tagged
 /// fields.
-pub fn encode_event_log_record(record: &BACnetEventLogRecord, buf: &mut BytesMut) -> Result<(), Error> {
+pub fn encode_event_log_record(
+    record: &BACnetEventLogRecord,
+    buf: &mut BytesMut,
+) -> Result<(), Error> {
     // Straight into `buf`, cut back on failure: no staging buffer (#2233).
     let start = buf.len();
     write_event_log_record(record, buf).inspect_err(|_| buf.truncate(start))

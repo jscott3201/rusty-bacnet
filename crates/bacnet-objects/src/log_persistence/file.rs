@@ -194,6 +194,11 @@ macro_rules! file_log_persistence {
             fn commit(&self, snapshot: &LogSnapshot<$record>) -> Result<(), Error> {
                 self.commit_slot(snapshot)
             }
+
+            #[cfg(feature = "test-support")]
+            fn commits_inline(&self) -> bool {
+                self.memory.is_some()
+            }
         }
     )*};
 }

@@ -1,7 +1,7 @@
 use super::receipt::{
     COMPLETED_AUDIT_RECEIPT_RETENTION_MILLIS, CompletedAuditReceipt,
-    ConfirmedAuditNotificationOutcome, MAX_COMPLETED_AUDIT_RECEIPTS, contains, insert,
-    validate_receipts,
+    ConfirmedAuditNotificationOutcome, MAX_COMPLETED_AUDIT_RECEIPTS, contains, first_repeated_key,
+    insert, validate_receipts,
 };
 
 fn completed(index: usize, at: u64) -> CompletedAuditReceipt {
@@ -71,4 +71,18 @@ fn a_repeated_key_is_refused_wherever_it_sits() {
             "{first}, {second}: {error:?}"
         );
     }
+}
+
+#[test]
+fn the_first_repeat_is_the_earliest_index_that_repeats_a_key() {
+    // Keys by position: a b c c b d a e d. The repeats sit at 3 (c), 4 (b),
+    // 6 (a) and 8 (d); the earliest is 3, though `a` sorts first.
+    let receipts: Vec<_> = [1, 2, 3, 3, 2, 4, 1, 5, 4]
+        .into_iter()
+        .map(|key| completed(key, 0))
+        .collect();
+    assert_eq!(first_repeated_key(&receipts), Some(3));
+    assert_eq!(first_repeated_key(&receipts[..3]), None);
+    // From b: b d a e d, where only d repeats, at 4.
+    assert_eq!(first_repeated_key(&receipts[4..]), Some(4));
 }

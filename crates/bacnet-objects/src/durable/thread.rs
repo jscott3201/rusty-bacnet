@@ -34,7 +34,7 @@ pub(crate) struct SaveWriter<S: Send + 'static> {
     /// either stored or not.
     thread: Option<AssertUnwindSafe<JoinHandle<()>>>,
     name: String,
-    /// The owner is going away; see [`closing`](Self::closing).
+    /// The owner is going away; see `closing`.
     closing: bool,
 }
 
@@ -158,6 +158,7 @@ impl<S: Send + 'static> SaveWriter<S> {
     /// here, on the caller's thread, instead of on a thread started only to
     /// be joined (#2233). With no thread started, nothing else is queued, so
     /// the order holds; with one started, saves still go to it.
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn closing(&mut self) {
         self.closing = true;
     }

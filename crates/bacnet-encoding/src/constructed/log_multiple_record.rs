@@ -46,13 +46,19 @@ const ANY: u8 = 8;
 /// Fails, leaving `buf` unchanged, for a bit string whose unused-bit count
 /// is above 7 (or nonzero with no data) or an any-value whose bytes aren't
 /// complete tagged values.
-pub fn encode_log_multiple_record(record: &BACnetLogMultipleRecord, buf: &mut BytesMut) -> Result<(), Error> {
+pub fn encode_log_multiple_record(
+    record: &BACnetLogMultipleRecord,
+    buf: &mut BytesMut,
+) -> Result<(), Error> {
     // Straight into `buf`, cut back on failure: no staging buffer (#2233).
     let start = buf.len();
     write_log_multiple_record(record, buf).inspect_err(|_| buf.truncate(start))
 }
 
-fn write_log_multiple_record(record: &BACnetLogMultipleRecord, out: &mut BytesMut) -> Result<(), Error> {
+fn write_log_multiple_record(
+    record: &BACnetLogMultipleRecord,
+    out: &mut BytesMut,
+) -> Result<(), Error> {
     encode_timestamp(out, &record.date, &record.time);
     tags::encode_opening_tag(out, 1);
     match &record.log_data {

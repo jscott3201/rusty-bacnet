@@ -63,9 +63,7 @@ fn write_log_record(record: &BACnetLogRecord, out: &mut BytesMut) -> Result<(), 
         LogDatum::RealValue(value) => primitives::encode_ctx_real(out, REAL, *value),
         // An ENUMERATED's contents are encoded as an Unsigned's are.
         LogDatum::EnumValue(value) => primitives::encode_ctx_unsigned(out, ENUMERATED, *value),
-        LogDatum::UnsignedValue(value) => {
-            primitives::encode_ctx_unsigned(out, UNSIGNED, *value)
-        }
+        LogDatum::UnsignedValue(value) => primitives::encode_ctx_unsigned(out, UNSIGNED, *value),
         LogDatum::SignedValue(value) => encode_ctx_integer(out, INTEGER, *value),
         LogDatum::BitstringValue { unused_bits, data } => {
             check_bit_string(
@@ -80,9 +78,7 @@ fn write_log_record(record: &BACnetLogRecord, out: &mut BytesMut) -> Result<(), 
             error_class,
             error_code,
         } => encode_failure(out, FAILURE, *error_class, *error_code),
-        LogDatum::TimeChange(seconds) => {
-            primitives::encode_ctx_real(out, TIME_CHANGE, *seconds)
-        }
+        LogDatum::TimeChange(seconds) => primitives::encode_ctx_real(out, TIME_CHANGE, *seconds),
         LogDatum::AnyValue(bytes) => encode_any_value(out, ANY, bytes)?,
     }
     tags::encode_closing_tag(out, 1);
@@ -116,7 +112,7 @@ pub fn decode_log_record(data: &[u8], offset: usize) -> Result<(BACnetLogRecord,
                     return Err(Error::decoding(
                         end,
                         "BACnetLogRecord status-flags must be a four-bit BitString",
-                    ))
+                    ));
                 }
             };
             end = next;

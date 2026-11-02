@@ -88,7 +88,7 @@ pub(super) fn validate_receipts(receipts: &[CompletedAuditReceipt]) -> Result<()
 /// Sorting the indices by key, then index, puts each key's receipts side
 /// by side in order, so every one after the first of its run repeats a key:
 /// no hashing of keys up to 65 KiB long, and one allocation (#2233).
-fn first_repeated_key(receipts: &[CompletedAuditReceipt]) -> Option<usize> {
+pub(super) fn first_repeated_key(receipts: &[CompletedAuditReceipt]) -> Option<usize> {
     if receipts.len() < 2 {
         return None;
     }
