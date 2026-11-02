@@ -5,10 +5,12 @@
 //! STG-1 starts at 15.0, in its second stage, which drives BO-1 and BO-2
 //! ACTIVE at priority 8; BO-3 is a spare target. The clock is paused.
 use super::cov_wire_test_support::*;
+use super::test_transport::TestTransport;
 use super::*;
 use bacnet_encoding::constructed::encode_device_object_reference;
 use bacnet_objects::binary::BinaryOutputObject;
 use bacnet_objects::staging::{StagingConfig, StagingObject};
+use bacnet_objects::traits::BACnetObject;
 use bacnet_services::object_mgmt::DeleteObjectRequest;
 use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
 use bacnet_services::write_property::WritePropertyRequest;
@@ -335,4 +337,63 @@ async fn a_removed_objects_owed_null_lands_before_its_replacement_writes() {
         .read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(8))
         .unwrap();
     assert_eq!(slot, INACTIVE);
+}
+
+/// STG-1 queues a plan for stage 1 and is edited behind it, so the plan is
+/// stale at its first guard: `edit` runs on the object under the same guard.
+async fn run_stale_plan(h: &Harness, edit: impl FnOnce(&mut dyn BACnetObject)) {
+    let plans = {
+        let mut db = h.server.database().write().await;
+        let object = db.get_mut(&stg1()).unwrap();
+        object
+            .write_property(
+                PropertyIdentifier::PRESENT_VALUE,
+                None,
+                PropertyValue::Real(5.0),
+                None,
+            )
+            .unwrap();
+        let plans = BACnetServer::<TestTransport>::take_staging_plans(&mut db, &[stg1()]);
+        assert_eq!(plans.len(), 1);
+        edit(db.get_mut(&stg1()).unwrap());
+        plans
+    };
+    let _runs = BACnetServer::<TestTransport>::execute_staging_plans(
+        &h.server.local_event_delivery(),
+        &h.server.local_cov_context(),
+        plans,
+    )
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_stale_plans_guard_still_sends_the_nulls_owed() {
+    let h = start().await;
+    run_stale_plan(&h, |object| {
+        object
+            .write_property(PRIORITY, None, PropertyValue::Unsigned(12), None)
+            .unwrap();
+    })
+    .await;
+    assert_slots(&h, 8, [NULL, NULL, NULL]).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_stale_plans_guard_sends_nothing_while_out_of_service() {
+    let h = start().await;
+    run_stale_plan(&h, |object| {
+        object
+            .write_property(
+                PropertyIdentifier::OUT_OF_SERVICE,
+                None,
+                PropertyValue::Boolean(true),
+                None,
+            )
+            .unwrap();
+        object
+            .write_property(PRIORITY, None, PropertyValue::Unsigned(12), None)
+            .unwrap();
+    })
+    .await;
+    assert_slots(&h, 8, [ACTIVE, ACTIVE, NULL]).await;
 }

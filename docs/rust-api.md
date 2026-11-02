@@ -6377,10 +6377,12 @@ in the guard of the object's next target write and before that write. A slot
 the object writes again before its NULL goes out is no longer owed, so a NULL
 never lands after the object's own later write. Out of service the targets
 are left alone (Clause 12.62.11): the NULLs wait for the return to service,
-or go out with the rest if the object is removed first. An application that
-changes the properties directly on the object, rather than through the
-server's write paths, sees them go out with the next plan the server takes
-from it.
+or go out with the rest if the object is removed first. (A Schedule sends them
+out of service too.) An application that changes the properties directly on
+the object, rather than through the server's write paths, leaves both the
+NULLs and the new configuration's writes waiting for the next plan the server
+takes from it, such as on the next write through the server: unlike the
+Schedule's 60-second tick, nothing sweeps Staging objects periodically.
 
 #### Lighting & Color (5)
 
