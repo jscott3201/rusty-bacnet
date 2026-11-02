@@ -10,7 +10,9 @@ use bacnet_encoding::{
     apdu::{Apdu, decode_apdu},
     npdu::decode_npdu,
 };
-use bacnet_transport::{mstp::MstpExecutionMode, mstp::codec::FrameType, port::TransportPort};
+use bacnet_transport::{
+    mstp::MstpExecutionMode, mstp::MstpThreadConfig, mstp::codec::FrameType, port::TransportPort,
+};
 use bacnet_types::{
     enums::{ObjectType, PropertyIdentifier},
     primitives::ObjectIdentifier,
@@ -224,8 +226,10 @@ async fn group_delegation(mode: MstpExecutionMode) {
 /// the test's runtime, so it runs on paused time: a starved host thread
 /// cannot make an MS/TP deadline (a poll timeout, T_no_token) expire
 /// between two steps of the walk, and `bounded` is only a hang backstop.
-/// The dedicated variant's node runs its own runtime on the wall clock,
-/// which the test cannot pause; #2284 tracks fixing that residual.
+/// The dedicated variant's node runs on a thread and runtime of its own,
+/// on the test's paused time (`MstpThreadConfig::with_test_time`, #2284),
+/// so the same holds there. One dedicated smoke test,
+/// `mstp_number_server_wire_dedicated_wall_clock`, keeps the wall clock.
 ///
 /// Names end in `_tokio` or `_dedicated`, so a suffix filter selects a mode.
 macro_rules! mode_tests {
@@ -235,9 +239,11 @@ macro_rules! mode_tests {
             let $mode = MstpExecutionMode::Tokio;
             $body
         }
-        #[tokio::test]
+        #[tokio::test(start_paused = true)]
         async fn $dedicated() {
-            let $mode = MstpExecutionMode::dedicated_thread();
+            let $mode = MstpExecutionMode::DedicatedThread(
+                MstpThreadConfig::new().with_test_time(tokio::runtime::Handle::current()),
+            );
             $body
         }
     };
@@ -252,6 +258,13 @@ mode_tests!(
     mstp_number_server_wire_dedicated,
     |mode| controls(Role::Server, mode).await
 );
+/// The one dedicated variant on the wall clock, the node's own runtime's:
+/// a smoke test of production timing, which host starvation can still fail
+/// (#2277).
+#[tokio::test]
+async fn mstp_number_server_wire_dedicated_wall_clock() {
+    controls(Role::Server, MstpExecutionMode::dedicated_thread()).await;
+}
 mode_tests!(
     mstp_number_endpoint_wire_tokio,
     mstp_number_endpoint_wire_dedicated,

@@ -31,9 +31,10 @@ const TRACE_FRAMES: usize = 40;
 /// One fixture's MS/TP link as a failure message sees it: the node's state
 /// and counters, and the last [`TRACE_FRAMES`] frames each side sent,
 /// stamped with Tokio time since the fixture started (#2277): virtual
-/// time in the paused Tokio variants, wall time in the dedicated ones.
+/// time in the paused variants (the dedicated ones on test time, #2284),
+/// wall time in the dedicated smoke test.
 ///
-/// `deadline_lateness` and the dedicated variants' stamps tell host starvation
+/// `deadline_lateness` and the wall-clock stamps tell host starvation
 /// (deadlines serviced seconds late, gaps between frames) from a node that
 /// stopped: under background QoS on a loaded macOS host, a 20 ms sleep can
 /// wake seconds late.
@@ -79,9 +80,10 @@ impl Link {
         )
     }
     /// Runs `future` with a 5 s hang backstop. On paused time (the Tokio
-    /// variants) the clock moves only when every task is idle, so the
-    /// backstop fires only when nothing can run; on the wall clock (the
-    /// dedicated variants) host starvation counts against it too.
+    /// variants, and the dedicated ones on test time) the clock moves only
+    /// when every task, and the dedicated node, is idle, so the backstop
+    /// fires only when nothing can run; on the wall clock (the dedicated
+    /// smoke test) host starvation counts against it too.
     pub async fn bounded<T>(&self, future: impl Future<Output = T>) -> T {
         match tokio::time::timeout(Duration::from_secs(5), future).await {
             Ok(value) => value,
