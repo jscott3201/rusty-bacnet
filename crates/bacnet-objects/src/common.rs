@@ -344,7 +344,9 @@ mod command_write;
 mod encoded_elements;
 mod list_element;
 pub(crate) use command_write::decode_command_write;
-pub(crate) use encoded_elements::{chunks, decode_element, decode_elements, decode_single_element};
+pub(crate) use encoded_elements::{
+    chunks, decode_element, decode_elements, decode_single_element, framed_octets,
+};
 #[cfg(test)]
 pub(crate) use list_element::assert_list_element_refused;
 pub(crate) use list_element::at_list_element;
