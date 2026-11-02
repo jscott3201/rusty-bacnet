@@ -1815,6 +1815,31 @@ the MSRV toolchain (`RUST_MSRV`) installed, Python 3, a C toolchain, `pkg-config
 `cmake`, `perl`, `file` and `ldd`. It never installs tools or skips features.
 CI runs it on PRs to `main`; on a Mac, rely on that job.
 
+### Coverage
+
+CI doesn't measure coverage. To find untested code in a crate, run
+[cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) over its nextest
+suite (`cargo install cargo-llvm-cov`, plus `rustup component add
+llvm-tools`). Its instrumented build goes to `target/llvm-cov-target`, beside
+the normal one:
+
+```bash
+cargo llvm-cov nextest -p bacnet-objects --summary-only        # per-file table
+cargo llvm-cov report -p bacnet-objects --show-missing-lines   # the lines no test ran, from the last run
+cargo llvm-cov nextest -p bacnet-objects -p bacnet-server --summary-only   # count the server's tests too
+cargo llvm-cov clean --workspace                               # drop the instrumented build
+```
+
+A `const` item is evaluated at build time, so the `const fn` that fills it is
+never called at run time and reports as uncovered, however many tests read
+the item. The row tables of both trend objects (`trend/metadata.rs`,
+`trend/multiple_metadata.rs`) are built this way. Each
+file has a `rows_tests` module that calls its `rows` builder at run time,
+with the argument behind `core::hint::black_box` so the call can't be
+folded, and checks the result against the `const` tables (#2183). Nothing is
+excluded from the report. A new `const fn` table gets the same kind of
+test, so per-file numbers stay trustworthy.
+
 ## Merge evidence
 
 Before merging a PR:
