@@ -1,12 +1,13 @@
 //! The command-run capability: the writes a Command or Channel object's
-//! Present_Value write queues.
+//! Present_Value write queues, or a Timer's state transition (#2206).
 
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
 
 use crate::channel::MemberDatatype;
 use crate::command::{CommandRun, WriteFailure};
 
-/// A Command's action lists or a Channel's member writes, run by the host.
+/// A Command's action lists, a Channel's member writes or a Timer's
+/// State_Change_Values writes, run by the host.
 ///
 /// The object returns itself from
 /// [`BACnetObject::command_runner_mut`](crate::traits::BACnetObject::command_runner_mut),
@@ -18,7 +19,8 @@ use crate::command::{CommandRun, WriteFailure};
 #[doc(hidden)]
 pub trait CommandRunner {
     /// Take the run the last Present_Value write queued: a Command's
-    /// selected list, or a Channel's value for its members.
+    /// selected list, or a Channel's value for its members; for a Timer, the
+    /// last transition's writes.
     fn take_command_run(&mut self) -> Option<CommandRun>;
 
     /// The current run generation. A run whose generation no longer matches

@@ -902,8 +902,30 @@ VALUE\_OUT\_OF\_RANGE.
 ### BACnetServer.add_timer
 
 ```python
-def add_timer(self, instance: int, name: str) -> None
+def add_timer(
+    self,
+    instance: int,
+    name: str,
+    *,
+    state_change_values: Optional[list[Optional[PropertyValue]]] = None,
+    references: Optional[list[tuple[ObjectIdentifier, PropertyIdentifier] | tuple[ObjectIdentifier, PropertyIdentifier, Optional[int]] | DeviceObjectPropertyReference]] = None,
+    priority_for_writing: Optional[int] = None,
+) -> None
 ```
+
+Add a Timer object.
+
+With `state_change_values` or `references` the Timer serves
+State\_Change\_Values, List\_Of\_Object\_Property\_References and
+Priority\_For\_Writing, and each transition writes its entry of
+`state_change_values` to every reference at
+`priority_for_writing` (16 when omitted). The seven entries run from
+IDLE\_TO\_RUNNING to EXPIRED\_TO\_RUNNING; `None` writes nothing and a
+NULL relinquishes. References take the `add_channel` members shape.
+A wrong entry count, or `priority_for_writing` without either of
+the other two, raises ValueError, a non-primitive entry TypeError,
+and a priority outside 1..=16 BacnetProtocolError with
+VALUE\_OUT\_OF\_RANGE.
 
 ### BACnetServer.add_load_control
 

@@ -47,6 +47,8 @@ mod timestamp;
 mod view;
 
 #[cfg(feature = "alloc")]
+pub(crate) use priority_value::decode_framed_date_time;
+#[cfg(feature = "alloc")]
 pub use priority_value::encode_priority_date_time;
 pub use priority_value::{PRIORITY_DATE_TIME_TAG, decode_priority_date_time};
 pub use strings::{

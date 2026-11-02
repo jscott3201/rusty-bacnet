@@ -8,11 +8,12 @@ use bacnet_objects::analog::AnalogOutputObject;
 use bacnet_objects::clock::{ClockFrame, ClockReader};
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::schedule::{CalendarObject, ScheduleObject};
+use bacnet_objects::traits::BACnetObject;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::constructed::{
-    BACnetDateRange, BACnetObjectPropertyReference, BACnetSpecialEvent, BACnetTimeValue,
-    SpecialEventPeriod,
+    BACnetCalendarEntry, BACnetDateRange, BACnetObjectPropertyReference, BACnetSpecialEvent,
+    BACnetTimeValue, SpecialEventPeriod,
 };
 use bytes::BytesMut;
 
@@ -334,4 +335,91 @@ async fn a_present_value_written_out_of_service_reaches_the_target_without_a_clo
     let guard = db.read().await;
     assert_eq!(schedule_present_value(&guard), REAL_5);
     assert_eq!(target_wire(&guard, 9), (REAL_5.to_vec(), REAL_5.to_vec()));
+}
+
+#[test]
+fn the_pass_asks_a_calendar_for_its_own_day_not_its_present_value() {
+    // Without a clock the Calendar's Present_Value is FALSE, but the pass
+    // asks it for the day it evaluates, through its CalendarState (#2179).
+    let christmas = SpecificDate::new(2026, 12, 25).unwrap();
+    let mut calendar = CalendarObject::new(CALENDAR, "Holidays").unwrap();
+    calendar
+        .add_date_entry(BACnetCalendarEntry::Date(christmas.to_date()))
+        .unwrap();
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(calendar)).unwrap();
+    let calendar = oid(ObjectType::CALENDAR, CALENDAR);
+    assert_eq!(
+        read_wire(&db, calendar, PropertyIdentifier::PRESENT_VALUE, None),
+        [0x10]
+    );
+    let states = calendar_states(&db, christmas);
+    assert_eq!(states.get(&calendar), Some(&true));
+    let boxing_day = SpecificDate::new(2026, 12, 26).unwrap();
+    assert_eq!(
+        calendar_states(&db, boxing_day).get(&calendar),
+        Some(&false)
+    );
+}
+
+/// A CALENDAR-typed object that lends no `CalendarState`: the pass reads
+/// its Present_Value instead.
+struct PresentValueCalendar(bool);
+
+impl BACnetObject for PresentValueCalendar {
+    fn object_identifier(&self) -> ObjectIdentifier {
+        oid(ObjectType::CALENDAR, CALENDAR)
+    }
+    fn object_name(&self) -> &str {
+        "PV calendar"
+    }
+    fn read_property(
+        &self,
+        property: PropertyIdentifier,
+        _array_index: Option<u32>,
+    ) -> Result<PropertyValue, bacnet_types::error::Error> {
+        match property {
+            PropertyIdentifier::PRESENT_VALUE => Ok(PropertyValue::Boolean(self.0)),
+            PropertyIdentifier::OBJECT_NAME => {
+                Ok(PropertyValue::CharacterString("PV calendar".into()))
+            }
+            _ => Err(bacnet_types::error::Error::protocol(
+                bacnet_types::enums::ErrorClass::PROPERTY,
+                bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY,
+            )),
+        }
+    }
+    fn write_property(
+        &mut self,
+        _property: PropertyIdentifier,
+        _array_index: Option<u32>,
+        _value: PropertyValue,
+        _priority: Option<u8>,
+    ) -> Result<(), bacnet_types::error::Error> {
+        Err(bacnet_types::error::Error::protocol(
+            bacnet_types::enums::ErrorClass::PROPERTY,
+            bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED,
+        ))
+    }
+    fn property_metadata(
+        &self,
+    ) -> std::borrow::Cow<'_, [bacnet_objects::property_metadata::PropertyMetadata]> {
+        crate::test_rows::read_only(&[])
+    }
+}
+
+#[test]
+fn a_calendar_lending_no_state_is_read_through_its_present_value() {
+    let calendar = oid(ObjectType::CALENDAR, CALENDAR);
+    let day = SpecificDate::new(2026, 12, 25).unwrap();
+    for present_value in [true, false] {
+        let mut db = ObjectDatabase::new();
+        db.add(Box::new(PresentValueCalendar(present_value)))
+            .unwrap();
+        assert!(db.get(&calendar).unwrap().calendar_state().is_none());
+        assert_eq!(
+            calendar_states(&db, day).get(&calendar),
+            Some(&present_value)
+        );
+    }
 }

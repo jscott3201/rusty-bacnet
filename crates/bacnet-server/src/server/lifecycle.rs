@@ -5,6 +5,7 @@ use crate::committed_cov::BackgroundCommit;
 
 #[path = "lifecycle_period.rs"]
 mod period;
+use super::binary_lighting_lifecycle::spawn_binary_lighting_operation_task as spawn_operation;
 use super::heap_futures::boxed;
 use super::{audit_recipient::spawn_owned, audit_recipient_routes::AuditRoutes};
 pub(super) use period::{MonotonicClocks, event_enrollment_period};
@@ -168,10 +169,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             request_tasks: Arc::clone(&request_tasks),
         };
         // A Schedule tick that writes a Command's Present_Value starts its list.
-        let schedule_runner = super::command_runs::CommandRunner::new(
+        let command_runs = super::command_runs::CommandRunner::new(
             &dispatch_context.services,
             &request_tasks.spawner(),
         );
+        let timer_runner = command_runs.clone(); // A Timer's expiry starts its writes (#2206).
         let dispatch_task = spawn_owned(audit_owner.clone(), move || async move {
             let mut seg_receivers: HashMap<SegRecvKey, SegmentedRequestState> = HashMap::new();
             let mut notifications_open = true;
@@ -759,7 +761,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     }
                 };
                 schedule_fanout.fire(&committed).await;
-                schedule_runner.start(committed.command_runs);
+                command_runs.start(committed.command_runs);
             }
         }));
 
@@ -798,11 +800,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             cov_fanout.clone().run_revisits()
         }));
 
-        let binary_lighting_operation_task = Some(
-            super::binary_lighting_lifecycle::spawn_binary_lighting_operation_task(
-                cov_fanout, monotonic,
-            ),
-        );
+        let binary_lighting_operation_task =
+            Some(spawn_operation(cov_fanout, monotonic, timer_runner));
 
         let broadcaster = super::broadcaster::BroadcasterState::new(
             &network,

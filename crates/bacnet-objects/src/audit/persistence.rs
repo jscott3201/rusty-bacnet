@@ -87,6 +87,9 @@ pub trait AuditLogPersistence: Send + Sync {
 #[cfg(feature = "std")]
 pub struct FileAuditLogPersistence {
     slot_paths: [PathBuf; 2],
+    /// Test support: keep the slots here instead of at `slot_paths`.
+    #[cfg(feature = "test-support")]
+    memory: Option<crate::durable::MemoryFiles>,
 }
 
 #[cfg(feature = "std")]
@@ -106,7 +109,41 @@ impl FileAuditLogPersistence {
         slot1.push(".slot1");
         Ok(Self {
             slot_paths: [PathBuf::from(slot0), PathBuf::from(slot1)],
+            #[cfg(feature = "test-support")]
+            memory: None,
         })
+    }
+
+    /// Test support, not a stable API: keep the slots in `memory`'s
+    /// entries 0 and 1 instead of on disk, decoding, selecting and encoding
+    /// them as on disk (#2233). [`slot_paths`](Self::slot_paths) are then
+    /// placeholders.
+    /// Nothing reaches disk: the state is gone when the process ends, so
+    /// never use this outside tests.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn in_memory(memory: crate::durable::MemoryFiles) -> Self {
+        let mut store = Self::new("in-memory").expect("a path that isn't empty");
+        store.memory = Some(memory);
+        store
+    }
+
+    /// Slot `slot`'s octets, or `None` when it doesn't exist.
+    fn read_slot(&self, slot: usize) -> Result<Option<Vec<u8>>, SlotReadFailure> {
+        #[cfg(feature = "test-support")]
+        if let Some(memory) = &self.memory {
+            let data = memory.read(slot, MAX_SNAPSHOT_BYTES + 1);
+            if data
+                .as_ref()
+                .is_some_and(|data| data.len() > MAX_SNAPSHOT_BYTES)
+            {
+                return Err(SlotReadFailure::Recoverable(Error::OutOfRange(format!(
+                    "AuditLog snapshot length exceeds {MAX_SNAPSHOT_BYTES}"
+                ))));
+            }
+            return Ok(data);
+        }
+        read_slot_file(&self.slot_paths[slot])
     }
 
     /// Concrete slot paths, exposed for application backup and diagnostics.
@@ -132,16 +169,19 @@ enum SlotReadFailure {
 #[cfg(feature = "std")]
 impl AuditLogPersistence for FileAuditLogPersistence {
     fn load(&self, expected_object: ObjectIdentifier) -> Result<Option<AuditLogSnapshot>, Error> {
-        let slots = [
-            read_slot(&self.slot_paths[0], expected_object),
-            read_slot(&self.slot_paths[1], expected_object),
-        ];
+        let slots = [0, 1].map(|slot| slot_state(self.read_slot(slot), expected_object));
         select_newest_slot(slots)
     }
 
     fn commit(&self, snapshot: &AuditLogSnapshot) -> Result<(), Error> {
         let bytes = encode_snapshot(snapshot)?;
-        let path = &self.slot_paths[(snapshot.generation % 2) as usize];
+        let slot = (snapshot.generation % 2) as usize;
+        #[cfg(feature = "test-support")]
+        if let Some(memory) = &self.memory {
+            memory.write(slot, bytes);
+            return Ok(());
+        }
+        let path = &self.slot_paths[slot];
         if let Some(parent) = path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
@@ -229,9 +269,16 @@ fn invalidate_failed_slot(file: &File) {
     let _ = file.sync_all();
 }
 
+/// What a slot read as `read` holds for `expected_object`.
 #[cfg(feature = "std")]
-fn read_slot(path: &Path, expected_object: ObjectIdentifier) -> SlotState {
-    match read_slot_inner(path, expected_object) {
+fn slot_state(
+    read: Result<Option<Vec<u8>>, SlotReadFailure>,
+    expected_object: ObjectIdentifier,
+) -> SlotState {
+    match read.and_then(|data| {
+        data.map(|data| decode_slot(&data, expected_object))
+            .transpose()
+    }) {
         Ok(Some(snapshot)) => SlotState::Valid(snapshot),
         Ok(None) => SlotState::Missing,
         Err(SlotReadFailure::Recoverable(error)) => SlotState::Recoverable(error),
@@ -239,11 +286,9 @@ fn read_slot(path: &Path, expected_object: ObjectIdentifier) -> SlotState {
     }
 }
 
+/// The octets of the slot file at `path`, or `None` when it doesn't exist.
 #[cfg(feature = "std")]
-fn read_slot_inner(
-    path: &Path,
-    expected_object: ObjectIdentifier,
-) -> Result<Option<AuditLogSnapshot>, SlotReadFailure> {
+fn read_slot_file(path: &Path) -> Result<Option<Vec<u8>>, SlotReadFailure> {
     let file = match File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
@@ -276,8 +321,16 @@ fn read_slot_inner(
             "AuditLog snapshot changed while being read".into(),
         )));
     }
+    Ok(Some(data))
+}
 
-    verify_snapshot_integrity(&data).map_err(SlotReadFailure::Recoverable)?;
+/// One slot's octets as a snapshot for `expected_object`.
+#[cfg(feature = "std")]
+fn decode_slot(
+    data: &[u8],
+    expected_object: ObjectIdentifier,
+) -> Result<AuditLogSnapshot, SlotReadFailure> {
+    verify_snapshot_integrity(data).map_err(SlotReadFailure::Recoverable)?;
     let version = u16::from_be_bytes(data[8..10].try_into().unwrap());
     if !matches!(
         version,
@@ -294,9 +347,7 @@ fn read_slot_inner(
             "AuditLog snapshot object identity does not match".into(),
         )));
     }
-    decode_verified_snapshot(&data, object_identifier, version)
-        .map(Some)
-        .map_err(SlotReadFailure::Recoverable)
+    decode_verified_snapshot(data, object_identifier, version).map_err(SlotReadFailure::Recoverable)
 }
 
 fn verify_snapshot_integrity(data: &[u8]) -> Result<(), Error> {

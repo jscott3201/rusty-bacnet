@@ -90,3 +90,38 @@ fn pics_timer_property_metadata_is_exact() {
         }
     }
 }
+
+#[test]
+fn pics_timer_state_change_rows_come_as_a_set() {
+    use bacnet_types::constructed::BACnetTimerStateChangeValue as V;
+    let mut object = TimerObject::new(7, "TMR-7").unwrap();
+    object
+        .set_state_change(core::array::from_fn(|_| V::NoValue), vec![], 16)
+        .unwrap();
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(object)).unwrap();
+    let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default())
+        .instance_types_only(&db);
+    let rows: Vec<_> = pics.supported_object_types[0]
+        .supported_properties
+        .iter()
+        .filter(|row| {
+            matches!(
+                row.property_id,
+                P::STATE_CHANGE_VALUES
+                    | P::LIST_OF_OBJECT_PROPERTY_REFERENCES
+                    | P::PRIORITY_FOR_WRITING
+            )
+        })
+        .map(|row| (row.property_id, row.access.optional, row.access.writable))
+        .collect();
+    // Footnote 5: optional, all three together.
+    assert_eq!(
+        rows,
+        sorted_rows(&[
+            (P::STATE_CHANGE_VALUES, true, true),
+            (P::LIST_OF_OBJECT_PROPERTY_REFERENCES, true, true),
+            (P::PRIORITY_FOR_WRITING, true, false),
+        ])
+    );
+}

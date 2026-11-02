@@ -84,6 +84,7 @@ alloc_only! {
     pub mod schedule;
     mod shed_level;
     pub mod staging;
+    mod timer_state_change;
     mod value_source;
 
     pub use access_credential::{
@@ -138,6 +139,9 @@ alloc_only! {
     };
     pub use log_multiple_record::{decode_log_multiple_record, encode_log_multiple_record};
     pub use log_record::{decode_log_record, encode_log_record};
+    pub use timer_state_change::{
+        decode_timer_state_change_value, encode_timer_state_change_value,
+    };
     pub use name_value::{decode_name_value, encode_name_value};
     pub use network_port::{
         decode_bdt_entry, decode_bdt_entry_list, decode_fdt_entry, decode_fdt_entry_list,

@@ -102,6 +102,19 @@ impl FileNotificationForwarderPersistence {
         })
     }
 
+    /// Test support, not a stable API: keep the file in `memory`'s entry 0
+    /// instead of on disk, decoding and encoding it as on disk (#2233).
+    /// [`path`](Self::path) is then a placeholder.
+    /// Nothing reaches disk: the state is gone when the process ends, so
+    /// never use this outside tests.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn in_memory(memory: crate::durable::MemoryFiles) -> Self {
+        let mut store = Self::new("in-memory").expect("a path that isn't empty");
+        store.file.keep_in(memory);
+        store
+    }
+
     /// The file the lists are kept in.
     pub fn path(&self) -> &Path {
         self.file.path()

@@ -13,9 +13,11 @@
 //! state machine still answers writes, but a running timer doesn't count
 //! down, and Reliability is writable.
 //!
-//! The object has no State_Change_Values, List_Of_Object_Property_References
-//! or Priority_For_Writing, so a transition has no write requests to make
-//! (#2206).
+//! Without State_Change_Values, List_Of_Object_Property_References and
+//! Priority_For_Writing a transition makes no writes. With them
+//! ([`TimerObject::set_state_change`]) each transition queues writes of its
+//! configured value to every referenced property, which the bundled server
+//! makes as it makes a Command's (`state_change`, #2206).
 //!
 //! A Timer keeps nothing across a restart: a rebuilt one starts IDLE with
 //! Last_State_Change NONE.
@@ -36,10 +38,14 @@ use crate::traits::{BACnetObject, DeadlineWaker, MonotonicClock};
 
 mod metadata;
 mod state;
+mod state_change;
+#[cfg(test)]
+mod state_change_tests;
 #[cfg(test)]
 mod tests;
 
 use state::Countdown;
+pub use state_change::{MAX_TIMER_REFERENCES, StateChangeValues};
 
 /// The shortest timeout a new Timer accepts, in milliseconds: zero is the
 /// expire request, so it can't start a timer.
@@ -70,6 +76,7 @@ pub struct TimerObject {
     out_of_service: bool,
     reliability: Reliability,
     saved_reliability: Option<Reliability>,
+    state_change: Option<state_change::StateChange>,
     clock: Option<Arc<dyn ClockReader>>,
     monotonic_clock: Option<Arc<MonotonicClock>>,
     deadline_waker: Option<Arc<DeadlineWaker>>,
@@ -102,6 +109,7 @@ impl TimerObject {
             out_of_service: false,
             reliability: Reliability::NO_FAULT_DETECTED,
             saved_reliability: None,
+            state_change: None,
             clock: None,
             monotonic_clock: None,
             deadline_waker: None,
@@ -190,7 +198,26 @@ impl BACnetObject for TimerObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        match property {
+            PropertyIdentifier::RELIABILITY => {
+                return Ok(PropertyValue::Enumerated(
+                    self.served_reliability().to_raw(),
+                ));
+            }
+            PropertyIdentifier::STATUS_FLAGS => {
+                return Ok(common::compute_status_flags(
+                    self.status_flags,
+                    self.served_reliability(),
+                    self.out_of_service,
+                    self.event_state,
+                ));
+            }
+            _ => {}
+        }
         if let Some(result) = read_common_properties!(self, property, array_index) {
+            return result;
+        }
+        if let Some(result) = self.read_state_change(property, array_index) {
             return result;
         }
         match property {
@@ -245,6 +272,10 @@ impl BACnetObject for TimerObject {
         // is already due.
         self.apply_due_expiry();
         let was_out_of_service = self.out_of_service;
+        if property == PropertyIdentifier::OUT_OF_SERVICE && !was_out_of_service {
+            // A client simulates Reliability from what it reads now.
+            self.reliability = self.served_reliability();
+        }
         if let Some(result) = common::write_out_of_service_with_reliability_restore(
             &mut self.out_of_service,
             &mut self.reliability,
@@ -258,6 +289,9 @@ impl BACnetObject for TimerObject {
             return result;
         }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
+            return result;
+        }
+        if let Some(result) = self.write_state_change(property, array_index, &value) {
             return result;
         }
         match property {
@@ -302,6 +336,19 @@ impl BACnetObject for TimerObject {
     fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
         Some(self)
     }
+
+    fn command_runner(&self) -> Option<&dyn crate::traits::CommandRunner> {
+        self.state_change
+            .is_some()
+            .then_some(self as &dyn crate::traits::CommandRunner)
+    }
+
+    fn command_runner_mut(&mut self) -> Option<&mut dyn crate::traits::CommandRunner> {
+        match self.state_change {
+            Some(_) => Some(self),
+            None => None,
+        }
+    }
 }
 
 impl crate::traits::Timed for TimerObject {
@@ -311,8 +358,11 @@ impl crate::traits::Timed for TimerObject {
         self.deadline_waker = clocks.deadline_waker.clone();
     }
 
+    /// `true` when a countdown expired, and also while a transition's writes
+    /// wait to be taken: a refused write can make one (the due expiry it
+    /// applies first) with nothing to take it, so the pass takes it.
     fn advance_monotonic_time(&mut self, now: Duration) -> bool {
-        self.expire_if_due(now)
+        self.expire_if_due(now) | self.has_pending_writes()
     }
 
     fn next_monotonic_deadline(&self) -> Option<Duration> {

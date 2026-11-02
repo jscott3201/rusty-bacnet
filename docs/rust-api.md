@@ -4059,6 +4059,16 @@ behaviour, so an object without it writes nothing.
   refuse it with PROPERTY / WRITE_ACCESS_DENIED while Out_Of_Service is TRUE.
   All three default to opting out; `set_reliability` answers
   `not_supported()`.
+- **`schedule_runner()` → `ScheduleRunner`**, for a Schedule whose writes
+  to its controlled references the server makes. The schedule pass calls
+  `take_owed_schedule_writes`, then `tick_schedule(today, time,
+  calendar_active)`, then `complete_schedule_write(write, outcomes)` for how
+  each target took each write; while the Device clock is invalid it skips the
+  tick but still sends the owed writes, and `calendar_active` answers `false`
+  for an identifier that names no Calendar. The database asks
+  `retry_refusals_naming(target)` when an object is added. Only
+  `tick_schedule` has no default. The built-in `ScheduleObject` lends it
+  (see Schedule & Notification below).
 
 ```rust,ignore
 use bacnet_objects::traits::{BACnetObject, Clocks, Timed};
@@ -4106,6 +4116,43 @@ sensor
     .reliability_eval()
     .map(|r| r.set_reliability(Reliability::NO_SENSOR))
     .transpose()?;
+```
+
+A Schedule's hooks move to the capability like this:
+
+```rust,ignore
+// Before: on `impl BACnetObject for MySchedule`, and a call site.
+fn tick_schedule(
+    &mut self,
+    today: SpecificDate,
+    time: Time,
+    calendar_active: &dyn Fn(ObjectIdentifier) -> bool,
+) -> Option<ScheduleWrite> {
+    self.evaluate_and_write(today, time, calendar_active)
+}
+let owed = schedule.take_owed_schedule_writes();
+
+// After: lend the capability and call through it.
+use bacnet_objects::traits::{BACnetObject, ScheduleRunner};
+
+fn schedule_runner(&mut self) -> Option<&mut dyn ScheduleRunner> {
+    Some(self)
+}
+
+impl ScheduleRunner for MySchedule {
+    fn tick_schedule(
+        &mut self,
+        today: SpecificDate,
+        time: Time,
+        calendar_active: &dyn Fn(ObjectIdentifier) -> bool,
+    ) -> Option<ScheduleWrite> {
+        self.evaluate_and_write(today, time, calendar_active)
+    }
+}
+let owed = schedule
+    .schedule_runner()
+    .map(|runner| runner.take_owed_schedule_writes())
+    .unwrap_or_default();
 ```
 
 A local input moves from its hook to the capability like this:
@@ -4955,8 +5002,8 @@ inline calendar entry matching `today`, or a referenced Calendar that is TRUE),
 then today's weekly entry if not NULL, then Schedule_Default; outside the
 period it returns `None`. Time-values are typed (`BACnetTimeValue::value` is a
 primitive `PropertyValue`), so Present_Value and the target writes carry the
-scheduled value's own datatype. The public `BACnetObject::tick_schedule(today,
-time, calendar_active)` hook returns `Option<ScheduleWrite>` (value, priority,
+scheduled value's own datatype. The public `ScheduleRunner::tick_schedule(today,
+time, calendar_active)` method returns `Option<ScheduleWrite>` (value, priority,
 references, retry): a changed value, or any value on entering the
 Effective_Period (start-up included); with neither, the current value for the
 references that refused their last write, flagged `retry` (#1436). The server writes it to every reference at
@@ -4986,7 +5033,7 @@ value of that datatype at its last write (#1086), or the reference itself: a
 missing object or property, or an array index the property can't take (#1433).
 The Schedule still writes its references. The server reports each write's
 per-target result through the public
-`BACnetObject::complete_schedule_write(write, outcomes)` hook, one
+`ScheduleRunner::complete_schedule_write(write, outcomes)` method, one
 `ScheduleTargetOutcome` (`Accepted`, `DatatypeRefused` for INVALID_DATA_TYPE or
 DATATYPE_NOT_SUPPORTED, `ReferenceRefused` for UNKNOWN_OBJECT,
 UNKNOWN_PROPERTY, PROPERTY_IS_NOT_AN_ARRAY or INVALID_ARRAY_INDEX, `Failed`
@@ -4998,7 +5045,7 @@ the refused references alone (#1436): the 60-second tick, or the pass any
 committed write to the Schedule runs. So an array grown to take the index gets
 the value and clears the fault within one tick. A target object created later
 doesn't wait (#1440): `ObjectDatabase::add` asks each Schedule through the
-public `BACnetObject::retry_refusals_naming(target)` hook whether it holds a
+public `ScheduleRunner::retry_refusals_naming(target)` method whether it holds a
 refusal naming the new object, and queues those that do; the server then
 writes that retry to the references naming the object alone and fans COV out,
 under the CreateObject's own guard or, after the application's own `add`, from
@@ -5033,7 +5080,7 @@ primitive value, NULL included (INVALID_DATA_TYPE otherwise, and
 WRITE_ACCESS_DENIED in service), and the tick leaves it alone. Every accepted
 write goes on to the references at `Priority_For_Writing`, a NULL
 relinquishing, in the pass the committed write triggers. The public
-`BACnetObject::take_owed_schedule_writes()` hook hands the pass what a Schedule
+`ScheduleRunner::take_owed_schedule_writes()` method hands the pass what a Schedule
 owes outside its calculation, once and before `tick_schedule`: the
 relinquishing NULLs a change of references or priority owes, then that
 written value. It needs no clock, so a value written on the object directly
@@ -5596,8 +5643,19 @@ outside the range, is VALUE_OUT_OF_RANGE and changes nothing. A new Timer
 accepts 1 to 4294967295 ms and defaults to 60000 ms; change them with
 `set_pres_value_range` and `set_default_timeout`. The countdown runs on the
 database's monotonic clock and holds while Out_Of_Service is TRUE, which also
-makes Reliability writable. The Timer has no State_Change_Values, so its
-transitions write nothing to other objects.
+makes Reliability writable.
+
+`TimerObject::set_state_change(values, references, priority)` gives the Timer
+State_Change_Values, List_Of_Object_Property_References and
+Priority_For_Writing, which it then serves together (#2206). Each transition
+writes its element of the seven values (`BACnetTimerStateChangeValue`;
+`NoValue` writes nothing) to every reference at that priority. The bundled
+server makes those writes as it makes a Command's, after the guard that made
+the transition is released, including the writes an expiry on the operation
+task leaves. A newer transition supersedes a run still writing. The values and
+references take network writes; Reliability reads CONFIGURATION_ERROR while
+the non-NULL values differ in datatype, and otherwise reports the first failed
+write of the last run.
 
 The Loop serves every required Table 12-20 row. Setpoint, the gain constants,
 Update_Interval and Action (DIRECT or REVERSE) take network writes.

@@ -1,7 +1,9 @@
 //! The seed inputs in `seeds/<target>/`: real saved files, built here.
 //!
 //! Each format's sample from `restore.rs` is saved through its backend in a
-//! scratch directory, and its files are laid out as the target's input.
+//! scratch directory, and its files are laid out as the target's input. A
+//! `*_file` target takes the same inputs as its in-memory twin, so its seeds
+//! are the same files.
 //! [`generated_seeds_are_saved`] holds the files in `seeds/` to what this
 //! module builds: `SEEDS_WRITE=1 cargo test` writes them again. A minimized
 //! failing input saved under `seeds/<target>/` is replayed like any other
@@ -13,10 +15,21 @@ use std::path::{Path, PathBuf};
 use crate::restore::{Format, Outcome, Scratch, read_files};
 use crate::{Target, seal};
 
-const TARGETS: [(&str, Target); 3] = [
-    ("log_restore", Target::Log),
-    ("audit_restore", Target::Audit),
-    ("object_file_restore", Target::ObjectFile),
+/// A target's check: [`crate::check`] or [`crate::check_files`].
+type Check = fn(Target, &[u8]) -> Outcome;
+
+/// Each target: its name, its formats and its check.
+const TARGETS: [(&str, Target, Check); 6] = [
+    ("log_restore", Target::Log, crate::check),
+    ("audit_restore", Target::Audit, crate::check),
+    ("object_file_restore", Target::ObjectFile, crate::check),
+    ("log_restore_file", Target::Log, crate::check_files),
+    ("audit_restore_file", Target::Audit, crate::check_files),
+    (
+        "object_file_restore_file",
+        Target::ObjectFile,
+        crate::check_files,
+    ),
 ];
 
 struct Seed {
@@ -65,7 +78,7 @@ fn audit_version(slot: &[u8], version: u16) -> Vec<u8> {
 
 fn generated() -> Vec<Seed> {
     let mut seeds = Vec::new();
-    for (target, kind) in TARGETS {
+    for (target, kind, _) in TARGETS {
         for (selector, format) in kind.formats().into_iter().enumerate() {
             let selector = u8::try_from(selector).expect("a selector octet");
             let mut seed = |suffix: &str, octets| {
@@ -116,12 +129,12 @@ fn generated_seeds_are_saved() {
             )
         });
         assert_eq!(saved, seed.octets, "{} is stale", path.display());
-        let (_, kind) = TARGETS
+        let (_, kind, check) = TARGETS
             .into_iter()
-            .find(|(target, _)| *target == seed.target)
+            .find(|(target, ..)| *target == seed.target)
             .unwrap();
         assert_eq!(
-            crate::check(kind, &seed.octets),
+            check(kind, &seed.octets),
             Outcome {
                 loaded: true,
                 built: true
@@ -136,11 +149,11 @@ fn generated_seeds_are_saved() {
 /// every format has one.
 #[test]
 fn every_seed_passes() {
-    for (target, kind) in TARGETS {
+    for (target, kind, check) in TARGETS {
         let mut seeded = vec![false; kind.formats().len()];
         for entry in fs::read_dir(directory(target)).expect("the seeds directory") {
             let octets = fs::read(entry.expect("a directory entry").path()).unwrap();
-            crate::check(kind, &octets);
+            check(kind, &octets);
             if let Some(&selector) = octets.first() {
                 let count = seeded.len();
                 seeded[usize::from(selector) % count] = true;

@@ -161,6 +161,10 @@ pub(crate) use inline::SaveWriter;
 #[cfg(feature = "std")]
 pub(crate) use thread::SaveWriter;
 
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use file::MemoryFiles;
+
 /// How long a staged write may wait for its request once its save has run.
 /// It counts from the end of the save, so a slow save never uses it up. Past
 /// it the request is taken to be gone, and the object drops the staged state

@@ -1394,6 +1394,12 @@ codecs of `bacnet-services`, which read their fields with the encoding
 crate's tag and value readers. The object crate's fuzz crate,
 `crates/bacnet-objects/fuzz`, shares its restore check with the crate's
 own corruption test: both build `crates/bacnet-objects/tests/support/restore.rs`.
+Its main targets run the file backends in their in-memory mode (the hidden
+`test-support` feature of `bacnet-objects`, not a stable API): the same
+load, slot selection, decode, encode and save code, with the octets in
+memory, so no input touches the file system (#2233). Each has a `*_file`
+twin that restores the same input from real files, for the file system
+calls themselves, and fails unless both come to the same outcome.
 The oracle of each target is in the doc comment at the top of its file (for
 the object crate's targets, of its `src/lib.rs`).
 
@@ -1408,9 +1414,9 @@ the object crate's targets, of its `src/lib.rs`).
 | `value_decode` | any octets | the tag walk always moves forward and stays within the input; each application value in turn round trips through `encode_property_value`; the owned decoder, the borrowed view and `validate_application_value` agree on each application-tagged value (the view also reads a character set the owned decoder can't convert, and the validator holds a Signed to its shortest form); an opening tag's element ends within the input; a `BACnetTimeStamp` round trips |
 | `constructed_decode` | a selector octet, then any octets | the constructed-value codec it picks (65 of them: recipients and destinations, schedules and calendars, event and fault parameters, log and audit records, network port tables and the rest of `bacnet_encoding::constructed`) round trips; the value-only readers, which have no encoder of their own, only decode, and the tolerant event notification decoder agrees with the strict one (the same request, or one without the message text the strict one refused) |
 | `service_decode` | a selector octet, then service parameters | the service codec it picks round trips: every confirmed request at its own service choice (0 to 33), then the unconfirmed requests, the ACKs and the formal error productions; the forwarded event notification only decodes, and the borrowed ReadProperty-ACK agrees with the owned one |
-| `log_restore` | a selector octet (Trend Log, Trend Log Multiple or Event Log), then two snapshot slots, each present or not, and sealed or not: a sealed slot gets the length field and CRC-32 of what it holds, so mutations reach the payload decoders | through `FileLogPersistence`: no panic; a loaded snapshot names the object and commits to fresh storage and loads back equal; a load that fails fails `with_persistence` too; a refused `with_persistence` leaves both slots as they were; a log built from a snapshot reports it `reopened()` and serves its Total_Record_Count |
-| `audit_restore` | an Audit Log's two slots, laid out as for `log_restore`; the seeds hold schema versions 1, 2 and 3 | the same through `FileAuditLogPersistence` and `AuditLogObject::new`, which serves the snapshot's records, Total_Record_Count, Buffer_Size, Enable and generation |
-| `object_file_restore` | a selector octet (Notification Forwarder, Notification Class, Tags, Color, Color Temperature or Access Rights), then the file | through each one-file backend: no panic; a loaded snapshot that saves loads back equal, and saving it again writes the same octets; one that doesn't save is refused by the object; a load that fails fails the object's build; a refused build leaves the file as it was |
+| `log_restore`, `log_restore_file` | a selector octet (Trend Log, Trend Log Multiple or Event Log), then two snapshot slots, each present or not, and sealed or not: a sealed slot gets the length field and CRC-32 of what it holds, so mutations reach the payload decoders | through `FileLogPersistence` (in memory, or on disk for the `_file` twin): no panic; a loaded snapshot names the object and commits to fresh storage and loads back equal; a load that fails fails `with_persistence` too; a refused `with_persistence` leaves both slots as they were; a log built from a snapshot reports it `reopened()` and serves its Total_Record_Count |
+| `audit_restore`, `audit_restore_file` | an Audit Log's two slots, laid out as for `log_restore`; the seeds hold schema versions 1, 2 and 3 | the same through `FileAuditLogPersistence` and `AuditLogObject::new`, which serves the snapshot's records, Total_Record_Count, Buffer_Size, Enable and generation |
+| `object_file_restore`, `object_file_restore_file` | a selector octet (Notification Forwarder, Notification Class, Tags, Color, Color Temperature or Access Rights), then the file | through each one-file backend: no panic; a loaded snapshot that saves loads back equal, and saving it again writes the same octets; one that doesn't save is refused by the object; a load that fails fails the object's build; a refused build leaves the file as it was |
 | `mstp_core` | one `MasterCore`, its address, Max_Master, Max_Info_Frames, timers, extended frames and storage from the input, then up to 2,048 steps with injected time: octets, receive errors and silences; whole frames of every type for it, another station or broadcast, on the line or from a host assembler, some damaged or cut off part way; deadlines on time or late; the adapter's starts (some refused or deferred), completions with or without echo, and aborts; queued NPDUs, oversize ones included; request decisions; calls stamped in the past | after every step, by a checker that reads only the line and the adapter's side, never the core's state: no panic; data, Tokens and polls only while the station holds the token, as the frames on the line show it, or as a token retry, a successor search or token generation when Clause 9.5.6 allows them, and otherwise only answers to what was asked, once and in time; at most Max_Info_Frames data frames per token use; poll sweeps one address at a time within Max_Master; T_turnaround before every frame; owed answers sent on a quiet line in time; Tokens to NS and a use's first poll to PS + 1 or TS + 1; queues and delivery slots within their sizes; the adapter contract on every action (one frame at a time, starts only for polled frames, completion only after a start, echo ignored, payloads in the action buffers); deliveries matching frames heard; a call stamped earlier than the last doing what it would at the last |
 
 The encoding crate's round trip: when a decoder accepts its input, ending
@@ -1462,8 +1468,9 @@ Postponed handled as an abandoned request within five.
 `crates/bacnet-encoding/**`, `crates/bacnet-services/**`,
 `crates/bacnet-types/**`, the object crate's persistence code (its fuzz
 crate, `tests/support/restore*.rs`, `src/**/*persistence*.rs`,
-`src/log_persistence/**`, `src/audit/persistence/**` and the durable file
-plumbing in `src/durable.rs` and `src/durable/**`), the workflow,
+`src/log_persistence/**`, `src/audit/persistence/**`, the durable file
+plumbing in `src/durable.rs` and `src/durable/**`, and its `Cargo.toml`,
+which holds the `test-support` feature), the workflow,
 `.github/ci-pins.env`, `scripts/ci/fuzz.sh` or
 `scripts/ci/install-tools.sh`, each target runs for 60 seconds. Other
 changes to the object crate wait for the scheduled run. Twice a
@@ -1523,7 +1530,8 @@ again after a change. The object crate's seeds in
 format's sample, written through its backend by `src/seeds.rs` and laid out
 as its target's input (for the two-slot formats also unsealed, in both
 slots at one generation, and for the Audit Log as schema versions 1 and 2),
-and `cargo test` checks that each one restores. `fuzz.sh run` passes the
+and `cargo test` checks that each one restores. A `*_file` twin's seeds
+are the same files as its in-memory target's. `fuzz.sh run` passes the
 seeds directory after the corpus, so libFuzzer reads the seeds on every run
 and writes new inputs only to the corpus; `cmin` minimizes the corpus alone. `cargo test` replays
 every seed file through its target's check, so a minimized failing input
@@ -1568,9 +1576,10 @@ bash scripts/ci/fuzz.sh build                         # every target
 bash scripts/ci/fuzz.sh run mstp_stream 60            # one target for 60 seconds
 bash scripts/ci/fuzz.sh run mstp_core 600             # the master core for 10 minutes
 bash scripts/ci/fuzz.sh run service_decode 60         # the service codecs, from their seeds
-bash scripts/ci/fuzz.sh run log_restore 60            # the log snapshot restores
-bash scripts/ci/fuzz.sh run audit_restore 60          # the Audit Log snapshot restores
-bash scripts/ci/fuzz.sh run object_file_restore 60    # the one-file formats' restores
+bash scripts/ci/fuzz.sh run log_restore 60            # the log snapshot restores, in memory
+bash scripts/ci/fuzz.sh run audit_restore 60          # the Audit Log snapshot restores, in memory
+bash scripts/ci/fuzz.sh run object_file_restore 60    # the one-file formats' restores, in memory
+bash scripts/ci/fuzz.sh run log_restore_file 60       # the log snapshot restores from files
 FUZZ_WORK=/tmp/fuzz bash scripts/ci/fuzz.sh run bip_encode 600 -max_len=16384
 ```
 
@@ -1578,10 +1587,16 @@ Arguments after the seconds go to libFuzzer. Without `FUZZ_WORK`, the corpus
 and anything a run finds stay in the fuzz crate's `corpus/<target>` and
 `artifacts/<target>`, which git ignores. A run prints its speed at the end
 (`stat::average_exec_per_sec`, inputs a second) with `stat::peak_rss_mb`,
-its peak memory in megabytes. The object crate's targets go through the
-file system, with a synchronized save whenever an input restores, so they
-run at a few thousand inputs a second at most; they keep their files in a
-directory of their own under the system's temporary one (`TMPDIR`).
+its peak memory in megabytes. The object crate's `*_file` targets go
+through the file system, with a synchronized save whenever an input
+restores, so they run at a few thousand inputs a second at most; they keep
+their files in a directory of their own under the system's temporary one
+(`TMPDIR`). Its in-memory targets ran 4 to 14 times as fast in local runs. On macOS
+every target that links `bacnet-objects` keeps all of its instrumented
+code, reachable or not (the coverage tables hold it live, so the linker
+strips none of it), and libFuzzer scans those 220,000 or so counters after
+every input: there even a target that does nothing tops out near 20,000
+inputs a second.
 
 **Triage.** When a target fails, its job uploads the artifact
 `fuzz-<target>` for 30 days (a re-run of the job replaces it): what

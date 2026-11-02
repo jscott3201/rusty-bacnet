@@ -189,6 +189,7 @@ mod scalar_null_writes;
 mod staging_writes;
 mod state_text_count;
 mod tags_profile_rows;
+mod timer_state_change_writes;
 mod timer_writes;
 mod trend_log_multiple_options;
 mod trend_log_options;
