@@ -3,6 +3,14 @@
 //! The object owns threshold/hysteresis evaluation only. It queues guarded
 //! local target-write plans for the server, which executes them after releasing
 //! the source-object database mutation lock.
+//!
+//! **On removal** (#2265) the object gives up the Present_Value slots its
+//! stage writes filled, at each priority it wrote them (`held`). Clause 12.62
+//! doesn't cover deletion; a Staging object holds its targets' slots for as
+//! long as it exists, as a Schedule does, so it follows the Schedule's
+//! release (#2256, #2264), with the same check that the slot is still its own.
+//! A plan still being written when the object goes stops at its next target
+//! (each write checks the generation under its own guard).
 
 use crate::prelude::*;
 use alloc::borrow::Cow;
@@ -22,6 +30,7 @@ use crate::device_reference;
 use crate::property_metadata::{PropertyConformance, PropertyMetadata, PropertyWriteCapability};
 use crate::traits::{BACnetObject, StagingSource};
 
+mod held;
 mod metadata;
 use metadata::STAGING_PROPERTY_METADATA;
 
@@ -95,6 +104,7 @@ pub struct StagingObject {
     reliability_before_out_of_service: Option<Reliability>,
     generation: u64,
     pending_plan: Option<StagingWritePlan>,
+    held: held::HeldSlots,
 }
 
 impl StagingObject {
@@ -134,6 +144,7 @@ impl StagingObject {
             reliability_before_out_of_service: None,
             generation: 0,
             pending_plan: None,
+            held: held::HeldSlots::default(),
         })
     }
 
@@ -184,7 +195,7 @@ impl StagingObject {
     }
 
     fn queue_current_stage_plan(&mut self) {
-        self.generation = self.generation.wrapping_add(1);
+        self.generation = crate::command::next_generation();
         if self.out_of_service || self.present_stage == 0 {
             self.pending_plan = None;
             return;
@@ -202,12 +213,14 @@ impl StagingObject {
                 active: *active,
             })
             .collect();
-        self.pending_plan = Some(StagingWritePlan {
+        let plan = StagingWritePlan {
             source: self.oid,
             generation: self.generation,
             priority: self.priority_for_writing,
             writes,
-        });
+        };
+        self.held.record(&plan);
+        self.pending_plan = Some(plan);
     }
 
     fn reset_and_reevaluate(&mut self) {
@@ -456,7 +469,7 @@ impl BACnetObject for StagingObject {
         ) {
             match (was_out_of_service, self.out_of_service) {
                 (false, true) => {
-                    self.generation = self.generation.wrapping_add(1);
+                    self.generation = crate::command::next_generation();
                     self.pending_plan = None;
                 }
                 (true, false) => self.evaluate(true),
@@ -576,6 +589,13 @@ impl StagingSource for StagingObject {
         }
         self.reliability = reliability;
         true
+    }
+
+    fn take_relinquish_writes(&mut self) -> Vec<crate::schedule::ScheduleWrite> {
+        // A plan never taken wrote nothing, but its slots are recorded; the
+        // ownership check skips them.
+        self.pending_plan = None;
+        self.held.take_relinquish_writes()
     }
 }
 

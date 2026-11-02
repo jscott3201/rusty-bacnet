@@ -7,6 +7,17 @@
 //! themselves are the bundled server's: it takes the queued [`CommandRun`]
 //! under the guard that committed the Present_Value write and makes each
 //! write once that guard is released.
+//!
+//! **On deletion** (#2265) a Command releases nothing. Its actions are
+//! one-shot writes, and Clause 12.10 makes no attempt to undo or roll back
+//! writes already made, so the values it wrote stay until another writer
+//! changes or relinquishes them. A run in progress stops: a local action
+//! checks the run's generation under the guard that commits it, so none is
+//! written once the object is gone, after a Post_Delay included. An action
+//! in another device is checked once its route is known, before its invoke
+//! ID is leased, and before each retry; a request that passed its last check
+//! still goes out if the delete lands in that gap, since no guard is held
+//! over a send.
 
 use crate::prelude::*;
 use alloc::borrow::Cow;

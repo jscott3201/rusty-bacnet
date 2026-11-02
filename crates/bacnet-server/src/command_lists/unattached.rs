@@ -99,6 +99,11 @@ impl RunHost for Unattached<'_> {
         let request = request(command)?;
         let runs = {
             let mut db = self.db.write().await;
+            // Under the write's own guard: a run whose object was deleted
+            // meanwhile writes nothing (#2265).
+            if !super::is_current(&db, run) {
+                return Err(super::stale_run());
+            }
             let origin = crate::command_source::resolve_local(
                 &db,
                 crate::LocalCommandSource::Object(run.source),
@@ -127,6 +132,7 @@ impl RunHost for Unattached<'_> {
 
     async fn write_remote(
         &self,
+        _run: &CommandRun,
         _device: ObjectIdentifier,
         _command: &BACnetActionCommand,
     ) -> Result<(), RemoteRequestError> {

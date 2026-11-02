@@ -149,10 +149,11 @@ impl ObjectDatabase {
         let is_new = !self.objects.contains_key(&oid);
         self.enrollment_eval_sources.remove(&oid);
         self.trend_poll.retire(&oid);
-        // A Schedule replaced gives up the slots it held, as a removed one
-        // does (#2264); the new object starts from what it holds.
+        // A Schedule or Staging object replaced gives up the slots it held,
+        // as a removed one does (#2264, #2265); the new object starts from
+        // what it holds.
         if let Some(mut replaced) = self.objects.insert(oid, object) {
-            self.schedule_removed(oid, replaced.as_mut());
+            self.commander_removed(oid, replaced.as_mut());
         }
         self.audit_membership_changed(oid, true);
         if is_new {
@@ -405,7 +406,7 @@ impl ObjectDatabase {
                     type_set.retain(|o| o != oid);
                 }
                 self.audit_membership_changed(*oid, false);
-                self.schedule_removed(*oid, obj.as_mut());
+                self.commander_removed(*oid, obj.as_mut());
                 self.membership_changed(*oid, false);
                 Ok(Some(obj))
             }

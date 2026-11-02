@@ -1,6 +1,8 @@
 //! The Staging capability: the target writes a Staging object's stage
 //! changes queue.
 
+use crate::prelude::*;
+use crate::schedule::ScheduleWrite;
 use crate::staging::StagingWritePlan;
 
 /// A Staging object's queued target writes and their outcome.
@@ -24,4 +26,13 @@ pub trait StagingSource {
     /// whether readable state changed; a stale generation is ignored, so
     /// older work cannot fault a newer stage change.
     fn complete_staging_write_plan(&mut self, generation: u64, success: bool) -> bool;
+
+    /// The NULLs that give up every priority slot the object's stage writes
+    /// filled, for its removal from the database (#2265). Each is a
+    /// [`relinquish`](ScheduleWrite::relinquish) write, so the bundled
+    /// server sends it only to a slot whose Value_Source still names this
+    /// object. Each is taken once. The default owes none.
+    fn take_relinquish_writes(&mut self) -> Vec<ScheduleWrite> {
+        Vec::new()
+    }
 }

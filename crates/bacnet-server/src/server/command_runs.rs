@@ -37,7 +37,7 @@
 //! joined and the database is free (#1252); a panic ends it straight away.
 
 use super::local_writes::{LocalWrite, LocalWriter};
-use super::remote_writes::{RemoteWrite, RemoteWriter};
+use super::remote_writes::{RemoteWrite, RemoteWriter, RunCheck};
 use super::request_tasks::RequestTaskSpawner;
 use super::*;
 use crate::command_lists::{RunHost, TakenRuns};
@@ -183,6 +183,18 @@ impl<T: TransportPort + 'static> CommandRunner<T> {
         self.report(source).await;
     }
 
+    /// [`RunHost::write_remote`] with no run to check, for tests of the
+    /// remote write path itself.
+    #[cfg(test)]
+    pub(super) async fn write_remote_unchecked(
+        &self,
+        device: ObjectIdentifier,
+        command: &BACnetActionCommand,
+    ) -> Result<(), RemoteRequestError> {
+        let write = RemoteWrite::for_command(device, command)?;
+        self.remote_writer().write(&write, None).await
+    }
+
     fn remote_writer(&self) -> RemoteWriter<'_, T> {
         RemoteWriter {
             network: &self.network,
@@ -241,9 +253,11 @@ impl<T: TransportPort + 'static> RunHost for CommandRunner<T> {
                 &encoded,
             )?
         };
+        // Made only while the run is current, checked under the commit's
+        // guard: a run whose object was deleted meanwhile writes nothing.
         let runs = self
             .writer()
-            .write(
+            .write_for_run(
                 &command.object_identifier,
                 LocalWrite::Property {
                     property: command.property_identifier,
@@ -251,7 +265,7 @@ impl<T: TransportPort + 'static> RunHost for CommandRunner<T> {
                     priority: command.priority,
                 },
                 value,
-                Some(crate::LocalCommandSource::Object(run.source)),
+                run,
             )
             .await?;
         // A write that starts another Command's or Channel's run starts that
@@ -262,11 +276,13 @@ impl<T: TransportPort + 'static> RunHost for CommandRunner<T> {
     /// Write one value in another device as a confirmed WriteProperty.
     async fn write_remote(
         &self,
+        run: &CommandRun,
         device: ObjectIdentifier,
         command: &BACnetActionCommand,
     ) -> Result<(), RemoteRequestError> {
         let write = RemoteWrite::for_command(device, command)?;
-        self.remote_writer().write(&write).await
+        let check = RunCheck { db: &self.db, run };
+        self.remote_writer().write(&write, Some(check)).await
     }
 
     /// Read one property in another device as a confirmed ReadProperty.

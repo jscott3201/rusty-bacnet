@@ -88,10 +88,12 @@ pub(crate) trait RunHost: Sync {
     ) -> impl Future<Output = Result<(), Error>> + Send;
 
     /// Make one write in `device`, another device, as a confirmed
-    /// WriteProperty carrying `command`'s value. No database guard is held
-    /// while it is outstanding.
+    /// WriteProperty carrying `command`'s value, on behalf of `run`. No
+    /// database guard is held while it is outstanding, and no attempt goes
+    /// out once `run` is no longer current ([`is_current`]).
     fn write_remote(
         &self,
+        run: &CommandRun,
         device: ObjectIdentifier,
         command: &BACnetActionCommand,
     ) -> impl Future<Output = Result<(), RemoteRequestError>> + Send;
@@ -224,6 +226,27 @@ fn end_ownerless_object(object: &mut dyn BACnetObject) -> bool {
     runner.complete_command_run(generation, Err(WriteFailure::Process))
 }
 
+/// Whether `run` is still its object's current run: the object is in `db`
+/// and its generation is the run's. A run whose object was deleted or
+/// replaced, or whose object started another run, is stale and makes no
+/// further write (#2265).
+pub(crate) fn is_current(db: &ObjectDatabase, run: &CommandRun) -> bool {
+    db.get(&run.source)
+        .and_then(|object| object.command_runner())
+        .map(|runner| runner.command_generation())
+        == Some(run.generation)
+}
+
+/// The refusal a write for a run that is no longer current ([`is_current`])
+/// gets, under the guard that would have committed it. The run stops there,
+/// since recording the outcome fails the same generation check.
+pub(crate) fn stale_run() -> Error {
+    Error::protocol(
+        bacnet_types::enums::ErrorClass::OBJECT,
+        bacnet_types::enums::ErrorCode::UNKNOWN_OBJECT,
+    )
+}
+
 /// Make `run`'s writes, then end it.
 ///
 /// The returned future owns the run from this call: dropping it before the
@@ -317,12 +340,7 @@ async fn make<H: RunHost>(
 ) -> Option<Result<(), WriteFailure>> {
     let remote = {
         let db = host.database().read().await;
-        if db
-            .get(&run.source)
-            .and_then(|object| object.command_runner())
-            .map(|runner| runner.command_generation())
-            != Some(run.generation)
-        {
+        if !is_current(&db, run) {
             return None;
         }
         // Naming this Device is the same as naming none. Clause 12.10.8

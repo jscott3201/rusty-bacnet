@@ -198,3 +198,78 @@ async fn unattached_channel_member_in_another_device_fails_unsent() {
         PropertyValue::Real(4.0)
     );
 }
+
+/// A write for a run that is no longer its object's current one is refused
+/// under the write's own guard and changes nothing (#2265); the same write
+/// for the current run is made.
+#[tokio::test]
+async fn a_write_for_a_stale_run_is_refused_under_its_guard() {
+    let cmd1 = oid(ObjectType::COMMAND, 1);
+    let ao1 = oid(ObjectType::ANALOG_OUTPUT, 1);
+    let mut objects = ObjectDatabase::new();
+    objects
+        .add(Box::new(
+            bacnet_objects::device::DeviceObject::new(
+                bacnet_objects::device::DeviceConfig::default(),
+            )
+            .unwrap(),
+        ))
+        .unwrap();
+    objects
+        .add(Box::new(
+            bacnet_objects::analog::AnalogOutputObject::new(1, "AO-1", EngineeringUnits::PERCENT)
+                .unwrap(),
+        ))
+        .unwrap();
+    objects
+        .add(Box::new(CommandObject::new(1, "CMD-1").unwrap()))
+        .unwrap();
+    let current = objects
+        .get(&cmd1)
+        .and_then(|object| object.command_runner())
+        .unwrap()
+        .command_generation();
+    let db = Arc::new(RwLock::new(objects));
+    let (started, _queued) = mpsc::unbounded_channel();
+    let host = Unattached { db: &db, started };
+    let command = BACnetActionCommand {
+        device_identifier: None,
+        object_identifier: ao1,
+        property_identifier: PropertyIdentifier::PRESENT_VALUE,
+        property_array_index: None,
+        property_value: PropertyValue::Real(40.0),
+        priority: Some(8),
+        post_delay: None,
+        quit_on_failure: false,
+        write_successful: false,
+    };
+    let slot8 = |db: &ObjectDatabase| {
+        db.get(&ao1)
+            .unwrap()
+            .read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(8))
+            .unwrap()
+    };
+    // Generation 0 is never handed out.
+    let stale = CommandRun {
+        generation: 0,
+        ..parent(cmd1)
+    };
+    let refused = host.write(&stale, &command).await.unwrap_err();
+    assert!(
+        matches!(
+            refused,
+            bacnet_types::error::Error::Remote(bacnet_types::error::RemoteError::Error {
+                class: bacnet_types::enums::ErrorClass::OBJECT,
+                code: bacnet_types::enums::ErrorCode::UNKNOWN_OBJECT,
+            })
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(slot8(&*db.read().await), PropertyValue::Null);
+    let run = CommandRun {
+        generation: current,
+        ..parent(cmd1)
+    };
+    host.write(&run, &command).await.unwrap();
+    assert_eq!(slot8(&*db.read().await), PropertyValue::Real(40.0));
+}

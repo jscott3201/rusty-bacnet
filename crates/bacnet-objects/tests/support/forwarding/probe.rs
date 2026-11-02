@@ -367,6 +367,14 @@ impl StagingSource for Probe {
         );
         true
     }
+    fn take_relinquish_writes(&mut self) -> Vec<bacnet_objects::schedule::ScheduleWrite> {
+        self.called("StagingSource::take_relinquish_writes", ());
+        vec![bacnet_objects::schedule::ScheduleWrite::new(
+            PropertyValue::Null,
+            9,
+            Vec::new(),
+        )]
+    }
 }
 
 /// The probe's command-run capability, logged under `CommandRunner::`.

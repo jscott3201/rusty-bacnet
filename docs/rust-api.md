@@ -5975,6 +5975,16 @@ references take network writes; Reliability reads CONFIGURATION_ERROR while
 the non-NULL values differ in datatype, and otherwise reports the first failed
 write of the last run.
 
+Deleting a Timer releases nothing and makes no transition's writes (#2265):
+deletion isn't a transition. A running Timer deleted leaves its start writes
+in its targets' slots and never expires; clear it first (write Timer_State
+IDLE) to have RUNNING_TO_IDLE's writes made, a NULL there relinquishing. A run whose object is deleted stops: each local write checks the run's
+generation under the guard that commits it, so nothing more is written once
+the object is gone. A write to another device is checked once its route is
+known, before its invoke ID is leased, and before each retry; a request that
+already passed its last check is still sent if the delete lands in that gap,
+since no guard is held over a send.
+
 The Loop serves every required Table 12-20 row. Setpoint, the gain constants,
 Update_Interval and Action (DIRECT or REVERSE) take network writes.
 Controlled_Variable_Units, the three gain units rows and Priority_For_Writing
@@ -6123,6 +6133,14 @@ In_Process FALSE, All_Writes_Successful FALSE and every command's
 `write_successful` FALSE. The endpoint responder refuses a Command's
 Present_Value write with WRITE_ACCESS_DENIED, as it does every write other
 than the Device's Description and Audit recipient.
+
+Deleting a Command releases nothing (#2265): its writes are one-shot, and the
+values it made stay until another writer changes or relinquishes them. A run whose object is deleted stops: each local write checks the run's
+generation under the guard that commits it, so nothing more is written once
+the object is gone. A write to another device is checked once its route is
+known, before its invoke ID is leased, and before each retry; a request that
+already passed its last check is still sent if the delete lands in that gap,
+since no guard is held over a send.
 
 Load Control supports COV (Table 13-1). Its SubscribeCOV report carries
 Present_Value, Status_Flags, Requested_Shed_Level, Start_Time and
@@ -6274,6 +6292,18 @@ notification carries Present_Value, Status_Flags and Present_Stage, and fires
 when Present_Value moves by the writable `COV_Increment` (default 0), when
 Status_Flags changes (including a target-plan completion that changes
 Reliability), or when Present_Stage changes.
+
+Removing a Staging object gives up the Present_Value slots its stage writes
+filled (#2265), as a Schedule's removal does, through the same path:
+DeleteObject, the application's own `ObjectDatabase::remove`, or an `add`
+that replaces it. The object records every target and priority its plans
+wrote, across stage, reference and priority changes, and the public
+`StagingSource::take_relinquish_writes()` hands the database one relinquish
+NULL per priority as it leaves. Each goes only to a slot whose Value_Source
+still names the Staging object, so a writer that took the slot keeps its
+command. A plan still being written stops at its next target. Changing
+Target_References or Priority_For_Writing doesn't yet give up the slots it
+leaves behind; they are released when the object is removed.
 
 #### Lighting & Color (5)
 
@@ -6675,6 +6705,17 @@ local ones are still written. A run that `stop()` cuts short, or whose future
 is dropped, during a remote request ends FAILED and frees its invoke ID.
 Without a server, `tick_schedules` has no network, so a remote member fails
 there.
+
+Deleting a Channel releases nothing (#2265): it holds no slot of its own,
+since each member's slot is at the priority its writer chose. While the
+Channel exists that writer relinquishes by writing NULL to it; once the
+Channel is deleted, the writer relinquishes each member's slot directly.
+A distribution whose Channel is deleted stops: each local write checks the run's
+generation under the guard that commits it, so nothing more is written once
+the object is gone. A write to another device is checked once its route is
+known, before its invoke ID is leased, and before each retry; a request that
+already passed its last check is still sent if the delete lands in that gap,
+since no guard is held over a send.
 
 Reliability reports how the last distribution ended (Clause 12.53.9):
 NO_FAULT_DETECTED after a SUCCESSFUL one, otherwise the kind of the first

@@ -648,6 +648,8 @@ mod command_run_cancel_tests;
 #[cfg(test)]
 mod command_run_stop_tests;
 #[cfg(test)]
+mod commanding_delete_tests;
+#[cfg(test)]
 mod confirmed_broadcast_tests;
 #[cfg(test)]
 mod cov_background_tests;
@@ -785,6 +787,8 @@ mod schedule_write_tests;
 mod segmentation_tests;
 #[cfg(test)]
 mod staging_cov_tests;
+#[cfg(test)]
+mod staging_delete_tests;
 #[cfg(test)]
 mod staging_reference_write_tests;
 #[cfg(test)]
