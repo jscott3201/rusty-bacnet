@@ -14,10 +14,11 @@ use bacnet_encoding::constructed::{
     decode_cov_multiple_subscription, decode_cov_subscription, decode_destination,
     decode_device_object_property_reference, decode_event_notification_subscription,
 };
+use bacnet_objects::property_metadata::{Datatype, ValueType};
 
 /// The Clause 21 element of a list held framed, which marks where each
-/// element ends.
-#[derive(Clone, Copy)]
+/// element ends: the datatype of the list's metadata row.
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum FramedElement {
     /// BACnetDestination: the Recipient_List of Notification Class and
     /// Notification Forwarder (Tables 12-24 and 12-58).
@@ -38,34 +39,15 @@ enum FramedElement {
 }
 
 impl FramedElement {
-    fn for_datatype(object_type: ObjectType, property: PropertyIdentifier) -> Option<Self> {
-        match property {
-            PropertyIdentifier::RECIPIENT_LIST
-                if matches!(
-                    object_type,
-                    ObjectType::NOTIFICATION_CLASS | ObjectType::NOTIFICATION_FORWARDER
-                ) =>
-            {
-                Some(Self::Destination)
-            }
-            PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES
-                if matches!(object_type, ObjectType::SCHEDULE | ObjectType::TIMER) =>
-            {
-                Some(Self::DeviceObjectPropertyReference)
-            }
-            PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS if object_type == ObjectType::DEVICE => {
-                Some(Self::CovSubscription)
-            }
-            PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS
-                if object_type == ObjectType::DEVICE =>
-            {
-                Some(Self::CovMultipleSubscription)
-            }
-            PropertyIdentifier::SUBSCRIBED_RECIPIENTS
-                if object_type == ObjectType::NOTIFICATION_FORWARDER =>
-            {
-                Some(Self::EventNotificationSubscription)
-            }
+    /// The framed element of a list of `datatype`; `None` for a datatype
+    /// this server has no element codec for.
+    fn for_datatype(datatype: Datatype) -> Option<Self> {
+        match datatype {
+            Datatype::Destination => Some(Self::Destination),
+            Datatype::DeviceObjectPropertyReference => Some(Self::DeviceObjectPropertyReference),
+            Datatype::CovSubscription => Some(Self::CovSubscription),
+            Datatype::CovMultipleSubscription => Some(Self::CovMultipleSubscription),
+            Datatype::EventNotificationSubscription => Some(Self::EventNotificationSubscription),
             _ => None,
         }
     }
@@ -105,8 +87,7 @@ fn unsplittable() -> Error {
 /// list with no element codec here, a stored frame that does not decode, and
 /// a value of any other shape.
 pub(super) fn list_items(
-    object_type: ObjectType,
-    property: PropertyIdentifier,
+    value_type: Option<ValueType>,
     value: PropertyValue,
 ) -> Result<Vec<PropertyValue>, Error> {
     let bytes = match value {
@@ -114,7 +95,9 @@ pub(super) fn list_items(
         PropertyValue::ApplicationData(bytes) => bytes,
         _ => return Err(unsplittable()),
     };
-    let element = FramedElement::for_datatype(object_type, property).ok_or_else(unsplittable)?;
+    let element = value_type
+        .and_then(|value_type| FramedElement::for_datatype(value_type.datatype))
+        .ok_or_else(unsplittable)?;
     let mut items = Vec::new();
     let mut offset = 0;
     while offset < bytes.len() {
@@ -124,3 +107,7 @@ pub(super) fn list_items(
     }
     Ok(items)
 }
+
+#[cfg(test)]
+#[path = "read_range_items/framed_tests.rs"]
+mod framed_tests;

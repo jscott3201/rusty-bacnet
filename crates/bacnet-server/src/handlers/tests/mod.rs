@@ -132,6 +132,7 @@ mod create_object_default_name;
 mod create_object_initial_values;
 mod create_object_state_count;
 mod credential_data_input_oos_writes;
+mod custom_value_types;
 mod detection_enable_summary;
 mod device_description_writes;
 mod device_event;
