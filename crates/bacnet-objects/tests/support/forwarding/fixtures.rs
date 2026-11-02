@@ -83,6 +83,7 @@ pub fn schedule_write(value: u64) -> ScheduleWrite {
         priority: 16,
         references: Vec::new(),
         retry: false,
+        relinquish: false,
     }
 }
 

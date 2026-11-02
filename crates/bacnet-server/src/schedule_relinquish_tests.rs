@@ -160,6 +160,7 @@ async fn a_schedule_null_relinquishes_a_commandable_target_and_leaves_the_others
         priority: 9,
         references,
         retry: false,
+        relinquish: false,
     };
     let schedule = OwingSchedule {
         owed: vec![
@@ -246,6 +247,7 @@ async fn a_schedule_target_index_is_checked_as_write_property_checks_it() {
         priority: 9,
         references,
         retry: false,
+        relinquish: false,
     };
     let schedule = OwingSchedule {
         owed: vec![

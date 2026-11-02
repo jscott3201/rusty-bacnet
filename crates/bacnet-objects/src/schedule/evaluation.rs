@@ -47,6 +47,13 @@ pub struct ScheduleWrite {
     /// it on every pass with nothing else to send while a refusal stands, so
     /// the server logs a target's failure of it at debug, not warn.
     pub retry: bool,
+    /// Whether this is a NULL that gives up slots the Schedule held, not a
+    /// value it calculated: one a change of its references or priority left
+    /// behind, or one its removal owes (#2264). The bundled server sends it
+    /// only to a slot whose Value_Source still names the Schedule, so a
+    /// writer that took the slot since keeps its command. A calculated NULL
+    /// goes to every reference, whoever holds the slot.
+    pub relinquish: bool,
 }
 
 /// How one target took a [`ScheduleWrite`], as the server reports it back

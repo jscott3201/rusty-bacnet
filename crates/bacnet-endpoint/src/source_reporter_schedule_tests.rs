@@ -58,6 +58,7 @@ fn source_reporter_forwards_complete_schedule_targets() {
             priority: 16,
             references: refs.clone(),
             retry: false,
+            relinquish: false,
         })
     );
     assert!(
@@ -84,6 +85,7 @@ fn source_reporter_forwards_complete_schedule_targets() {
         priority: 16,
         references: refs.clone(),
         retry: false,
+        relinquish: false,
     };
     assert_eq!(runner(&mut object).take_owed_schedule_writes(), [simulated]);
     assert!(runner(&mut object).take_owed_schedule_writes().is_empty());
@@ -108,12 +110,14 @@ fn source_reporter_forwards_complete_schedule_targets() {
                 priority: 16,
                 references: vec![refs[1].clone()],
                 retry: false,
+                relinquish: true,
             },
             ScheduleWrite {
                 value: PropertyValue::Unsigned(5),
                 priority: 16,
                 references: vec![refs[0].clone()],
                 retry: false,
+                relinquish: false,
             },
         ]
     );
@@ -131,6 +135,7 @@ fn source_reporter_forwards_complete_schedule_targets() {
             priority: 16,
             references: vec![refs[0].clone()],
             retry: false,
+            relinquish: false,
         },
         &[ScheduleTargetOutcome::DatatypeRefused],
     ));

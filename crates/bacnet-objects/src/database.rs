@@ -358,7 +358,10 @@ impl ObjectDatabase {
     /// Remove an object by identifier. Installed Audit membership protection
     /// returns an error before removing the object or changing indexes.
     /// Pulse Converters whose Input_Reference names a removed object have
-    /// the reference judged again, as [`add`](Self::add) does.
+    /// the reference judged again, as [`add`](Self::add) does. A removed
+    /// Schedule gives up the slots it holds on its targets: the NULLs are
+    /// queued for the server, which writes them under its next guard and
+    /// fans COV out (#2264). Without a server they wait in the queue.
     pub fn remove(
         &mut self,
         oid: &ObjectIdentifier,
@@ -390,6 +393,7 @@ impl ObjectDatabase {
                     type_set.retain(|o| o != oid);
                 }
                 self.audit_membership_changed(*oid, false);
+                self.schedule_removed(*oid, obj.as_mut());
                 self.membership_changed(*oid, false);
                 Ok(Some(obj))
             }

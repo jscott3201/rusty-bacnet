@@ -35,9 +35,23 @@
 //! taken the write. Every target here is local; a Schedule's references
 //! name objects of its own device only.
 //!
-//! A Schedule deleted by DeleteObject gives up every slot it still holds
-//! through the same target writes, under the request's guard
-//! (`DeletedSchedule`, #2256).
+//! A Schedule removed from the database gives up every slot it still holds
+//! through the same target writes (#2256, #2264). The database queues the
+//! NULLs as the object leaves, whether DeleteObject or the application's
+//! own `ObjectDatabase::remove` took it out, and the server writes them
+//! under the guard that takes the queue (`relinquish_for_removed`): the
+//! request's for a DeleteObject, the next one the Schedule task gets for an
+//! application's removal, or the first after start for one before it.
+//!
+//! A NULL that gives up a held slot (`ScheduleWrite::relinquish`) goes only
+//! to a slot whose Value_Source still names the Schedule (#2264): one a
+//! client, the application or another Schedule wrote since keeps that
+//! writer's command. The check reads the target's Value_Source_Array at the
+//! write's priority. A reference to a property other than Present_Value,
+//! or a target that doesn't serve that element (a Channel, an object with
+//! no source tracking), can't tell who holds the slot, so it gets the NULL,
+//! as it did before the check. A calculated NULL, a time or default whose
+//! value is NULL, is not checked: it goes to every reference.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -50,6 +64,7 @@ use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::calendar::SpecificDate;
+use bacnet_types::constructed::BACnetValueSource;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, Time};
 use tokio::sync::RwLock;
@@ -160,68 +175,28 @@ pub(crate) fn retry_for_created(
     }
 }
 
-/// The slots a Schedule removed by DeleteObject gives up (#2256).
-///
-/// [`plan`](Self::plan) runs under the request's guard before the removal,
-/// while the Schedule's command origin still resolves, and
-/// [`issue`](Self::issue) under the same guard once the object is out. The
-/// NULLs go through the pass's own target writes, with the origin its
-/// writes carried, and a target that refuses one is logged as a pass's
-/// failure is; the delete still succeeds. The COV fanout comes back to send
-/// once the guard is dropped, as after a RemoveListElement that drops a
-/// target. A Schedule that holds nothing writes nothing.
-pub(crate) struct DeletedSchedule {
-    schedule: ObjectIdentifier,
-    origin: Option<CommandOrigin>,
-}
-
-impl DeletedSchedule {
-    /// The plan for `deleted`, the object a DeleteObject names, under the
-    /// request's guard `db_w` and before it is removed: `None` unless the
-    /// object lends a [`ScheduleRunner`](bacnet_objects::traits::ScheduleRunner).
-    /// The origin its writes carry is resolved now, since it can't be once
-    /// the object is gone.
-    pub(crate) fn plan(
-        db_w: &mut ObjectDatabase,
-        deleted: Option<ObjectIdentifier>,
-    ) -> Option<Self> {
-        let schedule = deleted?;
-        db_w.get_mut(&schedule)?.schedule_runner()?;
-        Some(Self {
-            schedule,
-            origin: command_origin(db_w, schedule),
-        })
-    }
-
-    /// Write the NULLs `removed` owes its targets, under `db_w`, the
-    /// request's guard on `db`. `removed` is the planned Schedule, already
-    /// out of the database. Returns the COV fanout, and any Command or
-    /// Channel runs the writes started, to hand over once the guard is
-    /// dropped.
-    pub(crate) async fn issue(
-        self,
-        db: &Arc<RwLock<ObjectDatabase>>,
-        db_w: &mut ObjectDatabase,
-        removed: &mut dyn BACnetObject,
-        cov_table: &RwLock<CovSubscriptionTable>,
-    ) -> CommittedCov {
-        let writes = removed
-            .schedule_runner()
-            .map(|runner| runner.take_relinquish_writes())
-            .unwrap_or_default();
-        if writes.is_empty() {
-            return CommittedCov::default();
-        }
-        let mut commit = BackgroundCommit::new();
-        for write in &writes {
-            debug!(
-                schedule = %self.schedule,
-                refs = write.references.len(),
-                "Deleted Schedule relinquishing its controlled properties"
-            );
-            write_targets(db_w, &mut commit, self.origin.as_ref(), write);
-        }
-        commit.finish(db, db_w, cov_table).await
+/// Write, under `db_w`, the NULLs Schedules removed from the database owe
+/// their targets (#2256, #2264): each `(schedule, write)` pair is a
+/// relinquish the database queued as the Schedule left
+/// (`ObjectDatabase::take_membership_work_internal`). They carry the origin
+/// the Schedule's own writes did, the local Device with the Schedule as the
+/// initiating object, built without the Schedule in the database
+/// ([`removed_origin`]). A target that refuses one is logged as a pass's
+/// failure is, and the others are still written; `commit` collects the
+/// objects they changed for COV.
+pub(crate) fn relinquish_for_removed(
+    db_w: &mut ObjectDatabase,
+    commit: &mut BackgroundCommit,
+    relinquishes: &[(ObjectIdentifier, ScheduleWrite)],
+) {
+    for (schedule, write) in relinquishes {
+        debug!(
+            schedule = %schedule,
+            refs = write.references.len(),
+            "Removed Schedule relinquishing its controlled properties"
+        );
+        let origin = removed_origin(db_w, *schedule);
+        write_targets(db_w, commit, *schedule, origin.as_ref(), write);
     }
 }
 
@@ -311,7 +286,7 @@ fn deliver(
     write: &ScheduleWrite,
 ) {
     let origin = command_origin(db_w, initiator);
-    let outcomes = write_targets(db_w, commit, origin.as_ref(), write);
+    let outcomes = write_targets(db_w, commit, initiator, origin.as_ref(), write);
     let reliability_changed = db_w
         .get_mut(&initiator)
         .and_then(|schedule| schedule.schedule_runner())
@@ -327,15 +302,67 @@ fn command_origin(db: &ObjectDatabase, schedule: ObjectIdentifier) -> Option<Com
     crate::command_source::resolve_local(db, crate::LocalCommandSource::Object(schedule)).ok()
 }
 
+/// [`command_origin`] for a Schedule already out of the database: the local
+/// Device, while its object is here, with `schedule` as the initiating
+/// object, the origin its writes carried while it was in.
+fn removed_origin(db: &ObjectDatabase, schedule: ObjectIdentifier) -> Option<CommandOrigin> {
+    match crate::command_source::resolve_local(db, crate::LocalCommandSource::ServerDevice) {
+        Ok(CommandOrigin::Local { owner_device, .. }) => Some(CommandOrigin::Local {
+            owner_device,
+            initiating_object: Some(schedule),
+        }),
+        _ => None,
+    }
+}
+
+/// Whether the slot at `priority` of `reference` on `target` may still be
+/// `schedule`'s (#2264): `false` only when the target's Value_Source_Array
+/// element for that priority names another writer, or none. A reference to
+/// a property other than Present_Value, or a target that doesn't serve the
+/// element, can't tell, and counts as the Schedule's.
+fn still_held(
+    target: &dyn BACnetObject,
+    reference: &bacnet_types::constructed::BACnetObjectPropertyReference,
+    priority: u8,
+    schedule: ObjectIdentifier,
+    local_device: Option<ObjectIdentifier>,
+) -> bool {
+    if reference.property_identifier != PropertyIdentifier::PRESENT_VALUE.to_raw()
+        || reference.property_array_index.is_some()
+    {
+        return true;
+    }
+    let Ok(PropertyValue::ApplicationData(bytes)) = target.read_property(
+        PropertyIdentifier::VALUE_SOURCE_ARRAY,
+        Some(u32::from(priority)),
+    ) else {
+        return true;
+    };
+    let Ok((source, _)) = bacnet_encoding::constructed::decode_value_source(&bytes, 0) else {
+        return true;
+    };
+    match source {
+        BACnetValueSource::Object(source) => {
+            source.object_identifier == schedule
+                && source
+                    .device_identifier
+                    .is_none_or(|device| Some(device) == local_device)
+        }
+        _ => false,
+    }
+}
+
 /// Write `write` to each of its targets under `db_w`, collecting the changed
 /// ones in `commit`, and return how each took it.
 fn write_targets(
     db_w: &mut ObjectDatabase,
     commit: &mut BackgroundCommit,
+    schedule: ObjectIdentifier,
     origin: Option<&CommandOrigin>,
     write: &ScheduleWrite,
 ) -> Vec<ScheduleTargetOutcome> {
     let null = bacnet_device_core::write::relinquish::is_null_value(&write.value);
+    let local_device = db_w.local_device().identifier();
     // Clause 12.24.4: a failed member does not stop the others.
     let mut outcomes = Vec::with_capacity(write.references.len());
     for reference in &write.references {
@@ -348,6 +375,26 @@ fn write_targets(
             outcomes.push(ScheduleTargetOutcome::ReferenceRefused);
             continue;
         };
+        // A slot another writer took since is theirs now: the relinquish
+        // leaves it, and the target counts as having taken it (#2264).
+        if write.relinquish
+            && !still_held(
+                &*target_obj,
+                reference,
+                write.priority,
+                schedule,
+                local_device,
+            )
+        {
+            debug!(
+                schedule = %schedule,
+                target = %target_oid,
+                priority = write.priority,
+                "Schedule relinquish skipped: another writer holds the slot"
+            );
+            outcomes.push(ScheduleTargetOutcome::Accepted);
+            continue;
+        }
         // WriteProperty's index gate comes first (#1426), so an index on a
         // property that isn't an array fails the target without the object
         // seeing the value, a NULL included. Its refusals, like the object's
