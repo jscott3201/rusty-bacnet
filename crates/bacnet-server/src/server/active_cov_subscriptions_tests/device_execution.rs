@@ -74,24 +74,30 @@ impl BACnetObject for CustomDevice {
     }
     fn property_metadata(&self) -> Cow<'_, [bacnet_objects::property_metadata::PropertyMetadata]> {
         use bacnet_objects::property_metadata::{
-            PropertyConformance, PropertyMetadata, PropertyWriteCapability,
+            Datatype, PropertyConformance, PropertyMetadata, PropertyWriteCapability, ValueType,
         };
+        // Every row but Property_List claims to be an array, and the owned
+        // ones claim it too: the executor serves those from its own rows.
         Cow::Owned(
-            [PropertyIdentifier::DESCRIPTION, ACTIVE, MULTIPLE]
-                .iter()
-                .map(|property| {
-                    PropertyMetadata::new(
-                        *property,
-                        PropertyConformance::RequiredWrite,
-                        None,
-                        PropertyWriteCapability::Always,
-                    )
-                })
-                .collect(),
+            [
+                PropertyIdentifier::DESCRIPTION,
+                ACTIVE,
+                MULTIPLE,
+                SERVICES,
+                BINDINGS,
+            ]
+            .iter()
+            .map(|property| {
+                PropertyMetadata::new(
+                    *property,
+                    PropertyConformance::RequiredWrite,
+                    None,
+                    PropertyWriteCapability::Always,
+                )
+                .with_value_type(ValueType::array(Datatype::Unsigned))
+            })
+            .collect(),
         )
-    }
-    fn is_array_property(&self, property: PropertyIdentifier) -> bool {
-        property != LIST
     }
 }
 

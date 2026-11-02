@@ -5,6 +5,7 @@
 //! through `set_units`, and has no network write route.
 
 use super::super::*;
+use crate::property_metadata::{is_array_property, is_writable_property};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::RemoteError;
 
@@ -42,7 +43,7 @@ macro_rules! assert_units_row {
             crate::property_metadata::required_properties(&object.property_metadata())
                 .any(|required| required == PropertyIdentifier::UNITS)
         );
-        assert!(!object.is_array_property(PropertyIdentifier::UNITS));
+        assert!(!is_array_property(&object, PropertyIdentifier::UNITS));
 
         object.set_units(EngineeringUnits::DEGREES_CELSIUS).unwrap();
         assert_eq!(object.units(), EngineeringUnits::DEGREES_CELSIUS);
@@ -63,7 +64,7 @@ macro_rules! assert_units_row {
         }
 
         // No network write route, whatever the value's datatype.
-        assert!(!object.is_writable_property(PropertyIdentifier::UNITS));
+        assert!(!is_writable_property(&object, PropertyIdentifier::UNITS));
         for value in [
             PropertyValue::Enumerated(EngineeringUnits::PERCENT.to_raw()),
             PropertyValue::Unsigned(98),

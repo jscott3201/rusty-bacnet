@@ -1,3 +1,4 @@
+use bacnet_objects::property_metadata::{is_array_property, is_list_property};
 use std::ops::Range;
 
 use super::*;
@@ -253,7 +254,7 @@ fn read_range_items(
 ) -> Result<Vec<PropertyValue>, ReadRangeFailure> {
     let property = request.property_identifier;
     let index = request.property_array_index;
-    if index.is_some() && !object.is_array_property(property) {
+    if index.is_some() && !is_array_property(object, property) {
         // Read the whole property first so an unknown one keeps its error.
         object.read_property(property, None)?;
         return Err(ReadRangeFailure::Service(Error::protocol(
@@ -264,7 +265,7 @@ fn read_range_items(
     let value = group::read_served_property(db, view, object, property, index, members)?;
     // An indexed array element is never a list: 135-2020 defines no
     // BACnetARRAY of BACnetLIST property.
-    if index.is_some() || !object.is_list_property(property) {
+    if index.is_some() || !is_list_property(object, property) {
         return Err(ReadRangeFailure::Service(Error::protocol(
             ErrorClass::SERVICES,
             ErrorCode::PROPERTY_IS_NOT_A_LIST,

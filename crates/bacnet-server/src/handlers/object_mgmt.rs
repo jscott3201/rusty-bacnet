@@ -330,7 +330,7 @@ fn default_name(db: &ObjectDatabase, object_type: ObjectType, instance: u32) -> 
 
 /// Apply one initial value to the created object the way WriteProperty
 /// applies its value: the array index checked against the object, the value
-/// decoded whole with the object's list classification, the Object_Name kept
+/// decoded whole by the property's value type on the object, the Object_Name kept
 /// unique, and a NULL the property leaves as it is taken as applied
 /// ([`relinquish`](bacnet_device_core::write::relinquish)). A whole value for one of the type's
 /// creation-only properties goes to its initializer
@@ -347,7 +347,7 @@ fn initialize(
     use bacnet_device_core::write::{
         WriteTarget, check_and_prepare_name_write, commit_attempt, decode_write_property_value,
     };
-    use bacnet_objects::property_metadata::check_write_array_index;
+    use bacnet_objects::property_metadata::{check_write_array_index, object_value_type};
     let created_oid = creating.oid;
     let property = pv.property_identifier;
     let array_index = pv.property_array_index;
@@ -357,8 +357,8 @@ fn initialize(
     // not a write that was tried and failed.
     let value = decode_write_property_value(
         property,
+        object_value_type(object, property),
         array_index,
-        object.is_list_property(property),
         &pv.value,
     )
     .map_err(CreateObjectRefusal::Malformed)?;

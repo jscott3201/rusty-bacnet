@@ -2,6 +2,7 @@
 //! 12.16.13, #1092): the list a network write of Mode is checked against.
 
 use super::*;
+use crate::property_metadata::{is_array_property, is_list_property, is_writable_property};
 use bacnet_types::enums::{ErrorClass, ErrorCode, LifeSafetyMode};
 use bacnet_types::error::RemoteError;
 
@@ -61,8 +62,11 @@ fn accepted_modes_default_to_every_standard_mode_as_a_list() {
     let zone = LifeSafetyZoneObject::new(1, "LSZ-1").unwrap();
     for object in [&point as &dyn BACnetObject, &zone] {
         assert_eq!(modes(object), standard);
-        assert!(object.is_list_property(PropertyIdentifier::ACCEPTED_MODES));
-        assert!(!object.is_array_property(PropertyIdentifier::ACCEPTED_MODES));
+        assert!(is_list_property(object, PropertyIdentifier::ACCEPTED_MODES));
+        assert!(!is_array_property(
+            object,
+            PropertyIdentifier::ACCEPTED_MODES
+        ));
         assert!(crate::property_metadata::has_property(
             &object.property_metadata(),
             PropertyIdentifier::ACCEPTED_MODES
@@ -175,7 +179,10 @@ fn local_mode_changes_ignore_accepted_modes_and_leave_the_list_alone() {
 #[test]
 fn accepted_modes_is_network_read_only() {
     for mut object in objects(&[LifeSafetyMode::OFF, LifeSafetyMode::ON]) {
-        assert!(!object.is_writable_property(PropertyIdentifier::ACCEPTED_MODES));
+        assert!(!is_writable_property(
+            &*object,
+            PropertyIdentifier::ACCEPTED_MODES
+        ));
         let before = object
             .read_property(PropertyIdentifier::ACCEPTED_MODES, None)
             .unwrap();

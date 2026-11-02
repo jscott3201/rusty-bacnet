@@ -3,6 +3,7 @@
 //! Split out to keep every file under the 700-LOC cap.
 
 use super::super::*;
+use crate::property_metadata::is_writable_property;
 use bacnet_types::enums::{ErrorClass, ErrorCode, FaultType, LifeSafetyState};
 use bacnet_types::error::RemoteError;
 
@@ -239,7 +240,7 @@ fn fault_properties_are_advertised_together() {
     let props = crate::test_rows::listed(&ee.property_metadata());
     assert!(props.contains(&PropertyIdentifier::FAULT_TYPE));
     assert!(props.contains(&PropertyIdentifier::FAULT_PARAMETERS));
-    assert!(!ee.is_writable_property(PropertyIdentifier::FAULT_TYPE));
+    assert!(!is_writable_property(&ee, PropertyIdentifier::FAULT_TYPE));
     assert!(
         ee.write_property(
             PropertyIdentifier::FAULT_TYPE,

@@ -3,7 +3,7 @@
 
 use super::capabilities::CAPABILITY_ROWS;
 use super::fixtures::{address, noon, oid};
-use super::probe::{CUSTOM, CUSTOM_LIST};
+use super::probe::CUSTOM;
 use bacnet_objects::command_source::CommandOrigin;
 use bacnet_objects::event::{EventStateChange, EventTransition, EventTransitionCommit};
 use bacnet_objects::traits::BACnetObject;
@@ -11,7 +11,7 @@ use bacnet_types::constructed::{
     BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord, EventLogDatum, LogData,
     LogDatum, LogValue,
 };
-use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier as P};
+use bacnet_types::enums::{EventState, ObjectType};
 use bacnet_types::primitives::{BACnetTimeStamp, Date, PropertyValue};
 
 /// A row for a method that takes `&self`.
@@ -124,24 +124,6 @@ pub const QUERIES: &[(&str, Query)] = &[
     }),
     ("property_metadata", |o| {
         format!("{:?}", o.property_metadata())
-    }),
-    ("is_writable_property", |o| {
-        format!(
-            "{:?}",
-            [CUSTOM, P::DESCRIPTION].map(|p| o.is_writable_property(p))
-        )
-    }),
-    ("is_array_property", |o| {
-        format!(
-            "{:?}",
-            [CUSTOM, P::PRIORITY_ARRAY].map(|p| o.is_array_property(p))
-        )
-    }),
-    ("is_list_property", |o| {
-        format!(
-            "{:?}",
-            [CUSTOM_LIST, P::DATE_LIST].map(|p| o.is_list_property(p))
-        )
     }),
     ("command_runner", |o| {
         format!("{:?}", o.command_runner().map(address))

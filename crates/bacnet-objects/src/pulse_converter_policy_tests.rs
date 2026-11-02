@@ -1,4 +1,5 @@
 use super::*;
+use crate::property_metadata::is_writable_property;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::RemoteError;
 
@@ -20,7 +21,7 @@ fn present_value(pc: &PulseConverterObject) -> PropertyValue {
 #[test]
 fn present_value_is_denied_in_service_before_value_validation() {
     let mut pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
-    assert!(pc.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
+    assert!(is_writable_property(&pc, PropertyIdentifier::PRESENT_VALUE));
 
     for value in [
         PropertyValue::Real(12.5),

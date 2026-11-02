@@ -1,5 +1,6 @@
 use super::*;
 use PropertyIdentifier as P;
+use bacnet_objects::property_metadata::is_writable_property;
 use bacnet_objects::{
     accumulator::{AccumulatorObject, PulseConverterObject},
     traits::BACnetObject,
@@ -231,7 +232,7 @@ fn rpm_accumulator_metadata_corrects_historical_pics_writability() {
     // Present_Value is advertised again now that an arm routes it out of
     // service (#2267), and Reliability likewise (#2280).
     let object = AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS).unwrap();
-    assert!(!object.is_writable_property(P::OBJECT_NAME));
+    assert!(!is_writable_property(&object, P::OBJECT_NAME));
     for p in [
         P::PRESENT_VALUE,
         P::MAX_PRES_VALUE,
@@ -239,7 +240,7 @@ fn rpm_accumulator_metadata_corrects_historical_pics_writability() {
         P::LIMIT_MONITORING_INTERVAL,
         P::RELIABILITY,
     ] {
-        assert!(object.is_writable_property(p));
+        assert!(is_writable_property(&object, p));
     }
     // The Pulse Converter override translated exactly: the same seven
     // properties stay advertised, including gated Present_Value.
@@ -253,7 +254,7 @@ fn rpm_accumulator_metadata_corrects_historical_pics_writability() {
         P::OUT_OF_SERVICE,
         P::COV_INCREMENT,
     ] {
-        assert!(pc.is_writable_property(p));
+        assert!(is_writable_property(&pc, p));
     }
-    assert!(!pc.is_writable_property(P::OBJECT_NAME));
+    assert!(!is_writable_property(&pc, P::OBJECT_NAME));
 }

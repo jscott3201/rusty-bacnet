@@ -1,11 +1,15 @@
 use super::super::*;
+use crate::property_metadata::is_writable_property;
 
 #[test]
 fn event_enrollment_object_name_writability_matches_dispatch() {
     let mut enrollment =
         EventEnrollmentObject::new(1, "EE-A", EventType::CHANGE_OF_BITSTRING).unwrap();
 
-    assert!(enrollment.is_writable_property(PropertyIdentifier::OBJECT_NAME));
+    assert!(is_writable_property(
+        &enrollment,
+        PropertyIdentifier::OBJECT_NAME
+    ));
     enrollment
         .write_property(
             PropertyIdentifier::OBJECT_NAME,

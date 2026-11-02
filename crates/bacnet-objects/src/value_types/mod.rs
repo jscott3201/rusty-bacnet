@@ -274,10 +274,6 @@ macro_rules! define_value_object_commandable {
             }
 
             crate::traits::lend_cov_reporting!();
-
-            fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-                crate::property_metadata::is_writable_in_metadata($property_metadata, property)
-            }
         }
 
         impl crate::creation::Creatable for $struct_name {

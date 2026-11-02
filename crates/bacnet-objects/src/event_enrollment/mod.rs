@@ -493,43 +493,6 @@ impl BACnetObject for EventEnrollmentObject {
 
     crate::traits::lend_event_reporting!();
 
-    /// Mirrors the `write_property` arms above, so PICS reports what dispatch
-    /// actually accepts.
-    ///
-    /// Enumerated explicitly: the intrinsic-reporting objects accept
-    /// `HIGH_LIMIT`, `LOW_LIMIT`, `DEADBAND`, `LIMIT_ENABLE` and `TIME_DELAY`,
-    /// none of which an Event Enrollment accepts, because it carries those
-    /// inside `Event_Parameters` instead. `TIME_DELAY_NORMAL` is accepted here
-    /// as a real (O-coded) property, per Table 12-14.
-    ///
-    /// `Event_Detection_Enable` is writable even though Table 12-14 codes it R
-    /// rather than W: Clause 12.1.2 lets implementors accept writes to an R
-    /// property unless that object's property description expressly forbids
-    /// them. Clause 12.12 has no such prohibition; it anticipates setting the
-    /// value during configuration without mandating that timing. Annex K's
-    /// AE-AVM-A BIBB (Table K-17) positively requires a conforming workstation
-    /// to be able to *write* this property, so refusing the write would be
-    /// interoperably hostile.
-    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        // Table 12-14 has no Out_Of_Service (#1064), so of the common
-        // writable rows only the name and description apply.
-        matches!(
-            property,
-            PropertyIdentifier::OBJECT_NAME
-                | PropertyIdentifier::DESCRIPTION
-                | PropertyIdentifier::NOTIFY_TYPE
-                | PropertyIdentifier::NOTIFICATION_CLASS
-                | PropertyIdentifier::EVENT_ENABLE
-                | PropertyIdentifier::EVENT_DETECTION_ENABLE
-                | PropertyIdentifier::EVENT_PARAMETERS
-                | PropertyIdentifier::FAULT_PARAMETERS
-                | PropertyIdentifier::TIME_DELAY_NORMAL
-                | PropertyIdentifier::EVENT_MESSAGE_TEXTS_CONFIG
-                | PropertyIdentifier::EVENT_ALGORITHM_INHIBIT_REF
-                | PropertyIdentifier::EVENT_ALGORITHM_INHIBIT
-        )
-    }
-
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         Cow::Borrowed(metadata::EVENT_ENROLLMENT_PROPERTIES)
     }

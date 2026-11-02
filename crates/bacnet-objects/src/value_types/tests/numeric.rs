@@ -3,6 +3,7 @@
 //! Split out to keep every file under the 700-LOC cap.
 
 use super::super::*;
+use crate::property_metadata::is_writable_property;
 use bacnet_types::enums::ObjectType;
 use bacnet_types::error::RemoteError;
 
@@ -183,7 +184,10 @@ fn large_analog_value_object_type() {
 fn scalar_value_relinquish_default_write_recaptures_present_value() {
     // IntegerValue (i32 bounds via Signed extraction)
     let mut iv = IntegerValueObject::new(1, "IV-1").unwrap();
-    assert!(iv.is_writable_property(PropertyIdentifier::RELINQUISH_DEFAULT));
+    assert!(is_writable_property(
+        &iv,
+        PropertyIdentifier::RELINQUISH_DEFAULT
+    ));
     iv.write_property(
         PropertyIdentifier::RELINQUISH_DEFAULT,
         None,
@@ -227,7 +231,10 @@ fn scalar_value_relinquish_default_write_recaptures_present_value() {
 
     // PositiveIntegerValue (u64 bounds via Unsigned extraction)
     let mut piv = PositiveIntegerValueObject::new(1, "PIV-1").unwrap();
-    assert!(piv.is_writable_property(PropertyIdentifier::RELINQUISH_DEFAULT));
+    assert!(is_writable_property(
+        &piv,
+        PropertyIdentifier::RELINQUISH_DEFAULT
+    ));
     piv.write_property(
         PropertyIdentifier::RELINQUISH_DEFAULT,
         None,
@@ -243,7 +250,10 @@ fn scalar_value_relinquish_default_write_recaptures_present_value() {
 
     // LargeAnalogValue: Double, non-finite refused as VALUE_OUT_OF_RANGE.
     let mut lav = LargeAnalogValueObject::new(1, "LAV-1").unwrap();
-    assert!(lav.is_writable_property(PropertyIdentifier::RELINQUISH_DEFAULT));
+    assert!(is_writable_property(
+        &lav,
+        PropertyIdentifier::RELINQUISH_DEFAULT
+    ));
     lav.write_property(
         PropertyIdentifier::RELINQUISH_DEFAULT,
         None,

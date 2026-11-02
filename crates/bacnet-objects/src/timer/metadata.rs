@@ -185,7 +185,10 @@ mod tests {
             .map(|p| PropertyValue::Enumerated(p.to_raw()))
             .collect();
         assert_eq!(wire.len(), 15);
-        assert!(object.is_array_property(P::PROPERTY_LIST));
+        assert!(crate::property_metadata::is_array_property(
+            &object,
+            P::PROPERTY_LIST
+        ));
         assert_eq!(
             object.read_property(P::PROPERTY_LIST, None).unwrap(),
             PropertyValue::List(wire.clone())
@@ -242,7 +245,7 @@ mod tests {
                 };
                 assert_eq!(row.write_capability, capability, "{p:?}");
                 assert_eq!(
-                    object.is_writable_property(p),
+                    crate::property_metadata::is_writable_property(&object, p),
                     capability.is_writable(),
                     "{p:?}"
                 );
@@ -278,7 +281,7 @@ mod tests {
                 P::PRIORITY_ARRAY,
                 P::ALL,
             ] {
-                assert!(!object.is_writable_property(p));
+                assert!(!crate::property_metadata::is_writable_property(&object, p));
                 assert_error(
                     object.read_property(p, None).unwrap_err(),
                     ErrorCode::UNKNOWN_PROPERTY,

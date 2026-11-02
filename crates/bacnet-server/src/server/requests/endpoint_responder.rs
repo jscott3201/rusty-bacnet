@@ -215,8 +215,11 @@ impl EndpointResponder {
         // `device_write_target` admits, are single values.
         let value = bacnet_device_core::write::decode_write_property_value(
             write.property_identifier,
+            bacnet_objects::property_metadata::standard_value_type(
+                ObjectType::DEVICE,
+                write.property_identifier,
+            ),
             None,
-            false,
             &write.property_value,
         )?;
         if write.property_identifier == PropertyIdentifier::DESCRIPTION

@@ -50,9 +50,6 @@ impl BACnetObject for SourcedObject {
     fn property_metadata(&self) -> Cow<'_, [bacnet_objects::property_metadata::PropertyMetadata]> {
         self.inner.property_metadata()
     }
-    fn is_array_property(&self, property: PropertyIdentifier) -> bool {
-        self.inner.is_array_property(property)
-    }
 }
 
 struct Observer(Events);

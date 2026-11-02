@@ -1,4 +1,5 @@
 use super::*;
+use crate::property_metadata::is_array_property;
 use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::BACnetTimeStamp;
 
@@ -131,7 +132,10 @@ fn configuration_files_reads_as_an_array() {
         PropertyValue::ObjectIdentifier(file(2))
     );
     assert_property_error(read(Some(3)), ErrorCode::INVALID_ARRAY_INDEX);
-    assert!(device.is_array_property(PropertyIdentifier::CONFIGURATION_FILES));
+    assert!(is_array_property(
+        &device,
+        PropertyIdentifier::CONFIGURATION_FILES
+    ));
 }
 
 #[test]

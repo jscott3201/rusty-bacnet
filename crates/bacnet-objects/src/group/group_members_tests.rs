@@ -1,6 +1,7 @@
 //! Group (type 11) List_Of_Group_Members and Present_Value (#1134).
 
 use super::*;
+use crate::property_metadata::{is_array_property, is_list_property};
 use bacnet_types::constructed::PropertyReference;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::RemoteError;
@@ -88,8 +89,8 @@ fn group_lists_refuse_an_array_index() {
         PropertyIdentifier::LIST_OF_GROUP_MEMBERS,
         PropertyIdentifier::PRESENT_VALUE,
     ] {
-        assert!(!group.is_array_property(property));
-        assert!(group.is_list_property(property));
+        assert!(!is_array_property(&group, property));
+        assert!(is_list_property(&group, property));
         for index in [0, 1, u32::MAX] {
             assert_property_error(
                 group.read_property(property, Some(index)).unwrap_err(),

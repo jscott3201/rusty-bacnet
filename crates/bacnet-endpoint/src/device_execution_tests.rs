@@ -104,11 +104,22 @@ impl BACnetObject for CustomDevice {
     fn object_name(&self) -> &str {
         "custom-device"
     }
+    // The owned COV lists claim to be arrays; the executor serves them from
+    // its own rows.
     fn property_metadata(&self) -> std::borrow::Cow<'_, [PropertyMetadata]> {
-        crate::test_rows::read_only(&[
-            PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS,
-            PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS,
-        ])
+        let array = bacnet_objects::property_metadata::ValueType::array(
+            bacnet_objects::property_metadata::Datatype::Unsigned,
+        );
+        crate::test_rows::typed(
+            crate::test_rows::read_only(&[
+                PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS,
+                PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS,
+            ]),
+            &[
+                (PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS, array),
+                (PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS, array),
+            ],
+        )
     }
     fn read_property(
         &self,
@@ -142,9 +153,6 @@ impl BACnetObject for CustomDevice {
         _: Option<u8>,
     ) -> Result<(), Error> {
         panic!("read-only fixture")
-    }
-    fn is_array_property(&self, property: PropertyIdentifier) -> bool {
-        property != PropertyIdentifier::PROPERTY_LIST
     }
 }
 

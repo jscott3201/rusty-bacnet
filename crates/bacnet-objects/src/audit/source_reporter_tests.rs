@@ -1,4 +1,5 @@
 use super::*;
+use crate::property_metadata::is_writable_property;
 use bacnet_types::error::RemoteError;
 
 #[test]
@@ -26,7 +27,10 @@ fn ordinary_reporter_has_no_source_role_even_after_local_configuration() {
         assert!(crate::creation::builtin_deleteable(
             reporter.object_identifier().object_type()
         ));
-        assert!(!reporter.is_writable_property(PropertyIdentifier::AUDIT_SOURCE_REPORTER));
+        assert!(!is_writable_property(
+            &reporter,
+            PropertyIdentifier::AUDIT_SOURCE_REPORTER
+        ));
         assert!(matches!(reporter.write_property(
             PropertyIdentifier::AUDIT_SOURCE_REPORTER, None, PropertyValue::Boolean(true), None,
         ), Err(Error::Remote(RemoteError::Error { class, code }))

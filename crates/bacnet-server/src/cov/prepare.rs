@@ -1,6 +1,7 @@
 //! Shared selected-coordinate preparation; never substitutes Present_Value.
 use super::CovSample;
 use bacnet_encoding::primitives::encode_property_value;
+use bacnet_objects::property_metadata::is_array_property;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::{
     enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier},
@@ -54,7 +55,7 @@ pub(crate) fn validate_sample(
     index: Option<u32>,
     value: &PropertyValue,
 ) -> Result<(CovSample, bool), Error> {
-    let array = object.is_array_property(property);
+    let array = is_array_property(object, property);
     if index.is_some() && !array {
         return Err(property_error(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY));
     }

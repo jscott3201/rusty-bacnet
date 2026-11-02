@@ -3,6 +3,7 @@
 //! evaluator drives (#163/#137/#166; ASHRAE 135-2020 Clauses 12.12, 13.3).
 
 use super::super::*;
+use crate::property_metadata::is_writable_property;
 use bacnet_types::error::RemoteError;
 
 /// Absent a write, the property reads back the `Event_Parameters`
@@ -34,7 +35,10 @@ fn time_delay_normal_defaults_to_event_parameters_time_delay() {
 #[test]
 fn time_delay_normal_write_round_trips_and_is_writable() {
     let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
-    assert!(ee.is_writable_property(PropertyIdentifier::TIME_DELAY_NORMAL));
+    assert!(is_writable_property(
+        &ee,
+        PropertyIdentifier::TIME_DELAY_NORMAL
+    ));
     ee.write_property(
         PropertyIdentifier::TIME_DELAY_NORMAL,
         None,

@@ -7,6 +7,7 @@ use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead},
     PropertyWriteCapability,
 };
+use crate::property_metadata::{is_array_property, is_writable_property};
 use bacnet_types::enums::PropertyIdentifier as P;
 use bacnet_types::enums::{ErrorClass, ErrorCode, EscalatorMode};
 use bacnet_types::error::RemoteError;
@@ -64,7 +65,7 @@ fn assert_indexed_property_list(object: &dyn BACnetObject, all: &[P]) {
         .filter(|&&p| !matches!(p, P::OBJECT_IDENTIFIER | P::OBJECT_NAME | P::OBJECT_TYPE))
         .map(|p| PropertyValue::Enumerated(p.to_raw()))
         .collect();
-    assert!(object.is_array_property(P::PROPERTY_LIST));
+    assert!(is_array_property(object, P::PROPERTY_LIST));
     assert_eq!(
         object.read_property(P::PROPERTY_LIST, None).unwrap(),
         PropertyValue::List(wire.clone())
@@ -123,8 +124,8 @@ fn property_metadata_elevator_group_exact_sets_readable_rows_and_indexed_list() 
     );
     // Group_Members is BACnetARRAY (Table 12-76), so the service gate
     // admits an index; Landing_Calls is BACnetLIST and rejects one.
-    assert!(object.is_array_property(P::GROUP_MEMBERS));
-    assert!(!object.is_array_property(P::LANDING_CALLS));
+    assert!(is_array_property(&object, P::GROUP_MEMBERS));
+    assert!(!is_array_property(&object, P::LANDING_CALLS));
 }
 
 #[test]
@@ -177,7 +178,7 @@ fn property_metadata_escalator_exact_sets_readable_rows_and_indexed_list() {
     );
     // Fault_Signals is BACnetLIST (Table 12-78), so an index is rejected.
     for p in all {
-        assert!(!object.is_array_property(p), "{p:?}");
+        assert!(!is_array_property(&object, p), "{p:?}");
     }
 }
 
@@ -247,7 +248,7 @@ fn property_metadata_lift_exact_sets_readable_rows_and_indexed_list() {
         P::LANDING_DOOR_STATUS,
     ];
     for p in all {
-        assert_eq!(object.is_array_property(p), arrays.contains(&p), "{p:?}");
+        assert_eq!(is_array_property(&object, p), arrays.contains(&p), "{p:?}");
     }
     for p in arrays {
         assert!(matches!(
@@ -345,7 +346,7 @@ fn property_metadata_elevator_trio_write_capabilities_match_dispatch() {
                 };
                 assert_eq!(row.write_capability, capability, "{p:?}");
                 assert_eq!(
-                    object.is_writable_property(p),
+                    is_writable_property(&*object, p),
                     capability.is_writable(),
                     "{p:?}"
                 );
@@ -359,7 +360,7 @@ fn property_metadata_elevator_trio_write_capabilities_match_dispatch() {
             }
             // Object_Name has no network write route: a rename falls
             // through to WRITE_ACCESS_DENIED even with a well-formed value.
-            assert!(!object.is_writable_property(P::OBJECT_NAME));
+            assert!(!is_writable_property(&*object, P::OBJECT_NAME));
             assert_error(
                 object
                     .write_property(
@@ -379,7 +380,7 @@ fn property_metadata_elevator_trio_write_capabilities_match_dispatch() {
 #[test]
 fn property_metadata_elevator_trio_unserved_rows_stay_unknown() {
     fn assert_unserved(object: &mut dyn BACnetObject, p: P) {
-        assert!(!object.is_writable_property(p));
+        assert!(!is_writable_property(&*object, p));
         assert_error(
             object.read_property(p, None).unwrap_err(),
             ErrorCode::UNKNOWN_PROPERTY,

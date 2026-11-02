@@ -188,7 +188,7 @@ mod tests {
                 };
                 assert_eq!(row.write_capability, capability, "{p:?}");
                 assert_eq!(
-                    object.is_writable_property(p),
+                    crate::property_metadata::is_writable_property(&object, p),
                     capability.is_writable(),
                     "{p:?}"
                 );
@@ -250,7 +250,7 @@ mod tests {
                 P::RELIABILITY_EVALUATION_INHIBIT,
                 P::ALL,
             ] {
-                assert!(!object.is_writable_property(p));
+                assert!(!crate::property_metadata::is_writable_property(&object, p));
                 assert_error(
                     object.read_property(p, None).unwrap_err(),
                     ErrorCode::UNKNOWN_PROPERTY,
@@ -319,7 +319,7 @@ mod tests {
                 ErrorCode::INVALID_ARRAY_INDEX,
             ),
         ] {
-            assert!(object.is_array_property(p));
+            assert!(crate::property_metadata::is_array_property(&object, p));
             assert_error(
                 object
                     .write_property(p, Some(index), PropertyValue::List(vec![]), None)

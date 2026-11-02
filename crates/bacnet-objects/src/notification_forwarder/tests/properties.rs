@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::property_metadata::PropertyConformance;
+use crate::property_metadata::{is_array_property, is_list_property};
 use crate::traits::Timed;
 use bacnet_types::enums::PropertyIdentifier as P;
 
@@ -78,9 +79,9 @@ fn notification_forwarder_serves_every_required_row() {
         ErrorClass::PROPERTY,
         ErrorCode::UNKNOWN_PROPERTY,
     );
-    assert!(nf.is_list_property(P::SUBSCRIBED_RECIPIENTS));
-    assert!(nf.is_list_property(P::RECIPIENT_LIST));
-    assert!(nf.is_array_property(P::PORT_FILTER));
+    assert!(is_list_property(&nf, P::SUBSCRIBED_RECIPIENTS));
+    assert!(is_list_property(&nf, P::RECIPIENT_LIST));
+    assert!(is_array_property(&nf, P::PORT_FILTER));
 }
 
 #[test]

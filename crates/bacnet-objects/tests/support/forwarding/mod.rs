@@ -79,7 +79,7 @@ pub fn trait_methods() -> Vec<TraitMethod> {
     // method, one shared provided query, one multi-line mutating signature.
     assert!(method("object_identifier").shared && method("object_identifier").required);
     assert!(!method("write_property").shared && method("write_property").required);
-    assert!(method("is_list_property").shared && !method("is_list_property").required);
+    assert!(method("command_runner").shared && !method("command_runner").required);
     assert!(!method("write_property_from").shared && !method("write_property_from").required);
     methods
 }

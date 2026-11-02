@@ -2,6 +2,7 @@
 
 use crate::collections::{HashMap, HashSet};
 use crate::prelude::*;
+use crate::property_metadata::is_array_property;
 use core::time::Duration;
 
 use bacnet_encoding::constructed::encode_log_multiple_record;
@@ -375,7 +376,7 @@ impl ObjectDatabase {
         // ReadProperty's gate, which the Averaging sampler shares: only an
         // array has elements, whatever an object's read arm does with the
         // index.
-        if index.is_some() && !target.is_array_property(property) {
+        if index.is_some() && !is_array_property(target, property) {
             return Err(failure(
                 ErrorClass::PROPERTY,
                 ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,

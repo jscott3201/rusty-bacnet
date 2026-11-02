@@ -193,7 +193,10 @@ mod tests {
             .map(|p| PropertyValue::Enumerated(p.to_raw()))
             .collect();
         assert_eq!(wire.len(), 10);
-        assert!(object.is_array_property(P::PROPERTY_LIST));
+        assert!(crate::property_metadata::is_array_property(
+            &object,
+            P::PROPERTY_LIST
+        ));
         assert_eq!(
             object.read_property(P::PROPERTY_LIST, None).unwrap(),
             PropertyValue::List(wire.clone())
@@ -232,7 +235,7 @@ mod tests {
             };
             assert_eq!(row.write_capability, capability, "{p:?}");
             assert_eq!(
-                object.is_writable_property(p),
+                crate::property_metadata::is_writable_property(&object, p),
                 capability.is_writable(),
                 "{p:?}"
             );
@@ -246,7 +249,10 @@ mod tests {
         }
         // Object_Name has no network write route: a rename falls through
         // to WRITE_ACCESS_DENIED even with a well-formed value.
-        assert!(!object.is_writable_property(P::OBJECT_NAME));
+        assert!(!crate::property_metadata::is_writable_property(
+            &object,
+            P::OBJECT_NAME
+        ));
         assert_error(
             object
                 .write_property(
@@ -270,12 +276,15 @@ mod tests {
                 object.write_property(p, None, value, None).unwrap_err(),
                 ErrorCode::WRITE_ACCESS_DENIED,
             );
-            assert!(!object.is_writable_property(p));
+            assert!(!crate::property_metadata::is_writable_property(&object, p));
         }
         // Start_Time carries the table W code but dispatch has no write
         // arm (not even a schedule update), so even the read-back
         // Date/Time list is denied and the row stays ReadOnly.
-        assert!(!object.is_writable_property(P::START_TIME));
+        assert!(!crate::property_metadata::is_writable_property(
+            &object,
+            P::START_TIME
+        ));
         assert_error(
             object
                 .write_property(P::START_TIME, None, unspec_start_time(), None)
@@ -345,7 +354,7 @@ mod tests {
             P::SHED_LEVEL_DESCRIPTIONS,
             P::STATE_DESCRIPTION,
         ] {
-            assert!(!object.is_writable_property(p));
+            assert!(!crate::property_metadata::is_writable_property(&object, p));
             assert_error(
                 object.read_property(p, None).unwrap_err(),
                 ErrorCode::UNKNOWN_PROPERTY,

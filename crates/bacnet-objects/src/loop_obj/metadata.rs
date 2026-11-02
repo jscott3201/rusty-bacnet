@@ -211,7 +211,10 @@ mod tests {
                     _ => ReadOnly,
                 };
                 assert_eq!(row.write_capability, capability, "{p:?}");
-                assert_eq!(object.is_writable_property(p), capability.is_writable());
+                assert_eq!(
+                    crate::property_metadata::is_writable_property(&object, p),
+                    capability.is_writable()
+                );
                 let value = object.read_property(p, None).unwrap();
                 let result = object.write_property(p, None, value, None);
                 if capability == Always || (capability == WhenOutOfService && out_of_service) {
@@ -239,7 +242,7 @@ mod tests {
                 P::CURRENT_COMMAND_PRIORITY,
                 P::ALL,
             ] {
-                assert!(!object.is_writable_property(p));
+                assert!(!crate::property_metadata::is_writable_property(&object, p));
                 assert_error(
                     object.read_property(p, None).unwrap_err(),
                     ErrorCode::UNKNOWN_PROPERTY,

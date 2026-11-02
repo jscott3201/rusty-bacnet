@@ -20,8 +20,7 @@ fn staging_structured_decoder_groups_whole_and_indexed_values() {
     for stage in &stages {
         encode_stage_limit_value(&mut bytes, stage);
     }
-    let PropertyValue::List(values) =
-        decode_write_property_value(PropertyIdentifier::STAGES, None, false, &bytes).unwrap()
+    let PropertyValue::List(values) = decode(PropertyIdentifier::STAGES, None, &bytes).unwrap()
     else {
         panic!("whole Stages must decode to a list");
     };
@@ -31,12 +30,10 @@ fn staging_structured_decoder_groups_whole_and_indexed_values() {
     let mut one = BytesMut::new();
     encode_stage_limit_value(&mut one, &stages[0]);
     assert!(matches!(
-        decode_write_property_value(PropertyIdentifier::STAGES, Some(1), false, &one).unwrap(),
+        decode(PropertyIdentifier::STAGES, Some(1), &one).unwrap(),
         PropertyValue::ApplicationData(_)
     ));
-    assert!(
-        decode_write_property_value(PropertyIdentifier::STAGES, Some(1), false, &bytes).is_err()
-    );
+    assert!(decode(PropertyIdentifier::STAGES, Some(1), &bytes).is_err());
 }
 
 #[test]
@@ -49,7 +46,7 @@ fn staging_structured_decoder_rejects_trailing_malformed_data() {
     let mut bytes = BytesMut::new();
     encode_stage_limit_value(&mut bytes, &stage);
     bytes.extend_from_slice(&[0x44, 0x00]);
-    assert!(decode_write_property_value(PropertyIdentifier::STAGES, None, false, &bytes).is_err());
+    assert!(decode(PropertyIdentifier::STAGES, None, &bytes).is_err());
 }
 
 #[test]
@@ -66,21 +63,14 @@ fn staging_targets_reach_the_object_as_raw_reference_bytes() {
     bytes.extend_from_slice(&[0x19]);
     for index in [None, Some(1)] {
         assert_eq!(
-            decode_write_property_value(
-                PropertyIdentifier::TARGET_REFERENCES,
-                index,
-                false,
-                &bytes
-            )
-            .unwrap(),
+            decode(PropertyIdentifier::TARGET_REFERENCES, index, &bytes).unwrap(),
             PropertyValue::ApplicationData(bytes.to_vec())
         );
     }
     let mut size = BytesMut::new();
     bacnet_encoding::primitives::encode_app_unsigned(&mut size, 2);
     assert_eq!(
-        decode_write_property_value(PropertyIdentifier::TARGET_REFERENCES, Some(0), false, &size)
-            .unwrap(),
+        decode(PropertyIdentifier::TARGET_REFERENCES, Some(0), &size).unwrap(),
         PropertyValue::Unsigned(2)
     );
 }
@@ -90,7 +80,19 @@ fn staging_array_index_zero_keeps_unsigned_write_semantics() {
     let mut bytes = BytesMut::new();
     bacnet_encoding::primitives::encode_app_unsigned(&mut bytes, 2);
     assert_eq!(
-        decode_write_property_value(PropertyIdentifier::STAGES, Some(0), false, &bytes).unwrap(),
+        decode(PropertyIdentifier::STAGES, Some(0), &bytes).unwrap(),
         PropertyValue::Unsigned(2)
     );
+}
+
+/// A Staging write's value decoded as the server decodes it: by the
+/// property's standard value type on a Staging object.
+fn decode(
+    property: PropertyIdentifier,
+    index: Option<u32>,
+    bytes: &[u8],
+) -> Result<PropertyValue, bacnet_types::error::Error> {
+    let value_type =
+        bacnet_objects::property_metadata::standard_value_type(ObjectType::STAGING, property);
+    decode_write_property_value(property, value_type, index, bytes)
 }
