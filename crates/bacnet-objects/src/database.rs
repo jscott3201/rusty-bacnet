@@ -266,15 +266,12 @@ impl ObjectDatabase {
     ///
     /// Some answers come from the built-in object only, never through an
     /// adapter: whether a COV Trend Log is collecting (Enable and its window),
-    /// whether an Event Log takes received notifications, the samples an
-    /// Averaging object has due, and a Pulse Converter's Input_Reference
-    /// judging and counting. A wrapped Trend Log logging by COV keeps no
-    /// Enable or window gate and no baseline restart, and a wrapped Event Log
-    /// takes no received notifications. A wrapped Averaging object takes no
-    /// samples; while it holds a reference, its overdue sample deadline wakes
-    /// the bundled server's monotonic task every millisecond. A wrapped Pulse
-    /// Converter counts nothing, and its Reliability no longer follows its
-    /// Input_Reference.
+    /// whether an Event Log takes received notifications, and a Pulse
+    /// Converter's Input_Reference judging and counting. A wrapped Trend Log
+    /// logging by COV keeps no Enable or window gate and no baseline restart,
+    /// a wrapped Event Log takes no received notifications, and a wrapped
+    /// Pulse Converter counts nothing and its Reliability no longer follows
+    /// its Input_Reference.
     ///
     /// ```compile_fail
     /// use bacnet_objects::{database::ObjectDatabase, traits::BACnetObject};

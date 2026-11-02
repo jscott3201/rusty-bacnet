@@ -726,8 +726,9 @@ taken after the database is allowed (§4.5).
 sample, read; turning the sample into a join with other work under the
 database guard would reopen #1494's failure.
 
-**#2179 (capability accessors).** `BACnetObject` has 101 methods, 69 of
-them `_internal`. The core calls a few: `registered_port_internal`,
+**#2179 (capability accessors).** Before #2179, `BACnetObject` had 101
+methods, 69 of them `_internal`; after PR 8b it has 46, most of them
+capability accessors, and one `_internal`. The core calls a few: `registered_port_internal`,
 `device_authority_internal`, `audit_reporter_authority_internal` (now
 `audit_reporter_mut`, #2179's PR 8b), and three
 command-run hooks in the moved run-ending code (`take_command_run_internal`,

@@ -369,6 +369,14 @@ impl Timed for Probe {
             AuditReporterObject::new(18, "Probe snapshot").unwrap(),
         ))
     }
+    fn take_due_sample(&mut self, now: Duration) -> Option<BACnetObjectPropertyReference> {
+        self.called("Timed::take_due_sample", (now,));
+        Some(BACnetObjectPropertyReference {
+            object_identifier: oid(ObjectType::ANALOG_VALUE, 41),
+            property_identifier: P::PRESENT_VALUE.to_raw(),
+            property_array_index: Some(2),
+        })
+    }
 }
 
 /// The probe's Staging capability, logged under `StagingSource::`.

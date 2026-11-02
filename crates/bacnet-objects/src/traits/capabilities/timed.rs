@@ -4,6 +4,8 @@ use alloc::boxed::Box;
 use alloc::sync::Arc;
 use core::time::Duration;
 
+use bacnet_types::constructed::BACnetObjectPropertyReference;
+
 use crate::clock::ClockReader;
 use crate::traits::BACnetObject;
 
@@ -134,6 +136,21 @@ pub trait Timed {
     /// holds the object, for the COV report of an advance that changed it.
     /// `None` reports nothing.
     fn cov_snapshot(&self) -> Option<Box<dyn BACnetObject>> {
+        None
+    }
+
+    /// Claim the Averaging sample due at the monotonic instant `now`: step
+    /// the schedule past it and return the property to read, which the host
+    /// reads and records as a
+    /// [`LocalInputValue::AveragingSample`](crate::traits::LocalInputValue::AveragingSample).
+    /// The due time is the one [`next_monotonic_deadline`] reports, so an
+    /// adapter that forwards [`timed`](crate::traits::BACnetObject::timed)
+    /// keeps the deadline and the sampling together. The default has
+    /// nothing to sample. Not public API yet (#2179).
+    ///
+    /// [`next_monotonic_deadline`]: Self::next_monotonic_deadline
+    #[doc(hidden)]
+    fn take_due_sample(&mut self, _now: Duration) -> Option<BACnetObjectPropertyReference> {
         None
     }
 }

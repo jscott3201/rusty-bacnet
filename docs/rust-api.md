@@ -5651,13 +5651,15 @@ conformance is not claimed.
 #### Audit Reporter configuration and send delay
 
 Trusted local configuration through `dyn BACnetObject` uses one atomic
-`audit_reporter_mut()` → `AuditReporterAuthority::configure(level, operations, confirmed, selectors, priorities, maximum_send_delay)`
-contract (the hidden `configure_audit_reporter_internal` hook before #2179).
-A wrapper around a Reporter lends the Reporter's own authority, so it can't
-intercept a configuration; the endpoint's source Reporter adapter marks the
-authority with its source owner, which refuses Monitored_Objects and a send
-delay while the owner is active. It replaces all six settings once; invalid or resource-denied changes
-leave every field unchanged. The final argument is `Option<AuditSendDelay>`:
+contract, `audit_reporter_mut()` and then
+`AuditReporterAuthority::configure(level, operations, confirmed, selectors,
+priorities, maximum_send_delay)` (the hidden
+`configure_audit_reporter_internal` hook before #2179). A wrapper around a
+Reporter lends the Reporter's own authority, so it can't intercept a
+configuration; the endpoint's source Reporter adapter marks the authority
+with its source owner, which refuses Monitored_Objects and a send delay
+while the owner is active. It replaces all six settings once; invalid or
+resource-denied changes leave every field unchanged. The final argument is `Option<AuditSendDelay>`:
 `None` omits both delay/control properties, while `Some(AuditSendDelay::new(0)?)`
 exposes the pair with immediate delivery. Positive values enable bounded target
 batching; see [delay controls and limits](delayed-target-audit.md). Built-in live
@@ -5869,10 +5871,9 @@ read, or a value of a datatype the object can't average counts as a missed
 attempt. References are always local: a written reference naming another
 device is refused (see below). The server's monotonic operation task does this through
 `ObjectDatabase::sample_due_averaging_objects`, which an application driving
-its own database can call as well. It samples the built-in `AveragingObject`
-only (#2179): one wrapped with `ObjectDatabase::with_object_adapter` takes no
-samples, and while it holds a reference its overdue deadline wakes the
-monotonic task every millisecond.
+its own database can call as well. It asks each Averaging object for its
+due sample through the hidden `Timed::take_due_sample` (#2179), so an
+adapter that forwards `timed()` keeps a wrapped one sampled.
 
 The application feeds an object that has no reference. In a running server it
 passes each result to
@@ -6901,9 +6902,9 @@ that changes. While Out_Of_Service is TRUE, Reliability takes a client's
 value (Clause 12.23.10), and the return to service applies the latest
 verdict. A running server also counts from the property at least once a
 second (`ObjectDatabase::count_pulse_inputs`, on every wake of its monotonic
-operation task; the built-in `PulseConverterObject` only, so a wrapped one is
-neither judged nor counted, #2179): each increase over the last reading goes into Count as
-`add_pulses` would, and the first reading after the reference is set or
+operation task; the built-in `PulseConverterObject` only, so a wrapped one
+is neither judged nor counted, #2179): each increase over the last reading
+goes into Count as `add_pulses` would, and the first reading after the reference is set or
 changed only sets the baseline, so re-pointing it at a larger value counts
 nothing. A reading below the last one counts the wrap when the source is an
 Accumulator's Present_Value, modulo its Max_Pres_Value + 1 (Clause 12.61.4);

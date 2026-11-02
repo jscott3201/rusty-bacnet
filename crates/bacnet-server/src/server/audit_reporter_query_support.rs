@@ -144,6 +144,9 @@ impl BACnetObject for Probe {
     fn audit_log(&self) -> Option<&dyn bacnet_objects::traits::AuditLog> {
         (self.mode != "no capability").then_some(self)
     }
+    fn audit_log_mut(&mut self) -> Option<&mut dyn bacnet_objects::traits::AuditLog> {
+        (self.mode != "no capability").then_some(self)
+    }
 }
 
 impl bacnet_objects::traits::AuditLog for Probe {

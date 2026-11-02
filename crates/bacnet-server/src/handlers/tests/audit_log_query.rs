@@ -310,6 +310,10 @@ impl BACnetObject for SpyAuditObject {
     fn audit_log(&self) -> Option<&dyn bacnet_objects::traits::AuditLog> {
         Some(self)
     }
+
+    fn audit_log_mut(&mut self) -> Option<&mut dyn bacnet_objects::traits::AuditLog> {
+        Some(self)
+    }
 }
 
 impl bacnet_objects::traits::AuditLog for SpyAuditObject {

@@ -155,6 +155,25 @@ fn an_active_source_owner_refuses_monitored_objects_only_while_active() {
     configure(&mut reporter, None, None).unwrap();
 }
 
+#[test]
+fn a_dead_source_owner_refuses_nothing() {
+    let mut reporter = AuditReporterObject::new(1, "AR").unwrap();
+    let owner = AuditOwnership::for_source(
+        oid(ObjectType::DEVICE, 1),
+        oid(ObjectType::AUDIT_REPORTER, 1),
+    );
+    let lease = Arc::downgrade(&owner);
+    drop(owner);
+    assert!(lease.upgrade().is_none());
+    configure(&mut reporter, Some(&lease), Some(alloc::vec![])).unwrap();
+    assert!(
+        reporter
+            .configuration_internal()
+            .monitored_objects
+            .is_some()
+    );
+}
+
 /// A custom object of any type: none of the built-in state.
 struct Custom(ObjectIdentifier, &'static str);
 

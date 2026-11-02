@@ -137,6 +137,13 @@ pub const CAPABILITY_ROWS: &[(&str, Row)] = &[
         }),
     ),
     (
+        "Timed::take_due_sample",
+        Row::Command(|o| {
+            let now = Duration::from_secs(42);
+            format!("{:?}", o.timed().map(|t| t.take_due_sample(now)))
+        }),
+    ),
+    (
         "StagingSource::take_staging_write_plan",
         Row::Command(|o| {
             let plan = o.staging_source().map(|s| s.take_staging_write_plan());
