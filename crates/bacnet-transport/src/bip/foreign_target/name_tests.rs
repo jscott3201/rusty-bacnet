@@ -567,6 +567,28 @@ async fn a_lookup_ending_after_a_stop_counts_nothing() {
     assert_eq!(device.snapshot().bbmd_lookups, 0);
 }
 
+/// A name activated while a call runs isn't looked up once that call ends
+/// if the transport has stopped meanwhile: a stopped transport sends no
+/// query, and a start looks the name up again.
+#[tokio::test(start_paused = true)]
+async fn no_lookup_follows_a_stop() {
+    let device = Device::new(60).await;
+    device.after(1).await;
+    let gate = Arc::new(Notify::new());
+    device
+        .names
+        .answer(NAME, Answer::Gated(Arc::clone(&gate), vec![B]));
+    device.activate(Device::name()).unwrap();
+    device.after(1).await;
+    device
+        .activate(BACnetHostAddress::Name("other.test".into()))
+        .unwrap();
+    device.node.stop();
+    gate.notify_one();
+    device.after(1).await;
+    assert_eq!((device.names.calls(), device.bbmd()), (1, at(A)));
+}
+
 /// A written name is checked for its form and port, and the check changes
 /// nothing and looks nothing up.
 #[tokio::test(start_paused = true)]

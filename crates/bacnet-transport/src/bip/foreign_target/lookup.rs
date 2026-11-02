@@ -206,6 +206,12 @@ impl Lookups {
 /// always reports to the target, which frees the resolver slot: with its
 /// answer, or, dropped without one (its resolver panicked, or its task was
 /// dropped with the runtime), as [`BbmdLookupFailure::Abandoned`].
+///
+/// Making one takes the slot, so every one made must be started: one
+/// dropped unstarted would hold the slot until the next activation. It is
+/// made under the lock and started once the lock is released, since its
+/// report takes the lock.
+#[must_use = "a lookup holds the resolver slot until it is started"]
 pub(super) struct Lookup {
     target: Weak<ForeignTarget>,
     resolver: Arc<dyn BbmdResolver>,
@@ -213,6 +219,8 @@ pub(super) struct Lookup {
     generation: u64,
     /// Started and not reported yet.
     armed: bool,
+    /// Started at all, for the check on drop.
+    started: bool,
 }
 
 /// A failed lookup, with the resolver's error for the log.
@@ -235,6 +243,7 @@ impl Lookup {
     /// at once.
     pub(super) fn start(mut self) {
         self.armed = true;
+        self.started = true;
         match tokio::runtime::Handle::try_current() {
             Ok(runtime) => {
                 runtime.spawn(self.run());
@@ -278,6 +287,10 @@ impl Drop for Lookup {
     /// panicking resolver, or dropped with its task. No lock is held where
     /// a started one can drop.
     fn drop(&mut self) {
+        debug_assert!(
+            self.started || std::thread::panicking(),
+            "a BBMD lookup was made and never started, so it holds the resolver slot"
+        );
         self.end(Err(BbmdLookupFailure::Abandoned.into()));
     }
 }
@@ -313,7 +326,9 @@ impl ForeignTarget {
     /// A lookup of the name in effect, unless there is none, or a resolver
     /// call runs already (an activation then waits for it to end), or,
     /// unless an activation asks (`activated`) or waits, the last lookup
-    /// started less than [`ATTEMPT_LOOKUP_INTERVAL`] ago.
+    /// started less than [`ATTEMPT_LOOKUP_INTERVAL`] ago. A lookup returned
+    /// holds the slot: start it once the lock is released.
+    #[must_use = "a lookup holds the resolver slot until it is started"]
     fn lookup(&self, state: &mut TargetState, activated: bool) -> Option<Lookup> {
         let host = state.name.as_ref()?.host.clone();
         let lookups = &mut state.lookups;
@@ -337,15 +352,16 @@ impl ForeignTarget {
             host,
             generation: lookups.generation,
             armed: false,
+            started: false,
         })
     }
 
     /// A lookup started for `generation` ended, and with it the resolver
     /// call. One for an earlier activation, or one that ends with the
     /// transport stopped, changes and counts nothing: a start looks the name
-    /// up again. A name activated meanwhile is looked up now, unless this
-    /// one was abandoned, perhaps with the runtime, when the next attempt
-    /// does it instead.
+    /// up again. A name activated meanwhile is looked up now, while the
+    /// transport runs, unless this one was abandoned, perhaps with the
+    /// runtime: then the next attempt, or the next start, does it.
     fn looked_up(&self, generation: u64, answer: Result<Vec<Ipv4Addr>, Failed>) {
         let mut state = self.lock();
         if state.lookups.running == Some(generation) {
@@ -356,7 +372,7 @@ impl ForeignTarget {
             let abandoned = answer
                 .as_ref()
                 .is_err_and(|failed| failed.failure == BbmdLookupFailure::Abandoned);
-            let rerun = (state.lookups.rerun && !abandoned)
+            let rerun = (state.lookups.rerun && !abandoned && Self::running(&state).is_some())
                 .then(|| self.lookup(&mut state, true))
                 .flatten();
             drop(state);
@@ -447,7 +463,14 @@ impl ForeignTarget {
         let bbmd = state.config.bbmd();
         let failure = failed.failure;
         let error = failed.error.as_ref().map(ToString::to_string);
-        if std::mem::replace(&mut state.lookups.failing, true) {
+        let repeat = std::mem::replace(&mut state.lookups.failing, true);
+        if failure == BbmdLookupFailure::Abandoned {
+            if repeat {
+                debug!(host = %name.host, %bbmd, "A lookup of the BBMD's host name ended without an answer again");
+            } else {
+                warn!(host = %name.host, %bbmd, "A lookup of the BBMD's host name ended without an answer; registering with the last address it had");
+            }
+        } else if repeat {
             debug!(host = %name.host, ?failure, ?error, %bbmd, "The BBMD's host name still doesn't resolve to a usable address");
         } else {
             warn!(host = %name.host, ?failure, ?error, %bbmd, "The BBMD's host name doesn't resolve to a usable address; registering with the last address it had");
