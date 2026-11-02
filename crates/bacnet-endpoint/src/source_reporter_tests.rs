@@ -293,7 +293,7 @@ async fn rejected(
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn server_only_rejects_source_without_consuming_start() {
     let (session, _peer, observed) = session(SessionRole::ServerOnly);
     let mut session = session
@@ -302,7 +302,7 @@ async fn server_only_rejects_source_without_consuming_start() {
     rejected(&mut session, &observed, "requires a client role").await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn missing_database_can_be_attached_after_validation_failure() {
     let (session, _peer, observed) = session(SessionRole::ClientOnly);
     let mut session = session.with_source_audit_reporter(selected());
@@ -319,7 +319,7 @@ async fn missing_database_can_be_attached_after_validation_failure() {
     assert_eq!(observed.starts.load(Ordering::SeqCst), 1);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn device_validation_is_atomic_and_correctable() {
     for case in ["missing", "lower", "mismatch"] {
         let (session, _peer, observed) = session(SessionRole::Both);
@@ -404,7 +404,7 @@ impl BACnetObject for ForeignReporter {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn selection_validation_is_atomic_and_correctable() {
     for case in [
         "absent",
@@ -445,7 +445,7 @@ async fn selection_validation_is_atomic_and_correctable() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn conflicting_or_unknown_foreign_source_is_rejected_before_mutation() {
     for state in [Some(true), None] {
         let (session, _peer, observed) = session(SessionRole::ClientOnly);
@@ -472,7 +472,7 @@ async fn conflicting_or_unknown_foreign_source_is_rejected_before_mutation() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn existing_source_is_idempotent_but_conflicting_selection_is_not() {
     let (session, _peer, observed) = session(SessionRole::Both);
     let mut db = database();
@@ -496,7 +496,7 @@ async fn existing_source_is_idempotent_but_conflicting_selection_is_not() {
     session.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_database_is_released_on_drop_without_stop() {
     for role in [SessionRole::ClientOnly, SessionRole::Both] {
         let (session, _peer, _) = session(role);
@@ -516,7 +516,7 @@ async fn source_database_is_released_on_drop_without_stop() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn duplicate_sources_assembled_locally_are_rejected_atomically() {
     let (session, _peer, observed) = session(SessionRole::Both);
     let mut first = database();
@@ -539,7 +539,7 @@ async fn duplicate_sources_assembled_locally_are_rejected_atomically() {
     rejected(&mut session, &observed, "conflicting source").await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 #[should_panic(expected = "endpoint configuration must precede startup")]
 async fn source_selection_cannot_change_after_start() {
     let (session, _peer, _) = session(SessionRole::ClientOnly);
@@ -550,7 +550,7 @@ async fn source_selection_cannot_change_after_start() {
     let _ = session.with_source_audit_reporter(target());
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn repeated_pre_start_selection_only_wraps_the_final_choice() {
     let (session, _peer, _) = session(SessionRole::ClientOnly);
     let mut session = session
@@ -568,7 +568,7 @@ async fn repeated_pre_start_selection_only_wraps_the_final_choice() {
     session.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn selected_source_requires_typed_recipient_before_start() {
     let (session, _peer, observed) = session(SessionRole::ClientOnly);
     let mut db = database();
@@ -612,7 +612,7 @@ async fn selected_source_requires_typed_recipient_before_start() {
     session.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_both_requires_explicit_authorizer_before_owner_installation() {
     let (mut session, _peer, observed) = session(SessionRole::Both);
     session.device_write_authorizer = None;

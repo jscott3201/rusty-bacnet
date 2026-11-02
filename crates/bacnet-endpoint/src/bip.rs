@@ -303,9 +303,11 @@ impl BipEndpointBuilder {
         Ok(endpoint)
     }
 
-    /// Builds the session [`build_session`](Self::build_session) would, with
-    /// the same checks, over `transport` instead of a B/IP socket. Tests run
-    /// it on an in-memory link under paused time (#2298).
+    /// Builds the session [`build_session`](Self::build_session) would, over
+    /// `transport` instead of a B/IP socket. It still validates the B/IP
+    /// socket controls (interface, port, mode, multicast) by building the
+    /// B/IP transport, then drops that unstarted transport. Tests run it on
+    /// an in-memory link under paused time (#2298).
     #[cfg(test)]
     pub(crate) fn build_session_over<T: bacnet_transport::port::TransportPort + 'static>(
         self,
@@ -317,8 +319,10 @@ impl BipEndpointBuilder {
         })
     }
 
-    /// Validates the session-owned configuration, then composes it over the
-    /// transport `transport` makes from the remaining B/IP controls.
+    /// Validates the session-owned configuration (source Audit routes
+    /// included) and takes it out of the builder, then hands the rest of the
+    /// builder to `transport` and composes the session over the transport it
+    /// returns.
     fn compose<T: bacnet_transport::port::TransportPort + 'static>(
         mut self,
         transport: impl FnOnce(Self) -> Result<T, Error>,
