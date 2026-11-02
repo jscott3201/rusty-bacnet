@@ -6858,6 +6858,20 @@ their context-tagged Clause 21 forms, encoded with
 float `[0]` or integer `[1]` alternative, and Prescale's multiplier `[0]` and
 modulo divide `[1]` (#1487). Both are read-only.
 
+An Accumulator's Pulse_Rate is an Unsigned (Table 12-79): the input pulses
+counted over the last whole Limit_Monitoring_Interval (Clause 12.61.20). The
+object counts it in a fixed window when the application feeds it: set the
+interval with `set_limit_monitoring_interval` (or a client's write of
+Limit_Monitoring_Interval), count pulses with `record_pulses`, and let time
+pass with `advance_rate_window(seconds)`. Each time a whole interval has
+passed, Pulse_Rate becomes that window's count and a new window starts, in
+integer arithmetic only. An application that measures the rate itself calls
+`set_pulse_rate` instead. While Out_Of_Service is TRUE, Pulse_Rate keeps the
+value a client writes and ignores both routes. A write must be an Unsigned;
+the REAL the object used to serve is INVALID_DATA_TYPE (#2251). `record_pulses`
+counts toward the rate only: Present_Value stays the application's
+(`set_present_value`).
+
 A Pulse Converter's Input_Reference, set with `set_input_reference`, reads and
 takes writes like the Loop's variable references: the context-tagged
 `BACnetObjectPropertyReference` in a `PropertyValue::ApplicationData`, with

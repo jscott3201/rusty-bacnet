@@ -38,10 +38,9 @@ use crate::property_metadata::{
 // accept writes while Out_Of_Service is TRUE, but the write arm
 // unconditionally denies it and no Value_Set mechanism advances it, so the
 // metadata mirrors dispatch as RequiredRead/ReadOnly rather than advertising
-// a route that does not exist. Pulse_Rate is served as Real while Table 12-79
-// types it Unsigned, and Status_Flags is computed with event_state=0 by the
-// shared common arm even though the object owns an Event_State field; both
-// quirks are preserved, not fixed, by this migration. Presence is None
+// a route that does not exist. Status_Flags is computed with event_state=0
+// by the shared common arm even though the object owns an Event_State field;
+// that quirk is preserved, not fixed, by this migration. Presence is None
 // throughout: the implementation models no commandable, intrinsic-reporting,
 // or paired-text gating. The object is not createable at runtime (the
 // `creation` table has no constructor for it) and remains deleteable
@@ -341,11 +340,11 @@ mod tests {
                 PropertyValue::Unsigned(1000)
             );
             object
-                .write_property(P::PULSE_RATE, None, PropertyValue::Real(2.5), None)
+                .write_property(P::PULSE_RATE, None, PropertyValue::Unsigned(25), None)
                 .unwrap();
             assert_eq!(
                 object.read_property(P::PULSE_RATE, None).unwrap(),
-                PropertyValue::Real(2.5)
+                PropertyValue::Unsigned(25)
             );
             object
                 .write_property(
@@ -361,18 +360,19 @@ mod tests {
                     .unwrap(),
                 PropertyValue::Unsigned(60)
             );
-            // Non-finite Pulse_Rate values are refused without touching state.
-            for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            // Pulse_Rate is an Unsigned (Table 12-79): the REAL it was once
+            // served as is refused without touching state.
+            for value in [2.5, f32::NAN] {
                 assert_error(
                     object
                         .write_property(P::PULSE_RATE, None, PropertyValue::Real(value), None)
                         .unwrap_err(),
-                    ErrorCode::VALUE_OUT_OF_RANGE,
+                    ErrorCode::INVALID_DATA_TYPE,
                 );
             }
             assert_eq!(
                 object.read_property(P::PULSE_RATE, None).unwrap(),
-                PropertyValue::Real(2.5)
+                PropertyValue::Unsigned(25)
             );
             // Oversized Limit_Monitoring_Interval values are refused.
             assert_error(
@@ -389,7 +389,7 @@ mod tests {
             // Mistyped values are rejected without changing state.
             for (p, value) in [
                 (P::MAX_PRES_VALUE, PropertyValue::Real(1.0)),
-                (P::PULSE_RATE, PropertyValue::Unsigned(1)),
+                (P::PULSE_RATE, PropertyValue::Signed(1)),
                 (P::LIMIT_MONITORING_INTERVAL, PropertyValue::Enumerated(60)),
                 (P::DESCRIPTION, PropertyValue::Unsigned(1)),
                 (P::OUT_OF_SERVICE, PropertyValue::Unsigned(1)),

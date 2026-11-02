@@ -18,6 +18,8 @@ use crate::traits::BACnetObject;
 
 mod metadata;
 mod pulse_converter;
+#[cfg(test)]
+mod pulse_rate_tests;
 
 #[doc(hidden)]
 pub use pulse_converter::InputReading;
@@ -26,6 +28,16 @@ pub use pulse_converter::PulseConverterObject;
 // ---------------------------------------------------------------------------
 // AccumulatorObject (type 23)
 // ---------------------------------------------------------------------------
+
+/// The Limit_Monitoring_Interval window Pulse_Rate is being counted over: a
+/// fixed window, which Clause 12.61.23 leaves to the implementation.
+#[derive(Debug, Clone, Copy, Default)]
+struct RateWindow {
+    /// Pulses counted since the window opened.
+    pulses: u64,
+    /// Seconds of the window that have passed, below the interval.
+    elapsed: u32,
+}
 
 /// BACnet Accumulator object — tracks a pulse count with scaling.
 pub struct AccumulatorObject {
@@ -36,9 +48,13 @@ pub struct AccumulatorObject {
     max_pres_value: u64,
     scale: BACnetScale,
     prescale: Option<BACnetPrescale>,
-    pulse_rate: f32,
+    /// Pulse_Rate: the pulses counted over the last whole
+    /// Limit_Monitoring_Interval window (Clause 12.61.20).
+    pulse_rate: u64,
     units: EngineeringUnits,
     limit_monitoring_interval: u32,
+    /// The window [`AccumulatorObject::advance_rate_window`] is filling.
+    rate_window: RateWindow,
     status_flags: StatusFlags,
     event_state: EventState,
     out_of_service: bool,
@@ -63,9 +79,10 @@ impl AccumulatorObject {
             max_pres_value: u64::MAX,
             scale: BACnetScale::FloatScale(1.0),
             prescale: None,
-            pulse_rate: 0.0,
+            pulse_rate: 0,
             units,
             limit_monitoring_interval: 0,
+            rate_window: RateWindow::default(),
             status_flags: StatusFlags::empty(),
             event_state: EventState::NORMAL,
             out_of_service: false,
@@ -96,6 +113,60 @@ impl AccumulatorObject {
     /// has no value standing for none.
     pub fn set_prescale(&mut self, prescale: BACnetPrescale) {
         self.prescale = Some(prescale);
+    }
+
+    /// Set Limit_Monitoring_Interval, the length in seconds of the window
+    /// Pulse_Rate counts over, and start a new window. Zero, the default,
+    /// leaves Pulse_Rate to the application and network writes.
+    pub fn set_limit_monitoring_interval(&mut self, seconds: u32) {
+        self.limit_monitoring_interval = seconds;
+        self.rate_window = RateWindow::default();
+    }
+
+    /// Set Pulse_Rate to `pulses`, the input pulses counted over the latest
+    /// Limit_Monitoring_Interval, for an application that measures the rate
+    /// itself. While Out_Of_Service is TRUE the property is decoupled from
+    /// the input (Clause 12.61.10), so the value is dropped and a client's
+    /// keeps being served.
+    pub fn set_pulse_rate(&mut self, pulses: u64) {
+        if !self.out_of_service {
+            self.pulse_rate = pulses;
+        }
+    }
+
+    /// Count `pulses` input pulses into the current rate window. Only
+    /// Pulse_Rate uses them: Present_Value stays the application's
+    /// (`set_present_value`).
+    pub fn record_pulses(&mut self, pulses: u64) {
+        self.rate_window.pulses = self.rate_window.pulses.saturating_add(pulses);
+    }
+
+    /// Let `seconds` of the window pass. Once a whole Limit_Monitoring_Interval
+    /// has passed, Pulse_Rate becomes the pulses `record_pulses` counted in
+    /// the window, and a new, empty window starts; the rate is a count per
+    /// interval, so no division or float is involved. Call it at least once
+    /// an interval (each second, say): a call that spans several intervals
+    /// closes one window with every pulse counted and carries only the part
+    /// of an interval left over. With an interval of zero nothing changes.
+    ///
+    /// While Out_Of_Service is TRUE the windows keep running but Pulse_Rate
+    /// keeps a client's value (Clause 12.61.10); the first window to close
+    /// after the return to service sets it again.
+    pub fn advance_rate_window(&mut self, seconds: u32) {
+        let interval = self.limit_monitoring_interval;
+        if interval == 0 {
+            return;
+        }
+        let elapsed = self.rate_window.elapsed.saturating_add(seconds);
+        if elapsed < interval {
+            self.rate_window.elapsed = elapsed;
+            return;
+        }
+        let pulses = core::mem::take(&mut self.rate_window.pulses);
+        self.rate_window.elapsed = elapsed % interval;
+        if !self.out_of_service {
+            self.pulse_rate = pulses;
+        }
     }
 
     /// Whether Prescale is present, for the metadata.
@@ -147,7 +218,9 @@ impl BACnetObject for AccumulatorObject {
                 }
                 None => Err(common::unknown_property_error()),
             },
-            p if p == PropertyIdentifier::PULSE_RATE => Ok(PropertyValue::Real(self.pulse_rate)),
+            p if p == PropertyIdentifier::PULSE_RATE => {
+                Ok(PropertyValue::Unsigned(self.pulse_rate))
+            }
             p if p == PropertyIdentifier::UNITS => {
                 Ok(PropertyValue::Enumerated(self.units.to_raw()))
             }
@@ -194,8 +267,7 @@ impl BACnetObject for AccumulatorObject {
                 }
             }
             p if p == PropertyIdentifier::PULSE_RATE => {
-                if let PropertyValue::Real(v) = value {
-                    common::reject_non_finite(v)?;
+                if let PropertyValue::Unsigned(v) = value {
                     self.pulse_rate = v;
                     Ok(())
                 } else {
@@ -204,7 +276,7 @@ impl BACnetObject for AccumulatorObject {
             }
             p if p == PropertyIdentifier::LIMIT_MONITORING_INTERVAL => {
                 if let PropertyValue::Unsigned(v) = value {
-                    self.limit_monitoring_interval = common::u64_to_u32(v)?;
+                    self.set_limit_monitoring_interval(common::u64_to_u32(v)?);
                     Ok(())
                 } else {
                     Err(common::invalid_data_type_error())

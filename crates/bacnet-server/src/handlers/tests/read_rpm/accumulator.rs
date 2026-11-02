@@ -143,13 +143,13 @@ fn rpm_accumulator_indexed_reads_and_bytes_are_unchanged() {
     for configured in [false, true] {
         let mut object = AccumulatorObject::new(7, "ACC-7", EngineeringUnits::NO_UNITS).unwrap();
         if configured {
-            // Application-level count plus the three routed Unsigned/Real arms.
+            // Application-level count plus the three routed Unsigned arms.
             object.set_present_value(42);
             object
                 .write_property(P::MAX_PRES_VALUE, None, PropertyValue::Unsigned(200), None)
                 .unwrap();
             object
-                .write_property(P::PULSE_RATE, None, PropertyValue::Real(2.5), None)
+                .write_property(P::PULSE_RATE, None, PropertyValue::Unsigned(25), None)
                 .unwrap();
             object.set_scale(bacnet_types::constructed::BACnetScale::IntegerScale(-2));
             object
@@ -175,8 +175,8 @@ fn rpm_accumulator_indexed_reads_and_bytes_are_unchanged() {
         // under context tag 0 or an INTEGER under context tag 1, and Prescale
         // its multiplier under context tag 0 then its modulo divide under
         // context tag 1 (Clause 21, #1487); neither is an array, so an index
-        // is PROPERTY_IS_NOT_AN_ARRAY on both. 2.5f32 encodes as 0x40200000;
-        // 1.0f32 as 0x3F800000; -2 as the one octet 0xFE.
+        // is PROPERTY_IS_NOT_AN_ARRAY on both. 1.0f32 encodes as 0x3F800000;
+        // -2 as the one octet 0xFE.
         let prescale: ExpectedRead = Ok(&[0x09, 5, 0x19, 100]);
         let scale: ExpectedRead = Ok(if configured {
             &[0x19, 0xFE]
@@ -225,11 +225,8 @@ fn rpm_accumulator_indexed_reads_and_bytes_are_unchanged() {
             (
                 P::PULSE_RATE,
                 None,
-                Ok(if configured {
-                    &[0x44, 0x40, 0x20, 0x00, 0x00]
-                } else {
-                    &[0x44, 0, 0, 0, 0]
-                }),
+                // An application Unsigned (Table 12-79).
+                Ok(if configured { &[0x21, 25] } else { &[0x21, 0] }),
             ),
             (
                 P::PULSE_RATE,

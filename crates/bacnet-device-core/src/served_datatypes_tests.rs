@@ -48,8 +48,6 @@ const KNOWN_DEPARTURES: &[(T, P)] = &[
     // Table 12-18 gives Maintenance_Required BACnetMaintenance (an
     // enumeration); the object serves a BOOLEAN.
     (T::LIFE_SAFETY_POINT, P::MAINTENANCE_REQUIRED),
-    // Table 12-79 gives Pulse_Rate Unsigned; the object serves a REAL.
-    (T::ACCUMULATOR, P::PULSE_RATE),
 ];
 
 /// Rows this test can't check: values still empty after [] (an
