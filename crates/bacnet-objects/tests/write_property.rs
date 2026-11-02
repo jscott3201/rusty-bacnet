@@ -22,6 +22,7 @@
 //!
 //! Values are compared by their `Debug` text, so a NaN matches itself.
 
+use bacnet_objects::averaging::AveragingObject;
 use bacnet_objects::catalogue::representatives;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
@@ -353,11 +354,28 @@ fn write() -> impl Strategy<Value = Write> {
         })
 }
 
+/// The catalogue object at `index`, with the Averaging object holding two
+/// samples so that the writes that reset its window show.
+fn catalogue_object(index: usize) -> Box<dyn BACnetObject> {
+    let mut objects = representatives();
+    let object = objects.swap_remove(index % objects.len());
+    if object.object_identifier().object_type() != ObjectType::AVERAGING {
+        return object;
+    }
+    let mut seeded = AveragingObject::new(
+        object.object_identifier().instance_number(),
+        object.object_name(),
+    )
+    .expect("the catalogue's Averaging instance");
+    for sample in [1.0, 3.0] {
+        seeded.add_sample(sample).expect("a finite sample");
+    }
+    Box::new(seeded)
+}
+
 /// Run `writes` against the catalogue object at `index`, checking each.
 fn run(index: usize, writes: &[Write]) -> Result<(), TestCaseError> {
-    let mut objects = representatives();
-    let mut object = objects.swap_remove(index % objects.len());
-    drop(objects);
+    let mut object = catalogue_object(index);
     let name = format!("{:?}", object.object_identifier());
     for write in writes {
         let rows = object.property_metadata();
@@ -407,15 +425,24 @@ fn run(index: usize, writes: &[Write]) -> Result<(), TestCaseError> {
         } else {
             let after = view(object.as_ref());
             let object_type = object.object_identifier().object_type();
-            let undeclared: Vec<String> = changed(&before, &after)
-                .into_iter()
-                .filter(|key| {
-                    let changed = key.property();
-                    changed != property
-                        && !may_also_change(object_type, property).any(|listed| listed == changed)
-                })
-                .map(|key| format!("{key:?} {:?} -> {:?}", before.get(&key), after.get(&key)))
-                .collect();
+            let mut undeclared = Vec::new();
+            for key in changed(&before, &after) {
+                let other = key.property();
+                if other != property
+                    && !may_also_change(object_type, property).any(|listed| listed == other)
+                {
+                    undeclared.push(format!(
+                        "{other:?}{}: {} -> {}",
+                        if matches!(key, Key::Count(_)) {
+                            "[0]"
+                        } else {
+                            ""
+                        },
+                        before.get(&key).map_or("absent", String::as_str),
+                        after.get(&key).map_or("absent", String::as_str),
+                    ));
+                }
+            }
             prop_assert!(
                 undeclared.is_empty(),
                 "{name}: the write of {property:?}[{:?}] = {value:?} at {:?} also changed what support/write_side_effects.rs doesn't list:\n{}",
@@ -462,8 +489,8 @@ fn the_side_effect_table_covers_the_catalogue() {
         };
         for &(written, changed) in fragments.iter().flat_map(|fragment| fragment.iter()) {
             assert!(
-                has(written),
-                "{object_type:?}: the table lists a write of {written:?}, which isn't a row"
+                has(written) && object.is_writable_property(written),
+                "{object_type:?}: the table lists a write of {written:?}, which isn't a writable row"
             );
             for &other in changed {
                 assert!(

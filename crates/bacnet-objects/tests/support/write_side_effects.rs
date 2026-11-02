@@ -7,8 +7,11 @@
 //! change to the metadata rows counts as a change of Property_List.
 //!
 //! The entries come from each type's `write_property` and the reads it
-//! feeds, for the catalogue objects as `representatives()` builds them:
-//! standalone, with no database, no Device clock and no monotonic clock. So:
+//! feeds, for the catalogue objects as `representatives()` builds them, in
+//! that minimal state: standalone, with no database, no Device clock, no
+//! monotonic clock and default configuration (the one change the proptest
+//! makes is seeding the Averaging object with two samples). The table claims
+//! no more than that state shows:
 //! - nothing reads wall-clock or monotonic time, and a stamp a write takes
 //!   (a File's Modification_Date, a Pulse Converter's Count_Change_Time, a
 //!   Timer's Update_Time) stays unspecified, which is no change. The two
@@ -23,6 +26,23 @@
 //! - writes that only `write_property_from` takes (Present_Value of Analog,
 //!   Binary and Multi-state Output and Value, the Lighting commands) are
 //!   refused here, so those priority arrays stay empty.
+//!
+//! Known effects that this state hides, so the table leaves them out:
+//! - with a clock: Calendar Date_List moves Present_Value; Access Credential
+//!   Activation_Time and Expiration_Time move Credential_Status and
+//!   Reason_For_Disable; stamps (Modification_Date, Count_Change_Time, the
+//!   Timer's Update_Time and Expiration_Time) move; log writes add records,
+//!   moving Record_Count, Total_Record_Count, Log_Buffer and
+//!   Records_Since_Notification, and may turn Log_Enable off;
+//! - with configured actions, Command Present_Value moves In_Process and
+//!   All_Writes_Successful;
+//! - with an IP configuration (or a non-Normal command mode), Network Port
+//!   writes move Changes_Pending;
+//! - with an event raised, Event_Detection_Enable FALSE resets Event_State,
+//!   Acked_Transitions and the event time stamps (they are already initial
+//!   here);
+//! - with value-source commands, the commandable outputs' Value_Source,
+//!   Value_Source_Array and Last_Command_Time.
 //!
 //! An entry says what a write *may* change: whether it does depends on the
 //! object's state (most Reliability effects need Out_Of_Service first, and
@@ -45,6 +65,10 @@ const RELIABILITY_SIMULATION: &[Effect] = &[
     (P::OUT_OF_SERVICE, &[P::STATUS_FLAGS, P::RELIABILITY]),
     (P::RELIABILITY, &[P::STATUS_FLAGS]),
 ];
+
+/// Reliability written while out of service moves Status_Flags, for a type
+/// whose Out_Of_Service write leaves Reliability alone.
+const RELIABILITY_FLAGS: &[Effect] = &[(P::RELIABILITY, &[P::STATUS_FLAGS])];
 
 /// Time_Delay_Normal reads as Time_Delay until it is written itself.
 const TIME_DELAY_NORMAL_FALLBACK: &[Effect] = &[(P::TIME_DELAY, &[P::TIME_DELAY_NORMAL])];
@@ -72,6 +96,15 @@ const REPORTING_POINT: &[&[Effect]] = &[
     RELIABILITY_SIMULATION,
     TIME_DELAY_NORMAL_FALLBACK,
     INHIBIT_REFERENCE,
+];
+
+/// What a reset of the Averaging window moves, once it holds samples.
+const AVERAGING_STATISTICS: &[P] = &[
+    P::MINIMUM_VALUE,
+    P::AVERAGE_VALUE,
+    P::MAXIMUM_VALUE,
+    P::ATTEMPTED_SAMPLES,
+    P::VALID_SAMPLES,
 ];
 
 /// Each catalogue type's fragments, or `None` for a type the table doesn't
@@ -181,8 +214,9 @@ pub fn effects(object_type: T) -> Option<&'static [&'static [Effect]]> {
                 (P::DOOR_ALARM_STATE, &[P::RELIABILITY, P::STATUS_FLAGS]),
                 // A held state the lists no longer admit settles to NORMAL.
                 (
+                    // Fault values stay admitted, so Reliability can't move.
                     P::ALARM_VALUES,
-                    &[P::DOOR_ALARM_STATE, P::RELIABILITY, P::STATUS_FLAGS],
+                    &[P::DOOR_ALARM_STATE],
                 ),
                 (
                     P::FAULT_VALUES,
@@ -293,7 +327,10 @@ pub fn effects(object_type: T) -> Option<&'static [&'static [Effect]]> {
             ],
         ],
         T::STAGING => &[
-            RELIABILITY_SIMULATION,
+            // Out_Of_Service doesn't touch Reliability: a simulated value
+            // stays until the server's next write plan completes.
+            OUT_OF_SERVICE_FLAGS,
+            RELIABILITY_FLAGS,
             // Present_Stage is evaluated again; Present_Value is clamped to
             // the range, whose top is the last stage's limit.
             &[
@@ -355,14 +392,31 @@ pub fn effects(object_type: T) -> Option<&'static [&'static [Effect]]> {
                 &[P::LOG_INTERVAL, P::TRIGGER, P::PROPERTY_LIST],
             )],
         ],
-        // Each write changes only itself.
+        // In the catalogue's minimal state, each write changes only itself
+        // (see the module notes for what a clock or more state would add).
+        T::AVERAGING => &[&[
+            // Each accepted write of these discards the samples (the
+            // catalogue object is seeded with two, see write_property.rs).
+            (P::OBJECT_PROPERTY_REFERENCE, AVERAGING_STATISTICS),
+            (P::WINDOW_INTERVAL, AVERAGING_STATISTICS),
+            (P::WINDOW_SAMPLES, AVERAGING_STATISTICS),
+            // Attempted_Samples is the one statistic written: it takes 0.
+            (
+                P::ATTEMPTED_SAMPLES,
+                &[
+                    P::MINIMUM_VALUE,
+                    P::AVERAGE_VALUE,
+                    P::MAXIMUM_VALUE,
+                    P::VALID_SAMPLES,
+                ],
+            ),
+        ]],
         T::DEVICE
         | T::CALENDAR
         | T::COMMAND
         | T::GROUP
         | T::STRUCTURED_VIEW
         | T::NOTIFICATION_CLASS
-        | T::AVERAGING
         | T::ACCESS_RIGHTS
         | T::ACCESS_USER
         | T::ELEVATOR_GROUP
