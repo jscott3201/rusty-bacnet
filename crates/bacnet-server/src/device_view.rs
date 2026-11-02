@@ -6,25 +6,24 @@ use crate::cov::active::LiveDeviceCov;
 use bacnet_device_core::read::ReadOverlay;
 use bacnet_device_core::write::{identity_property, owned};
 use bacnet_objects::{
-    audit::{AuditLogForwarding, AuditLogStorage, AuditReporterObject, ObjectAuditPolicy},
+    audit::AuditReporterObject,
     database::ObjectDatabase,
     device::EXECUTED_SERVICES,
     file::{FileConfiguration, FileStorage},
     property_metadata::{PropertyConformance, PropertyMetadata, PropertyWriteCapability},
     traits::{
-        BACnetObject, CalendarState, CommandRunner, CovReportedProperty, EnrollmentEval,
-        EventReporting, LogBuffer,
+        AuditLog, AuditPolicy, BACnetObject, CalendarState, CommandRunner, CovReportedProperty,
+        EnrollmentEval, EventReporting, LogBuffer,
     },
 };
 use bacnet_types::{
-    constructed::BACnetObjectPropertyReference,
     enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier as P, ServiceSupported},
     error::Error,
     primitives::{ObjectIdentifier, PropertyValue},
 };
 use identity::IdentityView;
 use std::borrow::Cow;
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 #[derive(Clone, Copy)]
 pub(crate) enum DeviceExecution {
@@ -307,11 +306,11 @@ impl BACnetObject for DeviceReadView<'_> {
     // `tests::the_view_forwards_every_read_query` runs each query the trait
     // declares and fails on one this list lacks. The mutating hooks keep their
     // trait defaults: the view borrows the object shared and serves reads only.
-    fn audit_object_policy_internal(&self) -> ObjectAuditPolicy {
-        self.object.audit_object_policy_internal()
+    fn audit_policy(&self) -> Option<&dyn AuditPolicy> {
+        self.object.audit_policy()
     }
-    fn audit_reporter_internal(&self) -> Option<&AuditReporterObject> {
-        self.object.audit_reporter_internal()
+    fn audit_reporter(&self) -> Option<&AuditReporterObject> {
+        self.object.audit_reporter()
     }
     fn creation_only_properties(&self) -> &'static [P] {
         self.object.creation_only_properties()
@@ -346,14 +345,8 @@ impl BACnetObject for DeviceReadView<'_> {
     fn calendar_state(&self) -> Option<&dyn CalendarState> {
         self.object.calendar_state()
     }
-    fn input_reference_internal(&self) -> Option<Option<&BACnetObjectPropertyReference>> {
-        self.object.input_reference_internal()
-    }
-    fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {
-        self.object.audit_log_storage_internal()
-    }
-    fn audit_log_forwarding_internal(&self) -> Option<Arc<AuditLogForwarding>> {
-        self.object.audit_log_forwarding_internal()
+    fn audit_log(&self) -> Option<&dyn AuditLog> {
+        self.object.audit_log()
     }
     fn file_configuration(&self) -> Option<&dyn FileConfiguration> {
         self.object.file_configuration()

@@ -80,7 +80,7 @@ pub fn trait_methods() -> Vec<TraitMethod> {
     assert!(method("object_identifier").shared && method("object_identifier").required);
     assert!(!method("write_property").shared && method("write_property").required);
     assert!(method("is_list_property").shared && !method("is_list_property").required);
-    assert!(!method("audit_policy_authority_internal").shared);
+    assert!(!method("write_property_from").shared && !method("write_property_from").required);
     methods
 }
 

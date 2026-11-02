@@ -20,7 +20,7 @@ mod metadata;
 mod pulse_converter;
 
 #[doc(hidden)]
-pub use pulse_converter::InputReading;
+pub(crate) use pulse_converter::InputReading;
 pub use pulse_converter::PulseConverterObject;
 
 // ---------------------------------------------------------------------------

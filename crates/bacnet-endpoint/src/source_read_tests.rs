@@ -39,7 +39,9 @@ fn database(confirmed: bool) -> ObjectDatabase {
         .unwrap();
     let mut reporter = AuditReporterObject::new(1, "Source").unwrap();
     reporter
-        .configure_audit_reporter_internal(
+        .audit_reporter_mut()
+        .expect("an Audit Reporter")
+        .configure(
             AuditLevel::AUDIT_ALL,
             AuditOperationFlags::from_bits(1).unwrap(),
             confirmed,
@@ -441,7 +443,9 @@ async fn source_read_selector_preflight_is_atomic_and_adapter_rejects_mutation()
         let mut db = database(false);
         db.get_mut(&selected())
             .unwrap()
-            .configure_audit_reporter_internal(
+            .audit_reporter_mut()
+            .expect("an Audit Reporter")
+            .configure(
                 AuditLevel::AUDIT_ALL,
                 AuditOperationFlags::from_bits(1).unwrap(),
                 false,
@@ -467,7 +471,9 @@ async fn source_read_selector_preflight_is_atomic_and_adapter_rejects_mutation()
             PropertyValue::Boolean(false)
         );
         object
-            .configure_audit_reporter_internal(
+            .audit_reporter_mut()
+            .expect("an Audit Reporter")
+            .configure(
                 AuditLevel::AUDIT_ALL,
                 AuditOperationFlags::from_bits(1).unwrap(),
                 false,
@@ -482,7 +488,9 @@ async fn source_read_selector_preflight_is_atomic_and_adapter_rejects_mutation()
             let object = db.get_mut(&selected()).unwrap();
             assert!(
                 object
-                    .configure_audit_reporter_internal(
+                    .audit_reporter_mut()
+                    .expect("an Audit Reporter")
+                    .configure(
                         AuditLevel::NONE,
                         AuditOperationFlags::empty(),
                         true,

@@ -335,7 +335,11 @@ fn a_provisioned_audit_policy_serves_its_two_rows_before_property_list() {
             .write_property(P::AUDIT_LEVEL, None, PropertyValue::Enumerated(1), None)
             .unwrap();
         assert_eq!(
-            object.audit_object_policy_internal().level,
+            object
+                .audit_policy()
+                .map(|policy| policy.object_policy())
+                .unwrap_or_default()
+                .level,
             Some(bacnet_types::enums::AuditLevel::AUDIT_ALL)
         );
         assert_error(
@@ -350,6 +354,11 @@ fn a_provisioned_audit_policy_serves_its_two_rows_before_property_list() {
                 .unwrap_err(),
             ErrorCode::UNKNOWN_PROPERTY,
         );
-        assert!(object.audit_policy_authority_internal().is_some());
+        assert!(
+            object
+                .audit_policy_mut()
+                .and_then(|policy| policy.policy_authority())
+                .is_some()
+        );
     }
 }

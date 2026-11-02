@@ -18,7 +18,7 @@ use super::{
     command, metadata, milliseconds, noncommandable_audit_policy, written_transition,
     written_unsigned, written_xy, xy_value,
 };
-use crate::audit::{AuditPolicyAuthority, ObjectAuditPolicy};
+use crate::audit::ObjectAuditPolicy;
 use crate::command_source::{CommandOrigin, SingleValueSource};
 use crate::common::{self, read_identity_properties};
 use crate::object_profile::{ObjectProfile, ProfileState, TagsPersistence};
@@ -287,7 +287,7 @@ impl ColorObject {
         self.audit_policy = noncommandable_audit_policy(policy);
     }
 
-    pub(super) fn audit_policy(&self) -> &ObjectAuditPolicy {
+    pub(super) fn audit_overrides(&self) -> &ObjectAuditPolicy {
         &self.audit_policy
     }
 
@@ -400,6 +400,8 @@ impl ColorObject {
 }
 
 impl BACnetObject for ColorObject {
+    crate::traits::lend_audit_policy!();
+
     fn object_identifier(&self) -> ObjectIdentifier {
         self.oid
     }
@@ -538,18 +540,12 @@ impl BACnetObject for ColorObject {
         true
     }
 
-    fn audit_object_policy_internal(&self) -> ObjectAuditPolicy {
-        self.audit_policy
-    }
-
-    fn audit_policy_authority_internal(&mut self) -> Option<AuditPolicyAuthority<'_>> {
-        Some(AuditPolicyAuthority::new(&mut self.audit_policy))
-    }
-
     fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
         Some(self)
     }
 }
+
+crate::traits::impl_audit_policy!(ColorObject);
 
 impl crate::traits::Timed for ColorObject {
     fn bind_clocks(&mut self, clocks: &crate::traits::Clocks) {

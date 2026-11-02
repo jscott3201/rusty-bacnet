@@ -4,18 +4,15 @@
 use super::capabilities::CAPABILITY_ROWS;
 use super::fixtures::{address, noon, oid};
 use super::probe::{CUSTOM, CUSTOM_LIST};
-use bacnet_objects::accumulator::InputReading;
 use bacnet_objects::command_source::CommandOrigin;
 use bacnet_objects::event::{EventStateChange, EventTransition, EventTransitionCommit};
 use bacnet_objects::traits::BACnetObject;
-use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
 use bacnet_types::constructed::{
-    BACnetDeviceObjectReference, BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord,
-    EventLogDatum, LogData, LogDatum, LogValue,
+    BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord, EventLogDatum, LogData,
+    LogDatum, LogValue,
 };
-use bacnet_types::enums::{AuditLevel, EventState, ObjectType, PropertyIdentifier as P};
+use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier as P};
 use bacnet_types::primitives::{BACnetTimeStamp, Date, PropertyValue};
-use std::time::Duration;
 
 /// A row for a method that takes `&self`.
 pub type Query = fn(&dyn BACnetObject) -> String;
@@ -112,11 +109,11 @@ pub fn event_log_record() -> BACnetEventLogRecord {
 }
 
 pub const QUERIES: &[(&str, Query)] = &[
-    ("audit_object_policy_internal", |o| {
-        format!("{:?}", o.audit_object_policy_internal())
+    ("audit_policy", |o| {
+        format!("{:?}", o.audit_policy().map(address))
     }),
-    ("audit_reporter_internal", |o| {
-        format!("{:?}", o.audit_reporter_internal().map(address))
+    ("audit_reporter", |o| {
+        format!("{:?}", o.audit_reporter().map(address))
     }),
     ("object_identifier", |o| {
         format!("{:?}", o.object_identifier())
@@ -182,19 +179,7 @@ pub const QUERIES: &[(&str, Query)] = &[
     ("calendar_state", |o| {
         format!("{:?}", o.calendar_state().map(address))
     }),
-    ("input_reference_internal", |o| {
-        format!("{:?}", o.input_reference_internal())
-    }),
-    ("audit_log_storage_internal", |o| {
-        format!("{:?}", o.audit_log_storage_internal().map(address))
-    }),
-    ("audit_log_forwarding_internal", |o| {
-        format!(
-            "{:?}",
-            o.audit_log_forwarding_internal()
-                .map(|forwarding| address(forwarding.as_ref()))
-        )
-    }),
+    ("audit_log", |o| format!("{:?}", o.audit_log().map(address))),
     ("file_configuration", |o| {
         format!("{:?}", o.file_configuration().map(address))
     }),
@@ -214,33 +199,15 @@ pub const COMMANDS: &[(&str, Command)] = &[
                 .map(|device| device.object_identifier())
         )
     }),
-    ("audit_policy_authority_internal", |o| {
-        // The probe's policy level is NONE, so raising it prepares a write.
-        let level = PropertyValue::Enumerated(AuditLevel::AUDIT_ALL.to_raw());
-        let prepared = o.audit_policy_authority_internal().map(|policy| {
-            let write = policy.prepare(P::AUDIT_LEVEL, None, &level, None);
-            write.map(|write| write.is_some())
-        });
-        format!("{prepared:?}")
+    ("audit_policy_mut", |o| {
+        format!("{:?}", o.audit_policy_mut().map(|policy| address(policy)))
     }),
-    ("audit_reporter_authority_internal", |o| {
+    // The probe lends its own Reporter's authority, instance 17.
+    ("audit_reporter_mut", |o| {
         format!(
             "{:?}",
-            o.audit_reporter_authority_internal()
+            o.audit_reporter_mut()
                 .map(|reporter| reporter.object_identifier())
-        )
-    }),
-    ("configure_audit_reporter_internal", |o| {
-        format!(
-            "{:?}",
-            o.configure_audit_reporter_internal(
-                AuditLevel::AUDIT_CONFIG,
-                AuditOperationFlags::from_bits(1 << 1).unwrap(),
-                true,
-                None,
-                BACnetPriorityFilter::from_bits(1 << 7),
-                None,
-            )
         )
     }),
     ("write_property", |o| {
@@ -308,35 +275,8 @@ pub const COMMANDS: &[(&str, Command)] = &[
     ("set_overridden", |o| {
         format!("{:?}", o.set_overridden(true))
     }),
-    ("take_due_averaging_sample_internal", |o| {
-        format!(
-            "{:?}",
-            o.take_due_averaging_sample_internal(Duration::from_secs(42))
-        )
-    }),
-    ("set_input_usable_internal", |o| {
-        format!("{:?}", o.set_input_usable_internal(false))
-    }),
-    ("take_input_reading_internal", |o| {
-        let reading = InputReading {
-            value: -41,
-            wraps_after: Some(99),
-        };
-        format!("{:?}", o.take_input_reading_internal(Some(reading)))
-    }),
-    ("set_audit_log_parent_internal", |o| {
-        let parent = BACnetDeviceObjectReference {
-            device_identifier: None,
-            object_identifier: oid(ObjectType::DEVICE, 9),
-        };
-        format!("{:?}", o.set_audit_log_parent_internal(parent))
-    }),
-    ("audit_log_notification_sink_internal", |o| {
-        format!(
-            "{:?}",
-            o.audit_log_notification_sink_internal()
-                .map(|sink| address(sink))
-        )
+    ("audit_log_mut", |o| {
+        format!("{:?}", o.audit_log_mut().map(|log| address(log)))
     }),
     ("durable_writes", |o| {
         format!("{:?}", o.durable_writes().map(|writes| address(writes)))

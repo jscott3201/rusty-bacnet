@@ -103,14 +103,14 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             Error::Encoding("selected source Audit Reporter is absent from the database".into())
         })?;
         if !object
-            .audit_reporter_internal()
+            .audit_reporter()
             .is_some_and(|reporter| reporter.object_identifier() == selected)
         {
             return Err(Error::Encoding(
                 "selected object lacks the Audit Reporter capability".into(),
             ));
         }
-        if object.audit_reporter_internal().is_some_and(|reporter| {
+        if object.audit_reporter().is_some_and(|reporter| {
             has_property(
                 &reporter.property_metadata(),
                 PropertyIdentifier::MONITORED_OBJECTS,

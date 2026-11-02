@@ -728,7 +728,8 @@ database guard would reopen #1494's failure.
 
 **#2179 (capability accessors).** `BACnetObject` has 101 methods, 69 of
 them `_internal`. The core calls a few: `registered_port_internal`,
-`device_authority_internal`, `audit_reporter_authority_internal`, and three
+`device_authority_internal`, `audit_reporter_authority_internal` (now
+`audit_reporter_mut`, #2179's PR 8b), and three
 command-run hooks in the moved run-ending code (`take_command_run_internal`,
 `command_lists.rs:287`; `record_command_write_internal`, `:174`;
 `complete_command_run_internal`, `:176`). `command_generation_internal`

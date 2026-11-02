@@ -141,8 +141,14 @@ impl BACnetObject for Probe {
     ) -> Result<(), Error> {
         panic!("query must not mutate the log")
     }
-    fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {
+    fn audit_log(&self) -> Option<&dyn bacnet_objects::traits::AuditLog> {
         (self.mode != "no capability").then_some(self)
+    }
+}
+
+impl bacnet_objects::traits::AuditLog for Probe {
+    fn storage(&self) -> &dyn AuditLogStorage {
+        self
     }
 }
 

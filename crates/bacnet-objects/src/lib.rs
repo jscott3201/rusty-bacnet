@@ -101,6 +101,9 @@ mod evaluation_capability_tests;
 mod log_file_capability_tests;
 
 #[cfg(test)]
+mod audit_capability_tests;
+
+#[cfg(test)]
 mod schedule_capability_tests;
 
 #[cfg(test)]

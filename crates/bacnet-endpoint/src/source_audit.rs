@@ -75,7 +75,7 @@ impl SourceAudit {
             .expect("preflight local Device");
         let status = database
             .get(&selected)
-            .and_then(|object| object.audit_reporter_internal())
+            .and_then(|object| object.audit_reporter())
             .expect("preflight Reporter")
             .status_internal();
         let initial = database
@@ -223,7 +223,7 @@ impl SourceAudit {
             .ok_or_else(|| Error::Encoding("endpoint shutdown".into()))?;
         let reporter = db
             .get(&self.selected)
-            .and_then(|object| object.audit_reporter_internal())
+            .and_then(|object| object.audit_reporter())
             .ok_or_else(|| Error::Encoding("source Reporter is unavailable".into()))?;
         if has_property(
             &reporter.property_metadata(),
@@ -453,7 +453,7 @@ impl SourceAudit {
         };
         let Some(reporter) = db
             .get(&self.selected)
-            .and_then(|object| object.audit_reporter_internal())
+            .and_then(|object| object.audit_reporter())
         else {
             return;
         };

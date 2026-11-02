@@ -136,7 +136,7 @@ impl ObjectDatabase {
         // If replacing an existing object, remove its old name from the index
         // and invalidate state owned by enrollments that monitor it.
         if let Some(old) = self.objects.get(&oid) {
-            if let Some(reporter) = old.audit_reporter_internal() {
+            if let Some(reporter) = old.audit_reporter() {
                 reporter.status_internal().configuration_changed();
             }
             let old_name = old.object_name().to_string();
@@ -246,6 +246,15 @@ impl ObjectDatabase {
             .downcast_ref()
     }
 
+    /// The mutable form of [`stored_as`](Self::stored_as), with the same
+    /// limits.
+    pub(crate) fn stored_as_mut<T: 'static>(&mut self, oid: &ObjectIdentifier) -> Option<&mut T> {
+        let object: &mut (dyn BACnetObject + 'static) = self.objects.get_mut(oid)?.as_mut();
+        object
+            .as_stored_any_mut(crate::traits::ObjectStorageAccess(()))
+            .downcast_mut()
+    }
+
     /// Install an identity-preserving adapter through scoped structural access.
     ///
     /// The callback must preserve the object's identifier, name and type. It is
@@ -255,11 +264,17 @@ impl ObjectDatabase {
     /// an error or unwinds after modifying the slot. Slot borrows cannot escape.
     /// An installed Audit runtime can reject protected members before the callback.
     ///
-    /// Two log answers come from the built-in object only, never through an
+    /// Some answers come from the built-in object only, never through an
     /// adapter: whether a COV Trend Log is collecting (Enable and its window),
-    /// and whether an Event Log takes received notifications. A wrapped Trend
-    /// Log logging by COV keeps no Enable or window gate and no baseline
-    /// restart, and a wrapped Event Log takes no received notifications.
+    /// whether an Event Log takes received notifications, the samples an
+    /// Averaging object has due, and a Pulse Converter's Input_Reference
+    /// judging and counting. A wrapped Trend Log logging by COV keeps no
+    /// Enable or window gate and no baseline restart, and a wrapped Event Log
+    /// takes no received notifications. A wrapped Averaging object takes no
+    /// samples; while it holds a reference, its overdue sample deadline wakes
+    /// the bundled server's monotonic task every millisecond. A wrapped Pulse
+    /// Converter counts nothing, and its Reliability no longer follows its
+    /// Input_Reference.
     ///
     /// ```compile_fail
     /// use bacnet_objects::{database::ObjectDatabase, traits::BACnetObject};
@@ -359,7 +374,7 @@ impl ObjectDatabase {
         }
         match self.objects.remove(oid) {
             Some(mut obj) => {
-                if let Some(reporter) = obj.audit_reporter_internal() {
+                if let Some(reporter) = obj.audit_reporter() {
                     reporter.status_internal().configuration_changed();
                 }
                 self.enrollment_eval_sources.remove(oid);

@@ -136,6 +136,24 @@ impl AveragingObject {
     pub fn set_description(&mut self, desc: impl Into<String>) {
         self.description = desc.into();
     }
+
+    /// Claim the sample the schedule has due at the process-local monotonic
+    /// instant `now`.
+    ///
+    /// When one is due the schedule steps past it and this returns the
+    /// property to read; the database reads it while it still holds
+    /// exclusive access and records the outcome as a
+    /// [`LocalInputValue::AveragingSample`](crate::traits::LocalInputValue::AveragingSample).
+    /// The due time is the one [`Timed::next_monotonic_deadline`](crate::traits::Timed::next_monotonic_deadline)
+    /// reports. Nothing is due without an Object_Property_Reference or a
+    /// bound monotonic clock.
+    pub(crate) fn take_due_sample(
+        &mut self,
+        now: Duration,
+    ) -> Option<BACnetObjectPropertyReference> {
+        let reference = self.object_property_reference.clone()?;
+        self.window.take_due(now).then_some(reference)
+    }
 }
 
 /// Convert an application sample to the REAL the statistics are kept in.
@@ -295,14 +313,6 @@ impl BACnetObject for AveragingObject {
         // 13-1a criterion for its datatype; the object has no Status_Flags to
         // add to the report.
         true
-    }
-
-    fn take_due_averaging_sample_internal(
-        &mut self,
-        now: Duration,
-    ) -> Option<BACnetObjectPropertyReference> {
-        let reference = self.object_property_reference.clone()?;
-        self.window.take_due(now).then_some(reference)
     }
 
     fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {

@@ -307,8 +307,14 @@ impl BACnetObject for SpyAuditObject {
         crate::test_rows::read_only(&[])
     }
 
-    fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {
-        Some(self.storage.as_ref())
+    fn audit_log(&self) -> Option<&dyn bacnet_objects::traits::AuditLog> {
+        Some(self)
+    }
+}
+
+impl bacnet_objects::traits::AuditLog for SpyAuditObject {
+    fn storage(&self) -> &dyn AuditLogStorage {
+        self.storage.as_ref()
     }
 }
 

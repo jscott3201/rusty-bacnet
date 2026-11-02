@@ -172,7 +172,7 @@ mod tests {
                 .unwrap(),
             PropertyValue::Boolean(true)
         );
-        let old = object.audit_log_forwarding_internal().unwrap();
+        let old = object.audit_log().and_then(|log| log.forwarding()).unwrap();
         assert_eq!(
             object.read_property(P::RELIABILITY, None).unwrap(),
             PropertyValue::Enumerated(Reliability::CONFIGURATION_ERROR.to_raw())
@@ -188,7 +188,7 @@ mod tests {
             }
         );
         object.set_member_of(Some(parent));
-        let new = object.audit_log_forwarding_internal().unwrap();
+        let new = object.audit_log().and_then(|log| log.forwarding()).unwrap();
         new.status().set_configured(true);
         old.status().complete_delivery(epoch, false);
         assert_eq!(
@@ -220,10 +220,16 @@ mod tests {
         };
         let mut object: Box<dyn BACnetObject> = Box::new(log());
         object
-            .set_audit_log_parent_internal(parent.clone())
+            .audit_log_mut()
+            .unwrap()
+            .set_parent(parent.clone())
             .unwrap();
         assert_eq!(
-            object.audit_log_forwarding_internal().unwrap().parent(),
+            object
+                .audit_log()
+                .and_then(|log| log.forwarding())
+                .unwrap()
+                .parent(),
             &parent
         );
         assert_eq!(
@@ -234,13 +240,8 @@ mod tests {
 
         let mut other: Box<dyn BACnetObject> =
             Box::new(crate::binary::BinaryValueObject::new(1, "Other").unwrap());
-        assert!(matches!(
-            other.set_audit_log_parent_internal(parent),
-            Err(Error::Remote(RemoteError::Error { class, code }))
-                if class == ErrorClass::OBJECT
-                    && code == ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED
-        ));
-        assert!(other.audit_log_forwarding_internal().is_none());
+        assert!(other.audit_log_mut().is_none());
+        assert!(other.audit_log().is_none());
     }
 
     #[test]

@@ -76,7 +76,7 @@ pub(super) fn for_color_object(object: &ColorObject) -> Cow<'_, [PropertyMetadat
     with_optional(
         COLOR_BASE,
         object.value_source(),
-        object.audit_policy(),
+        object.audit_overrides(),
         object.profile(),
     )
 }
@@ -87,7 +87,7 @@ pub(super) fn for_color_temperature_object(
     with_optional(
         COLOR_TEMPERATURE_BASE,
         object.value_source(),
-        object.audit_policy(),
+        object.audit_overrides(),
         object.profile(),
     )
 }

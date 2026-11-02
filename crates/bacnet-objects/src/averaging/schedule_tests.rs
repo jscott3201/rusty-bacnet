@@ -46,23 +46,20 @@ fn averaging_schedule_spaces_samples_by_window_interval_over_window_samples() {
     let mut avg = sampled(&time, clock);
     // The first sample is one spacing after the clock is bound.
     assert_eq!(avg.next_monotonic_deadline(), Some(secs(2.0)));
-    assert_eq!(avg.take_due_averaging_sample_internal(secs(1.999)), None);
-    assert_eq!(
-        avg.take_due_averaging_sample_internal(secs(2.0)),
-        Some(reference())
-    );
+    assert_eq!(avg.take_due_sample(secs(1.999)), None);
+    assert_eq!(avg.take_due_sample(secs(2.0)), Some(reference()));
     // Claimed once: the same instant has nothing more.
-    assert_eq!(avg.take_due_averaging_sample_internal(secs(2.0)), None);
+    assert_eq!(avg.take_due_sample(secs(2.0)), None);
     assert_eq!(avg.next_monotonic_deadline(), Some(secs(4.0)));
 
     // A pass under a period late keeps the cadence.
-    assert!(avg.take_due_averaging_sample_internal(secs(4.5)).is_some());
+    assert!(avg.take_due_sample(secs(4.5)).is_some());
     assert_eq!(avg.next_monotonic_deadline(), Some(secs(6.0)));
     // A pass a period or more late takes one sample, not a burst, and starts
     // the cadence over from then.
-    assert!(avg.take_due_averaging_sample_internal(secs(11.0)).is_some());
+    assert!(avg.take_due_sample(secs(11.0)).is_some());
     assert_eq!(avg.next_monotonic_deadline(), Some(secs(13.0)));
-    assert_eq!(avg.take_due_averaging_sample_internal(secs(12.9)), None);
+    assert_eq!(avg.take_due_sample(secs(12.9)), None);
 
     // Claiming a sample doesn't record one: that is the database's job.
     assert_eq!(
@@ -118,15 +115,8 @@ fn averaging_schedule_restarts_on_every_route_that_empties_the_window() {
             "{route}"
         );
         assert_eq!(avg.next_monotonic_deadline(), Some(secs(3.5)), "{route}");
-        assert_eq!(
-            avg.take_due_averaging_sample_internal(secs(2.0)),
-            None,
-            "{route}"
-        );
-        assert!(
-            avg.take_due_averaging_sample_internal(secs(3.5)).is_some(),
-            "{route}"
-        );
+        assert_eq!(avg.take_due_sample(secs(2.0)), None, "{route}");
+        assert!(avg.take_due_sample(secs(3.5)).is_some(), "{route}");
     }
 
     // A refused write changes neither the window nor the schedule.
@@ -166,13 +156,13 @@ fn averaging_schedule_needs_a_reference_and_a_clock() {
     let mut avg = AveragingObject::new(1, "AVG-1").unwrap();
     avg.set_object_property_reference(Some(reference()));
     assert_eq!(avg.next_monotonic_deadline(), None);
-    assert_eq!(avg.take_due_averaging_sample_internal(Duration::MAX), None);
+    assert_eq!(avg.take_due_sample(Duration::MAX), None);
 
     // Bound but without a reference: the application feeds this object.
     let mut avg = sampled(&time, Arc::clone(&clock));
     avg.set_object_property_reference(None);
     assert_eq!(avg.next_monotonic_deadline(), None);
-    assert_eq!(avg.take_due_averaging_sample_internal(Duration::MAX), None);
+    assert_eq!(avg.take_due_sample(Duration::MAX), None);
 
     // Unbinding the clock stops the schedule.
     let mut avg = sampled(&time, clock);
@@ -181,7 +171,7 @@ fn averaging_schedule_needs_a_reference_and_a_clock() {
         ..crate::traits::Clocks::default()
     });
     assert_eq!(avg.next_monotonic_deadline(), None);
-    assert_eq!(avg.take_due_averaging_sample_internal(Duration::MAX), None);
+    assert_eq!(avg.take_due_sample(Duration::MAX), None);
 }
 
 #[test]

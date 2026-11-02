@@ -121,7 +121,9 @@ async fn delayed_target_audit_active_presence_and_off_runtime_silent_commands_pr
             .unwrap();
         assert!(
             object
-                .configure_audit_reporter_internal(
+                .audit_reporter_mut()
+                .expect("an Audit Reporter")
+                .configure(
                     AuditLevel::NONE,
                     AuditOperationFlags::empty(),
                     false,

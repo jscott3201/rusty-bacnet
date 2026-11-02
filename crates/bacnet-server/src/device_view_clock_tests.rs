@@ -6,6 +6,7 @@ use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_types::bitstring::ServicesSupported;
 use bacnet_types::enums::EngineeringUnits;
 use bacnet_types::primitives::{Date, Time};
+use std::sync::Arc;
 use std::sync::{
     Mutex,
     atomic::{AtomicUsize, Ordering},

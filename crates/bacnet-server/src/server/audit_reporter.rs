@@ -376,7 +376,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
     ) -> Option<(bacnet_objects::audit::SelectedAuditReporter, bool)> {
         let mandatory = db
             .get(&target)
-            .and_then(|object| object.audit_reporter_internal())
+            .and_then(|object| object.audit_reporter())
             .is_some_and(|reporter| reporter.configuration_internal().enabled());
         let association = self.transactions.audit_association.get()?;
         let selected = if mandatory {
@@ -406,7 +406,8 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         status.set_configured(route.is_some());
         let policy = db
             .get(&target)
-            .map(|object| object.audit_object_policy_internal())
+            .and_then(|object| object.audit_policy())
+            .map(|policy| policy.object_policy())
             .unwrap_or_default()
             .effective_internal(reporter);
         let selected = if mandatory {
@@ -475,7 +476,8 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         status.set_configured(route.is_some());
         let policy = db
             .get(&request.object_identifier)
-            .map(|object| object.audit_object_policy_internal())
+            .and_then(|object| object.audit_policy())
+            .map(|policy| policy.object_policy())
             .unwrap_or_default()
             .effective_internal(reporter);
         let selected = if mandatory {
@@ -561,7 +563,8 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         let policy = target
             .filter(|_| use_object_policy)
             .and_then(|oid| db.get(&oid))
-            .map(|object| object.audit_object_policy_internal())
+            .and_then(|object| object.audit_policy())
+            .map(|policy| policy.object_policy())
             .unwrap_or_default()
             .effective_internal(reporter);
         if !selected || !policy.reports(operation, None, None) {

@@ -141,7 +141,9 @@ async fn source_recipient_local_and_authorized_wire_pair_bypass_ordinary_filters
             db.set_clock_reader(None);
             db.get_mut(&selected())
                 .unwrap()
-                .configure_audit_reporter_internal(
+                .audit_reporter_mut()
+                .expect("an Audit Reporter")
+                .configure(
                     level,
                     AuditOperationFlags::empty(),
                     false,
@@ -216,7 +218,7 @@ async fn source_recipient_null_equal_invalid_and_second_permit_preserve_commit_s
         .await
         .get(&selected())
         .unwrap()
-        .audit_reporter_internal()
+        .audit_reporter()
         .unwrap()
         .status_internal();
     let initial_epoch = status.auditing_failure_epoch();

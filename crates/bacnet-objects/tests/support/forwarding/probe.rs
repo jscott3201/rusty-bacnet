@@ -9,12 +9,10 @@ use std::time::Duration;
 
 use super::fixtures::{METADATA, address, noon, oid, property_error};
 use bacnet_objects::access_control::{AccessEventReport, CommittedAccessEvent};
-use bacnet_objects::accumulator::InputReading;
 use bacnet_objects::analog::AnalogValueObject;
 use bacnet_objects::audit::{
-    AuditLogForwarding, AuditLogNotificationSink, AuditLogObject, AuditLogPersistence,
-    AuditLogSnapshot, AuditLogStorage, AuditPolicyAuthority, AuditReporterAuthority,
-    AuditReporterObject, AuditSendDelay, ObjectAuditPolicy,
+    AuditLogObject, AuditLogPersistence, AuditLogSnapshot, AuditReporterAuthority,
+    AuditReporterObject, ObjectAuditPolicy,
 };
 use bacnet_objects::command::{CommandRun, RunPlan, WriteFailure};
 use bacnet_objects::command_source::CommandOrigin;
@@ -29,17 +27,14 @@ use bacnet_objects::log_reporting::BufferReadyReport;
 use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::staging::StagingWritePlan;
 use bacnet_objects::traits::{
-    AccessEvents, BACnetObject, CalendarState, Clocks, CommandRunner, CovReportedProperty,
-    EnrollmentEval, EventReporting, LifeSafety, LifeSafetyOperationEffect,
+    AccessEvents, AuditLog, AuditPolicy, BACnetObject, CalendarState, Clocks, CommandRunner,
+    CovReportedProperty, EnrollmentEval, EventReporting, LifeSafety, LifeSafetyOperationEffect,
     LifeSafetyOperationOutcome, LocalInput, LocalInputValue, LogBuffer, ReliabilityEval,
     ScheduleRunner, StagingSource, Timed,
 };
 use bacnet_objects::trend::TrendLogObject;
-use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
 use bacnet_types::calendar::SpecificDate;
-use bacnet_types::constructed::{
-    BACnetDeviceObjectReference, BACnetObjectPropertyReference, BACnetObjectSelector,
-};
+use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetObjectPropertyReference};
 use bacnet_types::enums::{
     AuditLevel, EngineeringUnits, ErrorClass, ErrorCode, EventState, EventType,
     LifeSafetyOperation, ObjectType, PropertyIdentifier as P, Reliability,
@@ -49,6 +44,8 @@ use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue,
 
 #[path = "access_batch.rs"]
 mod access_batch;
+#[path = "audit.rs"]
+mod audit;
 #[path = "eval.rs"]
 mod eval;
 #[path = "log.rs"]
@@ -138,44 +135,21 @@ impl BACnetObject for Probe {
         self.called("device_authority_internal", ());
         self.device.device_authority_internal()
     }
-    fn audit_object_policy_internal(&self) -> ObjectAuditPolicy {
-        self.called("audit_object_policy_internal", ());
-        ObjectAuditPolicy {
-            level: Some(AuditLevel::AUDIT_ALL),
-            ..ObjectAuditPolicy::default()
-        }
+    fn audit_policy(&self) -> Option<&dyn AuditPolicy> {
+        self.called("audit_policy", ());
+        Some(self)
     }
-    fn audit_policy_authority_internal(&mut self) -> Option<AuditPolicyAuthority<'_>> {
-        self.called("audit_policy_authority_internal", ());
-        self.value.audit_policy_authority_internal()
+    fn audit_policy_mut(&mut self) -> Option<&mut dyn AuditPolicy> {
+        self.called("audit_policy_mut", ());
+        Some(self)
     }
-    fn audit_reporter_internal(&self) -> Option<&AuditReporterObject> {
-        self.called("audit_reporter_internal", ());
+    fn audit_reporter(&self) -> Option<&AuditReporterObject> {
+        self.called("audit_reporter", ());
         Some(&self.reporter)
     }
-    fn audit_reporter_authority_internal(&mut self) -> Option<AuditReporterAuthority<'_>> {
-        self.called("audit_reporter_authority_internal", ());
-        self.reporter.audit_reporter_authority_internal()
-    }
-    fn configure_audit_reporter_internal(
-        &mut self,
-        level: AuditLevel,
-        operations: AuditOperationFlags,
-        confirmed: bool,
-        selectors: Option<Vec<BACnetObjectSelector>>,
-        priorities: BACnetPriorityFilter,
-        maximum_send_delay: Option<AuditSendDelay>,
-    ) -> Result<(), Error> {
-        let arguments = (
-            level,
-            operations,
-            confirmed,
-            selectors,
-            priorities,
-            maximum_send_delay,
-        );
-        self.called("configure_audit_reporter_internal", arguments);
-        Ok(())
+    fn audit_reporter_mut(&mut self) -> Option<AuditReporterAuthority<'_>> {
+        self.called("audit_reporter_mut", ());
+        self.reporter.audit_reporter_mut()
     }
     fn object_identifier(&self) -> ObjectIdentifier {
         self.called("object_identifier", ());
@@ -326,49 +300,13 @@ impl BACnetObject for Probe {
     fn set_overridden(&mut self, overridden: bool) {
         self.called("set_overridden", (overridden,));
     }
-    fn take_due_averaging_sample_internal(
-        &mut self,
-        now: Duration,
-    ) -> Option<BACnetObjectPropertyReference> {
-        self.called("take_due_averaging_sample_internal", (now,));
-        Some(BACnetObjectPropertyReference {
-            object_identifier: oid(ObjectType::ANALOG_VALUE, 41),
-            property_identifier: P::PRESENT_VALUE.to_raw(),
-            property_array_index: Some(2),
-        })
+    fn audit_log(&self) -> Option<&dyn AuditLog> {
+        self.called("audit_log", ());
+        Some(self)
     }
-    fn input_reference_internal(&self) -> Option<Option<&BACnetObjectPropertyReference>> {
-        self.called("input_reference_internal", ());
-        Some(None)
-    }
-    fn set_input_usable_internal(&mut self, usable: bool) -> bool {
-        self.called("set_input_usable_internal", (usable,));
-        true
-    }
-    fn take_input_reading_internal(&mut self, reading: Option<InputReading>) -> bool {
-        self.called("take_input_reading_internal", (reading,));
-        true
-    }
-    fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {
-        self.called("audit_log_storage_internal", ());
-        self.audit_log.audit_log_storage_internal()
-    }
-    fn audit_log_forwarding_internal(&self) -> Option<Arc<AuditLogForwarding>> {
-        self.called("audit_log_forwarding_internal", ());
-        self.audit_log.audit_log_forwarding_internal()
-    }
-    fn set_audit_log_parent_internal(
-        &mut self,
-        parent: BACnetDeviceObjectReference,
-    ) -> Result<(), Error> {
-        self.called("set_audit_log_parent_internal", (parent,));
-        Ok(())
-    }
-    fn audit_log_notification_sink_internal(
-        &mut self,
-    ) -> Option<&mut dyn AuditLogNotificationSink> {
-        self.called("audit_log_notification_sink_internal", ());
-        self.audit_log.audit_log_notification_sink_internal()
+    fn audit_log_mut(&mut self) -> Option<&mut dyn AuditLog> {
+        self.called("audit_log_mut", ());
+        Some(self)
     }
     fn durable_writes(&mut self) -> Option<&mut dyn DurableWrites> {
         self.called("durable_writes", ());

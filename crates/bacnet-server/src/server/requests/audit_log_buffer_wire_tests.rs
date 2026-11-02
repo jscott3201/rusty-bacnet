@@ -175,7 +175,8 @@ async fn held(fixture: &Fixture) -> Vec<u64> {
         .await
         .get(&audit_log())
         .unwrap()
-        .audit_log_storage_internal()
+        .audit_log()
+        .map(|log| log.storage())
         .unwrap()
         .retained_records()
         .iter()
