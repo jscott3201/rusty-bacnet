@@ -309,6 +309,56 @@ fn extra_objects_join_the_object_list_after_the_ports() {
     assert!(build_database_with_extra(&identity, vec![Box::new(clash)]).is_err());
 }
 
+fn assert_identifier_exists(result: Result<ObjectDatabase, Error>) {
+    match result {
+        Err(Error::Remote(bacnet_types::error::RemoteError::Error {
+            class: bacnet_types::enums::ErrorClass::OBJECT,
+            code: bacnet_types::enums::ErrorCode::OBJECT_IDENTIFIER_ALREADY_EXISTS,
+        })) => {}
+        Err(other) => panic!("expected OBJECT_IDENTIFIER_ALREADY_EXISTS, got {other:?}"),
+        Ok(_) => panic!("expected OBJECT_IDENTIFIER_ALREADY_EXISTS, got a database"),
+    }
+}
+
+/// An extra under the Device's identifier would replace the Device (#2250).
+#[test]
+fn an_extra_reusing_the_device_identifier_is_refused() {
+    let identity = identity();
+    let twin = DeviceObject::new(DeviceConfig {
+        identity: identity.clone().with_name("twin"),
+        ..DeviceConfig::default()
+    })
+    .unwrap();
+    assert_identifier_exists(build_database_with_extra(&identity, vec![Box::new(twin)]));
+}
+
+/// An extra under a declared port's identifier would replace the port (#2250).
+#[test]
+fn an_extra_reusing_a_declared_port_identifier_is_refused() {
+    let identity = identity().with_bip_port(1, 10, LAN, 47808).unwrap();
+    let port = crate::network_port::NetworkPortObject::new_non_bip(
+        1,
+        "other-port",
+        NetworkType::VIRTUAL,
+        1,
+        bacnet_types::MacAddr::from_slice(&[1]),
+        1476,
+    )
+    .unwrap();
+    assert_identifier_exists(build_database_with_extra(&identity, vec![Box::new(port)]));
+}
+
+/// Two extras under one identifier would keep only the second (#2250).
+#[test]
+fn two_extras_sharing_an_identifier_are_refused() {
+    let first = AnalogInputObject::new(9, "ai-9-a", EngineeringUnits::NO_UNITS).unwrap();
+    let second = AnalogInputObject::new(9, "ai-9-b", EngineeringUnits::NO_UNITS).unwrap();
+    assert_identifier_exists(build_database_with_extra(
+        &identity(),
+        vec![Box::new(first), Box::new(second)],
+    ));
+}
+
 #[test]
 fn a_stale_port_entry_fails_both_database_builders() {
     // with_network_port can't store this entry, so place it by hand.

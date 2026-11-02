@@ -492,6 +492,16 @@ pub fn build_database_with_extra(
     for obj in &extra {
         oids.push(obj.object_identifier());
     }
+    // The database replaces an object added under an identifier it already
+    // holds, which would drop the Device or a declared port and leave the
+    // identifier listed twice. Refuse before anything is added (#2250).
+    let mut seen = crate::collections::HashSet::with_capacity(oids.len());
+    if !oids.iter().all(|oid| seen.insert(*oid)) {
+        return Err(Error::protocol(
+            bacnet_types::enums::ErrorClass::OBJECT,
+            bacnet_types::enums::ErrorCode::OBJECT_IDENTIFIER_ALREADY_EXISTS,
+        ));
+    }
     device.set_object_list(oids);
 
     let mut db = ObjectDatabase::new();
