@@ -4,7 +4,6 @@
 //! as they were, and takes the same commit once detection is on. The tables
 //! below sort each lender by the targets its commit takes; a lender added
 //! to, or moved within, the catalogue fails here until they change with it.
-#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 
 use crate::catalogue::representatives;
 use crate::event::{
@@ -12,6 +11,7 @@ use crate::event::{
 };
 use crate::traits::BACnetObject;
 use alloc::boxed::Box;
+#[cfg(feature = "event-reporting")]
 use alloc::collections::BTreeSet;
 use alloc::format;
 use alloc::string::String;
@@ -19,6 +19,7 @@ use alloc::vec::Vec;
 use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
 
+#[cfg(feature = "event-reporting")]
 /// Lenders whose commit takes any target.
 const ANY_TARGET: [ObjectType; 12] = [
     ObjectType::ANALOG_INPUT,
@@ -35,6 +36,7 @@ const ANY_TARGET: [ObjectType; 12] = [
     ObjectType::EVENT_ENROLLMENT,
 ];
 
+#[cfg(feature = "event-reporting")]
 /// The logs: BUFFER_READY has only the NORMAL state, so any other target is
 /// `Unsupported`, detection on or off.
 const NORMAL_ONLY: [ObjectType; 3] = [

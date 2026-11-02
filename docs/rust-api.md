@@ -3945,7 +3945,7 @@ neither.
 
 On the `firmware/link` objects image, both off save 4,952 / 4,444 / 5,984
 octets of flash on thumbv7m / thumbv7em / riscv32imac: `event-reporting`
-about 2.5 to 3.6 KB, `durable-writes` about 2 KB. Audit, COV and the
+about 2.5 to 3.7 KB, `durable-writes` about 2 KB. Audit, COV and the
 clock binding would each save under 400 octets there, so they have no
 feature.
 

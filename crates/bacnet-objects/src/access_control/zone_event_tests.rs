@@ -2,21 +2,19 @@
 //! (Clause 12.32, Table 12-37, Clause 13.3.2, #1305).
 //!
 //! Configuration goes through `write_property`, the route a client takes.
-#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 
 use crate::traits::EventReporting as _;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::PropertyIdentifier as P;
-use bacnet_types::enums::{
-    AccessZoneOccupancyState as S, ErrorClass, ErrorCode, EventType, Reliability,
-};
+#[cfg(feature = "event-reporting")]
+use bacnet_types::enums::Reliability;
+use bacnet_types::enums::{AccessZoneOccupancyState as S, ErrorClass, ErrorCode, EventType};
 use bacnet_types::error::RemoteError;
 
 use super::*;
-use crate::event::{
-    EventStateChange, EventTransition, EventTransitionCommit, TransitionOutcome,
-    commit_test_proposal,
-};
+use crate::event::{EventStateChange, EventTransition, EventTransitionCommit};
+#[cfg(feature = "event-reporting")]
+use crate::event::{TransitionOutcome, commit_test_proposal};
 
 fn read(zone: &AccessZoneObject, property: P) -> PropertyValue {
     zone.read_property(property, None).unwrap()

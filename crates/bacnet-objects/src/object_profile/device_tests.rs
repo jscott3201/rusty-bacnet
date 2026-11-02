@@ -1,5 +1,4 @@
 //! Device profile rows compose with clock, segmentation, services and Audit state.
-#![cfg_attr(not(feature = "durable-writes"), allow(unused_imports, dead_code))]
 use super::test_support::*;
 use super::*;
 use crate::clock::{ClockFrame, ClockReader};

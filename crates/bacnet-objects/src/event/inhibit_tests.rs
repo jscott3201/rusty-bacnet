@@ -2,19 +2,21 @@
 //! that report intrinsically (#1329): the inhibit stops the algorithm's
 //! offnormal and normal transitions but not fault detection (Clause
 //! 13.2.2.1), and a configured text is what a transition stores.
-#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 
 use crate::traits::EventReporting as _;
 use crate::traits::Timed;
 use bacnet_types::bitstring::LimitEnable;
-use bacnet_types::enums::{
-    EngineeringUnits, EventState, EventType, PropertyIdentifier as P, Reliability,
-};
+use bacnet_types::enums::{EngineeringUnits, EventState, PropertyIdentifier as P};
+#[cfg(feature = "event-reporting")]
+use bacnet_types::enums::{EventType, Reliability};
 use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
 
-use super::{EventTransitionCommit, TransitionOutcome, commit_test_proposal};
+#[cfg(feature = "event-reporting")]
+use super::commit_test_proposal;
+use super::{EventTransitionCommit, TransitionOutcome};
 use crate::access_control::AccessZoneObject;
 use crate::analog::AnalogInputObject;
+#[cfg(feature = "event-reporting")]
 use crate::binary::{BinaryOutputObject, BinaryValueObject};
 use crate::event_log::EventLogObject;
 use crate::traits::BACnetObject;
@@ -31,6 +33,7 @@ fn inhibit(object: &mut dyn BACnetObject, on: bool) {
     );
 }
 
+#[cfg(feature = "event-reporting")]
 fn state(object: &dyn BACnetObject) -> EventState {
     match object.read_property(P::EVENT_STATE, None).unwrap() {
         PropertyValue::Enumerated(raw) => EventState::from_raw(raw),
@@ -38,6 +41,7 @@ fn state(object: &dyn BACnetObject) -> EventState {
     }
 }
 
+#[cfg(feature = "event-reporting")]
 /// Propose and commit one transition, returning where it went.
 fn step(object: &mut dyn BACnetObject, outcome: Option<TransitionOutcome>) -> Option<EventState> {
     outcome.map(|outcome| commit_test_proposal(object, outcome).change.to)

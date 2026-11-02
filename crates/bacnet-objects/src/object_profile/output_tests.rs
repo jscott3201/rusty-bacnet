@@ -1,5 +1,4 @@
 //! Optional output profiles preserve command ownership and saved Tags authority.
-#![cfg_attr(not(feature = "durable-writes"), allow(unused_imports, dead_code))]
 
 use super::test_support::*;
 use super::*;
@@ -11,6 +10,7 @@ use crate::traits::BACnetObject;
 use bacnet_types::enums::{EngineeringUnits, ObjectType};
 use std::borrow::Cow;
 use std::sync::Arc;
+#[cfg(feature = "durable-writes")]
 use std::time::Duration;
 
 const KINDS: [ObjectType; 3] = [
@@ -22,6 +22,7 @@ const ROWS: [P; 3] = [P::TAGS, P::PROFILE_LOCATION, P::PROFILE_NAME];
 
 trait ProfileOutput: BACnetObject {
     fn provision(&mut self, profile: ObjectProfile) -> Result<(), Error>;
+    #[cfg(feature = "durable-writes")]
     fn wait(&self);
 }
 macro_rules! profile_output {
@@ -30,6 +31,7 @@ macro_rules! profile_output {
             fn provision(&mut self, profile: ObjectProfile) -> Result<(), Error> {
                 self.set_profile(profile)
             }
+            #[cfg(feature = "durable-writes")]
             fn wait(&self) {
                 self.wait_for_tag_saves();
             }

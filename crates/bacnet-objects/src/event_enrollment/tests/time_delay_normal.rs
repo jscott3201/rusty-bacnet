@@ -1,7 +1,6 @@
 //! `Time_Delay_Normal` on EventEnrollment (property 356, Table 12-14
 //! conformance O) and the internal evaluation-state channel the server
 //! evaluator drives (#163/#137/#166; ASHRAE 135-2020 Clauses 12.12, 13.3).
-#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 
 use super::super::*;
 use crate::property_metadata::is_writable_property;

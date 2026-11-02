@@ -1,6 +1,6 @@
-#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 use super::super::*;
 use crate::property_metadata::is_writable_property;
+#[cfg(feature = "event-reporting")]
 use crate::traits::EventReporting as _;
 use bacnet_types::bitstring::LimitEnable;
 use bacnet_types::enums::EventState;

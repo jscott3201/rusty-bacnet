@@ -3,7 +3,6 @@
 //! and 13.4.5, #1149): Alarm_Values, Fault_Values and Masked_Alarm_Values,
 //! the Door_Alarm_State they admit, CHANGE_OF_STATE on Door_Alarm_State and
 //! the FAULT_STATE check behind Reliability.
-#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 
 use crate::traits::EventReporting as _;
 use bacnet_types::bitstring::EventTransitionBits;
@@ -12,7 +11,10 @@ use bacnet_types::enums::{DoorAlarmState as S, ErrorClass, ErrorCode, EventType}
 use bacnet_types::error::RemoteError;
 
 use super::*;
-use crate::event::{EventStateChange, TransitionOutcome, commit_test_proposal};
+#[cfg(feature = "event-reporting")]
+use crate::event::EventStateChange;
+#[cfg(feature = "event-reporting")]
+use crate::event::{TransitionOutcome, commit_test_proposal};
 
 const LISTS: [P; 3] = [P::ALARM_VALUES, P::FAULT_VALUES, P::MASKED_ALARM_VALUES];
 
@@ -50,6 +52,7 @@ fn set_out_of_service(door: &mut AccessDoorObject, out_of_service: bool) {
     .unwrap();
 }
 
+#[cfg(feature = "event-reporting")]
 fn status_flags(bits: StatusFlags) -> PropertyValue {
     PropertyValue::BitString {
         unused_bits: 4,
@@ -57,6 +60,7 @@ fn status_flags(bits: StatusFlags) -> PropertyValue {
     }
 }
 
+#[cfg(feature = "event-reporting")]
 fn change(from: EventState, to: EventState) -> EventStateChange {
     EventStateChange { from, to }
 }

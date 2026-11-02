@@ -1,5 +1,4 @@
 //! Profile provisioning and storage remain independent of Value PV ownership.
-#![cfg_attr(not(feature = "durable-writes"), allow(unused_imports, dead_code))]
 
 use super::test_support::*;
 use super::*;
@@ -11,6 +10,7 @@ use crate::property_metadata::{PropertyConformance, PropertyWriteCapability};
 use crate::traits::BACnetObject;
 use bacnet_types::enums::{EngineeringUnits, ObjectType};
 use std::sync::Arc;
+#[cfg(feature = "durable-writes")]
 use std::time::Duration;
 
 const KINDS: [ObjectType; 3] = [

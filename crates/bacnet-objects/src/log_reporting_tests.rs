@@ -1,16 +1,19 @@
 //! BUFFER_READY on the three log objects (#1347, Clause 13.3.7).
-#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 use super::*;
 use crate::clock::{ClockFrame, ClockReader};
+#[cfg(feature = "event-reporting")]
 use crate::event::commit_test_proposal;
 use crate::event_log::EventLogObject;
 use crate::traits::BACnetObject;
 use crate::trend::{TrendLogMultipleObject, TrendLogObject};
+#[cfg(feature = "event-reporting")]
 use bacnet_types::constructed::{
     BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord, EventLogDatum, LogData,
     LogDatum,
 };
-use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
+#[cfg(feature = "event-reporting")]
+use bacnet_types::enums::ObjectType;
+use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::{Date, Time};
 use std::sync::Arc;
@@ -58,6 +61,7 @@ fn logs() -> [Box<dyn BACnetObject>; 3] {
     logs
 }
 
+#[cfg(feature = "event-reporting")]
 /// Add one ordinary record of the log's own family.
 fn add(log: &mut dyn BACnetObject) {
     match log.object_identifier().object_type() {

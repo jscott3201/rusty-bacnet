@@ -86,5 +86,12 @@ libc = { workspace = true, optional = true }
 [dev-dependencies]
 proptest.workspace = true
 
+# Its sweep drives event transitions through the objects' event reporting
+# before it writes (#2215).
+[[test]]
+name = "write_property_clocked"
+path = "tests/write_property_clocked.rs"
+required-features = ["event-reporting"]
+
 [lints]
 workspace = true

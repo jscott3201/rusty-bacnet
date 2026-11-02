@@ -1,11 +1,13 @@
 //! Multi-state Number_Of_States configuration and object-owned Reliability.
-#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 
 use super::super::*;
 use crate::property_metadata::is_writable_property;
+#[cfg(feature = "event-reporting")]
 use crate::traits::EventReporting as _;
 use crate::traits::ReliabilityEvaluation;
-use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, Reliability};
+#[cfg(feature = "event-reporting")]
+use bacnet_types::enums::EventState;
+use bacnet_types::enums::{ErrorClass, ErrorCode, Reliability};
 use bacnet_types::error::RemoteError;
 
 fn read_reliability(object: &dyn BACnetObject) -> u32 {

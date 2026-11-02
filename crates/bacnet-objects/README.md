@@ -22,8 +22,8 @@ uses. `std` turns both on, so a hosted build has them; a `no_std` build with
 
 | Feature | Off, the built-in objects lend nothing through | What drops out | Objects image, flash saved (thumbv7m / thumbv7em / riscv32imac) |
 | --- | --- | --- | --- |
-| `event-reporting` | `event_reporting()`, `event_reporting_mut()`, `enrollment_eval()`, `enrollment_eval_mut()` | Intrinsic reporting's evaluation and commits, alarm acknowledgment, the Event and Alert Enrollments' transitions and the logs' buffer-ready reports. The event properties still read and write. | 3,020 / 2,472 / 3,644 octets |
-| `durable-writes` | `durable_writes()` | Staged saves, which a host runs off the database lock. A write to an object with storage still saves, on the writer's own path. | 2,044 / 1,932 / 2,264 octets |
+| `event-reporting` | `event_reporting()`, `event_reporting_mut()`, `enrollment_eval()`, `enrollment_eval_mut()` | Intrinsic reporting's evaluation and commits, alarm acknowledgment, the Event and Alert Enrollments' transitions and the logs' buffer-ready reports. The event properties still read and write. | 3,020 / 2,464 / 3,684 octets |
+| `durable-writes` | `durable_writes()` | Staged saves, which a host runs off the database lock. A write to an object with storage still saves, on the writer's own path. | 2,044 / 1,924 / 2,304 octets |
 
 With both off, the objects image in `firmware/link` (a Device, two Analog
 Inputs and two Binary Values behind `bacnet-device-core`'s responder) is

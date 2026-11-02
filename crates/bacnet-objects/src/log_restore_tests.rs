@@ -1,5 +1,4 @@
 //! Restoring or seeding a log's buffer and Total_Record_Count (#1537).
-#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 use super::*;
 
 const MAX: u64 = u32::MAX as u64;

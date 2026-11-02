@@ -4,7 +4,6 @@
 //! New multi-state tests live here rather than inline in the object files, which
 //! is where this module tree keeps them — `multistate/tests/` is declared by
 //! `multistate/mod.rs` and already holds `objects.rs` and `state_text.rs`.
-#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 
 use super::super::*;
 use crate::property_metadata::is_writable_property;

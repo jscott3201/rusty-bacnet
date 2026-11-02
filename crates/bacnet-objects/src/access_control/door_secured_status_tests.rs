@@ -3,8 +3,8 @@
 //! input the door's own monitor can't tell makes it UNKNOWN, and pulses,
 //! simulated values, the event algorithm, Masked_Alarm_Values and the return
 //! to service all show through.
-#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 
+#[cfg(feature = "event-reporting")]
 use crate::traits::EventReporting as _;
 use crate::traits::Timed;
 use std::time::Duration;
@@ -12,6 +12,7 @@ use std::time::Duration;
 use bacnet_types::enums::PropertyIdentifier as P;
 
 use super::*;
+#[cfg(feature = "event-reporting")]
 use crate::event::commit_test_proposal;
 
 const SECURED: DoorSecuredStatus = DoorSecuredStatus::SECURED;
@@ -53,6 +54,7 @@ fn set_out_of_service(door: &mut AccessDoorObject, out_of_service: bool) {
     .unwrap();
 }
 
+#[cfg(feature = "event-reporting")]
 fn status_flags(bits: StatusFlags) -> PropertyValue {
     PropertyValue::BitString {
         unused_bits: 4,
@@ -136,6 +138,7 @@ fn access_door_secured_status_follows_door_and_lock_status() {
     assert_eq!(secured(&door), SECURED);
 }
 
+#[cfg(feature = "event-reporting")]
 /// Move the door to `state`, then let its event algorithm (Time_Delay 0)
 /// commit whatever transition that proposes.
 fn report(door: &mut AccessDoorObject, state: DoorAlarmState) {

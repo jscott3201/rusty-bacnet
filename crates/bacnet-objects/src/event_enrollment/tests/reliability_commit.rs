@@ -1,12 +1,15 @@
-#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 use super::super::*;
-use crate::event::{
-    EventStateChange, EventTransition, EventTransitionCommit, EventTransitionCommitError,
-};
+#[cfg(feature = "event-reporting")]
+use crate::event::EventTransitionCommitError;
+#[cfg(feature = "event-reporting")]
+use crate::event::{EventStateChange, EventTransition, EventTransitionCommit};
+#[cfg(feature = "event-reporting")]
 use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_types::enums::Reliability;
+#[cfg(feature = "event-reporting")]
 use bacnet_types::primitives::BACnetTimeStamp;
 
+#[cfg(feature = "event-reporting")]
 fn timestamp_at(object: &EventEnrollmentObject, index: u32) -> BACnetTimeStamp {
     let PropertyValue::ApplicationData(bytes) = object
         .read_property(PropertyIdentifier::EVENT_TIME_STAMPS, Some(index))
@@ -19,6 +22,7 @@ fn timestamp_at(object: &EventEnrollmentObject, index: u32) -> BACnetTimeStamp {
     timestamp
 }
 
+#[cfg(feature = "event-reporting")]
 fn snapshot(object: &EventEnrollmentObject) -> [PropertyValue; 5] {
     [
         object
@@ -39,6 +43,7 @@ fn snapshot(object: &EventEnrollmentObject) -> [PropertyValue; 5] {
     ]
 }
 
+#[cfg(feature = "event-reporting")]
 fn transition(from: EventState, to: EventState, timestamp: u16) -> EventTransitionCommit {
     EventTransitionCommit {
         change: EventStateChange { from, to },

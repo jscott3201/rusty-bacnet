@@ -1,4 +1,4 @@
 ---
 section: Migration notes
 ---
-- **bacnet-objects features (Rust API, #2215):** a no_std build with `alloc` alone now has `event-reporting` and `durable-writes` off, so its objects lend no event reporting and stage no durable writes. A no_std host that drives either adds the feature; `std` builds need nothing.
+- **bacnet-objects features (Rust API, #2215):** a no_std build with `alloc` alone no longer lends event reporting or stages durable writes. A no_std host that drives either names the features, `features = ["alloc", "event-reporting", "durable-writes"]`; `std` builds need nothing.

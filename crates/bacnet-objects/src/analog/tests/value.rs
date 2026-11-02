@@ -1,4 +1,3 @@
-#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 use super::super::*;
 use crate::property_metadata::is_writable_property;
 use crate::traits::EventReporting as _;

@@ -3,12 +3,12 @@
 //! and exactly those that evaluate or take a derived Reliability lend
 //! `ReliabilityEval` (#2179). A lender dropped from, or added to, the
 //! catalogue fails here until its table changes with it.
-#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 
 use crate::catalogue::representatives;
 use alloc::collections::BTreeSet;
 use bacnet_types::enums::ObjectType;
 
+#[cfg(feature = "event-reporting")]
 /// The built-in type that lends Event Enrollment evaluation.
 const ENROLLMENT_EVAL_LENDERS: [ObjectType; 1] = [ObjectType::EVENT_ENROLLMENT];
 

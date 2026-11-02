@@ -2,18 +2,24 @@
 //! Enrollment (#1507): the shared `ReportingOptions` serves them, as it does
 //! on the intrinsic reporters, and a committed transition stores the
 //! configured text in Event_Message_Texts.
-#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 
 use super::super::*;
+#[cfg(feature = "event-reporting")]
 use crate::binary::BinaryValueObject;
+#[cfg(feature = "event-reporting")]
 use crate::database::ObjectDatabase;
 use crate::event::{EventStateChange, EventTransition};
+#[cfg(feature = "event-reporting")]
 use crate::property_metadata::is_writable_property;
 use crate::traits::EventReporting as _;
+#[cfg(feature = "event-reporting")]
 use bacnet_encoding::constructed::encode_object_property_reference;
+#[cfg(feature = "event-reporting")]
 use bacnet_types::constructed::BACnetObjectPropertyReference;
+#[cfg(feature = "event-reporting")]
 use bacnet_types::enums::BinaryPV;
 use bacnet_types::error::RemoteError;
+#[cfg(feature = "event-reporting")]
 use bytes::BytesMut;
 
 fn enrollment() -> EventEnrollmentObject {
