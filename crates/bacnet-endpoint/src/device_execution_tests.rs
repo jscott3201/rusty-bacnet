@@ -1,14 +1,15 @@
 use super::*;
+use crate::session::bus_port::BusPort;
 use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::RemoteError;
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn endpoint_rp_only_wire_omits_nonexecuted_cov_properties() {
     wire_contract(false, false).await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn endpoint_execution_view_covers_write_opt_in_and_custom_device_reader() {
     wire_contract(true, false).await;
     wire_contract(false, true).await;
@@ -26,20 +27,14 @@ async fn wire_contract(writes: bool, custom: bool) {
             .role(SessionRole::ServerOnly)
             .database(db)
             .device(identity)
-            .build_session()
+            .build_session_over(BusPort::new())
             .unwrap();
     if writes {
         endpoint = endpoint.with_device_writes(Arc::new(|_| true));
     }
     endpoint.start().await.unwrap();
-    // The endpoint bound port 0; the client talks to the port it actually got.
     let port = endpoint.bip_local_address().unwrap().port();
-    let mut client = bacnet_client::client::BACnetClient::bip_builder()
-        .interface(Ipv4Addr::LOCALHOST)
-        .port(0)
-        .build()
-        .await
-        .unwrap();
+    let mut client = bus_client().await;
     let mac = bacnet_transport::bvll::encode_bip_mac([127, 0, 0, 1], port);
     let profile = client
         .read_property(
@@ -245,7 +240,7 @@ async fn generated_identity_preflight_failure_can_change_identity_and_retry() {
     session.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn endpoint_wildcard_keeps_frozen_identity_and_identity_free_selection_stays_global() {
     use std::net::Ipv4Addr;
     for composed in [true, false] {
@@ -260,14 +255,9 @@ async fn endpoint_wildcard_keeps_frozen_identity_and_identity_free_selection_sta
         if composed {
             builder = builder.device(identity.clone());
         }
-        let mut endpoint = builder.build_session().unwrap();
+        let mut endpoint = builder.build_session_over(BusPort::new()).unwrap();
         endpoint.start().await.unwrap();
-        let mut client = bacnet_client::client::BACnetClient::bip_builder()
-            .interface(Ipv4Addr::LOCALHOST)
-            .port(0)
-            .build()
-            .await
-            .unwrap();
+        let mut client = bus_client().await;
         let mac = bacnet_transport::bvll::encode_bip_mac(
             [127, 0, 0, 1],
             endpoint.bip_local_address().unwrap().port(),

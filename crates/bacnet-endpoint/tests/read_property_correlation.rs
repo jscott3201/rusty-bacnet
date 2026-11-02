@@ -1,14 +1,19 @@
-//! Public endpoint correlation against the bundled server over real B/IP.
-use bacnet_endpoint::{DeviceIdentity, SessionRole, bip::BipEndpointBuilder};
+//! Public endpoint correlation against the bundled server.
+//!
+//! Every test runs on paused time over in-memory links, so a stalled test
+//! thread can't time a read out after its peer answered (#2298).
+use bacnet_endpoint::{DeviceIdentity, SessionRole};
 use bacnet_server::server::{BACnetServer, ServerConfig};
-use bacnet_transport::bip::BipTransport;
 use bacnet_types::{
     enums::{ObjectType, PropertyIdentifier},
     primitives::ObjectIdentifier,
 };
-use std::net::Ipv4Addr;
+use bus_port::BusPort;
 
-#[tokio::test]
+#[path = "support/bus_port.rs"]
+mod bus_port;
+
+#[tokio::test(start_paused = true)]
 async fn endpoint_device_wildcard_accepts_bundled_server_concrete_ack() {
     let database = DeviceIdentity::new(10, 42)
         .unwrap()
@@ -20,14 +25,16 @@ async fn endpoint_device_wildcard_accepts_bundled_server_concrete_ack() {
             ..Default::default()
         },
         database,
-        BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST),
+        BusPort::new(),
     )
     .await
     .unwrap();
-    let mut endpoint = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
-        .role(SessionRole::ClientOnly)
-        .build_session()
-        .unwrap();
+    let mut endpoint = EndpointSession::new(
+        BusPort::new(),
+        SessionRole::ClientOnly,
+        SessionConfig::default(),
+    )
+    .unwrap();
     endpoint.start().await.unwrap();
     let ack = endpoint
         .client()
@@ -263,19 +270,19 @@ async fn correlation_matrix(endpoint: bool, routed: bool) {
     peer.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn standalone_direct_read_property_correlates_ack_identity() {
     correlation_matrix(false, false).await;
 }
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn standalone_routed_read_property_correlates_ack_identity() {
     correlation_matrix(false, true).await;
 }
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn endpoint_direct_read_property_correlates_ack_identity() {
     correlation_matrix(true, false).await;
 }
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn endpoint_routed_read_property_correlates_ack_identity() {
     correlation_matrix(true, true).await;
 }

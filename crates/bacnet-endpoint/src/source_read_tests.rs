@@ -1,3 +1,5 @@
+use super::bus_port::BusPort;
+use super::eventually::eventually;
 use super::*;
 use bacnet_encoding::apdu::{
     AbortPdu, ComplexAck, ErrorPdu, RejectPdu, SimpleAck, decode_apdu, encode_apdu,
@@ -16,7 +18,6 @@ use bacnet_types::enums::{
     RejectReason, Reliability, UnconfirmedServiceChoice,
 };
 use bacnet_types::primitives::BACnetTimeStamp;
-use bus::BusPort;
 use bytes::{Bytes, BytesMut};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio::time::{Duration, timeout};
@@ -28,12 +29,6 @@ use tokio::time::{Duration, timeout};
 /// go through [`eventually`], since a loop that only yields stops paused
 /// time and its deadline never comes.
 const WAIT: Duration = Duration::from_secs(2);
-
-#[path = "source_read_bus.rs"]
-mod bus;
-#[path = "../tests/support/eventually.rs"]
-mod eventually;
-use eventually::eventually;
 
 fn oid(kind: ObjectType, instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(kind, instance).unwrap()

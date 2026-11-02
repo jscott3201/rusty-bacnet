@@ -66,7 +66,7 @@ async fn change_frames(endpoint: &mut Endpoint) -> (Vec<Sent>, Vec<Sent>) {
     pair.into_iter().partition(|sent| sent.link.is_empty())
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_address_on_the_network_starts_unresolved_and_resolves_once_learned() {
     for role in [SessionRole::ClientOnly, SessionRole::Both] {
         // Before #1461 the session refused to start with this recipient.
@@ -101,7 +101,7 @@ async fn an_address_on_the_network_starts_unresolved_and_resolves_once_learned()
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_replaced_number_unresolves_the_address_and_a_change_still_goes_ahead() {
     for role in [SessionRole::ClientOnly, SessionRole::Both] {
         let mut endpoint = source_reporting_to(role, true, address(THIS_NETWORK, SINK)).await;
@@ -137,7 +137,7 @@ async fn a_replaced_number_unresolves_the_address_and_a_change_still_goes_ahead(
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_address_off_a_number_known_at_startup_also_starts_unresolved() {
     // A registered port publishes its number before the source starts. An
     // address on another network starts unresolved too: the number may

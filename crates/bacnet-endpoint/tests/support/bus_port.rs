@@ -1,7 +1,7 @@
-//! An in-memory link for the source Audit tests (#2293).
+//! An in-memory link for the endpoint tests (#2293, #2298).
 //!
-//! The tests used to talk over real UDP sockets with a 100 ms APDU timeout,
-//! so a test thread stalled for 100 ms on a loaded host failed a read that
+//! Many tests used to talk over real UDP sockets with real-time APDU
+//! timeouts, so a test thread stalled on a loaded host failed a read that
 //! its peer had answered. Paused Tokio time can't fix that over sockets: the
 //! clock jumps ahead whenever every task waits, even while a datagram is
 //! still on its way. This link carries frames over Tokio channels instead.
@@ -9,14 +9,22 @@
 //! nothing is in flight, and every deadline the tests meet is virtual.
 //!
 //! Each node gets a 6-byte B/IP MAC on 127.0.0.1, so the source Audit route
-//! bindings still name it by socket address. A unicast reaches the node that
-//! owns the MAC. No test here broadcasts, so a broadcast panics rather
-//! than pass without its frame reaching anyone.
+//! bindings still name it by socket address, and a session reports it as its
+//! B/IP address. A unicast reaches the node that owns the MAC. No test here
+//! broadcasts, so a broadcast panics rather than pass without its frame
+//! reaching anyone.
 //!
 //! [`TransportPort::max_npdu`] keeps its default, 1497 octets each way,
 //! which is what a running `BipTransport` reports.
-use super::*;
+//!
+//! The crate's unit tests include this file once, as `session::bus_port`,
+//! and integration tests include it by path, like `port_retry.rs`.
+use bacnet_transport::bvll::encode_bip_mac;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort, TransportProvenance};
+use bacnet_types::MacAddr;
+use bacnet_types::error::Error;
+use bytes::Bytes;
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use tokio::sync::mpsc;
 
@@ -41,14 +49,14 @@ fn nodes() -> MutexGuard<'static, Nodes> {
 }
 
 /// One node's port on the link.
-pub(super) struct BusPort {
+pub struct BusPort {
     mac: MacAddr,
     rx: Option<mpsc::Receiver<ReceivedNpdu>>,
 }
 
 impl BusPort {
     /// Joins the link on an unused port.
-    pub(super) fn new() -> Self {
+    pub fn new() -> Self {
         let (tx, rx) = mpsc::channel(QUEUE);
         let mut nodes = nodes();
         let port = nodes.next_port;

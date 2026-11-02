@@ -142,7 +142,7 @@ async fn audited_read(
     audit
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_records_for_an_address_on_this_network_go_without_a_dnet() {
     for role in [SessionRole::ClientOnly, SessionRole::Both] {
         let mut endpoint = source(role, true).await;
@@ -162,7 +162,7 @@ async fn source_records_for_an_address_on_this_network_go_without_a_dnet() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_routes_refuse_another_network_and_an_unknown_number() {
     for role in [SessionRole::ClientOnly, SessionRole::Both] {
         for learned in [true, false] {

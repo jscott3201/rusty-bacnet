@@ -74,7 +74,7 @@ async fn health(fixture: &Fixture) -> PropertyValue {
         .unwrap()
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_recipient_second_lease_size_and_close_fail_before_commit() {
     for case in ["second-lease", "size", "closed"] {
         let fixture = Fixture::with_max(true, if case == "size" { 50 } else { 1476 }).await;
@@ -127,7 +127,7 @@ async fn source_recipient_second_lease_size_and_close_fail_before_commit() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_recipient_pair_completion_orders_and_aba_fence() {
     for failure_first in [true, false] {
         let mut fixture = Fixture::new(true).await;
@@ -220,7 +220,7 @@ async fn source_recipient_closed_egress_is_postcommit_and_does_not_retry_or_roll
     fixture.peer.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_recipient_change_retires_pending_summary_without_new_read() {
     let mut fixture = Fixture::new(true).await;
     let permits: Vec<_> = (0..64)

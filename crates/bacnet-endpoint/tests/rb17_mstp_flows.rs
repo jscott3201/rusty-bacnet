@@ -15,10 +15,13 @@
 //! Evidence level: simulator (LoopbackSerial), NOT physical bench or
 //! on-wire conformance; timing qualification is RB-26, routing is RB-25.
 
+#[path = "support/eventually.rs"]
+mod eventually;
 #[path = "support/mstp_wire.rs"]
 mod mstp_wire;
 #[path = "support/rb17_harness.rs"]
 mod rb17_harness;
+use eventually::eventually;
 
 use std::sync::Arc;
 
@@ -299,14 +302,12 @@ async fn mstp_queue_and_admission_bounds_release() {
     // Prove the session task consumed the first command and stalled inside
     // the network send (event-driven, no sleep): only then is the race below
     // independent of task scheduling.
-    let deadline = tokio::time::Instant::now() + WAIT;
-    while !send_started.load(std::sync::atomic::Ordering::Acquire) {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "session task never consumed the first egress command"
-        );
-        tokio::task::yield_now().await;
-    }
+    eventually(
+        WAIT,
+        "session task never consumed the first egress command",
+        async || send_started.load(std::sync::atomic::Ordering::Acquire),
+    )
+    .await;
     // Two more sends race for the single free slot while the task is proven
     // stalled: exactly one buffers, the other is Full immediately (no
     // consumer progress is possible until stop). The Full one resolves
@@ -314,14 +315,10 @@ async fn mstp_queue_and_admission_bounds_release() {
     // first finished handle is the Full proof, deterministically.
     let s2 = tokio::spawn(send_one(egress.clone()));
     let s3 = tokio::spawn(send_one(egress));
-    let race_deadline = tokio::time::Instant::now() + WAIT;
-    while !(s2.is_finished() || s3.is_finished()) {
-        assert!(
-            tokio::time::Instant::now() < race_deadline,
-            "egress race never settled"
-        );
-        tokio::task::yield_now().await;
-    }
+    eventually(WAIT, "egress race never settled", async || {
+        s2.is_finished() || s3.is_finished()
+    })
+    .await;
     ingress.stop().await.expect("ingress must stop");
     let mut full = 0;
     let mut shutdown = 0;
@@ -397,23 +394,16 @@ async fn cancel_impl(mode: MstpExecutionMode, frames: Frames) {
     });
     // The lease is held from reserve (before any token): poll to 1, cancel,
     // then prove the exact lease is released.
-    let deadline = tokio::time::Instant::now() + WAIT;
-    while h.session.active_leases() != 1 {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "outbound lease never held"
-        );
-        tokio::task::yield_now().await;
-    }
+    eventually(WAIT, "outbound lease never held", async || {
+        h.session.active_leases() == 1
+    })
+    .await;
     pending.abort();
     let _ = pending.await;
-    while h.session.active_leases() != 0 {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "cancelled request stranded its lease"
-        );
-        tokio::task::yield_now().await;
-    }
+    eventually(WAIT, "cancelled request stranded its lease", async || {
+        h.session.active_leases() == 0
+    })
+    .await;
     h.shutdown().await;
 }
 
@@ -450,14 +440,10 @@ async fn stop_outstanding_impl(mode: MstpExecutionMode, frames: Frames) {
             )
             .await
     });
-    let deadline = tokio::time::Instant::now() + WAIT;
-    while h.session.active_leases() != 1 {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "outbound lease never held"
-        );
-        tokio::task::yield_now().await;
-    }
+    eventually(WAIT, "outbound lease never held", async || {
+        h.session.active_leases() == 1
+    })
+    .await;
     // Stop seals admission and releases the exact lease; the waiter observes
     // shutdown, never a hang or a success.
     h.session

@@ -1,3 +1,4 @@
+use super::bus_port::BusPort;
 use super::*;
 use bacnet_encoding::apdu::{ConfirmedRequest, decode_apdu, encode_apdu};
 use bacnet_encoding::npdu::{Npdu, encode_npdu};
@@ -67,6 +68,16 @@ fn session(
         peer,
         starts,
     )
+}
+
+/// A client on the in-memory link, so a test that talks to an endpoint
+/// through it runs on paused time (#2298).
+pub(super) async fn bus_client() -> bacnet_client::client::BACnetClient<BusPort> {
+    bacnet_client::client::BACnetClient::generic_builder()
+        .transport(BusPort::new())
+        .build()
+        .await
+        .unwrap()
 }
 
 fn oid(instance: u32) -> ObjectIdentifier {
@@ -213,7 +224,7 @@ async fn device_write_preflight_errors_are_atomic_and_retryable() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn endpoint_device_write_actual_ingress_rejects_source_reporter_and_stops() {
     let (session, mut peer, _) = session(SessionRole::Both);
     let mut db = database(&[123]);
@@ -389,8 +400,8 @@ async fn device_write_rejects_device_shaped_custom_object_without_authority() {
     );
 }
 
-#[tokio::test]
-async fn bip_device_write_authorized_round_trip_and_service_readback() {
+#[tokio::test(start_paused = true)]
+async fn device_write_authorized_round_trip_and_service_readback() {
     use std::net::Ipv4Addr;
     let mut session =
         crate::bip::BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
@@ -400,20 +411,14 @@ async fn bip_device_write_authorized_round_trip_and_service_readback() {
                 context.source_network.is_none()
                     && context.trust == bacnet_server::mutation::MutationTrust::Unverified
             }))
-            .build_session()
+            .build_session_over(BusPort::new())
             .unwrap();
     session.start().await.unwrap();
-    // The endpoint bound port 0; the client talks to the port it actually got.
     let port = session.bip_local_address().unwrap().port();
-    let mut client = bacnet_client::client::BACnetClient::bip_builder()
-        .interface(Ipv4Addr::LOCALHOST)
-        .port(0)
-        .build()
-        .await
-        .unwrap();
+    let mut client = bus_client().await;
     let mac = bacnet_transport::bvll::encode_bip_mac([127, 0, 0, 1], port);
     let mut value = BytesMut::new();
-    bacnet_encoding::primitives::encode_app_character_string(&mut value, "B/IP update").unwrap();
+    bacnet_encoding::primitives::encode_app_character_string(&mut value, "bus update").unwrap();
     tokio::time::timeout(
         Duration::from_secs(3),
         client.write_property(
@@ -430,7 +435,7 @@ async fn bip_device_write_authorized_round_trip_and_service_readback() {
     .unwrap();
     assert_eq!(
         read(&session, PropertyIdentifier::DESCRIPTION).await,
-        PropertyValue::CharacterString("B/IP update".into())
+        PropertyValue::CharacterString("bus update".into())
     );
     client
         .write_property(
@@ -445,7 +450,7 @@ async fn bip_device_write_authorized_round_trip_and_service_readback() {
         .unwrap();
     assert_eq!(
         read(&session, PropertyIdentifier::DESCRIPTION).await,
-        PropertyValue::CharacterString("B/IP update".into())
+        PropertyValue::CharacterString("bus update".into())
     );
     let ack = client
         .read_property(
@@ -466,8 +471,8 @@ async fn bip_device_write_authorized_round_trip_and_service_readback() {
 
 /// With several Devices the lowest is this device (#1204): writes reach it,
 /// and only it advertises WriteProperty, whichever Device was added first.
-#[tokio::test]
-async fn bip_device_writes_reach_the_lowest_of_several_devices() {
+#[tokio::test(start_paused = true)]
+async fn device_writes_reach_the_lowest_of_several_devices() {
     use std::net::Ipv4Addr;
     let mut session =
         crate::bip::BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
@@ -475,16 +480,11 @@ async fn bip_device_writes_reach_the_lowest_of_several_devices() {
             .database(database(&[456, 123]))
             .device(crate::DeviceIdentity::new(123, 42).unwrap())
             .device_writes(Arc::new(|_| true))
-            .build_session()
+            .build_session_over(BusPort::new())
             .unwrap();
     session.start().await.unwrap();
     let port = session.bip_local_address().unwrap().port();
-    let mut client = bacnet_client::client::BACnetClient::bip_builder()
-        .interface(Ipv4Addr::LOCALHOST)
-        .port(0)
-        .build()
-        .await
-        .unwrap();
+    let mut client = bus_client().await;
     let mac = bacnet_transport::bvll::encode_bip_mac([127, 0, 0, 1], port);
     let mut value = BytesMut::new();
     bacnet_encoding::primitives::encode_app_character_string(&mut value, "lowest").unwrap();
