@@ -30,6 +30,16 @@ fn all_eleven_builtin_intrinsic_families_implement_atomic_commit() {
     ];
 
     for object in &mut objects {
+        // Binary and Multi-state Output start with detection off, which
+        // refuses this commit (#2271).
+        object
+            .write_property(
+                PropertyIdentifier::EVENT_DETECTION_ENABLE,
+                None,
+                PropertyValue::Boolean(true),
+                None,
+            )
+            .unwrap();
         object
             .event_reporting_mut()
             .unwrap()

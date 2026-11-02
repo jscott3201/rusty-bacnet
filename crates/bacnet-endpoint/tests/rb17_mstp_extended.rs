@@ -175,7 +175,7 @@ async fn long_answer_impl(mode: MstpExecutionMode) {
     let db = db_with_named_analog(&id, 1, &name, 1.0);
     let mut h = Harness::with_database(mode, SessionRole::Both, Frames::Extended, id, db).await;
     let request = read_apdu(5, 1, PropertyIdentifier::OBJECT_NAME, 1476);
-    h.peer_send(&MstpFrame {
+    h.peer_deliver(&MstpFrame {
         frame_type: FrameType::BACNET_DATA_EXPECTING_REPLY,
         destination: SESSION_MAC,
         source: PEER_MAC,
@@ -210,7 +210,7 @@ async fn long_answer_impl(mode: MstpExecutionMode) {
     h.shutdown().await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn mstp_extended_long_answer_tokio() {
     long_answer_impl(MstpExecutionMode::Tokio).await;
 }

@@ -181,3 +181,47 @@ fn network_reliability_write_remains_denied() {
         PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw())
     );
 }
+
+#[test]
+fn detection_off_refuses_a_reliability_transition_and_keeps_reliability_alone() {
+    // The hidden reliability route meets the same Event_Detection_Enable
+    // gate as the transition commit (#2271): a transition is refused, and
+    // the Reliability staged beside it is not taken either.
+    let mut object =
+        EventEnrollmentObject::new(32, "EE-reliability-off", EventType::CHANGE_OF_BITSTRING)
+            .unwrap();
+    object
+        .write_property(
+            PropertyIdentifier::EVENT_DETECTION_ENABLE,
+            None,
+            PropertyValue::Boolean(false),
+            None,
+        )
+        .unwrap();
+    let before = snapshot(&object);
+
+    let refused = object.enrollment_eval_mut().unwrap().commit_reliability(
+        EventEnrollmentReliabilityCommit {
+            reliability: Reliability::UNDER_RANGE,
+            transition: Some(transition(EventState::NORMAL, EventState::FAULT, 21)),
+        },
+    );
+    assert_eq!(refused, Err(EventTransitionCommitError::DetectionDisabled));
+    assert_eq!(snapshot(&object), before);
+
+    // Reliability alone is not an event property, so it still commits.
+    object
+        .enrollment_eval_mut()
+        .unwrap()
+        .commit_reliability(EventEnrollmentReliabilityCommit {
+            reliability: Reliability::UNDER_RANGE,
+            transition: None,
+        })
+        .unwrap();
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::RELIABILITY, None)
+            .unwrap(),
+        PropertyValue::Enumerated(Reliability::UNDER_RANGE.to_raw())
+    );
+}

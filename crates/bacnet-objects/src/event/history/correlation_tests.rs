@@ -48,7 +48,7 @@ fn commit(
     timestamp: BACnetTimeStamp,
 ) {
     let from = *state;
-    EventTransitionState::new(state, acked, history)
+    EventTransitionState::new(true, state, acked, history)
         .commit(EventTransitionCommit {
             change: EventStateChange { from, to },
             coordinate: EventTransition::for_target_state(to),

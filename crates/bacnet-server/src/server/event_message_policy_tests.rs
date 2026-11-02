@@ -111,7 +111,17 @@ fn all_eleven_builtin_families_store_each_policy_message_in_only_its_coordinate(
     let objects = builtin_intrinsic_objects();
     assert_eq!(objects.len(), 11);
 
-    for object in objects {
+    for mut object in objects {
+        // Binary and Multi-state Output start with detection off, which
+        // refuses every commit away from NORMAL (#2271).
+        object
+            .write_property(
+                PropertyIdentifier::EVENT_DETECTION_ENABLE,
+                None,
+                PropertyValue::Boolean(true),
+                None,
+            )
+            .unwrap();
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
         db.add(object).unwrap();

@@ -4084,8 +4084,9 @@ behaviour, so an object without it writes nothing.
   each target took each write; while the Device clock is invalid it skips the
   tick but still sends the owed writes, and `calendar_active` answers `false`
   for an identifier that names no Calendar. The database asks
-  `retry_refusals_naming(target)` when an object is added, and DeleteObject
-  takes `take_relinquish_writes()` from the removed object. Only
+  `retry_refusals_naming(target)` when an object is added, and takes
+  `take_relinquish_writes()` from a Schedule as it leaves the database: on
+  every `remove` (DeleteObject's included) and when `add` replaces it. Only
   `tick_schedule` has no default. The built-in `ScheduleObject` lends it
   (see Schedule & Notification below).
 - **`cov()` → `CovReporting`**, for an object that reports changes of
@@ -4588,7 +4589,12 @@ fire-ready `TransitionOutcome` while leaving event state, acknowledgment bits,
 history, and the ready proposal unchanged until commit succeeds. Implement
 `commit_event_transition` to validate the supplied
 `EventTransitionCommit`, atomically apply all object-owned transition state, and
-return `EventTransitionCommitError` without mutation on failure. Custom objects
+return `EventTransitionCommitError` without mutation on failure. While the
+object's Event_Detection_Enable is FALSE, refuse every commit, NORMAL targets
+included, with `DetectionDisabled`, as the built-in reporters do: detection
+off stops the state machine and holds the event properties at their initial
+values (Clause 13.2.2.1), and turning it off should reset them directly, not
+through a commit. Custom objects
 can use these public types directly; the built-in private commit kernel is not
 required. Both server paths commit before distribution, even when Event_Enable,
 DCC, or an empty recipient list suppresses sending. The default commit
@@ -5109,7 +5115,9 @@ period it returns `None`. Time-values are typed (`BACnetTimeValue::value` is a
 primitive `PropertyValue`), so Present_Value and the target writes carry the
 scheduled value's own datatype. The public `ScheduleRunner::tick_schedule(today,
 time, calendar_active)` method returns `Option<ScheduleWrite>` (value, priority,
-references, retry): a changed value, or any value on entering the
+references, retry, relinquish; built with `ScheduleWrite::new` and the
+`with_retry` and `with_relinquish` builders, since the struct is
+`#[non_exhaustive]`): a changed value, or any value on entering the
 Effective_Period (start-up included); with neither, the current value for the
 references that refused their last write, flagged `retry` (#1436). The server writes it to every reference at
 `Priority_For_Writing`, set with `set_priority_for_writing` (1 to 16, default
@@ -5178,12 +5186,21 @@ out of service at once), and relinquishes, with a NULL at the old priority,
 each slot the Schedule holds that the change leaves behind: a dropped
 reference, or every reference when the priority moves. A Schedule holds slots
 from a write of a non-NULL value until it leaves its Effective_Period, so one
-out of season clears nothing another Schedule may own. DeleteObject of a
-Schedule gives up the slots it holds the same way (#2256): under the
-request's guard the server takes the public
-`ScheduleRunner::take_relinquish_writes()` NULLs from the removed object and
-writes them with the origin the Schedule's writes carried, then fans COV out
-for the targets. A target that refuses one doesn't fail the delete.
+out of season clears nothing another Schedule may own. Removing a Schedule
+gives up the slots it holds the same way (#2256, #2264), through one path
+whether DeleteObject, the application's own `ObjectDatabase::remove`, or an
+`add` that replaces it took the object out: the database takes the public
+`ScheduleRunner::take_relinquish_writes()` NULLs as the object leaves and
+queues them, and the server writes them under the next guard that settles
+the queue (the request's for a DeleteObject; every Schedule pass settles it
+first), with the local Device as owner and the removed Schedule as
+initiating object, then fans COV out for the targets. A target that refuses
+one doesn't fail the delete. Each such NULL, and each one a change of
+references or priority owes, is a `relinquish` write: the server sends it
+only to a slot whose Value_Source still names the Schedule, so a writer that
+took the slot since keeps its command. A reference to another property than
+Present_Value, or a target without Value_Source_Array (a Channel), gets the
+NULL regardless; a calculated NULL is never checked.
 
 While Out_Of_Service is TRUE, Present_Value is writable (#1055) with any
 primitive value, NULL included (INVALID_DATA_TYPE otherwise, and

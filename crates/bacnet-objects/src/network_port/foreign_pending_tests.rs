@@ -20,7 +20,7 @@ const REFUSED: [u8; 4] = [10, 0, 0, 99];
 /// A registration that applies what is activated, refuses [`REFUSED`] and a
 /// zero time-to-live, records each check, and refuses every activation
 /// while `fail` is set.
-struct Registration {
+pub(super) struct Registration {
     bbmd: Mutex<BACnetHostNPort>,
     ttl: Mutex<u16>,
     checked: Mutex<Vec<ForeignDeviceChanges>>,
@@ -28,7 +28,7 @@ struct Registration {
 }
 
 impl Registration {
-    fn new() -> Arc<Self> {
+    pub(super) fn new() -> Arc<Self> {
         Arc::new(Self {
             bbmd: Mutex::new(host([10, 0, 0, 1])),
             ttl: Mutex::new(300),
@@ -96,7 +96,10 @@ fn host(ip: [u8; 4]) -> BACnetHostNPort {
 
 /// A foreign-device port over `registration`, with the lease that keeps it
 /// registered, activating changes when `activation` is set.
-fn foreign_port(registration: &Arc<Registration>, activation: bool) -> (ObjectDatabase, Arc<()>) {
+pub(super) fn foreign_port(
+    registration: &Arc<Registration>,
+    activation: bool,
+) -> (ObjectDatabase, Arc<()>) {
     let mut db = ObjectDatabase::new();
     let config = BipPortConfig {
         ip_address: [127, 0, 0, 1],
