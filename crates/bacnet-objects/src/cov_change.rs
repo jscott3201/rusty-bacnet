@@ -47,7 +47,7 @@ pub fn effective_increment(
 ) -> Option<f64> {
     let explicit = explicit.map(f64::from);
     if numeric && property == PropertyIdentifier::PRESENT_VALUE {
-        explicit.or_else(|| object.cov_increment())
+        explicit.or_else(|| object.cov().and_then(|cov| cov.cov_increment()))
     } else {
         explicit
     }

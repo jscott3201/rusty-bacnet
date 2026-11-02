@@ -156,7 +156,10 @@ fn assert_cov_increment_row(object: &mut dyn BACnetObject, zero: PropertyValue) 
     );
     // Tables 12-46, 12-50 and 12-51 footnote 3: required of an object that
     // reports COV, as these do (#2193).
-    assert!(object.supports_cov(), "{kind:?}");
+    assert!(
+        object.cov().is_some_and(|cov| cov.supports_subscribe_cov()),
+        "{kind:?}"
+    );
     assert!(
         crate::property_metadata::required_properties(&object.property_metadata())
             .any(|required| required == cov),
@@ -166,7 +169,11 @@ fn assert_cov_increment_row(object: &mut dyn BACnetObject, zero: PropertyValue) 
     assert!(!object.is_array_property(cov), "{kind:?}");
     // A new object notifies on any change.
     assert_eq!(read(object, cov), zero, "{kind:?}");
-    assert_eq!(object.cov_increment(), Some(0.0), "{kind:?}");
+    assert_eq!(
+        object.cov().and_then(|cov| cov.cov_increment()),
+        Some(0.0),
+        "{kind:?}"
+    );
 }
 
 #[test]
@@ -184,7 +191,11 @@ fn integer_value_types_serve_an_unsigned_cov_increment() {
                 .write_property(cov, None, PropertyValue::Unsigned(value), None)
                 .unwrap();
             assert_eq!(read(&*object, cov), PropertyValue::Unsigned(value));
-            assert_eq!(object.cov_increment(), Some(value as f64), "{kind:?}");
+            assert_eq!(
+                object.cov().and_then(|cov| cov.cov_increment()),
+                Some(value as f64),
+                "{kind:?}"
+            );
         }
         // Only Unsigned is the table's datatype; a negative can't be one.
         for value in [
@@ -220,7 +231,7 @@ fn large_analog_value_serves_a_double_cov_increment_and_refuses_bad_ones() {
         lav.write_property(cov, None, PropertyValue::Double(value), None)
             .unwrap();
         assert_eq!(read(&lav, cov), PropertyValue::Double(value));
-        assert_eq!(lav.cov_increment(), Some(value));
+        assert_eq!(lav.cov().and_then(|cov| cov.cov_increment()), Some(value));
     }
     lav.write_property(cov, None, PropertyValue::Double(0.1), None)
         .unwrap();
@@ -262,6 +273,10 @@ fn non_numeric_value_types_have_no_cov_increment() {
             object.read_property(PropertyIdentifier::COV_INCREMENT, None),
             ErrorCode::UNKNOWN_PROPERTY,
         );
-        assert_eq!(object.cov_increment(), None, "{kind:?}");
+        assert_eq!(
+            object.cov().and_then(|cov| cov.cov_increment()),
+            None,
+            "{kind:?}"
+        );
     }
 }

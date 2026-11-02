@@ -161,7 +161,7 @@ fn apply_silenced_operation(
 
 /// Properties a Point or Zone offers for property COV, in the order an
 /// operation outcome reports their deltas.
-const COV_PROPERTIES: [PropertyIdentifier; 5] = [
+pub const COV_PROPERTIES: [PropertyIdentifier; 5] = [
     PropertyIdentifier::PRESENT_VALUE,
     PropertyIdentifier::TRACKING_VALUE,
     PropertyIdentifier::SILENCED,
@@ -502,13 +502,7 @@ impl BACnetObject for LifeSafetyPointObject {
         metadata::for_point(self)
     }
 
-    fn supports_cov(&self) -> bool {
-        true
-    }
-
-    fn supports_cov_property(&self, property: PropertyIdentifier) -> bool {
-        COV_PROPERTIES.contains(&property)
-    }
+    crate::traits::lend_cov_reporting!();
 
     crate::traits::lend_reliability_eval!();
 
@@ -518,6 +512,12 @@ impl BACnetObject for LifeSafetyPointObject {
 
     fn life_safety(&mut self) -> Option<&mut dyn crate::traits::LifeSafety> {
         Some(self)
+    }
+}
+
+impl crate::traits::CovReporting for LifeSafetyPointObject {
+    fn supports_cov_property(&self, property: PropertyIdentifier) -> bool {
+        COV_PROPERTIES.contains(&property)
     }
 }
 
@@ -824,13 +824,7 @@ impl BACnetObject for LifeSafetyZoneObject {
         metadata::for_zone(self)
     }
 
-    fn supports_cov(&self) -> bool {
-        true
-    }
-
-    fn supports_cov_property(&self, property: PropertyIdentifier) -> bool {
-        COV_PROPERTIES.contains(&property)
-    }
+    crate::traits::lend_cov_reporting!();
 
     crate::traits::lend_reliability_eval!();
 
@@ -840,6 +834,12 @@ impl BACnetObject for LifeSafetyZoneObject {
 
     fn life_safety(&mut self) -> Option<&mut dyn crate::traits::LifeSafety> {
         Some(self)
+    }
+}
+
+impl crate::traits::CovReporting for LifeSafetyZoneObject {
+    fn supports_cov_property(&self, property: PropertyIdentifier) -> bool {
+        COV_PROPERTIES.contains(&property)
     }
 }
 

@@ -9,9 +9,9 @@ use bacnet_objects::durable::DurableWrites;
 use bacnet_objects::file::{FileConfiguration, FileStorage};
 use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::traits::{
-    AccessEvents, AuditLog, AuditPolicy, BACnetObject, CalendarState, CommandRunner,
-    CovReportedProperty, EnrollmentEval, EventReporting, LifeSafety, LocalInput, LogBuffer,
-    ReliabilityEval, ScheduleRunner, StagingSource, Timed,
+    AccessEvents, AuditLog, AuditPolicy, BACnetObject, CalendarState, CommandRunner, CovReporting,
+    EnrollmentEval, EventReporting, LifeSafety, LocalInput, LogBuffer, ReliabilityEval,
+    ScheduleRunner, StagingSource, Timed,
 };
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
 use bacnet_types::error::Error;
@@ -170,14 +170,6 @@ impl BACnetObject for SourceReporter {
         !self.active() && self.wrapped.is_deleteable()
     }
 
-    fn supports_cov(&self) -> bool {
-        self.wrapped.supports_cov()
-    }
-
-    fn supports_subscribe_cov_property(&self) -> bool {
-        self.wrapped.supports_subscribe_cov_property()
-    }
-
     fn staging_source(&mut self) -> Option<&mut dyn StagingSource> {
         self.wrapped.staging_source()
     }
@@ -230,20 +222,8 @@ impl BACnetObject for SourceReporter {
         self.wrapped.calendar_state()
     }
 
-    fn supports_cov_property(&self, property: PropertyIdentifier) -> bool {
-        self.wrapped.supports_cov_property(property)
-    }
-
-    fn cov_increment(&self) -> Option<f64> {
-        self.wrapped.cov_increment()
-    }
-
-    fn cov_reported_properties(&self) -> &'static [CovReportedProperty] {
-        self.wrapped.cov_reported_properties()
-    }
-
-    fn set_overridden(&mut self, overridden: bool) {
-        self.wrapped.set_overridden(overridden)
+    fn cov(&self) -> Option<&dyn CovReporting> {
+        self.wrapped.cov()
     }
 
     fn audit_log(&self) -> Option<&dyn AuditLog> {

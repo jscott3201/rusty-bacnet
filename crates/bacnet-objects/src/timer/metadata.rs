@@ -157,7 +157,7 @@ mod tests {
             metadata.len()
         );
         assert!(object.is_deleteable());
-        assert!(!object.supports_cov());
+        assert!(!object.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
         for row in metadata.iter() {
             let p = row.property_identifier;
             let ranged = matches!(p, P::MIN_PRES_VALUE | P::MAX_PRES_VALUE);

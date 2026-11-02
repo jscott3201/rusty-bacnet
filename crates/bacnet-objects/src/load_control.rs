@@ -243,9 +243,9 @@ impl BACnetObject for LoadControlObject {
         metadata::for_object(self)
     }
 
-    /// Table 13-1 lists Load Control, so it takes SubscribeCOV; the shed
-    /// rows it reports come from the trait default.
-    fn supports_cov(&self) -> bool {
-        true
-    }
+    // Table 13-1 lists Load Control, so it takes SubscribeCOV; the shed
+    // rows it reports are that row's (the default).
+    crate::traits::lend_cov_reporting!();
 }
+
+impl crate::traits::CovReporting for LoadControlObject {}

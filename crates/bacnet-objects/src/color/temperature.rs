@@ -625,14 +625,14 @@ impl BACnetObject for ColorTemperatureObject {
         self.profile.capability()
     }
 
-    fn supports_cov(&self) -> bool {
-        true
-    }
+    crate::traits::lend_cov_reporting!();
 
     fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
         Some(self)
     }
 }
+
+impl crate::traits::CovReporting for ColorTemperatureObject {}
 
 crate::traits::impl_audit_policy!(ColorTemperatureObject);
 
