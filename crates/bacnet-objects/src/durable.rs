@@ -83,9 +83,12 @@
 //!
 //! The writer's thread is a plain `std` thread with no Tokio runtime, so a
 //! storage implementation that needs one brings its own handle. A storage
-//! call that panics fails that save. An object starts the thread with its
-//! first save and keeps it, parked while idle, until the object is dropped:
-//! one thread per object that has saved.
+//! call that panics fails that save. A save starts the thread when none is
+//! running, and the thread ends once the object has queued nothing for a
+//! while (#1956), so a device with many durable objects holds a thread only
+//! for each one that is saving. Saves stay in order across a new thread:
+//! the old one ends only with nothing queued, and the object joins it
+//! before it starts the next.
 //!
 //! Without std there are no threads: each save runs on the caller's thread
 //! before the call that queued it returns, so every wait is already over

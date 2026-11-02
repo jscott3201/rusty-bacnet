@@ -294,8 +294,8 @@ impl<R: SnapshotRecord> LogStore<R> {
     }
 
     /// The log is dropping. With the in-memory test backend, its final
-    /// commit may run on the caller's thread when no writer thread has
-    /// started (`SaveWriter::closing`), sparing the fuzz targets a thread
+    /// commit may run on the caller's thread when no writer thread is
+    /// running (`SaveWriter::closing`), sparing the fuzz targets a thread
     /// per input (#2233). Any other storage keeps the writer thread: a
     /// `LogPersistence::commit` is documented to run there, outside any
     /// async runtime.

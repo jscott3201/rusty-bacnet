@@ -348,3 +348,108 @@ fn a_closing_writer_with_a_thread_keeps_saving_on_it() {
     let caller = std::thread::current().id();
     assert!(gate.threads.lock().unwrap().iter().all(|id| *id != caller));
 }
+
+/// A thread with nothing left to save ends (none waits in tests), and the
+/// next save starts another, in order after the first (#1956).
+#[test]
+fn an_idle_thread_ends_and_the_next_save_starts_another() {
+    let (gate, handle) = gate();
+    let mut writer = writer(&gate);
+    let first = writer.submit(1);
+    assert_eq!(handle.started.recv_timeout(WAIT).unwrap(), 1);
+    handle.release.send(Ok(())).unwrap();
+    assert!(first.take_outcome().is_ok());
+    assert!(writer.thread_ended(), "the idle thread still runs");
+    let second = writer.submit(2);
+    assert_eq!(handle.started.recv_timeout(WAIT).unwrap(), 2);
+    handle.release.send(Ok(())).unwrap();
+    assert!(second.take_outcome().is_ok());
+    assert_eq!(writer.threads_started(), 2);
+    assert_eq!(*gate.saved.lock().unwrap(), [1, 2]);
+    let threads = gate.threads.lock().unwrap().clone();
+    assert_ne!(
+        threads[0], threads[1],
+        "a second thread made the second save"
+    );
+}
+
+/// Within its idle period a thread waits for the next save and makes it:
+/// two saves, one thread, still running until the writer goes.
+#[test]
+fn a_thread_waits_out_its_idle_period_for_the_next_save() {
+    let saved = Arc::new(Mutex::new(Vec::new()));
+    let saving = Arc::clone(&saved);
+    let mut writer = SaveWriter::idling_for(Duration::from_secs(3600), move |n: &u32| {
+        saving.lock().unwrap().push(*n);
+        Ok(())
+    });
+    assert!(writer.submit(1).take_outcome().is_ok());
+    assert!(writer.submit(2).take_outcome().is_ok());
+    assert_eq!(writer.threads_started(), 1);
+    assert!(writer.thread_running());
+    // The drop ends the waiting thread at once and joins it.
+    drop(writer);
+    assert_eq!(*saved.lock().unwrap(), [1, 2]);
+}
+
+/// Saves queued as the thread ends land in order, each once: whichever of
+/// the end and the queueing takes the queue's lock first, the save finds a
+/// thread to wake or starts one. Each round lets the thread end, or race
+/// it.
+#[test]
+fn saves_queued_as_the_thread_ends_are_all_made_in_order() {
+    let saved = Arc::new(Mutex::new(Vec::new()));
+    let saving = Arc::clone(&saved);
+    let mut writer = SaveWriter::idling_for(Duration::ZERO, move |n: &u32| {
+        saving.lock().unwrap().push(*n);
+        Ok(())
+    });
+    let mut tickets = Vec::new();
+    for n in 0..400 {
+        if n % 2 == 0 {
+            writer.submit_coalescing(n);
+        } else {
+            tickets.push(writer.submit(n));
+        }
+        if n % 7 == 0 {
+            writer.wait_idle();
+        }
+    }
+    drop(writer);
+    assert!(
+        tickets
+            .iter()
+            .all(|ticket| ticket.succeeded() == Some(true))
+    );
+    let saved = saved.lock().unwrap().clone();
+    // Coalescing may skip an unwaited save, never reorder or repeat one.
+    assert!(saved.windows(2).all(|pair| pair[0] < pair[1]), "{saved:?}");
+    assert_eq!(saved.last(), Some(&399));
+    for ticketed in (1..400).step_by(2) {
+        assert!(saved.contains(&ticketed), "save {ticketed} was lost");
+    }
+}
+
+/// A closing writer whose thread ended saves on the caller's thread, as one
+/// that never started a thread does.
+#[test]
+fn a_closing_writer_whose_thread_ended_saves_on_the_callers_thread() {
+    let saved = Arc::new(Mutex::new(Vec::new()));
+    let saving = Arc::clone(&saved);
+    let mut writer = SaveWriter::idling_for(Duration::ZERO, move |n: &u32| {
+        saving
+            .lock()
+            .unwrap()
+            .push((*n, std::thread::current().id()));
+        Ok(())
+    });
+    assert!(writer.submit(1).take_outcome().is_ok());
+    assert!(writer.thread_ended());
+    writer.closing();
+    writer.submit_coalescing(2);
+    let caller = std::thread::current().id();
+    let saved = saved.lock().unwrap().clone();
+    assert_ne!(saved[0].1, caller);
+    assert_eq!(saved[1], (2, caller));
+    assert_eq!(writer.threads_started(), 1);
+}

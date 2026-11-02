@@ -6671,9 +6671,10 @@ object, keeps Present_Value in an `Arc<dyn ColorOutputPersistence>`
 Present_Value; `output_restored` says whether it did. The object saves each new
 Present_Value, whether a write, a command, a STOP or the start set it, on its
 own writer thread (see `bacnet_objects::durable`), so nothing touches storage
-under the database guard. As with the other durable objects, each colour
-object with storage keeps that thread, parked while idle, for as long as it
-lives: one thread per object, which matters for a device with many of them. Unlike a Notification Class's Recipient_List, a change doesn't wait
+under the database guard. As with the other durable objects, that thread
+ends once the object has saved nothing for a while and the next save starts
+another, so a device with many colour objects holds no thread for an idle
+one (#1956). Unlike a Notification Class's Recipient_List, a change doesn't wait
 for its save and isn't refused when the save fails: the value is a live
 output, and it keeps working while storage doesn't. The cost is that the
 stored value can lag the served one after a failed save, so a restart in

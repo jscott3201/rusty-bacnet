@@ -4,7 +4,7 @@
 //!
 //! The saves go through a [`SaveWriter`], the writer type the durable
 //! objects share ([`crate::durable`]); each object with storage owns one,
-//! with its own thread for as long as the object lives. A save is queued
+//! with a thread of its own while it saves (#1956). A save is queued
 //! under the database guard, runs on that thread, and is coalesced while one
 //! waits to start. Nothing is staged. A failed save isn't retried at once:
 //! the next change, the server's stop or the object's drop tries again. The server's `stop()` asks the object to settle
