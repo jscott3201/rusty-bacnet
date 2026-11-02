@@ -250,27 +250,20 @@ fn attached<T: TransportPort + 'static>(
             "attached to the TUI, a revert goes to one device at a time: name the entries of \
              one device",
         )),
-        // Nothing to put back: no prompt, and the desk sends nothing.
+        // Nothing to put back: no prompt, and no job, so nothing unconfirmed
+        // can be sent, whatever entry holds these ids by then. Each is
+        // reported from the ledger as read.
         _ => {
             let left = entries.iter().filter(|e| ours(e, &ctx.principal)).count();
-            // Entries with nothing to put back are reported, not sent.
-            let ids: BTreeSet<u64> = entries
+            let unknown = || Outcome::NotSent(bacnet_ops::safety::desk::UNKNOWN_PRE_IMAGE.into());
+            let done: Vec<(Entry, Outcome)> = entries
                 .iter()
                 .filter(|e| {
                     ours(e, &ctx.principal) && wanted.as_ref().is_none_or(|ids| ids.contains(&e.id))
                 })
-                .map(|e| e.id)
+                .map(|e| (e.clone(), unknown()))
                 .collect();
-            let job = super::write_attached::revert(
-                Arc::clone(ctx),
-                Arc::clone(&account),
-                (ids, None),
-                fields.clone(),
-            );
-            let work = async move {
-                let (done, _) = job.await?;
-                body(&done, left)
-            };
+            let work = async move { body(&done, left) };
             Ok(Step::Sending(hand_off(
                 ctx, workspace, account, sending, fields, work,
             )))

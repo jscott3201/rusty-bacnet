@@ -63,8 +63,8 @@ enum Work {
     },
     Revert {
         wanted: BTreeSet<u64>,
-        /// What the person confirmed; none when there was nothing to show.
-        confirmed: Option<Box<Preview>>,
+        /// What the person confirmed: a revert is never sent unconfirmed.
+        confirmed: Box<Preview>,
         done: oneshot::Sender<Result<Reverted, ToolError>>,
     },
 }
@@ -190,9 +190,7 @@ impl<T: TransportPort + 'static> DeskJob<T> {
                 };
                 // Exactly what was confirmed, or nothing (#2185).
                 let current: Vec<Entry> = desk.entries().into_iter().filter(chosen).collect();
-                let stale = confirmed
-                    .as_deref()
-                    .and_then(|confirmed| changed(confirmed, &current, &ctx.policy));
+                let stale = changed(&confirmed, &current, &ctx.policy);
                 if let Some(detail) = stale {
                     let fields = json!({ "why": "stale", "detail": detail });
                     desk.record(&caller, "declined", fields).await;
@@ -232,7 +230,7 @@ const ENDED: &str = "the TUI's session ended before the change went; nothing was
 pub(crate) async fn revert<T: TransportPort + 'static>(
     ctx: Arc<Ctx<T>>,
     account: Arc<Account>,
-    (wanted, confirmed): (BTreeSet<u64>, Option<Box<Preview>>),
+    (wanted, confirmed): (BTreeSet<u64>, Box<Preview>),
     fields: Map<String, Value>,
 ) -> Result<Reverted, ToolError> {
     let attached = ctx.attached.as_ref().expect("an attached session");
@@ -291,11 +289,10 @@ pub(crate) async fn approve<T: TransportPort + 'static>(
             let sending = write_task::sending();
             let handoff: Handoff = match reverting {
                 Some(ids) => {
-                    let confirmed = Some(preview);
                     let job = revert(
                         Arc::clone(ctx),
                         Arc::clone(&account),
-                        (ids, confirmed),
+                        (ids, preview),
                         fields.clone(),
                     );
                     let work = async move {

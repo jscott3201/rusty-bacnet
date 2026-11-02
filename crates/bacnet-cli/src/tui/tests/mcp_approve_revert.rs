@@ -146,3 +146,33 @@ async fn undoing_relinquish_default_is_t3() {
     site.quit().await;
     site.stop().await;
 }
+
+/// A revert of an entry with nothing to put back asks nothing and sends
+/// nothing, even when the entry that id names by then has a pre-image:
+/// the ledger as read says entry 1 is unknown, the TUI's own holds a write
+/// to slot 8 under that id, and slot 8 keeps it.
+#[tokio::test(start_paused = true)]
+async fn nothing_to_put_back_sends_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut site = armed_site(dir.path()).await;
+    written(&mut site, dir.path(), 42, 8).await;
+    // The file the call reads now says entry 1's old value is unknown.
+    let path = dir.path().join("ledger.json");
+    let mut file: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    file["entries"][0]["before"] = Value::Null;
+    file["entries"][0]["commandable"] = json!(false);
+    std::fs::write(&path, file.to_string()).unwrap();
+    let mut undo = asking(dir.path(), revert(3, &[1])).await;
+    let (_agent, answer) = site.pump_while(&mut undo).await;
+    assert!(shown(&site.app).is_none(), "nothing to confirm");
+    let outcome = answer["result"]["structuredContent"]["results"][0]["outcome"].to_string();
+    assert!(outcome.contains("old value"), "{answer}");
+    assert_eq!(
+        slot(&site, 8).await,
+        PropertyValue::Real(42.0),
+        "not undone"
+    );
+    assert_eq!(site.app.safety.ledger.len(), 1, "the entry stays");
+    site.quit().await;
+    site.stop().await;
+}
