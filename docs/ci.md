@@ -907,10 +907,12 @@ candidate isn't accepted.
   scripts/perf`.
 - **On GitHub:** `.github/workflows/perf-counts.yml`, `workflow_dispatch`
   only, on the `ubuntu-24.04-arm` runner, with the baseline ref, the
-  candidate ref and the workloads as inputs; the same ref twice measures the
-  noise floor. It runs the script's tests first, puts the verdict table in
-  the run summary and uploads the tables and the raw callgrind files as
-  artifacts. Its job is named "Perf counts: ...", so it never stands in for
+  candidate ref, the workloads and the aim as inputs (`rp` for an
+  optimization, `none` for the no-regression check); the same ref twice
+  measures the noise floor. It runs the script's tests first, puts the
+  verdict table in the run summary, writes per-function changes to
+  `attribution.md` when the comparison fails, and uploads the tables and
+  the raw callgrind files as artifacts. Its job is named "Perf counts: ...", so it never stands in for
   CI OK or Native OK.
 
 ### Runner
@@ -1521,8 +1523,18 @@ can't work.
 - **Fuzz: `<target>`**, one job per target from that list, so a new
   `[[bin]]` runs without a workflow change, builds its target and runs it.
   cargo-fuzz's defaults apply: optimized, with debug assertions, overflow
-  checks and AddressSanitizer. An input that runs for 10 seconds counts as a
-  hang. On a scheduled or manual run on `dev` it then minimizes the corpus
+  checks and AddressSanitizer. The object crate's restore targets are the
+  exception (#2233): `fuzz.sh` names them and builds, runs and minimizes
+  them with no sanitizer (`-s none`); any other target keeps it. They check
+  for a panic and a broken round trip, which need no sanitizer, and the
+  workspace crates they link (bacnet-objects, bacnet-types, bacnet-encoding,
+  bacnet-npdu) forbid unsafe code. AddressSanitizer would only add checks
+  for memory errors in the unsafe code of their other dependencies (std,
+  bytes, smallvec, tracing, once_cell, libc and libfuzzer-sys), which are
+  fuzzed upstream. They run about 2.7 times faster without it, and the
+  harness's own allocator keeps libFuzzer's 2,048 MB limit on one
+  allocation. An input that runs for 10 seconds counts as a hang. On a
+  scheduled or manual run on `dev` it then minimizes the corpus
   (`fuzz.sh cmin`) and saves it.
 - **Fuzz: advisories**, on scheduled and manual runs only, checks each fuzz
   crate's lockfile against the RustSec advisories with Cargo Deny (at
@@ -1857,12 +1869,14 @@ cargo llvm-cov clean --workspace                               # drop the instru
 A `const` item is evaluated at build time, so the `const fn` that fills it is
 never called at run time and reports as uncovered, however many tests read
 the item. The row tables of both trend objects (`trend/metadata.rs`,
-`trend/multiple_metadata.rs`) are built this way. Each
-file has a `rows_tests` module that calls its `rows` builder at run time,
-with the argument behind `core::hint::black_box` so the call can't be
-folded, and checks the result against the `const` tables (#2183). Nothing is
-excluded from the report. A new `const fn` table gets the same kind of
-test, so per-file numbers stay trustworthy.
+`trend/multiple_metadata.rs`), of the File and Device objects
+(`file/metadata.rs`, `device/metadata.rs`), the logs' BUFFER_READY rows
+(`log_reporting.rs`) and the CreateObject table (`creation.rs`) are built
+this way. A test beside each calls its builder at run time, with the
+argument behind `core::hint::black_box` so the call can't be folded, and
+checks the result against the `const` table (#2183). Nothing is excluded
+from the report. A new `const fn` table gets the same kind of test, so
+per-file numbers stay trustworthy.
 
 ## Merge evidence
 
@@ -2038,7 +2052,7 @@ waits for them (see [CI gate](#ci-gate)).
 | Validate | Runs the release script tests (`scripts/release/test_*.py`, `scripts/test_changelog.py`). Checks, with `release_version.py`, that every publishable crate has the workspace version, except `bacnet-time`, which versions on its own, and, for a tag, that the tag is `v<version>` and the commit is on `dev`'s or `main`'s first-parent history (`git rev-list --first-parent`), so a commit inside a merged PR's branch doesn't qualify. For a tag, checks that no `changelog.d/` fragment is left unassembled. Extracts the notes with `changelog_notes.py` and writes `THIRD-PARTY-NOTICES`. |
 | CI gate | `ci_gate.py` on the release commit (a PR's head on a PR's dry run). On a tag it waits for the CI run the tag's push started; a dry run checks once and only warns. See [CI gate](#ci-gate). |
 | Crates and sdist | `cargo publish --workspace --dry-run --locked`, which packages every publishable crate and builds each against the others as published. Then `cargo package` for the `crates` artifact, and `maturin sdist`. |
-| Build (linux-x86_64, linux-aarch64, macos-x86_64, macos-arm64, windows-x86_64) | The wheels for CPython 3.11 to 3.14 (`PYTHONS`) and the CLI, on each platform's own runner. See [Builds](#builds). |
+| Build (linux-x86_64, linux-aarch64, macos-x86_64, macos-arm64, windows-x86_64) | The wheels for CPython 3.11 to 3.14 (`PYTHONS`) and the CLI, on each platform's own runner, then the CLI's MCP bundle from that binary (`mcpb.py pack`, no second build). See [Builds](#builds) and [MCP bundles](#mcp-bundles). |
 | Check the artifacts | `check_artifacts.py` over every file, then the `release-assets` artifact: what the publish jobs upload. See below. |
 | Smoke test (Linux x86_64, Linux aarch64, macOS arm64, macOS x86_64, Windows x86_64) | Each platform's wheels and CLI, run on that platform. See [Smoke tests](#smoke-tests). |
 | Publish plan (dry run) | Dry runs only, read only: `release_api.py plan` and `publish_crates.sh --dry-run`. See [Publish plan](#publish-plan-dry-run). |
@@ -2058,7 +2072,9 @@ libraries, and only Python's C API left to a flat lookup (`llvm-objdump`);
 PE with only the expected DLLs (`llvm-readobj`). Output that parses to
 nothing fails (no bind table, no Python lookups in an extension module, no
 `kernel32.dll` import). `llvm-objdump` and `llvm-readobj` come from the
-pinned toolchain's `llvm-tools`.
+pinned toolchain's `llvm-tools`. Each MCP bundle must pass `mcpb.py check`,
+with its executable byte for byte the CLI binary of its platform (see
+[MCP bundles](#mcp-bundles)).
 
 **Order.** The publish jobs run only for a tag, and only after Validate, the
 CI gate, the artifact check and every smoke test passed. They run one at a
@@ -2173,6 +2189,15 @@ one failing doesn't cancel the others.
   `capture --read` also decodes a one-packet pcap file, through the static
   libpcap and its filter compiler, without needing capture privileges. The
   macOS and Windows builds have no packet capture.
+- **MCP bundle.** `mcpb.py smoke` on the platform's bundle, with the cp312
+  venv's Python: it unzips the bundle as a host does, then runs the
+  manifest's command three times with `BACNET_CONFIG_DIR` set to a scratch
+  directory. A missing profile and an unauthorized one must each stop the
+  server by itself, with stdin still open, with a message naming `bacnet mcp
+  authorize`; the authorized read-only profile
+  [`mcpb/smoke-profile.toml`](../scripts/release/mcpb/smoke-profile.toml)
+  must answer `initialize` with a read-only title and `tools/list` with
+  exactly the manifest's tools, each annotated read-only.
 - **Python suite** (Linux): `python -m unittest discover -s
   crates/rusty-bacnet/tests` against the installed cp312 wheel.
 - **glibc 2.17** (Linux):
@@ -2272,6 +2297,9 @@ version isn't on crates.io yet.
     capture;
   - `bacnet-macos-amd64`, `bacnet-macos-arm64` and `bacnet-windows-amd64.exe`,
     with BACnet/SC (no packet capture, as in 0.11.0);
+  - an MCP bundle of each CLI binary, `bacnet-<platform>.mcpb`: the
+    binary's asset name with `.mcpb` for `.exe` (see
+    [MCP bundles](#mcp-bundles));
   - `rusty_bacnet-<version>.tar.gz`, the sdist;
   - twenty wheels, `rusty_bacnet-<version>-cp3XY-cp3XY-<platform>.whl` for
     CPython 3.11 to 3.14 on five platforms:
@@ -2298,6 +2326,32 @@ RHEL/CentOS 7, Debian 8, Ubuntu 14.04 and later: they are built on glibc 2.17
 itself. The CLI links libpcap statically. Debian and Ubuntu name the shared
 library `libpcap.so.0.8` and RHEL `libpcap.so.1`, so no single dynamically
 linked binary could run on both.
+
+### MCP bundles
+
+Each build job packs its CLI binary into an MCP bundle for Claude Desktop
+(#2304) with [`mcpb.py pack`](../scripts/release/mcpb.py), from the binary in
+`out/`, so the bundle travels in the `cli-<platform>` artifact. A bundle is a
+zip of the MCP Bundle format, manifest version 0.3
+(`modelcontextprotocol/mcpb`): `manifest.json`, the binary as
+`server/bacnet` (`server/bacnet.exe` on Windows, mode 755 either way),
+`LICENSE` and `THIRD-PARTY-NOTICES`. The manifest comes from
+[`mcpb/manifest.json`](../scripts/release/mcpb/manifest.json) with the
+release version, the entry point and the one OS the bundle is for. It runs
+`bacnet mcp serve --stdio --profile <profile>`, where the profile is the
+bundle's one setting. The format names the OS but not the architecture, so
+there is one bundle per platform. Entries are in a fixed order with the
+commit's time, so a rebuild of the same binary packs the same bytes.
+
+No Node.js runs in the release: `mcpb.py check` holds a transcription of the
+0.3 schema plus the checks `mcpb validate` adds (the entry point exists and
+is executable, and `mcp_config` uses only variables a host substitutes).
+`@anthropic-ai/mcpb` 2.1.2's `mcpb validate` accepted the manifests when this
+was written; run it again by hand after a format change. The smoke profile
+records an authorization, because a host can't run `bacnet mcp authorize`;
+`crates/bacnet-cli/tests/mcp_stdio.rs` serves it on every CI run and compares
+its tools with the manifest's, so a change to the profile format or the
+tool list fails there before a release.
 
 ### Builds
 

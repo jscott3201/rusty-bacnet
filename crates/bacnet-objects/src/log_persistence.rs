@@ -205,17 +205,19 @@ impl Default for LogCommitCadence {
     }
 }
 
-#[cfg(all(test, feature = "std"))]
+#[cfg(test)]
 mod tests;
 
+// std: these reopen logs through the file backend.
 #[cfg(all(test, feature = "std"))]
 mod reopen_tests;
 
-#[cfg(all(test, feature = "std"))]
+#[cfg(test)]
 mod cadence_tests;
 
+// std: these reopen logs through the file backend.
 #[cfg(all(test, feature = "std"))]
 mod reopen_fit_tests;
 
-#[cfg(all(test, feature = "std"))]
+#[cfg(test)]
 mod codec_tests;

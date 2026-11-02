@@ -2,8 +2,10 @@
 //! (#1423), and a write the object won't make leaves a write staged for
 //! another request alone (#1424).
 
+#[cfg(feature = "std")]
+use super::test_storage::WAIT;
 use super::test_storage::{
-    MemoryPersistence, WAIT, assert_refused, block_on, octets, persistent, positive_only, write,
+    MemoryPersistence, assert_refused, block_on, octets, persistent, positive_only, write,
     write_positive, zone_rule,
 };
 use super::*;
@@ -61,6 +63,8 @@ fn provisioned() -> AccessRightsSnapshot {
     }
 }
 
+// std: holds a save open on the writer thread.
+#[cfg(feature = "std")]
 #[test]
 fn a_requests_writes_stage_one_save_and_each_takes_its_step() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -171,6 +175,8 @@ fn staging_ends_at_a_write_the_object_will_refuse_and_passes_a_null_by() {
     assert!(rights.enable());
 }
 
+// std: holds a save open on the writer thread.
+#[cfg(feature = "std")]
 #[test]
 fn a_write_the_object_wont_make_leaves_another_requests_staged_write_alone() {
     let storage = Arc::new(MemoryPersistence::default());

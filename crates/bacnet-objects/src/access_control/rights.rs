@@ -419,15 +419,15 @@ mod tests;
 #[path = "rights_test_storage.rs"]
 mod test_storage;
 
-#[cfg(all(test, feature = "std"))]
+#[cfg(test)]
 #[path = "rights_persistence_tests.rs"]
 mod persistence_tests;
 
-#[cfg(all(test, feature = "std"))]
+#[cfg(test)]
 #[path = "rights_staging_tests.rs"]
 mod staging_tests;
 
-#[cfg(all(test, feature = "std"))]
+#[cfg(test)]
 #[path = "rights_fold_tests.rs"]
 mod fold_tests;
 

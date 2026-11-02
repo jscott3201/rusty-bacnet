@@ -116,3 +116,34 @@ fn each_entrys_creation_only_answers_come_from_the_type_its_constructor_builds()
         assert_eq!(built, (entry.creation_only.type_id)(), "{kind:?}");
     }
 }
+
+/// `BUILTIN` is a `const`, filled in at build time, so a coverage run sees
+/// `creatable` and `fixed` as never called. Calling them here at run time
+/// checks they build what the table holds (#2183).
+#[test]
+fn the_table_entries_are_what_their_builders_make_at_run_time() {
+    use core::hint::black_box;
+    let held = entry(ObjectType::DEVICE).unwrap();
+    let device = fixed(black_box(ObjectType::DEVICE));
+    assert_eq!(device.object_type, held.object_type);
+    assert!(device.constructor.is_none() && held.constructor.is_none());
+    assert_eq!(device.deleteable, held.deleteable);
+    assert_eq!(
+        device.creation_only.properties(),
+        held.creation_only.properties()
+    );
+
+    let held = entry(ObjectType::ANALOG_VALUE).unwrap();
+    let analog = creatable::<AnalogValueObject>(
+        black_box(ObjectType::ANALOG_VALUE),
+        held.constructor.unwrap(),
+    );
+    assert_eq!(analog.object_type, held.object_type);
+    assert!(analog.constructor.is_some());
+    assert_eq!(analog.deleteable, held.deleteable);
+    assert_eq!(analog.creation_only.properties(), [P::UNITS]);
+    assert_eq!(
+        (analog.creation_only.type_id)(),
+        (held.creation_only.type_id)()
+    );
+}

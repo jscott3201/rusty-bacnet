@@ -461,3 +461,6 @@ fn fill_missing<T: Clone>(stored: &mut Option<T>, incoming: &Option<T>) {
         stored.clone_from(incoming);
     }
 }
+
+#[cfg(test)]
+mod timestamp_tests;

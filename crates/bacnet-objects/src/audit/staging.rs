@@ -423,7 +423,7 @@ impl AuditLogObject {
     }
 
     /// Block until every queued commit has run.
-    #[cfg(all(test, feature = "std"))]
+    #[cfg(test)]
     pub(super) fn wait_for_commits(&self) {
         self.writer.wait_idle();
     }

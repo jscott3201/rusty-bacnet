@@ -102,6 +102,26 @@ cargo_fuzz() {
   cargo "+$nightly" fuzz "$subcommand" --target "$host" "$@"
 }
 
+# sanitizer TARGET: the sanitizer TARGET builds with (#2233). The object
+# crate's restore targets, named here, build with none; every other target,
+# a new one in bacnet-objects/fuzz included, keeps cargo-fuzz's default,
+# address. The restore targets assert no panic and a round trip, which need
+# no sanitizer. The workspace crates they link (bacnet-objects,
+# bacnet-types, bacnet-encoding, bacnet-npdu) all #![forbid(unsafe_code)];
+# AddressSanitizer would add checks for out-of-bounds access, use after
+# free and leaks only in the unsafe code of the rest they link: std, bytes,
+# smallvec, tracing, tracing-core and once_cell, libc (errno constants
+# only), and libfuzzer-sys with arbitrary, all fuzzed and audited upstream.
+# Without it a run makes about 2.7 times the executions. The harness's own
+# global allocator keeps libFuzzer's 2,048 MB limit on a single allocation.
+sanitizer() {
+  case $1 in
+    log_restore | log_restore_file | audit_restore | audit_restore_file \
+      | object_file_restore | object_file_restore_file) echo none ;;
+    *) echo address ;;
+  esac
+}
+
 # locked CRATE: fail unless CRATE's fuzz lockfile is current. Any cargo can
 # tell, so this runs whichever the caller has.
 locked() {
@@ -160,12 +180,24 @@ case $command in
     if [ "$#" -eq 1 ]; then
       crate=$(crate_of "$1")
       locked "$crate"
-      (cd "$root/crates/$crate" && cargo_fuzz build "$1")
+      (cd "$root/crates/$crate" && cargo_fuzz build -s "$(sanitizer "$1")" "$1")
     else
       for crate in "${crates[@]}"; do
         echo "==> $crate"
         locked "$crate"
-        (cd "$root/crates/$crate" && cargo_fuzz build)
+        # One build for a crate whose targets share the default sanitizer;
+        # otherwise each target with its own.
+        mixed=
+        for target in $(targets "$crate"); do
+          [ "$(sanitizer "$target")" = address ] || mixed=1
+        done
+        if [ -z "$mixed" ]; then
+          (cd "$root/crates/$crate" && cargo_fuzz build)
+        else
+          for target in $(targets "$crate"); do
+            (cd "$root/crates/$crate" && cargo_fuzz build -s "$(sanitizer "$target")" "$target")
+          done
+        fi
       done
     fi ;;
   run)
@@ -198,7 +230,7 @@ case $command in
     # A positional corpus directory replaces cargo-fuzz's default one; a
     # later -artifact_prefix overrides the one cargo-fuzz passes. A single
     # input that runs 10 seconds is a hang.
-    in_crate "$crate" "$target" cargo_fuzz run "$target" ${corpus:+"$corpus"} ${seeds:+"$seeds"} -- \
+    in_crate "$crate" "$target" cargo_fuzz run -s "$(sanitizer "$target")" "$target" ${corpus:+"$corpus"} ${seeds:+"$seeds"} -- \
       -max_total_time="$seconds" -timeout=10 -print_final_stats=1 \
       ${artifacts:+"-artifact_prefix=$artifacts/"} ${flags[@]+"${flags[@]}"} "$@" ;;
   tmin)
@@ -219,7 +251,7 @@ case $command in
     for input in "${inputs[@]}"; do
       input=$(cd "$(dirname "$input")" && pwd)/$(basename "$input")
       echo "==> minimizing $input"
-      in_crate "$crate" "$target" cargo_fuzz tmin "$target" "$input" -- -timeout=10 \
+      in_crate "$crate" "$target" cargo_fuzz tmin -s "$(sanitizer "$target")" "$target" "$input" -- -timeout=10 \
         ${artifacts:+"-artifact_prefix=$artifacts/"} || status=1
     done
     exit "$status" ;;
@@ -232,7 +264,7 @@ case $command in
     locked "$crate"
     corpus=$(work corpus "$target")
     before=$(find "${corpus:-$root/crates/$crate/fuzz/corpus/$target}" -type f | wc -l)
-    in_crate "$crate" "$target" cargo_fuzz cmin "$target" ${corpus:+"$corpus"} -- -timeout=10
+    in_crate "$crate" "$target" cargo_fuzz cmin -s "$(sanitizer "$target")" "$target" ${corpus:+"$corpus"} -- -timeout=10
     after=$(find "${corpus:-$root/crates/$crate/fuzz/corpus/$target}" -type f | wc -l)
     echo "corpus of $target: $((before)) inputs before, $((after)) after" ;;
   lock)

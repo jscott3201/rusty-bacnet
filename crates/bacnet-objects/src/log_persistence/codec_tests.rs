@@ -2,6 +2,7 @@
 //! zero generation in a slot whose checksum is sound, a record too long for
 //! a slot, and the file store's own I/O paths that need no fault injection.
 
+#[cfg(feature = "std")]
 use std::path::Path;
 
 use bacnet_types::constructed::{BACnetEventLogRecord, BACnetLogRecord, LogDatum};
@@ -10,7 +11,9 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 
 use super::codec::{self, Decoded, HEADER_LEN, TRAILER_LEN};
-use super::tests::{DATE, TempBase, at, event_record};
+#[cfg(feature = "std")]
+use super::tests::TempBase;
+use super::tests::{DATE, at, event_record};
 use super::*;
 use crate::clock::UNSPECIFIED_DATETIME;
 use crate::durable::crc32;
@@ -129,6 +132,8 @@ fn a_record_longer_than_a_slot_element_is_never_written() {
     }
 }
 
+// std: the file backend.
+#[cfg(feature = "std")]
 #[test]
 fn both_slots_at_one_generation_and_identical_load_as_that_snapshot() {
     let base = TempBase::new("twin-slots");
@@ -139,6 +144,8 @@ fn both_slots_at_one_generation_and_identical_load_as_that_snapshot() {
     assert_eq!(store.load(oid()).unwrap(), Some(snapshot(2)));
 }
 
+// std: the file backend.
+#[cfg(feature = "std")]
 #[test]
 fn a_commit_creates_a_missing_parent_directory() {
     let base = TempBase::new("nested");
@@ -151,6 +158,8 @@ fn a_commit_creates_a_missing_parent_directory() {
 
 /// A plain file where the slots' directory belongs, as the path below it
 /// that `tail` names.
+// std: the file backend.
+#[cfg(feature = "std")]
 fn file_in_the_way(base: &Path, tail: &[&str]) -> std::path::PathBuf {
     let blocker = base.with_extension("blocker");
     std::fs::write(&blocker, b"not a directory").unwrap();
@@ -160,6 +169,8 @@ fn file_in_the_way(base: &Path, tail: &[&str]) -> std::path::PathBuf {
 /// The slots' parent is a file (so the slot can't be opened), or lies under
 /// one (so the parent can't be created). Either way the commit fails as I/O
 /// and leaves no slot behind.
+// std: the file backend.
+#[cfg(feature = "std")]
 #[test]
 fn a_slot_that_cannot_be_created_fails_the_commit() {
     for tail in [&["state"][..], &["sub", "state"][..]] {
@@ -175,6 +186,8 @@ fn a_slot_that_cannot_be_created_fails_the_commit() {
     }
 }
 
+// std: the file backend.
+#[cfg(feature = "std")]
 #[test]
 fn a_slot_that_cannot_be_read_fails_the_load() {
     let base = TempBase::new("unreadable");

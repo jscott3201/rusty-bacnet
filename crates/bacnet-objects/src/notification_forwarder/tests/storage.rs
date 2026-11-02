@@ -1,9 +1,5 @@
 //! Storage stand-ins for the forwarder's persistence tests.
 
-// Without std the tests that hold a save open on the writer's thread are
-// left out, and the helpers only they use with them.
-#![cfg_attr(not(feature = "std"), allow(dead_code))]
-
 use super::*;
 use std::future::Future;
 use std::pin::pin;
@@ -29,6 +25,8 @@ struct Hold {
 
 /// The test's side of a held storage: each save reports on `started` and
 /// then waits for one message on `go`. Dropping `go` lets every save through.
+// std: holds a save open on the writer thread.
+#[cfg(feature = "std")]
 pub(super) struct Held {
     pub(super) started: mpsc::Receiver<ForwarderSnapshot>,
     pub(super) go: mpsc::Sender<()>,
@@ -39,6 +37,8 @@ pub(super) const WAIT: Duration = Duration::from_secs(10);
 
 impl MemoryPersistence {
     /// Make every later save wait for the test.
+    // std: holds a save open on the writer thread.
+    #[cfg(feature = "std")]
     pub(super) fn hold(&self) -> Held {
         let (started, started_rx) = mpsc::channel();
         let (go_tx, go) = mpsc::channel();
