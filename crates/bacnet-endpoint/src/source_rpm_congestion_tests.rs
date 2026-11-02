@@ -27,7 +27,9 @@ async fn congestion(mode: u8) {
     flags.insert(AuditOperation::AUDITING_FAILURE);
     db.get_mut(&selected())
         .unwrap()
-        .configure_audit_reporter_internal(
+        .audit_reporter_mut()
+        .expect("an Audit Reporter")
+        .configure(
             AuditLevel::AUDIT_ALL,
             flags,
             false,

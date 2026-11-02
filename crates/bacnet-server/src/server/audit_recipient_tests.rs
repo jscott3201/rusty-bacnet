@@ -192,7 +192,7 @@ async fn recipient_second_reservation_failure_and_noops_are_atomic() {
         .await
         .get(&oid(ObjectType::AUDIT_REPORTER, 1))
         .unwrap()
-        .audit_reporter_internal()
+        .audit_reporter()
         .unwrap()
         .status_internal();
     let before = status.begin_delivery();
@@ -332,7 +332,7 @@ async fn recipient_invalid_and_unauthorized_requests_preserve_value_epoch_and_se
         .await
         .get(&oid(ObjectType::AUDIT_REPORTER, 1))
         .unwrap()
-        .audit_reporter_internal()
+        .audit_reporter()
         .unwrap()
         .status_internal();
     let before = status.begin_delivery();

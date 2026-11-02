@@ -362,6 +362,12 @@ mod tests {
                 PropertyValue::Null,
                 ErrorCode::INVALID_DATA_TYPE,
             ),
+            // A BACnetMaintenance, not the BOOLEAN once served (#2252).
+            (
+                P::MAINTENANCE_REQUIRED,
+                PropertyValue::Boolean(true),
+                ErrorCode::INVALID_DATA_TYPE,
+            ),
             (
                 P::DESCRIPTION,
                 PropertyValue::Unsigned(1),

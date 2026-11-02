@@ -10,6 +10,8 @@
 //! slot is judged by the datatype the object is commanded in, which its
 //! Relinquish_Default carries, so a slot that is relinquished for now (NULL)
 //! is usable but has nothing to count. An unset reference is no fault.
+//! Only the built-in [`PulseConverterObject`] is judged and counted, so one
+//! wrapped by [`ObjectDatabase::with_object_adapter`] is neither.
 //!
 //! The verdict is taken when the reference is written (the server calls
 //! [`ObjectDatabase::check_input_reference`] as the write commits), when the
@@ -26,7 +28,7 @@ use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::ObjectDatabase;
-use crate::accumulator::InputReading;
+use crate::accumulator::{InputReading, PulseConverterObject};
 use crate::traits::BACnetObject;
 
 /// What a Pulse Converter's Input_Reference gives it.
@@ -53,9 +55,8 @@ impl ObjectDatabase {
         let Some((usable, _)) = self.judge(oid) else {
             return false;
         };
-        self.objects
-            .get_mut(oid)
-            .is_some_and(|object| object.set_input_usable_internal(usable))
+        self.stored_as_mut::<PulseConverterObject>(oid)
+            .is_some_and(|converter| converter.set_input_usable(usable))
     }
 
     /// Judge again every Pulse Converter whose Input_Reference names
@@ -74,9 +75,8 @@ impl ObjectDatabase {
             .filter(|converter| {
                 *converter == changed
                     || self
-                        .objects
-                        .get(converter)
-                        .and_then(|object| object.input_reference_internal().flatten())
+                        .stored_as::<PulseConverterObject>(converter)
+                        .and_then(PulseConverterObject::counted_reference)
                         .is_some_and(|reference| reference.object_identifier == changed)
             })
             .collect();
@@ -103,11 +103,11 @@ impl ObjectDatabase {
             let Some((usable, reading)) = self.judge(&oid) else {
                 continue;
             };
-            let Some(object) = self.objects.get_mut(&oid) else {
+            let Some(converter) = self.stored_as_mut::<PulseConverterObject>(&oid) else {
                 continue;
             };
-            let judged = object.set_input_usable_internal(usable);
-            let counted = object.take_input_reading_internal(reading);
+            let judged = converter.set_input_usable(usable);
+            let counted = converter.take_input_reading(reading);
             if judged || counted {
                 changed.push(oid);
             }
@@ -116,9 +116,11 @@ impl ObjectDatabase {
     }
 
     /// The verdict on the Pulse Converter `oid`'s Input_Reference and what
-    /// it reads now; `None` for an object that counts no referenced input.
+    /// it reads now; `None` for anything but a built-in Pulse Converter.
     fn judge(&self, oid: &ObjectIdentifier) -> Option<(bool, Option<InputReading>)> {
-        let reference = self.objects.get(oid)?.input_reference_internal()?;
+        let reference = self
+            .stored_as::<PulseConverterObject>(oid)?
+            .counted_reference();
         Some(
             match reference.map(|reference| self.input_source(*oid, reference)) {
                 None | Some(InputSource::Idle) => (true, None),

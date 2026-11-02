@@ -614,25 +614,11 @@ impl BACnetObject for AuditLogObject {
         log_metadata::for_object(self)
     }
 
-    fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {
+    fn audit_log(&self) -> Option<&dyn crate::traits::AuditLog> {
         Some(self)
     }
 
-    fn audit_log_forwarding_internal(&self) -> Option<Arc<AuditLogForwarding>> {
-        self.forwarding.clone()
-    }
-
-    fn set_audit_log_parent_internal(
-        &mut self,
-        parent: bacnet_types::constructed::BACnetDeviceObjectReference,
-    ) -> Result<(), Error> {
-        self.set_member_of(Some(parent));
-        Ok(())
-    }
-
-    fn audit_log_notification_sink_internal(
-        &mut self,
-    ) -> Option<&mut dyn AuditLogNotificationSink> {
+    fn audit_log_mut(&mut self) -> Option<&mut dyn crate::traits::AuditLog> {
         Some(self)
     }
 
@@ -641,6 +627,28 @@ impl BACnetObject for AuditLogObject {
     }
 
     fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
+        Some(self)
+    }
+}
+
+impl crate::traits::AuditLog for AuditLogObject {
+    fn storage(&self) -> &dyn AuditLogStorage {
+        self
+    }
+
+    fn forwarding(&self) -> Option<Arc<AuditLogForwarding>> {
+        self.forwarding.clone()
+    }
+
+    fn set_parent(
+        &mut self,
+        parent: bacnet_types::constructed::BACnetDeviceObjectReference,
+    ) -> Result<(), Error> {
+        self.set_member_of(Some(parent));
+        Ok(())
+    }
+
+    fn notification_sink(&mut self) -> Option<&mut dyn AuditLogNotificationSink> {
         Some(self)
     }
 }
@@ -700,7 +708,7 @@ impl AuditReporterObject {
     }
     /// Change Description through the installed target owner, if any.
     pub fn set_description(&mut self, desc: impl Into<String>) -> Result<(), Error> {
-        AuditReporterAuthority(self).write_description(
+        AuditReporterAuthority::new(self).write_description(
             PropertyValue::CharacterString(desc.into()),
             None,
             None,

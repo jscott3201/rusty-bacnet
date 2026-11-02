@@ -28,7 +28,10 @@ impl WriteSelection {
                     let Some(object) = db.get(&oid) else {
                         return false;
                     };
-                    let after = object.audit_object_policy_internal();
+                    let after = object
+                        .audit_policy()
+                        .map(|policy| policy.object_policy())
+                        .unwrap_or_default();
                     match property {
                         PropertyIdentifier::AUDIT_LEVEL => before.level != after.level,
                         PropertyIdentifier::AUDITABLE_OPERATIONS => {
@@ -70,7 +73,10 @@ impl<T: TransportPort + 'static> WriteCommitObserver for WriteAudit<'_, T> {
                     PropertyIdentifier::PRIORITY_ARRAY,
                 )))
         .then_some(write.priority.unwrap_or(16));
-        let object_policy = object.audit_object_policy_internal();
+        let object_policy = object
+            .audit_policy()
+            .map(|policy| policy.object_policy())
+            .unwrap_or_default();
         let policy = object_policy.effective_internal(reporter);
         let ordinary = if reporter_attempt {
             true
@@ -95,7 +101,7 @@ impl<T: TransportPort + 'static> WriteCommitObserver for WriteAudit<'_, T> {
         let selection = WriteSelection {
             ordinary,
             captured_revision: object
-                .audit_reporter_internal()
+                .audit_reporter()
                 .filter(|r| r.captures_changes_internal())
                 .map(|r| {
                     let status = r.status_internal();

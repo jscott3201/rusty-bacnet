@@ -39,7 +39,8 @@ pub(crate) fn handle_audit_notification_with_change(
     {
         let object = db.get_mut(&sink).ok_or_else(service_request_denied)?;
         let storage = object
-            .audit_log_notification_sink_internal()
+            .audit_log_mut()
+            .and_then(|log| log.notification_sink())
             .ok_or_else(service_request_denied)?;
         if !storage.notification_logging_enabled() {
             return Err(service_request_denied());
@@ -50,7 +51,8 @@ pub(crate) fn handle_audit_notification_with_change(
         .get_mut(&sink)
         .expect("sink existence was checked before Device timeout lookup");
     let storage = object
-        .audit_log_notification_sink_internal()
+        .audit_log_mut()
+        .and_then(|log| log.notification_sink())
         .expect("sink capability was checked before Device timeout lookup");
     storage.store_notifications_with_change(&request.notifications, apdu_timeout_ms)
 }
@@ -67,7 +69,8 @@ pub(crate) fn has_completed_confirmed_audit_receipt(
     }
     let object = db.get_mut(&sink).ok_or_else(service_request_denied)?;
     let storage = object
-        .audit_log_notification_sink_internal()
+        .audit_log_mut()
+        .and_then(|log| log.notification_sink())
         .ok_or_else(service_request_denied)?;
     storage.has_completed_confirmed_receipt(key, now_unix_millis)
 }
@@ -90,7 +93,8 @@ pub(crate) fn stage_audit_notification(
     {
         let object = db.get_mut(&sink).ok_or_else(service_request_denied)?;
         let storage = object
-            .audit_log_notification_sink_internal()
+            .audit_log_mut()
+            .and_then(|log| log.notification_sink())
             .ok_or_else(service_request_denied)?;
         if !storage.notification_logging_enabled() {
             return Err(service_request_denied());
@@ -99,7 +103,11 @@ pub(crate) fn stage_audit_notification(
     let apdu_timeout_ms = configured_apdu_timeout(db, device)?;
     let storage = db
         .get_mut(&sink)
-        .and_then(|object| object.audit_log_notification_sink_internal())
+        .and_then(|object| {
+            object
+                .audit_log_mut()
+                .and_then(|log| log.notification_sink())
+        })
         .expect("sink capability was checked before Device timeout lookup");
     storage.stage_notification_batch(&request.notifications, apdu_timeout_ms, receipt)
 }
@@ -116,7 +124,11 @@ pub(crate) fn finish_audit_notification(
     staged: StagedAuditBatch,
 ) -> Result<(ConfirmedAuditNotificationOutcome, bool), Error> {
     db.get_mut(&sink)
-        .and_then(|object| object.audit_log_notification_sink_internal())
+        .and_then(|object| {
+            object
+                .audit_log_mut()
+                .and_then(|log| log.notification_sink())
+        })
         .ok_or_else(service_request_denied)?
         .finish_notification_batch(staged)
         .map_err(|_| operational_problem())

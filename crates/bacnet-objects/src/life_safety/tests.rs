@@ -380,7 +380,8 @@ fn point_read_maintenance_required() {
     let val = pt
         .read_property(PropertyIdentifier::MAINTENANCE_REQUIRED, None)
         .unwrap();
-    assert_eq!(val, PropertyValue::Boolean(false));
+    // BACnetMaintenance NONE (#2252).
+    assert_eq!(val, PropertyValue::Enumerated(0));
 }
 
 #[test]

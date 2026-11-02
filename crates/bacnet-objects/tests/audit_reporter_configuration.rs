@@ -3,7 +3,7 @@
 use bacnet_objects::property_metadata::{PropertyMetadata, property_list};
 use std::borrow::Cow;
 
-use bacnet_objects::audit::AuditReporterObject;
+use bacnet_objects::audit::{AuditReporterAuthority, AuditReporterObject};
 use bacnet_objects::binary::BinaryValueObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
@@ -14,33 +14,19 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 struct CustomReporter {
     inner: AuditReporterObject,
-    configurations: usize,
+    lends: usize,
 }
 
 impl BACnetObject for CustomReporter {
-    fn audit_reporter_internal(&self) -> Option<&AuditReporterObject> {
+    fn audit_reporter(&self) -> Option<&AuditReporterObject> {
         Some(&self.inner)
     }
 
-    fn configure_audit_reporter_internal(
-        &mut self,
-        level: AuditLevel,
-        operations: AuditOperationFlags,
-        confirmed: bool,
-        selectors: Option<Vec<BACnetObjectSelector>>,
-        priorities: BACnetPriorityFilter,
-        maximum_send_delay: Option<bacnet_objects::audit::AuditSendDelay>,
-    ) -> Result<(), Error> {
-        self.inner.configure_audit_reporter_internal(
-            level,
-            operations,
-            confirmed,
-            selectors,
-            priorities,
-            maximum_send_delay,
-        )?;
-        self.configurations += 1;
-        Ok(())
+    // Configuration goes through the Reporter's own authority, so the custom
+    // object sees each one only as a lend.
+    fn audit_reporter_mut(&mut self) -> Option<AuditReporterAuthority<'_>> {
+        self.lends += 1;
+        self.inner.audit_reporter_mut()
     }
 
     fn object_identifier(&self) -> ObjectIdentifier {
@@ -89,14 +75,16 @@ fn snapshot(object: &dyn BACnetObject) -> Vec<(PropertyIdentifier, PropertyValue
 fn custom_reporter_configuration_replaces_every_setting_through_trait_object() {
     let mut custom = CustomReporter {
         inner: AuditReporterObject::new(1, "Custom Reporter").unwrap(),
-        configurations: 0,
+        lends: 0,
     };
     let target = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 1).unwrap();
     let operations = AuditOperationFlags::from_bits((1 << 1) | (1 << 63)).unwrap();
     let priorities = BACnetPriorityFilter::from_bits((1 << 7) | (1 << 15));
     let object: &mut dyn BACnetObject = &mut custom;
     object
-        .configure_audit_reporter_internal(
+        .audit_reporter_mut()
+        .expect("an Audit Reporter")
+        .configure(
             AuditLevel::AUDIT_ALL,
             operations,
             true,
@@ -129,7 +117,7 @@ fn custom_reporter_configuration_replaces_every_setting_through_trait_object() {
             BACnetObjectSelector::Object(target).encode_property_value()
         ])
     );
-    let reporter = object.audit_reporter_internal().unwrap();
+    let reporter = object.audit_reporter().unwrap();
     assert!(reporter.monitors_object_internal(target));
     assert!(reporter.reports_write_internal(PropertyIdentifier::PRESENT_VALUE, Some(8)));
     assert!(reporter.reports_write_internal(PropertyIdentifier::PRESENT_VALUE, Some(16)));
@@ -137,7 +125,9 @@ fn custom_reporter_configuration_replaces_every_setting_through_trait_object() {
 
     // Empty selection retains the property and selects no ordinary targets.
     object
-        .configure_audit_reporter_internal(
+        .audit_reporter_mut()
+        .expect("an Audit Reporter")
+        .configure(
             AuditLevel::AUDIT_CONFIG,
             AuditOperationFlags::empty(),
             false,
@@ -152,7 +142,7 @@ fn custom_reporter_configuration_replaces_every_setting_through_trait_object() {
     );
     assert!(
         !object
-            .audit_reporter_internal()
+            .audit_reporter()
             .unwrap()
             .monitors_object_internal(target)
     );
@@ -177,7 +167,9 @@ fn custom_reporter_configuration_replaces_every_setting_through_trait_object() {
 
     // None removes the property and restores catch-all selection.
     object
-        .configure_audit_reporter_internal(
+        .audit_reporter_mut()
+        .expect("an Audit Reporter")
+        .configure(
             AuditLevel::AUDIT_ALL,
             operations,
             true,
@@ -198,23 +190,25 @@ fn custom_reporter_configuration_replaces_every_setting_through_trait_object() {
     );
     assert!(
         object
-            .audit_reporter_internal()
+            .audit_reporter()
             .unwrap()
             .monitors_object_internal(target)
     );
-    assert_eq!(custom.configurations, 3);
+    assert_eq!(custom.lends, 3);
 }
 
 #[test]
 fn custom_reporter_invalid_configuration_preserves_all_settings_and_property_presence() {
     let mut custom = CustomReporter {
         inner: AuditReporterObject::new(1, "Custom Reporter").unwrap(),
-        configurations: 0,
+        lends: 0,
     };
     for selectors in [None, Some(vec![]), Some(vec![BACnetObjectSelector::None])] {
         let object: &mut dyn BACnetObject = &mut custom;
         object
-            .configure_audit_reporter_internal(
+            .audit_reporter_mut()
+            .expect("an Audit Reporter")
+            .configure(
                 AuditLevel::AUDIT_ALL,
                 AuditOperationFlags::from_bits(2).unwrap(),
                 true,
@@ -225,43 +219,35 @@ fn custom_reporter_invalid_configuration_preserves_all_settings_and_property_pre
             .unwrap();
         let before = snapshot(object);
         assert!(matches!(
-            object.configure_audit_reporter_internal(
-                AuditLevel::DEFAULT,
-                AuditOperationFlags::empty(),
-                false,
-                if selectors.is_none() {
-                    Some(vec![])
-                } else {
-                    None
-                },
-                BACnetPriorityFilter::all(),
-                None,
-            ),
+            object
+                .audit_reporter_mut()
+                .expect("an Audit Reporter")
+                .configure(
+                    AuditLevel::DEFAULT,
+                    AuditOperationFlags::empty(),
+                    false,
+                    if selectors.is_none() {
+                        Some(vec![])
+                    } else {
+                        None
+                    },
+                    BACnetPriorityFilter::all(),
+                    None,
+                ),
             Err(Error::OutOfRange(_))
         ));
         assert_eq!(snapshot(object), before);
     }
     assert_eq!(
-        custom.configurations, 3,
-        "invalid calls cannot commit custom state"
+        custom.lends, 6,
+        "every configuration, valid or not, borrows the custom object's Reporter"
     );
 }
 
 #[test]
-fn non_reporter_rejects_complete_configuration_without_mutation() {
+fn non_reporter_lends_no_configuration_authority() {
     let mut other = BinaryValueObject::new(1, "Other").unwrap();
     let object: &mut dyn BACnetObject = &mut other;
-    let before = snapshot(object);
-    for (selectors, priorities) in [
-        (None, BACnetPriorityFilter::all()),
-        (Some(vec![]), BACnetPriorityFilter::empty()),
-    ] {
-        assert!(matches!(object.configure_audit_reporter_internal(
-            AuditLevel::AUDIT_ALL, AuditOperationFlags::from_bits(2).unwrap(), true,
-            selectors, priorities,
-         None,), Err(Error::Remote(RemoteError::Error { class, code }))
-            if class == ErrorClass::OBJECT
-                && code == ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED));
-        assert_eq!(snapshot(object), before);
-    }
+    assert!(object.audit_reporter().is_none());
+    assert!(object.audit_reporter_mut().is_none());
 }

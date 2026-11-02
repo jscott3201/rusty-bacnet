@@ -27,14 +27,17 @@ fn forwarding_v1_reopen_reapplies_member_of_without_rewriting_snapshot() {
     let bytes = encode_snapshot_v1(&expected).unwrap();
     std::fs::write(&storage.slot_paths()[1], &bytes).unwrap();
     let mut log = super::AuditLogObject::new(1, "v1", 1, storage.clone()).unwrap();
-    assert!(log.audit_log_forwarding_internal().is_none());
+    assert!(log.audit_log().and_then(|log| log.forwarding()).is_none());
     let parent = bacnet_types::constructed::BACnetDeviceObjectReference {
         device_identifier: Some(ObjectIdentifier::new(ObjectType::DEVICE, 20).unwrap()),
         object_identifier: ObjectIdentifier::new(ObjectType::AUDIT_LOG, 7).unwrap(),
     };
     log.set_member_of(Some(parent.clone()));
     assert_eq!(
-        log.audit_log_forwarding_internal().unwrap().parent(),
+        log.audit_log()
+            .and_then(|log| log.forwarding())
+            .unwrap()
+            .parent(),
         &parent
     );
     assert_eq!(log.current_snapshot(), expected);

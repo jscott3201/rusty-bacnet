@@ -54,7 +54,8 @@ fn query(db: &ObjectDatabase, request: &AuditLogQueryRequest) -> Result<AuditLog
     }
     let object = db.get(&request.audit_log).ok_or_else(unknown_object)?;
     let storage = object
-        .audit_log_storage_internal()
+        .audit_log()
+        .map(|log| log.storage())
         .ok_or_else(optional_functionality_not_supported)?;
     let page = storage.query(
         &request.query_parameters,

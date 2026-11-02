@@ -29,18 +29,11 @@ fn assert_write_access_denied(error: Error) {
 fn audit_reporter_configuration_hook_is_opt_in_and_atomic() {
     let operations = AuditOperationFlags::from_bits((1 << 1) | (1 << 63)).unwrap();
     let mut other = crate::binary::BinaryValueObject::new(1, "Other").unwrap();
-    assert!(other.audit_reporter_internal().is_none());
-    assert!(matches!(
-        other.configure_audit_reporter_internal(
-            AuditLevel::AUDIT_ALL, operations, true, None, BACnetPriorityFilter::all(),
-         None,),
-        Err(Error::Remote(RemoteError::Error { class, code }))
-            if class == ErrorClass::OBJECT
-                && code == ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED
-    ));
+    assert!(other.audit_reporter().is_none());
+    assert!(other.audit_reporter_mut().is_none());
 
     let mut object: Box<dyn BACnetObject> = Box::new(AuditReporterObject::new(1, "AR").unwrap());
-    let reporter = object.audit_reporter_internal().unwrap();
+    let reporter = object.audit_reporter().unwrap();
     assert!(
         reporter
             .configuration_internal()
@@ -59,7 +52,9 @@ fn audit_reporter_configuration_hook_is_opt_in_and_atomic() {
     ];
     let priorities = BACnetPriorityFilter::from_bits(1 << 7);
     object
-        .configure_audit_reporter_internal(
+        .audit_reporter_mut()
+        .expect("an Audit Reporter")
+        .configure(
             AuditLevel::AUDIT_ALL,
             operations,
             true,
@@ -82,7 +77,9 @@ fn audit_reporter_configuration_hook_is_opt_in_and_atomic() {
         .collect();
     assert!(
         object
-            .configure_audit_reporter_internal(
+            .audit_reporter_mut()
+            .expect("an Audit Reporter")
+            .configure(
                 AuditLevel::DEFAULT,
                 AuditOperationFlags::empty(),
                 false,
@@ -95,7 +92,7 @@ fn audit_reporter_configuration_hook_is_opt_in_and_atomic() {
     for (&property, expected) in properties.iter().zip(before) {
         assert_eq!(object.read_property(property, None).unwrap(), expected);
     }
-    let reporter = object.audit_reporter_internal().unwrap();
+    let reporter = object.audit_reporter().unwrap();
     assert_eq!(
         reporter.configuration_internal().auditable_operations,
         operations
@@ -113,7 +110,9 @@ fn audit_reporter_configuration_hook_is_opt_in_and_atomic() {
     assert!(reporter.reports_write_internal(PropertyIdentifier::PRESENT_VALUE, Some(8)));
     assert!(!reporter.reports_write_internal(PropertyIdentifier::PRESENT_VALUE, Some(16)));
     object
-        .configure_audit_reporter_internal(
+        .audit_reporter_mut()
+        .expect("an Audit Reporter")
+        .configure(
             AuditLevel::NONE,
             AuditOperationFlags::empty(),
             false,
@@ -122,7 +121,7 @@ fn audit_reporter_configuration_hook_is_opt_in_and_atomic() {
             None,
         )
         .unwrap();
-    let reporter = object.audit_reporter_internal().unwrap();
+    let reporter = object.audit_reporter().unwrap();
     assert_eq!(
         reporter.configuration_internal().audit_level,
         AuditLevel::NONE

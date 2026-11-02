@@ -28,7 +28,7 @@ pub(super) fn record_drop(
             // both membership and mutation generation without requiring another READ.
             let current = db
                 .get(&source.selected)
-                .and_then(|object| object.audit_reporter_internal())
+                .and_then(|object| object.audit_reporter())
                 .is_some_and(|reporter| {
                     Arc::ptr_eq(&reporter.status_internal(), &batch.context.status)
                 });

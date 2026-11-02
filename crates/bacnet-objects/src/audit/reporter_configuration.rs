@@ -51,7 +51,9 @@ mod tests {
         let original = status.begin_delivery();
         assert!(
             reporter
-                .configure_audit_reporter_internal(
+                .audit_reporter_mut()
+                .expect("an Audit Reporter")
+                .configure(
                     AuditLevel::DEFAULT,
                     AuditOperationFlags::empty(),
                     true,

@@ -48,7 +48,11 @@ impl BACnetServer {
             self.validate_audit_recipient_input(recipient)?;
         }
         for object in pending.iter() {
-            if object.audit_log_forwarding_internal().is_some() {
+            if object
+                .audit_log()
+                .and_then(|log| log.forwarding())
+                .is_some()
+            {
                 audit_configuration::pending_audit_log_index(&pending, object.object_identifier())?;
             }
         }

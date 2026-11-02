@@ -23,9 +23,10 @@ use bacnet_objects::event_enrollment::{
 };
 use bacnet_objects::schedule::ScheduleTargetOutcome;
 use bacnet_objects::traits::LocalInputValue;
-use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
+use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference};
 use bacnet_types::enums::{
-    AccessEvent, EventState, LifeSafetyOperation, ObjectType, PropertyIdentifier as P, Reliability,
+    AccessEvent, AuditLevel, EventState, LifeSafetyOperation, ObjectType, PropertyIdentifier as P,
+    Reliability,
 };
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue};
 use std::collections::BTreeSet;
@@ -38,6 +39,14 @@ const SOURCES: &[(&str, &str)] = &[
     (
         "access_events",
         include_str!("../../../src/traits/capabilities/access_events.rs"),
+    ),
+    (
+        "audit_log",
+        include_str!("../../../src/traits/capabilities/audit_log.rs"),
+    ),
+    (
+        "audit_policy",
+        include_str!("../../../src/traits/capabilities/audit_policy.rs"),
     ),
     (
         "calendar_state",
@@ -125,6 +134,13 @@ pub const CAPABILITY_ROWS: &[(&str, Row)] = &[
                     .map(|snapshot| snapshot.object_name().to_owned())
             };
             format!("{:?}", o.timed().map(name))
+        }),
+    ),
+    (
+        "Timed::take_due_sample",
+        Row::Command(|o| {
+            let now = Duration::from_secs(42);
+            format!("{:?}", o.timed().map(|t| t.take_due_sample(now)))
         }),
     ),
     (
@@ -467,6 +483,59 @@ pub const CAPABILITY_ROWS: &[(&str, Row)] = &[
     (
         "LogBuffer::refresh_window",
         Row::Command(|o| format!("{:?}", o.log_buffer_mut().map(|l| l.refresh_window()))),
+    ),
+    // The two reads go through the shared accessor, the one AuditLogQuery's
+    // and the forwarder's read guards lend, so a read-only view runs them.
+    (
+        "AuditLog::storage",
+        Row::Query(|o| format!("{:?}", o.audit_log().map(|l| address(l.storage())))),
+    ),
+    (
+        "AuditLog::forwarding",
+        Row::Query(|o| {
+            let forwarding = o.audit_log().map(|l| l.forwarding().map(|f| address(&*f)));
+            format!("{forwarding:?}")
+        }),
+    ),
+    (
+        "AuditLog::set_parent",
+        Row::Command(|o| {
+            let parent = BACnetDeviceObjectReference {
+                device_identifier: None,
+                object_identifier: oid(ObjectType::DEVICE, 9),
+            };
+            format!("{:?}", o.audit_log_mut().map(|l| l.set_parent(parent)))
+        }),
+    ),
+    (
+        "AuditLog::notification_sink",
+        Row::Command(|o| {
+            let sink = o
+                .audit_log_mut()
+                .map(|l| l.notification_sink().map(|sink| address(sink)));
+            format!("{sink:?}")
+        }),
+    ),
+    // Through the shared accessor, the one the Reporter's read guard lends,
+    // so a read-only view runs it as well.
+    (
+        "AuditPolicy::object_policy",
+        Row::Query(|o| format!("{:?}", o.audit_policy().map(|p| p.object_policy()))),
+    ),
+    (
+        "AuditPolicy::policy_authority",
+        Row::Command(|o| {
+            // The probe's own policy level is NONE, so raising it prepares a
+            // write.
+            let level = PropertyValue::Enumerated(AuditLevel::AUDIT_ALL.to_raw());
+            let prepared = o.audit_policy_mut().map(|p| {
+                p.policy_authority().map(|policy| {
+                    let write = policy.prepare(P::AUDIT_LEVEL, None, &level, None);
+                    write.map(|write| write.is_some())
+                })
+            });
+            format!("{prepared:?}")
+        }),
     ),
     // Through the shared accessor, the one a host's read guard lends, so a
     // read-only view runs it as well.

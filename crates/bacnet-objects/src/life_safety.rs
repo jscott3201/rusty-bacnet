@@ -62,7 +62,7 @@ use alloc::borrow::Cow;
 use bacnet_types::constructed::BACnetDeviceObjectReference;
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, EventState, LifeSafetyMode, LifeSafetyOperation, LifeSafetyState,
-    ObjectType, PropertyIdentifier, Reliability, SilencedState,
+    Maintenance, ObjectType, PropertyIdentifier, Reliability, SilencedState,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
@@ -85,13 +85,32 @@ pub use reset::{
     LifeSafetyZoneResetExecutor,
 };
 
-/// Whether a state is one BACnetLifeSafetyState defines or one from the
-/// proprietary range 256..=65535 (Clause 21).
+/// Whether `value` (raw `raw`) is one of the enumeration's `named` values or
+/// from the proprietary range 256..=65535, which BACnetLifeSafetyState and
+/// BACnetMaintenance share (Clause 21).
+fn named_or_proprietary<T: PartialEq>(value: T, raw: u32, named: &[(&str, T)]) -> bool {
+    named.iter().any(|(_, standard)| *standard == value) || (256..=65_535).contains(&raw)
+}
+
+/// Whether a state is one BACnetLifeSafetyState defines or a proprietary one.
 fn valid_life_safety_state(state: LifeSafetyState) -> bool {
-    LifeSafetyState::ALL_NAMED
-        .iter()
-        .any(|&(_, named)| named == state)
-        || (256..=65_535).contains(&state.to_raw())
+    named_or_proprietary(state, state.to_raw(), LifeSafetyState::ALL_NAMED)
+}
+
+/// Decode a client's write of a Point's Maintenance_Required: an Enumerated
+/// holding a standard BACnetMaintenance or one from the proprietary range
+/// 256..=65535 (Clause 21). A reserved or larger number is VALUE_OUT_OF_RANGE
+/// and any other datatype, the BOOLEAN the Point once served among them,
+/// INVALID_DATA_TYPE.
+fn maintenance(value: &PropertyValue) -> Result<Maintenance, Error> {
+    let PropertyValue::Enumerated(raw) = value else {
+        return Err(common::invalid_data_type_error());
+    };
+    let maintenance = Maintenance::from_raw(*raw);
+    if !named_or_proprietary(maintenance, *raw, Maintenance::ALL_NAMED) {
+        return Err(common::value_out_of_range_error());
+    }
+    Ok(maintenance)
 }
 
 fn life_safety_error(code: ErrorCode) -> Error {
@@ -247,8 +266,9 @@ pub struct LifeSafetyPointObject {
     member_of: Vec<BACnetDeviceObjectReference>,
     /// Raw sensor reading.
     direct_reading: f32,
-    /// Whether maintenance is required.
-    maintenance_required: bool,
+    /// Maintenance_Required: the kind of maintenance the point needs
+    /// (Clause 12.15.25), a BACnetMaintenance.
+    maintenance_required: Maintenance,
     /// Event_State.
     event_state: EventState,
     status_flags: StatusFlags,
@@ -282,7 +302,7 @@ impl LifeSafetyPointObject {
             tracking_value: LifeSafetyState::QUIET,
             member_of: Vec::new(),
             direct_reading: 0.0,
-            maintenance_required: false,
+            maintenance_required: Maintenance::NONE,
             event_state: EventState::NORMAL,
             status_flags: StatusFlags::empty(),
             out_of_service: false,
@@ -362,6 +382,13 @@ impl LifeSafetyPointObject {
         self.description = desc.into();
     }
 
+    /// Set Maintenance_Required, the kind of maintenance the point needs,
+    /// which the standard leaves to local logic (Clause 12.15.25). It starts
+    /// as `Maintenance::NONE`. Unlike a network write, this takes any value.
+    pub fn set_maintenance_required(&mut self, maintenance: Maintenance) {
+        self.maintenance_required = maintenance;
+    }
+
     /// Add a zone to Member_Of: a Life Safety Zone, in this device (an
     /// `ObjectIdentifier` converts) or in the device the reference names.
     ///
@@ -417,9 +444,9 @@ impl BACnetObject for LifeSafetyPointObject {
             p if p == PropertyIdentifier::DIRECT_READING => {
                 Ok(PropertyValue::Real(self.direct_reading))
             }
-            p if p == PropertyIdentifier::MAINTENANCE_REQUIRED => {
-                Ok(PropertyValue::Boolean(self.maintenance_required))
-            }
+            p if p == PropertyIdentifier::MAINTENANCE_REQUIRED => Ok(PropertyValue::Enumerated(
+                self.maintenance_required.to_raw(),
+            )),
             p if p == PropertyIdentifier::EVENT_STATE => {
                 Ok(PropertyValue::Enumerated(self.event_state.to_raw()))
             }
@@ -456,11 +483,8 @@ impl BACnetObject for LifeSafetyPointObject {
             return Err(common::invalid_data_type_error());
         }
         if property == PropertyIdentifier::MAINTENANCE_REQUIRED {
-            if let PropertyValue::Boolean(v) = value {
-                self.maintenance_required = v;
-                return Ok(());
-            }
-            return Err(common::invalid_data_type_error());
+            self.maintenance_required = maintenance(&value)?;
+            return Ok(());
         }
         if let Some(result) = self.simulation().write(property, &value) {
             return result;
@@ -900,3 +924,6 @@ mod application_tests;
 
 #[cfg(test)]
 mod membership_tests;
+
+#[cfg(test)]
+mod maintenance_tests;

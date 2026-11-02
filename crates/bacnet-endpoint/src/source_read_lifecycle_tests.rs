@@ -41,7 +41,9 @@ async fn source_read_filters_priority_independence_and_unsupported_destinations(
             .await
             .get_mut(&selected())
             .unwrap()
-            .configure_audit_reporter_internal(
+            .audit_reporter_mut()
+            .expect("an Audit Reporter")
+            .configure(
                 level,
                 AuditOperationFlags::from_bits(bits).unwrap(),
                 false,
@@ -346,7 +348,9 @@ async fn source_read_and_target_reporting_remain_independent_over_bip() {
     .unwrap();
     let mut reporter = AuditReporterObject::new(1, "Target Reporter").unwrap();
     reporter
-        .configure_audit_reporter_internal(
+        .audit_reporter_mut()
+        .expect("an Audit Reporter")
+        .configure(
             AuditLevel::AUDIT_ALL,
             AuditOperationFlags::from_bits(1).unwrap(),
             false,

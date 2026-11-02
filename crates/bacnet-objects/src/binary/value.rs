@@ -189,17 +189,7 @@ impl BinaryValueObject {
 }
 
 impl BACnetObject for BinaryValueObject {
-    fn audit_policy_authority_internal(
-        &mut self,
-    ) -> Option<crate::audit::AuditPolicyAuthority<'_>> {
-        Some(crate::audit::AuditPolicyAuthority::new(
-            &mut self.audit_policy,
-        ))
-    }
-
-    fn audit_object_policy_internal(&self) -> crate::audit::ObjectAuditPolicy {
-        self.audit_policy
-    }
+    crate::traits::lend_audit_policy!();
 
     fn object_identifier(&self) -> ObjectIdentifier {
         self.oid
@@ -486,6 +476,8 @@ impl BACnetObject for BinaryValueObject {
         Some(self)
     }
 }
+
+crate::traits::impl_audit_policy!(BinaryValueObject);
 
 impl crate::traits::ReliabilityEval for BinaryValueObject {
     fn set_reliability(&mut self, reliability: Reliability) -> Result<(), Error> {
