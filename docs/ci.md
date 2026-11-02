@@ -892,6 +892,27 @@ CI run; this is the check against a kernel's NAT.
   only, like the emulation check. Its job is named "NAT (manual): ...", so
   it never stands in for CI OK or Native OK.
 
+### Perf counts (manual)
+
+`scripts/perf/perf_counts.py` compares two commits by callgrind
+instruction counts and allocator calls per request, with the gates and
+method in [Benchmarks.md section 10.4](../Benchmarks.md#104-counting-harness)
+(#1978, #1979). It builds the baseline twice and the candidate once in the
+Docker image `scripts/perf/Dockerfile` pins, and exits non-zero when the
+candidate isn't accepted.
+
+- **Locally:** `python3 scripts/perf/perf_counts.py run --baseline dev
+  --candidate <branch> --out <new directory>` (Docker on Apple silicon or
+  another arm64 host). Its tests: `python3 -m unittest discover -s
+  scripts/perf`.
+- **On GitHub:** `.github/workflows/perf-counts.yml`, `workflow_dispatch`
+  only, on the `ubuntu-24.04-arm` runner, with the baseline ref, the
+  candidate ref and the workloads as inputs; the same ref twice measures the
+  noise floor. It runs the script's tests first, puts the verdict table in
+  the run summary and uploads the tables and the raw callgrind files as
+  artifacts. Its job is named "Perf counts: ...", so it never stands in for
+  CI OK or Native OK.
+
 ### Runner
 
 Every Linux job runs on GitHub's `ubuntu-24.04` hosted runner, an x86_64 VM

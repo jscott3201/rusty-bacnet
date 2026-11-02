@@ -1,0 +1,23 @@
+--------------------------------------------------------------------------------
+Profile data file 'small.cg' (creator: callgrind-3.22.0)
+--------------------------------------------------------------------------------
+Events recorded:  Ir
+Events shown:     Ir
+
+--------------------------------------------------------------------------------
+Ir                  
+--------------------------------------------------------------------------------
+525 (100.0%)  PROGRAM TOTALS
+
+--------------------------------------------------------------------------------
+Ir                  file:function
+--------------------------------------------------------------------------------
+300 (57.14%)  src/a.rs:a::helper'2 [/target/release/counts]
+125 (23.81%)  src/a.rs:a::main::h0123456789abcdef [/target/release/counts]
+ 50 ( 9.52%)  src/inl.rs:a::main::h0123456789abcdef [/target/release/counts]
+ 25 ( 4.76%)  src/a.rs:a::helper
+ 25 ( 4.76%)  ./time/../sysdeps/unix/sysv/linux/clock_gettime.c:clock_gettime@@GLIBC_2.17 [/usr/lib/aarch64-linux-gnu/libc.so.6]
+  6 ( 1.14%)  ???:0x000000000014f988 [???]
+ 1,000 ( 0.00%)  src/b.rs:<smallvec::SmallVec<[u8; 6]> as core::iter::traits::collect::Extend<u8>>::extend::<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<u8>>> [/target/release/counts]
+
+--------------------------------------------------------------------------------

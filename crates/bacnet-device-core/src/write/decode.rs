@@ -54,8 +54,10 @@ fn invalid_data_encoding_error() -> Error {
 /// after another. A property that is a BACnetLIST written whole reaches the
 /// object as a `PropertyValue::List` whatever its length, so an empty value
 /// clears it and one element arrives as a list of one rather than as that
-/// element alone. For a property that isn't a list, an empty value is
-/// INVALID_DATA_ENCODING.
+/// element alone. A BACnetARRAY written whole with no octets is an array of
+/// no elements, an empty `PropertyValue::List`, which its object takes or
+/// refuses by its own rules (#2305). Any other empty value, an array
+/// element's included, is INVALID_DATA_ENCODING.
 ///
 /// Values of several constructed datatypes reach their object as raw octets
 /// in `PropertyValue::ApplicationData`, which it decodes itself, or one chunk
@@ -79,14 +81,14 @@ pub fn decode_write_property_value(
     array_index: Option<u32>,
     bytes: &[u8],
 ) -> Result<PropertyValue, Error> {
-    let list = value_type.is_some_and(ValueType::is_list);
+    let whole = Whole::of(value_type, array_index);
     match Decoding::of(property, value_type, array_index) {
-        Decoding::Application => decode_application_values(bytes, list && array_index.is_none()),
+        Decoding::Application => decode_application_values(bytes, whole),
         Decoding::Raw => Ok(PropertyValue::ApplicationData(bytes.to_vec())),
         Decoding::RawOrNull if bytes == [0x00] => Ok(PropertyValue::Null),
         Decoding::RawOrNull => Ok(PropertyValue::ApplicationData(bytes.to_vec())),
         #[cfg(feature = "structured-writes")]
-        Decoding::EventParameter => decode_event_parameter(bytes, list && array_index.is_none()),
+        Decoding::EventParameter => decode_event_parameter(bytes, whole),
         Decoding::Recipient => decode_recipient(bytes),
         #[cfg(feature = "structured-writes")]
         Decoding::Elements(element) => decode_structured_array(bytes, array_index, element),
@@ -237,12 +239,37 @@ impl Decoding {
     }
 }
 
+/// What a write without an array index names, by the property's shape: the
+/// generic loop's answer for a value of no elements or of one depends on it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Whole {
+    /// A BACnetLIST written whole: a list of any length.
+    List,
+    /// A BACnetARRAY written whole: no octets is an array of no elements.
+    Array,
+    /// One value, or one element of an array.
+    Value,
+}
+
+impl Whole {
+    fn of(value_type: Option<ValueType>, array_index: Option<u32>) -> Self {
+        match value_type {
+            Some(value_type) if array_index.is_none() && value_type.is_list() => Self::List,
+            Some(value_type) if array_index.is_none() && value_type.is_array() => Self::Array,
+            _ => Self::Value,
+        }
+    }
+}
+
 /// The generic loop: application-tagged values back to back. A list's
-/// encoding is its elements back to back, nothing at all for an empty one
-/// (Clause 20.2.17), so `whole_list` gives a list of any length. The other
-/// datatypes reaching this loop have no empty encoding, so no octets is
+/// encoding, and an array's written whole, is its elements back to back,
+/// nothing at all for an empty one (Clause 20.2.17), so a whole list is a
+/// list of any length and a whole array of no octets an empty one. A
+/// whole array of one element or more keeps the answer a value gets: its
+/// element alone, or a list of them. The other datatypes reaching this loop
+/// have no empty encoding, nor has an array element, so no octets is
 /// INVALID_DATA_ENCODING for them (Clause 15.9.1.3).
-fn decode_application_values(bytes: &[u8], whole_list: bool) -> Result<PropertyValue, Error> {
+fn decode_application_values(bytes: &[u8], whole: Whole) -> Result<PropertyValue, Error> {
     let mut values = Vec::new();
     let mut offset = 0;
     while offset < bytes.len() {
@@ -252,10 +279,11 @@ fn decode_application_values(bytes: &[u8], whole_list: bool) -> Result<PropertyV
         values.push(value);
         offset = new_offset;
     }
-    if whole_list {
+    if whole == Whole::List {
         return Ok(PropertyValue::List(values));
     }
     match values.len() {
+        0 if whole == Whole::Array => Ok(PropertyValue::List(values)),
         0 => Err(invalid_data_encoding_error()),
         1 => Ok(values.pop().expect("one element present")),
         _ => Ok(PropertyValue::List(values)),
@@ -265,11 +293,11 @@ fn decode_application_values(bytes: &[u8], whole_list: bool) -> Result<PropertyV
 /// An Event_Parameters value: the opaque form as its octet string, anything
 /// else through the generic loop.
 #[cfg(feature = "structured-writes")]
-fn decode_event_parameter(bytes: &[u8], whole_list: bool) -> Result<PropertyValue, Error> {
+fn decode_event_parameter(bytes: &[u8], whole: Whole) -> Result<PropertyValue, Error> {
     use bacnet_types::constructed::BACnetEventParameter;
 
     if !bytes.starts_with(&[0xfe, 0xff]) {
-        return decode_application_values(bytes, whole_list);
+        return decode_application_values(bytes, whole);
     }
     match bacnet_encoding::constructed::decode_event_parameter(bytes, 0) {
         Ok((BACnetEventParameter::Opaque { tag, data }, consumed))
@@ -367,3 +395,7 @@ mod equivalence_tests;
 #[cfg(test)]
 #[path = "structured_writes_tests.rs"]
 mod structured_writes_tests;
+
+#[cfg(test)]
+#[path = "empty_array_tests.rs"]
+mod empty_array_tests;

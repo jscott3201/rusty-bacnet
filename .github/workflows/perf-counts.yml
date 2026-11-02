@@ -1,0 +1,107 @@
+name: Perf counts
+
+# The counting harness (Benchmarks.md, "Counting harness"): callgrind
+# instruction counts and allocator calls per request for a baseline and a
+# candidate commit, built and run in the Docker image scripts/perf/Dockerfile
+# pins. A comparison builds the baseline twice (A and A') and the candidate
+# once and runs them interleaved (A B A' A' B A, three times), so its noise
+# floor comes from the same matrix as its verdict; the gates are those
+# scripts/perf/count_analysis.py declares, and the step fails when the
+# candidate isn't accepted. The same ref twice measures the noise floor only.
+# Counts compare only within one matrix on one machine. arm64, like the
+# earlier count archive (#1978, #2012).
+#
+# A manual check: workflow_dispatch is its only trigger, so no push, pull
+# request or schedule ever runs it. Its job's name starts with "Perf
+# counts:", so it can't pass for CI OK or Native OK, and
+# scripts/release/ci_gate.py reads only ci.yml and native-tests.yml runs.
+# The same script runs in local Docker on Apple silicon.
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline:
+        description: "Baseline ref (A). The same ref as the candidate measures the noise floor (A vs A')."
+        required: true
+        default: dev
+      candidate:
+        description: "Candidate ref (B): a branch, tag or SHA in this repository."
+        required: true
+      workloads:
+        description: "Comma-separated: rp, wp, rpm, codec (all seven), a codec workload name, or all."
+        required: true
+        default: rp,wp,rpm
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  counts:
+    name: "Perf counts: callgrind A B B A"
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Both refs are exported from this clone with git archive.
+          fetch-depth: 0
+      - name: Analysis script tests
+        run: python3 -m unittest discover -s scripts/perf
+      # The inputs reach the script as environment variables, never as
+      # interpolated shell text.
+      - name: Run the matrix
+        env:
+          BASELINE: ${{ inputs.baseline }}
+          CANDIDATE: ${{ inputs.candidate }}
+          WORKLOADS: ${{ inputs.workloads }}
+        run: |
+          # A branch name exists here only as origin/<name>.
+          resolve() {
+            git rev-parse --verify --quiet "$1^{commit}" \
+              || git rev-parse --verify --quiet "origin/$1^{commit}" \
+              || { echo "::error::no commit for ref $1" >&2; return 1; }
+          }
+          base=$(resolve "$BASELINE") || exit 1
+          cand=$(resolve "$CANDIDATE") || exit 1
+          if [ "$base" = "$cand" ]; then
+            python3 scripts/perf/perf_counts.py run --noise "$base" --workloads "$WORKLOADS" --out perf-out --gzip-raw
+          else
+            python3 scripts/perf/perf_counts.py run --baseline "$base" --candidate "$cand" \
+              --workloads "$WORKLOADS" --out perf-out --gzip-raw
+          fi
+      - name: Verdict table
+        if: always()
+        run: |
+          if [ -f perf-out/summary.md ]; then
+            cat perf-out/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No summary: the matrix didn't complete (see the run log and perf-out/manifest.json)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload the tables
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: perf-counts-summary
+          path: |
+            perf-out/summary.md
+            perf-out/summary.json
+            perf-out/items.md
+            perf-out/items.json
+            perf-out/manifest.json
+            perf-out/profiles/
+          if-no-files-found: warn
+      - name: Upload the raw outputs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: perf-counts-raw
+          path: |
+            perf-out/raw/
+            perf-out/harness/
+          if-no-files-found: warn
+          retention-days: 14

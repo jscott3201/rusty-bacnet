@@ -330,14 +330,7 @@ fn populate(objects: &mut [Box<dyn BACnetObject>]) -> Vec<String> {
             .find(|object| object.object_identifier().object_type() == object_type)
             .unwrap();
         let written = crate::write::gate_and_decode_write(&**object, property, None, &bytes)
-            .and_then(|value| {
-                eprintln!("DBG {object_type} {property} {value:?}");
-                object.write_property(property, None, value, None)
-            });
-        eprintln!(
-            "DBG -> {written:?} {:?}",
-            object.read_property(property, None)
-        );
+            .and_then(|value| object.write_property(property, None, value, None));
         if let Err(error) = written {
             failures.push(format!("populating {object_type} {property}: {error:?}"));
         }
