@@ -2,19 +2,33 @@
 //! Limit_Monitoring_Interval window (Clause 12.61.20, Table 12-79; #2251).
 
 use super::AccumulatorObject;
-use crate::traits::BACnetObject;
+use crate::traits::{BACnetObject, LocalInput, LocalInputValue, Timed};
 use bacnet_types::enums::{EngineeringUnits, ErrorClass, ErrorCode, PropertyIdentifier as P};
 use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::PropertyValue;
+use core::time::Duration;
 
+/// An Accumulator with this interval whose window opened at second 0.
 fn accumulator(interval: u32) -> AccumulatorObject {
     let mut object = AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS).unwrap();
     object.set_limit_monitoring_interval(interval);
+    at(&mut object, 0);
     object
 }
 
 fn rate(object: &AccumulatorObject) -> PropertyValue {
     object.read_property(P::PULSE_RATE, None).unwrap()
+}
+
+fn feed(object: &mut AccumulatorObject, pulses: u64) {
+    object
+        .apply_local_input(LocalInputValue::Pulses(pulses))
+        .unwrap();
+}
+
+/// Advance the object's monotonic time to `seconds`.
+fn at(object: &mut AccumulatorObject, seconds: u64) -> bool {
+    object.advance_monotonic_time(Duration::from_secs(seconds))
 }
 
 fn set_out_of_service(object: &mut AccumulatorObject, value: bool) {
@@ -34,39 +48,37 @@ fn pulse_rate_is_served_as_an_unsigned() {
 #[test]
 fn a_rate_is_the_count_of_one_whole_window() {
     let mut object = accumulator(60);
-    object.record_pulses(40);
-    object.advance_rate_window(30);
-    object.record_pulses(5);
+    feed(&mut object, 40);
+    at(&mut object, 30);
+    feed(&mut object, 5);
     // Half a window: nothing is published yet.
     assert_eq!(rate(&object), PropertyValue::Unsigned(0));
-    object.advance_rate_window(29);
+    assert!(!at(&mut object, 59));
     assert_eq!(rate(&object), PropertyValue::Unsigned(0));
-    object.advance_rate_window(1);
+    assert!(at(&mut object, 60));
     assert_eq!(rate(&object), PropertyValue::Unsigned(45));
     // The next window starts empty, and a quiet window reads zero.
-    object.advance_rate_window(60);
+    assert!(at(&mut object, 120));
     assert_eq!(rate(&object), PropertyValue::Unsigned(0));
 }
 
 #[test]
 fn a_late_call_closes_one_window_and_carries_the_remainder() {
     let mut object = accumulator(10);
-    object.record_pulses(7);
-    // 25 seconds: one window closes with every pulse counted, and the 5
-    // seconds past the last whole interval start the next one.
-    object.advance_rate_window(25);
+    feed(&mut object, 7);
+    // At 25 seconds one window closes with every pulse counted, and the 5
+    // seconds past the last whole interval belong to the next one.
+    at(&mut object, 25);
     assert_eq!(rate(&object), PropertyValue::Unsigned(7));
-    object.record_pulses(3);
-    object.advance_rate_window(4);
+    feed(&mut object, 3);
+    at(&mut object, 29);
     assert_eq!(rate(&object), PropertyValue::Unsigned(7));
-    object.advance_rate_window(1);
+    at(&mut object, 30);
     assert_eq!(rate(&object), PropertyValue::Unsigned(3));
-    // Counting saturates rather than wrapping, and so does the clock: 5
-    // seconds plus u32::MAX would wrap to 4, short of the interval.
-    object.record_pulses(u64::MAX);
-    object.record_pulses(1);
-    object.advance_rate_window(5);
-    object.advance_rate_window(u32::MAX);
+    // Counting saturates rather than wrapping.
+    feed(&mut object, u64::MAX);
+    feed(&mut object, 1);
+    at(&mut object, 40);
     assert_eq!(rate(&object), PropertyValue::Unsigned(u64::MAX));
 }
 
@@ -74,16 +86,17 @@ fn a_late_call_closes_one_window_and_carries_the_remainder() {
 fn without_an_interval_no_window_closes() {
     let mut object = accumulator(0);
     object.set_pulse_rate(9);
-    object.record_pulses(100);
-    object.advance_rate_window(u32::MAX);
+    feed(&mut object, 100);
+    at(&mut object, u64::MAX);
     assert_eq!(rate(&object), PropertyValue::Unsigned(9));
+    assert_eq!(object.next_monotonic_deadline(), None);
 }
 
 #[test]
 fn writing_the_interval_starts_a_new_window() {
     let mut object = accumulator(60);
-    object.record_pulses(50);
-    object.advance_rate_window(50);
+    feed(&mut object, 50);
+    at(&mut object, 50);
     object
         .write_property(
             P::LIMIT_MONITORING_INTERVAL,
@@ -92,11 +105,13 @@ fn writing_the_interval_starts_a_new_window() {
             None,
         )
         .unwrap();
-    // The 50 pulses and 50 seconds belonged to the old window.
-    object.advance_rate_window(19);
+    // The 50 pulses belonged to the old window; with no clock bound the
+    // new one opens at the next advance.
+    at(&mut object, 50);
+    at(&mut object, 69);
     assert_eq!(rate(&object), PropertyValue::Unsigned(0));
-    object.record_pulses(4);
-    object.advance_rate_window(1);
+    feed(&mut object, 4);
+    at(&mut object, 70);
     assert_eq!(rate(&object), PropertyValue::Unsigned(4));
 }
 
@@ -107,16 +122,59 @@ fn out_of_service_keeps_the_clients_rate() {
     object
         .write_property(P::PULSE_RATE, None, PropertyValue::Unsigned(500), None)
         .unwrap();
-    object.record_pulses(3);
-    object.advance_rate_window(10);
+    feed(&mut object, 3);
+    assert!(!at(&mut object, 10));
     object.set_pulse_rate(8);
     assert_eq!(rate(&object), PropertyValue::Unsigned(500));
     // Back in service, the next window to close sets it again.
     set_out_of_service(&mut object, false);
     assert_eq!(rate(&object), PropertyValue::Unsigned(500));
-    object.record_pulses(2);
-    object.advance_rate_window(10);
+    feed(&mut object, 2);
+    assert!(at(&mut object, 20));
     assert_eq!(rate(&object), PropertyValue::Unsigned(2));
+}
+
+#[test]
+fn pulses_fed_out_of_service_count_in_the_window_that_closes_in_service() {
+    let mut object = accumulator(10);
+    set_out_of_service(&mut object, true);
+    feed(&mut object, 5);
+    at(&mut object, 4);
+    set_out_of_service(&mut object, false);
+    feed(&mut object, 2);
+    assert!(at(&mut object, 10));
+    assert_eq!(rate(&object), PropertyValue::Unsigned(7));
+}
+
+#[test]
+fn a_window_with_the_same_count_reports_no_change() {
+    let mut object = accumulator(10);
+    feed(&mut object, 4);
+    assert!(at(&mut object, 10));
+    feed(&mut object, 4);
+    assert!(!at(&mut object, 20), "an unchanged rate is no change");
+    assert_eq!(rate(&object), PropertyValue::Unsigned(4));
+    // The window still closed: the next one counts only its own pulses.
+    feed(&mut object, 1);
+    assert!(at(&mut object, 30));
+    assert_eq!(rate(&object), PropertyValue::Unsigned(1));
+}
+
+#[test]
+fn rewriting_the_same_interval_keeps_the_window() {
+    let mut object = accumulator(10);
+    feed(&mut object, 3);
+    at(&mut object, 5);
+    object
+        .write_property(
+            P::LIMIT_MONITORING_INTERVAL,
+            None,
+            PropertyValue::Unsigned(10),
+            None,
+        )
+        .unwrap();
+    assert!(at(&mut object, 10));
+    assert_eq!(rate(&object), PropertyValue::Unsigned(3));
 }
 
 fn assert_property_error(error: Error, expected: ErrorCode) {

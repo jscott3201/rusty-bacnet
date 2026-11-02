@@ -15,9 +15,15 @@ use bytes::BytesMut;
 
 use crate::common::{self, read_common_properties};
 use crate::traits::BACnetObject;
+use crate::traits::{DeadlineWaker, MonotonicClock};
+use alloc::sync::Arc;
+use pulse_feed::RateWindow;
 
 mod metadata;
 mod pulse_converter;
+mod pulse_feed;
+#[cfg(test)]
+mod pulse_feed_tests;
 #[cfg(test)]
 mod pulse_rate_tests;
 
@@ -29,23 +35,17 @@ pub use pulse_converter::PulseConverterObject;
 // AccumulatorObject (type 23)
 // ---------------------------------------------------------------------------
 
-/// The Limit_Monitoring_Interval window Pulse_Rate is being counted over: a
-/// fixed window, which Clause 12.61.23 leaves to the implementation.
-#[derive(Debug, Clone, Copy, Default)]
-struct RateWindow {
-    /// Pulses counted since the window opened.
-    pulses: u64,
-    /// Seconds of the window that have passed, below the interval.
-    elapsed: u32,
-}
-
 /// BACnet Accumulator object — tracks a pulse count with scaling.
 ///
-/// Pulse_Rate's application routes (`set_pulse_rate`, `record_pulses`,
-/// `advance_rate_window`) need the concrete object, so they work only before
-/// it is registered with a server: no server path drives them yet. Once
-/// registered, Pulse_Rate changes only through a write while Out_Of_Service
-/// is TRUE, from a client or `write_local`.
+/// The application feeds it the input pulses it counts through
+/// [`LocalInput`](crate::traits::LocalInput), as
+/// [`LocalInputValue::Pulses`](crate::traits::LocalInputValue::Pulses),
+/// before or after the object is registered (a server's `add_pulses_local`).
+/// Pulses advance Present_Value through Prescale, wrapping past
+/// Max_Pres_Value, and Pulse_Rate counts them per Limit_Monitoring_Interval
+/// in a window its [`Timed`](crate::traits::Timed) capability closes, which
+/// a server drives from its monotonic task.
+#[derive(Clone)]
 pub struct AccumulatorObject {
     oid: ObjectIdentifier,
     name: String,
@@ -54,13 +54,20 @@ pub struct AccumulatorObject {
     max_pres_value: u64,
     scale: BACnetScale,
     prescale: Option<BACnetPrescale>,
+    /// Prescale's running remainder, below its modulo-divide: the pulses'
+    /// share of the next Present_Value step (Clause 12.61.13).
+    prescale_carry: u32,
     /// Pulse_Rate: the pulses counted over the last whole
     /// Limit_Monitoring_Interval window (Clause 12.61.20).
     pulse_rate: u64,
     units: EngineeringUnits,
     limit_monitoring_interval: u32,
-    /// The window [`AccumulatorObject::advance_rate_window`] is filling.
+    /// The window fed pulses are counted in until it closes.
     rate_window: RateWindow,
+    /// The monotonic clock a restarted window opens on, once bound.
+    monotonic: Option<Arc<MonotonicClock>>,
+    /// Wakes the host's pass when a new window's deadline is armed.
+    deadline_waker: Option<Arc<DeadlineWaker>>,
     status_flags: StatusFlags,
     event_state: EventState,
     out_of_service: bool,
@@ -85,10 +92,13 @@ impl AccumulatorObject {
             max_pres_value: u64::MAX,
             scale: BACnetScale::FloatScale(1.0),
             prescale: None,
+            prescale_carry: 0,
             pulse_rate: 0,
             units,
             limit_monitoring_interval: 0,
             rate_window: RateWindow::default(),
+            monotonic: None,
+            deadline_waker: None,
             status_flags: StatusFlags::empty(),
             event_state: EventState::NORMAL,
             out_of_service: false,
@@ -116,66 +126,35 @@ impl AccumulatorObject {
     /// Set the prescale. Prescale is optional (Table 12-79), and the object
     /// serves it only once this has set one: until then it is absent from
     /// Property_List and a read is UNKNOWN_PROPERTY, since BACnetPrescale
-    /// has no value standing for none.
+    /// has no value standing for none. Fed pulses then advance Present_Value
+    /// by its ratio, starting from an empty remainder; with a modulo-divide
+    /// of zero they leave Present_Value alone.
     pub fn set_prescale(&mut self, prescale: BACnetPrescale) {
         self.prescale = Some(prescale);
+        self.prescale_carry = 0;
     }
 
     /// Set Limit_Monitoring_Interval, the length in seconds of the window
-    /// Pulse_Rate counts over, and start a new window. Zero, the default,
-    /// leaves Pulse_Rate to the application and network writes.
+    /// Pulse_Rate counts over, and start a new, empty window. Setting the
+    /// interval it already has changes nothing, so a client that rewrites
+    /// the same value doesn't keep restarting the window. Zero, the
+    /// default, leaves Pulse_Rate to the application and network writes.
     pub fn set_limit_monitoring_interval(&mut self, seconds: u32) {
+        if seconds == self.limit_monitoring_interval {
+            return;
+        }
         self.limit_monitoring_interval = seconds;
-        self.rate_window = RateWindow::default();
+        self.restart_rate_window();
     }
 
     /// Set Pulse_Rate to `pulses`, the input pulses counted over the latest
     /// Limit_Monitoring_Interval, for an application that measures the rate
     /// itself. While Out_Of_Service is TRUE the property is decoupled from
     /// the input (Clause 12.61.10), so the value is dropped and a client's
-    /// keeps being served.
-    ///
-    /// Only before the object is registered; see the type's docs.
+    /// keeps being served. Being a setter on the concrete object, it works
+    /// only before the object is registered; a registered one counts the
+    /// rate from fed pulses.
     pub fn set_pulse_rate(&mut self, pulses: u64) {
-        if !self.out_of_service {
-            self.pulse_rate = pulses;
-        }
-    }
-
-    /// Count `pulses` input pulses into the current rate window. Only
-    /// Pulse_Rate uses them: Present_Value stays the application's
-    /// (`set_present_value`).
-    ///
-    /// Only before the object is registered; see the type's docs.
-    pub fn record_pulses(&mut self, pulses: u64) {
-        self.rate_window.pulses = self.rate_window.pulses.saturating_add(pulses);
-    }
-
-    /// Let `seconds` of the window pass. Once a whole Limit_Monitoring_Interval
-    /// has passed, Pulse_Rate becomes the pulses `record_pulses` counted in
-    /// the window, and a new, empty window starts; the rate is a count per
-    /// interval, so no division or float is involved. Call it at least once
-    /// an interval (each second, say): a call that spans several intervals
-    /// closes one window with every pulse counted and carries only the part
-    /// of an interval left over. With an interval of zero nothing changes.
-    ///
-    /// While Out_Of_Service is TRUE the windows keep running but Pulse_Rate
-    /// keeps a client's value (Clause 12.61.10); the first window to close
-    /// after the return to service sets it again.
-    ///
-    /// Only before the object is registered; see the type's docs.
-    pub fn advance_rate_window(&mut self, seconds: u32) {
-        let interval = self.limit_monitoring_interval;
-        if interval == 0 {
-            return;
-        }
-        let elapsed = self.rate_window.elapsed.saturating_add(seconds);
-        if elapsed < interval {
-            self.rate_window.elapsed = elapsed;
-            return;
-        }
-        let pulses = core::mem::take(&mut self.rate_window.pulses);
-        self.rate_window.elapsed = elapsed % interval;
         if !self.out_of_service {
             self.pulse_rate = pulses;
         }
@@ -305,6 +284,14 @@ impl BACnetObject for AccumulatorObject {
                 property,
             )),
         }
+    }
+
+    fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
+        Some(self)
+    }
+
+    fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
+        Some(self)
     }
 
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
