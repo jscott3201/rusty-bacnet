@@ -539,3 +539,9 @@ impl Default for DeviceIdentity {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod identity_tests;
+
+#[cfg(test)]
+mod network_port_tests;
