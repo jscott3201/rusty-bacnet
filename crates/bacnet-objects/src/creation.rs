@@ -1,13 +1,17 @@
 //! The object types a CreateObject request can build (Clause 15.3), one
-//! constructor per type (#2172).
+//! constructor per type (#2172), and the rest of each built-in type's
+//! lifecycle: what it takes only at creation, and whether DeleteObject
+//! removes it (#2179).
 //!
 //! The table here is the one source for both sides of createability: the
 //! bundled server's CreateObject handler builds each new object through
 //! [`builtin_constructor`], and its PICS reports a type as createable when
 //! the table has an entry for it (or the application registered a
-//! constructor for it). Createability belongs to the type, not to an
+//! constructor for it). Createability, the creation-only properties
+//! ([`builtin_creation_only`], from each type's [`Creatable`] impl) and
+//! deleteability ([`builtin_deleteable`]) belong to the type, not to an
 //! instance, so no object is asked; only code that names this table links
-//! its constructors.
+//! its constructors and initializers.
 //!
 //! Each constructor takes only the instance and a name, and starts the
 //! object with the defaults of its own `new`: no units on the analog and
@@ -44,7 +48,9 @@ use crate::prelude::*;
 
 use bacnet_types::enums::{EngineeringUnits, EventType, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::PropertyValue;
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+
+use crate::database::ObjectDatabase;
 
 use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use crate::audit::{AuditPriorityPolicy, ObjectAuditPolicy};
@@ -75,132 +81,365 @@ pub type BuiltinConstructor = fn(
     initial_properties: &[PropertyIdentifier],
 ) -> Result<Box<dyn BACnetObject>, Error>;
 
+/// A type whose objects take some CreateObject initial values that
+/// WriteProperty can't change afterwards (#1429).
+///
+/// Clause 15.3 doesn't limit initial values to the properties WriteProperty
+/// can change, so a device may take some of its read-only properties at
+/// creation. The bundled server hands such an initial value, written
+/// without an array index, to [`initialize_property`](Self::initialize_property)
+/// instead of the write route; every other initial value goes the way a
+/// WriteProperty does. The PICS lists the set for each createable type.
+///
+/// This belongs to the type, not to an instance, so it isn't a
+/// [`BACnetObject`] method. The built-in types the table builds implement
+/// it, and an application implements it for a type it registers a
+/// CreateObject constructor for (the bundled server's
+/// `ObjectTypeRegistry::register` takes the constructor's concrete type).
+/// The defaults set no property only at creation, so a type with none
+/// implements it with an empty `impl`.
+pub trait Creatable: BACnetObject + Sized + 'static {
+    /// The properties an initial value may set although WriteProperty
+    /// refuses them.
+    const CREATION_ONLY_PROPERTIES: &'static [PropertyIdentifier] = &[];
+
+    /// Apply a CreateObject initial value to one of
+    /// [`CREATION_ONLY_PROPERTIES`](Self::CREATION_ONLY_PROPERTIES),
+    /// written whole.
+    ///
+    /// The server calls this only on the object it is creating, before any
+    /// other request can see it. Check the value as a write would, and on
+    /// `Err` leave the object unchanged: the server then refuses the
+    /// request, naming the initial value, and drops the object. As on the
+    /// write route, an initial value that is one application NULL and that
+    /// this refuses with PROPERTY / INVALID_DATA_TYPE leaves the property as
+    /// it is and counts as applied, so refuse a NULL that way. The default
+    /// refuses every property with PROPERTY / WRITE_ACCESS_DENIED, the
+    /// answer for a property that can't be initialized at creation (Clause
+    /// 15.3.1.3.1).
+    fn initialize_property(
+        &mut self,
+        _property: PropertyIdentifier,
+        _value: PropertyValue,
+    ) -> Result<(), Error> {
+        Err(crate::common::write_access_denied_error())
+    }
+}
+
+/// One type's [`Creatable`] answers with the type erased: what the table
+/// holds for a built-in type, and a server's registration for an
+/// application's type.
+#[derive(Clone, Copy)]
+pub struct CreationOnly {
+    properties: &'static [PropertyIdentifier],
+    initialize: Initializer,
+    /// The type these answers came from, for the table's own tests.
+    #[cfg(test)]
+    type_id: fn() -> core::any::TypeId,
+}
+
+type Initializer =
+    fn(&mut (dyn BACnetObject + 'static), PropertyIdentifier, PropertyValue) -> Result<(), Error>;
+
+impl CreationOnly {
+    /// No property is set only at creation.
+    pub const NONE: Self = Self {
+        properties: &[],
+        initialize: |_, _, _| Err(crate::common::write_access_denied_error()),
+        #[cfg(test)]
+        type_id: core::any::TypeId::of::<()>,
+    };
+
+    /// `O`'s creation-only properties and initializer.
+    pub const fn of<O: Creatable>() -> Self {
+        Self {
+            properties: O::CREATION_ONLY_PROPERTIES,
+            initialize: initialize_as::<O>,
+            #[cfg(test)]
+            type_id: core::any::TypeId::of::<O>,
+        }
+    }
+
+    /// The properties set only at creation.
+    pub fn properties(&self) -> &'static [PropertyIdentifier] {
+        self.properties
+    }
+
+    /// Whether `property` is set only at creation.
+    pub fn contains(&self, property: PropertyIdentifier) -> bool {
+        self.properties.contains(&property)
+    }
+
+    /// Not public API yet (#2179): the bundled server's CreateObject calls it.
+    ///
+    /// Apply an initial value to the object `oid` names in `db`, through
+    /// [`Creatable::initialize_property`]. An object that isn't of the type
+    /// these answers came from, or isn't there, is refused with PROPERTY /
+    /// WRITE_ACCESS_DENIED, as the default refuses.
+    #[doc(hidden)]
+    pub fn initialize(
+        &self,
+        db: &mut ObjectDatabase,
+        oid: &ObjectIdentifier,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        let object = db
+            .stored_object_mut(oid)
+            .ok_or_else(crate::common::write_access_denied_error)?;
+        self.initialize_object(object, property, value)
+    }
+
+    /// [`initialize`](Self::initialize) on the stored object itself.
+    pub(crate) fn initialize_object(
+        &self,
+        object: &mut (dyn BACnetObject + 'static),
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        (self.initialize)(object, property, value)
+    }
+}
+
+impl core::fmt::Debug for CreationOnly {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_tuple("CreationOnly")
+            .field(&self.properties)
+            .finish()
+    }
+}
+
+fn initialize_as<O: Creatable>(
+    object: &mut (dyn BACnetObject + 'static),
+    property: PropertyIdentifier,
+    value: PropertyValue,
+) -> Result<(), Error> {
+    let object = object
+        .as_stored_any_mut(crate::traits::ObjectStorageAccess(()))
+        .downcast_mut::<O>()
+        .ok_or_else(crate::common::write_access_denied_error)?;
+    Creatable::initialize_property(object, property, value)
+}
+
+/// The old per-object forms of the table's answers, for the tests that
+/// build objects through the table.
+#[cfg(test)]
+pub(crate) trait CreationTestExt {
+    /// The type's creation-only properties.
+    fn creation_only_properties(&self) -> &'static [PropertyIdentifier];
+    /// The type's initializer, applied to this object.
+    fn initialize_property(
+        &mut self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error>;
+}
+
+#[cfg(test)]
+impl CreationTestExt for dyn BACnetObject {
+    fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
+        builtin_creation_only(self.object_identifier().object_type()).properties()
+    }
+
+    fn initialize_property(
+        &mut self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        builtin_creation_only(self.object_identifier().object_type())
+            .initialize_object(self, property, value)
+    }
+}
+
 /// The number of states a new multi-state object starts with, until a
 /// Number_Of_States or State_Text initial value sets it.
 const MULTI_STATE_DEFAULT_STATES: u32 = 2;
 
-const BUILTIN: &[(ObjectType, BuiltinConstructor)] = &[
-    (ObjectType::ANALOG_INPUT, |instance, name, _| {
+const BUILTIN: &[Entry] = &[
+    creatable::<AnalogInputObject>(ObjectType::ANALOG_INPUT, |instance, name, _| {
         boxed(AnalogInputObject::new(
             instance,
             name,
             EngineeringUnits::NO_UNITS,
         ))
     }),
-    (ObjectType::ANALOG_OUTPUT, |instance, name, _| {
+    creatable::<AnalogOutputObject>(ObjectType::ANALOG_OUTPUT, |instance, name, _| {
         boxed(AnalogOutputObject::new(
             instance,
             name,
             EngineeringUnits::NO_UNITS,
         ))
     }),
-    (ObjectType::ANALOG_VALUE, |instance, name, initial| {
+    creatable::<AnalogValueObject>(ObjectType::ANALOG_VALUE, |instance, name, initial| {
         let mut object = AnalogValueObject::new(instance, name, EngineeringUnits::NO_UNITS)?;
         object.set_audit_policy(audit_policy(initial));
         boxed(Ok(object))
     }),
-    (ObjectType::BINARY_INPUT, |instance, name, _| {
+    creatable::<BinaryInputObject>(ObjectType::BINARY_INPUT, |instance, name, _| {
         boxed(BinaryInputObject::new(instance, name))
     }),
-    (ObjectType::BINARY_OUTPUT, |instance, name, _| {
+    creatable::<BinaryOutputObject>(ObjectType::BINARY_OUTPUT, |instance, name, _| {
         boxed(BinaryOutputObject::new(instance, name))
     }),
-    (ObjectType::BINARY_VALUE, |instance, name, initial| {
+    creatable::<BinaryValueObject>(ObjectType::BINARY_VALUE, |instance, name, initial| {
         let mut object = BinaryValueObject::new(instance, name)?;
         object.set_audit_policy(audit_policy(initial));
         boxed(Ok(object))
     }),
-    (ObjectType::MULTI_STATE_INPUT, |instance, name, _| {
+    creatable::<MultiStateInputObject>(ObjectType::MULTI_STATE_INPUT, |instance, name, _| {
         boxed(MultiStateInputObject::new(
             instance,
             name,
             MULTI_STATE_DEFAULT_STATES,
         ))
     }),
-    (ObjectType::MULTI_STATE_OUTPUT, |instance, name, _| {
+    creatable::<MultiStateOutputObject>(ObjectType::MULTI_STATE_OUTPUT, |instance, name, _| {
         boxed(MultiStateOutputObject::new(
             instance,
             name,
             MULTI_STATE_DEFAULT_STATES,
         ))
     }),
-    (ObjectType::MULTI_STATE_VALUE, |instance, name, _| {
+    creatable::<MultiStateValueObject>(ObjectType::MULTI_STATE_VALUE, |instance, name, _| {
         boxed(MultiStateValueObject::new(
             instance,
             name,
             MULTI_STATE_DEFAULT_STATES,
         ))
     }),
-    (ObjectType::INTEGER_VALUE, |instance, name, _| {
+    creatable::<IntegerValueObject>(ObjectType::INTEGER_VALUE, |instance, name, _| {
         boxed(IntegerValueObject::new(instance, name))
     }),
-    (ObjectType::POSITIVE_INTEGER_VALUE, |instance, name, _| {
-        boxed(PositiveIntegerValueObject::new(instance, name))
-    }),
-    (ObjectType::LARGE_ANALOG_VALUE, |instance, name, _| {
+    creatable::<PositiveIntegerValueObject>(
+        ObjectType::POSITIVE_INTEGER_VALUE,
+        |instance, name, _| boxed(PositiveIntegerValueObject::new(instance, name)),
+    ),
+    creatable::<LargeAnalogValueObject>(ObjectType::LARGE_ANALOG_VALUE, |instance, name, _| {
         boxed(LargeAnalogValueObject::new(instance, name))
     }),
-    (ObjectType::CHARACTERSTRING_VALUE, |instance, name, _| {
-        boxed(CharacterStringValueObject::new(instance, name))
-    }),
-    (ObjectType::OCTETSTRING_VALUE, |instance, name, _| {
+    creatable::<CharacterStringValueObject>(
+        ObjectType::CHARACTERSTRING_VALUE,
+        |instance, name, _| boxed(CharacterStringValueObject::new(instance, name)),
+    ),
+    creatable::<OctetStringValueObject>(ObjectType::OCTETSTRING_VALUE, |instance, name, _| {
         boxed(OctetStringValueObject::new(instance, name))
     }),
-    (ObjectType::BITSTRING_VALUE, |instance, name, _| {
+    creatable::<BitStringValueObject>(ObjectType::BITSTRING_VALUE, |instance, name, _| {
         boxed(BitStringValueObject::new(instance, name))
     }),
-    (ObjectType::DATE_VALUE, |instance, name, _| {
+    creatable::<DateValueObject>(ObjectType::DATE_VALUE, |instance, name, _| {
         boxed(DateValueObject::new(instance, name))
     }),
-    (ObjectType::TIME_VALUE, |instance, name, _| {
+    creatable::<TimeValueObject>(ObjectType::TIME_VALUE, |instance, name, _| {
         boxed(TimeValueObject::new(instance, name))
     }),
-    (ObjectType::DATETIME_VALUE, |instance, name, _| {
+    creatable::<DateTimeValueObject>(ObjectType::DATETIME_VALUE, |instance, name, _| {
         boxed(DateTimeValueObject::new(instance, name))
     }),
-    (ObjectType::DATEPATTERN_VALUE, |instance, name, _| {
+    creatable::<DatePatternValueObject>(ObjectType::DATEPATTERN_VALUE, |instance, name, _| {
         boxed(DatePatternValueObject::new(instance, name))
     }),
-    (ObjectType::TIMEPATTERN_VALUE, |instance, name, _| {
+    creatable::<TimePatternValueObject>(ObjectType::TIMEPATTERN_VALUE, |instance, name, _| {
         boxed(TimePatternValueObject::new(instance, name))
     }),
-    (ObjectType::DATETIMEPATTERN_VALUE, |instance, name, _| {
-        boxed(DateTimePatternValueObject::new(instance, name))
-    }),
-    (ObjectType::CALENDAR, |instance, name, _| {
+    creatable::<DateTimePatternValueObject>(
+        ObjectType::DATETIMEPATTERN_VALUE,
+        |instance, name, _| boxed(DateTimePatternValueObject::new(instance, name)),
+    ),
+    creatable::<CalendarObject>(ObjectType::CALENDAR, |instance, name, _| {
         boxed(CalendarObject::new(instance, name))
     }),
-    (ObjectType::SCHEDULE, |instance, name, _| {
+    creatable::<ScheduleObject>(ObjectType::SCHEDULE, |instance, name, _| {
         boxed(ScheduleObject::new(instance, name, PropertyValue::Null))
     }),
-    (ObjectType::NOTIFICATION_CLASS, |instance, name, _| {
+    creatable::<NotificationClass>(ObjectType::NOTIFICATION_CLASS, |instance, name, _| {
         boxed(NotificationClass::new(instance, name))
     }),
-    (ObjectType::TREND_LOG, |instance, name, _| {
+    creatable::<TrendLogObject>(ObjectType::TREND_LOG, |instance, name, _| {
         boxed(TrendLogObject::new(instance, name, CREATED_BUFFER_SIZE))
     }),
     // The legacy Event_Parameters layout names no algorithm, so on a created
     // enrollment it runs none: Event_Type reads NONE for it.
-    (ObjectType::EVENT_ENROLLMENT, |instance, name, _| {
+    creatable::<EventEnrollmentObject>(ObjectType::EVENT_ENROLLMENT, |instance, name, _| {
         boxed(EventEnrollmentObject::new(instance, name, EventType::NONE))
     }),
-    (ObjectType::STRUCTURED_VIEW, |instance, name, _| {
+    creatable::<StructuredViewObject>(ObjectType::STRUCTURED_VIEW, |instance, name, _| {
         boxed(StructuredViewObject::new(instance, name))
     }),
+    // The node itself and its ports: never created, and never deleted.
+    fixed(ObjectType::DEVICE),
+    fixed(ObjectType::NETWORK_PORT),
 ];
+
+/// One built-in type's lifecycle: how CreateObject builds it, if it does,
+/// what it takes only at creation, and whether DeleteObject removes it. A
+/// type with no entry isn't created and is deleteable.
+struct Entry {
+    object_type: ObjectType,
+    constructor: Option<BuiltinConstructor>,
+    creation_only: CreationOnly,
+    deleteable: bool,
+}
+
+/// A type CreateObject builds through `constructor`, with `O`'s
+/// creation-only properties.
+const fn creatable<O: Creatable>(
+    object_type: ObjectType,
+    constructor: BuiltinConstructor,
+) -> Entry {
+    Entry {
+        object_type,
+        constructor: Some(constructor),
+        creation_only: CreationOnly::of::<O>(),
+        deleteable: true,
+    }
+}
+
+/// A type that is neither created nor deleted.
+const fn fixed(object_type: ObjectType) -> Entry {
+    Entry {
+        object_type,
+        constructor: None,
+        creation_only: CreationOnly::NONE,
+        deleteable: false,
+    }
+}
+
+fn entry(object_type: ObjectType) -> Option<&'static Entry> {
+    BUILTIN
+        .iter()
+        .find(|entry| entry.object_type == object_type)
+}
 
 /// The constructor for `object_type`, or `None` when CreateObject doesn't
 /// build that type.
 pub fn builtin_constructor(object_type: ObjectType) -> Option<BuiltinConstructor> {
-    BUILTIN
-        .iter()
-        .find(|(kind, _)| *kind == object_type)
-        .map(|(_, constructor)| *constructor)
+    entry(object_type)?.constructor
 }
 
 /// Every type the table builds, in table order.
 pub fn builtin_createable_types() -> impl Iterator<Item = ObjectType> {
-    BUILTIN.iter().map(|(kind, _)| *kind)
+    BUILTIN
+        .iter()
+        .filter(|entry| entry.constructor.is_some())
+        .map(|entry| entry.object_type)
+}
+
+/// What a new object of a built-in `object_type` takes only at creation:
+/// [`CreationOnly::NONE`] for a type the table doesn't build.
+pub fn builtin_creation_only(object_type: ObjectType) -> CreationOnly {
+    entry(object_type).map_or(CreationOnly::NONE, |entry| entry.creation_only)
+}
+
+/// Whether DeleteObject may remove an object of a built-in `object_type`.
+///
+/// Deleteability belongs to the type: every type is deleteable but Device
+/// and Network Port, which model the node itself and its ports. The
+/// database still refuses to remove an object a running runtime holds,
+/// such as the Audit Reporter an endpoint reports through
+/// ([`ObjectDatabase::check_removable`]).
+pub fn builtin_deleteable(object_type: ObjectType) -> bool {
+    entry(object_type).is_none_or(|entry| entry.deleteable)
 }
 
 fn boxed<O: BACnetObject + 'static>(
@@ -239,3 +478,7 @@ mod tests;
 #[cfg(test)]
 #[path = "creation_config_tests.rs"]
 mod config_tests;
+
+#[cfg(test)]
+#[path = "creation_table_tests.rs"]
+mod table_tests;

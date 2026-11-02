@@ -328,9 +328,13 @@ impl BACnetObject for AnalogInputObject {
 
     crate::traits::lend_reliability_eval!();
 
-    fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
-        super::CREATION_ONLY
+    fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
+        Some(self)
     }
+}
+
+impl crate::creation::Creatable for AnalogInputObject {
+    const CREATION_ONLY_PROPERTIES: &'static [PropertyIdentifier] = super::CREATION_ONLY;
 
     fn initialize_property(
         &mut self,
@@ -338,10 +342,6 @@ impl BACnetObject for AnalogInputObject {
         value: PropertyValue,
     ) -> Result<(), Error> {
         super::initialize_units(&mut self.units, property, value)
-    }
-
-    fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
-        Some(self)
     }
 }
 

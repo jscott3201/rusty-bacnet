@@ -3946,9 +3946,20 @@ trait BACnetObject {
     fn write_property(&mut self, property: PropertyIdentifier, array_index: Option<u32>,
         value: PropertyValue, priority: Option<u8>) -> Result<(), Error>;
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]>;
-    // ...and many provided methods with defaults.
+    // ...then `write_property_from`, the three `is_*_property` queries that
+    // default from the rows, and the capability accessors, all defaulted.
 }
 ```
+
+That is the whole surface a custom object implements (#2179): its identity,
+its reads and writes, and its property rows, plus a capability accessor for
+each optional behaviour it has ([Capabilities](#capabilities)). Answers that
+belong to the object type rather than to an instance aren't trait methods:
+whether CreateObject builds a type, what it takes only at creation, and
+whether DeleteObject removes it ([Creation and deletion](#creation-and-deletion)).
+The rustdoc of `BACnetObject` has a complete custom object that lends one
+capability. Code written against 0.15 moves as
+[Migrating custom objects to 0.16](#migrating-custom-objects-to-016) lists.
 
 `property_metadata` is required (#2181): an object's rows are its property
 model. Each `PropertyMetadata` row names one property the object serves, with
@@ -4003,11 +4014,37 @@ fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
 
 #### Capabilities
 
-Behaviour that only some objects have sits behind a capability accessor on
-the trait (#2179). The accessor defaults to `None`; an object that has the
-behaviour implements the capability trait (in `bacnet_objects::traits`) and
-returns `Some(self)`. The host asks the accessor before it drives the
-behaviour, so an object without it writes nothing.
+Behaviour that only some objects have sits behind a capability (#2179): a
+trait of its own in `bacnet_objects::traits`, and an accessor for it on
+`BACnetObject` that defaults to `None`.
+
+- **`None` means absent.** The host asks the accessor before it drives the
+  behaviour and leaves the object out when the answer is `None`: the time
+  pass skips it, SubscribeCOV refuses it, the fault detector leaves its
+  Reliability alone. Each bullet below says what `None` does for that
+  capability. An object without a behaviour writes nothing for it.
+- **Lending.** An object that has the behaviour implements the capability
+  trait and overrides the accessor to return `Some(self)`, or `Some` of the
+  field that holds the behaviour. Most capability methods have defaults, so
+  the object writes only the parts it uses.
+- **Shared and mutable accessors.** A capability the host drives only while
+  it holds the object exclusively has one `&mut self` accessor with the
+  plain name (`timed()`). One the host also reads under a shared database
+  guard has a `&self` accessor with the plain name and a `_mut` one beside it
+  (`event_reporting()` and `event_reporting_mut()`); an object that lends one
+  lends both. One the host only ever reads has the `&self` accessor alone:
+  `cov()` and `calendar_state()`.
+- **Adapters forward.** An object that wraps another (a read view, an
+  endpoint's source Reporter) forwards every accessor to the object inside,
+  so the inner object's own capability answers.
+- **Public and hidden.** `Timed`, `DurableWrites`, `FileStorage`,
+  `LocalInput`, `LifeSafety`, `EventReporting`, `ReliabilityEval`,
+  `ScheduleRunner` and `CovReporting` are public. The `#[doc(hidden)]` ones
+  (staging, command runs, access events, enrollment evaluation, the
+  Calendar's state, audit, logs and File configuration) serve the built-in
+  types and aren't public API yet.
+
+The capabilities, with what each accessor's `None` means:
 
 - **`timed()` → `Timed`**, for an object whose state moves with time.
   `bind_clocks(&Clocks)` takes the database's Device clock, monotonic clock
@@ -4033,8 +4070,7 @@ behaviour, so an object without it writes nothing.
   gates pass. A File-typed object that lends none answers both services with
   `SERVICES / FILE_ACCESS_DENIED`. An application backing a File with its own
   storage implements `FileStorage` and lends it from both; the built-in
-  `FileObject` does. They were `file_storage_internal()` and
-  `file_storage_internal_mut()` before #2179.
+  `FileObject` does.
 - **`local_input()` → `LocalInput`**, for an object that takes values the
   application in the same device supplies. Its one method,
   `apply_local_input(LocalInputValue)`, takes a Present_Value (built with
@@ -4103,15 +4139,10 @@ behaviour, so an object without it writes nothing.
   lists what a whole-object notification carries after Present_Value and
   Status_Flags. Its default, `None`, has the server report the object type's
   Table 13-1 row (`CovReportedProperty::standard_for(object_type)`);
-  `Some(list)` reports exactly that list. These were `supports_cov`,
-  `supports_subscribe_cov_property` and the three hooks of the same names on
-  `BACnetObject` before #2179. `supports_cov_property`'s old default read the
-  object type and the new one doesn't, so a custom Life Safety Point or Zone
-  narrows its own property set, for example to
-  `bacnet_objects::life_safety::COV_PROPERTIES`. Calls on a concrete type
-  need `use bacnet_objects::traits::CovReporting`. The unused
-  `set_overridden` hook was removed with no replacement: an object computes
-  Status_Flags' OVERRIDDEN bit itself when it reads the property.
+  `Some(list)` reports exactly that list. `supports_cov_property` doesn't
+  read the object type, so a custom Life Safety Point or Zone narrows its own
+  property set, for example to `bacnet_objects::life_safety::COV_PROPERTIES`.
+  Calls on a concrete type need `use bacnet_objects::traits::CovReporting`.
 - **`audit_log()` and `audit_log_mut()` → `AuditLog`** (hidden, #2179), for
   an Audit Log. `storage()` is the `AuditLogStorage` that AuditLogQuery and
   ReadRange read under a shared guard (it was the public
@@ -4146,6 +4177,414 @@ impl Timed for MyTimer {
 }
 ```
 
+The pre-1.0 object API removes `WritePropertyRollback` and the
+`capture_write_property_rollback` / `restore_write_property_rollback` hooks.
+Implementors validate writes and preserve their own state on failure. The bundled
+WritePropertyMultiple service retains every successful prefix write, reports the
+first failure, and leaves the remaining suffix unprocessed; it does not restore
+previous values. Built-in persistence and File resize candidates retain their
+existing commit boundaries. No replacement token API is needed.
+
+For unindexed writes that reach a built-in object's final property dispatch,
+absent properties return `PROPERTY/UNKNOWN_PROPERTY`, including NULL writes.
+Present read-only properties return `PROPERTY/WRITE_ACCESS_DENIED`. Presence is
+based on that instance's effective metadata, including optional properties and
+`PROPERTY_LIST`. Unprovisioned Staging names and stream File `RECORD_COUNT`
+also report absence; present read-only record File counts remain denied. Earlier
+state, command-source, authorization and indexed-write
+guards retain their precedence; custom object implementations retain their own
+write dispatch. WPM reports the failed coordinate and retains its successful
+prefix.
+
+An array index is checked before any object sees a write, on every service
+path the bundled server and `bacnet-device-core` run, custom objects included:
+`PROPERTY/UNKNOWN_PROPERTY` for a property with no row, then
+`PROPERTY/PROPERTY_IS_NOT_AN_ARRAY` for one that isn't an array. A direct call
+to `write_property` skips that gate, so each built-in object runs
+`bacnet_objects::property_metadata::check_write_array_index` first itself,
+and a custom object that is called directly should do the same (#2258).
+
+At the indexed WP/WPM service gate, effective metadata that omits the property
+produces `PROPERTY/UNKNOWN_PROPERTY` before value decoding. A served scalar or
+BACnetLIST still produces `PROPERTY/PROPERTY_IS_NOT_AN_ARRAY`; a served array
+retains its object-owned element, count and write-access rules. This
+absence-first ordering is a local error-precedence policy, and it applies to
+custom objects too: their rows decide presence. For this early absence failure,
+WPM keeps its successful prefix and reports the exact failed
+object/property/index, without authorizing or observing the failing element or
+suffix. The rejected indexed attempt produces no execution Audit record; present
+read-only arrays and unindexed absence retain their existing Audit handling. The
+outer WP authorization check and direct object writes are unchanged.
+
+A NULL written to a property that isn't commandable and has no NULL in its
+datatype succeeds and leaves the property as it is (Clauses 15.9.2 and 15.10.2,
+#1396). The server applies this once, for WriteProperty, WritePropertyMultiple,
+`write_local`, `write_local_encoded`, a Command's local writes, CreateObject's
+initial values and a Schedule's writes to its targets (#1416): the write goes
+to the object as usual, and when the object refuses the NULL with
+`PROPERTY/INVALID_DATA_TYPE` the server answers success instead. Every check the
+object makes first still answers, so an unknown property, a read-only one, one
+not writable in the object's state, or an array index out of range is refused as
+before. An object's own Present_Value relinquish, and a property that stores a
+NULL, never reach the rule. The rule covers an array element too, judged against
+the element's datatype once the index checks out. Nothing follows such a write as
+a change (no COV report, event pass or save). Over WriteProperty and
+WritePropertyMultiple an Audit Reporter records it as a successful write; a
+CreateObject is audited once, as its CREATE, and a Schedule's target writes
+aren't audited. A CreateObject goes on to its next initial value, and a
+Schedule counts the target as one that took its write. A custom object should
+therefore check access and state before the value's datatype, as the built-in
+objects do.
+
+WriteProperty and WritePropertyMultiple give a property that
+`BACnetObject::is_list_property` reports as a BACnetLIST, written whole, to the
+object as a `PropertyValue::List` of any length: a value with no octets is the
+empty list (Clause 20.2.17), so Alarm_Values can be cleared, and one element is
+a list of one. The object judges the list, so an empty value on a read-only list
+is its `PROPERTY/WRITE_ACCESS_DENIED`, and on a list it doesn't serve
+`PROPERTY/UNKNOWN_PROPERTY`. A few properties the server decodes for the object
+arrive as their raw octets in `PropertyValue::ApplicationData` instead, lists
+among them: Recipient_List, Subscribed_Recipients,
+List_Of_Object_Property_References, and the Loop and Pulse Converter references.
+The object decides what an empty value means there (an empty
+Setpoint_Reference holds no reference). For any other property, no octets is
+`PROPERTY/INVALID_DATA_ENCODING` and one element arrives alone.
+`write_local_encoded`, a Command's writes and CreateObject's initial values
+decode the same way (#1328, #1389). CreateObject checks an initial value's array
+index against the new object first, as WriteProperty does, and names the first
+initial value it can't apply by its position; one that doesn't decode is
+`PROPERTY/INVALID_DATA_ENCODING` there.
+
+A new object's Object_Name, until an initial value renames it, is its type
+and instance (`BINARY_VALUE-2`). When another object already holds that
+name, the server takes the first free `BINARY_VALUE-2 (n)` from n = 2, so a
+client that renamed an object to the next default name doesn't make the
+create fail (#1437). A few read-only properties take a CreateObject initial
+value: the type's `Creatable::CREATION_ONLY_PROPERTIES` lists the ones it sets
+whole only at creation, and the server gives such a value, sent without an
+array index, to `Creatable::initialize_property` instead of the write route
+(#1429, [Creation and deletion](#creation-and-deletion)). The built-in Analog Input, Output and Value, and Integer,
+Positive Integer and Large Analog Value, take Units (an Enumerated up to
+65535). The Multi-state Input, Output and Value take
+Number_Of_States (1 to `multistate::MAX_NUMBER_OF_STATES`, 1024),
+which resizes State_Text. A count is refused with `PROPERTY/VALUE_OUT_OF_RANGE`
+if a value the object holds would name a state past it. Of the configuration
+objects (#2208), Calendar, Schedule, Notification Class, Trend Log and
+Structured View take Object_Name; Notification Class takes Priority (three
+Unsigned values up to 255) and Ack_Required; Trend Log takes Buffer_Size (up to
+`trend::MAX_CREATED_BUFFER_SIZE`, 10,000); Event Enrollment takes
+Object_Property_Reference; and Structured View takes Node_Type, Node_Subtype,
+Subordinate_List and Subordinate_Annotations, the last two holding at most
+`group::MAX_SUBORDINATES` (1024) entries and keeping one size: either alone
+sets it, and both given in one request must match, or the later one is
+`PROPERTY/VALUE_OUT_OF_RANGE`. CreateObject applies Buffer_Size before the
+other initial values, since a log takes it only while it holds no record. WriteProperty still answers
+`PROPERTY/WRITE_ACCESS_DENIED` for each. The PICS lists each createable type's
+set.
+
+State_Text written whole, by WriteProperty, WritePropertyMultiple or a
+CreateObject initial value, sets Number_Of_States to its number of labels
+(#1443), with the same checks: 1 to 1024 labels, and a shrink that would
+leave Present_Value, Relinquish_Default, a Priority_Array command or an
+Alarm_Values entry past the new count is `PROPERTY/VALUE_OUT_OF_RANGE` and
+changes nothing. A Multi-state Output's Feedback_Value doesn't block a
+shrink; past the count it shows as CONFIGURATION_ERROR. Since a whole
+write can resize State_Text, its size at index 0 takes a write as well
+(Clause 12.1.5.1): an Unsigned count with the same checks, which truncates
+State_Text on a shrink and, on a grow, appends the `State {n}` labels a new
+object starts with. A WriteProperty naming Number_Of_States is still
+refused. The metadata gives Number_Of_States
+`PropertyWriteCapability::Through(STATE_TEXT)`, which doesn't count as
+writable, and the PICS keeps its row read-only, marks it "resized through
+STATE_TEXT: a whole write or its size at index 0", and leaves it off the
+creation-only line.
+
+On these objects the order of the initial values follows one rule: the
+values that give the state count are applied before every other initial
+value, and everything else, including a count value that fails its own
+checks (an array index, its datatype, its range), is applied in request
+order. Those values are the request's Number_Of_States, or, when it has
+none, State_Text written whole; with a Number_Of_States, a whole State_Text
+has to label exactly that many states. So Present_Value,
+Relinquish_Default, Alarm_Values and State_Text are judged against the
+requested count wherever it stands, and a bad value earlier in the list than
+a bad count is the one named. A refusal always names the value's own
+position: `[Relinquish_Default 2, Number_Of_States 1]` is refused at 1, the
+default being past the one state. With several good counts, the last one
+sets the states.
+
+A Multi-state Input or Value refuses an Alarm_Values entry past its
+Number_Of_States with `PROPERTY/VALUE_OUT_OF_RANGE` naming the element, over
+WriteProperty, WritePropertyMultiple, the list services and CreateObject
+alike (#1429). `set_alarm_values` stays unchecked for local configuration;
+on a Multi-state Value an entry past the count shows as CONFIGURATION_ERROR.
+A list holding such an entry has to lose it before AddListElement or
+RemoveListElement can change anything else, since each writes the whole list
+back.
+
+AddListElement and RemoveListElement edit only properties that
+`BACnetObject::is_list_property` reports as a BACnetLIST. The default follows the
+Clause 12 datatypes, including identifiers whose type depends on the object type
+(Alarm_Values, Present_Value, Member_Of, List_Of_Object_Property_References);
+custom objects with vendor lists override it. Every other target, whether a scalar,
+a constructed single value, a whole array or an indexed array element, returns
+`SERVICES/PROPERTY_IS_NOT_A_LIST` before any element is decoded. Unknown object,
+unknown property and array-index errors come first, and element datatype errors
+after. Only a BACnetLIST of BACnetDestination (Recipient_List) uses the
+destination codec, only Schedule's List_Of_Object_Property_References the
+reference codec (#1121), and only a Notification Forwarder's
+Subscribed_Recipients the subscription codec (#1049). A list the object holds
+framed with no element codec,
+such as the standalone Device's COV subscription lists, returns
+`PROPERTY/WRITE_ACCESS_DENIED`.
+
+Elements compare whole (Clauses 15.1.2 and 15.2.2): two elements are the same
+when their encodings are, so a destination that differs in one field is a
+different destination. AddListElement leaves an element that is already present
+as it is, including a repeat within the request; that is not a failure.
+Subscribed_Recipients is the exception (Clause 12.51.9): an element names the
+entry with the same recipient and process identifier, so AddListElement renews
+that entry in place with the element's confirmation flag and Time Remaining,
+and RemoveListElement removes it whatever those two members say.
+RemoveListElement checks every element first and removes nothing if one is
+refused: an element that does not decode as the property's element, or whose
+datatype differs from the stored elements', returns
+`PROPERTY/INVALID_DATA_TYPE`, and one not in the list
+`SERVICES/LIST_ELEMENT_NOT_FOUND`. Both services always answer errors with a
+ChangeList-Error. A refusal of an element (decode, datatype, not found) names
+its position. The object judges the edited list, the stored elements followed
+by the new ones in request order, through `write_property`. A refusal there
+that names an element, as `Error::Structured` with
+`ErrorDetail::FirstFailedElementNumber` holding its position in that list,
+goes out naming the request element at that position; the built-in Alarm_Values,
+Fault_Signals, Date_List and Schedule reference-list writers all name it. A
+stored element named that
+way is no element of the request, so the response names element 0. A refusal
+that names no element, for an element's datatype, encoding, range or space,
+names the first element the list would have gained, which is exact when one
+element is new. Refusals of the request or target (authorization, object,
+property, array index, list kind, write access) name element 0, as do the
+object's refusals of what a removal leaves.
+
+On a running server a successful edit runs the object's intrinsic-reporting
+evaluation, as a WriteProperty does. An Alarm_Values edit that puts the
+watched value in or out of alarm, with Time_Delay 0, moves Event_State before
+the next periodic tick, and the transition's Status_Flags change goes to the
+object's COV subscribers.
+
+ReadRange reads only the same BACnetLIST properties. A scalar, a constructed
+single value, a whole array (Object_List, Priority_Array) or an indexed array
+element returns `SERVICES/PROPERTY_IS_NOT_A_LIST`, after the unknown object,
+unknown property and array-index errors and before any By Sequence Number or By
+Time error. A list the object holds framed in one `PropertyValue::ApplicationData`
+is split into its elements first, so By Position counts destinations in
+Recipient_List, references in Schedule's List_Of_Object_Property_References,
+entries in a Notification Forwarder's Subscribed_Recipients, and subscriptions
+and COV-multiple contexts in the Device's Active_COV_Subscriptions and
+Active_COV_Multiple_Subscriptions. A running
+server pages those two Device lists from the live COV table, through the same
+Device view as ReadProperty and from one snapshot per request, so a page's
+items joined in order are a run of the ReadProperty value. The standalone
+`handle_read_range` pages the Device object's empty lists, as a
+`bacnet-device-core` read with no overlay reads them. A list it cannot split (a framed list with
+no element codec, such as a vendor list, or a value of another shape) returns
+`SERVICES/OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`; ReadProperty still reads it
+whole. Custom objects that hold a vendor list should return
+`PropertyValue::List`, one value per item.
+
+Intrinsic reporting uses one proposal/commit contract, on the
+`EventReporting` capability. Its
+`evaluate_intrinsic_reporting` and `tick_intrinsic_reporting` return a
+fire-ready `TransitionOutcome` while leaving event state, acknowledgment bits,
+history, and the ready proposal unchanged until commit succeeds. Implement
+`commit_event_transition` to validate the supplied
+`EventTransitionCommit`, atomically apply all object-owned transition state, and
+return `EventTransitionCommitError` without mutation on failure. While the
+object's Event_Detection_Enable is FALSE, refuse every commit, NORMAL targets
+included, with `DetectionDisabled`, as the built-in reporters do: detection
+off stops the state machine and holds the event properties at their initial
+values (Clause 13.2.2.1), and turning it off should reset them directly, not
+through a commit. Custom objects
+can use these public types directly; the built-in private commit kernel is not
+required. Both server paths commit before distribution, even when Event_Enable,
+DCC, or an empty recipient list suppresses sending. The default commit
+returns `Unsupported`, as the server does for an object that lends no
+`EventReporting`; it never authorizes an intrinsic notification.
+
+The pre-1.0 API removes `intrinsic_reporting_requires_atomic_commit` and the
+exported `impl_intrinsic_reporting!` macro. Migrate custom objects to the hooks
+above; there is no alternate immediate-commit path. Standalone detector
+`probe`/`tick` methods retain their own detector-local behavior.
+
+#### Creation and deletion
+
+Createability, the properties a type takes only at creation, and
+deleteability belong to the object type, not to an instance, so no
+`BACnetObject` method answers them (#2172, #2179). The server's CreateObject
+builds a type when the application registered a constructor for it
+([CreateObject constructors](#createobject-constructors)) or the built-in
+table `bacnet_objects::creation` has one: the analog, binary and multi-state
+input, output and value types, the twelve value types (Integer, Positive
+Integer, Large Analog, CharacterString, OctetString, BitString, Date, Time,
+DateTime and the three pattern types), and Calendar, Schedule, Notification
+Class, Trend Log, Event Enrollment and Structured View (#2208). Those six
+start inert: a Schedule with a NULL Schedule_Default and no references, a
+Trend Log of `trend::CREATED_BUFFER_SIZE` (100) records with nothing to log,
+an Event Enrollment with no reference and the `none` event parameters, and so
+on. A create without the initial values a type needs isn't refused, since
+Clause 15.3 leaves properties the request doesn't give to the device; the
+client configures the rest by WriteProperty, and the object starts working
+then. `ObjectTypeRegistry::creates(object_type)` gives that answer, and the
+PICS reports it. Any other type is refused with
+`OBJECT/UNSUPPORTED_OBJECT_TYPE` when the Device doesn't list it in
+Protocol_Object_Types_Supported, or `OBJECT/DYNAMIC_CREATION_NOT_SUPPORTED`
+when it does (#2171).
+
+- **Creation-only properties.** A type implements
+  `bacnet_objects::creation::Creatable`: `CREATION_ONLY_PROPERTIES` lists
+  the read-only properties an initial value may set, and
+  `initialize_property` applies one, checked as a write would be and leaving
+  the object unchanged on a refusal. Both default to none, so a type without
+  any writes `impl Creatable for MyType {}`. Every type the table builds
+  implements it, and the table erases each one into a `CreationOnly`;
+  `ObjectTypeRegistry::creation_only(object_type)` answers for the
+  registered type or else the table (`creation::builtin_creation_only`).
+- **Deleteability.** Every type is deleteable but Device and Network Port,
+  which model the node itself (`creation::builtin_deleteable`).
+  `ObjectTypeRegistry::keep_from_deletion(object_type)` keeps another type,
+  such as one that models a fixed part of the device, and
+  `ObjectTypeRegistry::deletes(object_type)` gives the combined answer. A
+  kept type's DeleteObject gets `OBJECT/OBJECT_DELETION_NOT_PERMITTED` and
+  the object stays; the PICS reports the same answer. Removing an object
+  locally through the database isn't affected, except that the database
+  refuses to remove an object a running runtime holds (the registered
+  Network Port, or the Device and Audit Reporters an Audit runtime
+  protects); `ObjectDatabase::check_removable(oid)` gives that answer, and
+  DeleteObject returns it too.
+
+#### Migrating custom objects to 0.16
+
+0.16 cuts `BACnetObject` from about a hundred methods to the core and the
+capability accessors (#2179, with #2181 and #2197). The compiler names each
+method a custom object still implements; the tables give each one's new
+home. A method on a capability trait is reached through its accessor, as in
+`object.cov().and_then(|cov| cov.cov_increment())`, and a call on a concrete
+type needs the capability trait in scope. `property_metadata` has no default
+any more (#2181). `is_createable` went too: createability is
+`ObjectTypeRegistry::creates(object_type)` (#2172). Accessors marked hidden
+lend `#[doc(hidden)]` capabilities that aren't public API yet.
+
+**Time and clocks: `Timed`, lent by `timed()` (#2220)**
+
+| 0.15 method | In 0.16 |
+|---|---|
+| `bind_clock_internal`, `bind_monotonic_clock_internal`, `bind_deadline_waker_internal` | `Timed::bind_clocks(&Clocks)`, one call with all three clocks |
+| `advance_monotonic_time_internal` | `Timed::advance_monotonic_time` |
+| `next_monotonic_deadline_internal` | `Timed::next_monotonic_deadline` |
+| `set_tracking_cov_increment_internal` | `Timed::set_tracking_cov_increment` |
+| `start_output_internal` | `Timed::start_output` |
+| `cov_snapshot_internal` | `Timed::cov_snapshot` |
+| `advance_time_internal` | removed: it was test-only |
+| `lighting_blink_count_internal` | removed: a test reads it through `ObjectDatabase::lighting_blink_count_internal` |
+| `durable_writes_internal` | `durable_writes()`; staged-write expiry moved to `DurableWrites::expire_staged` |
+
+**Property lists (#2181, #2197)**
+
+| 0.15 method | In 0.16 |
+|---|---|
+| `property_list` | `property_metadata::property_list(&rows)`; a read is `read_property_list(&rows, index)` |
+| `required_properties` | `property_metadata::required_properties(&rows)` |
+
+**Staging and command runs: hidden `StagingSource` and `CommandRunner` (#2232)**
+
+| 0.15 method | In 0.16 |
+|---|---|
+| `take_staging_write_plan_internal`, `staging_generation_internal`, `complete_staging_write_plan_internal` | `StagingSource` methods without `_internal`, lent by `staging_source()` |
+| `take_command_run_internal`, `command_generation_internal`, `record_command_write_internal`, `remember_member_datatype_internal`, `complete_command_run_internal` | `CommandRunner` methods without `_internal`, lent by `command_runner()` and `command_runner_mut()` |
+
+**Local input, access events and life safety (#2236)**
+
+| 0.15 method | In 0.16 |
+|---|---|
+| `set_present_value_internal`, `set_present_value_from_internal`, `set_tracking_value_internal`, `set_controlled_variable_value_internal`, `add_averaging_sample_internal`, `report_access_input_internal` | `LocalInput::apply_local_input(LocalInputValue::..)`, lent by `local_input()`; one enum variant per input |
+| `supports_access_event_batch_internal` | `access_events().is_some()` |
+| `record_access_event_batch_internal` | hidden `AccessEvents::record_access_event_batch`, lent by `access_events()` |
+| `apply_life_safety_operation` | `LifeSafety::apply_life_safety_operation`, lent by `life_safety()` |
+| `set_life_safety_operation_expected_internal` | `LifeSafety::set_life_safety_operation_expected` |
+
+**Event reporting: `EventReporting`, lent by `event_reporting()` and `event_reporting_mut()` (#2239)**
+
+| 0.15 method | In 0.16 |
+|---|---|
+| `evaluate_intrinsic_reporting`, `tick_intrinsic_reporting` | `EventReporting` methods of the same names |
+| `commit_event_transition_internal`, `enrollment_summary_capability_internal`, `buffer_ready_report_internal`, `event_algorithm_inhibit_reference_internal`, `follow_event_algorithm_inhibit_internal` | `EventReporting` methods without `_internal` |
+| `acknowledge_alarm_correlated_internal`, `acknowledge_alarm_correlated_detailed_internal` | `EventReporting::acknowledge_alarm(state, &timestamp)` |
+| `acknowledge_alarm` | removed: the bits-only form was never called |
+
+**Enrollment evaluation and reliability (#2241)**
+
+| 0.15 method | In 0.16 |
+|---|---|
+| `enrollment_eval_state_internal`, `set_enrollment_eval_state_internal`, `enrollment_eval_source_internal`, `set_enrollment_eval_source_internal`, `commit_event_enrollment_reliability_internal` | hidden `EnrollmentEval`: `eval_state`, `set_eval_state`, `eval_source`, `set_eval_source`, `commit_reliability`, lent by `enrollment_eval()` and `enrollment_eval_mut()` |
+| `set_event_state_internal`, `set_acked_transitions_internal` | removed; seed an Event Enrollment's Event_State with its own `set_event_state` |
+| `evaluate_reliability_internal`, `reliability_evaluation_inhibited_internal`, `set_reliability_internal` | `ReliabilityEval` methods without `_internal`, lent by `reliability_eval()` |
+
+**Schedules and Calendars (#2244)**
+
+| 0.15 method | In 0.16 |
+|---|---|
+| `tick_schedule`, `take_owed_schedule_writes`, `complete_schedule_write`, `retry_refusals_naming` | `ScheduleRunner` methods of the same names, lent by `schedule_runner()` |
+| `calendar_state_internal` | hidden `CalendarState::state_on`, lent by `calendar_state()` |
+
+**Logs and files (#2254)**
+
+| 0.15 method | In 0.16 |
+|---|---|
+| `file_storage_internal`, `file_storage_internal_mut` | `file_storage()` and `file_storage_mut()`, same `FileStorage` |
+| `file_configuration_internal`, `file_configuration_internal_mut` | hidden `file_configuration()` and `file_configuration_mut()` |
+| `log_buffer_internal`, `log_record_identities_internal`, `refresh_log_window_internal` | hidden `LogBuffer`: `buffer_records`, `record_identities`, `refresh_window`, lent by `log_buffer()` and `log_buffer_mut()` |
+| `add_trend_record`, `add_trend_multiple_record`, `add_event_log_record` | the built-in log's own `add_record`; a custom log implements the hidden `LogBuffer` methods of the same names |
+| `log_collecting_internal`, `logs_received_event_notifications_internal` | removed: the database asks the built-in Trend Log and Event Log directly |
+
+**Audit, Averaging and Pulse Converter (#2261)**
+
+| 0.15 method | In 0.16 |
+|---|---|
+| `audit_log_storage_internal`, `audit_log_forwarding_internal`, `set_audit_log_parent_internal`, `audit_log_notification_sink_internal` | hidden `AuditLog`: `storage`, `forwarding`, `set_parent`, `notification_sink`, lent by `audit_log()` and `audit_log_mut()` |
+| `audit_object_policy_internal`, `audit_policy_authority_internal` | hidden `AuditPolicy`: `object_policy` and `policy_authority`, lent by `audit_policy()` and `audit_policy_mut()` |
+| `audit_reporter_internal`, `audit_reporter_authority_internal` | hidden `audit_reporter()` and `audit_reporter_mut()` |
+| `configure_audit_reporter_internal` | `AuditReporterAuthority::configure`, through `audit_reporter_mut()` |
+| `take_due_averaging_sample_internal` | hidden `Timed::take_due_sample` |
+| `input_reference_internal`, `set_input_usable_internal`, `take_input_reading_internal` | removed: the database judges and counts the built-in Pulse Converter only |
+
+**COV reporting: `CovReporting`, lent by `cov()` (#2270)**
+
+| 0.15 method | In 0.16 |
+|---|---|
+| `supports_cov` | lend `cov()`; the whole-object form is `CovReporting::supports_subscribe_cov` (default `true`) |
+| `supports_subscribe_cov_property` | `cov().is_some()`: an object that lends `cov()` takes property subscriptions |
+| `supports_cov_property`, `cov_increment`, `cov_reported_properties` | `CovReporting` methods of the same names; `cov_reported_properties` returns `None` for the type's standard list |
+| `set_overridden` | removed: an object computes OVERRIDDEN when it reads Status_Flags |
+
+**Creation and deletion: the type table (this release)**
+
+| 0.15 method | In 0.16 |
+|---|---|
+| `creation_only_properties` | `Creatable::CREATION_ONLY_PROPERTIES` on the type; read with `ObjectTypeRegistry::creation_only(type)` or `creation::builtin_creation_only(type)` |
+| `initialize_property` | `Creatable::initialize_property` on the type, which CreateObject applies |
+| `is_deleteable` | `ObjectTypeRegistry::deletes(type)`, from `creation::builtin_deleteable` and `keep_from_deletion`; `ObjectDatabase::check_removable` for an object a runtime holds |
+
+To register a CreateObject constructor, return the concrete type, which
+implements `Creatable`, so the registration carries its creation-only
+answers: `register(ObjectType::from_raw(600), |oid, name|
+Ok(MyPump::new(oid, name)))` with `impl Creatable for MyPump {}`, or the
+builders' `object_constructor` with the same arguments
+([CreateObject constructors](#createobject-constructors)). A custom
+adapter that wrapped another object and forwarded `is_deleteable` drops it:
+an object no longer refuses deletion itself, so keep its type from deletion
+instead.
+
+Before and after, for the capabilities with the most moved code.
 COV reporting moves from its hooks to the capability like this:
 
 ```rust,ignore
@@ -4337,274 +4776,6 @@ let change = object
     .ok_or_else(no_alarm_configured)?
     .acknowledge_alarm(state, &timestamp)?;
 ```
-
-Createability belongs to the object type, not to an instance, so the trait
-has no method for it (`is_createable` was removed). The server's CreateObject
-builds a type when the application registered a constructor for it
-([CreateObject constructors](#createobject-constructors)) or the built-in
-table `bacnet_objects::creation` has one (#2172): the analog, binary and
-multi-state input, output and value types, the twelve value types
-(Integer, Positive Integer, Large Analog, CharacterString, OctetString,
-BitString, Date, Time, DateTime and the three pattern types), and Calendar,
-Schedule, Notification Class, Trend Log, Event Enrollment and Structured View
-(#2208). Those six start inert: a Schedule with a NULL Schedule_Default and no
-references, a Trend Log of `trend::CREATED_BUFFER_SIZE` (100) records with
-nothing to log, an Event Enrollment with no reference and the `none` event
-parameters, and so on. A create without the initial values a type needs isn't
-refused, since Clause 15.3 leaves properties the request doesn't give to the
-device; the client configures the rest by WriteProperty, and the object starts
-working then. `ObjectConstructors::creates(object_type)` gives that answer, and the PICS
-reports it. Any other type is refused with `OBJECT/UNSUPPORTED_OBJECT_TYPE`
-when the Device doesn't list it in Protocol_Object_Types_Supported, or
-`OBJECT/DYNAMIC_CREATION_NOT_SUPPORTED` when it does (#2171).
-
-One provided method decides what DeleteObject may do:
-
-- `is_deleteable` defaults to `true`. DeleteObject asks it of the named object
-  and removes the object when it is `true`, a custom object included; when it
-  is `false` the request gets `OBJECT/OBJECT_DELETION_NOT_PERMITTED` and the
-  object stays. The PICS reports it as the type's deleteability. Answer `false`
-  for an object a client must not remove; the built-in Device and Network Port
-  do.
-
-The pre-1.0 object API removes `WritePropertyRollback` and the
-`capture_write_property_rollback` / `restore_write_property_rollback` hooks.
-Implementors validate writes and preserve their own state on failure. The bundled
-WritePropertyMultiple service retains every successful prefix write, reports the
-first failure, and leaves the remaining suffix unprocessed; it does not restore
-previous values. Built-in persistence and File resize candidates retain their
-existing commit boundaries. No replacement token API is needed.
-
-For unindexed writes that reach a built-in object's final property dispatch,
-absent properties return `PROPERTY/UNKNOWN_PROPERTY`, including NULL writes.
-Present read-only properties return `PROPERTY/WRITE_ACCESS_DENIED`. Presence is
-based on that instance's effective metadata, including optional properties and
-`PROPERTY_LIST`. Unprovisioned Staging names and stream File `RECORD_COUNT`
-also report absence; present read-only record File counts remain denied. Earlier
-state, command-source, authorization and indexed-write
-guards retain their precedence; custom object implementations retain their own
-write dispatch. WPM reports the failed coordinate and retains its successful
-prefix.
-
-An array index is checked before any object sees a write, on every service
-path the bundled server and `bacnet-device-core` run, custom objects included:
-`PROPERTY/UNKNOWN_PROPERTY` for a property with no row, then
-`PROPERTY/PROPERTY_IS_NOT_AN_ARRAY` for one that isn't an array. A direct call
-to `write_property` skips that gate, so each built-in object runs
-`bacnet_objects::property_metadata::check_write_array_index` first itself,
-and a custom object that is called directly should do the same (#2258).
-
-At the indexed WP/WPM service gate, effective metadata that omits the property
-produces `PROPERTY/UNKNOWN_PROPERTY` before value decoding. A served scalar or
-BACnetLIST still produces `PROPERTY/PROPERTY_IS_NOT_AN_ARRAY`; a served array
-retains its object-owned element, count and write-access rules. This
-absence-first ordering is a local error-precedence policy, and it applies to
-custom objects too: their rows decide presence. For this early absence failure,
-WPM keeps its successful prefix and reports the exact failed
-object/property/index, without authorizing or observing the failing element or
-suffix. The rejected indexed attempt produces no execution Audit record; present
-read-only arrays and unindexed absence retain their existing Audit handling. The
-outer WP authorization check and direct object writes are unchanged.
-
-A NULL written to a property that isn't commandable and has no NULL in its
-datatype succeeds and leaves the property as it is (Clauses 15.9.2 and 15.10.2,
-#1396). The server applies this once, for WriteProperty, WritePropertyMultiple,
-`write_local`, `write_local_encoded`, a Command's local writes, CreateObject's
-initial values and a Schedule's writes to its targets (#1416): the write goes
-to the object as usual, and when the object refuses the NULL with
-`PROPERTY/INVALID_DATA_TYPE` the server answers success instead. Every check the
-object makes first still answers, so an unknown property, a read-only one, one
-not writable in the object's state, or an array index out of range is refused as
-before. An object's own Present_Value relinquish, and a property that stores a
-NULL, never reach the rule. The rule covers an array element too, judged against
-the element's datatype once the index checks out. Nothing follows such a write as
-a change (no COV report, event pass or save). Over WriteProperty and
-WritePropertyMultiple an Audit Reporter records it as a successful write; a
-CreateObject is audited once, as its CREATE, and a Schedule's target writes
-aren't audited. A CreateObject goes on to its next initial value, and a
-Schedule counts the target as one that took its write. A custom object should
-therefore check access and state before the value's datatype, as the built-in
-objects do.
-
-WriteProperty and WritePropertyMultiple give a property that
-`BACnetObject::is_list_property` reports as a BACnetLIST, written whole, to the
-object as a `PropertyValue::List` of any length: a value with no octets is the
-empty list (Clause 20.2.17), so Alarm_Values can be cleared, and one element is
-a list of one. The object judges the list, so an empty value on a read-only list
-is its `PROPERTY/WRITE_ACCESS_DENIED`, and on a list it doesn't serve
-`PROPERTY/UNKNOWN_PROPERTY`. A few properties the server decodes for the object
-arrive as their raw octets in `PropertyValue::ApplicationData` instead, lists
-among them: Recipient_List, Subscribed_Recipients,
-List_Of_Object_Property_References, and the Loop and Pulse Converter references.
-The object decides what an empty value means there (an empty
-Setpoint_Reference holds no reference). For any other property, no octets is
-`PROPERTY/INVALID_DATA_ENCODING` and one element arrives alone.
-`write_local_encoded`, a Command's writes and CreateObject's initial values
-decode the same way (#1328, #1389). CreateObject checks an initial value's array
-index against the new object first, as WriteProperty does, and names the first
-initial value it can't apply by its position; one that doesn't decode is
-`PROPERTY/INVALID_DATA_ENCODING` there.
-
-A new object's Object_Name, until an initial value renames it, is its type
-and instance (`BINARY_VALUE-2`). When another object already holds that
-name, the server takes the first free `BINARY_VALUE-2 (n)` from n = 2, so a
-client that renamed an object to the next default name doesn't make the
-create fail (#1437). A few read-only properties take a CreateObject initial
-value: `BACnetObject::creation_only_properties` lists the ones an object sets
-whole only at creation, and the server gives such a value, sent without an
-array index, to `BACnetObject::initialize_property` instead of the write
-route (#1429). The built-in Analog Input, Output and Value, and Integer,
-Positive Integer and Large Analog Value, take Units (an Enumerated up to
-65535). The Multi-state Input, Output and Value take
-Number_Of_States (1 to `multistate::MAX_NUMBER_OF_STATES`, 1024),
-which resizes State_Text. A count is refused with `PROPERTY/VALUE_OUT_OF_RANGE`
-if a value the object holds would name a state past it. Of the configuration
-objects (#2208), Calendar, Schedule, Notification Class, Trend Log and
-Structured View take Object_Name; Notification Class takes Priority (three
-Unsigned values up to 255) and Ack_Required; Trend Log takes Buffer_Size (up to
-`trend::MAX_CREATED_BUFFER_SIZE`, 10,000); Event Enrollment takes
-Object_Property_Reference; and Structured View takes Node_Type, Node_Subtype,
-Subordinate_List and Subordinate_Annotations, the last two holding at most
-`group::MAX_SUBORDINATES` (1024) entries and keeping one size: either alone
-sets it, and both given in one request must match, or the later one is
-`PROPERTY/VALUE_OUT_OF_RANGE`. CreateObject applies Buffer_Size before the
-other initial values, since a log takes it only while it holds no record. WriteProperty still answers
-`PROPERTY/WRITE_ACCESS_DENIED` for each. The PICS lists each createable type's
-set.
-
-State_Text written whole, by WriteProperty, WritePropertyMultiple or a
-CreateObject initial value, sets Number_Of_States to its number of labels
-(#1443), with the same checks: 1 to 1024 labels, and a shrink that would
-leave Present_Value, Relinquish_Default, a Priority_Array command or an
-Alarm_Values entry past the new count is `PROPERTY/VALUE_OUT_OF_RANGE` and
-changes nothing. A Multi-state Output's Feedback_Value doesn't block a
-shrink; past the count it shows as CONFIGURATION_ERROR. Since a whole
-write can resize State_Text, its size at index 0 takes a write as well
-(Clause 12.1.5.1): an Unsigned count with the same checks, which truncates
-State_Text on a shrink and, on a grow, appends the `State {n}` labels a new
-object starts with. A WriteProperty naming Number_Of_States is still
-refused. The metadata gives Number_Of_States
-`PropertyWriteCapability::Through(STATE_TEXT)`, which doesn't count as
-writable, and the PICS keeps its row read-only, marks it "resized through
-STATE_TEXT: a whole write or its size at index 0", and leaves it off the
-creation-only line.
-
-On these objects the order of the initial values follows one rule: the
-values that give the state count are applied before every other initial
-value, and everything else, including a count value that fails its own
-checks (an array index, its datatype, its range), is applied in request
-order. Those values are the request's Number_Of_States, or, when it has
-none, State_Text written whole; with a Number_Of_States, a whole State_Text
-has to label exactly that many states. So Present_Value,
-Relinquish_Default, Alarm_Values and State_Text are judged against the
-requested count wherever it stands, and a bad value earlier in the list than
-a bad count is the one named. A refusal always names the value's own
-position: `[Relinquish_Default 2, Number_Of_States 1]` is refused at 1, the
-default being past the one state. With several good counts, the last one
-sets the states.
-
-A Multi-state Input or Value refuses an Alarm_Values entry past its
-Number_Of_States with `PROPERTY/VALUE_OUT_OF_RANGE` naming the element, over
-WriteProperty, WritePropertyMultiple, the list services and CreateObject
-alike (#1429). `set_alarm_values` stays unchecked for local configuration;
-on a Multi-state Value an entry past the count shows as CONFIGURATION_ERROR.
-A list holding such an entry has to lose it before AddListElement or
-RemoveListElement can change anything else, since each writes the whole list
-back.
-
-AddListElement and RemoveListElement edit only properties that
-`BACnetObject::is_list_property` reports as a BACnetLIST. The default follows the
-Clause 12 datatypes, including identifiers whose type depends on the object type
-(Alarm_Values, Present_Value, Member_Of, List_Of_Object_Property_References);
-custom objects with vendor lists override it. Every other target, whether a scalar,
-a constructed single value, a whole array or an indexed array element, returns
-`SERVICES/PROPERTY_IS_NOT_A_LIST` before any element is decoded. Unknown object,
-unknown property and array-index errors come first, and element datatype errors
-after. Only a BACnetLIST of BACnetDestination (Recipient_List) uses the
-destination codec, only Schedule's List_Of_Object_Property_References the
-reference codec (#1121), and only a Notification Forwarder's
-Subscribed_Recipients the subscription codec (#1049). A list the object holds
-framed with no element codec,
-such as the standalone Device's COV subscription lists, returns
-`PROPERTY/WRITE_ACCESS_DENIED`.
-
-Elements compare whole (Clauses 15.1.2 and 15.2.2): two elements are the same
-when their encodings are, so a destination that differs in one field is a
-different destination. AddListElement leaves an element that is already present
-as it is, including a repeat within the request; that is not a failure.
-Subscribed_Recipients is the exception (Clause 12.51.9): an element names the
-entry with the same recipient and process identifier, so AddListElement renews
-that entry in place with the element's confirmation flag and Time Remaining,
-and RemoveListElement removes it whatever those two members say.
-RemoveListElement checks every element first and removes nothing if one is
-refused: an element that does not decode as the property's element, or whose
-datatype differs from the stored elements', returns
-`PROPERTY/INVALID_DATA_TYPE`, and one not in the list
-`SERVICES/LIST_ELEMENT_NOT_FOUND`. Both services always answer errors with a
-ChangeList-Error. A refusal of an element (decode, datatype, not found) names
-its position. The object judges the edited list, the stored elements followed
-by the new ones in request order, through `write_property`. A refusal there
-that names an element, as `Error::Structured` with
-`ErrorDetail::FirstFailedElementNumber` holding its position in that list,
-goes out naming the request element at that position; the built-in Alarm_Values,
-Fault_Signals, Date_List and Schedule reference-list writers all name it. A
-stored element named that
-way is no element of the request, so the response names element 0. A refusal
-that names no element, for an element's datatype, encoding, range or space,
-names the first element the list would have gained, which is exact when one
-element is new. Refusals of the request or target (authorization, object,
-property, array index, list kind, write access) name element 0, as do the
-object's refusals of what a removal leaves.
-
-On a running server a successful edit runs the object's intrinsic-reporting
-evaluation, as a WriteProperty does. An Alarm_Values edit that puts the
-watched value in or out of alarm, with Time_Delay 0, moves Event_State before
-the next periodic tick, and the transition's Status_Flags change goes to the
-object's COV subscribers.
-
-ReadRange reads only the same BACnetLIST properties. A scalar, a constructed
-single value, a whole array (Object_List, Priority_Array) or an indexed array
-element returns `SERVICES/PROPERTY_IS_NOT_A_LIST`, after the unknown object,
-unknown property and array-index errors and before any By Sequence Number or By
-Time error. A list the object holds framed in one `PropertyValue::ApplicationData`
-is split into its elements first, so By Position counts destinations in
-Recipient_List, references in Schedule's List_Of_Object_Property_References,
-entries in a Notification Forwarder's Subscribed_Recipients, and subscriptions
-and COV-multiple contexts in the Device's Active_COV_Subscriptions and
-Active_COV_Multiple_Subscriptions. A running
-server pages those two Device lists from the live COV table, through the same
-Device view as ReadProperty and from one snapshot per request, so a page's
-items joined in order are a run of the ReadProperty value. The standalone
-`handle_read_range` pages the Device object's empty lists, as a
-`bacnet-device-core` read with no overlay reads them. A list it cannot split (a framed list with
-no element codec, such as a vendor list, or a value of another shape) returns
-`SERVICES/OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`; ReadProperty still reads it
-whole. Custom objects that hold a vendor list should return
-`PropertyValue::List`, one value per item.
-
-Intrinsic reporting uses one proposal/commit contract, on the
-`EventReporting` capability. Its
-`evaluate_intrinsic_reporting` and `tick_intrinsic_reporting` return a
-fire-ready `TransitionOutcome` while leaving event state, acknowledgment bits,
-history, and the ready proposal unchanged until commit succeeds. Implement
-`commit_event_transition` to validate the supplied
-`EventTransitionCommit`, atomically apply all object-owned transition state, and
-return `EventTransitionCommitError` without mutation on failure. While the
-object's Event_Detection_Enable is FALSE, refuse every commit, NORMAL targets
-included, with `DetectionDisabled`, as the built-in reporters do: detection
-off stops the state machine and holds the event properties at their initial
-values (Clause 13.2.2.1), and turning it off should reset them directly, not
-through a commit. Custom objects
-can use these public types directly; the built-in private commit kernel is not
-required. Both server paths commit before distribution, even when Event_Enable,
-DCC, or an empty recipient list suppresses sending. The default commit
-returns `Unsupported`, as the server does for an object that lends no
-`EventReporting`; it never authorizes an intrinsic notification.
-
-The pre-1.0 API removes `intrinsic_reporting_requires_atomic_commit` and the
-exported `impl_intrinsic_reporting!` macro. Migrate custom objects to the hooks
-above; there is no alternate immediate-commit path. Standalone detector
-`probe`/`tick` methods retain their own detector-local behavior.
 
 ### Constructed property framing
 
@@ -9245,8 +9416,9 @@ The server automatically dispatches:
   DYNAMIC_CREATION_NOT_SUPPORTED (Clause 15.3.1.3, #2171). The types it
   creates are those of `bacnet_objects::creation`, each started with its
   own constructor's defaults (#2172). DeleteObject
-  answers OBJECT / UNKNOWN_OBJECT for an absent object, then asks the
-  object's `is_deleteable()`.
+  answers OBJECT / UNKNOWN_OBJECT for an absent object, then OBJECT /
+  OBJECT_DELETION_NOT_PERMITTED for a type it doesn't delete or an object
+  the database keeps ([Creation and deletion](#creation-and-deletion)).
 - DeviceCommunicationControl
 - ReinitializeDevice (restart, apply changes, or a Clause 19 backup or restore
   step): decoded and password-validated, then carried out by the
@@ -9322,19 +9494,29 @@ CreateObject builds the types of `bacnet_objects::creation` on its own. An
 application makes its own types creatable, or replaces a built-in type's
 constructor, by registering a constructor per type (#2173):
 `ServerBuilder::object_constructor(object_type, constructor)` (also on the
-B/IP and SC builders), or `ServerConfig::object_constructors`, an
-`ObjectConstructors` whose `register` takes the same arguments.
+B/IP and SC builders), or `ServerConfig::object_types`, an
+`ObjectTypeRegistry` whose `register` takes the same arguments. The
+constructor returns its concrete type, which implements
+`bacnet_objects::creation::Creatable`; that is where the type's
+creation-only properties come from (#2179). Every built-in type the table
+builds implements it already.
 
 ```rust,ignore
+use bacnet_objects::creation::Creatable;
+
+// MyPump takes no property only at creation.
+impl Creatable for MyPump {}
+
 let server = BACnetServer::bip_builder()
     .object_constructor(ObjectType::from_raw(600), |oid, name| {
-        Ok(Box::new(MyPump::new(oid, name)))
+        Ok(MyPump::new(oid, name))
     })?
     .object_constructor(ObjectType::ANALOG_VALUE, |oid, name| {
         let mut av =
             AnalogValueObject::new(oid.instance_number(), name, EngineeringUnits::DEGREES_CELSIUS)?;
         av.set_description("created by a client");
-        Ok(Box::new(av))
+        // Still takes Units only at creation, as the built-in type does.
+        Ok(av)
     })?
     .build()
     .await?;
@@ -9356,7 +9538,7 @@ let server = BACnetServer::bip_builder()
 - **What follows** is the path a built-in type takes: the server policy
   decides the request before the constructor runs, the initial values are
   applied as WriteProperty applies them (creation-only properties through
-  `initialize_property`), a refusal names its initial value and drops the
+  the type's `Creatable::initialize_property`), a refusal names its initial value and drops the
   object, and the creation is audited. The constructor doesn't see the
   initial values, so it can't add optional rows on request as the built-in
   table does (an Analog or Binary Value's audit policy rows): an initial
@@ -9369,6 +9551,9 @@ let server = BACnetServer::bip_builder()
   client as is. A caught panic still runs the process's panic hook, which
   prints to stderr by default (and can garble a terminal UI), so refuse
   with an error, not a panic.
+- **Deletion.** `ObjectTypeRegistry::keep_from_deletion(object_type)` keeps
+  a type from DeleteObject, registered or not; every other type but Device
+  and Network Port is deleteable.
 - **PICS.** A registered type reports as createable from the registry.
   With no instance in the database it is still listed, with no property
   rows or creation-only list: the server never calls the constructor just

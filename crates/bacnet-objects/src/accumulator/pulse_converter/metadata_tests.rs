@@ -95,7 +95,9 @@ fn property_metadata_pulse_converter_exact_sets_readable_rows_and_indexed_list()
             .len(),
         metadata.len()
     );
-    assert!(object.is_deleteable());
+    assert!(crate::creation::builtin_deleteable(
+        object.object_identifier().object_type()
+    ));
     assert!(object.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
     for row in metadata.iter() {
         let cov = COV_ROWS.contains(&row.property_identifier);

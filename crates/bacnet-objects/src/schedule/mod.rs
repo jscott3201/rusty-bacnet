@@ -514,11 +514,16 @@ impl BACnetObject for ScheduleObject {
         metadata::for_object(self)
     }
 
-    /// Object_Name is read-only over the network, but a client names the
-    /// Schedule it creates (#2208). Its other properties are writable.
-    fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
-        &[PropertyIdentifier::OBJECT_NAME]
-    }
+    crate::traits::lend_reliability_eval!();
+
+    crate::traits::lend_schedule_runner!();
+}
+
+/// Object_Name is read-only over the network, but a client names the
+/// Schedule it creates (#2208). Its other properties are writable.
+impl crate::creation::Creatable for ScheduleObject {
+    const CREATION_ONLY_PROPERTIES: &'static [PropertyIdentifier] =
+        &[PropertyIdentifier::OBJECT_NAME];
 
     fn initialize_property(
         &mut self,
@@ -530,10 +535,6 @@ impl BACnetObject for ScheduleObject {
         }
         common::initialize_object_name(&mut self.name, &value)
     }
-
-    crate::traits::lend_reliability_eval!();
-
-    crate::traits::lend_schedule_runner!();
 }
 
 impl ScheduleRunner for ScheduleObject {

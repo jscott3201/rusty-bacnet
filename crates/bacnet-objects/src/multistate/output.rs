@@ -457,9 +457,12 @@ impl BACnetObject for MultiStateOutputObject {
         metadata::for_object(self)
     }
 
-    fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
-        CREATION_ONLY
-    }
+    crate::traits::lend_reliability_eval!();
+}
+
+impl crate::creation::Creatable for MultiStateOutputObject {
+    const CREATION_ONLY_PROPERTIES: &'static [PropertyIdentifier] = CREATION_ONLY;
+
     fn initialize_property(
         &mut self,
         property: PropertyIdentifier,
@@ -476,7 +479,6 @@ impl BACnetObject for MultiStateOutputObject {
         let _ = self.recompute_reliability();
         Ok(())
     }
-    crate::traits::lend_reliability_eval!();
 }
 
 impl crate::traits::CovReporting for MultiStateOutputObject {}

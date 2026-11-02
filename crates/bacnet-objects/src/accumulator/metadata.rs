@@ -46,7 +46,7 @@ use crate::property_metadata::{
 // throughout: the implementation models no commandable, intrinsic-reporting,
 // or paired-text gating. The object is not createable at runtime (the
 // `creation` table has no constructor for it) and remains deleteable
-// (delete denies only Device and NetworkPort, so the is_deleteable=true
+// (delete denies only Device and NetworkPort, so the builtin_deleteable=true
 // default holds); neither needs an override. Array gating keeps the default:
 // Property_List admits an index (BACnetARRAY per Table 12-79) while every
 // other served row rejects one. COV keeps its `cov()` lend, and the COV
@@ -128,7 +128,9 @@ mod tests {
                 .len(),
             metadata.len()
         );
-        assert!(object.is_deleteable());
+        assert!(crate::creation::builtin_deleteable(
+            object.object_identifier().object_type()
+        ));
         assert!(object.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
         for row in metadata.iter() {
             assert_eq!(row.presence_condition, None);

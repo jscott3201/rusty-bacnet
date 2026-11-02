@@ -546,9 +546,16 @@ impl BACnetObject for MultiStateValueObject {
         metadata::for_object(self)
     }
 
-    fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
-        CREATION_ONLY
+    crate::traits::lend_reliability_eval!();
+
+    fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
+        Some(self)
     }
+}
+
+impl crate::creation::Creatable for MultiStateValueObject {
+    const CREATION_ONLY_PROPERTIES: &'static [PropertyIdentifier] = CREATION_ONLY;
+
     fn initialize_property(
         &mut self,
         property: PropertyIdentifier,
@@ -564,11 +571,6 @@ impl BACnetObject for MultiStateValueObject {
         )?;
         let _ = self.recompute_reliability();
         Ok(())
-    }
-    crate::traits::lend_reliability_eval!();
-
-    fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
-        Some(self)
     }
 }
 

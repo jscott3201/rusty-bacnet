@@ -133,7 +133,7 @@ fn network_port_delete_object_is_denied() {
     use bacnet_services::object_mgmt::DeleteObjectRequest;
 
     // NetworkPort models a running node's port and is not deleteable at
-    // runtime, mirroring `NetworkPortObject::is_deleteable` so PICS and the
+    // runtime, by the type-level `creation::builtin_deleteable`, so PICS and the
     // runtime DeleteObject handler share one truth source (differs from
     // LoadControl delete-allowed).
     let mut db = ObjectDatabase::new();

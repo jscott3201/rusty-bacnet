@@ -226,60 +226,31 @@ fn an_identifier_in_use_is_refused_before_its_type_is_judged() {
     assert!(db.get(&vendor).is_some());
 }
 
-/// A Binary Input that its application keeps from being deleted.
-struct Pinned(bacnet_objects::binary::BinaryInputObject);
-
-impl BACnetObject for Pinned {
-    fn object_identifier(&self) -> ObjectIdentifier {
-        self.0.object_identifier()
-    }
-
-    fn object_name(&self) -> &str {
-        self.0.object_name()
-    }
-
-    fn read_property(
-        &self,
-        property: PropertyIdentifier,
-        array_index: Option<u32>,
-    ) -> Result<PropertyValue, Error> {
-        self.0.read_property(property, array_index)
-    }
-
-    fn write_property(
-        &mut self,
-        property: PropertyIdentifier,
-        array_index: Option<u32>,
-        value: PropertyValue,
-        priority: Option<u8>,
-    ) -> Result<(), Error> {
-        self.0
-            .write_property(property, array_index, value, priority)
-    }
-
-    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
-        self.0.property_metadata()
-    }
-
-    fn is_deleteable(&self) -> bool {
-        false
-    }
-}
-
 #[test]
-fn delete_object_asks_the_object_whether_it_may_go() {
+fn delete_object_refuses_a_type_the_server_keeps() {
+    // Deleteability belongs to the type (#2179): a server that keeps the
+    // vendor type refuses its objects, and a server that doesn't removes
+    // them, whatever the object is.
     let mut db = make_db_with_device_and_ai();
-    let pinned = object(ObjectType::BINARY_INPUT, 3);
-    db.add(Box::new(Pinned(
-        bacnet_objects::binary::BinaryInputObject::new(3, "BI-3").unwrap(),
-    )))
-    .unwrap();
+    let kept = object(ObjectType::from_raw(600), 3);
+    db.add(Box::new(Vendor(kept))).unwrap();
+    let mut constructors = crate::server::ObjectTypeRegistry::new();
+    constructors.keep_from_deletion(kept.object_type());
+    assert!(!constructors.deletes(kept.object_type()));
+    let mut request = BytesMut::new();
+    DeleteObjectRequest {
+        object_identifier: kept,
+    }
+    .encode(&mut request);
     assert_eq!(
-        refusal(delete(&mut db, pinned)),
+        refusal(delete_object(&mut db, &constructors, &request).map(|_| ())),
         (ErrorClass::OBJECT, ErrorCode::OBJECT_DELETION_NOT_PERMITTED)
     );
-    assert!(db.get(&pinned).is_some());
-    // An object that allows it goes, whatever its type.
+    assert!(db.get(&kept).is_some());
+    // Without the registry the type is deleteable, as every type but
+    // Device and Network Port is.
+    delete(&mut db, kept).unwrap();
+    assert!(db.get(&kept).is_none());
     let ai = object(ObjectType::ANALOG_INPUT, 1);
     delete(&mut db, ai).unwrap();
     assert!(db.get(&ai).is_none());

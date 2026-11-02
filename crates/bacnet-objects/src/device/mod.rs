@@ -803,12 +803,6 @@ impl BACnetObject for DeviceObject {
         metadata::for_object(self)
     }
 
-    /// Device is not deleteable at runtime (nor createable: its type has
-    /// no constructor in [`crate::creation`]).
-    fn is_deleteable(&self) -> bool {
-        false
-    }
-
     fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
         Some(self)
     }

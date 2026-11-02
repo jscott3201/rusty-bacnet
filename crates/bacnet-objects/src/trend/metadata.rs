@@ -310,7 +310,9 @@ mod tests {
                         crate::test_rows::required(&object.property_metadata()),
                         required
                     );
-                    assert!(object.is_deleteable());
+                    assert!(crate::creation::builtin_deleteable(
+                        object.object_identifier().object_type()
+                    ));
                     assert!(!object.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
                     assert!(!object.is_array_property(P::LOG_BUFFER));
                     let metadata = object.property_metadata();

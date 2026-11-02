@@ -122,7 +122,8 @@ pub(crate) const CREATION_ONLY: &[PropertyIdentifier] = &[PropertyIdentifier::UN
 
 /// Set `units` from a Units initial value. An Enumerated above 65535 is
 /// outside BACnetEngineeringUnits (Clause 21) and is VALUE_OUT_OF_RANGE;
-/// any other property is WRITE_ACCESS_DENIED, as the trait default answers.
+/// any other property is WRITE_ACCESS_DENIED, as `Creatable`'s default
+/// answers.
 pub(crate) fn initialize_units(
     units: &mut EngineeringUnits,
     property: PropertyIdentifier,
