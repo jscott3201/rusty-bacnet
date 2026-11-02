@@ -374,6 +374,8 @@ async fn trend_log_reports_follow_their_class_and_are_logged() {
         for _ in 0..2 {
             db.get_mut(&tl1())
                 .unwrap()
+                .log_buffer_mut()
+                .unwrap()
                 .add_trend_record(BACnetLogRecord {
                     date: at(40).local_date,
                     time: time(40),
@@ -383,6 +385,8 @@ async fn trend_log_reports_follow_their_class_and_are_logged() {
                 .unwrap();
         }
         db.get_mut(&tlm1())
+            .unwrap()
+            .log_buffer_mut()
             .unwrap()
             .add_trend_multiple_record(BACnetLogMultipleRecord {
                 date: at(40).local_date,

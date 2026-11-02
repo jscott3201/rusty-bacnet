@@ -1,5 +1,6 @@
 use super::*;
 use bacnet_objects::property_metadata::PropertyMetadata;
+use bacnet_objects::traits::LogBuffer;
 use bacnet_types::error::Error;
 use std::borrow::Cow;
 use std::future::Future;
@@ -115,11 +116,28 @@ impl BACnetObject for GateTrend {
     fn timed(&mut self) -> Option<&mut dyn bacnet_objects::traits::Timed> {
         self.object.timed()
     }
+    fn log_buffer(&self) -> Option<&dyn LogBuffer> {
+        Some(self)
+    }
+    fn log_buffer_mut(&mut self) -> Option<&mut dyn LogBuffer> {
+        Some(self)
+    }
+}
+impl LogBuffer for GateTrend {
+    fn record_identities(&self) -> Vec<bacnet_objects::log_buffer::LogRecordIdentity> {
+        self.object.log_buffer().unwrap().record_identities()
+    }
+    fn buffer_records(&self) -> Option<&dyn bacnet_objects::log_buffer::LogBufferRecords> {
+        self.object.log_buffer()?.buffer_records()
+    }
     fn add_trend_record(
         &mut self,
         record: bacnet_types::constructed::BACnetLogRecord,
     ) -> Result<(), Error> {
-        self.object.add_trend_record(record)?;
+        self.object
+            .log_buffer_mut()
+            .unwrap()
+            .add_trend_record(record)?;
         self.appended.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }

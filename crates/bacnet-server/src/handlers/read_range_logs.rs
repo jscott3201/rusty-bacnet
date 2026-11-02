@@ -8,7 +8,7 @@
 //! both services see the same records, each item one bare
 //! BACnetAuditLogRecord whose identity is its Unsigned64 sequence number and
 //! timestamp. A Trend Log, Event Log or Trend Log Multiple lends its record
-//! buffer through `log_buffer_internal`, each item one record framed as its
+//! buffer through `LogBuffer::buffer_records`, each item one record framed as its
 //! Clause 21 production (#1233), with the identities its buffer derives. By
 //! Position, By Sequence Number and By Time then select through the same
 //! code for every log.
@@ -274,7 +274,7 @@ pub(super) fn log_buffer<'a>(
             RangeItems::AuditRecords(records),
             LogIdentities::Audit(records),
         )
-    } else if let Some(records) = object.log_buffer_internal() {
+    } else if let Some(records) = object.log_buffer().and_then(|log| log.buffer_records()) {
         (
             RangeItems::LogRecords(records),
             LogIdentities::Buffer(records),

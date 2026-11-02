@@ -12,6 +12,8 @@ use bacnet_types::primitives::ObjectIdentifier;
 
 use super::ObjectDatabase;
 use crate::device_reference::decode_reference;
+use crate::event_log::EventLogObject;
+use crate::traits::not_supported;
 
 impl ObjectDatabase {
     /// Record an event notification this device generated in each of its
@@ -61,10 +63,9 @@ impl ObjectDatabase {
     /// Whether any Event Log has opted in to the notifications the device
     /// receives. The server asks before it decodes one.
     pub fn collects_received_event_notifications(&self) -> bool {
-        self.find_by_type(ObjectType::EVENT_LOG).iter().any(|oid| {
-            self.get(oid)
-                .is_some_and(|log| log.logs_received_event_notifications_internal())
-        })
+        self.find_by_type(ObjectType::EVENT_LOG)
+            .iter()
+            .any(|oid| self.logs_received(oid))
     }
 
     /// Whether [`log_received_event_notification`](Self::log_received_event_notification)
@@ -109,11 +110,22 @@ impl ObjectDatabase {
     /// The Event Logs that take received notifications.
     fn received_notification_logs(&self) -> Vec<ObjectIdentifier> {
         let mut logs = self.find_by_type(ObjectType::EVENT_LOG);
-        logs.retain(|oid| {
-            self.get(oid)
-                .is_some_and(|log| log.logs_received_event_notifications_internal())
-        });
+        logs.retain(|oid| self.logs_received(oid));
         logs
+    }
+
+    /// Whether the object at `oid` is a built-in Event Log that has opted in
+    /// to received notifications: only
+    /// [`EventLogObject::set_log_received_notifications`] opts one in, so the
+    /// stored object itself is asked, never an adapter around it.
+    fn logs_received(&self, oid: &ObjectIdentifier) -> bool {
+        self.objects.get(oid).is_some_and(|object| {
+            object
+                .as_ref()
+                .as_stored_any(crate::traits::ObjectStorageAccess(()))
+                .downcast_ref::<EventLogObject>()
+                .is_some_and(EventLogObject::logs_received_notifications)
+        })
     }
 
     /// Whether a received notification is one a log may take: it isn't a
@@ -150,7 +162,11 @@ impl ObjectDatabase {
                 time: frame.local_time,
                 log_datum: EventLogDatum::Notification(notification.clone()),
             };
-            match log.add_event_log_record(record) {
+            let added = log.log_buffer_mut().map_or_else(
+                || Err(not_supported()),
+                |log| log.add_event_log_record(record),
+            );
+            match added {
                 Ok(()) => {}
                 Err(error) if is_unsupported(&error) => {
                     log_debug!(log = %oid, "Event Log object takes no records");

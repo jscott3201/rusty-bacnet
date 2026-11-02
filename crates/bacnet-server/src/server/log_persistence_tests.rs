@@ -135,6 +135,8 @@ async fn the_server_commits_a_durable_log_on_its_interval_and_at_stop() {
         .await
         .get_mut(&oid)
         .unwrap()
+        .log_buffer_mut()
+        .unwrap()
         .add_trend_record(record(2))
         .unwrap();
     server.stop().await.unwrap();

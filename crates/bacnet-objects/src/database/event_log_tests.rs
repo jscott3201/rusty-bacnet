@@ -353,6 +353,15 @@ impl BACnetObject for Refusing {
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         crate::test_rows::read_only(&[])
     }
+    fn log_buffer_mut(&mut self) -> Option<&mut dyn crate::traits::LogBuffer> {
+        Some(self)
+    }
+}
+
+impl crate::traits::LogBuffer for Refusing {
+    fn record_identities(&self) -> Vec<crate::log_buffer::LogRecordIdentity> {
+        Vec::new()
+    }
     fn add_event_log_record(&mut self, _: BACnetEventLogRecord) -> Result<(), Error> {
         self.0.fetch_add(1, Ordering::Relaxed);
         Err(Error::protocol(

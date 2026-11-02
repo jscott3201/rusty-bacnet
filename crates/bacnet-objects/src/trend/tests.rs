@@ -10,7 +10,10 @@ use std::sync::Arc;
 
 /// Each resident record as ReadRange serves it, still encoded.
 fn served(object: &dyn BACnetObject) -> Vec<Vec<u8>> {
-    let records = object.log_buffer_internal().unwrap();
+    let records = object
+        .log_buffer()
+        .and_then(|log| log.buffer_records())
+        .unwrap();
     (0..records.record_count())
         .map(|index| {
             let mut buf = BytesMut::new();
@@ -266,7 +269,13 @@ fn trendlog_serves_log_buffer_records_framed() {
 #[test]
 fn trendlog_log_buffer_empty() {
     let tl = TrendLogObject::new(1, "TL-1", 100).unwrap();
-    assert_eq!(tl.log_buffer_internal().unwrap().record_count(), 0);
+    assert_eq!(
+        tl.log_buffer()
+            .and_then(|log| log.buffer_records())
+            .unwrap()
+            .record_count(),
+        0
+    );
     assert!(matches!(
         tl.read_property(PropertyIdentifier::LOG_BUFFER, None),
         Err(Error::Remote(RemoteError::Error { class, code }))

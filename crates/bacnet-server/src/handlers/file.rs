@@ -62,7 +62,7 @@ fn invalid_file_start_position() -> Error {
 /// Clause 18 uses FILE_ACCESS_DENIED for locked or inaccessible files,
 /// and Clause 14.2.4.1 also uses it for attempted writes to read-only files.
 /// Both handlers report a File-typed object whose
-/// `file_storage_internal` hook returns `None` this way rather than reading
+/// `file_storage` hook returns `None` this way rather than reading
 /// it as empty, and the write handler also reports a `Read_Only` that is
 /// TRUE, unreadable, or not a BOOLEAN: like the access-method gate, it
 /// fails closed instead of assuming the file is writable.
@@ -179,7 +179,7 @@ fn execute_read_file(
     // Clause 14.1 Service Procedure, first step: reject an inaccessible
     // File object before its properties are
     // consulted; an object without storage is that case.
-    if object.file_storage_internal().is_none() {
+    if object.file_storage().is_none() {
         return Err(file_access_denied().into());
     }
 
@@ -193,9 +193,7 @@ fn execute_read_file(
     };
     validate_file_access_method(object, expected)?;
 
-    let storage = object
-        .file_storage_internal()
-        .ok_or_else(file_access_denied)?;
+    let storage = object.file_storage().ok_or_else(file_access_denied)?;
 
     match request.access {
         FileAccessMethod::Stream {
@@ -385,7 +383,7 @@ fn execute_write_file(
     // Clause 14.2 Service Procedure, first step: reject an inaccessible
     // File object before its properties are
     // consulted; an object without storage is that case.
-    if object.file_storage_internal().is_none() {
+    if object.file_storage().is_none() {
         return Err(file_access_denied().into());
     }
 
@@ -408,9 +406,7 @@ fn execute_write_file(
     };
     validate_file_access_method(object, expected)?;
 
-    let storage = object
-        .file_storage_internal_mut()
-        .ok_or_else(file_access_denied)?;
+    let storage = object.file_storage_mut().ok_or_else(file_access_denied)?;
 
     match request.access {
         FileWriteAccessMethod::Stream {

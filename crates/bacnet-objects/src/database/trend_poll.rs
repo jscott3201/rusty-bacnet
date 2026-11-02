@@ -199,8 +199,8 @@ impl ObjectDatabase {
         // Every log looks at its window, Event Logs included, whether or not
         // a monotonic clock drives acquisition.
         for oid in &logs {
-            if let Some(log) = self.get_mut(oid) {
-                log.refresh_log_window_internal();
+            if let Some(log) = self.get_mut(oid).and_then(|log| log.log_buffer_mut()) {
+                log.refresh_window();
             }
         }
         logs.truncate(trend_logs);
@@ -291,15 +291,15 @@ impl ObjectDatabase {
                 .iter()
                 .map(|member| self.acquire(local, member))
                 .collect();
-            let object = self.get_mut(&oid).unwrap();
-            let inserted = if oid.object_type() == ObjectType::TREND_LOG_MULTIPLE {
-                object.add_trend_multiple_record(BACnetLogMultipleRecord {
-                    date: frame.local_date,
-                    time: frame.local_time,
-                    log_data: LogData::Values(values),
-                })
-            } else {
-                object.add_trend_record(BACnetLogRecord {
+            let inserted = match self.get_mut(&oid).unwrap().log_buffer_mut() {
+                None => Err(crate::traits::not_supported()),
+                Some(log) if oid.object_type() == ObjectType::TREND_LOG_MULTIPLE => log
+                    .add_trend_multiple_record(BACnetLogMultipleRecord {
+                        date: frame.local_date,
+                        time: frame.local_time,
+                        log_data: LogData::Values(values),
+                    }),
+                Some(log) => log.add_trend_record(BACnetLogRecord {
                     date: frame.local_date,
                     time: frame.local_time,
                     // A Trend Log has exactly one reference.
@@ -308,7 +308,7 @@ impl ObjectDatabase {
                         .next()
                         .map_or(LogDatum::NullValue, LogDatum::from),
                     status_flags: None,
-                })
+                }),
             };
             inserted
                 .inspect_err(|error| {

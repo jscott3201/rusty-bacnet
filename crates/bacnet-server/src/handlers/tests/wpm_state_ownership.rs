@@ -86,7 +86,7 @@ fn wpm_file_resize_and_network_configuration_keep_committed_state() {
     assert_eq!(
         db.get(&file_oid)
             .unwrap()
-            .file_storage_internal()
+            .file_storage()
             .unwrap()
             .read_stream(0, 10)
             .unwrap()

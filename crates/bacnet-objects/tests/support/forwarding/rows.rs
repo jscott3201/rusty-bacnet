@@ -76,7 +76,7 @@ pub fn commit() -> EventTransitionCommit {
     }
 }
 
-fn multiple_record() -> BACnetLogMultipleRecord {
+pub fn multiple_record() -> BACnetLogMultipleRecord {
     BACnetLogMultipleRecord {
         date: record().date,
         time: noon(),
@@ -84,7 +84,7 @@ fn multiple_record() -> BACnetLogMultipleRecord {
     }
 }
 
-fn record() -> BACnetLogRecord {
+pub fn record() -> BACnetLogRecord {
     BACnetLogRecord {
         date: Date {
             year: 126,
@@ -98,7 +98,7 @@ fn record() -> BACnetLogRecord {
     }
 }
 
-fn event_log_record() -> BACnetEventLogRecord {
+pub fn event_log_record() -> BACnetEventLogRecord {
     BACnetEventLogRecord {
         date: Date {
             year: 126,
@@ -195,23 +195,14 @@ pub const QUERIES: &[(&str, Query)] = &[
                 .map(|forwarding| address(forwarding.as_ref()))
         )
     }),
-    ("file_configuration_internal", |o| {
-        format!("{:?}", o.file_configuration_internal().map(address))
+    ("file_configuration", |o| {
+        format!("{:?}", o.file_configuration().map(address))
     }),
-    ("file_storage_internal", |o| {
-        format!("{:?}", o.file_storage_internal().map(address))
+    ("file_storage", |o| {
+        format!("{:?}", o.file_storage().map(address))
     }),
-    ("log_record_identities_internal", |o| {
-        format!("{:?}", o.log_record_identities_internal())
-    }),
-    ("log_buffer_internal", |o| {
-        format!("{:?}", o.log_buffer_internal().map(address))
-    }),
-    ("logs_received_event_notifications_internal", |o| {
-        o.logs_received_event_notifications_internal().to_string()
-    }),
-    ("log_collecting_internal", |o| {
-        o.log_collecting_internal().to_string()
+    ("log_buffer", |o| {
+        format!("{:?}", o.log_buffer().map(address))
     }),
 ];
 
@@ -350,29 +341,13 @@ pub const COMMANDS: &[(&str, Command)] = &[
     ("durable_writes", |o| {
         format!("{:?}", o.durable_writes().map(|writes| address(writes)))
     }),
-    ("file_configuration_internal_mut", |o| {
-        format!(
-            "{:?}",
-            o.file_configuration_internal_mut()
-                .map(|file| address(file))
-        )
+    ("file_configuration_mut", |o| {
+        format!("{:?}", o.file_configuration_mut().map(|file| address(file)))
     }),
-    ("file_storage_internal_mut", |o| {
-        format!(
-            "{:?}",
-            o.file_storage_internal_mut().map(|file| address(file))
-        )
+    ("file_storage_mut", |o| {
+        format!("{:?}", o.file_storage_mut().map(|file| address(file)))
     }),
-    ("add_trend_record", |o| {
-        format!("{:?}", o.add_trend_record(record()))
-    }),
-    ("add_trend_multiple_record", |o| {
-        format!("{:?}", o.add_trend_multiple_record(multiple_record()))
-    }),
-    ("add_event_log_record", |o| {
-        format!("{:?}", o.add_event_log_record(event_log_record()))
-    }),
-    ("refresh_log_window_internal", |o| {
-        o.refresh_log_window_internal().to_string()
+    ("log_buffer_mut", |o| {
+        format!("{:?}", o.log_buffer_mut().map(|log| address(log)))
     }),
 ];

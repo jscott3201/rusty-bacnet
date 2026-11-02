@@ -135,7 +135,12 @@ fn a_polled_value_too_long_to_page_logs_value_too_long() {
 
 /// The record ReadRange serves for the newest sample of `oid`.
 fn last_served(db: &ObjectDatabase, oid: ObjectIdentifier) -> Vec<u8> {
-    let records = db.get(&oid).unwrap().log_buffer_internal().unwrap();
+    let records = db
+        .get(&oid)
+        .unwrap()
+        .log_buffer()
+        .and_then(|log| log.buffer_records())
+        .unwrap();
     let mut bytes = BytesMut::new();
     records.encode_record(records.record_count() - 1, &mut bytes);
     bytes.to_vec()

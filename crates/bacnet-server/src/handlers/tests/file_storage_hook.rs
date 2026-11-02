@@ -231,11 +231,11 @@ impl BACnetObject for LaxFile {
         crate::test_rows::read_only(&[])
     }
 
-    fn file_storage_internal(&self) -> Option<&dyn FileStorage> {
+    fn file_storage(&self) -> Option<&dyn FileStorage> {
         Some(self)
     }
 
-    fn file_storage_internal_mut(&mut self) -> Option<&mut dyn FileStorage> {
+    fn file_storage_mut(&mut self) -> Option<&mut dyn FileStorage> {
         Some(self)
     }
 }
@@ -367,11 +367,11 @@ impl BACnetObject for OpaqueReadOnlyFile {
         crate::test_rows::read_only(&[])
     }
 
-    fn file_storage_internal(&self) -> Option<&dyn FileStorage> {
+    fn file_storage(&self) -> Option<&dyn FileStorage> {
         Some(self)
     }
 
-    fn file_storage_internal_mut(&mut self) -> Option<&mut dyn FileStorage> {
+    fn file_storage_mut(&mut self) -> Option<&mut dyn FileStorage> {
         Some(self)
     }
 }

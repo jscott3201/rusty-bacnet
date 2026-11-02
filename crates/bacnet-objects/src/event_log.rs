@@ -13,9 +13,7 @@ use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlag
 
 use crate::clock::ClockReader;
 use crate::common::{self, read_common_properties};
-use crate::log_buffer::{
-    LogBufferRecords, LogRecordBuffer, LogRecordIdentity, log_buffer_read_denied,
-};
+use crate::log_buffer::{LogRecordBuffer, log_buffer_read_denied};
 use crate::log_lifecycle::LogLifecycle;
 use crate::log_persistence::store::{DurableLog, LogStore};
 use crate::log_reporting::{BufferReadyReporting, impl_buffer_ready_reporting};
@@ -264,7 +262,7 @@ impl BACnetObject for EventLogObject {
             p if p == PropertyIdentifier::BUFFER_SIZE => {
                 Ok(PropertyValue::Unsigned(self.buffer_size as u64))
             }
-            // ReadRange pages it through `log_buffer_internal`.
+            // ReadRange pages it through `LogBuffer::buffer_records`.
             p if p == PropertyIdentifier::LOG_BUFFER => Err(log_buffer_read_denied()),
             p if p == PropertyIdentifier::RECORD_COUNT => {
                 Ok(PropertyValue::Unsigned(self.records().len() as u64))
@@ -329,28 +327,7 @@ impl BACnetObject for EventLogObject {
         self.store.is_some().then_some(self as _)
     }
 
-    fn log_record_identities_internal(&self) -> Option<Vec<LogRecordIdentity>> {
-        Some(self.log_buffer.identities())
-    }
-
-    fn log_buffer_internal(&self) -> Option<&dyn LogBufferRecords> {
-        Some(&self.log_buffer)
-    }
-
-    fn add_event_log_record(&mut self, record: BACnetEventLogRecord) -> Result<(), Error> {
-        self.add_record(record)
-    }
-
-    fn refresh_log_window_internal(&mut self) -> bool {
-        self.settle_interruption(None);
-        let recorded = self.lifecycle().refresh_window();
-        self.commit_if_counted();
-        recorded
-    }
-
-    fn logs_received_event_notifications_internal(&self) -> bool {
-        self.log_received_notifications
-    }
+    crate::traits::lend_log_buffer!();
 
     crate::traits::lend_event_reporting!();
 
@@ -360,6 +337,7 @@ impl BACnetObject for EventLogObject {
 }
 
 impl_buffer_ready_reporting!(EventLogObject, reporting, log_buffer);
+crate::traits::impl_log_buffer!(EventLogObject, add_event_log_record, BACnetEventLogRecord);
 
 impl crate::traits::Timed for EventLogObject {
     fn bind_clocks(&mut self, clocks: &crate::traits::Clocks) {

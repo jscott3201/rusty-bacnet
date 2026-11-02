@@ -328,10 +328,7 @@ fn configuration_getters_do_not_mutate_or_sample_the_clock() {
     });
 
     assert_eq!(
-        file.file_configuration_internal()
-            .unwrap()
-            .stream_data()
-            .unwrap(),
+        file.file_configuration().unwrap().stream_data().unwrap(),
         &[1, 2]
     );
     assert_eq!(
@@ -340,7 +337,7 @@ fn configuration_getters_do_not_mutate_or_sample_the_clock() {
     );
     assert!(file.archive());
 
-    file.file_configuration_internal_mut()
+    file.file_configuration_mut()
         .unwrap()
         .set_stream_data(vec![3, 4])
         .unwrap();

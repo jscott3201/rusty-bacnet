@@ -399,7 +399,10 @@ fn rpm_and_rp_refuse_log_buffer_while_read_range_serves_framed_records() {
         // log-disabled and buffer-purged, bits 0 and 1, are the top two bits.
         let status = [0x1e, 0x0a, 5, 0xc0, 0x1f];
         let expected = [&timestamp[..], first, &timestamp, &status].concat();
-        let identities = object.log_record_identities_internal().unwrap();
+        let identities = object
+            .log_buffer()
+            .map(|log| log.record_identities())
+            .unwrap();
         assert_eq!(
             identities
                 .iter()

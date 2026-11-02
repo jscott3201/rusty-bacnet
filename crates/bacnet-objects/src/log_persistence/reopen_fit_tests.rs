@@ -145,7 +145,7 @@ fn a_full_stopped_log_keeps_its_records_over_the_marker() {
             clock: Some(HandClock::at(12)),
             ..crate::traits::Clocks::default()
         });
-        log.refresh_log_window_internal();
+        log.log_buffer_mut().unwrap().refresh_window();
         assert_eq!(
             (served(log.as_ref()), total(log.as_ref())),
             before,

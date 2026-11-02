@@ -39,6 +39,7 @@ mod enrollment_eval;
 mod event_reporting;
 mod life_safety;
 mod local_input;
+mod log_buffer;
 mod reliability_eval;
 mod schedule_runner;
 mod staging_source;
@@ -58,6 +59,9 @@ pub(crate) use event_reporting::lend_event_reporting;
 pub use event_reporting::{EventReporting, no_alarm_configured};
 pub use life_safety::LifeSafety;
 pub use local_input::{LocalInput, LocalInputValue};
+#[doc(hidden)]
+pub use log_buffer::LogBuffer;
+pub(crate) use log_buffer::{impl_log_buffer, lend_log_buffer};
 pub use reliability_eval::ReliabilityEval;
 pub(crate) use reliability_eval::lend_reliability_eval;
 pub use schedule_runner::ScheduleRunner;

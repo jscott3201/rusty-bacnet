@@ -73,7 +73,12 @@ fn assert_refused(result: Result<(), Error>, class: ErrorClass, code: ErrorCode)
 }
 
 fn log_data(db: &ObjectDatabase) -> Vec<LogData> {
-    let records = db.get(&tlm1()).unwrap().log_buffer_internal().unwrap();
+    let records = db
+        .get(&tlm1())
+        .unwrap()
+        .log_buffer()
+        .and_then(|log| log.buffer_records())
+        .unwrap();
     (0..records.record_count())
         .map(|index| {
             let mut bytes = BytesMut::new();

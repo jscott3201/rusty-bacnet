@@ -297,11 +297,11 @@ impl BACnetObject for ConfigurableTrend {
     fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
         self.inner.timed()
     }
-    fn add_trend_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
-        self.inner.add_trend_record(record)
+    fn log_buffer(&self) -> Option<&dyn crate::traits::LogBuffer> {
+        self.inner.log_buffer()
     }
-    fn log_buffer_internal(&self) -> Option<&dyn crate::log_buffer::LogBufferRecords> {
-        self.inner.log_buffer_internal()
+    fn log_buffer_mut(&mut self) -> Option<&mut dyn crate::traits::LogBuffer> {
+        self.inner.log_buffer_mut()
     }
 }
 
@@ -424,7 +424,12 @@ fn idle_reconciliation_and_max_interval_failure_backoff_are_bounded() {
 /// The datum of `oid`'s newest Log_Buffer record, decoded from the framed
 /// record ReadRange serves.
 fn last_datum(db: &ObjectDatabase, oid: ObjectIdentifier) -> LogDatum {
-    let records = db.get(&oid).unwrap().log_buffer_internal().unwrap();
+    let records = db
+        .get(&oid)
+        .unwrap()
+        .log_buffer()
+        .and_then(|log| log.buffer_records())
+        .unwrap();
     let index = records.record_count().checked_sub(1).expect("a record");
     let mut bytes = BytesMut::new();
     records.encode_record(index, &mut bytes);
