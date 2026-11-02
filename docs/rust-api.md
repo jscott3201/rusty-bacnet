@@ -5617,9 +5617,13 @@ never stays TRUE), waits for each clock-aligned boundary of an aligned POLLED
 log, and on every pass calls `LogBuffer::refresh_window` on each Trend Log,
 Trend Log Multiple and Event Log, so each records its window opening or
 closing. Wrappers forward the `log_buffer` accessors, as `SourceReporter`
-does. Whether a COV Trend Log is collecting, and whether an Event Log takes
-received notifications, are asked of the built-in `TrendLogObject` and
-`EventLogObject` themselves, not through the trait.
+does. Two answers come from the built-in objects only, never through the
+trait or an adapter: whether a COV Trend Log is collecting (its Enable and
+Start_Time / Stop_Time window) comes from `TrendLogObject`, and whether an
+Event Log takes received notifications from `EventLogObject`. A wrapper
+installed with `ObjectDatabase::with_object_adapter` isn't consulted, so a
+wrapped COV Trend Log keeps no Enable or window gate and no baseline restart,
+and a wrapped Event Log takes no received notifications.
 `TrendLogObject::set_logging_type` returns `Result`, as Trend Log
 Multiple's does. Only POLLED and TRIGGERED logs are polled. Complete log-family
 conformance is not claimed.

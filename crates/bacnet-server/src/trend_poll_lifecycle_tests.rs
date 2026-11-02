@@ -123,12 +123,11 @@ impl BACnetObject for GateTrend {
         Some(self)
     }
 }
+/// Only the trend insertion hook, as before #2179: no identities, no paged
+/// buffer and no window refresh, which keep their defaults.
 impl LogBuffer for GateTrend {
     fn record_identities(&self) -> Vec<bacnet_objects::log_buffer::LogRecordIdentity> {
-        self.object.log_buffer().unwrap().record_identities()
-    }
-    fn buffer_records(&self) -> Option<&dyn bacnet_objects::log_buffer::LogBufferRecords> {
-        self.object.log_buffer()?.buffer_records()
+        Vec::new()
     }
     fn add_trend_record(
         &mut self,

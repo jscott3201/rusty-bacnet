@@ -353,6 +353,9 @@ impl BACnetObject for Refusing {
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         crate::test_rows::read_only(&[])
     }
+    fn log_buffer(&self) -> Option<&dyn crate::traits::LogBuffer> {
+        Some(self)
+    }
     fn log_buffer_mut(&mut self) -> Option<&mut dyn crate::traits::LogBuffer> {
         Some(self)
     }

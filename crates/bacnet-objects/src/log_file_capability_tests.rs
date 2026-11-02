@@ -99,3 +99,84 @@ fn exactly_the_file_lends_file_configuration_through_both_accessors() {
         (shared, exclusive)
     });
 }
+
+/// A custom object of any log type: none of the built-in log state.
+struct CustomLog(bacnet_types::primitives::ObjectIdentifier, &'static str);
+
+impl BACnetObject for CustomLog {
+    fn object_identifier(&self) -> bacnet_types::primitives::ObjectIdentifier {
+        self.0
+    }
+    fn object_name(&self) -> &str {
+        self.1
+    }
+    fn read_property(
+        &self,
+        _: bacnet_types::enums::PropertyIdentifier,
+        _: Option<u32>,
+    ) -> Result<bacnet_types::primitives::PropertyValue, bacnet_types::error::Error> {
+        Err(crate::common::unknown_property_error())
+    }
+    fn write_property(
+        &mut self,
+        _: bacnet_types::enums::PropertyIdentifier,
+        _: Option<u32>,
+        _: bacnet_types::primitives::PropertyValue,
+        _: Option<u8>,
+    ) -> Result<(), bacnet_types::error::Error> {
+        Err(crate::common::unknown_property_error())
+    }
+    fn property_metadata(
+        &self,
+    ) -> alloc::borrow::Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        crate::test_rows::read_only(&[])
+    }
+}
+
+fn oid(object_type: ObjectType, instance: u32) -> bacnet_types::primitives::ObjectIdentifier {
+    bacnet_types::primitives::ObjectIdentifier::new(object_type, instance).unwrap()
+}
+
+#[test]
+fn stored_as_reflects_the_stored_object_not_its_box() {
+    use crate::database::ObjectDatabase;
+    use crate::event_log::EventLogObject;
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(EventLogObject::new(1, "log", 4).unwrap()))
+        .unwrap();
+    db.add(Box::new(CustomLog(oid(ObjectType::EVENT_LOG, 2), "custom")))
+        .unwrap();
+    // Reflecting the Box instead would make this miss.
+    assert!(
+        db.stored_as::<EventLogObject>(&oid(ObjectType::EVENT_LOG, 1))
+            .is_some()
+    );
+    assert!(
+        db.stored_as::<EventLogObject>(&oid(ObjectType::EVENT_LOG, 2))
+            .is_none()
+    );
+    assert!(
+        db.stored_as::<CustomLog>(&oid(ObjectType::EVENT_LOG, 1))
+            .is_none()
+    );
+    assert!(
+        db.stored_as::<EventLogObject>(&oid(ObjectType::EVENT_LOG, 3))
+            .is_none()
+    );
+}
+
+#[test]
+fn a_custom_trend_log_stays_collecting_and_a_custom_event_log_takes_nothing_received() {
+    use crate::database::ObjectDatabase;
+    let mut db = ObjectDatabase::new();
+    let trend = oid(ObjectType::TREND_LOG, 1);
+    let event = oid(ObjectType::EVENT_LOG, 2);
+    db.add(Box::new(CustomLog(trend, "custom trend"))).unwrap();
+    db.add(Box::new(CustomLog(event, "custom event"))).unwrap();
+    // Only the built-in Trend Log has an Enable and a window to shut.
+    assert!(db.trend_log_collecting(&trend));
+    assert!(!db.trend_log_collecting(&oid(ObjectType::TREND_LOG, 9)));
+    // Only the built-in Event Log can opt in to received notifications.
+    assert!(!db.logs_received(&event));
+    assert!(!db.collects_received_event_notifications());
+}

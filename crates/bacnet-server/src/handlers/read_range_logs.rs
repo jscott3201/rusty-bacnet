@@ -253,7 +253,7 @@ fn partition_point(len: usize, before: impl Fn(usize) -> bool) -> usize {
 
 /// The resolved Log_Buffer of a log object: its items, and the identities
 /// they are selected by.
-pub(super) type LogBuffer<'a> = (RangeItems<'a>, LogIdentities<'a>);
+pub(super) type ResolvedLogBuffer<'a> = (RangeItems<'a>, LogIdentities<'a>);
 
 /// Resolve `LOG_BUFFER` on an object that serves it outside ReadProperty (an
 /// Audit Log store or a log record buffer), or `None` to leave the request to
@@ -264,7 +264,7 @@ pub(super) type LogBuffer<'a> = (RangeItems<'a>, LogIdentities<'a>);
 pub(super) fn log_buffer<'a>(
     object: &'a dyn BACnetObject,
     request: &ReadRangeRequest,
-) -> Result<Option<LogBuffer<'a>>, Error> {
+) -> Result<Option<ResolvedLogBuffer<'a>>, Error> {
     if request.property_identifier != PropertyIdentifier::LOG_BUFFER {
         return Ok(None);
     }

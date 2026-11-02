@@ -118,14 +118,9 @@ impl ObjectDatabase {
     /// to received notifications: only
     /// [`EventLogObject::set_log_received_notifications`] opts one in, so the
     /// stored object itself is asked, never an adapter around it.
-    fn logs_received(&self, oid: &ObjectIdentifier) -> bool {
-        self.objects.get(oid).is_some_and(|object| {
-            object
-                .as_ref()
-                .as_stored_any(crate::traits::ObjectStorageAccess(()))
-                .downcast_ref::<EventLogObject>()
-                .is_some_and(EventLogObject::logs_received_notifications)
-        })
+    pub(crate) fn logs_received(&self, oid: &ObjectIdentifier) -> bool {
+        self.stored_as::<EventLogObject>(oid)
+            .is_some_and(EventLogObject::logs_received_notifications)
     }
 
     /// Whether a received notification is one a log may take: it isn't a

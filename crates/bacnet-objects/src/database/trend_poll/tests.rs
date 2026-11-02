@@ -298,10 +298,27 @@ impl BACnetObject for ConfigurableTrend {
         self.inner.timed()
     }
     fn log_buffer(&self) -> Option<&dyn crate::traits::LogBuffer> {
-        self.inner.log_buffer()
+        Some(self)
     }
     fn log_buffer_mut(&mut self) -> Option<&mut dyn crate::traits::LogBuffer> {
-        self.inner.log_buffer_mut()
+        Some(self)
+    }
+}
+
+/// The trend insertion hook and the paged buffer, as before #2179; no
+/// identities and no window refresh, which keep their defaults.
+impl crate::traits::LogBuffer for ConfigurableTrend {
+    fn record_identities(&self) -> Vec<crate::log_buffer::LogRecordIdentity> {
+        Vec::new()
+    }
+    fn buffer_records(&self) -> Option<&dyn crate::log_buffer::LogBufferRecords> {
+        self.inner.log_buffer()?.buffer_records()
+    }
+    fn add_trend_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
+        self.inner
+            .log_buffer_mut()
+            .unwrap()
+            .add_trend_record(record)
     }
 }
 

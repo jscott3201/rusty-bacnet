@@ -30,7 +30,7 @@ use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlag
 
 use super::{LocalDevice, Member, ObjectDatabase, RECONCILE, property_value_to_log_value};
 use crate::cov_change::{effective_increment, is_numeric, reports_change};
-use crate::traits::{BACnetObject, MonotonicClock, ObjectStorageAccess, not_supported};
+use crate::traits::{BACnetObject, MonotonicClock, not_supported};
 use crate::trend::TrendLogObject;
 
 /// What one look at a COV log's reference found.
@@ -96,14 +96,11 @@ impl ObjectDatabase {
     /// Only the built-in Trend Log has an Enable and a window to shut, so the
     /// stored object itself is asked, never an adapter around it; any other
     /// object leaves the gate to its insertion hook.
-    fn trend_log_collecting(&self, oid: &ObjectIdentifier) -> bool {
-        self.objects.get(oid).is_some_and(|object| {
-            object
-                .as_ref()
-                .as_stored_any(ObjectStorageAccess(()))
-                .downcast_ref::<TrendLogObject>()
+    pub(crate) fn trend_log_collecting(&self, oid: &ObjectIdentifier) -> bool {
+        self.objects.contains_key(oid)
+            && self
+                .stored_as::<TrendLogObject>(oid)
                 .is_none_or(TrendLogObject::collecting)
-        })
     }
 
     /// One pass of a COV Trend Log `oid`: look at its reference and log a
