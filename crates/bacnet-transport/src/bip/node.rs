@@ -21,7 +21,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddrV4;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, RwLock};
 use std::time::Duration;
 
 use bacnet_bip_codec::{BvlcFunction, Bvll, BvllError};
@@ -242,6 +242,10 @@ pub(super) struct NodeHandle {
     state: Mutex<NodeState>,
     /// Tells the driver that the node changed.
     wake: Notify,
+    /// Runs, with no lock held, before the driver sends each automatic
+    /// registration attempt: where a foreign device whose BBMD is known by
+    /// host name looks it up again (#1852).
+    attempt_hook: OnceLock<Box<dyn Fn() + Send + Sync>>,
     /// Runs once in a broadcast send, between the link's decision and the
     /// node's admission: where a test moves the node.
     #[cfg(test)]
@@ -282,6 +286,7 @@ impl NodeHandle {
                 stopped: false,
             }),
             wake: Notify::new(),
+            attempt_hook: OnceLock::new(),
             #[cfg(test)]
             before_admit: Mutex::new(None),
         };
@@ -352,6 +357,12 @@ impl NodeHandle {
             *self.link.write().unwrap_or_else(PoisonError::into_inner) = *state.node.link();
             Ok(())
         })
+    }
+
+    /// Run `hook` before each automatic registration attempt the driver
+    /// sends, from now on. A node takes one hook; a second is ignored.
+    pub(super) fn on_registration_attempt(&self, hook: Box<dyn Fn() + Send + Sync>) {
+        let _ = self.attempt_hook.set(hook);
     }
 
     /// Where this node's exchanges are counted.
@@ -537,6 +548,9 @@ impl NodeHandle {
             // asked to distribute for it.
             let attempt = self.lock().register.take();
             if let Some(attempt) = attempt {
+                if let Some(hook) = self.attempt_hook.get() {
+                    hook();
+                }
                 self.send_attempt(attempt).await;
             }
             self.send_releases().await;

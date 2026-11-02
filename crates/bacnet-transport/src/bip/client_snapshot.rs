@@ -7,6 +7,7 @@ use std::time::Duration;
 use bacnet_bip_codec::BvlcResultCode;
 use bacnet_bip_core::node::{AttemptOutcome, ExchangeCounters, NodeCounters, Operation};
 
+use super::BbmdLookupFailure;
 use super::node::NodeHandle;
 
 /// One management function's locally observed exchanges, cumulative across
@@ -126,6 +127,16 @@ pub struct ForeignRegistrationSnapshot {
     /// on this side before they were sent. The old entry then stays until
     /// its time-to-live runs out.
     pub previous_release_unanswered: u64,
+    /// Lookups of the BBMD's host name, while FD_BBMD_Address names one
+    /// (#1852): one when it is activated and one before each registration
+    /// attempt, counted when they end with the transport running.
+    pub bbmd_lookups: u64,
+    /// Of those, the ones that failed. The device kept registering with the
+    /// address it had.
+    pub bbmd_lookup_failures: u64,
+    /// Why the newest lookup failed; `None` once one succeeds, and cleared
+    /// on stop/start.
+    pub last_bbmd_lookup_failure: Option<BbmdLookupFailure>,
 }
 
 impl ForeignRegistrationSnapshot {
@@ -137,6 +148,7 @@ impl ForeignRegistrationSnapshot {
         self.next_attempt_in = None;
         self.registered = false;
         self.lease_remaining = None;
+        self.last_bbmd_lookup_failure = None;
     }
 }
 
@@ -309,6 +321,18 @@ impl ClientRecord {
             }
         };
         *count = count.saturating_add(1);
+    }
+
+    /// A lookup of the BBMD's host name ended: it failed with `failure`, or
+    /// succeeded.
+    pub(super) fn bbmd_lookup_ended(&self, failure: Option<BbmdLookupFailure>) {
+        let mut snapshot = self.lock();
+        let foreign = &mut snapshot.foreign_registration;
+        foreign.bbmd_lookups = foreign.bbmd_lookups.saturating_add(1);
+        if failure.is_some() {
+            foreign.bbmd_lookup_failures = foreign.bbmd_lookup_failures.saturating_add(1);
+        }
+        foreign.last_bbmd_lookup_failure = failure;
     }
 
     /// Add what the node counted since it last reported.
