@@ -42,53 +42,13 @@ const CATALOGUE_TYPES: usize = 64;
 /// A row added or dropped changes it.
 const VALUES_READ: usize = 1138;
 /// Rows a write over the wire is refused for access: the rows without a
-/// write route and the Out_Of_Service rows, but the empty arrays below.
-const REFUSED_ROWS: usize = 678;
+/// write route and the Out_Of_Service rows, the arrays that read empty
+/// included (#2305).
+const REFUSED_ROWS: usize = 690;
 /// Types the built-in table creates. A table entry changes it.
 const CREATED_TYPES: usize = 27;
 /// Types DeleteObject removes: all but Device and Network Port.
 const DELETED_TYPES: usize = 62;
-
-/// The read-only arrays that read empty, which a write of their own value
-/// (no octets) gets INVALID_DATA_ENCODING for: the write decoder takes no
-/// octets as no value at all for an array written whole, before the
-/// object sees the write, although an empty array encodes as nothing
-/// (Clause 20.2.17). An exception until #2305 settles the decoder.
-const EMPTY_ARRAYS: [(ObjectType, PropertyIdentifier); 12] = [
-    (ObjectType::COMMAND, PropertyIdentifier::ACTION),
-    (ObjectType::GLOBAL_GROUP, PropertyIdentifier::GROUP_MEMBERS),
-    (ObjectType::GLOBAL_GROUP, PropertyIdentifier::PRESENT_VALUE),
-    (
-        ObjectType::GLOBAL_GROUP,
-        PropertyIdentifier::GROUP_MEMBER_NAMES,
-    ),
-    (
-        ObjectType::STRUCTURED_VIEW,
-        PropertyIdentifier::SUBORDINATE_ANNOTATIONS,
-    ),
-    (ObjectType::ACCESS_DOOR, PropertyIdentifier::DOOR_MEMBERS),
-    (
-        ObjectType::ACCESS_CREDENTIAL,
-        PropertyIdentifier::ASSIGNED_ACCESS_RIGHTS,
-    ),
-    (
-        ObjectType::ACCESS_CREDENTIAL,
-        PropertyIdentifier::AUTHENTICATION_FACTORS,
-    ),
-    (ObjectType::ACCESS_POINT, PropertyIdentifier::ACCESS_DOORS),
-    (
-        ObjectType::CREDENTIAL_DATA_INPUT,
-        PropertyIdentifier::SUPPORTED_FORMATS,
-    ),
-    (
-        ObjectType::CREDENTIAL_DATA_INPUT,
-        PropertyIdentifier::SUPPORTED_FORMAT_CLASSES,
-    ),
-    (
-        ObjectType::ELEVATOR_GROUP,
-        PropertyIdentifier::GROUP_MEMBERS,
-    ),
-];
 
 struct Wire {
     server: BACnetServer<TestTransport>,
@@ -354,7 +314,7 @@ async fn rows_without_a_write_route_refuse_writes_over_the_wire() {
     let mut wire = Wire::start().await;
     let objects = wire.objects().await;
     let mut failures = Vec::new();
-    let (mut refused, mut empty_arrays) = (0, Vec::new());
+    let mut refused = 0;
     for (oid, rows) in &objects {
         let results = wire.rpm(*oid, PropertyIdentifier::ALL).await;
         for row in rows {
@@ -376,28 +336,14 @@ async fn rows_without_a_write_route_refuse_writes_over_the_wire() {
                 .find(|result| result.property_identifier == property)
                 .and_then(|result| result.property_value.clone())
                 .unwrap_or_else(|| vec![0x00]);
-            // The exception (#2305).
-            let empty_array = value.is_empty()
-                && row
-                    .effective_value_type(oid.object_type())
-                    .is_some_and(|value_type| value_type.is_array());
             match wire.write(*oid, property, value).await {
                 Reply::Error(ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED) => refused += 1,
-                Reply::Error(ErrorClass::PROPERTY, ErrorCode::INVALID_DATA_ENCODING)
-                    if empty_array =>
-                {
-                    empty_arrays.push((oid.object_type(), property));
-                }
                 other => failures.push(format!("{oid:?} {property:?}: {other:?}")),
             }
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
     assert_eq!(refused, REFUSED_ROWS, "rows refused for access");
-    assert_eq!(
-        empty_arrays, EMPTY_ARRAYS,
-        "the empty arrays of the exception"
-    );
 }
 
 #[tokio::test(start_paused = true)]
