@@ -371,7 +371,7 @@ struct ForeignReporter {
 }
 
 impl BACnetObject for ForeignReporter {
-    fn audit_reporter_internal(&self) -> Option<&AuditReporterObject> {
+    fn audit_reporter(&self) -> Option<&AuditReporterObject> {
         self.capability.as_ref()
     }
     fn object_identifier(&self) -> ObjectIdentifier {
@@ -579,7 +579,9 @@ async fn selected_source_requires_typed_recipient_before_start() {
     .unwrap();
     db.get_mut(&selected())
         .unwrap()
-        .configure_audit_reporter_internal(
+        .audit_reporter_mut()
+        .expect("an Audit Reporter")
+        .configure(
             AuditLevel::NONE,
             bacnet_types::bitstring::AuditOperationFlags::empty(),
             false,

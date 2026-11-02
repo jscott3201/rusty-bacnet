@@ -33,6 +33,8 @@
 //! [`BACnetObject`]: super::BACnetObject
 
 mod access_events;
+mod audit_log;
+mod audit_policy;
 mod calendar_state;
 mod command_runner;
 mod enrollment_eval;
@@ -48,6 +50,11 @@ mod timed;
 pub use crate::durable::DurableWrites;
 #[doc(hidden)]
 pub use access_events::AccessEvents;
+#[doc(hidden)]
+pub use audit_log::AuditLog;
+#[doc(hidden)]
+pub use audit_policy::AuditPolicy;
+pub(crate) use audit_policy::{impl_audit_policy, lend_audit_policy};
 #[doc(hidden)]
 pub use calendar_state::CalendarState;
 #[doc(hidden)]

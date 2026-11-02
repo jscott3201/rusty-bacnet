@@ -10,7 +10,9 @@ pub(super) fn failure_database(confirmed: bool) -> ObjectDatabase {
     let mut db = database(confirmed);
     db.get_mut(&selected())
         .unwrap()
-        .configure_audit_reporter_internal(
+        .audit_reporter_mut()
+        .expect("an Audit Reporter")
+        .configure(
             AuditLevel::AUDIT_ALL,
             failure_flags(),
             confirmed,
@@ -151,7 +153,7 @@ async fn source_failure_pending_context_invalidates_without_another_read() {
             old_status = db
                 .get(&selected())
                 .unwrap()
-                .audit_reporter_internal()
+                .audit_reporter()
                 .unwrap()
                 .status_internal();
             let object = db.get_mut(&selected()).unwrap();
@@ -166,7 +168,9 @@ async fn source_failure_pending_context_invalidates_without_another_read() {
                 _ => unreachable!(),
             };
             object
-                .configure_audit_reporter_internal(
+                .audit_reporter_mut()
+                .expect("an Audit Reporter")
+                .configure(
                     level,
                     flags,
                     confirmed,
@@ -176,7 +180,9 @@ async fn source_failure_pending_context_invalidates_without_another_read() {
                 )
                 .unwrap();
             object
-                .configure_audit_reporter_internal(
+                .audit_reporter_mut()
+                .expect("an Audit Reporter")
+                .configure(
                     AuditLevel::AUDIT_ALL,
                     failure_flags(),
                     true,

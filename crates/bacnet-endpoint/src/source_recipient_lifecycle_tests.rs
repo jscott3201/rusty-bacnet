@@ -10,7 +10,9 @@ fn released_projection(db: &mut ObjectDatabase) {
     );
     assert!(object.is_deleteable());
     object
-        .configure_audit_reporter_internal(
+        .audit_reporter_mut()
+        .expect("an Audit Reporter")
+        .configure(
             AuditLevel::NONE,
             AuditOperationFlags::empty(),
             false,

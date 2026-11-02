@@ -126,7 +126,9 @@ async fn endpoint_records_accepted_reinitialize_requests_only() {
     }
     db.get_mut(&selected())
         .unwrap()
-        .configure_audit_reporter_internal(
+        .audit_reporter_mut()
+        .expect("an Audit Reporter")
+        .configure(
             AuditLevel::AUDIT_ALL,
             operations,
             false,

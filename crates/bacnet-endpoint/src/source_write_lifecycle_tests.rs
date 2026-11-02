@@ -257,7 +257,9 @@ async fn source_write_captures_recipient_and_policy_before_peer_completion() {
         .await
         .get_mut(&selected())
         .unwrap()
-        .configure_audit_reporter_internal(
+        .audit_reporter_mut()
+        .expect("an Audit Reporter")
+        .configure(
             AuditLevel::NONE,
             AuditOperationFlags::empty(),
             false,

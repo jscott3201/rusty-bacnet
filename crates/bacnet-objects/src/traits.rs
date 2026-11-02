@@ -6,30 +6,26 @@ use crate::prelude::*;
 pub(crate) use object_storage::ObjectStorageAccess;
 
 use alloc::borrow::Cow;
-use alloc::sync::Arc;
-use core::time::Duration;
 
-use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
-
-use crate::audit::{AuditLogNotificationSink, AuditLogStorage};
 
 use crate::file::{FileConfiguration, FileStorage};
 
 pub mod capabilities;
 #[doc(hidden)]
 pub use capabilities::{
-    AccessEvents, CalendarState, CommandRunner, EnrollmentEval, LogBuffer, StagingSource,
+    AccessEvents, AuditLog, AuditPolicy, CalendarState, CommandRunner, EnrollmentEval, LogBuffer,
+    StagingSource,
 };
 pub use capabilities::{
     Clocks, DeadlineWaker, DurableWrites, EventReporting, LifeSafety, LocalInput, LocalInputValue,
     MonotonicClock, ReliabilityEval, ScheduleRunner, Timed, no_alarm_configured, not_supported,
 };
 pub(crate) use capabilities::{
-    impl_log_buffer, lend_enrollment_eval, lend_event_reporting, lend_log_buffer,
-    lend_reliability_eval, lend_schedule_runner,
+    impl_audit_policy, impl_log_buffer, lend_audit_policy, lend_enrollment_eval,
+    lend_event_reporting, lend_log_buffer, lend_reliability_eval, lend_schedule_runner,
 };
 
 mod defaults;
@@ -115,58 +111,44 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         None
     }
 
-    /// Snapshot of object-owned target Audit overrides. Absent fields inherit
-    /// the selected Reporter; source reporting does not inspect remote policies.
-    #[doc(hidden)]
-    fn audit_object_policy_internal(&self) -> crate::audit::ObjectAuditPolicy {
-        crate::audit::ObjectAuditPolicy::default()
-    }
-
-    /// Optional sealed built-in policy assignment authority (AV/BV, Color and
-    /// Color Temperature). Custom objects
-    /// remain on their ordinary writer path; adapters may forward this capability.
-    #[doc(hidden)]
-    fn audit_policy_authority_internal(
-        &mut self,
-    ) -> Option<crate::audit::AuditPolicyAuthority<'_>> {
-        None
-    }
-
-    /// The optional built-in Reporter authority.
-    #[doc(hidden)]
-    fn audit_reporter_internal(&self) -> Option<&crate::audit::AuditReporterObject> {
-        None
-    }
-
-    /// Scoped built-in Reporter mutation authority; absent for other objects.
-    #[doc(hidden)]
-    fn audit_reporter_authority_internal(
-        &mut self,
-    ) -> Option<crate::audit::AuditReporterAuthority<'_>> {
-        None
-    }
-
-    /// Atomically replace all trusted local Reporter settings without a network write.
+    /// Borrow this object's own Audit overrides for the snapshots a host
+    /// takes under a shared guard. Not public API yet (#2179).
     ///
-    /// The default opts out. Supporting implementations must reject invalid
-    /// settings before any mutation. `None` selectors remove Monitored_Objects
-    /// (catch-all); `Some(vec![])` retains the property and selects no ordinary
-    /// targets. An installed target owner prepares required records and lifecycle admission.
-    ///
-    /// Supply every field together, including the optional paired delay capability.
-    /// Active target ownership fixes pair presence; source ownership rejects it.
-    /// `None` omits both delay/control properties; a present zero is immediate.
+    /// The default has none, so every field inherits the selected Reporter.
+    /// An object that lends this lends
+    /// [`audit_policy_mut`](Self::audit_policy_mut) too. See [`AuditPolicy`].
     #[doc(hidden)]
-    fn configure_audit_reporter_internal(
-        &mut self,
-        _level: bacnet_types::enums::AuditLevel,
-        _operations: bacnet_types::bitstring::AuditOperationFlags,
-        _confirmed: bool,
-        _selectors: Option<Vec<bacnet_types::constructed::BACnetObjectSelector>>,
-        _priorities: bacnet_types::bitstring::BACnetPriorityFilter,
-        _maximum_send_delay: Option<crate::audit::AuditSendDelay>,
-    ) -> Result<(), Error> {
-        Err(not_supported())
+    fn audit_policy(&self) -> Option<&dyn AuditPolicy> {
+        None
+    }
+
+    /// Mutably borrow this object's own Audit overrides, for the sealed
+    /// pre-commit check of a write that changes them. Not public API yet
+    /// (#2179).
+    #[doc(hidden)]
+    fn audit_policy_mut(&mut self) -> Option<&mut dyn AuditPolicy> {
+        None
+    }
+
+    /// Borrow the built-in Audit Reporter this object is or wraps. Not
+    /// public API yet (#2179).
+    ///
+    /// The default has none. An adapter around a Reporter hands this and
+    /// [`audit_reporter_mut`](Self::audit_reporter_mut) on to it.
+    #[doc(hidden)]
+    fn audit_reporter(&self) -> Option<&crate::audit::AuditReporterObject> {
+        None
+    }
+
+    /// The built-in Audit Reporter's scoped mutation authority, which also
+    /// replaces its trusted local settings in one step
+    /// ([`AuditReporterAuthority::configure`](crate::audit::AuditReporterAuthority::configure)).
+    /// Not public API yet (#2179).
+    ///
+    /// The default has none.
+    #[doc(hidden)]
+    fn audit_reporter_mut(&mut self) -> Option<crate::audit::AuditReporterAuthority<'_>> {
+        None
     }
 
     /// The object's identifier (type + instance).
@@ -711,101 +693,24 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// by physical means (e.g., a manual switch on an output).
     fn set_overridden(&mut self, _overridden: bool) {}
 
-    /// Claim the Averaging sample the object's schedule has due at the
-    /// process-local monotonic instant `now`.
+    /// Borrow an Audit Log for the reads the bundled server makes under a
+    /// shared database guard: AuditLogQuery and ReadRange over its retained
+    /// records, and its forwarding profile. Not public API yet (#2179).
     ///
-    /// When one is due the object steps its schedule past it and returns the
-    /// property to read; the caller reads it while it still holds exclusive
-    /// access and records the outcome as a
-    /// [`LocalInputValue::AveragingSample`] through [`Self::local_input`].
-    /// An object that answers here reports the due time through
-    /// [`Timed::next_monotonic_deadline`],
-    /// so the server's monotonic task wakes for it. The built-in Averaging
-    /// object opts in while it holds an Object_Property_Reference and a
-    /// monotonic clock is bound; the default has nothing to sample.
+    /// The default has none: the server answers an AuditLogQuery naming the
+    /// object with SERVICES / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. An object
+    /// that lends this lends [`audit_log_mut`](Self::audit_log_mut) too. See
+    /// [`AuditLog`].
     #[doc(hidden)]
-    fn take_due_averaging_sample_internal(
-        &mut self,
-        _now: Duration,
-    ) -> Option<BACnetObjectPropertyReference> {
+    fn audit_log(&self) -> Option<&dyn AuditLog> {
         None
     }
 
-    /// The local property a Pulse Converter counts its input from, its
-    /// Input_Reference (Clause 12.23.6): `Some(None)` while it holds none,
-    /// and `None` for an object that counts no referenced input, which the
-    /// default is.
-    ///
-    /// The database judges the reference against its own objects
-    /// (`ObjectDatabase::check_input_reference`) and reports the verdict
-    /// through [`set_input_usable_internal`](Self::set_input_usable_internal).
+    /// Mutably borrow an Audit Log, for the trusted local parent a binding
+    /// sets and the Audit notifications the server stores. Not public API
+    /// yet (#2179).
     #[doc(hidden)]
-    fn input_reference_internal(&self) -> Option<Option<&BACnetObjectPropertyReference>> {
-        None
-    }
-
-    /// Take the database's verdict on the reference
-    /// [`input_reference_internal`](Self::input_reference_internal) returned:
-    /// `false` when it names a property the object can't count from, which
-    /// Clause 12.23.9 reports as a CONFIGURATION_ERROR Reliability. Returns
-    /// whether a readable property changed, so a caller owes COV. The
-    /// default has no input to judge.
-    #[doc(hidden)]
-    fn set_input_usable_internal(&mut self, _usable: bool) -> bool {
-        false
-    }
-
-    /// Take a reading of the property
-    /// [`input_reference_internal`](Self::input_reference_internal) names,
-    /// or `None` when there is nothing to read. A Pulse Converter counts each
-    /// increase over the last reading into Count (Clause 12.23.14), across a
-    /// wrap when the reading carries its bound. Returns whether a readable
-    /// property changed, so a caller owes COV. The default counts nothing.
-    #[doc(hidden)]
-    fn take_input_reading_internal(
-        &mut self,
-        _reading: Option<crate::accumulator::InputReading>,
-    ) -> bool {
-        false
-    }
-
-    /// Borrow this object's Audit Log query storage, if it has any.
-    ///
-    /// This read-only, type-erased channel lets the bundled server execute an
-    /// AuditLogQuery against an object's already-loaded retained records. It
-    /// deliberately does not expose persistence, mutation, or object
-    /// downcasting. The **default** returns `None`; an Audit Log object that
-    /// does not opt in is reported as SERVICES /
-    /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
-    fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {
-        None
-    }
-
-    /// Instance-owned optional Audit Log forwarding profile, never durable pending work.
-    #[doc(hidden)]
-    fn audit_log_forwarding_internal(&self) -> Option<Arc<crate::audit::AuditLogForwarding>> {
-        None
-    }
-
-    /// Set a trusted local Audit Log parent without downcasting or a second object store.
-    ///
-    /// The default opts out. This is not a network property-write capability;
-    /// callers own configuration admission, and the server still validates the route.
-    #[doc(hidden)]
-    fn set_audit_log_parent_internal(
-        &mut self,
-        _parent: bacnet_types::constructed::BACnetDeviceObjectReference,
-    ) -> Result<(), Error> {
-        Err(not_supported())
-    }
-
-    /// Mutably borrow this object's Audit notification receiver capability.
-    ///
-    /// The default opts out. Implementations own their persistence transaction
-    /// and must leave memory unchanged when the batch cannot be committed.
-    fn audit_log_notification_sink_internal(
-        &mut self,
-    ) -> Option<&mut dyn AuditLogNotificationSink> {
+    fn audit_log_mut(&mut self) -> Option<&mut dyn AuditLog> {
         None
     }
 

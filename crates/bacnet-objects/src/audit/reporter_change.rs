@@ -106,8 +106,66 @@ pub trait AuditReporterChangeSink: Send + Sync {
 
 /// Scoped concrete Reporter capability; it never exposes a replaceable object.
 #[doc(hidden)]
-pub struct AuditReporterAuthority<'a>(pub(super) &'a mut AuditReporterObject);
+pub struct AuditReporterAuthority<'a>(
+    pub(super) &'a mut AuditReporterObject,
+    /// The source Audit owner [`configure`](Self::configure) answers to.
+    Option<&'a alloc::sync::Weak<crate::database::AuditOwnership>>,
+);
+impl<'a> AuditReporterAuthority<'a> {
+    pub(super) fn new(reporter: &'a mut AuditReporterObject) -> Self {
+        Self(reporter, None)
+    }
+    /// The same authority answering to a source Audit owner: while `owner`
+    /// is active, [`configure`](Self::configure) refuses Monitored_Objects
+    /// and a send delay, which source Audit doesn't support. Only that
+    /// check changes.
+    pub fn with_source_owner(
+        self,
+        owner: &'a alloc::sync::Weak<crate::database::AuditOwnership>,
+    ) -> Self {
+        Self(self.0, Some(owner))
+    }
+}
 impl AuditReporterAuthority<'_> {
+    /// Atomically replace all trusted local Reporter settings without a
+    /// network write.
+    ///
+    /// Invalid settings are refused before any mutation. `None` selectors
+    /// remove Monitored_Objects (catch-all); `Some(vec![])` retains the
+    /// property and selects no ordinary targets. An installed target owner
+    /// prepares required records and lifecycle admission.
+    ///
+    /// Supply every field together, including the optional paired delay
+    /// capability. Active target ownership fixes pair presence; an active
+    /// source owner ([`with_source_owner`](Self::with_source_owner)) rejects
+    /// it. `None` omits both delay/control properties; a present zero is
+    /// immediate.
+    pub fn configure(
+        &mut self,
+        level: AuditLevel,
+        operations: AuditOperationFlags,
+        confirmed: bool,
+        selectors: Option<Vec<BACnetObjectSelector>>,
+        priorities: BACnetPriorityFilter,
+        maximum_send_delay: Option<AuditSendDelay>,
+    ) -> Result<(), Error> {
+        let source_active = self
+            .1
+            .is_some_and(|owner| owner.upgrade().is_some_and(|owner| owner.is_active()));
+        if source_active && (selectors.is_some() || maximum_send_delay.is_some()) {
+            return Err(Error::Encoding(
+                "source Audit does not support Monitored_Objects or delayed notifications".into(),
+            ));
+        }
+        let mut next = self.0.configuration_internal();
+        next.audit_level = level;
+        next.auditable_operations = operations;
+        next.confirmed = confirmed;
+        next.monitored_objects = selectors;
+        next.audit_priority_filter = priorities;
+        next.maximum_send_delay = maximum_send_delay;
+        self.0.change_configuration(next, None)
+    }
     pub fn object_identifier(&self) -> ObjectIdentifier {
         self.0.oid
     }

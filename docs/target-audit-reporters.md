@@ -33,7 +33,8 @@ Source mode retains its existing single current-context coalescer. See
 historical-loss and shutdown contracts.
 
 Trusted live Rust setters, the aggregate
-`configure_audit_reporter_internal(level, operations, confirmed, selectors, priorities, maximum_send_delay)`,
+`AuditReporterAuthority::configure(level, operations, confirmed, selectors, priorities, maximum_send_delay)`
+(through `BACnetObject::audit_reporter_mut`),
 and concrete Description writes use one object-owned change boundary. These APIs
 are fallible. Actual changes prepare all records, permits, confirmed leases,
 encoding and worker ownership before any configuration field commits. The aggregate

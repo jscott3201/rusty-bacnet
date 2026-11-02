@@ -22,7 +22,7 @@ mod pulse_converter;
 mod pulse_rate_tests;
 
 #[doc(hidden)]
-pub use pulse_converter::InputReading;
+pub(crate) use pulse_converter::InputReading;
 pub use pulse_converter::PulseConverterObject;
 
 // ---------------------------------------------------------------------------

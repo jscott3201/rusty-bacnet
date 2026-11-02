@@ -246,7 +246,7 @@ fn encode_item(object: &dyn BACnetObject, index: usize, buf: &mut BytesMut) {
     match object.log_buffer().and_then(|log| log.buffer_records()) {
         Some(records) => records.encode_record(index, buf),
         None => {
-            let ring = object.audit_log_storage_internal().unwrap();
+            let ring = object.audit_log().map(|log| log.storage()).unwrap();
             encode_audit_log_record(&ring.retained_records()[index].record, buf).unwrap();
         }
     }
@@ -554,8 +554,18 @@ impl BACnetObject for OddAuditRing {
         crate::test_rows::read_only(&[PropertyIdentifier::LOG_BUFFER])
     }
 
-    fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {
+    fn audit_log(&self) -> Option<&dyn bacnet_objects::traits::AuditLog> {
         Some(self)
+    }
+
+    fn audit_log_mut(&mut self) -> Option<&mut dyn bacnet_objects::traits::AuditLog> {
+        Some(self)
+    }
+}
+
+impl bacnet_objects::traits::AuditLog for OddAuditRing {
+    fn storage(&self) -> &dyn AuditLogStorage {
+        self
     }
 }
 

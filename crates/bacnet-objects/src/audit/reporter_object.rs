@@ -3,31 +3,12 @@
 use super::*;
 
 impl BACnetObject for AuditReporterObject {
-    fn audit_reporter_internal(&self) -> Option<&AuditReporterObject> {
+    fn audit_reporter(&self) -> Option<&AuditReporterObject> {
         Some(self)
     }
 
-    fn configure_audit_reporter_internal(
-        &mut self,
-        level: AuditLevel,
-        operations: AuditOperationFlags,
-        confirmed: bool,
-        selectors: Option<Vec<BACnetObjectSelector>>,
-        priorities: BACnetPriorityFilter,
-        maximum_send_delay: Option<crate::audit::AuditSendDelay>,
-    ) -> Result<(), Error> {
-        let mut next = self.configuration_internal();
-        next.audit_level = level;
-        next.auditable_operations = operations;
-        next.confirmed = confirmed;
-        next.monitored_objects = selectors;
-        next.audit_priority_filter = priorities;
-        next.maximum_send_delay = maximum_send_delay;
-        self.change_configuration(next, None)
-    }
-
-    fn audit_reporter_authority_internal(&mut self) -> Option<AuditReporterAuthority<'_>> {
-        Some(AuditReporterAuthority(self))
+    fn audit_reporter_mut(&mut self) -> Option<AuditReporterAuthority<'_>> {
+        Some(AuditReporterAuthority::new(self))
     }
 
     fn object_identifier(&self) -> ObjectIdentifier {
@@ -155,7 +136,12 @@ impl BACnetObject for AuditReporterObject {
                 | PropertyIdentifier::MAXIMUM_SEND_DELAY
                 | PropertyIdentifier::SEND_NOW
         ) {
-            return AuditReporterAuthority(self).write_property(property, value, array_index, None);
+            return AuditReporterAuthority::new(self).write_property(
+                property,
+                value,
+                array_index,
+                None,
+            );
         }
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),

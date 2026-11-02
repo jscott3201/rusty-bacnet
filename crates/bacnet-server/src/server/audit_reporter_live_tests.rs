@@ -20,7 +20,9 @@ async fn target_reporter_live_enable_emits_one_local_change() {
         .await
         .get_mut(&reporter)
         .unwrap()
-        .configure_audit_reporter_internal(
+        .audit_reporter_mut()
+        .expect("an Audit Reporter")
+        .configure(
             AuditLevel::AUDIT_ALL,
             operations,
             false,
@@ -155,7 +157,9 @@ async fn target_reporter_nominal_overlap_elects_lowest_before_write_filters_and_
         .await
         .get_mut(&oid(ObjectType::AUDIT_REPORTER, 2))
         .unwrap()
-        .configure_audit_reporter_internal(
+        .audit_reporter_mut()
+        .expect("an Audit Reporter")
+        .configure(
             AuditLevel::NONE,
             AuditOperationFlags::empty(),
             false,
@@ -278,7 +282,7 @@ async fn target_reporter_aggregate_late_admission_failure_is_atomic_and_releases
         .await
         .get(&target)
         .unwrap()
-        .audit_reporter_internal()
+        .audit_reporter()
         .unwrap()
         .configuration_internal();
     let permits: Vec<_> = (0..63)
@@ -299,7 +303,9 @@ async fn target_reporter_aggregate_late_admission_failure_is_atomic_and_releases
         .await
         .get_mut(&target)
         .unwrap()
-        .configure_audit_reporter_internal(
+        .audit_reporter_mut()
+        .expect("an Audit Reporter")
+        .configure(
             AuditLevel::AUDIT_CONFIG,
             flags,
             true,
@@ -324,7 +330,7 @@ async fn target_reporter_aggregate_late_admission_failure_is_atomic_and_releases
             .await
             .get(&target)
             .unwrap()
-            .audit_reporter_internal()
+            .audit_reporter()
             .unwrap()
             .configuration_internal(),
         before
@@ -339,7 +345,9 @@ async fn target_reporter_aggregate_late_admission_failure_is_atomic_and_releases
         .await
         .get_mut(&target)
         .unwrap()
-        .configure_audit_reporter_internal(
+        .audit_reporter_mut()
+        .expect("an Audit Reporter")
+        .configure(
             AuditLevel::AUDIT_CONFIG,
             flags,
             false,
@@ -470,7 +478,7 @@ async fn target_reporter_recipient_pair_has_one_elected_owner_and_fences_every_c
                 .map(|id| {
                     db.get(id)
                         .unwrap()
-                        .audit_reporter_internal()
+                        .audit_reporter()
                         .unwrap()
                         .status_internal()
                 })

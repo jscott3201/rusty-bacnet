@@ -57,7 +57,8 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         // selection still uses the existing Reporter/Monitored_Objects rules.
         let policy = db
             .get(&target)
-            .map(|object| object.audit_object_policy_internal())
+            .and_then(|object| object.audit_policy())
+            .map(|policy| policy.object_policy())
             .unwrap_or_default()
             .effective_internal(reporter);
         if !policy.reports(AuditOperation::READ, property.map(|(id, _)| id), None)

@@ -22,7 +22,8 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         let sequence = db.event_sequence_internal();
         let candidate = db
             .get_mut(&write.oid)?
-            .audit_policy_authority_internal()?
+            .audit_policy_mut()
+            .and_then(|policy| policy.policy_authority())?
             .prepare(write.property, write.array_index, value, write.priority)
             .ok()??;
         // Invalid/equal/NULL attempts retain the ordinary writer and observer.

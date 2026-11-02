@@ -70,7 +70,9 @@ fn unstarted_source(
         .unwrap();
     let mut reporter = AuditReporterObject::new(1, "Source").unwrap();
     reporter
-        .configure_audit_reporter_internal(
+        .audit_reporter_mut()
+        .expect("an Audit Reporter")
+        .configure(
             AuditLevel::AUDIT_ALL,
             AuditOperationFlags::from_bits(1).unwrap(),
             false,

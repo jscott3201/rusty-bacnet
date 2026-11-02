@@ -93,7 +93,7 @@ pub(super) fn pending_audit_log_index(
             object_id.instance_number()
         )));
     }
-    if object.audit_log_storage_internal().is_none() {
+    if object.audit_log().is_none() {
         return Err(PyValueError::new_err(
             "selected Audit Log does not support Audit storage",
         ));
@@ -121,7 +121,7 @@ pub(super) fn pending_audit_reporter_index(
             object_id.instance_number()
         )));
     }
-    if object.audit_reporter_internal().is_none() {
+    if object.audit_reporter().is_none() {
         return Err(PyValueError::new_err(
             "selected object does not support the Audit Reporter capability",
         ));
@@ -174,7 +174,7 @@ impl BACnetServer {
                 .collect::<PyResult<Vec<_>>>()?;
             for index in &indices {
                 pending[*index]
-                    .audit_reporter_authority_internal()
+                    .audit_reporter_mut()
                     .ok_or_else(|| {
                         PyValueError::new_err("selected object lacks concrete Reporter authority")
                     })?
@@ -183,7 +183,11 @@ impl BACnetServer {
             }
             for (config, index) in configs.into_iter().zip(indices) {
                 pending[index]
-                    .configure_audit_reporter_internal(
+                    .audit_reporter_mut()
+                    .ok_or_else(|| {
+                        PyValueError::new_err("selected object lacks concrete Reporter authority")
+                    })?
+                    .configure(
                         config.level,
                         config.operations,
                         config.confirmed,
@@ -276,10 +280,16 @@ impl BACnetServer {
         self.check_forwarding_configuration()?;
         let index = pending_audit_log_index(&pending, object_id)?;
         pending[index]
-            .set_audit_log_parent_internal(BACnetDeviceObjectReference {
-                device_identifier: Some(device),
-                object_identifier: parent_log,
-            })
+            .audit_log_mut()
+            .map_or_else(
+                || Err(bacnet_objects::traits::not_supported()),
+                |log| {
+                    log.set_parent(BACnetDeviceObjectReference {
+                        device_identifier: Some(device),
+                        object_identifier: parent_log,
+                    })
+                },
+            )
             .map_err(to_py_err)
     }
 

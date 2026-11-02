@@ -123,8 +123,9 @@ fn query(
     start: Option<u64>,
     count: u16,
 ) -> super::AuditLogQueryPage {
-    BACnetObject::audit_log_storage_internal(log)
+    BACnetObject::audit_log(log)
         .unwrap()
+        .storage()
         .query(parameters, start, count)
 }
 
@@ -635,5 +636,5 @@ fn records_appended_during_paging_cause_no_omission_or_duplication() {
 #[test]
 fn non_audit_objects_keep_the_default_capability_absent() {
     let reporter = super::AuditReporterObject::new(1, "Reporter").unwrap();
-    assert!(reporter.audit_log_storage_internal().is_none());
+    assert!(reporter.audit_log().map(|log| log.storage()).is_none());
 }

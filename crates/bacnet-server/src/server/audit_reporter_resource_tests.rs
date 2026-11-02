@@ -408,7 +408,7 @@ async fn audit_reporter_auditing_failure_late_completion_does_not_update_replace
         .await
         .get(&oid(ObjectType::AUDIT_REPORTER, 1))
         .unwrap()
-        .audit_reporter_internal()
+        .audit_reporter()
         .unwrap()
         .status_internal();
     let token = old.begin_delivery();

@@ -46,7 +46,8 @@ async fn assert_live(f: &Fixture, expected: &AuditLogSnapshot) {
         successful_actions_only: bacnet_types::enums::BACnetSuccessFilter::ALL,
     };
     let page = log
-        .audit_log_storage_internal()
+        .audit_log()
+        .map(|log| log.storage())
         .unwrap()
         .query(&query, None, 100);
     assert_eq!(
