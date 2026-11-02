@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::property_metadata::is_writable_property;
 use crate::traits::EventReporting as _;
 use bacnet_types::bitstring::LimitEnable;
 use bacnet_types::enums::EventState;
@@ -618,19 +619,24 @@ fn ai_property_list_invalid_index_returns_error() {
 
 #[test]
 fn av_is_writable_property_mirrors_write_property() {
-    use crate::traits::BACnetObject;
     let av = AnalogValueObject::new(1, "av-1", EngineeringUnits::NO_UNITS).unwrap();
     // Commandable (same as AO).
-    assert!(!av.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
-    assert!(av.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
+    assert!(!is_writable_property(
+        &av,
+        PropertyIdentifier::PRIORITY_ARRAY
+    ));
+    assert!(is_writable_property(&av, PropertyIdentifier::PRESENT_VALUE));
     // Event properties.
-    assert!(av.is_writable_property(PropertyIdentifier::LIMIT_ENABLE));
-    assert!(av.is_writable_property(PropertyIdentifier::NOTIFY_TYPE));
-    assert!(av.is_writable_property(PropertyIdentifier::TIME_DELAY));
+    assert!(is_writable_property(&av, PropertyIdentifier::LIMIT_ENABLE));
+    assert!(is_writable_property(&av, PropertyIdentifier::NOTIFY_TYPE));
+    assert!(is_writable_property(&av, PropertyIdentifier::TIME_DELAY));
     // #270: RELINQUISH_DEFAULT grew a validated write arm.
-    assert!(av.is_writable_property(PropertyIdentifier::RELINQUISH_DEFAULT));
+    assert!(is_writable_property(
+        &av,
+        PropertyIdentifier::RELINQUISH_DEFAULT
+    ));
     // Universal read-only.
-    assert!(!av.is_writable_property(PropertyIdentifier::STATUS_FLAGS));
+    assert!(!is_writable_property(&av, PropertyIdentifier::STATUS_FLAGS));
 }
 
 /// #270: a Relinquish_Default write is validated like a commanded

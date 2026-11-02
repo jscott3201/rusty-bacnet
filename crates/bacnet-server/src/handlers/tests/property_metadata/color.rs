@@ -1,5 +1,6 @@
 use super::*;
 use PropertyIdentifier as P;
+use bacnet_objects::property_metadata::is_writable_property;
 use bacnet_objects::{
     color::{ColorObject, ColorTemperatureObject},
     traits::BACnetObject,
@@ -196,10 +197,10 @@ fn rpm_color_metadata_advertises_the_routed_writes() {
         P::DEFAULT_FADE_TIME,
         P::TRANSITION,
     ] {
-        assert!(color.is_writable_property(p), "{p:?}");
+        assert!(is_writable_property(&color, p), "{p:?}");
     }
     for p in [P::OBJECT_NAME, P::TRACKING_VALUE, P::IN_PROGRESS] {
-        assert!(!color.is_writable_property(p), "{p:?}");
+        assert!(!is_writable_property(&color, p), "{p:?}");
     }
     let temperature = ColorTemperatureObject::new(1, "CT-1").unwrap();
     for p in [
@@ -211,9 +212,9 @@ fn rpm_color_metadata_advertises_the_routed_writes() {
         P::DEFAULT_STEP_INCREMENT,
         P::TRANSITION,
     ] {
-        assert!(temperature.is_writable_property(p), "{p:?}");
+        assert!(is_writable_property(&temperature, p), "{p:?}");
     }
     for p in [P::OBJECT_NAME, P::MIN_PRES_VALUE, P::MAX_PRES_VALUE] {
-        assert!(!temperature.is_writable_property(p), "{p:?}");
+        assert!(!is_writable_property(&temperature, p), "{p:?}");
     }
 }

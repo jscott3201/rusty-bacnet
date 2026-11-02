@@ -1,6 +1,7 @@
 use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject};
+use crate::property_metadata::is_writable_property;
 use crate::property_metadata::{PropertyConformance, PropertyWriteCapability};
 use crate::traits::EventReporting as _;
 use crate::traits::{BACnetObject, ReliabilityEvaluation};
@@ -93,7 +94,7 @@ fn all_nine_expose_default_false_boolean_writable_property_and_pics_truth() {
             "{name}"
         );
         assert!(
-            object.is_writable_property(INHIBIT),
+            is_writable_property(&*object, INHIBIT),
             "{name} PICS writability must match dispatch"
         );
         let wire_list = read(&*object, PropertyIdentifier::PROPERTY_LIST);

@@ -112,9 +112,9 @@ impl<T: TransportPort + 'static> WriteCommitObserver for WriteAudit<'_, T> {
         };
         // An index on a scalar reads the whole value, as before objects
         // refused that index themselves (#2274).
-        let read_index = write
-            .array_index
-            .filter(|_| object.is_array_property(write.property));
+        let read_index = write.array_index.filter(|_| {
+            bacnet_objects::property_metadata::is_array_property(object, write.property)
+        });
         let current_value = object
             .read_property(write.property, read_index)
             .ok()

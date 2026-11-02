@@ -1,3 +1,4 @@
+use crate::property_metadata::{is_array_property, is_writable_property};
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
 use bacnet_types::constructed::BACnetObjectSelector as Selector;
 use bacnet_types::enums::{
@@ -176,7 +177,10 @@ fn audit_reporter_auditing_failure_filter_invalidates_pending_epoch() {
 #[test]
 fn audit_reporter_monitored_objects_is_an_optional_array_even_when_absent() {
     let reporter = AuditReporterObject::new(1, "AR").unwrap();
-    assert!(reporter.is_array_property(PropertyIdentifier::MONITORED_OBJECTS));
+    assert!(is_array_property(
+        &reporter,
+        PropertyIdentifier::MONITORED_OBJECTS
+    ));
     for index in [None, Some(0), Some(1)] {
         assert!(matches!(
             reporter.read_property(PropertyIdentifier::MONITORED_OBJECTS, index),
@@ -625,22 +629,28 @@ fn audit_reporter_network_writes_to_new_properties_are_denied_without_mutation()
             .unwrap_err();
         assert_write_access_denied(error);
         assert_eq!(read(&reporter, property), before);
-        assert!(!reporter.is_writable_property(property));
+        assert!(!is_writable_property(&reporter, property));
     }
 }
 
 #[test]
 fn audit_reporter_description_write_and_metadata_remain_compatible() {
     let mut reporter = AuditReporterObject::new(1, "AR-1").unwrap();
-    assert!(reporter.is_writable_property(PropertyIdentifier::DESCRIPTION));
+    assert!(is_writable_property(
+        &reporter,
+        PropertyIdentifier::DESCRIPTION
+    ));
     let rows = reporter.property_metadata().into_owned();
     for property in rows.iter().map(|row| row.property_identifier) {
         assert_eq!(
-            reporter.is_writable_property(property),
+            is_writable_property(&reporter, property),
             property == PropertyIdentifier::DESCRIPTION
         );
     }
-    assert!(!reporter.is_writable_property(PropertyIdentifier::PROPERTY_LIST));
+    assert!(!is_writable_property(
+        &reporter,
+        PropertyIdentifier::PROPERTY_LIST
+    ));
 
     reporter
         .write_property(

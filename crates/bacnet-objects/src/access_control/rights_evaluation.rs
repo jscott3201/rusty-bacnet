@@ -56,6 +56,7 @@
 
 use crate::collections::HashMap;
 use crate::prelude::*;
+use crate::property_metadata::is_array_property;
 
 use bacnet_encoding::constructed::{decode_access_rule, decode_assigned_access_rights};
 use bacnet_types::constructed::{
@@ -712,7 +713,7 @@ impl Scope<'_> {
         let index = reference.property_array_index;
         // ReadProperty's gate: only an array takes an index. Index 0 reads
         // the array's size, which is no time-range value.
-        if index == Some(0) || (index.is_some() && !object.is_array_property(property)) {
+        if index == Some(0) || (index.is_some() && !is_array_property(object, property)) {
             return TimeRange::Never;
         }
         match object.read_property(property, index) {

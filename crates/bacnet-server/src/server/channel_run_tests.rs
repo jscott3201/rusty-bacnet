@@ -17,16 +17,16 @@ use bacnet_types::enums::WriteStatus;
 use std::borrow::Cow;
 use std::sync::Mutex as StdMutex;
 
-type Log = Arc<StdMutex<Vec<(PropertyIdentifier, PropertyValue)>>>;
+pub(super) type Log = Arc<StdMutex<Vec<(PropertyIdentifier, PropertyValue)>>>;
 
 /// A vendor-type object that holds a REAL in every property and takes any
 /// write, logging each one in order.
-struct Recorder {
-    oid: ObjectIdentifier,
-    log: Log,
+pub(super) struct Recorder {
+    pub(super) oid: ObjectIdentifier,
+    pub(super) log: Log,
 }
 
-fn rec() -> ObjectIdentifier {
+pub(super) fn rec() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::from_raw(600), 1).unwrap()
 }
 

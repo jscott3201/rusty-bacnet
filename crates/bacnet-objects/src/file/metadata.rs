@@ -200,7 +200,11 @@ mod tests {
                         if writable { Always } else { ReadOnly },
                         "{p:?}"
                     );
-                    assert_eq!(object.is_writable_property(p), writable, "{p:?}");
+                    assert_eq!(
+                        crate::property_metadata::is_writable_property(&object, p),
+                        writable,
+                        "{p:?}"
+                    );
                     let value = if matches!(p, P::FILE_SIZE | P::RECORD_COUNT) {
                         PropertyValue::Unsigned(2)
                     } else {
@@ -227,7 +231,7 @@ mod tests {
                     if crate::property_metadata::has_property(&object.property_metadata(), p) {
                         continue;
                     }
-                    assert!(!object.is_writable_property(p));
+                    assert!(!crate::property_metadata::is_writable_property(&object, p));
                     assert_error(
                         object.read_property(p, None).unwrap_err(),
                         ErrorCode::UNKNOWN_PROPERTY,

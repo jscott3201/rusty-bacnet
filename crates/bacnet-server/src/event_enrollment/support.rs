@@ -1,3 +1,4 @@
+use bacnet_objects::property_metadata::is_array_property;
 use std::collections::HashMap;
 
 use bacnet_objects::database::{LocalDevice, ObjectDatabase};
@@ -38,7 +39,7 @@ pub(super) fn read_setpoint(
         return SetpointRead::Transient;
     };
     let property = PropertyIdentifier::from_raw(reference.property_identifier);
-    if reference.property_array_index.is_some() && !object.is_array_property(property) {
+    if reference.property_array_index.is_some() && !is_array_property(object, property) {
         return SetpointRead::Unusable;
     }
     match object.read_property(property, reference.property_array_index) {

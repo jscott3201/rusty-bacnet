@@ -1,5 +1,6 @@
 use super::*;
 use crate::clock::ClockFrame;
+use crate::property_metadata::is_writable_property;
 use crate::traits::Timed;
 use bacnet_types::error::RemoteError;
 
@@ -666,7 +667,7 @@ fn pulse_converter_count_rows_are_read_only_over_the_network() {
         (PropertyIdentifier::COUNT_CHANGE_TIME, unspecified()),
         (PropertyIdentifier::COV_PERIOD, PropertyValue::Unsigned(60)),
     ] {
-        assert!(!pc.is_writable_property(property), "{property:?}");
+        assert!(!is_writable_property(&pc, property), "{property:?}");
         match write(&mut pc, property, value) {
             Err(Error::Remote(RemoteError::Error { class, code })) => {
                 assert_eq!(class, bacnet_types::enums::ErrorClass::PROPERTY);

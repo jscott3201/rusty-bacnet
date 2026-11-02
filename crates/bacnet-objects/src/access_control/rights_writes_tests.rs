@@ -3,6 +3,7 @@
 //! resize with the Clause 12.34.9.3 element, and every refusal leaving both
 //! arrays as they were.
 
+use crate::property_metadata::is_writable_property;
 use bacnet_encoding::constructed::encode_access_rule;
 use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference};
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
@@ -95,7 +96,7 @@ fn access_rights_rule_arrays_take_whole_and_indexed_writes() {
     for property in ARRAYS {
         let other = ARRAYS.into_iter().find(|p| *p != property).unwrap();
         let mut rights = AccessRightsObject::new(7, "AR-7").unwrap();
-        assert!(rights.is_writable_property(property));
+        assert!(is_writable_property(&rights, property));
 
         // A whole write in the server's form, the rules' octets back to back.
         rights

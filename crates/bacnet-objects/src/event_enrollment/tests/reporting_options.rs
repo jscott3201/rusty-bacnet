@@ -7,6 +7,7 @@ use super::super::*;
 use crate::binary::BinaryValueObject;
 use crate::database::ObjectDatabase;
 use crate::event::{EventStateChange, EventTransition};
+use crate::property_metadata::is_writable_property;
 use crate::traits::EventReporting as _;
 use bacnet_encoding::constructed::encode_object_property_reference;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
@@ -223,7 +224,7 @@ fn alert_enrollment_shares_the_reporting_options() {
         PropertyIdentifier::EVENT_ALGORITHM_INHIBIT_REF,
         PropertyIdentifier::EVENT_ALGORITHM_INHIBIT,
     ] {
-        assert!(alert.is_writable_property(property), "{property:?}");
+        assert!(is_writable_property(&alert, property), "{property:?}");
     }
     alert
         .write_property(

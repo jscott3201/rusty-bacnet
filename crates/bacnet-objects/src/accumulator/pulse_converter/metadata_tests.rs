@@ -1,5 +1,6 @@
 use super::*;
 use crate::property_metadata::PropertyWriteCapability;
+use crate::property_metadata::{is_array_property, is_writable_property};
 use crate::traits::BACnetObject;
 use bacnet_types::enums::{EngineeringUnits, ErrorClass, ErrorCode, Reliability};
 use bacnet_types::error::{Error, RemoteError};
@@ -123,7 +124,7 @@ fn property_metadata_pulse_converter_exact_sets_readable_rows_and_indexed_list()
         .filter(|&&p| !matches!(p, P::OBJECT_IDENTIFIER | P::OBJECT_NAME | P::OBJECT_TYPE))
         .map(|p| PropertyValue::Enumerated(p.to_raw()))
         .collect();
-    assert!(object.is_array_property(P::PROPERTY_LIST));
+    assert!(is_array_property(&object, P::PROPERTY_LIST));
     assert_eq!(
         object.read_property(P::PROPERTY_LIST, None).unwrap(),
         PropertyValue::List(wire.clone())
@@ -174,7 +175,7 @@ fn property_metadata_pulse_converter_exact_sets_readable_rows_and_indexed_list()
         P::UPDATE_TIME,
         P::COUNT_CHANGE_TIME,
     ] {
-        assert!(!object.is_array_property(p), "{p:?}");
+        assert!(!is_array_property(&object, p), "{p:?}");
     }
 }
 
@@ -211,7 +212,7 @@ fn property_metadata_pulse_converter_write_capabilities_match_dispatch() {
             };
             assert_eq!(row.write_capability, capability, "{p:?}");
             assert_eq!(
-                object.is_writable_property(p),
+                is_writable_property(&object, p),
                 capability.is_writable(),
                 "{p:?}"
             );
@@ -227,7 +228,7 @@ fn property_metadata_pulse_converter_write_capabilities_match_dispatch() {
         }
         // Object_Name has no network write route: a rename falls through
         // to WRITE_ACCESS_DENIED even with a well-formed value.
-        assert!(!object.is_writable_property(P::OBJECT_NAME));
+        assert!(!is_writable_property(&object, P::OBJECT_NAME));
         assert_error(
             object
                 .write_property(
@@ -309,7 +310,7 @@ fn property_metadata_pulse_converter_present_value_oos_gate_pins() {
     // datatype or range error, and the stored value is untouched.
     let mut object =
         PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
-    assert!(object.is_writable_property(P::PRESENT_VALUE));
+    assert!(is_writable_property(&object, P::PRESENT_VALUE));
     for value in [
         PropertyValue::Real(12.5),
         PropertyValue::Unsigned(12),
@@ -466,7 +467,7 @@ fn property_metadata_pulse_converter_writes_store_verbatim_with_range_gates() {
                 object.write_property(p, None, value, None).unwrap_err(),
                 ErrorCode::WRITE_ACCESS_DENIED,
             );
-            assert!(!object.is_writable_property(p));
+            assert!(!is_writable_property(&object, p));
         }
     }
 }
@@ -483,7 +484,7 @@ fn property_metadata_pulse_converter_unserved_rows_stay_unknown() {
         P::RELIABILITY_EVALUATION_INHIBIT,
         P::DEVICE_TYPE,
     ] {
-        assert!(!object.is_writable_property(p));
+        assert!(!is_writable_property(&object, p));
         assert_error(
             object.read_property(p, None).unwrap_err(),
             ErrorCode::UNKNOWN_PROPERTY,

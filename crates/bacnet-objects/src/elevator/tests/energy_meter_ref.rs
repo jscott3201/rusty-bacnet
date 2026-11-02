@@ -6,6 +6,7 @@
 
 use super::super::*;
 use super::{assert_invalid_data_type, assert_value_out_of_range};
+use crate::property_metadata::is_writable_property;
 use bacnet_types::constructed::BACnetDeviceObjectReference;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::RemoteError;
@@ -103,7 +104,7 @@ fn energy_meter_ref_starts_uninitialized_and_is_read_only_over_the_network() {
             !crate::property_metadata::required_properties(&object.property_metadata())
                 .any(|required| required == ENERGY_METER_REF)
         );
-        assert!(!object.is_writable_property(ENERGY_METER_REF), "{name}");
+        assert!(!is_writable_property(&*object, ENERGY_METER_REF), "{name}");
         object
             .set_energy_meter_ref(reference(None, ObjectType::ACCUMULATOR, 7))
             .unwrap();

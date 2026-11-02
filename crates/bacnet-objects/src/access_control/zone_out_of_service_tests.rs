@@ -2,6 +2,7 @@
 //! TRUE (Clauses 12.32.9, 12.32.10 and 12.32.11, Table 12-37 footnote 1,
 //! #1247).
 
+use crate::property_metadata::is_writable_property;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::enums::{PropertyIdentifier as P, Reliability};
 use bacnet_types::error::RemoteError;
@@ -93,8 +94,8 @@ fn access_zone_refuses_simulated_rows_in_service() {
         assert_eq!(served(&zone), own(false), "{property:?}");
     }
     // Both rows have a write route, open only out of service.
-    assert!(zone.is_writable_property(P::OCCUPANCY_COUNT));
-    assert!(zone.is_writable_property(P::RELIABILITY));
+    assert!(is_writable_property(&zone, P::OCCUPANCY_COUNT));
+    assert!(is_writable_property(&zone, P::RELIABILITY));
 }
 
 #[test]

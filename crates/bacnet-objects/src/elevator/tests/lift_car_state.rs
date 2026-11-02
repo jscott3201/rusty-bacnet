@@ -7,6 +7,7 @@ use super::super::*;
 use super::{
     assert_invalid_data_type, assert_property_error, assert_value_out_of_range, set_out_of_service,
 };
+use crate::property_metadata::{is_array_property, is_writable_property};
 use bacnet_types::enums::{ErrorCode, LiftCarDirection, LiftCarDriveStatus, LiftCarMode};
 
 type P = PropertyIdentifier;
@@ -43,7 +44,7 @@ fn lift_car_state_rows_start_unknown_and_follow_the_setters() {
         (P::CAR_DRIVE_STATUS, PropertyValue::Enumerated(0)),
     ] {
         assert_eq!(lift.read_property(p, None).unwrap(), expected, "{p:?}");
-        assert!(!lift.is_array_property(p), "{p:?}");
+        assert!(!is_array_property(&lift, p), "{p:?}");
     }
     lift.set_car_assigned_direction(LiftCarDirection::DOWN)
         .unwrap();
@@ -140,7 +141,7 @@ fn lift_car_state_setters_refuse_values_outside_their_enumerations() {
 fn lift_car_state_rows_take_simulation_writes_only_out_of_service() {
     let mut lift = LiftObject::new(1, "LIFT-1", 3).unwrap();
     for (p, value) in rows() {
-        assert!(lift.is_writable_property(p), "{p:?}");
+        assert!(is_writable_property(&lift, p), "{p:?}");
         let before = lift.read_property(p, None).unwrap();
         assert_property_error(
             lift.write_property(p, None, value, None),

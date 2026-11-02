@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::clock::{ClockFrame, ClockReader};
+use crate::property_metadata::is_writable_property;
 use crate::traits::Timed;
 use bacnet_types::error::RemoteError;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -435,9 +436,12 @@ fn resize_writability_and_failure_atomicity_follow_runtime_eligibility() {
         PropertyIdentifier::FILE_TYPE,
         PropertyIdentifier::FILE_SIZE,
     ] {
-        assert!(stream.is_writable_property(property), "{property:?}");
+        assert!(is_writable_property(&stream, property), "{property:?}");
     }
-    assert!(!stream.is_writable_property(PropertyIdentifier::RECORD_COUNT));
+    assert!(!is_writable_property(
+        &stream,
+        PropertyIdentifier::RECORD_COUNT
+    ));
     let before = state(&stream);
     assert_eq!(
         protocol_pair(
@@ -466,11 +470,23 @@ fn resize_writability_and_failure_atomicity_follow_runtime_eligibility() {
     .unwrap();
     assert_eq!(stream.data(), &[1, 2]);
     let mut record = record_file(vec![vec![1], vec![2]]);
-    assert!(!record.is_writable_property(PropertyIdentifier::FILE_SIZE));
-    assert!(record.is_writable_property(PropertyIdentifier::RECORD_COUNT));
+    assert!(!is_writable_property(
+        &record,
+        PropertyIdentifier::FILE_SIZE
+    ));
+    assert!(is_writable_property(
+        &record,
+        PropertyIdentifier::RECORD_COUNT
+    ));
     record.set_read_only(true);
-    assert!(!record.is_writable_property(PropertyIdentifier::FILE_SIZE));
-    assert!(!record.is_writable_property(PropertyIdentifier::RECORD_COUNT));
+    assert!(!is_writable_property(
+        &record,
+        PropertyIdentifier::FILE_SIZE
+    ));
+    assert!(!is_writable_property(
+        &record,
+        PropertyIdentifier::RECORD_COUNT
+    ));
     let before = state(&record);
     assert_eq!(
         protocol_pair(

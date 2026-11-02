@@ -573,7 +573,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             coarse_cov_oids,
             life_safety_cov_changes,
             staging_plans,
-            command_runs,
+            mut command_runs,
             timed_revisits,
         } = effects;
 
@@ -604,7 +604,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             comm_state,
             config,
         };
-        Self::execute_staging_plans(&services.event_delivery(), &cov_ctx, staging_plans).await;
+        command_runs.extend(
+            Self::execute_staging_plans(&services.event_delivery(), &cov_ctx, staging_plans).await,
+        );
         // Command lists run beside this request, so its response never waits
         // on their writes or post delays (#1150).
         if !command_runs.is_empty() {

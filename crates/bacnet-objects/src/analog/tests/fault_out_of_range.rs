@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::property_metadata::is_writable_property;
 use crate::traits::{BACnetObject, ReliabilityEvaluation};
 use bacnet_types::enums::{ErrorClass, ErrorCode, Reliability};
 use bacnet_types::error::RemoteError;
@@ -113,7 +114,7 @@ macro_rules! assert_property_surface {
             PropertyIdentifier::FAULT_LOW_LIMIT,
             PropertyIdentifier::FAULT_HIGH_LIMIT,
         ] {
-            assert!(!object.is_writable_property(property));
+            assert!(!is_writable_property(&object, property));
             assert_write_denied(object.write_property_from(
                 property,
                 None,
@@ -567,7 +568,7 @@ fn analog_output_has_no_fault_out_of_range_surface_or_evaluator() {
             &ao.property_metadata(),
             property
         ));
-        assert!(!ao.is_writable_property(property));
+        assert!(!is_writable_property(&ao, property));
         assert_unknown_property(ao.write_property_from(
             property,
             None,

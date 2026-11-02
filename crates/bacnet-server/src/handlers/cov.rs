@@ -40,7 +40,8 @@ fn validate_cov_property(
     // PROPERTY_IS_NOT_AN_ARRAY; the read here only proves the property is
     // there, so it drops that index rather than take the object's refusal
     // of it as UNKNOWN_PROPERTY (#2274).
-    let read_index = array_index.filter(|_| object.is_array_property(property));
+    let read_index = array_index
+        .filter(|_| bacnet_objects::property_metadata::is_array_property(object, property));
     let value = object
         .read_property(property, read_index)
         .map_err(|_| cov_property_error(ErrorCode::UNKNOWN_PROPERTY))?;

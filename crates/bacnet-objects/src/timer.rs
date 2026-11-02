@@ -19,6 +19,17 @@
 //! configured value to every referenced property, which the bundled server
 //! makes as it makes a Command's (`state_change`, #2206).
 //!
+//! **On deletion** (#2265) a Timer releases nothing and makes no transition's
+//! writes: deletion isn't a transition (Clause 12.57), and each
+//! transition's writes are one-shot. A configuration that wants a slot given
+//! up says so with a NULL State_Change_Value (Clause 12.57.20). So a running
+//! Timer deleted leaves its start writes (IDLE_TO_RUNNING and the like) in
+//! its targets' slots, and its expiry writes never come; to have
+//! RUNNING_TO_IDLE's writes made, clear the Timer (Timer_State IDLE) before
+//! deleting it. The writes of a transition still in progress stop as a
+//! Command's do, with the same gap for a request to another device that
+//! already passed its last check.
+//!
 //! A Timer keeps nothing across a restart: a rebuilt one starts IDLE with
 //! Last_State_Change NONE.
 

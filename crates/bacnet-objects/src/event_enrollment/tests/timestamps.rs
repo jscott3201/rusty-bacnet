@@ -1,6 +1,7 @@
 //! Event timestamp and property-metadata contracts for enrollment objects.
 
 use super::super::*;
+use crate::property_metadata::is_writable_property;
 use crate::property_metadata::{PropertyConformance, PropertyMetadata, PropertyWriteCapability};
 use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
@@ -147,7 +148,10 @@ fn assert_history_surface(object: &mut dyn BACnetObject, label: &str) {
         PropertyValue::List(vec![PropertyValue::CharacterString(String::new()); 3]),
         "{label}: Event_Message_Texts starts empty"
     );
-    assert!(!object.is_writable_property(PropertyIdentifier::EVENT_MESSAGE_TEXTS));
+    assert!(!is_writable_property(
+        &*object,
+        PropertyIdentifier::EVENT_MESSAGE_TEXTS
+    ));
     assert_property_error(
         object.write_property(
             PropertyIdentifier::EVENT_TIME_STAMPS,
@@ -158,7 +162,10 @@ fn assert_history_surface(object: &mut dyn BACnetObject, label: &str) {
         ErrorCode::WRITE_ACCESS_DENIED,
         &format!("{label}: Event_Time_Stamps write"),
     );
-    assert!(!object.is_writable_property(PropertyIdentifier::EVENT_TIME_STAMPS));
+    assert!(!is_writable_property(
+        &*object,
+        PropertyIdentifier::EVENT_TIME_STAMPS
+    ));
 }
 
 #[test]
@@ -297,7 +304,7 @@ fn assert_complete_metadata(
             });
         assert_eq!(
             row.write_capability.is_writable(),
-            object.is_writable_property(row.property_identifier),
+            is_writable_property(object, row.property_identifier),
             "{label}: {:?} writability",
             row.property_identifier
         );

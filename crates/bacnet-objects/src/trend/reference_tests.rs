@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::clock::{ClockFrame, ClockReader};
+use crate::property_metadata::is_array_property;
 use crate::traits::Timed;
 use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::{Date, Time};
@@ -210,12 +211,11 @@ fn trend_log_setter_refuses_a_device_member_that_is_no_device() {
 #[test]
 fn trend_log_multiple_serves_one_encoding_per_element() {
     let mut tlm = TrendLogMultipleObject::new(1, "TLM-1", 4).unwrap();
-    assert!(tlm.is_array_property(P));
-    assert!(
-        !TrendLogObject::new(1, "TL-1", 4)
-            .unwrap()
-            .is_array_property(P)
-    );
+    assert!(is_array_property(&tlm, P));
+    assert!(!is_array_property(
+        &TrendLogObject::new(1, "TL-1", 4).unwrap(),
+        P
+    ));
     tlm.add_property_reference(reference(None)).unwrap();
     tlm.add_property_reference(reference(Some(oid(ObjectType::DEVICE, 9))))
         .unwrap();

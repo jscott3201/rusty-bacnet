@@ -16,6 +16,7 @@
 //! still refuse their value, for a reason that isn't its shape, so each is
 //! pinned to the error it gives.
 
+use crate::property_metadata::is_writable_property;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier as P};
 use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::PropertyValue;
@@ -95,7 +96,7 @@ fn every_writable_row_takes_back_the_value_it_reads() {
         let object_type = object.object_identifier().object_type();
         // Out of service, an input's Present_Value and Reliability are
         // writable too.
-        if object.is_writable_property(P::OUT_OF_SERVICE) {
+        if is_writable_property(&*object, P::OUT_OF_SERVICE) {
             object
                 .write_property(P::OUT_OF_SERVICE, None, PropertyValue::Boolean(true), None)
                 .unwrap();
@@ -115,7 +116,7 @@ fn every_writable_row_takes_back_the_value_it_reads() {
         let rows = object.property_metadata().into_owned();
         for row in rows {
             let property = row.property_identifier;
-            if !object.is_writable_property(property) {
+            if !is_writable_property(&*object, property) {
                 continue;
             }
             let value = object.read_property(property, None).unwrap();

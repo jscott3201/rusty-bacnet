@@ -1,5 +1,5 @@
 use super::*;
-use bacnet_objects::property_metadata::PropertyMetadata;
+use bacnet_objects::property_metadata::{Datatype, PropertyMetadata, ValueType};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::cov::COVNotificationRequest;
 use bacnet_services::cov_multiple::COVNotificationMultipleRequest;
@@ -20,14 +20,18 @@ impl BACnetObject for Probe {
     fn object_name(&self) -> &str {
         "selected probe"
     }
+    // The vendor property's shape follows the probe's state: the rows are
+    // built per call, so an array one answers as an array.
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
-        crate::test_rows::read_only(&[PropertyIdentifier::PRESENT_VALUE, SELECTED])
+        let rows = crate::test_rows::read_only(&[PropertyIdentifier::PRESENT_VALUE, SELECTED]);
+        if self.0.lock().unwrap().array {
+            crate::test_rows::typed(rows, &[(SELECTED, ValueType::array(Datatype::Unsigned))])
+        } else {
+            rows
+        }
     }
     fn cov(&self) -> Option<&dyn bacnet_objects::traits::CovReporting> {
         Some(self)
-    }
-    fn is_array_property(&self, p: PropertyIdentifier) -> bool {
-        p == SELECTED && self.0.lock().unwrap().array
     }
     fn read_property(&self, p: PropertyIdentifier, _: Option<u32>) -> Result<PropertyValue, Error> {
         if p == PropertyIdentifier::PRESENT_VALUE {

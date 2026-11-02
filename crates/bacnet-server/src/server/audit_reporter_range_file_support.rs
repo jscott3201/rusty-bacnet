@@ -2,7 +2,7 @@ use super::*;
 use bacnet_objects::file::{
     FileObject, FileRecordRead, FileStorage, FileStreamRead, FileWriteStart,
 };
-use bacnet_objects::property_metadata::PropertyMetadata;
+use bacnet_objects::property_metadata::{Datatype, PropertyMetadata, ValueType};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Kind {
@@ -114,18 +114,16 @@ impl BACnetObject for Probe {
     fn object_name(&self) -> &str {
         "read target"
     }
-    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
-        crate::test_rows::read_only(&[])
-    }
-    fn is_array_property(&self, property: PropertyIdentifier) -> bool {
-        property == PropertyIdentifier::WEEKLY_SCHEDULE
-    }
     // Present_Value is a vendor list here, so a ReadRange can reach a
-    // property outside the configuration audit level.
-    fn is_list_property(&self, property: PropertyIdentifier) -> bool {
-        matches!(
-            property,
-            PropertyIdentifier::LOG_BUFFER | PropertyIdentifier::PRESENT_VALUE
+    // property outside the configuration audit level. Log_Buffer and
+    // Weekly_Schedule have no rows and keep their standard shapes.
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::typed(
+            crate::test_rows::read_only(&[PropertyIdentifier::PRESENT_VALUE]),
+            &[(
+                PropertyIdentifier::PRESENT_VALUE,
+                ValueType::list(Datatype::Unsigned),
+            )],
         )
     }
     fn read_property(

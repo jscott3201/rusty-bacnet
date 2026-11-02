@@ -19,7 +19,6 @@ use super::cov_wire_test_support::*;
 use super::device_bindings::OBSERVED_BINDING_TTL;
 use super::test_transport::SentFrame;
 use super::*;
-use crate::command_lists::RunHost;
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_types::constructed::BACnetActionCommand;
 use bacnet_types::network_number::NetworkNumber;
@@ -158,7 +157,9 @@ fn start_write(h: &Harness, instance: u32) -> JoinHandle<Ended> {
         ..write(ao(1), PropertyValue::Real(80.0), 8)
     };
     tokio::spawn(async move {
-        let result = runner.write_remote(device(instance), &command).await;
+        let result = runner
+            .write_remote_unchecked(device(instance), &command)
+            .await;
         (result, TokioInstant::now())
     })
 }

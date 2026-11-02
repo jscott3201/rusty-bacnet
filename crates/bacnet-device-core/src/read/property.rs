@@ -5,7 +5,7 @@ use super::rpm::{self, PlannedRow};
 use super::{LiveLists, ReadFailure, ReadOverlay, ReadScope};
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_objects::database::ObjectDatabase;
-use bacnet_objects::property_metadata::check_read_array_index;
+use bacnet_objects::property_metadata::{check_read_array_index, is_array_property};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_types::constructed::PropertyReference;
@@ -140,7 +140,7 @@ pub fn read_value<O: ReadOverlay>(
     // with PROPERTY / PROPERTY_IS_NOT_AN_ARRAY. The array/list decision
     // belongs to the object (identifier-static whitelists cannot express the
     // type-dependent identifiers, e.g. ALARM_VALUES), so the shared check
-    // defers to the trait query.
+    // reads the property's value type.
     check_read_array_index(object, property, array_index)?;
 
     group::read_served_property(db, overlay, object, property, array_index, members)
@@ -224,5 +224,5 @@ pub(crate) fn rpm_response_index(
         .property_metadata()
         .iter()
         .any(|row| row.property_identifier == property);
-    (present && object.is_array_property(property)).then_some(index)
+    (present && is_array_property(object, property)).then_some(index)
 }

@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::clock::{ClockFrame, ClockReader};
+use crate::property_metadata::is_array_property;
 use crate::traits::Timed;
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::constructed::{BACnetCalendarEntry, BACnetDateRange, BACnetWeekNDay};
@@ -252,7 +253,7 @@ fn calendar_property_list_contains_date_list() {
         &cal.property_metadata(),
         DATE_LIST
     ));
-    assert!(!cal.is_array_property(DATE_LIST));
+    assert!(!is_array_property(&cal, DATE_LIST));
 }
 
 #[test]

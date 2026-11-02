@@ -90,3 +90,68 @@ fn a_read_view_lends_no_batch_capability() {
     assert!(view.access_events().is_none());
     assert!(forwarded(&log).is_empty());
 }
+
+/// The view's array, list and writability answers before #2177 part 2, when
+/// it overrode the three trait methods, frozen here against the free
+/// functions over the rows it serves: equal for every property, with and
+/// without the identity overlay, under both execution profiles.
+#[test]
+fn the_view_rows_answer_shapes_and_writability_as_its_old_overrides_did() {
+    use bacnet_objects::device::{DeviceConfig, DeviceObject};
+    use bacnet_objects::property_metadata::{
+        is_array_property, is_list_property, is_writable_property,
+    };
+    let db = ObjectDatabase::new();
+    let device = DeviceObject::new(DeviceConfig::default()).unwrap();
+    let instance = device.object_identifier().instance_number();
+    let identity = bacnet_objects::DeviceIdentity::new(instance, 42).unwrap();
+    let properties = (0..=1023).map(P::from_raw).chain(
+        P::ALL_NAMED
+            .iter()
+            .map(|&(_, property)| property)
+            .filter(|property| property.to_raw() > 1023),
+    );
+    let properties: Vec<P> = properties.collect();
+    for execution in [
+        DeviceExecution::FullServer,
+        DeviceExecution::Endpoint {
+            writes: true,
+            reinitialize: true,
+        },
+    ] {
+        for identity in [None, Some(&identity)] {
+            let context = DeviceReadContext::new(&db, execution).with_identity(identity);
+            let view = context.object(&device);
+            for &property in &properties {
+                let owned = view.owns(property);
+                let old_array = if owned {
+                    property == P::PROPERTY_LIST
+                } else {
+                    is_array_property(&device, property)
+                };
+                let old_list = if owned {
+                    matches!(
+                        property,
+                        P::ACTIVE_COV_SUBSCRIPTIONS
+                            | P::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS
+                            | P::DEVICE_ADDRESS_BINDING
+                    )
+                } else {
+                    is_list_property(&device, property)
+                };
+                let old_writable = !owned && is_writable_property(&device, property);
+                let new = (
+                    is_array_property(&view, property),
+                    is_list_property(&view, property),
+                    is_writable_property(&view, property),
+                );
+                assert_eq!(
+                    new,
+                    (old_array, old_list, old_writable),
+                    "{property:?} with identity {}",
+                    identity.is_some()
+                );
+            }
+        }
+    }
+}

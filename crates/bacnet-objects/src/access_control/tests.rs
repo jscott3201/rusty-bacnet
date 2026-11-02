@@ -1,4 +1,5 @@
 use super::*;
+use crate::property_metadata::is_writable_property;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::RemoteError;
 
@@ -530,7 +531,10 @@ fn credential_data_input_write_denied() {
 #[test]
 fn access_door_relinquish_default_write_recaptures_present_value() {
     let mut door = AccessDoorObject::new(1, "DOOR-1").unwrap();
-    assert!(door.is_writable_property(PropertyIdentifier::RELINQUISH_DEFAULT));
+    assert!(is_writable_property(
+        &door,
+        PropertyIdentifier::RELINQUISH_DEFAULT
+    ));
 
     door.write_property(
         PropertyIdentifier::RELINQUISH_DEFAULT,

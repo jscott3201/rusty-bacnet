@@ -54,7 +54,6 @@ mod log;
 mod schedule;
 
 pub const CUSTOM: P = P::from_raw(5000);
-pub const CUSTOM_LIST: P = P::from_raw(5001);
 const REPORTED: [CovReportedProperty; 1] = [CovReportedProperty::Trigger(CUSTOM)];
 
 /// The calls a probe received, oldest first, each as `name(arguments)`.
@@ -197,18 +196,6 @@ impl BACnetObject for Probe {
     fn timed(&mut self) -> Option<&mut dyn Timed> {
         self.called("timed", ());
         Some(self)
-    }
-    fn is_writable_property(&self, property: P) -> bool {
-        self.called("is_writable_property", (property,));
-        property == CUSTOM
-    }
-    fn is_array_property(&self, property: P) -> bool {
-        self.called("is_array_property", (property,));
-        property == CUSTOM
-    }
-    fn is_list_property(&self, property: P) -> bool {
-        self.called("is_list_property", (property,));
-        property == CUSTOM_LIST
     }
     fn staging_source(&mut self) -> Option<&mut dyn StagingSource> {
         self.called("staging_source", ());
@@ -366,6 +353,14 @@ impl StagingSource for Probe {
             (generation, success),
         );
         true
+    }
+    fn take_relinquish_writes(&mut self) -> Vec<bacnet_objects::schedule::ScheduleWrite> {
+        self.called("StagingSource::take_relinquish_writes", ());
+        vec![bacnet_objects::schedule::ScheduleWrite::new(
+            PropertyValue::Null,
+            9,
+            Vec::new(),
+        )]
     }
 }
 

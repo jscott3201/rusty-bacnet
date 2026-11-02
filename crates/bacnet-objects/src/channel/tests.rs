@@ -1,4 +1,5 @@
 use super::*;
+use crate::property_metadata::{is_array_property, is_list_property, is_writable_property};
 use PropertyIdentifier as P;
 use bacnet_encoding::constructed::encode_device_object_property_reference;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
@@ -151,8 +152,8 @@ fn channel_arrays_read_one_element_per_index() {
     ];
     for (property, elements) in arrays {
         // Arrays on Channel, where a Schedule's reference list is a list.
-        assert!(channel.is_array_property(property), "{property:?}");
-        assert!(!channel.is_list_property(property), "{property:?}");
+        assert!(is_array_property(&channel, property), "{property:?}");
+        assert!(!is_list_property(&channel, property), "{property:?}");
         assert_eq!(
             channel.read_property(property, None).unwrap(),
             PropertyValue::List(elements.to_vec()),
@@ -182,7 +183,7 @@ fn channel_arrays_read_one_element_per_index() {
     }
     // The scalars take no index.
     for property in [P::PRESENT_VALUE, P::CHANNEL_NUMBER, P::WRITE_STATUS] {
-        assert!(!channel.is_array_property(property), "{property:?}");
+        assert!(!is_array_property(&channel, property), "{property:?}");
         assert_property_error(
             channel.write_property(property, Some(1), PropertyValue::Unsigned(1), None),
             ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
@@ -512,7 +513,7 @@ fn channel_property_list_and_required_rows_follow_table_12_62() {
     let writable: Vec<_> = rows
         .iter()
         .map(|row| row.property_identifier)
-        .filter(|property| channel.is_writable_property(*property))
+        .filter(|property| is_writable_property(&channel, *property))
         .collect();
     assert_eq!(
         writable,

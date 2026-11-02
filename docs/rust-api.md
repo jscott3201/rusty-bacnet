@@ -3946,8 +3946,8 @@ trait BACnetObject {
     fn write_property(&mut self, property: PropertyIdentifier, array_index: Option<u32>,
         value: PropertyValue, priority: Option<u8>) -> Result<(), Error>;
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]>;
-    // ...then `write_property_from`, the three `is_*_property` queries that
-    // default from the rows, and the capability accessors, all defaulted.
+    // ...then `write_property_from` and the capability accessors, all
+    // defaulted.
 }
 ```
 
@@ -3970,23 +3970,27 @@ the only property list an object writes (#2197): the free functions in
 `bacnet_objects::property_metadata` derive the rest. `property_list(rows)` is
 the Property_List the object serves, the rows less the four properties Clause
 12.1.1.4.1 leaves out; `read_property_list(rows, array_index)` answers a
-Property_List read from it; `required_properties(rows)` is the required set;
-and `has_property(rows, property)` says whether the object has a property. The
-iterators borrow the rows and `has_property` doesn't allocate. The default of
-`is_writable_property` derives from the rows too, and the server reads them for
-property presence, ReadPropertyMultiple's ALL, REQUIRED and OPTIONAL, the
-indexed-write gate and the PICS. A property without a row is absent to all of
-those, whatever `read_property` answers. Each row also gives the property's
-datatype and shape (#2177): `effective_value_type(object_type)` is the row's
-own, set with `with_value_type`, or else the standard one,
-`bacnet_types::datatype::standard_value_type`. `is_array_property` and
-`is_list_property` default to it, and the server reads it for the list
-services, ReadRange, NULL writes and device references. Which lists take
-typed elements and which references stay inside the device is the server's
-policy, by object type (`bacnet_device_core::write::policy`). A row for a
-vendor property states its own. Every built-in object supplies rows. A
-custom object's smallest honest set is the universal rows plus one for each
-property it serves:
+Property_List read from it; `required_properties(rows)` is the required set; and
+`has_property(rows, property)` says whether the object has a property. The
+iterators borrow the rows and `has_property` doesn't allocate.
+`is_writable_property(&object, property)` derives from the rows too: the row
+names a write route. The server reads them for property presence,
+ReadPropertyMultiple's ALL, REQUIRED and OPTIONAL, the indexed-write gate and
+the PICS. A property without a row is absent to all of those, whatever
+`read_property` answers. Each row also gives the property's datatype and shape
+(#2177): `effective_value_type(object_type)` is the row's own, set with
+`with_value_type`, or else the standard one,
+`bacnet_types::datatype::standard_value_type`. `is_array_property(&object,
+property)` and `is_list_property(&object, property)` read it, as does
+`object_value_type(&object, property)`, which gives the value type itself. The
+server reads it for the array-index gates, the list services, ReadRange, NULL
+writes, device references and how a written value's octets reach the object. An
+object whose rows change per instance returns them owned, as a Staging object
+does for its Stage_Names, and the answers follow. Which lists take typed
+elements and which references stay inside the device is the server's policy, by
+object type (`bacnet_device_core::write::policy`). A row for a vendor property
+states its own. Every built-in object supplies rows. A custom object's smallest
+honest set is the universal rows plus one for each property it serves:
 
 ```rust,ignore
 use bacnet_objects::property_metadata::{
@@ -4237,7 +4241,7 @@ therefore check access and state before the value's datatype, as the built-in
 objects do.
 
 WriteProperty and WritePropertyMultiple give a property that
-`BACnetObject::is_list_property` reports as a BACnetLIST, written whole, to the
+`property_metadata::is_list_property` reports as a BACnetLIST, written whole, to the
 object as a `PropertyValue::List` of any length: a value with no octets is the
 empty list (Clause 20.2.17), so Alarm_Values can be cleared, and one element is
 a list of one. The object judges the list, so an empty value on a read-only list
@@ -4323,20 +4327,19 @@ RemoveListElement can change anything else, since each writes the whole list
 back.
 
 AddListElement and RemoveListElement edit only properties that
-`BACnetObject::is_list_property` reports as a BACnetLIST. The default follows the
+`property_metadata::is_list_property` reports as a BACnetLIST. It follows the
 Clause 12 datatypes, including identifiers whose type depends on the object type
-(Alarm_Values, Present_Value, Member_Of, List_Of_Object_Property_References);
-custom objects with vendor lists override it. Every other target, whether a scalar,
-a constructed single value, a whole array or an indexed array element, returns
-`SERVICES/PROPERTY_IS_NOT_A_LIST` before any element is decoded. Unknown object,
-unknown property and array-index errors come first, and element datatype errors
-after. Only a BACnetLIST of BACnetDestination (Recipient_List) uses the
-destination codec, only Schedule's List_Of_Object_Property_References the
-reference codec (#1121), and only a Notification Forwarder's
-Subscribed_Recipients the subscription codec (#1049). A list the object holds
-framed with no element codec,
-such as the standalone Device's COV subscription lists, returns
-`PROPERTY/WRITE_ACCESS_DENIED`.
+(Alarm_Values, Present_Value, Member_Of, List_Of_Object_Property_References); a
+custom object states a vendor list on its row with `with_value_type`. Every
+other target, whether a scalar, a constructed single value, a whole array or an
+indexed array element, returns `SERVICES/PROPERTY_IS_NOT_A_LIST` before any
+element is decoded. Unknown object, unknown property and array-index errors come
+first, and element datatype errors after. Only a BACnetLIST of BACnetDestination
+(Recipient_List) uses the destination codec, only Schedule's
+List_Of_Object_Property_References the reference codec (#1121), and only a
+Notification Forwarder's Subscribed_Recipients the subscription codec (#1049). A
+list the object holds framed with no element codec, such as the standalone
+Device's COV subscription lists, returns `PROPERTY/WRITE_ACCESS_DENIED`.
 
 Elements compare whole (Clauses 15.1.2 and 15.2.2): two elements are the same
 when their encodings are, so a destination that differs in one field is a
@@ -4465,7 +4468,7 @@ when it does (#2171).
 #### Migrating custom objects to 0.16
 
 0.16 cuts `BACnetObject` from about a hundred methods to the core and the
-capability accessors (#2179, with #2181 and #2197). The compiler names each
+capability accessors (#2179, with #2181, #2197 and #2177). The compiler names each
 method a custom object still implements; the tables give each one's new
 home. A method on a capability trait is reached through its accessor, as in
 `object.cov().and_then(|cov| cov.cov_increment())`, and a call on a concrete
@@ -4488,12 +4491,56 @@ lend `#[doc(hidden)]` capabilities that aren't public API yet.
 | `lighting_blink_count_internal` | removed: a test reads it through `ObjectDatabase::lighting_blink_count_internal` |
 | `durable_writes_internal` | `durable_writes()`; staged-write expiry moved to `DurableWrites::expire_staged` |
 
-**Property lists (#2181, #2197)**
+**Property lists, writability and shapes (#2181, #2197, #2177)**
 
 | 0.15 method | In 0.16 |
 |---|---|
 | `property_list` | `property_metadata::property_list(&rows)`; a read is `read_property_list(&rows, index)` |
 | `required_properties` | `property_metadata::required_properties(&rows)` |
+| `is_writable_property` | `property_metadata::is_writable_property(&object, property)`, from the row's write capability; state it on the row |
+| `is_array_property` | `property_metadata::is_array_property(&object, property)`, from the row's value type; state a vendor array with `with_value_type(ValueType::array(..))` |
+| `is_list_property` | `property_metadata::is_list_property(&object, property)`, likewise; `with_value_type(ValueType::list(..))` |
+
+A call `object.is_array_property(p)` becomes `is_array_property(&object, p)`;
+the functions take `&dyn BACnetObject`, so pass a boxed object as `&*object`.
+An override that answered differently from the rows moves onto them: give
+the row the write capability or value type the override returned, and
+return owned rows where the answer changes with the instance's state. An
+adapter that wrapped another object and forwarded these three drops them,
+since forwarding `property_metadata` and `object_identifier` is enough.
+
+A custom object with a vendor array and a vendor list states both on its
+rows, where it used to override the two methods:
+
+```rust,ignore
+use bacnet_objects::property_metadata::{
+    Datatype, PropertyConformance as C, PropertyMetadata, PropertyWriteCapability as W,
+    ValueType, is_array_property, is_list_property,
+};
+use bacnet_types::enums::PropertyIdentifier as P;
+
+const SETPOINTS: P = P::from_raw(600); // a BACnetARRAY of REAL
+const ALARM_CODES: P = P::from_raw(601); // a BACnetLIST of Unsigned
+
+const ROWS: &[PropertyMetadata] = &[
+    PropertyMetadata::new(P::OBJECT_IDENTIFIER, C::RequiredRead, None, W::ReadOnly),
+    PropertyMetadata::new(P::OBJECT_NAME, C::RequiredRead, None, W::ReadOnly),
+    PropertyMetadata::new(P::OBJECT_TYPE, C::RequiredRead, None, W::ReadOnly),
+    PropertyMetadata::new(SETPOINTS, C::Optional, None, W::Always)
+        .with_value_type(ValueType::array(Datatype::Real)),
+    PropertyMetadata::new(ALARM_CODES, C::Optional, None, W::ReadOnly)
+        .with_value_type(ValueType::list(Datatype::Unsigned)),
+    PropertyMetadata::new(P::PROPERTY_LIST, C::RequiredRead, None, W::ReadOnly),
+];
+
+// `property_metadata` returns `Cow::Borrowed(ROWS)`; then, for the object:
+assert!(is_array_property(&pump, SETPOINTS));
+assert!(is_list_property(&pump, ALARM_CODES));
+```
+
+The index gates, the list services and ReadRange answer from those rows,
+and a whole write of the list reaches `write_property` as a
+`PropertyValue::List`.
 
 **Staging and command runs: hidden `StagingSource` and `CommandRunner` (#2232)**
 
@@ -5975,6 +6022,16 @@ references take network writes; Reliability reads CONFIGURATION_ERROR while
 the non-NULL values differ in datatype, and otherwise reports the first failed
 write of the last run.
 
+Deleting a Timer releases nothing and makes no transition's writes (#2265):
+deletion isn't a transition. A running Timer deleted leaves its start writes
+in its targets' slots and never expires; clear it first (write Timer_State
+IDLE) to have RUNNING_TO_IDLE's writes made, a NULL there relinquishing. A run whose object is deleted stops: each local write checks the run's
+generation under the guard that commits it, so nothing more is written once
+the object is gone. A write to another device is checked once its route is
+known, before its invoke ID is leased, and before each retry; a request that
+already passed its last check is still sent if the delete lands in that gap,
+since no guard is held over a send.
+
 The Loop serves every required Table 12-20 row. Setpoint, the gain constants,
 Update_Interval and Action (DIRECT or REVERSE) take network writes.
 Controlled_Variable_Units, the three gain units rows and Priority_For_Writing
@@ -6123,6 +6180,14 @@ In_Process FALSE, All_Writes_Successful FALSE and every command's
 `write_successful` FALSE. The endpoint responder refuses a Command's
 Present_Value write with WRITE_ACCESS_DENIED, as it does every write other
 than the Device's Description and Audit recipient.
+
+Deleting a Command releases nothing (#2265): its writes are one-shot, and the
+values it made stay until another writer changes or relinquishes them. A run whose object is deleted stops: each local write checks the run's
+generation under the guard that commits it, so nothing more is written once
+the object is gone. A write to another device is checked once its route is
+known, before its invoke ID is leased, and before each retry; a request that
+already passed its last check is still sent if the delete lands in that gap,
+since no guard is held over a send.
 
 Load Control supports COV (Table 13-1). Its SubscribeCOV report carries
 Present_Value, Status_Flags, Requested_Shed_Level, Start_Time and
@@ -6274,6 +6339,18 @@ notification carries Present_Value, Status_Flags and Present_Stage, and fires
 when Present_Value moves by the writable `COV_Increment` (default 0), when
 Status_Flags changes (including a target-plan completion that changes
 Reliability), or when Present_Stage changes.
+
+Removing a Staging object gives up the Present_Value slots its stage writes
+filled (#2265), as a Schedule's removal does, through the same path:
+DeleteObject, the application's own `ObjectDatabase::remove`, or an `add`
+that replaces it. The object records every target and priority its plans
+wrote, across stage, reference and priority changes, and the public
+`StagingSource::take_relinquish_writes()` hands the database one relinquish
+NULL per priority as it leaves. Each goes only to a slot whose Value_Source
+still names the Staging object, so a writer that took the slot keeps its
+command. A plan still being written stops at its next target. Changing
+Target_References or Priority_For_Writing doesn't yet give up the slots it
+leaves behind; they are released when the object is removed.
 
 #### Lighting & Color (5)
 
@@ -6675,6 +6752,17 @@ local ones are still written. A run that `stop()` cuts short, or whose future
 is dropped, during a remote request ends FAILED and frees its invoke ID.
 Without a server, `tick_schedules` has no network, so a remote member fails
 there.
+
+Deleting a Channel releases nothing (#2265): it holds no slot of its own,
+since each member's slot is at the priority its writer chose. While the
+Channel exists that writer relinquishes by writing NULL to it; once the
+Channel is deleted, the writer relinquishes each member's slot directly.
+A distribution whose Channel is deleted stops: each local write checks the run's
+generation under the guard that commits it, so nothing more is written once
+the object is gone. A write to another device is checked once its route is
+known, before its invoke ID is leased, and before each retry; a request that
+already passed its last check is still sent if the delete lands in that gap,
+since no guard is held over a send.
 
 Reliability reports how the last distribution ended (Clause 12.53.9):
 NO_FAULT_DETECTED after a SUCCESSFUL one, otherwise the kind of the first

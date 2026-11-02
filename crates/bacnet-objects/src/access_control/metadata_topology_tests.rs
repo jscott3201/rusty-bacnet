@@ -1,5 +1,6 @@
 use super::*;
 use crate::property_metadata::{PropertyPresenceCondition, PropertyWriteCapability};
+use crate::property_metadata::{is_array_property, is_list_property, is_writable_property};
 use crate::traits::BACnetObject;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
 use bacnet_types::error::{Error, RemoteError};
@@ -123,7 +124,7 @@ fn assert_indexed_property_list(object: &dyn BACnetObject, all: &[P]) {
         .filter(|&&p| !matches!(p, P::OBJECT_IDENTIFIER | P::OBJECT_NAME | P::OBJECT_TYPE))
         .map(|p| PropertyValue::Enumerated(p.to_raw()))
         .collect();
-    assert!(object.is_array_property(P::PROPERTY_LIST));
+    assert!(is_array_property(object, P::PROPERTY_LIST));
     assert_eq!(
         object.read_property(P::PROPERTY_LIST, None).unwrap(),
         PropertyValue::List(wire.clone())
@@ -227,12 +228,12 @@ fn property_metadata_access_door_exact_sets_readable_rows_and_indexed_list() {
             object.read_property(p, None).unwrap(),
             PropertyValue::List(vec![])
         );
-        assert!(!object.is_array_property(p), "{p:?}");
-        assert!(object.is_list_property(p), "{p:?}");
+        assert!(!is_array_property(&object, p), "{p:?}");
+        assert!(is_list_property(&object, p), "{p:?}");
     }
     // Priority_Array and Door_Members are BACnetARRAYs (Table 12-30), so
     // the service gate admits an index on both (#1169).
-    assert!(object.is_array_property(P::PRIORITY_ARRAY));
+    assert!(is_array_property(&object, P::PRIORITY_ARRAY));
     assert_eq!(
         object.read_property(P::PRIORITY_ARRAY, Some(0)).unwrap(),
         PropertyValue::Unsigned(16)
@@ -241,8 +242,8 @@ fn property_metadata_access_door_exact_sets_readable_rows_and_indexed_list() {
         object.read_property(P::PRIORITY_ARRAY, Some(1)).unwrap(),
         PropertyValue::Null
     );
-    assert!(object.is_array_property(P::DOOR_MEMBERS));
-    assert!(!object.is_array_property(P::DOOR_STATUS));
+    assert!(is_array_property(&object, P::DOOR_MEMBERS));
+    assert!(!is_array_property(&object, P::DOOR_STATUS));
     // The #1073 rows: the three times in tenths of a second, and no
     // command priority while Present_Value is the default.
     for (p, tenths) in [
@@ -254,7 +255,7 @@ fn property_metadata_access_door_exact_sets_readable_rows_and_indexed_list() {
             object.read_property(p, None).unwrap(),
             PropertyValue::Unsigned(tenths)
         );
-        assert!(!object.is_array_property(p));
+        assert!(!is_array_property(&object, p));
     }
     assert_eq!(
         object
@@ -363,9 +364,9 @@ fn property_metadata_access_point_exact_sets_readable_rows_and_indexed_list() {
     );
     // Access_Event_Time is one BACnetTimeStamp, so an index is rejected;
     // Access_Doors is a BACnetARRAY and takes one (#1169).
-    assert!(object.is_array_property(P::ACCESS_DOORS));
-    assert!(!object.is_array_property(P::ACCESS_EVENT_TIME));
-    assert!(!object.is_array_property(P::ACCESS_EVENT_CREDENTIAL));
+    assert!(is_array_property(&object, P::ACCESS_DOORS));
+    assert!(!is_array_property(&object, P::ACCESS_EVENT_TIME));
+    assert!(!is_array_property(&object, P::ACCESS_EVENT_CREDENTIAL));
 }
 
 #[test]
@@ -441,14 +442,14 @@ fn property_metadata_access_zone_exact_sets_readable_rows_and_indexed_list() {
         (P::OCCUPANCY_LOWER_LIMIT, PropertyValue::Unsigned(0)),
     ] {
         assert_eq!(object.read_property(p, None).unwrap(), value, "{p:?}");
-        assert!(!object.is_array_property(p));
+        assert!(!is_array_property(&object, p));
     }
     for p in [P::ENTRY_POINTS, P::EXIT_POINTS] {
         assert_eq!(
             object.read_property(p, None).unwrap(),
             PropertyValue::List(vec![])
         );
-        assert!(!object.is_array_property(p));
+        assert!(!is_array_property(&object, p));
     }
 }
 
@@ -553,7 +554,7 @@ fn property_metadata_access_trio_write_capabilities_match_dispatch() {
                 };
                 assert_eq!(row.write_capability, capability, "{p:?}");
                 assert_eq!(
-                    object.is_writable_property(p),
+                    is_writable_property(&*object, p),
                     capability.is_writable(),
                     "{p:?}"
                 );
@@ -569,7 +570,7 @@ fn property_metadata_access_trio_write_capabilities_match_dispatch() {
             }
             // Object_Name has no network write route: a rename falls
             // through to WRITE_ACCESS_DENIED even with a well-formed value.
-            assert!(!object.is_writable_property(P::OBJECT_NAME));
+            assert!(!is_writable_property(&*object, P::OBJECT_NAME));
             assert_error(
                 object
                     .write_property(
@@ -615,7 +616,7 @@ fn property_metadata_access_point_and_zone_writes_store_verbatim() {
                 point.write_property(p, None, value, None).unwrap_err(),
                 ErrorCode::WRITE_ACCESS_DENIED,
             );
-            assert!(!point.is_writable_property(p));
+            assert!(!is_writable_property(&point, p));
         }
         // Reliability takes its own readback only while out of service
         // (#1325).
@@ -626,7 +627,7 @@ fn property_metadata_access_point_and_zone_writes_store_verbatim() {
         } else {
             assert_error(result.unwrap_err(), ErrorCode::WRITE_ACCESS_DENIED);
         }
-        assert!(point.is_writable_property(P::RELIABILITY));
+        assert!(is_writable_property(&point, P::RELIABILITY));
         let mut zone = AccessZoneObject::new(1, "ZONE-1").unwrap();
         zone.write_property(
             P::OUT_OF_SERVICE,
@@ -670,7 +671,7 @@ fn property_metadata_access_point_and_zone_writes_store_verbatim() {
             } else {
                 assert_error(result.unwrap_err(), ErrorCode::WRITE_ACCESS_DENIED);
             }
-            assert!(zone.is_writable_property(p));
+            assert!(is_writable_property(&zone, p));
         }
         for p in [
             P::ENTRY_POINTS,
@@ -690,7 +691,7 @@ fn property_metadata_access_point_and_zone_writes_store_verbatim() {
                 zone.write_property(p, None, value, None).unwrap_err(),
                 ErrorCode::WRITE_ACCESS_DENIED,
             );
-            assert!(!zone.is_writable_property(p));
+            assert!(!is_writable_property(&zone, p));
         }
     }
 }
@@ -698,7 +699,7 @@ fn property_metadata_access_point_and_zone_writes_store_verbatim() {
 #[test]
 fn property_metadata_access_trio_unserved_rows_stay_unknown() {
     fn assert_unserved(object: &mut dyn BACnetObject, p: P) {
-        assert!(!object.is_writable_property(p));
+        assert!(!is_writable_property(&*object, p));
         assert_error(
             object.read_property(p, None).unwrap_err(),
             ErrorCode::UNKNOWN_PROPERTY,

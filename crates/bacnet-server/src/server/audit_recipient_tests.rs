@@ -1,6 +1,7 @@
 //! Observable target recipient changes through the same wire and local owners.
 use super::*;
 use bacnet_objects::audit::AuditReporterObject;
+use bacnet_objects::property_metadata::is_writable_property;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
 
@@ -470,7 +471,7 @@ async fn recipient_active_metadata_rpm_and_property_list_follow_runtime_presence
                 .any(|required| required == property),
             active
         );
-        assert_eq!(object.is_writable_property(property), active);
+        assert_eq!(is_writable_property(object, property), active);
         if active {
             let metadata = object.property_metadata();
             let row = metadata

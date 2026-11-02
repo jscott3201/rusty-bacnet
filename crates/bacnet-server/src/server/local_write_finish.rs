@@ -149,12 +149,14 @@ impl<T: TransportPort + 'static> LocalWriter<'_, T> {
         )
         .await;
         command_runs.extend(schedule_cov.command_runs);
-        BACnetServer::<T>::execute_staging_plans(
-            &self.event_delivery(),
-            &self.cov_context(),
-            staging_plans,
-        )
-        .await;
+        command_runs.extend(
+            BACnetServer::<T>::execute_staging_plans(
+                &self.event_delivery(),
+                &self.cov_context(),
+                staging_plans,
+            )
+            .await,
+        );
         command_runs
     }
 }

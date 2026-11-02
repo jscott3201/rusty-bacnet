@@ -35,8 +35,22 @@
 //! execution matches on (Clause 15.11). Allow_Group_Delay_Inhibit is served
 //! for it too: the object only stores the flag, and the server reads it to
 //! decide whether a WriteGroup asking for no delays gets them.
+//!
+//! **On deletion** (#2265) a Channel releases nothing. It holds no slot of
+//! its own: each member write fills the slot at the priority the
+//! Channel's writer chose (Clause 12.53.5), so the slot is that writer's.
+//! While the Channel exists that writer gives it up by writing NULL to the
+//! Channel; once it is deleted, the writer relinquishes each member's slot
+//! directly. Clause 12.53 says nothing about deletion. A distribution in
+//! progress stops: a member in this device checks the run's generation under
+//! the guard that commits its write, so none still waiting on its
+//! Execution_Delay is written once the object is gone. A member in another
+//! device is checked once its route is known, before its invoke ID is
+//! leased, and before each retry; a request that passed its last check still
+//! goes out if the delete lands in that gap.
 
 use crate::prelude::*;
+use crate::property_metadata::is_array_property;
 use alloc::borrow::Cow;
 use alloc::sync::Arc;
 
@@ -407,7 +421,7 @@ impl BACnetObject for ChannelObject {
         priority: Option<u8>,
     ) -> Result<(), Error> {
         crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
-        if array_index.is_some() && !self.is_array_property(property) {
+        if array_index.is_some() && !is_array_property(self, property) {
             return Err(common::property_is_not_an_array_error());
         }
         if let Some(result) = common::write_object_name(&mut self.name, property, &value) {

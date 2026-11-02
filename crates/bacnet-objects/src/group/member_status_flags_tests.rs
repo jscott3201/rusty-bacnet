@@ -2,6 +2,7 @@
 //! 12.50.10, #1092).
 
 use super::*;
+use crate::property_metadata::{is_array_property, is_list_property, is_writable_property};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::RemoteError;
 
@@ -38,7 +39,7 @@ fn read(group: &GlobalGroupObject, property: PropertyIdentifier) -> PropertyValu
 
 fn assert_write_denied(group: &mut GlobalGroupObject, property: PropertyIdentifier) {
     let value = read(group, property);
-    assert!(!group.is_writable_property(property));
+    assert!(!is_writable_property(&*group, property));
     assert!(matches!(
         group.write_property(property, None, value.clone(), None),
         Err(Error::Remote(RemoteError::Error { class, code }))
@@ -190,8 +191,8 @@ fn event_state_and_member_status_flags_are_read_only_scalars() {
         PropertyIdentifier::EVENT_STATE,
         PropertyIdentifier::MEMBER_STATUS_FLAGS,
     ] {
-        assert!(!group.is_array_property(property));
-        assert!(!group.is_list_property(property));
+        assert!(!is_array_property(&group, property));
+        assert!(!is_list_property(&group, property));
         assert_write_denied(&mut group, property);
     }
 }

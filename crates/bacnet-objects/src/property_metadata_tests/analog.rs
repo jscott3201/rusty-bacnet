@@ -1,4 +1,5 @@
 use super::*;
+use crate::property_metadata::is_writable_property;
 use bacnet_types::error::RemoteError;
 
 use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
@@ -268,7 +269,7 @@ fn property_metadata_analog_write_capabilities_match_dispatch() {
                     _ => PropertyWriteCapability::ReadOnly,
                 };
                 assert_eq!(row.write_capability, capability, "{p:?}");
-                assert_eq!(object.is_writable_property(p), capability.is_writable());
+                assert_eq!(is_writable_property(&*object, p), capability.is_writable());
                 let index = (p == P::PRIORITY_ARRAY).then_some(8);
                 let value = object.read_property(p, index).unwrap();
                 let result = object.write_property_from(

@@ -1,4 +1,5 @@
 use super::*;
+use crate::property_metadata::is_writable_property;
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, LifeSafetyMode, LifeSafetyOperation, LifeSafetyState, ObjectType,
     SilencedState,
@@ -308,7 +309,7 @@ fn point_silenced_and_operation_expected_are_network_read_only() {
             .write_property(property, None, PropertyValue::Enumerated(3), None)
             .unwrap_err();
         assert_protocol_error(error, ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED);
-        assert!(!point.is_writable_property(property));
+        assert!(!is_writable_property(&point, property));
     }
 }
 

@@ -2,6 +2,7 @@
 //! Relinquish_Default gate, and the rows writable only out of service.
 
 use super::*;
+use crate::property_metadata::is_writable_property;
 
 #[test]
 fn property_metadata_access_door_writes_command_priority_and_gate_relinquish() {
@@ -117,7 +118,7 @@ fn property_metadata_access_door_writes_command_priority_and_gate_relinquish() {
             } else {
                 assert_error(result.unwrap_err(), ErrorCode::WRITE_ACCESS_DENIED);
             }
-            assert!(object.is_writable_property(p));
+            assert!(is_writable_property(&object, p));
         }
         // The other Table-O status rows and the readable-only rows deny
         // even their own readback on write.
@@ -137,7 +138,7 @@ fn property_metadata_access_door_writes_command_priority_and_gate_relinquish() {
                 object.write_property(p, None, value, None).unwrap_err(),
                 ErrorCode::WRITE_ACCESS_DENIED,
             );
-            assert!(!object.is_writable_property(p));
+            assert!(!is_writable_property(&object, p));
         }
     }
 }

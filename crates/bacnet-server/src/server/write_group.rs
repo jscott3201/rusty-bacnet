@@ -223,8 +223,11 @@ async fn write_channel<T: TransportPort + 'static>(
     // A Channel's Present_Value is one value, never a list.
     let value = bacnet_device_core::write::decode_write_property_value(
         PropertyIdentifier::PRESENT_VALUE,
+        bacnet_objects::property_metadata::standard_value_type(
+            ObjectType::CHANNEL,
+            PropertyIdentifier::PRESENT_VALUE,
+        ),
         None,
-        false,
         write.value,
     )?;
     let write_group = LocalWrite::WriteGroup {

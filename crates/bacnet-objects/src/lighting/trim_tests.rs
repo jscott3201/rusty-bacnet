@@ -6,6 +6,7 @@
 use super::engine_tests::{Fixture, op};
 use super::*;
 use crate::property_metadata::PropertyPresenceCondition;
+use crate::property_metadata::is_writable_property;
 use bacnet_types::enums::{ErrorClass, ErrorCode, LightingInProgress, LightingOperation as Op};
 use bacnet_types::error::RemoteError;
 
@@ -85,7 +86,7 @@ fn the_trim_rows_are_absent_until_set_then_present_and_writable() {
         row(FADE_TIME).presence_condition,
         Some(PropertyPresenceCondition::LightingTrims)
     );
-    assert!(f.lo.is_writable_property(HIGH) && f.lo.is_writable_property(FADE_TIME));
+    assert!(is_writable_property(&f.lo, HIGH) && is_writable_property(&f.lo, FADE_TIME));
     assert_eq!(
         metadata.last().unwrap().property_identifier,
         PropertyIdentifier::PROPERTY_LIST

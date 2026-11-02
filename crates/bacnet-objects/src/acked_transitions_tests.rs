@@ -7,6 +7,7 @@ use crate::event::{EventStateChange, EventTransition, EventTransitionCommit};
 use crate::event_enrollment::{AlertEnrollmentObject, EventEnrollmentObject};
 use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject};
 use crate::property_metadata::PropertyWriteCapability;
+use crate::property_metadata::is_writable_property;
 use crate::traits::BACnetObject;
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
 use bacnet_types::enums::{
@@ -150,7 +151,10 @@ fn acked_transitions_network_write_and_metadata_deny_every_family() {
                         )
                         .unwrap();
                 }
-                assert!(!object.is_writable_property(PropertyIdentifier::ACKED_TRANSITIONS));
+                assert!(!is_writable_property(
+                    &*object,
+                    PropertyIdentifier::ACKED_TRANSITIONS
+                ));
                 {
                     let metadata = object.property_metadata();
                     let row = metadata
@@ -219,7 +223,10 @@ fn acked_transitions_internal_commit_and_acknowledgment_bypass_property_writes()
             "{}",
             object.object_name()
         );
-        assert!(!object.is_writable_property(PropertyIdentifier::ACKED_TRANSITIONS));
+        assert!(!is_writable_property(
+            &*object,
+            PropertyIdentifier::ACKED_TRANSITIONS
+        ));
     }
 }
 
