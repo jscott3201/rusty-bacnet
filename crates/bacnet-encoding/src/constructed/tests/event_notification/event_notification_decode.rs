@@ -204,10 +204,11 @@ fn event_notification_preserves_optional_envelope_fields() {
     assert_eq!(decoded.message_text.as_deref(), Some("high limit"));
     assert!(decoded.ack_required);
 
-    let mut ack_values = canonical_values();
-    ack_values[4] = &[2];
+    // An EVENT that leaves out ackRequired reads as not needing one.
+    let mut event_values = canonical_values();
+    event_values[4] = &[1];
     let decoded = decode_event_notification(&raw_event_notification(
-        ack_values,
+        event_values,
         canonical_tags(),
         None,
         false,
@@ -285,4 +286,57 @@ fn event_notification_rejects_every_truncated_prefix() {
     for end in 0..encoded.len() {
         assert!(decode_event_notification(&encoded[..end]).is_err());
     }
+}
+
+/// An ACK_NOTIFICATION with no ackRequired, fromState or eventValues, the
+/// octets `ack_notification_omits_ack_from_state_and_event_values_exactly`
+/// pins, cut where the notify type ends: To State [11] follows.
+const ACK_HEAD: [u8; 24] = [
+    0x09, 0x01, 0x1c, 0x02, 0x00, 0x00, 0x01, 0x2c, 0x00, 0x00, 0x00, 0x03, 0x3e, 0x19, 0x07, 0x3f,
+    0x49, 0x05, 0x59, 0x64, 0x69, 0x05, 0x89, 0x02,
+];
+
+/// The ACK_NOTIFICATION head, `between` it and To State, then `after`.
+fn ack_notification(between: &[u8], after: &[u8]) -> Vec<u8> {
+    [&ACK_HEAD[..], between, &[0xb9, 0x03], after].concat()
+}
+
+/// Out-of-range event values: [12] { [5] { 81.5, IN_ALARM, 1.0, 80.0 } }.
+const OUT_OF_RANGE_VALUES: [u8; 22] = [
+    0xce, 0x5e, 0x0c, 0x42, 0xa3, 0x00, 0x00, 0x1a, 0x04, 0x80, 0x2c, 0x3f, 0x80, 0x00, 0x00, 0x3c,
+    0x42, 0xa0, 0x00, 0x00, 0x5f, 0xcf,
+];
+
+#[test]
+fn ack_notification_refuses_alarm_only_fields() {
+    // #2247: the encoder leaves these out of an ACK_NOTIFICATION, so reading
+    // them there changed the request through a re-encode. Each one alone is
+    // refused, where To State is due or as octets past it.
+    let values = &OUT_OF_RANGE_VALUES[..];
+    assert!(decode_event_notification(&ack_notification(&[], &[])).is_ok());
+    for (between, after, kind) in [
+        (&[0x99, 0x01][..], &[][..], DecodingKind::InvalidTag),
+        (&[0xa9, 0x04], &[], DecodingKind::InvalidTag),
+        (&[0x99, 0x01, 0xa9, 0x04], &[], DecodingKind::InvalidTag),
+        (&[], values, DecodingKind::Trailing),
+    ] {
+        let data = ack_notification(between, after);
+        let refused = decode_event_notification(&data).unwrap_err();
+        assert_eq!(
+            refused.decode_fault().map(|(_, k)| k),
+            Some(kind),
+            "{data:02x?}"
+        );
+        // The tolerant decoder, which the client and the Event Log read
+        // with, keeps the strict decoder's refusal.
+        assert!(decode_event_notification_tolerant(&data).is_err());
+    }
+
+    // The same fields in an ALARM decode.
+    let mut alarm = ack_notification(&[0x99, 0x01, 0xa9, 0x04], values);
+    alarm[ACK_HEAD.len() - 1] = 0x00;
+    let decoded = decode_event_notification(&alarm).unwrap();
+    assert!(decoded.ack_required);
+    assert_eq!(decoded.from_state, EventState::LOW_LIMIT);
+    assert!(decoded.event_values.is_some());
 }
