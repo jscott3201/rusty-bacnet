@@ -157,6 +157,7 @@ impl ScheduleObject {
             priority: self.priority_for_writing,
             references: self.refusing_references.clone(),
             retry: true,
+            relinquish: false,
         })
     }
 

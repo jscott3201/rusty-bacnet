@@ -28,11 +28,19 @@ use crate::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 /// local: a Schedule's references name objects of its own device. When an
 /// object is added, the database asks each Schedule
 /// [`retry_refusals_naming`](Self::retry_refusals_naming) under its
-/// exclusive borrow. When DeleteObject removes a Schedule, the server takes
-/// [`take_relinquish_writes`](Self::take_relinquish_writes) from the removed
-/// object and writes those NULLs to its targets. A custom schedule that
-/// keeps priority slots on its targets overrides that method, or its last
-/// commands stay behind after the delete; the default gives up nothing.
+/// exclusive borrow. When a Schedule is removed, by DeleteObject or the
+/// application's own `ObjectDatabase::remove`, the database takes
+/// [`take_relinquish_writes`](Self::take_relinquish_writes) from the object
+/// as it leaves and queues them, and the server writes those NULLs to its
+/// targets. A custom schedule that keeps priority slots on its targets
+/// overrides that method, or its last commands stay behind after the
+/// removal; the default gives up nothing.
+///
+/// A [`relinquish`](ScheduleWrite::relinquish) write reaches only the slots
+/// whose Value_Source still names the Schedule (#2264), so a writer that
+/// took one since keeps it. A target that doesn't serve Value_Source_Array
+/// for the slot, or a reference to a property other than Present_Value,
+/// gets the NULL as before.
 pub trait ScheduleRunner {
     /// Evaluate the schedule at `time` on `today` (Clause 12.24.4).
     ///
@@ -59,9 +67,9 @@ pub trait ScheduleRunner {
     /// Take the writes the schedule owes its targets apart from its
     /// calculation, each once, in order: a NULL to every priority slot a
     /// change of List_Of_Object_Property_References or Priority_For_Writing
-    /// left behind (#1088), then the Present_Value owed out of service, for
-    /// a client's write (Clause 12.24.14) or a change of those two
-    /// properties.
+    /// left behind (#1088), each a [`relinquish`](ScheduleWrite::relinquish)
+    /// write, then the Present_Value owed out of service, for a client's
+    /// write (Clause 12.24.14) or a change of those two properties.
     ///
     /// A pass takes them before it calls
     /// [`tick_schedule`](Self::tick_schedule), so they reach the targets
@@ -100,11 +108,13 @@ pub trait ScheduleRunner {
     }
 
     /// The NULLs that give up every priority slot the schedule holds on its
-    /// targets, for its removal by DeleteObject (#2256): those
+    /// targets, for its removal from the database (#2256, #2264): those
     /// [`take_owed_schedule_writes`](Self::take_owed_schedule_writes) owes
     /// still, then one to each slot its last value filled. Each is taken
     /// once; a schedule that never wrote, or whose slots are already given
-    /// up, owes none. No value write is owed. The default owes none.
+    /// up, owes none. No value write is owed. Each is a
+    /// [`relinquish`](ScheduleWrite::relinquish) write. The default owes
+    /// none.
     fn take_relinquish_writes(&mut self) -> Vec<ScheduleWrite> {
         Vec::new()
     }

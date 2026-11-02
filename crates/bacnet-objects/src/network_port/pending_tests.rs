@@ -18,8 +18,8 @@ const REFUSED: [u8; 4] = [10, 0, 0, 99];
 /// Tables that apply what is activated, refuse a BDT naming [`REFUSED`],
 /// and refuse every activation while `fail` is set.
 #[derive(Default)]
-struct Tables {
-    bdt: Mutex<Vec<BACnetBDTEntry>>,
+pub(super) struct Tables {
+    pub(super) bdt: Mutex<Vec<BACnetBDTEntry>>,
     accepts: Mutex<bool>,
     fail: Mutex<bool>,
     fail_check: Mutex<bool>,
@@ -75,7 +75,7 @@ fn oid() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::NETWORK_PORT, 1).unwrap()
 }
 
-fn row(ip: [u8; 4]) -> BACnetBDTEntry {
+pub(super) fn row(ip: [u8; 4]) -> BACnetBDTEntry {
     BACnetBDTEntry {
         bbmd_address: BACnetHostNPort {
             host: BACnetHostAddress::Ip(IpAddr::V4(Ipv4Addr::from(ip))),
@@ -86,7 +86,7 @@ fn row(ip: [u8; 4]) -> BACnetBDTEntry {
 }
 
 /// A BBMD port over `tables`, with the lease that keeps it registered.
-fn bbmd_port(tables: &Arc<Tables>) -> (ObjectDatabase, Arc<()>) {
+pub(super) fn bbmd_port(tables: &Arc<Tables>) -> (ObjectDatabase, Arc<()>) {
     let mut db = ObjectDatabase::new();
     let config = BipPortConfig {
         ip_address: [127, 0, 0, 1],

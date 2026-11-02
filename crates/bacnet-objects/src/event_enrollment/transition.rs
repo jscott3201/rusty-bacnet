@@ -17,6 +17,7 @@ pub struct EventEnrollmentReliabilityCommit {
 }
 
 pub(super) fn commit_event_transition(
+    detection_enabled: bool,
     event_state: &mut EventState,
     acked_transitions: &mut EventTransitionBits,
     event_history: &mut EventHistory,
@@ -28,6 +29,7 @@ pub(super) fn commit_event_transition(
     let mut staged_acknowledgments = *acked_transitions;
     let mut staged_history = event_history.clone();
     EventTransitionState::new(
+        detection_enabled,
         &mut staged_event_state,
         &mut staged_acknowledgments,
         &mut staged_history,
@@ -40,7 +42,11 @@ pub(super) fn commit_event_transition(
     Ok(())
 }
 
+/// A Reliability-only commit (no transition) is taken with detection off:
+/// Reliability is not one of the event properties detection freezes. A
+/// transition is refused then, as [`commit_event_transition`] refuses it.
 pub(super) fn commit_reliability(
+    detection_enabled: bool,
     reliability: &mut Reliability,
     event_state: &mut EventState,
     acked_transitions: &mut EventTransitionBits,
@@ -56,6 +62,7 @@ pub(super) fn commit_reliability(
 
     if let Some(transition) = commit.transition {
         EventTransitionState::new(
+            detection_enabled,
             &mut staged_event_state,
             &mut staged_acknowledgments,
             &mut staged_history,
@@ -77,6 +84,7 @@ macro_rules! impl_event_enrollment_reliability_commit {
             commit: $crate::event_enrollment::EventEnrollmentReliabilityCommit,
         ) -> Result<(), EventTransitionCommitError> {
             transition::commit_reliability(
+                self.event_detection_enable,
                 &mut self.reliability,
                 &mut self.event_state,
                 &mut self.acked_transitions,

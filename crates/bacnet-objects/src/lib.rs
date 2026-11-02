@@ -95,6 +95,9 @@ mod local_input_tests;
 mod event_reporting_tests;
 
 #[cfg(test)]
+mod detection_disabled_commit_tests;
+
+#[cfg(test)]
 mod cov_reporting_tests;
 
 #[cfg(test)]
@@ -122,6 +125,10 @@ mod reliability_inhibit_tests;
 
 #[cfg(test)]
 mod read_consistency_tests;
+#[cfg(test)]
+mod read_write_round_trip_seeds;
+#[cfg(test)]
+mod read_write_round_trip_tests;
 #[cfg(test)]
 mod typed_enum_storage_tests;
 #[cfg(test)]
