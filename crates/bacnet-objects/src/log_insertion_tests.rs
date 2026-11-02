@@ -80,10 +80,19 @@ fn fallible_insertion_keeps_count_only_success_and_rejects_unsupported_objects()
             assert_eq!(object.total(), 2);
         }
     }
+    // A non-log lends no buffer, so the host has nowhere to add a record.
     let mut unsupported =
         crate::analog::AnalogInputObject::new(1, "AI", EngineeringUnits::DEGREES_CELSIUS).unwrap();
+    assert!(unsupported.log_buffer_mut().is_none());
+    // A log that lends one but takes no trend records refuses them.
+    let mut event = FamilyKind::Event.object(2);
     assert_protocol(
-        unsupported.add_trend_record(ordinary(1, 10)).unwrap_err(),
+        event
+            .object_mut()
+            .log_buffer_mut()
+            .unwrap()
+            .add_trend_record(ordinary(1, 10))
+            .unwrap_err(),
         ErrorClass::OBJECT,
         ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
     );

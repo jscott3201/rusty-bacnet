@@ -583,7 +583,7 @@ async fn exercise(confirmed: bool, selected: bool, lists: bool, files: bool) {
                 failure.then_some((ErrorClass::SERVICES, ErrorCode::INVALID_FILE_START_POSITION))
             );
             let db = target.database().read().await;
-            let storage = db.get(&object).unwrap().file_storage_internal().unwrap();
+            let storage = db.get(&object).unwrap().file_storage().unwrap();
             if record_access {
                 assert_eq!(
                     storage.read_records(0, 10).unwrap().records,

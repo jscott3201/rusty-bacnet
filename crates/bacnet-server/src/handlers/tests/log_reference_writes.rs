@@ -180,7 +180,8 @@ fn assert_refused(result: Result<(), Error>, class: ErrorClass, code: ErrorCode,
 fn record_count(db: &ObjectDatabase, oid: ObjectIdentifier) -> usize {
     db.get(&oid)
         .unwrap()
-        .log_buffer_internal()
+        .log_buffer()
+        .and_then(|log| log.buffer_records())
         .unwrap()
         .record_count()
 }
@@ -189,7 +190,8 @@ fn record(db: &ObjectDatabase, oid: ObjectIdentifier, index: usize) -> Vec<u8> {
     let mut bytes = BytesMut::new();
     db.get(&oid)
         .unwrap()
-        .log_buffer_internal()
+        .log_buffer()
+        .and_then(|log| log.buffer_records())
         .unwrap()
         .encode_record(index, &mut bytes);
     bytes.to_vec()

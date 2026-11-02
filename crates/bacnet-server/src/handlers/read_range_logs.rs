@@ -8,7 +8,7 @@
 //! both services see the same records, each item one bare
 //! BACnetAuditLogRecord whose identity is its Unsigned64 sequence number and
 //! timestamp. A Trend Log, Event Log or Trend Log Multiple lends its record
-//! buffer through `log_buffer_internal`, each item one record framed as its
+//! buffer through `LogBuffer::buffer_records`, each item one record framed as its
 //! Clause 21 production (#1233), with the identities its buffer derives. By
 //! Position, By Sequence Number and By Time then select through the same
 //! code for every log.
@@ -253,7 +253,7 @@ fn partition_point(len: usize, before: impl Fn(usize) -> bool) -> usize {
 
 /// The resolved Log_Buffer of a log object: its items, and the identities
 /// they are selected by.
-pub(super) type LogBuffer<'a> = (RangeItems<'a>, LogIdentities<'a>);
+pub(super) type ResolvedLogBuffer<'a> = (RangeItems<'a>, LogIdentities<'a>);
 
 /// Resolve `LOG_BUFFER` on an object that serves it outside ReadProperty (an
 /// Audit Log store or a log record buffer), or `None` to leave the request to
@@ -264,7 +264,7 @@ pub(super) type LogBuffer<'a> = (RangeItems<'a>, LogIdentities<'a>);
 pub(super) fn log_buffer<'a>(
     object: &'a dyn BACnetObject,
     request: &ReadRangeRequest,
-) -> Result<Option<LogBuffer<'a>>, Error> {
+) -> Result<Option<ResolvedLogBuffer<'a>>, Error> {
     if request.property_identifier != PropertyIdentifier::LOG_BUFFER {
         return Ok(None);
     }
@@ -274,7 +274,7 @@ pub(super) fn log_buffer<'a>(
             RangeItems::AuditRecords(records),
             LogIdentities::Audit(records),
         )
-    } else if let Some(records) = object.log_buffer_internal() {
+    } else if let Some(records) = object.log_buffer().and_then(|log| log.buffer_records()) {
         (
             RangeItems::LogRecords(records),
             LogIdentities::Buffer(records),

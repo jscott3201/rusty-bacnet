@@ -1,5 +1,5 @@
 use bacnet_objects::property_metadata::PropertyMetadata;
-use bacnet_objects::traits::Timed;
+use bacnet_objects::traits::{LogBuffer, Timed};
 use bacnet_types::error::RemoteError;
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -101,8 +101,16 @@ impl BACnetObject for ListObject {
         crate::test_rows::read_only(&[self.property])
     }
 
-    fn log_record_identities_internal(&self) -> Option<Vec<LogRecordIdentity>> {
-        self.identities.clone()
+    fn log_buffer(&self) -> Option<&dyn LogBuffer> {
+        self.identities.is_some().then_some(self as _)
+    }
+}
+
+/// Identities without a paged buffer: ReadRange reads Log_Buffer through
+/// `read_property` and selects by these.
+impl LogBuffer for ListObject {
+    fn record_identities(&self) -> Vec<LogRecordIdentity> {
+        self.identities.clone().unwrap_or_default()
     }
 }
 
@@ -548,7 +556,11 @@ fn purge_status_record_replaces_old_sequence_continuation() {
             None,
         )
         .unwrap();
-    let status_sequence = object.log_record_identities_internal().unwrap()[0].sequence_number();
+    let status_sequence = object
+        .log_buffer()
+        .map(|log| log.record_identities())
+        .unwrap()[0]
+        .sequence_number();
     assert_eq!(status_sequence, 3);
     let oid = object.object_identifier();
     let mut db = ObjectDatabase::new();

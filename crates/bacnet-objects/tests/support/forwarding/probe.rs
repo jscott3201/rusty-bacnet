@@ -25,34 +25,34 @@ use bacnet_objects::event::{
     EventTransitionCommitError, TransitionOutcome,
 };
 use bacnet_objects::file::{FileConfiguration, FileObject, FileStorage};
-use bacnet_objects::log_buffer::{LogBufferRecords, LogRecordIdentity};
 use bacnet_objects::log_reporting::BufferReadyReport;
 use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::staging::StagingWritePlan;
 use bacnet_objects::traits::{
     AccessEvents, BACnetObject, CalendarState, Clocks, CommandRunner, CovReportedProperty,
     EnrollmentEval, EventReporting, LifeSafety, LifeSafetyOperationEffect,
-    LifeSafetyOperationOutcome, LocalInput, LocalInputValue, ReliabilityEval, ScheduleRunner,
-    StagingSource, Timed,
+    LifeSafetyOperationOutcome, LocalInput, LocalInputValue, LogBuffer, ReliabilityEval,
+    ScheduleRunner, StagingSource, Timed,
 };
 use bacnet_objects::trend::TrendLogObject;
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::constructed::{
-    BACnetDeviceObjectReference, BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord,
-    BACnetObjectPropertyReference, BACnetObjectSelector,
+    BACnetDeviceObjectReference, BACnetObjectPropertyReference, BACnetObjectSelector,
 };
 use bacnet_types::enums::{
     AuditLevel, EngineeringUnits, ErrorClass, ErrorCode, EventState, EventType,
     LifeSafetyOperation, ObjectType, PropertyIdentifier as P, Reliability,
 };
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{BACnetTimeStamp, Date, ObjectIdentifier, PropertyValue, Time};
+use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue, Time};
 
 #[path = "access_batch.rs"]
 mod access_batch;
 #[path = "eval.rs"]
 mod eval;
+#[path = "log.rs"]
+mod log;
 #[path = "schedule.rs"]
 mod schedule;
 
@@ -374,59 +374,29 @@ impl BACnetObject for Probe {
         self.called("durable_writes", ());
         self.audit_log.durable_writes()
     }
-    fn file_configuration_internal(&self) -> Option<&dyn FileConfiguration> {
-        self.called("file_configuration_internal", ());
+    fn file_configuration(&self) -> Option<&dyn FileConfiguration> {
+        self.called("file_configuration", ());
         Some(&self.file)
     }
-    fn file_configuration_internal_mut(&mut self) -> Option<&mut dyn FileConfiguration> {
-        self.called("file_configuration_internal_mut", ());
+    fn file_configuration_mut(&mut self) -> Option<&mut dyn FileConfiguration> {
+        self.called("file_configuration_mut", ());
         Some(&mut self.file)
     }
-    fn file_storage_internal(&self) -> Option<&dyn FileStorage> {
-        self.called("file_storage_internal", ());
+    fn file_storage(&self) -> Option<&dyn FileStorage> {
+        self.called("file_storage", ());
         Some(&self.file)
     }
-    fn file_storage_internal_mut(&mut self) -> Option<&mut dyn FileStorage> {
-        self.called("file_storage_internal_mut", ());
+    fn file_storage_mut(&mut self) -> Option<&mut dyn FileStorage> {
+        self.called("file_storage_mut", ());
         Some(&mut self.file)
     }
-    fn log_record_identities_internal(&self) -> Option<Vec<LogRecordIdentity>> {
-        self.called("log_record_identities_internal", ());
-        let date = Date {
-            year: 126,
-            month: 10,
-            day: 2,
-            day_of_week: 5,
-        };
-        Some(vec![LogRecordIdentity::new(9, date, noon()).unwrap()])
+    fn log_buffer(&self) -> Option<&dyn LogBuffer> {
+        self.called("log_buffer", ());
+        Some(self)
     }
-    fn log_buffer_internal(&self) -> Option<&dyn LogBufferRecords> {
-        self.called("log_buffer_internal", ());
-        self.trend_log.log_buffer_internal()
-    }
-    fn add_trend_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
-        self.called("add_trend_record", (record,));
-        Err(own_record_error())
-    }
-    fn add_trend_multiple_record(&mut self, record: BACnetLogMultipleRecord) -> Result<(), Error> {
-        self.called("add_trend_multiple_record", (record,));
-        Err(own_record_error())
-    }
-    fn add_event_log_record(&mut self, record: BACnetEventLogRecord) -> Result<(), Error> {
-        self.called("add_event_log_record", (record,));
-        Err(own_record_error())
-    }
-    fn refresh_log_window_internal(&mut self) -> bool {
-        self.called("refresh_log_window_internal", ());
-        true
-    }
-    fn log_collecting_internal(&self) -> bool {
-        self.called("log_collecting_internal", ());
-        false
-    }
-    fn logs_received_event_notifications_internal(&self) -> bool {
-        self.called("logs_received_event_notifications_internal", ());
-        true
+    fn log_buffer_mut(&mut self) -> Option<&mut dyn LogBuffer> {
+        self.called("log_buffer_mut", ());
+        Some(self)
     }
 }
 

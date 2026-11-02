@@ -10,16 +10,15 @@ use bacnet_objects::audit::{
 };
 use bacnet_objects::durable::DurableWrites;
 use bacnet_objects::file::{FileConfiguration, FileStorage};
-use bacnet_objects::log_buffer::{LogBufferRecords, LogRecordIdentity};
 use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::traits::{
     AccessEvents, BACnetObject, CalendarState, CommandRunner, CovReportedProperty, EnrollmentEval,
-    EventReporting, LifeSafety, LocalInput, ReliabilityEval, ScheduleRunner, StagingSource, Timed,
+    EventReporting, LifeSafety, LocalInput, LogBuffer, ReliabilityEval, ScheduleRunner,
+    StagingSource, Timed,
 };
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
 use bacnet_types::constructed::{
-    BACnetDeviceObjectReference, BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord,
-    BACnetObjectPropertyReference, BACnetObjectSelector,
+    BACnetDeviceObjectReference, BACnetObjectPropertyReference, BACnetObjectSelector,
 };
 use bacnet_types::enums::{AuditLevel, ErrorClass, ErrorCode, PropertyIdentifier};
 use bacnet_types::error::Error;
@@ -324,52 +323,28 @@ impl BACnetObject for SourceReporter {
         self.wrapped.durable_writes()
     }
 
-    fn file_configuration_internal(&self) -> Option<&dyn FileConfiguration> {
-        self.wrapped.file_configuration_internal()
+    fn file_configuration(&self) -> Option<&dyn FileConfiguration> {
+        self.wrapped.file_configuration()
     }
 
-    fn file_configuration_internal_mut(&mut self) -> Option<&mut dyn FileConfiguration> {
-        self.wrapped.file_configuration_internal_mut()
+    fn file_configuration_mut(&mut self) -> Option<&mut dyn FileConfiguration> {
+        self.wrapped.file_configuration_mut()
     }
 
-    fn file_storage_internal(&self) -> Option<&dyn FileStorage> {
-        self.wrapped.file_storage_internal()
+    fn file_storage(&self) -> Option<&dyn FileStorage> {
+        self.wrapped.file_storage()
     }
 
-    fn file_storage_internal_mut(&mut self) -> Option<&mut dyn FileStorage> {
-        self.wrapped.file_storage_internal_mut()
+    fn file_storage_mut(&mut self) -> Option<&mut dyn FileStorage> {
+        self.wrapped.file_storage_mut()
     }
 
-    fn log_record_identities_internal(&self) -> Option<Vec<LogRecordIdentity>> {
-        self.wrapped.log_record_identities_internal()
+    fn log_buffer(&self) -> Option<&dyn LogBuffer> {
+        self.wrapped.log_buffer()
     }
 
-    fn log_buffer_internal(&self) -> Option<&dyn LogBufferRecords> {
-        self.wrapped.log_buffer_internal()
-    }
-
-    fn add_trend_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
-        self.wrapped.add_trend_record(record)
-    }
-
-    fn add_trend_multiple_record(&mut self, record: BACnetLogMultipleRecord) -> Result<(), Error> {
-        self.wrapped.add_trend_multiple_record(record)
-    }
-
-    fn add_event_log_record(&mut self, record: BACnetEventLogRecord) -> Result<(), Error> {
-        self.wrapped.add_event_log_record(record)
-    }
-
-    fn refresh_log_window_internal(&mut self) -> bool {
-        self.wrapped.refresh_log_window_internal()
-    }
-
-    fn log_collecting_internal(&self) -> bool {
-        self.wrapped.log_collecting_internal()
-    }
-
-    fn logs_received_event_notifications_internal(&self) -> bool {
-        self.wrapped.logs_received_event_notifications_internal()
+    fn log_buffer_mut(&mut self) -> Option<&mut dyn LogBuffer> {
+        self.wrapped.log_buffer_mut()
     }
 }
 

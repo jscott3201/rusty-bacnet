@@ -111,7 +111,7 @@ async fn snapshot(
     let file = db
         .get(&oid(ObjectType::FILE, 1))
         .unwrap()
-        .file_storage_internal()
+        .file_storage()
         .unwrap()
         .read_stream(0, 100)
         .unwrap()

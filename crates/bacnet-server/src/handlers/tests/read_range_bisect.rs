@@ -15,7 +15,11 @@ fn stamped_log(hours: &[u8]) -> (ObjectDatabase, ObjectIdentifier, TimestampOrde
         })
         .unwrap();
     }
-    let order = log.log_buffer_internal().unwrap().timestamp_order();
+    let order = log
+        .log_buffer()
+        .and_then(|log| log.buffer_records())
+        .unwrap()
+        .timestamp_order();
     let oid = log.object_identifier();
     let mut db = ObjectDatabase::new();
     db.add(Box::new(log)).unwrap();

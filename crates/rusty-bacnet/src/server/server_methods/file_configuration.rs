@@ -49,7 +49,7 @@ impl BACnetServer {
             .find(|object| object.object_identifier() == oid)
             .ok_or_else(|| missing_file(instance))?;
         let configuration = object
-            .file_configuration_internal()
+            .file_configuration()
             .ok_or_else(|| missing_configuration(instance))?;
         operation(configuration)
     }
@@ -70,7 +70,7 @@ impl BACnetServer {
             .find(|object| object.object_identifier() == oid)
             .ok_or_else(|| missing_file(instance))?;
         let configuration = object
-            .file_configuration_internal_mut()
+            .file_configuration_mut()
             .ok_or_else(|| missing_configuration(instance))?;
         operation(configuration)
     }
@@ -350,7 +350,7 @@ mod tests {
         let guard = server.lock_pending().unwrap();
         assert_eq!(
             guard[0]
-                .file_configuration_internal()
+                .file_configuration()
                 .unwrap()
                 .stream_data()
                 .unwrap(),
@@ -358,7 +358,7 @@ mod tests {
         );
         assert_eq!(
             guard[2]
-                .file_configuration_internal()
+                .file_configuration()
                 .unwrap()
                 .stream_data()
                 .unwrap(),
@@ -450,7 +450,7 @@ mod tests {
         });
         assert_eq!(
             started.lock_pending().unwrap()[0]
-                .file_configuration_internal()
+                .file_configuration()
                 .unwrap()
                 .stream_data()
                 .unwrap(),

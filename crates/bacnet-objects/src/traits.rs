@@ -9,9 +9,7 @@ use alloc::borrow::Cow;
 use alloc::sync::Arc;
 use core::time::Duration;
 
-use bacnet_types::constructed::{
-    BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord, BACnetObjectPropertyReference,
-};
+use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
@@ -19,17 +17,19 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use crate::audit::{AuditLogNotificationSink, AuditLogStorage};
 
 use crate::file::{FileConfiguration, FileStorage};
-use crate::log_buffer::{LogBufferRecords, LogRecordIdentity};
 
 pub mod capabilities;
 #[doc(hidden)]
-pub use capabilities::{AccessEvents, CalendarState, CommandRunner, EnrollmentEval, StagingSource};
+pub use capabilities::{
+    AccessEvents, CalendarState, CommandRunner, EnrollmentEval, LogBuffer, StagingSource,
+};
 pub use capabilities::{
     Clocks, DeadlineWaker, DurableWrites, EventReporting, LifeSafety, LocalInput, LocalInputValue,
     MonotonicClock, ReliabilityEval, ScheduleRunner, Timed, no_alarm_configured, not_supported,
 };
 pub(crate) use capabilities::{
-    lend_enrollment_eval, lend_event_reporting, lend_reliability_eval, lend_schedule_runner,
+    impl_log_buffer, lend_enrollment_eval, lend_event_reporting, lend_log_buffer,
+    lend_reliability_eval, lend_schedule_runner,
 };
 
 mod defaults;
@@ -820,144 +820,73 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         None
     }
 
-    /// Borrow this object's trusted local File configuration capability.
+    /// Borrow this object's trusted local File configuration, which bindings
+    /// use to set the pending payload, access method and growth limits
+    /// without downcasting the object. Not public API yet (#2179).
     ///
-    /// The default returns `None`. The built-in [`crate::file::FileObject`]
-    /// opts in so bindings can configure its pending payload, access method,
-    /// and growth limits without general object downcasting or a parallel
-    /// state cache.
+    /// The default has none. The built-in [`crate::file::FileObject`] lends
+    /// it through this and
+    /// [`file_configuration_mut`](Self::file_configuration_mut); an object
+    /// that lends one lends the other.
     #[doc(hidden)]
-    fn file_configuration_internal(&self) -> Option<&dyn FileConfiguration> {
+    fn file_configuration(&self) -> Option<&dyn FileConfiguration> {
         None
     }
 
-    /// Mutably borrow this object's trusted local File configuration capability.
-    ///
-    /// The default returns `None`; payload mutations remain object-owned and
-    /// must preserve the same accounting and metadata behavior as the built-in
-    /// File setters.
+    /// Mutably borrow this object's trusted local File configuration. Its
+    /// payload mutations stay object-owned and keep the accounting and
+    /// metadata behaviour of the built-in File setters. Not public API yet
+    /// (#2179).
     #[doc(hidden)]
-    fn file_configuration_internal_mut(&mut self) -> Option<&mut dyn FileConfiguration> {
+    fn file_configuration_mut(&mut self) -> Option<&mut dyn FileConfiguration> {
         None
     }
 
-    /// Borrow this object's File storage, if it has any.
+    /// Borrow this object's File storage, which the bundled server's
+    /// AtomicReadFile handler reads under a shared database guard.
     ///
-    /// This is the read half of the **internal** channel the server's
-    /// AtomicReadFile handler uses to reach file contents. It bypasses the
-    /// property model on purpose: Table 12-16 (ASHRAE 135-2020
-    /// Clause 12.13) defines no File Data property, so file contents are
-    /// reachable only through the Clause 14 File Access Services.
+    /// File contents bypass the property model on purpose: Table 12-16
+    /// (ASHRAE 135-2020 Clause 12.13) defines no File Data property, so they
+    /// are reachable only through the Clause 14 File Access Services.
     ///
-    /// The **default** returns `None`, so object types without a file opt
-    /// out; the server reports `None` on a File-typed object as SERVICES /
+    /// The default has none, so an object type without a file opts out; the
+    /// server reports a File-typed object that lends none as SERVICES /
     /// FILE_ACCESS_DENIED (Clause 18 covers locked or inaccessible files)
-    /// rather than reading it as empty.
-    /// Applications backing a File object with their own storage — a disk
-    /// file, a firmware partition — implement [`FileStorage`] and return
-    /// `Some`.
-    fn file_storage_internal(&self) -> Option<&dyn FileStorage> {
+    /// rather than reading it as empty. An application backing a File object
+    /// with its own storage, a disk file or a firmware partition, implements
+    /// [`FileStorage`] and lends it here and from
+    /// [`file_storage_mut`](Self::file_storage_mut).
+    fn file_storage(&self) -> Option<&dyn FileStorage> {
         None
     }
 
-    /// Mutably borrow this object's File storage, if it has any.
-    ///
-    /// The write half of
-    /// [`file_storage_internal`](Self::file_storage_internal), used by the
-    /// AtomicWriteFile handler after the read-only and access-method gates
-    /// have passed. The **default** returns `None`.
-    fn file_storage_internal_mut(&mut self) -> Option<&mut dyn FileStorage> {
+    /// Mutably borrow this object's File storage, which the AtomicWriteFile
+    /// handler writes after its read-only and access-method gates have
+    /// passed. The default has none. See
+    /// [`file_storage`](Self::file_storage).
+    fn file_storage_mut(&mut self) -> Option<&mut dyn FileStorage> {
         None
     }
 
-    /// Return stable identities aligned with this object's resident log records.
+    /// Borrow a log's buffer for the ReadRange reads the bundled server makes
+    /// under a shared database guard. Not public API yet (#2179).
     ///
-    /// Implementing log objects return identities oldest-to-newest, in the
-    /// same order as their public resident-record view and their
-    /// [`log_buffer_internal`](Self::log_buffer_internal) records. Sequence
-    /// numbers are object-owned metadata and never part of an encoded BACnet
-    /// record. Non-log objects return `None`.
-    fn log_record_identities_internal(&self) -> Option<Vec<LogRecordIdentity>> {
-        None
-    }
-
-    /// Borrow this object's Log_Buffer records as ReadRange pages them.
-    ///
-    /// The built-in Trend Log, Trend Log Multiple and Event Log objects
-    /// answer a ReadProperty of Log_Buffer with PROPERTY / READ_ACCESS_DENIED,
-    /// since their clauses (12.25.14, 12.30.19, 12.27.13) open the buffer to
-    /// ReadRange only; the server's ReadRange handler reads it through this
-    /// channel instead, one encoded record per item. The **default** returns
-    /// `None`, which leaves ReadRange reading the property through
-    /// [`read_property`](Self::read_property).
-    fn log_buffer_internal(&self) -> Option<&dyn LogBufferRecords> {
-        None
-    }
-
-    /// Submit a trend record to an object's log lifecycle.
-    ///
-    /// `Ok(())` means the operation was accepted, not that an ordinary record
-    /// became resident: disabled logs ignore it and zero-capacity logs may only
-    /// increment their count. A required status transition can replace the
-    /// ordinary record. Timestamp failures return an error without mutation.
-    /// Objects without trend insertion return OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
-    fn add_trend_record(&mut self, _record: BACnetLogRecord) -> Result<(), Error> {
-        Err(not_supported())
-    }
-
-    /// Submit a Trend Log Multiple record, one value per monitored member, to
-    /// an object's log lifecycle.
-    ///
-    /// The outcomes match [`add_trend_record`](Self::add_trend_record).
-    /// Objects without Trend Log Multiple insertion return
-    /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
-    fn add_trend_multiple_record(&mut self, _record: BACnetLogMultipleRecord) -> Result<(), Error> {
-        Err(not_supported())
-    }
-
-    /// Submit an Event Log record to an object's log lifecycle.
-    ///
-    /// The server hands the event notifications this device builds to its
-    /// Event Logs through this hook
-    /// ([`ObjectDatabase::log_event_notification`](crate::database::ObjectDatabase::log_event_notification)).
-    /// The outcomes match [`add_trend_record`](Self::add_trend_record).
-    /// Objects without Event Log insertion return
-    /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
-    fn add_event_log_record(&mut self, _record: BACnetEventLogRecord) -> Result<(), Error> {
-        Err(not_supported())
-    }
-
-    /// Look at a log's Start_Time / Stop_Time window against the bound
-    /// clock, recording the LOG_DISABLED change when it opened or closed
-    /// since the last look while Enable is TRUE.
-    ///
-    /// The trend poller calls this for every Trend Log, Trend Log Multiple
-    /// and Event Log on each pass, so a window that moves while no record
-    /// arrives is still logged within one pass. Returns whether a record was
-    /// added. The default, for objects without a window, does nothing and
-    /// returns `false`.
+    /// The default has none, which leaves ReadRange reading Log_Buffer
+    /// through [`read_property`](Self::read_property) with no record
+    /// identities to select by. See [`LogBuffer`].
     #[doc(hidden)]
-    fn refresh_log_window_internal(&mut self) -> bool {
-        false
+    fn log_buffer(&self) -> Option<&dyn LogBuffer> {
+        None
     }
 
-    /// Whether a log keeps the ordinary records it is given now: Enable is
-    /// TRUE and its Start_Time / Stop_Time window admitted the local time at
-    /// the last look. A Trend Log logging by COV starts over from the
-    /// current value when collection resumes, so the trend poller asks this
-    /// before each look (#1480). The default, for objects that aren't logs,
-    /// says yes and leaves the gate to the insertion hook.
+    /// Mutably borrow a log's buffer, for the records the trend poller and
+    /// the event logger add and the window the poller looks at. Not public
+    /// API yet (#2179).
+    ///
+    /// The default has none: the trend poller adds nothing to the object,
+    /// and the event logger skips it. See [`LogBuffer`].
     #[doc(hidden)]
-    fn log_collecting_internal(&self) -> bool {
-        true
-    }
-
-    /// Whether this Event Log takes the event notifications the device
-    /// receives, through
-    /// [`ObjectDatabase::log_received_event_notification`](crate::database::ObjectDatabase::log_received_event_notification).
-    /// The default, and an Event Log that hasn't opted in, says no.
-    #[doc(hidden)]
-    fn logs_received_event_notifications_internal(&self) -> bool {
-        false
+    fn log_buffer_mut(&mut self) -> Option<&mut dyn LogBuffer> {
+        None
     }
 }

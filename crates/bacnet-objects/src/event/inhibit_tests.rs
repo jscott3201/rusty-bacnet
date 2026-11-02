@@ -275,7 +275,10 @@ fn an_inhibited_log_holds_its_buffer_ready_report() {
         PropertyValue::Unsigned(1),
     );
     inhibit(&mut log, true);
-    log.add_event_log_record(record()).unwrap();
+    log.log_buffer_mut()
+        .unwrap()
+        .add_event_log_record(record())
+        .unwrap();
     assert_eq!(log.tick_intrinsic_reporting(), None);
     assert_eq!(log.evaluate_intrinsic_reporting(), None);
     // The record still counts, so the report falls due once it clears.

@@ -110,21 +110,34 @@ fn empty_log(family: LogFamily, capacity: u32, total: u32) -> Box<dyn BACnetObje
 
 fn add(object: &mut dyn BACnetObject, family: LogFamily, (date, time): (Date, Time)) {
     match family {
-        LogFamily::Trend => object.add_trend_record(BACnetLogRecord {
-            date,
-            time,
-            ..record(1)
-        }),
-        LogFamily::Event => object.add_event_log_record(BACnetEventLogRecord {
-            date,
-            time,
-            ..event_record(1)
-        }),
-        LogFamily::TrendMultiple => object.add_trend_multiple_record(BACnetLogMultipleRecord {
-            date,
-            time,
-            ..multiple_record(1)
-        }),
+        LogFamily::Trend => object
+            .log_buffer_mut()
+            .unwrap()
+            .add_trend_record(BACnetLogRecord {
+                date,
+                time,
+                ..record(1)
+            }),
+        LogFamily::Event => {
+            object
+                .log_buffer_mut()
+                .unwrap()
+                .add_event_log_record(BACnetEventLogRecord {
+                    date,
+                    time,
+                    ..event_record(1)
+                })
+        }
+        LogFamily::TrendMultiple => {
+            object
+                .log_buffer_mut()
+                .unwrap()
+                .add_trend_multiple_record(BACnetLogMultipleRecord {
+                    date,
+                    time,
+                    ..multiple_record(1)
+                })
+        }
     }
     .unwrap();
 }
@@ -170,7 +183,8 @@ fn random_log(rng: &mut Rng, family: LogFamily) -> Box<dyn BACnetObject> {
 /// Total_Record_Count once per newer record.
 fn stepped_identities(object: &dyn BACnetObject) -> Vec<Identity> {
     let timestamps: Vec<_> = object
-        .log_record_identities_internal()
+        .log_buffer()
+        .map(|log| log.record_identities())
         .unwrap()
         .iter()
         .map(|identity| (identity.date(), identity.time()))
@@ -229,7 +243,7 @@ fn civil(date: Date, time: Time) -> Option<(u16, u8, u8, u8, u8, u8, u8)> {
 
 /// Append item `index` of `object`'s Log_Buffer to `buf`.
 fn encode_item(object: &dyn BACnetObject, index: usize, buf: &mut BytesMut) {
-    match object.log_buffer_internal() {
+    match object.log_buffer().and_then(|log| log.buffer_records()) {
         Some(records) => records.encode_record(index, buf),
         None => {
             let ring = object.audit_log_storage_internal().unwrap();
@@ -452,7 +466,10 @@ fn sequence_and_time_reads_match_the_walk_over_random_logs() {
         for seed in 0..64 {
             let mut rng = Rng(seed);
             let object = random_log(&mut rng, family);
-            let records = object.log_buffer_internal().unwrap();
+            let records = object
+                .log_buffer()
+                .and_then(|log| log.buffer_records())
+                .unwrap();
             orders.push((records.record_count() > 1, records.timestamp_order()));
             let identities = stepped_identities(object.as_ref());
             if identities.windows(2).any(|pair| pair[1].0 < pair[0].0) {

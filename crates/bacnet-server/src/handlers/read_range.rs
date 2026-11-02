@@ -301,7 +301,8 @@ fn prepare_read_range<'a>(
     let mut log_identities = || {
         buffer_identities.take().or_else(|| {
             object
-                .log_record_identities_internal()
+                .log_buffer()
+                .map(|log| log.record_identities())
                 .map(LogIdentities::Listed)
         })
     };

@@ -171,7 +171,7 @@ impl BACnetObject for Probe {
     ) -> Result<(), Error> {
         panic!("read-only fixture")
     }
-    fn file_storage_internal(&self) -> Option<&dyn FileStorage> {
+    fn file_storage(&self) -> Option<&dyn FileStorage> {
         Some(self)
     }
 }
