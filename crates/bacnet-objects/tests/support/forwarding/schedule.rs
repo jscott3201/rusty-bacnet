@@ -35,6 +35,10 @@ impl ScheduleRunner for Probe {
         self.called("ScheduleRunner::retry_refusals_naming", (target,));
         Some(schedule_write(7))
     }
+    fn take_relinquish_writes(&mut self) -> Vec<ScheduleWrite> {
+        self.called("ScheduleRunner::take_relinquish_writes", ());
+        vec![schedule_write(8)]
+    }
 }
 
 impl CalendarState for Probe {
