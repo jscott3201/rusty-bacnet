@@ -6,7 +6,8 @@
 //! Every logical scenario runs in BOTH `Tokio` and `DedicatedThread`
 //! execution modes with the same assertions, with standard frames and with
 //! extended frames on (`MstpEndpointBuilder::extended_frames`, #1663).
-//! Event-driven (timeout-guarded channel receives, no sleeps). The Tokio
+//! Event-driven (timeout-guarded channel receives; no fixed sleeps, only
+//! `Harness::peer_deliver`'s 1 ms counter poll). The Tokio
 //! variants run on paused time; the dedicated-thread MAC keeps the wall
 //! clock, so peer requests go through `Harness::peer_deliver` (#2269).
 //!

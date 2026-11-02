@@ -3,9 +3,9 @@
 //! Split from `rb17_mstp_proof.rs` (file-size gate). Same harness
 //! (`support/rb17_harness.rs`: session-under-test + raw-frame peer over
 //! [`LoopbackSerial::pair`](bacnet_transport::mstp::LoopbackSerial), both
-//! execution modes, standard and extended frames, no sleeps; Tokio
-//! variants on paused time, peer requests through
-//! `Harness::peer_deliver`, #2269), proving: dropped reply sender releases without late bytes;
+//! execution modes, standard and extended frames; no fixed sleeps, only
+//! `Harness::peer_deliver`'s 1 ms counter poll; Tokio variants on paused
+//! time, #2269), proving: dropped reply sender releases without late bytes;
 //! token/PFM traffic during application work preserves postponed
 //! ownership; queue/admission bounds release (MAC `WouldBlock`,
 //! egress-full, layer full-drop); cancellation and stop with an outstanding

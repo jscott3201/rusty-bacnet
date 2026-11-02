@@ -30,6 +30,15 @@ bip-broadcast-observers = { max-threads = 1 }
 filter = 'binary(bip_network_numbers) | binary(client_bip_network_numbers)'
 test-group = 'bip-broadcast-observers'
 
+# The rb17 MS/TP dedicated-thread tests run their node on a thread of its own,
+# on the wall clock, beside the test's thread. Under heavy load a node starved
+# past the 250 ms reply window rightly sends no reply, and the test fails
+# (#2269; the signature is in tests/support/rb17_harness.rs). Count each as
+# two threads, so a loaded run starts fewer of them at once.
+[[profile.default.overrides]]
+filter = '(binary_id(bacnet-endpoint::rb17_mstp_flows) | binary_id(bacnet-endpoint::rb17_mstp_proof) | binary_id(bacnet-endpoint::rb17_mstp_extended)) & test(/_dedicated$/)'
+threads-required = 2
+
 # These B/IP broadcast tests skip themselves on a host without a usable
 # default route or broadcast; show their output when they pass, so a CI log
 # says whether each one ran or skipped (#1538).

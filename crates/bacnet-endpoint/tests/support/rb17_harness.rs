@@ -41,6 +41,16 @@ use crate::mstp_wire::{
 /// near it. The Tokio variants run on paused time, and a request the
 /// session dropped as out of turn never comes back whatever the wait
 /// (#2269), which [`Harness::peer_deliver`] handles.
+///
+/// One residual is left to the dedicated variants, under extreme host load
+/// only: the node's own thread is starved past the reply window (about
+/// 250 ms) while it answers. It then rightly sends neither the answer nor
+/// Reply Postponed, and the wait for either times out. The failure's
+/// [`Harness::link_report`] shows it: `frames_received: 1,
+/// npdus_delivered: 1, expired_requests: 1, reply_postponed_tx: 0`, and a
+/// deadline lateness of 0.3 s or more. No harness change can recover that;
+/// `.config/nextest.toml` gives these tests two threads each to make it
+/// rarer.
 pub const WAIT: Duration = Duration::from_secs(5);
 /// How often [`Harness::peer_deliver`] sends a frame before giving up.
 /// Each drop takes a stall of T_no_token or more on the test's thread, so
@@ -135,6 +145,9 @@ pub struct Harness {
     pub peer: Arc<LoopbackSerial>,
     pub writes: mpsc::UnboundedReceiver<MstpFrame>,
     pub drain: tokio::task::JoinHandle<()>,
+    /// Where the session's node runs; [`Self::peer_deliver`] resends only
+    /// for a dedicated thread.
+    pub mode: MstpExecutionMode,
 }
 
 impl Harness {
@@ -160,7 +173,7 @@ impl Harness {
         let mut session = MstpEndpointBuilder::new(observed, SESSION_MAC)
             .max_master(7)
             .extended_frames(frames.extended())
-            .execution_mode(mode)
+            .execution_mode(mode.clone())
             .role(role)
             // Bounded queues + client timers mirror the RB-16 proof shape.
             .queue_capacity(32)
@@ -183,6 +196,7 @@ impl Harness {
             peer,
             writes,
             drain,
+            mode,
         }
     }
 
@@ -267,7 +281,8 @@ impl Harness {
     /// counts it delivered, or never will.
     ///
     /// The Tokio variants run on paused time, where a stall of the test's
-    /// thread moves no MAC deadline, so there the first send is delivered.
+    /// thread moves no MAC deadline, so there the first send must be
+    /// delivered: a drop is a bug, and the call panics instead of resending.
     ///
     /// Call it with no earlier peer frame still on its way to the session,
     /// so the next frame the MAC counts is this one.
@@ -289,12 +304,25 @@ impl Harness {
                 }
             })
             .await
-            .expect("the session never counted the peer's frame");
+            .unwrap_or_else(|_| {
+                panic!(
+                    "the session never counted the peer's frame; {}",
+                    self.link_report()
+                )
+            });
             if judged.npdus_delivered > before.npdus_delivered {
                 return;
             }
+            assert!(
+                self.mode != MstpExecutionMode::Tokio,
+                "on paused time the session must take the peer's frame first time; {}",
+                self.link_report()
+            );
         }
-        panic!("the session dropped the peer's frame {DELIVERY_ATTEMPTS} times");
+        panic!(
+            "the session dropped the peer's frame {DELIVERY_ATTEMPTS} times; {}",
+            self.link_report()
+        );
     }
 
     /// Drives token opportunities until a data frame matching `is_data`
