@@ -4,19 +4,21 @@
 //!
 //! The clock-bound proptest (`tests/write_property_clocked.rs`) holds every
 //! accepted write to both tables: a write of P may change P, what the
-//! clock-free table lists for P, what [`clocked_effects`] adds here, and the
-//! stamps [`stamps`] names, which may only move to the current step's date
-//! and time. As there, each entry comes from the type's write path and the
-//! reads it feeds, and lists only what this setup can show.
+//! clock-free table lists for P, what [`clocked_effects`] adds here, what
+//! [`routed_effects`] adds for a write through `write_property_from` only,
+//! and the stamps [`stamps`] names, which may only move to the current
+//! step's date and time. As there, each entry comes from the type's write
+//! path and the reads it feeds. The coverage pass fails on any entry no
+//! write of its sweep or scenarios uses (`write_scenarios.rs`).
 //!
 //! What the setup reveals:
-//! - **Commands with a writer.** `write_property_from` takes Present_Value
+//! - **Commands with a writer** (routed). `write_property_from` takes Present_Value
 //!   on the commandable outputs and values: it moves the priority array, the
 //!   priority in control, the published Value_Source, the slot's
 //!   Value_Source_Array entry and Last_Command_Time (a sequence number that
 //!   steps when the effective value or source changes). A Value_Source
 //!   correction rewrites its slot only and leaves Last_Command_Time.
-//! - **Lighting.** A Lighting Output's Present_Value and Lighting_Command
+//! - **Lighting** (routed). A Lighting Output's Present_Value and Lighting_Command
 //!   run the lighting engine as well: Tracking_Value, In_Progress and
 //!   Egress_Active (a warn) move with the slot.
 //! - **Raised events.** With an event raised, Event_Detection_Enable FALSE
@@ -127,7 +129,7 @@ const LOG_LIFECYCLE: &[Effect] = &[
 ];
 
 /// A Trend Log's new monitored property purges the buffer.
-const LOG_PURGE_ON_REFERENCE: &[Effect] = &[(P::LOG_DEVICE_OBJECT_PROPERTY, LOG_RECORD_MAY_STOP)];
+const LOG_PURGE_ON_REFERENCE: &[Effect] = &[(P::LOG_DEVICE_OBJECT_PROPERTY, LOG_RECORD)];
 
 /// What the lighting engine moves on a Lighting Output, besides
 /// Present_Value: the slot and its source, and the operation it starts or
@@ -150,7 +152,7 @@ pub fn clocked_effects(object_type: T) -> &'static [&'static [Effect]] {
         | T::BINARY_OUTPUT
         | T::BINARY_VALUE
         | T::MULTI_STATE_OUTPUT
-        | T::MULTI_STATE_VALUE => &[SOURCED_COMMAND, EVENT_RESET],
+        | T::MULTI_STATE_VALUE => &[EVENT_RESET],
         T::ANALOG_INPUT
         | T::BINARY_INPUT
         | T::MULTI_STATE_INPUT
@@ -161,17 +163,6 @@ pub fn clocked_effects(object_type: T) -> &'static [&'static [Effect]] {
             EVENT_RESET,
             &[(P::EVENT_DETECTION_ENABLE, &[P::SECURED_STATUS])],
         ],
-        T::LIGHTING_OUTPUT => &[&[
-            (P::PRESENT_VALUE, LIGHTING_ENGINE),
-            (P::LIGHTING_COMMAND, LIGHTING_ENGINE),
-            (P::LIGHTING_COMMAND, &[P::PRESENT_VALUE]),
-            // Only a NULL can empty every slot, so only Present_Value moves
-            // the published source with one writer.
-            (P::PRESENT_VALUE, &[P::VALUE_SOURCE]),
-            (P::VALUE_SOURCE, &[P::VALUE_SOURCE_ARRAY]),
-        ]],
-        // A warn arms an egress.
-        T::BINARY_LIGHTING_OUTPUT => &[SOURCED_COMMAND, &[(P::PRESENT_VALUE, &[P::EGRESS_ACTIVE])]],
         T::TREND_LOG | T::TREND_LOG_MULTIPLE => &[LOG_LIFECYCLE, LOG_PURGE_ON_REFERENCE],
         T::EVENT_LOG => &[LOG_LIFECYCLE],
         // A Log_Enable change appends a status record; a smaller
@@ -207,6 +198,32 @@ pub fn clocked_effects(object_type: T) -> &'static [&'static [Effect]] {
     }
 }
 
+/// Each type's entries for a write through `write_property_from` only: the
+/// commands that need their writer. A plain `write_property` of these
+/// properties is refused on these types, so it may move none of them.
+pub fn routed_effects(object_type: T) -> &'static [&'static [Effect]] {
+    match object_type {
+        T::ANALOG_OUTPUT
+        | T::ANALOG_VALUE
+        | T::BINARY_OUTPUT
+        | T::BINARY_VALUE
+        | T::MULTI_STATE_OUTPUT
+        | T::MULTI_STATE_VALUE => &[SOURCED_COMMAND],
+        T::LIGHTING_OUTPUT => &[&[
+            (P::PRESENT_VALUE, LIGHTING_ENGINE),
+            (P::LIGHTING_COMMAND, LIGHTING_ENGINE),
+            (P::LIGHTING_COMMAND, &[P::PRESENT_VALUE]),
+            // Only a NULL can empty every slot, so only Present_Value moves
+            // the published source with one writer.
+            (P::PRESENT_VALUE, &[P::VALUE_SOURCE]),
+            (P::VALUE_SOURCE, &[P::VALUE_SOURCE_ARRAY]),
+        ]],
+        // A warn arms an egress.
+        T::BINARY_LIGHTING_OUTPUT => &[SOURCED_COMMAND, &[(P::PRESENT_VALUE, &[P::EGRESS_ACTIVE])]],
+        _ => &[],
+    }
+}
+
 /// Each type's stamps: a write of `.0` may set each property in `.1` to the
 /// current step's date and time, and to nothing else.
 pub fn stamps(object_type: T) -> &'static [Effect] {
@@ -225,12 +242,25 @@ pub fn stamps(object_type: T) -> &'static [Effect] {
     }
 }
 
-/// Whether a write of `property` may also change `other` on `object_type`
-/// with clocks and seeds: the clock-free table's entries and this one's.
-pub fn may_also_change_clocked(object_type: T, property: P, other: P) -> bool {
-    crate::write_side_effects::may_also_change(object_type, property).any(|listed| listed == other)
-        || clocked_effects(object_type)
-            .iter()
-            .flat_map(|fragment| fragment.iter())
-            .any(|(written, changed)| *written == property && changed.contains(&other))
+/// Every entry this table holds for `object_type`: the clocked entries,
+/// the routed ones when `from` is set, and the stamps when `stamped` is.
+pub fn entries(object_type: T, from: bool, stamped: bool) -> impl Iterator<Item = &'static Effect> {
+    let routed: &[&[Effect]] = if from {
+        routed_effects(object_type)
+    } else {
+        &[]
+    };
+    let stamps: &[Effect] = if stamped { stamps(object_type) } else { &[] };
+    clocked_effects(object_type)
+        .iter()
+        .chain(routed)
+        .flat_map(|fragment| fragment.iter())
+        .chain(stamps)
+}
+
+/// Whether this table (not the clock-free one) lets a write of `property`,
+/// through `write_property_from` when `from` is set, change `other`.
+pub fn listed(object_type: T, property: P, other: P, from: bool) -> bool {
+    entries(object_type, from, false)
+        .any(|(written, changed)| *written == property && changed.contains(&other))
 }

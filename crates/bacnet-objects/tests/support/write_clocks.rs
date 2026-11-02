@@ -16,8 +16,8 @@
 //!   multicast group lent and an owner that activates changes, so the
 //!   pending rows take writes and Changes_Pending moves;
 //! - a raised event (NORMAL to FAULT, committed through the object's
-//!   event-reporting capability) on every object with detection enabled
-//!   that takes the commit;
+//!   event-reporting capability) on every object that takes the commit,
+//!   with Event_Detection_Enable turned on first where it starts off;
 //! - two Averaging samples, as the clock-free variant has;
 //! - a Present_Value command from [`origin`] at priorities 8 and 16 on every
 //!   object that tracks a source per priority, so a Value_Source correction
@@ -105,8 +105,10 @@ impl ClockReader for Steps {
         Some(ClockFrame {
             local_date: DATE,
             local_time: self.time(),
-            utc_offset: 0,
-            daylight_savings_status: false,
+            // Local time five hours behind UTC, with daylight saving on,
+            // so a stamp taken in UTC rather than local time shows.
+            utc_offset: 300,
+            daylight_savings_status: true,
         })
     }
 }
@@ -219,6 +221,22 @@ impl Fixture {
         fixture
     }
 
+    /// The seeded catalogue object of `object_type`.
+    pub fn of(object_type: ObjectType) -> Self {
+        let index = representatives()
+            .iter()
+            .position(|object| object.object_identifier().object_type() == object_type)
+            .expect("a catalogue type");
+        Self::new(index)
+    }
+
+    /// Move both clocks `steps` steps, as [`step`](Self::step) does.
+    pub fn wait(&mut self, steps: u32) {
+        for _ in 0..steps {
+            self.step();
+        }
+    }
+
     /// The object under test.
     pub fn object(&mut self) -> &mut dyn BACnetObject {
         self.database
@@ -252,12 +270,16 @@ impl Fixture {
     /// current step's stamp, so Event_Detection_Enable FALSE has an event to
     /// reset.
     fn raise_event(&mut self) {
-        // With detection off no event can be raised (Clause 13.2.2.1).
-        let detection = self
-            .object()
-            .read_property(PropertyIdentifier::EVENT_DETECTION_ENABLE, None);
-        if matches!(detection, Ok(PropertyValue::Boolean(false))) {
-            return;
+        // With detection off no event can be raised (Clause 13.2.2.1):
+        // the Binary and Multi-state Outputs start that way, so turn it on.
+        let detection = PropertyIdentifier::EVENT_DETECTION_ENABLE;
+        if matches!(
+            self.object().read_property(detection, None),
+            Ok(PropertyValue::Boolean(false))
+        ) {
+            let _ =
+                self.object()
+                    .write_property(detection, None, PropertyValue::Boolean(true), None);
         }
         let timestamp = BACnetTimeStamp::DateTime {
             date: DATE,
@@ -557,6 +579,7 @@ pub fn extra_candidates(object_type: ObjectType, property: PropertyIdentifier) -
         .into_iter()
         .map(|value| (None, value, priority, true))
         .collect();
+    out.extend(crate::write_values::crafted(object_type, property));
     // Last, relinquishing both seeded commands moves the published source.
     if property == P::PRESENT_VALUE {
         out.push((None, PropertyValue::Null, Some(8), true));
@@ -566,19 +589,14 @@ pub fn extra_candidates(object_type: ObjectType, property: PropertyIdentifier) -
 }
 
 /// What the targeted pass writes first when a row takes no candidate as
-/// seeded: Event_Detection_Enable TRUE for Event_Algorithm_Inhibit (the
-/// Binary and Multi-state Outputs start with detection off), logging off for
-/// an Audit Log's Buffer_Size, and Out_Of_Service TRUE, which opens the
-/// simulation writes, for everything else.
+/// seeded: logging off for an Audit Log's Buffer_Size, and Out_Of_Service
+/// TRUE, which opens the simulation writes, for everything else.
 pub fn prerequisite(
     object_type: ObjectType,
     property: PropertyIdentifier,
 ) -> (PropertyIdentifier, PropertyValue) {
     use PropertyIdentifier as P;
     match (object_type, property) {
-        (_, P::EVENT_ALGORITHM_INHIBIT) => {
-            (P::EVENT_DETECTION_ENABLE, PropertyValue::Boolean(true))
-        }
         (ObjectType::AUDIT_LOG, P::BUFFER_SIZE) => (P::LOG_ENABLE, PropertyValue::Boolean(false)),
         _ => (P::OUT_OF_SERVICE, PropertyValue::Boolean(true)),
     }
