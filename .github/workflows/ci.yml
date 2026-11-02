@@ -401,7 +401,7 @@ jobs:
       # bacnet-device-core over it, structured-writes off too, so its
       # structured writes are refused (#2210), and the image's host
       # scenario: the configuration that ships.
-      - name: bacnet-objects tests (alloc, capability features off)
+      - name: bacnet-objects and bacnet-device-core tests (alloc, capability features and structured-writes off)
         if: ${{ !cancelled() }}
         run: cargo nextest run -p bacnet-objects -p bacnet-device-core -p firmware-link --no-default-features --features alloc,firmware-link/objects --locked --profile ci
       - name: no_std crates' doctests (alloc, without std)

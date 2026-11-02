@@ -10,10 +10,11 @@ the database guard, the transport, addressing and time.
   default). Like `bacnet-objects`, it needs atomic compare-and-swap, so it
   doesn't build for ARMv6-M.
 - `structured-writes`, which `std` turns on, decodes writes of a
-  BACnetEventParameter, a single BACnetRecipient, and BACnetPortPermission
-  and BACnetStageLimitValue array elements. With `alloc` alone it is off:
-  those writes are refused with WRITE_ACCESS_DENIED, and a firmware image
-  is about 20 KB of flash smaller.
+  BACnetEventParameter and of BACnetPortPermission and
+  BACnetStageLimitValue array elements. With `alloc` alone it is off: those
+  writes are refused with WRITE_ACCESS_DENIED, and a firmware image is
+  about 20 KB of flash smaller. The metadata rows still call those
+  properties writable, so list them as read-only in such a build's PICS.
 - `bacnet-server` runs its ReadProperty, ReadPropertyMultiple,
   WriteProperty, WritePropertyMultiple, Who-Is and Who-Has on it, through
   the staged functions in `read`, `write` and `discovery`.

@@ -12,7 +12,7 @@ use bacnet_objects::command_source::{CommandDeviceBinding, CommandOrigin};
 use bacnet_objects::device_identity::build_database_with_extra;
 use bacnet_objects::present_value_access::PresentValueAccess;
 use bacnet_objects::property_metadata::{
-    PropertyConformance, PropertyMetadata, PropertyWriteCapability,
+    Datatype, PropertyConformance, PropertyMetadata, PropertyWriteCapability, ValueType,
 };
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::read_property::ReadPropertyACK;
@@ -76,13 +76,21 @@ impl BACnetObject for Permissive {
                 None,
                 PropertyWriteCapability::Always,
             ),
-            // One BACnetRecipient, a datatype `structured-writes` decodes.
+            // One BACnetRecipient, which every build decodes.
             PropertyMetadata::new(
                 P::AUDIT_NOTIFICATION_RECIPIENT,
                 PropertyConformance::Optional,
                 None,
                 PropertyWriteCapability::Always,
             ),
+            // A BACnetEventParameter, which only `structured-writes` takes.
+            PropertyMetadata::new(
+                P::EVENT_PARAMETERS,
+                PropertyConformance::Optional,
+                None,
+                PropertyWriteCapability::Always,
+            )
+            .with_value_type(ValueType::single(Datatype::EventParameter)),
         ];
         Cow::Borrowed(ROWS)
     }
@@ -355,39 +363,97 @@ fn a_null_left_unchanged_is_acknowledged_with_nothing_written() {
     assert_eq!(read(&mut db, bv1(), P::OBJECT_NAME), before);
 }
 
-/// An Audit_Notification_Recipient, one BACnetRecipient, is taken with the
+/// An Event_Parameters write, opaque or not, is taken with the
 /// `structured-writes` feature and refused with WRITE_ACCESS_DENIED without
-/// it, changing nothing (#2210). On a Device that doesn't serve it, it is
-/// UNKNOWN_PROPERTY either way.
+/// it, changing nothing (#2210). A Recipient is taken either way, and on a
+/// Device that doesn't serve it is UNKNOWN_PROPERTY.
 #[test]
-fn a_recipient_write_needs_the_structured_writes_feature() {
+fn an_event_parameter_write_needs_the_structured_writes_feature() {
     let mut db = database();
-    let recipient = [0x0c, 0x02, 0x00, 0x00, 0x07];
     let permissive = oid(ObjectType::DEVICE, 77);
+    let constructed = [0x0e, 0x21, 0x05, 0x0f];
+    let opaque = [0xfe, 0xff, 0x01, 0x02, 0x03, 0xff, 0xff];
+    for value in [&constructed[..], &opaque] {
+        let apdu = write_property(permissive, P::EVENT_PARAMETERS, None, value);
+        let (outcome, reply, objects) = handle(&mut db, apdu);
+        assert_eq!(outcome, Outcome::Reply);
+        if cfg!(feature = "structured-writes") {
+            assert!(is_simple_ack(&reply), "{value:02x?}: {reply:?}");
+            assert_eq!(objects, [permissive]);
+        } else {
+            assert_eq!(
+                error_of(reply),
+                (ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED)
+            );
+            assert!(objects.is_empty());
+        }
+    }
+    let recipient = [0x0c, 0x02, 0x00, 0x00, 0x07];
     let apdu = write_property(
         permissive,
         P::AUDIT_NOTIFICATION_RECIPIENT,
         None,
         &recipient,
     );
-    let (outcome, reply, objects) = handle(&mut db, apdu);
-    assert_eq!(outcome, Outcome::Reply);
-    if cfg!(feature = "structured-writes") {
-        assert!(is_simple_ack(&reply), "{reply:?}");
-        assert_eq!(objects, [permissive]);
-    } else {
-        assert_eq!(
-            error_of(reply),
-            (ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED)
-        );
-        assert!(objects.is_empty());
-    }
+    let (_, reply, objects) = handle(&mut db, apdu);
+    assert!(is_simple_ack(&reply), "{reply:?}");
+    assert_eq!(objects, [permissive]);
     let device = oid(ObjectType::DEVICE, DEVICE);
     let apdu = write_property(device, P::AUDIT_NOTIFICATION_RECIPIENT, None, &recipient);
     let (_, reply, objects) = handle(&mut db, apdu);
     assert_eq!(
         error_of(reply),
         (ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY)
+    );
+    assert!(objects.is_empty());
+}
+
+/// WritePropertyMultiple shares the decoding: without the feature its
+/// Event_Parameters attempt is the failed one, WRITE_ACCESS_DENIED (#2210).
+#[test]
+fn a_wpm_event_parameter_write_needs_the_structured_writes_feature() {
+    use bacnet_services::common::BACnetPropertyValue;
+    use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
+
+    let mut db = database();
+    let permissive = oid(ObjectType::DEVICE, 77);
+    let mut body = BytesMut::new();
+    WritePropertyMultipleRequest {
+        list_of_write_access_specs: vec![WriteAccessSpecification {
+            object_identifier: permissive,
+            list_of_properties: vec![BACnetPropertyValue {
+                property_identifier: P::EVENT_PARAMETERS,
+                property_array_index: None,
+                value: vec![0x0e, 0x21, 0x05, 0x0f],
+                priority: None,
+            }],
+        }],
+    }
+    .encode(&mut body)
+    .unwrap();
+    let apdu = confirmed(
+        ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE,
+        &body,
+        false,
+    );
+    let (_, reply, objects) = handle(&mut db, apdu);
+    if cfg!(feature = "structured-writes") {
+        assert!(matches!(reply, Some(Apdu::SimpleAck(_))), "{reply:?}");
+        assert_eq!(objects, [permissive]);
+        return;
+    }
+    let Some(Apdu::Error(error)) = reply else {
+        panic!("expected an Error PDU, got {reply:?}");
+    };
+    let refused = WritePropertyMultipleError::from_error_pdu(&error).unwrap();
+    assert_eq!(
+        (refused.error_class, refused.error_code),
+        (ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED)
+    );
+    let attempt = refused.first_failed_write_attempt;
+    assert_eq!(
+        (attempt.object_identifier, attempt.property_identifier),
+        (permissive, P::EVENT_PARAMETERS.to_raw())
     );
     assert!(objects.is_empty());
 }

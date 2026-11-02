@@ -76,9 +76,11 @@ if ! "$quick"; then
   cargo nextest run -p bacnet-cli --locked
   step "bacnet-cli tests (no default features: without the TUI)"
   cargo nextest run -p bacnet-cli --no-default-features --locked
-  step "no_std crates' tests and doctests (alloc, without std)"
+  step "no_std crates' tests (alloc, without std)"
   cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc,bacnet-objects/event-reporting,bacnet-objects/durable-writes,bacnet-device-core/structured-writes --locked
+  step "bacnet-objects and bacnet-device-core tests (alloc, capability features and structured-writes off)"
   cargo nextest run -p bacnet-objects -p bacnet-device-core -p firmware-link --no-default-features --features alloc,firmware-link/objects --locked
+  step "no_std crates' doctests (alloc, without std)"
   cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc,bacnet-objects/event-reporting,bacnet-objects/durable-writes,bacnet-device-core/structured-writes --locked
   step "no_std crates' tests (without alloc)"
   cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --locked

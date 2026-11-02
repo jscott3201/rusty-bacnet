@@ -1,7 +1,7 @@
-//! The `structured-writes` feature (#2210): with it, the four datatypes the
-//! core decodes itself reach their objects; without it, each write of one is
-//! refused with PROPERTY / WRITE_ACCESS_DENIED, and nothing else changes.
-use super::decode_write_property_value;
+//! The `structured-writes` feature (#2210): with it, the three datatypes it
+//! covers reach their objects; without it, each write of one is refused with
+//! PROPERTY / WRITE_ACCESS_DENIED, and nothing else changes.
+use super::{decode_write_property_value, gate_and_decode_write};
 use alloc::vec;
 use alloc::vec::Vec;
 use bacnet_objects::property_metadata::{Datatype, standard_value_type};
@@ -25,13 +25,13 @@ fn structured_writes() -> Vec<Case> {
             Datatype::EventParameter,
             vec![0xfe, 0xff, 0x01, 0x02, 0x03, 0xff, 0xff],
         ),
-        // A Recipient naming device 7.
+        // A BACnetEventParameter that isn't opaque, a context-tagged choice.
         (
-            ObjectType::DEVICE,
-            P::AUDIT_NOTIFICATION_RECIPIENT,
+            ObjectType::EVENT_ENROLLMENT,
+            P::EVENT_PARAMETERS,
             None,
-            Datatype::Recipient,
-            vec![0x0c, 0x02, 0x00, 0x00, 0x07],
+            Datatype::EventParameter,
+            vec![0x0e, 0x21, 0x05, 0x0f],
         ),
         // A BACnetPortPermission, as one element and as the whole array.
         (
@@ -147,6 +147,18 @@ fn other_writes_are_decoded_either_way() {
         .unwrap(),
         PropertyValue::Enumerated(1)
     );
+    // A single Recipient, checked whatever the build.
+    let recipient = [0x0c, 0x02, 0x00, 0x00, 0x07];
+    assert_eq!(
+        decode(
+            ObjectType::DEVICE,
+            P::AUDIT_NOTIFICATION_RECIPIENT,
+            None,
+            &recipient
+        )
+        .unwrap(),
+        PropertyValue::ApplicationData(recipient.to_vec())
+    );
     let weekday = [0x0e, 0x0f];
     assert_eq!(
         decode(ObjectType::SCHEDULE, P::WEEKLY_SCHEDULE, Some(1), &weekday).unwrap(),
@@ -157,3 +169,56 @@ fn other_writes_are_decoded_either_way() {
 // A hosted build keeps every write it had: `std` turns the feature on.
 #[cfg(feature = "std")]
 const _: () = assert!(cfg!(feature = "structured-writes"));
+
+/// An Event Enrollment that serves no properties at all.
+struct Bare;
+
+impl bacnet_objects::traits::BACnetObject for Bare {
+    fn object_identifier(&self) -> bacnet_types::primitives::ObjectIdentifier {
+        bacnet_types::primitives::ObjectIdentifier::new(ObjectType::EVENT_ENROLLMENT, 1).unwrap()
+    }
+    fn object_name(&self) -> &str {
+        "bare"
+    }
+    fn read_property(&self, _: P, _: Option<u32>) -> Result<PropertyValue, Error> {
+        Ok(PropertyValue::Null)
+    }
+    fn write_property(
+        &mut self,
+        _: P,
+        _: Option<u32>,
+        _: PropertyValue,
+        _: Option<u8>,
+    ) -> Result<(), Error> {
+        Ok(())
+    }
+    fn property_metadata(
+        &self,
+    ) -> alloc::borrow::Cow<'_, [bacnet_objects::property_metadata::PropertyMetadata]> {
+        alloc::borrow::Cow::Borrowed(&[])
+    }
+}
+
+/// On an object without the property, the build without the feature answers
+/// UNKNOWN_PROPERTY, as the object's own write would, not the refusal; the
+/// build with it decodes the value for the object to judge.
+#[test]
+fn a_property_the_object_lacks_is_no_refused_datatype() {
+    let opaque = [0xfe, 0xff, 0x01, 0x02, 0x03, 0xff, 0xff];
+    let result = gate_and_decode_write(&Bare, P::EVENT_PARAMETERS, None, &opaque);
+    if cfg!(feature = "structured-writes") {
+        assert!(
+            matches!(result, Ok(PropertyValue::OctetString(_))),
+            "{result:?}"
+        );
+    } else {
+        assert!(
+            matches!(
+                result.as_ref().map_err(Error::remote),
+                Err(Some(bacnet_types::error::RemoteError::Error { code, .. }))
+                    if code == bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY
+            ),
+            "{result:?}"
+        );
+    }
+}

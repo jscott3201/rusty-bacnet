@@ -33,12 +33,13 @@ alloc = [
     "bacnet-services/alloc",
     "bacnet-objects/alloc",
 ]
-# WriteProperty's own decoding of four structured datatypes (#2210): a
-# BACnetEventParameter, a single BACnetRecipient, and the elements of a
-# BACnetPortPermission or BACnetStageLimitValue array. `std` turns it on.
-# Without it, a write of one of those values is refused with PROPERTY /
-# WRITE_ACCESS_DENIED, and an image drops their decoders: about 20 KB of
-# flash on a Cortex-M, most of it the event parameter decoder.
+# WriteProperty's own decoding of three structured datatypes (#2210): a
+# BACnetEventParameter, and the elements of a BACnetPortPermission or
+# BACnetStageLimitValue array. `std` turns it on. Without it, a write of one
+# of those values is refused with PROPERTY / WRITE_ACCESS_DENIED, and an
+# image drops their decoders: about 20 KB of flash on a Cortex-M, most of
+# it the event parameter decoder. The rows still call those properties
+# writable, so such a build's PICS lists them as read-only.
 structured-writes = []
 
 # The release that first publishes this crate. Until the website names that

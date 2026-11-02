@@ -63,12 +63,16 @@ fn invalid_data_encoding_error() -> Error {
 /// Setpoint_Reference with no octets, for one, holds no reference. Index 0
 /// of an array, its size, is an Unsigned and takes the generic loop.
 ///
-/// Four datatypes take arms that call bacnet-encoding's structured
-/// decoders: a BACnetEventParameter (for its opaque form), a single
-/// BACnetRecipient, and the elements of a BACnetPortPermission or
+/// Three datatypes take arms that call bacnet-encoding's structured
+/// decoders only this path needs: a BACnetEventParameter (for its opaque
+/// form), and the elements of a BACnetPortPermission or
 /// BACnetStageLimitValue array. Without the `structured-writes` feature any
 /// write of one of them is refused with PROPERTY / WRITE_ACCESS_DENIED, so
 /// an image that never writes them doesn't link those decoders (#2210).
+/// The metadata rows still call such a property writable, so a build
+/// without the feature lists it as read-only in its PICS. A single
+/// BACnetRecipient is checked either way: the Device's own write of its
+/// Audit_Notification_Recipient links that decoder already.
 pub fn decode_write_property_value(
     property: PropertyIdentifier,
     value_type: Option<ValueType>,
@@ -83,7 +87,6 @@ pub fn decode_write_property_value(
         Decoding::RawOrNull => Ok(PropertyValue::ApplicationData(bytes.to_vec())),
         #[cfg(feature = "structured-writes")]
         Decoding::EventParameter => decode_event_parameter(bytes, list && array_index.is_none()),
-        #[cfg(feature = "structured-writes")]
         Decoding::Recipient => decode_recipient(bytes),
         #[cfg(feature = "structured-writes")]
         Decoding::Elements(element) => decode_structured_array(bytes, array_index, element),
@@ -91,17 +94,17 @@ pub fn decode_write_property_value(
         // decoder an arm can call, whichever datatypes the image's objects
         // serve. Without the feature these arms call none.
         #[cfg(not(feature = "structured-writes"))]
-        Decoding::EventParameter | Decoding::Recipient | Decoding::Elements(_) => {
-            Err(structured_write_refused())
-        }
+        Decoding::EventParameter | Decoding::Elements(_) => Err(structured_write_refused()),
     }
 }
 
 /// PROPERTY / WRITE_ACCESS_DENIED for a write of a datatype this build
 /// doesn't decode. The value may be of the right datatype, so neither
 /// INVALID_DATA_TYPE nor DATATYPE_NOT_SUPPORTED fits; the device has chosen
-/// not to take writes of the property, which Clauses 15.9.1.3.1 and 15.10
-/// report as WRITE_ACCESS_DENIED. Nor is it a refusal of the NULL's
+/// not to take writes of the property. The opening text of Clauses 15.9 and
+/// 15.10 lets an implementation restrict writes that way, answered with
+/// WRITE_ACCESS_DENIED, the code their error tables give a property that
+/// can't be written. Nor is it a refusal of the NULL's
 /// datatype, so a lone NULL isn't judged a relinquish (`relinquish`).
 #[cfg(not(feature = "structured-writes"))]
 fn structured_write_refused() -> Error {
@@ -150,10 +153,7 @@ impl Decoding {
     /// `structured-writes` feature links.
     #[cfg(not(feature = "structured-writes"))]
     fn is_structured(self) -> bool {
-        matches!(
-            self,
-            Self::EventParameter | Self::Recipient | Self::Elements(_)
-        )
+        matches!(self, Self::EventParameter | Self::Elements(_))
     }
 
     fn of(property: PropertyIdentifier, value_type: Option<ValueType>, index: Option<u32>) -> Self {
@@ -283,7 +283,6 @@ fn decode_event_parameter(bytes: &[u8], whole_list: bool) -> Result<PropertyValu
 
 /// An Audit_Notification_Recipient value, checked as one BACnetRecipient and
 /// passed on as its octets.
-#[cfg(feature = "structured-writes")]
 fn decode_recipient(bytes: &[u8]) -> Result<PropertyValue, Error> {
     use bacnet_types::constructed::BACnetRecipient;
     use bacnet_types::enums::ObjectType;
