@@ -43,8 +43,9 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
-    /// BACnet maintenance type (Clause 21); used by life safety point/zone
-    /// and access door Maintenance_Required.
+    /// BACnetMaintenance (Clause 21): the Maintenance_Required of a Life
+    /// Safety Point and an Access Door. A Life Safety Zone's is a BOOLEAN
+    /// instead. Values 256..=65535 are the proprietary range.
     pub struct Maintenance(u32);
 
     const NONE = 0;

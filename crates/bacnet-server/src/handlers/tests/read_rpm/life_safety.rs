@@ -35,6 +35,7 @@ fn rpm_life_safety_point_indexed_reads_and_list_bytes_are_unchanged() {
         let mut object = LifeSafetyPointObject::new(7, "LSP-7").unwrap();
         if configured {
             object.set_direct_reading(42.5);
+            object.set_maintenance_required(bacnet_types::enums::Maintenance::PERIODIC_TEST);
             object
                 .add_member(ObjectIdentifier::new(ObjectType::LIFE_SAFETY_ZONE, 9).unwrap())
                 .unwrap();
@@ -104,7 +105,12 @@ fn rpm_life_safety_point_indexed_reads_and_list_bytes_are_unchanged() {
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (P::MAINTENANCE_REQUIRED, None, Ok(&[0x10])),
+            // A BACnetMaintenance (Table 12-18): periodic-test, or none.
+            (
+                P::MAINTENANCE_REQUIRED,
+                None,
+                Ok(if configured { &[0x91, 1] } else { &[0x91, 0] }),
+            ),
             (P::EVENT_STATE, None, Ok(&[0x91, 0])),
             (P::STATUS_FLAGS, None, Ok(&[0x82, 4, 0])),
             (P::OUT_OF_SERVICE, None, Ok(&[0x10])),

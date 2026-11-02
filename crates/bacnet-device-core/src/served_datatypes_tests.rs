@@ -44,11 +44,7 @@ use bytes::BytesMut;
 /// Each is a bug in the object, kept here so this test still catches every
 /// other row; fixing one fails the test until its entry goes. In catalogue
 /// order.
-const KNOWN_DEPARTURES: &[(T, P)] = &[
-    // Table 12-18 gives Maintenance_Required BACnetMaintenance (an
-    // enumeration); the object serves a BOOLEAN.
-    (T::LIFE_SAFETY_POINT, P::MAINTENANCE_REQUIRED),
-];
+const KNOWN_DEPARTURES: &[(T, P)] = &[];
 
 /// Rows this test can't check: values still empty after [] (an
 /// empty value decodes as any datatype) or unreadable whole. In catalogue

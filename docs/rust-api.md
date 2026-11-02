@@ -6468,6 +6468,15 @@ that started it fails with OBJECT / BUSY, so such a loop stops after one round.
 | `LifeSafetyPointObject` | `::new(instance, name)` |
 | `LifeSafetyZoneObject` | `::new(instance, name)` |
 
+A Point's Maintenance_Required is a BACnetMaintenance (Table 12-18), served
+as an Enumerated and named by `bacnet_types::enums::Maintenance`. It starts
+as `NONE`; the application sets it with `set_maintenance_required`, and a
+client's write must be an Enumerated holding a standard value or one from the
+proprietary range 256..=65535. A reserved or larger number is
+VALUE_OUT_OF_RANGE, and a BOOLEAN, the datatype the Point used to serve, is
+INVALID_DATA_TYPE (#2252). A Zone's Maintenance_Required is a BOOLEAN
+(Table 12-19), which the Zone doesn't serve yet.
+
 #### Access Control (7)
 
 | Type | Constructor |
