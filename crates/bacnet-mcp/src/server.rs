@@ -144,6 +144,7 @@ impl<T: TransportPort + 'static> Shared<T> {
                 let options = WatchOptions {
                     max_points: policy.caps.process_watches,
                     bucket: Some(Arc::new(TokenBucket::new(rates.principal, rates.burst))),
+                    agent: true,
                     ..WatchOptions::default()
                 };
                 Hub::new(Arc::clone(engine), options)
@@ -192,7 +193,7 @@ impl<T: TransportPort + 'static> McpServer<T> {
             policy,
             principal.into(),
             shared,
-            (None, None),
+            (None, None, None),
         ))
     }
 
@@ -208,6 +209,7 @@ impl<T: TransportPort + 'static> McpServer<T> {
         principal: String,
         (shared, initialize): (&Shared<T>, Duration),
         lending: Option<crate::tools::write_attached::Attached<T>>,
+        pane: crate::board::Pane,
     ) -> Result<Self, ServeError> {
         policy
             .validate()
@@ -221,7 +223,7 @@ impl<T: TransportPort + 'static> McpServer<T> {
             policy,
             principal,
             shared,
-            (Some(initialize), lending),
+            (Some(initialize), lending, Some(pane)),
         ))
     }
 
@@ -230,9 +232,10 @@ impl<T: TransportPort + 'static> McpServer<T> {
         policy: Policy,
         principal: String,
         shared: Shared<T>,
-        (initialize, attached): (
+        (initialize, attached, pane): (
             Option<Duration>,
             Option<crate::tools::write_attached::Attached<T>>,
+            Option<crate::board::Pane>,
         ),
     ) -> Self {
         let writes = crate::writes::Writes::new(&policy.writes);
@@ -263,6 +266,7 @@ impl<T: TransportPort + 'static> McpServer<T> {
                 handoffs: tokio_util::task::TaskTracker::new(),
                 panics: crate::contain::Panics::default(),
                 attached,
+                pane,
             }),
         }
     }
@@ -599,6 +603,12 @@ impl<T: TransportPort + 'static> ServerHandler for McpServer<T> {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let args = request.arguments.unwrap_or_default();
+        // An attached session's calls show on the TUI's agent pane (#2185).
+        let noted = self.ctx.pane.as_ref().map(|pane| {
+            let started = tokio::time::Instant::now();
+            let what = (crate::board::target(&args), peer(&context).name);
+            (pane, started, what)
+        });
         let call = async {
             if tools::writes(&request.name) {
                 let retry = tools::write::Retry {
@@ -614,7 +624,12 @@ impl<T: TransportPort + 'static> ServerHandler for McpServer<T> {
                 .await
                 .map(Into::into)
         };
-        contained(&self.ctx.panics, call).await
+        let response = contained(&self.ctx.panics, call).await;
+        if let Some((pane, started, (target, client))) = noted {
+            let what = (request.name.as_ref(), target, client);
+            pane.record(what, &response, started.elapsed());
+        }
+        response
     }
 
     async fn list_resources(

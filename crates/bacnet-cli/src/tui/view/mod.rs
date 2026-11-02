@@ -4,6 +4,8 @@
 //! 80x24 is the smallest supported terminal and 120x40 the full layout.
 //! Below the minimum only a notice is drawn.
 
+#[cfg(feature = "mcp")]
+mod agents;
 mod bars;
 mod browser;
 mod capture;
@@ -88,6 +90,8 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
         _ if app.screen == Screen::Sc => sc::draw(frame, body, app, &theme),
         _ if app.screen == Screen::Mstp => mstp::draw(frame, body, app, &theme),
         _ if app.screen == Screen::Capture => capture::draw(frame, body, app, &theme),
+        #[cfg(feature = "mcp")]
+        _ if app.screen == Screen::Agents => agents::draw(frame, body, app, &theme),
         Some(open) if app.screen == Screen::Browse => {
             browser::draw(frame, body, open, Names::of(app), &theme)
         }

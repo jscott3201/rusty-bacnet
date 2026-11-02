@@ -39,6 +39,7 @@ pub(crate) fn map_key(app: &App, key: KeyEvent) -> Option<Action> {
         Overlay::None if app.screen == Screen::Sc => sc(key),
         Overlay::None if app.screen == Screen::Mstp => mstp(key),
         Overlay::None if app.screen == Screen::Capture => capture(app, key),
+        Overlay::None if app.screen == Screen::Agents => agents(key),
         Overlay::None if app.screen == Screen::Browse => browse(key),
         Overlay::None => main(key),
     }
@@ -238,8 +239,9 @@ pub(crate) const GLOBAL: &[Binding] = &[
             (KeyCode::Char('5'), Action::ShowScreen(Screen::Sc)),
             (KeyCode::Char('6'), Action::ShowScreen(Screen::Mstp)),
             (KeyCode::Char('7'), Action::ShowScreen(Screen::Capture)),
+            (KeyCode::Char('8'), Action::ShowScreen(Screen::Agents)),
         ],
-        "Watch, Network, SC, MS/TP, Capture; see the top line",
+        "The other screens, as the top line names them",
     ),
 ];
 
@@ -438,6 +440,17 @@ pub(crate) const MSTP: &[Binding] = &[
     ),
 ];
 
+/// The agent pane (screen 8, #2185): scroll the calls, back.
+pub(crate) const AGENTS: &[Binding] = &[
+    MOVE,
+    JUMP,
+    ENDS,
+    keys(
+        &[(KeyCode::Esc, Action::ShowScreen(Screen::Main))],
+        "Back to the devices",
+    ),
+];
+
 /// The Capture screen (screen 7): Tab between the list, the tree and the
 /// hex view, Space to pause, `/` to filter, `e` to export, `z` to clear.
 /// Left and Right work in the tree only ([`capture`]).
@@ -540,6 +553,11 @@ fn sc(key: KeyEvent) -> Option<Action> {
 /// The MS/TP screen (screen 6).
 fn mstp(key: KeyEvent) -> Option<Action> {
     screen(MSTP, key)
+}
+
+/// The agent pane (screen 8).
+fn agents(key: KeyEvent) -> Option<Action> {
+    screen(AGENTS, key)
 }
 
 /// The Capture screen (screen 7): Left and Right only in the decode tree.

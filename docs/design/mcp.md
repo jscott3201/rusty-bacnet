@@ -779,7 +779,7 @@ the slow-network default matters.
   user A can't redeem user B's approval or cursor. TLS is required unless the
   bind is loopback.
 
-## 9. Future phases: TUI-attached mode and the daemon
+## 9. TUI-attached mode (done) and the daemon
 
 **TUI-attached mode (phase 4).** While the TUI is open, MCP requests enter
 as another command source through a local socket listener in the TUI
@@ -790,8 +790,32 @@ engine executes, settles the ledger and audits, and the MCP call returns the
 outcome; a decline or the 120 s timeout returns `declined`. This is the
 verifiable approver for T2 and T3: a person on a UI the server controls, one
 transport, one ledger, one rate budget, and no contention for UDP 47808.
-Approvals queue one at a time; there is no "approve all". An agent pane lists
-every MCP call and its cost. The agents' sessions run on a Tokio runtime of
+Approvals queue one at a time; there is no "approve all". An agent pane
+(screen 8) lists every MCP call and its cost, newest first, in a ring of the
+latest 500 that counts what it drops, and the requests waiting with their
+ages. The sessions push each call into a ring under a std mutex held only for
+the push; the TUI copies it on a tick with `try_lock`, so a frame never waits
+on a session (#1498: no lock across an await, none awaited at all).
+
+As built (#2185), three decisions close the phase:
+
+- **Disarming refuses the queue at once.** When the TUI's write session
+  disarms (`W`, or it runs out), every request it holds, the one on screen
+  included, is refused `not-armed` there and then, rather than when the
+  person later confirms it. Nothing could be sent without arming again, and
+  the agent hears at once instead of waiting out the dialog.
+- **The meter counts by account.** A request is an agent's when it is
+  charged to an agent's call account (`Account::agent`) or to the agents'
+  watch hub; the request limits remember that for each slot on the meter.
+  The re-read before an agent's write is charged to its call, so it shows
+  as the agent's on the pane's cost column and on the meter alike, which
+  the watch list's title and `bacnet://session` give as the agents' share.
+- **`bacnet://session` reports the TUI's arming**, read-only (`tui.armed`),
+  so an agent can tell whether a write could be confirmed now.
+
+Agent hosts often end a tool call after about 60 s, while the dialog waits up
+to 120 s; the pane shows each waiting request's age, and the guide advises
+raising the host's tool timeout where it has one. The agents' sessions run on a Tokio runtime of
 the listener's own, whose threads the TUI's panic hook recognizes by name: a
 bug an agent's request reaches ends that agent's session, audited, without
 restoring the terminal (#2203). The engine, client and transport stay on the
@@ -821,7 +845,7 @@ image, and a `.mcpb` bundle for Claude Desktop.
 | 1 | #2066 | `bacnet-mcp` with `stdio`; `bacnet mcp serve` behind `mcp`; the nine read tools; untrusted envelope; error mapping; signed cursors; per-call caps; per-principal and per-network limits; the `[mcp]` profile table; `survey_site` and `investigate_point`; `mcp` classified `Read` | a stdio integration test drives a site survey against the in-process lab; `tools/list` has no write tool in any configuration; `--passive` builds no client and sends nothing; 500 reads stay within the caps and a slow network is held to 2 a second; an injection fixture comes back sanitised, enveloped and capped; stdout carries only JSON-RPC; trend paging survives three pages and `summary` matches a brute-force computation; a docs page and changelog |
 | 2 (done) | #2067 | the watch hub; resources and templates; `subscriptions/listen` with caps; the alarm, session and ledger resources; `bacnet_watch` | two listeners on one point make one BACnet subscription and the last one leaving cancels it; a device refusing COV falls back to polling with `source: poll`; no lifetime-0 subscription; a notification storm is coalesced and drops counted; shutdown completes each listen stream and cancels every subscription |
 | 3 (done) | #2068 | `tui/safety/*` and the engine half of the write worker move to `bacnet-ops::safety` (the TUI keeps an adapter); `bacnet_write`, `bacnet_revert`; the `Approver` trait with `ClientElicitation`, `PlanGrant` and `Deny`; integrity-protected state; `mcp_writes = "never" \| "elicit"` (default `never`); the new audit fields | with `never` the write tools are absent; with `elicit` a T1 write is previewed, confirmed, sent and ledgered while T2, T3 and priority 6 are refused; tampered, expired, replayed or cross-principal state is refused and nothing sent; a stale pre-image gives `refused: stale`, audited; a timeout leaves an `unknown` entry; revert restores the pre-image; the TUI lists MCP entries marked `front_end: mcp`; plan-grant writes run without prompts and are audited; the TUI's write tests still pass |
-| 4 | after 0.15 | TUI-attached mode | an agent's T2 or T3 write executes only after the TUI confirmation; another uid is refused and audited; agent reads share the rate meter; frame tests cover the banner and queue |
+| 4 (done) | #2185, #2201 | TUI-attached mode: the socket (Unix) and named pipe (Windows) listener, `bacnet mcp connect`, `TuiApprover` and the agent pane | an agent's T2 or T3 write executes only after the TUI confirmation; another uid is refused and audited; agent reads share the rate meter, attributed to the agents as the pane counts them; frame tests cover the banner, the queue and the agent pane; disarming refuses the queue at once |
 | 4b | after 0.15, optional | background daemon | survives TUI exit and reattaches with the same ledger; a crash mid-write leaves `sending`, which becomes `unknown` on restart; a protocol mismatch is handled as specified |
 | 5 | after 0.15 | Streamable HTTP and OAuth, multi-user | conformance against an SDK client; wrong audience 401, missing scope 403; cross-user redemption refused; starts only with TLS and OAuth or an explicit loopback bind; interop with a real provider as a manual check |
 | 6 | after 0.15 | standalone binary, packaging | builds without the TUI tree; release smoke test over HTTPS; image runs as non-root on a read-only filesystem |

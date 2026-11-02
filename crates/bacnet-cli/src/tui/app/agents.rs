@@ -10,8 +10,14 @@
 //! on the write worker's desk; declining, the lifetime running out, or the
 //! dialog closing any other way sends nothing, and the agent's session
 //! audits it. A request the agent withdrew (it cancelled the call or
-//! disconnected) leaves the queue unshown, or closes its dialog. Without
-//! the `mcp` feature there are none, and this is all empty.
+//! disconnected) leaves the queue unshown, or closes its dialog. Disarming
+//! here refuses every request held at once, `not-armed`, rather than at
+//! confirm time. Without the `mcp` feature there are none, and this is all
+//! empty. The agent pane (screen 8) lists them with their ages, beside the
+//! agents' calls (`agent_pane`).
+
+#[cfg(feature = "mcp")]
+use std::time::{Duration, Instant};
 
 #[cfg(feature = "mcp")]
 use bacnet_mcp::attach::{AgentApproval, Declined, Gone, MAX_QUEUED, Refusal};
@@ -40,20 +46,41 @@ pub(crate) enum AgentAnswer {
 }
 
 /// The agents' write requests: the one on screen, with its dialog's
-/// request id, and those waiting behind it, oldest first.
+/// request id, and those waiting behind it, oldest first, each with when
+/// it came; and the agent pane.
 #[derive(Debug, Default)]
 pub(crate) struct Agents {
     #[cfg(feature = "mcp")]
-    shown: Option<(u64, AgentApproval)>,
+    shown: Option<(u64, AgentApproval, Instant)>,
     #[cfg(feature = "mcp")]
-    waiting: std::collections::VecDeque<AgentApproval>,
+    waiting: std::collections::VecDeque<(Instant, AgentApproval)>,
+    /// The agent pane's state (#2185).
+    pub(crate) pane: super::agent_pane::AgentPane,
+}
+
+/// A request held here, as the agent pane lists it.
+#[cfg(feature = "mcp")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Held {
+    /// The agent's connection number.
+    pub(crate) agent: u64,
+    /// The name its client claims, without quotes of its own.
+    pub(crate) client: Option<String>,
+    /// `write` or `revert`.
+    pub(crate) what: &'static str,
+    /// The device it would write.
+    pub(crate) device: u32,
+    /// How long it has waited here.
+    pub(crate) age: Duration,
+    /// On screen: how long until its dialog declines it.
+    pub(crate) left: Option<Duration>,
 }
 
 impl Agents {
     /// Whether dialog `req` shows an agent's request.
     pub(crate) fn shows(&self, req: u64) -> bool {
         #[cfg(feature = "mcp")]
-        return self.shown.as_ref().is_some_and(|(id, _)| *id == req);
+        return self.shown.as_ref().is_some_and(|(id, ..)| *id == req);
         #[cfg(not(feature = "mcp"))]
         {
             let _ = req;
@@ -76,10 +103,9 @@ impl Agents {
         return self
             .shown
             .as_ref()
-            .filter(|(id, _)| *id == req)
-            .map(|(_, request)| {
-                // The name is the client's claim: no quotes of its own.
-                let claimed = request.claimed_name().map(|n| n.replace(['"', '\\'], ""));
+            .filter(|(id, ..)| *id == req)
+            .map(|(_, request, _)| {
+                let claimed = claimed(request);
                 let who = match claimed {
                     Some(name) => format!("agent {} (its client says \"{name}\")", request.agent()),
                     None => format!("agent {}", request.agent()),
@@ -106,6 +132,36 @@ impl Agents {
             None
         }
     }
+
+    /// The requests held at `now`, the one on screen first (`opened` then),
+    /// then those waiting, oldest first.
+    #[cfg(feature = "mcp")]
+    pub(crate) fn held_at(&self, now: Instant, opened: Option<Instant>) -> Vec<Held> {
+        {
+            let held = |request: &AgentApproval, came: Instant, left: Option<Duration>| Held {
+                agent: request.agent(),
+                client: claimed(request),
+                what: if request.reverts() { "revert" } else { "write" },
+                device: request.preview().device,
+                age: now.saturating_duration_since(came),
+                left,
+            };
+            let lifetime = super::safety::PREVIEW_LIFETIME;
+            let shown = self.shown.iter().map(|(_, request, came)| {
+                let left =
+                    opened.map(|at| lifetime.saturating_sub(now.saturating_duration_since(at)));
+                held(request, *came, left)
+            });
+            let waiting = self.waiting.iter().map(|(came, r)| held(r, *came, None));
+            shown.chain(waiting).collect()
+        }
+    }
+}
+
+/// The name `request`'s client claims, without quotes of its own.
+#[cfg(feature = "mcp")]
+fn claimed(request: &AgentApproval) -> Option<String> {
+    request.claimed_name().map(|n| n.replace(['"', '\\'], ""))
 }
 
 impl App {
@@ -117,7 +173,7 @@ impl App {
             if !self.safety.agents.shows(req) {
                 return false;
             }
-            let Some((_, request)) = self.safety.agents.shown.take() else {
+            let Some((_, request, _)) = self.safety.agents.shown.take() else {
                 return false;
             };
             let agent = request.agent();
@@ -157,15 +213,16 @@ impl App {
     /// Once a second: let go of requests their agents withdrew, close an
     /// agent's dialog that is gone or withdrawn, and open the next.
     pub(super) fn agents_tick(&mut self) {
+        self.agent_pane_tick();
         #[cfg(feature = "mcp")]
         {
             let before = self.safety.agents.held();
-            self.safety.agents.waiting.retain(|r| !r.withdrawn());
+            self.safety.agents.waiting.retain(|(_, r)| !r.withdrawn());
             let on_screen = |app: &App, id: u64| {
                 matches!(&app.overlay, Overlay::Safety(m)
                     if matches!(**m, Modal::Confirm { req, .. } if req == id))
             };
-            if let Some((id, request)) = &self.safety.agents.shown {
+            if let Some((id, request, _)) = &self.safety.agents.shown {
                 let (id, agent) = (*id, request.agent());
                 if request.withdrawn() {
                     let why = match request.gone() {
@@ -186,6 +243,40 @@ impl App {
             }
             self.dirty |= before != self.safety.agents.held();
             self.show_next_agent();
+        }
+    }
+
+    /// Follow the write session's arming (after every action): disarmed,
+    /// every request held is refused at once, `not-armed`, and its dialog
+    /// closes, rather than each being refused when confirmed (#2185).
+    pub(super) fn agents_follow_arm(&mut self) {
+        let armed = self.safety.armed.is_some();
+        let disarmed = self.safety.agents.pane.armed_now(armed) && !armed;
+        #[cfg(not(feature = "mcp"))]
+        let _ = disarmed;
+        #[cfg(feature = "mcp")]
+        if disarmed {
+            let mut refused = 0;
+            if let Some((req, request, _)) = self.safety.agents.shown.take() {
+                if matches!(&self.overlay, Overlay::Safety(m)
+                    if matches!(**m, Modal::Confirm { req: shown, .. } if shown == req))
+                {
+                    self.overlay = Overlay::None;
+                }
+                refused += usize::from(!request.withdrawn());
+                request.refuse(Refusal::NotArmed);
+            }
+            for (_, request) in self.safety.agents.waiting.drain(..) {
+                refused += usize::from(!request.withdrawn());
+                request.refuse(Refusal::NotArmed);
+            }
+            if refused > 0 {
+                let text = format!(
+                    "Disarmed: read-only. Refused {refused} agent request(s) waiting here \
+                     (not-armed); nothing was sent."
+                );
+                self.flash(text, FLASH_FOR);
+            }
         }
     }
 
@@ -221,7 +312,7 @@ impl App {
             };
             return self.flash(text, FLASH_FOR);
         }
-        self.safety.agents.waiting.push_back(request);
+        self.safety.agents.waiting.push_back((self.now, request));
         self.dirty = true;
         self.show_next_agent();
     }
@@ -237,7 +328,7 @@ impl App {
         {
             return;
         }
-        while let Some(request) = self.safety.agents.waiting.pop_front() {
+        while let Some((came, request)) = self.safety.agents.waiting.pop_front() {
             if request.withdrawn() {
                 continue;
             }
@@ -249,7 +340,7 @@ impl App {
                 error: None,
                 opened: self.now,
             });
-            self.safety.agents.shown = Some((req, request));
+            self.safety.agents.shown = Some((req, request, came));
             self.dirty = true;
             return;
         }

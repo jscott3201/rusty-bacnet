@@ -7,7 +7,9 @@
 //! token from the caller's [`TokenBucket`], when the account has one. The
 //! account rides in a task-local, so the engine's read paths charge it
 //! without passing it along; a request made outside [`charged`] (the TUI's)
-//! charges nothing.
+//! charges nothing. An [`agent`](Account::agent)'s account marks its
+//! requests on the request-rate meter as an agent's, so a front end that
+//! shares its engine with agents (the TUI, #2185) shows their share.
 
 use std::future::Future;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -27,6 +29,7 @@ pub struct Account {
     requests: AtomicU32,
     throttled_us: AtomicU64,
     bucket: Option<Arc<TokenBucket>>,
+    agent: bool,
 }
 
 impl Account {
@@ -36,7 +39,24 @@ impl Account {
             requests: AtomicU32::new(0),
             throttled_us: AtomicU64::new(0),
             bucket,
+            agent: false,
         }
+    }
+
+    /// [`new`](Self::new), for an agent's call: the meter counts its
+    /// requests as an agent's ([`RequestLimits::recent_agents`]).
+    ///
+    /// [`RequestLimits::recent_agents`]: super::RequestLimits::recent_agents
+    pub fn agent(bucket: Option<Arc<TokenBucket>>) -> Self {
+        Self {
+            agent: true,
+            ..Self::new(bucket)
+        }
+    }
+
+    /// Whether it is an agent's ([`agent`](Self::agent)).
+    pub fn is_agent(&self) -> bool {
+        self.agent
     }
 
     /// Requests counted so far.

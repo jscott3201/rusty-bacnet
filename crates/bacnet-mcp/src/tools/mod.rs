@@ -207,7 +207,7 @@ pub(crate) async fn call<T: TransportPort + 'static>(
         ));
     }
     let request = request(name, &args)?;
-    let account = Arc::new(Account::new(Some(Arc::clone(&ctx.bucket))));
+    let account = ctx.account();
     let budget = ctx.policy.caps.budget;
     let call = Call::new(budget, Arc::clone(&account));
     let run = async {
@@ -327,7 +327,7 @@ pub(crate) async fn call_write<T: TransportPort + 'static>(
         match ctx.writes.ask() {
             Some(slot) => Some(slot),
             None => {
-                let account = Arc::new(Account::new(Some(Arc::clone(&ctx.bucket))));
+                let account = ctx.account();
                 let call = Call::new(budget, account);
                 let error = write::unconfirmed(ctx, &args, peer, (PENDING, PENDING_WHY)).await;
                 return Ok(finish(ctx, name, &call, Err(error)).into());
@@ -455,7 +455,7 @@ async fn attempt<T: TransportPort + 'static>(
     cancel: &CancellationToken,
     account: Option<Arc<Account>>,
 ) -> Result<Attempt, ErrorData> {
-    let account = account.unwrap_or_else(|| Arc::new(Account::new(Some(Arc::clone(&ctx.bucket)))));
+    let account = account.unwrap_or_else(|| ctx.account());
     let budget = ctx.policy.caps.budget;
     let call = Call::new(budget, Arc::clone(&account));
     let run = async {

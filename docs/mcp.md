@@ -71,7 +71,7 @@ under its own account and budget, and a cancelled read sends nothing more.
 | `.../property/{prop}` | one property (`name` or `name[index]`; `[`, `]` and `:` may be percent-encoded) | a property watch (SubscribeCOVProperty) |
 | `bacnet://alarms` | each device in reach: its first page of GetEventInformation, as far as the read's budget goes (`unread` past it, `errors` per device) | a poll every 60 s; an update when the events change |
 | `bacnet://device/{instance}/alarms` | one device's first page of events | the same, for one device. A session's per-device alarm URIs, on listen streams and legacy subscriptions alike, count against its 64-URI bound (the acknowledgment leaves out the rest), so the poll reads at most that many devices |
-| `bacnet://session` | level (`read-only`, `write-session` while a session or plan grant is in force, `write-session (expired)`), `writes` (`not offered`, or the mode, arming and what the client may confirm), `expires` (seconds left in an armed session), `grants` (a plan grant: in force, used, budget, expiry; `used` is null and `count_unavailable` says why when the plan's write count can't be trusted, so its writes are refused), limits, the request meter, the principal's watches and the hub's footprint (points, subscribed, polled, requests, lagged notifications, lifetime) | an update when this server arms a session, a write spends a plan grant's budget, or the armed session or the plan grant runs out (announced when it ends, with no request needed) (#2160) |
+| `bacnet://session` | level (`read-only`, `write-session` while a session or plan grant is in force, `write-session (expired)`), `writes` (`not offered`, or the mode, arming and what the client may confirm), `expires` (seconds left in an armed session), `grants` (a plan grant: in force, used, budget, expiry; `used` is null and `count_unavailable` says why when the plan's write count can't be trusted, so its writes are refused), limits, the request meter (`requests_last_10_s`, and of those `agents_requests_last_10_s`, every MCP caller's), the principal's watches and the hub's footprint (points, subscribed, polled, requests, lagged notifications, lifetime); on a session attached to the TUI, `tui.armed`, read-only: whether the TUI's write session is armed, so a write could be confirmed there now | an update when this server arms a session, a write spends a plan grant's budget, or the armed session or the plan grant runs out (announced when it ends, with no request needed) (#2160) |
 | `bacnet://ledger` | this principal's ledger entries in effect (`ledger_id`, target, value written, what undoes it, state, time), read from the profile workspace's `ledger.json`; empty without writes | an update when one of this server's writes is recorded as `sending`, and again when it settles (two updates, folded into one when they come close together); when a revert settles; and when it settles an entry left `sending` as unknown. A write the device refused announces its `sending` row and then the row's removal, so the ledger ends as it was. The TUI's own changes to the shared ledger aren't announced (#2160) |
 
 A watched point is read from the hub, which sends nothing. An unwatched one
@@ -577,6 +577,17 @@ stderr; when the TUI ends the session it exits cleanly.
     holds 4, the one on screen included; one more is refused
     (`approval-queue-full`). A request waits behind another dialog the
     person has open.
+  - Disarming the TUI (`W`, or the write session running out) refuses
+    every request it holds at once, the one on screen included, with
+    `not-armed` and nothing sent, rather than leaving them to be refused
+    when confirmed.
+  - **Host timeouts.** Agent hosts often end a tool call after about 60 s,
+    while the dialog waits up to 120 s, and a request queued behind
+    others waits longer. A request answered after the host gave up is
+    still sent if confirmed, but the agent never hears the result; it can
+    read `bacnet://ledger`. Raise the host's tool timeout where it has
+    one, and answer requests promptly; the agent pane shows each one's
+    age.
   - Confirmed, the write runs on the TUI's own write session: the targets
     are read again (a preview that changed is refused `stale`), the
     ledger records it as the agent's (`front_end: mcp` with the
@@ -615,6 +626,23 @@ stderr; when the TUI ends the session it exits cleanly.
     the change went, so nothing was sent. A dropped job whose write had
     reached the ledger answers `pending` with `applied: "unknown"`
     instead.
+- **The agent pane.** Screen 8 (`8`, listed on the top line while the
+  listener runs) shows the attached agents' tool calls, newest first:
+  the time (UTC), the agent (its connection number and the name its
+  client claims), the tool, a short summary of the target, the outcome
+  (`ok`, `refused:` and the reason, `declined` or `withdrawn`, `stale`,
+  or `error:` and its kind) and the cost: the requests charged to the
+  call, the re-read before a write and the writes sent included, and how
+  long it took. It keeps the latest 500 calls; older ones are dropped,
+  and the heading counts them. Above the calls it lists the write
+  requests waiting for you, each with its age, the one on screen with
+  the seconds left before it is declined, and a warning once a request
+  is older than a host's usual 60 s. The heading gives the agents' share
+  of the request meter, and the watch list's meter adds the same share
+  (`agents n/s`): a request counts as an agent's when it is charged to an
+  agent's call or to the agents' watch hub, so the pane and the meter
+  agree. The sessions record each call on the listener's threads; the
+  TUI copies the list each frame it changed, never waiting on them.
 - **The socket (Unix).** `mcp.sock` in the profile's workspace. The workspace
   must be a directory of yours, not a symbolic link; one with a looser
   mode than 0700 is narrowed to 0700 when the listener starts, and the
@@ -880,6 +908,13 @@ stderr; when the TUI ends the session it exits cleanly.
   an agent on an open session's socket reading through its client, on the
   watch list's meter, `MCP n` and `MCP off` on the bar, the watch list's
   first SubscribeCOV keeping the first subscriber process identifier, and
-  quitting ending it;
+  quitting ending it; `mcp_agent_pane.rs`: the agent pane's frames at
+  120x40 and 80x24 (empty, with calls, with a waiting request's age, with
+  dropped calls counted), an agent's read, confirmed write, declined write
+  and unarmed refusal shown with their outcome and cost, the meter's
+  agents' share matching the pane, disarming refusing the queue at once,
+  and `bacnet://session` following the TUI's arming; `board.rs` in
+  `bacnet-mcp`: the ring dropping its oldest, never waited on, and the
+  outcome and target summaries;
   `crates/bacnet-cli/tests/mcp_connect.rs`: `bacnet mcp connect` against a
   listener, stdout JSON-RPC only, and the refusal with nothing listening.

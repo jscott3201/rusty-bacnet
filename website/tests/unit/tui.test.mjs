@@ -59,7 +59,7 @@ test('the plain-text export keeps a screenshot as its alt text', async () => {
 // keymap.rs's per-context functions, and the key reference section for each.
 const sections = {
   main: 'Devices and the browser', watch: 'Watch list', network: 'Network screen', sc: 'BACnet/SC screen',
-  mstp: 'MS/TP screen', capture: 'Capture screen', join: 'MS/TP join confirmation', connection: 'Profile dialog', picker: 'Interface picker',
+  mstp: 'MS/TP screen', capture: 'Capture screen', agents: 'Agent pane', join: 'MS/TP join confirmation', connection: 'Profile dialog', picker: 'Interface picker',
   form: 'Who-Is form', filter: 'Filters', safety: 'Write dialogs', command_line: 'Command bar',
   global: 'Everywhere', help: 'Help overlay', browse: 'Devices and the browser',
 };

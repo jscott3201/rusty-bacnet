@@ -46,6 +46,8 @@ pub(super) struct Sessions<T: TransportPort + 'static> {
         tokio::sync::mpsc::Sender<super::AgentApproval>,
         tokio::sync::mpsc::Sender<super::DeskJob<T>>,
     )>,
+    /// Where each session records its calls (#2185).
+    pub(super) board: super::Board,
     /// The `[mcp]` limits, joined to the engine's while an agent is in.
     pub(super) overlay: Overlay,
     /// The watch hub and principal bucket every session shares.
@@ -167,6 +169,10 @@ impl<T: TransportPort + 'static> Sessions<T> {
             self.principal.clone(),
             (&self.shared, INITIALIZE_WAIT),
             lending,
+            crate::board::Pane {
+                board: self.board.clone(),
+                agent: connection,
+            },
         ) {
             Ok(server) => server,
             Err(error) => {

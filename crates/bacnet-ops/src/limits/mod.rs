@@ -180,9 +180,10 @@ pub struct Turn {
 struct Slots {
     /// The slots booked and given back.
     schedule: Schedule,
-    /// The slots handed out within the meter's window, oldest first; a
-    /// slot given back leaves it.
-    recent: VecDeque<Instant>,
+    /// The slots handed out within the meter's window, oldest first, each
+    /// marked when an agent's account was charged for it; a slot given back
+    /// leaves it.
+    recent: VecDeque<(Instant, bool)>,
 }
 
 /// How long the meter remembers a request.
@@ -283,7 +284,8 @@ impl RequestLimits {
         };
         // The gate is never closed, so the permit always comes.
         let permit = self.gate(device).acquire_owned().await.ok();
-        self.pace(network).await;
+        self.pace(network, account.as_deref().is_some_and(Account::is_agent))
+            .await;
         if let Some(token) = token {
             token.keep();
         }
@@ -305,7 +307,8 @@ impl RequestLimits {
             Some(bucket) => bucket.hold().await,
             None => None,
         };
-        self.pace(network).await;
+        self.pace(network, account.as_deref().is_some_and(Account::is_agent))
+            .await;
         if let Some(token) = token {
             token.keep();
         }
@@ -316,8 +319,8 @@ impl RequestLimits {
     }
 
     /// Wait for `network`'s slot, then the global one, under the overlay
-    /// too while one is in force.
-    async fn pace(&self, network: Option<u16>) {
+    /// too while one is in force; on the meter as an agent's when `agent`.
+    async fn pace(&self, network: Option<u16>, agent: bool) {
         let layer = self.layer();
         let networks = layer
             .as_deref()
@@ -333,7 +336,7 @@ impl RequestLimits {
             tokio::time::sleep_until(booking.at).await;
         }
         let interval = self.global_spacing(layer.as_deref());
-        if let Some(booking) = self.reserve(Instant::now(), interval) {
+        if let Some(booking) = self.reserve(Instant::now(), interval, agent) {
             let _hold = Hold {
                 owner: Owner::Global(self),
                 booking,
@@ -356,9 +359,10 @@ impl RequestLimits {
     }
 
     /// The slot this request may go in, `interval` before the next,
-    /// reserving it. Without spacing it goes now (`None`), whatever slots
-    /// spaced requests left booked.
-    fn reserve(&self, now: Instant, interval: Duration) -> Option<Booking> {
+    /// reserving it, on the meter as an agent's when `agent`. Without
+    /// spacing it goes now (`None`), whatever slots spaced requests left
+    /// booked.
+    fn reserve(&self, now: Instant, interval: Duration, agent: bool) -> Option<Booking> {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let booking = if interval.is_zero() {
             state.schedule.clear(now);
@@ -369,14 +373,14 @@ impl RequestLimits {
         while state
             .recent
             .front()
-            .is_some_and(|at| now.saturating_duration_since(*at) >= METER_WINDOW)
+            .is_some_and(|(at, _)| now.saturating_duration_since(*at) >= METER_WINDOW)
         {
             state.recent.pop_front();
         }
         // A slot given back and taken again lies before later bookings.
         let at = booking.map_or(now, |booking| booking.at);
-        let i = state.recent.partition_point(|recent| *recent <= at);
-        state.recent.insert(i, at);
+        let i = state.recent.partition_point(|(recent, _)| *recent <= at);
+        state.recent.insert(i, (at, agent));
         booking
     }
 
@@ -385,7 +389,7 @@ impl RequestLimits {
     fn release(&self, booking: Booking, now: Instant) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if state.schedule.release(booking, now)
-            && let Some(i) = state.recent.iter().rposition(|at| *at == booking.at)
+            && let Some(i) = state.recent.iter().rposition(|(at, _)| *at == booking.at)
         {
             state.recent.remove(i);
         }
@@ -436,12 +440,25 @@ impl RequestLimits {
 
     /// Requests whose slot fell in the meter's window up to now.
     pub fn recent(&self) -> usize {
+        self.metered(|_| true)
+    }
+
+    /// Of [`recent`](Self::recent), those charged to an agent's
+    /// [`Account`] (#2185): the requests of its tool calls, the re-read
+    /// before its writes included, and of a watch hub that serves agents.
+    pub fn recent_agents(&self) -> usize {
+        self.metered(|agent| agent)
+    }
+
+    fn metered(&self, which: impl Fn(bool) -> bool) -> usize {
         let now = Instant::now();
         let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state
             .recent
             .iter()
-            .filter(|at| **at <= now && now.saturating_duration_since(**at) < METER_WINDOW)
+            .filter(|(at, agent)| {
+                *at <= now && now.saturating_duration_since(*at) < METER_WINDOW && which(*agent)
+            })
             .count()
     }
 }
@@ -618,5 +635,22 @@ mod tests {
         // Uncharged requests count nowhere.
         drop(limits.turn(1).await);
         assert_eq!(account.requests(), 4);
+    }
+
+    /// The meter tells an agent's requests from the rest (#2185): those
+    /// charged to an agent's account, at once or paced, and nothing else.
+    #[tokio::test(start_paused = true)]
+    async fn the_meter_counts_agents_requests_apart() {
+        let limits = RequestLimits::new(10);
+        drop(limits.turn(1).await);
+        charged(Arc::new(Account::new(None)), limits.slot(None)).await;
+        charged(Arc::new(Account::agent(None)), async {
+            drop(limits.turn(2).await);
+            limits.slot(None).await;
+        })
+        .await;
+        assert_eq!((limits.recent(), limits.recent_agents()), (4, 2));
+        tokio::time::advance(METER_WINDOW).await;
+        assert_eq!((limits.recent(), limits.recent_agents()), (0, 0));
     }
 }

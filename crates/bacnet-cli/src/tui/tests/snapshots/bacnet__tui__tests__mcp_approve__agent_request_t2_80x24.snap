@@ -1,8 +1,9 @@
 ---
 source: crates/bacnet-cli/src/tui/tests/mcp_approve.rs
+assertion_line: 102
 expression: "screen(&mut site.app, 80, 24)"
 ---
-" [1 Devices] 2 3 4 7 | BIP | up | WRITE 15:00 | MCP 1, 1 to confirm      ? help "
+" [1 Devices] 2 3 4 7 8 | BIP | up | WRITE 15:00 | MCP 1, 1 to confirm    ? help "
 "┌ Devices (1) | sort: instance ↑ ──────────────────────────────────────────────┐"
 "│  Instance* Name Address          Net   Vendor APDU Seg  Seen                 │"
 "│> 100       …    10.0.0.100:47808 local 260    1476 none 0s                   │"
