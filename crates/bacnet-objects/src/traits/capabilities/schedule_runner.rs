@@ -28,7 +28,11 @@ use crate::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 /// local: a Schedule's references name objects of its own device. When an
 /// object is added, the database asks each Schedule
 /// [`retry_refusals_naming`](Self::retry_refusals_naming) under its
-/// exclusive borrow.
+/// exclusive borrow. When DeleteObject removes a Schedule, the server takes
+/// [`take_relinquish_writes`](Self::take_relinquish_writes) from the removed
+/// object and writes those NULLs to its targets. A custom schedule that
+/// keeps priority slots on its targets overrides that method, or its last
+/// commands stay behind after the delete; the default gives up nothing.
 pub trait ScheduleRunner {
     /// Evaluate the schedule at `time` on `today` (Clause 12.24.4).
     ///

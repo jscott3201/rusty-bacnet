@@ -12,10 +12,13 @@ use super::cov_wire_test_support::*;
 use super::schedule_reference_write_tests::slot;
 use super::schedule_write_tests::{read, sch5, schedule};
 use super::*;
+use bacnet_objects::channel::ChannelObject;
 use bacnet_objects::schedule::ScheduleObject;
 use bacnet_services::object_mgmt::DeleteObjectRequest;
 use bacnet_types::calendar::SpecificDate;
-use bacnet_types::constructed::{BACnetDateRange, BACnetObjectPropertyReference};
+use bacnet_types::constructed::{
+    BACnetDateRange, BACnetDeviceObjectPropertyReference, BACnetObjectPropertyReference,
+};
 use bacnet_types::enums::ObjectType;
 
 fn sch6() -> ObjectIdentifier {
@@ -157,4 +160,41 @@ async fn a_target_that_refuses_the_null_does_not_stop_the_delete() {
     assert_eq!(slot(&h, av1(), 16).await, PropertyValue::Null);
     let notification = h.cov_notification().await;
     assert_eq!(notification.list_of_values[0].value, real(0.0));
+}
+
+/// SCH-5 commanding CH-1's Present_Value at priority 16, and CH-1 passing
+/// what it holds on to AV-1 at once.
+fn through_a_channel(db: &mut ObjectDatabase) {
+    let ch1 = ObjectIdentifier::new(ObjectType::CHANNEL, 1).unwrap();
+    let mut channel = ChannelObject::new(1, "CH-1", 1).unwrap();
+    channel
+        .set_members(vec![BACnetDeviceObjectPropertyReference::new_local(
+            av1(),
+            PV.to_raw(),
+        )])
+        .unwrap();
+    db.add(Box::new(channel)).unwrap();
+    let mut schedule = ScheduleObject::new(5, "SCH-5", PropertyValue::Real(10.0)).unwrap();
+    schedule
+        .add_object_property_reference(BACnetObjectPropertyReference::new(ch1, PV.to_raw()))
+        .unwrap();
+    db.add(Box::new(schedule)).unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_relinquish_starts_the_run_of_a_channel_target() {
+    // The NULL relinquishes CH-1's slot 16, and the distribution that write
+    // starts carries it on to AV-1: the run reached the request's effects.
+    let mut h = Harness::start_with(ServerConfig::default(), through_a_channel).await;
+    h.subscribe_cov().await;
+    // The start-up run may still be distributing when the subscription's
+    // first report goes out; wait for AV-1 to report 10.0.
+    while h.cov_notification().await.list_of_values[0].value != real(10.0) {}
+    assert_eq!(slot(&h, av1(), 16).await, PropertyValue::Real(10.0));
+    delete(&mut h, sch5()).await;
+    response(&h).await.unwrap();
+    let notification = h.cov_notification().await;
+    assert_eq!(notification.monitored_object_identifier, av1());
+    assert_eq!(notification.list_of_values[0].value, real(0.0));
+    assert_eq!(slot(&h, av1(), 16).await, PropertyValue::Null);
 }

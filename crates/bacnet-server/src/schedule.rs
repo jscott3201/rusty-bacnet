@@ -176,8 +176,11 @@ pub(crate) struct DeletedSchedule {
 }
 
 impl DeletedSchedule {
-    /// Note `deleted`, when it is an object that runs as a Schedule, and the
-    /// origin its writes carry.
+    /// The plan for `deleted`, the object a DeleteObject names, under the
+    /// request's guard `db_w` and before it is removed: `None` unless the
+    /// object lends a [`ScheduleRunner`](bacnet_objects::traits::ScheduleRunner).
+    /// The origin its writes carry is resolved now, since it can't be once
+    /// the object is gone.
     pub(crate) fn plan(
         db_w: &mut ObjectDatabase,
         deleted: Option<ObjectIdentifier>,
@@ -190,9 +193,11 @@ impl DeletedSchedule {
         })
     }
 
-    /// Relinquish, under `db_w`, the guard on `db`, what `removed`, the
-    /// planned Schedule taken out of the database, holds; returns the COV
-    /// fanout owed, and any Command runs the writes started.
+    /// Write the NULLs `removed` owes its targets, under `db_w`, the
+    /// request's guard on `db`. `removed` is the planned Schedule, already
+    /// out of the database. Returns the COV fanout, and any Command or
+    /// Channel runs the writes started, to hand over once the guard is
+    /// dropped.
     pub(crate) async fn issue(
         self,
         db: &Arc<RwLock<ObjectDatabase>>,
