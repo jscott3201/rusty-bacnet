@@ -4,7 +4,6 @@
 //! ObjectDatabase and returns the encoded response bytes.
 
 use std::collections::HashSet;
-use std::time::Duration;
 
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_encoding::primitives::encode_property_value;

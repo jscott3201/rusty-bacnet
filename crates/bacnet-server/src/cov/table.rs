@@ -1,0 +1,430 @@
+//! The COV subscription table: entries keyed by the monitored object first,
+//! the per-peer accounting, and what each mutation removed or fenced.
+use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
+use core::sync::atomic::{AtomicUsize, Ordering};
+
+use bacnet_device_core::cov::{
+    CovCounters, CovPolicy, CovRecipient, CovSample, CovSubscriptionKey, MultipleContextKey,
+    SubscriberEndpoint,
+};
+use bacnet_encoding::npdu::NpduAddress;
+use bacnet_time::Instant;
+use bacnet_types::MacAddr;
+use bacnet_types::enums::PropertyIdentifier;
+use bacnet_types::primitives::ObjectIdentifier;
+
+use super::flight::{FlightState, FlightTiming, Token};
+use super::{CovSubscription, CovSubscriptionSnapshot};
+
+/// Gives each table its own identity, so a snapshot from one table can't
+/// complete another's entry.
+static NEXT_TABLE: AtomicUsize = AtomicUsize::new(0);
+
+/// What table mutations ended, replaced or removed since the host last took
+/// them ([`CovTable::take_fenced`]). A host that keeps wake-ups or histories
+/// outside the table acts on exactly these.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Fenced {
+    /// Outstanding confirmed reports whose flight a renewal or a route
+    /// change replaced, or whose deadline passed: their workers stop.
+    pub tokens: Vec<Token>,
+    /// References that left the table: cancelled, expired, or removed with
+    /// their object or route.
+    pub removed: Vec<CovSubscriptionKey>,
+    /// References a fence or an abandoned report left owing a fresh
+    /// evaluation (#896, #923).
+    pub revisit: Vec<CovSubscriptionKey>,
+    /// Multiple contexts an admission refreshed: their lifetime, maximum
+    /// notification delay and subscriber APDU size may have changed.
+    pub contexts: Vec<MultipleContextKey>,
+}
+
+/// The entries, ordered by their key, which puts the monitored object first.
+#[derive(Debug, Default)]
+pub(super) struct Entries(BTreeMap<CovSubscriptionKey, CovSubscriptionSnapshot>);
+
+impl Entries {
+    pub(super) fn get(&self, key: &CovSubscriptionKey) -> Option<&CovSubscriptionSnapshot> {
+        self.0.get(key)
+    }
+
+    pub(super) fn get_mut(
+        &mut self,
+        key: &CovSubscriptionKey,
+    ) -> Option<&mut CovSubscriptionSnapshot> {
+        self.0.get_mut(key)
+    }
+
+    pub(super) fn contains(&self, key: &CovSubscriptionKey) -> bool {
+        self.0.contains_key(key)
+    }
+
+    /// Insert under the snapshot's own key, returning the entry it replaced.
+    pub(super) fn insert(
+        &mut self,
+        snapshot: CovSubscriptionSnapshot,
+    ) -> Option<CovSubscriptionSnapshot> {
+        self.0.insert(snapshot.key.clone(), snapshot)
+    }
+
+    pub(super) fn remove(&mut self, key: &CovSubscriptionKey) -> Option<CovSubscriptionSnapshot> {
+        self.0.remove(key)
+    }
+
+    pub(super) fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub(super) fn values(&self) -> impl Iterator<Item = &CovSubscriptionSnapshot> {
+        self.0.values()
+    }
+
+    pub(super) fn values_mut(&mut self) -> impl Iterator<Item = &mut CovSubscriptionSnapshot> {
+        self.0.values_mut()
+    }
+
+    /// The entries monitoring `oid`, found without visiting the others.
+    pub(super) fn of_object(
+        &self,
+        oid: ObjectIdentifier,
+    ) -> impl Iterator<Item = &CovSubscriptionSnapshot> {
+        // The least key of any entry on `oid`: keys order by object, then
+        // family (ordinary first), recipient (a direct, empty MAC least) and
+        // process.
+        let least = CovSubscriptionKey::Object {
+            recipient: CovRecipient::Direct(MacAddr::new()),
+            process_id: 0,
+            object: oid,
+        };
+        self.0
+            .range(least..)
+            .take_while(move |(key, _)| key.object() == oid)
+            .map(|(_, entry)| entry)
+    }
+}
+
+/// Table of active COV subscriptions, with their confirmed flights and
+/// completion tickets as plain state. It takes no lock and reads no clock:
+/// the host holds it under its own guard and passes `now`, on one monotonic
+/// timeline, to every call that can expire something.
+#[derive(Debug)]
+pub struct CovTable {
+    pub(super) id: usize,
+    pub(super) subs: Entries,
+    pub(super) generation: u64,
+    /// The last completion ticket issued; tickets start at one.
+    pub(super) issued: u64,
+    /// Flights with an outstanding report or a hold-off; an absent flight
+    /// is idle.
+    pub(super) flights: BTreeMap<u64, FlightState>,
+    pub(super) next_flight: u64,
+    pub(super) peer_counts: BTreeMap<CovRecipient, usize>,
+    pub(super) peer_indefinite_counts: BTreeMap<CovRecipient, usize>,
+    pub(super) policy: CovPolicy,
+    pub(super) timing: FlightTiming,
+    /// Subscription counts since the host last took them.
+    pub(super) counts: CovCounters,
+    pub(super) fenced: Fenced,
+}
+
+impl Default for CovTable {
+    fn default() -> Self {
+        Self::new(CovPolicy::default())
+    }
+}
+
+impl CovTable {
+    /// An empty table under `policy`, sanitized.
+    pub fn new(policy: CovPolicy) -> Self {
+        Self {
+            id: NEXT_TABLE.fetch_add(1, Ordering::Relaxed),
+            subs: Entries::default(),
+            generation: 0,
+            issued: 0,
+            flights: BTreeMap::new(),
+            next_flight: 0,
+            peer_counts: BTreeMap::new(),
+            peer_indefinite_counts: BTreeMap::new(),
+            policy: policy.sanitized(),
+            timing: FlightTiming::default(),
+            counts: CovCounters::default(),
+            fenced: Fenced::default(),
+        }
+    }
+
+    /// This table with confirmed reports timed by `timing`: their deadline
+    /// and the hold-off after a failure.
+    pub fn with_flight_timing(mut self, timing: FlightTiming) -> Self {
+        self.timing = timing;
+        self
+    }
+
+    /// The active COV policy.
+    pub fn policy(&self) -> &CovPolicy {
+        &self.policy
+    }
+
+    /// How confirmed reports are timed.
+    pub fn flight_timing(&self) -> FlightTiming {
+        self.timing
+    }
+
+    /// Subscription counts since the last call: created, cancelled, purged
+    /// and refused. `subscriptions_active` is the live count; the
+    /// notification fields stay zero.
+    pub fn take_counts(&mut self) -> CovCounters {
+        let mut counts = core::mem::take(&mut self.counts);
+        counts.subscriptions_active = self.subs.len() as u64;
+        counts
+    }
+
+    /// What mutations removed, replaced or fenced since the last call.
+    pub fn take_fenced(&mut self) -> Fenced {
+        core::mem::take(&mut self.fenced)
+    }
+
+    /// Get the number of active subscriptions for a peer.
+    pub fn peer_subscription_count(&self, peer: &CovRecipient) -> usize {
+        self.peer_counts.get(peer).copied().unwrap_or(0)
+    }
+
+    /// Get the number of active indefinite subscriptions for a peer.
+    pub fn peer_indefinite_count(&self, peer: &CovRecipient) -> usize {
+        self.peer_indefinite_counts.get(peer).copied().unwrap_or(0)
+    }
+
+    /// Get an accepted entry by its complete typed identity.
+    pub fn get_subscription(&self, key: &CovSubscriptionKey) -> Option<&CovSubscriptionSnapshot> {
+        self.subs.get(key)
+    }
+
+    /// Every accepted entry, ordered by monitored object.
+    pub fn entries(&self) -> impl Iterator<Item = &CovSubscriptionSnapshot> {
+        self.subs.values()
+    }
+
+    /// The accepted entries monitoring `oid`, expired ones included.
+    pub fn object_entries(
+        &self,
+        oid: ObjectIdentifier,
+    ) -> impl Iterator<Item = &CovSubscriptionSnapshot> {
+        self.subs.of_object(oid)
+    }
+
+    /// Every accepted reference of one Multiple context.
+    pub fn multiple_context_references<'a>(
+        &'a self,
+        context: &'a MultipleContextKey,
+    ) -> impl Iterator<Item = &'a CovSubscriptionSnapshot> + 'a {
+        self.subs
+            .values()
+            .filter(move |sub| sub.key.multiple_context() == Some(context))
+    }
+
+    /// Whether an exact subscription identity is present.
+    pub fn contains(&self, key: &CovSubscriptionKey) -> bool {
+        self.subs.contains(key)
+    }
+
+    fn remove_internal(&mut self, key: &CovSubscriptionKey, was_cancelled: bool) -> bool {
+        let Some(sub) = self.subs.remove(key) else {
+            return false;
+        };
+        self.fenced.removed.push(key.clone());
+        // A removed entry's flight ends without a fence, as dropping its
+        // marker did: an outstanding report runs on, and its outcome no
+        // longer counts. A context's flight goes with its last reference.
+        match key.multiple_context() {
+            Some(context) if self.multiple_context_references(context).next().is_some() => {}
+            _ => {
+                self.flights.remove(&sub.flight);
+            }
+        }
+        let peer = sub.recipient();
+        if let Some(count) = self.peer_counts.get_mut(&peer) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                self.peer_counts.remove(&peer);
+            }
+        }
+        if sub.expires_at.is_none()
+            && let Some(count) = self.peer_indefinite_counts.get_mut(&peer)
+        {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                self.peer_indefinite_counts.remove(&peer);
+            }
+        }
+        if was_cancelled {
+            self.counts.subscriptions_cancelled += 1;
+        }
+        true
+    }
+
+    /// Cancel only the exact family/form/property/index identity.
+    pub fn unsubscribe(&mut self, key: &CovSubscriptionKey) -> bool {
+        self.remove_internal(key, true)
+    }
+
+    /// Cancel every reference in the exact Multiple context.
+    pub fn unsubscribe_cov_multiple_context(&mut self, context: &MultipleContextKey) {
+        let keys: Vec<_> = self
+            .multiple_context_references(context)
+            .map(|sub| sub.key.clone())
+            .collect();
+        for key in keys {
+            self.remove_internal(&key, true);
+        }
+    }
+
+    /// Remove all subscriptions for a given object (used on DeleteObject).
+    pub fn remove_for_object(&mut self, oid: ObjectIdentifier) {
+        let to_remove: Vec<_> = self
+            .subs
+            .of_object(oid)
+            .map(|sub| sub.key.clone())
+            .collect();
+        for key in to_remove {
+            self.remove_internal(&key, false);
+        }
+    }
+
+    /// Remove subscriptions using this current route and release shared peer quotas.
+    /// An obsolete router cannot remove a subscription migrated elsewhere.
+    pub fn remove_peer_subscriptions(
+        &mut self,
+        mac: &[u8],
+        network: Option<&NpduAddress>,
+    ) -> usize {
+        let target = SubscriberEndpoint::new(mac, network);
+        let to_remove: Vec<_> = self
+            .subs
+            .values()
+            .filter(|entry| entry.endpoint() == target)
+            .map(|entry| entry.key.clone())
+            .collect();
+        let count = to_remove.len();
+        for key in to_remove {
+            self.remove_internal(&key, true);
+        }
+        count
+    }
+
+    /// Remove every subscription expired at `now`, and end every confirmed
+    /// report whose deadline has passed (its worker never reported; its
+    /// coordinate's references are owed a fresh look). Returns the number of
+    /// subscriptions removed.
+    pub fn expire(&mut self, now: Instant) -> usize {
+        self.end_abandoned(now);
+        let to_remove: Vec<_> = self
+            .subs
+            .values()
+            .filter(|sub| sub.expires_at.is_some_and(|exp| exp <= now))
+            .map(|sub| sub.key.clone())
+            .collect();
+        let mut purged = 0;
+        for key in to_remove {
+            purged += usize::from(self.remove_internal(&key, false));
+        }
+        self.counts.subscriptions_purged += purged as u64;
+        purged
+    }
+
+    /// End every subscription's lifetime at `now`, so the next lookup or
+    /// [`expire`](Self::expire) purges them all. Clause 13.1 lets a COV
+    /// server lose its subscriptions when it restarts; a host can drop them
+    /// this way.
+    pub fn expire_all(&mut self, now: Instant) {
+        for entry in self.subs.values_mut() {
+            entry.subscription.expires_at = Some(now);
+        }
+    }
+
+    /// Get all active (non-expired) subscriptions for a given object,
+    /// purging the expired ones first.
+    pub fn subscriptions_for(
+        &mut self,
+        oid: &ObjectIdentifier,
+        now: Instant,
+    ) -> Vec<&CovSubscriptionSnapshot> {
+        self.expire(now);
+        self.subs.of_object(*oid).collect()
+    }
+
+    /// The finest COV increment each object's live subscriptions to
+    /// `property` ask for (#1510): SubscribeCOVProperty subscriptions and
+    /// Multiple references that give one. A negative increment reports any
+    /// change, as zero does, so it counts as zero; a NaN or infinite one
+    /// reports nothing finer, so it's left out.
+    pub fn finest_increments(
+        &self,
+        property: PropertyIdentifier,
+        now: Instant,
+    ) -> BTreeMap<ObjectIdentifier, f64> {
+        let mut finest = BTreeMap::new();
+        for sub in self.subs.values() {
+            if sub.monitored_property != Some(property)
+                || sub.expires_at.is_some_and(|expires| expires <= now)
+            {
+                continue;
+            }
+            let Some(increment) = sub
+                .cov_increment
+                .map(f64::from)
+                .filter(|increment| increment.is_finite())
+            else {
+                continue;
+            };
+            let increment = increment.max(0.0);
+            finest
+                .entry(sub.monitored_object_identifier)
+                .and_modify(|finest: &mut f64| *finest = finest.min(increment))
+                .or_insert(increment);
+        }
+        finest
+    }
+
+    /// Whether a snapshot still owns a live entry in this table at `now`.
+    pub fn is_current(&self, snapshot: &CovSubscriptionSnapshot, now: Instant) -> bool {
+        self.remaining_lifetime(snapshot, now)
+            .and_then(super::CovTimeRemaining::wire_seconds)
+            .is_some()
+    }
+
+    /// Ordinary whole-object trigger policy: a numeric Present_Value must move
+    /// by the increment, any other value must change, and the first report
+    /// always fires. Status_Flags and other Table 13-1 trigger values (such as
+    /// Staging's Present_Stage) are checked separately by the caller.
+    /// An unchanged object therefore reports nothing, however often it is
+    /// fanned out. Property subscriptions compare their prepared sample instead.
+    pub fn should_notify(
+        sub: &CovSubscription,
+        current_value: Option<&CovSample>,
+        cov_increment: Option<f64>,
+    ) -> bool {
+        let Some(current) = current_value else {
+            return true;
+        };
+        current.reports(
+            sub.last_notified_observation
+                .as_ref()
+                .map(|observation| observation.sample()),
+            cov_increment,
+            true,
+        )
+    }
+
+    /// Number of active subscriptions.
+    pub fn len(&self) -> usize {
+        self.subs.len()
+    }
+
+    /// Whether the table is empty.
+    pub fn is_empty(&self) -> bool {
+        self.subs.len() == 0
+    }
+}
+
+#[cfg(test)]
+mod tests;

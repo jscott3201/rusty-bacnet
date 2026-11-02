@@ -323,7 +323,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             // Present_Value leads, except on an Access Point (Access_Event).
             let lead = crate::cov::reported::lead(oid.object_type());
 
-            (|| {
+            let captured = (|| {
                 let leading = object.read_property(lead.property(), None).ok()?;
                 let sample = bacnet_device_core::cov::CovSample::new(&leading).ok()?;
                 let flags = crate::cov::flags::PreparedFlags::read(object).ok()?;
@@ -349,33 +349,45 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 values.extend(reported.values);
                 let observation = flags.observation(sample).with_triggers(reported.triggers);
                 let increment = object.cov().and_then(|cov| cov.cov_increment());
-                // Reserve every ordinary reference while the shared observation
-                // is still guarded, before a preceding property send can await.
-                let completions = subs
+                let reporting: Vec<_> = subs
                     .iter()
                     .enumerate()
-                    .filter_map(|(index, sub)| {
-                        if sub.monitored_property.is_some()
-                            || (!force
-                                && !(lead.triggers()
+                    .filter(|(_, sub)| {
+                        sub.monitored_property.is_none()
+                            && (force
+                                || (lead.triggers()
                                     && CovSubscriptionTable::should_notify(
                                         sub,
                                         Some(observation.sample()),
                                         sub.cov_increment.map(f64::from).or(increment),
                                     ))
-                                && !observation
+                                || observation
                                     .flags_changed(sub.last_notified_observation.as_ref())
-                                && !observation
+                                || observation
                                     .triggers_changed(sub.last_notified_observation.as_ref()))
-                        {
-                            return None;
-                        }
-                        sub.prepare_completion()
-                            .map(|completion| (index, completion))
                     })
-                    .collect::<HashMap<_, _>>();
-                Some((values, observation, completions))
-            })()
+                    .map(|(index, _)| index)
+                    .collect();
+                Some((values, observation, reporting))
+            })();
+            // Reserve every ordinary reference while the shared observation
+            // is still guarded (database, then table), before a preceding
+            // property send can await.
+            match captured {
+                Some((values, observation, reporting)) if !reporting.is_empty() => {
+                    let mut table = cov_table.write().await;
+                    let completions = reporting
+                        .into_iter()
+                        .filter_map(|index| {
+                            table
+                                .prepare_completion(&subs[index])
+                                .map(|completion| (index, completion))
+                        })
+                        .collect::<HashMap<_, _>>();
+                    Some((values, observation, completions))
+                }
+                _ => None,
+            }
         } else {
             None
         };
@@ -453,7 +465,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     }
                     (values, observation)
                 };
-                let Some(completion) = sub.prepare_completion() else {
+                // Issued under the database guard the observation was read
+                // under, then the table's (#826).
+                let Some(completion) = cov_table.write().await.prepare_completion(sub) else {
                     continue;
                 };
                 (values, observation, completion)
@@ -472,7 +486,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let time_remaining = {
                 let table = cov_table.read().await;
                 table
-                    .remaining_lifetime(sub, runtime_clock::now())
+                    .remaining_lifetime(sub, runtime_clock::core_now())
                     .and_then(crate::cov::CovTimeRemaining::wire_seconds)
                     .filter(|_| table.confirmed_idle(sub))
             };

@@ -1,395 +1,44 @@
-//! Outstanding confirmed reports, their acknowledgment and the pause after a
-//! failure (#896).
-//!
-//! A confirmed COV notification completes its references' baselines only when
-//! the subscriber acknowledges it
-//! ([`CovSubscriptionTable::complete_observation`]). Until then its coordinate
-//! has one outstanding report, marked with that report's ticket. The coordinate
-//! is an ordinary or Single subscription, or a whole COV-multiple context: every
-//! notification to a context has to carry all the timestamped changes queued for
-//! it (Clauses 13.1, 13.16.3.1.2.3 and 13.17.1.1.5), so one reference's report
-//! cannot be outstanding while a sibling's goes out.
-//!
-//! Fanouts skip a marked coordinate, so its later changes wait. The Ack clears
-//! the mark and hands the coordinate's references to [`CovRevisits`], and the
-//! server then reports, in one notification, whatever changed meanwhile.
-//!
-//! A report that runs out of retries or is answered with an Error clears its mark
-//! and holds its coordinate off for one full retry cycle. Fanouts inside the
-//! hold-off skip the coordinate and schedule nothing. The first fanout after it
-//! reports the change again; for a context it hands every reference to one
-//! follow-up, since the failed report's changes may sit on other objects. A
-//! subscriber that stopped answering, or keeps refusing, therefore costs at most
-//! one delivery attempt per hold-off however often its objects change, and
-//! cannot keep the in-flight slots to itself. Shutdown and cancellation clear
-//! the mark without a hold-off, and so does a report DeviceCommunicationControl
-//! ends at a retry (Clause 16.1): the subscriber did not fail, so its coordinate
-//! is free to report again as soon as initiation is enabled.
-//!
-//! The standard delivers a confirmed notification with the usual APDU timeout and
-//! retries (Clause 5.4.4) and asks nothing further once they end. Reporting again
-//! after a hold-off is local policy.
-//!
-//! A replaced ordinary or Single subscription starts with a fresh marker. A
-//! context gets one when its route changes, and when a re-subscription that
-//! lists references arrives while it is busy, so the initial report is not held
-//! behind the old one (Clauses 13.14.2 and 13.16.2). The old marker is fenced:
-//! its outstanding report stops retrying, and can neither complete nor unmark
-//! the coordinate.
-//!
-//! A fenced report's outcome no longer counts, yet it may have reached the
-//! subscriber. So when the old marker owed a follow-up (its report was
-//! outstanding, or had failed and was holding off or owed), every reference of
-//! the context is evaluated again, and the untimestamped references that report
-//! carried and the re-subscription kept first forget their baselines (#923).
-//! The follow-up then reports their current value even if it went back to the
-//! baseline, which the subscriber would otherwise keep showing. References the
-//! report did not carry keep their acknowledged baselines, so the follow-up does
-//! not grow to the whole context. Timestamped references need no reset: the
-//! fenced report's history returns to their queue, and a change back is captured
-//! as one more change, so the subscriber ends at the current value.
-//!
-//! Without a fence the same gap remains, and is accepted: a failed report keeps
-//! its baselines, so if it did arrive (only its Acks were lost) and the value
-//! goes back before the follow-up, nothing is sent again. A fence after the owed
-//! follow-up has been taken clears nothing either.
+//! The server's side of a confirmed COV report (#896): the worker's wake-up
+//! for a fence, and the queue of references owed a fresh evaluation. The
+//! flight itself is plain state in the table; `flight.rs` has the policy.
 
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
 
+use bacnet_device_core::cov::CovSubscriptionKey;
 use tokio::sync::Notify;
-use tokio::time::Instant;
 
-use super::observation_order::{ObservationTicket, PreparedCovCompletion};
-use super::{
-    CovSubscriptionKey, CovSubscriptionSnapshot, CovSubscriptionTable, MultipleContextKey,
-};
+use super::Token;
 
-#[derive(Debug, Default)]
-struct FlightState {
-    /// Ticket of the outstanding report, or zero for none.
-    ticket: u64,
-    /// End of the hold-off after a failed report. Once it has passed, a
-    /// context still owes one follow-up of all its references.
-    hold_until: Option<Instant>,
-    /// Replaced by a fresh marker: an outstanding report stops retrying.
-    fenced: bool,
-    /// References the outstanding report carried, kept while a failed one is
-    /// holding off or owed, and cleared once it is acknowledged or its owed
-    /// follow-up is taken.
-    carried: HashSet<CovSubscriptionKey>,
-}
-
-#[derive(Debug, Default)]
-struct FlightShared {
-    state: Mutex<FlightState>,
-    fenced: Notify,
-}
-
-/// Outstanding confirmed report and hold-off of one coordinate, shared by every
-/// snapshot of it. For a Multiple context it also identifies the current route
-/// incarnation: replacing it fences snapshots taken before.
-#[derive(Debug, Clone, Default)]
-pub(super) struct FlightMarker(Arc<FlightShared>);
-
-impl FlightMarker {
-    fn state(&self) -> MutexGuard<'_, FlightState> {
-        // A panic while holding this lock leaves only plain values.
-        self.0.state.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// Whether both handles name the same coordinate incarnation.
-    pub(super) fn same(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-
-    /// If a report is outstanding, or a failed one is still holding off or
-    /// owed, the references it carried.
-    fn owed_carried(&self) -> Option<HashSet<CovSubscriptionKey>> {
-        let state = self.state();
-        (state.ticket != 0 || state.hold_until.is_some()).then(|| state.carried.clone())
-    }
-
-    /// No outstanding report and no hold-off in force at `now`.
-    fn idle(&self, now: Instant) -> bool {
-        let state = self.state();
-        state.ticket == 0 && state.hold_until.is_none_or(|until| now >= until)
-    }
-
-    /// End of a hold-off still in force at `now`, with no report outstanding.
-    fn holding_until(&self, now: Instant) -> Option<Instant> {
-        let state = self.state();
-        state
-            .hold_until
-            .filter(|until| state.ticket == 0 && now < *until)
-    }
-
-    /// Clear a hold-off that has passed, reporting whether there was one.
-    fn take_owed(&self, now: Instant) -> bool {
-        let mut state = self.state();
-        let owed = state.ticket == 0 && state.hold_until.is_some_and(|until| now >= until);
-        if owed {
-            state.hold_until = None;
-            state.carried.clear();
-        }
-        owed
-    }
-
-    /// Whether `ticket` is the outstanding report.
-    pub(super) fn holds(&self, ticket: ObservationTicket) -> bool {
-        self.state().ticket == ticket.get()
-    }
-
-    /// A fresh marker replaced this one: stop its outstanding report.
-    pub(super) fn fence(&self) {
-        self.state().fenced = true;
-        self.0.fenced.notify_waiters();
-    }
-
-    /// End the report `ticket` if it is still outstanding.
-    fn settle(&self, ticket: ObservationTicket, hold_until: Option<Instant>) {
-        let mut state = self.state();
-        if state.ticket == ticket.get() {
-            state.ticket = 0;
-            state.hold_until = hold_until;
-            if hold_until.is_none() {
-                state.carried.clear();
-            }
-        }
-    }
-}
-
-/// Why [`CovSubscriptionTable::begin_confirmed`] refused a report.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BeginRefusal {
-    /// A reference was removed, replaced, moved to another route or expired
-    /// since it was captured. Its live state deserves a fresh look.
-    NotCurrent,
-    /// The coordinate already has an outstanding report, is holding off after
-    /// a failure, or was acknowledged since it was captured. That outcome owns
-    /// the follow-up.
-    Busy,
-}
-
-/// The outstanding confirmed report of one notification, on its one
-/// coordinate: a subscription or a whole context.
+/// The outstanding confirmed report of one notification, as its worker
+/// holds it: the token its outcome goes back with
+/// ([`CovSubscriptionTable::delivered`](super::CovSubscriptionTable::delivered)),
+/// and the wake-up a fence fires.
 ///
-/// Dropping it ends the report without a hold-off: after the Ack has completed
-/// the baselines, on shutdown and cancellation, once it is fenced, or when DCC
-/// withdraws it.
+/// Dropping it ends nothing: a worker reports every outcome, and a report
+/// whose worker was aborted ends itself at its deadline.
 #[derive(Debug)]
-#[must_use = "dropping a flight ends the outstanding report"]
 pub(crate) struct ConfirmedFlight {
-    marker: FlightMarker,
-    ticket: ObservationTicket,
+    token: Token,
+    wake: Arc<Notify>,
 }
 
 impl ConfirmedFlight {
-    /// Retries exhausted or refused: end the report and hold its coordinate off
-    /// for `hold_off`, leaving the baselines where they were.
-    pub(crate) fn failed(self, hold_off: Duration) {
-        self.marker
-            .settle(self.ticket, Some(Instant::now() + hold_off));
+    pub(super) fn new(token: Token, wake: Arc<Notify>) -> Self {
+        Self { token, wake }
     }
 
-    /// Complete once a fresh marker has replaced this report's, after a route
-    /// change or a renewal: retrying it on the old incarnation would only land
-    /// after the replacement's own report.
+    /// The report's token.
+    pub(crate) fn token(&self) -> Token {
+        self.token
+    }
+
+    /// Complete once a fresh flight has replaced this report's, after a route
+    /// change or a renewal, or once its deadline passed: retrying it would
+    /// only land after the replacement's own report. Cancel-safe: a fence
+    /// that came first leaves its permit for the next call.
     pub(crate) async fn fenced(&self) {
-        loop {
-            let notified = self.marker.0.fenced.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable();
-            if self.marker.state().fenced {
-                return;
-            }
-            notified.await;
-        }
-    }
-}
-
-impl Drop for ConfirmedFlight {
-    fn drop(&mut self) {
-        self.marker.settle(self.ticket, None);
-    }
-}
-
-impl CovSubscriptionTable {
-    /// The live entry `snapshot` was taken from, whatever its expiry.
-    fn live_entry(&self, snapshot: &CovSubscriptionSnapshot) -> Option<&CovSubscriptionSnapshot> {
-        if !Arc::ptr_eq(&self.owner, &snapshot.owner) {
-            return None;
-        }
-        self.subs.get(snapshot.key()).filter(|entry| {
-            entry.generation == snapshot.generation && entry.flight.same(&snapshot.flight)
-        })
-    }
-
-    fn confirmed_idle_at(&self, snapshot: &CovSubscriptionSnapshot, now: Instant) -> bool {
-        if !snapshot.issue_confirmed_notifications {
-            return true;
-        }
-        // A snapshot that is no longer live is dropped by the liveness checks.
-        self.live_entry(snapshot).is_none_or(|entry| {
-            entry.flight.idle(now)
-                && entry.last_successful_ticket == snapshot.last_successful_ticket
-        })
-    }
-
-    /// Whether a fanout may report this ordinary or Single subscription now: no
-    /// confirmed report of it is outstanding or holding it off, and none was
-    /// acknowledged after `snapshot` was taken, so the snapshot's baseline is
-    /// still the live one. Always true for unconfirmed subscriptions.
-    pub(crate) fn confirmed_idle(&self, snapshot: &CovSubscriptionSnapshot) -> bool {
-        self.confirmed_idle_at(snapshot, Instant::now())
-    }
-
-    /// The same for a whole COV-multiple context: its marker is idle and no live
-    /// snapshot among `snapshots` predates an acknowledgment. Always true for an
-    /// unconfirmed context.
-    pub(crate) fn context_idle(
-        &self,
-        context: &MultipleContextKey,
-        snapshots: &[CovSubscriptionSnapshot],
-    ) -> bool {
-        if !context.confirmed {
-            return true;
-        }
-        let now = Instant::now();
-        self.multiple_context_references(context)
-            .next()
-            .is_none_or(|entry| entry.flight.idle(now))
-            && snapshots
-                .iter()
-                .all(|snapshot| self.confirmed_idle_at(snapshot, now))
-    }
-
-    /// End of the hold-off a failed report put on a confirmed context, while
-    /// it is in force. The timestamped backstop retries the context then.
-    pub(crate) fn context_hold_until(&self, context: &MultipleContextKey) -> Option<Instant> {
-        if !context.confirmed {
-            return None;
-        }
-        self.multiple_context_references(context)
-            .next()
-            .and_then(|entry| entry.flight.holding_until(Instant::now()))
-    }
-
-    /// Whether an idle context still owes the follow-up of a failed report,
-    /// whose hold-off has passed. Taking it clears it: the caller fans every
-    /// reference of the context out, since the failed report's changes may sit
-    /// on objects other than the one that fanned out now.
-    pub(crate) fn take_owed_context(&self, context: &MultipleContextKey) -> bool {
-        context.confirmed
-            && self
-                .multiple_context_references(context)
-                .next()
-                .is_some_and(|entry| entry.flight.take_owed(Instant::now()))
-    }
-
-    /// Mark the coordinate of one confirmed notification's references
-    /// outstanding, under the report's single ticket.
-    pub(crate) fn begin_confirmed<'a>(
-        &mut self,
-        completion: PreparedCovCompletion,
-        snapshots: impl IntoIterator<Item = &'a CovSubscriptionSnapshot>,
-    ) -> Result<ConfirmedFlight, BeginRefusal> {
-        let PreparedCovCompletion::Confirmed(ticket) = completion else {
-            debug_assert!(false, "a confirmed report prepares a confirmed completion");
-            return Err(BeginRefusal::Busy);
-        };
-        let now = Instant::now();
-        let mut marker: Option<FlightMarker> = None;
-        let mut carried = HashSet::new();
-        for snapshot in snapshots {
-            if !self.is_current(snapshot) {
-                return Err(BeginRefusal::NotCurrent);
-            }
-            if !self.confirmed_idle_at(snapshot, now) {
-                return Err(BeginRefusal::Busy);
-            }
-            let current = &self.subs[snapshot.key()].flight;
-            // Live references of one report share their subscription's or
-            // context's marker.
-            debug_assert!(marker.as_ref().is_none_or(|known| known.same(current)));
-            marker.get_or_insert_with(|| current.clone());
-            carried.insert(snapshot.key().clone());
-        }
-        let Some(marker) = marker else {
-            return Err(BeginRefusal::NotCurrent);
-        };
-        let mut state = marker.state();
-        state.ticket = ticket.get();
-        state.carried = carried;
-        drop(state);
-        Ok(ConfirmedFlight { marker, ticket })
-    }
-
-    /// Choose the marker a Multiple context keeps after this admission. A route
-    /// change always starts a new one, as does a re-subscription listing
-    /// references while the context is busy. Returns it, with the marker it
-    /// replaces, if any.
-    pub(super) fn context_flight(
-        &self,
-        context: &MultipleContextKey,
-        route: &super::SubscriberEndpoint,
-        lists_references: bool,
-    ) -> (FlightMarker, Option<FlightMarker>) {
-        let current = self
-            .subs
-            .values()
-            .find(|entry| entry.key.multiple_context() == Some(context))
-            .map(|entry| (entry.endpoint() == *route, entry.flight.clone()));
-        match current {
-            Some((true, flight)) if !lists_references || flight.idle(Instant::now()) => {
-                (flight, None)
-            }
-            Some((_, replaced)) => (FlightMarker::default(), Some(replaced)),
-            None => (FlightMarker::default(), None),
-        }
-    }
-
-    /// Fence a marker a fresh one replaced, once the references `listed` by the
-    /// replacing request are published. If its report was outstanding, or
-    /// failed and still owed a follow-up, nothing on the old marker can finish
-    /// the job, yet the report may have reached the subscriber: every
-    /// reference, kept or relisted, is evaluated again, and each kept
-    /// untimestamped one the report carried forgets its baseline first, so the
-    /// follow-up reports its current value (#923). Listed references have no
-    /// baseline either, so
-    /// whichever of this follow-up and the initial report goes first carries
-    /// them as first reports, and the other finds the context busy.
-    pub(super) fn fence_context_flight(
-        &mut self,
-        context: &MultipleContextKey,
-        replaced: &FlightMarker,
-        listed: &HashSet<CovSubscriptionKey>,
-    ) {
-        if let Some(carried) = replaced.owed_carried() {
-            debug_assert!(context.confirmed, "only confirmed contexts owe follow-ups");
-            // Measured against a baseline the subscriber may have left behind,
-            // a carried value that went back to it would never be reported again.
-            for entry in self.subs.values_mut() {
-                if entry.key.multiple_context() == Some(context)
-                    && !entry.timestamped
-                    && carried.contains(&entry.key)
-                    && !listed.contains(&entry.key)
-                {
-                    entry.subscription.last_notified_observation = None;
-                }
-            }
-            self.revisits.request(
-                self.multiple_context_references(context)
-                    .map(|entry| entry.key().clone()),
-            );
-        }
-        replaced.fence();
-    }
-
-    /// References owed a fresh evaluation after an acknowledgment.
-    pub(crate) fn revisits(&self) -> &Arc<CovRevisits> {
-        &self.revisits
+        self.wake.notified().await;
     }
 }
 

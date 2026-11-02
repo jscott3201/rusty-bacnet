@@ -34,15 +34,14 @@ impl CovSubscriptionTable {
     /// notification Time_Remaining uses. Ordinary and Single entries belong to
     /// `Active_COV_Subscriptions` and are skipped.
     pub(crate) fn active_cov_multiple_entries(&self, now: Instant) -> Vec<ActiveCovMultipleEntry> {
-        self.subs
-            .values()
+        self.entries()
             .filter_map(|entry| {
                 let CovSubscriptionKey::Multiple {
                     context,
                     object,
                     property,
                     index,
-                } = &entry.key
+                } = entry.key()
                 else {
                     return None;
                 };

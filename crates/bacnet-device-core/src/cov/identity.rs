@@ -2,6 +2,7 @@
 //! route, the original client address, and the coordinates every table
 //! operation keys on.
 use alloc::format;
+use core::cmp::Ordering;
 
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_types::MacAddr;
@@ -34,7 +35,9 @@ impl SubscriberEndpoint {
 /// Original BACnet client address for COV identity, quota and notification accounting.
 /// A routed address is independent of the immediate router; it is a claimed
 /// protocol address, not an authentication credential.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+///
+/// Recipients order direct before routed, then by address.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CovRecipient {
     /// A local-network client, identified by its source MAC.
     Direct(MacAddr),
@@ -79,7 +82,7 @@ impl CovRecipient {
 }
 
 /// Multiple notification context. Confirmed and unconfirmed forms are independent.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MultipleContextKey {
     /// Original client address, without the immediate router.
     pub recipient: CovRecipient,
@@ -90,6 +93,10 @@ pub struct MultipleContextKey {
 }
 
 /// Complete accepted subscription coordinates used by every table operation.
+///
+/// Keys order by monitored object first, so a table finds an object's
+/// subscriptions together; then ordinary before Single before Multiple, and
+/// by recipient, process, form, property and index.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CovSubscriptionKey {
     /// Ordinary whole-object subscription.
@@ -143,6 +150,63 @@ impl CovSubscriptionKey {
             Self::Multiple { context, .. } => Some(context),
             _ => None,
         }
+    }
+
+    /// Every coordinate but the object, in comparison order. Each field of
+    /// each family appears, so two keys compare equal exactly when `Eq`
+    /// says they are.
+    #[allow(clippy::type_complexity)]
+    fn rank(
+        &self,
+    ) -> (
+        u8,
+        &CovRecipient,
+        u32,
+        bool,
+        Option<PropertyIdentifier>,
+        Option<u32>,
+    ) {
+        match self {
+            Self::Object {
+                recipient,
+                process_id,
+                ..
+            } => (0, recipient, *process_id, false, None, None),
+            Self::Property {
+                recipient,
+                process_id,
+                property,
+                index,
+                ..
+            } => (1, recipient, *process_id, false, Some(*property), *index),
+            Self::Multiple {
+                context,
+                property,
+                index,
+                ..
+            } => (
+                2,
+                &context.recipient,
+                context.process_id,
+                context.confirmed,
+                Some(*property),
+                *index,
+            ),
+        }
+    }
+}
+
+impl Ord for CovSubscriptionKey {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.object()
+            .cmp(&other.object())
+            .then_with(|| self.rank().cmp(&other.rank()))
+    }
+}
+
+impl PartialOrd for CovSubscriptionKey {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 

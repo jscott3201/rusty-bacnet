@@ -22,7 +22,7 @@ async fn migrate(fixture: &Fixture, old: &CovSubscriptionSnapshot) -> CovSubscri
         .subscribe_multiple(
             old.key().multiple_context().unwrap(),
             &route,
-            runtime_clock::now() + Duration::from_secs(600),
+            crate::runtime_clock::core_now() + bacnet_time::Duration::from_secs(600),
             1,
             None,
             vec![],

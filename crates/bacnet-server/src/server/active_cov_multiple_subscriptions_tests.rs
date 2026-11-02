@@ -255,7 +255,7 @@ async fn active_cov_multiple_wire_renewal_cancellation_expiry_and_cleanup_are_ex
         process_id: 83,
         confirmed: false,
     };
-    let expires_at = runtime_clock::now() + Duration::from_millis(300);
+    let expires_at = runtime_clock::core_now() + bacnet_time::Duration::from_millis(300);
     let proposal = CovSubscription {
         subscriber_mac: MacAddr::from_slice(&routed().mac),
         subscriber_network: routed().network,

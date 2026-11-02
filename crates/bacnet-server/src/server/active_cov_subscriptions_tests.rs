@@ -219,7 +219,9 @@ async fn active_cov_wire_expiry_delete_object_and_peer_cleanup_remove_entries() 
             subscriber_process_identifier: 34,
             monitored_object_identifier: av(1),
             issue_confirmed_notifications: false,
-            expires_at: Some(runtime_clock::now() + Duration::from_millis(300)),
+            expires_at: Some(
+                crate::runtime_clock::core_now() + bacnet_time::Duration::from_millis(300),
+            ),
             last_notified_observation: None,
             monitored_property: None,
             monitored_property_array_index: None,

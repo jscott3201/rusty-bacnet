@@ -170,23 +170,22 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 else {
                     continue;
                 };
-                let Some(completion) = sub.prepare_completion() else {
-                    continue;
-                };
-                candidates.push((sub, Ok((prepared.values, prepared.observation, completion))));
+                candidates.push((sub, Ok((prepared.values, prepared.observation))));
             }
 
-            // Established lock order: DB read -> table read -> timed store. No
-            // object callback runs under the table guard. Each prepared value
-            // owns its own check; a live sibling with a failed read cannot
-            // authorize a stale value.
+            // Established lock order: DB read -> table write -> timed store.
+            // No object callback runs under the table guard. Each prepared
+            // value owns its own check; a live sibling with a failed read
+            // cannot authorize a stale value. Completion tickets are issued
+            // under both guards, so they follow the order of the observations
+            // (#826).
             let context = subscriptions[0]
                 .key()
                 .multiple_context()
                 .expect("Multiple snapshot")
                 .clone();
             let (retained, untimed, subscriber_max_apdu, owners, store, any_timestamped) = {
-                let table = cov_table.read().await;
+                let mut table = cov_table.write().await;
                 // A confirmed context has at most one outstanding report, and
                 // the next one has to batch everything held meanwhile (#896).
                 // That report's Ack, or the first fanout after a hold-off, sends
@@ -211,7 +210,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     );
                     return;
                 }
-                let now = runtime_clock::now();
+                let now = runtime_clock::core_now();
                 let store = table.timed().clone();
                 // An unconfirmed context sends one report at a time, so no later
                 // report overtakes the parts of this one (#986, #1038); a
@@ -255,7 +254,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         continue;
                     };
                     let current = match prepared {
-                        Ok((values, baseline, completion)) => {
+                        Ok((values, baseline)) => {
+                            let Some(completion) = table.prepare_completion(sub) else {
+                                continue;
+                            };
                             claim.add_untimed(
                                 sub.key().clone(),
                                 sub.generation(),
@@ -266,7 +268,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         }
                         Err(current) => current,
                     };
-                    let Some(completion) = sub.prepare_completion() else {
+                    let Some(completion) = table.prepare_completion(sub) else {
                         continue;
                     };
                     // Captured changes carry their own commit times. The current
@@ -320,6 +322,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 // context starts none while a report is outstanding, so this
                 // holds for it too. Captured values need no object read.
                 let mut untimed = HashSet::new();
+                let mut others = Vec::new();
                 for other in table.multiple_context_references(&context) {
                     if !other.timestamped {
                         untimed.insert((
@@ -338,7 +341,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     else {
                         continue;
                     };
-                    let Some(completion) = other.prepare_completion() else {
+                    others.push((other.clone(), remaining));
+                }
+                for (other, remaining) in others {
+                    let Some(completion) = table.prepare_completion(&other) else {
                         continue;
                     };
                     let (incarnation, changes) =
@@ -348,7 +354,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         continue;
                     };
                     claim.add(other.key().clone(), incarnation, changes);
-                    retained.push((other.clone(), Vec::new(), last, completion, remaining));
+                    retained.push((other, Vec::new(), last, completion, remaining));
                 }
                 let subscriber_max_apdu = table
                     .multiple_context_references(&context)

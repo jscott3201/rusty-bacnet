@@ -378,7 +378,7 @@ async fn multiple_route_wire_delete_expiry_and_current_peer_cleanup_remove_migra
                     &router_b().mac,
                     router_b().network.as_ref(),
                 ),
-                runtime_clock::now(),
+                crate::runtime_clock::core_now(),
                 0,
                 None,
                 vec![],

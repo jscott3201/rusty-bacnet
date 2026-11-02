@@ -1,6 +1,57 @@
-use super::*;
+//! A proposed COV subscription and the immutable snapshot a table accepts.
+use core::ops::Deref;
+
+use bacnet_device_core::cov::{
+    CovNotificationKind, CovObservation, CovRecipient, CovSubscriptionKey, MultipleContextKey,
+    SubscriberEndpoint,
+};
+use bacnet_encoding::npdu::NpduAddress;
+use bacnet_time::Instant;
+use bacnet_types::MacAddr;
+use bacnet_types::enums::PropertyIdentifier;
+use bacnet_types::error::Error;
+use bacnet_types::primitives::ObjectIdentifier;
+
+/// Proposed COV subscription data. Table acceptance validates its canonical
+/// identity and returns an immutable [`CovSubscriptionSnapshot`] for delivery.
+#[derive(Debug, Clone)]
+pub struct CovSubscription {
+    /// Immediate delivery MAC: the local subscriber or its current router.
+    pub subscriber_mac: MacAddr,
+    /// Routed source address when the subscriber is behind a BACnet router.
+    pub subscriber_network: Option<NpduAddress>,
+    /// Process identifier chosen by the subscriber.
+    pub subscriber_process_identifier: u32,
+    /// The object being monitored.
+    pub monitored_object_identifier: ObjectIdentifier,
+    /// Notification form. Mutable renewal data for ordinary/Single subscriptions;
+    /// part of the canonical identity for Multiple references.
+    pub issue_confirmed_notifications: bool,
+    /// When this subscription expires (None = infinite lifetime), on the
+    /// host's monotonic timeline: the instant the table compares with the
+    /// `now` each call is given.
+    pub expires_at: Option<Instant>,
+    /// Last delivered bounded observation, including specialized command fields.
+    pub last_notified_observation: Option<CovObservation>,
+    /// Monitored property for Single-property and Multiple-reference subscriptions.
+    pub monitored_property: Option<PropertyIdentifier>,
+    /// Accepted property index; absent, zero and element indexes are independent.
+    pub monitored_property_array_index: Option<u32>,
+    /// COV increment override (SubscribeCOVProperty only).
+    pub cov_increment: Option<f32>,
+    /// Notification service family used for this subscription.
+    pub notification_kind: CovNotificationKind,
+    /// Whether COVNotificationMultiple values should include timeOfChange.
+    pub timestamped: bool,
+}
 
 impl CovSubscription {
+    /// Original client address shared by subscription identity and accounting.
+    /// Process, family and monitored coordinates additionally distinguish subscriptions.
+    pub fn recipient(&self) -> CovRecipient {
+        CovRecipient::from_endpoint(&self.subscriber_mac, self.subscriber_network.as_ref())
+    }
+
     /// Current immediate transport route and original routed source.
     pub fn endpoint(&self) -> SubscriberEndpoint {
         SubscriberEndpoint::new(&self.subscriber_mac, self.subscriber_network.as_ref())
@@ -31,15 +82,16 @@ impl CovSubscription {
 pub struct CovSubscriptionSnapshot {
     pub(super) key: CovSubscriptionKey,
     pub(super) generation: u64,
-    pub(super) owner: Arc<ObservationOwner>,
+    /// The table that accepted it.
+    pub(super) table: usize,
     // Zero is the initial marker; issued tickets start at one and never wrap.
     pub(super) last_successful_ticket: u64,
-    // Outstanding confirmed report and hold-off of this entry's coordinate
-    // (#896): the entry itself for ordinary and Single subscriptions, the whole
-    // context for Multiple ones. A Multiple context shares it for one live route
-    // incarnation, so a route change fences old snapshots; a same-route refresh
-    // keeps it. Private so callers cannot forge completion authority.
-    pub(super) flight: super::confirmed::FlightMarker,
+    // The flight this entry's confirmed reports run on (#896): its own for
+    // ordinary and Single subscriptions, the whole context's for Multiple
+    // ones. A Multiple context keeps one for one live route incarnation, so
+    // a route change fences old snapshots; a same-route refresh keeps it.
+    // Private so callers cannot forge completion authority.
+    pub(super) flight: u64,
     pub(super) subscription: CovSubscription,
     /// Reported maximum notification delay of a Multiple reference; `None`
     /// for ordinary and Single entries. The timed store keeps the context's
@@ -57,7 +109,7 @@ impl CovSubscriptionSnapshot {
     }
 
     /// Table generation of this accepted entry; renewal publishes a new one.
-    pub(crate) fn generation(&self) -> u64 {
+    pub fn generation(&self) -> u64 {
         self.generation
     }
 
@@ -76,7 +128,7 @@ impl CovSubscriptionSnapshot {
     }
 }
 
-impl std::ops::Deref for CovSubscriptionSnapshot {
+impl Deref for CovSubscriptionSnapshot {
     type Target = CovSubscription;
     fn deref(&self) -> &Self::Target {
         &self.subscription

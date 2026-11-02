@@ -1,7 +1,10 @@
 use super::*;
+use bacnet_device_core::cov::CovNotificationKind;
+use bacnet_time::Duration;
+use bacnet_types::MacAddr;
 use bacnet_types::enums::ObjectType;
+use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::RemoteError;
-use std::time::Duration;
 
 fn proposal(index: Option<u32>, confirmed: bool) -> CovSubscription {
     CovSubscription {
@@ -10,7 +13,7 @@ fn proposal(index: Option<u32>, confirmed: bool) -> CovSubscription {
         subscriber_process_identifier: 9,
         monitored_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 1).unwrap(),
         issue_confirmed_notifications: confirmed,
-        expires_at: Some(Instant::now() + Duration::from_secs(60)),
+        expires_at: Some(crate::runtime_clock::core_now() + Duration::from_secs(60)),
         last_notified_observation: Some(
             bacnet_device_core::cov::CovObservation::new(
                 bacnet_device_core::cov::CovSample::new(
@@ -141,13 +144,13 @@ fn cov_identity_batch_reserves_only_final_duplicates_and_exhaustion_is_atomic() 
     let before = table.admit_for_test(existing.clone(), 0).unwrap();
     let peer = existing.recipient();
     let context = context(&existing);
-    let expiry = Instant::now() + Duration::from_secs(600);
+    let expiry = crate::runtime_clock::core_now() + Duration::from_secs(600);
     let mut replacement = existing.clone();
     replacement.expires_at = Some(expiry);
     replacement.cov_increment = Some(2.0);
     let mut added = replacement.clone();
     added.monitored_property_array_index = Some(0);
-    table.generation = u64::MAX - 1;
+    table.core.generation = u64::MAX - 1;
     let counters = table.counters.snapshot();
     // Generation exhaustion refuses the request as a whole, keeping nothing.
     let exhausted = table
@@ -162,7 +165,7 @@ fn cov_identity_batch_reserves_only_final_duplicates_and_exhaustion_is_atomic() 
         .unwrap_err();
     assert!(exhausted.refused.is_none() && exhausted.committed.is_empty());
     resource_error(exhausted.error);
-    assert_eq!(table.generation, u64::MAX - 1);
+    assert_eq!(table.core.generation, u64::MAX - 1);
     assert_eq!(table.len(), 1);
     assert_eq!(
         table.get_subscription(before.key()).unwrap().expires_at,

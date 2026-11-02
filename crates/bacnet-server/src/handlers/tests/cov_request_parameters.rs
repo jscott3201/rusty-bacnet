@@ -1,7 +1,7 @@
 use super::*;
 use bacnet_encoding::primitives;
 use bacnet_types::error::RemoteError;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 fn object(instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::ANALOG_INPUT, instance).unwrap()
@@ -35,7 +35,8 @@ fn subscribe_cov_lifetime_only_preserves_whole_table_and_quota_before_lookup_or_
     let mut expired = (*finite).clone();
     expired.subscriber_mac = MacAddr::from_slice(&[2]);
     expired.subscriber_process_identifier = 99;
-    expired.expires_at = Some(Instant::now() - Duration::from_secs(1));
+    expired.expires_at =
+        Some(crate::runtime_clock::core_now() - bacnet_time::Duration::from_secs(1));
     table.subscribe(expired.clone()).unwrap();
     let counters = table.counters().snapshot();
     for target in [object(1), object(999)] {
@@ -122,7 +123,10 @@ async fn subscribe_cov_valid_renewal_expiry_and_nonexistent_cancel_remain_suppor
     )
     .unwrap()
     .remove(0);
-    assert!(renewed.expires_at.unwrap() > first.expires_at.unwrap() + Duration::from_secs(28000));
+    assert!(
+        renewed.expires_at.unwrap()
+            > first.expires_at.unwrap() + bacnet_time::Duration::from_secs(28000)
+    );
     assert_eq!(table.len(), 1);
     assert!(
         handle_subscribe_cov_with_initial(&mut table, &db, &[1], &raw(object(999), None, None))

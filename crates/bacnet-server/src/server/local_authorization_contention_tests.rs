@@ -92,7 +92,7 @@ async fn local_authorization_cov_collision_releases_db_and_retries_fresh_until_q
         process_id: 1570,
         confirmed: false,
     };
-    let expires_at = std::time::Instant::now() + Duration::from_secs(300);
+    let expires_at = crate::runtime_clock::core_now() + bacnet_time::Duration::from_secs(300);
     let fresh = table
         .subscribe_multiple(
             &context,

@@ -30,6 +30,7 @@ bacnet-network.workspace = true
 # so the server keeps them if that changes.
 bacnet-objects = { workspace = true, features = ["std", "event-reporting", "durable-writes"] }
 bacnet-device-core = { workspace = true, features = ["std"] }
+bacnet-time = { workspace = true, features = ["std"] }
 bytes = { workspace = true, features = ["std"] }
 futures-util.workspace = true
 tracing.workspace = true

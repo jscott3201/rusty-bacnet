@@ -1,4 +1,14 @@
-use super::*;
+//! Admission: ordinary and Single subscriptions, Multiple references with
+//! their shared context, and the caps every new subscription meets.
+use alloc::collections::BTreeSet;
+use alloc::vec::Vec;
+
+use bacnet_device_core::cov::{CovRecipient, MultipleContextKey, SubscriberEndpoint};
+use bacnet_time::Instant;
+use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::error::Error;
+
+use super::{CovSubscription, CovSubscriptionKey, CovSubscriptionSnapshot, CovTable};
 
 /// A SubscribeCOVPropertyMultiple admission that did not take every reference
 /// (Clause 13.16.2). Processing runs in request order and stops at the first
@@ -37,24 +47,29 @@ enum Cap {
     Table,
 }
 
-impl CovSubscriptionTable {
+impl CovTable {
     /// Accept an ordinary or Single insertion or renewal after quota and
     /// generation preflight. Multiple references are rejected before any table
     /// effect: they enter only through [`subscribe_multiple`](Self::subscribe_multiple),
     /// which owns their shared context lifetime and maximum notification delay.
-    pub fn subscribe(&mut self, sub: CovSubscription) -> Result<CovSubscriptionSnapshot, Error> {
+    pub fn subscribe(
+        &mut self,
+        sub: CovSubscription,
+        now: Instant,
+    ) -> Result<CovSubscriptionSnapshot, Error> {
         let key = sub.key()?;
         if key.multiple_context().is_some() {
             return Err(Error::Encoding(
                 "Multiple references must be admitted through subscribe_multiple".into(),
             ));
         }
-        self.purge_expired();
+        self.expire(now);
         let existing = self.subs.get(&key).cloned();
         self.check_admission(
             &sub.recipient(),
             sub.expires_at.is_none(),
             existing.as_deref(),
+            now,
         )?;
         let generation = self.reserve_generations(1)?;
         Ok(self.publish(key, sub, generation, None, None, None))
@@ -86,6 +101,7 @@ impl CovSubscriptionTable {
     /// while that report is outstanding, holding off or owed also clears the
     /// observations of the kept untimestamped references it carried, since the
     /// fenced report may have reached the subscriber (#923).
+    #[allow(clippy::too_many_arguments)]
     pub fn subscribe_multiple(
         &mut self,
         context: &MultipleContextKey,
@@ -94,6 +110,7 @@ impl CovSubscriptionTable {
         max_notification_delay: u32,
         subscriber_max_apdu: Option<u16>,
         mut subscriptions: Vec<CovSubscription>,
+        now: Instant,
     ) -> Result<Vec<CovSubscriptionSnapshot>, MultipleRefusal> {
         context.recipient.validate()?;
         let recipient = CovRecipient::from_endpoint(&route.mac, route.network.as_ref());
@@ -114,7 +131,7 @@ impl CovSubscriptionTable {
                 .into());
             }
         }
-        self.purge_expired();
+        self.expire(now);
         let overflow = self
             .first_overflow(&recipient, &subscriptions)
             .map(|(position, cap)| (position, self.refuse_new(cap)));
@@ -131,18 +148,18 @@ impl CovSubscriptionTable {
         }
         // Final options win exactly once, retaining the final-occurrence request order.
         subscriptions.reverse();
-        let mut keys = std::collections::HashSet::new();
+        let mut keys = BTreeSet::new();
         subscriptions.retain(|sub| keys.insert(sub.key().expect("validated identity")));
         subscriptions.reverse();
         let first_generation = self.reserve_generations(subscriptions.len())?;
         // No fallible step follows this point. Unreplaced context references retain generations.
-        let (flight, replaced) = self.context_flight(context, route, !subscriptions.is_empty());
+        let (flight, replaced) =
+            self.context_flight(context, route, !subscriptions.is_empty(), now);
         // A request whose header is unknown (the raw-data handler) keeps the
         // maximum APDU the context's subscriber advertised before.
         let subscriber_max_apdu = subscriber_max_apdu.or_else(|| {
-            self.subs
-                .values()
-                .find(|entry| entry.key.multiple_context() == Some(context))
+            self.multiple_context_references(context)
+                .next()
                 .and_then(|entry| entry.subscriber_max_apdu)
         });
         let mut previously_indefinite = 0;
@@ -154,7 +171,7 @@ impl CovSubscriptionTable {
                 entry.subscriber_max_apdu = subscriber_max_apdu;
                 entry.subscription.subscriber_mac = route.mac.clone();
                 entry.subscription.subscriber_network = route.network.clone();
-                entry.flight = flight.clone();
+                entry.flight = flight;
             }
         }
         if let Some(count) = self.peer_indefinite_counts.get_mut(&recipient) {
@@ -173,22 +190,15 @@ impl CovSubscriptionTable {
                     first_generation + offset as u64,
                     Some(max_notification_delay),
                     subscriber_max_apdu,
-                    Some(flight.clone()),
+                    Some(flight),
                 )
             })
             .collect();
-        {
-            let mut timed = self.timed.lock();
-            timed.set_delay(context, max_notification_delay);
-            // Lifetime left now, rounded up as notifications report it; an
-            // expired one, which no notification reports, sizes as the longest.
-            let time_remaining = CovTimeRemaining::at(Some(expires_at), runtime_clock::now())
-                .wire_seconds()
-                .unwrap_or(u32::MAX);
-            timed.set_sizing(context, subscriber_max_apdu, time_remaining);
-        }
+        // The host's timestamped histories follow the context's delay and
+        // sizing.
+        self.fenced.contexts.push(context.clone());
         if let Some(replaced) = replaced {
-            self.fence_context_flight(context, &replaced, &keys);
+            self.fence_context_flight(context, replaced, &keys, now);
         }
         match overflow {
             None => Ok(accepted),
@@ -210,10 +220,10 @@ impl CovSubscriptionTable {
     ) -> Option<(usize, Cap)> {
         let (peer_room, table_room) = self.room(recipient);
         let room = peer_room.min(table_room);
-        let mut added = std::collections::HashSet::new();
+        let mut added = BTreeSet::new();
         for (position, sub) in proposals.iter().enumerate() {
             let key = sub.key().expect("validated identity");
-            if self.subs.contains_key(&key) || added.contains(&key) {
+            if self.subs.contains(&key) || added.contains(&key) {
                 continue;
             }
             if added.len() == room {
@@ -227,35 +237,6 @@ impl CovSubscriptionTable {
         None
     }
 
-    /// Test fixture: admit one proposal through its family's production
-    /// owner. A Multiple reference is a one-reference `subscribe_multiple`
-    /// request (finite expiry required) that refreshes its exact context with
-    /// the supplied maximum notification delay.
-    #[cfg(test)]
-    pub(crate) fn admit_for_test(
-        &mut self,
-        sub: CovSubscription,
-        max_notification_delay: u32,
-    ) -> Result<CovSubscriptionSnapshot, Error> {
-        let Some(context) = sub.key()?.multiple_context().cloned() else {
-            return self.subscribe(sub);
-        };
-        let expires_at = sub
-            .expires_at
-            .expect("Multiple contexts always have a finite lifetime");
-        let mut accepted = self
-            .subscribe_multiple(
-                &context,
-                &sub.endpoint(),
-                expires_at,
-                max_notification_delay,
-                None,
-                vec![sub],
-            )
-            .map_err(|refusal| refusal.error)?;
-        Ok(accepted.remove(0))
-    }
-
     fn reserve_generations(&mut self, count: usize) -> Result<u64, Error> {
         if count == 0 {
             return Ok(self.generation);
@@ -264,9 +245,7 @@ impl CovSubscriptionTable {
             .ok()
             .and_then(|count| self.generation.checked_add(count));
         let Some(last) = last else {
-            self.counters
-                .subscriptions_rejected_capacity
-                .fetch_add(1, Ordering::Relaxed);
+            self.counts.subscriptions_rejected_capacity += 1;
             return Err(Error::protocol(
                 ErrorClass::RESOURCES,
                 ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT,
@@ -284,35 +263,27 @@ impl CovSubscriptionTable {
         generation: u64,
         max_notification_delay: Option<u32>,
         subscriber_max_apdu: Option<u16>,
-        context_flight: Option<super::confirmed::FlightMarker>,
+        context_flight: Option<u64>,
     ) -> CovSubscriptionSnapshot {
+        let flight = context_flight.unwrap_or_else(|| self.new_flight());
         let snapshot = CovSubscriptionSnapshot {
             key,
             generation,
-            owner: Arc::clone(&self.owner),
+            table: self.id,
             last_successful_ticket: 0,
-            flight: context_flight.unwrap_or_default(),
+            flight,
             subscription: sub.clone(),
             max_notification_delay,
             subscriber_max_apdu,
         };
-        {
-            let mut timed = self.timed.lock();
-            let delay = max_notification_delay.unwrap_or_default();
-            match (snapshot.key.multiple_context(), sub.timestamped) {
-                (Some(_), true) => timed.reset(&snapshot.key, generation, delay),
-                (Some(_), false) => timed.reset_untimed(&snapshot.key, generation, delay),
-                (None, _) => timed.remove(&snapshot.key),
-            }
-        }
         let peer = sub.recipient();
         let new_indefinite = sub.expires_at.is_none();
-        match self.subs.insert(snapshot.key.clone(), snapshot.clone()) {
+        match self.subs.insert(snapshot.clone()) {
             Some(old) => {
-                if !old.flight.same(&snapshot.flight) {
+                if old.flight != snapshot.flight {
                     // The replaced incarnation's outstanding report stops retrying;
                     // the replacement reports for itself (#896).
-                    old.flight.fence();
+                    self.fence_flight(old.flight);
                 }
                 let old_indefinite = old.expires_at.is_none();
                 if old_indefinite != new_indefinite {
@@ -331,30 +302,24 @@ impl CovSubscriptionTable {
                 if new_indefinite {
                     *self.peer_indefinite_counts.entry(peer).or_default() += 1;
                 }
-                self.counters
-                    .subscriptions_created
-                    .fetch_add(1, Ordering::Relaxed);
+                self.counts.subscriptions_created += 1;
             }
         }
-        self.counters
-            .subscriptions_active
-            .store(self.subs.len() as u64, Ordering::Relaxed);
         snapshot
     }
 
     /// Check admission for a single subscription request against policy quotas.
-    pub(super) fn check_admission(
+    fn check_admission(
         &mut self,
         peer: &CovRecipient,
         is_indefinite: bool,
         existing: Option<&CovSubscription>,
+        now: Instant,
     ) -> Result<(), Error> {
-        self.purge_expired();
+        self.expire(now);
 
         if is_indefinite && !self.policy.allow_indefinite_subscriptions {
-            self.counters
-                .subscriptions_rejected_indefinite
-                .fetch_add(1, Ordering::Relaxed);
+            self.counts.subscriptions_rejected_indefinite += 1;
             return Err(Error::protocol(
                 ErrorClass::SERVICES,
                 ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
@@ -377,7 +342,7 @@ impl CovSubscriptionTable {
             }
         };
 
-        self.check_caps(peer, new_count, new_indefinite)
+        self.check_caps(peer, new_count, new_indefinite, now)
     }
 
     /// Check the indefinite policy and the subscription caps for one
@@ -388,14 +353,13 @@ impl CovSubscriptionTable {
         peer: &CovRecipient,
         new_count: usize,
         new_indefinite: usize,
+        now: Instant,
     ) -> Result<(), Error> {
-        self.purge_expired();
+        self.expire(now);
 
         if new_indefinite > 0 {
             if !self.policy.allow_indefinite_subscriptions {
-                self.counters
-                    .subscriptions_rejected_indefinite
-                    .fetch_add(1, Ordering::Relaxed);
+                self.counts.subscriptions_rejected_indefinite += 1;
                 return Err(Error::protocol(
                     ErrorClass::SERVICES,
                     ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
@@ -403,9 +367,7 @@ impl CovSubscriptionTable {
             }
             let current_indefinite = self.peer_indefinite_counts.get(peer).copied().unwrap_or(0);
             if current_indefinite + new_indefinite > self.policy.max_indefinite_per_peer {
-                self.counters
-                    .subscriptions_rejected_indefinite
-                    .fetch_add(1, Ordering::Relaxed);
+                self.counts.subscriptions_rejected_indefinite += 1;
                 return Err(Error::protocol(
                     ErrorClass::RESOURCES,
                     ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT,
@@ -449,12 +411,11 @@ impl CovSubscriptionTable {
     }
 
     /// Count a refusal at `cap` and build its error.
-    fn refuse_new(&self, cap: Cap) -> Error {
-        let counter = match cap {
-            Cap::Peer => &self.counters.subscriptions_rejected_quota,
-            Cap::Table => &self.counters.subscriptions_rejected_capacity,
-        };
-        counter.fetch_add(1, Ordering::Relaxed);
+    fn refuse_new(&mut self, cap: Cap) -> Error {
+        match cap {
+            Cap::Peer => self.counts.subscriptions_rejected_quota += 1,
+            Cap::Table => self.counts.subscriptions_rejected_capacity += 1,
+        }
         Error::protocol(
             ErrorClass::RESOURCES,
             ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT,

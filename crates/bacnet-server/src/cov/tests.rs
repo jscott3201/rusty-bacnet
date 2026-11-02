@@ -1,6 +1,8 @@
 use super::*;
+use bacnet_device_core::cov::CovNotificationKind;
+use bacnet_time::Duration;
+use bacnet_types::MacAddr;
 use bacnet_types::enums::ObjectType;
-use std::time::Duration;
 
 fn ai1() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap()
@@ -49,7 +51,7 @@ fn unsubscribe() {
 fn expired_subscriptions_purged_on_lookup() {
     let mut table = CovSubscriptionTable::new();
     let mut sub = make_sub(&[1, 2, 3], 1, ai1());
-    sub.expires_at = Some(Instant::now() - Duration::from_secs(1)); // already expired
+    sub.expires_at = Some(crate::runtime_clock::core_now() - Duration::from_secs(1)); // already expired
     table.subscribe(sub).unwrap();
     assert_eq!(table.subscriptions_for(&ai1()).len(), 0);
     assert!(table.is_empty());
@@ -282,7 +284,7 @@ fn same_subscriber_different_objects_both_exist() {
 fn purge_expired_removes_stale_subscriptions() {
     let mut table = CovSubscriptionTable::new();
     let mut sub1 = make_sub(&[1, 2, 3], 1, ai1());
-    sub1.expires_at = Some(Instant::now() - Duration::from_secs(10));
+    sub1.expires_at = Some(crate::runtime_clock::core_now() - Duration::from_secs(10));
     let mut sub2 = make_sub(&[4, 5, 6], 2, ai1());
     sub2.expires_at = None; // infinite lifetime
     table.subscribe(sub2).unwrap();
@@ -296,8 +298,8 @@ fn purge_expired_removes_stale_subscriptions() {
 #[test]
 fn cov_multiple_context_lifetime_refreshes_and_expires() {
     let mut table = CovSubscriptionTable::new();
-    let original_expiry = Instant::now() + Duration::from_secs(30);
-    let refreshed_expiry = Instant::now() + Duration::from_secs(60);
+    let original_expiry = crate::runtime_clock::core_now() + Duration::from_secs(30);
+    let refreshed_expiry = crate::runtime_clock::core_now() + Duration::from_secs(60);
 
     let mut present_value = make_sub(&[1, 2, 3], 1, ai1());
     present_value.notification_kind = CovNotificationKind::Multiple;
@@ -334,16 +336,14 @@ fn cov_multiple_context_lifetime_refreshes_and_expires() {
     // The refresh point updates the whole context's expiry and reported
     // delay together; the Single entry has neither refreshed.
     let multiple_terms: Vec<_> = table
-        .subs
-        .values()
+        .entries()
         .filter(|sub| sub.notification_kind == CovNotificationKind::Multiple)
         .map(|sub| (sub.expires_at, sub.max_notification_delay()))
         .collect();
     assert_eq!(multiple_terms, vec![(Some(refreshed_expiry), Some(9)); 2]);
     assert!(
         table
-            .subs
-            .values()
+            .entries()
             .any(|sub| sub.notification_kind == CovNotificationKind::Single
                 && sub.expires_at == Some(original_expiry)
                 && sub.max_notification_delay().is_none())
@@ -353,7 +353,7 @@ fn cov_multiple_context_lifetime_refreshes_and_expires() {
         .subscribe_multiple(
             &context,
             &SubscriberEndpoint::new(&[1, 2, 3], None),
-            Instant::now() - Duration::from_secs(1),
+            crate::runtime_clock::core_now() - Duration::from_secs(1),
             9,
             None,
             vec![],
@@ -362,7 +362,7 @@ fn cov_multiple_context_lifetime_refreshes_and_expires() {
 
     assert_eq!(table.purge_expired(), 2);
     assert_eq!(table.len(), 1);
-    assert!(table.subs.values().all(|sub| {
+    assert!(table.entries().all(|sub| {
         sub.notification_kind == CovNotificationKind::Single
             && sub.expires_at == Some(original_expiry)
     }));
@@ -384,22 +384,17 @@ fn default_policy_allows_1024th_subscription() {
     // 16 peers * 64 subscriptions each = 1024 subscriptions
     for peer_idx in 0..16u8 {
         let mac = [192, 168, 1, peer_idx];
-        let peer_key = CovRecipient::Direct(MacAddr::from_slice(&mac));
         for proc_id in 0..64u32 {
-            table
-                .check_admission(&peer_key, false, None)
-                .expect("subscription admitted");
             let mut sub = make_sub(&mac, proc_id, oid);
-            sub.expires_at = Some(Instant::now() + Duration::from_secs(300));
-            table.subscribe(sub).unwrap();
+            sub.expires_at = Some(crate::runtime_clock::core_now() + Duration::from_secs(300));
+            table.subscribe(sub).expect("subscription admitted");
         }
     }
     assert_eq!(table.len(), 1024);
 
     // 1025th subscription from a 17th peer fails due to global capacity
     let mac17 = [192, 168, 1, 17];
-    let peer17 = CovRecipient::Direct(MacAddr::from_slice(&mac17));
-    assert!(table.check_admission(&peer17, false, None).is_err());
+    assert!(table.subscribe(make_sub(&mac17, 0, oid)).is_err());
 }
 
 #[test]
@@ -455,14 +450,15 @@ fn expired_subscriptions_immediately_release_quota_on_admission() {
 
     // Create a subscription with an expiry in the past
     let mut sub = make_sub(&[1, 2, 3], 1, ai1());
-    sub.expires_at = Some(Instant::now() - Duration::from_secs(5));
+    sub.expires_at = Some(crate::runtime_clock::core_now() - Duration::from_secs(5));
     table.subscribe(sub).unwrap();
     assert_eq!(table.len(), 1);
 
     // Admitting a new subscription from the same peer immediately purges the expired subscription
     // and succeeds, rather than being rejected by per-peer quota!
-    assert!(table.check_admission(&peer, false, None).is_ok());
-    assert_eq!(table.len(), 0);
+    assert!(table.subscribe(make_sub(&[1, 2, 3], 2, ai1())).is_ok());
+    assert_eq!(table.len(), 1);
+    assert_eq!(table.peer_subscription_count(&peer), 1);
 }
 
 #[test]
@@ -522,16 +518,19 @@ fn finest_increments_take_each_objects_smallest_live_increment_on_the_property()
     ] {
         table.subscribe(sub).unwrap();
     }
-    assert_eq!(table.finest_increments(tv), HashMap::from([(ai1(), 0.5)]));
+    assert_eq!(
+        table.finest_increments(tv),
+        std::collections::BTreeMap::from([(ai1(), 0.5)])
+    );
     // A negative increment reports any change, as zero does; an expired
     // subscription counts for nothing.
     table.subscribe(on(7, ai2(), tv, Some(-1.0))).unwrap();
     let mut expired = on(8, ai1(), tv, Some(0.01));
-    expired.expires_at = Some(Instant::now() - Duration::from_secs(1));
+    expired.expires_at = Some(crate::runtime_clock::core_now() - Duration::from_secs(1));
     table.subscribe(expired).unwrap();
     assert_eq!(
         table.finest_increments(tv),
-        HashMap::from([(ai1(), 0.5), (ai2(), 0.0)])
+        std::collections::BTreeMap::from([(ai1(), 0.5), (ai2(), 0.0)])
     );
 }
 

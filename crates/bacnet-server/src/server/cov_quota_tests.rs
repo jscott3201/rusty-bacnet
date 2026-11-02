@@ -1,5 +1,4 @@
 use bacnet_types::error::RemoteError;
-use std::time::{Duration, Instant};
 
 use bytes::BytesMut;
 
@@ -511,7 +510,9 @@ async fn disconnect_and_expiry_cleanup_releases_quota() {
             subscriber_process_identifier: 1,
             monitored_object_identifier: ai(5),
             issue_confirmed_notifications: false,
-            expires_at: Some(Instant::now() - Duration::from_secs(5)),
+            expires_at: Some(
+                crate::runtime_clock::core_now() - bacnet_time::Duration::from_secs(5),
+            ),
             last_notified_observation: None,
             monitored_property: None,
             monitored_property_array_index: None,
@@ -695,7 +696,10 @@ async fn subscribe_cov_property_multiple_quota_names_the_overflowing_reference()
                         subscriber_process_identifier: 1,
                         monitored_object_identifier: ai(i),
                         issue_confirmed_notifications: false,
-                        expires_at: Some(Instant::now() + Duration::from_secs(3600)),
+                        expires_at: Some(
+                            crate::runtime_clock::core_now()
+                                + bacnet_time::Duration::from_secs(3600),
+                        ),
                         last_notified_observation: None,
                         monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
                         monitored_property_array_index: None,

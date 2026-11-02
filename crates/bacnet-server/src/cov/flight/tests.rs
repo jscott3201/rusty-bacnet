@@ -1,0 +1,227 @@
+//! The plain flight state: deadlines, outcomes and fences (#896, #2303).
+use super::*;
+use crate::cov::{CovSubscription, Fenced};
+use alloc::vec;
+use bacnet_device_core::cov::{CovNotificationKind, CovObservation, CovSample};
+use bacnet_types::MacAddr;
+use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+
+const T0: Instant = Instant::from_secs(1_000);
+/// One-second attempts and one retry: two seconds of retries, a deadline
+/// three seconds after the report begins, and a two-second hold-off.
+const TIMING: FlightTiming = FlightTiming::new(Duration::from_secs(1), 1);
+
+fn proposal(kind: CovNotificationKind, property: PropertyIdentifier) -> CovSubscription {
+    CovSubscription {
+        subscriber_mac: MacAddr::from_slice(&[1]),
+        subscriber_network: None,
+        subscriber_process_identifier: 1,
+        monitored_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 1).unwrap(),
+        issue_confirmed_notifications: true,
+        expires_at: Some(T0 + Duration::from_secs(600)),
+        last_notified_observation: None,
+        monitored_property: Some(property),
+        monitored_property_array_index: None,
+        cov_increment: None,
+        notification_kind: kind,
+        timestamped: false,
+    }
+}
+
+fn table() -> CovTable {
+    CovTable::default().with_flight_timing(TIMING)
+}
+
+fn single(table: &mut CovTable) -> CovSubscriptionSnapshot {
+    table
+        .subscribe(
+            proposal(
+                CovNotificationKind::Single,
+                PropertyIdentifier::PRESENT_VALUE,
+            ),
+            T0,
+        )
+        .unwrap()
+}
+
+/// A two-reference confirmed context.
+fn context(table: &mut CovTable, route: u8) -> (CovSubscriptionSnapshot, CovSubscriptionSnapshot) {
+    let mut refs = [
+        PropertyIdentifier::PRESENT_VALUE,
+        PropertyIdentifier::STATUS_FLAGS,
+    ]
+    .map(|property| proposal(CovNotificationKind::Multiple, property));
+    for sub in &mut refs {
+        sub.subscriber_mac = MacAddr::from_slice(&[route]);
+        sub.subscriber_network = Some(bacnet_encoding::npdu::NpduAddress {
+            network: 7,
+            mac_address: MacAddr::from_slice(&[9]),
+        });
+    }
+    let context = refs[0].key().unwrap().multiple_context().unwrap().clone();
+    let route = refs[0].endpoint();
+    let expires = refs[0].expires_at.unwrap();
+    let mut accepted = table
+        .subscribe_multiple(&context, &route, expires, 5, None, refs.to_vec(), T0)
+        .unwrap();
+    let b = accepted.pop().unwrap();
+    (accepted.pop().unwrap(), b)
+}
+
+fn begin(
+    table: &mut CovTable,
+    carried: &[&CovSubscriptionSnapshot],
+    now: Instant,
+) -> (Token, PreparedCovCompletion) {
+    let report = table.prepare_completion(carried[0]).unwrap();
+    let token = table
+        .begin_confirmed(report, carried.iter().copied(), now)
+        .unwrap();
+    (token, report)
+}
+
+fn value(v: f32) -> CovObservation {
+    CovObservation::new(CovSample::new(&PropertyValue::Real(v)).unwrap(), None).unwrap()
+}
+
+#[test]
+fn timing_sets_the_deadline_and_the_hold_off() {
+    assert_eq!(TIMING.deadline(), Duration::from_secs(3));
+    assert_eq!(TIMING.hold_off(), Duration::from_secs(2));
+    let defaults = FlightTiming::default();
+    assert_eq!(defaults.deadline(), Duration::from_secs(15));
+    assert_eq!(defaults.hold_off(), Duration::from_secs(12));
+}
+
+/// A worker that never reports, aborted say: its report holds the
+/// coordinate until the deadline, and ends itself there with no hold-off.
+#[test]
+fn an_unsettled_report_ends_itself_at_its_deadline() {
+    let mut table = table();
+    let sub = single(&mut table);
+    let (token, report) = begin(&mut table, &[&sub], T0);
+    let deadline = T0 + Duration::from_secs(3);
+    let just_before = deadline - Duration::from_nanos(1);
+    assert!(!table.confirmed_idle(&sub, just_before));
+    assert!(
+        table.confirmed_idle(&sub, deadline),
+        "freed at the deadline"
+    );
+    // The abandoned report's late outcome counts for nothing.
+    assert!(!table.complete_observation(&sub, report, value(1.0), deadline));
+    table.delivered(token, Delivery::Failed, deadline);
+    assert!(table.confirmed_idle(&sub, deadline), "no hold-off");
+    // The next report begins at once.
+    let (next, report) = begin(&mut table, &[&sub], deadline);
+    assert!(table.complete_observation(&sub, report, value(2.0), deadline));
+    table.delivered(next, Delivery::Acknowledged, deadline);
+    assert!(table.confirmed_idle(
+        &table.get_subscription(sub.key()).unwrap().clone(),
+        deadline
+    ));
+}
+
+/// The table's expiry pass reports an abandoned report: its token, so the
+/// host drops the worker's wake-up, and its references, owed a fresh look.
+#[test]
+fn expire_reports_abandoned_reports_once() {
+    let mut table = table();
+    let sub = single(&mut table);
+    let (a, b) = context(&mut table, 1);
+    let (single_token, _) = begin(&mut table, &[&sub], T0);
+    let (context_token, _) = begin(&mut table, &[&a], T0);
+    table.take_fenced();
+    table.expire(T0 + Duration::from_secs(2));
+    assert_eq!(table.take_fenced(), Fenced::default(), "not yet due");
+    table.expire(T0 + Duration::from_secs(3));
+    let fenced = table.take_fenced();
+    assert_eq!(fenced.tokens.len(), 2);
+    assert!(fenced.tokens.contains(&single_token) && fenced.tokens.contains(&context_token));
+    let mut revisit = fenced.revisit.clone();
+    revisit.sort();
+    let mut expected = vec![sub.key().clone(), a.key().clone(), b.key().clone()];
+    expected.sort();
+    assert_eq!(revisit, expected, "the whole context is owed a look");
+    table.expire(T0 + Duration::from_secs(4));
+    assert_eq!(table.take_fenced(), Fenced::default(), "reported once");
+}
+
+#[test]
+fn outcomes_settle_the_report() {
+    let mut table = table();
+    let sub = single(&mut table);
+    for outcome in [Delivery::Acknowledged, Delivery::NotSent] {
+        let live = table.get_subscription(sub.key()).unwrap().clone();
+        let (token, _) = begin(&mut table, &[&live], T0);
+        assert!(!table.confirmed_idle(&live, T0));
+        table.delivered(token, outcome, T0);
+        assert!(
+            table.confirmed_idle(&live, T0),
+            "{outcome:?} holds nothing off"
+        );
+    }
+    let (token, _) = begin(&mut table, &[&sub], T0);
+    table.delivered(token, Delivery::Failed, T0 + Duration::from_secs(1));
+    let held_until = T0 + Duration::from_secs(3);
+    assert!(!table.confirmed_idle(&sub, held_until - Duration::from_nanos(1)));
+    assert!(
+        table.confirmed_idle(&sub, held_until),
+        "one retry cycle after the failure"
+    );
+    // A second outcome for the same report changes nothing.
+    table.delivered(token, Delivery::Acknowledged, T0 + Duration::from_secs(1));
+    assert!(!table.confirmed_idle(&sub, T0 + Duration::from_secs(2)));
+}
+
+/// A renewal or a route change replaces a flight and fences its outstanding
+/// report; a removal ends the flight without a fence, as dropping its marker
+/// did.
+#[test]
+fn fences_name_replaced_reports_only() {
+    let mut table = table();
+    let sub = single(&mut table);
+    let (token, _) = begin(&mut table, &[&sub], T0);
+    table.take_fenced();
+    let renewed = single(&mut table);
+    assert_eq!(table.take_fenced().tokens, vec![token]);
+    assert!(table.confirmed_idle(&renewed, T0));
+
+    let (a, b) = context(&mut table, 1);
+    let (token, _) = begin(&mut table, &[&a, &b], T0);
+    table.take_fenced();
+    // A same-route empty renewal keeps the flight.
+    let ctx = a.key().multiple_context().unwrap().clone();
+    table
+        .subscribe_multiple(
+            &ctx,
+            &a.endpoint(),
+            T0 + Duration::from_secs(900),
+            5,
+            None,
+            vec![],
+            T0,
+        )
+        .unwrap();
+    let fenced = table.take_fenced();
+    assert!(fenced.tokens.is_empty() && fenced.revisit.is_empty());
+    assert_eq!(fenced.contexts, vec![ctx.clone()]);
+    // A route change fences the report and owes its references a look.
+    let (moved, _) = context(&mut table, 2);
+    let fenced = table.take_fenced();
+    assert_eq!(fenced.tokens, vec![token]);
+    assert_eq!(fenced.revisit.len(), 2);
+    assert!(table.confirmed_idle(&moved, T0));
+
+    let (token, _) = begin(&mut table, &[&renewed], T0);
+    assert!(table.unsubscribe(renewed.key()));
+    let fenced = table.take_fenced();
+    assert!(fenced.tokens.is_empty(), "a removal fences nothing");
+    assert_eq!(fenced.removed, vec![renewed.key().clone()]);
+    table.delivered(token, Delivery::Acknowledged, T0);
+    assert_eq!(
+        table.remaining_lifetime(&renewed, T0),
+        None,
+        "the removed subscription stays gone"
+    );
+}
