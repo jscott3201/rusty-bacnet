@@ -3925,7 +3925,8 @@ through Max_Pres_Value.
 
 An Accumulator's Reliability takes a write the same way, only while
 Out_Of_Service is set, to simulate a fault (#2280): in service the write
-raises WRITE_ACCESS_DENIED, and a value outside BACnetReliability
+raises WRITE_ACCESS_DENIED, a value that isn't an Enumerated
+INVALID_DATA_TYPE, and a value outside BACnetReliability
 VALUE_OUT_OF_RANGE. Status_Flags FAULT follows it, and the return to service
 puts back the Reliability the object had before. A Max_Pres_Value write
 below the current Present_Value raises VALUE_OUT_OF_RANGE and changes
