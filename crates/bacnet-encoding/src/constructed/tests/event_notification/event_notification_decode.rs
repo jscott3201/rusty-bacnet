@@ -288,31 +288,59 @@ fn event_notification_rejects_every_truncated_prefix() {
     }
 }
 
-/// An ACK_NOTIFICATION with no ackRequired, fromState or eventValues, the
-/// octets `ack_notification_omits_ack_from_state_and_event_values_exactly`
-/// pins, cut where the notify type ends: To State [11] follows.
-const ACK_HEAD: [u8; 24] = [
-    0x09, 0x01, 0x1c, 0x02, 0x00, 0x00, 0x01, 0x2c, 0x00, 0x00, 0x00, 0x03, 0x3e, 0x19, 0x07, 0x3f,
-    0x49, 0x05, 0x59, 0x64, 0x69, 0x05, 0x89, 0x02,
-];
-
-/// The ACK_NOTIFICATION head, `between` it and To State, then `after`.
-fn ack_notification(between: &[u8], after: &[u8]) -> Vec<u8> {
-    [&ACK_HEAD[..], between, &[0xb9, 0x03], after].concat()
+/// An ACK_NOTIFICATION of a high-limit transition, as the encoder writes it:
+/// without ackRequired, fromState or eventValues, ending with To State [11].
+fn ack_request() -> EventNotificationRequest {
+    EventNotificationRequest {
+        process_identifier: 1,
+        initiating_device_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 1).unwrap(),
+        event_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 3).unwrap(),
+        timestamp: BACnetTimeStamp::SequenceNumber(7),
+        notification_class: 5,
+        priority: 100,
+        event_type: EventType::OUT_OF_RANGE,
+        message_text: None,
+        notify_type: NotifyType::ACK_NOTIFICATION,
+        ack_required: false,
+        from_state: EventState::NORMAL,
+        to_state: EventState::HIGH_LIMIT,
+        event_values: None,
+    }
 }
 
-/// Out-of-range event values: [12] { [5] { 81.5, IN_ALARM, 1.0, 80.0 } }.
-const OUT_OF_RANGE_VALUES: [u8; 22] = [
-    0xce, 0x5e, 0x0c, 0x42, 0xa3, 0x00, 0x00, 0x1a, 0x04, 0x80, 0x2c, 0x3f, 0x80, 0x00, 0x00, 0x3c,
-    0x42, 0xa0, 0x00, 0x00, 0x5f, 0xcf,
-];
+/// The encoded ACK_NOTIFICATION with `between` inserted before To State
+/// and `after` appended.
+fn ack_notification(between: &[u8], after: &[u8]) -> Vec<u8> {
+    let mut plain = BytesMut::new();
+    encode_event_notification(&ack_request(), &mut plain).unwrap();
+    let (head, to_state) = plain.split_at(plain.len() - 2);
+    assert_eq!(to_state, [0xb9, 0x03], "To State [11] HIGH_LIMIT ends it");
+    [head, between, to_state, after].concat()
+}
+
+/// The encoded out-of-range event values: [12] { [5] { ... } }.
+fn out_of_range_values() -> Vec<u8> {
+    let mut alarm = ack_request();
+    alarm.notify_type = NotifyType::ALARM;
+    let mut without = BytesMut::new();
+    encode_event_notification(&alarm, &mut without).unwrap();
+    alarm.event_values = Some(NotificationParameters::OutOfRange {
+        exceeding_value: 81.5,
+        status_flags: StatusFlags::IN_ALARM,
+        deadband: 1.0,
+        exceeded_limit: 80.0,
+    });
+    let mut with = BytesMut::new();
+    encode_event_notification(&alarm, &mut with).unwrap();
+    with[without.len()..].to_vec()
+}
 
 #[test]
 fn ack_notification_refuses_alarm_only_fields() {
     // #2247: the encoder leaves these out of an ACK_NOTIFICATION, so reading
     // them there changed the request through a re-encode. Each one alone is
     // refused, where To State is due or as octets past it.
-    let values = &OUT_OF_RANGE_VALUES[..];
+    let values = &out_of_range_values()[..];
     assert!(decode_event_notification(&ack_notification(&[], &[])).is_ok());
     for (between, after, kind) in [
         (&[0x99, 0x01][..], &[][..], DecodingKind::InvalidTag),
@@ -334,7 +362,11 @@ fn ack_notification_refuses_alarm_only_fields() {
 
     // The same fields in an ALARM decode.
     let mut alarm = ack_notification(&[0x99, 0x01, 0xa9, 0x04], values);
-    alarm[ACK_HEAD.len() - 1] = 0x00;
+    let notify_type = alarm
+        .windows(2)
+        .position(|pair| pair == [0x89, 0x02])
+        .expect("[8] notifyType ACK_NOTIFICATION");
+    alarm[notify_type + 1] = 0x00;
     let decoded = decode_event_notification(&alarm).unwrap();
     assert!(decoded.ack_required);
     assert_eq!(decoded.from_state, EventState::LOW_LIMIT);

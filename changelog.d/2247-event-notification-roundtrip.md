@@ -1,7 +1,7 @@
 ---
 section: Fixed
 ---
-- **Wire:** Decoding an event notification now refuses an ACK_NOTIFICATION
-  that carries ack-required, from-state or event values, which an
-  acknowledgment leaves out; the client, Event Log records and the
-  Notification Forwarder all read it the same way (#2247).
+- **Wire:** An event notification of type ACK_NOTIFICATION that carries
+  ack-required, from-state or event values is now refused: a confirmed sender
+  gets a Reject, and an unconfirmed one is dropped, not logged or forwarded
+  (#2247).

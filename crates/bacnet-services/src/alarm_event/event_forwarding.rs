@@ -48,7 +48,9 @@ pub struct ForwardedEventNotification {
 impl ForwardedEventNotification {
     /// Read a ConfirmedEventNotification or UnconfirmedEventNotification
     /// request. Errors when a required member is missing, a member is out of
-    /// order or malformed, or anything follows the event values.
+    /// order or malformed, or anything follows the event values. An
+    /// ACK_NOTIFICATION carries no ackRequired, fromState or event values and
+    /// is refused with any of them, as `decode_event_notification` refuses it.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         const WHAT: &str = "EventNotification";
         validate_tlv_sequence(data, WHAT)?;

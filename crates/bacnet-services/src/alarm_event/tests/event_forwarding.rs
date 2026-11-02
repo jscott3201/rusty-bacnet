@@ -116,7 +116,12 @@ fn forwarded_acknowledgment_refuses_alarm_only_fields() {
         + 1;
     ack[notify_type] = 0x02;
     assert!(decode_event_notification(&ack).is_err());
-    assert!(ForwardedEventNotification::decode(&ack).is_err());
+    assert_eq!(
+        ForwardedEventNotification::decode(&ack)
+            .unwrap_err()
+            .reject_reason(),
+        Some(RejectReason::INVALID_TAG)
+    );
 
     // Each field alone: [9] and [10] where To State is due, [12] after it.
     let mut plain = alarm();
@@ -125,15 +130,18 @@ fn forwarded_acknowledgment_refuses_alarm_only_fields() {
     let to_state = plain.len() - 2;
     let values = &encoded(&alarm())[..];
     let values = &values[values.len() - 22..];
-    for (between, after) in [
-        (&[0x99, 0x00][..], &[][..]),
-        (&[0xA9, 0x00], &[]),
-        (&[], values),
+    for (between, after, reason) in [
+        (&[0x99, 0x00][..], &[][..], RejectReason::INVALID_TAG),
+        (&[0xA9, 0x00], &[], RejectReason::INVALID_TAG),
+        (&[], values, RejectReason::TOO_MANY_ARGUMENTS),
     ] {
         let data = [&plain[..to_state], between, &plain[to_state..], after].concat();
-        assert!(
-            ForwardedEventNotification::decode(&data).is_err(),
-            "{data:02X?} must not decode"
+        assert_eq!(
+            ForwardedEventNotification::decode(&data)
+                .unwrap_err()
+                .reject_reason(),
+            Some(reason),
+            "{data:02X?}"
         );
     }
 }

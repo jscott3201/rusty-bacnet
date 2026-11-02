@@ -373,3 +373,18 @@ fn members_cut_short_are_a_short_buffer() {
         assert!(framed > 0);
     }
 }
+
+#[test]
+fn event_log_record_refuses_an_acknowledgment_with_alarm_only_fields() {
+    // #2247: an ALARM's parameters with the notify type turned to
+    // ACK_NOTIFICATION keep ackRequired and fromState, which an
+    // acknowledgment leaves out; the record refuses them.
+    let mut parameters = BytesMut::new();
+    encode_event_notification(&notification(), &mut parameters).unwrap();
+    let notify_type = parameters
+        .windows(2)
+        .position(|pair| pair == [0x89, 0x00])
+        .expect("[8] notifyType ALARM");
+    parameters[notify_type + 1] = 0x02;
+    assert!(decode_event_log_record(&framed(&parameters), 0).is_err());
+}

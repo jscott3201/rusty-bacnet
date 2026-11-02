@@ -172,11 +172,11 @@ pub fn decode_event_notification(data: &[u8]) -> Result<EventNotificationRequest
 
     // [9] ackRequired, [10] fromState and [12] eventValues describe an
     // ALARM or EVENT transition, and an ACK_NOTIFICATION leaves all three
-    // out (Clause 13.8.1.1.10 to 13.8.1.1.13). The encoder drops them for
-    // one, so a decoder that read them there would hand back values that
-    // can't survive a re-encode (#2247): such a request is refused, with
-    // the stray tag where To State [11] is due or with eventValues as
-    // octets past the request's end.
+    // out (Clauses 13.8.1.1.10, .11 and .13; Clause 13.9 has the same
+    // parameters). The encoder drops them for one, so a decoder that read
+    // them there would hand back values that can't survive a re-encode
+    // (#2247): such a request is refused, with the stray tag where To State
+    // [11] is due or with eventValues as octets past the request's end.
     let transition = notify_type != NotifyType::ACK_NOTIFICATION;
 
     // [9] ackRequired (ALARM/EVENT only; read as false when left out)
@@ -227,14 +227,16 @@ pub fn decode_event_notification(data: &[u8]) -> Result<EventNotificationRequest
     )?;
     offset = new_offset;
 
-    // [12] eventValues — optional
-    let mut event_values = None;
+    // An ACK_NOTIFICATION ends at To State.
     if !transition && offset < data.len() {
         return Err(Error::trailing(
             offset,
             "EventNotification ACK_NOTIFICATION has octets after toState",
         ));
     }
+
+    // [12] eventValues — optional
+    let mut event_values = None;
     if offset < data.len() {
         let (opening, inner_start) = tags::decode_tag(data, offset)?;
         if !opening.is_opening_tag(12) {
