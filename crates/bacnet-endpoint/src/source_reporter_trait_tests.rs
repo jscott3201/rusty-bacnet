@@ -32,8 +32,6 @@ fn outcomes(object: &mut dyn BACnetObject, log: &CallLog) -> Vec<Outcome> {
 
 #[test]
 fn every_method_reaches_the_wrapped_object() {
-    // The method an active source answers without asking the wrapped object.
-    const OWN_ANSWERS: [&str; 1] = ["is_deleteable"];
     let log = CallLog::default();
     let probe = Probe::new(ObjectType::ANALOG_VALUE, log.clone());
     let mut object: Box<dyn BACnetObject> = Box::new(probe);
@@ -50,15 +48,9 @@ fn every_method_reaches_the_wrapped_object() {
     let sealed = outcomes(object.as_mut(), &log);
     for ((expected, active), sealed) in direct.iter().zip(&active).zip(&sealed) {
         let name = expected.0;
-        assert_eq!(
-            sealed, expected,
-            "{name}: SourceReporter must forward it, arguments and answer unchanged"
-        );
-        if OWN_ANSWERS.contains(&name) {
-            assert_ne!(active, expected, "{name}: an active source answers it");
-        } else {
+        for outcome in [active, sealed] {
             assert_eq!(
-                active, expected,
+                outcome, expected,
                 "{name}: SourceReporter must forward it, arguments and answer unchanged"
             );
         }

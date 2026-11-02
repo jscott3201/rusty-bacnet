@@ -182,9 +182,9 @@ async fn success(role: SessionRole) {
     {
         let db = db.read().await;
         assert!(source(&db, selected()));
-        assert!(!db.get(&selected()).unwrap().is_deleteable());
+        assert!(db.check_removable(&selected()).is_err());
         assert!(!source(&db, target()));
-        assert!(db.get(&target()).unwrap().is_deleteable());
+        assert!(db.check_removable(&target()).is_ok());
     }
     tokio::time::advance(Duration::from_secs(60)).await;
     tokio::task::yield_now().await;
@@ -248,7 +248,7 @@ async fn rejected(
                         object
                             .read_property(PropertyIdentifier::AUDIT_SOURCE_REPORTER, None)
                             .ok(),
-                        object.is_deleteable(),
+                        db.check_removable(&oid).is_ok(),
                         std::ptr::from_ref(object).cast::<()>(),
                     )
                 })
@@ -287,7 +287,7 @@ async fn rejected(
                         .ok(),
                     value
                 );
-                assert_eq!(object.is_deleteable(), *deleteable);
+                assert_eq!(db.check_removable(oid).is_ok(), *deleteable);
             }
         }
     }
@@ -491,7 +491,7 @@ async fn existing_source_is_idempotent_but_conflicting_selection_is_not() {
     {
         let db = session.database.as_ref().unwrap().read().await;
         assert!(source(&db, target()));
-        assert!(!db.get(&target()).unwrap().is_deleteable());
+        assert!(db.check_removable(&target()).is_err());
     }
     session.stop().await.unwrap();
 }
@@ -557,9 +557,9 @@ async fn repeated_pre_start_selection_only_wraps_the_final_choice() {
     {
         let db = session.database.as_ref().unwrap().read().await;
         assert!(!source(&db, selected()));
-        assert!(db.get(&selected()).unwrap().is_deleteable());
+        assert!(db.check_removable(&selected()).is_ok());
         assert!(source(&db, target()));
-        assert!(!db.get(&target()).unwrap().is_deleteable());
+        assert!(db.check_removable(&target()).is_err());
     }
     session.stop().await.unwrap();
 }

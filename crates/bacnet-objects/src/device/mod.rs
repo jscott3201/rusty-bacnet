@@ -624,6 +624,7 @@ impl BACnetObject for DeviceObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        crate::property_metadata::check_read_array_index(self, property, array_index)?;
         if property == PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT {
             return self.read_audit_recipient(array_index);
         }
@@ -801,12 +802,6 @@ impl BACnetObject for DeviceObject {
 
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
         metadata::for_object(self)
-    }
-
-    /// Device is not deleteable at runtime (nor createable: its type has
-    /// no constructor in [`crate::creation`]).
-    fn is_deleteable(&self) -> bool {
-        false
     }
 
     fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {

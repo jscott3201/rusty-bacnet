@@ -380,6 +380,7 @@ impl BACnetObject for TrendLogObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        crate::property_metadata::check_read_array_index(self, property, array_index)?;
         // Logging_Type, Log_Interval, Align_Intervals, Interval_Offset and
         // Trigger, then Start_Time and Stop_Time.
         if let Some(value) = self
@@ -535,18 +536,6 @@ impl BACnetObject for TrendLogObject {
         metadata::for_object(self)
     }
 
-    fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
-        creation_only::CREATION_ONLY
-    }
-
-    fn initialize_property(
-        &mut self,
-        property: PropertyIdentifier,
-        value: PropertyValue,
-    ) -> Result<(), Error> {
-        creation_only::initialize(self, property, value)
-    }
-
     fn durable_writes(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
         self.store.is_some().then_some(self as _)
     }
@@ -557,6 +546,18 @@ impl BACnetObject for TrendLogObject {
 
     fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
         Some(self)
+    }
+}
+
+impl crate::creation::Creatable for TrendLogObject {
+    const CREATION_ONLY_PROPERTIES: &'static [PropertyIdentifier] = creation_only::CREATION_ONLY;
+
+    fn initialize_property(
+        &mut self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        creation_only::initialize(self, property, value)
     }
 }
 

@@ -13,10 +13,10 @@ const CREATION_ONLY_LABEL: &str = "Whole value set only by CreateObject";
 /// What a row without properties says instead of a property list: only a
 /// type the application registered a constructor for, with no instance in
 /// the database, has none (#2173). The generator never calls that
-/// constructor, so the properties and deleteability are the built object's.
+/// constructor, so the properties are the built object's.
 const REGISTERED_WITHOUT_INSTANCE: &str = "Createable through a constructor the application \
-registered; no instance exists to describe, so the properties and deleteability are \
-those of the object the constructor builds";
+registered; no instance exists to describe, so the properties are those of the object the \
+constructor builds";
 
 /// A row's access as the text and Markdown PICS print it: the flags, and for
 /// a row writes of another property change

@@ -208,6 +208,7 @@ impl BACnetObject for MultiStateOutputObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        crate::property_metadata::check_read_array_index(self, property, array_index)?;
         if let Some(result) = self
             .value_source
             .read(property, array_index, &self.priority_array)
@@ -457,9 +458,12 @@ impl BACnetObject for MultiStateOutputObject {
         metadata::for_object(self)
     }
 
-    fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
-        CREATION_ONLY
-    }
+    crate::traits::lend_reliability_eval!();
+}
+
+impl crate::creation::Creatable for MultiStateOutputObject {
+    const CREATION_ONLY_PROPERTIES: &'static [PropertyIdentifier] = CREATION_ONLY;
+
     fn initialize_property(
         &mut self,
         property: PropertyIdentifier,
@@ -476,7 +480,6 @@ impl BACnetObject for MultiStateOutputObject {
         let _ = self.recompute_reliability();
         Ok(())
     }
-    crate::traits::lend_reliability_eval!();
 }
 
 impl crate::traits::CovReporting for MultiStateOutputObject {}

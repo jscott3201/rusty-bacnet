@@ -593,7 +593,7 @@ fn delete_device_object_fails() {
 #[test]
 fn delete_network_port_object_fails() {
     // NetworkPort models a running node's port and is not deleteable at
-    // runtime, mirroring `NetworkPortObject::is_deleteable` so PICS and the
+    // runtime, by the type-level `creation::builtin_deleteable`, so PICS and the
     // runtime DeleteObject handler share one truth source.
     let mut db = ObjectDatabase::new();
     let np = bacnet_objects::network_port::NetworkPortObject::new_non_bip(

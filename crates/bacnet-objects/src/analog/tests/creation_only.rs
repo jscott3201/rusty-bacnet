@@ -4,6 +4,7 @@
 //! while WriteProperty keeps refusing it.
 
 use super::super::*;
+use crate::creation::CreationTestExt;
 use bacnet_types::enums::EngineeringUnits;
 use bacnet_types::error::RemoteError;
 

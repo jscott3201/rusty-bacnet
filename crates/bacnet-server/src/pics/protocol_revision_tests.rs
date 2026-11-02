@@ -91,9 +91,6 @@ impl BACnetObject for RevisedDevice {
     fn property_metadata(&self) -> Cow<'_, [bacnet_objects::property_metadata::PropertyMetadata]> {
         self.inner.property_metadata()
     }
-    fn is_deleteable(&self) -> bool {
-        false
-    }
 }
 
 fn database(device: Box<dyn BACnetObject>) -> ObjectDatabase {

@@ -117,6 +117,7 @@ impl BACnetObject for CalendarObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        crate::property_metadata::check_read_array_index(self, property, array_index)?;
         match property {
             p if p == PropertyIdentifier::OBJECT_IDENTIFIER => {
                 Ok(PropertyValue::ObjectIdentifier(self.oid))
@@ -176,11 +177,20 @@ impl BACnetObject for CalendarObject {
         calendar_metadata::for_object(self)
     }
 
-    /// Object_Name is read-only over the network, but a client names the
-    /// Calendar it creates (#2208).
-    fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
-        &[PropertyIdentifier::OBJECT_NAME]
+    fn calendar_state(&self) -> Option<&dyn crate::traits::CalendarState> {
+        Some(self)
     }
+
+    fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
+        Some(self)
+    }
+}
+
+/// Object_Name is read-only over the network, but a client names the
+/// Calendar it creates (#2208).
+impl crate::creation::Creatable for CalendarObject {
+    const CREATION_ONLY_PROPERTIES: &'static [PropertyIdentifier] =
+        &[PropertyIdentifier::OBJECT_NAME];
 
     fn initialize_property(
         &mut self,
@@ -191,14 +201,6 @@ impl BACnetObject for CalendarObject {
             return Err(common::write_access_denied_error());
         }
         common::initialize_object_name(&mut self.name, &value)
-    }
-
-    fn calendar_state(&self) -> Option<&dyn crate::traits::CalendarState> {
-        Some(self)
-    }
-
-    fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
-        Some(self)
     }
 }
 

@@ -5,7 +5,7 @@
 use super::mutation_tests::{Fixture, oid, value};
 use super::*;
 use crate::mutation::MutationPolicy;
-use crate::server::object_constructors::tests::{VENDOR_TYPE, Vendor, vendor_type};
+use crate::server::object_type_registry::tests::{VENDOR_TYPE, Vendor, vendor_type};
 use bacnet_objects::analog::AnalogValueObject;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::object_mgmt::{CreateObjectAck, CreateObjectRequest, ObjectSpecifier};
@@ -70,8 +70,8 @@ fn refused(class: ErrorClass, code: ErrorCode, element: u8) -> Vec<u8> {
 fn with_vendor(fixture: &mut Fixture) {
     fixture
         .config
-        .object_constructors
-        .register(vendor_type(), |oid, name| Ok(Vendor::boxed(oid, name)))
+        .object_types
+        .register(vendor_type(), |oid, name| Ok(Vendor::new(oid, name)))
         .unwrap();
 }
 
@@ -198,7 +198,7 @@ async fn a_registered_analog_value_constructor_replaces_the_built_in() {
     let mut fixture = Fixture::new(None);
     fixture
         .config
-        .object_constructors
+        .object_types
         .register(ObjectType::ANALOG_VALUE, |oid, name| {
             let mut object = AnalogValueObject::new(
                 oid.instance_number(),
@@ -206,7 +206,7 @@ async fn a_registered_analog_value_constructor_replaces_the_built_in() {
                 EngineeringUnits::DEGREES_CELSIUS,
             )?;
             object.set_description("site default");
-            Ok(Box::new(object))
+            Ok(object)
         })
         .unwrap();
     let object = created(
@@ -267,10 +267,10 @@ async fn a_constructor_that_builds_another_object_is_refused() {
     let mut fixture = Fixture::new(None);
     fixture
         .config
-        .object_constructors
+        .object_types
         .register(vendor_type(), |oid, name| {
             let other = ObjectIdentifier::new(oid.object_type(), oid.instance_number() + 1)?;
-            Ok(Vendor::boxed(other, name))
+            Ok(Vendor::new(other, name))
         })
         .unwrap();
     let before = fixture.db.read().await.len();
@@ -296,9 +296,9 @@ async fn a_constructor_that_builds_another_object_is_refused() {
 async fn a_constructor_refusal_reaches_the_client_and_a_panic_creates_nothing() {
     let mut fixture = Fixture::new(None);
     let raw = |offset| ObjectType::from_raw(VENDOR_TYPE + offset);
-    let constructors = &mut fixture.config.object_constructors;
+    let constructors = &mut fixture.config.object_types;
     constructors
-        .register(raw(1), |_, _| {
+        .register::<Vendor, _>(raw(1), |_, _| {
             Err(Error::protocol(
                 ErrorClass::RESOURCES,
                 ErrorCode::NO_SPACE_FOR_OBJECT,
@@ -306,10 +306,10 @@ async fn a_constructor_refusal_reaches_the_client_and_a_panic_creates_nothing() 
         })
         .unwrap();
     constructors
-        .register(raw(2), |_, _| Err(Error::Encoding("not now".into())))
+        .register::<Vendor, _>(raw(2), |_, _| Err(Error::Encoding("not now".into())))
         .unwrap();
     constructors
-        .register(raw(3), |_, _| panic!("constructor bug"))
+        .register::<Vendor, _>(raw(3), |_, _| panic!("constructor bug"))
         .unwrap();
     let before = fixture.db.read().await.len();
     for (kind, class, code) in [
@@ -345,10 +345,10 @@ async fn the_policy_decides_a_registered_type_before_its_constructor_runs() {
     let counted = Arc::clone(&calls);
     fixture
         .config
-        .object_constructors
+        .object_types
         .register(vendor_type(), move |oid, name| {
             counted.fetch_add(1, Ordering::SeqCst);
-            Ok(Vendor::boxed(oid, name))
+            Ok(Vendor::new(oid, name))
         })
         .unwrap();
     fixture.config.mutation_policy = MutationPolicy::DenyAll;
@@ -379,10 +379,10 @@ async fn a_registered_type_refuses_a_taken_identifier_and_the_reserved_instance(
     let counted = Arc::clone(&calls);
     fixture
         .config
-        .object_constructors
+        .object_types
         .register(vendor_type(), move |oid, name| {
             counted.fetch_add(1, Ordering::SeqCst);
-            Ok(Vendor::boxed(oid, name))
+            Ok(Vendor::new(oid, name))
         })
         .unwrap();
     let taken = oid(vendor_type(), 3);
@@ -470,8 +470,76 @@ async fn creates_answers_exactly_what_create_object_builds() {
         }
         assert_eq!(
             built,
-            fixture.config.object_constructors.creates(kind),
+            fixture.config.object_types.creates(kind),
             "{kind:?}: {response:?}"
         );
     }
+}
+
+#[tokio::test]
+async fn a_type_the_builders_keep_is_refused_by_delete_object_and_the_pics_says_so() {
+    use bacnet_services::object_mgmt::DeleteObjectRequest;
+    const DELETE: ConfirmedServiceChoice = ConfirmedServiceChoice::DELETE_OBJECT;
+    let kept = ObjectType::BINARY_VALUE;
+    // Every builder takes it; the running server reads the generic one's.
+    let bip = BACnetServer::bip_builder().keep_from_deletion(kept);
+    assert!(!bip.config.object_types.deletes(kept));
+    let builder =
+        BACnetServer::<test_transport::TestTransport>::generic_builder().keep_from_deletion(kept);
+    let mut fixture = Fixture::new(None);
+    fixture.config.object_types = builder.config.object_types.clone();
+    let delete = |instance| {
+        let mut bytes = BytesMut::new();
+        DeleteObjectRequest {
+            object_identifier: oid(kept, instance),
+        }
+        .encode(&mut bytes);
+        bytes.freeze()
+    };
+    let payload = |npdu| {
+        bacnet_encoding::npdu::decode_npdu(npdu)
+            .unwrap()
+            .payload
+            .to_vec()
+    };
+    let answer = payload(
+        fixture
+            .dispatch(DELETE, delete(1), 5)
+            .await
+            .expect("response"),
+    );
+    assert_eq!(
+        answer,
+        [
+            0x50,
+            5,
+            DELETE.to_raw(),
+            0x91,
+            ErrorClass::OBJECT.to_raw() as u8,
+            0x91,
+            ErrorCode::OBJECT_DELETION_NOT_PERMITTED.to_raw() as u8,
+        ]
+    );
+    assert!(fixture.db.read().await.get(&oid(kept, 1)).is_some());
+    let row = |config: &ServerConfig, db: &ObjectDatabase| {
+        crate::pics::generate_pics(db, config, &crate::pics::PicsConfig::default())
+            .supported_object_types
+            .into_iter()
+            .find(|support| support.object_type == kept)
+            .unwrap()
+            .deleteable
+    };
+    assert!(!row(&fixture.config, &*fixture.db.read().await));
+
+    // Without the registration the same request removes it.
+    fixture.config.object_types = Default::default();
+    assert!(row(&fixture.config, &*fixture.db.read().await));
+    let answer = payload(
+        fixture
+            .dispatch(DELETE, delete(1), 5)
+            .await
+            .expect("response"),
+    );
+    assert_eq!(answer, [0x20, 5, DELETE.to_raw()]);
+    assert!(fixture.db.read().await.get(&oid(kept, 1)).is_none());
 }

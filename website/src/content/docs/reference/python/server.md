@@ -2184,8 +2184,11 @@ window at the end of each interval and Pulse\_Rate becomes that
 window's count, which a SubscribeCOVProperty on it is notified of.
 While Out\_Of\_Service is set Present\_Value holds and Pulse\_Rate keeps
 a client's value: the pulses still fill the rate window, but
-Present\_Value drops them rather than catching up later. `pulses` is an unsigned 64-bit count; a negative
-or larger int raises OverflowError. An unknown object raises
+Present\_Value drops them rather than catching up later. Present\_Value
+takes a write only then, an Unsigned up to Max\_Pres\_Value, and once
+back in service the pulses count on from the written value.
+`pulses` is an unsigned 64-bit count; a negative or larger int
+raises OverflowError. An unknown object raises
 UNKNOWN\_OBJECT and any object other than an Accumulator
 OPTIONAL\_FUNCTIONALITY\_NOT\_SUPPORTED.
 

@@ -208,6 +208,7 @@ impl BACnetObject for BinaryValueObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        crate::property_metadata::check_read_array_index(self, property, array_index)?;
         if metadata::excludes(self, property) {
             return Err(common::unknown_property_error());
         }
@@ -473,6 +474,8 @@ impl BACnetObject for BinaryValueObject {
         Some(self)
     }
 }
+
+impl crate::creation::Creatable for BinaryValueObject {}
 
 impl crate::traits::CovReporting for BinaryValueObject {}
 

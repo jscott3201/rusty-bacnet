@@ -134,7 +134,9 @@ fn rows_and_codes_match_the_addendum_tables() {
             rows.iter().map(|&(p, _)| p).collect::<HashSet<_>>().len(),
             rows.len()
         );
-        assert!(object.is_deleteable());
+        assert!(crate::creation::builtin_deleteable(
+            object.object_identifier().object_type()
+        ));
         assert!(object.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
         for row in metadata.iter() {
             let p = row.property_identifier;

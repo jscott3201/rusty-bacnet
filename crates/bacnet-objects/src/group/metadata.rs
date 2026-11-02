@@ -45,7 +45,7 @@ use crate::property_metadata::{
 // Of the trio only StructuredView is createable at runtime (#2208), taking
 // its ReadOnly node and subordinate rows as CreateObject initial values; all
 // three remain deleteable (delete denies only Device and NetworkPort, so the
-// is_deleteable=true default holds). Array gating, writability, and COV also keep
+// builtin_deleteable=true default holds). Array gating, writability, and COV also keep
 // their defaults: Present_Value admits an index only on GlobalGroup
 // (BACnetARRAY per Table 12-57) and rejects it on Group (BACnetLIST per
 // Table 12-17); List_Of_Group_Members stays index-rejecting while
@@ -141,7 +141,9 @@ mod tests {
                 .len(),
             metadata.len()
         );
-        assert!(object.is_deleteable());
+        assert!(crate::creation::builtin_deleteable(
+            object.object_identifier().object_type()
+        ));
         assert!(!object.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
         for row in metadata.iter() {
             assert_eq!(row.presence_condition, None);

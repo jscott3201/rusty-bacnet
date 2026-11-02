@@ -5,7 +5,7 @@ use super::*;
 
 impl PicsGenerator<'_> {
     pub(super) fn build_object_types(&self) -> Vec<ObjectTypeSupport> {
-        let constructors = &self.server_config.object_constructors;
+        let constructors = &self.server_config.object_types;
         let mut by_type: BTreeMap<u32, Vec<&dyn BACnetObject>> = BTreeMap::new();
         for (_oid, obj) in self.db.iter_objects() {
             by_type
@@ -38,16 +38,22 @@ impl PicsGenerator<'_> {
                 Some(object) => vec![object.as_ref()],
                 None => objects.clone(),
             };
-            let Some(&representative) = objects.first() else {
+            // Creation and deletion are the type-level answers CreateObject
+            // and DeleteObject follow (#2179).
+            let deleteable = constructors.deletes(object_type);
+            if objects.is_empty() {
                 result.push(ObjectTypeSupport {
                     object_type,
                     createable,
-                    creation_only_properties: Vec::new(),
-                    deleteable: true,
+                    creation_only_properties: constructors
+                        .creation_only(object_type)
+                        .properties()
+                        .to_vec(),
+                    deleteable,
                     supported_properties: Vec::new(),
                 });
                 continue;
-            };
+            }
             let view = (self.served && object_type == ObjectType::DEVICE).then(|| {
                 crate::device_view::DeviceReadContext::new(
                     self.db,
@@ -64,16 +70,16 @@ impl PicsGenerator<'_> {
                     }
                 }));
 
-            // Deletion is asked of the instances' representative; creation
-            // is the type-level answer CreateObject itself follows.
-            let deleteable = representative.is_deleteable();
             let written_through = |property: &PropertyIdentifier| {
                 supported_properties
                     .iter()
                     .any(|row| row.property_id == *property && row.written_through.is_some())
             };
             let creation_only_properties = if createable {
-                let mut properties = representative.creation_only_properties().to_vec();
+                let mut properties = constructors
+                    .creation_only(object_type)
+                    .properties()
+                    .to_vec();
                 properties.retain(|property| !written_through(property));
                 properties
             } else {

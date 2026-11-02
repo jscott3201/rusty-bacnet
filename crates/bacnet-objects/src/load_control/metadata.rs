@@ -140,7 +140,9 @@ mod tests {
                 .len(),
             metadata.len()
         );
-        assert!(object.is_deleteable());
+        assert!(crate::creation::builtin_deleteable(
+            object.object_identifier().object_type()
+        ));
         // Table 13-1 has a Load Control row (#1061).
         assert!(object.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
         for row in metadata.iter() {

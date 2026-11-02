@@ -165,6 +165,7 @@ impl BACnetObject for NotificationClass {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        crate::property_metadata::check_read_array_index(self, property, array_index)?;
         // Table 12-24 has no Out_Of_Service (#1064), and Clause 12.21 holds the
         // OUT_OF_SERVICE flag FALSE.
         if let Some(result) =
@@ -254,9 +255,13 @@ impl BACnetObject for NotificationClass {
         metadata::for_object(self)
     }
 
-    fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
-        creation_only::CREATION_ONLY
+    fn durable_writes(&mut self) -> Option<&mut dyn DurableWrites> {
+        Some(self)
     }
+}
+
+impl crate::creation::Creatable for NotificationClass {
+    const CREATION_ONLY_PROPERTIES: &'static [PropertyIdentifier] = creation_only::CREATION_ONLY;
 
     fn initialize_property(
         &mut self,
@@ -264,10 +269,6 @@ impl BACnetObject for NotificationClass {
         value: PropertyValue,
     ) -> Result<(), Error> {
         creation_only::initialize(self, property, value)
-    }
-
-    fn durable_writes(&mut self) -> Option<&mut dyn DurableWrites> {
-        Some(self)
     }
 }
 

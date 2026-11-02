@@ -88,6 +88,8 @@ async fn built_in_configuration_identity_metadata_and_writes_survive_wrapping() 
     session.start().await.unwrap();
     {
         let mut db = session.database.as_ref().unwrap().write().await;
+        // The running source keeps its Reporter in the database.
+        assert!(db.check_removable(&selected()).is_err());
         let object = db.get_mut(&selected()).unwrap();
         assert_eq!(object.object_identifier(), selected());
         assert_eq!(object.object_name(), "Reporter-1");
@@ -113,7 +115,6 @@ async fn built_in_configuration_identity_metadata_and_writes_survive_wrapping() 
             read(object, PropertyIdentifier::AUDIT_SOURCE_REPORTER),
             PropertyValue::Boolean(true)
         );
-        assert!(!object.is_deleteable());
         assert!(!object.is_writable_property(PropertyIdentifier::AUDIT_SOURCE_REPORTER));
         denied(object.write_property(
             PropertyIdentifier::AUDIT_SOURCE_REPORTER,
@@ -434,6 +435,7 @@ async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
         assert!(db.enrollment_eval_state_invalidated(&selected()));
         assert_eq!(db.enrollment_eval_source(&selected()), Some(monitored));
         assert_eq!(calls.clock_bindings.load(Ordering::SeqCst), clock_binds);
+        assert!(db.check_removable(&selected()).is_err());
         let object = db.get_mut(&selected()).unwrap();
         assert!(std::ptr::eq(capability, object.audit_reporter().unwrap()));
         assert_eq!(
@@ -534,7 +536,6 @@ async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
             read(object, PropertyIdentifier::AUDIT_SOURCE_REPORTER),
             PropertyValue::Boolean(true)
         );
-        assert!(!object.is_deleteable());
     }
     session.stop().await.unwrap();
 }

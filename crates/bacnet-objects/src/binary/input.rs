@@ -305,6 +305,7 @@ impl BACnetObject for BinaryInputObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        crate::property_metadata::check_read_array_index(self, property, array_index)?;
         if property == PropertyIdentifier::STATUS_FLAGS {
             return Ok(common::compute_status_flags(
                 self.status_flags,
@@ -469,6 +470,8 @@ impl BACnetObject for BinaryInputObject {
         Some(self)
     }
 }
+
+impl crate::creation::Creatable for BinaryInputObject {}
 
 impl crate::traits::CovReporting for BinaryInputObject {}
 

@@ -110,8 +110,13 @@ impl<T: TransportPort + 'static> WriteCommitObserver for WriteAudit<'_, T> {
                 }),
             change: mandatory.then_some((write.oid, write.property, object_policy)),
         };
+        // An index on a scalar reads the whole value, as before objects
+        // refused that index themselves (#2274).
+        let read_index = write
+            .array_index
+            .filter(|_| object.is_array_property(write.property));
         let current_value = object
-            .read_property(write.property, write.array_index)
+            .read_property(write.property, read_index)
             .ok()
             .and_then(|value| small_value(&value));
         self.pending = Some(Box::new(PendingWrite {

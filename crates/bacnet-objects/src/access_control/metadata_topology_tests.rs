@@ -84,7 +84,9 @@ fn assert_exact_sets(object: &dyn BACnetObject, all: &[P], required: &[P], intri
             .len(),
         metadata.len()
     );
-    assert!(object.is_deleteable());
+    assert!(crate::creation::builtin_deleteable(
+        object.object_identifier().object_type()
+    ));
     for row in metadata.iter() {
         let condition = if PERMITTED_EVENT_ROWS.contains(&row.property_identifier) {
             Some(PropertyPresenceCondition::IntrinsicReportingOptional)

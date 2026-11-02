@@ -39,7 +39,7 @@ mod metadata;
 /// property (the numeric value types, whose tables require it): a field that
 /// starts at NO_UNITS and reads as Enumerated, a `units` getter and a
 /// validated `set_units` setter. Units has no network write route, but a
-/// CreateObject initial value may set it ([`BACnetObject::initialize_property`]),
+/// CreateObject initial value may set it ([`Creatable::initialize_property`](crate::creation::Creatable::initialize_property)),
 /// as on the analog types.
 ///
 /// The optional `cov_increment` entry names the COV_Increment datatype of the
@@ -183,6 +183,7 @@ macro_rules! define_value_object_commandable {
                 property: PropertyIdentifier,
                 array_index: Option<u32>,
             ) -> Result<PropertyValue, Error> {
+                crate::property_metadata::check_read_array_index(self, property, array_index)?;
                 if let Some(result) = read_common_properties!(self, property, array_index) {
                     return result;
                 }
@@ -277,13 +278,12 @@ macro_rules! define_value_object_commandable {
             fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
                 crate::property_metadata::is_writable_in_metadata($property_metadata, property)
             }
+        }
 
-            // Units is read-only to WriteProperty but a CreateObject initial
-            // value may set it, as on the analog types (#1429).
+        impl crate::creation::Creatable for $struct_name {
             $(
-            fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
-                crate::analog::CREATION_ONLY
-            }
+            const CREATION_ONLY_PROPERTIES: &'static [PropertyIdentifier] =
+                crate::analog::CREATION_ONLY;
 
             fn initialize_property(
                 &mut self,

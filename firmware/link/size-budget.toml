@@ -429,6 +429,34 @@
 # RAM unchanged at 16480. riscv32imac's .rodata outgrew its budget (its
 # switch tables land there), so that budget is the new size plus 12%; the
 # other budgets are unchanged.
+#
+# #2179 (ten PRs, from #2220 to this one) cut BACnetObject to its core and
+# capability accessors; its last PR moves creation-only properties, their
+# initializers and deleteability to the CreateObject table, three vtable
+# slots fewer per type. Measured with Rust 1.99.0, as text / rodata /
+# flash: on dev before the series (f0e8b7a29^), on dev before the last PR
+# (93676f20f), and after it:
+#
+#   thumbv7m objects     146616 / 17896 / 165536
+#                        149656 / 17992 / 168672
+#                        149476 / 17944 / 168444
+#   thumbv7em objects    145840 / 17896 / 164760
+#                        148740 / 17992 / 167756
+#                        148564 / 17944 / 167532
+#   riscv32imac objects  179472 / 19344 / 198838
+#                        180216 / 21904 / 202142
+#                        180040 / 21848 / 201910
+#
+# RAM unchanged at 16480. The window also holds #2177, whose rows above
+# grew the image by 4880 / 4728 / 5348 octets of flash; the rest of the
+# window, the series and the PRs between, comes to about 2 KB less flash,
+# near the floor of the design pass's estimate, since each accessor is a
+# vtable entry too. The last PR saved 228 / 224 / 232
+# octets. Sizes plus 12% are looser than every objects budget but
+# riscv32imac's .rodata, which tightens to 24480; the others stay.
+# Re-measured after merging dev at c3bbc9932, whose own changes add to the
+# image: 150088 / 17944 / 169056, 149188 / 17944 / 168156 and
+# 180756 / 21856 / 202634; riscv32imac's .rodata plus 12% is still 24480.
 
 [thumbv7m-none-eabi.mstp]
 text = 18320
@@ -806,7 +834,7 @@ memmove_functions = 2
 
 [riscv32imac-unknown-none-elf.objects]
 text = 201008
-rodata = 24944
+rodata = 24480
 data = 64
 bss = 18464
 flash = 222704

@@ -294,6 +294,7 @@ impl BACnetObject for EventEnrollmentObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        crate::property_metadata::check_read_array_index(self, property, array_index)?;
         if property == PropertyIdentifier::STATUS_FLAGS {
             // Clause 12.12 fixes OVERRIDDEN and OUT_OF_SERVICE at FALSE;
             // IN_ALARM follows Event_State and FAULT follows Reliability.
@@ -532,10 +533,10 @@ impl BACnetObject for EventEnrollmentObject {
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         Cow::Borrowed(metadata::EVENT_ENROLLMENT_PROPERTIES)
     }
+}
 
-    fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
-        creation_only::CREATION_ONLY
-    }
+impl crate::creation::Creatable for EventEnrollmentObject {
+    const CREATION_ONLY_PROPERTIES: &'static [PropertyIdentifier] = creation_only::CREATION_ONLY;
 
     fn initialize_property(
         &mut self,

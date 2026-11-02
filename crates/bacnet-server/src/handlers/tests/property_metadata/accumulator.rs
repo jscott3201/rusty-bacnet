@@ -226,15 +226,14 @@ fn accumulator_delete_object_removes_each_pair_member() {
 #[test]
 fn rpm_accumulator_metadata_corrects_historical_pics_writability() {
     // Intended PICS correction (call-out): the historical default advertised
-    // Accumulator Object_Name and Present_Value writable while no arm routes
-    // them, and hid the routed Max_Pres_Value, Pulse_Rate, and
-    // Limit_Monitoring_Interval arms. The canonical rows correct both
-    // directions; dispatch itself is unchanged.
+    // Accumulator Object_Name writable while no arm routes it, and hid the
+    // routed Max_Pres_Value, Pulse_Rate, and Limit_Monitoring_Interval arms.
+    // Present_Value is advertised again now that an arm routes it out of
+    // service (#2267).
     let object = AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS).unwrap();
-    for p in [P::OBJECT_NAME, P::PRESENT_VALUE] {
-        assert!(!object.is_writable_property(p));
-    }
+    assert!(!object.is_writable_property(P::OBJECT_NAME));
     for p in [
+        P::PRESENT_VALUE,
         P::MAX_PRES_VALUE,
         P::PULSE_RATE,
         P::LIMIT_MONITORING_INTERVAL,

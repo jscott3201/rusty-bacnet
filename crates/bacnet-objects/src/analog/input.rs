@@ -169,6 +169,7 @@ impl BACnetObject for AnalogInputObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        crate::property_metadata::check_read_array_index(self, property, array_index)?;
         // IN_ALARM: override STATUS_FLAGS with event_state before common macro
         if property == PropertyIdentifier::STATUS_FLAGS {
             return Ok(common::compute_status_flags(
@@ -328,9 +329,13 @@ impl BACnetObject for AnalogInputObject {
 
     crate::traits::lend_reliability_eval!();
 
-    fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
-        super::CREATION_ONLY
+    fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
+        Some(self)
     }
+}
+
+impl crate::creation::Creatable for AnalogInputObject {
+    const CREATION_ONLY_PROPERTIES: &'static [PropertyIdentifier] = super::CREATION_ONLY;
 
     fn initialize_property(
         &mut self,
@@ -338,10 +343,6 @@ impl BACnetObject for AnalogInputObject {
         value: PropertyValue,
     ) -> Result<(), Error> {
         super::initialize_units(&mut self.units, property, value)
-    }
-
-    fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
-        Some(self)
     }
 }
 
