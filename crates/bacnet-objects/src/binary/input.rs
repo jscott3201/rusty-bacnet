@@ -296,9 +296,7 @@ impl BACnetObject for BinaryInputObject {
         rows
     }
 
-    fn supports_cov(&self) -> bool {
-        true
-    }
+    crate::traits::lend_cov_reporting!();
 
     crate::traits::lend_event_reporting!();
 
@@ -471,6 +469,8 @@ impl BACnetObject for BinaryInputObject {
         Some(self)
     }
 }
+
+impl crate::traits::CovReporting for BinaryInputObject {}
 
 impl crate::traits::ReliabilityEval for BinaryInputObject {
     fn set_reliability(&mut self, reliability: Reliability) -> Result<(), Error> {

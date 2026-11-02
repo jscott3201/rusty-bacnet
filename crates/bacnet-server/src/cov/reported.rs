@@ -9,6 +9,10 @@ use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bytes::BytesMut;
 
+#[cfg(test)]
+#[path = "reported_tests.rs"]
+mod tests;
+
 /// The value a whole-object notification reports first, ahead of
 /// Status_Flags, which Active_COV_Subscriptions also names as the monitored
 /// property. Present_Value, a trigger filtered by the object's COV_Increment,
@@ -33,7 +37,13 @@ pub(crate) struct PreparedReported {
 }
 impl PreparedReported {
     pub fn read(object: &dyn BACnetObject) -> Result<Self, Error> {
-        let declared = object.cov_reported_properties();
+        // An object that names no list reports its type's Table 13-1 row.
+        let declared = match object.cov() {
+            None => &[][..],
+            Some(cov) => cov.cov_reported_properties().unwrap_or_else(|| {
+                CovReportedProperty::standard_for(object.object_identifier().object_type())
+            }),
+        };
         if declared.is_empty() {
             return Ok(Self {
                 values: Vec::new(),

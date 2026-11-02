@@ -4041,7 +4041,8 @@ behaviour, so an object without it writes nothing.
   `LocalInputValue::present_value` or `present_value_from`, the second naming
   the local Device as its origin), a Life Safety Tracking_Value, a Loop's
   Controlled_Variable_Value, an Averaging sample, an access-control record or
-  a Program's Program_State. The enum is `#[non_exhaustive]`: an object matches the inputs it models and
+  an Accumulator's input pulses (`LocalInputValue::Pulses`) or a Program's
+  Program_State. The enum is `#[non_exhaustive]`: an object matches the inputs it models and
   answers the rest with `not_supported()`, OBJECT /
   OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, the same error the server returns for
   an object that lends none. `BACnetServer::set_present_value_local` and its
@@ -4087,6 +4088,29 @@ behaviour, so an object without it writes nothing.
   takes `take_relinquish_writes()` from the removed object. Only
   `tick_schedule` has no default. The built-in `ScheduleObject` lends it
   (see Schedule & Notification below).
+- **`cov()` → `CovReporting`**, for an object that reports changes of
+  value. An object that lends none takes no COV subscription, and the server
+  refuses SubscribeCOV, SubscribeCOVProperty and SubscribeCOVPropertyMultiple
+  naming it with OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. The server
+  reads it under a shared guard only, so it has no `_mut` twin.
+  `supports_subscribe_cov()` (default `true`) admits the whole-object form;
+  an object whose type has no Table 13-1 row, like the built-in Averaging and
+  Command, answers `false` and takes property subscriptions only.
+  `supports_cov_property(p)` (default `true`) decides each property
+  subscription, `cov_increment()` (default `None`) is the object's current
+  COV_Increment, read at each evaluation, and `cov_reported_properties()`
+  lists what a whole-object notification carries after Present_Value and
+  Status_Flags. Its default, `None`, has the server report the object type's
+  Table 13-1 row (`CovReportedProperty::standard_for(object_type)`);
+  `Some(list)` reports exactly that list. These were `supports_cov`,
+  `supports_subscribe_cov_property` and the three hooks of the same names on
+  `BACnetObject` before #2179. `supports_cov_property`'s old default read the
+  object type and the new one doesn't, so a custom Life Safety Point or Zone
+  narrows its own property set, for example to
+  `bacnet_objects::life_safety::COV_PROPERTIES`. Calls on a concrete type
+  need `use bacnet_objects::traits::CovReporting`. The unused
+  `set_overridden` hook was removed with no replacement: an object computes
+  Status_Flags' OVERRIDDEN bit itself when it reads the property.
 - **`audit_log()` and `audit_log_mut()` → `AuditLog`** (hidden, #2179), for
   an Audit Log. `storage()` is the `AuditLogStorage` that AuditLogQuery and
   ReadRange read under a shared guard (it was the public
@@ -4119,6 +4143,32 @@ impl Timed for MyTimer {
         self.deadline
     }
 }
+```
+
+COV reporting moves from its hooks to the capability like this:
+
+```rust,ignore
+// Before: on `impl BACnetObject for MySensor`.
+fn supports_cov(&self) -> bool {
+    true
+}
+fn cov_increment(&self) -> Option<f64> {
+    Some(f64::from(self.cov_increment))
+}
+
+// After: lend the capability; a call site goes through `cov()`.
+use bacnet_objects::traits::{BACnetObject, CovReporting};
+
+fn cov(&self) -> Option<&dyn CovReporting> {
+    Some(self)
+}
+
+impl CovReporting for MySensor {
+    fn cov_increment(&self) -> Option<f64> {
+        Some(f64::from(self.cov_increment))
+    }
+}
+let increment = sensor.cov().and_then(|cov| cov.cov_increment());
 ```
 
 Reliability evaluation moves from its hooks to the capability like this:
@@ -5935,9 +5985,9 @@ Attempted_Samples fail with VALUE_OUT_OF_RANGE and change nothing.
 
 Each sample changes the statistics and counts together, then the server's COV
 path runs, as it does after a write. Averaging has no Table 13-1 row, so
-SubscribeCOV on it is refused (`supports_cov` is false), but it takes
-SubscribeCOVProperty and SubscribeCOVPropertyMultiple
-(`supports_subscribe_cov_property` is true): a numeric property is reported
+SubscribeCOV on it is refused (its `CovReporting` answers
+`supports_subscribe_cov()` with `false`), but it takes SubscribeCOVProperty and
+SubscribeCOVPropertyMultiple (it lends `cov()`): a numeric property is reported
 when it moves by the subscription's COV increment, or on any change if the
 subscription gives none, and the report carries no Status_Flags because the
 object has none. A move to or from the NaN or an infinity of an empty window is
@@ -6920,22 +6970,36 @@ modulo divide `[1]` (#1487). Both are read-only.
 
 An Accumulator's Pulse_Rate is an Unsigned (Table 12-79): the input pulses
 counted over the last whole Limit_Monitoring_Interval (Clause 12.61.20). The
-object counts it in a fixed window when the application feeds it: set the
-interval with `set_limit_monitoring_interval` (or a client's write of
-Limit_Monitoring_Interval), count pulses with `record_pulses`, and let time
-pass with `advance_rate_window(seconds)`. Each time a whole interval has
-passed, Pulse_Rate becomes that window's count and a new window starts, in
-integer arithmetic only. An application that measures the rate itself calls
-`set_pulse_rate` instead. These routes need the concrete
-`AccumulatorObject`, so they work only before the object is registered: no
-server path reaches them yet, and in a running server Pulse_Rate changes only
-through a write while Out_Of_Service is TRUE, from a client or `write_local`.
+application counts its meter's pulses and feeds them in with
+`BACnetServer::add_pulses_local(&oid, pulses)`, or, before the object is
+registered, `apply_local_input(LocalInputValue::Pulses(pulses))` on its
+`LocalInput` (#2259):
+
+- **Present_Value** steps by one count per pulse, or by Prescale's ratio when
+  the object has one, keeping the remainder between feeds (Clause 12.61.13),
+  and rolls over modulo Max_Pres_Value + 1 (Clause 12.61.4). A Prescale with a
+  modulo-divide of zero has no ratio and leaves Present_Value alone.
+- **Pulse_Rate** counts in a fixed window, in integer arithmetic only. Once
+  Limit_Monitoring_Interval is set (`set_limit_monitoring_interval`, or a
+  client's write), the object's `Timed` capability reports the end of the
+  window as its deadline and the server's monotonic task closes it there:
+  Pulse_Rate becomes the window's count, Pulse_Rate property subscribers are
+  notified, and the next window opens at that boundary. A pass that comes
+  late closes one window with every pulse counted and carries the part of an
+  interval left over, so the next deadline is always later than the pass. A
+  change of interval starts a new, empty window; rewriting the interval it
+  already has changes nothing, so a client that repeats the write doesn't
+  hold Pulse_Rate back. With an interval of zero,
+  the default, no window closes. An application that measures the rate
+  itself calls `set_pulse_rate` before registering the object.
+- **Out_Of_Service.** While it is TRUE (Clause 12.61.10), Present_Value
+  holds, dropping fed pulses rather than catching up on the return to
+  service, and Pulse_Rate keeps a client's written value, though the pulses
+  still fill the window, so the first window to close in service counts them.
+
 Pulse_Rate is writable only while Out_Of_Service is TRUE (Clause 12.61.20);
-in service a write is WRITE_ACCESS_DENIED. While out of service it keeps the
-written value and ignores the application routes. A write must be an
-Unsigned; the REAL the object used to serve is INVALID_DATA_TYPE (#2251). `record_pulses`
-counts toward the rate only: Present_Value stays the application's
-(`set_present_value`).
+in service a write is WRITE_ACCESS_DENIED. A write must be an Unsigned; the
+REAL the object used to serve is INVALID_DATA_TYPE (#2251).
 
 A Pulse Converter's Input_Reference, set with `set_input_reference`, reads and
 takes writes like the Loop's variable references: the context-tagged

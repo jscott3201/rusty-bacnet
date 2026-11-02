@@ -530,7 +530,7 @@ fn av_cov_increment_read_write() {
             .unwrap(),
         PropertyValue::Real(1.5)
     );
-    assert_eq!(av.cov_increment(), Some(1.5));
+    assert_eq!(av.cov().and_then(|cov| cov.cov_increment()), Some(1.5));
 }
 
 #[test]

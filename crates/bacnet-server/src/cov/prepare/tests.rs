@@ -234,8 +234,8 @@ impl BACnetObject for Custom {
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         crate::test_rows::read_only(&[PropertyIdentifier::PRESENT_VALUE, CUSTOM, VARIABLE])
     }
-    fn supports_cov(&self) -> bool {
-        true
+    fn cov(&self) -> Option<&dyn bacnet_objects::traits::CovReporting> {
+        Some(self)
     }
     fn is_array_property(&self, p: PropertyIdentifier) -> bool {
         p == CUSTOM
@@ -261,6 +261,8 @@ impl BACnetObject for Custom {
         Err(property_error(ErrorCode::WRITE_ACCESS_DENIED))
     }
 }
+
+impl bacnet_objects::traits::CovReporting for Custom {}
 fn single(p: PropertyIdentifier, index: Option<u32>) -> BytesMut {
     let mut b = BytesMut::new();
     SubscribeCOVPropertyRequest {

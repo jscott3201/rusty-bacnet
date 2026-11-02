@@ -43,7 +43,7 @@ fn assert_exact_sets(object: &dyn BACnetObject, all: &[P], required: &[P]) {
         metadata.len()
     );
     assert!(object.is_deleteable());
-    assert!(!object.supports_cov());
+    assert!(!object.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
     for row in metadata.iter() {
         assert_eq!(row.presence_condition, None);
         let expected = if required.contains(&row.property_identifier) {

@@ -3900,6 +3900,19 @@ An Accumulator serves Prescale only once one is configured; until then a
 read is UNKNOWN_PROPERTY and Property_List leaves it out, instead of a null
 read.
 
+The application feeds an Accumulator the pulses its meter produced with
+`await server.add_pulses_local(accumulator_id, pulses)` (#2259). In service
+they step Present_Value, by Prescale's ratio when one is configured (the
+remainder carries to the next call), and Present_Value rolls over modulo
+Max_Pres_Value + 1. Once Limit_Monitoring_Interval is set, by a peer or with
+`write_property_local`, the running server closes a window at the end of
+each interval: Pulse_Rate becomes the number of pulses fed into it, and a
+SubscribeCOVProperty on Pulse_Rate is notified. While Out_Of_Service is
+set, Present_Value holds, dropping fed pulses instead of catching up later,
+and Pulse_Rate keeps the value a peer wrote until a window closes back in
+service; the pulses fed meanwhile still count toward that window. Any other object raises
+OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
+
 A Pulse Converter checks what its Input_Reference names (#1341). Reliability
 reads CONFIGURATION_ERROR (10), and Status_Flags FAULT, while the reference
 names a missing object or a property that isn't an Unsigned or INTEGER, and
