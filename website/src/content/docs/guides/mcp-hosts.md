@@ -3,7 +3,7 @@ title: "Install the MCP server in an agent host"
 description: "Add the bacnet CLI's MCP server to Claude Desktop with its bundle, or to Claude Code and other agent hosts with the plain command, after authorizing a profile."
 ---
 
-The [MCP server](/rusty-bacnet/guides/ai-agents/) is part of the `bacnet` CLI, so installing it means telling an agent host how to start `bacnet mcp serve --stdio`. Claude Desktop installs it from an MCP bundle: one file, downloaded from the GitHub release, that holds the `bacnet` executable and the settings form. Claude Code and other hosts start the CLI you already installed. Either way the server is **read-only** unless the profile it runs on offers writes, and it starts only on a profile a person has authorized.
+The [MCP server](/rusty-bacnet/guides/ai-agents/) is part of the `bacnet` CLI, so installing it means telling an agent host how to start `bacnet mcp serve --stdio`. Claude Desktop installs it from an MCP bundle: one file, downloaded from the GitHub release, that holds the `bacnet` executable and the settings form. Claude Code and other hosts start the CLI you already installed. Either way the server is **read-only** unless the profile it runs on offers writes, and then each write needs a person's approval: in the host for that write, or ahead of time in a plan grant authorized with the profile. It starts only on a profile a person has authorized.
 
 ## First, authorize a profile
 
@@ -39,7 +39,7 @@ On Linux, use a bundle only with a host that installs MCP bundles there; otherwi
 2. Open the file with Claude Desktop, for example by double-clicking it, and install the extension it shows.
 3. Enter the name of the profile you authorized, such as `plant-a`, in the extension's **Profile** setting. That is its only setting: the profile holds the transport, the reach and the write policy.
 
-The bundle runs its own copy of `bacnet`, the same executable as the release's download for that platform. To update, install the next release's bundle; the authorization lives in the profile, so it carries over.
+The bundle runs its own copy of `bacnet`, the same executable as the release's download for that platform. Like the macOS downloads, it isn't notarized: if macOS blocks it when Claude Desktop starts the extension, allow it under **System Settings → Privacy & Security** as the [macOS install steps](/rusty-bacnet/start/installation/#cli-on-macos) describe, and don't turn Gatekeeper off for the whole system. To update, install the next release's bundle; the authorization lives in the profile, so it carries over.
 
 If the server doesn't start, Claude Desktop shows that it failed, and its log for the extension has the server's message. A profile that isn't there names the folder it was looked for in; a profile that isn't authorized, or no longer is, names the command to run. Both stop the server at once, before it reads anything from the host.
 
@@ -68,7 +68,7 @@ Any host that starts a local MCP server over stdio can run the same command. Mos
 
 A host that lets you set the server's environment can also pass `BACNET_CONFIG_DIR` there, for a profile store outside the default directory.
 
-Without a profile, only the passive server runs: it sends nothing and offers the frame decoder and an empty discovery table. The bundle doesn't offer it, since it always runs a profile; add it to a host by hand when decoding captured frames is all you need:
+Without a profile the server refuses to start unless it is given `--passive`: a passive server sends nothing and offers the frame decoder and an empty discovery table. The bundle doesn't offer it, since it always runs a profile; add it to a host by hand when decoding captured frames is all you need:
 
 ```sh
 bacnet mcp serve --stdio --passive

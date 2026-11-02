@@ -188,6 +188,12 @@ fn an_unauthorized_profile_or_extra_flags_are_refused() {
             && stderr.contains("bacnet mcp authorize --profile other"),
         "{stderr}"
     );
+    // The same for a passive server, which reads the profile's policy.
+    let stderr = refused(
+        &["mcp", "serve", "--stdio", "--passive", "--profile", "other"],
+        Some(config.path()),
+    );
+    assert!(stderr.contains("no profile named other"), "{stderr}");
     // A bare consent time authorizes nothing.
     let bare = store(&format!("{PROFILE}authorized_at_unix = 1\n"));
     let stderr = refused(

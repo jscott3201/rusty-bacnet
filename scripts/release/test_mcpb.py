@@ -40,6 +40,8 @@ FAKE = textwrap.dedent('''\
         listed.append({{"name": "bacnet_write", "annotations": {{"readOnlyHint": False}}}})
     if MODE == "unannotated":
         listed[0].pop("annotations")
+    if MODE == "destructive":
+        listed[0]["annotations"] = {{"readOnlyHint": True, "destructiveHint": True}}
     for line in sys.stdin:
         message = json.loads(line)
         if "id" not in message:
@@ -249,6 +251,26 @@ class CheckArtifactsBundleTests(unittest.TestCase):
         errors = check_artifacts.check_bundles(directory, ["x.mcpb=bacnet-nope"], clis, "1.2.0")
         self.assertTrue(any("not one of the --cli binaries" in e for e in errors), errors)
 
+    def test_bundles_are_compared_with_the_cli_and_notices(self):
+        files = Files(self)
+        directory = files.pack().parent
+        cli = directory / files.binary.name
+        clis = {cli.name: "macosx_11_0_arm64"}
+        spec = [f"bacnet-macos-arm64.mcpb={cli.name}"]
+        cli.write_bytes(b"another build of the CLI")
+        errors = check_artifacts.check_bundles(directory, spec, clis, "1.2.0", files.notices)
+        self.assertIn("bacnet-macos-arm64.mcpb: server/bacnet differs from bacnet-macos-arm64", errors)
+        cli.write_bytes(files.binary.read_bytes())
+        other = files.dir / "OTHER-NOTICES"
+        other.write_text("other notices\n")
+        errors = check_artifacts.check_bundles(directory, spec, clis, "1.2.0", other)
+        self.assertTrue(any("THIRD-PARTY-NOTICES differs" in e for e in errors), errors)
+        cli.unlink()
+        errors = check_artifacts.check_bundles(directory, spec, clis, "1.2.0", files.notices)
+        self.assertTrue(any("is missing, so it can't be compared" in e for e in errors), errors)
+        self.assertTrue(any("no " in e for e in mcpb.check_bundle(
+            directory / "bacnet-macos-arm64.mcpb", "macos-arm64", "1.2.0", binary=cli, notices=other.with_name("x"))))
+
     def test_wheel_smoke_loads_check_artifacts_alone(self):
         # The wheel smoke runs under -I and loads check_artifacts.py by path,
         # with this directory off sys.path: it must import nothing local.
@@ -292,6 +314,7 @@ class SmokeTests(unittest.TestCase):
 
     def test_each_fault_fails(self):
         cases = {"writes": "tools/list gave", "unannotated": "not annotated read-only",
+                 "destructive": "not annotated read-only",
                  "chatty": "not JSON-RPC", "ignores-consent": "kept running"}
         for mode, want in cases.items():
             with self.subTest(mode=mode):

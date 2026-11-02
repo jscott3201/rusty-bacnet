@@ -363,6 +363,8 @@ def check_bundles(directory, specs, cli_platforms, version, notices=None):
             errors.append(f"{name}: {cli} is not one of the --cli binaries")
         elif not (directory / name).is_file():
             errors.append(f"missing MCP bundle {name}")
+        elif not (directory / cli).is_file():
+            errors.append(f"{name}: its CLI binary {cli} is missing, so it can't be compared")
         else:
             errors += mcpb.check_bundle(directory / name, release_platform(cli_platforms[cli]), version,
                                         binary=directory / cli, notices=notices)

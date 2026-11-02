@@ -3,7 +3,7 @@
   "name": "rusty-bacnet",
   "display_name": "BACnet (rusty-bacnet)",
   "description": "Discover and read BACnet building automation devices through a profile you authorized; read-only unless the profile allows writes.",
-  "long_description": "Runs `bacnet mcp serve --stdio` from the rusty-bacnet CLI. The server connects through a `bacnet tui` profile, whose `[mcp]` table limits the networks, devices and rates an agent may use.\n\n**Before installing**, authorize the profile in a terminal: `bacnet mcp authorize --profile NAME`. A profile that isn't authorized stops the server at start with a message that names this command.\n\nThe server is read-only by default: write tools appear only when the profile's `[mcp]` table offers them, and every write then needs a person's approval.",
+  "long_description": "Runs `bacnet mcp serve --stdio` from the rusty-bacnet CLI. The server connects through a `bacnet tui` profile, whose `[mcp]` table limits the networks, devices and rates an agent may use.\n\n**Before installing**, authorize the profile in a terminal: `bacnet mcp authorize --profile NAME`. A profile that isn't authorized stops the server at start with a message that names this command.\n\nThe server is read-only by default: write tools appear only when the profile's `[mcp]` table offers them. A write then needs a person's approval, given for that write in the host or ahead of time by a plan grant authorized with the profile.",
   "author": {
     "name": "Justin Scott",
     "url": "https://github.com/jscott3201"

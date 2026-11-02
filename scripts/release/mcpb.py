@@ -324,9 +324,13 @@ def check_bundle(path, platform, version, binary=None, notices=None):
             info = bundle.getinfo(entry)
             if info.create_system != 3 or _mode(info) & 0o111 != 0o111:
                 errors.append(f"{label}: {entry} is not stored executable (mode {_mode(info):o})")
-            if binary is not None and bundle.read(entry) != Path(binary).read_bytes():
+            if binary is not None and not Path(binary).is_file():
+                errors.append(f"{label}: no {binary} to compare {entry} with")
+            elif binary is not None and bundle.read(entry) != Path(binary).read_bytes():
                 errors.append(f"{label}: {entry} differs from {Path(binary).name}")
-        if notices is not None and NOTICES in names and bundle.read(NOTICES) != Path(notices).read_bytes():
+        if notices is not None and not Path(notices).is_file():
+            errors.append(f"{label}: no {notices} to compare {NOTICES} with")
+        elif notices is not None and NOTICES in names and bundle.read(NOTICES) != Path(notices).read_bytes():
             errors.append(f"{label}: {NOTICES} differs from {notices}")
         if LICENSE in names and not bundle.read(LICENSE).strip():
             errors.append(f"{label}: {LICENSE} is empty")
