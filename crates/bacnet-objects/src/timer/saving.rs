@@ -80,6 +80,8 @@ impl TimerObject {
     /// served now stays until it, or a write, changes it. Saves before it
     /// returns; a save that fails keeps the written set and returns
     /// storage's error. Does nothing without storage or a written set.
+    /// Call it before the object joins the database, as the setters are,
+    /// not under the database guard: it waits for its save.
     pub fn clear_written_state_change(&mut self) -> Result<(), Error> {
         saving::clear(self)
     }

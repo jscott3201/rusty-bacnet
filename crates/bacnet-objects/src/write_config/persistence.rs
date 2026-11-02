@@ -84,6 +84,10 @@ pub struct ChannelMembers {
 /// state](crate::durable#storage-leads-the-served-state). A backend that
 /// refuses a save returns an error and keeps what it held; the write that
 /// asked for it is then refused.
+///
+/// An implementation must not own the object it serves, or the database
+/// holding it: the object's writer thread calls it, and dropping the object
+/// there would wait for that same thread to end, forever.
 pub trait WriteConfigPersistence: Send + Sync {
     /// What was last saved for `object`, or `None` when nothing was saved.
     fn load(&self, object: ObjectIdentifier) -> Result<Option<WriteConfigSnapshot>, Error>;

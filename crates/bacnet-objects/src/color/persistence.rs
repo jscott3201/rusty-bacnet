@@ -83,6 +83,10 @@ pub struct ColorOutputSnapshot {
 /// The object calls `load` once, as it takes the storage, and `save` from
 /// its writer thread, one call at a time. A backend that refuses a save
 /// returns an error and keeps what it held.
+///
+/// An implementation must not own the object it serves, or the database
+/// holding it: the object's writer thread calls it, and dropping the object
+/// there would wait for that same thread to end, forever.
 pub trait ColorOutputPersistence: Send + Sync {
     /// What was last saved for `object`, or `None` when nothing was saved.
     fn load(&self, object: ObjectIdentifier) -> Result<Option<ColorOutputSnapshot>, Error>;

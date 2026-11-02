@@ -129,6 +129,8 @@ impl ColorTemperatureObject {
     /// object's
     /// [`clear_written_default`](super::super::ColorObject::clear_written_default)
     /// does.
+    /// Call it before the object joins the database, as the setters are,
+    /// not under the database guard: it waits for its save.
     pub fn clear_written_default(&mut self) -> Result<(), Error> {
         self.output.clear_written_default()
     }

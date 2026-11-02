@@ -150,6 +150,10 @@ pub struct LogSnapshot<R> {
 ///
 /// The log calls `load` once, as it opens, and `commit` from its writer
 /// thread, one call at a time.
+///
+/// An implementation must not own the object it serves, or the database
+/// holding it: the object's writer thread calls it, and dropping the object
+/// there would wait for that same thread to end, forever.
 pub trait LogPersistence<R>: Send + Sync {
     /// Load the newest valid snapshot for `expected_object`, or `None` when
     /// storage holds none yet.

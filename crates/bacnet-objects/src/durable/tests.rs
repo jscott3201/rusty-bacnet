@@ -505,3 +505,49 @@ fn dropping_a_writer_mid_save_returns_once_its_saves_have_run() {
     dropper.join().unwrap();
     assert_eq!(*gate.saved.lock().unwrap(), [1, 2]);
 }
+
+/// A waker that panics when woken.
+struct PanickingWaker;
+
+impl Wake for PanickingWaker {
+    fn wake(self: Arc<Self>) {
+        panic!("a waker panicked as the save's wait ended");
+    }
+}
+
+/// A panic after a storage call, outside the catch that guards it (here a
+/// waker the save's wait wakes), ends the thread without leaving it
+/// counted as running: the next save starts another, and the writer's drop
+/// returns.
+#[test]
+fn a_thread_that_panics_outside_a_save_still_lets_the_drop_return() {
+    let (gate, handle) = gate();
+    let mut writer = writer(&gate);
+    let ticket = writer.submit(1);
+    let mut wait = ticket.wait();
+    let waker = Waker::from(Arc::new(PanickingWaker));
+    assert!(
+        Pin::new(&mut wait)
+            .poll(&mut Context::from_waker(&waker))
+            .is_pending()
+    );
+    assert_eq!(handle.started.recv_timeout(WAIT).unwrap(), 1);
+    handle.release.send(Ok(())).unwrap();
+    if !writer.thread_ended() {
+        // Its drop would wait forever: fail with a message instead.
+        std::mem::forget(writer);
+        panic!("the thread that panicked still counts as running");
+    }
+    assert_eq!(ticket.succeeded(), Some(true));
+    let next = writer.submit(2);
+    assert_eq!(handle.started.recv_timeout(WAIT).unwrap(), 2);
+    handle.release.send(Ok(())).unwrap();
+    assert!(next.wait().block_for(WAIT));
+    let (dropped_tx, dropped) = mpsc::channel();
+    std::thread::spawn(move || {
+        drop(writer);
+        let _ = dropped_tx.send(());
+    });
+    dropped.recv_timeout(WAIT).expect("the drop returned");
+    assert_eq!(*gate.saved.lock().unwrap(), [1, 2]);
+}

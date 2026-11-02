@@ -46,6 +46,11 @@ type DoneFn<S> = dyn Fn(&S, &Result<(), Error>) + Send + Sync;
 /// When a thread can't be started, the save runs on the caller's thread,
 /// under whatever guard the caller holds, as saves did before they left the
 /// caller's thread. A later save tries to start a thread again.
+///
+/// The storage calls must not drop the writer's owner: a drop on the
+/// writer's own thread would wait for that thread to end, forever. So a
+/// storage implementation never owns the object, or the database holding
+/// it.
 pub(crate) struct SaveWriter<S: Send + 'static> {
     shared: Arc<Shared<S>>,
     name: String,
@@ -330,7 +335,10 @@ impl<S: Send + 'static> Drop for SaveWriter<S> {
 /// What a writer thread runs.
 #[cfg(not(test))]
 fn thread_main<S: Send + 'static>(shared: Arc<Shared<S>>) -> impl FnOnce() + Send + 'static {
-    move || run(&shared)
+    move || {
+        let _unwinding = EndOnUnwind(&shared);
+        run(&shared);
+    }
 }
 
 /// What a writer thread runs, in tests: it hands back a [`Released`],
@@ -341,8 +349,35 @@ fn thread_main<S: Send + 'static>(
     shared: Arc<Shared<S>>,
 ) -> impl FnOnce() -> Released<S> + Send + 'static {
     move || {
-        run(&shared);
+        {
+            let _unwinding = EndOnUnwind(&shared);
+            run(&shared);
+        }
         Released(shared)
+    }
+}
+
+/// Ends a writer thread that unwinds. `run_job` catches a panic from a
+/// storage call, but not one raised after it, such as a waker that panics
+/// as a save's wait ends. Without this the thread would die with `alive`
+/// set, and the writer's drop would wait for it forever. Jobs still queued
+/// stay for the thread the next save starts, which runs them first; a drop
+/// before that leaves them unsaved, as the thread's death would have.
+struct EndOnUnwind<'a, S>(&'a Shared<S>);
+
+impl<S> Drop for EndOnUnwind<'_, S> {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            return;
+        }
+        let mut queue = lock(&self.0.queue);
+        queue.running = false;
+        // A panicking thread hands back no `Released`.
+        #[cfg(test)]
+        {
+            queue.unreleased -= 1;
+        }
+        end(self.0, &mut queue);
     }
 }
 

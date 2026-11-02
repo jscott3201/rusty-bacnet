@@ -220,6 +220,8 @@ impl ColorObject {
     /// changes it. Saves before it returns; a save that fails keeps the
     /// written default and returns storage's error. Does nothing without
     /// storage or a written default.
+    /// Call it before the object joins the database, as the setters are,
+    /// not under the database guard: it waits for its save.
     pub fn clear_written_default(&mut self) -> Result<(), Error> {
         self.output.clear_written_default()
     }
