@@ -19,7 +19,8 @@ pub const SOCKET_FILE: &str = "mcp.sock";
 pub(crate) const VIA: &str = "local-socket";
 
 /// Where the TUI's socket for the workspace `dir` is. Never fails on
-/// Unix; the Windows pipe's name needs the workspace's salt file.
+/// Unix; the Windows pipe's name needs the workspace's salt and nonce
+/// files.
 pub fn socket_path(dir: &Path) -> Result<PathBuf, AttachError> {
     Ok(dir.join(SOCKET_FILE))
 }
@@ -112,6 +113,9 @@ impl Endpoint {
         &self.path
     }
 
+    /// Nothing to do: the Windows pipe's nonce is withdrawn here.
+    pub(super) fn withdraw(&mut self) {}
+
     /// Remove the socket file, once, if it is still this listener's.
     pub(super) fn remove(&mut self) {
         if !self.removed {
@@ -131,7 +135,7 @@ impl Preflight {
     /// With the listener's lock held, so any socket at the path is a stale
     /// one: bind the socket on `runtime`, narrow it to its owner, and check
     /// that the workspace `dir` is still the one checked.
-    pub(super) async fn bind(
+    pub(super) fn bind(
         self,
         dir: &Path,
         runtime: &Handle,

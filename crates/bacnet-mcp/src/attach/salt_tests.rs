@@ -7,10 +7,17 @@ use std::fs::File;
 use std::sync::{Arc, Barrier};
 
 use super::*;
+use crate::attach::nonce::NONCE_LEN;
 
 /// A salt of every byte `b`.
 fn salt_of(b: u8) -> Salt {
     Salt([b; SALT_LEN])
+}
+
+/// The name for the workspace `dir` with the salt `salt_of(b)` and a
+/// nonce of zeroes.
+fn named(b: u8, dir: &Path) -> PathBuf {
+    pipe_name(&salt_of(b), &Nonce([0; NONCE_LEN]), dir)
 }
 
 /// The name the pipe had before #2219: the workspace's path alone.
@@ -34,11 +41,11 @@ fn write_private(path: &Path, bytes: &[u8]) {
 fn the_name_needs_the_salt_and_the_workspace() {
     let one = tempfile::tempdir().unwrap();
     let two = tempfile::tempdir().unwrap();
-    let name = pipe_name(&salt_of(1), one.path());
-    assert_eq!(name, pipe_name(&salt_of(1), one.path()));
-    assert_eq!(name, pipe_name(&salt_of(1), &one.path().join(".")));
-    assert_ne!(name, pipe_name(&salt_of(1), two.path()));
-    assert_ne!(name, pipe_name(&salt_of(2), one.path()), "the salt counts");
+    let name = named(1, one.path());
+    assert_eq!(name, named(1, one.path()));
+    assert_eq!(name, named(1, &one.path().join(".")));
+    assert_ne!(name, named(1, two.path()));
+    assert_ne!(name, named(2, one.path()), "the salt counts");
     assert_ne!(name, unsalted(one.path()), "the path alone doesn't give it");
     let shown = name.to_str().unwrap();
     let hash = shown.strip_prefix(r"\\.\pipe\rusty-bacnet-mcp-").unwrap();
@@ -166,6 +173,21 @@ fn open_to_everyone(path: &Path, bytes: &[u8]) {
     let descriptor = Descriptor::from_sddl(&format!("O:{own}D:P(A;;FA;;;{own})(A;;FR;;;WD)"));
     let mut file = win32::create_file(path, &descriptor.unwrap()).unwrap();
     file.write_all(bytes).unwrap();
+}
+
+/// A file of another user's is refused, as is one its group or others
+/// may read or write; a test can't make a file of another uid, so the
+/// rule is checked on made-up owners.
+#[cfg(unix)]
+#[test]
+fn a_salt_of_another_user_is_refused() {
+    platform::private(1000, 0o100_600, 1000).unwrap();
+    let error = platform::private(1001, 0o100_600, 1000).unwrap_err();
+    assert!(error.to_string().contains("owned by uid 1001"), "{error}");
+    for mode in [0o640, 0o604, 0o620, 0o602] {
+        let error = platform::private(1000, mode, 1000).unwrap_err();
+        assert!(error.to_string().contains("mode"), "{mode:o}: {error}");
+    }
 }
 
 /// A salt symbolic link is refused, never followed, even to a private
