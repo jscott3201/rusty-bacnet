@@ -608,14 +608,14 @@ impl crate::traits::EventReporting for EventEnrollmentObject {
             })
     }
 
-    /// Refuses a commit that would leave NORMAL while
-    /// `Event_Detection_Enable` is FALSE (Clause 13.2.2.1), whoever calls it.
+    /// Refuses every commit while `Event_Detection_Enable` is FALSE
+    /// (Clause 13.2.2.1), whoever calls it.
     fn commit_event_transition(
         &mut self,
         commit: EventTransitionCommit,
     ) -> Result<(), EventTransitionCommitError> {
-        crate::event::history::detection_gate(self.event_detection_enable, &commit)?;
         transition::commit_event_transition(
+            self.event_detection_enable,
             &mut self.event_state,
             &mut self.acked_transitions,
             &mut self.event_history,

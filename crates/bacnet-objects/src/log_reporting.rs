@@ -333,7 +333,8 @@ impl BufferReadyReporting {
     /// Commit one report made at Total_Record_Count `total` through the
     /// shared kernel, then move Last_Notify_Record to `total` and restart
     /// Records_Since_Notification. Any target other than NORMAL is refused
-    /// as unsupported: the algorithm has no other state.
+    /// as unsupported, since the algorithm has no other state; with detection
+    /// off the kernel refuses a NORMAL one too.
     pub(crate) fn commit(
         &mut self,
         commit: EventTransitionCommit,
@@ -343,6 +344,7 @@ impl BufferReadyReporting {
             return Err(EventTransitionCommitError::Unsupported);
         }
         EventTransitionState::new(
+            self.event_detection_enable,
             &mut self.event_state,
             &mut self.acked_transitions,
             &mut self.history,

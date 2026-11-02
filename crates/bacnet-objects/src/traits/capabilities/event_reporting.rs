@@ -87,12 +87,16 @@ pub trait EventReporting {
     /// state; a failed commit leaves that state retryable.
     ///
     /// While the object's `Event_Detection_Enable` is FALSE, the state
-    /// machine is stopped (Clause 13.2.2.1): every built-in reporter refuses
-    /// a commit whose target state is not NORMAL with
+    /// machine is stopped and the event properties stay at their initial
+    /// values (Clause 13.2.2.1), so no commit lands, NORMAL targets
+    /// included. The built-in reporters refuse every such commit with
     /// [`EventTransitionCommitError::DetectionDisabled`], changing nothing,
-    /// and an implementation with that property should do the same. A NORMAL
-    /// target is not refused by this rule; turning detection off resets the
-    /// event properties directly rather than through a commit.
+    /// and an implementation with that property should do the same; turning
+    /// detection off resets the event properties directly, never through a
+    /// commit. Two built-in exceptions answer first with
+    /// [`EventTransitionCommitError::Unsupported`]: the logs (Trend Log,
+    /// Trend Log Multiple, Event Log) for any target other than NORMAL,
+    /// detection on or off, and Alert Enrollment, which has no commit.
     ///
     /// This channel is deliberately separate from network property writes
     /// and notification distribution. The default fails closed with
