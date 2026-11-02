@@ -52,8 +52,6 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-import mcpb
-
 GLIBC = re.compile(r"\bGLIBC_(\d+(?:\.\d+)+)\b")
 WHEEL = re.compile(r"^rusty_bacnet-(?P<ver>[^-]+)-(?P<py>[^-]+)-(?P<abi>[^-]+)-(?P<plat>[^-]+)\.whl$")
 SDIST = re.compile(r"^rusty_bacnet-(?P<ver>[^-]+)\.tar\.gz$")
@@ -352,6 +350,10 @@ def release_platform(platform):
 def check_bundles(directory, specs, cli_platforms, version, notices=None):
     """Errors for the MCP bundles: each NAME=CLI in `specs` passes
     mcpb.check_bundle against that CLI binary, and DIR holds no other."""
+    # Here, not at the top: wheel_smoke.py loads this file by path under -I
+    # for pep440(), where this directory isn't on sys.path.
+    import mcpb
+
     errors = []
     listed = set()
     for spec in specs:

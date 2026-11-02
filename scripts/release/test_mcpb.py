@@ -6,6 +6,7 @@ import contextlib
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -247,6 +248,18 @@ class CheckArtifactsBundleTests(unittest.TestCase):
         self.assertIn("missing MCP bundle gone.mcpb", errors)
         errors = check_artifacts.check_bundles(directory, ["x.mcpb=bacnet-nope"], clis, "1.2.0")
         self.assertTrue(any("not one of the --cli binaries" in e for e in errors), errors)
+
+    def test_wheel_smoke_loads_check_artifacts_alone(self):
+        # The wheel smoke runs under -I and loads check_artifacts.py by path,
+        # with this directory off sys.path: it must import nothing local.
+        script = Path(__file__).with_name("wheel_smoke.py")
+        code = ("import importlib.util, sys; spec = importlib.util.spec_from_file_location('w', sys.argv[1]); "
+                "module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); "
+                "print(module.pep440('1.2.0-rc.1'))")
+        with tempfile.TemporaryDirectory() as tmp:
+            done = subprocess.run([sys.executable, "-I", "-c", code, str(script)], cwd=tmp,
+                                  capture_output=True, text=True, check=False)
+        self.assertEqual((done.returncode, done.stdout.strip()), (0, "1.2.0rc1"), done.stderr)
 
     def test_release_platform(self):
         cases = {"linux_x86_64": "linux-x86_64", "linux_aarch64": "linux-aarch64",
