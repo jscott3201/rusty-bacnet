@@ -642,6 +642,9 @@ mod creation_only_tests;
 mod createable_rows_tests;
 
 #[cfg(test)]
+mod catalogue_consistency_tests;
+
+#[cfg(test)]
 mod data_link_tests;
 
 #[cfg(test)]
