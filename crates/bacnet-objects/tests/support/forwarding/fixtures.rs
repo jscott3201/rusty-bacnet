@@ -78,13 +78,7 @@ pub fn address<T: ?Sized>(reference: &T) -> String {
 }
 
 pub fn schedule_write(value: u64) -> ScheduleWrite {
-    ScheduleWrite {
-        value: PropertyValue::Unsigned(value),
-        priority: 16,
-        references: Vec::new(),
-        retry: false,
-        relinquish: false,
-    }
+    ScheduleWrite::new(PropertyValue::Unsigned(value), 16, Vec::new())
 }
 
 /// DESCRIPTION is writable here, and CUSTOM is absent, unlike the probe's

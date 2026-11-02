@@ -155,13 +155,7 @@ async fn a_schedule_null_relinquishes_a_commandable_target_and_leaves_the_others
     let outcomes = Outcomes::default();
     // Both writes are owed ones, which go out without a clock: a Real at
     // priority 9, then the NULL that relinquishes it.
-    let write = |value, references| ScheduleWrite {
-        value,
-        priority: 9,
-        references,
-        retry: false,
-        relinquish: false,
-    };
+    let write = |value, references| ScheduleWrite::new(value, 9, references);
     let schedule = OwingSchedule {
         owed: vec![
             write(
@@ -242,13 +236,7 @@ async fn a_schedule_target_index_is_checked_as_write_property_checks_it() {
     let outcomes = Outcomes::default();
     let msv = oid(ObjectType::MULTI_STATE_VALUE, 1);
     let bv = oid(ObjectType::BINARY_VALUE, 1);
-    let write = |value, references| ScheduleWrite {
-        value,
-        priority: 9,
-        references,
-        retry: false,
-        relinquish: false,
-    };
+    let write = |value, references| ScheduleWrite::new(value, 9, references);
     let schedule = OwingSchedule {
         owed: vec![
             write(

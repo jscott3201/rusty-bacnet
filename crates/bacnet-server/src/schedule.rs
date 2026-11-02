@@ -84,6 +84,10 @@ pub(crate) fn schedule_instant(frame: ClockFrame) -> Option<(SpecificDate, Time)
 ///
 /// A running server evaluates schedules itself every 60 seconds and fans COV
 /// out for the objects they write; this entry point evaluates without COV.
+/// It first does the work changes of membership queued (the NULLs a removed
+/// Schedule owes, retries to created objects), also without COV, so those
+/// land before any Schedule re-added under a removed one's identifier
+/// writes (#2264).
 ///
 /// A write to a Command object's Present_Value starts its list, and one to a
 /// Channel object's Present_Value starts passing the value to its members.
@@ -99,7 +103,7 @@ pub async fn tick_schedules(db: &Arc<RwLock<ObjectDatabase>>) {
     let runs = {
         let mut db_w = db.write().await;
         let schedules = db_w.find_by_type(ObjectType::SCHEDULE);
-        let commit = evaluate(&mut db_w, schedules);
+        let commit = pass(&mut db_w, schedules);
         commit.take_command_runs(db, &mut db_w)
     };
     crate::command_lists::run_unattached(db, runs).await;
@@ -114,7 +118,7 @@ pub(crate) async fn tick_schedules_committed(
 ) -> CommittedCov {
     let mut db_w = db.write().await;
     let schedules = db_w.find_by_type(ObjectType::SCHEDULE);
-    let commit = evaluate(&mut db_w, schedules);
+    let commit = pass(&mut db_w, schedules);
     commit.finish(db, &mut db_w, cov_table).await
 }
 
@@ -140,7 +144,7 @@ pub(crate) async fn reevaluate_written(
     if schedules.is_empty() {
         return CommittedCov::default();
     }
-    let commit = evaluate(db_w, schedules);
+    let commit = pass(db_w, schedules);
     commit.finish(db, db_w, cov_table).await
 }
 
@@ -221,8 +225,25 @@ fn calendar_states(db: &ObjectDatabase, today: SpecificDate) -> HashMap<ObjectId
         .collect()
 }
 
-fn evaluate(db_w: &mut ObjectDatabase, schedules: Vec<ObjectIdentifier>) -> BackgroundCommit {
+/// The Schedule pass for `schedules` under `db_w`: first the work the
+/// membership queue holds (`crate::membership::drain`), so a removed
+/// Schedule's NULLs land before a Schedule re-added under its identifier
+/// writes (#2264), then [`evaluate`]. Kept out of the async callers so their
+/// futures hold only the commit it returns.
+fn pass(db_w: &mut ObjectDatabase, schedules: Vec<ObjectIdentifier>) -> BackgroundCommit {
     let mut commit = BackgroundCommit::new();
+    crate::membership::drain(db_w, &mut commit);
+    evaluate(db_w, &mut commit, schedules);
+    commit
+}
+
+/// Run the pass for `schedules` under `db_w`, collecting what it changed in
+/// `commit`.
+fn evaluate(
+    db_w: &mut ObjectDatabase,
+    commit: &mut BackgroundCommit,
+    schedules: Vec<ObjectIdentifier>,
+) {
     let instant = db_w.clock_frame().and_then(schedule_instant);
     if instant.is_none() {
         debug!("Skipping the Schedule calculation without a valid Device clock");
@@ -272,9 +293,8 @@ fn evaluate(db_w: &mut ObjectDatabase, schedules: Vec<ObjectIdentifier>) -> Back
     }
 
     for (initiator, write) in writes {
-        deliver(db_w, &mut commit, initiator, &write);
+        deliver(db_w, commit, initiator, &write);
     }
-    commit
 }
 
 /// Write one Schedule write to each of its targets, then report how each took

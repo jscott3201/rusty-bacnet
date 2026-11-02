@@ -139,3 +139,18 @@ fn removing_a_schedule_queues_the_slots_it_holds_and_wakes_the_server() {
     assert!(db.take_membership_work_internal().is_empty());
     assert_eq!(wakes.load(Ordering::SeqCst), 1);
 }
+
+#[test]
+fn a_replaced_schedule_queues_its_slots_and_one_removed_twice_queues_them_once() {
+    let mut db = ObjectDatabase::new();
+    db.add(refusing_schedule()).unwrap();
+    // Replacing SCH-1 with another that holds the same slots: the old one's
+    // NULL is queued. Removing the second, before the server takes the
+    // queue, owes the same NULL, which is queued once.
+    db.add(refusing_schedule()).unwrap();
+    db.remove(&sch1()).unwrap();
+    let work = db.take_membership_work_internal();
+    assert_eq!(work.relinquishes.len(), 1, "{work:?}");
+    assert_eq!(work.relinquishes[0].0, sch1());
+    assert!(work.relinquishes[0].1.relinquish);
+}

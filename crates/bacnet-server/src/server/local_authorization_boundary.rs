@@ -15,6 +15,9 @@ pub(super) struct Boundary {
 }
 
 impl Boundary {
+    /// Take `oid` out of `db` to wrap it. The removal is a real one, so a
+    /// Schedule wrapped this way would give up its held slots (#2264); only
+    /// Access Points are wrapped, and the wrapper lends no `ScheduleRunner`.
     pub(super) fn wrap(db: &mut ObjectDatabase, oid: ObjectIdentifier) -> Self {
         Self {
             inner: db.remove(&oid).unwrap().unwrap(),

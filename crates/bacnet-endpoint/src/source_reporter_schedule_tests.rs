@@ -53,13 +53,11 @@ fn source_reporter_forwards_complete_schedule_targets() {
     let no_calendars = |_: ObjectIdentifier| false;
     assert_eq!(
         runner(&mut object).tick_schedule(today, noon, &no_calendars),
-        Some(ScheduleWrite {
-            value: PropertyValue::Unsigned(2),
-            priority: 16,
-            references: refs.clone(),
-            retry: false,
-            relinquish: false,
-        })
+        Some(ScheduleWrite::new(
+            PropertyValue::Unsigned(2),
+            16,
+            refs.clone()
+        ))
     );
     assert!(
         runner(&mut object)
@@ -80,13 +78,7 @@ fn source_reporter_forwards_complete_schedule_targets() {
     ] {
         object.write_property(property, None, value, None).unwrap();
     }
-    let simulated = ScheduleWrite {
-        value: PropertyValue::Unsigned(5),
-        priority: 16,
-        references: refs.clone(),
-        retry: false,
-        relinquish: false,
-    };
+    let simulated = ScheduleWrite::new(PropertyValue::Unsigned(5), 16, refs.clone());
     assert_eq!(runner(&mut object).take_owed_schedule_writes(), [simulated]);
     assert!(runner(&mut object).take_owed_schedule_writes().is_empty());
 
@@ -105,20 +97,9 @@ fn source_reporter_forwards_complete_schedule_targets() {
     assert_eq!(
         runner(&mut object).take_owed_schedule_writes(),
         [
-            ScheduleWrite {
-                value: PropertyValue::Null,
-                priority: 16,
-                references: vec![refs[1].clone()],
-                retry: false,
-                relinquish: true,
-            },
-            ScheduleWrite {
-                value: PropertyValue::Unsigned(5),
-                priority: 16,
-                references: vec![refs[0].clone()],
-                retry: false,
-                relinquish: false,
-            },
+            ScheduleWrite::new(PropertyValue::Null, 16, vec![refs[1].clone()])
+                .with_relinquish(true),
+            ScheduleWrite::new(PropertyValue::Unsigned(5), 16, vec![refs[0].clone()]),
         ]
     );
     object
@@ -130,13 +111,7 @@ fn source_reporter_forwards_complete_schedule_targets() {
         )
         .unwrap();
     assert!(runner(&mut object).complete_schedule_write(
-        &ScheduleWrite {
-            value: PropertyValue::Unsigned(2),
-            priority: 16,
-            references: vec![refs[0].clone()],
-            retry: false,
-            relinquish: false,
-        },
+        &ScheduleWrite::new(PropertyValue::Unsigned(2), 16, vec![refs[0].clone()]),
         &[ScheduleTargetOutcome::DatatypeRefused],
     ));
     assert_eq!(

@@ -118,7 +118,8 @@ impl ObjectDatabase {
     /// judged again (`ObjectDatabase::check_input_reference`); one whose
     /// Reliability changes is queued for the server's COV fanout. A Schedule
     /// holding a refused reference to it is queued for the server to retry
-    /// that reference (#1440).
+    /// that reference (#1440). A Schedule replaced gives up the slots it
+    /// held, as [`remove`](Self::remove) has it do (#2264).
     pub fn add(&mut self, mut object: Box<dyn BACnetObject>) -> Result<(), Error> {
         let identifier = object.object_identifier();
         ObjectIdentifier::new_addressable(identifier.object_type(), identifier.instance_number())?;
@@ -148,7 +149,11 @@ impl ObjectDatabase {
         let is_new = !self.objects.contains_key(&oid);
         self.enrollment_eval_sources.remove(&oid);
         self.trend_poll.retire(&oid);
-        self.objects.insert(oid, object);
+        // A Schedule replaced gives up the slots it held, as a removed one
+        // does (#2264); the new object starts from what it holds.
+        if let Some(mut replaced) = self.objects.insert(oid, object) {
+            self.schedule_removed(oid, replaced.as_mut());
+        }
         self.audit_membership_changed(oid, true);
         if is_new {
             self.type_index

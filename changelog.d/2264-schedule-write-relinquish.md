@@ -1,5 +1,6 @@
 ---
 section: Changed
 ---
-- **Breaking (Rust API):** `ScheduleWrite` gains a `relinquish` field marking
-  the NULLs that give up slots a Schedule held (#2264).
+- **Breaking (Rust API):** `ScheduleWrite` is `#[non_exhaustive]`, built with
+  `ScheduleWrite::new`, and gains a `relinquish` flag marking the NULLs that
+  give up slots a Schedule held (#2264).

@@ -18,7 +18,7 @@ use super::cov_wire_test_support::*;
 use super::schedule_reference_write_tests::slot;
 use super::schedule_write_tests::{read, sch5, schedule, write_property};
 use super::*;
-use bacnet_encoding::constructed::encode_device_object_property_reference;
+use bacnet_encoding::constructed::{decode_value_source, encode_device_object_property_reference};
 use bacnet_objects::channel::ChannelObject;
 use bacnet_objects::command_source::CommandOrigin;
 use bacnet_objects::schedule::ScheduleObject;
@@ -26,7 +26,8 @@ use bacnet_services::list_manipulation::ListElementRequest;
 use bacnet_services::object_mgmt::DeleteObjectRequest;
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::constructed::{
-    BACnetDeviceObjectPropertyReference, BACnetObjectPropertyReference,
+    BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference,
+    BACnetObjectPropertyReference, BACnetValueSource,
 };
 use bacnet_types::enums::ObjectType;
 
@@ -102,7 +103,89 @@ async fn an_application_remove_relinquishes_the_targets_and_fans_cov_out() {
     assert_eq!(notification.list_of_values[0].value, real(0.0));
     assert_eq!(slot(&h, av1(), 16).await, PropertyValue::Null);
     assert_eq!(read(&h, av1(), PV).await, PropertyValue::Real(0.0));
+    // The NULL carried the removed Schedule as its writer.
+    assert_eq!(source_16(&h).await, sch5_source());
     h.no_notification().await;
+}
+
+/// AV-1's Value_Source_Array element for priority 16.
+async fn source_16(h: &Harness) -> BACnetValueSource {
+    let PropertyValue::ApplicationData(bytes) = h
+        .server
+        .database()
+        .read()
+        .await
+        .get(&av1())
+        .unwrap()
+        .read_property(PropertyIdentifier::VALUE_SOURCE_ARRAY, Some(16))
+        .unwrap()
+    else {
+        panic!("Value_Source_Array encodes as application data");
+    };
+    decode_value_source(&bytes, 0).unwrap().0
+}
+
+fn sch5_source() -> BACnetValueSource {
+    BACnetValueSource::Object(BACnetDeviceObjectReference {
+        device_identifier: None,
+        object_identifier: sch5(),
+    })
+}
+
+/// A new SCH-5 commanding AV-1 at priority 16 with 20.0.
+fn fresh_sch5() -> Box<ScheduleObject> {
+    let mut fresh = ScheduleObject::new(5, "SCH-5", PropertyValue::Real(20.0)).unwrap();
+    fresh
+        .add_object_property_reference(BACnetObjectPropertyReference::new(av1(), PV.to_raw()))
+        .unwrap();
+    Box::new(fresh)
+}
+
+#[tokio::test(start_paused = true)]
+async fn replacement_written_before_the_settle_is_not_cleared() {
+    // The old SCH-5's NULL is still queued when the pass runs; the pass
+    // drains it first, so the new SCH-5's command lands after it.
+    let h = start_with(schedule).await;
+    {
+        let mut db = h.server.database().write().await;
+        db.remove(&sch5()).unwrap();
+        db.add(fresh_sch5()).unwrap();
+    }
+    let _ =
+        crate::schedule::tick_schedules_committed(h.server.database(), &h.server.cov_table).await;
+    assert_eq!(slot(&h, av1(), 16).await, PropertyValue::Real(20.0));
+    h.settle().await;
+    assert_eq!(slot(&h, av1(), 16).await, PropertyValue::Real(20.0));
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_add_that_replaces_a_schedule_relinquishes_its_slots() {
+    let h = start_with(schedule).await;
+    h.server.database().write().await.add(fresh_sch5()).unwrap();
+    let notification = h.cov_notification().await;
+    assert_eq!(notification.list_of_values[0].value, real(0.0));
+    assert_eq!(slot(&h, av1(), 16).await, PropertyValue::Null);
+    // The new SCH-5 commands the slot at its first pass.
+    let _ =
+        crate::schedule::tick_schedules_committed(h.server.database(), &h.server.cov_table).await;
+    assert_eq!(slot(&h, av1(), 16).await, PropertyValue::Real(20.0));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_calculated_null_is_not_checked() {
+    // A NULL Schedule_Default is SCH-5's value, not a relinquish: it goes
+    // to AV-1's slot 16 whoever holds it (#2265 tracks that case).
+    let mut h = taken_over().await;
+    write_property(
+        &mut h,
+        PropertyIdentifier::SCHEDULE_DEFAULT,
+        None,
+        vec![0x00],
+    )
+    .await
+    .unwrap();
+    assert_eq!(slot(&h, av1(), 16).await, PropertyValue::Null);
+    assert_eq!(read(&h, av1(), PV).await, PropertyValue::Real(0.0));
 }
 
 #[tokio::test(start_paused = true)]
@@ -233,10 +316,12 @@ async fn a_new_priority_leaves_the_old_slot_another_writer_took() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn leaving_the_period_leaves_a_slot_another_writer_took() {
+async fn leaving_the_period_writes_nothing_to_a_slot_another_writer_took() {
     let mut h = taken_over().await;
     // An Effective_Period that ended yesterday: SCH-5 goes inactive and
-    // writes nothing, and holds nothing a later delete would give up.
+    // writes nothing, and holds nothing a later delete would give up. This
+    // pins the exit, not the Value_Source check: with nothing held, the
+    // delete owes no NULL for the check to stop.
     write_property(
         &mut h,
         PropertyIdentifier::EFFECTIVE_PERIOD,
