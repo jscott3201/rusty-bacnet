@@ -1,0 +1,21 @@
+{
+  "commit": "9764c9db8c264ab873a9db5b3a4dc14f643c38e3",
+  "environment": {
+    "GLIBC_TUNABLES": "glibc.malloc.tcache_count=32:glibc.malloc.mmap_threshold=1048576:glibc.malloc.trim_threshold=1048576:glibc.malloc.top_pad=1048576"
+  },
+  "noise_floors": {
+    "decode_apdu_confirmed_request/none": 2.6666666656183224e-05,
+    "decode_npdu_100b_payload/none": 2.6666666684604934e-05,
+    "decode_read_property_request/none": 2.6666666684604934e-05,
+    "encode_apdu_confirmed_request/none": 2.6666666713026643e-05,
+    "encode_npdu_100b_payload/none": 2.6666666656183224e-05,
+    "encode_read_property_request/none": 1.3333333356513322e-05,
+    "full_stack_encode_rp/none": 2.6666666599339806e-05,
+    "rp/ct": 11.38788888889394,
+    "rp/mt": 14.771333333330404,
+    "rpm/ct": 41.42766666667012,
+    "rpm/mt": 640.974000000002,
+    "wp/ct": 9.94422222222056,
+    "wp/mt": 146.01755555555428
+  }
+}

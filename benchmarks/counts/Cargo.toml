@@ -38,7 +38,12 @@ path = "src/bin/counts.rs"
 name = "codec-counts"
 path = "src/bin/codec_counts.rs"
 
-# Line tables only: callgrind can then attribute instructions to source
-# lines (and see through inlining) without changing the optimized code.
+# Built like the published binaries (the root workspace's `dist` profile:
+# whole-program LTO, one codegen unit), so a count follows what ships and
+# not the default profile's inlining across 16 codegen units (#2314). Line
+# tables only: callgrind can then attribute instructions to source lines
+# (and see through inlining) without changing the optimized code.
 [profile.release]
+lto = "fat"
+codegen-units = 1
 debug = "line-tables-only"

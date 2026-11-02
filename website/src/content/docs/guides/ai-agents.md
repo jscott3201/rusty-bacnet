@@ -7,7 +7,7 @@ description: "Let an AI agent host such as Claude Code discover and read a BACne
 
 ## Install it
 
-Every prebuilt `bacnet` download on the [installation page](/rusty-bacnet/start/installation/) includes `bacnet mcp serve`. A source build enables it with the CLI's `mcp` feature:
+Every prebuilt `bacnet` download on the [installation page](/rusty-bacnet/start/installation/) includes `bacnet mcp serve`, and releases after 0.15.0 also attach an MCP bundle for Claude Desktop. [Install the MCP server in an agent host](/rusty-bacnet/guides/mcp-hosts/) walks through Claude Desktop, Claude Code and other hosts. A source build enables the server with the CLI's `mcp` feature:
 
 ```sh
 cargo install --path crates/bacnet-cli --locked --features mcp

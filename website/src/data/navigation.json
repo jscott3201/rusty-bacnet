@@ -91,6 +91,10 @@
       {
         "label": "AI agents (MCP)",
         "slug": "guides/ai-agents"
+      },
+      {
+        "label": "MCP host setup",
+        "slug": "guides/mcp-hosts"
       }
     ]
   },

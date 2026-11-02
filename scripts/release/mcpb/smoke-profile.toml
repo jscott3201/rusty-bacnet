@@ -1,0 +1,28 @@
+# The profile the release smoke test serves an MCP bundle with (#2304): a
+# B/IP profile on loopback, read-only, as `bacnet mcp authorize --profile
+# smoke` saved it. A desktop host can't answer that command's question, so
+# the authorization is recorded here instead. If the profile format changes,
+# authorize a copy again and replace this file;
+# crates/bacnet-cli/tests/mcp_stdio.rs fails until then.
+version = 1
+transport = "bip"
+
+[bip]
+interface = "127.0.0.1"
+port = 0
+broadcast = "255.255.255.255"
+timeout_ms = 6000
+min_interval_ms = 0
+ttl = 300
+
+[safety]
+writes = "never"
+dangerous = false
+
+[mcp]
+networks = [0]
+authorized_at_unix = 1793577600
+authorized_transport = '{"bip":{"bbmd":null,"broadcast":"255.255.255.255","interface":"127.0.0.1","min_interval_ms":0,"port":0,"renewal_secs":null,"timeout_ms":6000,"ttl":300},"mstp":null,"sc":null,"transport":"bip"}'
+
+[mcp.authorized]
+networks = [0]
