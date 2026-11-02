@@ -6,8 +6,9 @@ use crate::audit::receipt::{
     self, CompletedAuditReceipt, MAX_AUDIT_RECEIPT_KEY_BYTES, MAX_COMPLETED_AUDIT_RECEIPTS,
 };
 
-pub(super) fn encoded_len(receipts: &[CompletedAuditReceipt]) -> Result<usize, Error> {
-    receipt::validate_receipts(receipts)?;
+/// The encoded length of receipts `validate_receipts` already passed, as
+/// `validate_snapshot` and the snapshot encoder have them (#2233).
+pub(super) fn checked_len(receipts: &[CompletedAuditReceipt]) -> Result<usize, Error> {
     receipts.iter().try_fold(4usize, |length, receipt| {
         length
             .checked_add(8 + 4)
@@ -20,7 +21,9 @@ pub(super) fn encode(
     receipts: &[CompletedAuditReceipt],
     payload: &mut Vec<u8>,
 ) -> Result<(), Error> {
-    encoded_len(receipts)?;
+    // Its one caller, the snapshot encoder, ran `validate_snapshot` first,
+    // which validated the receipts (#2233).
+    checked_len(receipts)?;
     payload.extend_from_slice(&(receipts.len() as u32).to_be_bytes());
     for receipt in receipts {
         payload.extend_from_slice(&receipt.completed_at_unix_millis().to_be_bytes());

@@ -117,15 +117,16 @@ impl FileAuditLogPersistence {
     /// Test support, not a stable API: keep the slots in `memory`'s
     /// entries 0 and 1 instead of on disk, decoding, selecting and encoding
     /// them as on disk (#2233). [`slot_paths`](Self::slot_paths) are then
-    /// placeholders.
+    /// empty placeholders, which cost no allocation.
     /// Nothing reaches disk: the state is gone when the process ends, so
     /// never use this outside tests.
     #[cfg(feature = "test-support")]
     #[doc(hidden)]
     pub fn in_memory(memory: crate::durable::MemoryFiles) -> Self {
-        let mut store = Self::new("in-memory").expect("a path that isn't empty");
-        store.memory = Some(memory);
-        store
+        Self {
+            slot_paths: [PathBuf::new(), PathBuf::new()],
+            memory: Some(memory),
+        }
     }
 
     /// Slot `slot`'s octets, or `None` when it doesn't exist.
@@ -410,14 +411,23 @@ fn encode_snapshot_for_version(
     version: u16,
 ) -> Result<Vec<u8>, Error> {
     validate_snapshot(snapshot)?;
-    let mut payload = Vec::new();
-    payload.extend_from_slice(&snapshot.capacity.to_be_bytes());
-    payload.push(u8::from(snapshot.log_enable));
-    payload.extend_from_slice(&snapshot.total_record_count.to_be_bytes());
-    payload.extend_from_slice(&(snapshot.records.len() as u32).to_be_bytes());
+    // The header goes first, its payload length filled in at the end, so
+    // the payload is written in place rather than copied in after (#2233).
+    let mut data = Vec::new();
+    data.extend_from_slice(MAGIC);
+    data.extend_from_slice(&version.to_be_bytes());
+    data.extend_from_slice(&snapshot.object_identifier.encode());
+    data.extend_from_slice(&snapshot.generation.to_be_bytes());
+    data.extend_from_slice(&[0; 4]);
+    data.extend_from_slice(&snapshot.capacity.to_be_bytes());
+    data.push(u8::from(snapshot.log_enable));
+    data.extend_from_slice(&snapshot.total_record_count.to_be_bytes());
+    data.extend_from_slice(&(snapshot.records.len() as u32).to_be_bytes());
+    // One buffer for every record, cleared before each.
+    let mut record = record_buffer(snapshot.records.len());
     for result in &snapshot.records {
         validate_record_dynamic_size(&result.record)?;
-        let mut record = BytesMut::new();
+        record.clear();
         encode_audit_log_record(&result.record, &mut record)?;
         if record.len() > MAX_RECORD_BYTES {
             return Err(Error::OutOfRange(format!(
@@ -425,9 +435,9 @@ fn encode_snapshot_for_version(
                 record.len()
             )));
         }
-        let projected = HEADER_LEN
-            .checked_add(payload.len())
-            .and_then(|length| length.checked_add(8 + 4 + record.len()))
+        let projected = data
+            .len()
+            .checked_add(8 + 4 + record.len())
             .and_then(|length| length.checked_add(TRAILER_LEN))
             .ok_or_else(|| Error::OutOfRange("AuditLog snapshot length overflow".into()))?;
         if projected > MAX_SNAPSHOT_BYTES {
@@ -435,30 +445,24 @@ fn encode_snapshot_for_version(
                 "AuditLog snapshot length exceeds {MAX_SNAPSHOT_BYTES}"
             )));
         }
-        payload.extend_from_slice(&result.sequence_number.to_be_bytes());
-        payload.extend_from_slice(&(record.len() as u32).to_be_bytes());
-        payload.extend_from_slice(&record);
+        data.extend_from_slice(&result.sequence_number.to_be_bytes());
+        data.extend_from_slice(&(record.len() as u32).to_be_bytes());
+        data.extend_from_slice(&record);
     }
     if version != SCHEMA_VERSION_V1 {
-        receipt_codec::encode(&snapshot.completed_receipts, &mut payload)?;
+        receipt_codec::encode(&snapshot.completed_receipts, &mut data)?;
     }
-    let total_len = HEADER_LEN
-        .checked_add(payload.len())
-        .and_then(|length| length.checked_add(TRAILER_LEN))
+    let total_len = data
+        .len()
+        .checked_add(TRAILER_LEN)
         .ok_or_else(|| Error::OutOfRange("AuditLog snapshot length overflow".into()))?;
     if total_len > MAX_SNAPSHOT_BYTES {
         return Err(Error::OutOfRange(format!(
             "AuditLog snapshot length {total_len} exceeds {MAX_SNAPSHOT_BYTES}"
         )));
     }
-
-    let mut data = Vec::with_capacity(total_len);
-    data.extend_from_slice(MAGIC);
-    data.extend_from_slice(&version.to_be_bytes());
-    data.extend_from_slice(&snapshot.object_identifier.encode());
-    data.extend_from_slice(&snapshot.generation.to_be_bytes());
-    data.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    data.extend_from_slice(&payload);
+    let payload_len = (data.len() - HEADER_LEN) as u32;
+    data[HEADER_LEN - 4..HEADER_LEN].copy_from_slice(&payload_len.to_be_bytes());
     let checksum = crc32(&data);
     data.extend_from_slice(&checksum.to_be_bytes());
     Ok(data)
@@ -615,8 +619,9 @@ pub(super) fn validate_snapshot(snapshot: &AuditLogSnapshot) -> Result<(), Error
         .checked_add(4 + 1 + 8 + 4)
         .and_then(|length| length.checked_add(TRAILER_LEN))
         .ok_or_else(|| Error::OutOfRange("AuditLog snapshot length overflow".into()))?;
+    let mut scratch = record_buffer(snapshot.records.len());
     for result in &snapshot.records {
-        let encoded_len = validate_record(&result.record)?;
+        let encoded_len = record_len(&result.record, &mut scratch)?;
         projected_len = projected_len
             .checked_add(8 + 4 + encoded_len)
             .ok_or_else(|| Error::OutOfRange("AuditLog snapshot length overflow".into()))?;
@@ -632,7 +637,8 @@ pub(super) fn validate_snapshot(snapshot: &AuditLogSnapshot) -> Result<(), Error
     let receipt_len = if snapshot.completed_receipts.is_empty() {
         0
     } else {
-        receipt_codec::encoded_len(&snapshot.completed_receipts)?
+        // `validate_receipts` passed them above.
+        receipt_codec::checked_len(&snapshot.completed_receipts)?
     };
     projected_len = projected_len
         .checked_add(receipt_len)
@@ -648,16 +654,31 @@ pub(super) fn validate_snapshot(snapshot: &AuditLogSnapshot) -> Result<(), Error
 pub(super) fn validate_record(
     record: &bacnet_types::constructed::BACnetAuditLogRecord,
 ) -> Result<usize, Error> {
+    record_len(record, &mut BytesMut::new())
+}
+
+/// A buffer to encode `count` records in one at a time: room for a typical
+/// one from the start, and no allocation at all for none (#2233).
+fn record_buffer(count: usize) -> BytesMut {
+    BytesMut::with_capacity(if count == 0 { 0 } else { 128 })
+}
+
+/// [`validate_record`], encoding into `scratch`, which it clears first, so
+/// a caller checking many records reuses one buffer (#2233).
+fn record_len(
+    record: &bacnet_types::constructed::BACnetAuditLogRecord,
+    scratch: &mut BytesMut,
+) -> Result<usize, Error> {
     validate_record_dynamic_size(record)?;
-    let mut encoded = BytesMut::new();
-    encode_audit_log_record(record, &mut encoded)?;
-    if encoded.len() > MAX_RECORD_BYTES {
+    scratch.clear();
+    encode_audit_log_record(record, scratch)?;
+    if scratch.len() > MAX_RECORD_BYTES {
         return Err(Error::OutOfRange(format!(
             "AuditLog record length {} exceeds {MAX_RECORD_BYTES}",
-            encoded.len()
+            scratch.len()
         )));
     }
-    Ok(encoded.len())
+    Ok(scratch.len())
 }
 
 fn validate_record_dynamic_size(

@@ -199,30 +199,38 @@ pub(crate) fn validate<R: SnapshotRecord>(snapshot: &LogSnapshot<R>) -> Result<(
 /// The slot octets for `snapshot`, after [`validate`].
 pub(crate) fn encode<R: SnapshotRecord>(snapshot: &LogSnapshot<R>) -> Result<Vec<u8>, Error> {
     validate(snapshot)?;
-    let mut payload = Vec::new();
-    payload.extend_from_slice(&snapshot.buffer_size.to_be_bytes());
-    payload.push(u8::from(snapshot.log_enable) | (u8::from(snapshot.stop_when_full) << 1));
-    payload.extend_from_slice(&snapshot.total_record_count.to_be_bytes());
-    payload.extend_from_slice(&snapshot.last_notify_record.to_be_bytes());
-    payload.extend_from_slice(&snapshot.records_since_notification_from.to_be_bytes());
-    payload.extend_from_slice(&snapshot.notification_threshold.to_be_bytes());
+    // The header goes first, its payload length filled in at the end, so
+    // the payload is written in place rather than copied in after (#2233).
+    let mut data = Vec::new();
+    data.extend_from_slice(MAGIC);
+    data.extend_from_slice(&SCHEMA_VERSION.to_be_bytes());
+    data.extend_from_slice(&snapshot.object_identifier.encode());
+    data.extend_from_slice(&snapshot.generation.to_be_bytes());
+    data.extend_from_slice(&[0; 4]);
+    data.extend_from_slice(&snapshot.buffer_size.to_be_bytes());
+    data.push(u8::from(snapshot.log_enable) | (u8::from(snapshot.stop_when_full) << 1));
+    data.extend_from_slice(&snapshot.total_record_count.to_be_bytes());
+    data.extend_from_slice(&snapshot.last_notify_record.to_be_bytes());
+    data.extend_from_slice(&snapshot.records_since_notification_from.to_be_bytes());
+    data.extend_from_slice(&snapshot.notification_threshold.to_be_bytes());
     for (date, time) in [snapshot.start_time, snapshot.stop_time] {
-        payload.extend_from_slice(&date.encode());
-        payload.extend_from_slice(&time.encode());
+        data.extend_from_slice(&date.encode());
+        data.extend_from_slice(&time.encode());
     }
     match &snapshot.acquisition {
-        None => payload.push(0),
+        None => data.push(0),
         Some(acquisition) => {
-            payload.push(1);
-            payload.extend_from_slice(&acquisition.logging_type.to_raw().to_be_bytes());
-            payload.extend_from_slice(&acquisition.log_interval.to_be_bytes());
-            payload.push(u8::from(acquisition.align_intervals));
-            payload.extend_from_slice(&acquisition.interval_offset.to_be_bytes());
+            data.push(1);
+            data.extend_from_slice(&acquisition.logging_type.to_raw().to_be_bytes());
+            data.extend_from_slice(&acquisition.log_interval.to_be_bytes());
+            data.push(u8::from(acquisition.align_intervals));
+            data.extend_from_slice(&acquisition.interval_offset.to_be_bytes());
         }
     }
-    let mut element = BytesMut::new();
+    let mut element =
+        element_buffer(snapshot.log_device_object_property.len() + snapshot.records.len());
     put_list(
-        &mut payload,
+        &mut data,
         &snapshot.log_device_object_property,
         &mut element,
         |reference, buf| {
@@ -230,38 +238,39 @@ pub(crate) fn encode<R: SnapshotRecord>(snapshot: &LogSnapshot<R>) -> Result<Vec
             Ok(())
         },
     )?;
-    put_list(
-        &mut payload,
-        &snapshot.records,
-        &mut element,
-        |record, buf| record.encode(buf),
-    )?;
-    let total_len = HEADER_LEN + payload.len() + TRAILER_LEN;
+    put_list(&mut data, &snapshot.records, &mut element, |record, buf| {
+        record.encode(buf)
+    })?;
+    let payload_len = data.len() - HEADER_LEN;
+    let total_len = data.len() + TRAILER_LEN;
     if total_len > MAX_SNAPSHOT_BYTES {
         return Err(Error::OutOfRange(format!(
             "log snapshot length {total_len} exceeds {MAX_SNAPSHOT_BYTES}"
         )));
     }
-    let mut data = Vec::with_capacity(total_len);
-    data.extend_from_slice(MAGIC);
-    data.extend_from_slice(&SCHEMA_VERSION.to_be_bytes());
-    data.extend_from_slice(&snapshot.object_identifier.encode());
-    data.extend_from_slice(&snapshot.generation.to_be_bytes());
-    data.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    data.extend_from_slice(&payload);
+    data[HEADER_LEN - 4..HEADER_LEN].copy_from_slice(&(payload_len as u32).to_be_bytes());
     let checksum = crc32(&data);
     data.extend_from_slice(&checksum.to_be_bytes());
     Ok(data)
 }
 
+/// A buffer to encode `count` elements in one at a time: room for a
+/// typical one from the start, so it isn't grown octet run by octet run
+/// for each snapshot, and no allocation at all for none (#2233).
+fn element_buffer(count: usize) -> BytesMut {
+    BytesMut::with_capacity(if count == 0 { 0 } else { 64 })
+}
+
+/// Append `items` to `data`, a slot under construction whose payload starts
+/// at [`HEADER_LEN`].
 fn put_list<T>(
-    payload: &mut Vec<u8>,
+    data: &mut Vec<u8>,
     items: &[T],
     element: &mut BytesMut,
     encode: impl Fn(&T, &mut BytesMut) -> Result<(), Error>,
 ) -> Result<(), Error> {
     let count = u32::try_from(items.len()).map_err(|_| corrupt("list is too long"))?;
-    payload.extend_from_slice(&count.to_be_bytes());
+    data.extend_from_slice(&count.to_be_bytes());
     for item in items {
         element.clear();
         encode(item, element)?;
@@ -271,9 +280,9 @@ fn put_list<T>(
                 element.len()
             )));
         }
-        payload.extend_from_slice(&(element.len() as u32).to_be_bytes());
-        payload.extend_from_slice(element);
-        if payload.len() > MAX_SNAPSHOT_BYTES {
+        data.extend_from_slice(&(element.len() as u32).to_be_bytes());
+        data.extend_from_slice(element);
+        if data.len() - HEADER_LEN > MAX_SNAPSHOT_BYTES {
             return Err(Error::OutOfRange(format!(
                 "log snapshot length exceeds {MAX_SNAPSHOT_BYTES}"
             )));
@@ -468,7 +477,7 @@ fn decode_payload<R: SnapshotRecord>(
     validate(&snapshot)?;
     // A record that decodes but would not encode again could never be
     // served, so such a slot is as damaged as one that fails to decode.
-    let mut scratch = BytesMut::new();
+    let mut scratch = element_buffer(snapshot.records.len());
     for record in &snapshot.records {
         scratch.clear();
         record.encode(&mut scratch)?;
