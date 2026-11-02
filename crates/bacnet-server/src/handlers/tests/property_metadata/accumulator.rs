@@ -19,7 +19,12 @@ fn accumulator_objects(configured: bool) -> [Box<dyn BACnetObject>; 2] {
     if configured {
         acc.write_property(P::MAX_PRES_VALUE, None, PropertyValue::Unsigned(1000), None)
             .unwrap();
-        acc.write_property(P::PULSE_RATE, None, PropertyValue::Real(2.5), None)
+        // Pulse_Rate takes a write only out of service (Clause 12.61.20).
+        acc.write_property(P::OUT_OF_SERVICE, None, PropertyValue::Boolean(true), None)
+            .unwrap();
+        acc.write_property(P::PULSE_RATE, None, PropertyValue::Unsigned(25), None)
+            .unwrap();
+        acc.write_property(P::OUT_OF_SERVICE, None, PropertyValue::Boolean(false), None)
             .unwrap();
         acc.write_property(
             P::LIMIT_MONITORING_INTERVAL,

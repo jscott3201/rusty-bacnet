@@ -251,3 +251,37 @@ fn state_texts_with_parentheses_and_commas_write_back() {
         ]))
     );
 }
+
+/// A Life Safety Point's Maintenance_Required is a BACnetMaintenance, read
+/// and written by name; the Zone's is a BOOLEAN (#2252). An Accumulator's
+/// Pulse_Rate is an Unsigned (#2251).
+#[test]
+fn maintenance_reads_and_writes_by_name_and_pulse_rate_is_a_count() {
+    let texts = StateTexts::default();
+    let format = |object_type, property, octets: &[u8]| {
+        ValueFormat::new(object_type, &texts, Floats::Display).value(property, octets)
+    };
+    let point = O::LIFE_SAFETY_POINT;
+    let p = P::MAINTENANCE_REQUIRED;
+    assert_eq!(format(point, p, &[0x91, 2]), "need-service-operational");
+    assert_eq!(format(point, p, &[0x91, 0]), "none");
+    assert_eq!(
+        parse(point, p, None, "need-service-operational"),
+        Ok(PropertyValue::Enumerated(2))
+    );
+    assert_eq!(
+        parse(point, p, None, "periodic-test"),
+        Ok(PropertyValue::Enumerated(1))
+    );
+    assert!(parse(point, p, None, "dirty").is_err());
+    assert_eq!(
+        parse(O::LIFE_SAFETY_ZONE, p, None, "true"),
+        Ok(PropertyValue::Boolean(true))
+    );
+    assert_eq!(format(O::LIFE_SAFETY_ZONE, p, &[0x11]), "true");
+    assert_eq!(format(O::ACCUMULATOR, P::PULSE_RATE, &[0x21, 25]), "25");
+    assert_eq!(
+        parse(O::ACCUMULATOR, P::PULSE_RATE, None, "25"),
+        Ok(PropertyValue::Unsigned(25))
+    );
+}

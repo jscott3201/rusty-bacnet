@@ -6485,6 +6485,15 @@ that started it fails with OBJECT / BUSY, so such a loop stops after one round.
 | `LifeSafetyPointObject` | `::new(instance, name)` |
 | `LifeSafetyZoneObject` | `::new(instance, name)` |
 
+A Point's Maintenance_Required is a BACnetMaintenance (Table 12-18), served
+as an Enumerated and named by `bacnet_types::enums::Maintenance`. It starts
+as `NONE`; the application sets it with `set_maintenance_required`, and a
+client's write must be an Enumerated holding a standard value or one from the
+proprietary range 256..=65535. A reserved or larger number is
+VALUE_OUT_OF_RANGE, and a BOOLEAN, the datatype the Point used to serve, is
+INVALID_DATA_TYPE (#2252). A Zone's Maintenance_Required is a BOOLEAN
+(Table 12-19), which the Zone doesn't serve yet.
+
 #### Access Control (7)
 
 | Type | Constructor |
@@ -6874,6 +6883,25 @@ their context-tagged Clause 21 forms, encoded with
 `bacnet_encoding::constructed::{encode_scale, encode_prescale}`: Scale's
 float `[0]` or integer `[1]` alternative, and Prescale's multiplier `[0]` and
 modulo divide `[1]` (#1487). Both are read-only.
+
+An Accumulator's Pulse_Rate is an Unsigned (Table 12-79): the input pulses
+counted over the last whole Limit_Monitoring_Interval (Clause 12.61.20). The
+object counts it in a fixed window when the application feeds it: set the
+interval with `set_limit_monitoring_interval` (or a client's write of
+Limit_Monitoring_Interval), count pulses with `record_pulses`, and let time
+pass with `advance_rate_window(seconds)`. Each time a whole interval has
+passed, Pulse_Rate becomes that window's count and a new window starts, in
+integer arithmetic only. An application that measures the rate itself calls
+`set_pulse_rate` instead. These routes need the concrete
+`AccumulatorObject`, so they work only before the object is registered: no
+server path reaches them yet, and in a running server Pulse_Rate changes only
+through a write while Out_Of_Service is TRUE, from a client or `write_local`.
+Pulse_Rate is writable only while Out_Of_Service is TRUE (Clause 12.61.20);
+in service a write is WRITE_ACCESS_DENIED. While out of service it keeps the
+written value and ignores the application routes. A write must be an
+Unsigned; the REAL the object used to serve is INVALID_DATA_TYPE (#2251). `record_pulses`
+counts toward the rate only: Present_Value stays the application's
+(`set_present_value`).
 
 A Pulse Converter's Input_Reference, set with `set_input_reference`, reads and
 takes writes like the Loop's variable references: the context-tagged
