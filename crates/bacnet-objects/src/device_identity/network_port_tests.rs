@@ -149,5 +149,12 @@ fn other_link_types_build_only_where_the_port_object_takes_them() {
     let mut mstp = NetworkPortEntry::sc(5, 50, [3; 6]);
     mstp.network_type = NetworkType::MSTP.to_raw();
     mstp.mac = MacAddr::from_slice(&[3]);
-    assert!(mstp.build_object().is_err());
+    match mstp.build_object() {
+        Err(Error::Remote(bacnet_types::error::RemoteError::Error {
+            class: bacnet_types::enums::ErrorClass::PROPERTY,
+            code: bacnet_types::enums::ErrorCode::VALUE_OUT_OF_RANGE,
+        })) => {}
+        Err(other) => panic!("expected PROPERTY / VALUE_OUT_OF_RANGE, got {other:?}"),
+        Ok(_) => panic!("an MS/TP entry has no generic port"),
+    }
 }

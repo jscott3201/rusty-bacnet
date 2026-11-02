@@ -306,7 +306,14 @@ fn extra_objects_join_the_object_list_after_the_ports() {
 
     // An extra named like a declared port is refused by the database.
     let clash = AnalogInputObject::new(8, "port-1", EngineeringUnits::NO_UNITS).unwrap();
-    assert!(build_database_with_extra(&identity, vec![Box::new(clash)]).is_err());
+    match build_database_with_extra(&identity, vec![Box::new(clash)]) {
+        Err(Error::Remote(bacnet_types::error::RemoteError::Error {
+            class: bacnet_types::enums::ErrorClass::PROPERTY,
+            code: bacnet_types::enums::ErrorCode::DUPLICATE_NAME,
+        })) => {}
+        Err(other) => panic!("expected PROPERTY / DUPLICATE_NAME, got {other:?}"),
+        Ok(_) => panic!("expected PROPERTY / DUPLICATE_NAME, got a database"),
+    }
 }
 
 fn assert_identifier_exists(result: Result<ObjectDatabase, Error>) {

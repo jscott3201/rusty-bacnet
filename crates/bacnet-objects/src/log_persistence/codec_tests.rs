@@ -40,7 +40,7 @@ fn oid() -> ObjectIdentifier {
 
 /// Rewrite the declared payload length and the checksum after an edit, so
 /// the slot passes its integrity check and only the edit is wrong.
-fn reseal(data: &mut [u8]) {
+fn reseal_with_length(data: &mut [u8]) {
     let payload = (data.len() - HEADER_LEN - TRAILER_LEN) as u32;
     data[22..26].copy_from_slice(&payload.to_be_bytes());
     let at = data.len() - TRAILER_LEN;
@@ -71,7 +71,7 @@ fn a_payload_with_trailing_octets_is_damage() {
     let mut data = codec::encode(&snapshot(3)).unwrap();
     // One octet after the record list, before the checksum.
     data.insert(data.len() - TRAILER_LEN, 0);
-    reseal(&mut data);
+    reseal_with_length(&mut data);
     assert!(corrupt_reason(&data).contains("trailing octets"));
 }
 
@@ -79,7 +79,7 @@ fn a_payload_with_trailing_octets_is_damage() {
 fn a_sealed_slot_at_generation_zero_is_damage() {
     let mut data = codec::encode(&snapshot(3)).unwrap();
     data[14..22].copy_from_slice(&0u64.to_be_bytes());
-    reseal(&mut data);
+    reseal_with_length(&mut data);
     assert!(corrupt_reason(&data).contains("generation must be nonzero"));
 }
 
@@ -149,19 +149,30 @@ fn a_commit_creates_a_missing_parent_directory() {
     assert_eq!(store.load(oid()).unwrap(), Some(snapshot(1)));
 }
 
-/// A plain file where the slots' directory belongs.
-fn file_in_the_way(base: &Path) -> std::path::PathBuf {
+/// A plain file where the slots' directory belongs, as the path below it
+/// that `tail` names.
+fn file_in_the_way(base: &Path, tail: &[&str]) -> std::path::PathBuf {
     let blocker = base.with_extension("blocker");
     std::fs::write(&blocker, b"not a directory").unwrap();
-    blocker.join("state")
+    tail.iter().fold(blocker, |path, part| path.join(part))
 }
 
+/// The slots' parent is a file (so the slot can't be opened), or lies under
+/// one (so the parent can't be created). Either way the commit fails as I/O
+/// and leaves no slot behind.
 #[test]
 fn a_slot_that_cannot_be_created_fails_the_commit() {
-    let base = TempBase::new("blocked-commit");
-    let store = FileLogPersistence::new(file_in_the_way(base.path())).unwrap();
-    let error = LogPersistence::<BACnetEventLogRecord>::commit(&store, &snapshot(1)).unwrap_err();
-    assert!(!matches!(error, Error::Encoding(_)), "{error:?}");
+    for tail in [&["state"][..], &["sub", "state"][..]] {
+        let base = TempBase::new("blocked-commit");
+        let store = FileLogPersistence::new(file_in_the_way(base.path(), tail)).unwrap();
+        let error =
+            LogPersistence::<BACnetEventLogRecord>::commit(&store, &snapshot(1)).unwrap_err();
+        assert!(matches!(error, Error::Transport(_)), "{tail:?}: {error:?}");
+        assert!(
+            store.slot_paths().iter().all(|path| !path.exists()),
+            "{tail:?}"
+        );
+    }
 }
 
 #[test]
@@ -172,5 +183,5 @@ fn a_slot_that_cannot_be_read_fails_the_load() {
     // platform.
     std::fs::create_dir_all(&store.slot_paths()[0]).unwrap();
     let error = LogPersistence::<BACnetEventLogRecord>::load(&store, oid()).unwrap_err();
-    assert!(!matches!(error, Error::Encoding(_)), "{error:?}");
+    assert!(matches!(error, Error::Transport(_)), "{error:?}");
 }

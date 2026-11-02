@@ -150,14 +150,14 @@ fn min_pres_value_refuses_a_wrong_type_a_non_finite_value_and_one_inside_the_lad
         ErrorCode::INVALID_DATA_TYPE,
     );
     for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-        assert!(
+        assert_code(
             write(
                 &mut object,
                 PropertyIdentifier::MIN_PRES_VALUE,
                 PropertyValue::Real(value),
             )
-            .is_err(),
-            "{value}"
+            .unwrap_err(),
+            ErrorCode::VALUE_OUT_OF_RANGE,
         );
     }
     // The first stage's lower deadband edge is 9.0; Min_Pres_Value must stay

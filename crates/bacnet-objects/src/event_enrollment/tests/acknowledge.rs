@@ -22,17 +22,7 @@ fn offnormal() -> EventEnrollmentObject {
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
     )))
     .unwrap();
-    ee.commit_event_transition(EventTransitionCommit {
-        change: EventStateChange {
-            from: EventState::NORMAL,
-            to: EventState::OFFNORMAL,
-        },
-        coordinate: EventTransition::ToOffnormal,
-        ack_required: true,
-        timestamp: STAMP,
-        message_text: None,
-    })
-    .unwrap();
+    commit_offnormal(&mut ee, STAMP);
     assert_eq!(
         read(&ee, PropertyIdentifier::ACKED_TRANSITIONS),
         PropertyValue::BitString {
@@ -42,6 +32,21 @@ fn offnormal() -> EventEnrollmentObject {
         }
     );
     ee
+}
+
+/// Commit NORMAL to OFFNORMAL at `timestamp`, acknowledgment required.
+fn commit_offnormal(ee: &mut EventEnrollmentObject, timestamp: BACnetTimeStamp) {
+    ee.commit_event_transition(EventTransitionCommit {
+        change: EventStateChange {
+            from: EventState::NORMAL,
+            to: EventState::OFFNORMAL,
+        },
+        coordinate: EventTransition::ToOffnormal,
+        ack_required: true,
+        timestamp,
+        message_text: None,
+    })
+    .unwrap();
 }
 
 fn read(ee: &EventEnrollmentObject, property: PropertyIdentifier) -> PropertyValue {
@@ -126,20 +131,30 @@ fn the_refusal_lifts_once_detection_is_back() {
     set_detection(&mut ee, false);
     assert_no_alarm_configured(ee.acknowledge_alarm(EventState::OFFNORMAL, &STAMP));
 
-    // Re-enabled, the refusal is no longer NO_ALARM_CONFIGURED: the reset
-    // dropped the OFFNORMAL transition, so there's nothing left to match.
     set_detection(&mut ee, true);
+    // The reset dropped the earlier OFFNORMAL transition, so its time stamp
+    // matches nothing now, and nothing moves.
     let before = snapshot(&ee);
     match ee.acknowledge_alarm(EventState::OFFNORMAL, &STAMP) {
-        Err(Error::Remote(RemoteError::Error { class, code })) => {
-            assert_ne!(
-                (class, code),
-                (ErrorClass::OBJECT, ErrorCode::NO_ALARM_CONFIGURED)
-            );
-        }
-        other => panic!("expected a protocol error, got {other:?}"),
+        Err(Error::Remote(RemoteError::Error {
+            class: ErrorClass::SERVICES,
+            code: ErrorCode::INVALID_TIME_STAMP,
+        })) => {}
+        other => panic!("expected SERVICES / INVALID_TIME_STAMP, got {other:?}"),
     }
     assert_eq!(snapshot(&ee), before);
+
+    // A fresh transition after re-enabling is acknowledged.
+    let fresh = BACnetTimeStamp::SequenceNumber(43);
+    commit_offnormal(&mut ee, fresh.clone());
+    ee.acknowledge_alarm(EventState::OFFNORMAL, &fresh).unwrap();
+    assert_eq!(
+        read(&ee, PropertyIdentifier::ACKED_TRANSITIONS),
+        PropertyValue::BitString {
+            unused_bits: 5,
+            data: vec![0xE0],
+        }
+    );
 }
 
 #[test]
