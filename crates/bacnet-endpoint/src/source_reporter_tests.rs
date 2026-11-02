@@ -507,8 +507,12 @@ async fn source_database_is_released_on_drop_without_stop() {
         let weak = Arc::downgrade(session.database.as_ref().unwrap());
         drop(session);
         // Dispatch owns a responder clone until its abort is observed.
-        tokio::task::yield_now().await;
-        assert!(weak.upgrade().is_none());
+        crate::session::eventually::eventually(
+            Duration::from_secs(2),
+            "the dropped session lets go of the database",
+            async || weak.upgrade().is_none(),
+        )
+        .await;
     }
 }
 

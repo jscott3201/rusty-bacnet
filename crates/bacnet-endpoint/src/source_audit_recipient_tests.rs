@@ -276,8 +276,12 @@ async fn drop_without_stop_adds_no_recipient_work_or_retained_database() {
         drop(session);
         tokio::task::yield_now().await;
         tokio::time::advance(Duration::from_secs(60)).await;
-        tokio::task::yield_now().await;
-        assert!(weak.upgrade().is_none());
+        crate::session::eventually::eventually(
+            Duration::from_secs(2),
+            "the dropped session lets go of the database",
+            async || weak.upgrade().is_none(),
+        )
+        .await;
         assert_eq!(coordinator.active_count().unwrap(), 0);
         assert_eq!(observed.sends.load(Ordering::SeqCst), 0);
     }

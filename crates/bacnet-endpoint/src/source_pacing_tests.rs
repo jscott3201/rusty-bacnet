@@ -82,11 +82,11 @@ async fn a_waiting_audited_read_fails_at_once_when_the_session_stops_or_drops() 
         // The waiter no longer holds the source, so nothing of the session
         // keeps the database once the session itself is gone.
         drop(endpoint);
-        bounded(async {
-            while weak.strong_count() > 0 {
-                tokio::task::yield_now().await;
-            }
-        })
+        crate::session::eventually::eventually(
+            Duration::from_secs(2),
+            "the dropped session lets go of the database",
+            async || weak.strong_count() == 0,
+        )
         .await;
     }
 }
