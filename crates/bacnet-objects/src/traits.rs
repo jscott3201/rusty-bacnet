@@ -68,7 +68,133 @@ pub enum ReliabilityEvaluation {
     },
 }
 
-/// The core trait for all BACnet objects.
+/// One BACnet object: the surface a custom object implements.
+///
+/// # What an implementer writes
+///
+/// Five methods have no default: [`object_identifier`](Self::object_identifier),
+/// [`object_name`](Self::object_name), [`read_property`](Self::read_property),
+/// [`write_property`](Self::write_property) and
+/// [`property_metadata`](Self::property_metadata). The metadata rows are the
+/// object's property model: Property_List, the required properties and
+/// property presence all derive from them
+/// ([`property_list`](crate::property_metadata::property_list),
+/// [`required_properties`](crate::property_metadata::required_properties),
+/// [`has_property`](crate::property_metadata::has_property)), and so do the
+/// defaults of [`is_writable_property`](Self::is_writable_property),
+/// [`is_array_property`](Self::is_array_property) and
+/// [`is_list_property`](Self::is_list_property). Keep the rows true rather
+/// than overriding those three. [`write_property_from`](Self::write_property_from)
+/// defaults to `write_property`; an object that tracks who commanded it
+/// overrides it.
+///
+/// # Capabilities
+///
+/// Every other behaviour is a capability: a trait of its own, in
+/// [`capabilities`], with an accessor here that defaults to `None`. `None`
+/// means the object doesn't have the behaviour, and the host leaves it out:
+/// the server's time pass skips an object whose [`timed`](Self::timed) is
+/// `None`, and SubscribeCOV refuses one whose [`cov`](Self::cov) is `None`.
+/// Each accessor says what its `None` does. To lend a capability, implement
+/// its trait and override the accessor to return `Some(self)` (or `Some` of
+/// the field that holds the behaviour). Most capability methods have
+/// defaults, so an object writes only the parts it uses.
+///
+/// An accessor that only hands out `&mut` has the capability's plain name.
+/// A capability the host also reads under a shared database guard has a
+/// `&self` accessor with the plain name and a `_mut` one beside it; an
+/// object that lends one lends both. An adapter that wraps another object
+/// forwards every accessor to the object inside. The public capabilities are
+/// [`Timed`], [`CovReporting`], [`EventReporting`], [`LocalInput`],
+/// [`LifeSafety`], [`ReliabilityEval`], [`ScheduleRunner`],
+/// [`DurableWrites`] and [`FileStorage`]. The `#[doc(hidden)]` ones serve
+/// built-in types and aren't public API yet.
+///
+/// # What isn't here
+///
+/// Answers that belong to the object type, not to an instance, aren't trait
+/// methods. Whether CreateObject builds a type, and which properties an
+/// initial value sets only at creation, come from the constructor table in
+/// [`crate::creation`] and its [`Creatable`](crate::creation::Creatable)
+/// trait, which an application implements for a type it registers. Whether
+/// DeleteObject removes a type comes from
+/// [`builtin_deleteable`](crate::creation::builtin_deleteable) and the
+/// server's registry.
+///
+/// # Example
+///
+/// A custom setpoint that lends one capability, [`CovReporting`], so it
+/// takes COV subscriptions and reports changes of half a unit:
+///
+/// ```
+/// use std::borrow::Cow;
+/// use bacnet_objects::property_metadata::{
+///     PropertyConformance as C, PropertyMetadata, PropertyWriteCapability as Wr,
+/// };
+/// use bacnet_objects::traits::{BACnetObject, CovReporting};
+/// use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier as P};
+/// use bacnet_types::error::Error;
+/// use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+///
+/// const ROWS: &[PropertyMetadata] = &[
+///     PropertyMetadata::new(P::OBJECT_IDENTIFIER, C::RequiredRead, None, Wr::ReadOnly),
+///     PropertyMetadata::new(P::OBJECT_NAME, C::RequiredRead, None, Wr::ReadOnly),
+///     PropertyMetadata::new(P::OBJECT_TYPE, C::RequiredRead, None, Wr::ReadOnly),
+///     PropertyMetadata::new(P::PRESENT_VALUE, C::RequiredWrite, None, Wr::Always),
+///     PropertyMetadata::new(P::PROPERTY_LIST, C::RequiredRead, None, Wr::ReadOnly),
+/// ];
+///
+/// struct Setpoint(f32);
+///
+/// // Every CovReporting method has a default; this one sets the increment.
+/// impl CovReporting for Setpoint {
+///     fn cov_increment(&self) -> Option<f64> {
+///         Some(0.5)
+///     }
+/// }
+///
+/// impl BACnetObject for Setpoint {
+///     fn object_identifier(&self) -> ObjectIdentifier {
+///         ObjectIdentifier::new(ObjectType::from_raw(130), 1).unwrap()
+///     }
+///     fn object_name(&self) -> &str {
+///         "setpoint"
+///     }
+///     fn read_property(&self, p: P, _: Option<u32>) -> Result<PropertyValue, Error> {
+///         match p {
+///             P::PRESENT_VALUE => Ok(PropertyValue::Real(self.0)),
+///             // ... and the universal rows ...
+///             _ => Err(Error::protocol(ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY)),
+///         }
+///     }
+///     fn write_property(
+///         &mut self,
+///         p: P,
+///         _: Option<u32>,
+///         value: PropertyValue,
+///         _: Option<u8>,
+///     ) -> Result<(), Error> {
+///         match (p, value) {
+///             (P::PRESENT_VALUE, PropertyValue::Real(v)) => {
+///                 self.0 = v;
+///                 Ok(())
+///             }
+///             _ => Err(Error::protocol(ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED)),
+///         }
+///     }
+///     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+///         Cow::Borrowed(ROWS)
+///     }
+///     // Lend the capability; every other accessor stays `None`.
+///     fn cov(&self) -> Option<&dyn CovReporting> {
+///         Some(self)
+///     }
+/// }
+///
+/// let mut object = Setpoint(21.0);
+/// assert_eq!(object.cov().and_then(|cov| cov.cov_increment()), Some(0.5));
+/// assert!(object.timed().is_none());
+/// ```
 ///
 /// Stored objects have crate-authorized concrete access; borrowed read views
 /// remain valid implementors. Applications cannot manufacture its access permit:
@@ -76,8 +202,6 @@ pub enum ReliabilityEvaluation {
 /// use bacnet_objects::traits::ObjectStorageAccess;
 /// let permit = ObjectStorageAccess(());
 /// ```
-/// Implementors represent a single BACnet object (Device, AnalogInput, etc.)
-/// and provide read/write access to their properties.
 pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// Typed local Device authority for composition-owned configuration.
     /// This does not grant network write access to the object database.

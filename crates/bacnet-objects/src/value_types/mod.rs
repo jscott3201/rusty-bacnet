@@ -39,7 +39,7 @@ mod metadata;
 /// property (the numeric value types, whose tables require it): a field that
 /// starts at NO_UNITS and reads as Enumerated, a `units` getter and a
 /// validated `set_units` setter. Units has no network write route, but a
-/// CreateObject initial value may set it ([`BACnetObject::initialize_property`]),
+/// CreateObject initial value may set it ([`Creatable::initialize_property`](crate::creation::Creatable::initialize_property)),
 /// as on the analog types.
 ///
 /// The optional `cov_increment` entry names the COV_Increment datatype of the
