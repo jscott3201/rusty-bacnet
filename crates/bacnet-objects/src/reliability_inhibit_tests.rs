@@ -3,9 +3,12 @@ use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject};
 use crate::property_metadata::is_writable_property;
 use crate::property_metadata::{PropertyConformance, PropertyWriteCapability};
+#[cfg(feature = "event-reporting")]
 use crate::traits::EventReporting as _;
 use crate::traits::{BACnetObject, ReliabilityEvaluation};
-use bacnet_types::enums::{EngineeringUnits, EventState, PropertyIdentifier, Reliability};
+#[cfg(feature = "event-reporting")]
+use bacnet_types::enums::EventState;
+use bacnet_types::enums::{EngineeringUnits, PropertyIdentifier, Reliability};
 use bacnet_types::primitives::PropertyValue;
 
 const INHIBIT: PropertyIdentifier = PropertyIdentifier::RELIABILITY_EVALUATION_INHIBIT;
@@ -380,6 +383,7 @@ fn repeated_oos_cycles_clear_old_client_ownership() {
     }
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn inhibit_does_not_change_detection_enable_and_recovery_is_reportable() {
     let mut object =

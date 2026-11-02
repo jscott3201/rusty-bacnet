@@ -77,6 +77,7 @@ fn msi_event_enable_bit_selects_which_transition_distributes() {
 /// because they all target OFFNORMAL. A gate keyed to a fixed bit rather than to
 /// the transition being reported — `event_enable & 0x01` where
 /// `& transition_bit` belongs — answers one of these two rows wrongly.
+#[cfg(feature = "event-reporting")]
 #[test]
 fn msi_event_enable_bit_selects_whether_the_return_to_normal_distributes() {
     for (bits, distributes) in [
@@ -652,6 +653,7 @@ fn unsupported_fault_and_output_alarm_surfaces_are_unknown() {
     ));
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn recommissioning_alarm_values_while_offnormal_returns_to_normal() {
     let mut msi = MultiStateInputObject::new(1, "MSI-1", 3).unwrap();

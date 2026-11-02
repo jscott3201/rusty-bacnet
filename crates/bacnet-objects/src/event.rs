@@ -1097,11 +1097,13 @@ impl CommandFailureDetector {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "event-reporting"))]
 pub(crate) use history::commit_test_proposal;
 pub(crate) use history::impl_builtin_intrinsic_reporting;
 pub(crate) use state_reporting::impl_change_of_state_reporting;
 
+#[cfg(all(test, feature = "event-reporting"))]
+mod fault_reporting_tests;
 #[cfg(test)]
 mod fault_tests;
 #[cfg(test)]

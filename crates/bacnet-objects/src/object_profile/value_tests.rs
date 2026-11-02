@@ -10,6 +10,7 @@ use crate::property_metadata::{PropertyConformance, PropertyWriteCapability};
 use crate::traits::BACnetObject;
 use bacnet_types::enums::{EngineeringUnits, ObjectType};
 use std::sync::Arc;
+#[cfg(feature = "durable-writes")]
 use std::time::Duration;
 
 const KINDS: [ObjectType; 3] = [
@@ -329,6 +330,7 @@ fn invalid_and_oversized_tags_never_attempt_a_save_in_any_value_mode() {
     }
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn each_value_monotonic_hook_expires_unclaimed_stages_without_output_change() {
     for kind in KINDS {

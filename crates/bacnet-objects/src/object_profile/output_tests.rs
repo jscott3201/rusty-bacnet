@@ -10,6 +10,7 @@ use crate::traits::BACnetObject;
 use bacnet_types::enums::{EngineeringUnits, ObjectType};
 use std::borrow::Cow;
 use std::sync::Arc;
+#[cfg(feature = "durable-writes")]
 use std::time::Duration;
 
 const KINDS: [ObjectType; 3] = [
@@ -21,6 +22,7 @@ const ROWS: [P; 3] = [P::TAGS, P::PROFILE_LOCATION, P::PROFILE_NAME];
 
 trait ProfileOutput: BACnetObject {
     fn provision(&mut self, profile: ObjectProfile) -> Result<(), Error>;
+    #[cfg(feature = "durable-writes")]
     fn wait(&self);
 }
 macro_rules! profile_output {
@@ -29,6 +31,7 @@ macro_rules! profile_output {
             fn provision(&mut self, profile: ObjectProfile) -> Result<(), Error> {
                 self.set_profile(profile)
             }
+            #[cfg(feature = "durable-writes")]
             fn wait(&self) {
                 self.wait_for_tag_saves();
             }
@@ -161,6 +164,7 @@ fn all_outputs_eight_masks_and_oos_states_preserve_existing_metadata() {
     }
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn output_saved_overrides_need_provisioning_and_invalid_replacement_preserves_state() {
     for kind in KINDS {
@@ -271,6 +275,7 @@ fn output_invalid_and_oversized_tags_make_no_save_attempts() {
     }
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn output_monotonic_hooks_correct_expired_stages_without_output_changes() {
     for kind in KINDS {

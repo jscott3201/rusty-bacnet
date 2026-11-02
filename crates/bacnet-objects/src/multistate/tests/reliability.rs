@@ -2,9 +2,12 @@
 
 use super::super::*;
 use crate::property_metadata::is_writable_property;
+#[cfg(feature = "event-reporting")]
 use crate::traits::EventReporting as _;
 use crate::traits::ReliabilityEvaluation;
-use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, Reliability};
+#[cfg(feature = "event-reporting")]
+use bacnet_types::enums::EventState;
+use bacnet_types::enums::{ErrorClass, ErrorCode, Reliability};
 use bacnet_types::error::RemoteError;
 
 fn read_reliability(object: &dyn BACnetObject) -> u32 {
@@ -542,6 +545,7 @@ fn oos_and_inhibit_suppress_mutations_then_release_current_state_synchronously()
     );
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn synchronous_reliability_is_observed_by_the_existing_intrinsic_event_kernel() {
     let mut msi = MultiStateInputObject::new(1, "MSI-events", 2).unwrap();

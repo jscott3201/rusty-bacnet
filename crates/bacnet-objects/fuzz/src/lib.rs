@@ -70,14 +70,17 @@ pub enum Target {
 impl Target {
     /// Its formats, in selector order.
     pub fn formats(self) -> Vec<&'static Format> {
-        FORMATS
-            .iter()
-            .filter(|format| match self {
-                Self::Log => format.two_slot && format.name != "audit_log",
-                Self::Audit => format.name == "audit_log",
-                Self::ObjectFile => !format.two_slot,
-            })
-            .collect()
+        self.iter().collect()
+    }
+
+    /// Its formats, in selector order, without collecting them: [`parse`]
+    /// runs on every input.
+    fn iter(self) -> impl Iterator<Item = &'static Format> + Clone {
+        FORMATS.iter().filter(move |format| match self {
+            Self::Log => format.two_slot && format.name != "audit_log",
+            Self::Audit => format.name == "audit_log",
+            Self::ObjectFile => !format.two_slot,
+        })
     }
 }
 
@@ -153,7 +156,9 @@ impl Medium for Memory {
         Self::new(vec![None; self.count])
     }
     fn contents(&self) -> Vec<Option<Vec<u8>>> {
-        self.files.files()[..self.count].to_vec()
+        // One copy of the octets, not two: the check takes this on every
+        // input.
+        self.files.files().into_iter().take(self.count).collect()
     }
 }
 
@@ -195,11 +200,14 @@ fn remove_stale_scratch() {
 
 /// `target`'s format that `input` picks, and the files it holds.
 fn parse(target: Target, input: &[u8]) -> (&'static Format, Vec<Option<Vec<u8>>>) {
-    let formats = target.formats();
+    let mut formats = target.iter();
     let (selector, rest) = input
         .split_first()
         .map_or((0, &[][..]), |(&s, rest)| (s, rest));
-    let format = formats[usize::from(selector) % formats.len()];
+    let count = formats.clone().count();
+    let format = formats
+        .nth(usize::from(selector) % count)
+        .expect("a selector modulo the format count");
     (format, files(format, rest))
 }
 

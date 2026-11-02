@@ -37,7 +37,6 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags, Tim
 
 use crate::common::{self, read_common_properties};
 use crate::database::ObjectDatabase;
-use crate::durable::DurableWrites;
 use crate::event::EventTransition;
 use crate::traits::BACnetObject;
 
@@ -255,7 +254,8 @@ impl BACnetObject for NotificationClass {
         metadata::for_object(self)
     }
 
-    fn durable_writes(&mut self) -> Option<&mut dyn DurableWrites> {
+    #[cfg(feature = "durable-writes")]
+    fn durable_writes(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
         Some(self)
     }
 }

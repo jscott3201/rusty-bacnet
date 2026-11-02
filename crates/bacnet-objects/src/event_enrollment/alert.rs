@@ -85,7 +85,7 @@ impl AlertEnrollmentObject {
 
     /// Seed a committed, unacknowledged transition to `state` for a test:
     /// Alert Enrollment has no transition commit of its own.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "event-reporting"))]
     pub(crate) fn seed_unacknowledged(
         &mut self,
         state: EventState,

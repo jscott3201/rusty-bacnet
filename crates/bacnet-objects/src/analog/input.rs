@@ -315,6 +315,7 @@ impl BACnetObject for AnalogInputObject {
         ))
     }
 
+    #[cfg(feature = "durable-writes")]
     fn durable_writes(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
         self.profile.capability()
     }
@@ -460,6 +461,7 @@ mod detection_enable_reset_tests {
         );
     }
 
+    #[cfg(feature = "event-reporting")]
     #[test]
     fn rejected_delayed_and_fault_reindication_proposals_remain_retryable() {
         use crate::event::{

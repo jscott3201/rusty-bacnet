@@ -3,7 +3,9 @@ use crate::command_source::CommandOrigin;
 use bacnet_encoding::constructed::decode_value_source;
 use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetValueSource};
-use bacnet_types::enums::{EngineeringUnits, EventState, EventType, Reliability};
+use bacnet_types::enums::EngineeringUnits;
+#[cfg(feature = "event-reporting")]
+use bacnet_types::enums::{EventState, EventType, Reliability};
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier};
 
 fn origin(device: u32) -> CommandOrigin {
@@ -201,6 +203,7 @@ fn tags_do_not_steal_priorities_source_correction_or_command_time() {
     }
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn profile_writes_preserve_command_failure_and_out_of_range_transitions() {
     for kind in KINDS {
