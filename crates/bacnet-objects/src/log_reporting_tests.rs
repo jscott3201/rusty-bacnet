@@ -15,6 +15,8 @@ use bacnet_types::constructed::{
 use bacnet_types::enums::ObjectType;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::RemoteError;
+#[cfg(feature = "event-reporting")]
+use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::primitives::{Date, Time};
 use std::sync::Arc;
 
@@ -406,4 +408,182 @@ fn only_a_report_to_normal_commits() {
     assert_eq!(refused, Err(EventTransitionCommitError::Unsupported));
     assert_eq!(reporting.event_state(), EventState::NORMAL);
     assert_eq!(reporting.report(), None);
+}
+
+/// Commit a report the recipients must acknowledge, stamped `stamp`.
+#[cfg(feature = "event-reporting")]
+fn commit_acked_report(log: &mut dyn BACnetObject, stamp: &BACnetTimeStamp) {
+    add(log);
+    let reporting = log.event_reporting_mut().expect("lends event reporting");
+    let outcome = reporting
+        .tick_intrinsic_reporting()
+        .expect("a report is due");
+    reporting
+        .commit_event_transition(EventTransitionCommit {
+            coordinate: outcome.change.transition(),
+            change: outcome.change,
+            ack_required: true,
+            timestamp: stamp.clone(),
+            message_text: None,
+        })
+        .unwrap();
+}
+
+#[cfg(feature = "event-reporting")]
+fn acked(log: &dyn BACnetObject) -> PropertyValue {
+    log.read_property(P::ACKED_TRANSITIONS, None).unwrap()
+}
+
+#[cfg(feature = "event-reporting")]
+fn acknowledge(
+    log: &mut dyn BACnetObject,
+    state: EventState,
+    stamp: &BACnetTimeStamp,
+) -> Result<Option<EventStateChange>, Error> {
+    log.event_reporting_mut()
+        .expect("lends event reporting")
+        .acknowledge_alarm(state, stamp)
+}
+
+/// A report needing acknowledgment is acknowledged by its own timestamp.
+/// With detection off there is nothing to acknowledge, so the log answers
+/// NO_ALARM_CONFIGURED and changes nothing, and turning detection back on
+/// lifts that refusal (#2183).
+#[cfg(feature = "event-reporting")]
+#[test]
+fn an_acknowledgment_needs_detection_and_the_reports_timestamp() {
+    let all_acked = PropertyValue::BitString {
+        unused_bits: 5,
+        data: vec![EventTransitionBits::all().to_bacnet()],
+    };
+    let unacked_normal = PropertyValue::BitString {
+        unused_bits: 5,
+        data: vec![(EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_FAULT).to_bacnet()],
+    };
+    let stamp = BACnetTimeStamp::SequenceNumber(42);
+    let other = BACnetTimeStamp::SequenceNumber(43);
+    let invalid_stamp = (ErrorClass::SERVICES, ErrorCode::INVALID_TIME_STAMP);
+    for mut log in logs() {
+        let log = log.as_mut();
+        write(log, P::NOTIFICATION_THRESHOLD, PropertyValue::Unsigned(1));
+        commit_acked_report(log, &stamp);
+        assert_eq!(acked(log), unacked_normal);
+
+        // Another timestamp, or a state the log never entered, is refused.
+        assert_eq!(
+            code(acknowledge(log, EventState::NORMAL, &other).unwrap_err()),
+            invalid_stamp
+        );
+        assert_eq!(
+            code(acknowledge(log, EventState::OFFNORMAL, &stamp).unwrap_err()),
+            invalid_stamp
+        );
+        assert_eq!(acked(log), unacked_normal);
+        assert_eq!(
+            acknowledge(log, EventState::NORMAL, &stamp).unwrap(),
+            Some(EventStateChange {
+                from: EventState::NORMAL,
+                to: EventState::NORMAL,
+            })
+        );
+        assert_eq!(acked(log), all_acked);
+
+        // Detection off: the refusal changes nothing.
+        commit_acked_report(log, &other);
+        write(
+            log,
+            P::EVENT_DETECTION_ENABLE,
+            PropertyValue::Boolean(false),
+        );
+        assert_eq!(
+            code(acknowledge(log, EventState::NORMAL, &other).unwrap_err()),
+            (ErrorClass::OBJECT, ErrorCode::NO_ALARM_CONFIGURED)
+        );
+        assert_eq!(acked(log), all_acked);
+
+        // Back on, the log answers again: the reset history holds no report.
+        write(log, P::EVENT_DETECTION_ENABLE, PropertyValue::Boolean(true));
+        assert_eq!(
+            code(acknowledge(log, EventState::NORMAL, &other).unwrap_err()),
+            invalid_stamp
+        );
+        commit_acked_report(log, &stamp);
+        assert!(acknowledge(log, EventState::NORMAL, &stamp).is_ok());
+        assert_eq!(acked(log), all_acked);
+    }
+}
+
+/// Event_Algorithm_Inhibit follows its reference only once one is set.
+#[cfg(feature = "event-reporting")]
+#[test]
+fn the_inhibit_follows_only_a_configured_reference() {
+    let binary_value = ObjectIdentifier::new(ObjectType::BINARY_VALUE, 1).unwrap();
+    let reference = BACnetObjectPropertyReference::new(binary_value, P::PRESENT_VALUE.to_raw());
+    for mut log in logs() {
+        let log = log.as_mut();
+        let reporting = log.event_reporting_mut().unwrap();
+        assert_eq!(reporting.event_algorithm_inhibit_reference(), None);
+        assert!(!reporting.follow_event_algorithm_inhibit(true));
+        let mut octets = bytes::BytesMut::new();
+        bacnet_encoding::constructed::encode_object_property_reference(&mut octets, &reference);
+        write(
+            log,
+            P::EVENT_ALGORITHM_INHIBIT_REF,
+            PropertyValue::ApplicationData(octets.to_vec()),
+        );
+        let reporting = log.event_reporting_mut().unwrap();
+        assert_eq!(
+            reporting.event_algorithm_inhibit_reference(),
+            Some(reference.clone())
+        );
+        assert!(reporting.follow_event_algorithm_inhibit(true));
+        assert!(!reporting.follow_event_algorithm_inhibit(true));
+        assert_eq!(
+            log.read_property(P::EVENT_ALGORITHM_INHIBIT, None).unwrap(),
+            PropertyValue::Boolean(true)
+        );
+        assert!(
+            log.event_reporting_mut()
+                .unwrap()
+                .follow_event_algorithm_inhibit(false)
+        );
+    }
+}
+
+/// The trend logs' setters for the event rows the network also writes.
+#[test]
+fn the_trend_logs_set_event_enable_and_notify_type() {
+    let enable = EventTransitionBits::TO_OFFNORMAL;
+    let expected = PropertyValue::BitString {
+        unused_bits: 5,
+        data: vec![enable.to_bacnet()],
+    };
+    let alarm = PropertyValue::Enumerated(NotifyType::ALARM.to_raw());
+    let mut trend = TrendLogObject::new(1, "TL-1", 4).unwrap();
+    trend.set_event_enable(enable);
+    trend.set_notify_type(NotifyType::ALARM);
+    let mut multiple = TrendLogMultipleObject::new(1, "TLM-1", 4).unwrap();
+    multiple.set_event_enable(enable);
+    multiple.set_notify_type(NotifyType::ALARM);
+    for log in [&trend as &dyn BACnetObject, &multiple] {
+        assert_eq!(log.read_property(P::EVENT_ENABLE, None).unwrap(), expected);
+        assert_eq!(log.read_property(P::NOTIFY_TYPE, None).unwrap(), alarm);
+    }
+}
+
+/// `BUFFER_READY_METADATA` is a `const`, filled in at build time, so a
+/// coverage run sees `required` and `permitted` as never called. Calling
+/// them here at run time checks they build the table's rows (#2183).
+#[test]
+fn the_event_rows_are_what_their_builders_make_at_run_time() {
+    use crate::property_metadata::PropertyWriteCapability::{Always, ReadOnly};
+    use core::hint::black_box;
+    assert_eq!(
+        required(black_box(P::NOTIFICATION_THRESHOLD), Always),
+        BUFFER_READY_METADATA[0]
+    );
+    assert_eq!(
+        permitted(black_box(P::EVENT_MESSAGE_TEXTS), ReadOnly),
+        BUFFER_READY_METADATA[8]
+    );
 }

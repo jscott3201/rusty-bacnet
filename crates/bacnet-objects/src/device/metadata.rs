@@ -133,3 +133,7 @@ pub(super) fn for_object(object: &DeviceObject) -> Cow<'_, [PropertyMetadata]> {
     }
     rows
 }
+
+#[cfg(test)]
+#[path = "metadata_rows_tests.rs"]
+mod rows_tests;

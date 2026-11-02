@@ -757,7 +757,7 @@ impl AuditReporterObject {
     }
 }
 
-#[cfg(all(test, feature = "std"))]
+#[cfg(test)]
 #[path = "audit/tests.rs"]
 mod tests;
 
@@ -765,7 +765,7 @@ mod tests;
 #[path = "audit/query_tests.rs"]
 mod query_tests;
 
-#[cfg(all(test, feature = "std"))]
+#[cfg(test)]
 #[path = "audit/notification_tests.rs"]
 mod notification_tests;
 
@@ -773,10 +773,12 @@ mod notification_tests;
 #[path = "audit/receipt_tests.rs"]
 mod receipt_tests;
 
+// std: these load and save through the file backend.
 #[cfg(all(test, feature = "std"))]
 #[path = "audit/persistence_receipt_tests.rs"]
 mod persistence_receipt_tests;
 
+// std: these load and save through the file backend.
 #[cfg(all(test, feature = "std"))]
 #[path = "audit/persistence_schema_tests.rs"]
 mod persistence_schema_tests;
@@ -788,10 +790,10 @@ mod reporter_configuration;
 #[path = "audit/reporter_delay_tests.rs"]
 mod reporter_delay_tests;
 
-#[cfg(all(test, feature = "std"))]
+#[cfg(test)]
 #[path = "audit/staging_tests.rs"]
 mod staging_tests;
 
-#[cfg(all(test, feature = "std"))]
+#[cfg(test)]
 #[path = "audit/buffer_tests.rs"]
 mod buffer_tests;

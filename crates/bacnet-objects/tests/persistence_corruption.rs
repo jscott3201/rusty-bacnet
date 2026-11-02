@@ -13,6 +13,7 @@
 //! match, one flip per octet) so the damage reaches the payload decoders,
 //! where a load is allowed but the same check applies.
 
+// std: every format here is read and written through its file backend.
 #![cfg(feature = "std")]
 
 #[path = "support/restore.rs"]

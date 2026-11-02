@@ -1,12 +1,15 @@
 //! Saves that run off the database lock (#1270): staged writes, and the
 //! operation task's coalesced saves.
 
-use super::storage::{MemoryPersistence, WAIT, block_on, persistent};
+#[cfg(feature = "std")]
+use super::storage::WAIT;
+use super::storage::{MemoryPersistence, block_on, persistent};
 use super::*;
 use crate::durable::{DurableWrites, STAGED_WRITE_LIFETIME, SaveWait, StageStep};
 use crate::traits::Timed;
 use bacnet_types::enums::PropertyIdentifier as P;
 use std::sync::atomic::Ordering;
+#[cfg(feature = "std")]
 use std::time::Instant;
 
 fn staged(step: StageStep) -> SaveWait {
@@ -16,6 +19,8 @@ fn staged(step: StageStep) -> SaveWait {
     }
 }
 
+// std: holds a save open on the writer thread.
+#[cfg(feature = "std")]
 fn busy(step: StageStep) -> SaveWait {
     match step {
         StageStep::Busy(wait) => wait,
@@ -46,6 +51,8 @@ fn stage_saved(
     wait
 }
 
+// std: holds a save open on the writer thread.
+#[cfg(feature = "std")]
 #[test]
 fn a_staged_write_saves_while_the_forwarder_serves_the_old_list() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -99,6 +106,8 @@ fn a_staged_write_whose_save_fails_is_refused_and_the_old_list_stays() {
     assert_eq!(counters.failed_saves(), 1);
 }
 
+// std: holds a save open on the writer thread.
+#[cfg(feature = "std")]
 #[test]
 fn a_second_write_waits_until_the_first_has_landed() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -170,6 +179,8 @@ fn a_released_staged_write_whose_save_failed_saves_nothing_more() {
     assert_eq!(storage.saved(), served);
 }
 
+// std: holds a save open on the writer thread.
+#[cfg(feature = "std")]
 #[test]
 fn a_release_from_another_request_leaves_the_staged_write_alone() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -201,6 +212,8 @@ fn a_release_from_another_request_leaves_the_staged_write_alone() {
     assert_eq!(storage.saved(), second);
 }
 
+// std: holds a save open on the writer thread.
+#[cfg(feature = "std")]
 #[test]
 fn a_slow_save_keeps_its_staged_write_for_a_lifetime_after_it_finishes() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -246,6 +259,8 @@ fn a_write_nobody_staged_supersedes_a_staged_one() {
     assert_eq!(storage.saved(), staged_list);
 }
 
+// std: waits out the staged lifetime on the wall clock.
+#[cfg(feature = "std")]
 #[test]
 fn a_forgotten_staged_write_frees_the_forwarder() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -320,6 +335,8 @@ fn staging_skips_writes_the_forwarder_does_not_save_or_will_refuse() {
     assert_eq!(storage.saves(), 0);
 }
 
+// std: holds a save open on the writer thread.
+#[cfg(feature = "std")]
 #[test]
 fn operation_task_saves_coalesce_and_never_hold_the_forwarder() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -353,6 +370,8 @@ fn operation_task_saves_coalesce_and_never_hold_the_forwarder() {
     assert_eq!(storage.saved(), [subscription(device(6), 1, 1)]);
 }
 
+// std: holds a save open on the writer thread.
+#[cfg(feature = "std")]
 #[test]
 fn an_operation_task_save_returns_while_storage_is_held() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -457,6 +476,8 @@ fn a_forwarder_dropped_with_a_staged_write_whose_save_failed_leaves_storage_alon
     assert_eq!(storage.saves(), 1);
 }
 
+// std: holds a save open on the writer thread.
+#[cfg(feature = "std")]
 #[test]
 fn a_forwarder_dropped_while_its_staged_save_runs_puts_storage_back_after_it() {
     let storage = Arc::new(MemoryPersistence::default());

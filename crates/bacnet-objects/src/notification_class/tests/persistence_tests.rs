@@ -9,9 +9,12 @@ use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipien
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::RemoteError;
 use bytes::BytesMut;
+#[cfg(feature = "std")]
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(feature = "std")]
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 pub(super) fn framed(list: &[BACnetDestination]) -> PropertyValue {
     let mut buf = BytesMut::new();
@@ -202,8 +205,12 @@ fn a_saved_recipient_list_a_write_would_refuse_refuses_the_class() {
     }
 }
 
+// std: the file backend.
+#[cfg(feature = "std")]
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+// std: the file backend.
+#[cfg(feature = "std")]
 fn temp_file() -> PathBuf {
     let serial = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir()
@@ -214,6 +221,8 @@ fn temp_file() -> PathBuf {
         .join("recipients")
 }
 
+// std: the file backend.
+#[cfg(feature = "std")]
 #[test]
 fn file_persistence_round_trips_and_refuses_another_objects_file() {
     let path = temp_file();
@@ -281,6 +290,8 @@ fn file_persistence_round_trips_and_refuses_another_objects_file() {
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
 
+// std: the file backend.
+#[cfg(feature = "std")]
 #[test]
 fn file_persistence_keeps_a_class_list_across_a_rebuild() {
     let path = temp_file();
@@ -301,6 +312,8 @@ fn file_persistence_keeps_a_class_list_across_a_rebuild() {
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
 
+// std: the file backend.
+#[cfg(feature = "std")]
 #[test]
 fn file_persistence_refuses_a_file_past_its_size_or_entry_caps() {
     use crate::notification_class::persistence::MAX_FILE_BYTES;

@@ -1523,8 +1523,18 @@ can't work.
 - **Fuzz: `<target>`**, one job per target from that list, so a new
   `[[bin]]` runs without a workflow change, builds its target and runs it.
   cargo-fuzz's defaults apply: optimized, with debug assertions, overflow
-  checks and AddressSanitizer. An input that runs for 10 seconds counts as a
-  hang. On a scheduled or manual run on `dev` it then minimizes the corpus
+  checks and AddressSanitizer. The object crate's restore targets are the
+  exception (#2233): `fuzz.sh` names them and builds, runs and minimizes
+  them with no sanitizer (`-s none`); any other target keeps it. They check
+  for a panic and a broken round trip, which need no sanitizer, and the
+  workspace crates they link (bacnet-objects, bacnet-types, bacnet-encoding,
+  bacnet-npdu) forbid unsafe code. AddressSanitizer would only add checks
+  for memory errors in the unsafe code of their other dependencies (std,
+  bytes, smallvec, tracing, once_cell, libc and libfuzzer-sys), which are
+  fuzzed upstream. They run about 2.7 times faster without it, and the
+  harness's own allocator keeps libFuzzer's 2,048 MB limit on one
+  allocation. An input that runs for 10 seconds counts as a hang. On a
+  scheduled or manual run on `dev` it then minimizes the corpus
   (`fuzz.sh cmin`) and saves it.
 - **Fuzz: advisories**, on scheduled and manual runs only, checks each fuzz
   crate's lockfile against the RustSec advisories with Cargo Deny (at
@@ -1859,12 +1869,14 @@ cargo llvm-cov clean --workspace                               # drop the instru
 A `const` item is evaluated at build time, so the `const fn` that fills it is
 never called at run time and reports as uncovered, however many tests read
 the item. The row tables of both trend objects (`trend/metadata.rs`,
-`trend/multiple_metadata.rs`) are built this way. Each
-file has a `rows_tests` module that calls its `rows` builder at run time,
-with the argument behind `core::hint::black_box` so the call can't be
-folded, and checks the result against the `const` tables (#2183). Nothing is
-excluded from the report. A new `const fn` table gets the same kind of
-test, so per-file numbers stay trustworthy.
+`trend/multiple_metadata.rs`), of the File and Device objects
+(`file/metadata.rs`, `device/metadata.rs`), the logs' BUFFER_READY rows
+(`log_reporting.rs`) and the CreateObject table (`creation.rs`) are built
+this way. A test beside each calls its builder at run time, with the
+argument behind `core::hint::black_box` so the call can't be folded, and
+checks the result against the `const` table (#2183). Nothing is excluded
+from the report. A new `const fn` table gets the same kind of test, so
+per-file numbers stay trustworthy.
 
 ## Merge evidence
 

@@ -47,6 +47,7 @@ pub use persistence::{
     WriteConfigSnapshot,
 };
 
+// std: these load and save through the file backend.
 #[cfg(all(test, feature = "std"))]
 #[path = "write_config/persistence_tests.rs"]
 mod persistence_tests;

@@ -5,11 +5,16 @@
 use super::super::*;
 use super::make_dest_device;
 use super::persistence_tests::{assert_refused, framed, write};
-use super::storage::{MemoryPersistence, WAIT, block_on, persistent};
-use crate::durable::{DurableWrites, STAGED_WRITE_LIFETIME, SaveWait, StageStep};
+#[cfg(feature = "std")]
+use super::storage::WAIT;
+use super::storage::{MemoryPersistence, block_on, persistent};
+#[cfg(feature = "std")]
+use crate::durable::STAGED_WRITE_LIFETIME;
+use crate::durable::{DurableWrites, SaveWait, StageStep};
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+#[cfg(feature = "std")]
 use std::time::{Duration, Instant};
 
 fn staged(step: StageStep) -> SaveWait {
@@ -19,6 +24,8 @@ fn staged(step: StageStep) -> SaveWait {
     }
 }
 
+// std: holds a save open on the writer thread.
+#[cfg(feature = "std")]
 fn busy(step: StageStep) -> SaveWait {
     match step {
         StageStep::Busy(wait) => wait,
@@ -34,6 +41,8 @@ fn stage_saved(nc: &mut NotificationClass, list: &[BACnetDestination]) -> SaveWa
     wait
 }
 
+// std: holds a save open on the writer thread.
+#[cfg(feature = "std")]
 #[test]
 fn a_staged_write_saves_while_the_class_serves_the_old_list() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -87,6 +96,8 @@ fn a_staged_write_whose_save_fails_is_refused_and_the_old_list_stays() {
     assert_eq!(storage.saves(), 1);
 }
 
+// std: holds a save open on the writer thread.
+#[cfg(feature = "std")]
 #[test]
 fn a_second_write_waits_until_the_first_has_landed() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -174,6 +185,8 @@ fn a_write_nobody_staged_supersedes_a_staged_one() {
     assert_eq!(storage.saved(), Some(staged_list.to_vec()));
 }
 
+// std: judges the staged lifetime on the wall clock.
+#[cfg(feature = "std")]
 #[test]
 fn a_forgotten_staged_write_is_dropped_by_the_next_write_that_stages() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -212,6 +225,8 @@ fn a_forgotten_staged_write_is_dropped_by_the_next_write_that_stages() {
     assert_eq!(storage.saves(), 4);
 }
 
+// std: holds a save open on the writer thread.
+#[cfg(feature = "std")]
 #[test]
 fn an_operation_task_call_drops_a_forgotten_staged_write_once_its_lifetime_is_over() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -342,6 +357,8 @@ fn a_class_dropped_with_a_staged_write_whose_save_failed_leaves_storage_alone() 
     assert_eq!(persistent(&storage).recipient_list(), served);
 }
 
+// std: holds a save open on the writer thread.
+#[cfg(feature = "std")]
 #[test]
 fn a_class_dropped_while_its_staged_save_runs_puts_storage_back_after_it() {
     let storage = Arc::new(MemoryPersistence::default());
