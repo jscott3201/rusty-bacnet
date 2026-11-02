@@ -1,10 +1,10 @@
 //! The agent pane's state (#2185; design §9): screen 8, while the
 //! session's MCP listener runs. It lists the attached agents' tool calls,
-//! newest first, from the listener's [`Board`](bacnet_mcp::attach::Board):
+//! newest first, from the listener's `bacnet_mcp::attach::Board`:
 //! the sessions record each call there on their own runtime, and every
 //! tick takes a copy when it changed, without waiting for the lock, so a
 //! busy session never holds up a frame. The ring keeps the latest
-//! [`CALLS`](bacnet_mcp::attach::CALLS), dropping the oldest, counted.
+//! `bacnet_mcp::attach::CALLS`, dropping the oldest, counted.
 //!
 //! The pane also tells the board whether the write session here is armed,
 //! which `bacnet://session` reports to the agents, read-only.
