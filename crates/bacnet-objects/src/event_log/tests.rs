@@ -90,7 +90,10 @@ fn framed(record: &BACnetEventLogRecord) -> Vec<u8> {
 
 /// Each resident record as ReadRange serves it.
 fn served(el: &EventLogObject) -> Vec<Vec<u8>> {
-    let records = el.log_buffer_internal().unwrap();
+    let records = el
+        .log_buffer()
+        .and_then(|log| log.buffer_records())
+        .unwrap();
     (0..records.record_count())
         .map(|index| {
             let mut buf = BytesMut::new();
@@ -155,7 +158,13 @@ fn read_property_refuses_log_buffer() {
     el.add_record(make_record(10, 72.5)).unwrap();
     el.add_record(make_record(11, 73.0)).unwrap();
     assert_read_access_denied(el.read_property(PropertyIdentifier::LOG_BUFFER, None));
-    assert_eq!(el.log_buffer_internal().unwrap().record_count(), 2);
+    assert_eq!(
+        el.log_buffer()
+            .and_then(|log| log.buffer_records())
+            .unwrap()
+            .record_count(),
+        2
+    );
 }
 
 /// Each record is served framed as Clause 21's BACnetEventLogRecord (#1233).
@@ -442,7 +451,7 @@ fn event_log_identities_align_after_eviction_and_differ_from_position() {
         el.add_record(make_record(hour, hour as f32)).unwrap();
     }
 
-    let identities = el.log_record_identities_internal().unwrap();
+    let identities = el.log_buffer().map(|log| log.record_identities()).unwrap();
     let wire = served(&el);
     assert_eq!(identities.len(), el.records().len());
     assert_eq!(identities.len(), wire.len());
@@ -469,7 +478,8 @@ fn event_log_clear_preserves_total_and_next_identity() {
     el.add_record(make_record(1, 1.0)).unwrap();
     el.add_record(make_record(1, 2.0)).unwrap();
     assert_eq!(
-        el.log_record_identities_internal()
+        el.log_buffer()
+            .map(|log| log.record_identities())
             .unwrap()
             .iter()
             .map(|identity| identity.sequence_number())
@@ -478,7 +488,12 @@ fn event_log_clear_preserves_total_and_next_identity() {
     );
 
     el.clear();
-    assert!(el.log_record_identities_internal().unwrap().is_empty());
+    assert!(
+        el.log_buffer()
+            .map(|log| log.record_identities())
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(
         el.read_property(PropertyIdentifier::TOTAL_RECORD_COUNT, None)
             .unwrap(),
@@ -486,7 +501,7 @@ fn event_log_clear_preserves_total_and_next_identity() {
     );
     el.add_record(make_record(1, 3.0)).unwrap();
     assert_eq!(
-        el.log_record_identities_internal().unwrap()[0].sequence_number(),
+        el.log_buffer().map(|log| log.record_identities()).unwrap()[0].sequence_number(),
         3
     );
 }
@@ -502,10 +517,13 @@ fn event_log_disabled_ordinary_rejection_does_not_consume_identity() {
         None,
     )
     .unwrap();
-    let before = el.log_record_identities_internal().unwrap();
+    let before = el.log_buffer().map(|log| log.record_identities()).unwrap();
     el.add_record(make_record(1, 1.0)).unwrap();
 
-    assert_eq!(el.log_record_identities_internal().unwrap(), before);
+    assert_eq!(
+        el.log_buffer().map(|log| log.record_identities()).unwrap(),
+        before
+    );
     assert_eq!(
         el.read_property(PropertyIdentifier::TOTAL_RECORD_COUNT, None)
             .unwrap(),
@@ -529,7 +547,7 @@ fn event_log_total_record_count_is_u32_and_wraps_max_to_one() {
         PropertyValue::Unsigned(1)
     );
     assert_eq!(
-        el.log_record_identities_internal().unwrap()[0].sequence_number(),
+        el.log_buffer().map(|log| log.record_identities()).unwrap()[0].sequence_number(),
         1
     );
 }

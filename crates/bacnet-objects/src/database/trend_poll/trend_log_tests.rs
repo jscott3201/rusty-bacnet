@@ -17,7 +17,12 @@ fn read(db: &ObjectDatabase, oid: ObjectIdentifier, property: P) -> PropertyValu
 
 /// Each served record of `oid`, encoded.
 fn served(db: &ObjectDatabase, oid: ObjectIdentifier) -> Vec<BytesMut> {
-    let records = db.get(&oid).unwrap().log_buffer_internal().unwrap();
+    let records = db
+        .get(&oid)
+        .unwrap()
+        .log_buffer()
+        .and_then(|log| log.buffer_records())
+        .unwrap();
     (0..records.record_count())
         .map(|index| {
             let mut bytes = BytesMut::new();

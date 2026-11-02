@@ -112,7 +112,11 @@ impl Family {
 
     /// The newest record as ReadRange serves it.
     fn served_last(&self) -> Vec<u8> {
-        let records = self.object().log_buffer_internal().unwrap();
+        let records = self
+            .object()
+            .log_buffer()
+            .and_then(|log| log.buffer_records())
+            .unwrap();
         let mut bytes = BytesMut::new();
         records.encode_record(records.record_count() - 1, &mut bytes);
         bytes.to_vec()
@@ -121,8 +125,15 @@ impl Family {
     /// Submit `record` through the trend insertion hook its family serves.
     fn add_trend_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
         match self {
-            Self::TrendMultiple(object) => object.add_trend_multiple_record(multiple(record)),
-            _ => self.object_mut().add_trend_record(record),
+            Self::TrendMultiple(object) => object
+                .log_buffer_mut()
+                .unwrap()
+                .add_trend_multiple_record(multiple(record)),
+            _ => self
+                .object_mut()
+                .log_buffer_mut()
+                .unwrap()
+                .add_trend_record(record),
         }
     }
 
@@ -171,7 +182,8 @@ impl Family {
 
     fn identities(&self) -> Vec<u64> {
         self.object()
-            .log_record_identities_internal()
+            .log_buffer()
+            .map(|log| log.record_identities())
             .unwrap()
             .iter()
             .map(|identity| identity.sequence_number())

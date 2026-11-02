@@ -93,7 +93,12 @@ pub(super) fn multiple(
 
 /// The log's records, decoded from the framed records ReadRange serves.
 pub(super) fn records(db: &ObjectDatabase, oid: ObjectIdentifier) -> Vec<BACnetLogMultipleRecord> {
-    let records = db.get(&oid).unwrap().log_buffer_internal().unwrap();
+    let records = db
+        .get(&oid)
+        .unwrap()
+        .log_buffer()
+        .and_then(|log| log.buffer_records())
+        .unwrap();
     (0..records.record_count())
         .map(|index| {
             let mut bytes = BytesMut::new();

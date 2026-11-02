@@ -60,22 +60,32 @@ fn logs() -> [Box<dyn BACnetObject>; 3] {
 /// Add one ordinary record of the log's own family.
 fn add(log: &mut dyn BACnetObject) {
     match log.object_identifier().object_type() {
-        ObjectType::TREND_LOG => log.add_trend_record(BACnetLogRecord {
-            date: DATE,
-            time: TIME,
-            log_datum: LogDatum::UnsignedValue(1),
-            status_flags: None,
-        }),
-        ObjectType::EVENT_LOG => log.add_event_log_record(BACnetEventLogRecord {
-            date: DATE,
-            time: TIME,
-            log_datum: EventLogDatum::TimeChange(1.0),
-        }),
-        _ => log.add_trend_multiple_record(BACnetLogMultipleRecord {
-            date: DATE,
-            time: TIME,
-            log_data: LogData::Values(Vec::new()),
-        }),
+        ObjectType::TREND_LOG => log
+            .log_buffer_mut()
+            .unwrap()
+            .add_trend_record(BACnetLogRecord {
+                date: DATE,
+                time: TIME,
+                log_datum: LogDatum::UnsignedValue(1),
+                status_flags: None,
+            }),
+        ObjectType::EVENT_LOG => {
+            log.log_buffer_mut()
+                .unwrap()
+                .add_event_log_record(BACnetEventLogRecord {
+                    date: DATE,
+                    time: TIME,
+                    log_datum: EventLogDatum::TimeChange(1.0),
+                })
+        }
+        _ => log
+            .log_buffer_mut()
+            .unwrap()
+            .add_trend_multiple_record(BACnetLogMultipleRecord {
+                date: DATE,
+                time: TIME,
+                log_data: LogData::Values(Vec::new()),
+            }),
     }
     .unwrap();
 }

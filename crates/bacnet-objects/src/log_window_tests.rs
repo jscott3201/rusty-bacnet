@@ -182,7 +182,7 @@ impl Log {
 
     /// The look the poller's pass makes; whether it logged a change.
     fn pass(&mut self) -> bool {
-        self.object_mut().refresh_log_window_internal()
+        self.object_mut().log_buffer_mut().unwrap().refresh_window()
     }
 
     /// Offer an ordinary record taken at `(date, time)`.
@@ -190,29 +190,43 @@ impl Log {
         let kind = self.kind;
         let object = self.object_mut();
         match kind {
-            Kind::Trend => object.add_trend_record(BACnetLogRecord {
-                date,
-                time,
-                log_datum: LogDatum::RealValue(1.5),
-                status_flags: None,
-            }),
-            Kind::Event => object.add_event_log_record(BACnetEventLogRecord {
-                date,
-                time,
-                log_datum: EventLogDatum::TimeChange(1.5),
-            }),
-            Kind::Multiple => object.add_trend_multiple_record(BACnetLogMultipleRecord {
-                date,
-                time,
-                log_data: LogData::Values(vec![LogValue::RealValue(1.5)]),
-            }),
+            Kind::Trend => object
+                .log_buffer_mut()
+                .unwrap()
+                .add_trend_record(BACnetLogRecord {
+                    date,
+                    time,
+                    log_datum: LogDatum::RealValue(1.5),
+                    status_flags: None,
+                }),
+            Kind::Event => {
+                object
+                    .log_buffer_mut()
+                    .unwrap()
+                    .add_event_log_record(BACnetEventLogRecord {
+                        date,
+                        time,
+                        log_datum: EventLogDatum::TimeChange(1.5),
+                    })
+            }
+            Kind::Multiple => object.log_buffer_mut().unwrap().add_trend_multiple_record(
+                BACnetLogMultipleRecord {
+                    date,
+                    time,
+                    log_data: LogData::Values(vec![LogValue::RealValue(1.5)]),
+                },
+            ),
         }
         .unwrap();
     }
 
     /// The resident records, as ReadRange serves them.
     fn seen(&self) -> Vec<Seen> {
-        let records = self.object().log_buffer_internal().unwrap();
+        let records = self
+            .object()
+            .log_buffer()
+            .and_then(|log| log.buffer_records())
+            .unwrap();
         (0..records.record_count())
             .map(|index| {
                 let mut bytes = BytesMut::new();

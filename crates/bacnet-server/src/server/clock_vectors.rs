@@ -164,7 +164,8 @@ async fn ordinary_trend_poll_uses_synchronized_offset_and_dst_frame() {
     let identities = guard
         .get(&oid)
         .unwrap()
-        .log_record_identities_internal()
+        .log_buffer()
+        .map(|log| log.record_identities())
         .unwrap();
     assert_eq!(identities.len(), 1);
     assert_eq!(identities[0].date(), frame.local_date);

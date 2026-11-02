@@ -44,7 +44,7 @@ pub(super) async fn contents(h: &Harness) -> (Vec<u8>, Vec<Vec<u8>>) {
     let storage = |instance| {
         db.get(&ObjectIdentifier::new(ObjectType::FILE, instance).unwrap())
             .unwrap()
-            .file_storage_internal()
+            .file_storage()
             .unwrap()
     };
     (

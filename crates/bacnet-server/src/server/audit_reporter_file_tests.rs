@@ -64,7 +64,7 @@ async fn contents(fixture: &Fixture, record: bool) -> Vec<Vec<u8>> {
     let storage = db
         .get(&oid(ObjectType::FILE, 1))
         .unwrap()
-        .file_storage_internal()
+        .file_storage()
         .unwrap();
     if record {
         storage.read_records(0, 100).unwrap().records
@@ -290,10 +290,10 @@ impl BACnetObject for ProbeFile {
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         self.file.property_metadata()
     }
-    fn file_storage_internal(&self) -> Option<&dyn FileStorage> {
+    fn file_storage(&self) -> Option<&dyn FileStorage> {
         self.storage.then_some(self)
     }
-    fn file_storage_internal_mut(&mut self) -> Option<&mut dyn FileStorage> {
+    fn file_storage_mut(&mut self) -> Option<&mut dyn FileStorage> {
         if self.mutable_storage {
             Some(self)
         } else {

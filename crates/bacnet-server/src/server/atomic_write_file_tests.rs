@@ -91,7 +91,7 @@ async fn default_refusal(record: bool) {
             let storage = guard
                 .get(&ObjectIdentifier::new(ObjectType::FILE, 1).unwrap())
                 .unwrap()
-                .file_storage_internal()
+                .file_storage()
                 .unwrap();
             let unchanged = if record {
                 storage.read_records(0, 10000).unwrap().records == vec![b"sentinel".to_vec()]
@@ -227,10 +227,10 @@ async fn atomic_write_file_opaque_abort_keeps_legacy_service_mapping() {
         ) -> Result<(), Error> {
             unreachable!()
         }
-        fn file_storage_internal(&self) -> Option<&dyn FileStorage> {
+        fn file_storage(&self) -> Option<&dyn FileStorage> {
             Some(self)
         }
-        fn file_storage_internal_mut(&mut self) -> Option<&mut dyn FileStorage> {
+        fn file_storage_mut(&mut self) -> Option<&mut dyn FileStorage> {
             Some(self)
         }
     }

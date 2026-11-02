@@ -60,7 +60,11 @@ fn assert_error(result: Result<(), Error>, class: ErrorClass, code: ErrorCode) {
 }
 
 fn record_count(object: &dyn BACnetObject) -> usize {
-    object.log_buffer_internal().unwrap().record_count()
+    object
+        .log_buffer()
+        .and_then(|log| log.buffer_records())
+        .unwrap()
+        .record_count()
 }
 
 #[test]

@@ -10,11 +10,10 @@ use bacnet_objects::{
     database::ObjectDatabase,
     device::EXECUTED_SERVICES,
     file::{FileConfiguration, FileStorage},
-    log_buffer::{LogBufferRecords, LogRecordIdentity},
     property_metadata::{PropertyConformance, PropertyMetadata, PropertyWriteCapability},
     traits::{
         BACnetObject, CalendarState, CommandRunner, CovReportedProperty, EnrollmentEval,
-        EventReporting,
+        EventReporting, LogBuffer,
     },
 };
 use bacnet_types::{
@@ -356,23 +355,14 @@ impl BACnetObject for DeviceReadView<'_> {
     fn audit_log_forwarding_internal(&self) -> Option<Arc<AuditLogForwarding>> {
         self.object.audit_log_forwarding_internal()
     }
-    fn file_configuration_internal(&self) -> Option<&dyn FileConfiguration> {
-        self.object.file_configuration_internal()
+    fn file_configuration(&self) -> Option<&dyn FileConfiguration> {
+        self.object.file_configuration()
     }
-    fn file_storage_internal(&self) -> Option<&dyn FileStorage> {
-        self.object.file_storage_internal()
+    fn file_storage(&self) -> Option<&dyn FileStorage> {
+        self.object.file_storage()
     }
-    fn log_record_identities_internal(&self) -> Option<Vec<LogRecordIdentity>> {
-        self.object.log_record_identities_internal()
-    }
-    fn log_buffer_internal(&self) -> Option<&dyn LogBufferRecords> {
-        self.object.log_buffer_internal()
-    }
-    fn logs_received_event_notifications_internal(&self) -> bool {
-        self.object.logs_received_event_notifications_internal()
-    }
-    fn log_collecting_internal(&self) -> bool {
-        self.object.log_collecting_internal()
+    fn log_buffer(&self) -> Option<&dyn LogBuffer> {
+        self.object.log_buffer()
     }
 }
 
