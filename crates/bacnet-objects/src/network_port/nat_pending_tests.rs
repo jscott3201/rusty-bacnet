@@ -33,7 +33,7 @@ fn global() -> BACnetHostNPort {
 /// A BBMD that can run behind NAT, as the transport's live view would
 /// answer: NAT needs a global address, and only an IPv4 host or the unset
 /// sentinel is a global address.
-struct Tables {
+pub(super) struct Tables {
     nat: Mutex<bool>,
     global: Mutex<BACnetHostNPort>,
     /// Whether it can run behind NAT at all.
@@ -42,7 +42,7 @@ struct Tables {
 }
 
 impl Tables {
-    fn new(capable: bool) -> Arc<Self> {
+    pub(super) fn new(capable: bool) -> Arc<Self> {
         Arc::new(Self {
             nat: Mutex::new(false),
             global: Mutex::new(UNSET),
@@ -122,7 +122,7 @@ fn oid() -> ObjectIdentifier {
 
 /// An IPv4 port in BBMD mode over `tables`, activating changes when
 /// `activation` says so.
-fn bbmd_port(tables: &Arc<Tables>, activation: bool) -> (ObjectDatabase, Arc<()>) {
+pub(super) fn bbmd_port(tables: &Arc<Tables>, activation: bool) -> (ObjectDatabase, Arc<()>) {
     let mut db = ObjectDatabase::new();
     let config = BipPortConfig {
         ip_address: [127, 0, 0, 1],

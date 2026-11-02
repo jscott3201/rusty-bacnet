@@ -119,11 +119,7 @@ impl NetworkPortObject {
                 // The value written, alone.
                 let mut changes = BbmdChanges::default();
                 let decoded = match (property, value) {
-                    (
-                        P::BBMD_BROADCAST_DISTRIBUTION_TABLE,
-                        PropertyValue::ApplicationData(octets),
-                    ) => bacnet_encoding::constructed::decode_bdt_entry_list(octets)
-                        .map_err(|_| common::invalid_data_encoding_error())
+                    (P::BBMD_BROADCAST_DISTRIBUTION_TABLE, value) => decode_bdt(value)
                         .map(|table| changes.broadcast_distribution_table = Some(table)),
                     (P::BBMD_ACCEPT_FD_REGISTRATIONS, PropertyValue::Boolean(accept)) => {
                         changes.accept_foreign_device_registrations = Some(*accept);
@@ -268,6 +264,17 @@ fn merge(pending: &mut BbmdChanges, written: BbmdChanges) {
     if written.multicast_group.is_some() {
         pending.multicast_group = written.multicast_group;
     }
+}
+
+/// A written BBMD_Broadcast_Distribution_Table, in either shape the object
+/// API sees: the raw list octets WriteProperty hands over, or the list a
+/// read returns, one encoded entry per element (#2272). The octets are
+/// joined and decoded as one list, so both shapes are refused alike.
+fn decode_bdt(
+    value: &PropertyValue,
+) -> Result<alloc::vec::Vec<bacnet_types::constructed::BACnetBDTEntry>, Error> {
+    bacnet_encoding::constructed::decode_bdt_entry_list(&common::chunks(value)?.concat())
+        .map_err(|_| common::invalid_data_encoding_error())
 }
 
 /// A written FD_BBMD_Address or BACnet_IP_Global_Address: exactly one

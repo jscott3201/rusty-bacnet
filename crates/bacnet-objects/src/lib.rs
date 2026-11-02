@@ -118,6 +118,8 @@ mod reliability_writability_tests;
 mod reliability_inhibit_tests;
 
 #[cfg(test)]
+mod read_write_round_trip_tests;
+#[cfg(test)]
 mod typed_enum_storage_tests;
 #[cfg(test)]
 mod write_consistency_tests;
