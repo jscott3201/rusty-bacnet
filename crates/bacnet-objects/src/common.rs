@@ -54,7 +54,8 @@ pub(crate) fn unhandled_write_error(
     property: bacnet_types::enums::PropertyIdentifier,
     array_index: Option<u32>,
 ) -> bacnet_types::error::Error {
-    // Indexed fallback precedence is outside this unindexed correction.
+    // Built-in objects run `check_write_array_index` first, so an index
+    // reaches here only on an array property.
     if array_index.is_some()
         || metadata
             .iter()

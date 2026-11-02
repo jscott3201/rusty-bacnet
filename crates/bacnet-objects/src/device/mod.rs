@@ -756,6 +756,7 @@ impl BACnetObject for DeviceObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         if property == PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT {
             return self.write_audit_recipient(array_index, value, _priority, None);
         }

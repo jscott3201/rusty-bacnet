@@ -405,6 +405,7 @@ impl BACnetObject for ChannelObject {
         value: PropertyValue,
         priority: Option<u8>,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         if array_index.is_some() && !self.is_array_property(property) {
             return Err(common::property_is_not_an_array_error());
         }

@@ -149,6 +149,7 @@ impl BACnetObject for AuditReporterObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         if matches!(
             property,
             PropertyIdentifier::DESCRIPTION

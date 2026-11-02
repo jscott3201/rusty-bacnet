@@ -46,12 +46,9 @@ fn unknown_writes_classify_every_builtin_with_null_and_ordinary_values() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
     for object in &mut objects {
-        // Network Port already distinguished absent indexed properties before #870.
-        let expected = match object.object_identifier().object_type() {
-            ObjectType::NETWORK_PORT => ErrorCode::UNKNOWN_PROPERTY,
-            ObjectType::STAGING | ObjectType::CHANNEL => ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
-            _ => ErrorCode::WRITE_ACCESS_DENIED,
-        };
+        // An indexed write to a property the object lacks is unknown, as the
+        // server's index gate answers it (#2258).
+        let expected = ErrorCode::UNKNOWN_PROPERTY;
         for index in [0, 1] {
             assert_eq!(
                 code(
@@ -93,7 +90,7 @@ fn unknown_writes_optional_staging_names_use_current_presence() {
             (ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY)
         );
     }
-    // Indexed precedence is deliberately unchanged by this unindexed correction.
+    // Indexed, absence is still the answer (#2258).
     assert_eq!(
         code(
             absent
@@ -105,7 +102,7 @@ fn unknown_writes_optional_staging_names_use_current_presence() {
                 )
                 .unwrap_err()
         ),
-        (ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED)
+        (ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY)
     );
     let mut present = StagingObject::new(2, "present", staging_config()).unwrap();
     assert_eq!(
@@ -162,6 +159,12 @@ fn unknown_writes_file_record_count_distinguishes_absence_from_read_only() {
                 (ErrorClass::PROPERTY, expected)
             );
         }
+        // Indexed, absence comes first, then the scalar's index (#2258).
+        let indexed = if records {
+            ErrorCode::PROPERTY_IS_NOT_AN_ARRAY
+        } else {
+            ErrorCode::UNKNOWN_PROPERTY
+        };
         assert_eq!(
             code(
                 file.write_property(
@@ -172,7 +175,7 @@ fn unknown_writes_file_record_count_distinguishes_absence_from_read_only() {
                 )
                 .unwrap_err()
             ),
-            (ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED)
+            (ErrorClass::PROPERTY, indexed)
         );
     }
 }

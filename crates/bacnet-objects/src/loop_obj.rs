@@ -338,10 +338,11 @@ impl BACnetObject for LoopObject {
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
-        _array_index: Option<u32>,
+        array_index: Option<u32>,
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         // Clause 12.17.9 decouples Present_Value from the algorithm while
         // Out_Of_Service is TRUE and Table 12-20 footnote 7 makes it writable
         // then, for simulation and testing. In service the algorithm owns it;
@@ -363,6 +364,9 @@ impl BACnetObject for LoopObject {
         }
         if let Some(result) = common::write_cov_increment(&mut self.cov_increment, property, &value)
         {
+            return result;
+        }
+        if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
         match property {
@@ -424,16 +428,6 @@ impl BACnetObject for LoopObject {
                     ErrorCode::INVALID_DATA_TYPE,
                 ))
             }
-            p if p == PropertyIdentifier::DESCRIPTION => {
-                if let PropertyValue::CharacterString(s) = value {
-                    self.description = s;
-                    return Ok(());
-                }
-                Err(Error::protocol(
-                    ErrorClass::PROPERTY,
-                    ErrorCode::INVALID_DATA_TYPE,
-                ))
-            }
             // Table 12-20 types the two variable references
             // BACnetObjectPropertyReference: a write takes the reference's
             // context-tagged members, the unset form clearing it, and Null
@@ -458,7 +452,7 @@ impl BACnetObject for LoopObject {
             _ => Err(crate::common::unhandled_write_error(
                 self.property_metadata().as_ref(),
                 property,
-                _array_index,
+                array_index,
             )),
         }
     }

@@ -234,6 +234,7 @@ impl BACnetObject for AnalogInputObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         // AI present-value is writable only when out-of-service
         if property == PropertyIdentifier::PRESENT_VALUE {
             if !self.out_of_service {

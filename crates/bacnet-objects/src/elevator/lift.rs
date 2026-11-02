@@ -366,6 +366,7 @@ impl BACnetObject for LiftObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         if let Some(result) =
             common::write_out_of_service(&mut self.out_of_service, property, &value)
         {

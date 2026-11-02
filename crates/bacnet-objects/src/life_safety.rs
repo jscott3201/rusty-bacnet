@@ -430,10 +430,11 @@ impl BACnetObject for LifeSafetyPointObject {
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
-        _array_index: Option<u32>,
+        array_index: Option<u32>,
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         // Present value is read-only via protocol
         if property == PropertyIdentifier::PRESENT_VALUE {
             return Err(common::write_access_denied_error());
@@ -470,7 +471,7 @@ impl BACnetObject for LifeSafetyPointObject {
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
-            _array_index,
+            array_index,
         ))
     }
 
@@ -767,10 +768,11 @@ impl BACnetObject for LifeSafetyZoneObject {
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
-        _array_index: Option<u32>,
+        array_index: Option<u32>,
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         // Present value is read-only via protocol
         if property == PropertyIdentifier::PRESENT_VALUE {
             return Err(common::write_access_denied_error());
@@ -792,7 +794,7 @@ impl BACnetObject for LifeSafetyZoneObject {
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
-            _array_index,
+            array_index,
         ))
     }
 

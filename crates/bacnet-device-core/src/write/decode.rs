@@ -7,34 +7,7 @@ use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier}
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
-/// At the existing indexed-write gate, effective absence takes precedence over
-/// array classification (local error-order policy for Clauses 15.9/15.10).
-pub fn check_write_array_index(
-    object: &dyn BACnetObject,
-    property: PropertyIdentifier,
-    index: Option<u32>,
-) -> Result<(), Error> {
-    if index.is_none() {
-        return Ok(());
-    }
-    if !object
-        .property_metadata()
-        .iter()
-        .any(|row| row.property_identifier == property)
-    {
-        return Err(protocol_error(
-            ErrorClass::PROPERTY,
-            ErrorCode::UNKNOWN_PROPERTY,
-        ));
-    }
-    if !object.is_array_property(property) {
-        return Err(protocol_error(
-            ErrorClass::PROPERTY,
-            ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
-        ));
-    }
-    Ok(())
-}
+pub use bacnet_objects::property_metadata::check_write_array_index;
 
 /// What WriteProperty does with a value's octets before `object` takes it:
 /// [`check_write_array_index`], then [`decode_write_property_value`] with the

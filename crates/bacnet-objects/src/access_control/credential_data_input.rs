@@ -210,6 +210,7 @@ impl BACnetObject for CredentialDataInputObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         // The reader's entry edge is always seen (it starts in service and
         // only this write moves Out_Of_Service), so there is no fallback.
         if let Some(result) = common::write_out_of_service_with_restore(
