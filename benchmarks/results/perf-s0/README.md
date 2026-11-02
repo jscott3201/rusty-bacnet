@@ -34,8 +34,12 @@ per request and "bytes" the bytes those calls requested.
 - **Runs:** three invocations of `scripts/perf/perf_counts.py run --noise`
   (`noise-rp/`, `noise-wp-rpm/`, `noise-codec/`); 312 callgrind runs, none
   failed or repeated. The tables here come from re-analyzing those runs with
-  the current script (the harness's allocator excluded, A' labelled P in
-  `runs.tsv`); the raw counts are unchanged.
+  the current script; the raw counts are unchanged. The backfill was a
+  one-off Python step over each run's `manifest.json`: relabel the second
+  build from B to P (A'), set each run's `harness_ir` to
+  `count_analysis.harness_ir(functions, edges)` from
+  `count_analysis.parse_callgrind` of its raw callgrind file, then
+  `python3 scripts/perf/perf_counts.py analyze <run directory>`.
 
 Each directory holds the table (`summary.md`, `summary.json`), every run's
 totals (`runs.tsv`, with the harness allocator's share in `harness_ir`),

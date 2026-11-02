@@ -16,7 +16,7 @@ import perf_counts
 DATA = Path(__file__).resolve().parent / "testdata"
 
 
-def runs_for(label, slopes, workload, runtime, calls=22.0, bytes_=2196.0, base=5_000_000, harness=0.0):
+def runs_for(label, slopes, workload, runtime, calls=22.0, bytes_=2196.0, base=5_000_000, harness=42.0):
     """Runs whose slopes are exactly `slopes`: each ordinal's short run costs
     `base + slope * short`, its long run `base + slope * long`. `harness` is
     the counting allocator's share per request, added on top."""
@@ -34,7 +34,7 @@ def runs_for(label, slopes, workload, runtime, calls=22.0, bytes_=2196.0, base=5
 
 
 def manifest(slopes_a, slopes_b, workload="rp", runtime="ct", calls=(22.0, 22.0), bytes_=(2196.0, 2196.0),
-             mode="compare", slopes_p=None, cells=None, harness=0.0):
+             mode="compare", slopes_p=None, cells=None, harness=42.0):
     """A completed manifest. A comparison has A, A' (P) and B; a noise run A
     and P (`slopes_b` are P's). `cells` lists extra (workload, runtime)
     pairs given the same slopes, for coverage."""
@@ -51,7 +51,8 @@ def manifest(slopes_a, slopes_b, workload="rp", runtime="ct", calls=(22.0, 22.0)
                 values, rate, byte_rate = slopes_b, calls[1], bytes_[1]
             runs += runs_for(label, values, w, r, rate, byte_rate, harness=harness)
     variants = {label: {"sha": label * 40, "ref": label, "binaries": {"counts": "same"}} for label in labels}
-    return {"mode": mode, "variants": variants, "runs": runs, "completed": True}
+    order = ("APPA" if mode == "noise" else "ABPPBA") * (len(slopes_a) // 2)
+    return {"mode": mode, "variants": variants, "runs": runs, "completed": True, "order": order}
 
 
 ALL_ROUND_TRIPS = [(w, r) for w in ca.ROUND_TRIP for r in ca.RUNTIMES if (w, r) != ("rp", "ct")]
@@ -230,12 +231,52 @@ class Gates(unittest.TestCase):
         for variant in [r for r in m["runs"] if r["label"] == "P"]:
             m["runs"].remove(variant)
         del m["variants"]["P"]
+        m["order"] = "ABBA" * 3
         with self.assertRaises(ValueError):
             ca.analyze(m)
         floors = {f"{w}/{r}": 60.0 for w in ca.ROUND_TRIP for r in ca.RUNTIMES}
         s = ca.analyze(m, floors)
         self.assertEqual(self.row(s)["noise_floor_source"], "recorded noise run (quick mode)")
         self.assertTrue(s["accepted"])
+
+    # Matrix shape, reproducible baseline and the harness share (second review).
+
+    def full(self):
+        return manifest(self.A, [x - 520 for x in self.A], slopes_p=self.P, cells=ALL_ROUND_TRIPS)
+
+    def test_short_or_uneven_matrices_are_refused(self):
+        one_block = manifest(self.A[:2], [x - 520 for x in self.A[:2]], slopes_p=self.P[:2], cells=ALL_ROUND_TRIPS)
+        with self.assertRaisesRegex(ValueError, "fewer than six"):
+            ca.analyze(one_block)
+        short_b = self.full()
+        short_b["runs"] = [r for r in short_b["runs"] if not (r["label"] == "B" and r["ordinal"] > 2)]
+        with self.assertRaisesRegex(ValueError, "ordinals"):
+            ca.analyze(short_b)
+        short_p = self.full()
+        short_p["runs"] = [r for r in short_p["runs"] if not (r["label"] == "P" and r["ordinal"] > 1)]
+        with self.assertRaisesRegex(ValueError, "ordinals"):
+            ca.analyze(short_p)
+        duplicate = self.full()
+        extra = copy.deepcopy(next(r for r in duplicate["runs"] if r["label"] == "B"))
+        extra["instructions"] -= 10_000_000
+        duplicate["runs"].append(extra)
+        with self.assertRaisesRegex(ValueError, "duplicate"):
+            ca.analyze(duplicate)
+        self.assertTrue(ca.analyze(self.full())["accepted"])
+
+    def test_differing_baseline_builds_are_not_accepted(self):
+        m = self.full()
+        m["variants"]["P"]["binaries"] = {"counts": "other"}
+        s = ca.analyze(m)
+        self.assertFalse(s["accepted"])
+        self.assertTrue(any("A and A'" in p for p in s["coverage_problems"]))
+
+    def test_missing_harness_share_is_refused(self):
+        for value in (0, None):
+            m = self.full()
+            m["runs"][0]["harness_ir"] = value
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "counting-allocator"):
+                ca.analyze(m)
 
     def test_incomplete_matrix_has_no_verdict(self):
         m = manifest(self.A, [x - 520 for x in self.A])
@@ -265,7 +306,7 @@ class Runner(unittest.TestCase):
         self.assertEqual(perf_counts.plan(self.args(noise="dev", baseline=None, candidate=None))[2], "APPA" * 3)
 
     def test_bad_plans_are_refused(self):
-        for kwargs in ({"aim": "RP"}, {"workloads": "wp", "aim": "rp"}, {"runtimes": "ct,xt"},
+        for kwargs in ({"blocks": 2}, {"aim": "RP"}, {"workloads": "wp", "aim": "rp"}, {"runtimes": "ct,xt"},
                        {"workloads": "rp,typo"}, {"candidate": None}):
             with self.subTest(**kwargs), self.assertRaises(ValueError):
                 perf_counts.plan(self.args(**kwargs))

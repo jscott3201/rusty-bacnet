@@ -270,6 +270,7 @@ def run_matrix(manifest, out, save):
                         bytes=result["bytes"],
                     )
                     save()
+                    ca.check_harness_ir(record)
                     log("RUN", name, record["instructions"], record["allocs"], record["bytes"])
 
 
@@ -435,6 +436,8 @@ def plan(args):
     if bad or not runtimes:
         raise ValueError(f"runtimes must be ct and/or mt, not {args.runtimes!r}")
     aim = tuple(a.strip() for a in args.aim.split(",") if a.strip())
+    if args.blocks < 3:
+        raise ValueError("--blocks must be at least 3 (six runs per build)")
     floors = {}
     if args.noise:
         if args.baseline or args.candidate or args.noise_floors:
@@ -547,7 +550,7 @@ def main(argv=None):
     run_parser.add_argument("--noise", metavar="REF", help="A vs A': two clean builds of REF")
     run_parser.add_argument("--workloads", default="rp,wp,rpm", help="rp,wp,rpm, codec workload names, codec or all")
     run_parser.add_argument("--runtimes", default="ct,mt")
-    run_parser.add_argument("--blocks", type=int, default=3, help="order blocks (default 3: six runs per build)")
+    run_parser.add_argument("--blocks", type=int, default=3, help="order blocks, at least 3 (six runs per build)")
     run_parser.add_argument("--out", required=True, help="a new directory for the outputs")
     run_parser.add_argument("--harness", help="benchmarks/counts directory to build (default: the candidate's)")
     run_parser.add_argument("--image", help="image tag to use or build (default: from the Dockerfile's hash)")

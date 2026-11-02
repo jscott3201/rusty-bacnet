@@ -261,6 +261,32 @@ def slope(short, long, short_n, long_n):
     return (long - short) / (long_n - short_n)
 
 
+def check_harness_ir(run):
+    """A run that allocated must have its counting allocator's share: a
+    renamed or inlined `CountingAlloc` would otherwise quietly turn the gate
+    back into the raw count."""
+    if run.get("harness_ir") is None or (run["allocs"] > 0 and run["harness_ir"] <= 0):
+        raise ValueError(f"{run['name']}: {run['allocs']} allocations but no counting-allocator cost found")
+
+
+def check_shape(manifest, runs):
+    """Every workload and runtime has, per build, exactly as many ordinals as
+    the matrix order gives it, and no run appears twice."""
+    names = [r["name"] for r in runs]
+    duplicates = sorted({n for n in names if names.count(n) > 1})
+    if duplicates:
+        raise ValueError(f"duplicate run records: {', '.join(duplicates)}")
+    order = manifest.get("order") or ""
+    expected = {label: order.count(label) for label in manifest["variants"]}
+    if min(expected.values(), default=0) < 6:
+        raise ValueError(f"the order {order!r} gives a build fewer than six runs")
+    for workload, runtime in {(r["workload"], r["runtime"]) for r in runs}:
+        for label, count in expected.items():
+            ordinals = ordinal_runs(runs, workload, runtime, label)
+            if sorted(ordinals) != list(range(1, count + 1)):
+                raise ValueError(f"{workload}/{runtime}/{label}: ordinals {sorted(ordinals)}, expected 1 to {count}")
+
+
 def variant_metrics(runs, workload, runtime, label):
     """Slopes and allocation rates of one variant's ordinals.
 
@@ -275,9 +301,11 @@ def variant_metrics(runs, workload, runtime, label):
         if short_n not in pair or long_n not in pair:
             raise ValueError(f"{workload}/{runtime}/{label}{ordinal}: missing a run length")
         short, long = pair[short_n], pair[long_n]
+        for run in (short, long):
+            check_harness_ir(run)
         raw.append(slope(short["instructions"], long["instructions"], short_n, long_n))
-        slopes.append(slope(short["instructions"] - short.get("harness_ir", 0),
-                            long["instructions"] - long.get("harness_ir", 0), short_n, long_n))
+        slopes.append(slope(short["instructions"] - short["harness_ir"],
+                            long["instructions"] - long["harness_ir"], short_n, long_n))
         calls.append(long["allocs"] / long_n)
         bytes_.append(long["bytes"] / long_n)
         call_slopes.append(slope(short["allocs"], long["allocs"], short_n, long_n))
@@ -384,6 +412,7 @@ def analyze(manifest, recorded_floors=None, aimed=("rp",)):
         raise ValueError("the matrix didn't complete; no verdict")
     noise = manifest["mode"] == "noise"
     runs = [r for r in manifest["runs"] if r.get("instructions") is not None]
+    check_shape(manifest, runs)
     pairs = sorted({(r["workload"], r["runtime"]) for r in runs})
     if not noise:
         validate_aim(aimed, {w for w, _ in pairs})
@@ -428,6 +457,8 @@ def analyze(manifest, recorded_floors=None, aimed=("rp",)):
         summary["baseline_builds_identical"] = binaries[0] == binaries[1]
     if not noise:
         problems = coverage_problems(rows, aimed)
+        if summary.get("baseline_builds_identical") is False:
+            problems.append("the baseline's two builds (A and A') differ, so the build isn't reproducible")
         summary["aimed"] = list(aimed)
         summary["coverage_problems"] = problems
         summary["accepted"] = not problems and bool(rows) and all(r["verdict"] == "PASS" for r in rows)
