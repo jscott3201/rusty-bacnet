@@ -31,6 +31,7 @@ impl BACnetObject for AuditReporterObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        crate::property_metadata::check_read_array_index(self, property, array_index)?;
         let configuration = self.configuration_internal();
         match property {
             p if p == PropertyIdentifier::OBJECT_IDENTIFIER => {

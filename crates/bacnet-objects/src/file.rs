@@ -558,6 +558,7 @@ impl BACnetObject for FileObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        crate::property_metadata::check_read_array_index(self, property, array_index)?;
         // Table 12-16 has no Status_Flags, Reliability or Out_Of_Service (#1064).
         if let Some(result) = read_identity_properties!(self, property, array_index) {
             return result;

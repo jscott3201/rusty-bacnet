@@ -5,6 +5,7 @@ use super::rpm::{self, PlannedRow};
 use super::{LiveLists, ReadFailure, ReadOverlay, ReadScope};
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_objects::database::ObjectDatabase;
+use bacnet_objects::property_metadata::check_read_array_index;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_types::constructed::PropertyReference;
@@ -138,14 +139,9 @@ pub fn read_value<O: ReadOverlay>(
     // Clause 15.5.1.3: an array index on a non-array property is rejected
     // with PROPERTY / PROPERTY_IS_NOT_AN_ARRAY. The array/list decision
     // belongs to the object (identifier-static whitelists cannot express the
-    // type-dependent identifiers, e.g. ALARM_VALUES), so the handler defers
-    // to the trait query.
-    if array_index.is_some() && !object.is_array_property(property) {
-        return Err(Error::protocol(
-            ErrorClass::PROPERTY,
-            ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
-        ));
-    }
+    // type-dependent identifiers, e.g. ALARM_VALUES), so the shared check
+    // defers to the trait query.
+    check_read_array_index(object, property, array_index)?;
 
     group::read_served_property(db, overlay, object, property, array_index, members)
 }
