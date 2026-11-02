@@ -23,20 +23,20 @@ fn start_alias(
     start_object(session, mac, oid(kind, ObjectIdentifier::WILDCARD_INSTANCE))
 }
 async fn released(session: &EndpointSession<BusPort>) {
-    timeout(WAIT, async {
-        while session.active_leases() != 0
-            || session
-                .source_audit
-                .as_ref()
-                .unwrap()
-                .available_operations()
-                != 64
-        {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
+    eventually(
+        WAIT,
+        "every lease and source operation is released",
+        async || {
+            session.active_leases() == 0
+                && session
+                    .source_audit
+                    .as_ref()
+                    .unwrap()
+                    .available_operations()
+                    == 64
+        },
+    )
+    .await;
 }
 fn value_free(record: &BACnetAuditNotification) {
     assert!(record.target_value.is_none() && record.current_value.is_none());

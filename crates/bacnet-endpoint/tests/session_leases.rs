@@ -5,6 +5,10 @@
 
 use std::time::Duration;
 
+#[path = "support/eventually.rs"]
+mod eventually;
+use eventually::eventually;
+
 use bacnet_encoding::apdu::{Apdu, ConfirmedRequest, decode_apdu, encode_apdu};
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_endpoint::session::{EndpointSession, SessionConfig, SessionRole};
@@ -149,20 +153,11 @@ async fn lost_consumer_routes_to_policy_without_hanging() {
     .await
     .unwrap();
 
-    // Poll policy counters deterministically (no sleep): the dispatch task
-    // routes without a server role within the timeout.
-    let deadline = tokio::time::Instant::now() + WAIT;
-    loop {
-        let counters = client.policy_counters().await;
-        if counters.no_server_role >= 1 {
-            break;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "lost inbound was not policy-owned: {counters:?}"
-        );
-        tokio::task::yield_now().await;
-    }
+    // The dispatch task routes the request to policy without a server role.
+    eventually(WAIT, "lost inbound was not policy-owned", async || {
+        client.policy_counters().await.no_server_role >= 1
+    })
+    .await;
 
     client.stop().await.unwrap();
     peer.stop().await.unwrap();
@@ -266,7 +261,8 @@ async fn full_ingress_queue_overflows_to_policy() {
                             policy += 1;
                         }
                     }
-                    _ = tokio::task::yield_now() => {}
+                    // Paused time moves only on a sleep, so the deadline can pass.
+                    _ = tokio::time::sleep(Duration::from_millis(1)) => {}
                 }
                 if inbound >= 1 && policy >= 1 {
                     break;
@@ -299,18 +295,10 @@ async fn malformed_apdu_is_policy_owned() {
         .await
         .unwrap();
 
-    let deadline = tokio::time::Instant::now() + WAIT;
-    loop {
-        let counters = client.policy_counters().await;
-        if counters.ingress_policy >= 1 {
-            break;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "malformed APDU was not policy-owned: {counters:?}"
-        );
-        tokio::task::yield_now().await;
-    }
+    eventually(WAIT, "malformed APDU was not policy-owned", async || {
+        client.policy_counters().await.ingress_policy >= 1
+    })
+    .await;
 
     // Encoded property value helper is linked (structural preservation of the
     // service payload path); keep the import live without affecting policy.

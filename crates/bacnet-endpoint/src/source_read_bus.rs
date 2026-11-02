@@ -10,7 +10,11 @@
 //!
 //! Each node gets a 6-byte B/IP MAC on 127.0.0.1, so the source Audit route
 //! bindings still name it by socket address. A unicast reaches the node that
-//! owns the MAC. Broadcasts reach no node: no test here needs one.
+//! owns the MAC. No test here broadcasts, so a broadcast panics rather
+//! than pass without its frame reaching anyone.
+//!
+//! [`TransportPort::max_npdu`] keeps its default, 1497 octets each way,
+//! which is what a running `BipTransport` reports.
 use super::*;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort, TransportProvenance};
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -94,7 +98,7 @@ impl TransportPort for BusPort {
         Ok(())
     }
     async fn send_broadcast(&self, _npdu: &[u8]) -> Result<(), Error> {
-        Ok(())
+        panic!("BusPort has no broadcast");
     }
     fn local_receive_apdu_capacity(&self) -> u16 {
         1476

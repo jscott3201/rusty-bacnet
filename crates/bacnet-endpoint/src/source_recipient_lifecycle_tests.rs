@@ -127,13 +127,10 @@ async fn source_recipient_drop_does_not_pin_membership_for_dormant_external_read
     let owner = Arc::downgrade(&session.source_recipient.as_ref().unwrap().owner);
     drop(session);
     // An aborted dispatch frame retains membership until the executor drops it.
-    timeout(WAIT, async {
-        while owner.upgrade().is_some() {
-            tokio::task::yield_now().await;
-        }
+    eventually(WAIT, "the recipient owner is dropped", async || {
+        owner.upgrade().is_none()
     })
-    .await
-    .unwrap();
+    .await;
     // Keep the external future unpolled: it must retain neither a sink nor a lease.
     released_projection(&mut guard);
     assert!(guard.remove(&selected()).unwrap().is_some());
