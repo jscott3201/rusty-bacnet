@@ -19,6 +19,7 @@ use support::*;
 
 async fn controls(role: Role, mode: MstpExecutionMode) {
     let (mut owner, mut peer) = fixture(role, mode, Gates::new(false, false, false)).await;
+    let link = peer.link.clone();
     // An unknown owner and a unicast announcement cannot yield an earlier reply.
     // The first valid reply is a FIFO fence, not a timeout-based silence claim.
     peer.control(NODE, &[1, 0x80, 0x12]).await;
@@ -64,15 +65,16 @@ async fn controls(role: Role, mode: MstpExecutionMode) {
         // An erroneous response to the earlier query would carry the old value.
         peer.number(next.into()).await;
     }
-    bounded(owner.stop()).await;
+    link.bounded(owner.stop()).await;
 }
 
 async fn blocked_producer_progress(role: Role, mode: MstpExecutionMode) {
     let gates = Gates::new(true, false, false);
     let (mut owner, mut peer) = fixture(role, mode, gates.clone()).await;
+    let link = peer.link.clone();
     peer.control(BROADCAST, &[1, 0x80, 0x13, 0, 77, 1]).await;
     peer.control(NODE, &[1, 0x80, 0x12]).await;
-    bounded(gates.queued.acquire()).await.unwrap().forget();
+    link.bounded(gates.queued.acquire()).await.unwrap().forget();
     // Drain the real queued frame; the producer stays held after enqueue, but
     // does not own the serial writer or MAC mutex, so application egress can run.
     peer.number(77).await;
@@ -85,8 +87,8 @@ async fn blocked_producer_progress(role: Role, mode: MstpExecutionMode) {
         0,
         "producer remains held during APDU progress"
     );
-    bounded(owner.stop()).await;
-    bounded(gates.send_dropped.acquire())
+    link.bounded(owner.stop()).await;
+    link.bounded(gates.send_dropped.acquire())
         .await
         .unwrap()
         .forget();
@@ -94,11 +96,12 @@ async fn blocked_producer_progress(role: Role, mode: MstpExecutionMode) {
 
 /// The owner answers an independent ReadProperty from the peer.
 async fn responder_progress(peer: &mut Peer) {
+    let link = peer.link.clone();
     // Independent ReadProperty: analog-input 1 / present-value, Invoke ID 42.
     // NPDU version1/expecting-reply, confirmed unsegmented APDU, max-APDU480.
     let request = [1, 4, 0, 3, 42, 12, 0x0c, 0, 0, 0, 1, 0x19, 85];
     peer.await_token().await;
-    bounded(peer.frame(FrameType::BACNET_DATA_EXPECTING_REPLY, NODE, &request))
+    link.bounded(peer.frame(FrameType::BACNET_DATA_EXPECTING_REPLY, NODE, &request))
         .await
         .unwrap();
     let frame = peer.answer().await;
@@ -123,6 +126,7 @@ async fn responder_progress(peer: &mut Peer) {
 /// A standalone client has no responder role; its own confirmed request to the
 /// peer must complete through the same serial owner instead.
 async fn requester_progress(client: &BACnetClient<GatedTransport>, peer: &mut Peer) {
+    let link = peer.link.clone();
     let object = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
     let request = client.read_property(&[PEER], object, PropertyIdentifier::PRESENT_VALUE, None);
     let respond = async {
@@ -149,11 +153,11 @@ async fn requester_progress(client: &BACnetClient<GatedTransport>, peer: &mut Pe
             1, 0, 0x30, invoke_id, 12, 0x0c, 0, 0, 0, 1, 0x19, 85, 0x3e, 0x44, 0x42, 0x28, 0, 0,
             0x3f,
         ];
-        bounded(peer.frame(FrameType::BACNET_DATA_NOT_EXPECTING_REPLY, NODE, &ack))
+        link.bounded(peer.frame(FrameType::BACNET_DATA_NOT_EXPECTING_REPLY, NODE, &ack))
             .await
             .unwrap();
     };
-    let (ack, ()) = bounded(async { tokio::join!(request, respond) }).await;
+    let (ack, ()) = link.bounded(async { tokio::join!(request, respond) }).await;
     let ack = ack.expect("client ReadProperty completes while the Number producer is held");
     assert_eq!(ack.object_identifier, object);
     assert_eq!(ack.property_value, [0x44, 0x42, 0x28, 0, 0]);
@@ -162,9 +166,10 @@ async fn requester_progress(client: &BACnetClient<GatedTransport>, peer: &mut Pe
 async fn stopped_producer(role: Role, mode: MstpExecutionMode, bare_drop: bool) {
     let gates = Gates::new(true, true, !bare_drop);
     let (mut owner, mut peer) = fixture(role, mode, gates.clone()).await;
+    let link = peer.link.clone();
     peer.control(BROADCAST, &[1, 0x80, 0x13, 0, 77, 0]).await;
     peer.control(NODE, &[1, 0x80, 0x12]).await;
-    bounded(gates.queued.acquire()).await.unwrap().forget();
+    link.bounded(gates.queued.acquire()).await.unwrap().forget();
     // Actual queue admission happened. The optional serial gate also prevents
     // autonomous lost-token recovery from completing a number frame.
     if bare_drop {
@@ -173,7 +178,7 @@ async fn stopped_producer(role: Role, mode: MstpExecutionMode, bare_drop: bool) 
         {
             let stop = owner.stop();
             tokio::pin!(stop);
-            bounded(async {
+            link.bounded(async {
                 tokio::select! {
                     _ = &mut stop => panic!("stop must wait for the transport gate"),
                     permit = gates.stop_started.acquire() => { permit.unwrap().forget(); }
@@ -182,16 +187,16 @@ async fn stopped_producer(role: Role, mode: MstpExecutionMode, bare_drop: bool) 
             .await;
             // Drop this stop waiter while cleanup is known to be pending.
         }
-        bounded(gates.send_dropped.acquire())
+        link.bounded(gates.send_dropped.acquire())
             .await
             .unwrap()
             .forget();
         gates.stop_release.add_permits(1);
-        bounded(owner.stop()).await;
+        link.bounded(owner.stop()).await;
         drop(owner);
     }
     if bare_drop {
-        bounded(gates.send_dropped.acquire())
+        link.bounded(gates.send_dropped.acquire())
             .await
             .unwrap()
             .forget();
@@ -199,97 +204,93 @@ async fn stopped_producer(role: Role, mode: MstpExecutionMode, bare_drop: bool) 
     peer.assert_released(&gates).await;
 }
 
-#[tokio::test]
-async fn mstp_number_transport_group_and_any_delegation() {
-    for mode in [
-        MstpExecutionMode::Tokio,
-        MstpExecutionMode::dedicated_thread(),
-    ] {
-        let (mut transport, peer) = transport(mode, Gates::new(false, false, false)).await;
-        assert!(transport.supports_local_nonrouter_number_controls());
-        let mut received = transport.start().await.unwrap();
-        for (destination, group) in [(NODE, false), (BROADCAST, true)] {
-            let bytes = [1, 0x80, 0x13, 0, 77, 0];
-            peer.control(destination, &bytes).await;
-            let packet = bounded(received.recv()).await.unwrap();
-            assert_eq!(packet.link_layer_group, group);
-            assert_eq!(packet.source_mac.as_slice(), [PEER]);
-            assert_eq!(packet.npdu.as_ref(), bytes);
-        }
-        bounded(transport.stop()).await.unwrap();
+async fn group_delegation(mode: MstpExecutionMode) {
+    let (mut transport, peer) = transport(mode, Gates::new(false, false, false)).await;
+    let link = peer.link.clone();
+    assert!(transport.supports_local_nonrouter_number_controls());
+    let mut received = transport.start().await.unwrap();
+    for (destination, group) in [(NODE, false), (BROADCAST, true)] {
+        let bytes = [1, 0x80, 0x13, 0, 77, 0];
+        peer.control(destination, &bytes).await;
+        let packet = link.bounded(received.recv()).await.unwrap();
+        assert_eq!(packet.link_layer_group, group);
+        assert_eq!(packet.source_mac.as_slice(), [PEER]);
+        assert_eq!(packet.npdu.as_ref(), bytes);
     }
+    link.bounded(transport.stop()).await.unwrap();
 }
+
+/// One test per execution mode (#2277). The Tokio variant runs the node on
+/// the test's runtime, so it runs on paused time: a starved host thread
+/// cannot make an MS/TP deadline (a poll timeout, T_no_token) expire
+/// between two steps of the walk, and `bounded` is only a hang backstop.
+/// The dedicated variant's node runs its own runtime on the wall clock,
+/// which the test cannot pause.
 macro_rules! mode_tests {
-    ($name:ident, $role:expr_2021, $mode:expr_2021) => {
+    ($tokio:ident, $dedicated:ident, |$mode:ident| $body:expr) => {
+        #[tokio::test(start_paused = true)]
+        async fn $tokio() {
+            let $mode = MstpExecutionMode::Tokio;
+            $body
+        }
         #[tokio::test]
-        async fn $name() {
-            controls($role, $mode).await;
+        async fn $dedicated() {
+            let $mode = MstpExecutionMode::dedicated_thread();
+            $body
         }
     };
 }
 mode_tests!(
-    mstp_number_server_tokio_wire,
-    Role::Server,
-    MstpExecutionMode::Tokio
+    mstp_number_transport_group_and_any_delegation_tokio,
+    mstp_number_transport_group_and_any_delegation_dedicated,
+    |mode| group_delegation(mode).await
 );
 mode_tests!(
+    mstp_number_server_tokio_wire,
     mstp_number_server_dedicated_wire,
-    Role::Server,
-    MstpExecutionMode::dedicated_thread()
+    |mode| controls(Role::Server, mode).await
 );
 mode_tests!(
     mstp_number_endpoint_tokio_wire,
-    Role::Endpoint,
-    MstpExecutionMode::Tokio
-);
-mode_tests!(
     mstp_number_endpoint_dedicated_wire,
-    Role::Endpoint,
-    MstpExecutionMode::dedicated_thread()
+    |mode| controls(Role::Endpoint, mode).await
 );
 mode_tests!(
     mstp_number_client_tokio_wire,
-    Role::Client,
-    MstpExecutionMode::Tokio
+    mstp_number_client_dedicated_wire,
+    |mode| controls(Role::Client, mode).await
 );
 mode_tests!(
-    mstp_number_client_dedicated_wire,
-    Role::Client,
-    MstpExecutionMode::dedicated_thread()
-);
-const MODES: [MstpExecutionMode; 2] = [
-    MstpExecutionMode::Tokio,
-    MstpExecutionMode::dedicated_thread(),
-];
-#[tokio::test]
-async fn mstp_number_held_producer_preserves_application_progress() {
-    for role in [Role::Server, Role::Endpoint] {
-        for mode in MODES {
-            blocked_producer_progress(role, mode).await;
+    mstp_number_held_producer_preserves_application_progress_tokio,
+    mstp_number_held_producer_preserves_application_progress_dedicated,
+    |mode| {
+        for role in [Role::Server, Role::Endpoint] {
+            blocked_producer_progress(role, mode.clone()).await;
         }
     }
-}
-#[tokio::test]
-async fn mstp_number_client_held_producer_preserves_request_progress() {
-    for mode in MODES {
-        blocked_producer_progress(Role::Client, mode).await;
-    }
-}
-#[tokio::test]
-async fn mstp_number_queued_producer_canceled_stop_and_drop() {
-    for role in [Role::Server, Role::Endpoint] {
-        for mode in MODES {
+);
+mode_tests!(
+    mstp_number_client_held_producer_preserves_request_progress_tokio,
+    mstp_number_client_held_producer_preserves_request_progress_dedicated,
+    |mode| blocked_producer_progress(Role::Client, mode).await
+);
+mode_tests!(
+    mstp_number_queued_producer_canceled_stop_and_drop_tokio,
+    mstp_number_queued_producer_canceled_stop_and_drop_dedicated,
+    |mode| {
+        for role in [Role::Server, Role::Endpoint] {
             for bare_drop in [false, true] {
                 stopped_producer(role, mode.clone(), bare_drop).await;
             }
         }
     }
-}
-#[tokio::test]
-async fn mstp_number_client_queued_producer_canceled_stop_and_drop() {
-    for mode in MODES {
+);
+mode_tests!(
+    mstp_number_client_queued_producer_canceled_stop_and_drop_tokio,
+    mstp_number_client_queued_producer_canceled_stop_and_drop_dedicated,
+    |mode| {
         for bare_drop in [false, true] {
             stopped_producer(Role::Client, mode.clone(), bare_drop).await;
         }
     }
-}
+);
