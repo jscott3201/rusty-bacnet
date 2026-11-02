@@ -23,7 +23,7 @@ use crate::log_window::LogWindow;
 use crate::property_metadata::read_property_list;
 use crate::traits::BACnetObject;
 use acquisition::{Acquisition, Rules};
-use cov_settings::CovSettings;
+pub(crate) use cov_settings::CovSettings;
 
 mod acquisition;
 mod cov_settings;
@@ -278,17 +278,31 @@ impl TrendLogObject {
     /// value's changes to (Clause 12.25.11). `None`, NULL, uses the
     /// referenced property's own criteria: the object's COV_Increment for a
     /// numeric Present_Value, any change otherwise. An increment that is
-    /// negative or not finite is PROPERTY / VALUE_OUT_OF_RANGE.
+    /// negative or not finite is PROPERTY / VALUE_OUT_OF_RANGE. On a log
+    /// with storage, a value a write set wins: the argument is checked but
+    /// not taken (see [`clear_written_reporting`](Self::clear_written_reporting)).
     pub fn set_client_cov_increment(&mut self, increment: Option<f32>) -> Result<(), Error> {
-        self.cov.set_client_cov_increment(increment)
+        let mut cov = self.cov;
+        cov.set_client_cov_increment(increment)?;
+        if !self.kept_over_setter(PropertyIdentifier::CLIENT_COV_INCREMENT) {
+            self.cov = cov;
+        }
+        Ok(())
     }
 
     /// Set COV_Resubscription_Interval in seconds (Clause 12.25.10); zero is
     /// PROPERTY / VALUE_OUT_OF_RANGE. It is stored and served, but unused
     /// until the log subscribes to another device's property, which it
-    /// doesn't yet: COV logging follows this device's properties only.
+    /// doesn't yet: COV logging follows this device's properties only. A
+    /// value a write set wins as for
+    /// [`set_client_cov_increment`](Self::set_client_cov_increment).
     pub fn set_cov_resubscription_interval(&mut self, seconds: u32) -> Result<(), Error> {
-        self.cov.set_resubscription_interval(seconds)
+        let mut cov = self.cov;
+        cov.set_resubscription_interval(seconds)?;
+        if !self.kept_over_setter(PropertyIdentifier::COV_RESUBSCRIPTION_INTERVAL) {
+            self.cov = cov;
+        }
+        Ok(())
     }
 
     /// Set Start_Time, the local date and time from which records are kept,
@@ -338,20 +352,29 @@ impl TrendLogObject {
     }
 
     /// Set Notification_Class: the number of the Notification Class whose
-    /// recipients get the log's reports (0 by default).
+    /// recipients get the log's reports (0 by default). On a log with
+    /// storage, a value a write set wins (see
+    /// [`clear_written_reporting`](Self::clear_written_reporting)), as it
+    /// does for the next two setters.
     pub fn set_notification_class(&mut self, class: u32) {
-        self.reporting.set_notification_class(class);
+        if !self.kept_over_setter(PropertyIdentifier::NOTIFICATION_CLASS) {
+            self.reporting.set_notification_class(class);
+        }
     }
 
     /// Set Event_Enable; a report goes out only while its TO_NORMAL flag is
     /// set, as it is by default.
     pub fn set_event_enable(&mut self, enable: EventTransitionBits) {
-        self.reporting.set_event_enable(enable);
+        if !self.kept_over_setter(PropertyIdentifier::EVENT_ENABLE) {
+            self.reporting.set_event_enable(enable);
+        }
     }
 
     /// Set Notify_Type, sent with each report (EVENT by default).
     pub fn set_notify_type(&mut self, notify_type: NotifyType) {
-        self.reporting.set_notify_type(notify_type);
+        if !self.kept_over_setter(PropertyIdentifier::NOTIFY_TYPE) {
+            self.reporting.set_notify_type(notify_type);
+        }
     }
 
     fn lifecycle(&mut self) -> LogLifecycle<'_, BACnetLogRecord> {
@@ -462,6 +485,12 @@ impl BACnetObject for TrendLogObject {
         _priority: Option<u8>,
     ) -> Result<(), Error> {
         crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
+        // A reporting setting a durable log keeps saves first (#1952).
+        if let Some(result) =
+            crate::log_persistence::store::staging::write(self, property, array_index, &value)
+        {
+            return result;
+        }
         if property == PropertyIdentifier::LOG_ENABLE {
             if let PropertyValue::Boolean(v) = value {
                 return self.lifecycle().write_enable(v);

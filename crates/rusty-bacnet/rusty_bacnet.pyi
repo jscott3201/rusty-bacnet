@@ -5049,6 +5049,7 @@ class BACnetServer:
         align_intervals: bool | None = None,
         interval_offset: int | None = None,
         storage_path: Optional[str] = None,
+        clear_written_reporting: bool = False,
         total_record_count: int = 0,
     ) -> None:
         """Add a Trend Log (Clause 12.25) that the server polls, triggers or
@@ -5092,9 +5093,13 @@ class BACnetServer:
         OverflowError.
 
         ``storage_path`` keeps the log in files, as on
-        ``add_trend_log_multiple``. ``client_cov_increment`` and
-        ``cov_resubscription_interval`` aren't saved: they apply on every
-        start, reopened or not.
+        ``add_trend_log_multiple``. A Client_COV_Increment or
+        COV_Resubscription_Interval written over the network, or with
+        ``write_property_local``, is saved too, and refused when it can't be;
+        once saved it wins over ``client_cov_increment`` and
+        ``cov_resubscription_interval`` at every later start.
+        ``clear_written_reporting=True`` drops the saved writes first, so
+        the keywords apply again. Unwritten, they apply on every start.
         """
         ...
     def add_trend_log_multiple(
@@ -5162,7 +5167,8 @@ class BACnetServer:
         about a minute of records; a failed commit is retried. A log reopened
         from those files serves its saved records, Total_Record_Count,
         BUFFER_READY counts and Notification_Threshold, Enable,
-        Stop_When_Full and every setting a peer can write, and appends one
+        Stop_When_Full and every setting a peer can write, Notification_Class
+        and the other reporting settings among them, and appends one
         LOG_INTERRUPTED record to mark the restart (none when it reopens full
         and stopped); the saved state wins over the keyword arguments.
         ``buffer_size`` wins over the saved Buffer_Size: a smaller one keeps
@@ -5202,8 +5208,10 @@ class BACnetServer:
         ``add_trend_log``; BUFFER_READY counts from the seeded value.
 
         ``storage_path`` keeps the log in files, as on
-        ``add_trend_log_multiple``. ``log_received_notifications`` isn't
-        saved and applies on every start.
+        ``add_trend_log_multiple``, Notification_Class and the other
+        reporting settings a write set included; such a write is refused when
+        it can't be saved. ``log_received_notifications`` isn't saved and
+        applies on every start.
         """
         ...
     def add_audit_log(self, instance: int, name: str, storage_path: str, buffer_size: int = 100) -> None: ...

@@ -9,8 +9,10 @@
 //! and Stop_Time as four
 //! octets of date and four of time each, the acquisition settings behind a
 //! presence octet, then the references and the records, each list a count
-//! followed by length-prefixed Clause 21 encodings. Every integer is
-//! big-endian.
+//! followed by length-prefixed Clause 21 encodings. Schema version 2
+//! (#1952) ends the payload with the written reporting settings
+//! ([`reporting`]); a version 1 slot, which stops after the records, still
+//! loads, with none written. Every integer is big-endian.
 
 use crate::prelude::*;
 use bacnet_encoding::constructed::{
@@ -26,14 +28,19 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 use bytes::BytesMut;
 
-use super::{LogAcquisitionSettings, LogSnapshot};
+use super::{LogAcquisitionSettings, LogReportingSettings, LogSnapshot};
 use crate::durable::crc32;
 use crate::log_buffer::ResidentLogRecord;
 use crate::log_window::LogWindow;
 use crate::trend::MAX_LOG_DEVICE_OBJECT_PROPERTIES;
 
+mod reporting;
+
 const MAGIC: &[u8; 8] = b"RBLOGS01";
-pub(super) const SCHEMA_VERSION: u16 = 1;
+/// The schema written: version 2 adds the written reporting settings.
+pub(super) const SCHEMA_VERSION: u16 = 2;
+/// The schema before them (#1541), still read.
+pub(super) const SCHEMA_VERSION_1: u16 = 1;
 pub(super) const HEADER_LEN: usize = 8 + 2 + 4 + 8 + 4;
 pub(super) const TRAILER_LEN: usize = 4;
 /// The most octets one record or reference may take in a slot.
@@ -85,7 +92,9 @@ impl SnapshotRecord for BACnetLogMultipleRecord {
 }
 
 /// Room in a slot for everything but the records: header, trailer, the
-/// fixed fields and 64 references.
+/// fixed fields, 64 references and the written reporting settings, whose
+/// three message texts [`reporting::MAX_TEXT_OCTETS`] caps (about 50 KiB
+/// in all).
 const FIXED_ALLOWANCE: usize = 64 * 1024;
 
 /// The largest Buffer_Size an `R` log can keep in a slot: enough of the
@@ -193,7 +202,7 @@ pub(crate) fn validate<R: SnapshotRecord>(snapshot: &LogSnapshot<R>) -> Result<(
     for reference in &snapshot.log_device_object_property {
         crate::device_reference::check_device_member(reference.device_identifier)?;
     }
-    Ok(())
+    reporting::validate(R::OBJECT_TYPE, &snapshot.reporting)
 }
 
 /// The slot octets for `snapshot`, after [`validate`].
@@ -241,6 +250,7 @@ pub(crate) fn encode<R: SnapshotRecord>(snapshot: &LogSnapshot<R>) -> Result<Vec
     put_list(&mut data, &snapshot.records, &mut element, |record, buf| {
         record.encode(buf)
     })?;
+    reporting::put(&mut data, &snapshot.reporting, &mut element);
     let payload_len = data.len() - HEADER_LEN;
     let total_len = data.len() + TRAILER_LEN;
     if total_len > MAX_SNAPSHOT_BYTES {
@@ -309,7 +319,7 @@ pub(super) fn decode<R: SnapshotRecord>(data: &[u8], expected: ObjectIdentifier)
         return Decoded::Corrupt(error);
     }
     let version = u16::from_be_bytes([data[8], data[9]]);
-    if version != SCHEMA_VERSION {
+    if version != SCHEMA_VERSION && version != SCHEMA_VERSION_1 {
         return Decoded::Refused(corrupt(format_args!(
             "schema version {version} is unsupported"
         )));
@@ -319,7 +329,7 @@ pub(super) fn decode<R: SnapshotRecord>(data: &[u8], expected: ObjectIdentifier)
         Ok(_) => return Decoded::Refused(corrupt("belongs to another object")),
         Err(error) => return Decoded::Corrupt(error),
     }
-    match decode_payload(data, expected) {
+    match decode_payload(data, version, expected) {
         Ok(snapshot) => Decoded::Valid(snapshot),
         Err(error) => Decoded::Corrupt(error),
     }
@@ -417,6 +427,7 @@ impl<'a> Reader<'a> {
 
 fn decode_payload<R: SnapshotRecord>(
     data: &[u8],
+    version: u16,
     object_identifier: ObjectIdentifier,
 ) -> Result<LogSnapshot<R>, Error> {
     let generation = u64::from_be_bytes(data[14..22].try_into().unwrap());
@@ -455,6 +466,11 @@ fn decode_payload<R: SnapshotRecord>(
         buffer_size.min(max_buffer_size::<R>()) as usize,
         R::decode_at,
     )?;
+    let reporting = if version == SCHEMA_VERSION_1 {
+        LogReportingSettings::default()
+    } else {
+        reporting::read(&mut reader)?
+    };
     if reader.offset != reader.data.len() {
         return Err(corrupt("payload has trailing octets"));
     }
@@ -473,6 +489,7 @@ fn decode_payload<R: SnapshotRecord>(
         stop_time,
         acquisition,
         log_device_object_property,
+        reporting,
     };
     validate(&snapshot)?;
     // A record that decodes but would not encode again could never be

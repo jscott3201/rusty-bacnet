@@ -34,6 +34,7 @@ use crate::event::{
     EnrollmentSummaryCapability, EventStateChange, EventTransitionCommit,
     EventTransitionCommitError, TransitionOutcome,
 };
+use crate::log_persistence::LogReportingSettings;
 use crate::property_metadata::{
     PropertyConformance::Optional,
     PropertyMetadata,
@@ -127,6 +128,38 @@ pub(crate) struct BufferReadyReporting {
     event_detection_enable: bool,
     /// The counts of the last committed report, for its event values.
     report: Option<BufferReadyReport>,
+    /// The settings a write has set (#1952).
+    written: Written,
+}
+
+/// The reporting settings a write has set, now or before a restart
+/// (#1952): on a log with storage, the ones its snapshot keeps and its
+/// setters leave alone.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Written {
+    notification_class: bool,
+    event_enable: bool,
+    notify_type: bool,
+    event_detection_enable: bool,
+    message_texts: bool,
+    inhibit_reference: bool,
+    inhibit: bool,
+}
+
+impl Written {
+    /// The flag a write of `property` sets, if any.
+    fn flag(&mut self, property: P) -> Option<&mut bool> {
+        Some(match property {
+            P::NOTIFICATION_CLASS => &mut self.notification_class,
+            P::EVENT_ENABLE => &mut self.event_enable,
+            P::NOTIFY_TYPE => &mut self.notify_type,
+            P::EVENT_DETECTION_ENABLE => &mut self.event_detection_enable,
+            P::EVENT_MESSAGE_TEXTS_CONFIG => &mut self.message_texts,
+            P::EVENT_ALGORITHM_INHIBIT_REF => &mut self.inhibit_reference,
+            P::EVENT_ALGORITHM_INHIBIT => &mut self.inhibit,
+            _ => return None,
+        })
+    }
 }
 
 impl Default for BufferReadyReporting {
@@ -146,6 +179,7 @@ impl Default for BufferReadyReporting {
             history: EventHistory::default(),
             event_detection_enable: true,
             report: None,
+            written: Written::default(),
         }
     }
 }
@@ -207,6 +241,80 @@ impl BufferReadyReporting {
         self.count_restarted_at = count_restarted_at;
     }
 
+    /// Whether a write has set `property`, one of the settings a durable
+    /// log keeps (#1952).
+    pub(crate) fn written(&self, property: P) -> bool {
+        let mut written = self.written;
+        written.flag(property).is_some_and(|flag| *flag)
+    }
+
+    /// The settings a write has set, as a durable log saves them; the two
+    /// COV settings, a Trend Log's, are left `None` (#1952).
+    pub(crate) fn saved(&self) -> LogReportingSettings {
+        let written = self.written;
+        let options = &self.history.options;
+        LogReportingSettings {
+            notification_class: written
+                .notification_class
+                .then_some(self.notification_class),
+            event_enable: written.event_enable.then_some(self.event_enable),
+            notify_type: written.notify_type.then_some(self.notify_type),
+            event_detection_enable: written
+                .event_detection_enable
+                .then_some(self.event_detection_enable),
+            event_message_texts_config: written
+                .message_texts
+                .then(|| options.message_texts_config().clone()),
+            event_algorithm_inhibit_ref: written
+                .inhibit_reference
+                .then(|| options.inhibit_reference().cloned())
+                .flatten(),
+            event_algorithm_inhibit: written.inhibit.then(|| options.inhibited()),
+            client_cov_increment: None,
+            cov_resubscription_interval: None,
+        }
+    }
+
+    /// Take back the settings a log saved (#1952), each marked written
+    /// again. The snapshot was checked as it loaded.
+    pub(crate) fn restore(&mut self, saved: &LogReportingSettings) {
+        if let Some(class) = saved.notification_class {
+            self.notification_class = class;
+            self.written.notification_class = true;
+        }
+        if let Some(enable) = saved.event_enable {
+            self.event_enable = enable;
+            self.written.event_enable = true;
+        }
+        if let Some(notify_type) = saved.notify_type {
+            self.notify_type = notify_type;
+            self.written.notify_type = true;
+        }
+        if let Some(enable) = saved.event_detection_enable {
+            self.event_detection_enable = enable;
+            self.written.event_detection_enable = true;
+        }
+        let options = &mut self.history.options;
+        if let Some(texts) = &saved.event_message_texts_config {
+            options.restore_message_texts_config(texts.clone());
+            self.written.message_texts = true;
+        }
+        if let Some(reference) = &saved.event_algorithm_inhibit_ref {
+            options.restore_inhibit_reference(Some(reference.clone()));
+            self.written.inhibit_reference = true;
+        }
+        if let Some(inhibit) = saved.event_algorithm_inhibit {
+            options.restore_inhibit(inhibit);
+            self.written.inhibit = true;
+        }
+    }
+
+    /// Mark every setting as one no write has set, so a durable log's
+    /// setters apply again (#1952). The values stay.
+    pub(crate) fn unwrite(&mut self) {
+        self.written = Written::default();
+    }
+
     /// Serve one of the event rows for a log whose Total_Record_Count is
     /// `total`, or `None` for any other property.
     pub(crate) fn read(
@@ -252,7 +360,25 @@ impl BufferReadyReporting {
     /// Event_Time_Stamps and Event_Message_Texts back to their starting
     /// values (Clause 12.27.26). TRUE again starts the algorithm afresh,
     /// counting from the current Total_Record_Count.
+    ///
+    /// A write it takes marks its setting written (#1952).
     pub(crate) fn write(
+        &mut self,
+        property: P,
+        array_index: Option<u32>,
+        value: &PropertyValue,
+        total: u32,
+    ) -> Option<Result<(), Error>> {
+        let result = self.write_row(property, array_index, value, total)?;
+        if result.is_ok()
+            && let Some(flag) = self.written.flag(property)
+        {
+            *flag = true;
+        }
+        Some(result)
+    }
+
+    fn write_row(
         &mut self,
         property: P,
         array_index: Option<u32>,

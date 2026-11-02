@@ -40,9 +40,11 @@
 //! records that fit and logs a warning naming both sizes. A Buffer_Size
 //! whose full buffer of the family's worst-case records couldn't fit a
 //! slot's 256 MiB is refused.
-//! Settings the application applies after opening replace the stored ones,
-//! so an application that configures its logs on every start should skip
-//! that for a log that [reopened](crate::trend::TrendLogObject::reopened).
+//! The settings above that the application applies after opening replace
+//! the stored ones, so an application that configures its logs on every
+//! start should skip that for a log that
+//! [reopened](crate::trend::TrendLogObject::reopened). The written
+//! reporting settings work the other way round (see below).
 //!
 //! A reopened log then appends one LOG_INTERRUPTED status record, which
 //! tells readers samples may be missing across the restart (Clauses
@@ -58,6 +60,29 @@
 //!
 //! Notification_Threshold comes back with the counts, since BUFFER_READY
 //! resumes from them.
+//!
+//! # Written reporting settings (#1952)
+//!
+//! A snapshot also keeps the reporting settings a write set
+//! ([`LogReportingSettings`]): Notification_Class, Event_Enable,
+//! Notify_Type, Event_Detection_Enable, Event_Message_Texts_Config and the
+//! Event_Algorithm_Inhibit pair on every log, plus Client_COV_Increment and
+//! COV_Resubscription_Interval on a Trend Log (Table 12-35 gives a Trend Log
+//! Multiple neither). Only a written setting is kept; the application's
+//! setter governs one no write has set. Once a write has set one, the saved
+//! value wins over its setter on every later start, so an application that
+//! configures its logs at each start keeps a peer's write.
+//! `clear_written_reporting` (on each log) drops them all, so the setters
+//! apply again.
+//!
+//! These writes don't wait for the cadence. A write of one of them commits a
+//! snapshot holding it before the log serves it, and is refused with
+//! DEVICE / OPERATIONAL_PROBLEM, the old value kept, when that commit fails.
+//! The bundled server stages the commit, so it runs with the database guard
+//! dropped ([`crate::durable`]); while a write is staged the cadence's own
+//! commits wait, so none of them can put the old value back in storage
+//! after the request is answered. A write nobody staged commits where it is
+//! and waits for the commit.
 //!
 //! # Failed commits
 //!
@@ -76,8 +101,11 @@
 use crate::prelude::*;
 use core::time::Duration;
 
-use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
-use bacnet_types::enums::LoggingType;
+use bacnet_types::bitstring::EventTransitionBits;
+use bacnet_types::constructed::{
+    BACnetDeviceObjectPropertyReference, BACnetObjectPropertyReference,
+};
+use bacnet_types::enums::{LoggingType, NotifyType};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 
@@ -103,6 +131,34 @@ pub struct LogAcquisitionSettings {
     pub align_intervals: bool,
     /// Interval_Offset in hundredths of a second.
     pub interval_offset: u32,
+}
+
+/// The reporting settings a write set on a log, as its snapshot keeps them
+/// (#1952). Each is `None` until a write sets it; see the
+/// [module documentation](self).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LogReportingSettings {
+    /// Notification_Class.
+    pub notification_class: Option<u32>,
+    /// Event_Enable.
+    pub event_enable: Option<EventTransitionBits>,
+    /// Notify_Type.
+    pub notify_type: Option<NotifyType>,
+    /// Event_Detection_Enable.
+    pub event_detection_enable: Option<bool>,
+    /// Event_Message_Texts_Config, ordered TO_OFFNORMAL, TO_FAULT,
+    /// TO_NORMAL; at most 16 KiB of UTF-8 each in a snapshot.
+    pub event_message_texts_config: Option<[String; 3]>,
+    /// Event_Algorithm_Inhibit_Ref, when a write set one. A write of the
+    /// unset form leaves `None`, which reopens as unset too.
+    pub event_algorithm_inhibit_ref: Option<BACnetObjectPropertyReference>,
+    /// Event_Algorithm_Inhibit.
+    pub event_algorithm_inhibit: Option<bool>,
+    /// Client_COV_Increment, on a Trend Log only: `Some(None)` for a
+    /// written NULL, as `set_client_cov_increment` takes it.
+    pub client_cov_increment: Option<Option<f32>>,
+    /// COV_Resubscription_Interval in seconds, on a Trend Log only.
+    pub cov_resubscription_interval: Option<u32>,
 }
 
 /// The durable state of one Trend Log (`R` = `BACnetLogRecord`), Trend Log
@@ -144,6 +200,9 @@ pub struct LogSnapshot<R> {
     /// [`MAX_LOG_DEVICE_OBJECT_PROPERTIES`](crate::trend::MAX_LOG_DEVICE_OBJECT_PROPERTIES)
     /// on a Trend Log Multiple, none on an Event Log.
     pub log_device_object_property: Vec<BACnetDeviceObjectPropertyReference>,
+    /// The reporting settings a write set (#1952); none in a snapshot of
+    /// the first schema version, which still loads.
+    pub reporting: LogReportingSettings,
 }
 
 /// Application-owned storage for one log's [`LogSnapshot`].
@@ -221,3 +280,9 @@ mod reopen_fit_tests;
 
 #[cfg(test)]
 mod codec_tests;
+
+#[cfg(test)]
+mod reporting_codec_tests;
+
+#[cfg(test)]
+mod reporting_tests;

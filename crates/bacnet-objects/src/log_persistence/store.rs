@@ -1,5 +1,6 @@
 //! How a durable log keeps its storage: the cadence bookkeeping, the writer
-//! thread its commits run on, and the hooks the three log objects share.
+//! thread its commits run on, the staged writes of its reporting settings
+//! ([`staging`]), and the hooks the three log objects share.
 
 use crate::prelude::*;
 use alloc::collections::VecDeque;
@@ -15,11 +16,19 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 
 use super::codec::{self, SnapshotRecord};
-use super::{LogAcquisitionSettings, LogCommitCadence, LogPersistence, LogSnapshot};
+use super::{
+    LogAcquisitionSettings, LogCommitCadence, LogPersistence, LogReportingSettings, LogSnapshot,
+};
+use crate::durable::staged::StagedSaves;
 use crate::durable::{SaveWait, SaveWriter};
 use crate::log_buffer::{LogRecordBuffer, ResidentLogRecord};
 use crate::log_reporting::{BufferReadyReporting, records_between};
 use crate::log_window::LogWindow;
+use crate::traits::BACnetObject;
+use crate::trend::CovSettings;
+use staging::LogReporting;
+
+pub(crate) mod staging;
 
 /// Everything a snapshot holds but the records themselves, plus how many
 /// records are resident: what tells whether the log changed since the last
@@ -38,11 +47,13 @@ pub(crate) struct LogState {
     stop_time: (Date, Time),
     acquisition: Option<LogAcquisitionSettings>,
     log_device_object_property: Vec<BACnetDeviceObjectPropertyReference>,
+    reporting: LogReportingSettings,
 }
 
 impl LogState {
     /// The state of a log held in these parts; the trend logs add their
-    /// acquisition settings and references with [`trend`](Self::trend).
+    /// acquisition settings and references with [`trend`](Self::trend), and
+    /// a Trend Log its COV settings with [`cov`](Self::cov).
     pub(crate) fn of<R: ResidentLogRecord>(
         buffer: &LogRecordBuffer<R>,
         log_enable: bool,
@@ -65,6 +76,7 @@ impl LogState {
             stop_time,
             acquisition: None,
             log_device_object_property: Vec::new(),
+            reporting: reporting.saved(),
         }
     }
 
@@ -76,6 +88,12 @@ impl LogState {
     ) -> Self {
         self.acquisition = Some(acquisition);
         self.log_device_object_property = references;
+        self
+    }
+
+    /// Add the COV settings a write set on a Trend Log.
+    pub(crate) fn cov(mut self, cov: &CovSettings) -> Self {
+        cov.save_into(&mut self.reporting);
         self
     }
 
@@ -96,15 +114,25 @@ impl LogState {
             stop_time: self.stop_time,
             acquisition: self.acquisition,
             log_device_object_property: self.log_device_object_property.clone(),
+            reporting: self.reporting.clone(),
         }
     }
 }
 
-/// One durable log's storage: the writer its commits run on and what the
-/// cadence needs to decide the next one.
+/// What a log's writer saves: a snapshot it numbers as it commits.
+type Commit<R> = Mutex<LogSnapshot<R>>;
+
+/// One durable log's storage: the writer its commits run on, with the write
+/// of a reporting setting staged on it, and what the cadence needs to
+/// decide the next commit.
 pub(crate) struct LogStore<R: SnapshotRecord> {
     oid: ObjectIdentifier,
-    writer: SaveWriter<Mutex<LogSnapshot<R>>>,
+    /// The writer, and a staged write's steps: each the reporting settings
+    /// a write leaves (#1952).
+    saves: StagedSaves<Commit<R>, LogReporting>,
+    /// Writes of the reporting settings the log keeps made so far, so a
+    /// staged step is taken only if no other came between (#1952).
+    writes: u64,
     /// The generation of the last snapshot storage took.
     generation: Arc<AtomicU64>,
     cadence: LogCommitCadence,
@@ -171,7 +199,7 @@ impl<R: SnapshotRecord> LogStore<R> {
                 oid.object_type().to_raw(),
                 oid.instance_number()
             ),
-            move |pending: &Mutex<LogSnapshot<R>>| {
+            move |pending: &Commit<R>| {
                 let mut snapshot = pending.lock();
                 snapshot.generation = committed
                     .load(Ordering::Acquire)
@@ -195,7 +223,8 @@ impl<R: SnapshotRecord> LogStore<R> {
         Ok((
             Self {
                 oid,
-                writer,
+                saves: StagedSaves::new(writer),
+                writes: 0,
                 generation,
                 cadence: LogCommitCadence::default(),
                 queued: None,
@@ -282,15 +311,39 @@ impl<R: SnapshotRecord> LogStore<R> {
     /// commit still waiting to start is replaced by this one.
     pub(crate) fn queue(&mut self, state: LogState, records: &VecDeque<R>) {
         let snapshot = state.snapshot(self.oid, records);
-        self.writer.submit_coalescing(Mutex::new(snapshot));
+        self.saves.submit_coalescing(Mutex::new(snapshot));
+        self.note_queued(state);
+    }
+
+    /// `state` is the latest one handed to the writer.
+    fn note_queued(&mut self, state: LogState) {
         self.queued_total = state.total_record_count;
         self.queued = Some(state);
         self.restart_interval = true;
     }
 
+    /// Whether a write of a reporting setting is staged, its request still
+    /// to take or release it. The cadence's commits wait meanwhile: one of
+    /// the served state would leave storage behind a write about to be
+    /// answered (#1952).
+    pub(crate) fn staged(&self) -> bool {
+        self.saves.is_staged()
+    }
+
+    /// Drop a staged write, as when the log stops or drops with its request
+    /// gone, and count the log changed if its commit may have left storage
+    /// holding settings the log never served, so the next commit puts
+    /// storage back.
+    fn drop_staged(&mut self) {
+        self.saves.drop_staged();
+        if self.saves.take_correction() {
+            self.queued = None;
+        }
+    }
+
     /// A wait that ends once every commit queued so far has run.
     pub(crate) fn idle(&self) -> SaveWait {
-        self.writer.idle()
+        self.saves.idle()
     }
 
     /// The log is dropping. With the in-memory test backend, its final
@@ -302,7 +355,7 @@ impl<R: SnapshotRecord> LogStore<R> {
     pub(crate) fn closing(&mut self) {
         #[cfg(feature = "test-support")]
         if self.commits_inline {
-            self.writer.closing();
+            self.saves.closing();
         }
     }
 }
@@ -343,12 +396,22 @@ pub(crate) fn fit_to_buffer_size<R>(snapshot: &mut LogSnapshot<R>, buffer_size: 
 
 /// The parts of a log object its storage works with. Each log implements it
 /// and gets the cadence hooks below.
-pub(crate) trait DurableLog {
+pub(crate) trait DurableLog: BACnetObject {
     /// The log's record family.
     type Record: SnapshotRecord;
 
     /// The state a commit would save now.
     fn log_state(&self) -> LogState;
+
+    /// The storage, if the log has one.
+    fn store(&self) -> Option<&LogStore<Self::Record>>;
+
+    /// The log's reporting settings: its BUFFER_READY state, and a Trend
+    /// Log's COV settings.
+    fn reporting(&self) -> (&BufferReadyReporting, Option<&CovSettings>);
+
+    /// [`reporting`](Self::reporting), to change.
+    fn reporting_mut(&mut self) -> (&mut BufferReadyReporting, Option<&mut CovSettings>);
 
     /// The storage, if the log has one, and the resident records, borrowed
     /// together.
@@ -376,11 +439,13 @@ pub(crate) trait DurableLog {
     }
 
     /// Commit when the records since the last commit reach the cadence's
-    /// count.
+    /// count, unless a write is staged.
     fn commit_if_counted(&mut self) {
         let due = {
             let (store, buffer) = self.durable_parts();
-            store.is_some_and(|store| store.count_due(buffer.total_record_count()))
+            store.is_some_and(|store| {
+                !store.staged() && store.count_due(buffer.total_record_count())
+            })
         };
         if due {
             let state = self.log_state();
@@ -403,9 +468,10 @@ pub(crate) trait DurableLog {
         }
     }
 
-    /// Commit when the state changed since the last commit.
+    /// Commit when the state changed since the last commit, unless a
+    /// write is staged.
     fn commit_if_changed(&mut self) {
-        if self.durable_parts().0.is_none() {
+        if self.store().is_none_or(LogStore::staged) {
             return;
         }
         let state = self.log_state();
@@ -416,35 +482,61 @@ pub(crate) trait DurableLog {
         }
     }
 
-    /// The final commit, as the server stops or the log drops: commit what
-    /// changed, and return the wait for every queued commit, or `None`
-    /// without storage.
+    /// The final commit, as the server stops or the log drops: drop a
+    /// staged write no request is left to take, commit what changed, and
+    /// return the wait for every queued commit, or `None` without storage.
     fn commit_final(&mut self) -> Option<SaveWait> {
+        if let Some(store) = self.durable_parts().0 {
+            store.drop_staged();
+        }
         self.commit_if_changed();
         self.durable_parts().0.map(|store| store.idle())
     }
 }
 
 /// Implement [`DurableWrites`](crate::durable::DurableWrites) and `Drop` for
-/// a [`DurableLog`]: the server's stop commits it once more and waits for
-/// the commit, and so does dropping it. Nothing is ever staged: a log's
-/// commits don't decide any request.
+/// a [`DurableLog`]. A write of a reporting setting the log keeps stages
+/// its commit ([`staging`]); the server's stop drops a staged write no
+/// request is left to take, commits the log once more and waits for the
+/// commit, and so does dropping it.
 macro_rules! impl_durable_log {
     ($log:ty) => {
         impl $crate::durable::DurableWrites for $log {
             fn stage_write(
                 &mut self,
-                _property: bacnet_types::enums::PropertyIdentifier,
-                _array_index: Option<u32>,
-                _value: &bacnet_types::primitives::PropertyValue,
+                property: bacnet_types::enums::PropertyIdentifier,
+                array_index: Option<u32>,
+                value: &bacnet_types::primitives::PropertyValue,
             ) -> $crate::durable::StageStep {
-                $crate::durable::StageStep::Skip
+                self.stage_writes(&[$crate::durable::PendingWrite {
+                    property,
+                    array_index,
+                    value: value.clone(),
+                }])
             }
 
-            fn release_staged_write(&mut self, _staged: &$crate::durable::SaveWait) {}
+            fn stage_writes(
+                &mut self,
+                writes: &[$crate::durable::PendingWrite],
+            ) -> $crate::durable::StageStep {
+                $crate::log_persistence::store::staging::stage_writes(self, writes)
+            }
+
+            fn release_staged_write(&mut self, staged: &$crate::durable::SaveWait) {
+                $crate::log_persistence::store::staging::release(self, staged);
+            }
+
+            fn has_staged_write(&self) -> bool {
+                $crate::log_persistence::store::DurableLog::store(self)
+                    .is_some_and($crate::log_persistence::store::LogStore::staged)
+            }
 
             fn settle_forgotten_writes(&mut self) -> Option<$crate::durable::SaveWait> {
                 $crate::log_persistence::store::DurableLog::commit_final(self)
+            }
+
+            fn expire_staged(&mut self, now: core::time::Duration) {
+                $crate::log_persistence::store::staging::expire(self, now);
             }
         }
 
