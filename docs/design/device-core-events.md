@@ -1,7 +1,7 @@
 # Design: COV and event reporting in the device core (#2303)
 
-Status: **draft for the maintainer's approval**, revised after the first
-review; §11 records the lead's decisions so far. Phase 3 of #2178, milestone
+Status: **approved** by the maintainer on 2026-11-02 as the plan of record
+(draft PR #2318); §11 records the decisions. Phase 3 of #2178, milestone
 0.16.0. Line references are to dev at `c308eda25`; paths without a crate are
 in `crates/bacnet-server/src/`. BACnet references are clause and table
 numbers in ANSI/ASHRAE 135-2020, paraphrased.
@@ -39,8 +39,8 @@ delays measured from the instant a condition began, and the `ReliabilityEval`
 fault pass; Notification Class distribution (Clauses 12.21, 13.2.5);
 AcknowledgeAlarm and local acknowledgement (Clauses 13.2.3, 13.5) and
 GetEventInformation, which a device with event-initiating objects has to
-execute (Clause 13.2.4); and Event Enrollment (Clauses 12.12, 13.3, 13.4),
-unless open question 8 gives it its own issue.
+execute (Clause 13.2.4). Event Enrollment (Clauses 12.12, 13.3, 13.4) is
+designed here (§6.6) and delivered under its own issue, #2319.
 
 Also: no I/O, locks, async or clock in the core; the server's octets
 unchanged but for the deliberate changes in §9; a `reporting` firmware
@@ -49,7 +49,7 @@ the reporting code needs an allocator (the `alloc` profile, not #1771's
 allocation-free one).
 
 **Non-goals (v1)**, all staying hosted (§7.1): the SubscribeCOVPropertyMultiple
-service, its notifications and timestamped changes (§5.6, open question 3),
+service, its notifications and timestamped changes (§5.6; follow-up #2320),
 though the table admits its contexts from PR 1; transport, routing,
 segmentation, DCC, the server's confirmed-request transactions and its
 Who-Is wait for an unbound recipient; receiving notifications; GetAlarmSummary
@@ -72,7 +72,7 @@ Layer 5.5: bacnet-device-core   requests (phases 1-2) and reporting (this design
 Layer 6:   bacnet-server        locks, transport, routing, retries; tasks that call the above
 ```
 
-The modules join the existing crate (open question 1), sharing `reply`,
+The modules join the existing crate (§11), sharing `reply`,
 `Inbound`, the `Responder`, `ReadOverlay` (§5.7) and `WriteCommitObserver`.
 The new dependency is `bacnet-time` (the core's `std` turns on its `std`,
 for `HostClock`); `bacnet-objects` takes it too, for the delay instants of
@@ -141,7 +141,7 @@ pub enum Destination {
     Subscriber(SubscriberEndpoint), // the route a subscription arrived on (cov/identity.rs:8-23, moved)
     Recipient(BACnetRecipient),     // a Notification Class destination
 }
-pub enum NotifyService { Cov, Event }         // CovMultiple with open question 3
+pub enum NotifyService { Cov, Event }         // CovMultiple with #2320
 pub struct Notification {
     pub token: Token,                         // its end comes back through `delivered`
     pub to: Destination,
@@ -219,7 +219,7 @@ impl Reporter {
     pub fn reply(&mut self, from: &BACnetAddress, apdu: &[u8], ids: &mut dyn InvokeIds, now: Instant) -> bool;
     pub fn changed(&mut self, db: &mut ObjectDatabase, objects: &[ObjectIdentifier], now: Instant);
     pub fn acknowledge_local(&mut self, db: &mut ObjectDatabase, object: ObjectIdentifier,
-        state: EventState, now: Instant) -> Result<(), Error>;   // open question 7
+        state: EventState, now: Instant) -> Result<(), Error>;   // §6.4
     pub fn next_deadline(&self) -> Option<Instant>;
     pub fn on_deadline(&mut self, db: &mut ObjectDatabase, ids: &mut dyn InvokeIds, now: Instant);
     /// The next notification, addressed and, if confirmed, with its invoke ID.
@@ -254,7 +254,7 @@ pub struct CovSubscriptionTable {
     wakes: BTreeMap<Token, Arc<Notify>>,      // wake-ups for workers to fence; no state
     revisits: Arc<CovRevisits>,               // the revisit task's wake-up
     counters: Arc<AtomicCovCounters>,         // lock-free metrics, fed from the core's counts
-    timed: TimedStore,                        // until open question 3
+    timed: TimedStore,                        // until #2320
 }
 ```
 
@@ -411,7 +411,7 @@ Clause 13.16's SubscribeCOVPropertyMultiple is the only Multiple form; its
 notifications are the COVNotificationMultiple services. PR 1 moves its
 admission (`cov/admission.rs:89-201`) and its per-context flights with the
 table, and PR 2 its active list, so the table is one type in both hosts. The
-rest stays hosted until open question 3 is answered: the service checks
+rest stays hosted until #2320: the service checks
 (`handlers/cov.rs:252-496`), the timestamped histories (`cov/timed.rs`,
 `cov/timed/*`, `cov/timed_capture.rs`), the read cache
 (`cov/multiple_reads.rs`), the split to the subscriber's APDU size
@@ -449,7 +449,7 @@ Active_COV_Subscriptions) matches, and PR 2 removes the pin.
 | An index on a property that isn't an array | PROPERTY / PROPERTY_IS_NOT_AN_ARRAY | 13.15.1.1.5 | `cov/prepare.rs:60` |
 | A cap reached | RESOURCES / NO_SPACE_TO_ADD_LIST_ELEMENT | 13.14.1.3.1 | `cov/admission.rs:404-413`, `:425-452` |
 | SubscribeCOVProperty with a zero lifetime | SERVICES / VALUE_OUT_OF_RANGE | 13.15.1.1.4, 13.15.1.3.1 | `:180-187` |
-| SubscribeCOV indefinite while the policy refuses it | SERVICES / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED today; the standard's list gives VALUE_OUT_OF_RANGE (a follow-up fixes it, not the move) | 13.14.1.1.4, 13.14.1.3.1 | `cov/admission.rs:353-361`, `:395-402` |
+| SubscribeCOV indefinite while the policy refuses it | SERVICES / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED today; the standard's list gives VALUE_OUT_OF_RANGE (#2317 fixes it, not the move) | 13.14.1.1.4, 13.14.1.3.1 | `cov/admission.rs:353-361`, `:395-402` |
 | A lifetime without the confirmed flag | Reject INCONSISTENT_PARAMETERS | 13.14.1.1.3, 18.9 | `:91-93`, `:189-191` |
 | Parameters don't decode | Reject, the decoder's reason | 18.9, 20.1.8 | `:87`, `:176` |
 
@@ -497,7 +497,7 @@ whose target changed. Both happen at once when the change arrives through
 set itself, a reference no host reported). The server sweeps once a second,
 as now, and its task sleeps until the core's next deadline rather than the
 next whole second, so the facade and the server fire at the same instant.
-Firmware sets `ReportConfig::sweep` (open question 9).
+Firmware sets `ReportConfig::sweep` (§11).
 
 Each proposal is committed before anyone asks whether to send it
 (`commit_intrinsic_transition`, `event_notifications.rs:128-203`): the
@@ -565,7 +565,7 @@ after the SimpleACK, as now (`requests/mod.rs:665-671`).
 Clause 13.2.3 also allows acknowledgement by local means, a reset button
 say, and nothing in the stack offers that today. `acknowledge_local` names
 an object and a transition's state, takes the latest committed timestamp
-of that transition, and runs the same path (open question 7).
+of that transition, and runs the same path (PR 3).
 
 ### 6.5 GetEventInformation
 
@@ -607,7 +607,7 @@ Event Enrollment's pending state live in memory today, and after a restart
 the objects start from their configured state. The core keeps that. The
 Notification Class saves its own Recipient_List, which Clause 12.21.8 says
 outlives a restart, through its persistence trait, unchanged. Saving event
-state would be a feature with its own design (open question 4).
+state would be a feature with its own design (§11: none in v1).
 
 ## 7. What moves, what stays, and the slices
 
@@ -624,11 +624,11 @@ the tables, with line counts (non-test lines).
 | 1 | The COV table, flights and tickets, subscribe services | ~2,060 | subscribe, renew, cancel, errors, caps | `reporting` image starts: subscribe through staged calls |
 | 2 | Active lists; COV evaluation and notifications; the `Reporter`, outbox and confirmed table; `ActiveCovOverlay` | ~1,585 moved, ~800 new | Active_COV, notifications, increments, flights | the image runs through the `Reporter` |
 | 3 | Intrinsic events with instant delays, distribution, both acknowledgements, GetEventInformation, the fault pass | ~1,990 moved, ~200 new | delays, recipients, acknowledgements | `event-reporting` on |
-| 4 | Event Enrollment (or its own issue, open question 8) | ~2,720 | each algorithm | `event-enrollment` on |
+| #2319 | Event Enrollment, on §6.6 and Appendix A.4 | ~2,720 | each algorithm | `event-enrollment` on |
 
-Split point: PR 4's pure algorithm files can go first, the pass and commit
-second (it passes 2,500 lines). The active lists sit in PR 2 to keep PR 1
-under that line.
+#2303 closes on PRs 1-3. #2319 can split its pure algorithm files first,
+the pass and commit second (it passes 2,500 lines). The active lists sit
+in PR 2 to keep PR 1 under that line.
 
 ### 7.1 What stays hosted
 
@@ -642,7 +642,7 @@ under that line.
 - Addresses and receiving: `event_recipient_route.rs`,
   `event_awaited_recipients.rs`, the bindings, `event_forwarding*.rs`,
   `received_event_log.rs`, `server/clock.rs`; GetAlarmSummary and
-  GetEnrollmentSummary; until open question 3, the Multiple path
+  GetEnrollmentSummary; until #2320, the Multiple path
   (`cov/timed*`, `cov/multiple_reads.rs`, `cov_notifications/multiple*.rs`).
 
 ### 7.2 Parity tests
@@ -671,7 +671,7 @@ differing.
 | 1 | Subscribe, renew, cancel, cancel of nothing; every row of §5.8; the caps; a renewal that replaces a route. The facade sends nothing yet, so the flight machine (acknowledged, fenced, an aborted worker settling at its deadline) is tested in the core and through the server's own tests |
 | 2 | Active_COV_Subscriptions before and after an expiry; the initial notification; changes under and over COV_Increment; Status_Flags alone; a Table 13-1 trigger; a property subscription's own increment; a confirmed report acknowledged, refused and timed out (hold-off); a change in flight (revisit); a renewal that fences a flight; an abandoned flight (the server's worker aborted, the facade never told) ending at its deadline, after which the next change is reported; Time_Remaining after time passes |
 | 3 | OUT_OF_RANGE with Time_Delay 2 seeded by a write at 0.9 s (sent at 2.9 s) and back with Time_Delay_Normal; a value that reverts inside the delay; Event_Enable cleared (committed, not sent); recipients by day, window and transition; no clock (sequence numbers, fail-closed windows); AcknowledgeAlarm good, wrong state, wrong timestamp, local acknowledgement, and their notifications; GetEventInformation |
-| 4 | Each algorithm both ways; a FAULT_OUT_OF_RANGE fault; the pass-count delay at two intervals |
+| #2319 | Each algorithm both ways; a FAULT_OUT_OF_RANGE fault; the pass-count delay at two intervals |
 
 Mutation checks: PR 1, drop the flight deadline (the aborted-worker tests
 must fail); PR 2, change the increment test's `>=` to `>`; PR 3, compare
@@ -726,8 +726,8 @@ image would link:
 |---|---|---|
 | `cov` (after PR 2) | 147-156 KB | ~4,100 linked lines of PR 1 and 2 |
 | + `event-reporting` (after PR 3) | 172-181 KB | ~2,200 lines, plus the measured objects and encoder share |
-| + `event-enrollment` (after PR 4) | 207-221 KB | ~2,700 lines, the Event Enrollment object, `decode_event_parameter` |
-| + the Multiple path (open question 3) | +15-25 KB | ~3,300 lines, the COVNotificationMultiple codec |
+| + `event-enrollment` (#2319) | 207-221 KB | ~2,700 lines, the Event Enrollment object, `decode_event_parameter` |
+| + the Multiple path (#2320) | +15-25 KB | ~3,300 lines, the COVNotificationMultiple codec |
 
 Flash runs about 18 KB above `.text`. So COV with intrinsic reporting fits
 a 256 KB part with room; with Event Enrollment it is tight there and easy
@@ -742,7 +742,7 @@ check that reporting costs a non-reporting device nothing. PR 1 adds a
 from `--suggest`, so every PR has a budget row: PR 1's scenario subscribes,
 renews and cancels through the staged functions; PR 2's runs through the
 `Reporter`, reads Active_COV_Subscriptions and checks what it pops; PR 3
-and PR 4 add a Time_Delay, an acknowledgement and an enrollment.
+and #2319 add a Time_Delay, an acknowledgement and an enrollment.
 
 A table entry is about 250 octets on a 32-bit target (two addresses, the
 lifetime, flight and ticket, and the last delivered values on the heap);
@@ -782,63 +782,65 @@ octets of COV per input, 16 confirmed reports in flight per peer, one owed
 revisit instead of a second report, the caps. Firmware adds the fixed
 outbox, where COV yields to events and becomes owed (§4.2).
 
-**Size and scope.** §8; each feature is checked alone in CI. About 8,400
-moved lines over four PRs, more if open question 3 brings Multiple in.
+**Size and scope.** §8; each feature is checked alone in CI. Moved lines:
+~5,640 in PRs 1-3, then ~2,720 under #2319 and ~3,300 under #2320.
 
-## 10. Open questions
+## 10. Questions, as decided
 
-1. **Placement.** (a) Modules in `bacnet-device-core`; (b) a sibling
-   crate; (c) `bacnet-objects`. **Recommend (a)** (§3.1).
-2. **Features.** (a) `cov`, `event-reporting`, `event-enrollment`, each kept
-   only if its PR measures a saving; (b) one feature. **Recommend (a)**:
-   COV-only and intrinsic-only devices are common.
-3. **The Multiple form.** (a) Move it all in this issue (two more PRs,
-   ~3,300 lines, untimed then timed); (b) its admission and flights in
-   PR 1 and active list in PR 2, the rest in a follow-up issue.
-   **Recommend (b)**: the service is optional, its code the most intricate
-   here, and firmware rarely needs it; the shared table keeps the server
-   whole meanwhile.
-4. **Event-state persistence.** (a) None, as today; (b) a save hook.
-   **Recommend (a)**, (b) as its own issue on demand: restoring raises
-   questions (stale timestamps, which delays restart) that need a design.
-5. **The image.** (a) A separate `reporting` image; (b) grow `objects`.
-   **Recommend (a)**, so the `objects` rows keep the non-reporting cost.
-6. **A clock on firmware without one.** (a) A portable clock in the core,
-   set by TimeSynchronization and UTCTimeSynchronization and run on the
-   monotonic `now` (the anchor arithmetic of `server/clock.rs`, without its
-   `SystemTime`), lent to the database as its `ClockReader`; (b) leave the
-   clock to each firmware. **Recommend (a)**, as a follow-up issue after
-   PR 3: a synchronized device then has real timestamps and windows, and
-   §6.3's fail-closed rule only covers the time before the first sync.
-7. **Local acknowledgement.** (a) `acknowledge_local` in PR 3 (§6.4);
-   (b) later, on demand. **Recommend (a)**: it is a few dozen lines on the
-   acknowledgement path, and a panel's reset button is a common firmware
-   need that Clause 13.2.3 allows.
-8. **Event Enrollment's home.** (a) PR 4 of this issue; (b) its own issue,
-   after PR 3, with this doc's §6.6 as its design. **Recommend (b)**: it is
-   the largest slice (~2,720 lines), the costliest for an image, and
-   already portable inside the server, so nothing waits on it; #2303 then
-   closes on COV and intrinsic reporting, and its acceptance line for Event
-   Enrollment moves with it.
-9. **The sweep in firmware.** (a) Keep a 1 Hz sweep everywhere; (b)
-   deadline-driven, with the sweep period in `ReportConfig` (the server
-   keeps 1 s; firmware may lengthen it or turn it off when it reports every
-   change through `changed`). **Recommend (b)**: with delays as instants
-   (§6.1) the sweep is only the safety net, and a sleeping device
-   shouldn't wake every second for it.
+All decided on 2026-11-02 (§11); kept here with the options weighed.
+
+1. **Placement.** Modules in `bacnet-device-core` (§3.1), over a sibling
+   crate or `bacnet-objects`.
+2. **Features.** `cov`, `event-reporting` and `event-enrollment`, each kept
+   only if its PR measures a saving, over a single feature.
+3. **The Multiple form.** Its admission and flights in PR 1 and active list
+   in PR 2; the service, timestamped histories and splitting in #2320,
+   over moving all ~3,300 lines here.
+4. **Event-state persistence.** None in v1, over a save hook; a hook would
+   need its own design (stale timestamps, which delays restart).
+5. **The image.** A separate `reporting` image, so the `objects` rows keep
+   the non-reporting cost.
+6. **A clock on firmware without one.** A portable clock set by
+   TimeSynchronization and UTCTimeSynchronization on the monotonic `now`,
+   lent to the database as its `ClockReader`, in #2321. Until it lands,
+   recipient windows fail closed without a clock (§6.3).
+7. **Local acknowledgement.** `acknowledge_local` in PR 3 (§6.4), over
+   waiting for demand.
+8. **Event Enrollment's home.** Its own issue, #2319, on §6.6 and
+   Appendix A.4; #2303 closes on PRs 1-3.
+9. **The sweep.** Deadline-driven, with the sweep period in `ReportConfig`
+   (the server keeps 1 s), over a fixed 1 Hz sweep.
 
 ## 11. Decisions
 
-Lead, 2026-11-02, from the first review: (1) the flight state machine and a
-plain ticket land in PR 1, and the server keeps wake-ups only (§4.5, §5.2);
-(2) a flight carries its own deadline and ends itself there, with a parity
-row (§5.5, §7.2); (3) delays are anchored to instants (§6.1); (4) the
-facade's confirmed table serves COV and events, with host invoke IDs, a host
-binding trait and counted unresolved recipients (§4.4); (5) the outbox is a
-fixed buffer bounded by count and octets, where events may evict COV, and
-PR 1 measures a `BTreeMap` against a sorted `Vec` (§4.2, §5.2); (6) without
-a clock, windows fail closed, an unspecified hour is all day, and clockless
-builds refuse restricted Recipient_List entries (§6.3).
+**Maintainer, 2026-11-02:**
+
+1. The design is approved as the plan of record (draft PR #2318).
+2. Event Enrollment moves to its own issue, #2319. #2303 closes on PRs 1-3:
+   the COV table, subscribe services and flights; COV notifications and the
+   `Reporter`; intrinsic events, acknowledgement and GetEventInformation.
+3. SubscribeCOVPropertyMultiple's timestamped notification path is
+   follow-up #2320.
+4. The synced firmware clock is follow-up #2321; recipient windows fail
+   closed without a clock until then.
+
+**Lead, 2026-11-02:**
+
+5. From the first review: the flight state machine and a plain ticket land
+   in PR 1, and the server keeps wake-ups only (§4.5, §5.2); a flight
+   carries its own deadline and ends itself there, with a parity row
+   (§5.5, §7.2); delays are anchored to instants (§6.1); the facade's
+   confirmed table serves COV and events, with host invoke IDs, a host
+   binding trait and counted unresolved recipients (§4.4); the outbox is a
+   fixed buffer bounded by count and octets, where events may evict COV,
+   and PR 1 measures a `BTreeMap` against a sorted `Vec` (§4.2, §5.2);
+   without a clock, windows fail closed, an unspecified hour is all day,
+   and clockless builds refuse restricted Recipient_List entries (§6.3).
+6. Placement in `bacnet-device-core`; the three features; no event-state
+   persistence in v1; a separate `reporting` image; local acknowledgement
+   in PR 3; a deadline-driven sweep (§10).
+7. The indefinite-lifetime refusal's error code (§5.8) is fixed in #2317,
+   apart from the move.
 
 ## 12. Evidence
 
@@ -896,7 +898,7 @@ core sends what it subscribes to.
 | New: due instants in the detectors (`bacnet-objects` `event.rs`), `next_due`, `acknowledge_local`, clockless windows | | ~200 |
 | **Total** | | **~1,990 moved, ~200 new** |
 
-### A.4 PR 4: Event Enrollment
+### A.4 #2319: Event Enrollment
 
 | Item | From | Lines |
 |---|---|---|
