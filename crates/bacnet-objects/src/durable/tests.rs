@@ -56,6 +56,25 @@ fn writer(gate: &Arc<Gate>) -> SaveWriter<u32> {
 
 const WAIT: Duration = Duration::from_secs(10);
 
+impl SaveWait {
+    /// [`block`](Self::block) for at most `timeout` for each event, and say
+    /// whether the wait is over.
+    fn block_for(&self, timeout: Duration) -> bool {
+        let state = self.event.state.lock();
+        let (state, _) = self
+            .event
+            .happened
+            .wait_timeout_while(state, timeout, |state| !state.done)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let done = state.done;
+        drop(state);
+        done && self
+            .then
+            .as_ref()
+            .is_none_or(|then| then.block_for(timeout))
+    }
+}
+
 #[test]
 fn saves_run_in_order_on_the_writer_thread() {
     let (gate, handle) = gate();
@@ -387,7 +406,7 @@ fn a_thread_waits_out_its_idle_period_for_the_next_save() {
     assert!(writer.submit(2).take_outcome().is_ok());
     assert_eq!(writer.threads_started(), 1);
     assert!(writer.thread_running());
-    // The drop ends the waiting thread at once and joins it.
+    // The drop ends the waiting thread at once and waits for it.
     drop(writer);
     assert_eq!(*saved.lock().unwrap(), [1, 2]);
 }
@@ -411,10 +430,16 @@ fn saves_queued_as_the_thread_ends_are_all_made_in_order() {
         } else {
             tickets.push(writer.submit(n));
         }
+        // A stranded save fails here with a message, not at the run's
+        // timeout.
         if n % 7 == 0 {
-            writer.wait_idle();
+            assert!(
+                writer.idle().block_for(WAIT),
+                "a save before {n} was stranded"
+            );
         }
     }
+    assert!(writer.idle().block_for(WAIT), "a save was stranded");
     drop(writer);
     assert!(
         tickets
@@ -452,4 +477,31 @@ fn a_closing_writer_whose_thread_ended_saves_on_the_callers_thread() {
     assert_ne!(saved[0].1, caller);
     assert_eq!(saved[1], (2, caller));
     assert_eq!(writer.threads_started(), 1);
+}
+
+/// With no handle on its thread, dropping a writer mid-save still returns
+/// only once every queued save has run (#1956).
+#[test]
+fn dropping_a_writer_mid_save_returns_once_its_saves_have_run() {
+    let (gate, handle) = gate();
+    let mut writer = writer(&gate);
+    writer.submit(1);
+    writer.submit(2);
+    assert_eq!(handle.started.recv_timeout(WAIT).unwrap(), 1);
+    let (dropped_tx, dropped) = mpsc::channel();
+    let dropper = std::thread::spawn(move || {
+        drop(writer);
+        dropped_tx.send(()).unwrap();
+    });
+    handle.release.send(Ok(())).unwrap();
+    assert_eq!(handle.started.recv_timeout(WAIT).unwrap(), 2);
+    // Save 2 is still running, so the drop can't have returned.
+    assert!(
+        dropped.try_recv().is_err(),
+        "the drop returned with a save still running"
+    );
+    handle.release.send(Ok(())).unwrap();
+    dropped.recv_timeout(WAIT).expect("the drop returned");
+    dropper.join().unwrap();
+    assert_eq!(*gate.saved.lock().unwrap(), [1, 2]);
 }

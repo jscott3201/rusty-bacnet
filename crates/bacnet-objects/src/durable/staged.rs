@@ -51,7 +51,7 @@
 //! storage back as it goes: `StagedSaves` keeps, beside the staged write,
 //! the state the object served at its latest storage call, and its `Drop`
 //! saves that state, unless the staged save failed, before the writer's own
-//! drop joins the thread. An object that stages through `StagedSaves` gets
+//! drop waits for its thread. An object that stages through `StagedSaves` gets
 //! this without a `Drop` of its own; [`stage`](StagedSaves::stage) takes
 //! the served state, and [`correct`](StagedSaves::correct) keeps it current.
 
@@ -404,7 +404,7 @@ impl<S: Send + 'static, N> StagedSaves<S, N> {
 impl<S: Send + 'static, N> Drop for StagedSaves<S, N> {
     /// The object is going away with nothing left to take a staged write.
     /// Drop it as a release would, and put storage back to the served state
-    /// it kept before the writer, dropped next, joins its thread (#1363).
+    /// it kept before the writer, dropped next, waits for its thread (#1363).
     fn drop(&mut self) {
         self.drop_staged();
         if let Some(served) = self.correction.take() {

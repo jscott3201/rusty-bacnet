@@ -87,9 +87,10 @@
 //! call that panics fails that save. A save starts the thread when none is
 //! running, and the thread ends once the object has queued nothing for a
 //! while (#1956), so a device with many durable objects holds a thread only
-//! for each one that is saving. Saves stay in order across a new thread:
-//! the old one ends only with nothing queued, and the object joins it
-//! before it starts the next.
+//! for each one that is saving. The thread is detached, so one that has
+//! ended holds nothing. Saves stay in order across a new thread: the old one
+//! ends only with nothing queued and never touches the queue again, and
+//! dropping the object waits until no thread runs it.
 //!
 //! Without std there are no threads: each save runs on the caller's thread
 //! before the call that queued it returns, so every wait is already over

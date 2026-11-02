@@ -7,7 +7,6 @@ use alloc::collections::VecDeque;
 use core::time::Duration;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
-use std::thread::JoinHandle;
 
 use bacnet_types::error::Error;
 
@@ -39,14 +38,16 @@ type DoneFn<S> = dyn Fn(&S, &Result<(), Error>) + Send + Sync;
 /// Dropping the writer waits for the saves already queued, so state saved
 /// just before an object goes away is in storage when a new object loads
 /// it.
+///
+/// The thread is detached: the writer keeps no handle on it, so one that
+/// has ended holds nothing, its stack included, until the next save. Its
+/// end is signalled through the queue instead (see `run`).
+///
+/// When a thread can't be started, the save runs on the caller's thread,
+/// under whatever guard the caller holds, as saves did before they left the
+/// caller's thread. A later save tries to start a thread again.
 pub(crate) struct SaveWriter<S: Send + 'static> {
     shared: Arc<Shared<S>>,
-    /// The last thread started, running or ended. Asserted unwind safe, as
-    /// std's `JoinHandle` is not (#1428). That is sound: only `enqueue`,
-    /// which joins and replaces it, and the drop, which joins it, touch the
-    /// handle, both through `&mut self`, and a panic leaves it either stored
-    /// or not.
-    thread: Option<AssertUnwindSafe<JoinHandle<()>>>,
     name: String,
     /// The owner is going away; see `closing`.
     closing: bool,
@@ -56,8 +57,7 @@ struct Shared<S> {
     queue: Mutex<Queue<S>>,
     /// The thread has a job to run, or the writer is closing.
     work: Condvar,
-    /// A thread ended, for a test that waits for that.
-    #[cfg(test)]
+    /// A thread ended: the writer's drop waits for this.
     ended: Condvar,
     /// How long the thread waits for a job before it ends.
     idle_exit: Duration,
@@ -83,6 +83,10 @@ struct Queue<S> {
     /// Threads started so far, for tests.
     #[cfg(test)]
     started: u64,
+    /// Threads started whose resources haven't all gone yet, for tests: see
+    /// [`Released`].
+    #[cfg(test)]
+    unreleased: u64,
     /// Waits [`SaveWriter::idle`] handed out, set once the queue next
     /// empties with no job running.
     idle_waits: Vec<Arc<Event>>,
@@ -121,16 +125,16 @@ impl<S: Send + 'static> SaveWriter<S> {
                     alive: false,
                     #[cfg(test)]
                     started: 0,
+                    #[cfg(test)]
+                    unreleased: 0,
                     idle_waits: Vec::new(),
                 }),
                 work: Condvar::new(),
-                #[cfg(test)]
                 ended: Condvar::new(),
                 idle_exit,
                 save: AssertUnwindSafe(Box::new(save)),
                 done: AssertUnwindSafe(Box::new(done)),
             }),
-            thread: None,
             name,
             closing: false,
         }
@@ -207,49 +211,56 @@ impl<S: Send + 'static> SaveWriter<S> {
         self.closing = true;
     }
 
+    /// Queue `job`, starting a thread when none runs the queue.
+    ///
+    /// Why no save is lost or reordered across a thread's end: `alive` is
+    /// read here and cleared by the thread, both under the queue's lock, and
+    /// the thread clears it only with the queue empty and never touches the
+    /// queue after that. If this takes the lock first, the job is queued
+    /// while the thread still runs, and the thread, which looks at the queue
+    /// before it ends, runs it. If the thread ends first, this finds no
+    /// thread, and the queue empty, and starts a new one with the job. Only
+    /// the owner queues (`&mut self`), so jobs keep their order, and an
+    /// ended thread that has yet to return is no second runner: it holds
+    /// only its reference to the shared state.
     fn enqueue(&mut self, job: Job<S>) {
-        {
-            let mut queue = lock(&self.shared.queue);
-            if queue.alive {
-                queue.jobs.push_back(job);
-                drop(queue);
-                self.shared.work.notify_one();
-                return;
-            }
+        let mut queue = lock(&self.shared.queue);
+        if queue.alive {
+            queue.jobs.push_back(job);
+            drop(queue);
+            self.shared.work.notify_one();
+            return;
         }
-        // No thread runs the queue, so it is empty: none has started, or the
-        // last one ended idle.
         if self.closing {
+            drop(queue);
             run_job(&self.shared, job);
             return;
         }
-        // A thread that ended has nothing left but to return; join it, so a
-        // writer never has two.
-        if let Some(AssertUnwindSafe(ended)) = self.thread.take() {
-            let _ = ended.join();
-        }
+        queue.alive = true;
+        #[cfg(test)]
         {
-            let mut queue = lock(&self.shared.queue);
-            queue.alive = true;
-            #[cfg(test)]
-            {
-                queue.started += 1;
-            }
-            queue.jobs.push_back(job);
+            queue.started += 1;
+            queue.unreleased += 1;
         }
+        queue.jobs.push_back(job);
+        drop(queue);
         let shared = Arc::clone(&self.shared);
         match std::thread::Builder::new()
             .name(self.name.clone())
-            .spawn(move || run(&shared))
+            .spawn(thread_main(shared))
         {
-            Ok(handle) => self.thread = Some(AssertUnwindSafe(handle)),
+            // Detached: the handle goes now, so an ended thread holds nothing.
+            Ok(handle) => drop(handle),
             Err(error) => {
-                // Without a thread the save runs here, as it did before
-                // saves left the caller's thread. The queue holds only it.
+                // Without a thread the save runs here; the queue holds only it.
                 log_warn!(%error, writer = %self.name, "Could not start a save thread");
                 let job = {
                     let mut queue = lock(&self.shared.queue);
                     queue.alive = false;
+                    #[cfg(test)]
+                    {
+                        queue.unreleased -= 1;
+                    }
                     queue.jobs.pop_front()
                 };
                 if let Some(job) = job {
@@ -281,27 +292,72 @@ impl<S: Send + 'static> SaveWriter<S> {
         lock(&self.shared.queue).started
     }
 
-    /// Wait until no thread runs the queue, for at most ten seconds, and
-    /// say whether none does. A thread that waits out its idle period ends
-    /// well inside that.
+    /// Wait until no thread runs the queue and every thread started has
+    /// let go of all it held, its handle included, for at most ten seconds,
+    /// and say whether that came. A thread that waits out its idle period
+    /// ends well inside that.
     pub(crate) fn thread_ended(&self) -> bool {
         let queue = lock(&self.shared.queue);
         let (queue, _) = self
             .shared
             .ended
-            .wait_timeout_while(queue, Duration::from_secs(10), |queue| queue.alive)
+            .wait_timeout_while(queue, Duration::from_secs(10), |queue| {
+                queue.alive || queue.unreleased > 0
+            })
             .unwrap_or_else(PoisonError::into_inner);
-        !queue.alive
+        !queue.alive && queue.unreleased == 0
     }
 }
 
 impl<S: Send + 'static> Drop for SaveWriter<S> {
+    /// Close the queue and wait until no thread runs it. A running thread
+    /// runs every job queued before it ends, so the saves have landed when
+    /// this returns.
     fn drop(&mut self) {
-        lock(&self.shared.queue).closed = true;
-        self.shared.work.notify_one();
-        if let Some(AssertUnwindSafe(thread)) = self.thread.take() {
-            let _ = thread.join();
+        let mut queue = lock(&self.shared.queue);
+        queue.closed = true;
+        self.shared.work.notify_all();
+        while queue.alive {
+            queue = self
+                .shared
+                .ended
+                .wait(queue)
+                .unwrap_or_else(PoisonError::into_inner);
         }
+    }
+}
+
+/// What a writer thread runs.
+#[cfg(not(test))]
+fn thread_main<S: Send + 'static>(shared: Arc<Shared<S>>) -> impl FnOnce() + Send + 'static {
+    move || run(&shared)
+}
+
+/// What a writer thread runs, in tests: it hands back a [`Released`],
+/// which std keeps with the thread's result until the thread has ended and
+/// its handle is gone.
+#[cfg(test)]
+fn thread_main<S: Send + 'static>(
+    shared: Arc<Shared<S>>,
+) -> impl FnOnce() -> Released<S> + Send + 'static {
+    move || {
+        run(&shared);
+        Released(shared)
+    }
+}
+
+/// A thread's result in tests. std drops a thread's result once both the
+/// thread has ended and its `JoinHandle` is gone (joined or dropped), so
+/// this counts the threads whose handle someone still holds, as well as
+/// those still running.
+#[cfg(test)]
+struct Released<S>(Arc<Shared<S>>);
+
+#[cfg(test)]
+impl<S> Drop for Released<S> {
+    fn drop(&mut self) {
+        lock(&self.0.queue).unreleased -= 1;
+        self.0.ended.notify_all();
     }
 }
 
@@ -352,13 +408,11 @@ fn run<S>(shared: &Shared<S>) {
     }
 }
 
-/// The thread ends with the queue empty: say so, under the queue's lock.
+/// The thread ends with the queue empty: say so, under the queue's lock,
+/// and wake a drop waiting for it.
 fn end<S>(shared: &Shared<S>, queue: &mut Queue<S>) {
     queue.alive = false;
-    #[cfg(test)]
     shared.ended.notify_all();
-    #[cfg(not(test))]
-    let _ = shared;
 }
 
 /// Make one storage call. A storage implementation that panics fails the save
