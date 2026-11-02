@@ -1066,8 +1066,10 @@ port isn't contended for. The agent host launches it as it launches
 `bacnet mcp serve`. The TUI listens only on a profile authorized for MCP
 (below), unless its `[mcp]` table sets `tui_listener = false`; the status
 bar shows `MCP n` with the agents attached. Over the socket or pipe the tools are
-read-only whatever `mcp_writes` says, and the table's rates join the
-TUI's only while an agent is attached. Only your own OS user can connect.
+read-only unless `mcp_writes = "elicit"`: then each write an agent asks
+for opens the TUI's preview dialog, and only your confirmation there
+sends it. The table's rates join the TUI's only while an agent is
+attached. Only your own OS user can connect.
 On Unix the workspace is kept at mode 0700 (a looser one is narrowed when
 the listener starts), the socket is 0600, and each connection's peer
 credentials are checked. On Windows the pipe's access list grants your

@@ -501,15 +501,26 @@ expired state or a missing capability is a refusal reason on the retry
 (`declined`, `confirmation-expired`, `elicitation-unsupported`). For an
 older client (#2158) the tool call itself sends the form and waits for
 the answer after `Ask`, then runs the retry; the approver still doesn't
-wait. Phase 4's `TuiApprover` will need the waiting form back, and can
-add it then.
+wait.
+
+Phase 4 (#2185) adds the waiting form beside it, `WaitingApprover`: its
+`approve` holds the call, with no lock, until a person answers on a
+channel the server controls, and answers `Approved(via)` or `Refused`,
+never `Ask`. `TuiApprover` is its one implementation. The existing
+approvers and their tests are unchanged. Because the TUI holds the
+workspace's lock for its whole session, an attached write can't open the
+desk itself: on confirmation the TUI lends its desk, and the write runs
+there as the agent's (its ledger entries name the agent's principal),
+re-read first, at the TUI session's level. A revert over the socket is
+confirmed the same way, at the tier of the writes it undoes, and the
+lent desk checks the TUI session may still write before it sends.
 
 | Approver | Verified by the server | Phase |
 |---|---|---|
 | `Deny` | n/a (the default) | 3 |
 | `ClientElicitation`: a form through multi round-trip requests, or on an older client the server's own elicitation request (#2158) | no, so T1 only and opt-in | 3 |
 | `PlanGrant` (`PlanApprover` as built): a commissioning plan a person approved once, at T3, through a verified channel (device set, property allowlist, priority range, write budget, expiry of 8 h or less) | yes | 3 |
-| `TuiApprover`: the attached TUI's own preview dialog, with an "agent request" banner, the 300 ms key debounce and the 120 s auto-decline | yes | 4 |
+| `TuiApprover`: the attached TUI's own preview dialog, with an "agent request" banner, the 300 ms key debounce and the 120 s auto-decline. As built (#2185): every tier (T1 Enter, T2 `y`, T3 the device instance typed); the TUI's write session must be armed; requests queue one at a time, oldest first, at most 4 held, the rest refused (`approval-queue-full`); a decline, the timeout, the TUI ending or its session ending is `declined`, audited by the agent's session; a call never waits past 490 s; audited `confirmed_via: "tui"`, `approved_by:` the TUI's OS user | yes | 4 |
 | `UrlApprover`: an approval page behind the same identity provider, same subject or a permitted second person | yes | 5 |
 
 Every approval is audited with `via` and `by`.

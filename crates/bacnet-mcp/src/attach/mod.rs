@@ -37,8 +37,11 @@
 //! works across runtimes, and their own timers and socket I/O run on their
 //! runtime.
 //!
-//! Sessions over the socket are read-only whatever the profile's write
-//! policy: the write tools need the TUI's own approver, which comes later.
+//! Sessions over the socket are read-only unless the profile offers
+//! writes (`mcp_writes = "elicit"`) and the TUI lends its write desk
+//! ([`DeskJob`]): then the person at the TUI approves every write, at
+//! every tier, from its queue of [`AgentApproval`]s, and the client's own
+//! confirmation, `mcp_arm` and any plan grant play no part (#2185).
 //! The sessions serve any byte stream; the socket (`socket.rs`) and the
 //! pipe (`pipe.rs`) each bring their own listener, peer check and bridge
 //! connection.
@@ -66,10 +69,14 @@ use std::time::Duration;
 use bacnet_ops::engine::Engine;
 use bacnet_transport::port::TransportPort;
 use tokio::runtime::{Handle, Runtime};
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+pub use crate::tools::write_attached::DeskJob;
+pub use crate::writes::tui::{
+    AgentApproval, Declined, Gone, LIFETIME, MAX_QUEUED, Refusal, WAIT_AT_MOST,
+};
 pub use bridge::bridge;
 #[cfg(feature = "stdio")]
 pub use bridge::bridge_stdio;
@@ -97,7 +104,7 @@ pub use socket::{SOCKET_FILE, connect, socket_path};
 #[cfg(all(test, windows))]
 pub(crate) use win32::{Descriptor, create_dir, own_sid, security_of};
 
-use crate::policy::{Policy, Workspace, WritePolicy};
+use crate::policy::{ArmMode, Policy, Workspace, WritePolicy};
 use crate::server::Shared;
 use sessions::Sessions;
 
@@ -251,6 +258,8 @@ pub struct Listener {
     /// The sessions' own runtime, if they have one: shut down once they
     /// have all ended.
     runtime: Option<OwnRuntime>,
+    /// The agents' write requests, until the TUI takes them.
+    approvals: Option<mpsc::Receiver<AgentApproval>>,
     /// The listener's lock, held for its life and released last.
     _lock: std::fs::File,
 }
@@ -266,10 +275,13 @@ impl std::fmt::Debug for Listener {
 
 impl Listener {
     /// Listen on [`socket_path`] of `workspace.dir` for agents of this OS
-    /// user, each served by a read-only session over `engine` under
-    /// `policy` as `principal`, audited in the workspace, the sessions run
-    /// on `runtime`. Needs a Tokio runtime, which must outlive the
-    /// listener: the engine's client and transport run on it.
+    /// user, each served by a session over `engine` under `policy` as
+    /// `principal`, audited in the workspace, the sessions run on
+    /// `runtime`. Read-only unless the policy offers writes and the TUI
+    /// lends its write `desk`: then the TUI takes the agents' write
+    /// requests from [`approvals`](Self::approvals). Needs a Tokio
+    /// runtime, which must outlive the listener: the engine's client and
+    /// transport run on it.
     ///
     /// Refused when another listener holds the workspace's lock. On Unix,
     /// the workspace must be this user's own directory, not a symbolic
@@ -285,6 +297,7 @@ impl Listener {
         principal: impl Into<String>,
         workspace: Workspace,
         runtime: SessionRuntime,
+        desk: Option<mpsc::Sender<DeskJob<T>>>,
     ) -> Result<Self, AttachError> {
         let principal = principal.into();
         Self::bind_with(
@@ -292,8 +305,8 @@ impl Listener {
             policy,
             principal,
             workspace,
-            os_credentials,
-            runtime,
+            (os_credentials, runtime),
+            desk,
         )
         .await
     }
@@ -304,14 +317,21 @@ impl Listener {
         mut policy: Policy,
         principal: String,
         workspace: Workspace,
-        credentials: Credentials,
-        runtime: SessionRuntime,
+        (credentials, runtime): (Credentials, SessionRuntime),
+        desk: Option<mpsc::Sender<DeskJob<T>>>,
     ) -> Result<Self, AttachError> {
         // The listener always has an engine, so a caller's passive policy
-        // is overridden; and no write tool goes over the socket, whatever
-        // the profile allows.
+        // is overridden. Writes go over the socket only with the TUI's
+        // desk to write through, and only as the TUI approves them: not by
+        // the client's confirmation, an armed MCP session or a plan grant.
         policy.passive = false;
-        policy.writes = WritePolicy::default();
+        let desk = desk.filter(|_| policy.writes.offered());
+        if desk.is_some() {
+            policy.writes.arm = ArmMode::Never;
+            policy.writes.plan = None;
+        } else {
+            policy.writes = WritePolicy::default();
+        }
         policy
             .validate()
             .map_err(|e| format!("the MCP policy: {e}"))?;
@@ -344,7 +364,15 @@ impl Listener {
         let tracker = tokio_util::task::TaskTracker::new();
         let refusals = Arc::new(std::sync::Mutex::new(sessions::Refusals::default()));
         let finish = finish(&shared, &workspace, &principal, &refusals);
+        let (lending, approvals) = match desk {
+            Some(desk) => {
+                let (to_tui, approvals) = mpsc::channel(MAX_AGENTS);
+                (Some((to_tui, desk)), Some(approvals))
+            }
+            None => (None, None),
+        };
         let sessions = Sessions {
+            lending,
             overlay: policy.overlay(),
             engine,
             policy,
@@ -367,8 +395,16 @@ impl Listener {
             agents: seen,
             finish: Some(finish),
             runtime,
+            approvals,
             _lock: lock,
         })
+    }
+
+    /// The agents' write requests, for the TUI to queue and answer: once,
+    /// and only when it lent its desk to a policy that offers writes.
+    /// Dropping it (or each request unanswered) declines them.
+    pub fn approvals(&mut self) -> Option<mpsc::Receiver<AgentApproval>> {
+        self.approvals.take()
     }
 
     /// The socket's path, or on Windows the pipe's name.

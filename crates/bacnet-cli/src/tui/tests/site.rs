@@ -616,6 +616,24 @@ impl Site {
         .await;
     }
 
+    /// Apply worker events until `task` ends, and return what it gave.
+    #[cfg(feature = "mcp")]
+    pub(super) async fn pump_while<R>(&mut self, task: &mut JoinHandle<R>) -> R {
+        bounded(async {
+            loop {
+                tokio::select! {
+                    biased;
+                    done = &mut *task => return done.expect("the task panicked"),
+                    event = self.events.recv() => {
+                        let commands = worker(&mut self.app, event.expect("worker stopped"));
+                        self.send(commands).await;
+                    }
+                }
+            }
+        })
+        .await
+    }
+
     /// Apply worker events until one satisfies `done`, which sees each first.
     pub(super) async fn pump_events_until(&mut self, mut done: impl FnMut(&WorkerEvent) -> bool) {
         bounded(async {

@@ -69,6 +69,7 @@ async fn the_mcp_limits_apply_only_while_an_agent_is_attached() {
         "tester",
         workspace(dir.path()),
         SessionRuntime::Callers,
+        None,
     )
     .await
     .unwrap();
@@ -153,6 +154,7 @@ async fn the_tui_keeps_its_cov_when_an_agent_leaves_the_same_point() {
         "tester",
         workspace(dir.path()),
         SessionRuntime::Callers,
+        None,
     )
     .await
     .unwrap();
@@ -239,8 +241,8 @@ async fn unreadable_credentials_are_refused() {
             Policy::default(),
             "tester".into(),
             workspace(dir.path()),
-            credentials,
-            SessionRuntime::Callers,
+            (credentials, SessionRuntime::Callers),
+            None,
         )
         .await
         .unwrap();

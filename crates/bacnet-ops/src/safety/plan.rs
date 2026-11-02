@@ -60,6 +60,57 @@ pub(crate) const DEFAULT_PRIORITY: u8 = 16;
 pub(crate) const PRIORITY_6: &str = "priority 6 is reserved for minimum on and off times \
      (Clause 19.2.3); a profile with dangerous = true allows it";
 
+/// The revert of `entries`, all to one device, as a preview of the writes
+/// that put their pre-images back, for a person to confirm (#2185): each
+/// at the tier of the write it undoes, at least T1. `None` when they span
+/// devices or there are none; an entry whose old value is unknown is left
+/// out, as revert leaves it.
+pub fn undo_preview(entries: &[super::ledger::Entry]) -> Option<Preview> {
+    let device = entries.first()?.device;
+    if entries.iter().any(|e| e.device != device) {
+        return None;
+    }
+    let items: Vec<Planned> = entries
+        .iter()
+        .filter_map(|entry| {
+            let (undo, object) = (entry.undo()?, entry.object()?);
+            let relinquish = undo.bytes == super::NULL;
+            let occupancy = if entry.commandable {
+                Occupancy::Ours
+            } else {
+                Occupancy::NotCommandable
+            };
+            let property = entry.property();
+            Some(Planned {
+                spec: WriteSpec {
+                    device,
+                    object,
+                    property,
+                    index: entry.index,
+                    value: (!relinquish).then(|| undo.text.clone()),
+                    priority: entry.priority,
+                },
+                priority: entry.priority,
+                gate: gate(property, entry.priority, relinquish, occupancy, true),
+                value: undo,
+                commandable: entry.commandable,
+                before: Some(entry.written.clone()),
+                occupancy,
+                effect: Effect::NotPresentValue,
+                out_of_service: None,
+                notes: vec!["puts back the value from before the write".into()],
+            })
+        })
+        .collect();
+    let gate = overall(&items, false);
+    Some(Preview {
+        device,
+        items,
+        batch: false,
+        gate,
+    })
+}
+
 /// The tier of one write.
 pub(crate) fn gate(
     property: PropertyIdentifier,

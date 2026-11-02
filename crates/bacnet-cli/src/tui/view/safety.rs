@@ -43,14 +43,30 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, modal: &Modal, them
             password(request, typed, theme),
         ),
         Modal::Confirm {
+            req,
             change,
             typed,
             error,
             ..
-        } => (
-            format!(" Confirm ({}) ", tier_name(&change.gate())),
-            confirm(change, typed, error.as_deref(), theme),
-        ),
+        } => {
+            // The key guard runs from the first frame that shows it.
+            app.drawing_confirm(*req);
+            let tier = tier_name(&change.gate());
+            let lines = confirm(change, typed, error.as_deref(), theme);
+            // An attached agent's request (#2185): who asks, and the queue.
+            match app.safety.agents.banner(*req) {
+                Some((who, queue)) => {
+                    let mut banner = vec![
+                        Line::styled(who, theme.danger()),
+                        Line::styled(queue, theme.dim()),
+                        Line::raw(""),
+                    ];
+                    banner.extend(lines);
+                    (format!(" Agent request: confirm ({tier}) "), banner)
+                }
+                None => (format!(" Confirm ({tier}) "), lines),
+            }
+        }
         Modal::Result(outcomes) => (" Result ".to_string(), result(outcomes, theme)),
         Modal::Ledger { notice, confirm } => (
             format!(" Session ledger ({}) ", app.safety.ledger.len()),
@@ -147,9 +163,20 @@ fn tier_name(gate: &Gate) -> &'static str {
     }
 }
 
+/// A value as a device (or an agent) gave it, for the dialog: control and
+/// invisible format characters out, cut to 80 characters.
+fn value_text(text: &str) -> String {
+    let clean = super::sanitize(text);
+    match clean.char_indices().nth(80) {
+        Some((cut, _)) => format!("{}…", &clean[..cut]),
+        None => clean,
+    }
+}
+
 fn item_lines(item: &Planned, theme: &Theme) -> Vec<Line<'static>> {
     let mut lines = vec![Line::styled(item.label(), theme.accent())];
-    let before = item.before.as_ref().map(|b| b.text.clone());
+    let before = item.before.as_ref().map(|b| value_text(&b.text));
+    let after = value_text(&item.value.text);
     if let Some(priority) = item.priority {
         let slot = match (item.occupancy, &before) {
             (Occupancy::Empty, _) => "empty".to_string(),
@@ -157,20 +184,20 @@ fn item_lines(item: &Planned, theme: &Theme) -> Vec<Line<'static>> {
             (_, Some(text)) => format!("{text} (another commander's)"),
             (_, None) => "?".into(),
         };
-        lines.push(Line::raw(format!(
-            "  slot {priority}: {slot} -> {}",
-            item.value.text
-        )));
+        lines.push(Line::raw(format!("  slot {priority}: {slot} -> {after}")));
     } else {
         lines.push(Line::raw(format!(
-            "  value: {} -> {}",
+            "  value: {} -> {after}",
             before.as_deref().unwrap_or("?"),
-            item.value.text
         )));
     }
     match &item.effect {
         Effect::Changes { from, to } => lines.push(Line::styled(
-            format!("  Present_Value will change: {from} -> {to}"),
+            format!(
+                "  Present_Value will change: {} -> {}",
+                value_text(from),
+                value_text(to)
+            ),
             theme.warn(),
         )),
         Effect::Unchanged {
@@ -270,10 +297,17 @@ fn confirm(change: &Change, typed: &str, error: Option<&str>, theme: &Theme) -> 
             for item in &preview.items {
                 lines.extend(item_lines(item, theme));
             }
-            (
-                preview.gate.clone(),
-                "T3: this commands a life-safety, critical or reserved priority.",
-            )
+            // Over MCP a Relinquish_Default write is T3 at any priority.
+            let fallback = preview.items.iter().any(|item| {
+                item.spec.property == bacnet_types::enums::PropertyIdentifier::RELINQUISH_DEFAULT
+                    && !matches!(item.priority, Some(1 | 2 | 5 | 6))
+            });
+            let why = if fallback {
+                "T3: Relinquish_Default is the value the point falls back to with every slot empty."
+            } else {
+                "T3: this commands a life-safety, critical or reserved priority."
+            };
+            (preview.gate.clone(), why)
         }
         Change::Device(request) => {
             lines.extend(request_lines(request, theme));
