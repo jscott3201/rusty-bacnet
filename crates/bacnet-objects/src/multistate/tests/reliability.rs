@@ -1,4 +1,5 @@
 //! Multi-state Number_Of_States configuration and object-owned Reliability.
+#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 
 use super::super::*;
 use crate::property_metadata::is_writable_property;
@@ -542,6 +543,7 @@ fn oos_and_inhibit_suppress_mutations_then_release_current_state_synchronously()
     );
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn synchronous_reliability_is_observed_by_the_existing_intrinsic_event_kernel() {
     let mut msi = MultiStateInputObject::new(1, "MSI-events", 2).unwrap();

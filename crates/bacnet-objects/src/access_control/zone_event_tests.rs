@@ -2,6 +2,7 @@
 //! (Clause 12.32, Table 12-37, Clause 13.3.2, #1305).
 //!
 //! Configuration goes through `write_property`, the route a client takes.
+#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 
 use crate::traits::EventReporting as _;
 use bacnet_types::bitstring::EventTransitionBits;
@@ -240,6 +241,7 @@ fn access_zone_alarm_values_refuse_normal() {
     assert_eq!(read(&zone, P::ALARM_VALUES), states(&others));
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn access_zone_goes_offnormal_after_time_delay_and_back_to_normal() {
     let mut zone = alarming_zone(2);
@@ -293,6 +295,7 @@ fn access_zone_goes_offnormal_after_time_delay_and_back_to_normal() {
     );
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn access_zone_time_delay_normal_governs_only_the_return_to_normal() {
     let mut zone = alarming_zone(1);
@@ -360,6 +363,7 @@ fn access_zone_condition_cleared_within_time_delay_reports_nothing() {
     assert_eq!(event_state(&zone), enumerated(EventState::NORMAL));
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn access_zone_event_enable_gates_distribution_not_the_transition() {
     let mut zone = alarming_zone(0);
@@ -493,6 +497,7 @@ fn access_zone_acknowledges_its_latest_offnormal_transition() {
     );
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn access_zone_simulated_fault_and_count_drive_the_event_state() {
     let mut zone = alarming_zone(0);

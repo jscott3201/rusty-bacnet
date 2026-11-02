@@ -1,4 +1,5 @@
 //! Profile provisioning and storage remain independent of Value PV ownership.
+#![cfg_attr(not(feature = "durable-writes"), allow(unused_imports, dead_code))]
 
 use super::test_support::*;
 use super::*;
@@ -329,6 +330,7 @@ fn invalid_and_oversized_tags_never_attempt_a_save_in_any_value_mode() {
     }
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn each_value_monotonic_hook_expires_unclaimed_stages_without_output_change() {
     for kind in KINDS {

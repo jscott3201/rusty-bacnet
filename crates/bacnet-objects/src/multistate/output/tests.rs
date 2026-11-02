@@ -1,3 +1,4 @@
+#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 use super::*;
 use crate::property_metadata::is_writable_property;
 use crate::traits::EventReporting as _;
@@ -133,6 +134,7 @@ fn oversized_feedback_value_is_rejected_rather_than_wrapped_into_agreement() {
     assert_eq!(outcome.event_type, EventType::COMMAND_FAILURE);
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn command_failure_uses_present_and_feedback() {
     let mut mso = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();

@@ -1,3 +1,4 @@
+#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject};
@@ -380,6 +381,7 @@ fn repeated_oos_cycles_clear_old_client_ownership() {
     }
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn inhibit_does_not_change_detection_enable_and_recovery_is_reportable() {
     let mut object =

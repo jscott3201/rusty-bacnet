@@ -2,6 +2,7 @@
 //! that report intrinsically (#1329): the inhibit stops the algorithm's
 //! offnormal and normal transitions but not fault detection (Clause
 //! 13.2.2.1), and a configured text is what a transition stores.
+#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 
 use crate::traits::EventReporting as _;
 use crate::traits::Timed;
@@ -64,6 +65,7 @@ fn high_input(time_delay: u32) -> AnalogInputObject {
     ai
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn an_inhibited_algorithm_proposes_no_offnormal_transition_but_still_faults() {
     let mut ai = high_input(0);
@@ -97,6 +99,7 @@ fn an_inhibited_algorithm_proposes_no_offnormal_transition_but_still_faults() {
     assert_eq!(step(&mut ai, offnormal), Some(EventState::HIGH_LIMIT));
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn turning_the_inhibit_on_returns_an_offnormal_object_to_normal_at_once() {
     let mut ai = high_input(0);
@@ -112,6 +115,7 @@ fn turning_the_inhibit_on_returns_an_offnormal_object_to_normal_at_once() {
     assert_eq!(ai.tick_intrinsic_reporting(), None);
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn a_condition_has_to_last_its_whole_delay_after_the_inhibit_clears() {
     let mut ai = high_input(2);
@@ -128,6 +132,7 @@ fn a_condition_has_to_last_its_whole_delay_after_the_inhibit_clears() {
     assert_eq!(step(&mut ai, outcome), Some(EventState::HIGH_LIMIT));
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn the_change_of_state_and_command_failure_detectors_take_the_inhibit_too() {
     // A Binary Value in its alarm state.

@@ -1,4 +1,5 @@
 //! Device profile rows compose with clock, segmentation, services and Audit state.
+#![cfg_attr(not(feature = "durable-writes"), allow(unused_imports, dead_code))]
 use super::test_support::*;
 use super::*;
 use crate::clock::{ClockFrame, ClockReader};
@@ -352,6 +353,7 @@ fn device_invalid_writes_and_save_failure_preserve_served_and_stored_tags() {
     assert_eq!(object.read_property(P::TAGS, None).unwrap(), before);
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn device_expired_stage_corrects_tags_and_accepts_the_next_write() {
     let store = Arc::new(Memory::default());

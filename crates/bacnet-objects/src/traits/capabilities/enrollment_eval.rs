@@ -76,10 +76,12 @@ pub trait EnrollmentEval {
 /// [`EnrollmentEval`], for inside its `BACnetObject` impl.
 macro_rules! lend_enrollment_eval {
     () => {
+        #[cfg(feature = "event-reporting")]
         fn enrollment_eval(&self) -> Option<&dyn $crate::traits::EnrollmentEval> {
             Some(self)
         }
 
+        #[cfg(feature = "event-reporting")]
         fn enrollment_eval_mut(&mut self) -> Option<&mut dyn $crate::traits::EnrollmentEval> {
             Some(self)
         }

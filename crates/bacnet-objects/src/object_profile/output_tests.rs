@@ -1,4 +1,5 @@
 //! Optional output profiles preserve command ownership and saved Tags authority.
+#![cfg_attr(not(feature = "durable-writes"), allow(unused_imports, dead_code))]
 
 use super::test_support::*;
 use super::*;
@@ -161,6 +162,7 @@ fn all_outputs_eight_masks_and_oos_states_preserve_existing_metadata() {
     }
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn output_saved_overrides_need_provisioning_and_invalid_replacement_preserves_state() {
     for kind in KINDS {
@@ -271,6 +273,7 @@ fn output_invalid_and_oversized_tags_make_no_save_attempts() {
     }
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn output_monotonic_hooks_correct_expired_stages_without_output_changes() {
     for kind in KINDS {

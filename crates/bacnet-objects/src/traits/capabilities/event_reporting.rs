@@ -180,10 +180,12 @@ pub trait EventReporting {
 /// [`EventReporting`], for inside its `BACnetObject` impl.
 macro_rules! lend_event_reporting {
     () => {
+        #[cfg(feature = "event-reporting")]
         fn event_reporting(&self) -> Option<&dyn $crate::traits::EventReporting> {
             Some(self)
         }
 
+        #[cfg(feature = "event-reporting")]
         fn event_reporting_mut(&mut self) -> Option<&mut dyn $crate::traits::EventReporting> {
             Some(self)
         }

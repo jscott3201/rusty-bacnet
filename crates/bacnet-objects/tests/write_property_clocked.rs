@@ -19,6 +19,7 @@
 //! object, and the scenarios in `support/write_scenarios.rs`, held to the
 //! same tables. It fails on a writable row no write changed (apart from the
 //! listed identity-only rows) and on a clocked table entry no write used.
+#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 
 use bacnet_objects::property_metadata::{is_array_property, is_writable_property};
 use std::cell::RefCell;
@@ -288,6 +289,7 @@ fn sweep_row(index: usize, property: PropertyIdentifier, prepared: bool) -> Reac
 ///   in [`IDENTITY_ONLY`], which take only the value they hold;
 /// - with [`SCENARIOS`] run too, every entry of the clocked table is used,
 ///   except those in [`UNREACHABLE`].
+#[cfg(feature = "event-reporting")]
 #[test]
 fn every_writable_row_and_table_entry_is_reached() {
     USED.with(|set| set.borrow_mut().clear());

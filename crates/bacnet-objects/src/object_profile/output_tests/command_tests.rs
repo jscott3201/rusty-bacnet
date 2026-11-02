@@ -1,3 +1,4 @@
+#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 use super::*;
 use crate::command_source::CommandOrigin;
 use bacnet_encoding::constructed::decode_value_source;
@@ -201,6 +202,7 @@ fn tags_do_not_steal_priorities_source_correction_or_command_time() {
     }
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn profile_writes_preserve_command_failure_and_out_of_range_transitions() {
     for kind in KINDS {

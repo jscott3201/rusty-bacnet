@@ -1,4 +1,5 @@
 //! Optional input profiles do not acquire Present_Value simulation ownership.
+#![cfg_attr(not(feature = "durable-writes"), allow(unused_imports, dead_code))]
 
 use super::test_support::*;
 use super::*;
@@ -172,6 +173,7 @@ fn pv_values(kind: ObjectType) -> [PropertyValue; 2] {
     }
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn tags_in_both_oos_states_preserve_network_and_internal_pv_ownership() {
     for kind in KINDS {
@@ -451,6 +453,7 @@ fn input_invalid_and_oversized_tags_make_no_save_attempts() {
     }
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn input_monotonic_hooks_correct_expired_stages_without_output_changes() {
     for kind in KINDS {

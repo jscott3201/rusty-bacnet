@@ -1,4 +1,5 @@
 //! BUFFER_READY on the three log objects (#1347, Clause 13.3.7).
+#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 use super::*;
 use crate::clock::{ClockFrame, ClockReader};
 use crate::event::commit_test_proposal;
@@ -111,6 +112,7 @@ fn unsigned(log: &dyn BACnetObject, property: P) -> u64 {
 
 /// Every Notification_Threshold records make one NORMAL to NORMAL proposal,
 /// and committing it reports the previous and current Total_Record_Count.
+#[cfg(feature = "event-reporting")]
 #[test]
 fn every_threshold_of_records_proposes_one_report_on_each_log() {
     for mut log in logs() {
@@ -193,6 +195,7 @@ fn every_threshold_of_records_proposes_one_report_on_each_log() {
     }
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn no_threshold_or_detection_off_proposes_nothing() {
     for mut log in logs() {
@@ -242,6 +245,7 @@ fn no_threshold_or_detection_off_proposes_nothing() {
 
 /// A purge restarts Records_Since_Notification at its BUFFER_PURGED record,
 /// but the algorithm still counts from Last_Notify_Record.
+#[cfg(feature = "event-reporting")]
 #[test]
 fn a_purge_restarts_records_since_notification_only() {
     for mut log in logs() {
@@ -268,6 +272,7 @@ fn a_purge_restarts_records_since_notification_only() {
     }
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn event_enable_to_normal_decides_distribution_only() {
     for mut log in logs() {

@@ -109,7 +109,9 @@ alloc = [
 # by default for the host builds, as `alloc` is. Both crates need atomic
 # compare-and-swap, so the image builds only for targets that have it
 # (scripts/ci/check-firmware-link.sh filters them), and the apdu image
-# builds with `alloc` alone.
+# builds with `alloc` alone. bacnet-objects' capability features (#2215)
+# stay off: the responder drives neither event reporting nor staged durable
+# writes, so the image drops the code only those reach.
 objects = ["alloc", "dep:bacnet-objects", "dep:bacnet-device-core"]
 
 # `emulate`: the emulation build, which scripts/emu/emulate-firmware.sh runs

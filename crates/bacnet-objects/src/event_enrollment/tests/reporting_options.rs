@@ -2,6 +2,7 @@
 //! Enrollment (#1507): the shared `ReportingOptions` serves them, as it does
 //! on the intrinsic reporters, and a committed transition stores the
 //! configured text in Event_Message_Texts.
+#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 
 use super::super::*;
 use crate::binary::BinaryValueObject;
@@ -125,6 +126,7 @@ fn event_enrollment_serves_and_takes_the_three_rows() {
     );
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn event_enrollment_inhibit_follows_its_reference_through_the_database() {
     let mut db = ObjectDatabase::new();
@@ -215,6 +217,7 @@ fn event_enrollment_commit_stores_the_configured_text_or_none() {
 /// optional rows, so the configuration survives a detection reset, the
 /// inhibit takes no write while detection is off, and with a reference the
 /// database refreshes it from the referenced property.
+#[cfg(feature = "event-reporting")]
 #[test]
 fn alert_enrollment_shares_the_reporting_options() {
     let source = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();

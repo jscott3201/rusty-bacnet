@@ -4,6 +4,7 @@
 //! New multi-state tests live here rather than inline in the object files, which
 //! is where this module tree keeps them — `multistate/tests/` is declared by
 //! `multistate/mod.rs` and already holds `objects.rs` and `state_text.rs`.
+#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 
 use super::super::*;
 use crate::property_metadata::is_writable_property;
@@ -77,6 +78,7 @@ fn msi_event_enable_bit_selects_which_transition_distributes() {
 /// because they all target OFFNORMAL. A gate keyed to a fixed bit rather than to
 /// the transition being reported — `event_enable & 0x01` where
 /// `& transition_bit` belongs — answers one of these two rows wrongly.
+#[cfg(feature = "event-reporting")]
 #[test]
 fn msi_event_enable_bit_selects_whether_the_return_to_normal_distributes() {
     for (bits, distributes) in [
@@ -652,6 +654,7 @@ fn unsupported_fault_and_output_alarm_surfaces_are_unknown() {
     ));
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn recommissioning_alarm_values_while_offnormal_returns_to_normal() {
     let mut msi = MultiStateInputObject::new(1, "MSI-1", 3).unwrap();

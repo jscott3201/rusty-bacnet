@@ -4,6 +4,7 @@
 //! as they were, and takes the same commit once detection is on. The tables
 //! below sort each lender by the targets its commit takes; a lender added
 //! to, or moved within, the catalogue fails here until they change with it.
+#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 
 use crate::catalogue::representatives;
 use crate::event::{
@@ -113,6 +114,7 @@ fn lenders() -> Vec<(ObjectType, Box<dyn BACnetObject>)> {
         .collect()
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn every_lender_refuses_every_commit_while_detection_is_disabled() {
     let mut failures = Vec::new();

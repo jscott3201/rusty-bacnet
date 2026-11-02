@@ -3,6 +3,7 @@
 //! and exactly those that evaluate or take a derived Reliability lend
 //! `ReliabilityEval` (#2179). A lender dropped from, or added to, the
 //! catalogue fails here until its table changes with it.
+#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 
 use crate::catalogue::representatives;
 use alloc::collections::BTreeSet;
@@ -41,6 +42,7 @@ fn assert_in_catalogue(seen: &BTreeSet<u32>, lenders: &[ObjectType]) {
     }
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn exactly_the_event_enrollment_lends_enrollment_eval_through_both_accessors() {
     let mut seen = BTreeSet::new();

@@ -1,4 +1,5 @@
 //! Restoring or seeding a log's buffer and Total_Record_Count (#1537).
+#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 use super::*;
 
 const MAX: u64 = u32::MAX as u64;
@@ -264,6 +265,7 @@ fn an_interruption_needs_an_actual_moment() {
     }
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn buffer_ready_counts_from_the_restored_count() {
     for kind in FamilyKind::ALL {

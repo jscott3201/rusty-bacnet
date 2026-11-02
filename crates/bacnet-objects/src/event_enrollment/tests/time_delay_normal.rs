@@ -1,6 +1,7 @@
 //! `Time_Delay_Normal` on EventEnrollment (property 356, Table 12-14
 //! conformance O) and the internal evaluation-state channel the server
 //! evaluator drives (#163/#137/#166; ASHRAE 135-2020 Clauses 12.12, 13.3).
+#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 
 use super::super::*;
 use crate::property_metadata::is_writable_property;
@@ -141,6 +142,7 @@ fn time_delay_normal_write_validation() {
 /// The evaluation-state round trip: pending countdown, COV baseline, and the
 /// last offnormal-causing value are owned by the object and reachable only
 /// through the internal channel.
+#[cfg(feature = "event-reporting")]
 #[test]
 fn enrollment_eval_state_round_trip() {
     let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
@@ -198,6 +200,7 @@ fn enrollment_eval_state_round_trip() {
     );
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn configuration_setters_cancel_pending_countdowns() {
     let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
@@ -282,6 +285,7 @@ fn configuration_setters_cancel_pending_countdowns() {
 /// Clause 13.2.2.1's disable reset covers the evaluation state: evaluation
 /// is suspended, so a stale countdown or baseline must not
 /// survive into the next enabled period.
+#[cfg(feature = "event-reporting")]
 #[test]
 fn disabling_detection_clears_eval_state_and_refuses_writes() {
     let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();

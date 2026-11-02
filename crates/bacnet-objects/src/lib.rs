@@ -91,8 +91,11 @@ mod present_value_access_tests;
 #[cfg(test)]
 mod local_input_tests;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "event-reporting"))]
 mod event_reporting_tests;
+
+#[cfg(test)]
+mod capability_features_tests;
 
 #[cfg(test)]
 mod detection_disabled_commit_tests;
@@ -146,13 +149,13 @@ mod cov_criteria_tests;
 #[cfg(test)]
 mod scalar_relinquishment_tests;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "event-reporting"))]
 mod enrollment_summary_capability_tests;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "event-reporting"))]
 mod acknowledge_alarm_object_family_tests;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "event-reporting"))]
 mod acked_transitions_tests;
 
 #[cfg(test)]

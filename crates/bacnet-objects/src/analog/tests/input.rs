@@ -1,3 +1,4 @@
+#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 use super::super::*;
 use crate::property_metadata::is_writable_property;
 use crate::traits::EventReporting as _;
@@ -162,6 +163,7 @@ fn ai_read_write_limit_enable() {
     }
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn ai_intrinsic_reporting_triggers_on_present_value_change() {
     let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
@@ -676,6 +678,7 @@ fn analog_time_delay_normal_defaults_to_time_delay_when_unwritten() {
 /// Clause 13.3.6's asymmetry at object level, commissioned entirely over
 /// `write_property`: the HIGH_LIMIT indication (a) waits Time_Delay, the
 /// NORMAL indication (e) waits Time_Delay_Normal.
+#[cfg(feature = "event-reporting")]
 #[test]
 fn ai_time_delay_normal_gates_the_return_to_normal() {
     let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();

@@ -1,3 +1,4 @@
+#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 use crate::property_metadata::PropertyMetadata;
 use std::borrow::Cow;
 
@@ -13,6 +14,7 @@ use bacnet_types::enums::{
 use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn all_eleven_builtin_intrinsic_families_implement_atomic_commit() {
     let mut objects: Vec<Box<dyn BACnetObject>> = vec![

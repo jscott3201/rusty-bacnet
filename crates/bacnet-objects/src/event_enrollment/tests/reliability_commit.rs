@@ -1,3 +1,4 @@
+#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 use super::super::*;
 use crate::event::{
     EventStateChange, EventTransition, EventTransitionCommit, EventTransitionCommitError,
@@ -48,6 +49,7 @@ fn transition(from: EventState, to: EventState, timestamp: u16) -> EventTransiti
     }
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn stock_reliability_commit_is_atomic_across_fault_reentry_and_recovery() {
     let mut object =
@@ -135,6 +137,7 @@ fn stock_reliability_commit_is_atomic_across_fault_reentry_and_recovery() {
     );
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn rejected_stock_reliability_commit_changes_nothing() {
     let mut object =
@@ -182,6 +185,7 @@ fn network_reliability_write_remains_denied() {
     );
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn detection_off_refuses_a_reliability_transition_and_keeps_reliability_alone() {
     // The hidden reliability route meets the same Event_Detection_Enable

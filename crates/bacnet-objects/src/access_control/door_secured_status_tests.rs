@@ -3,6 +3,7 @@
 //! input the door's own monitor can't tell makes it UNKNOWN, and pulses,
 //! simulated values, the event algorithm, Masked_Alarm_Values and the return
 //! to service all show through.
+#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 
 use crate::traits::EventReporting as _;
 use crate::traits::Timed;
@@ -143,6 +144,7 @@ fn report(door: &mut AccessDoorObject, state: DoorAlarmState) {
     commit_test_proposal(door, outcome);
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn access_door_secured_status_follows_the_in_alarm_flag() {
     let mut door = door();

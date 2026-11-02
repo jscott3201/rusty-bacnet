@@ -3,6 +3,7 @@
 //! and 13.4.5, #1149): Alarm_Values, Fault_Values and Masked_Alarm_Values,
 //! the Door_Alarm_State they admit, CHANGE_OF_STATE on Door_Alarm_State and
 //! the FAULT_STATE check behind Reliability.
+#![cfg_attr(not(feature = "event-reporting"), allow(unused_imports, dead_code))]
 
 use crate::traits::EventReporting as _;
 use bacnet_types::bitstring::EventTransitionBits;
@@ -323,6 +324,7 @@ fn access_door_masking_the_current_state_returns_it_to_normal() {
     assert_eq!(alarm_state(&door), enumerated(S::NORMAL.to_raw()));
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn access_door_goes_offnormal_after_time_delay_and_back_to_normal() {
     let mut door = alarming_door(2);
@@ -368,6 +370,7 @@ fn access_door_goes_offnormal_after_time_delay_and_back_to_normal() {
     );
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn access_door_fault_values_report_multi_state_fault() {
     let mut door = alarming_door(5);
@@ -412,6 +415,7 @@ fn access_door_fault_values_report_multi_state_fault() {
     );
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn access_door_simulated_reliability_holds_until_the_return_to_service() {
     let mut door = alarming_door(0);
