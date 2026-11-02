@@ -331,14 +331,50 @@ fn subordinates_and_annotations_keep_one_size_in_either_order() {
         assert_eq!(read(&**view, list), read(&*list_first, list));
         assert_eq!(read(&**view, notes), texts(&["supply", "return"]));
     }
-    // Sizes that differ: the later value sets both, and one string alone
-    // decodes as itself.
-    list_first
-        .initialize_property(notes, PropertyValue::CharacterString("only".into()))
+    // Once both are given, a size that differs is refused and changes
+    // nothing, in either order.
+    assert_code(
+        list_first.initialize_property(notes, PropertyValue::CharacterString("only".into())),
+        ErrorCode::VALUE_OUT_OF_RANGE,
+    );
+    assert_code(
+        notes_first.initialize_property(list, subordinates(&[1, 2, 3])),
+        ErrorCode::VALUE_OUT_OF_RANGE,
+    );
+    for view in [&list_first, &notes_first] {
+        assert_eq!(array_size(&**view, list), PropertyValue::Unsigned(2));
+        assert_eq!(read(&**view, notes), texts(&["supply", "return"]));
+    }
+}
+
+#[test]
+fn either_list_alone_sets_the_size_up_to_the_cap() {
+    let list = PropertyIdentifier::SUBORDINATE_LIST;
+    let notes = PropertyIdentifier::SUBORDINATE_ANNOTATIONS;
+    let mut view = build(ObjectType::STRUCTURED_VIEW);
+    // One string alone decodes as itself.
+    view.initialize_property(notes, PropertyValue::CharacterString("only".into()))
         .unwrap();
-    assert_eq!(array_size(&*list_first, list), PropertyValue::Unsigned(1));
-    notes_first
-        .initialize_property(list, subordinates(&[1, 2, 3]))
+    assert_eq!(array_size(&*view, list), PropertyValue::Unsigned(1));
+    let past_cap = crate::group::MAX_SUBORDINATES as u32 + 1;
+    let no_space = |result: Result<(), Error>| match result {
+        Err(Error::Remote(RemoteError::Error { class, code })) => {
+            assert_eq!(
+                (class, code),
+                (ErrorClass::RESOURCES, ErrorCode::NO_SPACE_TO_WRITE_PROPERTY)
+            );
+        }
+        other => panic!("{other:?}"),
+    };
+    let mut fresh = build(ObjectType::STRUCTURED_VIEW);
+    let many: Vec<u32> = (1..=past_cap).collect();
+    no_space(fresh.initialize_property(list, subordinates(&many)));
+    let labels: Vec<String> = (0..past_cap).map(|n| n.to_string()).collect();
+    let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+    no_space(fresh.initialize_property(notes, texts(&labels)));
+    assert_eq!(array_size(&*fresh, list), PropertyValue::Unsigned(0));
+    let at_cap: Vec<u32> = (1..past_cap).collect();
+    fresh
+        .initialize_property(list, subordinates(&at_cap))
         .unwrap();
-    assert_eq!(read(&*notes_first, notes), texts(&["supply", "return", ""]));
 }

@@ -7,21 +7,27 @@
 //! values or stays empty and named by default.
 //!
 //! Subordinate_List and Subordinate_Annotations keep one size (Clause
-//! 12.29.7 and 12.29.8): giving either sets the other's size too. The
-//! annotations of new members are empty, and a new member of the list is the
-//! uninitialized reference, at the reserved instance, which a client
-//! ignores. So with both given at one size, their order doesn't matter;
-//! with sizes that differ, the later one sets the size.
+//! 12.29.7 and 12.29.8). Given alone, either sets the size of both: the
+//! annotations of new members are empty, and a new member of the list is
+//! the uninitialized reference, at the reserved instance. Given both in one
+//! request, they must have one size, in either order; the later one is
+//! refused with VALUE_OUT_OF_RANGE otherwise, rather than cutting the
+//! other short. Each holds at most [`MAX_SUBORDINATES`] elements.
 
 use crate::prelude::*;
 use bacnet_types::constructed::BACnetDeviceObjectReference;
-use bacnet_types::enums::{NodeType, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{ErrorClass, ErrorCode, NodeType, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 
 use super::StructuredViewObject;
 use crate::common;
 use crate::device_reference;
+
+/// The most subordinates a Structured View takes at creation, as the other
+/// lists clients write are bounded; more is RESOURCES /
+/// NO_SPACE_TO_WRITE_PROPERTY.
+pub const MAX_SUBORDINATES: usize = 1024;
 
 /// The properties [`initialize`] sets.
 pub(super) const CREATION_ONLY: &[PropertyIdentifier] = &[
@@ -65,18 +71,42 @@ pub(super) fn initialize(
         PropertyIdentifier::SUBORDINATE_LIST => {
             let references: Vec<BACnetDeviceObjectReference> =
                 device_reference::decode_references(&value)?;
+            check_size(view, property, references.len())?;
             device_reference::check_device_members(&references)?;
             view.subordinate_annotations
                 .resize(references.len(), String::new());
             view.subordinate_list = references;
+            view.creation_given[0] = true;
         }
         PropertyIdentifier::SUBORDINATE_ANNOTATIONS => {
             let annotations = annotations(value)?;
+            check_size(view, property, annotations.len())?;
             view.subordinate_list
                 .resize_with(annotations.len(), uninitialized_member);
             view.subordinate_annotations = annotations;
+            view.creation_given[1] = true;
         }
         _ => return Err(common::write_access_denied_error()),
+    }
+    Ok(())
+}
+
+/// Refuse `size` for `property` past [`MAX_SUBORDINATES`], or when the
+/// other list was given first at another size.
+fn check_size(
+    view: &StructuredViewObject,
+    property: PropertyIdentifier,
+    size: usize,
+) -> Result<(), Error> {
+    if size > MAX_SUBORDINATES {
+        return Err(Error::protocol(
+            ErrorClass::RESOURCES,
+            ErrorCode::NO_SPACE_TO_WRITE_PROPERTY,
+        ));
+    }
+    let own = usize::from(property == PropertyIdentifier::SUBORDINATE_ANNOTATIONS);
+    if view.creation_given[1 - own] && size != view.subordinate_list.len() {
+        return Err(common::value_out_of_range_error());
     }
     Ok(())
 }

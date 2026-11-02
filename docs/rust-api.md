@@ -4392,8 +4392,11 @@ Structured View take Object_Name; Notification Class takes Priority (three
 Unsigned values up to 255) and Ack_Required; Trend Log takes Buffer_Size (up to
 `trend::MAX_CREATED_BUFFER_SIZE`, 10,000); Event Enrollment takes
 Object_Property_Reference; and Structured View takes Node_Type, Node_Subtype,
-Subordinate_List and Subordinate_Annotations, the last two keeping one size
-(the later one sets it). WriteProperty still answers
+Subordinate_List and Subordinate_Annotations, the last two holding at most
+`group::MAX_SUBORDINATES` (1024) entries and keeping one size: either alone
+sets it, and both given in one request must match, or the later one is
+`PROPERTY/VALUE_OUT_OF_RANGE`. CreateObject applies Buffer_Size before the
+other initial values, since a log takes it only while it holds no record. WriteProperty still answers
 `PROPERTY/WRITE_ACCESS_DENIED` for each. The PICS lists each createable type's
 set.
 

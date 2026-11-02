@@ -79,7 +79,7 @@ pub(crate) fn handle_create_object_observed(
     let counts = StateCounts::of(db, created_oid, &request);
 
     // Apply initial values; on failure, remove the created object.
-    for (position, pv) in apply_counts_first(db, created_oid, &request, counts, command_origin) {
+    for (position, pv) in apply_sizes_first(db, created_oid, &request, counts, command_origin) {
         if let Err(refusal) = initialize(db, created_oid, pv, counts, command_origin) {
             let _ = db.remove(&created_oid);
             return Err(refusal.of_initial_value(position));
@@ -142,9 +142,14 @@ impl StateCounts {
     }
 }
 
-/// Apply the initial values that give a multi-state object its state count
-/// first ([`StateCounts`]), and return the initial values left to apply,
-/// with their positions, in request order (#1429, #1443).
+/// Apply the initial values that size the new object first: those that
+/// give a multi-state object its state count ([`StateCounts`]), and a Trend
+/// Log's Buffer_Size (#2208). Return the initial values left to apply, with
+/// their positions, in request order (#1429, #1443).
+///
+/// Buffer_Size goes first because a log takes it only while it holds no
+/// record, and other initial values (a new Log_DeviceObjectProperty, Enable
+/// FALSE) record a status, so the result must not depend on their order.
 ///
 /// Present_Value, Relinquish_Default, Alarm_Values, the State_Text elements
 /// and State_Text written whole are then judged against the count the
@@ -155,7 +160,7 @@ impl StateCounts {
 /// request order, so the last of those sets the count. A refusal always
 /// names the value's own position. On a fresh object a count can only fail
 /// its own checks here, since every state the object holds is 1.
-fn apply_counts_first<'a>(
+fn apply_sizes_first<'a>(
     db: &mut ObjectDatabase,
     created_oid: ObjectIdentifier,
     request: &'a CreateObjectRequest,
@@ -167,7 +172,10 @@ fn apply_counts_first<'a>(
     (1u32..)
         .zip(&request.list_of_initial_values)
         .filter(|(_, pv)| {
-            !counts.gives(pv) || initialize(db, created_oid, pv, counts, command_origin).is_err()
+            let sizes = counts.gives(pv)
+                || (pv.property_identifier == PropertyIdentifier::BUFFER_SIZE
+                    && pv.property_array_index.is_none());
+            !sizes || initialize(db, created_oid, pv, counts, command_origin).is_err()
         })
         .collect()
 }

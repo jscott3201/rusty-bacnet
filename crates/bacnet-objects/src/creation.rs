@@ -30,7 +30,9 @@
 //! logs nothing, an Event Enrollment runs no algorithm), and starts once a
 //! write gives them, without a restart. The properties these types serve
 //! read-only (Object_Name on all but the Event Enrollment, a Notification
-//! Class's Priority and Ack_Required, a Trend Log's Buffer_Size, an Event
+//! Class's Priority and Ack_Required, a Trend Log's Buffer_Size (at most
+//! [`MAX_CREATED_BUFFER_SIZE`](crate::trend::MAX_CREATED_BUFFER_SIZE)
+//! records, applied before the other values), an Event
 //! Enrollment's Object_Property_Reference, a Structured View's node and
 //! subordinate properties) take an initial value as creation-only
 //! properties (#1429).

@@ -347,3 +347,175 @@ async fn a_created_configuration_object_is_deleted_cleanly() {
     }
     assert_eq!(fixture.db.read().await.len(), before);
 }
+
+#[tokio::test]
+async fn a_trend_log_takes_its_buffer_size_after_values_that_record_a_status() {
+    // A new reference purges the buffer and Enable FALSE records a status;
+    // Buffer_Size still applies, last in the list (Clause 15.3.2).
+    let fixture = clocked().await;
+    let response = send(
+        &fixture,
+        request(
+            ObjectSpecifier::Type(ObjectType::TREND_LOG),
+            vec![
+                (
+                    P::LOG_DEVICE_OBJECT_PROPERTY,
+                    reference(oid(ObjectType::BINARY_VALUE, 1)),
+                ),
+                (P::LOG_ENABLE, value(PropertyValue::Boolean(false))),
+                (P::BUFFER_SIZE, value(PropertyValue::Unsigned(50))),
+            ],
+        ),
+    )
+    .await;
+    let log = created(&response);
+    let db = fixture.db.read().await;
+    assert_eq!(read(&db, log, P::BUFFER_SIZE), PropertyValue::Unsigned(50));
+    assert_eq!(read(&db, log, P::LOG_ENABLE), PropertyValue::Boolean(false));
+}
+
+fn subordinate_list(instances: &[u32]) -> Vec<u8> {
+    let mut subordinates = BytesMut::new();
+    for &instance in instances {
+        encode_device_object_reference(
+            &mut subordinates,
+            &BACnetDeviceObjectReference {
+                device_identifier: None,
+                object_identifier: oid(ObjectType::BINARY_VALUE, instance),
+            },
+        );
+    }
+    subordinates.to_vec()
+}
+
+#[tokio::test]
+async fn a_structured_view_refuses_lists_of_two_sizes_in_either_order() {
+    let fixture = Fixture::new(None);
+    let notes = value(PropertyValue::CharacterString("only".into()));
+    for values in [
+        vec![
+            (P::SUBORDINATE_LIST, subordinate_list(&[1, 2, 3])),
+            (P::SUBORDINATE_ANNOTATIONS, notes.clone()),
+        ],
+        vec![
+            (P::SUBORDINATE_ANNOTATIONS, notes.clone()),
+            (P::SUBORDINATE_LIST, subordinate_list(&[1, 2, 3])),
+        ],
+    ] {
+        let response = send(
+            &fixture,
+            request(ObjectSpecifier::Type(ObjectType::STRUCTURED_VIEW), values),
+        )
+        .await;
+        assert_refused(&response, ErrorCode::VALUE_OUT_OF_RANGE, 2);
+        assert!(
+            fixture
+                .db
+                .read()
+                .await
+                .find_by_type(ObjectType::STRUCTURED_VIEW)
+                .is_empty()
+        );
+    }
+    // Past the cap.
+    let many: Vec<u32> = (1..=1025).collect();
+    let response = send(
+        &fixture,
+        request(
+            ObjectSpecifier::Type(ObjectType::STRUCTURED_VIEW),
+            vec![(P::SUBORDINATE_LIST, subordinate_list(&many))],
+        ),
+    )
+    .await;
+    let create = ConfirmedServiceChoice::CREATE_OBJECT.to_raw();
+    assert_eq!(
+        response,
+        [
+            0x50,
+            5,
+            create,
+            0x0E,
+            0x91,
+            ErrorClass::RESOURCES.to_raw() as u8,
+            0x91,
+            ErrorCode::NO_SPACE_TO_WRITE_PROPERTY.to_raw() as u8,
+            0x0F,
+            0x19,
+            1,
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_name_taken_at_creation_must_be_free_and_a_refusal_frees_it() {
+    let fixture = Fixture::new(None);
+    let name = |text: &str| {
+        (
+            P::OBJECT_NAME,
+            value(PropertyValue::CharacterString(text.into())),
+        )
+    };
+    // Binary Value 1 holds "one".
+    let response = send(
+        &fixture,
+        request(
+            ObjectSpecifier::Type(ObjectType::CALENDAR),
+            vec![name("one")],
+        ),
+    )
+    .await;
+    assert_refused(&response, ErrorCode::DUPLICATE_NAME, 1);
+    // Named, then refused at a later value: the name is free again.
+    let response = send(
+        &fixture,
+        request(
+            ObjectSpecifier::Type(ObjectType::CALENDAR),
+            vec![name("Holidays"), (P::DATE_LIST, vec![0x0C, 126, 15, 5, 1])],
+        ),
+    )
+    .await;
+    assert_refused(&response, ErrorCode::VALUE_OUT_OF_RANGE, 2);
+    assert!(fixture.db.read().await.find_by_name("Holidays").is_none());
+    let calendar = created(
+        &send(
+            &fixture,
+            request(
+                ObjectSpecifier::Type(ObjectType::CALENDAR),
+                vec![name("Holidays")],
+            ),
+        )
+        .await,
+    );
+    let db = fixture.db.read().await;
+    assert_eq!(
+        db.find_by_name("Holidays")
+            .map(|object| object.object_identifier()),
+        Some(calendar)
+    );
+}
+
+#[tokio::test]
+async fn a_created_enrollment_with_none_parameters_never_transitions() {
+    let fixture = Fixture::new(None);
+    let enrollment = created(
+        &send(
+            &fixture,
+            request(
+                ObjectSpecifier::Type(ObjectType::EVENT_ENROLLMENT),
+                vec![(
+                    P::OBJECT_PROPERTY_REFERENCE,
+                    reference(oid(ObjectType::BINARY_VALUE, 1)),
+                )],
+            ),
+        )
+        .await,
+    );
+    let mut db = fixture.db.write().await;
+    for _ in 0..3 {
+        assert!(crate::event_enrollment::evaluate_event_enrollments(&mut db, 1).is_empty());
+    }
+    assert_eq!(
+        read(&db, enrollment, P::EVENT_STATE),
+        PropertyValue::Enumerated(bacnet_types::enums::EventState::NORMAL.to_raw())
+    );
+}
