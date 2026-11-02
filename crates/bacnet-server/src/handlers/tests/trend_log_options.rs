@@ -93,7 +93,12 @@ fn assert_refused(result: Result<(), Error>, class: ErrorClass, code: ErrorCode)
 /// Each record of `oid` as ReadRange serves it: its status, or `None` for
 /// an ordinary record.
 fn statuses(db: &ObjectDatabase, oid: ObjectIdentifier) -> Vec<Option<LogStatus>> {
-    let records = db.get(&oid).unwrap().log_buffer_internal().unwrap();
+    let records = db
+        .get(&oid)
+        .unwrap()
+        .log_buffer()
+        .and_then(|log| log.buffer_records())
+        .unwrap();
     (0..records.record_count())
         .map(|index| {
             let mut bytes = BytesMut::new();

@@ -384,7 +384,14 @@ mod tests {
                         ErrorClass::PROPERTY,
                         ErrorCode::INVALID_ARRAY_INDEX,
                     );
-                    assert_eq!(object.log_buffer_internal().unwrap().record_count(), 0);
+                    assert_eq!(
+                        object
+                            .log_buffer()
+                            .and_then(|log| log.buffer_records())
+                            .unwrap()
+                            .record_count(),
+                        0
+                    );
                 }
             }
         }
@@ -549,9 +556,20 @@ mod tests {
                     object.read_property(P::LOG_ENABLE, None).unwrap(),
                     PropertyValue::Boolean(true)
                 );
-                assert_eq!(object.log_buffer_internal().unwrap().record_count(), 0);
+                assert_eq!(
+                    object
+                        .log_buffer()
+                        .and_then(|log| log.buffer_records())
+                        .unwrap()
+                        .record_count(),
+                    0
+                );
                 assert_eq!(object.property_metadata().as_ref(), metadata);
             }
         }
     }
 }
+
+#[cfg(test)]
+#[path = "metadata_rows_tests.rs"]
+mod rows_tests;

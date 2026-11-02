@@ -30,7 +30,8 @@ use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlag
 
 use super::{LocalDevice, Member, ObjectDatabase, RECONCILE, property_value_to_log_value};
 use crate::cov_change::{effective_increment, is_numeric, reports_change};
-use crate::traits::{BACnetObject, MonotonicClock};
+use crate::traits::{BACnetObject, MonotonicClock, not_supported};
+use crate::trend::TrendLogObject;
 
 /// What one look at a COV log's reference found.
 #[derive(Debug, Clone)]
@@ -91,6 +92,17 @@ fn status_flags(object: &dyn BACnetObject) -> Option<StatusFlags> {
 }
 
 impl ObjectDatabase {
+    /// Whether the Trend Log at `oid` keeps the records it is given now.
+    /// Only the built-in Trend Log has an Enable and a window to shut, so the
+    /// stored object itself is asked, never an adapter around it; any other
+    /// object leaves the gate to its insertion hook.
+    pub(crate) fn trend_log_collecting(&self, oid: &ObjectIdentifier) -> bool {
+        self.objects.contains_key(oid)
+            && self
+                .stored_as::<TrendLogObject>(oid)
+                .is_none_or(TrendLogObject::collecting)
+    }
+
     /// One pass of a COV Trend Log `oid`: look at its reference and log a
     /// record when it changed (see the module docs).
     pub(super) fn poll_cov(
@@ -108,10 +120,7 @@ impl ObjectDatabase {
         {
             return;
         }
-        if !self
-            .get(&oid)
-            .is_some_and(|log| log.log_collecting_internal())
-        {
+        if !self.trend_log_collecting(&oid) {
             // Nothing is kept now; start over when collection resumes.
             let entry = self.trend_poll.0.get_mut(&oid).unwrap();
             entry.cov_baseline = None;
@@ -157,7 +166,8 @@ impl ObjectDatabase {
             let record = look.record(frame.local_date, frame.local_time);
             self.get_mut(&oid)
                 .unwrap()
-                .add_trend_record(record)
+                .log_buffer_mut()
+                .map_or_else(|| Err(not_supported()), |log| log.add_trend_record(record))
                 .inspect_err(|error| {
                     log_warn!(object = %oid, %error, "trend-log COV record insertion failed");
                 })

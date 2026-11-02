@@ -125,8 +125,8 @@ pub enum FileWriteStart {
 /// and nothing here appears in `Property_List`.
 ///
 /// The server reaches an implementation through
-/// [`BACnetObject::file_storage_internal`] and
-/// [`BACnetObject::file_storage_internal_mut`]. Every method has a default
+/// [`BACnetObject::file_storage`] and
+/// [`BACnetObject::file_storage_mut`]. Every method has a default
 /// that refuses with SERVICES / FILE_ACCESS_DENIED — there is no
 /// implementation behind it, making the file inaccessible under
 /// Clause 18 — and a stream-only implementation overrides only the
@@ -647,19 +647,19 @@ impl BACnetObject for FileObject {
         metadata::for_object(self)
     }
 
-    fn file_configuration_internal(&self) -> Option<&dyn FileConfiguration> {
+    fn file_configuration(&self) -> Option<&dyn FileConfiguration> {
         Some(self)
     }
 
-    fn file_configuration_internal_mut(&mut self) -> Option<&mut dyn FileConfiguration> {
+    fn file_configuration_mut(&mut self) -> Option<&mut dyn FileConfiguration> {
         Some(self)
     }
 
-    fn file_storage_internal(&self) -> Option<&dyn FileStorage> {
+    fn file_storage(&self) -> Option<&dyn FileStorage> {
         Some(self)
     }
 
-    fn file_storage_internal_mut(&mut self) -> Option<&mut dyn FileStorage> {
+    fn file_storage_mut(&mut self) -> Option<&mut dyn FileStorage> {
         Some(self)
     }
 

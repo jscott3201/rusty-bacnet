@@ -12,8 +12,8 @@
 //! and a method added to a capability trait until it has a row here.
 
 use super::declared;
-use super::fixtures::{clocks, day, noon, oid, schedule_write};
-use super::rows::{Row, commit};
+use super::fixtures::{address, clocks, day, noon, oid, schedule_write};
+use super::rows::{Row, commit, event_log_record, multiple_record, record};
 use bacnet_objects::access_control::AccessEventReport;
 use bacnet_objects::channel::MemberDatatype;
 use bacnet_objects::command::WriteFailure;
@@ -62,6 +62,10 @@ const SOURCES: &[(&str, &str)] = &[
     (
         "local_input",
         include_str!("../../../src/traits/capabilities/local_input.rs"),
+    ),
+    (
+        "log_buffer",
+        include_str!("../../../src/traits/capabilities/log_buffer.rs"),
     ),
     (
         "reliability_eval",
@@ -421,6 +425,48 @@ pub const CAPABILITY_ROWS: &[(&str, Row)] = &[
             let retry = o.schedule_runner().map(|r| r.retry_refusals_naming(target));
             format!("{retry:?}")
         }),
+    ),
+    // The two reads go through the shared accessor, the one ReadRange's
+    // read guard lends, so a read-only view runs them as well.
+    (
+        "LogBuffer::record_identities",
+        Row::Query(|o| format!("{:?}", o.log_buffer().map(|l| l.record_identities()))),
+    ),
+    (
+        "LogBuffer::buffer_records",
+        Row::Query(|o| {
+            let records = o.log_buffer().map(|l| l.buffer_records().map(address));
+            format!("{records:?}")
+        }),
+    ),
+    (
+        "LogBuffer::add_trend_record",
+        Row::Command(|o| {
+            let added = o.log_buffer_mut().map(|l| l.add_trend_record(record()));
+            format!("{added:?}")
+        }),
+    ),
+    (
+        "LogBuffer::add_trend_multiple_record",
+        Row::Command(|o| {
+            let record = multiple_record();
+            let added = o
+                .log_buffer_mut()
+                .map(|l| l.add_trend_multiple_record(record));
+            format!("{added:?}")
+        }),
+    ),
+    (
+        "LogBuffer::add_event_log_record",
+        Row::Command(|o| {
+            let record = event_log_record();
+            let added = o.log_buffer_mut().map(|l| l.add_event_log_record(record));
+            format!("{added:?}")
+        }),
+    ),
+    (
+        "LogBuffer::refresh_window",
+        Row::Command(|o| format!("{:?}", o.log_buffer_mut().map(|l| l.refresh_window()))),
     ),
     // Through the shared accessor, the one a host's read guard lends, so a
     // read-only view runs it as well.

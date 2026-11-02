@@ -36,7 +36,10 @@ fn multiple_record(hour: u8, values: Vec<LogValue>) -> BACnetLogMultipleRecord {
 
 /// Each resident record as ReadRange serves it.
 fn served(object: &dyn BACnetObject) -> Vec<Vec<u8>> {
-    let records = object.log_buffer_internal().unwrap();
+    let records = object
+        .log_buffer()
+        .and_then(|log| log.buffer_records())
+        .unwrap();
     (0..records.record_count())
         .map(|index| {
             let mut buf = BytesMut::new();
@@ -70,7 +73,14 @@ fn trend_logs_refuse_read_property_of_log_buffer() {
             }
             other => panic!("expected READ_ACCESS_DENIED, got {other:?}"),
         }
-        assert_eq!(object.log_buffer_internal().unwrap().record_count(), 1);
+        assert_eq!(
+            object
+                .log_buffer()
+                .and_then(|log| log.buffer_records())
+                .unwrap()
+                .record_count(),
+            1
+        );
     }
 }
 
@@ -84,7 +94,10 @@ fn trend_log_serves_status_flags_only_when_recorded() {
         .unwrap();
     trend.add_record(record(1, 20.0, None)).unwrap();
 
-    let identities = trend.log_record_identities_internal().unwrap();
+    let identities = trend
+        .log_buffer()
+        .map(|log| log.record_identities())
+        .unwrap();
     assert_eq!(identities[0].sequence_number(), 1);
     assert_eq!(identities[1].sequence_number(), 2);
     assert_eq!(identities[0].date(), identities[1].date());
@@ -164,7 +177,10 @@ fn trend_family_identity_raw_and_served_views_stay_fifo_aligned() {
     }
 
     for object in [&trend as &dyn BACnetObject, &multiple as &dyn BACnetObject] {
-        let identities = object.log_record_identities_internal().unwrap();
+        let identities = object
+            .log_buffer()
+            .map(|log| log.record_identities())
+            .unwrap();
         let served = served(object);
         assert_eq!(identities.len(), 2);
         assert_eq!(identities.len(), served.len());
@@ -202,7 +218,13 @@ fn trend_logs_refuse_unencodable_records_at_add() {
     bad.log_datum = LogDatum::AnyValue(stray_close.clone());
     assert!(trend.add_record(bad.clone()).is_err());
     bad.log_datum = bad_padding.clone().into();
-    assert!(trend.add_trend_record(bad).is_err());
+    assert!(
+        trend
+            .log_buffer_mut()
+            .unwrap()
+            .add_trend_record(bad)
+            .is_err()
+    );
     trend.add_record(record(3, 30.0, None)).unwrap();
 
     let mut multiple = TrendLogMultipleObject::new(1, "TLM-1", 4).unwrap();
@@ -219,6 +241,8 @@ fn trend_logs_refuse_unencodable_records_at_add() {
     );
     assert!(
         multiple
+            .log_buffer_mut()
+            .unwrap()
             .add_trend_multiple_record(multiple_record(2, vec![bad_padding]))
             .is_err()
     );

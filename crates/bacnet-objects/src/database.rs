@@ -233,6 +233,19 @@ impl ObjectDatabase {
         }
     }
 
+    /// The object stored at `oid` as the concrete type `T`, or `None` when it
+    /// is another type, or an adapter around a `T` that
+    /// [`with_object_adapter`](Self::with_object_adapter) installed. This
+    /// reflects the stored object itself, never its `Box`: downcasting the
+    /// box would match the blanket `StoredObject` impl on `Box` and miss
+    /// every time.
+    pub(crate) fn stored_as<T: 'static>(&self, oid: &ObjectIdentifier) -> Option<&T> {
+        let object: &(dyn BACnetObject + 'static) = self.objects.get(oid)?.as_ref();
+        object
+            .as_stored_any(crate::traits::ObjectStorageAccess(()))
+            .downcast_ref()
+    }
+
     /// Install an identity-preserving adapter through scoped structural access.
     ///
     /// The callback must preserve the object's identifier, name and type. It is
@@ -241,6 +254,12 @@ impl ObjectDatabase {
     /// Poll ownership is retired before invocation, even if the callback returns
     /// an error or unwinds after modifying the slot. Slot borrows cannot escape.
     /// An installed Audit runtime can reject protected members before the callback.
+    ///
+    /// Two log answers come from the built-in object only, never through an
+    /// adapter: whether a COV Trend Log is collecting (Enable and its window),
+    /// and whether an Event Log takes received notifications. A wrapped Trend
+    /// Log logging by COV keeps no Enable or window gate and no baseline
+    /// restart, and a wrapped Event Log takes no received notifications.
     ///
     /// ```compile_fail
     /// use bacnet_objects::{database::ObjectDatabase, traits::BACnetObject};

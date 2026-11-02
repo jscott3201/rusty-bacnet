@@ -15,9 +15,7 @@ use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlag
 
 use crate::clock::ClockReader;
 use crate::common;
-use crate::log_buffer::{
-    LogBufferRecords, LogRecordBuffer, LogRecordIdentity, log_buffer_read_denied,
-};
+use crate::log_buffer::{LogRecordBuffer, log_buffer_read_denied};
 use crate::log_lifecycle::LogLifecycle;
 use crate::log_persistence::store::{DurableLog, LogStore};
 use crate::log_reporting::{BufferReadyReporting, impl_buffer_ready_reporting};
@@ -110,6 +108,15 @@ impl TrendLogObject {
         self.acquisition.acquired();
         self.commit_if_counted();
         Ok(())
+    }
+
+    /// Whether the log keeps the ordinary records it is given now: Enable is
+    /// TRUE and its Start_Time / Stop_Time window admitted the local time at
+    /// the last look. A Trend Log logging by COV starts over from the
+    /// current value when collection resumes, so the trend poller asks this
+    /// before each look (#1480).
+    pub(crate) fn collecting(&self) -> bool {
+        self.log_enable && self.window.is_open()
     }
 
     /// Get the current buffer contents.
@@ -426,7 +433,7 @@ impl BACnetObject for TrendLogObject {
             p if p == PropertyIdentifier::RELIABILITY => {
                 Ok(PropertyValue::Enumerated(self.reliability.to_raw()))
             }
-            // ReadRange pages it through `log_buffer_internal`.
+            // ReadRange pages it through `LogBuffer::buffer_records`.
             p if p == PropertyIdentifier::LOG_BUFFER => Err(log_buffer_read_denied()),
             // The Clause 21 encoding; while no reference is set, the empty
             // element a Trend Log Multiple grows by (#1417).
@@ -544,28 +551,7 @@ impl BACnetObject for TrendLogObject {
         self.store.is_some().then_some(self as _)
     }
 
-    fn log_record_identities_internal(&self) -> Option<Vec<LogRecordIdentity>> {
-        Some(self.log_buffer.identities())
-    }
-
-    fn log_buffer_internal(&self) -> Option<&dyn LogBufferRecords> {
-        Some(&self.log_buffer)
-    }
-
-    fn add_trend_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
-        self.add_record(record)
-    }
-
-    fn refresh_log_window_internal(&mut self) -> bool {
-        self.settle_interruption(None);
-        let recorded = self.lifecycle().refresh_window();
-        self.commit_if_counted();
-        recorded
-    }
-
-    fn log_collecting_internal(&self) -> bool {
-        self.log_enable && self.window.is_open()
-    }
+    crate::traits::lend_log_buffer!();
 
     crate::traits::lend_event_reporting!();
 
@@ -575,6 +561,7 @@ impl BACnetObject for TrendLogObject {
 }
 
 impl_buffer_ready_reporting!(TrendLogObject, reporting, log_buffer);
+crate::traits::impl_log_buffer!(TrendLogObject, add_trend_record, BACnetLogRecord);
 
 impl crate::traits::Timed for TrendLogObject {
     fn bind_clocks(&mut self, clocks: &crate::traits::Clocks) {

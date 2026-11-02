@@ -186,7 +186,7 @@ async fn routed_file_write_preserves_json_and_remote_bytes_and_refusal() {
             let data = db
                 .get(&oid(10))
                 .unwrap()
-                .file_storage_internal()
+                .file_storage()
                 .unwrap()
                 .read_stream(0, 20)
                 .unwrap();
@@ -210,7 +210,7 @@ async fn routed_file_write_preserves_json_and_remote_bytes_and_refusal() {
                 .await
                 .get(&oid(13))
                 .unwrap()
-                .file_storage_internal()
+                .file_storage()
                 .unwrap()
                 .read_stream(0, 20)
                 .unwrap()
@@ -378,7 +378,7 @@ async fn direct_file_commands_keep_their_existing_local_destination() {
         .await
         .get(&oid(10))
         .unwrap()
-        .file_storage_internal()
+        .file_storage()
         .unwrap()
         .read_stream(0, 20)
         .unwrap();

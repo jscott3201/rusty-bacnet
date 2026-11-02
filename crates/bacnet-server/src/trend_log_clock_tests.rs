@@ -78,7 +78,10 @@ fn database(clock: Arc<dyn ClockReader>) -> (Arc<RwLock<ObjectDatabase>>, Object
 
 /// The records ReadRange serves, each as its encoded bytes.
 fn served(obj: &dyn BACnetObject) -> Vec<Vec<u8>> {
-    let records = obj.log_buffer_internal().unwrap();
+    let records = obj
+        .log_buffer()
+        .and_then(|log| log.buffer_records())
+        .unwrap();
     (0..records.record_count())
         .map(|index| {
             let mut bytes = bytes::BytesMut::new();
@@ -115,7 +118,7 @@ async fn ordinary_poll_uses_exact_device_local_timestamp_and_hundredths() {
     poll_trend_logs(&db).await;
     let guard = db.read().await;
     let obj = guard.get(&oid).unwrap();
-    let identities = obj.log_record_identities_internal().unwrap();
+    let identities = obj.log_buffer().map(|log| log.record_identities()).unwrap();
     assert_eq!(identities.len(), 1);
     assert_eq!(identities[0].date(), expected.local_date);
     assert_eq!(identities[0].time(), expected.local_time);
@@ -144,7 +147,8 @@ async fn ordinary_poll_uses_exact_device_local_timestamp_and_hundredths() {
     let identities = guard
         .get(&oid)
         .unwrap()
-        .log_record_identities_internal()
+        .log_buffer()
+        .map(|log| log.record_identities())
         .unwrap();
     assert_eq!(identities.len(), 2);
     assert_eq!(identities[1].time(), next.local_time);

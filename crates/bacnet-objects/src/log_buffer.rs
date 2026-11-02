@@ -44,7 +44,7 @@ pub(crate) fn log_buffer_read_denied() -> Error {
 /// with the identity ReadRange selects it by.
 ///
 /// The records align element for element with
-/// [`crate::traits::BACnetObject::log_record_identities_internal`]. A page
+/// [`crate::traits::LogBuffer::record_identities`]. A page
 /// encodes only the records it visits, and the built-in logs find them
 /// without walking the whole buffer, so a narrow window over a full log
 /// stays cheap (#1536).
@@ -158,7 +158,7 @@ pub const ANY_VALUE_MAX_OCTETS: usize = 256;
 
 /// Stable object-owned identity for one resident log record.
 ///
-/// Identity views returned by [`crate::traits::BACnetObject::log_record_identities_internal`]
+/// Identity views returned by [`crate::traits::LogBuffer::record_identities`]
 /// are ordered oldest-to-newest and align element-for-element with the owning
 /// object's resident records and `LOG_BUFFER` projection. Sequence numbers are
 /// always nonzero. Event and Trend logs count in Unsigned32 and wrap from

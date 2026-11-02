@@ -11,7 +11,12 @@ use bacnet_types::bitstring::LogStatus;
 use bacnet_types::primitives::StatusFlags;
 
 fn records(db: &ObjectDatabase, oid: ObjectIdentifier) -> Vec<BACnetLogRecord> {
-    let records = db.get(&oid).unwrap().log_buffer_internal().unwrap();
+    let records = db
+        .get(&oid)
+        .unwrap()
+        .log_buffer()
+        .and_then(|log| log.buffer_records())
+        .unwrap();
     (0..records.record_count())
         .map(|index| {
             let mut bytes = BytesMut::new();

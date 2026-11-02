@@ -98,6 +98,9 @@ mod event_reporting_tests;
 mod evaluation_capability_tests;
 
 #[cfg(test)]
+mod log_file_capability_tests;
+
+#[cfg(test)]
 mod schedule_capability_tests;
 
 #[cfg(test)]

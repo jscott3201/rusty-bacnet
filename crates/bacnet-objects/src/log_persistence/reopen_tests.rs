@@ -61,9 +61,18 @@ pub(super) fn open(
 
 pub(super) fn add(log: &mut dyn BACnetObject, hour: u8) {
     match log.object_identifier().object_type() {
-        ObjectType::TREND_LOG => log.add_trend_record(trend_record(hour)),
-        ObjectType::EVENT_LOG => log.add_event_log_record(event_record(hour)),
-        _ => log.add_trend_multiple_record(multiple_record(hour)),
+        ObjectType::TREND_LOG => log
+            .log_buffer_mut()
+            .unwrap()
+            .add_trend_record(trend_record(hour)),
+        ObjectType::EVENT_LOG => log
+            .log_buffer_mut()
+            .unwrap()
+            .add_event_log_record(event_record(hour)),
+        _ => log
+            .log_buffer_mut()
+            .unwrap()
+            .add_trend_multiple_record(multiple_record(hour)),
     }
     .unwrap();
 }
@@ -128,7 +137,10 @@ fn settings(log: &dyn BACnetObject) -> Vec<Option<PropertyValue>> {
 
 /// Every resident record as ReadRange serves it, with its sequence number.
 pub(super) fn served(log: &dyn BACnetObject) -> Vec<(u64, Vec<u8>)> {
-    let buffer = log.log_buffer_internal().unwrap();
+    let buffer = log
+        .log_buffer()
+        .and_then(|log| log.buffer_records())
+        .unwrap();
     (0..buffer.record_count())
         .map(|index| {
             let mut bytes = BytesMut::new();
@@ -210,7 +222,7 @@ fn a_reopened_log_serves_its_buffer_and_settings_plus_one_interruption() {
             clock: Some(HandClock::at(13)),
             ..crate::traits::Clocks::default()
         });
-        log.refresh_log_window_internal();
+        log.log_buffer_mut().unwrap().refresh_window();
         assert_eq!(total(log.as_ref()), before.1 + 1, "{kind:?}");
     }
 }

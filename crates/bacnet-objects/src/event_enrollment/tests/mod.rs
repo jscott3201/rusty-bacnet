@@ -1,3 +1,4 @@
+mod acknowledge;
 mod alert;
 mod atomic_commit;
 mod detection_enable;

@@ -19,9 +19,7 @@ use super::references::{self, MAX_LOG_DEVICE_OBJECT_PROPERTIES};
 use crate::clock::ClockReader;
 use crate::common;
 use crate::device_reference;
-use crate::log_buffer::{
-    LogBufferRecords, LogRecordBuffer, LogRecordIdentity, log_buffer_read_denied,
-};
+use crate::log_buffer::{LogRecordBuffer, log_buffer_read_denied};
 use crate::log_lifecycle::LogLifecycle;
 use crate::log_persistence::store::{DurableLog, LogStore};
 use crate::log_reporting::{BufferReadyReporting, impl_buffer_ready_reporting};
@@ -388,7 +386,7 @@ impl BACnetObject for TrendLogMultipleObject {
             p if p == PropertyIdentifier::RELIABILITY => {
                 Ok(PropertyValue::Enumerated(self.reliability.to_raw()))
             }
-            // ReadRange pages it through `log_buffer_internal`.
+            // ReadRange pages it through `LogBuffer::buffer_records`.
             p if p == PropertyIdentifier::LOG_BUFFER => Err(log_buffer_read_denied()),
             // A BACnetARRAY: one Clause 21 encoding per element (#1234).
             p if p == PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY => common::read_array(
@@ -473,24 +471,7 @@ impl BACnetObject for TrendLogMultipleObject {
         self.store.is_some().then_some(self as _)
     }
 
-    fn log_record_identities_internal(&self) -> Option<Vec<LogRecordIdentity>> {
-        Some(self.log_buffer.identities())
-    }
-
-    fn log_buffer_internal(&self) -> Option<&dyn LogBufferRecords> {
-        Some(&self.log_buffer)
-    }
-
-    fn add_trend_multiple_record(&mut self, record: BACnetLogMultipleRecord) -> Result<(), Error> {
-        self.add_record(record)
-    }
-
-    fn refresh_log_window_internal(&mut self) -> bool {
-        self.settle_interruption(None);
-        let recorded = self.lifecycle().refresh_window();
-        self.commit_if_counted();
-        recorded
-    }
+    crate::traits::lend_log_buffer!();
 
     crate::traits::lend_event_reporting!();
 
@@ -500,6 +481,11 @@ impl BACnetObject for TrendLogMultipleObject {
 }
 
 impl_buffer_ready_reporting!(TrendLogMultipleObject, reporting, log_buffer);
+crate::traits::impl_log_buffer!(
+    TrendLogMultipleObject,
+    add_trend_multiple_record,
+    BACnetLogMultipleRecord
+);
 
 impl crate::traits::Timed for TrendLogMultipleObject {
     fn bind_clocks(&mut self, clocks: &crate::traits::Clocks) {

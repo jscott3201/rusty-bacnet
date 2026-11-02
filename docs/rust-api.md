@@ -4026,6 +4026,15 @@ behaviour, so an object without it writes nothing.
   pass calls it on every object that has the capability, before it advances
   the object's `Timed` operations, so an object that only stages writes
   needs no `Timed`.
+- **`file_storage()` and `file_storage_mut()` → `FileStorage`** (in
+  `bacnet_objects::file`), for a File object's contents. AtomicReadFile reads
+  them through the shared accessor under a read guard, and AtomicWriteFile
+  writes them through the mutable one once its read-only and access-method
+  gates pass. A File-typed object that lends none answers both services with
+  `SERVICES / FILE_ACCESS_DENIED`. An application backing a File with its own
+  storage implements `FileStorage` and lends it from both; the built-in
+  `FileObject` does. They were `file_storage_internal()` and
+  `file_storage_internal_mut()` before #2179.
 - **`local_input()` → `LocalInput`**, for an object that takes values the
   application in the same device supplies. Its one method,
   `apply_local_input(LocalInputValue)`, takes a Present_Value (built with
@@ -5390,9 +5399,11 @@ A running server records its own event notifications in every Event Log. Each
 notification it builds for an event or acknowledgment transition, intrinsic or
 from an Event Enrollment, goes through `ObjectDatabase::log_event_notification`,
 which adds a notification record stamped with the Device clock's local date and
-time to each Event Log through `BACnetObject::add_event_log_record` (the
-built-in `EventLogObject` takes it like `add_record`; the trait default refuses
-with `OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`). The rules:
+time to each Event Log through the hidden `LogBuffer` capability that
+`BACnetObject::log_buffer_mut` lends (the built-in `EventLogObject` takes it
+like `add_record`; an Event Log that lends none, or takes no event-log
+records, is skipped as `OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`). The
+rules:
 
 - The record holds the notification as recipients get it, with Process
   Identifier 0 in place of a recipient's own.
@@ -5562,8 +5573,9 @@ Trend Log Multiple, Trend Log and Event Log objects list `Log_Buffer` in their
 Property_List, but ReadProperty and ReadPropertyMultiple answer it with
 `PROPERTY / READ_ACCESS_DENIED` (also inside RPM `ALL` and `REQUIRED`):
 Clauses 12.25.14, 12.27.13 and 12.30.19 make the buffer reachable only
-through ReadRange. ReadRange reads each object's records through
-`BACnetObject::log_buffer_internal`, a `LogBufferRecords` view, and returns
+through ReadRange. ReadRange reads each object's records through the
+hidden `LogBuffer` capability that `BACnetObject::log_buffer` lends, a
+`LogBufferRecords` view from `buffer_records()`, and returns
 each item as one record framed as its Clause 21 production:
 
 | Object | Record | Codec in `bacnet_encoding::constructed` |
@@ -5611,20 +5623,29 @@ Log record stays small enough for a ReadRange page on a 480-octet APDU. A
 value no record could carry is logged as `SERVICES / OTHER`. Records an
 application adds itself are not capped.
 
-The pre-1.0 `BACnetObject` contract has two fallible trend hooks:
-`add_trend_record` for Trend Log records and `add_trend_multiple_record` for
-Trend Log Multiple records. The void hook and `try_add_trend_record_internal`
-adapter have been replaced. Custom implementations return their insertion result
-directly; the default returns `OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`.
+An application adds a record to a built-in log with the log's own
+`add_record`. The trend poller adds records through the hidden `LogBuffer`
+capability (`BACnetObject::log_buffer_mut`, #2179): its fallible
+`add_trend_record` takes Trend Log records and `add_trend_multiple_record`
+Trend Log Multiple records. Each returns its insertion result directly; the
+default, and an object that lends no `LogBuffer`, answer
+`OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`.
 The server poller (`ObjectDatabase::poll_trend_logs`) samples both object types
 and retries failed insertions without advancing its last-log time. It also
 makes one acquisition for each Trigger of a TRIGGERED log (a Trend Log
 Multiple with no members records an empty set of values, and a Trend Log
 with no reference a PROPERTY / NO_PROPERTY_SPECIFIED failure, so Trigger
 never stays TRUE), waits for each clock-aligned boundary of an aligned POLLED
-log, and on every pass calls the hidden `refresh_log_window_internal` hook on
-each Trend Log, Trend Log Multiple and Event Log, so each records its window
-opening or closing. Wrappers forward that hook, as `SourceReporter` does.
+log, and on every pass calls `LogBuffer::refresh_window` on each Trend Log,
+Trend Log Multiple and Event Log, so each records its window opening or
+closing. Wrappers forward the `log_buffer` accessors, as `SourceReporter`
+does. Two answers come from the built-in objects only, never through the
+trait or an adapter: whether a COV Trend Log is collecting (its Enable and
+Start_Time / Stop_Time window) comes from `TrendLogObject`, and whether an
+Event Log takes received notifications from `EventLogObject`. A wrapper
+installed with `ObjectDatabase::with_object_adapter` isn't consulted, so a
+wrapped COV Trend Log keeps no Enable or window gate and no baseline restart,
+and a wrapped Event Log takes no received notifications.
 `TrendLogObject::set_logging_type` returns `Result`, as Trend Log
 Multiple's does. Only POLLED and TRIGGERED logs are polled. Complete log-family
 conformance is not claimed.
