@@ -526,13 +526,25 @@ impl Request<'_> {
                 audit.lifecycle_completed(&mut db, &result);
             }
             let membership = crate::membership::settle(database, &mut db, cov_table).await;
-            (result, membership)
+            // A created Schedule runs at once with its initial values, as
+            // after a write of it, not at the next minute's pass (#2208).
+            let created = target.filter(|_| result.is_ok());
+            let schedule = crate::schedule::reevaluate_written(
+                database,
+                &mut db,
+                created.as_slice(),
+                cov_table,
+            )
+            .await;
+            (result, [membership, schedule])
         };
-        membership.merge_into(
-            &mut effects.coarse_cov_oids,
-            &mut effects.life_safety_cov_changes,
-            &mut effects.command_runs,
-        );
+        for fanout in membership {
+            fanout.merge_into(
+                &mut effects.coarse_cov_oids,
+                &mut effects.life_safety_cov_changes,
+                &mut effects.command_runs,
+            );
+        }
         match result {
             Ok(()) => self.complex_ack(ack_buf),
             Err(e) => self.error(&e),

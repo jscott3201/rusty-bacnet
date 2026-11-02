@@ -15,20 +15,45 @@
 //! string or bit string, and unspecified dates and times. The request's
 //! initial values are applied afterwards, as WriteProperty applies them.
 //!
-//! The configuration objects (Calendar, Schedule and the like) need
-//! creation-only properties and default references first (#2208); the
-//! types that model the device itself or its hardware are never created.
+//! The configuration objects clients commonly create (#2208) start inert:
+//! a Calendar with no dates, a Schedule with no references and a NULL
+//! Schedule_Default, a Notification Class with priorities 255 and no
+//! recipients, a Trend Log of [`CREATED_BUFFER_SIZE`] records with nothing
+//! to log, an Event Enrollment with no reference and the `none` event
+//! parameters, and a Structured View with no subordinates. Clause 15.3
+//! leaves the values of properties the request doesn't give to the device,
+//! and its error list has no entry for a missing property, so none of them
+//! is refused for lacking initial values: a client creates one with a few
+//! initial values and configures the rest by WriteProperty, which is how
+//! clients use the service. An object missing its reference or parameters
+//! does nothing until it has them (a Schedule writes nowhere, a Trend Log
+//! logs nothing, an Event Enrollment runs no algorithm), and starts once a
+//! write gives them, without a restart. The properties these types serve
+//! read-only (Object_Name on all but the Event Enrollment, a Notification
+//! Class's Priority and Ack_Required, a Trend Log's Buffer_Size, an Event
+//! Enrollment's Object_Property_Reference, a Structured View's node and
+//! subordinate properties) take an initial value as creation-only
+//! properties (#1429).
+//!
+//! The types that model the device itself or its hardware are never
+//! created.
 
 use crate::prelude::*;
 
-use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{EngineeringUnits, EventType, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
+use bacnet_types::primitives::PropertyValue;
 
 use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use crate::audit::{AuditPriorityPolicy, ObjectAuditPolicy};
 use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
+use crate::event_enrollment::EventEnrollmentObject;
+use crate::group::StructuredViewObject;
 use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject};
+use crate::notification_class::NotificationClass;
+use crate::schedule::{CalendarObject, ScheduleObject};
 use crate::traits::BACnetObject;
+use crate::trend::{CREATED_BUFFER_SIZE, TrendLogObject};
 use crate::value_types::{
     BitStringValueObject, CharacterStringValueObject, DatePatternValueObject,
     DateTimePatternValueObject, DateTimeValueObject, DateValueObject, IntegerValueObject,
@@ -140,6 +165,26 @@ const BUILTIN: &[(ObjectType, BuiltinConstructor)] = &[
     (ObjectType::DATETIMEPATTERN_VALUE, |instance, name, _| {
         boxed(DateTimePatternValueObject::new(instance, name))
     }),
+    (ObjectType::CALENDAR, |instance, name, _| {
+        boxed(CalendarObject::new(instance, name))
+    }),
+    (ObjectType::SCHEDULE, |instance, name, _| {
+        boxed(ScheduleObject::new(instance, name, PropertyValue::Null))
+    }),
+    (ObjectType::NOTIFICATION_CLASS, |instance, name, _| {
+        boxed(NotificationClass::new(instance, name))
+    }),
+    (ObjectType::TREND_LOG, |instance, name, _| {
+        boxed(TrendLogObject::new(instance, name, CREATED_BUFFER_SIZE))
+    }),
+    // The legacy Event_Parameters layout names no algorithm, so on a created
+    // enrollment it runs none: Event_Type reads NONE for it.
+    (ObjectType::EVENT_ENROLLMENT, |instance, name, _| {
+        boxed(EventEnrollmentObject::new(instance, name, EventType::NONE))
+    }),
+    (ObjectType::STRUCTURED_VIEW, |instance, name, _| {
+        boxed(StructuredViewObject::new(instance, name))
+    }),
 ];
 
 /// The constructor for `object_type`, or `None` when CreateObject doesn't
@@ -188,3 +233,7 @@ fn audit_policy(initial_properties: &[PropertyIdentifier]) -> ObjectAuditPolicy 
 #[cfg(test)]
 #[path = "creation_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "creation_config_tests.rs"]
+mod config_tests;

@@ -25,6 +25,11 @@
 //! localized the same way, so its members naming this device read back in
 //! the local form; a member naming another device is kept, and the Channel
 //! writes it there (#1264).
+//!
+//! So are an Event Enrollment's Object_Property_Reference and a Structured
+//! View's Subordinate_List, which take their value at creation (#2208): a
+//! reference naming this device reads back in the local form, and one naming
+//! another device is kept as given.
 
 use alloc::borrow::Cow;
 use alloc::vec::Vec;
@@ -104,10 +109,14 @@ fn rewrite(object_type: ObjectType, property: PropertyIdentifier) -> Option<Rewr
             ObjectType::SCHEDULE | ObjectType::CHANNEL,
             PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES,
         ) => Some(localize_members::<BACnetDeviceObjectPropertyReference>),
-        (ObjectType::STAGING, PropertyIdentifier::TARGET_REFERENCES) => {
+        (ObjectType::STAGING, PropertyIdentifier::TARGET_REFERENCES)
+        | (ObjectType::STRUCTURED_VIEW, PropertyIdentifier::SUBORDINATE_LIST) => {
             Some(localize_members::<BACnetDeviceObjectReference>)
         }
-        (ObjectType::AVERAGING, PropertyIdentifier::OBJECT_PROPERTY_REFERENCE)
+        (
+            ObjectType::AVERAGING | ObjectType::EVENT_ENROLLMENT,
+            PropertyIdentifier::OBJECT_PROPERTY_REFERENCE,
+        )
         | (ObjectType::TREND_LOG, PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY) => {
             Some(localize_single::<BACnetDeviceObjectPropertyReference>)
         }
@@ -405,6 +414,25 @@ mod tests {
         );
     }
 
+    /// A Structured View's Subordinate_List, which CreateObject sets, is
+    /// localized as Staging targets are (#2208).
+    #[test]
+    fn subordinates_naming_the_local_device_lose_their_device() {
+        let db = database(7);
+        let view = ObjectIdentifier::new(ObjectType::STRUCTURED_VIEW, 1).unwrap();
+        let written = encoded(&[target(1, Some(device(7))), target(2, Some(device(9)))]);
+        let expected = encoded(&[target(1, None), target(2, Some(device(9)))]);
+        assert_eq!(
+            localize(
+                &db,
+                view,
+                PropertyIdentifier::SUBORDINATE_LIST,
+                PropertyValue::ApplicationData(written)
+            ),
+            PropertyValue::ApplicationData(expected)
+        );
+    }
+
     const REFERENCE: PropertyIdentifier = PropertyIdentifier::OBJECT_PROPERTY_REFERENCE;
 
     fn averaging() -> ObjectIdentifier {
@@ -476,10 +504,17 @@ mod tests {
         ] {
             assert_eq!(localize(&db, averaging(), REFERENCE, value.clone()), value);
         }
-        // The same property of another object type is not localized.
-        let enrollment = ObjectIdentifier::new(ObjectType::EVENT_ENROLLMENT, 1).unwrap();
+        // An Event Enrollment's reference, which it takes at creation, is
+        // localized too (#2208); the same property of another object type is
+        // not.
         let named = split(member(1, Some(device(7))));
-        assert_eq!(localize(&db, enrollment, REFERENCE, named.clone()), named);
+        let enrollment = ObjectIdentifier::new(ObjectType::EVENT_ENROLLMENT, 1).unwrap();
+        assert_eq!(
+            localize(&db, enrollment, REFERENCE, named.clone()),
+            PropertyValue::ApplicationData(encoded(&[member(1, None)]))
+        );
+        let other = ObjectIdentifier::new(ObjectType::LOAD_CONTROL, 1).unwrap();
+        assert_eq!(localize(&db, other, REFERENCE, named.clone()), named);
     }
 
     #[test]

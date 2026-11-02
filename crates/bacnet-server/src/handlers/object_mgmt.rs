@@ -349,10 +349,17 @@ fn initialize(
     )
     .map_err(CreateObjectRefusal::Malformed)?;
     let value = bacnet_device_core::write::localize(db, created_oid, property, value);
+    // The object was added under its default name; a new one has to be free,
+    // and the database's name index moves along with it, whichever route
+    // sets it.
+    if property == PropertyIdentifier::OBJECT_NAME {
+        check_and_prepare_name_write(db, &created_oid, &value)
+            .map_err(CreateObjectRefusal::Failed)?;
+    }
     let object = db.get_mut(&created_oid).expect("created above");
     if array_index.is_none() && object.creation_only_properties().contains(&property) {
-        return match object.initialize_property(property, value) {
-            Ok(()) => Ok(()),
+        let applied = match object.initialize_property(property, value) {
+            Ok(()) => true,
             // A NULL is judged as on the write route.
             Err(error)
                 if bacnet_device_core::write::relinquish::is_null_octets(&pv.value)
@@ -360,16 +367,14 @@ fn initialize(
                         object, property, None, &error,
                     ) =>
             {
-                Ok(())
+                false
             }
-            Err(error) => Err(CreateObjectRefusal::Failed(error)),
+            Err(error) => return Err(CreateObjectRefusal::Failed(error)),
         };
-    }
-    // The object was added under its default name; a new one has to be free,
-    // and the write moves the database's name index along with it.
-    if property == PropertyIdentifier::OBJECT_NAME {
-        check_and_prepare_name_write(db, &created_oid, &value)
-            .map_err(CreateObjectRefusal::Failed)?;
+        if applied && property == PropertyIdentifier::OBJECT_NAME {
+            db.update_name_index(&created_oid);
+        }
+        return Ok(());
     }
     let target = WriteTarget {
         oid: created_oid,

@@ -151,11 +151,8 @@ fn rpm_group_metadata_does_not_enable_create_object() {
             ObjectType::GLOBAL_GROUP,
             ObjectIdentifier::new(ObjectType::GLOBAL_GROUP, 7).unwrap(),
         ),
-        (
-            ObjectType::STRUCTURED_VIEW,
-            ObjectIdentifier::new(ObjectType::STRUCTURED_VIEW, 7).unwrap(),
-        ),
     ];
+    // A Structured View is createable (#2208).
     for (kind, oid) in cases {
         for object_specifier in [
             ObjectSpecifier::Type(kind),

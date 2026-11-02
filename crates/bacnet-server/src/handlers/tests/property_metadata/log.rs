@@ -204,7 +204,11 @@ fn rpm_metadata_log_selectors_pics_rows_and_budgets_are_exact() {
                 assert_eq!(pics.supported_object_types.len(), 1);
                 let support = &pics.supported_object_types[0];
                 assert_eq!(support.object_type, oid.object_type());
-                assert!(!support.createable);
+                // Of the logs, only the Trend Log is createable (#2208).
+                assert_eq!(
+                    support.createable,
+                    oid.object_type() == ObjectType::TREND_LOG
+                );
                 assert!(support.deleteable);
                 let rows: Vec<_> = support
                     .supported_properties

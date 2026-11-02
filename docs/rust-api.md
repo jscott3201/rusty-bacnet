@@ -4262,10 +4262,17 @@ has no method for it (`is_createable` was removed). The server's CreateObject
 builds a type when the application registered a constructor for it
 ([CreateObject constructors](#createobject-constructors)) or the built-in
 table `bacnet_objects::creation` has one (#2172): the analog, binary and
-multi-state input, output and value types and the twelve value types
+multi-state input, output and value types, the twelve value types
 (Integer, Positive Integer, Large Analog, CharacterString, OctetString,
-BitString, Date, Time, DateTime and the three pattern types).
-`ObjectConstructors::creates(object_type)` gives that answer, and the PICS
+BitString, Date, Time, DateTime and the three pattern types), and Calendar,
+Schedule, Notification Class, Trend Log, Event Enrollment and Structured View
+(#2208). Those six start inert: a Schedule with a NULL Schedule_Default and no
+references, a Trend Log of `trend::CREATED_BUFFER_SIZE` (100) records with
+nothing to log, an Event Enrollment with no reference and the `none` event
+parameters, and so on. A create without the initial values a type needs isn't
+refused, since Clause 15.3 leaves properties the request doesn't give to the
+device; the client configures the rest by WriteProperty, and the object starts
+working then. `ObjectConstructors::creates(object_type)` gives that answer, and the PICS
 reports it. Any other type is refused with `OBJECT/UNSUPPORTED_OBJECT_TYPE`
 when the Device doesn't list it in Protocol_Object_Types_Supported, or
 `OBJECT/DYNAMIC_CREATION_NOT_SUPPORTED` when it does (#2171).
@@ -4362,9 +4369,16 @@ Positive Integer and Large Analog Value, take Units (an Enumerated up to
 65535). The Multi-state Input, Output and Value take
 Number_Of_States (1 to `multistate::MAX_NUMBER_OF_STATES`, 1024),
 which resizes State_Text. A count is refused with `PROPERTY/VALUE_OUT_OF_RANGE`
-if a value the object holds would name a state past it. WriteProperty still
-answers `PROPERTY/WRITE_ACCESS_DENIED` for each. The PICS lists each
-createable type's set.
+if a value the object holds would name a state past it. Of the configuration
+objects (#2208), Calendar, Schedule, Notification Class, Trend Log and
+Structured View take Object_Name; Notification Class takes Priority (three
+Unsigned values up to 255) and Ack_Required; Trend Log takes Buffer_Size (up to
+`trend::MAX_CREATED_BUFFER_SIZE`, 10,000); Event Enrollment takes
+Object_Property_Reference; and Structured View takes Node_Type, Node_Subtype,
+Subordinate_List and Subordinate_Annotations, the last two keeping one size
+(the later one sets it). WriteProperty still answers
+`PROPERTY/WRITE_ACCESS_DENIED` for each. The PICS lists each createable type's
+set.
 
 State_Text written whole, by WriteProperty, WritePropertyMultiple or a
 CreateObject initial value, sets Number_Of_States to its number of labels
