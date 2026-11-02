@@ -216,7 +216,11 @@ def run_command(image, variant, raw, name, binary, args):
     script = (
         f'test "$(sha256sum /target/release/{binary} | cut -d " " -f 1)" = "{expected}" '
         f"|| {{ echo 'binary hash mismatch' >&2; exit 97; }}; "
-        f"exec {' '.join(VALGRIND)} --callgrind-out-file=/out/{name}.cg /target/release/{binary} {' '.join(args)}"
+        f"{' '.join(VALGRIND)} --callgrind-out-file=/out/{name}.cg /target/release/{binary} {' '.join(args)}; "
+        # Valgrind creates its output readable by its owner only, and in the
+        # container that owner is root. Docker Desktop hides that; a Linux
+        # runner then can't read the file, so open it up and keep the status.
+        f'status=$?; chmod a+r /out/{name}.cg 2>/dev/null; exit "$status"'
     )
     return [
         "docker", "run", "--rm", "--network", "none",
