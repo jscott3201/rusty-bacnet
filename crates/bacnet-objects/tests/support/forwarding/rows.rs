@@ -147,16 +147,6 @@ pub const QUERIES: &[(&str, Query)] = &[
         format!("{:?}", o.creation_only_properties())
     }),
     ("is_deleteable", |o| o.is_deleteable().to_string()),
-    ("supports_cov", |o| o.supports_cov().to_string()),
-    // Rendered beside `supports_cov`: the probe's false must differ both from
-    // an all-default object (false, false) and from an adapter that kept the
-    // default, which follows the forwarded `supports_cov` (true, true).
-    ("supports_subscribe_cov_property", |o| {
-        format!(
-            "{:?}",
-            [o.supports_cov(), o.supports_subscribe_cov_property()]
-        )
-    }),
     ("command_runner", |o| {
         format!("{:?}", o.command_runner().map(address))
     }),
@@ -166,16 +156,7 @@ pub const QUERIES: &[(&str, Query)] = &[
     ("enrollment_eval", |o| {
         format!("{:?}", o.enrollment_eval().map(address))
     }),
-    ("supports_cov_property", |o| {
-        format!(
-            "{:?}",
-            [CUSTOM, P::DESCRIPTION].map(|p| o.supports_cov_property(p))
-        )
-    }),
-    ("cov_increment", |o| format!("{:?}", o.cov_increment())),
-    ("cov_reported_properties", |o| {
-        format!("{:?}", o.cov_reported_properties())
-    }),
+    ("cov", |o| format!("{:?}", o.cov().map(address))),
     ("calendar_state", |o| {
         format!("{:?}", o.calendar_state().map(address))
     }),
@@ -271,9 +252,6 @@ pub const COMMANDS: &[(&str, Command)] = &[
     }),
     ("schedule_runner", |o| {
         format!("{:?}", o.schedule_runner().map(|runner| address(runner)))
-    }),
-    ("set_overridden", |o| {
-        format!("{:?}", o.set_overridden(true))
     }),
     ("audit_log_mut", |o| {
         format!("{:?}", o.audit_log_mut().map(|log| address(log)))

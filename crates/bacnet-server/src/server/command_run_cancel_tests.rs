@@ -401,14 +401,16 @@ impl bacnet_objects::traits::BACnetObject for Rearmable {
         self.0.property_metadata()
     }
 
-    fn supports_cov(&self) -> bool {
-        true
+    fn cov(&self) -> Option<&dyn bacnet_objects::traits::CovReporting> {
+        Some(self)
     }
 
     fn life_safety(&mut self) -> Option<&mut dyn bacnet_objects::traits::LifeSafety> {
         Some(self)
     }
 }
+
+impl bacnet_objects::traits::CovReporting for Rearmable {}
 
 impl bacnet_objects::traits::LifeSafety for Rearmable {
     fn set_life_safety_operation_expected(

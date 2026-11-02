@@ -81,7 +81,7 @@ mod tests {
             crate::test_rows::required(&object.property_metadata()),
             required
         );
-        assert!(!object.supports_cov());
+        assert!(!object.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
         for row in object.property_metadata().iter() {
             assert_eq!(row.presence_condition, None);
             let p = row.property_identifier;

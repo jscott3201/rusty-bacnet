@@ -28,17 +28,8 @@ impl Boundary {
 }
 
 impl BACnetObject for Boundary {
-    fn supports_cov(&self) -> bool {
-        self.inner.supports_cov()
-    }
-    fn supports_subscribe_cov_property(&self) -> bool {
-        self.inner.supports_subscribe_cov_property()
-    }
-    fn supports_cov_property(&self, p: P) -> bool {
-        self.inner.supports_cov_property(p)
-    }
-    fn cov_reported_properties(&self) -> &'static [bacnet_objects::traits::CovReportedProperty] {
-        self.inner.cov_reported_properties()
+    fn cov(&self) -> Option<&dyn bacnet_objects::traits::CovReporting> {
+        self.inner.cov()
     }
     fn object_identifier(&self) -> ObjectIdentifier {
         self.inner.object_identifier()

@@ -95,6 +95,9 @@ mod local_input_tests;
 mod event_reporting_tests;
 
 #[cfg(test)]
+mod cov_reporting_tests;
+
+#[cfg(test)]
 mod evaluation_capability_tests;
 
 #[cfg(test)]

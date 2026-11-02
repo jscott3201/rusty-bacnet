@@ -236,7 +236,7 @@ mod tests {
             metadata.len()
         );
         assert!(object.is_deleteable());
-        assert!(object.supports_cov());
+        assert!(object.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
         assert_conformance(&metadata, &required);
         for row in metadata.iter() {
             object.read_property(row.property_identifier, None).unwrap();
@@ -307,7 +307,7 @@ mod tests {
             metadata.len()
         );
         assert!(object.is_deleteable());
-        assert!(object.supports_cov());
+        assert!(object.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
         assert_conformance(&metadata, &required);
         for row in metadata.iter() {
             object.read_property(row.property_identifier, None).unwrap();

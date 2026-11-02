@@ -456,6 +456,7 @@ fn point_property_list() {
 #[test]
 fn life_safety_property_cov_capabilities_are_explicit() {
     let point = LifeSafetyPointObject::new(1, "LSP-1").unwrap();
+    let point_cov = point.cov().unwrap();
     for property in [
         PropertyIdentifier::PRESENT_VALUE,
         PropertyIdentifier::STATUS_FLAGS,
@@ -463,11 +464,12 @@ fn life_safety_property_cov_capabilities_are_explicit() {
         PropertyIdentifier::SILENCED,
         PropertyIdentifier::OPERATION_EXPECTED,
     ] {
-        assert!(point.supports_cov_property(property));
+        assert!(point_cov.supports_cov_property(property));
     }
-    assert!(!point.supports_cov_property(PropertyIdentifier::MODE));
+    assert!(!point_cov.supports_cov_property(PropertyIdentifier::MODE));
 
     let zone = LifeSafetyZoneObject::new(1, "LSZ-1").unwrap();
+    let zone_cov = zone.cov().unwrap();
     for property in [
         PropertyIdentifier::PRESENT_VALUE,
         PropertyIdentifier::STATUS_FLAGS,
@@ -475,10 +477,10 @@ fn life_safety_property_cov_capabilities_are_explicit() {
         PropertyIdentifier::SILENCED,
         PropertyIdentifier::OPERATION_EXPECTED,
     ] {
-        assert!(zone.supports_cov_property(property));
+        assert!(zone_cov.supports_cov_property(property));
     }
-    assert!(!zone.supports_cov_property(PropertyIdentifier::MODE));
-    assert!(!zone.supports_cov_property(PropertyIdentifier::ACCEPTED_MODES));
+    assert!(!zone_cov.supports_cov_property(PropertyIdentifier::MODE));
+    assert!(!zone_cov.supports_cov_property(PropertyIdentifier::ACCEPTED_MODES));
 }
 
 #[test]

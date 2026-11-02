@@ -138,7 +138,7 @@ fn loop_cov_increment_is_writable_validated_and_drives_cov() {
         read(&lo, PropertyIdentifier::COV_INCREMENT),
         PropertyValue::Real(0.0)
     );
-    assert_eq!(lo.cov_increment(), Some(0.0));
+    assert_eq!(lo.cov().and_then(|cov| cov.cov_increment()), Some(0.0));
     assert!(lo.is_writable_property(PropertyIdentifier::COV_INCREMENT));
 
     lo.write_property(
@@ -148,7 +148,7 @@ fn loop_cov_increment_is_writable_validated_and_drives_cov() {
         None,
     )
     .unwrap();
-    assert_eq!(lo.cov_increment(), Some(2.5));
+    assert_eq!(lo.cov().and_then(|cov| cov.cov_increment()), Some(2.5));
 
     for (value, code) in [
         (PropertyValue::Real(-0.5), ErrorCode::VALUE_OUT_OF_RANGE),
@@ -389,14 +389,14 @@ fn loop_cov_reports_setpoint_and_controlled_variable_value() {
     use crate::traits::CovReportedProperty::Value;
     let lo = LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     assert_eq!(
-        lo.cov_reported_properties(),
+        crate::cov_reporting_tests::reported(&lo),
         [
             Value(PropertyIdentifier::SETPOINT),
             Value(PropertyIdentifier::CONTROLLED_VARIABLE_VALUE),
         ]
     );
     let list = crate::test_rows::listed(&lo.property_metadata());
-    for reported in lo.cov_reported_properties() {
+    for reported in crate::cov_reporting_tests::reported(&lo) {
         assert!(list.contains(&reported.property()));
         assert!(!reported.triggers(), "Table 13-1 reports them only");
     }

@@ -37,6 +37,7 @@ mod audit_log;
 mod audit_policy;
 mod calendar_state;
 mod command_runner;
+mod cov_reporting;
 mod enrollment_eval;
 mod event_reporting;
 mod life_safety;
@@ -59,6 +60,8 @@ pub(crate) use audit_policy::{impl_audit_policy, lend_audit_policy};
 pub use calendar_state::CalendarState;
 #[doc(hidden)]
 pub use command_runner::CommandRunner;
+pub(crate) use cov_reporting::lend_cov_reporting;
+pub use cov_reporting::{CovReportedProperty, CovReporting};
 #[doc(hidden)]
 pub use enrollment_eval::EnrollmentEval;
 pub(crate) use enrollment_eval::lend_enrollment_eval;

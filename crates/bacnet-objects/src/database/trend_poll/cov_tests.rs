@@ -350,7 +350,7 @@ fn a_target_without_a_cov_increment_logs_every_change_under_a_null_increment() {
     )
     .unwrap();
     let msv_oid = msv.object_identifier();
-    assert_eq!(msv.cov_increment(), None);
+    assert_eq!(msv.cov().and_then(|cov| cov.cov_increment()), None);
     db.add(Box::new(msv)).unwrap();
     // The log's own Client_COV_Increment is NULL by default.
     let oid = cov_log_of(&mut db, msv_oid);

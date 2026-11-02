@@ -118,8 +118,9 @@ pub enum PropertyPresenceCondition {
     /// The object reports COV, which its table's footnote makes the condition
     /// for COV_Increment (and for a Pulse Converter's COV_Period too): the
     /// analog types, Loop, Pulse Converter, the numeric value types, Lighting
-    /// Output and Staging (#2193). A row carries it only on an object whose
-    /// [`supports_cov`](crate::traits::BACnetObject::supports_cov) is true.
+    /// Output and Staging (#2193). A row carries it only on an object that
+    /// lends [`CovReporting`](crate::traits::CovReporting) through
+    /// [`cov`](crate::traits::BACnetObject::cov) and takes SubscribeCOV.
     CovReporting,
     /// A Timer's Present_Value is writable while it is in service, which
     /// requires Min_Pres_Value and Max_Pres_Value (Table 12-75 footnote 4,
