@@ -31,10 +31,12 @@ pub struct Pics {
     /// type CreateObject builds even before it has an instance. Until its
     /// first instance, a table type is described from an object its own
     /// built-in constructor makes, which the database never sees. A registered type
-    /// with no instance gets a row without property detail (no properties
-    /// and no creation-only list, deleteable as the trait default answers):
-    /// the server never calls an application's constructor just to
-    /// describe the type.
+    /// with no instance gets a row without property detail, with its
+    /// registration's creation-only list and the type's deleteability: the
+    /// server never calls an application's constructor just to describe the
+    /// type. Deleteability is the type's answer, so an Audit Reporter shows
+    /// as deleteable even while a running Audit runtime keeps one instance
+    /// from removal.
     pub supported_object_types: Vec<ObjectTypeSupport>,
     /// Services the server can initiate or execute.
     pub supported_services: Vec<ServiceSupport>,
@@ -151,7 +153,7 @@ pub struct ObjectTypeSupport {
     pub object_type: ObjectType,
     /// Whether the type can be created remotely with CreateObject: the
     /// server configuration registers a constructor for it
-    /// ([`ServerConfig::object_constructors`]), or the built-in table
+    /// ([`ServerConfig::object_types`]), or the built-in table
     /// ([`bacnet_objects::creation`]) builds it. Every createable type has a
     /// row, with or without an instance in the database: see
     /// [`Pics::supported_object_types`].

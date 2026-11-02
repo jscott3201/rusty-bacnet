@@ -12,13 +12,13 @@ use bacnet_types::error::RemoteError;
 ///
 /// This builds only the types of the built-in table,
 /// [`bacnet_objects::creation`]; the running server also builds those of
-/// its [`ObjectConstructors`](crate::server::ObjectConstructors).
+/// its [`ObjectTypeRegistry`](crate::server::ObjectTypeRegistry).
 pub fn handle_create_object(
     db: &mut ObjectDatabase,
     service_data: &[u8],
     buf: &mut BytesMut,
 ) -> Result<(), Error> {
-    let constructors = crate::server::ObjectConstructors::default();
+    let constructors = crate::server::ObjectTypeRegistry::default();
     handle_create_object_observed(db, &constructors, service_data, buf, &mut None, None)
         .map_err(CreateObjectRefusal::into_error)
 }
@@ -63,7 +63,7 @@ impl CreateObjectRefusal {
 /// allocated candidate, or final identity. Before by-type allocation it is absent.
 pub(crate) fn handle_create_object_observed(
     db: &mut ObjectDatabase,
-    constructors: &crate::server::ObjectConstructors,
+    constructors: &crate::server::ObjectTypeRegistry,
     service_data: &[u8],
     buf: &mut BytesMut,
     target: &mut Option<ObjectIdentifier>,
@@ -195,7 +195,7 @@ fn apply_sizes_first<'a>(
 /// constructor for the type comes before the built-in table's.
 fn create(
     db: &mut ObjectDatabase,
-    constructors: &crate::server::ObjectConstructors,
+    constructors: &crate::server::ObjectTypeRegistry,
     request: &CreateObjectRequest,
     target: &mut Option<ObjectIdentifier>,
 ) -> Result<ObjectIdentifier, Error> {
@@ -435,7 +435,7 @@ fn state_count(db: &ObjectDatabase, created_oid: ObjectIdentifier) -> Option<Pro
 /// ([`ObjectDatabase::check_removable`]), is OBJECT /
 /// OBJECT_DELETION_NOT_PERMITTED; the PICS reports the same type-level
 /// answer. The running server also keeps the types its
-/// [`ObjectConstructors`](crate::server::ObjectConstructors) keep from
+/// [`ObjectTypeRegistry`](crate::server::ObjectTypeRegistry) keep from
 /// deletion.
 ///
 /// Returns the removed object. Drop it after releasing the database guard,
@@ -446,14 +446,14 @@ pub fn handle_delete_object(
     db: &mut ObjectDatabase,
     service_data: &[u8],
 ) -> Result<Box<dyn bacnet_objects::traits::BACnetObject>, Error> {
-    let constructors = crate::server::ObjectConstructors::default();
+    let constructors = crate::server::ObjectTypeRegistry::default();
     delete_object(db, &constructors, service_data)
 }
 
 /// [`handle_delete_object`] with the server's registry.
 pub(crate) fn delete_object(
     db: &mut ObjectDatabase,
-    constructors: &crate::server::ObjectConstructors,
+    constructors: &crate::server::ObjectTypeRegistry,
     service_data: &[u8],
 ) -> Result<Box<dyn bacnet_objects::traits::BACnetObject>, Error> {
     let request = DeleteObjectRequest::decode(service_data).map_err(Error::into_request_reject)?;

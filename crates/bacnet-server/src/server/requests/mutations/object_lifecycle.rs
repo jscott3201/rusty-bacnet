@@ -31,7 +31,7 @@ impl Request<'_> {
             let mut target = None;
             let result = handlers::handle_create_object_observed(
                 &mut db,
-                &self.config.object_constructors,
+                &self.config.object_types,
                 &self.req.service_request,
                 &mut ack_buf,
                 &mut target,
@@ -133,7 +133,7 @@ impl Request<'_> {
             }
             let (result, removed) = match handlers::delete_object(
                 &mut db,
-                &self.config.object_constructors,
+                &self.config.object_types,
                 &self.req.service_request,
             ) {
                 Ok(removed) => (Ok(()), Some(removed)),

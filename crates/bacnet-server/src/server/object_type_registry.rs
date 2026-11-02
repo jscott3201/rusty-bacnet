@@ -1,5 +1,6 @@
-//! The application's own CreateObject constructors (#2173), and the
-//! type-level creation and deletion answers that go with them (#2179).
+//! The server's per-type lifecycle registry: the application's own
+//! CreateObject constructors (#2173), and the type-level creation and
+//! deletion answers that go with them (#2179).
 
 use super::*;
 use bacnet_objects::creation::{Creatable, CreationOnly};
@@ -8,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// A registered constructor with its object type erased. It runs
 /// synchronously with the object database write-locked; see
-/// [`ObjectConstructors::register`].
+/// [`ObjectTypeRegistry::register`].
 pub(crate) type ObjectConstructor =
     Arc<dyn Fn(ObjectIdentifier, &str) -> Result<Box<dyn BACnetObject>, Error> + Send + Sync>;
 
@@ -21,8 +22,8 @@ pub(crate) struct Registration {
 
 /// The object types an application makes creatable over the network, each
 /// with its constructor, and the types it keeps from DeleteObject, set in
-/// [`ServerConfig::object_constructors`] or through a server builder's
-/// `object_constructor`.
+/// [`ServerConfig::object_types`] or through a server builder's
+/// `object_constructor` and `keep_from_deletion`.
 ///
 /// CreateObject looks here before the built-in table,
 /// [`bacnet_objects::creation`], so a registration may stand in for a
@@ -35,12 +36,12 @@ pub(crate) struct Registration {
 /// and [`deletes`](Self::deletes) are what the CreateObject and
 /// DeleteObject handlers and the PICS read.
 #[derive(Clone, Default)]
-pub struct ObjectConstructors {
+pub struct ObjectTypeRegistry {
     by_type: BTreeMap<u32, Registration>,
     kept: BTreeSet<u32>,
 }
 
-impl ObjectConstructors {
+impl ObjectTypeRegistry {
     /// An empty registry: CreateObject builds only the built-in types.
     pub fn new() -> Self {
         Self::default()
@@ -178,9 +179,9 @@ impl ObjectConstructors {
     }
 }
 
-impl std::fmt::Debug for ObjectConstructors {
+impl std::fmt::Debug for ObjectTypeRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ObjectConstructors")
+        f.debug_struct("ObjectTypeRegistry")
             .field("created", &self.object_types().collect::<Vec<_>>())
             .field(
                 "kept_from_deletion",
@@ -199,7 +200,7 @@ fn registration_error(message: &str) -> Error {
 }
 
 /// Build the object `oid` names through an application `constructor`, as
-/// [`ObjectConstructors::register`] describes.
+/// [`ObjectTypeRegistry::register`] describes.
 pub(crate) fn construct(
     constructor: &ObjectConstructor,
     oid: ObjectIdentifier,
@@ -237,7 +238,7 @@ pub(crate) fn construct(
 macro_rules! object_constructor_builder {
     () => {
         /// Make `object_type` creatable through `constructor`; see
-        /// [`ObjectConstructors::register`], whose refusals this returns.
+        /// [`ObjectTypeRegistry::register`], whose refusals this returns.
         pub fn object_constructor<O, F>(
             mut self,
             object_type: ObjectType,
@@ -248,9 +249,16 @@ macro_rules! object_constructor_builder {
             F: Fn(ObjectIdentifier, &str) -> Result<O, Error> + Send + Sync + 'static,
         {
             self.config
-                .object_constructors
+                .object_types
                 .register(object_type, constructor)?;
             Ok(self)
+        }
+
+        /// Keep objects of `object_type` from DeleteObject; see
+        /// [`ObjectTypeRegistry::keep_from_deletion`].
+        pub fn keep_from_deletion(mut self, object_type: ObjectType) -> Self {
+            self.config.object_types.keep_from_deletion(object_type);
+            self
         }
     };
 }
@@ -269,5 +277,5 @@ impl ScServerBuilder {
 }
 
 #[cfg(test)]
-#[path = "object_constructors_tests.rs"]
+#[path = "object_type_registry_tests.rs"]
 pub(super) mod tests;

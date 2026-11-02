@@ -103,7 +103,9 @@ pub enum ReliabilityEvaluation {
 /// An accessor that only hands out `&mut` has the capability's plain name.
 /// A capability the host also reads under a shared database guard has a
 /// `&self` accessor with the plain name and a `_mut` one beside it; an
-/// object that lends one lends both. An adapter that wraps another object
+/// object that lends one lends both. One the host only ever reads has the
+/// `&self` accessor alone: [`cov`](Self::cov) and
+/// [`calendar_state`](Self::calendar_state). An adapter that wraps another object
 /// forwards every accessor to the object inside. The public capabilities are
 /// [`Timed`], [`CovReporting`], [`EventReporting`], [`LocalInput`],
 /// [`LifeSafety`], [`ReliabilityEval`], [`ScheduleRunner`],

@@ -140,9 +140,9 @@ pub struct TimeSyncData {
 
 mod config;
 pub use config::ServerConfig;
-mod object_constructors;
-pub use object_constructors::ObjectConstructors;
-pub(crate) use object_constructors::construct as construct_registered_object;
+mod object_type_registry;
+pub use object_type_registry::ObjectTypeRegistry;
+pub(crate) use object_type_registry::construct as construct_registered_object;
 mod audit_batch_queue;
 mod audit_batch_runtime;
 mod audit_context_preparation;

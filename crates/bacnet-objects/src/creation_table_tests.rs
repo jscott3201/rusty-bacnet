@@ -101,3 +101,18 @@ fn an_initializer_sets_its_own_types_objects_and_refuses_any_other() {
     }
     assert_ne!(db.get(&calendar).unwrap().object_name(), "renamed");
 }
+
+#[test]
+fn each_entrys_creation_only_answers_come_from_the_type_its_constructor_builds() {
+    // An entry's `O` and its constructor are written apart; a mismatch would
+    // route every creation-only initial value to a downcast that fails.
+    for kind in builtin_createable_types() {
+        let entry = entry(kind).unwrap();
+        let object = (entry.constructor.unwrap())(1, "made".into(), &[]).unwrap();
+        let object: &(dyn BACnetObject + 'static) = object.as_ref();
+        let built = object
+            .as_stored_any(crate::traits::ObjectStorageAccess(()))
+            .type_id();
+        assert_eq!(built, (entry.creation_only.type_id)(), "{kind:?}");
+    }
+}

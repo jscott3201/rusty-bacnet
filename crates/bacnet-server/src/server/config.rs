@@ -164,9 +164,9 @@ pub struct ServerConfig {
     pub request_admission_policy: RequestAdmissionPolicy,
     /// The application's CreateObject constructors (default: none), each
     /// making its type creatable or standing in for the built-in one. See
-    /// [`ObjectConstructors::register`] for which types it takes and how a
+    /// [`ObjectTypeRegistry::register`] for which types it takes and how a
     /// constructor must behave: it runs with the database write-locked.
-    pub object_constructors: ObjectConstructors,
+    pub object_types: ObjectTypeRegistry,
 }
 
 impl std::fmt::Debug for ServerConfig {
@@ -224,7 +224,7 @@ impl std::fmt::Debug for ServerConfig {
             .field("discovery_policy", &self.discovery_policy)
             .field("cov_policy", &self.cov_policy)
             .field("request_admission_policy", &self.request_admission_policy)
-            .field("object_constructors", &self.object_constructors)
+            .field("object_types", &self.object_types)
             .finish()
     }
 }
@@ -275,7 +275,7 @@ impl Default for ServerConfig {
             discovery_policy: DiscoveryPolicy::default(),
             cov_policy: CovPolicy::default(),
             request_admission_policy: RequestAdmissionPolicy::default(),
-            object_constructors: ObjectConstructors::default(),
+            object_types: ObjectTypeRegistry::default(),
         }
     }
 }

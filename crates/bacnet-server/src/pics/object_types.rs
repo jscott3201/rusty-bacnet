@@ -5,7 +5,7 @@ use super::*;
 
 impl PicsGenerator<'_> {
     pub(super) fn build_object_types(&self) -> Vec<ObjectTypeSupport> {
-        let constructors = &self.server_config.object_constructors;
+        let constructors = &self.server_config.object_types;
         let mut by_type: BTreeMap<u32, Vec<&dyn BACnetObject>> = BTreeMap::new();
         for (_oid, obj) in self.db.iter_objects() {
             by_type
@@ -45,7 +45,10 @@ impl PicsGenerator<'_> {
                 result.push(ObjectTypeSupport {
                     object_type,
                     createable,
-                    creation_only_properties: Vec::new(),
+                    creation_only_properties: constructors
+                        .creation_only(object_type)
+                        .properties()
+                        .to_vec(),
                     deleteable,
                     supported_properties: Vec::new(),
                 });

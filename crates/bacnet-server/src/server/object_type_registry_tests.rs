@@ -108,7 +108,7 @@ fn vendor(oid: ObjectIdentifier, name: &str) -> Result<Vendor, Error> {
 
 #[test]
 fn a_type_registers_once() {
-    let mut constructors = ObjectConstructors::new();
+    let mut constructors = ObjectTypeRegistry::new();
     constructors.register(vendor_type(), vendor).unwrap();
     assert!(constructors.contains(vendor_type()));
     let again = constructors.register::<Vendor, _>(vendor_type(), |_, _| {
@@ -133,7 +133,7 @@ fn a_type_registers_once() {
 
 #[test]
 fn only_listed_and_proprietary_types_register() {
-    let mut constructors = ObjectConstructors::new();
+    let mut constructors = ObjectTypeRegistry::new();
     // Network Security is deleted from the standard, 65 to 127 are reserved
     // standard types the Device doesn't list, and past 1023 no identifier
     // can hold the type.
@@ -175,7 +175,7 @@ fn the_builders_refuse_what_the_registry_refuses() {
 
 #[test]
 fn device_and_network_port_never_register() {
-    let mut constructors = ObjectConstructors::new();
+    let mut constructors = ObjectTypeRegistry::new();
     for kind in [ObjectType::DEVICE, ObjectType::NETWORK_PORT] {
         // Both are listed types; the node itself is what refuses them.
         assert!(bacnet_objects::device::SUPPORTED_OBJECT_TYPES.contains(&kind));
@@ -190,7 +190,7 @@ fn device_and_network_port_never_register() {
 
 #[test]
 fn creates_answers_registry_or_built_in_table() {
-    let mut constructors = ObjectConstructors::new();
+    let mut constructors = ObjectTypeRegistry::new();
     assert!(constructors.creates(ObjectType::ANALOG_VALUE));
     assert!(!constructors.creates(ObjectType::ELEVATOR_GROUP));
     assert!(!constructors.creates(vendor_type()));
@@ -222,7 +222,7 @@ fn the_pics_lists_a_registered_type_with_no_instance_without_building_one() {
     let mut registered = ServerConfig::default();
     for kind in [vendor_type(), ObjectType::ELEVATOR_GROUP] {
         registered
-            .object_constructors
+            .object_types
             .register::<Vendor, _>(kind, |_, _| panic!("the PICS never calls a constructor"))
             .unwrap();
     }
@@ -256,7 +256,7 @@ fn the_pics_reports_a_registered_type_with_an_instance_as_createable() {
     );
     let mut registered = ServerConfig::default();
     registered
-        .object_constructors
+        .object_types
         .register(vendor_type(), vendor)
         .unwrap();
     // The instance still describes the properties.
@@ -268,7 +268,7 @@ fn the_pics_reports_a_registered_type_with_an_instance_as_createable() {
 
 #[test]
 fn creation_only_and_deletion_answer_by_type() {
-    let mut constructors = ObjectConstructors::new();
+    let mut constructors = ObjectTypeRegistry::new();
     let units = [PropertyIdentifier::UNITS];
     // The built-in table answers for a type with no registration.
     assert_eq!(

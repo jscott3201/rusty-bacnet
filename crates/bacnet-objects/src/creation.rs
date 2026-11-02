@@ -95,7 +95,7 @@ pub type BuiltinConstructor = fn(
 /// [`BACnetObject`] method. The built-in types the table builds implement
 /// it, and an application implements it for a type it registers a
 /// CreateObject constructor for (the bundled server's
-/// `ObjectConstructors::register` takes the constructor's concrete type).
+/// `ObjectTypeRegistry::register` takes the constructor's concrete type).
 /// The defaults set no property only at creation, so a type with none
 /// implements it with an empty `impl`.
 pub trait Creatable: BACnetObject + Sized + 'static {
@@ -133,6 +133,9 @@ pub trait Creatable: BACnetObject + Sized + 'static {
 pub struct CreationOnly {
     properties: &'static [PropertyIdentifier],
     initialize: Initializer,
+    /// The type these answers came from, for the table's own tests.
+    #[cfg(test)]
+    type_id: fn() -> core::any::TypeId,
 }
 
 type Initializer =
@@ -143,6 +146,8 @@ impl CreationOnly {
     pub const NONE: Self = Self {
         properties: &[],
         initialize: |_, _, _| Err(crate::common::write_access_denied_error()),
+        #[cfg(test)]
+        type_id: core::any::TypeId::of::<()>,
     };
 
     /// `O`'s creation-only properties and initializer.
@@ -150,6 +155,8 @@ impl CreationOnly {
         Self {
             properties: O::CREATION_ONLY_PROPERTIES,
             initialize: initialize_as::<O>,
+            #[cfg(test)]
+            type_id: core::any::TypeId::of::<O>,
         }
     }
 
@@ -163,10 +170,13 @@ impl CreationOnly {
         self.properties.contains(&property)
     }
 
+    /// Not public API yet (#2179): the bundled server's CreateObject calls it.
+    ///
     /// Apply an initial value to the object `oid` names in `db`, through
     /// [`Creatable::initialize_property`]. An object that isn't of the type
     /// these answers came from, or isn't there, is refused with PROPERTY /
     /// WRITE_ACCESS_DENIED, as the default refuses.
+    #[doc(hidden)]
     pub fn initialize(
         &self,
         db: &mut ObjectDatabase,

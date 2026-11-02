@@ -451,9 +451,12 @@
 # grew the image by 4880 / 4728 / 5348 octets of flash; the rest of the
 # window, the series and the PRs between, comes to about 2 KB less flash,
 # near the floor of the design pass's estimate, since each accessor is a
-# vtable entry too. The last PR took 228 / 224 / 232
+# vtable entry too. The last PR saved 228 / 224 / 232
 # octets. Sizes plus 12% are looser than every objects budget but
 # riscv32imac's .rodata, which tightens to 24480; the others stay.
+# Re-measured after merging dev at c3bbc9932, whose own changes add to the
+# image: 150088 / 17944 / 169056, 149188 / 17944 / 168156 and
+# 180756 / 21856 / 202634; riscv32imac's .rodata plus 12% is still 24480.
 
 [thumbv7m-none-eabi.mstp]
 text = 18320

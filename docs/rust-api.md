@@ -4032,7 +4032,8 @@ trait of its own in `bacnet_objects::traits`, and an accessor for it on
   plain name (`timed()`). One the host also reads under a shared database
   guard has a `&self` accessor with the plain name and a `_mut` one beside it
   (`event_reporting()` and `event_reporting_mut()`); an object that lends one
-  lends both.
+  lends both. One the host only ever reads has the `&self` accessor alone:
+  `cov()` and `calendar_state()`.
 - **Adapters forward.** An object that wraps another (a read view, an
   endpoint's source Reporter) forwards every accessor to the object inside,
   so the inner object's own capability answers.
@@ -4428,7 +4429,7 @@ an Event Enrollment with no reference and the `none` event parameters, and so
 on. A create without the initial values a type needs isn't refused, since
 Clause 15.3 leaves properties the request doesn't give to the device; the
 client configures the rest by WriteProperty, and the object starts working
-then. `ObjectConstructors::creates(object_type)` gives that answer, and the
+then. `ObjectTypeRegistry::creates(object_type)` gives that answer, and the
 PICS reports it. Any other type is refused with
 `OBJECT/UNSUPPORTED_OBJECT_TYPE` when the Device doesn't list it in
 Protocol_Object_Types_Supported, or `OBJECT/DYNAMIC_CREATION_NOT_SUPPORTED`
@@ -4441,13 +4442,13 @@ when it does (#2171).
   the object unchanged on a refusal. Both default to none, so a type without
   any writes `impl Creatable for MyType {}`. Every type the table builds
   implements it, and the table erases each one into a `CreationOnly`;
-  `ObjectConstructors::creation_only(object_type)` answers for the
+  `ObjectTypeRegistry::creation_only(object_type)` answers for the
   registered type or else the table (`creation::builtin_creation_only`).
 - **Deleteability.** Every type is deleteable but Device and Network Port,
   which model the node itself (`creation::builtin_deleteable`).
-  `ObjectConstructors::keep_from_deletion(object_type)` keeps another type,
+  `ObjectTypeRegistry::keep_from_deletion(object_type)` keeps another type,
   such as one that models a fixed part of the device, and
-  `ObjectConstructors::deletes(object_type)` gives the combined answer. A
+  `ObjectTypeRegistry::deletes(object_type)` gives the combined answer. A
   kept type's DeleteObject gets `OBJECT/OBJECT_DELETION_NOT_PERMITTED` and
   the object stays; the PICS reports the same answer. Removing an object
   locally through the database isn't affected, except that the database
@@ -4465,7 +4466,7 @@ home. A method on a capability trait is reached through its accessor, as in
 `object.cov().and_then(|cov| cov.cov_increment())`, and a call on a concrete
 type needs the capability trait in scope. `property_metadata` has no default
 any more (#2181). `is_createable` went too: createability is
-`ObjectConstructors::creates(object_type)` (#2172). Accessors marked hidden
+`ObjectTypeRegistry::creates(object_type)` (#2172). Accessors marked hidden
 lend `#[doc(hidden)]` capabilities that aren't public API yet.
 
 **Time and clocks: `Timed`, lent by `timed()` (#2220)**
@@ -4564,14 +4565,16 @@ lend `#[doc(hidden)]` capabilities that aren't public API yet.
 
 | 0.15 method | In 0.16 |
 |---|---|
-| `creation_only_properties` | `Creatable::CREATION_ONLY_PROPERTIES` on the type; read with `ObjectConstructors::creation_only(type)` or `creation::builtin_creation_only(type)` |
-| `initialize_property` | `Creatable::initialize_property` on the type, applied through `CreationOnly::initialize` |
-| `is_deleteable` | `ObjectConstructors::deletes(type)`, from `creation::builtin_deleteable` and `keep_from_deletion`; `ObjectDatabase::check_removable` for an object a runtime holds |
+| `creation_only_properties` | `Creatable::CREATION_ONLY_PROPERTIES` on the type; read with `ObjectTypeRegistry::creation_only(type)` or `creation::builtin_creation_only(type)` |
+| `initialize_property` | `Creatable::initialize_property` on the type, which CreateObject applies |
+| `is_deleteable` | `ObjectTypeRegistry::deletes(type)`, from `creation::builtin_deleteable` and `keep_from_deletion`; `ObjectDatabase::check_removable` for an object a runtime holds |
 
-A registered CreateObject constructor now returns its concrete type, not a
-`Box<dyn BACnetObject>`, so the registration carries that type's
-`Creatable` answers: `register(ObjectType::from_raw(600), |oid, name|
-Ok(MyPump::new(oid, name)))` with `impl Creatable for MyPump {}`. A custom
+To register a CreateObject constructor, return the concrete type, which
+implements `Creatable`, so the registration carries its creation-only
+answers: `register(ObjectType::from_raw(600), |oid, name|
+Ok(MyPump::new(oid, name)))` with `impl Creatable for MyPump {}`, or the
+builders' `object_constructor` with the same arguments
+([CreateObject constructors](#createobject-constructors)). A custom
 adapter that wrapped another object and forwarded `is_deleteable` drops it:
 an object no longer refuses deletion itself, so keep its type from deletion
 instead.
@@ -9486,8 +9489,8 @@ CreateObject builds the types of `bacnet_objects::creation` on its own. An
 application makes its own types creatable, or replaces a built-in type's
 constructor, by registering a constructor per type (#2173):
 `ServerBuilder::object_constructor(object_type, constructor)` (also on the
-B/IP and SC builders), or `ServerConfig::object_constructors`, an
-`ObjectConstructors` whose `register` takes the same arguments. The
+B/IP and SC builders), or `ServerConfig::object_types`, an
+`ObjectTypeRegistry` whose `register` takes the same arguments. The
 constructor returns its concrete type, which implements
 `bacnet_objects::creation::Creatable`; that is where the type's
 creation-only properties come from (#2179). Every built-in type the table
@@ -9543,7 +9546,7 @@ let server = BACnetServer::bip_builder()
   client as is. A caught panic still runs the process's panic hook, which
   prints to stderr by default (and can garble a terminal UI), so refuse
   with an error, not a panic.
-- **Deletion.** `ObjectConstructors::keep_from_deletion(object_type)` keeps
+- **Deletion.** `ObjectTypeRegistry::keep_from_deletion(object_type)` keeps
   a type from DeleteObject, registered or not; every other type but Device
   and Network Port is deleteable.
 - **PICS.** A registered type reports as createable from the registry.

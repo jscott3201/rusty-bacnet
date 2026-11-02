@@ -234,7 +234,7 @@ fn delete_object_refuses_a_type_the_server_keeps() {
     let mut db = make_db_with_device_and_ai();
     let kept = object(ObjectType::from_raw(600), 3);
     db.add(Box::new(Vendor(kept))).unwrap();
-    let mut constructors = crate::server::ObjectConstructors::new();
+    let mut constructors = crate::server::ObjectTypeRegistry::new();
     constructors.keep_from_deletion(kept.object_type());
     assert!(!constructors.deletes(kept.object_type()));
     let mut request = BytesMut::new();
