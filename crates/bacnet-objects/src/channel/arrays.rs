@@ -182,6 +182,13 @@ impl ChannelConfig {
         array_index: Option<u32>,
         value: PropertyValue,
     ) -> Result<(), Error> {
+        let scalar = matches!(
+            property,
+            PropertyIdentifier::CHANNEL_NUMBER | PropertyIdentifier::ALLOW_GROUP_DELAY_INHIBIT
+        );
+        if scalar && array_index.is_some() {
+            return Err(common::property_is_not_an_array_error());
+        }
         match property {
             PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES => {
                 self.write_members(array_index, value)?;
