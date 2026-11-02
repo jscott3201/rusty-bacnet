@@ -37,6 +37,10 @@ limit. The script fails unless:
 Tool output that parses to nothing fails: the bind tables must list a
 libSystem bind, an extension module must have Python flat lookups, and every
 PE file must import kernel32.dll.
+
+With --mcpb BUNDLE=CLI, each MCP bundle passes `mcpb.py check` (#2304): its
+manifest, its version (the Cargo one), and its executable, which must be that
+CLI binary byte for byte; no other .mcpb file may be in DIR.
 """
 
 import argparse
@@ -47,6 +51,8 @@ import tarfile
 import tempfile
 import zipfile
 from pathlib import Path
+
+import mcpb
 
 GLIBC = re.compile(r"\bGLIBC_(\d+(?:\.\d+)+)\b")
 WHEEL = re.compile(r"^rusty_bacnet-(?P<ver>[^-]+)-(?P<py>[^-]+)-(?P<abi>[^-]+)-(?P<plat>[^-]+)\.whl$")
@@ -337,6 +343,33 @@ def check_binary(path, label, platform, glibc_limit, py_tag=None):
     return errors
 
 
+def release_platform(platform):
+    """The release platform (the build matrix's name) of a CLI platform tag."""
+    system, arch, _ = parse_platform(platform)
+    return f"{system}-{'arm64' if (system, arch) == ('macos', 'aarch64') else arch}"
+
+
+def check_bundles(directory, specs, cli_platforms, version, notices=None):
+    """Errors for the MCP bundles: each NAME=CLI in `specs` passes
+    mcpb.check_bundle against that CLI binary, and DIR holds no other."""
+    errors = []
+    listed = set()
+    for spec in specs:
+        name, _, cli = spec.partition("=")
+        listed.add(name)
+        if cli not in cli_platforms:
+            errors.append(f"{name}: {cli} is not one of the --cli binaries")
+        elif not (directory / name).is_file():
+            errors.append(f"missing MCP bundle {name}")
+        else:
+            errors += mcpb.check_bundle(directory / name, release_platform(cli_platforms[cli]), version,
+                                        binary=directory / cli, notices=notices)
+    for path in sorted(directory.glob("*.mcpb")):
+        if path.name not in listed:
+            errors.append(f"unexpected MCP bundle {path.name}")
+    return errors
+
+
 def check_notices(directory, wheels, version, notices):
     """Errors for wheels or an sdist whose THIRD-PARTY-NOTICES is missing or differs."""
     errors = []
@@ -368,6 +401,7 @@ def main(argv=None):
     parser.add_argument("--python", nargs="+", required=True, help="CPython versions, e.g. 3.11")
     parser.add_argument("--wheel-platform", nargs="+", required=True, help="wheel platform tags")
     parser.add_argument("--cli", nargs="+", default=[], help="NAME=PLATFORM for each CLI binary")
+    parser.add_argument("--mcpb", nargs="+", default=[], help="BUNDLE=CLI for each MCP bundle")
     args = parser.parse_args(argv)
     for platform in args.wheel_platform + [spec.partition("=")[2] for spec in args.cli]:
         try:
@@ -402,13 +436,16 @@ def main(argv=None):
             errors.append(f"missing CLI binary {cli_name}")
             continue
         errors += check_binary(path, cli_name, platform, limit)
+    cli_platforms = dict(spec.partition("=")[::2] for spec in args.cli)
+    errors += check_bundles(args.dir, args.mcpb, cli_platforms, args.release_version, args.notices)
 
     for err in errors:
         print(f"error: {err}", file=sys.stderr)
     if errors:
         return 1
     notices = f", {args.notices.name} in each" if args.notices else ""
-    print(f"OK: {len(wheels)} wheels, one sdist, {len(args.cli)} CLI binaries, glibc <= {args.glibc}{notices}")
+    print(f"OK: {len(wheels)} wheels, one sdist, {len(args.cli)} CLI binaries, {len(args.mcpb)} MCP bundles,"
+          f" glibc <= {args.glibc}{notices}")
     return 0
 
 

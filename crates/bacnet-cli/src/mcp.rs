@@ -233,6 +233,16 @@ fn unauthorized(name: &str) -> String {
     )
 }
 
+/// Why a profile that isn't there can't serve: an agent host's settings
+/// name it, so say where it was looked for and what makes one (#2304).
+fn missing(name: &str, store: &Store) -> String {
+    format!(
+        "no profile named {name} in {}: create it in `bacnet tui`, then run `bacnet mcp \
+         authorize --profile {name}` in a terminal",
+        store.root().join("profiles").display()
+    )
+}
+
 /// Why live traffic needs a profile.
 const NEEDS_PROFILE: &str = "a live MCP server needs an authorized profile: give --profile NAME \
      (authorized with `bacnet mcp authorize --profile NAME`); without one only --passive, which \
@@ -250,6 +260,9 @@ fn from_profile(cli: &Cli, name: &str) -> Result<(TransportArgs, Policy), String
         return Err(FLAGS_WITH_PROFILE.into());
     }
     let store = Store::discover()?;
+    if !store.exists(name)? {
+        return Err(missing(name, &store));
+    }
     let profile = store.load(name)?;
     let section = profile.mcp.as_deref().cloned().unwrap_or_default();
     if !section.authorized() {

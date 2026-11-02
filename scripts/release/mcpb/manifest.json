@@ -1,0 +1,50 @@
+{
+  "manifest_version": "0.3",
+  "name": "rusty-bacnet",
+  "display_name": "BACnet (rusty-bacnet)",
+  "description": "Discover and read BACnet building automation devices through a profile you authorized; read-only unless the profile allows writes.",
+  "long_description": "Runs `bacnet mcp serve --stdio` from the rusty-bacnet CLI. The server connects through a `bacnet tui` profile, whose `[mcp]` table limits the networks, devices and rates an agent may use.\n\n**Before installing**, authorize the profile in a terminal: `bacnet mcp authorize --profile NAME`. A profile that isn't authorized stops the server at start with a message that names this command.\n\nThe server is read-only by default: write tools appear only when the profile's `[mcp]` table offers them, and every write then needs a person's approval.",
+  "author": {
+    "name": "Justin Scott",
+    "url": "https://github.com/jscott3201"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jscott3201/rusty-bacnet"
+  },
+  "homepage": "https://jscott3201.github.io/rusty-bacnet/",
+  "documentation": "https://jscott3201.github.io/rusty-bacnet/guides/mcp-hosts/",
+  "support": "https://github.com/jscott3201/rusty-bacnet/issues",
+  "server": {
+    "type": "binary",
+    "mcp_config": {
+      "args": ["mcp", "serve", "--stdio", "--profile", "${user_config.profile}"],
+      "env": {}
+    }
+  },
+  "tools": [
+    { "name": "bacnet_discover", "description": "Send a Who-Is and list the devices that answer" },
+    { "name": "bacnet_find_object", "description": "Find objects across discovered devices by name, description or type" },
+    { "name": "bacnet_network_map", "description": "Show the reachable networks, their routers and devices" },
+    { "name": "bacnet_read", "description": "Read properties of an object" },
+    { "name": "bacnet_list_objects", "description": "List a device's objects" },
+    { "name": "bacnet_describe_device", "description": "Summarise a device: vendor, model, firmware, services and objects" },
+    { "name": "bacnet_read_trend", "description": "Read and summarise a trend log's records" },
+    { "name": "bacnet_read_log_records", "description": "Read and summarise an Event Log's or Audit Log's records" },
+    { "name": "bacnet_alarms", "description": "List a device's objects in alarm or fault" },
+    { "name": "bacnet_decode", "description": "Decode a BACnet frame given as hex, sending nothing" },
+    { "name": "bacnet_watch", "description": "Follow points and report which changed since the last call" }
+  ],
+  "tools_generated": true,
+  "prompts_generated": true,
+  "keywords": ["bacnet", "building-automation", "ashrae", "hvac", "iot"],
+  "license": "MIT",
+  "user_config": {
+    "profile": {
+      "type": "string",
+      "title": "Profile",
+      "description": "The name of a bacnet TUI profile that `bacnet mcp authorize --profile NAME` authorized in a terminal.",
+      "required": true
+    }
+  }
+}

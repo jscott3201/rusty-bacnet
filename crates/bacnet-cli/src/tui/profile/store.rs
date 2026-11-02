@@ -89,6 +89,15 @@ impl Store {
         names.sort();
         Ok(names)
     }
+    /// Whether profile `name` has a file, its name checked first.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
+    pub(crate) fn exists(&self, name: &str) -> Result<bool, String> {
+        match fs::metadata(self.path(name)?) {
+            Ok(_) => Ok(true),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(format!("cannot inspect profile {name}: {e}")),
+        }
+    }
     pub(crate) fn load(&self, name: &str) -> Result<Profile, String> {
         let path = self.path(name)?;
         if fs::metadata(&path)
