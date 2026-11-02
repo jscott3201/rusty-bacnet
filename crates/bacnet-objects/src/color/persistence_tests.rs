@@ -215,6 +215,26 @@ fn version_2_files_are_strict_and_version_1_still_loads() {
     );
 }
 
+/// A version 1 file loads, and saving what it held writes version 2, which
+/// loads back the same.
+#[test]
+fn a_version_1_file_saves_back_as_version_2() {
+    let case = FileCase::new();
+    let half = 0.5f32.to_be_bytes();
+    write_body(&case, color_oid(), &[&[1u8][..], &half, &half].concat());
+    let loaded = case.store().load(color_oid()).unwrap().unwrap();
+    assert_eq!(
+        loaded,
+        ColorOutputSnapshot {
+            present_value: Some(ColorOutputValue::Xy(BACnetXyColor::new(0.5, 0.5))),
+            default: None,
+        }
+    );
+    case.store().save(color_oid(), &loaded).unwrap();
+    assert_eq!(&std::fs::read(&case.path).unwrap()[..8], b"RBNCLR02");
+    assert_eq!(case.store().load(color_oid()).unwrap(), Some(loaded));
+}
+
 #[test]
 fn the_wrong_kind_of_value_does_not_build() {
     let kelvin = Memory::holding(ColorOutputValue::Kelvin(3000));

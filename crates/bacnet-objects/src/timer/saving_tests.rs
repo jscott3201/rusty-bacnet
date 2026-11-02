@@ -229,3 +229,34 @@ fn a_saved_set_the_timer_would_refuse_fails_the_build() {
     assert!(restored.state_change_saved());
     assert_eq!(read(&restored, PRIORITY, None), PropertyValue::Unsigned(16));
 }
+
+/// Clearing the written set lets the configured one apply again, now and
+/// after a rebuild; a clear storage refuses keeps the written set.
+#[test]
+fn clearing_the_written_set_lets_the_configured_one_apply() {
+    let storage = MemoryConfig::new();
+    timer(&storage, 1.0)
+        .write_property(VALUES, Some(1), PropertyValue::Real(42.0), None)
+        .unwrap();
+    let mut rebuilt = timer(&storage, 3.0);
+    assert!(rebuilt.state_change_saved());
+    storage.fail(true);
+    assert!(rebuilt.clear_written_state_change().is_err());
+    assert!(rebuilt.state_change_saved());
+    storage.fail(false);
+    rebuilt.clear_written_state_change().unwrap();
+    assert!(!rebuilt.state_change_saved());
+    assert_eq!(
+        storage.saved(),
+        Some(WriteConfigSnapshot::Timer(TimerWriteConfig::default()))
+    );
+    // Served as it was until the setter applies.
+    assert_eq!(read(&rebuilt, VALUES, Some(1)), PropertyValue::Real(42.0));
+    rebuilt
+        .set_state_change(values(3.0), vec![reference(1)], 9)
+        .unwrap();
+    assert_eq!(read(&rebuilt, VALUES, Some(1)), PropertyValue::Real(3.0));
+    drop(rebuilt);
+    let again = timer(&storage, 5.0);
+    assert_eq!(read(&again, VALUES, Some(1)), PropertyValue::Real(5.0));
+}

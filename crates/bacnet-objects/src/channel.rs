@@ -180,9 +180,12 @@ impl ChannelObject {
     /// NO_SPACE_TO_WRITE_PROPERTY past [`MAX_CHANNEL_MEMBERS`].
     ///
     /// On a Channel [`with_persistence`](Self::with_persistence) whose
-    /// storage holds a member list a write set, the saved list wins: the
-    /// members are checked but not taken. So do the setters below for the
-    /// parts they configure.
+    /// storage holds a member list a write set, the saved list wins, so an
+    /// application that sets its configuration at each start keeps a peer's
+    /// write: the members are checked but not taken. So do the setters below
+    /// for the parts they configure.
+    /// [`clear_written_config`](Self::clear_written_config) lets them all
+    /// apply again.
     pub fn set_members(
         &mut self,
         members: Vec<BACnetDeviceObjectPropertyReference>,

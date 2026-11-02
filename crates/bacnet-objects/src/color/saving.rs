@@ -246,8 +246,9 @@ impl OutputStorage {
         {
             match claimed {
                 Ok(default) => store.take_default(default),
-                // Storage keeps what it held; the next change saves again.
-                Err(_) => store.queued = None,
+                // Storage keeps what it held: save the Present_Value changes
+                // that waited for the refused default.
+                Err(_) => store.queue(),
             }
             store.after_staging();
             return claimed.map_err(refused);
@@ -264,6 +265,32 @@ impl OutputStorage {
         store.queued = Some(saved);
         store.take_default(default);
         Ok(default)
+    }
+
+    /// Drop a default a write saved, so storage keeps none and the object's
+    /// default setter applies again. The default served now stays until the
+    /// setter or a write changes it. Saves where it is and waits for the
+    /// save; one that fails keeps the written default and returns storage's
+    /// error. Nothing to do without storage or a written default.
+    pub(super) fn clear_written_default(&mut self) -> Result<(), Error> {
+        let Some(store) = &mut self.0 else {
+            return Ok(());
+        };
+        if store.current.default.is_none() {
+            return Ok(());
+        }
+        let cleared = ColorOutputSnapshot {
+            default: None,
+            ..store.current
+        };
+        store.saves.save_now(cleared)?;
+        store.queued = Some(cleared);
+        store.current = cleared;
+        // A staged default worked out before this gives way, and keeps the
+        // cleared state as what is served.
+        store.default_writes = store.default_writes.wrapping_add(1);
+        store.after_staging();
+        Ok(())
     }
 
     /// See [`DurableWrites::release_staged_write`](crate::durable::DurableWrites::release_staged_write).

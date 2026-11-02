@@ -121,7 +121,10 @@ impl TimerObject {
     ///
     /// On a Timer [`with_persistence`](Self::with_persistence) whose storage
     /// holds a set a write made ([`state_change_saved`](Self::state_change_saved)),
-    /// the saved set wins: the arguments are checked but not taken.
+    /// the saved set wins, so an application that sets its configuration at
+    /// each start keeps a peer's write: the arguments are checked but not
+    /// taken, and [`clear_written_state_change`](Self::clear_written_state_change)
+    /// lets them apply again.
     pub fn set_state_change(
         &mut self,
         values: StateChangeValues,

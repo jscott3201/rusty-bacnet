@@ -26,6 +26,7 @@ fn python_storage_path_keeps_the_saved_value_over_present_value() {
         present_value: Some(BACnetXyColor::new(present.0, present.1)),
         default: Some(BACnetXyColor::new(0.0, 0.0)),
         storage_path: path.to_str(),
+        clear_written_default: false,
     };
     let mut first = color(1, "C", output((0.25, 0.5))).unwrap();
     assert!(!first.output_restored());
@@ -53,6 +54,7 @@ fn python_color_temperature_keywords_clamp_and_keep_the_saved_value() {
         present_value: Some(present),
         default: Some(9_000),
         storage_path: path.to_str(),
+        clear_written_default: false,
     };
     let first = color_temperature(1, "CT", Some((2_000, 6_500)), output(2_700)).unwrap();
     assert_eq!(first.default_color_temperature(), 6_500);

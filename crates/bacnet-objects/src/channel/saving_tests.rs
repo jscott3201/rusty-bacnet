@@ -230,3 +230,24 @@ fn a_saved_configuration_the_channel_would_refuse_fails_the_build() {
     .unwrap();
     assert_eq!(read(&restored, NUMBER), PropertyValue::Unsigned(300));
 }
+
+/// Clearing the written parts lets the configured ones apply again, now and
+/// after a rebuild.
+#[test]
+fn clearing_the_written_config_lets_the_configured_one_apply() {
+    let storage = MemoryConfig::new();
+    write(&mut channel(&storage), GROUPS, None, unsigned_list(&[5, 6])).unwrap();
+    let mut rebuilt = channel(&storage);
+    assert!(rebuilt.saved().groups);
+    rebuilt.clear_written_config().unwrap();
+    assert!(!rebuilt.saved().groups);
+    assert_eq!(
+        storage.saved(),
+        Some(WriteConfigSnapshot::Channel(ChannelWriteConfig::default()))
+    );
+    assert_eq!(read(&rebuilt, GROUPS), unsigned_list(&[5, 6]));
+    rebuilt.set_control_groups(vec![2]).unwrap();
+    assert_eq!(read(&rebuilt, GROUPS), unsigned_list(&[2]));
+    drop(rebuilt);
+    assert_eq!(read(&channel(&storage), GROUPS), unsigned_list(&[2]));
+}

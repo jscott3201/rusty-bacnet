@@ -75,6 +75,15 @@ impl TimerObject {
                 .is_some_and(|change| change.set.written)
     }
 
+    /// Drop the set a write saved: storage keeps none from now on, so
+    /// [`set_state_change`](Self::set_state_change) applies again. The set
+    /// served now stays until it, or a write, changes it. Saves before it
+    /// returns; a save that fails keeps the written set and returns
+    /// storage's error. Does nothing without storage or a written set.
+    pub fn clear_written_state_change(&mut self) -> Result<(), Error> {
+        saving::clear(self)
+    }
+
     /// Block until the saves queued so far have run. Dropping the Timer
     /// waits for them too.
     pub fn wait_for_saves(&self) {
@@ -134,6 +143,10 @@ impl ConfigWrites for TimerObject {
 
     fn next(set: &TimerSet, write: &PendingWrite) -> Result<TimerSet, Error> {
         set.after_write(write.property, write.array_index, &write.value)
+    }
+
+    fn unwrite(set: &mut TimerSet) {
+        set.written = false;
     }
 }
 

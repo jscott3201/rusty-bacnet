@@ -2,7 +2,6 @@
 section: Added
 ---
 - Timers and Channels built `with_persistence` keep the configuration a peer
-  writes across a restart: a Timer's State_Change_Values, references and
-  Priority_For_Writing, and a Channel's members, delays, Channel_Number,
-  Control_Groups and delay inhibit. A write that can't be saved is refused
-  (#2243).
+  writes across a restart, refusing a write they can't save; a saved part
+  wins over its setter until `clear_written_state_change` or
+  `clear_written_config` drops it (#2243).

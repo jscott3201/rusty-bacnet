@@ -193,7 +193,10 @@ impl ColorObject {
     ///
     /// This configures the default; it is not saved. Once storage holds a
     /// default a write set ([`with_output_persistence`](Self::with_output_persistence)),
-    /// that one wins: the colour is checked but not taken.
+    /// that one wins, so an application that sets its configuration at each
+    /// start keeps a peer's write: the colour is checked but not taken, and
+    /// [`clear_written_default`](Self::clear_written_default) lets it apply
+    /// again.
     pub fn set_default_color(&mut self, color: BACnetXyColor) -> Result<(), Error> {
         if !command::xy_in_range(color) {
             return Err(common::value_out_of_range_error());
@@ -202,6 +205,23 @@ impl ColorObject {
             self.default_color = color;
         }
         Ok(())
+    }
+
+    /// Whether storage holds a Default_Color a write set, now or before a
+    /// restart, which [`set_default_color`](Self::set_default_color) then
+    /// leaves alone. Always false without storage.
+    pub fn default_color_saved(&self) -> bool {
+        self.output.default_saved()
+    }
+
+    /// Drop the Default_Color a write saved (#1956): storage keeps none
+    /// from now on, so [`set_default_color`](Self::set_default_color)
+    /// applies again. The default served now stays until it, or a write,
+    /// changes it. Saves before it returns; a save that fails keeps the
+    /// written default and returns storage's error. Does nothing without
+    /// storage or a written default.
+    pub fn clear_written_default(&mut self) -> Result<(), Error> {
+        self.output.clear_written_default()
     }
 
     /// Stage the request's Default_Color writes on the output storage.

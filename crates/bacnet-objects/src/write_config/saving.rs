@@ -77,6 +77,9 @@ pub(crate) trait ConfigWrites {
     /// The configuration `write` leaves on top of `config`, or the
     /// object's refusal of it.
     fn next(config: &Self::Config, write: &PendingWrite) -> Result<Self::Config, Error>;
+
+    /// Mark every part of `config` as one no write has set.
+    fn unwrite(config: &mut Self::Config);
 }
 
 /// Run `f` on `object`'s storage; then, if `f` dropped a staged write,
@@ -125,6 +128,30 @@ pub(crate) fn write<T: ConfigWrites>(object: &mut T, write: PendingWrite) -> Res
         storage.save_now(snapshot).map_err(refused)?;
     }
     object.install(next);
+    Ok(())
+}
+
+/// Drop every part a write saved, so storage keeps none and the setters
+/// apply again; the configuration served stays until they change it. Saves
+/// where it is and waits for the save; one that fails keeps the written
+/// parts and returns storage's error. Nothing to do when nothing is written.
+pub(crate) fn clear<T: ConfigWrites>(object: &mut T) -> Result<(), Error> {
+    let Some(config) = object.config() else {
+        return Ok(());
+    };
+    let mut next = config.clone();
+    T::unwrite(&mut next);
+    let cleared = T::snapshot(Some(&next));
+    if cleared == T::snapshot(object.config()) {
+        return Ok(());
+    }
+    if let Some(storage) = object.storage().as_mut() {
+        storage.save_now(cleared)?;
+    }
+    // Counted, so a step staged from the written configuration gives way.
+    object.install(next);
+    // A step still staged keeps the cleared configuration as what is served.
+    with_storage(object, |_| ());
     Ok(())
 }
 

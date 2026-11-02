@@ -108,6 +108,15 @@ impl ChannelObject {
         }
     }
 
+    /// Drop every part a write saved: storage keeps none from now on, so the
+    /// setters apply again. The configuration served now stays until they,
+    /// or a write, change it. Saves before it returns; a save that fails
+    /// keeps the written parts and returns storage's error. Does nothing
+    /// without storage or a written part.
+    pub fn clear_written_config(&mut self) -> Result<(), Error> {
+        saving::clear(self)
+    }
+
     /// Block until the saves queued so far have run. Dropping the Channel
     /// waits for them too.
     pub fn wait_for_saves(&self) {
@@ -166,6 +175,10 @@ impl ConfigWrites for ChannelObject {
 
     fn saves(property: PropertyIdentifier) -> bool {
         ChannelConfig::written_by(property)
+    }
+
+    fn unwrite(config: &mut ChannelConfig) {
+        config.written = Written::default();
     }
 
     fn next(config: &ChannelConfig, write: &PendingWrite) -> Result<ChannelConfig, Error> {

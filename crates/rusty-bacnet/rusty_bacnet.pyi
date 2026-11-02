@@ -5442,6 +5442,7 @@ class BACnetServer:
         present_value: Optional[tuple[float, float]] = None,
         default_color: Optional[tuple[float, float]] = None,
         storage_path: Optional[str] = None,
+        clear_written_default: bool = False,
         value_source_tracking: bool = False,
         tags: Optional[list[NameValue]] = None,
         profile_location: Optional[str] = None,
@@ -5462,8 +5463,9 @@ class BACnetServer:
         In_Progress reads NOT_CONTROLLED until a write drives the output.
         The file keeps a Default_Color written over the network too, which
         wins over ``default_color`` at the next start; such a write is
-        refused when it can't be saved. A file that doesn't load raises
-        BacnetError."""
+        refused when it can't be saved. ``clear_written_default=True`` drops
+        a saved one first, so ``default_color`` applies again. A file that
+        doesn't load raises BacnetError."""
         ...
     def add_color_temperature(
         self,
@@ -5475,6 +5477,7 @@ class BACnetServer:
         max_pres_value: Optional[int] = None,
         default_color_temperature: Optional[int] = None,
         storage_path: Optional[str] = None,
+        clear_written_default: bool = False,
         value_source_tracking: bool = False,
         tags: Optional[list[NameValue]] = None,
         profile_location: Optional[str] = None,
@@ -5487,9 +5490,9 @@ class BACnetServer:
         clamped to them. A value out of range raises BacnetProtocolError.
         ``value_source_tracking`` is as on ``add_color``.
         ``default_color_temperature`` (4000 unless given, clamped to the
-        limits) and ``storage_path`` work as ``default_color`` and
-        ``storage_path`` on ``add_color``, with 0 keeping the temperature
-        from before the restart."""
+        limits), ``storage_path`` and ``clear_written_default`` work as on
+        ``add_color``, with 0 keeping the temperature from before the
+        restart."""
         ...
     def add_channel(
         self,

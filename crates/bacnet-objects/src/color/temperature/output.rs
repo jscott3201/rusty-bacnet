@@ -105,7 +105,9 @@ impl ColorTemperatureObject {
     ///
     /// This configures the default; it is not saved. Once storage holds a
     /// default a write set ([`with_output_persistence`](Self::with_output_persistence)),
-    /// that one wins: the value is checked but not taken.
+    /// that one wins, as on a Color object: the value is checked but not
+    /// taken, and [`clear_written_default`](Self::clear_written_default)
+    /// lets it apply again.
     pub fn set_default_color_temperature(&mut self, kelvin: u32) -> Result<(), Error> {
         let default = match kelvin {
             0 => 0,
@@ -115,6 +117,20 @@ impl ColorTemperatureObject {
             self.default_color_temperature = default;
         }
         Ok(())
+    }
+
+    /// Whether storage holds a Default_Color_Temperature a write set, now or
+    /// before a restart. Always false without storage.
+    pub fn default_color_temperature_saved(&self) -> bool {
+        self.output.default_saved()
+    }
+
+    /// Drop the Default_Color_Temperature a write saved (#1956), as a Color
+    /// object's
+    /// [`clear_written_default`](super::super::ColorObject::clear_written_default)
+    /// does.
+    pub fn clear_written_default(&mut self) -> Result<(), Error> {
+        self.output.clear_written_default()
     }
 
     /// A Default_Color_Temperature write. Clause 12.Y.8 clamps it as

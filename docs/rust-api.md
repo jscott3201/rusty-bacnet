@@ -6046,7 +6046,10 @@ included, before the Timer serves them, and is refused with DEVICE /
 OPERATIONAL_PROBLEM, leaving the set as it was, when the save fails. A Timer
 rebuilt on the same storage serves the saved set, and `set_state_change`
 then checks its arguments without taking them (`state_change_saved` says
-so). The state machine is not kept: the Timer still starts IDLE. Storage is
+so), so an application that sets its configuration at each start keeps a
+peer's write. `clear_written_state_change` drops the saved set (saving
+that, and returning storage's error if the save fails) so the setter
+applies again. The state machine is not kept: the Timer still starts IDLE. Storage is
 an `Arc<dyn WriteConfigPersistence>` (`bacnet_objects::write_config`), which a
 Channel uses too; `FileWriteConfigPersistence::new(path)` is the bundled
 backend, one file per object, replaced whole through a synchronized temporary
@@ -6706,7 +6709,10 @@ last value at the next start. Unlike Present_Value, a default write saves
 before the object serves it and is refused with DEVICE / OPERATIONAL_PROBLEM,
 keeping the old default, when the save fails; a written default wins over
 the one `set_default_color` or `set_default_color_temperature` configures at
-the next start. A `ColorOutputSnapshot` holds both, each an `Option`: a
+the next start (`default_color_saved` and `default_color_temperature_saved`
+say so) until `clear_written_default` drops it. In Python,
+`clear_written_default=True` on `add_color` and `add_color_temperature` does
+the same before `default_color` applies. A `ColorOutputSnapshot` holds both, each an `Option`: a
 Present_Value once something drove the output, a default once a write set it.
 `FileColorOutputPersistence::new(path)` is the bundled backend: a tagged
 header with the object identifier, a kind octet, then Present_Value and the
@@ -6743,8 +6749,9 @@ same `WriteConfigPersistence` storage a Timer uses. Each write saves before the
 Channel serves it, and is refused with DEVICE / OPERATIONAL_PROBLEM when the
 save fails. The members and their delays are kept together. A part a write
 saved wins over the configured one at the next start: its setter checks its
-argument without taking it. Parts nobody wrote take what the application
-configures, and Present_Value, Write_Status and Reliability start afresh.
+argument without taking it, until `clear_written_config` drops every saved
+part. Parts nobody wrote take what the application configures, and
+Present_Value, Write_Status and Reliability start afresh.
 
 Present_Value takes any primitive value or one of the constructed
 alternatives: a lighting command framed in context tag 0, or, as Addendum

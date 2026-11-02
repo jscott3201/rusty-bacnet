@@ -386,6 +386,79 @@ fn a_joined_stage_released_unmade_lets_both_go() {
     assert_eq!(storage.held().and_then(|saved| saved.default), None);
 }
 
+/// Clearing a written default lets the configured one apply again, now and
+/// after a restart.
+#[test]
+fn clearing_a_written_default_lets_the_configured_one_apply() {
+    let storage = Arc::new(Memory::default());
+    let zero = xy_value(BACnetXyColor::new(0.0, 0.0));
+    color(&storage)
+        .write_property(P::DEFAULT_COLOR, None, zero, None)
+        .unwrap();
+    let mut rebuilt = color(&storage);
+    assert!(rebuilt.default_color_saved());
+    rebuilt.clear_written_default().unwrap();
+    assert!(!rebuilt.default_color_saved());
+    assert_eq!(storage.held().unwrap().default, None);
+    rebuilt.set_default_color(d65()).unwrap();
+    assert_eq!(rebuilt.default_color(), d65());
+    drop(rebuilt);
+    assert_eq!(color(&storage).default_color(), d65());
+
+    let storage = Arc::new(Memory::default());
+    temperature(&storage)
+        .write_property(
+            P::DEFAULT_COLOR_TEMPERATURE,
+            None,
+            PropertyValue::Unsigned(0),
+            None,
+        )
+        .unwrap();
+    let mut rebuilt = temperature(&storage);
+    assert!(rebuilt.default_color_temperature_saved());
+    rebuilt.clear_written_default().unwrap();
+    rebuilt.set_default_color_temperature(4000).unwrap();
+    drop(rebuilt);
+    assert_eq!(temperature(&storage).default_color_temperature(), 4000);
+}
+
+/// A staged default whose save failed is refused, and the Present_Value
+/// change that waited for it is saved at once.
+#[test]
+fn a_refused_staged_default_saves_the_present_value_that_waited() {
+    let storage = Arc::new(Memory::default());
+    let mut color = color(&storage);
+    color.start_output();
+    color.wait_for_output_saves();
+    let zero = xy_value(BACnetXyColor::new(0.0, 0.0));
+    let write = PendingWrite {
+        property: P::DEFAULT_COLOR,
+        array_index: None,
+        value: zero.clone(),
+    };
+    storage.fail.store(true, Ordering::SeqCst);
+    let StageStep::Staged(wait) = color.stage_writes(core::slice::from_ref(&write)) else {
+        panic!("the default didn't stage");
+    };
+    wait.block();
+    color.set_present_value(red()).unwrap();
+    storage.fail.store(false, Ordering::SeqCst);
+    assert!(
+        color
+            .write_property(P::DEFAULT_COLOR, None, zero, None)
+            .is_err()
+    );
+    color.release_staged_write(&wait);
+    color.wait_for_output_saves();
+    assert_eq!(
+        storage.held(),
+        Some(ColorOutputSnapshot {
+            present_value: Some(ColorOutputValue::Xy(red())),
+            default: None,
+        })
+    );
+}
+
 /// The acceptance case for the writer threads: a device of many colour
 /// objects with storage, each saved once, holds no thread once they are
 /// idle (#1956).

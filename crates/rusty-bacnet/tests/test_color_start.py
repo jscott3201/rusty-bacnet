@@ -128,6 +128,19 @@ class ColorStartTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await server.stop()
 
+        # clear_written_default drops the written one, so default_color
+        # applies again, at this start and the next.
+        for boot in ("cleared", "after"):
+            with self.subTest(boot=boot):
+                server = new_server()
+                server.add_color(1, "Color", default_color=(0.64, 0.33), storage_path=path,
+                                 clear_written_default=boot == "cleared")
+                await server.start()
+                try:
+                    await self.assert_xy(server, (0.64, 0.33))
+                finally:
+                    await server.stop()
+
     async def test_a_non_zero_default_wins_over_present_value_on_every_boot(self):
         path = str(self.directory / "warm-2")
         for boot in ("first", "later"):
