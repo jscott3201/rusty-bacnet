@@ -275,4 +275,6 @@ mod pending_tests;
 #[cfg(test)]
 mod required_rows_tests;
 #[cfg(test)]
+mod round_trip_tests;
+#[cfg(test)]
 mod tests;

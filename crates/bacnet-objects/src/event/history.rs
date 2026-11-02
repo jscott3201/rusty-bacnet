@@ -35,8 +35,11 @@ pub(crate) struct EventHistory {
 ///
 /// This aggregate is staged for object-family adoption: it keeps the generic
 /// commit policy centralized while each object remains responsible for
-/// lending its own three property stores through its trait hook.
+/// lending its own three property stores through its trait hook, and its
+/// Event_Detection_Enable, so no caller can skip the detection gate.
 pub(crate) struct EventTransitionState<'a> {
+    /// Event_Detection_Enable; FALSE refuses every commit (Clause 13.2.2.1).
+    detection_enabled: bool,
     event_state: &'a mut EventState,
     acked_transitions: &'a mut EventTransitionBits,
     history: &'a mut EventHistory,
@@ -44,11 +47,13 @@ pub(crate) struct EventTransitionState<'a> {
 
 impl<'a> EventTransitionState<'a> {
     pub(crate) fn new(
+        detection_enabled: bool,
         event_state: &'a mut EventState,
         acked_transitions: &'a mut EventTransitionBits,
         history: &'a mut EventHistory,
     ) -> Self {
         Self {
+            detection_enabled,
             event_state,
             acked_transitions,
             history,
@@ -56,10 +61,18 @@ impl<'a> EventTransitionState<'a> {
     }
 
     /// Validate and commit all event properties for exactly one coordinate.
+    ///
+    /// With detection off nothing commits, NORMAL targets included: the
+    /// state machine is stopped and the event properties stay at the initial
+    /// values the disabling write restored (Clause 13.2.2.1). That reset is
+    /// made directly, never through a commit.
     pub(crate) fn commit(
         self,
         commit: EventTransitionCommit,
     ) -> Result<(), EventTransitionCommitError> {
+        if !self.detection_enabled {
+            return Err(EventTransitionCommitError::DetectionDisabled);
+        }
         let expected_coordinate = EventTransition::for_target_state(commit.change.to);
         if commit.coordinate != expected_coordinate {
             return Err(EventTransitionCommitError::CoordinateTargetMismatch {
@@ -103,8 +116,9 @@ impl<'a> EventTransitionState<'a> {
 ///
 /// The evaluation hooks only propose transitions. The commit hook lends the
 /// detector and object history to the shared kernel and finalizes private
-/// detector state only after that kernel succeeds. The gated arms enforce
-/// Clause 13.2.2.1's Event_Detection_Enable state-machine gate.
+/// detector state only after that kernel succeeds. The gated arms, and the
+/// kernel's own detection check on the commit, enforce Clause 13.2.2.1's
+/// Event_Detection_Enable state-machine gate.
 macro_rules! impl_builtin_intrinsic_reporting {
     (
         $object:ty,
@@ -165,6 +179,7 @@ macro_rules! impl_builtin_intrinsic_reporting {
             ) -> Result<(), $crate::event::EventTransitionCommitError> {
                 let change = commit.change.clone();
                 $crate::event::history::EventTransitionState::new(
+                    self.$event_detection_enable_field,
                     &mut self.$detector_field.event_state,
                     &mut self.$detector_field.acked_transitions,
                     &mut self.$history_field,
@@ -403,7 +418,7 @@ mod tests {
         history: &mut EventHistory,
         commit: EventTransitionCommit,
     ) -> Result<(), EventTransitionCommitError> {
-        EventTransitionState::new(state, acked, history).commit(commit)
+        EventTransitionState::new(true, state, acked, history).commit(commit)
     }
 
     #[test]
@@ -678,13 +693,13 @@ mod tests {
             message_text: Some("low-limit".into()),
         };
 
-        EventTransitionState::new(&mut state, &mut acked, &mut history)
+        EventTransitionState::new(true, &mut state, &mut acked, &mut history)
             .commit(first.clone())
             .unwrap();
         let expected_acked = acked;
         let expected_history = history.clone();
 
-        let error = EventTransitionState::new(&mut state, &mut acked, &mut history)
+        let error = EventTransitionState::new(true, &mut state, &mut acked, &mut history)
             .commit(first)
             .unwrap_err();
 
