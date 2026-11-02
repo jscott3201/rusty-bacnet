@@ -6,8 +6,10 @@
 //! Every logical scenario runs in BOTH `Tokio` and `DedicatedThread`
 //! execution modes with the same assertions, with standard frames and with
 //! extended frames on (`MstpEndpointBuilder::extended_frames`, #1663).
-//! Deterministic and event-driven (timeout-guarded channel receives, no
-//! sleeps).
+//! Event-driven (timeout-guarded channel receives; no fixed sleeps, only
+//! `Harness::peer_deliver`'s 1 ms counter poll). The Tokio
+//! variants run on paused time; the dedicated-thread MAC keeps the wall
+//! clock, so peer requests go through `Harness::peer_deliver` (#2269).
 //!
 //! Evidence level (simulator, NOT physical bench or on-wire conformance):
 //! this file proves single serial ownership + start-once, prompt replies via
@@ -95,7 +97,7 @@ async fn one_owner_impl(mode: MstpExecutionMode, frames: Frames) {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn mstp_one_serial_owner_tokio() {
     one_owner_impl(MstpExecutionMode::Tokio, Frames::Standard).await;
 }
@@ -105,7 +107,7 @@ async fn mstp_one_serial_owner_dedicated() {
     one_owner_impl(MstpExecutionMode::dedicated_thread(), Frames::Standard).await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn mstp_one_serial_owner_extended_tokio() {
     one_owner_impl(MstpExecutionMode::Tokio, Frames::Extended).await;
 }
@@ -117,7 +119,7 @@ async fn mstp_one_serial_owner_extended_dedicated() {
 
 async fn prompt_reply_impl(mode: MstpExecutionMode, frames: Frames) {
     let mut h = Harness::new(mode, SessionRole::Both, frames).await;
-    h.peer_send(&data_expecting(1, 9)).await;
+    h.peer_deliver(&data_expecting(1, 9)).await;
     // Prompt path: DataNotExpectingReply with NO ReplyPostponed before it.
     let mut saw_postponed = false;
     let reply = h
@@ -142,7 +144,7 @@ async fn prompt_reply_impl(mode: MstpExecutionMode, frames: Frames) {
     h.shutdown().await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn mstp_prompt_reply_tokio() {
     prompt_reply_impl(MstpExecutionMode::Tokio, Frames::Standard).await;
 }
@@ -152,7 +154,7 @@ async fn mstp_prompt_reply_dedicated() {
     prompt_reply_impl(MstpExecutionMode::dedicated_thread(), Frames::Standard).await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn mstp_prompt_reply_extended_tokio() {
     prompt_reply_impl(MstpExecutionMode::Tokio, Frames::Extended).await;
 }
@@ -165,7 +167,7 @@ async fn mstp_prompt_reply_extended_dedicated() {
 async fn bidirectional_impl(mode: MstpExecutionMode, frames: Frames) {
     let mut h = Harness::new(mode, SessionRole::Both, frames).await;
     // Inbound: peer request-in answered promptly by the server role.
-    h.peer_send(&data_expecting(1, 21)).await;
+    h.peer_deliver(&data_expecting(1, 21)).await;
     let inbound_reply = h
         .wait_for("inbound ComplexAck", |f| {
             f.frame_type == FrameType::BACNET_DATA_NOT_EXPECTING_REPLY && f.destination == PEER_MAC
@@ -208,7 +210,7 @@ async fn bidirectional_impl(mode: MstpExecutionMode, frames: Frames) {
         other => panic!("expected ConfirmedRequest, got {other:?}"),
     };
     // Peer answers with the echoed invoke ID; the client future completes.
-    h.peer_send(&MstpFrame {
+    h.peer_deliver(&MstpFrame {
         frame_type: FrameType::BACNET_DATA_NOT_EXPECTING_REPLY,
         destination: SESSION_MAC,
         source: PEER_MAC,
@@ -224,7 +226,7 @@ async fn bidirectional_impl(mode: MstpExecutionMode, frames: Frames) {
     h.shutdown().await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn mstp_bidirectional_tokio() {
     bidirectional_impl(MstpExecutionMode::Tokio, Frames::Standard).await;
 }
@@ -234,7 +236,7 @@ async fn mstp_bidirectional_dedicated() {
     bidirectional_impl(MstpExecutionMode::dedicated_thread(), Frames::Standard).await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn mstp_bidirectional_extended_tokio() {
     bidirectional_impl(MstpExecutionMode::Tokio, Frames::Extended).await;
 }
@@ -252,7 +254,7 @@ async fn deferred_impl(mode: MstpExecutionMode, frames: Frames) {
         .expect("server role")
         .suspend_next_reply()
         .expect("arm suspension");
-    h.peer_send(&data_expecting(1, 33)).await;
+    h.peer_deliver(&data_expecting(1, 33)).await;
     // The MAC releases ReplyPostponed once dispatch drops the prompt sender.
     let postponed = h
         .wait_for("ReplyPostponed", |f| {
@@ -271,7 +273,7 @@ async fn deferred_impl(mode: MstpExecutionMode, frames: Frames) {
     h.shutdown().await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn mstp_deferred_after_postponed_tokio() {
     deferred_impl(MstpExecutionMode::Tokio, Frames::Standard).await;
 }
@@ -281,7 +283,7 @@ async fn mstp_deferred_after_postponed_dedicated() {
     deferred_impl(MstpExecutionMode::dedicated_thread(), Frames::Standard).await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn mstp_deferred_after_postponed_extended_tokio() {
     deferred_impl(MstpExecutionMode::Tokio, Frames::Extended).await;
 }
