@@ -20,9 +20,10 @@ use bacnet_types::primitives::ObjectIdentifier;
 
 use super::cov_notifications_tests::recording_transport;
 use super::*;
-use crate::cov::{CovNotificationKind, CovPolicy, CovSubscription};
+use crate::cov::CovSubscription;
 use crate::handlers::{handle_subscribe_cov, handle_subscribe_cov_property_multiple_with_initial};
 use crate::server::test_transport::TestTransport;
+use bacnet_device_core::cov::{CovNotificationKind, CovPolicy};
 
 fn ai(instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::ANALOG_INPUT, instance).unwrap()
@@ -489,14 +490,16 @@ async fn disconnect_and_expiry_cleanup_releases_quota() {
     // Verify routed_b remains active
     {
         let table = server.cov_table.read().await;
-        assert!(table.contains(&crate::cov::CovSubscriptionKey::Object {
-            recipient: crate::cov::CovRecipient::from_endpoint(
-                &MacAddr::from_slice(&router_mac),
-                Some(&routed_b)
-            ),
-            process_id: 1,
-            object: ai(1)
-        }));
+        assert!(
+            table.contains(&bacnet_device_core::cov::CovSubscriptionKey::Object {
+                recipient: bacnet_device_core::cov::CovRecipient::from_endpoint(
+                    &MacAddr::from_slice(&router_mac),
+                    Some(&routed_b)
+                ),
+                process_id: 1,
+                object: ai(1)
+            })
+        );
     }
 
     // Test expiry cleanup via purge_expired

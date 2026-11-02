@@ -146,7 +146,7 @@ pub struct BACnetServer {
     atomic_write_file_budget: server::AtomicWriteFileBudget,
     read_range_budget: server::ReadRangeBudget,
     get_event_information_budget: server::GetEventInformationBudget,
-    cov_policy: server::CovPolicy,
+    cov_policy: bacnet_device_core::cov::CovPolicy,
     time_sync_policy: server::TimeSyncPolicy,
     audit_notification_sink: Option<AuditNotificationSink>,
     audit_reporters: Option<server::AuditReportersConfig>,

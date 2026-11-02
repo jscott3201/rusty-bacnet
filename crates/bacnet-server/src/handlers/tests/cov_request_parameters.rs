@@ -55,8 +55,8 @@ fn subscribe_cov_lifetime_only_preserves_whole_table_and_quota_before_lookup_or_
             assert_eq!(table.counters().snapshot(), counters);
             for before in [&finite, &expired] {
                 let after = table
-                    .get_subscription(&crate::cov::CovSubscriptionKey::Object {
-                        recipient: crate::cov::CovRecipient::from_endpoint(
+                    .get_subscription(&bacnet_device_core::cov::CovSubscriptionKey::Object {
+                        recipient: bacnet_device_core::cov::CovRecipient::from_endpoint(
                             &before.subscriber_mac,
                             None,
                         ),

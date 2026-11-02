@@ -1,5 +1,5 @@
 use super::*;
-use crate::cov::{CovRecipient, CovSample};
+use bacnet_device_core::cov::{CovRecipient, CovSample};
 use bacnet_types::MacAddr;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
@@ -569,7 +569,7 @@ pub(super) fn timed_reference(
         monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
         monitored_property_array_index: None,
         cov_increment: None,
-        notification_kind: crate::cov::CovNotificationKind::Multiple,
+        notification_kind: bacnet_device_core::cov::CovNotificationKind::Multiple,
         timestamped: true,
     }
 }
@@ -577,7 +577,7 @@ pub(super) fn timed_reference(
 #[test]
 fn empty_admissions_of_unknown_contexts_leave_no_deadline_state() {
     let mut table = crate::cov::CovSubscriptionTable::new();
-    let route = crate::cov::SubscriberEndpoint::new(&[10, 0, 0, 1, 0xBA, 0xC0], None);
+    let route = bacnet_device_core::cov::SubscriberEndpoint::new(&[10, 0, 0, 1, 0xBA, 0xC0], None);
     let expires = crate::runtime_clock::now() + std::time::Duration::from_secs(300);
     // A peer varying process and form across empty-list requests.
     for process_id in 0..64 {

@@ -12,6 +12,10 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 
 use crate::runtime_clock;
+use bacnet_device_core::cov::{
+    CovNotificationKind, CovObservation, CovPolicy, CovRecipient, CovSample, CovSubscriptionKey,
+    MultipleContextKey, SubscriberEndpoint,
+};
 
 mod identity;
 pub use identity::*;
@@ -20,11 +24,7 @@ mod admission;
 pub use admission::MultipleRefusal;
 mod confirmed;
 pub(crate) use confirmed::{BeginRefusal, CovRevisits};
-mod sample;
-pub use sample::CovSample;
-mod observation;
 mod observation_order;
-pub use observation::CovObservation;
 use observation_order::ObservationOwner;
 pub(crate) use observation_order::PreparedCovCompletion;
 pub(crate) mod flags;
@@ -90,15 +90,6 @@ impl CovSubscription {
     pub fn recipient(&self) -> CovRecipient {
         CovRecipient::from_endpoint(&self.subscriber_mac, self.subscriber_network.as_ref())
     }
-}
-
-/// COV notification service family for a stored subscription.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CovNotificationKind {
-    /// COVNotification / ConfirmedCOVNotification.
-    Single,
-    /// COVNotificationMultiple / ConfirmedCOVNotificationMultiple.
-    Multiple,
 }
 
 /// Table of active COV subscriptions.

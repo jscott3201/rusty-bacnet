@@ -105,7 +105,7 @@ async fn fixture(
 async fn baseline(
     f: &Fixture,
     sub: &CovSubscriptionSnapshot,
-) -> Option<crate::cov::CovObservation> {
+) -> Option<bacnet_device_core::cov::CovObservation> {
     f.table
         .read()
         .await
@@ -253,8 +253,8 @@ async fn cov_status_multiple_one_read_per_context_and_independent_baselines() {
     s.lock().unwrap().changing = false;
     s.lock().unwrap().selected = PropertyValue::Real(1.0);
     s.lock().unwrap().flags = flags(3);
-    let sample = crate::cov::CovSample::new(&PropertyValue::Real(1.0)).unwrap();
-    let o = crate::cov::CovObservation::new(sample, Some(&flags(3))).unwrap();
+    let sample = bacnet_device_core::cov::CovSample::new(&PropertyValue::Real(1.0)).unwrap();
+    let o = bacnet_device_core::cov::CovObservation::new(sample, Some(&flags(3))).unwrap();
     f.table.write().await.complete_for_test(&first, o.clone());
     f.table.write().await.unsubscribe(second.key());
     f.table.write().await.unsubscribe(third.key());
@@ -263,8 +263,9 @@ async fn cov_status_multiple_one_read_per_context_and_independent_baselines() {
         false,
         PropertyIdentifier::PRESENT_VALUE,
     );
-    sibling.last_notified_observation =
-        Some(crate::cov::CovObservation::new(o.sample().clone(), Some(&flags(2))).unwrap());
+    sibling.last_notified_observation = Some(
+        bacnet_device_core::cov::CovObservation::new(o.sample().clone(), Some(&flags(2))).unwrap(),
+    );
     let sibling = f.table.write().await.admit_for_test(sibling, 0).unwrap();
     f.fire(false, &[]).await;
     let payload = values(

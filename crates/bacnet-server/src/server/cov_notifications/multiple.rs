@@ -56,8 +56,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             return;
         }
 
-        let mut grouped: HashMap<crate::cov::MultipleContextKey, Vec<CovSubscriptionSnapshot>> =
-            HashMap::new();
+        let mut grouped: HashMap<
+            bacnet_device_core::cov::MultipleContextKey,
+            Vec<CovSubscriptionSnapshot>,
+        > = HashMap::new();
 
         for sub in subscriptions {
             grouped
@@ -357,7 +359,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 // earlier part (#1008), so every live one is an owner; one
                 // whose latest change the last notification carries times
                 // its field itself.
-                let owners: HashMap<Coordinate, (crate::cov::CovSubscriptionKey, u64)> = table
+                let owners: HashMap<
+                    Coordinate,
+                    (bacnet_device_core::cov::CovSubscriptionKey, u64),
+                > = table
                     .multiple_context_references(&context)
                     .filter(|other| {
                         other.timestamped
@@ -583,7 +588,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 /// establishes and the ticket that completes it.
 type Carried = (
     CovSubscriptionSnapshot,
-    crate::cov::CovObservation,
+    bacnet_device_core::cov::CovObservation,
     crate::cov::PreparedCovCompletion,
 );
 

@@ -6,7 +6,7 @@
 //! processed. A failure of the request itself keeps and reports nothing.
 use super::cov_wire_test_support::*;
 use super::*;
-use crate::cov::{CovRecipient, MultipleContextKey};
+use bacnet_device_core::cov::{CovRecipient, MultipleContextKey};
 use bacnet_objects::analog::AnalogValueObject;
 use bacnet_services::cov_multiple::COVNotificationMultipleRequest;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
@@ -240,7 +240,7 @@ async fn the_reference_past_the_subscription_cap_is_named_and_the_ones_before_it
                     monitored_property: None,
                     monitored_property_array_index: None,
                     cov_increment: None,
-                    notification_kind: crate::cov::CovNotificationKind::Single,
+                    notification_kind: bacnet_device_core::cov::CovNotificationKind::Single,
                     timestamped: false,
                 })
                 .unwrap();

@@ -94,7 +94,8 @@ fn subscribe_cov_property_handler_returns_initial_subscription() {
 
 #[test]
 fn subscribe_cov_update_existing_entry_allowed_at_capacity() {
-    use crate::cov::{AtomicCovCounters, CovPolicy};
+    use crate::cov::AtomicCovCounters;
+    use bacnet_device_core::cov::CovPolicy;
     let db = make_db_with_ai();
     let mac = vec![192, 168, 1, 1, 0xBA, 0xC0];
     let mut table = CovSubscriptionTable::with_policy(

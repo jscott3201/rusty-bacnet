@@ -70,8 +70,10 @@ fn should_notify_no_increment_first_report_fires() {
     assert!(CovSubscriptionTable::should_notify(
         &sub,
         Some(
-            &crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(1.0))
-                .unwrap()
+            &bacnet_device_core::cov::CovSample::new(
+                &bacnet_types::primitives::PropertyValue::Real(1.0)
+            )
+            .unwrap()
         ),
         None
     ));
@@ -84,8 +86,10 @@ fn should_notify_first_notification_always_fires() {
     assert!(CovSubscriptionTable::should_notify(
         &sub,
         Some(
-            &crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(72.5))
-                .unwrap()
+            &bacnet_device_core::cov::CovSample::new(
+                &bacnet_types::primitives::PropertyValue::Real(72.5)
+            )
+            .unwrap()
         ),
         Some(1.0)
     ));
@@ -95,9 +99,11 @@ fn should_notify_first_notification_always_fires() {
 fn should_notify_change_exceeds_increment() {
     let mut sub = make_sub(&[1, 2, 3], 1, ai1());
     sub.last_notified_observation = Some(
-        crate::cov::CovObservation::new(
-            crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(70.0))
-                .unwrap(),
+        bacnet_device_core::cov::CovObservation::new(
+            bacnet_device_core::cov::CovSample::new(
+                &bacnet_types::primitives::PropertyValue::Real(70.0),
+            )
+            .unwrap(),
             None,
         )
         .unwrap(),
@@ -106,8 +112,10 @@ fn should_notify_change_exceeds_increment() {
     assert!(CovSubscriptionTable::should_notify(
         &sub,
         Some(
-            &crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(72.5))
-                .unwrap()
+            &bacnet_device_core::cov::CovSample::new(
+                &bacnet_types::primitives::PropertyValue::Real(72.5)
+            )
+            .unwrap()
         ),
         Some(1.0)
     ));
@@ -117,9 +125,11 @@ fn should_notify_change_exceeds_increment() {
 fn should_notify_change_below_increment() {
     let mut sub = make_sub(&[1, 2, 3], 1, ai1());
     sub.last_notified_observation = Some(
-        crate::cov::CovObservation::new(
-            crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(72.0))
-                .unwrap(),
+        bacnet_device_core::cov::CovObservation::new(
+            bacnet_device_core::cov::CovSample::new(
+                &bacnet_types::primitives::PropertyValue::Real(72.0),
+            )
+            .unwrap(),
             None,
         )
         .unwrap(),
@@ -128,8 +138,10 @@ fn should_notify_change_below_increment() {
     assert!(!CovSubscriptionTable::should_notify(
         &sub,
         Some(
-            &crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(72.3))
-                .unwrap()
+            &bacnet_device_core::cov::CovSample::new(
+                &bacnet_types::primitives::PropertyValue::Real(72.3)
+            )
+            .unwrap()
         ),
         Some(1.0)
     ));
@@ -139,9 +151,11 @@ fn should_notify_change_below_increment() {
 fn should_notify_exact_increment() {
     let mut sub = make_sub(&[1, 2, 3], 1, ai1());
     sub.last_notified_observation = Some(
-        crate::cov::CovObservation::new(
-            crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(70.0))
-                .unwrap(),
+        bacnet_device_core::cov::CovObservation::new(
+            bacnet_device_core::cov::CovSample::new(
+                &bacnet_types::primitives::PropertyValue::Real(70.0),
+            )
+            .unwrap(),
             None,
         )
         .unwrap(),
@@ -150,8 +164,10 @@ fn should_notify_exact_increment() {
     assert!(CovSubscriptionTable::should_notify(
         &sub,
         Some(
-            &crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(71.0))
-                .unwrap()
+            &bacnet_device_core::cov::CovSample::new(
+                &bacnet_types::primitives::PropertyValue::Real(71.0)
+            )
+            .unwrap()
         ),
         Some(1.0)
     ));
@@ -161,9 +177,11 @@ fn should_notify_exact_increment() {
 fn should_notify_zero_increment_fires_on_any_change() {
     let mut sub = make_sub(&[1, 2, 3], 1, ai1());
     sub.last_notified_observation = Some(
-        crate::cov::CovObservation::new(
-            crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(72.0))
-                .unwrap(),
+        bacnet_device_core::cov::CovObservation::new(
+            bacnet_device_core::cov::CovSample::new(
+                &bacnet_types::primitives::PropertyValue::Real(72.0),
+            )
+            .unwrap(),
             None,
         )
         .unwrap(),
@@ -172,8 +190,10 @@ fn should_notify_zero_increment_fires_on_any_change() {
     assert!(CovSubscriptionTable::should_notify(
         &sub,
         Some(
-            &crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(72.001))
-                .unwrap()
+            &bacnet_device_core::cov::CovSample::new(
+                &bacnet_types::primitives::PropertyValue::Real(72.001)
+            )
+            .unwrap()
         ),
         Some(0.0)
     ));
@@ -190,9 +210,9 @@ fn should_notify_ignores_an_unchanged_value() {
         (PropertyValue::Enumerated(1), None),
     ] {
         let mut sub = make_sub(&[1, 2, 3], 1, ai1());
-        let sample = crate::cov::CovSample::new(&value).unwrap();
+        let sample = bacnet_device_core::cov::CovSample::new(&value).unwrap();
         sub.last_notified_observation =
-            Some(crate::cov::CovObservation::new(sample.clone(), None).unwrap());
+            Some(bacnet_device_core::cov::CovObservation::new(sample.clone(), None).unwrap());
         assert!(
             !CovSubscriptionTable::should_notify(&sub, Some(&sample), increment),
             "{value:?} with {increment:?}"
@@ -206,9 +226,11 @@ fn complete_for_test_updates() {
     let snapshot = table.subscribe(make_sub(&[1, 2, 3], 1, ai1())).unwrap();
     table.complete_for_test(
         &snapshot,
-        crate::cov::CovObservation::new(
-            crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(72.5))
-                .unwrap(),
+        bacnet_device_core::cov::CovObservation::new(
+            bacnet_device_core::cov::CovSample::new(
+                &bacnet_types::primitives::PropertyValue::Real(72.5),
+            )
+            .unwrap(),
             None,
         )
         .unwrap(),
@@ -218,9 +240,11 @@ fn complete_for_test_updates() {
     assert_eq!(
         subs[0].last_notified_observation,
         Some(
-            crate::cov::CovObservation::new(
-                crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(72.5))
-                    .unwrap(),
+            bacnet_device_core::cov::CovObservation::new(
+                bacnet_device_core::cov::CovSample::new(
+                    &bacnet_types::primitives::PropertyValue::Real(72.5)
+                )
+                .unwrap(),
                 None
             )
             .unwrap()
@@ -509,4 +533,38 @@ fn finest_increments_take_each_objects_smallest_live_increment_on_the_property()
         table.finest_increments(tv),
         HashMap::from([(ai1(), 0.5), (ai2(), 0.0)])
     );
+}
+
+/// The table half of the core's sample-storage test: an accepted
+/// observation shares its sample's storage, and a completion with an equal
+/// value keeps it.
+#[test]
+fn cov_sample_storage_is_shared_with_the_table() {
+    use bacnet_device_core::cov::{CovObservation, CovSample};
+    use bacnet_types::primitives::PropertyValue::{List, OctetString};
+    let a = CovSample::new(&List(vec![OctetString(vec![1])])).unwrap();
+    let b = a.clone();
+    let proposal = CovSubscription {
+        last_notified_observation: Some(CovObservation::new(a.clone(), None).unwrap()),
+        monitored_property: Some(PropertyIdentifier::PRIORITY_ARRAY),
+        ..make_sub(
+            &[1],
+            1,
+            ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 1).unwrap(),
+        )
+    };
+    let mut table = CovSubscriptionTable::with_policy(
+        CovPolicy::unlimited(),
+        Arc::new(AtomicCovCounters::default()),
+    );
+    let accepted = table.subscribe(proposal).unwrap();
+    for _ in 0..10 {
+        let held = accepted.clone();
+        let held = held.last_notified_observation.as_ref().unwrap().sample();
+        assert!(std::ptr::eq(a.value(), held.value()));
+    }
+    assert!(table.complete_for_test(&accepted, CovObservation::new(b, None).unwrap()));
+    let live = table.get_subscription(accepted.key()).unwrap();
+    let live = live.last_notified_observation.as_ref().unwrap().sample();
+    assert!(std::ptr::eq(a.value(), live.value()));
 }

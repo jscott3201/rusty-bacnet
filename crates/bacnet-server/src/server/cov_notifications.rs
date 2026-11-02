@@ -325,7 +325,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
             (|| {
                 let leading = object.read_property(lead.property(), None).ok()?;
-                let sample = crate::cov::CovSample::new(&leading).ok()?;
+                let sample = bacnet_device_core::cov::CovSample::new(&leading).ok()?;
                 let flags = crate::cov::flags::PreparedFlags::read(object).ok()?;
                 let reported = crate::cov::reported::PreparedReported::read(object).ok()?;
                 let mut buf = BytesMut::new();

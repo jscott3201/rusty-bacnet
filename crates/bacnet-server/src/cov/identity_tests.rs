@@ -12,9 +12,11 @@ fn proposal(index: Option<u32>, confirmed: bool) -> CovSubscription {
         issue_confirmed_notifications: confirmed,
         expires_at: Some(Instant::now() + Duration::from_secs(60)),
         last_notified_observation: Some(
-            crate::cov::CovObservation::new(
-                crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(1.0))
-                    .unwrap(),
+            bacnet_device_core::cov::CovObservation::new(
+                bacnet_device_core::cov::CovSample::new(
+                    &bacnet_types::primitives::PropertyValue::Real(1.0),
+                )
+                .unwrap(),
                 None,
             )
             .unwrap(),
@@ -48,9 +50,11 @@ fn cov_identity_generations_never_reuse_across_renew_cancel_or_foreign_table() {
     assert!(
         !table.complete_for_test(
             &first,
-            crate::cov::CovObservation::new(
-                crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(7.0))
-                    .unwrap(),
+            bacnet_device_core::cov::CovObservation::new(
+                bacnet_device_core::cov::CovSample::new(
+                    &bacnet_types::primitives::PropertyValue::Real(7.0)
+                )
+                .unwrap(),
                 None
             )
             .unwrap()
@@ -59,9 +63,11 @@ fn cov_identity_generations_never_reuse_across_renew_cancel_or_foreign_table() {
     assert!(
         table.complete_for_test(
             &second,
-            crate::cov::CovObservation::new(
-                crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(8.0))
-                    .unwrap(),
+            bacnet_device_core::cov::CovObservation::new(
+                bacnet_device_core::cov::CovSample::new(
+                    &bacnet_types::primitives::PropertyValue::Real(8.0)
+                )
+                .unwrap(),
                 None
             )
             .unwrap()
@@ -71,9 +77,11 @@ fn cov_identity_generations_never_reuse_across_renew_cancel_or_foreign_table() {
     assert!(
         !table.complete_for_test(
             &second,
-            crate::cov::CovObservation::new(
-                crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(9.0))
-                    .unwrap(),
+            bacnet_device_core::cov::CovObservation::new(
+                bacnet_device_core::cov::CovSample::new(
+                    &bacnet_types::primitives::PropertyValue::Real(9.0)
+                )
+                .unwrap(),
                 None
             )
             .unwrap()
@@ -83,9 +91,11 @@ fn cov_identity_generations_never_reuse_across_renew_cancel_or_foreign_table() {
     assert!(
         !table.complete_for_test(
             &second,
-            crate::cov::CovObservation::new(
-                crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(9.0))
-                    .unwrap(),
+            bacnet_device_core::cov::CovObservation::new(
+                bacnet_device_core::cov::CovSample::new(
+                    &bacnet_types::primitives::PropertyValue::Real(9.0)
+                )
+                .unwrap(),
                 None
             )
             .unwrap()
@@ -97,9 +107,11 @@ fn cov_identity_generations_never_reuse_across_renew_cancel_or_foreign_table() {
             .unwrap()
             .last_notified_observation,
         Some(
-            crate::cov::CovObservation::new(
-                crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(1.0))
-                    .unwrap(),
+            bacnet_device_core::cov::CovObservation::new(
+                bacnet_device_core::cov::CovSample::new(
+                    &bacnet_types::primitives::PropertyValue::Real(1.0)
+                )
+                .unwrap(),
                 None
             )
             .unwrap()
@@ -109,9 +121,11 @@ fn cov_identity_generations_never_reuse_across_renew_cancel_or_foreign_table() {
     assert!(
         !table.complete_for_test(
             &foreign,
-            crate::cov::CovObservation::new(
-                crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(99.0))
-                    .unwrap(),
+            bacnet_device_core::cov::CovObservation::new(
+                bacnet_device_core::cov::CovSample::new(
+                    &bacnet_types::primitives::PropertyValue::Real(99.0)
+                )
+                .unwrap(),
                 None
             )
             .unwrap()
@@ -197,9 +211,11 @@ fn cov_identity_batch_reserves_only_final_duplicates_and_exhaustion_is_atomic() 
     assert!(
         !table.complete_for_test(
             &before,
-            crate::cov::CovObservation::new(
-                crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(100.0))
-                    .unwrap(),
+            bacnet_device_core::cov::CovObservation::new(
+                bacnet_device_core::cov::CovSample::new(
+                    &bacnet_types::primitives::PropertyValue::Real(100.0)
+                )
+                .unwrap(),
                 None
             )
             .unwrap()

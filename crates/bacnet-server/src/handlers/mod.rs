@@ -34,11 +34,11 @@ use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue}
 
 use bytes::BytesMut;
 
-use crate::cov::{
-    CovNotificationKind, CovSubscription, CovSubscriptionKey, CovSubscriptionSnapshot,
-    CovSubscriptionTable, MultipleContextKey, SubscriberEndpoint,
-};
+use crate::cov::{CovSubscription, CovSubscriptionSnapshot, CovSubscriptionTable};
 use crate::device_view::DeviceReadContext;
+use bacnet_device_core::cov::{
+    CovNotificationKind, CovSubscriptionKey, MultipleContextKey, SubscriberEndpoint,
+};
 
 mod alarm_event;
 mod audit_log_query;

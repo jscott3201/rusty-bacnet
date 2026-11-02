@@ -1,5 +1,5 @@
 use super::*;
-use crate::cov::{CovObservation, CovSample};
+use bacnet_device_core::cov::{CovObservation, CovSample};
 
 fn routed(single: bool, confirmed: bool) -> CovSubscription {
     let mut sub = proposal(

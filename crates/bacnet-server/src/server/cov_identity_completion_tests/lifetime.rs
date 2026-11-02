@@ -82,8 +82,8 @@ async fn cov_lifetime_held_initial_and_fanout_expiry_admit_nothing() {
                         .unwrap()
                         .last_notified_observation,
                     Some(
-                        crate::cov::CovObservation::new(
-                            crate::cov::CovSample::new(
+                        bacnet_device_core::cov::CovObservation::new(
+                            bacnet_device_core::cov::CovSample::new(
                                 &bacnet_types::primitives::PropertyValue::Real(1.0)
                             )
                             .unwrap(),
@@ -201,9 +201,11 @@ async fn cov_lifetime_admitted_confirmed_retry_survives_expiry_and_ack_drains() 
         sub.expires_at = (kind == CovNotificationKind::Multiple)
             .then(|| runtime_clock::now() + Duration::from_secs(300));
         sub.last_notified_observation = Some(
-            crate::cov::CovObservation::new(
-                crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(99.0))
-                    .unwrap(),
+            bacnet_device_core::cov::CovObservation::new(
+                bacnet_device_core::cov::CovSample::new(
+                    &bacnet_types::primitives::PropertyValue::Real(99.0),
+                )
+                .unwrap(),
                 None,
             )
             .unwrap(),
@@ -220,10 +222,10 @@ async fn cov_lifetime_admitted_confirmed_retry_survives_expiry_and_ack_drains() 
                 .unwrap()
                 .last_notified_observation,
             Some(
-                crate::cov::CovObservation::new(
-                    crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(
-                        99.0
-                    ))
+                bacnet_device_core::cov::CovObservation::new(
+                    bacnet_device_core::cov::CovSample::new(
+                        &bacnet_types::primitives::PropertyValue::Real(99.0)
+                    )
                     .unwrap(),
                     None
                 )

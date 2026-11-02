@@ -1,7 +1,6 @@
 use super::*;
-use crate::cov::{
-    CovNotificationKind, CovObservation, CovSample, CovSubscription, SubscriberEndpoint,
-};
+use crate::cov::CovSubscription;
+use bacnet_device_core::cov::{CovNotificationKind, CovObservation, CovSample, SubscriberEndpoint};
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_types::MacAddr;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};

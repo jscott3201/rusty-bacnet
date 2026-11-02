@@ -84,8 +84,11 @@ async fn local_authorization_cov_collision_releases_db_and_retries_fresh_until_q
             timestamped: false,
         })
         .unwrap();
-    let context = crate::cov::MultipleContextKey {
-        recipient: crate::cov::CovRecipient::from_endpoint(&MacAddr::from_slice(&PEER), None),
+    let context = bacnet_device_core::cov::MultipleContextKey {
+        recipient: bacnet_device_core::cov::CovRecipient::from_endpoint(
+            &MacAddr::from_slice(&PEER),
+            None,
+        ),
         process_id: 1570,
         confirmed: false,
     };
@@ -93,7 +96,7 @@ async fn local_authorization_cov_collision_releases_db_and_retries_fresh_until_q
     let fresh = table
         .subscribe_multiple(
             &context,
-            &crate::cov::SubscriberEndpoint::new(&PEER, None),
+            &bacnet_device_core::cov::SubscriberEndpoint::new(&PEER, None),
             expires_at,
             0,
             None,

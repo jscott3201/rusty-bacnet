@@ -381,7 +381,7 @@ fn value_source_cov_noncommandable_admission_requires_tracking() {
 async fn observation(
     f: &Fixture,
     sub: &CovSubscriptionSnapshot,
-) -> Option<crate::cov::CovObservation> {
+) -> Option<bacnet_device_core::cov::CovObservation> {
     f.table
         .read()
         .await

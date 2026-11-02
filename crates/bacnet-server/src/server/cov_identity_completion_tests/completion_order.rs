@@ -39,7 +39,10 @@ async fn command(f: &Fixture, value: f32) {
         )
         .unwrap();
 }
-async fn observation(f: &Fixture, sub: &CovSubscriptionSnapshot) -> crate::cov::CovObservation {
+async fn observation(
+    f: &Fixture,
+    sub: &CovSubscriptionSnapshot,
+) -> bacnet_device_core::cov::CovObservation {
     f.table
         .read()
         .await
@@ -79,8 +82,8 @@ async fn delayed_older_success(kind: CovNotificationKind, ordinary: bool, record
         p.monitored_property = None;
     }
     p.last_notified_observation = Some(
-        crate::cov::CovObservation::new(
-            crate::cov::CovSample::new(&PropertyValue::Real(0.0)).unwrap(),
+        bacnet_device_core::cov::CovObservation::new(
+            bacnet_device_core::cov::CovSample::new(&PropertyValue::Real(0.0)).unwrap(),
             Some(&PropertyValue::BitString {
                 unused_bits: 4,
                 data: vec![0],

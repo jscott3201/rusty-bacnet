@@ -324,7 +324,8 @@ fn increment_in_use(
 ) -> Option<f32> {
     let increment = prepare::effective_increment(object, property, true, explicit)?;
     let value = object.read_property(property, index).ok()?;
-    let (_, numeric) = prepare::validate_sample(object, property, index, &value).ok()?;
+    let (_, numeric) =
+        bacnet_device_core::cov::validate_sample(object, property, index, &value).ok()?;
     // The subscription list reports the increment as a REAL, so a wider
     // object increment (a Large Analog Value's Double) is narrowed here.
     numeric.then_some(increment as f32)

@@ -4,7 +4,8 @@
 use super::super::cov_notify_context::CovFanoutHandles;
 use super::*;
 use crate::cov::timed::TimedClaim;
-use crate::cov::{BeginRefusal, CovObservation, CovSubscriptionKey, PreparedCovCompletion};
+use crate::cov::{BeginRefusal, PreparedCovCompletion};
+use bacnet_device_core::cov::{CovObservation, CovSubscriptionKey};
 
 /// A confirmed notification ready for admission.
 pub(in crate::server) struct ConfirmedReport {

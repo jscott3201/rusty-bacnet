@@ -190,9 +190,8 @@ mod tests {
         VALUE_MEMORY, value_len,
     };
     use super::*;
-    use crate::cov::{
-        AtomicCovCounters, CovObservation, CovSample, CovSubscriptionTable, SubscriberEndpoint,
-    };
+    use crate::cov::{AtomicCovCounters, CovSubscriptionTable};
+    use bacnet_device_core::cov::{CovObservation, CovSample, SubscriberEndpoint};
     use std::sync::Arc;
 
     /// The local maximum APDU these tests' devices take: the largest B/IP one.

@@ -76,8 +76,8 @@ fn subscribe_cov_property_parameter_errors_precede_lookup_and_expired_entry_purg
                 "invalid request must not purge even expired entries"
             );
             let current = table
-                .get_subscription(&crate::cov::CovSubscriptionKey::Property {
-                    recipient: crate::cov::CovRecipient::from_endpoint(
+                .get_subscription(&bacnet_device_core::cov::CovSubscriptionKey::Property {
+                    recipient: bacnet_device_core::cov::CovRecipient::from_endpoint(
                         &MacAddr::from_slice(&mac),
                         None,
                     ),
