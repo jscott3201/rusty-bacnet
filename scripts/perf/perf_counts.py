@@ -4,6 +4,7 @@
 
   perf_counts.py run --baseline REF --candidate REF [options]   # A, A' and B
   perf_counts.py run --noise REF [options]                      # A and A'
+  perf_counts.py run --baseline v0.13.0 --candidate REF --baseline-compat v013 --workloads codec
   perf_counts.py analyze OUT [--aim rp,... | --aim none]
   perf_counts.py attribute OUT [--workload rp] [--runtime ct]   # calls first
 
@@ -16,9 +17,13 @@ its noise floor and no allocation calls are added.
    its libc6, valgrind and gcc package versions;
 2. exports each ref with `git archive` into OUT/trees/<label>, and replaces
    its benchmarks/counts/ with one harness (the candidate's, or --harness);
-   in each tree, `cargo update --workspace` refreshes only the stack's path
-   packages in the harness lock, and the run stops if any third-party
-   package would change;
+   with --baseline-compat NAME, the baseline trees (A and A') get the
+   harness's compat/NAME_setup.rs as src/setup.rs, for a baseline whose
+   setup API predates the harness's; in each tree, `cargo update
+   --workspace` refreshes only the stack's path packages in the harness
+   lock, and the run stops if any third-party package would be added or
+   change version (one the tree no longer uses may drop out; the manifest
+   records it);
 3. builds each tree in a fresh Docker volume at the same paths (/wt, /target)
    with --locked and CARGO_INCREMENTAL=0; a comparison builds the baseline
    twice (A and A'), so its noise floor comes from the same matrix;
@@ -162,6 +167,27 @@ def install_harness(source, tree):
     return harness_hashes(target)
 
 
+def compat_setup(harness, name):
+    """The harness's compat/NAME_setup.rs, or a ValueError naming the ones
+    there are."""
+    path = harness / "compat" / f"{name}_setup.rs"
+    if not path.is_file():
+        known = sorted(p.name.removesuffix("_setup.rs") for p in (harness / "compat").glob("*_setup.rs"))
+        raise ValueError(f"no compat setup {name!r} in {harness / 'compat'} (have {known})")
+    return path
+
+
+def install_compat(harness, name, manifest):
+    """Puts compat/NAME_setup.rs in place of src/setup.rs in the baseline
+    trees (A and A'), and records its hash with them."""
+    source = compat_setup(harness, name)
+    for label in ("A", "P"):
+        variant = manifest["variants"].get(label)
+        if variant is not None:
+            shutil.copy2(source, Path(variant["root"]) / "benchmarks/counts/src/setup.rs")
+            variant["setup_compat"] = {"name": name, "sha256": sha256(source)}
+
+
 # ---------------------------------------------------------------- docker
 
 
@@ -175,10 +201,22 @@ def third_party(lock_text):
     return out
 
 
+def lock_drift(before, after):
+    """The registry packages a lock refresh added (or moved to another
+    version), and those it only dropped, as sorted lists."""
+    old, new = third_party(before), third_party(after)
+    added = sorted(new - old)
+    changed = {name for name, _version, _source in added}
+    dropped = sorted(p for p in old - new if p[0] not in changed)
+    return added, dropped
+
+
 def refresh_lock(image, variant, registry):
     """Re-resolves the tree's path packages in its copy of the harness lock
-    and refuses any third-party change, so both trees build the same
-    third-party versions."""
+    and refuses any third-party package added or at another version, so
+    both trees build the same third-party versions. A package the tree no
+    longer uses drops out of its lock; that's recorded, since it can't
+    change what the trees share (an older baseline, #1979 S1)."""
     lock = Path(variant["root"]) / "benchmarks/counts/Cargo.lock"
     before = lock.read_text()
     sh([
@@ -186,13 +224,13 @@ def refresh_lock(image, variant, registry):
         image["id"], "sh", "-c", "cd /wt/benchmarks/counts && cargo update --workspace --quiet",
     ])
     after = lock.read_text()
-    added, removed = third_party(after) - third_party(before), third_party(before) - third_party(after)
-    if added or removed:
+    added, dropped = lock_drift(before, after)
+    if added:
         raise RuntimeError(
-            f"{variant['label']}: refreshing the harness lock for {variant['sha'][:12]} would change third-party "
-            f"packages (added {sorted(added)}, removed {sorted(removed)}); update benchmarks/counts/Cargo.lock "
-            "so it serves both trees"
+            f"{variant['label']}: refreshing the harness lock for {variant['sha'][:12]} would add or change "
+            f"third-party packages ({added}); update benchmarks/counts/Cargo.lock so it serves both trees"
         )
+    variant["lock_dropped"] = [f"{name} {version}" for name, version, _source in dropped]
     variant["lock_sha256"] = sha256(lock)
     variant["lock_refreshed"] = after != before
 
@@ -609,6 +647,8 @@ def run(args):
         for variant in manifest["variants"].values():
             if install_harness(staged, Path(variant["root"])) != manifest["harness"]["files"]:
                 raise RuntimeError("harness copy differs")
+        if args.baseline_compat:
+            install_compat(harness, args.baseline_compat, manifest)
         save()
         sh(["docker", "volume", "create", registry], stdout=subprocess.DEVNULL)
         for variant in manifest["variants"].values():
@@ -660,6 +700,9 @@ def main(argv=None):
     run_parser.add_argument("--out", required=True, help="a new directory for the outputs")
     run_parser.add_argument("--harness", help="benchmarks/counts directory to build (default: the candidate's)")
     run_parser.add_argument("--image", help="image tag to use or build (default: from the Dockerfile's hash)")
+    run_parser.add_argument("--baseline-compat", metavar="NAME",
+                            help="build the baseline trees with the harness's compat/NAME_setup.rs as src/setup.rs "
+                                 "(v013: a v0.13.0 baseline)")
     run_parser.add_argument("--noise-floors", action="append",
                             help="quick mode, local only: skip the A' build and use this noise run's floors "
                                  "(summary.json; repeatable)")

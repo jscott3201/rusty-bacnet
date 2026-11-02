@@ -395,6 +395,24 @@ class Runner(unittest.TestCase):
         self.assertEqual(perf_counts.third_party(lock), perf_counts.third_party(bumped_path))
         self.assertNotEqual(perf_counts.third_party(lock), perf_counts.third_party(bumped_tokio))
 
+    def test_lock_refresh_may_drop_unused_packages_but_not_add_or_move(self):
+        registry = 'source = "registry+https://github.com/rust-lang/crates.io-index"\n'
+        lock = ('[[package]]\nname = "nix"\nversion = "0.31.3"\n' + registry +
+                '\n[[package]]\nname = "tokio"\nversion = "1.54.1"\n' + registry)
+        dropped_nix = lock.split("\n[[package]]")[0].replace("nix", "bytes").replace("0.31.3", "1.11.0")
+        added, dropped = perf_counts.lock_drift(lock, '[[package]]\nname = "tokio"\nversion = "1.54.1"\n' + registry)
+        self.assertEqual((added, [d[:2] for d in dropped]), ([], [("nix", "0.31.3")]))
+        added, dropped = perf_counts.lock_drift(lock, lock.replace("1.54.1", "1.55.0"))
+        self.assertEqual(([a[:2] for a in added], dropped), ([("tokio", "1.55.0")], []))
+        added, _dropped = perf_counts.lock_drift(lock, lock + "\n" + dropped_nix)
+        self.assertEqual([a[:2] for a in added], [("bytes", "1.11.0")])
+
+    def test_baseline_compat_names_a_setup_file(self):
+        harness = Path(__file__).resolve().parents[2] / "benchmarks/counts"
+        self.assertEqual(perf_counts.compat_setup(harness, "v013").name, "v013_setup.rs")
+        with self.assertRaisesRegex(ValueError, "v013"):
+            perf_counts.compat_setup(harness, "v012")
+
     def test_quick_mode_refuses_floors_from_other_allocator_settings(self):
         tuned = "glibc.malloc.tcache_count=32"
         with self.assertRaisesRegex(ValueError, "allocator settings"):
