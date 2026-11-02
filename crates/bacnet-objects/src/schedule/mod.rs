@@ -420,6 +420,7 @@ impl BACnetObject for ScheduleObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         if property == PropertyIdentifier::PRESENT_VALUE {
             return self.write_present_value(array_index, value);
         }
@@ -504,7 +505,6 @@ impl BACnetObject for ScheduleObject {
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
-            array_index,
         ))
     }
 

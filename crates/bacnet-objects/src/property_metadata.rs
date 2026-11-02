@@ -422,6 +422,33 @@ pub fn object_value_type<O: BACnetObject + ?Sized>(
     )
 }
 
+/// The array-index check every write makes before the value is judged: an
+/// index on a property `object` has no row for is UNKNOWN_PROPERTY, and an
+/// index on a property that isn't an array is PROPERTY_IS_NOT_AN_ARRAY. A
+/// whole write (`index` of `None`) passes.
+///
+/// Effective absence comes before the array classification (a local
+/// error-order choice for Clauses 15.9 and 15.10). The server runs this
+/// ahead of the value's decoding, and each built-in object runs it first in
+/// its own `write_property`, so a direct caller gets the server's answer
+/// (#2258).
+pub fn check_write_array_index<O: BACnetObject + ?Sized>(
+    object: &O,
+    property: PropertyIdentifier,
+    index: Option<u32>,
+) -> Result<(), Error> {
+    if index.is_none() {
+        return Ok(());
+    }
+    if !has_property(&object.property_metadata(), property) {
+        return Err(crate::common::unknown_property_error());
+    }
+    if !object.is_array_property(property) {
+        return Err(crate::common::property_is_not_an_array_error());
+    }
+    Ok(())
+}
+
 /// Project implemented write capability for one property identifier.
 pub fn is_writable_in_metadata(
     metadata: &[PropertyMetadata],

@@ -160,6 +160,16 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// datatype, as a success that leaves the property as it is (Clauses
     /// 15.9.2 and 19.2.1, #1396), so an access check made after the datatype
     /// check would never be seen for a NULL.
+    ///
+    /// The array index is checked before the object is called on every
+    /// service path the bundled server and `bacnet-device-core` run, custom
+    /// objects included: an index on a property with no row is
+    /// UNKNOWN_PROPERTY, and on a property that isn't an array
+    /// PROPERTY_IS_NOT_AN_ARRAY. A caller that writes the object directly
+    /// skips that gate, so the built-in objects run
+    /// [`check_write_array_index`](crate::property_metadata::check_write_array_index)
+    /// first themselves; a custom object called directly should do the same
+    /// (#2258).
     fn write_property(
         &mut self,
         property: PropertyIdentifier,

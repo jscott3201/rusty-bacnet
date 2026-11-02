@@ -14,7 +14,7 @@ use crate::traits::BACnetObject;
 
 mod metadata;
 
-/// Maximum valid program state value (unloaded = 5).
+/// The largest standard BACnetProgramState (UNLOADING).
 const PROGRAM_STATE_MAX: u32 = 5;
 
 /// BACnet Program object — represents an application program lifecycle.
@@ -47,7 +47,12 @@ impl ProgramObject {
         })
     }
 
-    /// Set the program state directly (application use).
+    /// Set the program state. Program_State is read-only on the network
+    /// (Clause 12.22.4): a client asks for a change through Program_Change,
+    /// and the application that runs the program reports the new state here,
+    /// or through [`LocalInputValue::ProgramState`] on a served object.
+    ///
+    /// [`LocalInputValue::ProgramState`]: crate::traits::LocalInputValue::ProgramState
     pub fn set_program_state(&mut self, state: u32) {
         self.program_state = state;
     }
@@ -95,10 +100,11 @@ impl BACnetObject for ProgramObject {
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
-        _array_index: Option<u32>,
+        array_index: Option<u32>,
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         if let Some(result) =
             common::write_out_of_service(&mut self.out_of_service, property, &value)
         {
@@ -116,27 +122,37 @@ impl BACnetObject for ProgramObject {
                     Err(common::invalid_data_type_error())
                 }
             }
-            p if p == PropertyIdentifier::PROGRAM_STATE => {
-                if let PropertyValue::Enumerated(v) = value {
-                    if v > PROGRAM_STATE_MAX {
-                        return Err(common::value_out_of_range_error());
-                    }
-                    self.program_state = v;
-                    Ok(())
-                } else {
-                    Err(common::invalid_data_type_error())
-                }
-            }
             _ => Err(crate::common::unhandled_write_error(
                 self.property_metadata().as_ref(),
                 property,
-                _array_index,
             )),
         }
     }
 
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
         metadata::for_object(self)
+    }
+
+    fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
+        Some(self)
+    }
+}
+
+/// The state the application's program reports, in or out of service: the
+/// Program has no simulated Program_State.
+impl crate::traits::LocalInput for ProgramObject {
+    fn apply_local_input(&mut self, input: crate::traits::LocalInputValue) -> Result<(), Error> {
+        let crate::traits::LocalInputValue::ProgramState(value) = input else {
+            return Err(crate::traits::not_supported());
+        };
+        let PropertyValue::Enumerated(state) = value else {
+            return Err(common::invalid_data_type_error());
+        };
+        if state > PROGRAM_STATE_MAX {
+            return Err(common::value_out_of_range_error());
+        }
+        self.program_state = state;
+        Ok(())
     }
 }
 
@@ -180,44 +196,52 @@ mod tests {
     }
 
     #[test]
-    fn program_write_program_state() {
+    fn program_state_write_is_refused() {
         let mut prog = ProgramObject::new(1, "PRG-1").unwrap();
-        prog.write_property(
-            PropertyIdentifier::PROGRAM_STATE,
-            None,
-            PropertyValue::Enumerated(2),
-            None,
-        )
-        .unwrap();
+        for value in [PropertyValue::Enumerated(2), PropertyValue::Unsigned(2)] {
+            let error = prog
+                .write_property(PropertyIdentifier::PROGRAM_STATE, None, value, None)
+                .unwrap_err();
+            assert!(
+                matches!(error, Error::Remote(bacnet_types::error::RemoteError::Error { code, .. })
+                    if code == bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED),
+                "{error:?}"
+            );
+        }
+        assert_eq!(
+            prog.read_property(PropertyIdentifier::PROGRAM_STATE, None)
+                .unwrap(),
+            PropertyValue::Enumerated(0)
+        );
+    }
+
+    #[test]
+    fn program_state_local_input_sets_a_standard_state() {
+        use crate::traits::LocalInputValue;
+        let mut prog = ProgramObject::new(1, "PRG-1").unwrap();
+        let mut apply = |value| {
+            prog.local_input()
+                .unwrap()
+                .apply_local_input(LocalInputValue::ProgramState(value))
+        };
+        apply(PropertyValue::Enumerated(2)).unwrap();
+        let code = |result: Result<(), Error>| match result {
+            Err(Error::Remote(bacnet_types::error::RemoteError::Error { code, .. })) => code,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            code(apply(PropertyValue::Enumerated(6))),
+            bacnet_types::enums::ErrorCode::VALUE_OUT_OF_RANGE
+        );
+        assert_eq!(
+            code(apply(PropertyValue::Unsigned(1))),
+            bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE
+        );
         assert_eq!(
             prog.read_property(PropertyIdentifier::PROGRAM_STATE, None)
                 .unwrap(),
             PropertyValue::Enumerated(2)
         );
-    }
-
-    #[test]
-    fn program_write_program_state_out_of_range() {
-        let mut prog = ProgramObject::new(1, "PRG-1").unwrap();
-        let result = prog.write_property(
-            PropertyIdentifier::PROGRAM_STATE,
-            None,
-            PropertyValue::Enumerated(99),
-            None,
-        );
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn program_write_program_state_wrong_type() {
-        let mut prog = ProgramObject::new(1, "PRG-1").unwrap();
-        let result = prog.write_property(
-            PropertyIdentifier::PROGRAM_STATE,
-            None,
-            PropertyValue::Unsigned(2),
-            None,
-        );
-        assert!(result.is_err());
     }
 
     #[test]

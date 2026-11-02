@@ -9,14 +9,15 @@ use crate::property_metadata::{
     PropertyWriteCapability::{Always, ReadOnly},
 };
 
-// Preserve the implemented surface and legacy order. Program_State's existing
-// write route is deliberately described, not changed into a lifecycle guard.
+// Preserve the implemented surface and legacy order. Program_State is
+// read-only (Clause 12.22.4): clients request changes through Program_Change,
+// and the application reports the state with `set_program_state` (#2258).
 const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
     PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::PROGRAM_STATE, RequiredRead, None, Always),
+    PropertyMetadata::new(P::PROGRAM_STATE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PROGRAM_CHANGE, RequiredWrite, None, Always),
     PropertyMetadata::new(P::REASON_FOR_HALT, Optional, None, ReadOnly),
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
@@ -137,9 +138,7 @@ mod tests {
             for row in object.property_metadata().into_owned() {
                 let p = row.property_identifier;
                 let capability = match p {
-                    P::PROGRAM_CHANGE | P::PROGRAM_STATE | P::DESCRIPTION | P::OUT_OF_SERVICE => {
-                        Always
-                    }
+                    P::PROGRAM_CHANGE | P::DESCRIPTION | P::OUT_OF_SERVICE => Always,
                     _ => ReadOnly,
                 };
                 assert_eq!(row.write_capability, capability, "{p:?}");
@@ -175,11 +174,9 @@ mod tests {
     }
 
     #[test]
-    fn property_metadata_program_preserves_state_and_request_compatibility() {
+    fn property_metadata_program_state_is_read_only_and_requests_do_not_change_it() {
         let mut object = ProgramObject::new(1, "PRG-1").unwrap();
         let metadata = object.property_metadata().into_owned();
-        // No transition validation is introduced: every in-range state is still
-        // writable from every other state, in or out of service.
         for out_of_service in [false, true] {
             object
                 .write_property(
@@ -189,51 +186,28 @@ mod tests {
                     None,
                 )
                 .unwrap();
-            for initial in 0..=5 {
-                for next in 0..=5 {
-                    object.set_program_state(initial);
-                    object
-                        .write_property(
-                            P::PROGRAM_STATE,
-                            None,
-                            PropertyValue::Enumerated(next),
-                            None,
-                        )
-                        .unwrap();
+            // The application reports any state; a network write of any
+            // value, in range or not, is refused and changes nothing.
+            for state in 0..=5 {
+                object.set_program_state(state);
+                for value in [
+                    PropertyValue::Enumerated((state + 1) % 6),
+                    PropertyValue::Enumerated(6),
+                    PropertyValue::Unsigned(0),
+                ] {
+                    assert_error(
+                        object
+                            .write_property(P::PROGRAM_STATE, None, value, None)
+                            .unwrap_err(),
+                        ErrorCode::WRITE_ACCESS_DENIED,
+                    );
                     assert_eq!(
                         object.read_property(P::PROGRAM_STATE, None).unwrap(),
-                        PropertyValue::Enumerated(next)
+                        PropertyValue::Enumerated(state)
                     );
                 }
             }
-            for invalid in [6, u32::MAX] {
-                assert_error(
-                    object
-                        .write_property(
-                            P::PROGRAM_STATE,
-                            None,
-                            PropertyValue::Enumerated(invalid),
-                            None,
-                        )
-                        .unwrap_err(),
-                    ErrorCode::VALUE_OUT_OF_RANGE,
-                );
-                assert_eq!(
-                    object.read_property(P::PROGRAM_STATE, None).unwrap(),
-                    PropertyValue::Enumerated(5)
-                );
-            }
-            assert_error(
-                object
-                    .write_property(P::PROGRAM_STATE, None, PropertyValue::Unsigned(0), None)
-                    .unwrap_err(),
-                ErrorCode::INVALID_DATA_TYPE,
-            );
-            assert_eq!(
-                object.read_property(P::PROGRAM_STATE, None).unwrap(),
-                PropertyValue::Enumerated(5)
-            );
-            // Requests retain their unrestricted enum route and do not execute
+            // Requests keep their unrestricted enum route and do not execute
             // a program or implicitly change Program_State.
             for request in [1, 5, 6, u32::MAX, 0] {
                 object

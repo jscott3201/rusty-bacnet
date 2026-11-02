@@ -365,10 +365,11 @@ impl BACnetObject for PulseConverterObject {
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
-        _array_index: Option<u32>,
+        array_index: Option<u32>,
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         let in_service_value = self.present_value();
         let was_out_of_service = self.out_of_service;
         if let Some(result) =
@@ -450,7 +451,6 @@ impl BACnetObject for PulseConverterObject {
             _ => Err(crate::common::unhandled_write_error(
                 self.property_metadata().as_ref(),
                 property,
-                _array_index,
             )),
         }
     }

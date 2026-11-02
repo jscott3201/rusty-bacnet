@@ -394,6 +394,7 @@ impl BACnetObject for EventEnrollmentObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         if property == PropertyIdentifier::NOTIFY_TYPE {
             // BACnetNotifyType is a closed three-value production {alarm,
             // event, ack-notification} (Clause 21); out-of-production values
@@ -484,7 +485,6 @@ impl BACnetObject for EventEnrollmentObject {
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
-            array_index,
         ))
     }
 

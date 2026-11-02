@@ -226,6 +226,55 @@ fn a_completion_that_changes_no_reliability_reports_no_change() {
     );
 }
 
+/// A Reliability simulated out of service ends with it: back in service the
+/// object reports the one it held before going out, until the plan queued
+/// on the way back in completes (#2258).
+#[test]
+fn a_simulated_reliability_ends_when_out_of_service_returns_to_false() {
+    let reliability = |object: &StagingObject| read(object, PropertyIdentifier::RELIABILITY);
+    let simulated = PropertyValue::Enumerated(Reliability::PROCESS_ERROR.to_raw());
+    for failed_before in [false, true] {
+        let mut object = settled();
+        if failed_before {
+            assert!(object.complete_staging_write_plan(object.staging_generation(), false));
+        }
+        let before = reliability(&object);
+        for oos in [true, false] {
+            write(
+                &mut object,
+                PropertyIdentifier::OUT_OF_SERVICE,
+                PropertyValue::Boolean(oos),
+            )
+            .unwrap();
+            if oos {
+                write(
+                    &mut object,
+                    PropertyIdentifier::RELIABILITY,
+                    simulated.clone(),
+                )
+                .unwrap();
+                assert_eq!(reliability(&object), simulated);
+                // NULL leaves Out_Of_Service and the simulation alone.
+                write(
+                    &mut object,
+                    PropertyIdentifier::OUT_OF_SERVICE,
+                    PropertyValue::Null,
+                )
+                .unwrap();
+                assert_eq!(reliability(&object), simulated);
+            }
+        }
+        assert_eq!(reliability(&object), before);
+        // The plan queued on the way back in judges it afresh.
+        let plan = object.take_staging_write_plan().unwrap();
+        object.complete_staging_write_plan(plan.generation, true);
+        assert_eq!(
+            reliability(&object),
+            PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw())
+        );
+    }
+}
+
 #[test]
 fn a_stage_encoding_with_trailing_octets_is_refused() {
     let mut object = settled();
