@@ -224,7 +224,10 @@ fn invalid_source_messages() -> Vec<ScMessage> {
     messages
 }
 
-#[tokio::test]
+// The heartbeat tests below run on tokio's paused clock, which the transport's
+// heartbeat deadline follows (#2124). On real time a stalled runner could pass
+// the 1 s ACK deadline before the test answered the probe (#2310).
+#[tokio::test(start_paused = true)]
 async fn hub_npdu_invalid_sources_do_not_refresh_liveness() {
     let (mut transport, mut rx, ws_hub) = start_with_heartbeat_timing().await;
     assert_valid_sentinel(&mut rx, &ws_hub, None).await;
@@ -233,8 +236,8 @@ async fn hub_npdu_invalid_sources_do_not_refresh_liveness() {
     let mut next = 0;
     let mut interval = tokio::time::interval(Duration::from_millis(20));
 
-    // Keep malformed traffic flowing through the real std::Instant timeout.
-    // A state notification proves timeout; a generous bound catches refreshes.
+    // Keep malformed traffic flowing past the 1 s timeout. A state
+    // notification proves timeout; a generous bound catches refreshes.
     timeout(Duration::from_secs(3), async {
         loop {
             tokio::select! {
@@ -261,7 +264,7 @@ async fn hub_npdu_invalid_sources_do_not_refresh_liveness() {
     transport.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn hub_npdu_invalid_sources_do_not_clear_pending_heartbeat() {
     let (mut transport, mut rx, ws_hub) = start_with_heartbeat_timing().await;
     assert_valid_sentinel(&mut rx, &ws_hub, None).await;

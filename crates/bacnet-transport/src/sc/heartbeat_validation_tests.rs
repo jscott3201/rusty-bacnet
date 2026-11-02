@@ -20,18 +20,11 @@ async fn heartbeat_request_payload_gets_nak_before_ack() {
     transport.stop().await.unwrap();
 }
 
+/// Starts a transport with a 100 ms heartbeat interval and a 1 s liveness
+/// timeout. Callers run on tokio's paused clock, which the heartbeat deadline
+/// follows (#2124): on real time a stalled runner could pass that timeout
+/// before the test answered a probe (#2310).
 pub(super) async fn start_timed() -> (
-    ScTransport<LoopbackWebSocket>,
-    mpsc::Receiver<ReceivedNpdu>,
-    LoopbackWebSocket,
-) {
-    start_timed_with_timeout(1000).await
-}
-
-/// Like [`start_timed`], with the liveness timeout in milliseconds.
-pub(super) async fn start_timed_with_timeout(
-    timeout_ms: u64,
-) -> (
     ScTransport<LoopbackWebSocket>,
     mpsc::Receiver<ReceivedNpdu>,
     LoopbackWebSocket,
@@ -39,7 +32,7 @@ pub(super) async fn start_timed_with_timeout(
     let (client, ws) = LoopbackWebSocket::pair();
     let mut transport = ScTransport::new(client, [0x01; 6])
         .with_device_uuid([1; 16])
-        .with_test_heartbeat_timing_ms(100, timeout_ms);
+        .with_test_heartbeat_timing_ms(100, 1000);
     let (rx, ()) = tokio::join!(transport.start(), hub_accept(&ws, [0x10; 6]));
     (transport, rx.unwrap(), ws)
 }
@@ -56,11 +49,9 @@ async fn rejection_barrier(ws: &LoopbackWebSocket) {
     assert_eq!(recv(ws).await, [0, 0, 0x33, 0x44, 0x0A, 1, 0, 0, 7, 0, 7]);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn heartbeat_unsupported_ack_does_not_clear_pending_probe() {
-    // Real time: a loaded runner can take over a second for the cases below,
-    // so the liveness timeout must sit well past that or the node disconnects.
-    let (mut transport, _rx, ws) = start_timed_with_timeout(5000).await;
+    let (mut transport, _rx, ws) = start_timed().await;
     let probe = recv(&ws).await;
     assert_eq!(probe[0], 0x0A);
     ws.send(&[0x0B, 2, probe[2], probe[3], 0x5E]).await.unwrap();
@@ -97,7 +88,7 @@ async fn heartbeat_unsupported_ack_does_not_clear_pending_probe() {
     transport.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn heartbeat_invalid_traffic_does_not_refresh_node_liveness() {
     let (mut transport, _rx, ws) = start_timed().await;
     let mut states = transport.connection_state_changes();
@@ -111,7 +102,7 @@ async fn heartbeat_invalid_traffic_does_not_refresh_node_liveness() {
     let mut next = 0;
     let mut probe_count = 0;
     let mut interval = tokio::time::interval(Duration::from_millis(20));
-    // Real time is required: production uses std::Instant for receive activity.
+    // A state notification proves timeout; a generous bound catches refreshes.
     timeout(Duration::from_secs(3), async {
         loop {
             tokio::select! {

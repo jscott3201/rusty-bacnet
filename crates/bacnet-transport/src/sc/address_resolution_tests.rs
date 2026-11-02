@@ -291,7 +291,9 @@ async fn no_answer_once_disconnected() {
     transport.stop().await.unwrap();
 }
 
-#[tokio::test]
+// Paused clock: the heartbeat deadline follows it (#2124). On real time a
+// stalled runner could pass the 700 ms timeout before the probe's ACK (#2310).
+#[tokio::test(start_paused = true)]
 async fn capability_denial_preserves_pending_heartbeat_and_npdu_interop() {
     let (client, hub) = LoopbackWebSocket::pair();
     let mut transport = ScTransport::new(client, [1; 6])
@@ -679,7 +681,9 @@ async fn address_resolution_result_for_keeps_existing_parse_and_fatal_policy() {
     }
 }
 
-#[tokio::test]
+// Paused clock: the heartbeat deadline follows it (#2124). On real time a
+// stalled runner could pass the 700 ms timeout before the probe's ACK (#2310).
+#[tokio::test(start_paused = true)]
 async fn address_resolution_valid_traffic_keeps_heartbeat_and_npdu_interop() {
     let (client, hub) = LoopbackWebSocket::pair();
     let mut transport = ScTransport::new(client, [1; 6])
