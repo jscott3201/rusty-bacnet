@@ -37,6 +37,11 @@
 //!   A runtime that cannot advance parks on the real clock, not in a busy
 //!   loop, and the hold's end unparks it, so it does not sleep out that
 //!   park either.
+//! - The node's end holds too. An abort wakes the task through Tokio, not
+//!   through the gate, so the transport takes a hold first
+//!   ([`Node::hold_until_dropped`]) and the gate releases it once the
+//!   node's future (and so the serial port it owns) has dropped: a test
+//!   waiting for that drop sees no time pass meanwhile (#2284).
 //! - Once the node's future is done or dropped, wake-ups start no hold, so
 //!   a stray waker cannot keep the test's runtime from shutting down.
 //!
@@ -91,10 +96,22 @@ impl TestTime {
         // Busy from the start: the task has its first poll to come.
         gate.lock().hold = Some(start_hold(&gate.runtime));
         OnTestTime {
-            future: Box::pin(future),
+            future: Some(Box::pin(future)),
             gate,
             waker: None,
         }
+    }
+}
+
+/// The spawned node's side of its gate, kept by the transport.
+pub(super) struct Node(Arc<Gate>);
+
+impl Node {
+    /// Hold the test's clock from now until the node's future has dropped:
+    /// call it before the node's task is aborted. The task is not polled
+    /// again, so only the drop releases the hold.
+    pub(super) fn hold_until_dropped(&self) {
+        self.0.wake();
     }
 }
 
@@ -115,7 +132,8 @@ fn start_hold(runtime: &Handle) -> Sender<()> {
 
 /// A future polled with the test's runtime entered, behind a [`Gate`].
 pub(super) struct OnTestTime<F> {
-    future: Pin<Box<F>>,
+    /// `None` once it is done: it drops before the gate lets go.
+    future: Option<Pin<Box<F>>>,
     gate: Arc<Gate>,
     /// The task's waker and its gated wrapper, rebuilt when the task's
     /// changes.
@@ -138,13 +156,17 @@ impl<F: Future> Future for OnTestTime<F> {
                 gated
             }
         };
+        let Some(future) = this.future.as_mut() else {
+            panic!("OnTestTime polled after it finished");
+        };
         this.gate.lock().woken = false;
         let polled = {
             let _entered = this.gate.runtime.enter();
-            this.future.as_mut().poll(&mut Context::from_waker(&waker))
+            future.as_mut().poll(&mut Context::from_waker(&waker))
         };
         match polled {
             Poll::Ready(output) => {
+                this.future = None;
                 this.gate.close();
                 Poll::Ready(output)
             }
@@ -160,8 +182,18 @@ impl<F: Future> Future for OnTestTime<F> {
     }
 }
 
+impl<F> OnTestTime<F> {
+    /// The node's side of the gate, for the transport.
+    pub(super) fn node(&self) -> Node {
+        Node(Arc::clone(&self.gate))
+    }
+}
+
 impl<F> Drop for OnTestTime<F> {
     fn drop(&mut self) {
+        // The future first: what it owns (the serial port) drops while the
+        // clock is still held.
+        drop(self.future.take());
         self.gate.close();
     }
 }
@@ -283,6 +315,44 @@ mod tests {
         assert!(poll(&mut future).is_ready());
         assert!(!gate.holding(), "Ready leaves no hold");
         assert_eq!(polls.get(), 3);
+    }
+
+    /// What the future owns drops while the gate still holds: the gate
+    /// lets go only after, whether the future finished or was dropped.
+    #[test]
+    fn the_future_drops_before_the_gate_lets_go() {
+        struct Records(Arc<std::sync::OnceLock<Arc<Gate>>>, Rc<Cell<Option<bool>>>);
+        impl Drop for Records {
+            fn drop(&mut self) {
+                self.1.set(self.0.get().map(|gate| gate.holding()));
+            }
+        }
+        let runtime = runtime();
+        for finish in [false, true] {
+            let slot = Arc::new(std::sync::OnceLock::new());
+            let seen = Rc::new(Cell::new(None));
+            let records = Records(Arc::clone(&slot), Rc::clone(&seen));
+            let mut future =
+                TestTime::new(runtime.handle().clone()).drive(std::future::poll_fn(move |cx| {
+                    let _owned = &records;
+                    cx.waker().wake_by_ref();
+                    if finish {
+                        Poll::Ready(())
+                    } else {
+                        Poll::Pending
+                    }
+                }));
+            let gate = Arc::clone(&future.gate);
+            slot.set(Arc::clone(&gate)).ok().unwrap();
+            if finish {
+                assert!(poll(&mut future).is_ready());
+            } else {
+                assert!(poll(&mut future).is_pending());
+                drop(future);
+            }
+            assert_eq!(seen.get(), Some(true), "held while the future dropped");
+            assert!(!gate.holding());
+        }
     }
 
     /// Dropping the future releases a hold it had, and a waker that

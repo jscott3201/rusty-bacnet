@@ -470,17 +470,31 @@ pub(crate) fn sync_parent_dir(path: &Path) {
 }
 
 /// The CRC-32 (IEEE 802.3, reflected) of `data`, which the two-slot
-/// snapshot files end with.
+/// snapshot files end with. One table lookup per octet rather than eight
+/// shift steps (#2233).
 pub(crate) fn crc32(data: &[u8]) -> u32 {
-    let mut crc = !0u32;
-    for byte in data {
-        crc ^= u32::from(*byte);
-        for _ in 0..8 {
-            crc = (crc >> 1) ^ (0xedb8_8320 & (0u32.wrapping_sub(crc & 1)));
-        }
-    }
-    !crc
+    !data.iter().fold(!0u32, |crc, &byte| {
+        CRC32_TABLE[usize::from(crc as u8 ^ byte)] ^ (crc >> 8)
+    })
 }
+
+/// [`crc32`]'s table: entry `n` is the remainder of octet `n` shifted
+/// through the reflected polynomial eight times.
+static CRC32_TABLE: [u32; 256] = {
+    let mut table = [0u32; 256];
+    let mut n = 0;
+    while n < 256 {
+        let mut crc = n as u32;
+        let mut bit = 0;
+        while bit < 8 {
+            crc = (crc >> 1) ^ (0xedb8_8320 & 0u32.wrapping_sub(crc & 1));
+            bit += 1;
+        }
+        table[n] = crc;
+        n += 1;
+    }
+    table
+};
 
 /// Whether a directory sync failed only because the filesystem cannot
 /// synchronize a directory.

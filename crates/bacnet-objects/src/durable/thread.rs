@@ -34,6 +34,8 @@ pub(crate) struct SaveWriter<S: Send + 'static> {
     /// either stored or not.
     thread: Option<AssertUnwindSafe<JoinHandle<()>>>,
     name: String,
+    /// The owner is going away; see `closing`.
+    closing: bool,
 }
 
 struct Shared<S> {
@@ -86,6 +88,7 @@ impl<S: Send + 'static> SaveWriter<S> {
             }),
             thread: None,
             name,
+            closing: false,
         }
     }
 
@@ -150,7 +153,21 @@ impl<S: Send + 'static> SaveWriter<S> {
         }
     }
 
+    /// The owner is going away, and its drop will wait for every save it
+    /// queues. A save queued from now on while no thread has started runs
+    /// here, on the caller's thread, instead of on a thread started only to
+    /// be joined (#2233). With no thread started, nothing else is queued, so
+    /// the order holds; with one started, saves still go to it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn closing(&mut self) {
+        self.closing = true;
+    }
+
     fn enqueue(&mut self, job: Job<S>) {
+        if self.thread.is_none() && self.closing {
+            run_job(&self.shared, job);
+            return;
+        }
         if self.thread.is_none() {
             let shared = Arc::clone(&self.shared);
             match std::thread::Builder::new()

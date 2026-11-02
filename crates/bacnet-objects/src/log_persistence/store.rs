@@ -126,6 +126,10 @@ pub(crate) struct LogStore<R: SnapshotRecord> {
     restart_interval: bool,
     reopened: bool,
     interruption_pending: bool,
+    /// The storage is the in-memory test backend, whose final commit may
+    /// run on the dropping thread ([`closing`](Self::closing)).
+    #[cfg(feature = "test-support")]
+    commits_inline: bool,
 }
 
 impl<R: SnapshotRecord> LogStore<R> {
@@ -159,6 +163,8 @@ impl<R: SnapshotRecord> LogStore<R> {
             loaded.as_ref().map_or(0, |snapshot| snapshot.generation),
         ));
         let committed = Arc::clone(&generation);
+        #[cfg(feature = "test-support")]
+        let commits_inline = persistence.commits_inline();
         let writer = SaveWriter::new(
             format!(
                 "bacnet-log-{}-{}-save",
@@ -199,6 +205,8 @@ impl<R: SnapshotRecord> LogStore<R> {
                 restart_interval: false,
                 reopened: false,
                 interruption_pending: false,
+                #[cfg(feature = "test-support")]
+                commits_inline,
             },
             loaded,
         ))
@@ -283,6 +291,19 @@ impl<R: SnapshotRecord> LogStore<R> {
     /// A wait that ends once every commit queued so far has run.
     pub(crate) fn idle(&self) -> SaveWait {
         self.writer.idle()
+    }
+
+    /// The log is dropping. With the in-memory test backend, its final
+    /// commit may run on the caller's thread when no writer thread has
+    /// started (`SaveWriter::closing`), sparing the fuzz targets a thread
+    /// per input (#2233). Any other storage keeps the writer thread: a
+    /// `LogPersistence::commit` is documented to run there, outside any
+    /// async runtime.
+    pub(crate) fn closing(&mut self) {
+        #[cfg(feature = "test-support")]
+        if self.commits_inline {
+            self.writer.closing();
+        }
     }
 }
 
@@ -429,6 +450,11 @@ macro_rules! impl_durable_log {
 
         impl Drop for $log {
             fn drop(&mut self) {
+                if let Some(store) =
+                    $crate::log_persistence::store::DurableLog::durable_parts(self).0
+                {
+                    store.closing();
+                }
                 // The writer's own drop, which follows, waits for it.
                 let _ = $crate::log_persistence::store::DurableLog::commit_final(self);
             }
