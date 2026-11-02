@@ -187,11 +187,17 @@ impl CovParity {
     }
 }
 
-/// The parity fixture and a Life Safety Point, whose Mode is readable but
-/// not reported.
+/// The parity fixture, a Life Safety Point, whose Mode is readable but not
+/// reported, and an Averaging object, which takes property subscriptions
+/// but refuses SubscribeCOV.
 fn fixture(identity: &bacnet_objects::DeviceIdentity) -> ObjectDatabase {
     let point = bacnet_objects::life_safety::LifeSafetyPointObject::new(1, "LSP-1").unwrap();
-    database_with(identity, vec![Box::new(point)])
+    let averaging = bacnet_objects::averaging::AveragingObject::new(1, "AVG-1").unwrap();
+    database_with(identity, vec![Box::new(point), Box::new(averaging)])
+}
+
+fn averaging() -> ObjectIdentifier {
+    oid(ObjectType::AVERAGING, 1)
 }
 
 fn direct(mac: u8) -> SubscriberEndpoint {
@@ -288,6 +294,23 @@ async fn subscribe_renew_and_cancel_match() {
     let bv = oid(ObjectType::BINARY_VALUE, 1);
     let body = subscribe_property(1, bv, P::PRESENT_VALUE, None, Some(true), Some(60));
     cov.request("property", &b, PROPERTY, &body).await;
+    let body = subscribe_property(
+        3,
+        averaging(),
+        P::AVERAGE_VALUE,
+        None,
+        Some(false),
+        Some(60),
+    );
+    let reply = cov
+        .request(
+            "property, an object refusing SubscribeCOV",
+            &b,
+            PROPERTY,
+            &body,
+        )
+        .await;
+    assert!(matches!(reply, Apdu::SimpleAck(_)), "{reply:?}");
     let cancel = subscribe(1, ai(), None, None);
     cov.request("cancel", &a, SUBSCRIBE, &cancel).await;
     cov.request("cancel of nothing", &a, SUBSCRIBE, &cancel)
@@ -335,6 +358,15 @@ async fn refusals_match() {
             "SubscribeCOV, no COV reporting",
             SUBSCRIBE,
             subscribe(1, group, Some(false), Some(60)),
+            (
+                ErrorClass::OBJECT,
+                ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+            ),
+        ),
+        (
+            "SubscribeCOV, property subscriptions only",
+            SUBSCRIBE,
+            subscribe(1, averaging(), Some(false), Some(60)),
             (
                 ErrorClass::OBJECT,
                 ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
@@ -402,6 +434,12 @@ async fn refusals_match() {
             "SubscribeCOV, parameters that don't decode",
             SUBSCRIBE,
             vec![0x09],
+            None,
+        ),
+        (
+            "SubscribeCOVProperty, parameters that don't decode",
+            PROPERTY,
+            vec![0x09, 0x01, 0x1C],
             None,
         ),
     ] {
@@ -516,6 +554,32 @@ async fn caps_match() {
         &subscribe(1, ai(), Some(false), Some(60)),
     )
     .await;
+    cov.stop().await;
+
+    // Two of three slots set aside for peer 9: once the one unreserved slot
+    // is taken, only peer 9 is admitted.
+    let reserved = direct(9);
+    let policy = CovPolicy {
+        max_subscriptions_global: 3,
+        reserved_capacity: 2,
+        reserved_peers: vec![reserved.mac.clone()],
+        ..CovPolicy::default()
+    };
+    let mut cov = CovParity::start(policy).await;
+    let finite = |process| subscribe(process, ai(), Some(false), Some(60));
+    cov.request("unreserved", &a, SUBSCRIBE, &finite(1)).await;
+    let reply = cov
+        .request("past the unreserved share", &b, SUBSCRIBE, &finite(1))
+        .await;
+    assert_eq!(refused(&reply), no_space);
+    cov.request("reserved", &reserved, SUBSCRIBE, &finite(1))
+        .await;
+    cov.request("reserved again", &reserved, SUBSCRIBE, &finite(2))
+        .await;
+    let reply = cov
+        .request("past the table", &reserved, SUBSCRIBE, &finite(3))
+        .await;
+    assert_eq!(refused(&reply), no_space);
     cov.stop().await;
 }
 

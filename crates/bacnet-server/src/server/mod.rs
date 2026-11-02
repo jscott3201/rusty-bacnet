@@ -668,6 +668,8 @@ mod cov_notifications_tests;
 #[cfg(test)]
 mod cov_quota_tests;
 #[cfg(test)]
+mod cov_stalled_send_tests;
+#[cfg(test)]
 mod cov_timed_capture_order_tests;
 #[cfg(test)]
 mod cov_timed_chunk_tests;

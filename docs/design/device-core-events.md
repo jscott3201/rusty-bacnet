@@ -867,6 +867,11 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
 9. The facade isn't in PR 1, so a `cov` feature would save nothing yet: the
    `objects` image links none of the table. PR 2 measures it with the
    `Reporter` (§3.2).
+10. From PR 1's review: a live worker stops at the retry budget, however
+    long a send stalls, and reports a failure (hold-off), so the deadline
+    one timeout later only ever frees an aborted worker's coordinate; and a
+    report that begins on a coordinate still marked by an unsettled one
+    past its deadline fences it (§5.5).
 
 ## 12. Evidence
 

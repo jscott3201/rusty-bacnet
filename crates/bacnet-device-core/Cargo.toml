@@ -42,6 +42,11 @@ alloc = [
 # it the event parameter decoder. The rows still call those properties
 # writable, so such a build's PICS lists them as read-only.
 structured-writes = []
+# Hidden hooks for hosts' own tests (the COV table's generation counter, so
+# bacnet-server's table tests reach generation exhaustion). bacnet-server
+# turns it on for its tests only, through a dev-dependency; never enable it
+# in a product build.
+test-support = []
 
 # The release that first publishes this crate. Until the website names that
 # release, its crate map links the source here instead of docs.rs (#1989).

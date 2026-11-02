@@ -241,6 +241,15 @@ async fn stop_cov(kind: CovNotificationKind, service: ConfirmedServiceChoice) {
     let entry = table.subscriptions_for(&oid)[0].clone();
     assert!(!table.confirmed_idle(&entry), "{kind:?}");
     assert_eq!(entry.last_notified_observation, None, "{kind:?}");
+    // By its deadline, the retry cycle plus one timeout after the report
+    // began, the coordinate is free again, with no hold-off. The report
+    // began before the clock paused, so a full deadline from now is past it.
+    tokio::time::pause();
+    let timeout = Duration::from_millis(server.config.cov_retry_timeout_ms);
+    tokio::time::advance(timeout * (u32::from(DEFAULT_APDU_RETRIES) + 2)).await;
+    assert!(table.confirmed_idle(&entry), "{kind:?}: past its deadline");
+    assert_eq!(table.purge_expired(), 0);
+    assert!(table.confirmed_idle(&entry), "{kind:?}");
 }
 
 #[tokio::test]

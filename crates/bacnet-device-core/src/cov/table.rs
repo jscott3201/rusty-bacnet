@@ -420,9 +420,11 @@ impl CovTable {
         )
     }
 
-    /// The last generation the table issued. A test hook: hosts' table
-    /// tests reach generation exhaustion through it and
+    /// The last generation the table issued. A test hook, behind the
+    /// `test-support` feature: hosts' table tests reach generation
+    /// exhaustion through it and
     /// [`set_generation_for_test`](Self::set_generation_for_test).
+    #[cfg(feature = "test-support")]
     #[doc(hidden)]
     pub fn generation_for_test(&self) -> u64 {
         self.generation
@@ -430,6 +432,7 @@ impl CovTable {
 
     /// Make `generation` the last generation issued. A test hook, see
     /// [`generation_for_test`](Self::generation_for_test).
+    #[cfg(feature = "test-support")]
     #[doc(hidden)]
     pub fn set_generation_for_test(&mut self, generation: u64) {
         self.generation = generation;

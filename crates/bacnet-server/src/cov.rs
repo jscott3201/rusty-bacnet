@@ -261,7 +261,11 @@ impl CovSubscriptionTable {
 
     /// Accept an ordinary or Single insertion or renewal; see
     /// [`CovTable::subscribe`].
-    pub fn subscribe(&mut self, sub: CovSubscription) -> Result<CovSubscriptionSnapshot, Error> {
+    #[cfg(test)]
+    pub(crate) fn subscribe(
+        &mut self,
+        sub: CovSubscription,
+    ) -> Result<CovSubscriptionSnapshot, Error> {
         let accepted = self.core.subscribe(sub, runtime_clock::core_now());
         let published = match &accepted {
             Ok(accepted) => std::slice::from_ref(accepted),
@@ -302,7 +306,7 @@ impl CovSubscriptionTable {
 
     /// Accept Multiple references in request order and refresh their exact
     /// context; see [`CovTable::subscribe_multiple`].
-    pub fn subscribe_multiple(
+    pub(crate) fn subscribe_multiple(
         &mut self,
         context: &MultipleContextKey,
         route: &SubscriberEndpoint,
@@ -330,7 +334,7 @@ impl CovSubscriptionTable {
 
     /// Resolve captured owner/key/generation/route authority against live
     /// expiry at `now`, on the server's core timeline.
-    pub fn remaining_lifetime(
+    pub(crate) fn remaining_lifetime(
         &self,
         snapshot: &CovSubscriptionSnapshot,
         now: bacnet_time::Instant,
@@ -369,6 +373,8 @@ impl CovSubscriptionTable {
         let token = self
             .core
             .begin_confirmed(completion, snapshots, runtime_clock::core_now())?;
+        // A report it replaced past its deadline is fenced: wake its worker.
+        self.sync(&[]);
         let wake = Arc::new(Notify::new());
         self.wakes.insert(token, Arc::clone(&wake));
         Ok(ConfirmedFlight::new(token, wake))

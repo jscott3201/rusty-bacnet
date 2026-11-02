@@ -225,3 +225,24 @@ fn fences_name_replaced_reports_only() {
         "the removed subscription stays gone"
     );
 }
+
+/// A report begun on a coordinate whose last report passed its deadline
+/// unsettled fences that report: its worker, if alive, stops (#2303).
+#[test]
+fn a_report_past_its_deadline_is_fenced_by_the_next() {
+    let mut table = table();
+    let sub = single(&mut table);
+    let (stale, _) = begin(&mut table, &[&sub], T0);
+    table.take_fenced();
+    let deadline = T0 + Duration::from_secs(3);
+    let (next, report) = begin(&mut table, &[&sub], deadline);
+    assert_eq!(table.take_fenced().tokens, vec![stale]);
+    assert_ne!(stale, next);
+    // The stale outcome changes nothing; the new report's counts.
+    table.delivered(stale, Delivery::Acknowledged, deadline);
+    assert!(!table.confirmed_idle(&sub, deadline));
+    assert!(table.complete_observation(&sub, report, value(3.0), deadline));
+    table.delivered(next, Delivery::Acknowledged, deadline);
+    let live = table.get_subscription(sub.key()).unwrap().clone();
+    assert!(table.confirmed_idle(&live, deadline));
+}

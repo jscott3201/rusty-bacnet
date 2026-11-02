@@ -108,6 +108,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             );
             (flight, Arc::clone(table.revisits()))
         };
+        // The instant the table began the report, near enough: its deadline
+        // runs from it, and the worker's cutoff below too.
+        let begun = tokio::time::Instant::now();
         let flight = match flight {
             Ok(flight) => {
                 // The coordinate is marked busy: the later parts can queue,
@@ -188,6 +191,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     }
                 },
             );
+            // The report ends at its retry budget, however long a send
+            // stalls (a BACnet/SC send can wait on a hub or a direct dial), as
+            // one whose retries ran out: the table's deadline, one timeout
+            // later, is only for a worker that can't report. Past it a stale
+            // retry could follow the coordinate's next report (#2303). The
+            // cutoff takes no lock, and cancels the transaction as a fence
+            // does.
+            let delivery = tokio::time::timeout_at(begun + hold_off, delivery);
             // A renewal or route change replaced this report's incarnation: its
             // retries would only land after the replacement's own report, and
             // its Ack could complete nothing. Dropping the delivery cancels the
@@ -195,7 +206,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             // A fence already ended the report in the table; nothing is
             // owed back.
             let result = tokio::select! {
-                result = delivery => result,
+                result = delivery => result.unwrap_or_else(|_| {
+                    warn!(invoke_id = id, "{label} cut off at its retry budget");
+                    Ok(NotificationWorkerResult::Exhausted)
+                }),
                 () = flight.fenced() => {
                     debug!(invoke_id = id, "{label} superseded by a new incarnation");
                     drop(claim);

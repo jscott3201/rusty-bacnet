@@ -25,13 +25,18 @@
 //! costs at most one delivery attempt per hold-off however often its objects
 //! change, and cannot keep the in-flight slots to itself. A report that was
 //! never sent, because DeviceCommunicationControl ended it at a retry (Clause
-//! 16.1) or the host shut it down, clears the mark without a hold-off: the
-//! subscriber did not fail.
+//! 16.1) or its transaction closed, clears the mark without a hold-off when
+//! its worker reports it: the subscriber did not fail.
 //!
 //! Each report also carries a deadline, the retry budget plus one timeout,
-//! at which it ends itself if no outcome arrived: a host whose worker was
-//! aborted can't report one, and the coordinate is freed then, as an idle
-//! one, with its references owed a fresh look ([`CovTable::expire`]).
+//! at which it ends itself if no outcome arrived. That is for a worker that
+//! can report nothing: one aborted, as a host's shutdown aborts them, keeps
+//! the mark until then, and the coordinate is freed at the deadline, with
+//! no hold-off and its references owed a fresh look
+//! ([`CovTable::expire`]). A live worker stops at the retry budget, before
+//! the deadline, and reports a failure. Should a worker stalled past the
+//! deadline still be running, the next report on the coordinate fences it
+//! ([`Fenced::tokens`](super::Fenced::tokens)) as it begins.
 //!
 //! The standard delivers a confirmed notification with the usual APDU timeout and
 //! retries (Clause 5.4.4) and asks nothing further once they end. Reporting again
@@ -123,8 +128,10 @@ pub enum Delivery {
     /// Its retries ran out, or the subscriber answered with an Error: its
     /// coordinate holds off for one retry cycle.
     Failed,
-    /// No attempt counts: DeviceCommunicationControl withdrew it, its
-    /// transaction closed, or the host shut down.
+    /// No attempt counts: DeviceCommunicationControl withdrew it, or its
+    /// transaction closed. The mark clears at once. A worker aborted at
+    /// shutdown reports nothing; its report keeps the mark until its
+    /// deadline.
     NotSent,
 }
 
@@ -386,6 +393,16 @@ impl CovTable {
         };
         let deadline = now.saturating_add(self.timing.deadline());
         let state = self.flights.entry(flight).or_default();
+        // A report still marked here passed its deadline, or the coordinate
+        // would be busy. Its worker may yet be alive, stalled in a send, so
+        // it is fenced before the new report takes the mark: one report at
+        // a time per coordinate.
+        if state.ticket != 0 {
+            self.fenced.tokens.push(Token {
+                flight,
+                ticket: state.ticket,
+            });
+        }
         state.ticket = ticket.get();
         state.deadline = Some(deadline);
         state.carried = carried;
