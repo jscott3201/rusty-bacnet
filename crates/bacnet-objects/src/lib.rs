@@ -95,6 +95,9 @@ mod local_input_tests;
 mod event_reporting_tests;
 
 #[cfg(test)]
+mod detection_disabled_commit_tests;
+
+#[cfg(test)]
 mod cov_reporting_tests;
 
 #[cfg(test)]

@@ -4589,7 +4589,12 @@ fire-ready `TransitionOutcome` while leaving event state, acknowledgment bits,
 history, and the ready proposal unchanged until commit succeeds. Implement
 `commit_event_transition` to validate the supplied
 `EventTransitionCommit`, atomically apply all object-owned transition state, and
-return `EventTransitionCommitError` without mutation on failure. Custom objects
+return `EventTransitionCommitError` without mutation on failure. While the
+object's Event_Detection_Enable is FALSE, refuse every commit, NORMAL targets
+included, with `DetectionDisabled`, as the built-in reporters do: detection
+off stops the state machine and holds the event properties at their initial
+values (Clause 13.2.2.1), and turning it off should reset them directly, not
+through a commit. Custom objects
 can use these public types directly; the built-in private commit kernel is not
 required. Both server paths commit before distribution, even when Event_Enable,
 DCC, or an empty recipient list suppresses sending. The default commit
