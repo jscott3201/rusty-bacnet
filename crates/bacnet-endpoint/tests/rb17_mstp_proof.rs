@@ -7,9 +7,10 @@
 //! execution modes with the same assertions, with standard frames and with
 //! extended frames on (`MstpEndpointBuilder::extended_frames`, #1663).
 //! Event-driven (timeout-guarded channel receives; no fixed sleeps, only
-//! `Harness::peer_deliver`'s 1 ms counter poll). The Tokio
-//! variants run on paused time; the dedicated-thread MAC keeps the wall
-//! clock, so peer requests go through `Harness::peer_deliver` (#2269).
+//! `Harness::peer_deliver`'s 1 ms counter poll). Both variants run on
+//! paused time: the dedicated-thread MAC runs on the test's time
+//! (`MstpThreadConfig::with_test_time`, #2284). One dedicated smoke test,
+//! `mstp_prompt_reply_dedicated_wall_clock`, keeps the wall clock.
 //!
 //! Evidence level (simulator, NOT physical bench or on-wire conformance):
 //! this file proves single serial ownership + start-once, prompt replies via
@@ -102,9 +103,9 @@ async fn mstp_one_serial_owner_tokio() {
     one_owner_impl(MstpExecutionMode::Tokio, Frames::Standard).await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn mstp_one_serial_owner_dedicated() {
-    one_owner_impl(MstpExecutionMode::dedicated_thread(), Frames::Standard).await;
+    one_owner_impl(dedicated(), Frames::Standard).await;
 }
 
 #[tokio::test(start_paused = true)]
@@ -112,9 +113,9 @@ async fn mstp_one_serial_owner_extended_tokio() {
     one_owner_impl(MstpExecutionMode::Tokio, Frames::Extended).await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn mstp_one_serial_owner_extended_dedicated() {
-    one_owner_impl(MstpExecutionMode::dedicated_thread(), Frames::Extended).await;
+    one_owner_impl(dedicated(), Frames::Extended).await;
 }
 
 async fn prompt_reply_impl(mode: MstpExecutionMode, frames: Frames) {
@@ -149,9 +150,9 @@ async fn mstp_prompt_reply_tokio() {
     prompt_reply_impl(MstpExecutionMode::Tokio, Frames::Standard).await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn mstp_prompt_reply_dedicated() {
-    prompt_reply_impl(MstpExecutionMode::dedicated_thread(), Frames::Standard).await;
+    prompt_reply_impl(dedicated(), Frames::Standard).await;
 }
 
 #[tokio::test(start_paused = true)]
@@ -159,9 +160,17 @@ async fn mstp_prompt_reply_extended_tokio() {
     prompt_reply_impl(MstpExecutionMode::Tokio, Frames::Extended).await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn mstp_prompt_reply_extended_dedicated() {
-    prompt_reply_impl(MstpExecutionMode::dedicated_thread(), Frames::Extended).await;
+    prompt_reply_impl(dedicated(), Frames::Extended).await;
+}
+
+/// The one dedicated variant on the wall clock, the node's own runtime's
+/// (#2284): a smoke test of production timing. Under extreme host load it
+/// can still fail as `rb17_harness::WAIT` describes.
+#[tokio::test]
+async fn mstp_prompt_reply_dedicated_wall_clock() {
+    prompt_reply_impl(MstpExecutionMode::dedicated_thread(), Frames::Standard).await;
 }
 
 async fn bidirectional_impl(mode: MstpExecutionMode, frames: Frames) {
@@ -231,9 +240,9 @@ async fn mstp_bidirectional_tokio() {
     bidirectional_impl(MstpExecutionMode::Tokio, Frames::Standard).await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn mstp_bidirectional_dedicated() {
-    bidirectional_impl(MstpExecutionMode::dedicated_thread(), Frames::Standard).await;
+    bidirectional_impl(dedicated(), Frames::Standard).await;
 }
 
 #[tokio::test(start_paused = true)]
@@ -241,9 +250,9 @@ async fn mstp_bidirectional_extended_tokio() {
     bidirectional_impl(MstpExecutionMode::Tokio, Frames::Extended).await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn mstp_bidirectional_extended_dedicated() {
-    bidirectional_impl(MstpExecutionMode::dedicated_thread(), Frames::Extended).await;
+    bidirectional_impl(dedicated(), Frames::Extended).await;
 }
 
 async fn deferred_impl(mode: MstpExecutionMode, frames: Frames) {
@@ -278,9 +287,9 @@ async fn mstp_deferred_after_postponed_tokio() {
     deferred_impl(MstpExecutionMode::Tokio, Frames::Standard).await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn mstp_deferred_after_postponed_dedicated() {
-    deferred_impl(MstpExecutionMode::dedicated_thread(), Frames::Standard).await;
+    deferred_impl(dedicated(), Frames::Standard).await;
 }
 
 #[tokio::test(start_paused = true)]
@@ -288,9 +297,9 @@ async fn mstp_deferred_after_postponed_extended_tokio() {
     deferred_impl(MstpExecutionMode::Tokio, Frames::Extended).await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn mstp_deferred_after_postponed_extended_dedicated() {
-    deferred_impl(MstpExecutionMode::dedicated_thread(), Frames::Extended).await;
+    deferred_impl(dedicated(), Frames::Extended).await;
 }
 
 /// The builder's timing setters reach the transport's `MstpConfig`; left

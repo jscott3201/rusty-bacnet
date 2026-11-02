@@ -74,7 +74,9 @@ serial = ["dep:tokio-serial"]
 serial-gpio = ["serial", "dep:gpiocdev"]
 ethernet = []
 # The scripted MS/TP line and token ring the monitor's own tests use, as
-# `mstp::monitor::script`, for tools built on the monitor (#1854).
+# `mstp::monitor::script`, for tools built on the monitor (#1854); and
+# `MstpThreadConfig::with_test_time`, which runs a dedicated-thread MS/TP
+# node on a paused test runtime's time (#2284).
 test-support = []
 
 [dev-dependencies]

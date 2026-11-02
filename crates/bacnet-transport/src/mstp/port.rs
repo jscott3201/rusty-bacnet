@@ -258,7 +258,7 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
             tap: self.frame_tap.clone(),
         };
         let task = match &dedicated_runtime {
-            Some(runtime) => runtime.handle.spawn(task.run()),
+            Some(runtime) => runtime.spawn(task.run()),
             None => tokio::spawn(task.run()),
         };
         self.dedicated_runtime = dedicated_runtime;

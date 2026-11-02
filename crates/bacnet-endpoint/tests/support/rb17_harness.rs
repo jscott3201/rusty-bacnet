@@ -23,7 +23,9 @@ use bacnet_npdu::NetworkPriority;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
-use bacnet_transport::mstp::{LoopbackSerial, MstpExecutionMode, MstpTransport, SerialPort};
+use bacnet_transport::mstp::{
+    LoopbackSerial, MstpExecutionMode, MstpThreadConfig, MstpTransport, SerialPort,
+};
 use bacnet_types::enums::{
     ConfirmedServiceChoice, EngineeringUnits, ObjectType, PropertyIdentifier, Segmentation,
     ServiceSupported,
@@ -38,18 +40,20 @@ use crate::mstp_wire::{
 };
 
 /// A hang backstop, not a timing budget: no wait here is meant to come
-/// near it. The Tokio variants run on paused time, and a request the
-/// session dropped as out of turn never comes back whatever the wait
-/// (#2269), which [`Harness::peer_deliver`] handles.
+/// near it. The tests run on paused time, the dedicated variants included
+/// ([`dedicated`]), and a request the session dropped as out of turn never
+/// comes back whatever the wait (#2269), which [`Harness::peer_deliver`]
+/// handles.
 ///
-/// One residual is left to the dedicated variants, under extreme host load
+/// One residual is left to a dedicated variant on the wall clock
+/// ([`MstpExecutionMode::dedicated_thread`]), under extreme host load
 /// only: the node's own thread is starved past the reply window (about
 /// 250 ms) while it answers. It then rightly sends neither the answer nor
 /// Reply Postponed, and the wait for either times out. The failure's
 /// [`Harness::link_report`] shows it: `frames_received: 1,
 /// npdus_delivered: 1, expired_requests: 1, reply_postponed_tx: 0`, and a
 /// deadline lateness of 0.3 s or more. No harness change can recover that;
-/// `.config/nextest.toml` gives these tests two threads each to make it
+/// `.config/nextest.toml` gives such tests two threads each to make it
 /// rarer.
 pub const WAIT: Duration = Duration::from_secs(5);
 /// How often [`Harness::peer_deliver`] sends a frame before giving up.
@@ -58,6 +62,24 @@ pub const WAIT: Duration = Duration::from_secs(5);
 const DELIVERY_ATTEMPTS: usize = 8;
 pub const SESSION_MAC: u8 = 3;
 pub const PEER_MAC: u8 = 7;
+
+/// A dedicated-thread node on the test's paused time (#2284): its thread
+/// and runtime are its own, its deadlines the test runtime's, which
+/// advances only when both are idle. Call it inside the test's runtime.
+pub fn dedicated() -> MstpExecutionMode {
+    MstpExecutionMode::DedicatedThread(
+        MstpThreadConfig::new().with_test_time(tokio::runtime::Handle::current()),
+    )
+}
+
+/// Whether `mode` runs the node on the test's paused time: a stalled test
+/// thread can then move no MAC deadline.
+fn on_test_time(mode: &MstpExecutionMode) -> bool {
+    match mode {
+        MstpExecutionMode::Tokio => true,
+        MstpExecutionMode::DedicatedThread(thread) => thread.has_test_time(),
+    }
+}
 
 /// The frames the session's link runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,7 +168,7 @@ pub struct Harness {
     pub writes: mpsc::UnboundedReceiver<MstpFrame>,
     pub drain: tokio::task::JoinHandle<()>,
     /// Where the session's node runs; [`Self::peer_deliver`] resends only
-    /// for a dedicated thread.
+    /// for a dedicated thread on the wall clock.
     pub mode: MstpExecutionMode,
 }
 
@@ -270,8 +292,9 @@ impl Harness {
     ///
     /// The peer sends out of turn: it never holds the token, so the session
     /// takes the frame only while it sits in IDLE. A dedicated-thread MAC
-    /// runs its own runtime on the wall clock and keeps running while a
-    /// loaded host starves the test's thread. After T_no_token (500 ms) of
+    /// on the wall clock ([`MstpExecutionMode::dedicated_thread`]) runs its
+    /// own runtime's time and keeps running while a loaded host starves the
+    /// test's thread. After T_no_token (500 ms) of
     /// silence it polls for a successor, and a data frame that arrives
     /// during a poll is an unexpected frame: the session drops it and goes
     /// back to IDLE (Clause 9.5.6.8). No wait, however long, brings that
@@ -280,9 +303,10 @@ impl Harness {
     /// event, so the snapshot that first counts the frame received also
     /// counts it delivered, or never will.
     ///
-    /// The Tokio variants run on paused time, where a stall of the test's
-    /// thread moves no MAC deadline, so there the first send must be
-    /// delivered: a drop is a bug, and the call panics instead of resending.
+    /// The Tokio variants and [`dedicated`] run on paused time, where a
+    /// stall of the test's thread moves no MAC deadline, so there the first
+    /// send must be delivered: a drop is a bug, and the call panics instead
+    /// of resending.
     ///
     /// Call it with no earlier peer frame still on its way to the session,
     /// so the next frame the MAC counts is this one.
@@ -314,7 +338,7 @@ impl Harness {
                 return;
             }
             assert!(
-                self.mode != MstpExecutionMode::Tokio,
+                !on_test_time(&self.mode),
                 "on paused time the session must take the peer's frame first time; {}",
                 self.link_report()
             );
