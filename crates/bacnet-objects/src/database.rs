@@ -255,6 +255,15 @@ impl ObjectDatabase {
             .downcast_mut()
     }
 
+    /// The stored object itself, with the `'static` bound the crate's
+    /// concrete access needs.
+    pub(crate) fn stored_object_mut(
+        &mut self,
+        oid: &ObjectIdentifier,
+    ) -> Option<&mut (dyn BACnetObject + 'static)> {
+        Some(self.objects.get_mut(oid)?.as_mut())
+    }
+
     /// Install an identity-preserving adapter through scoped structural access.
     ///
     /// The callback must preserve the object's identifier, name and type. It is

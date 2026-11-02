@@ -108,7 +108,7 @@ use crate::property_metadata::{
 // other row: the family models no commandable or paired-text gating.
 // The trio is not createable at runtime (the `creation` table has no
 // constructor for it) and remains deleteable (delete denies
-// only Device and NetworkPort, so the is_deleteable=true default holds);
+// only Device and NetworkPort, so the builtin_deleteable=true default holds);
 // neither needs an override. Array gating keeps the default: Priority_Array
 // and Door_Members (BACnetARRAYs per Table 12-30), Access_Doors (Table 12-36)
 // and Property_List admit an index while every other served row rejects one. COV keeps its lend: Access Door and Access

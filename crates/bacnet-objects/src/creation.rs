@@ -1,13 +1,17 @@
 //! The object types a CreateObject request can build (Clause 15.3), one
-//! constructor per type (#2172).
+//! constructor per type (#2172), and the rest of each built-in type's
+//! lifecycle: what it takes only at creation, and whether DeleteObject
+//! removes it (#2179).
 //!
 //! The table here is the one source for both sides of createability: the
 //! bundled server's CreateObject handler builds each new object through
 //! [`builtin_constructor`], and its PICS reports a type as createable when
 //! the table has an entry for it (or the application registered a
-//! constructor for it). Createability belongs to the type, not to an
+//! constructor for it). Createability, the creation-only properties
+//! ([`builtin_creation_only`], from each type's [`Creatable`] impl) and
+//! deleteability ([`builtin_deleteable`]) belong to the type, not to an
 //! instance, so no object is asked; only code that names this table links
-//! its constructors.
+//! its constructors and initializers.
 //!
 //! Each constructor takes only the instance and a name, and starts the
 //! object with the defaults of its own `new`: no units on the analog and
@@ -131,18 +135,14 @@ pub struct CreationOnly {
     initialize: Initializer,
 }
 
-type Initializer = fn(
-    &mut ObjectDatabase,
-    &ObjectIdentifier,
-    PropertyIdentifier,
-    PropertyValue,
-) -> Result<(), Error>;
+type Initializer =
+    fn(&mut (dyn BACnetObject + 'static), PropertyIdentifier, PropertyValue) -> Result<(), Error>;
 
 impl CreationOnly {
     /// No property is set only at creation.
     pub const NONE: Self = Self {
         properties: &[],
-        initialize: |_, _, _, _| Err(crate::common::write_access_denied_error()),
+        initialize: |_, _, _| Err(crate::common::write_access_denied_error()),
     };
 
     /// `O`'s creation-only properties and initializer.
@@ -174,7 +174,20 @@ impl CreationOnly {
         property: PropertyIdentifier,
         value: PropertyValue,
     ) -> Result<(), Error> {
-        (self.initialize)(db, oid, property, value)
+        let object = db
+            .stored_object_mut(oid)
+            .ok_or_else(crate::common::write_access_denied_error)?;
+        self.initialize_object(object, property, value)
+    }
+
+    /// [`initialize`](Self::initialize) on the stored object itself.
+    pub(crate) fn initialize_object(
+        &self,
+        object: &mut (dyn BACnetObject + 'static),
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        (self.initialize)(object, property, value)
     }
 }
 
@@ -187,15 +200,45 @@ impl core::fmt::Debug for CreationOnly {
 }
 
 fn initialize_as<O: Creatable>(
-    db: &mut ObjectDatabase,
-    oid: &ObjectIdentifier,
+    object: &mut (dyn BACnetObject + 'static),
     property: PropertyIdentifier,
     value: PropertyValue,
 ) -> Result<(), Error> {
-    let object = db
-        .stored_as_mut::<O>(oid)
+    let object = object
+        .as_stored_any_mut(crate::traits::ObjectStorageAccess(()))
+        .downcast_mut::<O>()
         .ok_or_else(crate::common::write_access_denied_error)?;
     Creatable::initialize_property(object, property, value)
+}
+
+/// The old per-object forms of the table's answers, for the tests that
+/// build objects through the table.
+#[cfg(test)]
+pub(crate) trait CreationTestExt {
+    /// The type's creation-only properties.
+    fn creation_only_properties(&self) -> &'static [PropertyIdentifier];
+    /// The type's initializer, applied to this object.
+    fn initialize_property(
+        &mut self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error>;
+}
+
+#[cfg(test)]
+impl CreationTestExt for dyn BACnetObject {
+    fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
+        builtin_creation_only(self.object_identifier().object_type()).properties()
+    }
+
+    fn initialize_property(
+        &mut self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        builtin_creation_only(self.object_identifier().object_type())
+            .initialize_object(self, property, value)
+    }
 }
 
 /// The number of states a new multi-state object starts with, until a

@@ -312,12 +312,6 @@ impl BACnetObject for DeviceReadView<'_> {
     fn audit_reporter(&self) -> Option<&AuditReporterObject> {
         self.object.audit_reporter()
     }
-    fn creation_only_properties(&self) -> &'static [P] {
-        self.object.creation_only_properties()
-    }
-    fn is_deleteable(&self) -> bool {
-        self.object.is_deleteable()
-    }
     fn command_runner(&self) -> Option<&dyn CommandRunner> {
         self.object.command_runner()
     }

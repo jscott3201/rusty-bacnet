@@ -49,7 +49,8 @@ impl SourceReporter {
 
 // Delegate every BACnetObject method, including defaulted/hidden hooks: inheriting
 // a default here would silently discard a downstream object's override. Only the
-// source property and its write gate, plus deletion, belong to this adapter.
+// source property and its write gate belong to this adapter; the database keeps
+// the active Reporter from being removed (`ObjectDatabase::check_removable`).
 // `trait_tests` runs each method the trait declares and fails on one that does
 // not reach the wrapped object unchanged.
 impl BACnetObject for SourceReporter {
@@ -152,22 +153,6 @@ impl BACnetObject for SourceReporter {
 
     fn is_list_property(&self, property: PropertyIdentifier) -> bool {
         self.wrapped.is_list_property(property)
-    }
-
-    fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
-        self.wrapped.creation_only_properties()
-    }
-
-    fn initialize_property(
-        &mut self,
-        property: PropertyIdentifier,
-        value: PropertyValue,
-    ) -> Result<(), Error> {
-        self.wrapped.initialize_property(property, value)
-    }
-
-    fn is_deleteable(&self) -> bool {
-        !self.active() && self.wrapped.is_deleteable()
     }
 
     fn staging_source(&mut self) -> Option<&mut dyn StagingSource> {

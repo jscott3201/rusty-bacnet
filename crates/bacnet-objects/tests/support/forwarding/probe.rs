@@ -210,18 +210,6 @@ impl BACnetObject for Probe {
         self.called("is_list_property", (property,));
         property == CUSTOM_LIST
     }
-    fn creation_only_properties(&self) -> &'static [P] {
-        self.called("creation_only_properties", ());
-        &[CUSTOM]
-    }
-    fn initialize_property(&mut self, property: P, value: PropertyValue) -> Result<(), Error> {
-        self.called("initialize_property", (property, value));
-        Ok(())
-    }
-    fn is_deleteable(&self) -> bool {
-        self.called("is_deleteable", ());
-        false
-    }
     fn staging_source(&mut self) -> Option<&mut dyn StagingSource> {
         self.called("staging_source", ());
         Some(self)

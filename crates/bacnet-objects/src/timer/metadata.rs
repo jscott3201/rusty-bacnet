@@ -156,7 +156,9 @@ mod tests {
                 .len(),
             metadata.len()
         );
-        assert!(object.is_deleteable());
+        assert!(crate::creation::builtin_deleteable(
+            object.object_identifier().object_type()
+        ));
         assert!(!object.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
         for row in metadata.iter() {
             let p = row.property_identifier;

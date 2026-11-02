@@ -572,18 +572,6 @@ impl BACnetObject for StructuredViewObject {
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
         metadata::for_structured_view_object(self)
     }
-
-    fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
-        structured_view_creation::CREATION_ONLY
-    }
-
-    fn initialize_property(
-        &mut self,
-        property: PropertyIdentifier,
-        value: PropertyValue,
-    ) -> Result<(), Error> {
-        structured_view_creation::initialize(self, property, value)
-    }
 }
 
 impl crate::creation::Creatable for StructuredViewObject {

@@ -255,9 +255,6 @@ impl BACnetObject for NetworkPortObject {
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
         metadata::for_object(self)
     }
-    fn is_deleteable(&self) -> bool {
-        false
-    }
 }
 
 #[cfg(test)]

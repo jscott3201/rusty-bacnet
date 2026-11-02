@@ -365,18 +365,6 @@ impl BACnetObject for AnalogOutputObject {
     crate::traits::lend_event_reporting!();
 
     crate::traits::lend_reliability_eval!();
-
-    fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
-        super::CREATION_ONLY
-    }
-
-    fn initialize_property(
-        &mut self,
-        property: PropertyIdentifier,
-        value: PropertyValue,
-    ) -> Result<(), Error> {
-        super::initialize_units(&mut self.units, property, value)
-    }
 }
 
 impl crate::creation::Creatable for AnalogOutputObject {

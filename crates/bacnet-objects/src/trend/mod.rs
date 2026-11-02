@@ -535,18 +535,6 @@ impl BACnetObject for TrendLogObject {
         metadata::for_object(self)
     }
 
-    fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
-        creation_only::CREATION_ONLY
-    }
-
-    fn initialize_property(
-        &mut self,
-        property: PropertyIdentifier,
-        value: PropertyValue,
-    ) -> Result<(), Error> {
-        creation_only::initialize(self, property, value)
-    }
-
     fn durable_writes(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
         self.store.is_some().then_some(self as _)
     }

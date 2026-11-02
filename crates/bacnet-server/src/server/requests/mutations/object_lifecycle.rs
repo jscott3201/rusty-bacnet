@@ -132,11 +132,14 @@ impl Request<'_> {
                     true,
                 );
             }
-            let (result, mut removed) =
-                match handlers::handle_delete_object(&mut db, &self.req.service_request) {
-                    Ok(removed) => (Ok(()), Some(removed)),
-                    Err(error) => (Err(error), None),
-                };
+            let (result, mut removed) = match handlers::delete_object(
+                &mut db,
+                &self.config.object_constructors,
+                &self.req.service_request,
+            ) {
+                Ok(removed) => (Ok(()), Some(removed)),
+                Err(error) => (Err(error), None),
+            };
             if result.is_ok()
                 && let Some(status) = removed_status
             {

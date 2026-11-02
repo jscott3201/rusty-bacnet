@@ -535,5 +535,7 @@ fn channel_property_list_and_required_rows_follow_table_12_62() {
             .is_some_and(|cov| cov.supports_subscribe_cov())
     );
     assert!(!channel.cov().is_some());
-    assert!(channel.is_deleteable());
+    assert!(crate::creation::builtin_deleteable(
+        channel.object_identifier().object_type()
+    ));
 }

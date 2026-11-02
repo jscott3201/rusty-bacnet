@@ -71,7 +71,7 @@ fn with_vendor(fixture: &mut Fixture) {
     fixture
         .config
         .object_constructors
-        .register(vendor_type(), |oid, name| Ok(Vendor::boxed(oid, name)))
+        .register(vendor_type(), |oid, name| Ok(Vendor::new(oid, name)))
         .unwrap();
 }
 
@@ -206,7 +206,7 @@ async fn a_registered_analog_value_constructor_replaces_the_built_in() {
                 EngineeringUnits::DEGREES_CELSIUS,
             )?;
             object.set_description("site default");
-            Ok(Box::new(object))
+            Ok(object)
         })
         .unwrap();
     let object = created(
@@ -270,7 +270,7 @@ async fn a_constructor_that_builds_another_object_is_refused() {
         .object_constructors
         .register(vendor_type(), |oid, name| {
             let other = ObjectIdentifier::new(oid.object_type(), oid.instance_number() + 1)?;
-            Ok(Vendor::boxed(other, name))
+            Ok(Vendor::new(other, name))
         })
         .unwrap();
     let before = fixture.db.read().await.len();
@@ -298,7 +298,7 @@ async fn a_constructor_refusal_reaches_the_client_and_a_panic_creates_nothing() 
     let raw = |offset| ObjectType::from_raw(VENDOR_TYPE + offset);
     let constructors = &mut fixture.config.object_constructors;
     constructors
-        .register(raw(1), |_, _| {
+        .register::<Vendor, _>(raw(1), |_, _| {
             Err(Error::protocol(
                 ErrorClass::RESOURCES,
                 ErrorCode::NO_SPACE_FOR_OBJECT,
@@ -306,10 +306,10 @@ async fn a_constructor_refusal_reaches_the_client_and_a_panic_creates_nothing() 
         })
         .unwrap();
     constructors
-        .register(raw(2), |_, _| Err(Error::Encoding("not now".into())))
+        .register::<Vendor, _>(raw(2), |_, _| Err(Error::Encoding("not now".into())))
         .unwrap();
     constructors
-        .register(raw(3), |_, _| panic!("constructor bug"))
+        .register::<Vendor, _>(raw(3), |_, _| panic!("constructor bug"))
         .unwrap();
     let before = fixture.db.read().await.len();
     for (kind, class, code) in [
@@ -348,7 +348,7 @@ async fn the_policy_decides_a_registered_type_before_its_constructor_runs() {
         .object_constructors
         .register(vendor_type(), move |oid, name| {
             counted.fetch_add(1, Ordering::SeqCst);
-            Ok(Vendor::boxed(oid, name))
+            Ok(Vendor::new(oid, name))
         })
         .unwrap();
     fixture.config.mutation_policy = MutationPolicy::DenyAll;
@@ -382,7 +382,7 @@ async fn a_registered_type_refuses_a_taken_identifier_and_the_reserved_instance(
         .object_constructors
         .register(vendor_type(), move |oid, name| {
             counted.fetch_add(1, Ordering::SeqCst);
-            Ok(Vendor::boxed(oid, name))
+            Ok(Vendor::new(oid, name))
         })
         .unwrap();
     let taken = oid(vendor_type(), 3);

@@ -277,23 +277,6 @@ macro_rules! define_value_object_commandable {
             fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
                 crate::property_metadata::is_writable_in_metadata($property_metadata, property)
             }
-
-            // Units is read-only to WriteProperty but a CreateObject initial
-            // value may set it, as on the analog types (#1429).
-            $(
-            fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
-                crate::analog::CREATION_ONLY
-            }
-
-            fn initialize_property(
-                &mut self,
-                property: PropertyIdentifier,
-                value: PropertyValue,
-            ) -> Result<(), Error> {
-                let units: &mut $units_ty = &mut self.units;
-                crate::analog::initialize_units(units, property, value)
-            }
-            )?
         }
 
         impl crate::creation::Creatable for $struct_name {

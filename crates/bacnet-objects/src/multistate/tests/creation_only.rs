@@ -5,6 +5,7 @@
 
 use super::super::*;
 use crate::command_source::test_origin;
+use crate::creation::{Creatable, CreationTestExt};
 use PropertyIdentifier as P;
 use bacnet_types::error::RemoteError;
 
@@ -155,7 +156,7 @@ fn a_count_that_would_strand_a_held_state_is_refused() {
     default.set_relinquish_default(5).unwrap();
     let mut alarms = MultiStateInputObject::new(2, "MSI-2", 5).unwrap();
     alarms.set_alarm_values(vec![1, 5]);
-    let objects: [&mut dyn BACnetObject; 5] = [
+    let objects: [&mut (dyn BACnetObject + 'static); 5] = [
         &mut input,
         &mut output,
         &mut value,

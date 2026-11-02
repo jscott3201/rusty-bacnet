@@ -143,10 +143,6 @@ pub const QUERIES: &[(&str, Query)] = &[
             [CUSTOM_LIST, P::DATE_LIST].map(|p| o.is_list_property(p))
         )
     }),
-    ("creation_only_properties", |o| {
-        format!("{:?}", o.creation_only_properties())
-    }),
-    ("is_deleteable", |o| o.is_deleteable().to_string()),
     ("command_runner", |o| {
         format!("{:?}", o.command_runner().map(address))
     }),
@@ -212,10 +208,6 @@ pub const COMMANDS: &[(&str, Command)] = &[
                 &origin
             )
         )
-    }),
-    ("initialize_property", |o| {
-        let value = PropertyValue::CharacterString("probe".into());
-        format!("{:?}", o.initialize_property(CUSTOM, value))
     }),
     ("timed", |o| {
         format!("{:?}", o.timed().map(|timed| address(timed)))

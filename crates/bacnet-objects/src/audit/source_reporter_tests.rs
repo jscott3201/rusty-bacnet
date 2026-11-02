@@ -23,7 +23,9 @@ fn ordinary_reporter_has_no_source_role_even_after_local_configuration() {
                 .unwrap(),
             PropertyValue::Boolean(false)
         );
-        assert!(reporter.is_deleteable());
+        assert!(crate::creation::builtin_deleteable(
+            reporter.object_identifier().object_type()
+        ));
         assert!(!reporter.is_writable_property(PropertyIdentifier::AUDIT_SOURCE_REPORTER));
         assert!(matches!(reporter.write_property(
             PropertyIdentifier::AUDIT_SOURCE_REPORTER, None, PropertyValue::Boolean(true), None,

@@ -22,14 +22,20 @@ pub(crate) struct Vendor {
 }
 
 impl Vendor {
-    pub(crate) fn boxed(oid: ObjectIdentifier, name: &str) -> Box<dyn BACnetObject> {
-        Box::new(Self {
+    pub(crate) fn new(oid: ObjectIdentifier, name: &str) -> Self {
+        Self {
             oid,
             name: name.to_owned(),
             value: 0,
-        })
+        }
+    }
+
+    pub(crate) fn boxed(oid: ObjectIdentifier, name: &str) -> Box<dyn BACnetObject> {
+        Box::new(Self::new(oid, name))
     }
 }
+
+impl bacnet_objects::creation::Creatable for Vendor {}
 
 impl BACnetObject for Vendor {
     fn object_identifier(&self) -> ObjectIdentifier {
@@ -96,8 +102,8 @@ impl BACnetObject for Vendor {
     }
 }
 
-fn vendor(oid: ObjectIdentifier, name: &str) -> Result<Box<dyn BACnetObject>, Error> {
-    Ok(Vendor::boxed(oid, name))
+fn vendor(oid: ObjectIdentifier, name: &str) -> Result<Vendor, Error> {
+    Ok(Vendor::new(oid, name))
 }
 
 #[test]
@@ -105,7 +111,7 @@ fn a_type_registers_once() {
     let mut constructors = ObjectConstructors::new();
     constructors.register(vendor_type(), vendor).unwrap();
     assert!(constructors.contains(vendor_type()));
-    let again = constructors.register(vendor_type(), |_, _| {
+    let again = constructors.register::<Vendor, _>(vendor_type(), |_, _| {
         panic!("a refused registration is never called")
     });
     assert!(matches!(again, Err(Error::Encoding(_))), "{again:?}");
@@ -173,7 +179,7 @@ fn device_and_network_port_never_register() {
     for kind in [ObjectType::DEVICE, ObjectType::NETWORK_PORT] {
         // Both are listed types; the node itself is what refuses them.
         assert!(bacnet_objects::device::SUPPORTED_OBJECT_TYPES.contains(&kind));
-        let refused = constructors.register(kind, |_, _| {
+        let refused = constructors.register::<Vendor, _>(kind, |_, _| {
             panic!("a refused registration is never called")
         });
         assert!(matches!(refused, Err(Error::Encoding(_))), "{refused:?}");
@@ -217,7 +223,7 @@ fn the_pics_lists_a_registered_type_with_no_instance_without_building_one() {
     for kind in [vendor_type(), ObjectType::ELEVATOR_GROUP] {
         registered
             .object_constructors
-            .register(kind, |_, _| panic!("the PICS never calls a constructor"))
+            .register::<Vendor, _>(kind, |_, _| panic!("the PICS never calls a constructor"))
             .unwrap();
     }
     let rows = type_rows(&db, &registered);
@@ -258,4 +264,51 @@ fn the_pics_reports_a_registered_type_with_an_instance_as_createable() {
         row(&type_rows(&db, &registered), vendor_type()),
         Some((true, 5))
     );
+}
+
+#[test]
+fn creation_only_and_deletion_answer_by_type() {
+    let mut constructors = ObjectConstructors::new();
+    let units = [PropertyIdentifier::UNITS];
+    // The built-in table answers for a type with no registration.
+    assert_eq!(
+        constructors
+            .creation_only(ObjectType::ANALOG_VALUE)
+            .properties(),
+        units
+    );
+    // A registration answers with its constructor's type: the built-in
+    // Analog Value keeps its Units, a vendor type with none has none.
+    constructors
+        .register(ObjectType::ANALOG_VALUE, |oid, name| {
+            bacnet_objects::analog::AnalogValueObject::new(
+                oid.instance_number(),
+                name,
+                bacnet_types::enums::EngineeringUnits::NO_UNITS,
+            )
+        })
+        .unwrap();
+    constructors
+        .register(ObjectType::ANALOG_OUTPUT, vendor)
+        .unwrap();
+    assert_eq!(
+        constructors
+            .creation_only(ObjectType::ANALOG_VALUE)
+            .properties(),
+        units
+    );
+    assert!(
+        constructors
+            .creation_only(ObjectType::ANALOG_OUTPUT)
+            .properties()
+            .is_empty()
+    );
+    // Every type is deleteable but Device, Network Port and those kept.
+    for kind in [ObjectType::DEVICE, ObjectType::NETWORK_PORT] {
+        assert!(!constructors.deletes(kind), "{kind:?}");
+    }
+    assert!(constructors.deletes(vendor_type()));
+    constructors.keep_from_deletion(vendor_type());
+    assert!(!constructors.deletes(vendor_type()));
+    assert!(constructors.deletes(ObjectType::ANALOG_VALUE));
 }

@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_objects::creation::CreationOnly;
 use bacnet_types::error::RemoteError;
 
 /// Handle a CreateObject request.
@@ -76,11 +77,20 @@ pub(crate) fn handle_create_object_observed(
     }
     let created_oid =
         create(db, constructors, &request, target).map_err(CreateObjectRefusal::Failed)?;
-    let counts = StateCounts::of(db, created_oid, &request);
+    // What the type takes only at creation (#2179): the registration's
+    // answer for a registered type, the built-in table's for the rest.
+    let creation_only = constructors.creation_only(created_oid.object_type());
+    let counts = StateCounts::of(creation_only, &request);
+    let creating = Creating {
+        oid: created_oid,
+        creation_only,
+        counts,
+        command_origin,
+    };
 
     // Apply initial values; on failure, remove the created object.
-    for (position, pv) in apply_sizes_first(db, created_oid, &request, counts, command_origin) {
-        if let Err(refusal) = initialize(db, created_oid, pv, counts, command_origin) {
+    for (position, pv) in apply_sizes_first(db, &creating, &request) {
+        if let Err(refusal) = initialize(db, &creating, pv) {
             let _ = db.remove(&created_oid);
             return Err(refusal.of_initial_value(position));
         }
@@ -91,6 +101,16 @@ pub(crate) fn handle_create_object_observed(
     }
     .encode(buf);
     Ok(())
+}
+
+/// The object a CreateObject request is creating, and what its initial
+/// values need to know about it.
+struct Creating<'a> {
+    oid: ObjectIdentifier,
+    /// The type's creation-only properties and their initializer.
+    creation_only: CreationOnly,
+    counts: StateCounts,
+    command_origin: Option<&'a bacnet_objects::command_source::CommandOrigin>,
 }
 
 /// Which initial values give a multi-state object its state count.
@@ -107,16 +127,8 @@ enum StateCounts {
 }
 
 impl StateCounts {
-    fn of(
-        db: &ObjectDatabase,
-        created_oid: ObjectIdentifier,
-        request: &CreateObjectRequest,
-    ) -> Self {
-        let object = db.get(&created_oid).expect("created above");
-        if !object
-            .creation_only_properties()
-            .contains(&PropertyIdentifier::NUMBER_OF_STATES)
-        {
+    fn of(creation_only: CreationOnly, request: &CreateObjectRequest) -> Self {
+        if !creation_only.contains(PropertyIdentifier::NUMBER_OF_STATES) {
             Self::None
         } else if request
             .list_of_initial_values
@@ -162,20 +174,18 @@ impl StateCounts {
 /// its own checks here, since every state the object holds is 1.
 fn apply_sizes_first<'a>(
     db: &mut ObjectDatabase,
-    created_oid: ObjectIdentifier,
+    creating: &Creating<'_>,
     request: &'a CreateObjectRequest,
-    counts: StateCounts,
-    command_origin: Option<&bacnet_objects::command_source::CommandOrigin>,
 ) -> Vec<(u32, &'a bacnet_services::common::BACnetPropertyValue)> {
     // A refused attempt leaves the object as it was, and the value is tried
     // again in its place.
     (1u32..)
         .zip(&request.list_of_initial_values)
         .filter(|(_, pv)| {
-            let sizes = counts.gives(pv)
+            let sizes = creating.counts.gives(pv)
                 || (pv.property_identifier == PropertyIdentifier::BUFFER_SIZE
                     && pv.property_array_index.is_none());
-            !sizes || initialize(db, created_oid, pv, counts, command_origin).is_err()
+            !sizes || initialize(db, creating, pv).is_err()
         })
         .collect()
 }
@@ -264,9 +274,9 @@ fn create(
     // registration takes no type past 1023.
     let oid = ObjectIdentifier::new(object_type, instance)?;
     *target = Some(oid);
-    let object = if let Some(constructor) = registered {
+    let object = if let Some(registration) = registered {
         crate::server::construct_registered_object(
-            constructor,
+            &registration.constructor,
             oid,
             &default_name(db, object_type, instance),
         )?
@@ -322,27 +332,23 @@ fn default_name(db: &ObjectDatabase, object_type: ObjectType, instance: u32) -> 
 /// applies its value: the array index checked against the object, the value
 /// decoded whole with the object's list classification, the Object_Name kept
 /// unique, and a NULL the property leaves as it is taken as applied
-/// ([`relinquish`](bacnet_device_core::write::relinquish)). A whole value for one of the object's
-/// [`creation_only_properties`] goes to its
-/// [`initialize_property`] instead of the write route, which keeps refusing
-/// it (#1429). A State_Text written whole goes the write route, which sets
+/// ([`relinquish`](bacnet_device_core::write::relinquish)). A whole value for one of the type's
+/// creation-only properties goes to its initializer
+/// ([`CreationOnly::initialize`]) instead of the write route, which keeps
+/// refusing it (#1429). A State_Text written whole goes the write route, which sets
 /// the state count from it (#1443); when the request gives the count
 /// itself ([`StateCounts::Given`]), one that would change it is
 /// VALUE_OUT_OF_RANGE. The caller removes the object when this fails.
-///
-/// [`creation_only_properties`]: bacnet_objects::traits::BACnetObject::creation_only_properties
-/// [`initialize_property`]: bacnet_objects::traits::BACnetObject::initialize_property
 fn initialize(
     db: &mut ObjectDatabase,
-    created_oid: ObjectIdentifier,
+    creating: &Creating<'_>,
     pv: &bacnet_services::common::BACnetPropertyValue,
-    counts: StateCounts,
-    command_origin: Option<&bacnet_objects::command_source::CommandOrigin>,
 ) -> Result<(), CreateObjectRefusal> {
     use bacnet_device_core::write::{
         WriteTarget, check_and_prepare_name_write, commit_attempt, decode_write_property_value,
     };
     use bacnet_objects::property_metadata::check_write_array_index;
+    let created_oid = creating.oid;
     let property = pv.property_identifier;
     let array_index = pv.property_array_index;
     let object = db.get(&created_oid).expect("created above");
@@ -364,15 +370,20 @@ fn initialize(
         check_and_prepare_name_write(db, &created_oid, &value)
             .map_err(CreateObjectRefusal::Failed)?;
     }
-    let object = db.get_mut(&created_oid).expect("created above");
-    if array_index.is_none() && object.creation_only_properties().contains(&property) {
-        let applied = match object.initialize_property(property, value) {
+    if array_index.is_none() && creating.creation_only.contains(property) {
+        let applied = match creating
+            .creation_only
+            .initialize(db, &created_oid, property, value)
+        {
             Ok(()) => true,
             // A NULL is judged as on the write route.
             Err(error)
                 if bacnet_device_core::write::relinquish::is_null_octets(&pv.value)
                     && bacnet_device_core::write::relinquish::leaves_unchanged(
-                        object, property, None, &error,
+                        db.get(&created_oid).expect("created above"),
+                        property,
+                        None,
+                        &error,
                     ) =>
             {
                 false
@@ -391,11 +402,11 @@ fn initialize(
         priority: pv.priority,
         value: &pv.value,
     };
-    let fixed_count = (counts == StateCounts::Given
+    let fixed_count = (creating.counts == StateCounts::Given
         && property == PropertyIdentifier::STATE_TEXT
         && array_index.is_none())
     .then(|| state_count(db, created_oid));
-    commit_attempt(db, None, target, value, None, command_origin)
+    commit_attempt(db, None, target, value, None, creating.command_origin)
         .map_err(CreateObjectRefusal::Failed)?;
     // The labels have to fit the count the request gives; the caller drops
     // the object on a refusal, so the resize needs no undoing.
@@ -417,11 +428,15 @@ fn state_count(db: &ObjectDatabase, created_oid: ObjectIdentifier) -> Option<Pro
 /// Handle a DeleteObject request.
 ///
 /// Removes the object from the database. An absent object is OBJECT /
-/// UNKNOWN_OBJECT whatever its type; one whose
-/// `BACnetObject::is_deleteable` is false (the Device and Network Port
-/// objects, which model the running node itself, and any application object
-/// that opts out) is OBJECT / OBJECT_DELETION_NOT_PERMITTED, so PICS and
-/// runtime dispatch share one truth source.
+/// UNKNOWN_OBJECT whatever its type. One of a type DeleteObject doesn't
+/// remove ([`bacnet_objects::creation::builtin_deleteable`]: the Device and
+/// Network Port objects, which model the running node itself), or one the
+/// database keeps for a running runtime
+/// ([`ObjectDatabase::check_removable`]), is OBJECT /
+/// OBJECT_DELETION_NOT_PERMITTED; the PICS reports the same type-level
+/// answer. The running server also keeps the types its
+/// [`ObjectConstructors`](crate::server::ObjectConstructors) keep from
+/// deletion.
 ///
 /// Returns the removed object. Drop it after releasing the database guard,
 /// and off the async runtime: an object that saves its state (a Notification
@@ -431,22 +446,32 @@ pub fn handle_delete_object(
     db: &mut ObjectDatabase,
     service_data: &[u8],
 ) -> Result<Box<dyn bacnet_objects::traits::BACnetObject>, Error> {
-    let request = DeleteObjectRequest::decode(service_data).map_err(Error::into_request_reject)?;
+    let constructors = crate::server::ObjectConstructors::default();
+    delete_object(db, &constructors, service_data)
+}
 
-    let object = db.get(&request.object_identifier).ok_or(Error::protocol(
-        ErrorClass::OBJECT,
-        ErrorCode::UNKNOWN_OBJECT,
-    ))?;
-    if !object.is_deleteable() {
+/// [`handle_delete_object`] with the server's registry.
+pub(crate) fn delete_object(
+    db: &mut ObjectDatabase,
+    constructors: &crate::server::ObjectConstructors,
+    service_data: &[u8],
+) -> Result<Box<dyn bacnet_objects::traits::BACnetObject>, Error> {
+    let request = DeleteObjectRequest::decode(service_data).map_err(Error::into_request_reject)?;
+    let oid = request.object_identifier;
+    if db.get(&oid).is_none() {
+        return Err(Error::protocol(
+            ErrorClass::OBJECT,
+            ErrorCode::UNKNOWN_OBJECT,
+        ));
+    }
+    if !constructors.deletes(oid.object_type()) {
         return Err(Error::protocol(
             ErrorClass::OBJECT,
             ErrorCode::OBJECT_DELETION_NOT_PERMITTED,
         ));
     }
-
-    db.remove(&request.object_identifier)?
-        .ok_or(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::UNKNOWN_OBJECT,
-        ))
+    db.remove(&oid)?.ok_or(Error::protocol(
+        ErrorClass::OBJECT,
+        ErrorCode::UNKNOWN_OBJECT,
+    ))
 }

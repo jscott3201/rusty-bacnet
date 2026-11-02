@@ -135,10 +135,6 @@ impl BACnetObject for TestDevice {
             PropertyIdentifier::PROTOCOL_REVISION,
         ])
     }
-    /// Device is not deleteable; mirrors the real DeviceObject.
-    fn is_deleteable(&self) -> bool {
-        false
-    }
 }
 
 // ── Helpers ────────────────────────────────────────────────────────
@@ -269,30 +265,15 @@ fn device_not_createable_or_deleteable() {
 }
 
 #[test]
-fn real_device_and_network_port_overrides_not_createable_or_deleteable() {
-    // Directly exercise the real DeviceObject and NetworkPortObject trait
-    // overrides (not the TestDevice stub) so a regression flipping either
-    // override to true fails here rather than silently changing PICS output.
-    use bacnet_objects::device::{DeviceConfig, DeviceObject};
-    use bacnet_objects::network_port::NetworkPortObject;
-
-    let device = DeviceObject::new(DeviceConfig {
-        identity: bacnet_objects::DeviceIdentity::default().with_name("Dev"),
-        ..Default::default()
-    })
-    .unwrap();
-    assert!(!device.is_deleteable(), "Device must not be deleteable");
-
-    let np = NetworkPortObject::new_non_bip(
-        1,
-        "NP-1",
-        bacnet_types::enums::NetworkType::from_raw(0),
-        0,
-        Default::default(),
-        1476,
-    )
-    .unwrap();
-    assert!(!np.is_deleteable(), "NetworkPort must not be deleteable");
+fn device_and_network_port_types_are_not_createable_or_deleteable() {
+    // The type-level answers DeleteObject and the PICS share (#2179): a
+    // regression flipping either fails here rather than silently changing
+    // PICS output.
+    use bacnet_objects::creation::{builtin_constructor, builtin_deleteable};
+    for kind in [ObjectType::DEVICE, ObjectType::NETWORK_PORT] {
+        assert!(!builtin_deleteable(kind), "{kind:?} must not be deleteable");
+        assert!(builtin_constructor(kind).is_none(), "{kind:?}");
+    }
 }
 
 #[test]

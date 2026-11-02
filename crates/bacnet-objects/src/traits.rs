@@ -7,7 +7,7 @@ pub(crate) use object_storage::ObjectStorageAccess;
 
 use alloc::borrow::Cow;
 
-use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier, Reliability};
+use bacnet_types::enums::{PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
@@ -384,62 +384,6 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     fn is_list_property(&self, property: PropertyIdentifier) -> bool {
         crate::property_metadata::object_value_type(self, property)
             .is_some_and(crate::property_metadata::ValueType::is_list)
-    }
-
-    /// The properties whose whole value a CreateObject initial value may set
-    /// on this object although WriteProperty can't change it afterwards.
-    ///
-    /// Clause 15.3 doesn't limit initial values to the properties
-    /// WriteProperty can change, so a device may take some of its read-only
-    /// properties at creation. The bundled server hands such an initial value,
-    /// written without an array index, to [`Self::initialize_property`]
-    /// instead of the write route; every other initial value goes the way a
-    /// WriteProperty does. The PICS lists the set for each createable type.
-    /// Default empty: no property is set only at creation.
-    fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
-        &[]
-    }
-
-    /// Apply a CreateObject initial value to one of
-    /// [`Self::creation_only_properties`], written whole.
-    ///
-    /// The server calls this only on the object it is creating, before any
-    /// other request can see it. Check the value as a write would, and on
-    /// `Err` leave the object unchanged: the server then refuses the request,
-    /// naming the initial value, and drops the object. As on the write
-    /// route, an initial value that is one application NULL and that this
-    /// refuses with PROPERTY / INVALID_DATA_TYPE leaves the property as it
-    /// is and counts as applied, so refuse a NULL that way. The default
-    /// refuses every property with PROPERTY / WRITE_ACCESS_DENIED, the
-    /// answer for a property that can't be initialized at creation (Clause
-    /// 15.3.1.3.1).
-    ///
-    /// The bundled server's CreateObject reaches this hook on the types in
-    /// [`crate::creation`] and on a custom object whose type the
-    /// application registered a constructor for.
-    fn initialize_property(
-        &mut self,
-        _property: PropertyIdentifier,
-        _value: PropertyValue,
-    ) -> Result<(), Error> {
-        Err(Error::protocol(
-            ErrorClass::PROPERTY,
-            ErrorCode::WRITE_ACCESS_DENIED,
-        ))
-    }
-
-    /// Whether this object can be deleted at runtime via DeleteObject.
-    ///
-    /// Default `true`: the bundled server's DeleteObject handler asks this of
-    /// the named object and removes it when the answer is `true`, a custom
-    /// object included. When it is `false` the request is refused with
-    /// OBJECT / OBJECT_DELETION_NOT_PERMITTED and the object stays (#2171).
-    /// The PICS reports the answer as the type's deleteability. Override it
-    /// to `false` for an object a client must not remove, such as one that
-    /// models a fixed part of the device; the built-in Device and Network
-    /// Port do.
-    fn is_deleteable(&self) -> bool {
-        true
     }
 
     /// Mutably borrow a Staging object's capability, which queues target

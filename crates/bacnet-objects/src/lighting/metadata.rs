@@ -63,7 +63,7 @@ use crate::property_metadata::{
 // implementation models no commandable or intrinsic-reporting gating here.
 // The duo is not createable at runtime (the `creation` table has no
 // constructor for it) and remains deleteable (delete denies
-// only Device and NetworkPort, so the is_deleteable=true default holds);
+// only Device and NetworkPort, so the builtin_deleteable=true default holds);
 // neither needs an override. Array gating keeps the default: Priority_Array
 // and Property_List admit an index (BACnetARRAY per Tables 12-64/12-69)
 // while every other served row rejects one. COV keeps its override:
@@ -238,7 +238,9 @@ mod tests {
                 .len(),
             metadata.len()
         );
-        assert!(object.is_deleteable());
+        assert!(crate::creation::builtin_deleteable(
+            object.object_identifier().object_type()
+        ));
         assert!(object.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
         for row in metadata.iter() {
             // The value-source rows are required by their footnotes, not

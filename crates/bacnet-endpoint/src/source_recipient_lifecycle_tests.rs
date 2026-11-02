@@ -1,6 +1,7 @@
 use super::*;
 
 fn released_projection(db: &mut ObjectDatabase) {
+    assert!(db.check_removable(&selected()).is_ok());
     let object = db.get_mut(&selected()).unwrap();
     assert_eq!(
         object
@@ -8,7 +9,6 @@ fn released_projection(db: &mut ObjectDatabase) {
             .unwrap(),
         PropertyValue::Boolean(false)
     );
-    assert!(object.is_deleteable());
     object
         .audit_reporter_mut()
         .expect("an Audit Reporter")

@@ -362,25 +362,6 @@ impl BACnetObject for MultiStateInputObject {
         metadata::for_object(self)
     }
 
-    fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
-        CREATION_ONLY
-    }
-    fn initialize_property(
-        &mut self,
-        property: PropertyIdentifier,
-        value: PropertyValue,
-    ) -> Result<(), Error> {
-        let held: Vec<u32> = self.held_states().collect();
-        initialize_states(
-            &mut self.number_of_states,
-            &mut self.state_text,
-            held,
-            property,
-            value,
-        )?;
-        let _ = self.recompute_reliability();
-        Ok(())
-    }
     crate::traits::lend_reliability_eval!();
 
     fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
