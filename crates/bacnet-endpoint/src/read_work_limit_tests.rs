@@ -10,6 +10,8 @@ use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::enums::AbortReason;
 
+use super::bus_port::BusPort;
+use super::device_write_tests::bus_client;
 use super::*;
 use crate::bip::BipEndpointBuilder;
 use crate::identity::DeviceIdentity;
@@ -64,15 +66,10 @@ async fn read_groups(limit: Option<usize>) -> Vec<Result<(), Error>> {
     if let Some(limit) = limit {
         builder = builder.read_work_limit(limit);
     }
-    let mut endpoint = builder.build_session().unwrap();
+    let mut endpoint = builder.build_session_over(BusPort::new()).unwrap();
     endpoint.start().await.unwrap();
     let port = endpoint.bip_local_address().unwrap().port();
-    let mut client = bacnet_client::client::BACnetClient::bip_builder()
-        .interface(Ipv4Addr::LOCALHOST)
-        .port(0)
-        .build()
-        .await
-        .unwrap();
+    let mut client = bus_client().await;
     let mac = bacnet_transport::bvll::encode_bip_mac([127, 0, 0, 1], port);
     let mut results = Vec::new();
     for instance in [1, 2] {
@@ -93,7 +90,7 @@ async fn read_groups(limit: Option<usize>) -> Vec<Result<(), Error>> {
     results
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn endpoint_group_read_past_the_read_work_limit_aborts_out_of_resources() {
     let results = read_groups(Some(2)).await;
     assert!(

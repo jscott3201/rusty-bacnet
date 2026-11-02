@@ -292,7 +292,37 @@ impl BipEndpointBuilder {
     /// socket after `start()`); no second hidden socket is created here or
     /// in [`EndpointSession`]. Bind-count proofs use a counting test double
     /// plus real-socket corroboration (single nonzero local MAC/port).
-    pub fn build_session(mut self) -> Result<EndpointSession<BipTransport>, Error> {
+    pub fn build_session(self) -> Result<EndpointSession<BipTransport>, Error> {
+        let mut bip_status = None;
+        let mut endpoint = self.compose(|builder| {
+            let transport = builder.build_transport()?;
+            bip_status = Some(transport.bvlc_client_status());
+            Ok(transport)
+        })?;
+        endpoint.bip_status = bip_status;
+        Ok(endpoint)
+    }
+
+    /// Builds the session [`build_session`](Self::build_session) would, with
+    /// the same checks, over `transport` instead of a B/IP socket. Tests run
+    /// it on an in-memory link under paused time (#2298).
+    #[cfg(test)]
+    pub(crate) fn build_session_over<T: bacnet_transport::port::TransportPort + 'static>(
+        self,
+        transport: T,
+    ) -> Result<EndpointSession<T>, Error> {
+        self.compose(|builder| {
+            builder.build_transport()?;
+            Ok(transport)
+        })
+    }
+
+    /// Validates the session-owned configuration, then composes it over the
+    /// transport `transport` makes from the remaining B/IP controls.
+    fn compose<T: bacnet_transport::port::TransportPort + 'static>(
+        mut self,
+        transport: impl FnOnce(Self) -> Result<T, Error>,
+    ) -> Result<EndpointSession<T>, Error> {
         let device_write_authorizer = self.device_write_authorizer.take();
         let reinitialize = self.reinitialize.take();
         let reinit_password = self.reinit_password.take();
@@ -306,10 +336,7 @@ impl BipEndpointBuilder {
         let database = self.database.take();
         let identity = self.identity.take();
         let registered_network_port = self.registered_network_port.take();
-        let transport = self.build_transport()?;
-        let bip_status = transport.bvlc_client_status();
-        let mut endpoint = EndpointSession::new(transport, role, session)?;
-        endpoint.bip_status = Some(bip_status);
+        let mut endpoint = EndpointSession::new(transport(self)?, role, session)?;
         if let Some(db) = database {
             endpoint = endpoint.with_database(db);
         }

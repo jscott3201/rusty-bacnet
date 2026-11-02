@@ -6,8 +6,10 @@ use std::net::Ipv4Addr;
 
 const PASSWORD: &str = "reinit-pw";
 
+use crate::session::bus_port::BusPort;
+
 type Builder = crate::bip::BipEndpointBuilder;
-type Client = bacnet_client::client::BACnetClient<bacnet_transport::bip::BipTransport>;
+type Client = bacnet_client::client::BACnetClient<BusPort>;
 type Received = Arc<std::sync::Mutex<Vec<ReinitializeContext>>>;
 
 /// A handler that records the context of each request it carries out.
@@ -29,31 +31,24 @@ fn states(received: &Received) -> Vec<ReinitializedState> {
     received.lock().unwrap().iter().map(|c| c.state).collect()
 }
 
-/// A running B/IP endpoint for Device 123, composed by `configure`, a client
-/// to reach it, and the endpoint's B/IP address.
+/// A running endpoint for Device 123, composed by `configure`, a client to
+/// reach it, and the endpoint's MAC. Both sit on the in-memory link, so the
+/// tests run on paused time (#2298).
 async fn running(
     configure: impl FnOnce(Builder) -> Builder,
-) -> (
-    EndpointSession<bacnet_transport::bip::BipTransport>,
-    Client,
-    [u8; 6],
-) {
+) -> (EndpointSession<BusPort>, Client, [u8; 6]) {
     let identity = crate::DeviceIdentity::new(123, 42).unwrap();
     let db = crate::identity::build_database_with_extra(&identity, vec![]).unwrap();
     let builder = Builder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
         .role(SessionRole::ServerOnly)
         .database(db)
         .device(identity);
-    let mut endpoint = configure(builder).build_session().unwrap();
-    endpoint.start().await.unwrap();
-    // The endpoint bound port 0; the client talks to the port it actually got.
-    let port = endpoint.bip_local_address().unwrap().port();
-    let client = Client::bip_builder()
-        .interface(Ipv4Addr::LOCALHOST)
-        .port(0)
-        .build()
-        .await
+    let mut endpoint = configure(builder)
+        .build_session_over(BusPort::new())
         .unwrap();
+    endpoint.start().await.unwrap();
+    let port = endpoint.bip_local_address().unwrap().port();
+    let client = bus_client().await;
     let mac = bacnet_transport::bvll::encode_bip_mac([127, 0, 0, 1], port);
     (endpoint, client, mac)
 }
@@ -106,7 +101,7 @@ async fn assert_refused(
     assert!(error.to_string().contains(expected), "got {error}");
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn reinitialize_device_reaches_the_handler() {
     let received = Received::default();
     let (mut endpoint, mut client, mac) = running(|builder| {
@@ -136,7 +131,7 @@ async fn reinitialize_device_reaches_the_handler() {
     endpoint.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_wrong_password_never_reaches_the_handler() {
     let received = Received::default();
     let (mut endpoint, mut client, mac) = running(|builder| {
@@ -165,7 +160,7 @@ async fn a_wrong_password_never_reaches_the_handler() {
 
 /// With no password configured, any request reaches the handler, with or
 /// without a password of its own.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn without_a_password_any_request_reaches_the_handler() {
     let received = Received::default();
     let (mut endpoint, mut client, mac) =
@@ -197,7 +192,7 @@ async fn without_a_password_any_request_reaches_the_handler() {
 /// With Device writes and ReinitializeDevice both enabled, the Device
 /// advertises ReadProperty, WriteProperty and ReinitializeDevice, and
 /// executes each.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn read_write_and_reinitialize_are_advertised_together() {
     let received = Received::default();
     let (mut endpoint, mut client, mac) = running(|builder| {
@@ -236,7 +231,7 @@ async fn read_write_and_reinitialize_are_advertised_together() {
 
 /// A panicking handler is answered SERVICES / OTHER, and the session's
 /// dispatch survives it: a ReadProperty afterwards still succeeds.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_panicking_handler_is_answered_and_the_session_keeps_serving() {
     let (mut endpoint, mut client, mac) = running(|builder| {
         builder.reinitialize(|_: &ReinitializeContext, _: &mut ObjectDatabase| {

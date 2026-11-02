@@ -1,5 +1,6 @@
 //! Device Tags metadata does not expand the endpoint's narrow write admission.
 use super::*;
+use crate::session::bus_port::BusPort;
 use bacnet_objects::object_profile::{ObjectProfile, TagsPersistence, TagsSnapshot};
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::WriteAccessSpecification;
@@ -101,7 +102,7 @@ fn profiled_database(
     assert_eq!(db.selected_device(), Some(selected));
     db
 }
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn device_profiles_read_but_tags_never_enter_endpoint_mutation_authority() {
     for writes in [false, true] {
         for provisioned in [false, true] {
@@ -114,7 +115,7 @@ async fn device_profiles_read_but_tags_never_enter_endpoint_mutation_authority()
                     .role(SessionRole::ServerOnly)
                     .database(db)
                     .device(identity)
-                    .build_session()
+                    .build_session_over(BusPort::new())
                     .unwrap();
             if writes {
                 let calls = calls.clone();
@@ -124,12 +125,7 @@ async fn device_profiles_read_but_tags_never_enter_endpoint_mutation_authority()
                 }));
             }
             endpoint.start().await.unwrap();
-            let mut client = bacnet_client::client::BACnetClient::bip_builder()
-                .interface(Ipv4Addr::LOCALHOST)
-                .port(0)
-                .build()
-                .await
-                .unwrap();
+            let mut client = bus_client().await;
             let mac = bacnet_transport::bvll::encode_bip_mac(
                 [127, 0, 0, 1],
                 endpoint.bip_local_address().unwrap().port(),
