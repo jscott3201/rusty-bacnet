@@ -212,6 +212,7 @@ macro_rules! impl_builtin_intrinsic_reporting {
 
 pub(crate) use impl_builtin_intrinsic_reporting;
 
+#[cfg(feature = "event-reporting")]
 /// Commit a built-in proposal with fixed, explicit test policy.
 ///
 /// Object-level tests that need a later state transition use no-acknowledgment

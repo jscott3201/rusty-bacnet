@@ -91,6 +91,7 @@ impl ProfileState {
         self.profile.read(property, index)
     }
 
+    #[cfg(feature = "durable-writes")]
     pub(crate) fn capability(&mut self) -> Option<&mut dyn DurableWrites> {
         self.storage.is_some().then_some(self)
     }

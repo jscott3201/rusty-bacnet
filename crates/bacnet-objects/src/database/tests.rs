@@ -2,17 +2,25 @@ use crate::property_metadata::PropertyMetadata;
 use std::borrow::Cow;
 
 use super::*;
+#[cfg(feature = "event-reporting")]
 use crate::access_control::{AccessDoorObject, AccessZoneObject};
+#[cfg(feature = "event-reporting")]
 use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
+#[cfg(feature = "event-reporting")]
 use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
+#[cfg(feature = "event-reporting")]
 use crate::event::{EventStateChange, EventTransition, EventTransitionCommit};
+#[cfg(feature = "event-reporting")]
 use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject};
-use bacnet_types::enums::{
-    EngineeringUnits, ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier,
-};
+#[cfg(feature = "event-reporting")]
+use bacnet_types::enums::{EngineeringUnits, EventState};
+use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
 use bacnet_types::error::{Error, RemoteError};
-use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
+#[cfg(feature = "event-reporting")]
+use bacnet_types::primitives::BACnetTimeStamp;
+use bacnet_types::primitives::PropertyValue;
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn all_eleven_builtin_intrinsic_families_implement_atomic_commit() {
     let mut objects: Vec<Box<dyn BACnetObject>> = vec![

@@ -324,6 +324,7 @@ impl BACnetObject for EventLogObject {
         metadata::for_object(self)
     }
 
+    #[cfg(feature = "durable-writes")]
     fn durable_writes(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
         self.store.is_some().then_some(self as _)
     }

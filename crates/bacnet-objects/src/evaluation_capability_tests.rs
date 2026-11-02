@@ -8,6 +8,7 @@ use crate::catalogue::representatives;
 use alloc::collections::BTreeSet;
 use bacnet_types::enums::ObjectType;
 
+#[cfg(feature = "event-reporting")]
 /// The built-in type that lends Event Enrollment evaluation.
 const ENROLLMENT_EVAL_LENDERS: [ObjectType; 1] = [ObjectType::EVENT_ENROLLMENT];
 
@@ -41,6 +42,7 @@ fn assert_in_catalogue(seen: &BTreeSet<u32>, lenders: &[ObjectType]) {
     }
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn exactly_the_event_enrollment_lends_enrollment_eval_through_both_accessors() {
     let mut seen = BTreeSet::new();

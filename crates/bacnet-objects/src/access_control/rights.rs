@@ -5,7 +5,6 @@ use bacnet_types::enums::{
 };
 
 use super::*;
-use crate::durable::DurableWrites;
 
 #[path = "rights_persistence.rs"]
 mod persistence;
@@ -406,7 +405,8 @@ impl BACnetObject for AccessRightsObject {
         super::metadata_identity::for_access_rights_object(self)
     }
 
-    fn durable_writes(&mut self) -> Option<&mut dyn DurableWrites> {
+    #[cfg(feature = "durable-writes")]
+    fn durable_writes(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
         Some(self)
     }
 }

@@ -11,6 +11,7 @@ use crate::event::{
 };
 use crate::traits::BACnetObject;
 use alloc::boxed::Box;
+#[cfg(feature = "event-reporting")]
 use alloc::collections::BTreeSet;
 use alloc::format;
 use alloc::string::String;
@@ -18,6 +19,7 @@ use alloc::vec::Vec;
 use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
 
+#[cfg(feature = "event-reporting")]
 /// Lenders whose commit takes any target.
 const ANY_TARGET: [ObjectType; 12] = [
     ObjectType::ANALOG_INPUT,
@@ -34,6 +36,7 @@ const ANY_TARGET: [ObjectType; 12] = [
     ObjectType::EVENT_ENROLLMENT,
 ];
 
+#[cfg(feature = "event-reporting")]
 /// The logs: BUFFER_READY has only the NORMAL state, so any other target is
 /// `Unsupported`, detection on or off.
 const NORMAL_ONLY: [ObjectType; 3] = [
@@ -113,6 +116,7 @@ fn lenders() -> Vec<(ObjectType, Box<dyn BACnetObject>)> {
         .collect()
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn every_lender_refuses_every_commit_while_detection_is_disabled() {
     let mut failures = Vec::new();
