@@ -78,6 +78,8 @@ mod mcp_approve;
 #[cfg(feature = "mcp")]
 mod mcp_approve_keys;
 #[cfg(feature = "mcp")]
+mod mcp_approve_revert;
+#[cfg(feature = "mcp")]
 mod mcp_attach;
 mod mstp_join_audit;
 mod mstp_layout;

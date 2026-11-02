@@ -63,8 +63,37 @@ enum Work {
     },
     Revert {
         wanted: BTreeSet<u64>,
+        /// What the person confirmed; none when there was nothing to show.
+        confirmed: Option<Box<Preview>>,
         done: oneshot::Sender<Result<Reverted, ToolError>>,
     },
+}
+
+/// Why the entries `current` (those the confirmed ids name now) are not
+/// what `confirmed` showed: an id taken by another write since, or a write
+/// merged into an entry, changes what a revert would send. Their revert,
+/// rebuilt, must match item for item (target, priority, the value put back
+/// and the value it replaces), on one device this server may reach.
+fn changed(confirmed: &Preview, current: &[Entry], policy: &crate::Policy) -> Option<String> {
+    let Some(now) = bacnet_ops::safety::plan::undo_preview(current) else {
+        return Some("the entries confirmed have changed".into());
+    };
+    if !policy.allows_device(now.device) {
+        return Some(format!(
+            "device {} is not in this server's [mcp] devices",
+            now.device
+        ));
+    }
+    let same = now.device == confirmed.device
+        && now.items.len() == current.len()
+        && now.items.len() == confirmed.items.len()
+        && now.items.iter().zip(&confirmed.items).all(|(a, b)| {
+            a.spec == b.spec
+                && a.priority == b.priority
+                && a.value.bytes == b.value.bytes
+                && a.before == b.before
+        });
+    (!same).then(|| "the entries confirmed have changed".into())
 }
 
 /// A revert's entries and outcomes, and how many of the principal's are
@@ -136,7 +165,11 @@ impl<T: TransportPort + 'static> DeskJob<T> {
                 let _ = done.send(Ok(sent));
                 shown
             }
-            Work::Revert { wanted, done } => {
+            Work::Revert {
+                wanted,
+                confirmed,
+                done,
+            } => {
                 let via = Some(Via::Tui);
                 let caller = McpCaller::new(&ctx.writes, &ctx.policy.writes, via, fields);
                 let caller = caller.hosted(host);
@@ -155,6 +188,20 @@ impl<T: TransportPort + 'static> DeskJob<T> {
                 let chosen = |entry: &Entry| {
                     super::revert::ours(entry, principal) && wanted.contains(&entry.id)
                 };
+                // Exactly what was confirmed, or nothing (#2185).
+                let current: Vec<Entry> = desk.entries().into_iter().filter(chosen).collect();
+                let stale = confirmed
+                    .as_deref()
+                    .and_then(|confirmed| changed(confirmed, &current, &ctx.policy));
+                if let Some(detail) = stale {
+                    let fields = json!({ "why": "stale", "detail": detail });
+                    desk.record(&caller, "declined", fields).await;
+                    desk.set_origin(was);
+                    let message =
+                        format!("{detail} since the revert was confirmed; nothing was sent");
+                    let _ = done.send(Err(ToolError::refused("stale", message)));
+                    return Vec::new();
+                }
                 let revert = desk.revert(engine.client(), engine.limits(), &caller, chosen);
                 let undone = charged(account, revert).await;
                 ctx.writes.signals.ledger_settled(&before, desk, false);
@@ -180,17 +227,22 @@ impl<T: TransportPort + 'static> DeskJob<T> {
 const ENDED: &str = "the TUI's session ended before the change went; nothing was sent";
 
 /// A revert of the principal's entries `wanted`, as a job on the TUI's
-/// desk; the work for the call's task.
+/// desk, refused as stale unless they still revert as `confirmed`; the
+/// work for the call's task.
 pub(crate) async fn revert<T: TransportPort + 'static>(
     ctx: Arc<Ctx<T>>,
     account: Arc<Account>,
-    wanted: BTreeSet<u64>,
+    (wanted, confirmed): (BTreeSet<u64>, Option<Box<Preview>>),
     fields: Map<String, Value>,
 ) -> Result<Reverted, ToolError> {
     let attached = ctx.attached.as_ref().expect("an attached session");
     let (done, answer) = oneshot::channel();
     let desk = attached.desk.clone();
-    let work = Work::Revert { wanted, done };
+    let work = Work::Revert {
+        wanted,
+        confirmed,
+        done,
+    };
     let job = DeskJob {
         ctx: Arc::clone(&ctx),
         account,
@@ -239,7 +291,13 @@ pub(crate) async fn approve<T: TransportPort + 'static>(
             let sending = write_task::sending();
             let handoff: Handoff = match reverting {
                 Some(ids) => {
-                    let job = revert(Arc::clone(ctx), Arc::clone(&account), ids, fields.clone());
+                    let confirmed = Some(preview);
+                    let job = revert(
+                        Arc::clone(ctx),
+                        Arc::clone(&account),
+                        (ids, confirmed),
+                        fields.clone(),
+                    );
                     let work = async move {
                         let (done, left) = job.await?;
                         super::revert::body(&done, left)

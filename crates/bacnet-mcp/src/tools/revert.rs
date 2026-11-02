@@ -217,21 +217,32 @@ fn attached<T: TransportPort + 'static>(
         Map<String, Value>,
     ),
 ) -> Result<Step, ToolError> {
+    use bacnet_ops::safety::{Gate, Tier};
+    // Only entries whose old value is known: the dialog shows each one's
+    // revert, and the desk sends exactly those (`write_attached`).
     let chosen: Vec<Entry> = entries
         .iter()
         .filter(|e| {
-            ours(e, &ctx.principal) && wanted.as_ref().is_none_or(|ids| ids.contains(&e.id))
+            ours(e, &ctx.principal)
+                && wanted.as_ref().is_none_or(|ids| ids.contains(&e.id))
+                && e.undo().is_some()
         })
         .cloned()
         .collect();
     let ids: BTreeSet<u64> = chosen.iter().map(|e| e.id).collect();
     let preview = bacnet_ops::safety::plan::undo_preview(&chosen);
     match preview {
-        Some(preview) if !preview.items.is_empty() => {
-            let tier = match preview.gate {
-                bacnet_ops::safety::Gate::Allowed(tier) => tier,
-                bacnet_ops::safety::Gate::Blocked(_) => bacnet_ops::safety::Tier::T3,
+        Some(mut preview) if !preview.items.is_empty() => {
+            // The planner's tier, never blocked here: `undo_preview` plans
+            // as `dangerous`, since a priority 6 entry was written so, and
+            // its revert is T3 at that priority. Over MCP a write to
+            // Relinquish_Default is T3, and so is undoing one.
+            let planned = match preview.gate {
+                Gate::Allowed(tier) => tier,
+                Gate::Blocked(_) => Tier::T3,
             };
+            let tier = super::write::mcp_tier(&preview, planned);
+            preview.gate = Gate::Allowed(tier);
             Ok(Step::Wait(Box::new(preview), tier, Some(ids)))
         }
         None if !chosen.is_empty() => Err(ToolError::refused(
@@ -242,14 +253,22 @@ fn attached<T: TransportPort + 'static>(
         // Nothing to put back: no prompt, and the desk sends nothing.
         _ => {
             let left = entries.iter().filter(|e| ours(e, &ctx.principal)).count();
+            // Entries with nothing to put back are reported, not sent.
+            let ids: BTreeSet<u64> = entries
+                .iter()
+                .filter(|e| {
+                    ours(e, &ctx.principal) && wanted.as_ref().is_none_or(|ids| ids.contains(&e.id))
+                })
+                .map(|e| e.id)
+                .collect();
             let job = super::write_attached::revert(
                 Arc::clone(ctx),
                 Arc::clone(&account),
-                ids,
+                (ids, None),
                 fields.clone(),
             );
             let work = async move {
-                let (done, _) = job.await.unwrap_or_default();
+                let (done, _) = job.await?;
                 body(&done, left)
             };
             Ok(Step::Sending(hand_off(

@@ -76,13 +76,20 @@ pub(crate) struct SafetyState {
     pub(crate) drawn: std::cell::Cell<Option<(u64, Instant)>>,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Set by a test that pins the guard to the wall clock.
+    pub(crate) static WALL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 impl App {
     /// The clock the confirmation guard reads: the wall clock, or under
     /// test the app's own, which tests move by hand.
     pub(crate) fn wall(&self) -> Instant {
         #[cfg(test)]
-        return self.now;
-        #[cfg(not(test))]
+        if !WALL.get() {
+            return self.now;
+        }
         Instant::now()
     }
 

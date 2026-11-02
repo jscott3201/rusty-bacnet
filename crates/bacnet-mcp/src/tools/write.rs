@@ -534,7 +534,7 @@ async fn preview<T: TransportPort + 'static>(
 /// The tier a change takes over MCP: the planner's, except that a write
 /// to Relinquish_Default, the value a point falls back to when every slot
 /// is empty, is T3, so a client's confirmation can't approve it.
-fn mcp_tier(preview: &Preview, tier: Tier) -> Tier {
+pub(super) fn mcp_tier(preview: &Preview, tier: Tier) -> Tier {
     let fallback = preview
         .items
         .iter()

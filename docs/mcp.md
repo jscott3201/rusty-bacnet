@@ -594,9 +594,14 @@ stderr; when the TUI ends the session it exits cleanly.
     call waits longer than the queue's full turn (490 s).
   - `bacnet_revert` is confirmed in the same dialog (the banner says it
     reverts): it shows the writes that put the pre-images back, each at
-    the tier of the write it undoes (T1 at least), and the TUI's write
+    the tier of the write it undoes (T1 at least; undoing a
+    Relinquish_Default write is T3, as the write was), and the TUI's write
     session must be armed, checked again just before anything is sent
-    (`tui-refused` otherwise). Its scope is every MCP entry of the TUI's
+    (`tui-refused` otherwise). The desk sends exactly what was confirmed:
+    it rebuilds the revert from the ledger as it is then, and refuses it
+    as `stale` when that differs (an entry id another write has taken
+    since, or a later write to the slot merged into the entry), with the
+    device checks run again. Its scope is every MCP entry of the TUI's
     OS user, the principal: every agent's, through the TUI or on stdio,
     not only this agent's. The dialog confirms one device, so the
     entries named (or all of them) must be on one device
