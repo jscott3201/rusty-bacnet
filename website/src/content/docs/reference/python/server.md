@@ -2167,6 +2167,28 @@ on one of them is notified when it changes (by the subscription's COV
 increment, if it gave one); SubscribeCOV on an Averaging object is
 refused.
 
+### BACnetServer.add_pulses_local
+
+```python
+def add_pulses_local(self, object_id: ObjectIdentifier, pulses: int) -> Awaitable[None]
+```
+
+Feed an Accumulator the input pulses its meter produced since the
+last call, counted by the application.
+
+In service the pulses step Present\_Value, through Prescale's ratio
+when the object has one, rolling over modulo Max\_Pres\_Value + 1. They
+also count toward Pulse\_Rate: once Limit\_Monitoring\_Interval is set
+(`write_property_local` or a client's write), the server closes a
+window at the end of each interval and Pulse\_Rate becomes that
+window's count, which a SubscribeCOVProperty on it is notified of.
+While Out\_Of\_Service is set Present\_Value holds and Pulse\_Rate keeps
+a client's value: the pulses still fill the rate window, but
+Present\_Value drops them rather than catching up later. `pulses` is an unsigned 64-bit count; a negative
+or larger int raises OverflowError. An unknown object raises
+UNKNOWN\_OBJECT and any object other than an Accumulator
+OPTIONAL\_FUNCTIONALITY\_NOT\_SUPPORTED.
+
 ### BACnetServer.comm_state
 
 ```python
