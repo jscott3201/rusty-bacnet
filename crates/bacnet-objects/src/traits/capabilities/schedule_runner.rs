@@ -94,6 +94,16 @@ pub trait ScheduleRunner {
     fn retry_refusals_naming(&self, _target: ObjectIdentifier) -> Option<ScheduleWrite> {
         None
     }
+
+    /// The NULLs that give up every priority slot the schedule holds on its
+    /// targets, for its removal by DeleteObject (#2256): those
+    /// [`take_owed_schedule_writes`](Self::take_owed_schedule_writes) owes
+    /// still, then one to each slot its last value filled. Each is taken
+    /// once; a schedule that never wrote, or whose slots are already given
+    /// up, owes none. No value write is owed. The default owes none.
+    fn take_relinquish_writes(&mut self) -> Vec<ScheduleWrite> {
+        Vec::new()
+    }
 }
 
 /// The two accessors of an object that lends itself as its

@@ -34,6 +34,10 @@
 //! #1416): the property keeps its value and the target counts as having
 //! taken the write. Every target here is local; a Schedule's references
 //! name objects of its own device only.
+//!
+//! A Schedule deleted by DeleteObject gives up every slot it still holds
+//! through the same target writes, under the request's guard
+//! (`DeletedSchedule`, #2256).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -41,8 +45,10 @@ use std::sync::Arc;
 use crate::committed_cov::{BackgroundCommit, CommittedCov};
 use crate::cov::CovSubscriptionTable;
 use bacnet_objects::clock::ClockFrame;
+use bacnet_objects::command_source::CommandOrigin;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::schedule::{ScheduleTargetOutcome, ScheduleWrite};
+use bacnet_objects::traits::BACnetObject;
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, Time};
@@ -154,6 +160,66 @@ pub(crate) fn retry_for_created(
     }
 }
 
+/// The slots a Schedule removed by DeleteObject gives up (#2256).
+///
+/// [`plan`](Self::plan) runs under the request's guard before the removal,
+/// while the Schedule's command origin still resolves, and
+/// [`issue`](Self::issue) under the same guard once the object is out. The
+/// NULLs go through the pass's own target writes, with the origin its
+/// writes carried, and a target that refuses one is logged as a pass's
+/// failure is; the delete still succeeds. The COV fanout comes back to send
+/// once the guard is dropped, as after a RemoveListElement that drops a
+/// target. A Schedule that holds nothing writes nothing.
+pub(crate) struct DeletedSchedule {
+    schedule: ObjectIdentifier,
+    origin: Option<CommandOrigin>,
+}
+
+impl DeletedSchedule {
+    /// Note `deleted`, when it is an object that runs as a Schedule, and the
+    /// origin its writes carry.
+    pub(crate) fn plan(
+        db_w: &mut ObjectDatabase,
+        deleted: Option<ObjectIdentifier>,
+    ) -> Option<Self> {
+        let schedule = deleted?;
+        db_w.get_mut(&schedule)?.schedule_runner()?;
+        Some(Self {
+            schedule,
+            origin: command_origin(db_w, schedule),
+        })
+    }
+
+    /// Relinquish, under `db_w`, the guard on `db`, what `removed`, the
+    /// planned Schedule taken out of the database, holds; returns the COV
+    /// fanout owed, and any Command runs the writes started.
+    pub(crate) async fn issue(
+        self,
+        db: &Arc<RwLock<ObjectDatabase>>,
+        db_w: &mut ObjectDatabase,
+        removed: &mut dyn BACnetObject,
+        cov_table: &RwLock<CovSubscriptionTable>,
+    ) -> CommittedCov {
+        let writes = removed
+            .schedule_runner()
+            .map(|runner| runner.take_relinquish_writes())
+            .unwrap_or_default();
+        if writes.is_empty() {
+            return CommittedCov::default();
+        }
+        let mut commit = BackgroundCommit::new();
+        for write in &writes {
+            debug!(
+                schedule = %self.schedule,
+                refs = write.references.len(),
+                "Deleted Schedule relinquishing its controlled properties"
+            );
+            write_targets(db_w, &mut commit, self.origin.as_ref(), write);
+        }
+        commit.finish(db, db_w, cov_table).await
+    }
+}
+
 /// Whether each Calendar is TRUE on `today`, resolved once per pass so every
 /// Schedule that references one sees the same answer.
 fn calendar_states(db: &ObjectDatabase, today: SpecificDate) -> HashMap<ObjectIdentifier, bool> {
@@ -239,9 +305,31 @@ fn deliver(
     initiator: ObjectIdentifier,
     write: &ScheduleWrite,
 ) {
-    let origin =
-        crate::command_source::resolve_local(db_w, crate::LocalCommandSource::Object(initiator))
-            .ok();
+    let origin = command_origin(db_w, initiator);
+    let outcomes = write_targets(db_w, commit, origin.as_ref(), write);
+    let reliability_changed = db_w
+        .get_mut(&initiator)
+        .and_then(|schedule| schedule.schedule_runner())
+        .is_some_and(|runner| runner.complete_schedule_write(write, &outcomes));
+    if reliability_changed {
+        commit.changed(initiator);
+    }
+}
+
+/// The origin a Schedule's writes carry: the local Device, with the Schedule
+/// as the initiating object, while both are in the database.
+fn command_origin(db: &ObjectDatabase, schedule: ObjectIdentifier) -> Option<CommandOrigin> {
+    crate::command_source::resolve_local(db, crate::LocalCommandSource::Object(schedule)).ok()
+}
+
+/// Write `write` to each of its targets under `db_w`, collecting the changed
+/// ones in `commit`, and return how each took it.
+fn write_targets(
+    db_w: &mut ObjectDatabase,
+    commit: &mut BackgroundCommit,
+    origin: Option<&CommandOrigin>,
+    write: &ScheduleWrite,
+) -> Vec<ScheduleTargetOutcome> {
     let null = bacnet_device_core::write::relinquish::is_null_value(&write.value);
     // Clause 12.24.4: a failed member does not stop the others.
     let mut outcomes = Vec::with_capacity(write.references.len());
@@ -271,7 +359,7 @@ fn deliver(
                 reference.property_array_index,
                 write.value.clone(),
                 Some(write.priority),
-                origin.as_ref(),
+                origin,
             )
         });
         let outcome = ScheduleTargetOutcome::of(&result);
@@ -319,13 +407,7 @@ fn deliver(
         }
         outcomes.push(outcome);
     }
-    let reliability_changed = db_w
-        .get_mut(&initiator)
-        .and_then(|schedule| schedule.schedule_runner())
-        .is_some_and(|runner| runner.complete_schedule_write(write, &outcomes));
-    if reliability_changed {
-        commit.changed(initiator);
-    }
+    outcomes
 }
 
 #[cfg(test)]
