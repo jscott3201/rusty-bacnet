@@ -368,6 +368,27 @@ class Runner(unittest.TestCase):
         self.assertEqual(perf_counts.exit_code({"mode": "noise"}), 0)
 
 
+class Callers(unittest.TestCase):
+    def test_semaphore_cost_is_split_by_nearest_matching_caller(self):
+        functions = {
+            "<tokio::sync::batch_semaphore::Semaphore>::add_permits_locked'<tokio::sync::batch_semaphore::Semaphore>"
+            "::release'<tokio::sync::mutex::MutexGuard<bacnet_client::tsm::Tsm> as Drop>::drop"
+            "'bacnet_client::client::requests::send": 100,
+            "<tokio::sync::batch_semaphore::Semaphore>::add_permits_locked'2'<tokio::sync::mpsc::bounded::Semaphore>"
+            "::add_permit'bacnet_server::server::dispatch": 30,
+            "<tokio::sync::batch_semaphore::Acquire as Future>::poll'<tokio::sync::rwlock::RwLock<"
+            "bacnet_objects::database::ObjectDatabase>>::read'bacnet_server::server::read": 50,
+            "<tokio::sync::batch_semaphore::Acquire as Future>::poll'tokio::runtime::task::raw::poll": 7,
+            "malloc'bacnet_client::client::requests::send": 999,
+        }
+        split = ca.split_by_caller(functions)
+        self.assertEqual(split["2a: client (transaction table and other client locks)"], 100)
+        self.assertEqual(split["channel permits (bounded mpsc)"], 30)  # nearer than the server frame
+        self.assertEqual(split["2b: server (database and other server locks)"], 50)
+        self.assertEqual(split["other or deeper than the caller depth"], 7)
+        self.assertEqual(sum(split.values()), 187)  # malloc isn't semaphore cost
+
+
 class Profiles(unittest.TestCase):
     def test_calls_in_skips_recursion_and_harness_cost(self):
         edges = {("free", "free"): [5, 50], ("a::main", "free"): [2, 20],

@@ -228,12 +228,12 @@ def build_variant(image, variant, registry):
     return hashes
 
 
-def run_command(image, variant, raw, name, binary, args, environment=None):
+def run_command(image, variant, raw, name, binary, args, environment=None, valgrind_extra=()):
     expected = variant["binaries"][binary]
     script = (
         f'test "$(sha256sum /target/release/{binary} | cut -d " " -f 1)" = "{expected}" '
         f"|| {{ echo 'binary hash mismatch' >&2; exit 97; }}; "
-        f"{' '.join(VALGRIND)} --callgrind-out-file=/out/{name}.cg /target/release/{binary} {' '.join(args)}; "
+        f"{' '.join([*VALGRIND, *valgrind_extra])} --callgrind-out-file=/out/{name}.cg /target/release/{binary} {' '.join(args)}; "
         # Valgrind creates its output readable by its owner only, and in the
         # container that owner is root. Docker Desktop hides that; a Linux
         # runner then can't read the file, so open it up and keep the status.
@@ -294,6 +294,39 @@ def run_matrix(manifest, out, save):
                     save()
                     ca.check_harness_ir(record)
                     log("RUN", name, record["instructions"], record["allocs"], record["bytes"])
+
+
+CALLER_DEPTH = 8
+
+
+def caller_split(manifest, out):
+    """Item 2a's semaphore cost by caller, per round trip and runtime, from an
+    extra pair of build A runs with --separate-callers (not gated)."""
+    raw = out / "raw"
+    variant = manifest["variants"]["A"]
+    result, md = {}, ["# Semaphore cost by caller (build A, self instructions per request)", ""]
+    for workload in [w for w in manifest["workloads"] if w in ca.ROUND_TRIP]:
+        for runtime in manifest["runtimes"]:
+            split = {}
+            for n in ca.lengths(workload):
+                name = f"callers-{workload}-{runtime}-{n}"
+                binary, args = workload_command(workload, runtime, n)
+                command = run_command(manifest["image"], variant, raw, name, binary, args, manifest.get("environment"),
+                                      (f"--separate-callers={CALLER_DEPTH}",))
+                with open(raw / f"{name}.out", "w") as stdout, open(raw / f"{name}.err", "w") as stderr:
+                    if subprocess.run(command, stdout=stdout, stderr=stderr).returncode:
+                        raise RuntimeError(f"{name} failed; see {raw / (name + '.err')}")
+                split[n] = ca.split_by_caller(ca.parse_callgrind((raw / f"{name}.cg").read_text())[1])
+            short, long = ca.lengths(workload)
+            groups = sorted(set(split[short]) | set(split[long]))
+            per = {g: ca.slope(split[short].get(g, 0), split[long].get(g, 0), short, long) for g in groups}
+            result[f"{workload}/{runtime}"] = per
+            md += [f"## {workload} / {runtime}", "", ca.table(["Group", "Self instructions per request"], [
+                [g, ca.fmt(v)] for g, v in sorted(per.items(), key=lambda kv: -kv[1])]), ""]
+            log("CALLERS", workload, runtime, {g: round(v, 1) for g, v in per.items()})
+    (out / "callers.md").write_text("\n".join(md) + "\n")
+    (out / "callers.json").write_text(json.dumps(result, indent=2) + "\n")
+    manifest["callers"] = result
 
 
 def annotate(manifest, out):
@@ -575,6 +608,9 @@ def run(args):
         manifest["completed"] = True
         manifest["ended"] = now()
         save()
+        if args.callers:
+            caller_split(manifest, out)
+            save()
         annotate(manifest, out)
         summary = analyze(out, None, aim)
         if args.gzip_raw:
@@ -618,6 +654,9 @@ def main(argv=None):
                             help="workloads judged on the saving gate (default rp), or none: the no-regression check")
     run_parser.add_argument("--glibc-tunables", default=GLIBC_TUNABLES,
                             help=f"GLIBC_TUNABLES for every counted run (default {GLIBC_TUNABLES!r}; empty for none)")
+    run_parser.add_argument("--callers", action="store_true",
+                            help=f"also split item 2a's semaphore cost by caller (--separate-callers={CALLER_DEPTH}) "
+                                 "from an extra pair of build A runs per round trip; not gated")
     run_parser.add_argument("--gzip-raw", action="store_true", help="gzip the callgrind files afterwards")
     run_parser.add_argument("--keep", action="store_true", help="keep the build volumes and trees")
     analyze_parser = commands.add_parser("analyze", help="re-analyze a completed run")

@@ -587,6 +587,38 @@ ITEMS = {
 }
 
 
+# Item 2a's semaphore cost split by who called it (#2314), from a profile run
+# with callgrind's --separate-callers: each function name then carries its
+# callers, nearest first, joined by "'". The nearest caller that matches a
+# group decides; bounded mpsc channels return permits through the same
+# semaphore, so they are a group of their own.
+SEMAPHORE_RE = re.compile(r"tokio::sync::batch_semaphore")
+CALLER_GROUPS = (
+    ("channel permits (bounded mpsc)", re.compile(r"tokio::sync::mpsc")),
+    ("2a: client (transaction table and other client locks)", re.compile(r"bacnet_client")),
+    ("2b: server (database and other server locks)", re.compile(r"bacnet_server|bacnet_device_core|bacnet_objects")),
+)
+
+
+def caller_frames(name):
+    """A --separate-callers function name split into frames, nearest first;
+    recursion-depth suffixes ('2) are dropped."""
+    return [frame for frame in name.split("'") if frame and not frame.isdigit()]
+
+
+def split_by_caller(functions):
+    """Semaphore self Ir per caller group: {group: Ir}."""
+    out = {}
+    for name, cost in functions.items():
+        frames = caller_frames(name)
+        if not frames or not SEMAPHORE_RE.search(frames[0]):
+            continue
+        group = next((g for frame in frames[1:] for g, pattern in CALLER_GROUPS if pattern.search(frame)),
+                     "other or deeper than the caller depth")
+        out[group] = out.get(group, 0) + cost
+    return out
+
+
 def item_costs(symbol_medians, line_medians):
     """Self Ir per request of each #1978 item, by symbol and by source file."""
     out = {}
