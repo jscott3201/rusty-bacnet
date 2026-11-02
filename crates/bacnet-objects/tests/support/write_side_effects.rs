@@ -66,10 +66,6 @@ const RELIABILITY_SIMULATION: &[Effect] = &[
     (P::RELIABILITY, &[P::STATUS_FLAGS]),
 ];
 
-/// Reliability written while out of service moves Status_Flags, for a type
-/// whose Out_Of_Service write leaves Reliability alone.
-const RELIABILITY_FLAGS: &[Effect] = &[(P::RELIABILITY, &[P::STATUS_FLAGS])];
-
 /// Time_Delay_Normal reads as Time_Delay until it is written itself.
 const TIME_DELAY_NORMAL_FALLBACK: &[Effect] = &[(P::TIME_DELAY, &[P::TIME_DELAY_NORMAL])];
 
@@ -327,10 +323,9 @@ pub fn effects(object_type: T) -> Option<&'static [&'static [Effect]]> {
             ],
         ],
         T::STAGING => &[
-            // Out_Of_Service doesn't touch Reliability: a simulated value
-            // stays until the server's next write plan completes.
-            OUT_OF_SERVICE_FLAGS,
-            RELIABILITY_FLAGS,
+            // Leaving out of service puts back the Reliability set aside,
+            // ending a simulated one (#2258).
+            RELIABILITY_SIMULATION,
             // Present_Stage is evaluated again; Present_Value is clamped to
             // the range, whose top is the last stage's limit.
             &[

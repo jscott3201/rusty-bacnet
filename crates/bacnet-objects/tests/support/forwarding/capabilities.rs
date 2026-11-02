@@ -442,6 +442,13 @@ pub const CAPABILITY_ROWS: &[(&str, Row)] = &[
             format!("{retry:?}")
         }),
     ),
+    (
+        "ScheduleRunner::take_relinquish_writes",
+        Row::Command(|o| {
+            let writes = o.schedule_runner().map(|r| r.take_relinquish_writes());
+            format!("{writes:?}")
+        }),
+    ),
     // The two reads go through the shared accessor, the one ReadRange's
     // read guard lends, so a read-only view runs them as well.
     (

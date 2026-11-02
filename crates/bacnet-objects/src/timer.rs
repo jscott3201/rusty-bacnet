@@ -268,6 +268,7 @@ impl BACnetObject for TimerObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         // Every write, a refused one included, first applies an expiry that
         // is already due.
         self.apply_due_expiry();
@@ -324,7 +325,6 @@ impl BACnetObject for TimerObject {
             _ => Err(crate::common::unhandled_write_error(
                 self.property_metadata().as_ref(),
                 property,
-                array_index,
             )),
         }
     }

@@ -752,6 +752,8 @@ mod notification_initiator_tests;
 #[cfg(test)]
 mod notification_transactions_tests;
 #[cfg(test)]
+mod program_state_application_tests;
+#[cfg(test)]
 mod pulse_converter_cov_tests;
 #[cfg(test)]
 mod pulse_converter_reference_tests;
@@ -767,6 +769,8 @@ mod remote_write_discovery_tests;
 mod run_cycle_tests;
 #[cfg(test)]
 mod schedule_create_retry_tests;
+#[cfg(test)]
+mod schedule_delete_tests;
 #[cfg(test)]
 mod schedule_reference_list_tests;
 #[cfg(test)]

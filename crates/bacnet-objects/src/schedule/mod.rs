@@ -58,6 +58,8 @@ pub use evaluation::{ScheduleTargetOutcome, ScheduleWrite};
 /// priority sends the current value to the new targets and relinquishes the
 /// slots it leaves behind (see
 /// [`set_object_property_references`](Self::set_object_property_references)).
+/// Deleting the object over the network relinquishes every slot it holds
+/// ([`ScheduleRunner::take_relinquish_writes`]).
 ///
 /// Reliability is CONFIGURATION_ERROR while the non-NULL values in the two
 /// schedules and Schedule_Default are not all of one datatype, or while a
@@ -418,6 +420,7 @@ impl BACnetObject for ScheduleObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         if property == PropertyIdentifier::PRESENT_VALUE {
             return self.write_present_value(array_index, value);
         }
@@ -502,7 +505,6 @@ impl BACnetObject for ScheduleObject {
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
-            array_index,
         ))
     }
 
@@ -547,6 +549,10 @@ impl ScheduleRunner for ScheduleObject {
 
     fn retry_refusals_naming(&self, target: ObjectIdentifier) -> Option<ScheduleWrite> {
         self.retry_refused_naming(target)
+    }
+
+    fn take_relinquish_writes(&mut self) -> Vec<ScheduleWrite> {
+        self.relinquish_all()
     }
 
     fn tick_schedule(

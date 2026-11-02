@@ -46,7 +46,7 @@ fn pics_loop_program_notification_class_property_metadata_is_exact() {
         (P::OBJECT_NAME, false, false),
         (P::DESCRIPTION, true, true),
         (P::OBJECT_TYPE, false, false),
-        (P::PROGRAM_STATE, false, true),
+        (P::PROGRAM_STATE, false, false),
         (P::PROGRAM_CHANGE, false, true),
         (P::REASON_FOR_HALT, true, false),
         (P::STATUS_FLAGS, false, false),

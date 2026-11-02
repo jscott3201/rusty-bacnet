@@ -54,6 +54,10 @@ fn inputs() -> Vec<(&'static str, LocalInputValue)> {
                 DoorStateReport::default(),
             )),
         ),
+        (
+            "ProgramState",
+            LocalInputValue::ProgramState(PropertyValue::Enumerated(2)),
+        ),
     ]
 }
 
@@ -81,6 +85,7 @@ const MODELS: &[(ObjectType, &[&str])] = &[
     (ObjectType::ACCESS_POINT, &["AccessEvent"]),
     (ObjectType::CREDENTIAL_DATA_INPUT, &["CredentialRead"]),
     (ObjectType::ACCESS_DOOR, &["DoorState"]),
+    (ObjectType::PROGRAM, &["ProgramState"]),
 ];
 
 /// Every property the object lists, read whole.

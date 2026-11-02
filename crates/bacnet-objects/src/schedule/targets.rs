@@ -169,6 +169,23 @@ impl ScheduleObject {
         })
     }
 
+    /// The NULLs that give up every slot this Schedule holds, for its
+    /// deletion (#2256): the ones a change of the targets still owes, then
+    /// one to each slot its last value filled. Nothing is held afterwards,
+    /// and no value write stays owed.
+    pub(super) fn relinquish_all(&mut self) -> Vec<ScheduleWrite> {
+        let mut writes = core::mem::take(&mut self.relinquish_owed);
+        writes.extend(self.held.take().map(|held| ScheduleWrite {
+            value: PropertyValue::Null,
+            priority: held.priority,
+            references: held.references,
+            retry: false,
+        }));
+        self.simulated_write = None;
+        self.rewrite_owed = false;
+        writes
+    }
+
     /// The writes owed apart from the calculation, in order: the NULLs a
     /// change of the targets owes, then the Present_Value owed out of service,
     /// for a client's write or a change of the targets (`out_of_service.rs`).

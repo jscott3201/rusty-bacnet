@@ -4040,8 +4040,8 @@ behaviour, so an object without it writes nothing.
   `apply_local_input(LocalInputValue)`, takes a Present_Value (built with
   `LocalInputValue::present_value` or `present_value_from`, the second naming
   the local Device as its origin), a Life Safety Tracking_Value, a Loop's
-  Controlled_Variable_Value, an Averaging sample or an access-control record.
-  The enum is `#[non_exhaustive]`: an object matches the inputs it models and
+  Controlled_Variable_Value, an Averaging sample, an access-control record or
+  a Program's Program_State. The enum is `#[non_exhaustive]`: an object matches the inputs it models and
   answers the rest with `not_supported()`, OBJECT /
   OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, the same error the server returns for
   an object that lends none. `BACnetServer::set_present_value_local` and its
@@ -4083,7 +4083,8 @@ behaviour, so an object without it writes nothing.
   each target took each write; while the Device clock is invalid it skips the
   tick but still sends the owed writes, and `calendar_active` answers `false`
   for an identifier that names no Calendar. The database asks
-  `retry_refusals_naming(target)` when an object is added. Only
+  `retry_refusals_naming(target)` when an object is added, and DeleteObject
+  takes `take_relinquish_writes()` from the removed object. Only
   `tick_schedule` has no default. The built-in `ScheduleObject` lends it
   (see Schedule & Notification below).
 - **`audit_log()` and `audit_log_mut()` → `AuditLog`** (hidden, #2179), for
@@ -4333,6 +4334,14 @@ state, command-source, authorization and indexed-write
 guards retain their precedence; custom object implementations retain their own
 write dispatch. WPM reports the failed coordinate and retains its successful
 prefix.
+
+An array index is checked before any object sees a write, on every service
+path the bundled server and `bacnet-device-core` run, custom objects included:
+`PROPERTY/UNKNOWN_PROPERTY` for a property with no row, then
+`PROPERTY/PROPERTY_IS_NOT_AN_ARRAY` for one that isn't an array. A direct call
+to `write_property` skips that gate, so each built-in object runs
+`bacnet_objects::property_metadata::check_write_array_index` first itself,
+and a custom object that is called directly should do the same (#2258).
 
 At the indexed WP/WPM service gate, effective metadata that omits the property
 produces `PROPERTY/UNKNOWN_PROPERTY` before value decoding. A served scalar or
@@ -5119,7 +5128,12 @@ out of service at once), and relinquishes, with a NULL at the old priority,
 each slot the Schedule holds that the change leaves behind: a dropped
 reference, or every reference when the priority moves. A Schedule holds slots
 from a write of a non-NULL value until it leaves its Effective_Period, so one
-out of season clears nothing another Schedule may own.
+out of season clears nothing another Schedule may own. DeleteObject of a
+Schedule gives up the slots it holds the same way (#2256): under the
+request's guard the server takes the public
+`ScheduleRunner::take_relinquish_writes()` NULLs from the removed object and
+writes them with the origin the Schedule's writes carried, then fans COV out
+for the targets. A target that refuses one doesn't fail the delete.
 
 While Out_Of_Service is TRUE, Present_Value is writable (#1055) with any
 primitive value, NULL included (INVALID_DATA_TYPE otherwise, and
@@ -7017,8 +7031,9 @@ on targets with atomic compare-and-swap, as `bacnet-objects` does. The
   observer must not await or take a lock that can wait on the database, an
   async task or anything held across an await; a short leaf mutex taken
   after the database is fine, and the server's take a few. The shared
-  steps every write path takes (`check_write_array_index`,
-  `gate_and_decode_write`, `decode_write_property_value`, `localize`,
+  steps every write path takes (`gate_and_decode_write`, whose index check
+  is `bacnet_objects::property_metadata::check_write_array_index`,
+  `decode_write_property_value`, `localize`,
   `commit_attempt`, `check_executor_owned_write`); the NULL-relinquish rule
   (`write::relinquish`); and the end of a Command's or Channel's run a host
   can't make (`end_unmade`, `take_queued`, `Unfinished`).
@@ -9005,6 +9020,16 @@ separately. Python exposes the same native policy through
 the endpoints' Device-write authorizer through their `device_write_policy`
 callable (#2033). See
 [Server authorization policy](mutation-policy.md).
+
+### Program_State from the application
+
+Program_State is read-only on the network (Clause 12.22.4), and
+`write_local` refuses it with `PROPERTY / WRITE_ACCESS_DENIED` as well. The
+application reports the state of the program a Program object stands for with
+`BACnetServer::set_program_state_local`, the object's `ProgramState` local
+input, or `ProgramObject::set_program_state` before the server holds it
+(#2258). It takes an Enumerated BACnetProgramState from 0 (IDLE) to 5
+(UNLOADING).
 
 ### Life Safety execution and COV
 
