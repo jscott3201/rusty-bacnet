@@ -3,15 +3,15 @@ use super::*;
 use bacnet_transport::loopback::LoopbackTransport;
 use tokio::sync::{Notify, Semaphore};
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_rpm_default_queue_accounts_local_losses_and_recovers_summary() {
     congestion(0).await;
 }
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_rpm_full_queue_summary_wait_is_owned_and_stop_cancels() {
     congestion(1).await;
 }
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_rpm_full_queue_summary_generation_replacement_discards_old_count() {
     congestion(2).await;
 }
@@ -105,23 +105,10 @@ async fn congestion(mode: u8) {
     assert!(read.await.unwrap().is_ok());
     // All notification admissions and the first full-queue summary attempt settle
     // while transport remains held. No deadline or speculative retry is needed.
-    timeout(WAIT, async {
-        loop {
-            let db = session.database.as_ref().unwrap().read().await;
-            let state = db
-                .get(&selected())
-                .unwrap()
-                .read_property(PropertyIdentifier::RELIABILITY, None)
-                .unwrap();
-            if state == PropertyValue::Enumerated(Reliability::COMMUNICATION_FAILURE.to_raw()) {
-                break;
-            }
-            drop(db);
-            tokio::task::yield_now().await;
-        }
+    eventually(WAIT, "Reliability is COMMUNICATION_FAILURE", async || {
+        reliability(&session).await == Reliability::COMMUNICATION_FAILURE.to_raw()
     })
-    .await
-    .unwrap();
+    .await;
     timeout(
         WAIT,
         session
@@ -239,24 +226,10 @@ async fn congestion(mode: u8) {
     assert_eq!(delivered, 0);
     assert!(lost > 0);
     assert!(summaries >= 1);
-    timeout(WAIT, async {
-        loop {
-            let db = session.database.as_ref().unwrap().read().await;
-            if db
-                .get(&selected())
-                .unwrap()
-                .read_property(PropertyIdentifier::RELIABILITY, None)
-                .unwrap()
-                == PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw())
-            {
-                break;
-            }
-            drop(db);
-            tokio::task::yield_now().await;
-        }
+    eventually(WAIT, "Reliability is NO_FAULT_DETECTED", async || {
+        reliability(&session).await == Reliability::NO_FAULT_DETECTED.to_raw()
     })
-    .await
-    .unwrap();
+    .await;
     for send in unrelated {
         assert!(send.complete().await.result.is_ok());
     }

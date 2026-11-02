@@ -3,7 +3,7 @@ use super::*;
 use bacnet_types::error::RemoteError;
 
 fn start_object(
-    session: &EndpointSession<BipTransport>,
+    session: &EndpointSession<BusPort>,
     mac: &[u8],
     object: ObjectIdentifier,
 ) -> tokio::task::JoinHandle<Result<ReadPropertyACK, Error>> {
@@ -16,27 +16,27 @@ fn start_object(
     })
 }
 fn start_alias(
-    session: &EndpointSession<BipTransport>,
+    session: &EndpointSession<BusPort>,
     mac: &[u8],
     kind: ObjectType,
 ) -> tokio::task::JoinHandle<Result<ReadPropertyACK, Error>> {
     start_object(session, mac, oid(kind, ObjectIdentifier::WILDCARD_INSTANCE))
 }
-async fn released(session: &EndpointSession<BipTransport>) {
-    timeout(WAIT, async {
-        while session.active_leases() != 0
-            || session
-                .source_audit
-                .as_ref()
-                .unwrap()
-                .available_operations()
-                != 64
-        {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
+async fn released(session: &EndpointSession<BusPort>) {
+    eventually(
+        WAIT,
+        "every lease and source operation is released",
+        async || {
+            session.active_leases() == 0
+                && session
+                    .source_audit
+                    .as_ref()
+                    .unwrap()
+                    .available_operations()
+                    == 64
+        },
+    )
+    .await;
 }
 fn value_free(record: &BACnetAuditNotification) {
     assert!(record.target_value.is_none() && record.current_value.is_none());
@@ -47,7 +47,7 @@ fn value_free(record: &BACnetAuditNotification) {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_read_alias_success_records_peer_concrete_object_both_roles_modes() {
     let (mut peer, mut requests) = network().await;
     let (mut sink, mut records) = network().await;
@@ -115,7 +115,7 @@ async fn source_read_alias_success_records_peer_concrete_object_both_roles_modes
     sink.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_read_alias_failure_keeps_requested_identity_without_trusting_bad_ack() {
     let (mut peer, mut requests) = network().await;
     let (mut sink, mut records) = network().await;
@@ -191,7 +191,7 @@ async fn source_read_alias_failure_keeps_requested_identity_without_trusting_bad
     sink.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_read_alias_cancelled_retry_resolves_identity_on_original_recipient_snapshot() {
     let (mut peer, mut requests) = network().await;
     let (mut old, mut old_records) = network().await;
@@ -264,7 +264,7 @@ async fn source_read_alias_cancelled_retry_resolves_identity_on_original_recipie
     new.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_read_range_concrete_device_ack_establishes_target_device_for_this_record() {
     use bacnet_services::read_range::{ReadRangeAck, ReadRangeRequest};
     let (mut peer, mut requests) = network().await;

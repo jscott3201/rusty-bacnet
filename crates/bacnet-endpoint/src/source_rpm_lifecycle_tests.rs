@@ -1,6 +1,6 @@
 use super::*;
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn endpoint_rpm_prewire_profile_and_byte_bounds_with_and_without_source() {
     let (mut peer, mut requests) = network().await;
     let (mut sink, mut received) = network().await;
@@ -13,19 +13,21 @@ async fn endpoint_rpm_prewire_profile_and_byte_bounds_with_and_without_source() 
                 .unwrap()
                 .provision_audit_recipient(BACnetRecipient::Device(oid(ObjectType::DEVICE, 999)))
                 .unwrap();
-            BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
-                .role(SessionRole::ClientOnly)
-                .queue_capacity(128)
-                .database(db)
-                .source_audit_device_binding(oid(ObjectType::DEVICE, 999), address(&sink))
-                .build_session()
-                .unwrap()
-                .with_source_audit_reporter(selected())
+            let mut session = bare_session(
+                SessionRole::ClientOnly,
+                SessionConfig {
+                    queue_capacity: 128,
+                    ..SessionConfig::default()
+                },
+            )
+            .with_database(db)
+            .with_source_audit_reporter(selected());
+            session
+                .source_audit_bindings
+                .push((oid(ObjectType::DEVICE, 999), address(&sink)));
+            session
         } else {
-            BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
-                .role(SessionRole::ClientOnly)
-                .build_session()
-                .unwrap()
+            bare_session(SessionRole::ClientOnly, SessionConfig::default())
         };
         session.start().await.unwrap();
         let client = session.cloned_client_handle().unwrap();
@@ -113,7 +115,7 @@ async fn endpoint_rpm_prewire_profile_and_byte_bounds_with_and_without_source() 
     sink.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_rpm_raw_ack_bound_and_segmented_terminal_fanout() {
     let (mut peer, mut requests) = network().await;
     let (mut sink, mut received) = network().await;
@@ -154,7 +156,7 @@ async fn source_rpm_raw_ack_bound_and_segmented_terminal_fanout() {
     sink.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_rpm_cancelled_retry_retains_one_snapshot_and_stop_joins() {
     let (mut peer, mut requests) = network().await;
     let (mut old, mut old_records) = network().await;
@@ -210,7 +212,7 @@ async fn source_rpm_cancelled_retry_retains_one_snapshot_and_stop_joins() {
     new.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_rpm_drop_releases_pending_operation_and_database() {
     let (mut peer, mut requests) = network().await;
     let (mut sink, _) = network().await;
@@ -229,24 +231,19 @@ async fn source_rpm_drop_releases_pending_operation_and_database() {
             .await
             .is_err()
     );
-    timeout(WAIT, async {
-        loop {
-            let mut db = db.write().await;
-            if db.remove(&oid(ObjectType::DEVICE, 123)).is_ok() {
-                break;
-            }
-            drop(db);
-            tokio::task::yield_now().await;
-        }
+    eventually(WAIT, "the local Device can be removed", async || {
+        db.write()
+            .await
+            .remove(&oid(ObjectType::DEVICE, 123))
+            .is_ok()
     })
-    .await
-    .unwrap();
+    .await;
     assert_eq!(coordinator.active_count().unwrap(), 0);
     peer.stop().await.unwrap();
     sink.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_rpm_partial_notification_admission_counts_only_dropped_occurrences() {
     let (mut peer, mut requests) = network().await;
     let (mut sink, mut received) = network().await;

@@ -3,7 +3,7 @@ use bacnet_services::read_range::{RangeSpec, ReadRangeAck, ReadRangeRequest};
 use bacnet_types::primitives::{Date, Time};
 
 fn range_start(
-    session: &EndpointSession<BipTransport>,
+    session: &EndpointSession<BusPort>,
     mac: &[u8],
     range: Option<RangeSpec>,
 ) -> tokio::task::JoinHandle<Result<ReadRangeAck, Error>> {
@@ -88,7 +88,7 @@ fn ranges() -> Vec<Option<RangeSpec>> {
     ]
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_read_range_choices_empty_and_multiple_items_both_modes() {
     let (mut peer, mut requests) = network().await;
     let (mut sink, mut records) = network().await;
@@ -156,7 +156,7 @@ async fn source_read_range_choices_empty_and_multiple_items_both_modes() {
     sink.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_read_range_terminal_errors_and_segmented_attempt_are_reported() {
     let (mut peer, mut requests) = network().await;
     let (mut sink, mut records) = network().await;
@@ -256,7 +256,7 @@ async fn source_read_range_terminal_errors_and_segmented_attempt_are_reported() 
     sink.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_read_range_invalid_preflight_does_not_consume_sequence_or_lease() {
     let (mut peer, mut requests) = network().await;
     let (mut sink, mut records) = network().await;
@@ -355,7 +355,7 @@ async fn source_read_range_invalid_preflight_does_not_consume_sequence_or_lease(
 /// A page numbered from 0 after the device's wrap: strict refuses it as a
 /// broken rule, lenient keeps it with the rule named, and the audit record
 /// reports each outcome (#1531).
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_read_range_lenient_keeps_a_zero_first_sequence_page() {
     use bacnet_services::read_range::{ReadRangeValidation, ReadRangeViolation};
 
@@ -428,7 +428,7 @@ async fn source_read_range_lenient_keeps_a_zero_first_sequence_page() {
 
 /// The endpoint's paged log read finds the oldest record from the counts
 /// and decodes the page it reads from there (#1530).
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn read_log_page_finds_the_oldest_record_and_decodes_its_page() {
     use bacnet_client::log_reader::LogCursor;
     use bacnet_encoding::constructed::encode_log_record;
@@ -515,7 +515,7 @@ async fn read_log_page_finds_the_oldest_record_and_decodes_its_page() {
     sink.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_read_range_cancelled_caller_keeps_one_retry_record_and_stop_releases() {
     let (mut peer, mut requests) = network().await;
     let (mut sink, mut records) = network().await;
@@ -549,7 +549,7 @@ async fn source_read_range_cancelled_caller_keeps_one_retry_record_and_stop_rele
     sink.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_read_range_snapshot_and_generation_survive_recipient_change() {
     let (mut peer, mut requests) = network().await;
     let (mut old, mut old_records) = network().await;
@@ -613,7 +613,7 @@ async fn source_read_range_snapshot_and_generation_survive_recipient_change() {
     new.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_read_range_drop_unblocks_retained_caller_and_releases_database() {
     let (mut peer, mut requests) = network().await;
     let (mut sink, _records) = network().await;
@@ -638,18 +638,13 @@ async fn source_read_range_drop_unblocks_retained_caller_and_releases_database()
             .await
             .is_err()
     );
-    timeout(WAIT, async {
-        loop {
-            let mut db = db.write().await;
-            if db.remove(&oid(ObjectType::DEVICE, 123)).is_ok() {
-                break;
-            }
-            drop(db);
-            tokio::task::yield_now().await;
-        }
+    eventually(WAIT, "the local Device can be removed", async || {
+        db.write()
+            .await
+            .remove(&oid(ObjectType::DEVICE, 123))
+            .is_ok()
     })
-    .await
-    .unwrap();
+    .await;
     assert_eq!(coordinator.active_count().unwrap(), 0);
     peer.stop().await.unwrap();
     sink.stop().await.unwrap();

@@ -39,7 +39,7 @@ impl TransportPort for Gated {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_read_queued_egress_is_owned_before_caller_cancellation() {
     let source_mac = encode_bip_mac([127, 0, 0, 1], 30001);
     let peer_mac = encode_bip_mac([127, 0, 0, 1], 30002);
@@ -97,13 +97,10 @@ async fn source_read_queued_egress_is_owned_before_caller_cancellation() {
             .read_property(&peer_mac, target(), PropertyIdentifier::PRESENT_VALUE, None)
             .await
     });
-    timeout(WAIT, async {
-        while session.active_leases() != 1 {
-            tokio::task::yield_now().await;
-        }
+    eventually(WAIT, "the request holds its lease", async || {
+        session.active_leases() == 1
     })
-    .await
-    .unwrap();
+    .await;
     // Yield to the owned task's egress admission before cancelling its waiter.
     tokio::task::yield_now().await;
     caller.abort();
@@ -134,7 +131,7 @@ async fn source_read_queued_egress_is_owned_before_caller_cancellation() {
     peer.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_recipient_full_egress_fails_one_sibling_after_commit_without_retry() {
     let source_mac = encode_bip_mac([127, 0, 0, 1], 30001);
     let peer_mac = encode_bip_mac([127, 0, 0, 1], 30002);
@@ -208,26 +205,10 @@ async fn source_recipient_full_egress_fails_one_sibling_after_commit_without_ret
     }
     // The first postcommit attempt queues; the second encounters the bounded
     // queue while the unrelated transport operation is deliberately held.
-    timeout(WAIT, async {
-        loop {
-            let health = session
-                .database
-                .as_ref()
-                .unwrap()
-                .read()
-                .await
-                .get(&selected())
-                .unwrap()
-                .read_property(PropertyIdentifier::RELIABILITY, None)
-                .unwrap();
-            if health == PropertyValue::Enumerated(Reliability::COMMUNICATION_FAILURE.to_raw()) {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
+    eventually(WAIT, "Reliability is COMMUNICATION_FAILURE", async || {
+        reliability(&session).await == Reliability::COMMUNICATION_FAILURE.to_raw()
     })
-    .await
-    .unwrap();
+    .await;
     gate.add_permits(2);
     blocker.complete().await.result.unwrap();
     let probe = receive(&mut received).await;

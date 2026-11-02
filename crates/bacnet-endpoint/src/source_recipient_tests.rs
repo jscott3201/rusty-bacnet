@@ -12,13 +12,13 @@ fn value(recipient: &BACnetRecipient) -> Vec<u8> {
     bacnet_encoding::constructed::encode_recipient(&mut data, recipient).unwrap();
     data.to_vec()
 }
-fn direct(network: &NetworkLayer<BipTransport>) -> BACnetRecipient {
+fn direct(network: &NetworkLayer<BusPort>) -> BACnetRecipient {
     BACnetRecipient::Address(BACnetAddress {
         network_number: 0,
         mac_address: MacAddr::from_slice(network.local_mac()),
     })
 }
-async fn local(session: &EndpointSession<BipTransport>, value: PropertyValue) -> Result<(), Error> {
+async fn local(session: &EndpointSession<BusPort>, value: PropertyValue) -> Result<(), Error> {
     session
         .database
         .as_ref()
@@ -34,7 +34,7 @@ async fn local(session: &EndpointSession<BipTransport>, value: PropertyValue) ->
             None,
         )
 }
-async fn current(session: &EndpointSession<BipTransport>) -> PropertyValue {
+async fn current(session: &EndpointSession<BusPort>) -> PropertyValue {
     session
         .database
         .as_ref()
@@ -47,8 +47,8 @@ async fn current(session: &EndpointSession<BipTransport>) -> PropertyValue {
         .unwrap()
 }
 async fn wire(
-    session: &EndpointSession<BipTransport>,
-    peer: &NetworkLayer<BipTransport>,
+    session: &EndpointSession<BusPort>,
+    peer: &NetworkLayer<BusPort>,
     replies: &mut bacnet_network::layer::ApduReceiver,
     bytes: Vec<u8>,
     invoke: u8,
@@ -130,7 +130,7 @@ fn assert_record(
     assert_eq!(record.result, None);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_recipient_local_and_authorized_wire_pair_bypass_ordinary_filters() {
     let (mut old, mut old_records) = network().await;
     let (mut new, mut new_records) = network().await;
@@ -203,7 +203,7 @@ async fn source_recipient_local_and_authorized_wire_pair_bypass_ordinary_filters
     peer.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_recipient_null_equal_invalid_and_second_permit_preserve_commit_state() {
     let (mut sink, mut records) = network().await;
     let mut db = database(false);
@@ -293,7 +293,7 @@ async fn source_recipient_null_equal_invalid_and_second_permit_preserve_commit_s
     sink.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_recipient_read_keeps_admitted_route_and_later_read_uses_new_value() {
     let (mut old, mut old_records) = network().await;
     let (mut new, mut new_records) = network().await;
@@ -347,7 +347,7 @@ async fn source_recipient_read_keeps_admitted_route_and_later_read_uses_new_valu
 #[path = "source_recipient_lifecycle_tests.rs"]
 mod lifetime;
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_recipient_wire_denial_panic_and_invalid_encoding_are_atomic() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let (mut sink, mut records) = network().await;
@@ -422,7 +422,7 @@ async fn source_recipient_wire_denial_panic_and_invalid_encoding_are_atomic() {
     peer.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn source_recipient_unresolved_device_preserves_read_and_rejects_live_change() {
     let (mut sink, mut records) = network().await;
     let (mut peer, mut requests) = network().await;
