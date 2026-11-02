@@ -225,7 +225,9 @@ async fn group_delegation(mode: MstpExecutionMode) {
 /// cannot make an MS/TP deadline (a poll timeout, T_no_token) expire
 /// between two steps of the walk, and `bounded` is only a hang backstop.
 /// The dedicated variant's node runs its own runtime on the wall clock,
-/// which the test cannot pause.
+/// which the test cannot pause; #2284 tracks fixing that residual.
+///
+/// Names end in `_tokio` or `_dedicated`, so a suffix filter selects a mode.
 macro_rules! mode_tests {
     ($tokio:ident, $dedicated:ident, |$mode:ident| $body:expr) => {
         #[tokio::test(start_paused = true)]
@@ -246,18 +248,18 @@ mode_tests!(
     |mode| group_delegation(mode).await
 );
 mode_tests!(
-    mstp_number_server_tokio_wire,
-    mstp_number_server_dedicated_wire,
+    mstp_number_server_wire_tokio,
+    mstp_number_server_wire_dedicated,
     |mode| controls(Role::Server, mode).await
 );
 mode_tests!(
-    mstp_number_endpoint_tokio_wire,
-    mstp_number_endpoint_dedicated_wire,
+    mstp_number_endpoint_wire_tokio,
+    mstp_number_endpoint_wire_dedicated,
     |mode| controls(Role::Endpoint, mode).await
 );
 mode_tests!(
-    mstp_number_client_tokio_wire,
-    mstp_number_client_dedicated_wire,
+    mstp_number_client_wire_tokio,
+    mstp_number_client_wire_dedicated,
     |mode| controls(Role::Client, mode).await
 );
 mode_tests!(

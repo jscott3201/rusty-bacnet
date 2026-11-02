@@ -30,9 +30,10 @@ const TRACE_FRAMES: usize = 40;
 
 /// One fixture's MS/TP link as a failure message sees it: the node's state
 /// and counters, and the last [`TRACE_FRAMES`] frames each side sent,
-/// stamped with wall-clock time since the fixture started (#2277).
+/// stamped with Tokio time since the fixture started (#2277): virtual
+/// time in the paused Tokio variants, wall time in the dedicated ones.
 ///
-/// `deadline_lateness` and the wall-clock stamps tell host starvation
+/// `deadline_lateness` and the dedicated variants' stamps tell host starvation
 /// (deadlines serviced seconds late, gaps between frames) from a node that
 /// stopped: under background QoS on a loaded macOS host, a 20 ms sleep can
 /// wake seconds late.
@@ -41,14 +42,14 @@ pub struct Link {
     /// Set once the transport exists, before it moves into its owner.
     diagnostics: Arc<OnceLock<MstpDiagnostics>>,
     trace: Arc<StdMutex<VecDeque<String>>>,
-    start: std::time::Instant,
+    start: tokio::time::Instant,
 }
 impl Default for Link {
     fn default() -> Self {
         Self {
             diagnostics: Default::default(),
             trace: Default::default(),
-            start: std::time::Instant::now(),
+            start: tokio::time::Instant::now(),
         }
     }
 }
@@ -70,7 +71,7 @@ impl Link {
     pub fn report(&self) -> String {
         let trace = self.trace.lock().unwrap();
         format!(
-            "wall {:?} since start; node {:?}; {:?}; frames (wall time):\n{}",
+            "{:?} since start; node {:?}; {:?}; frames:\n{}",
             self.start.elapsed(),
             self.diagnostics.get().map(MstpDiagnostics::node_state),
             self.diagnostics.get().map(MstpDiagnostics::snapshot),
