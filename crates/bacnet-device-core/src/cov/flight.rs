@@ -33,8 +33,8 @@
 //! can report nothing: one aborted, as a host's shutdown aborts them, keeps
 //! the mark until then, and the coordinate is freed at the deadline, with
 //! no hold-off and its references owed a fresh look
-//! ([`CovTable::expire`]). A live worker stops at the retry budget, before
-//! the deadline, and reports a failure. Should a worker stalled past the
+//! ([`CovTable::expire`]). A live worker stops half a timeout before the
+//! deadline, however long its sends stall, and reports a failure. Should a worker stalled past the
 //! deadline still be running, the next report on the coordinate fences it
 //! ([`Fenced::tokens`](super::Fenced::tokens)) as it begins.
 //!

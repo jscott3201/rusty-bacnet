@@ -1,16 +1,18 @@
 //! A confirmed COV report whose send stalls past its flight's deadline
 //! (#2303), as a BACnet/SC send waiting on a hub or a direct dial can.
 //!
-//! The worker stops at its retry budget, one timeout before the table's
-//! deadline, and reports a failure, so its coordinate holds off: no second
-//! report starts while the stalled one could still send, and nothing the
-//! stalled send carried lands after a newer value. Time is paused.
+//! The worker stops half a timeout before the table's deadline and reports
+//! a failure, so its coordinate holds off: no second report starts while the
+//! stalled one could still send, and nothing the stalled send carried lands
+//! after a newer value. A worker that reports nothing at all, as an aborted
+//! one, is fenced by the next report past its deadline. Time is paused.
 use super::cov_wire_test_support::*;
 use super::*;
 use bacnet_services::cov::SubscribeCOVRequest;
 
-/// One attempt's timeout: the budget is four of them, 400 ms, the deadline
-/// 500 ms and the hold-off after a failure 400 ms.
+/// One attempt's timeout: the retry cycle is four of them, 400 ms, the
+/// worker's cutoff 450 ms, the deadline 500 ms and the hold-off after a
+/// failure 400 ms.
 const TIMEOUT_MS: u64 = 100;
 
 /// Present_Value of each ConfirmedCOVNotification the subscriber received,
@@ -49,8 +51,9 @@ async fn revisit(h: &Harness) {
     table.revisits().request(keys);
 }
 
-#[tokio::test(start_paused = true)]
-async fn a_stalled_report_ends_at_its_budget_and_no_stale_value_follows_a_newer_one() {
+/// A harness with AV-1 subscribed for confirmed notifications, its initial
+/// report acknowledged and the log cleared.
+async fn subscribed() -> Harness {
     let mut h = Harness::start(ServerConfig {
         cov_retry_timeout_ms: TIMEOUT_MS,
         ..ServerConfig::default()
@@ -70,20 +73,11 @@ async fn a_stalled_report_ends_at_its_budget_and_no_stale_value_follows_a_newer_
     h.ack().await;
     h.settle().await;
     h.frames.lock().unwrap().clear();
+    h
+}
 
-    // The report of 10 stalls in its first send.
-    let (entered, release) = h.hold_notification_barrier(true);
-    h.write_local(10.0).await;
-    tokio::time::timeout(Duration::from_secs(1), entered.acquire())
-        .await
-        .unwrap()
-        .unwrap()
-        .forget();
-    // Past the deadline. The worker stopped at its budget and failed.
-    tokio::time::sleep(Duration::from_millis(5 * TIMEOUT_MS + 100)).await;
-
-    // A newer value, looked at again without an expiry pass, inside the
-    // hold-off: the coordinate stays held off, so no second report starts.
+/// AV-1's Present_Value set to `value` without a fanout.
+async fn set_quietly(h: &Harness, value: f32) {
     h.server
         .database()
         .write()
@@ -93,11 +87,31 @@ async fn a_stalled_report_ends_at_its_budget_and_no_stale_value_follows_a_newer_
         .write_property_from(
             PV,
             None,
-            PropertyValue::Real(20.0),
+            PropertyValue::Real(value),
             Some(8),
             &crate::command_source::test_origin(),
         )
         .unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_stalled_report_ends_before_its_deadline_and_no_stale_value_follows_a_newer_one() {
+    let mut h = subscribed().await;
+
+    // The report of 10 stalls in its first send.
+    let (entered, release) = h.hold_notification_barrier(true);
+    h.write_local(10.0).await;
+    tokio::time::timeout(Duration::from_secs(1), entered.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    // Past the deadline. The worker was cut off before it and failed.
+    tokio::time::sleep(Duration::from_millis(5 * TIMEOUT_MS + 100)).await;
+
+    // A newer value, looked at again without an expiry pass, inside the
+    // hold-off: the coordinate stays held off, so no second report starts.
+    set_quietly(&h, 20.0).await;
     revisit(&h).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert!(
@@ -124,5 +138,34 @@ async fn a_stalled_report_ends_at_its_budget_and_no_stale_value_follows_a_newer_
     assert_eq!(values.first(), Some(&20.0), "{values:?}");
     assert!(values.iter().all(|value| *value == 20.0), "{values:?}");
     assert!(h.server.notification_transactions.active_count() <= 1);
+    h.server.stop().await.unwrap();
+}
+
+/// A worker that reports nothing (aborted; the test begins the report
+/// itself and runs no worker) leaves its report marked past the deadline.
+/// The next report the server begins there fences it and wakes the worker:
+/// the server's table wakes fenced workers as soon as a report begins, on
+/// the revisit path too, which takes no expiry pass.
+#[tokio::test(start_paused = true)]
+async fn the_next_report_past_the_deadline_wakes_a_worker_that_never_reported() {
+    let mut h = subscribed().await;
+    let abandoned = {
+        let mut table = h.server.cov_table.write().await;
+        let sub = table.entries().next().unwrap().clone();
+        let report = table.prepare_completion(&sub).unwrap();
+        table.begin_confirmed(report, [&sub]).unwrap()
+    };
+    // Before the deadline the coordinate is busy: a newer value waits.
+    set_quietly(&h, 20.0).await;
+    revisit(&h).await;
+    tokio::time::sleep(Duration::from_millis(4 * TIMEOUT_MS)).await;
+    assert_eq!(received(&h), Vec::<f32>::new());
+    // Past it, the next report goes out and wakes the abandoned worker.
+    tokio::time::sleep(Duration::from_millis(2 * TIMEOUT_MS)).await;
+    revisit(&h).await;
+    tokio::time::timeout(Duration::from_millis(TIMEOUT_MS), abandoned.fenced())
+        .await
+        .expect("the next report fences the abandoned one");
+    assert_eq!(received(&h).first(), Some(&20.0));
     h.server.stop().await.unwrap();
 }

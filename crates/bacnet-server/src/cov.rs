@@ -373,7 +373,8 @@ impl CovSubscriptionTable {
         let token = self
             .core
             .begin_confirmed(completion, snapshots, runtime_clock::core_now())?;
-        // A report it replaced past its deadline is fenced: wake its worker.
+        // A report it replaced past its deadline is fenced: wake its worker,
+        // if one still runs, and drop its wake-up (#2303).
         self.sync(&[]);
         let wake = Arc::new(Notify::new());
         self.wakes.insert(token, Arc::clone(&wake));
