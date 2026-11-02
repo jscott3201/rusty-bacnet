@@ -37,7 +37,25 @@ use crate::mstp_wire::{
     FrameType, MstpFrame, decode_frame, encode_frame, reply_to_poll, token_frame,
 };
 
+/// A hang backstop, not a timing budget: no wait here is meant to come
+/// near it. The Tokio variants run on paused time, and a request the
+/// session dropped as out of turn never comes back whatever the wait
+/// (#2269), which [`Harness::peer_deliver`] handles.
+///
+/// One residual is left to the dedicated variants, under extreme host load
+/// only: the node's own thread is starved past the reply window (about
+/// 250 ms) while it answers. It then rightly sends neither the answer nor
+/// Reply Postponed, and the wait for either times out. The failure's
+/// [`Harness::link_report`] shows it: `frames_received: 1,
+/// npdus_delivered: 1, expired_requests: 1, reply_postponed_tx: 0`, and a
+/// deadline lateness of 0.3 s or more. No harness change can recover that;
+/// `.config/nextest.toml` gives these tests two threads each to make it
+/// rarer.
 pub const WAIT: Duration = Duration::from_secs(5);
+/// How often [`Harness::peer_deliver`] sends a frame before giving up.
+/// Each drop takes a stall of T_no_token or more on the test's thread, so
+/// one resend is nearly always enough.
+const DELIVERY_ATTEMPTS: usize = 8;
 pub const SESSION_MAC: u8 = 3;
 pub const PEER_MAC: u8 = 7;
 
@@ -127,6 +145,9 @@ pub struct Harness {
     pub peer: Arc<LoopbackSerial>,
     pub writes: mpsc::UnboundedReceiver<MstpFrame>,
     pub drain: tokio::task::JoinHandle<()>,
+    /// Where the session's node runs; [`Self::peer_deliver`] resends only
+    /// for a dedicated thread.
+    pub mode: MstpExecutionMode,
 }
 
 impl Harness {
@@ -152,7 +173,7 @@ impl Harness {
         let mut session = MstpEndpointBuilder::new(observed, SESSION_MAC)
             .max_master(7)
             .extended_frames(frames.extended())
-            .execution_mode(mode)
+            .execution_mode(mode.clone())
             .role(role)
             // Bounded queues + client timers mirror the RB-16 proof shape.
             .queue_capacity(32)
@@ -175,14 +196,15 @@ impl Harness {
             peer,
             writes,
             drain,
+            mode,
         }
     }
 
     pub async fn next_frame(&mut self) -> MstpFrame {
-        let frame = tokio::time::timeout(WAIT, self.writes.recv())
-            .await
-            .expect("session frame timed out")
-            .expect("writes closed");
+        let frame = match tokio::time::timeout(WAIT, self.writes.recv()).await {
+            Ok(frame) => frame.expect("writes closed"),
+            Err(_) => panic!("session frame timed out; {}", self.link_report()),
+        };
         assert_eq!(
             frame.source, SESSION_MAC,
             "one link owner: every session frame carries the session station"
@@ -199,11 +221,18 @@ impl Harness {
         let deadline = tokio::time::Instant::now() + WAIT;
         loop {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            assert!(!remaining.is_zero(), "timed out waiting for session {what}");
-            let frame = tokio::time::timeout(remaining, self.writes.recv())
-                .await
-                .expect("session frame timed out")
-                .expect("writes closed");
+            assert!(
+                !remaining.is_zero(),
+                "timed out waiting for session {what}; {}",
+                self.link_report()
+            );
+            let frame = match tokio::time::timeout(remaining, self.writes.recv()).await {
+                Ok(frame) => frame.expect("writes closed"),
+                Err(_) => panic!(
+                    "session frame timed out waiting for {what}; {}",
+                    self.link_report()
+                ),
+            };
             assert_eq!(
                 frame.source, SESSION_MAC,
                 "one link owner: every session frame carries the session station"
@@ -214,6 +243,19 @@ impl Harness {
         }
     }
 
+    /// The session's MAC state and counters, for a failure message: they
+    /// tell a dropped request from a late or missing answer.
+    pub fn link_report(&self) -> String {
+        match self.session.mstp_diagnostics() {
+            Some(diagnostics) => format!(
+                "node {:?}, {:?}",
+                diagnostics.node_state(),
+                diagnostics.snapshot()
+            ),
+            None => "no MS/TP diagnostics".to_owned(),
+        }
+    }
+
     pub async fn peer_send(&self, frame: &MstpFrame) {
         let mut buf = BytesMut::new();
         encode_frame(&mut buf, frame).expect("valid test frame");
@@ -221,6 +263,66 @@ impl Harness {
             .write(&buf)
             .await
             .expect("peer write must succeed");
+    }
+
+    /// Sends `frame`, a data frame the session must hand up, until the
+    /// session's MAC delivers it (#2269).
+    ///
+    /// The peer sends out of turn: it never holds the token, so the session
+    /// takes the frame only while it sits in IDLE. A dedicated-thread MAC
+    /// runs its own runtime on the wall clock and keeps running while a
+    /// loaded host starves the test's thread. After T_no_token (500 ms) of
+    /// silence it polls for a successor, and a data frame that arrives
+    /// during a poll is an unexpected frame: the session drops it and goes
+    /// back to IDLE (Clause 9.5.6.8). No wait, however long, brings that
+    /// frame back, so the peer resends it, as a requester retries. The MAC's
+    /// counters tell the outcomes apart: they are published after each
+    /// event, so the snapshot that first counts the frame received also
+    /// counts it delivered, or never will.
+    ///
+    /// The Tokio variants run on paused time, where a stall of the test's
+    /// thread moves no MAC deadline, so there the first send must be
+    /// delivered: a drop is a bug, and the call panics instead of resending.
+    ///
+    /// Call it with no earlier peer frame still on its way to the session,
+    /// so the next frame the MAC counts is this one.
+    pub async fn peer_deliver(&self, frame: &MstpFrame) {
+        let diagnostics = self
+            .session
+            .mstp_diagnostics()
+            .expect("an MS/TP session has diagnostics");
+        for _ in 0..DELIVERY_ATTEMPTS {
+            let before = diagnostics.snapshot().mac;
+            self.peer_send(frame).await;
+            let judged = tokio::time::timeout(WAIT, async {
+                loop {
+                    let now = diagnostics.snapshot().mac;
+                    if now.frames_received > before.frames_received {
+                        break now;
+                    }
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            })
+            .await
+            .unwrap_or_else(|_| {
+                panic!(
+                    "the session never counted the peer's frame; {}",
+                    self.link_report()
+                )
+            });
+            if judged.npdus_delivered > before.npdus_delivered {
+                return;
+            }
+            assert!(
+                self.mode != MstpExecutionMode::Tokio,
+                "on paused time the session must take the peer's frame first time; {}",
+                self.link_report()
+            );
+        }
+        panic!(
+            "the session dropped the peer's frame {DELIVERY_ATTEMPTS} times; {}",
+            self.link_report()
+        );
     }
 
     /// Drives token opportunities until a data frame matching `is_data`
@@ -254,7 +356,7 @@ impl Harness {
                 _ => {}
             }
         }
-        panic!("token drive did not deliver {what}");
+        panic!("token drive did not deliver {what}; {}", self.link_report());
     }
 
     pub async fn shutdown(mut self) {

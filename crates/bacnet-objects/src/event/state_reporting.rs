@@ -184,7 +184,8 @@ impl ChangeOfStateReporting {
     }
 
     /// Commit one transition through the shared kernel, then settle the
-    /// detector's countdown and fault edge.
+    /// detector's countdown and fault edge. With detection off the kernel
+    /// refuses every commit.
     pub(crate) fn commit(
         &mut self,
         commit: EventTransitionCommit,
@@ -192,6 +193,7 @@ impl ChangeOfStateReporting {
     ) -> Result<(), EventTransitionCommitError> {
         let change = commit.change.clone();
         EventTransitionState::new(
+            self.event_detection_enable,
             &mut self.event_detector.event_state,
             &mut self.event_detector.acked_transitions,
             &mut self.event_history,
