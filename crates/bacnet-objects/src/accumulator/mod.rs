@@ -20,6 +20,8 @@ use alloc::sync::Arc;
 use pulse_feed::RateWindow;
 
 mod metadata;
+#[cfg(test)]
+mod present_value_tests;
 mod pulse_converter;
 mod pulse_feed;
 #[cfg(test)]
@@ -45,6 +47,11 @@ pub use pulse_converter::PulseConverterObject;
 /// Max_Pres_Value, and Pulse_Rate counts them per Limit_Monitoring_Interval
 /// in a window its [`Timed`](crate::traits::Timed) capability closes, which
 /// a server drives from its monotonic task.
+///
+/// While Out_Of_Service is TRUE a client may write Present_Value (#2267).
+/// Dependents take the written value as input (Clause 12.61.10): a Pulse
+/// Converter whose Input_Reference names it counts an increase as its delta
+/// and a decrease as a wrap through Max_Pres_Value.
 #[derive(Clone)]
 pub struct AccumulatorObject {
     oid: ObjectIdentifier,
@@ -108,7 +115,8 @@ impl AccumulatorObject {
         })
     }
 
-    /// Set the present value (application use).
+    /// Set the present value (application use). Prescale's remainder is
+    /// left as it is; only a client's write, out of service, clears it.
     pub fn set_present_value(&mut self, value: u64) {
         self.present_value = value;
     }
@@ -160,6 +168,15 @@ impl AccumulatorObject {
         }
     }
 
+    /// Take a client's Present_Value, written out of service. The written
+    /// count starts afresh: Prescale's remainder is cleared, since it held
+    /// a share of a step toward the count being replaced, and once back in
+    /// service fed pulses count on from the written value.
+    fn write_present_value(&mut self, value: u64) {
+        self.present_value = value;
+        self.prescale_carry = 0;
+    }
+
     /// Whether Prescale is present, for the metadata.
     fn has_prescale(&self) -> bool {
         self.prescale.is_some()
@@ -180,6 +197,7 @@ impl BACnetObject for AccumulatorObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        crate::property_metadata::check_read_array_index(self, property, array_index)?;
         if let Some(result) = read_common_properties!(self, property, array_index) {
             return result;
         }
@@ -237,10 +255,6 @@ impl BACnetObject for AccumulatorObject {
         _priority: Option<u8>,
     ) -> Result<(), Error> {
         crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
-        // Present value is read-only from the network
-        if property == PropertyIdentifier::PRESENT_VALUE {
-            return Err(common::write_access_denied_error());
-        }
         if let Some(result) =
             common::write_out_of_service(&mut self.out_of_service, property, &value)
         {
@@ -250,6 +264,23 @@ impl BACnetObject for AccumulatorObject {
             return result;
         }
         match property {
+            // Writable only while Out_Of_Service is TRUE (Table 12-79
+            // footnote 1, Clause 12.61.4), so a client can set the count a
+            // meter shows or simulate one; in service the input owns it.
+            p if p == PropertyIdentifier::PRESENT_VALUE => {
+                if !self.out_of_service {
+                    return Err(common::write_access_denied_error());
+                }
+                let PropertyValue::Unsigned(v) = value else {
+                    return Err(common::invalid_data_type_error());
+                };
+                // The value stays within zero through Max_Pres_Value.
+                if v > self.max_pres_value {
+                    return Err(common::value_out_of_range_error());
+                }
+                self.write_present_value(v);
+                Ok(())
+            }
             p if p == PropertyIdentifier::MAX_PRES_VALUE => {
                 if let PropertyValue::Unsigned(v) = value {
                     self.max_pres_value = v;
@@ -339,18 +370,6 @@ mod tests {
                 .unwrap(),
             PropertyValue::Unsigned(42)
         );
-    }
-
-    #[test]
-    fn accumulator_present_value_read_only_from_network() {
-        let mut acc = AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS).unwrap();
-        let result = acc.write_property(
-            PropertyIdentifier::PRESENT_VALUE,
-            None,
-            PropertyValue::Unsigned(10),
-            None,
-        );
-        assert!(result.is_err());
     }
 
     #[test]

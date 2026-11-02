@@ -129,7 +129,8 @@ async fn fed_pulses_step_present_value_through_prescale_and_wrap() {
 #[tokio::test(start_paused = true)]
 async fn out_of_service_keeps_the_clients_values() {
     let (mut h, origin) = start().await;
-    h.server.add_pulses_local(&acc1(), 20).await.unwrap();
+    // 1:2 Prescale: 21 pulses are 10 counts with one pulse held.
+    h.server.add_pulses_local(&acc1(), 21).await.unwrap();
     write(
         &h,
         PropertyIdentifier::OUT_OF_SERVICE,
@@ -137,23 +138,25 @@ async fn out_of_service_keeps_the_clients_values() {
     )
     .await;
     write(&h, RATE, PropertyValue::Unsigned(500)).await;
+    // A client's Present_Value starts afresh, without the held pulse (#2267).
+    write(&h, PV, PropertyValue::Unsigned(50)).await;
     h.server.add_pulses_local(&acc1(), 40).await.unwrap();
     advance_to(origin, 10_000).await;
     advance_to(origin, 20_000).await;
     assert_eq!(read(&h, RATE).await, PropertyValue::Unsigned(500));
-    assert_eq!(read(&h, PV).await, PropertyValue::Unsigned(10));
+    assert_eq!(read(&h, PV).await, PropertyValue::Unsigned(50));
     // Back in service the next window to close sets the rate again, and
-    // Present_Value counts on from where it was held.
+    // Present_Value counts on from the written value: 5 pulses are 2 counts.
     write(
         &h,
         PropertyIdentifier::OUT_OF_SERVICE,
         PropertyValue::Boolean(false),
     )
     .await;
-    h.server.add_pulses_local(&acc1(), 6).await.unwrap();
-    assert_eq!(read(&h, PV).await, PropertyValue::Unsigned(13));
+    h.server.add_pulses_local(&acc1(), 5).await.unwrap();
+    assert_eq!(read(&h, PV).await, PropertyValue::Unsigned(52));
     advance_to(origin, 30_000).await;
-    assert_eq!(read(&h, RATE).await, PropertyValue::Unsigned(6));
+    assert_eq!(read(&h, RATE).await, PropertyValue::Unsigned(5));
     h.server.stop().await.unwrap();
 }
 
@@ -222,6 +225,47 @@ async fn a_feed_notifies_present_value_subscribers() {
     // 1:2 Prescale: 10 pulses are 5 counts.
     h.server.add_pulses_local(&acc1(), 10).await.unwrap();
     assert_eq!(value_in(&h.cov_notification().await, PV), vec![0x21, 0x05]);
+    h.server.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_clients_present_value_write_notifies_subscribers() {
+    let (mut h, _origin) = start().await;
+    let mut body = BytesMut::new();
+    bacnet_services::cov::SubscribeCOVRequest {
+        subscriber_process_identifier: 9,
+        monitored_object_identifier: acc1(),
+        issue_confirmed_notifications: Some(false),
+        lifetime: Some(300),
+    }
+    .encode(&mut body)
+    .unwrap();
+    h.request(ConfirmedServiceChoice::SUBSCRIBE_COV, body).await;
+    assert_eq!(response(&h).await, Ok(()));
+    assert_eq!(value_in(&h.cov_notification().await, PV), vec![0x21, 0x00]);
+    // Going out of service reports the Status_Flags change.
+    write(
+        &h,
+        PropertyIdentifier::OUT_OF_SERVICE,
+        PropertyValue::Boolean(true),
+    )
+    .await;
+    assert_eq!(value_in(&h.cov_notification().await, PV), vec![0x21, 0x00]);
+    // A client's WriteProperty of Present_Value is reported too (#2267).
+    let mut body = BytesMut::new();
+    bacnet_services::write_property::WritePropertyRequest {
+        object_identifier: acc1(),
+        property_identifier: PV,
+        property_array_index: None,
+        property_value: vec![0x21, 42],
+        priority: None,
+    }
+    .encode(&mut body)
+    .unwrap();
+    h.request(ConfirmedServiceChoice::WRITE_PROPERTY, body)
+        .await;
+    assert_eq!(response(&h).await, Ok(()));
+    assert_eq!(value_in(&h.cov_notification().await, PV), vec![0x21, 42]);
     h.server.stop().await.unwrap();
 }
 

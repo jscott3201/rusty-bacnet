@@ -6372,8 +6372,11 @@ class BACnetServer:
         window's count, which a SubscribeCOVProperty on it is notified of.
         While Out_Of_Service is set Present_Value holds and Pulse_Rate keeps
         a client's value: the pulses still fill the rate window, but
-        Present_Value drops them rather than catching up later. ``pulses`` is an unsigned 64-bit count; a negative
-        or larger int raises OverflowError. An unknown object raises
+        Present_Value drops them rather than catching up later. Present_Value
+        takes a write only then, an Unsigned up to Max_Pres_Value, and once
+        back in service the pulses count on from the written value.
+        ``pulses`` is an unsigned 64-bit count; a negative or larger int
+        raises OverflowError. An unknown object raises
         UNKNOWN_OBJECT and any object other than an Accumulator
         OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
         """

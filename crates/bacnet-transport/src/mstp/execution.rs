@@ -103,6 +103,9 @@ pub struct MstpThreadConfig {
     /// fail: refused outright when none is allowed, and when the kernel
     /// applies only part of the set, found by the read-back.
     pub cpu_affinity: Vec<usize>,
+    /// See [`Self::with_test_time`].
+    #[cfg(any(test, feature = "test-support"))]
+    test_time: Option<super::test_time::TestTime>,
 }
 
 impl MstpThreadConfig {
@@ -111,7 +114,32 @@ impl MstpThreadConfig {
         Self {
             realtime_priority: None,
             cpu_affinity: Vec::new(),
+            #[cfg(any(test, feature = "test-support"))]
+            test_time: None,
         }
+    }
+
+    /// Test support (`test-support` feature, #2284): run the node's clock
+    /// and timers on `runtime`'s Tokio time instead of the thread's own
+    /// runtime's, which is the wall clock. The node still runs on its own
+    /// thread and runtime.
+    ///
+    /// Meant for a paused `current_thread` test runtime
+    /// (`#[tokio::test(start_paused = true)]`, passing
+    /// `Handle::current()`). That runtime's clock then advances only when
+    /// both it and the node have nothing to run, as if the node ran on it,
+    /// so a starved test thread cannot let a node deadline pass. On an
+    /// unpaused runtime, time is the wall clock as before.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_test_time(mut self, runtime: tokio::runtime::Handle) -> Self {
+        self.test_time = Some(super::test_time::TestTime::new(runtime));
+        self
+    }
+
+    /// Whether [`Self::with_test_time`] set a runtime.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn has_test_time(&self) -> bool {
+        self.test_time.is_some()
     }
 
     /// Ask for `SCHED_FIFO` at `priority`; see [`Self::realtime_priority`].
@@ -162,6 +190,18 @@ impl MstpThreadConfig {
             )));
         }
         Ok(())
+    }
+
+    /// Hold the test's clock, if `with_test_time` named one, while
+    /// the guard lives.
+    pub(super) fn hold_time(&self) -> TimeHold {
+        TimeHold {
+            #[cfg(any(test, feature = "test-support"))]
+            _hold: self
+                .test_time
+                .as_ref()
+                .map(super::test_time::TestTime::hold),
+        }
     }
 
     fn is_default(&self) -> bool {
@@ -313,10 +353,20 @@ fn mismatch(message: String) -> Error {
     Error::Transport(std::io::Error::other(format!("MS/TP thread: {message}")))
 }
 
+/// Holds the test's clock while the transport waits on the dedicated thread
+/// (`MstpThreadConfig::with_test_time`); without test time, nothing.
+pub(super) struct TimeHold {
+    #[cfg(any(test, feature = "test-support"))]
+    _hold: Option<super::test_time::Hold>,
+}
+
 /// Owns the isolated reactor. Dropping the shutdown sender also handles cancelled
 /// startup and abort; only `stop` waits for runtime and blocking-I/O completion.
 pub(super) struct DedicatedRuntime {
-    pub(super) handle: tokio::runtime::Handle,
+    handle: tokio::runtime::Handle,
+    /// [`MstpThreadConfig::with_test_time`].
+    #[cfg(any(test, feature = "test-support"))]
+    test_time: Option<super::test_time::TestTime>,
     shutdown: oneshot::Sender<()>,
     finished: oneshot::Receiver<()>,
 }
@@ -327,6 +377,9 @@ impl DedicatedRuntime {
     pub(super) async fn new(
         config: MstpThreadConfig,
     ) -> Result<(Self, MstpExecutionStatus), Error> {
+        #[cfg(any(test, feature = "test-support"))]
+        let test_time = config.test_time.clone();
+        let _held = config.hold_time();
         let (started_tx, started_rx) = oneshot::channel();
         let (shutdown, shutdown_rx) = oneshot::channel();
         let (finished_tx, finished) = oneshot::channel();
@@ -367,6 +420,8 @@ impl DedicatedRuntime {
         Ok((
             Self {
                 handle,
+                #[cfg(any(test, feature = "test-support"))]
+                test_time,
                 shutdown,
                 finished,
             },
@@ -374,7 +429,32 @@ impl DedicatedRuntime {
         ))
     }
 
+    /// Spawn the MAC loop on the thread's runtime, on test time if the
+    /// config asked for it.
+    pub(super) fn spawn<F>(&self, future: F) -> tokio::task::JoinHandle<()>
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(time) = &self.test_time {
+            return self.handle.spawn(time.drive(future));
+        }
+        self.handle.spawn(future)
+    }
+
+    /// Hold the test's clock, as [`MstpThreadConfig::hold_time`] does.
+    pub(super) fn hold_time(&self) -> TimeHold {
+        TimeHold {
+            #[cfg(any(test, feature = "test-support"))]
+            _hold: self
+                .test_time
+                .as_ref()
+                .map(super::test_time::TestTime::hold),
+        }
+    }
+
     pub(super) async fn stop(self) {
+        let _held = self.hold_time();
         drop(self.shutdown);
         let _ = self.finished.await;
     }

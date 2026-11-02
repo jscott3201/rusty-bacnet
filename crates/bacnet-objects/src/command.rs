@@ -235,6 +235,7 @@ impl BACnetObject for CommandObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        crate::property_metadata::check_read_array_index(self, property, array_index)?;
         // Table 12-12 has no Out_Of_Service (#1064), and Clause 12.10 holds the
         // OUT_OF_SERVICE flag FALSE.
         if let Some(result) =

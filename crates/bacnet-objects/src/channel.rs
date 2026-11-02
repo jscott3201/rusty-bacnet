@@ -352,6 +352,7 @@ impl BACnetObject for ChannelObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        crate::property_metadata::check_read_array_index(self, property, array_index)?;
         if let Some(result) = read_identity_properties!(self, property, array_index) {
             return result;
         }

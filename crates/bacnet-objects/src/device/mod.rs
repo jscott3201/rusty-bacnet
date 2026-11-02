@@ -624,6 +624,7 @@ impl BACnetObject for DeviceObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        crate::property_metadata::check_read_array_index(self, property, array_index)?;
         if property == PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT {
             return self.read_audit_recipient(array_index);
         }

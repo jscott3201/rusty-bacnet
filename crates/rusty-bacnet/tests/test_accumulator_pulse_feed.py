@@ -3,7 +3,8 @@
 `add_pulses_local` steps Present_Value through Prescale, wrapping past
 Max_Pres_Value, and the running server turns the pulses of each
 Limit_Monitoring_Interval into Pulse_Rate. Out of service, a client's values
-stay.
+stay, and Present_Value takes a client's write only then (#2267); back in
+service, counting resumes from it.
 """
 
 from __future__ import annotations
@@ -99,14 +100,39 @@ class AccumulatorPulseFeedTests(unittest.TestCase):
                     self.assertLess(time.monotonic(), deadline, "Pulse_Rate never read 42")
                     await asyncio.sleep(0.05)
 
+                self.assertEqual(await read(PV), 8)
+
+                async def refused(value: PropertyValue, code: ErrorCode) -> None:
+                    with self.assertRaises(BacnetProtocolError) as raised:
+                        await client.write_property(address, ACCUMULATOR, PV, value)
+                    self.assertEqual(raised.exception.error_class, ErrorClass.PROPERTY.to_raw())
+                    self.assertEqual(raised.exception.error_code, code.to_raw())
+
+                # In service the input owns Present_Value, over the wire and
+                # locally (#2267).
+                await refused(PropertyValue.unsigned(7), ErrorCode.WRITE_ACCESS_DENIED)
+                with self.assertRaises(BacnetProtocolError) as raised:
+                    await write(PV, PropertyValue.unsigned(7))
+                self.assertEqual(
+                    raised.exception.error_code, ErrorCode.WRITE_ACCESS_DENIED.to_raw()
+                )
+
                 # Out of service, the values a client wrote stay.
                 await write(PropertyIdentifier.OUT_OF_SERVICE, PropertyValue.boolean(True))
                 await write(PULSE_RATE, PropertyValue.unsigned(500))
-                held = await read(PV)
+                await client.write_property(address, ACCUMULATOR, PV, PropertyValue.unsigned(7))
+                await refused(PropertyValue.unsigned(10), ErrorCode.VALUE_OUT_OF_RANGE)
+                await refused(PropertyValue.real(7.0), ErrorCode.INVALID_DATA_TYPE)
                 await server.add_pulses_local(ACCUMULATOR, 30)
                 await asyncio.sleep(1.2)
                 self.assertEqual(await read(PULSE_RATE), 500)
-                self.assertEqual(await read(PV), held)
+                self.assertEqual(await read(PV), 7)
+
+                # Back in service, counting resumes from the written value:
+                # three pulses are two counts.
+                await write(PropertyIdentifier.OUT_OF_SERVICE, PropertyValue.boolean(False))
+                await server.add_pulses_local(ACCUMULATOR, 3)
+                self.assertEqual(await read(PV), 9)
 
                 with self.assertRaises(BacnetProtocolError) as raised:
                     await server.add_pulses_local(AV, 1)
