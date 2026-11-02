@@ -184,6 +184,7 @@ fn bo_command_failure_uses_present_and_feedback_values() {
     );
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn bo_time_delay_gates_command_failure() {
     let mut bo = BinaryOutputObject::new(1, "BO-1").unwrap();
@@ -210,6 +211,7 @@ fn bo_time_delay_gates_command_failure() {
 /// pTimeDelayNormal (condition (b)). Both are commissioned as properties here
 /// — no direct field access — so the wiring from Time_Delay_Normal through
 /// the detector is exercised end to end at object level.
+#[cfg(feature = "event-reporting")]
 #[test]
 fn bo_time_delay_normal_selects_the_return_to_normal_delay() {
     let mut bo = BinaryOutputObject::new(1, "BO-1").unwrap();

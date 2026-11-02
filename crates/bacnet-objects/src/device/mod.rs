@@ -796,6 +796,7 @@ impl BACnetObject for DeviceObject {
         ))
     }
 
+    #[cfg(feature = "durable-writes")]
     fn durable_writes(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
         self.profile.capability()
     }

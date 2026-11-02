@@ -619,6 +619,7 @@ impl BACnetObject for ColorTemperatureObject {
         metadata::for_color_temperature_object(self)
     }
 
+    #[cfg(feature = "durable-writes")]
     fn durable_writes(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
         if self.output.is_some() {
             return Some(self);

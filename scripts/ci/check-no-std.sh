@@ -42,6 +42,9 @@
 # it is checked only on the targets that have it: ARMv6-M is passed over
 # (#1615, and bacnet-device-core over it, #2178).
 #
+# bacnet-objects' capability features (#2215) each change what it compiles:
+# `alloc` alone has them all off, then each is off alone, then all are on.
+#
 # To cover another crate or feature set, add a line to `checks`.
 set -euo pipefail
 
@@ -76,6 +79,9 @@ checks=(
   "bacnet-services -"
   "bacnet-services alloc"
   "bacnet-objects alloc"
+  "bacnet-objects alloc,durable-writes"
+  "bacnet-objects alloc,event-reporting"
+  "bacnet-objects alloc,event-reporting,durable-writes"
   "bacnet-device-core alloc"
 )
 default_targets=(thumbv6m-none-eabi thumbv7em-none-eabihf riscv32imac-unknown-none-elf)

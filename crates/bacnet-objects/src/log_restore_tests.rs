@@ -264,6 +264,7 @@ fn an_interruption_needs_an_actual_moment() {
     }
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn buffer_ready_counts_from_the_restored_count() {
     for kind in FamilyKind::ALL {

@@ -317,6 +317,7 @@ fn av_direct_priority_array_index_17_error() {
     assert!(result.is_err());
 }
 
+#[cfg(feature = "event-reporting")]
 #[test]
 fn av_intrinsic_reporting_normal_to_high_limit_to_normal() {
     let mut av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();

@@ -457,6 +457,32 @@
 # Re-measured after merging dev at c3bbc9932, whose own changes add to the
 # image: 150088 / 17944 / 169056, 149188 / 17944 / 168156 and
 # 180756 / 21856 / 202634; riscv32imac's .rodata plus 12% is still 24480.
+#
+# #2215 gives bacnet-objects two capability features, `event-reporting`
+# and `durable-writes`, which `std` turns on. The image takes bacnet-objects
+# with `alloc` alone, so it builds with both off: its responder drives
+# neither, and the objects lend nothing through those accessors. Measured
+# with Rust 1.99.0 against dev at c921e47e6, as text / rodata / flash: both
+# on (as before), event-reporting off, durable-writes off, both off (the
+# image now):
+#
+#   thumbv7m objects     149728 / 17896 / 168648
+#                        146796 / 17808 / 165628
+#                        147728 / 17852 / 166604
+#                        144908 / 17764 / 163696
+#   thumbv7em objects    149048 / 17896 / 167968
+#                        146672 / 17808 / 165504
+#                        147168 / 17852 / 166044
+#                        144736 / 17764 / 163524
+#   riscv32imac objects  180408 / 21976 / 202406
+#                        176812 / 21888 / 198722
+#                        178148 / 21932 / 200102
+#                        174556 / 21844 / 196422
+#
+# RAM unchanged at 16480. Both off save 4952 / 4444 / 5984 octets of
+# flash. A spike that also compiled out audit, COV and the clock binding
+# saved under 400 octets each, so those have no feature. The text, rodata
+# (but riscv32imac's) and flash budgets tighten to the new sizes plus 12%.
 
 [thumbv7m-none-eabi.mstp]
 text = 18320
@@ -547,11 +573,11 @@ div64_functions = 0
 memmove_functions = 0
 
 [thumbv7m-none-eabi.objects]
-text = 164224
-rodata = 20048
+text = 162304
+rodata = 19904
 data = 64
 bss = 18464
-flash = 185408
+flash = 183344
 ram = 18464
 fmt_functions = 0
 div64_functions = 0
@@ -822,22 +848,22 @@ div64_functions = 0
 memmove_functions = 0
 
 [thumbv7em-none-eabihf.objects]
-text = 163344
-rodata = 20048
+text = 162112
+rodata = 19904
 data = 64
 bss = 18464
-flash = 184544
+flash = 183152
 ram = 18464
 fmt_functions = 0
 div64_functions = 0
 memmove_functions = 2
 
 [riscv32imac-unknown-none-elf.objects]
-text = 201008
+text = 195504
 rodata = 24480
 data = 64
 bss = 18464
-flash = 222704
+flash = 220000
 ram = 18464
 fmt_functions = 0
 div64_functions = 0

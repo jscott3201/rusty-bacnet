@@ -101,6 +101,6 @@ fn holds_binary_pv(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "event-reporting"))]
 #[path = "event_algorithm_inhibit_tests.rs"]
 mod tests;

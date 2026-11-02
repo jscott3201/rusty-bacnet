@@ -63,10 +63,18 @@ for crate in bacnet-types bacnet-encoding bacnet-services; do
 done
 
 # bacnet-objects with alloc and without std (#1615). It has no build without
-# alloc: the database boxes every object.
-echo "==> bacnet-objects (no_std with alloc$label)"
-cargo_for clippy -p bacnet-objects --no-default-features --features alloc --locked -- -D warnings
+# alloc: the database boxes every object. `alloc` alone has every capability
+# feature off (#2215); then each one off alone, the others on. All targets,
+# so the tests that need a capability are seen to compile out cleanly; the
+# only dev-dependency, proptest, has no C build. CI's no_std test job lints
+# and tests them all on, and tests them all off.
+echo "==> bacnet-objects (no_std with alloc, capability features off$label)"
+cargo_for clippy -p bacnet-objects --all-targets --no-default-features --features alloc --locked -- -D warnings
 cargo_for doc -p bacnet-objects --no-default-features --features alloc --no-deps --locked --document-private-items
+for features in alloc,durable-writes alloc,event-reporting; do
+  echo "==> bacnet-objects (no_std, features: $features$label)"
+  cargo_for clippy -p bacnet-objects --all-targets --no-default-features --features "$features" --locked -- -D warnings
+done
 
 # bacnet-objects with its hidden test-support feature (#2233): the file
 # backends' in-memory mode, which only the restore fuzz crate turns on, so
