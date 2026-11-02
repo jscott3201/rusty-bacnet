@@ -1,0 +1,18 @@
+{
+  "commit": "64bb7eb27f0b27657f4591b2c9a5dfc06efaf097",
+  "noise_floors": {
+    "decode_apdu_confirmed_request/none": 0.0,
+    "decode_npdu_100b_payload/none": 0.0,
+    "decode_read_property_request/none": 0.0,
+    "encode_apdu_confirmed_request/none": 0.0,
+    "encode_npdu_100b_payload/none": 0.0,
+    "encode_read_property_request/none": 0.0,
+    "full_stack_encode_rp/none": 0.0,
+    "rp/ct": 15.49233333333541,
+    "rp/mt": 57.78866666666727,
+    "rpm/ct": 978.3570000000036,
+    "rpm/mt": 664.678777777779,
+    "wp/ct": 93.96411111110501,
+    "wp/mt": 146.86255555555545
+  }
+}
