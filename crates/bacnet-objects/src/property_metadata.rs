@@ -3,9 +3,12 @@
 
 use alloc::vec::Vec;
 
-use bacnet_types::enums::PropertyIdentifier;
+pub use bacnet_types::datatype::{ArraySize, Datatype, ValueShape, ValueType, standard_value_type};
+use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
+
+use crate::traits::BACnetObject;
 
 /// A property's base conformance code in its Clause 12 object table.
 ///
@@ -185,6 +188,12 @@ pub struct PropertyMetadata {
     pub presence_condition: Option<PropertyPresenceCondition>,
     /// The write route implemented for this property.
     pub write_capability: PropertyWriteCapability,
+    /// The value's datatype and shape, when this row states its own. `None`,
+    /// what [`Self::new`] gives, takes the standard one for the object's
+    /// type ([`standard_value_type`]); every built-in row does. A custom
+    /// object states one for a property the standard has none for, such as
+    /// a proprietary one, with [`Self::with_value_type`].
+    pub value_type: Option<ValueType>,
 }
 
 impl PropertyMetadata {
@@ -235,7 +244,61 @@ impl PropertyMetadata {
             conformance,
             presence_condition,
             write_capability,
+            value_type: None,
         }
+    }
+
+    /// The same row, stating its own datatype and shape.
+    ///
+    /// ```
+    /// use bacnet_objects::property_metadata::{
+    ///     Datatype, PropertyConformance, PropertyMetadata, PropertyWriteCapability, ValueType,
+    /// };
+    /// use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+    ///
+    /// let proprietary = PropertyIdentifier::from_raw(512);
+    /// let row = PropertyMetadata::new(
+    ///     proprietary,
+    ///     PropertyConformance::Optional,
+    ///     None,
+    ///     PropertyWriteCapability::ReadOnly,
+    /// )
+    /// .with_value_type(ValueType::array(Datatype::Real));
+    /// let value_type = row.effective_value_type(ObjectType::from_raw(130)).unwrap();
+    /// assert!(value_type.is_array());
+    /// ```
+    pub const fn with_value_type(self, value_type: ValueType) -> Self {
+        Self {
+            value_type: Some(value_type),
+            ..self
+        }
+    }
+
+    /// This row's datatype and shape on an object of `object_type`: its own
+    /// [`Self::value_type`], or else the standard one.
+    pub const fn effective_value_type(self, object_type: ObjectType) -> Option<ValueType> {
+        match self.value_type {
+            Some(value_type) => Some(value_type),
+            None => standard_value_type(object_type, self.property_identifier),
+        }
+    }
+}
+
+/// The datatype and shape of `property` on an object of `object_type` with
+/// these rows: its row's [`PropertyMetadata::effective_value_type`], or the
+/// standard one when no row names it.
+///
+/// A property without a row keeps its standard shape, so an indexed read of
+/// a standard array the object lacks still fails as an unknown property
+/// rather than as a property that isn't an array.
+pub fn value_type_of(
+    object_type: ObjectType,
+    rows: &[PropertyMetadata],
+    property: PropertyIdentifier,
+) -> Option<ValueType> {
+    match rows.iter().find(|row| row.property_identifier == property) {
+        Some(row) => row.effective_value_type(object_type),
+        None => standard_value_type(object_type, property),
     }
 }
 
@@ -342,6 +405,20 @@ pub fn read_property_list(
             .map(|p| PropertyValue::Enumerated(p.to_raw()))
             .ok_or_else(crate::common::invalid_array_index_error),
     }
+}
+
+/// The datatype and shape of `property` on `object`: [`value_type_of`] over
+/// its type and metadata rows. `None` for a property with neither a row
+/// value type nor a standard one.
+pub fn object_value_type<O: BACnetObject + ?Sized>(
+    object: &O,
+    property: PropertyIdentifier,
+) -> Option<ValueType> {
+    value_type_of(
+        object.object_identifier().object_type(),
+        &object.property_metadata(),
+        property,
+    )
 }
 
 /// Project implemented write capability for one property identifier.

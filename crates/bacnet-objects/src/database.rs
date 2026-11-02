@@ -207,6 +207,23 @@ impl ObjectDatabase {
         self.objects.get(oid).map(|o| o.as_ref())
     }
 
+    /// The datatype and shape of `property` on the object `oid` names: the
+    /// object's metadata row's
+    /// ([`object_value_type`](crate::property_metadata::object_value_type)),
+    /// or the standard one for its type when the database doesn't hold it,
+    /// so a request naming a missing object still decodes its value as the
+    /// property's datatype implies.
+    pub fn value_type(
+        &self,
+        oid: &ObjectIdentifier,
+        property: bacnet_types::enums::PropertyIdentifier,
+    ) -> Option<crate::property_metadata::ValueType> {
+        match self.get(oid) {
+            Some(object) => crate::property_metadata::object_value_type(object, property),
+            None => crate::property_metadata::standard_value_type(oid.object_type(), property),
+        }
+    }
+
     /// Get a mutable reference to an object by identifier.
     pub fn get_mut(&mut self, oid: &ObjectIdentifier) -> Option<&mut (dyn BACnetObject + '_)> {
         if let Some(object) = self.objects.get_mut(oid) {
