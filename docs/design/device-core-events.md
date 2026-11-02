@@ -853,8 +853,9 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
      `BTreeMap`: 4,776 octets less. The image without the probe has
      127,288 and 143,420. Both link no `core::fmt` and two more memmove
      routines (four in all).
-   - Speed: a release-build probe on the host (Apple M-series, 1,024
-     subscriptions on 64 objects, best of 20) admits all of them in 1.56 ms
+   - Speed: a release-build probe on an Apple silicon host shared with
+     other work (1,024 subscriptions on 64 objects, best of 20 runs, each
+     variant run three times) admits all of them in 1.56 ms
      with the `Vec` and 4.1 ms with the `BTreeMap`, and finds one object's
      subscriptions (the fanout's lookup, with its expiry pass) in 382 ns
      and 2,609 ns. Removing every subscription one object at a time takes
