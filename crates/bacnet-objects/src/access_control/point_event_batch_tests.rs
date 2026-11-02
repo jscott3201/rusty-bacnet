@@ -189,3 +189,52 @@ fn native_event_batch_refuses_unhealthy_or_oversized_admission_atomically() {
         assert_eq!(point.record_event_batch(&reports[..1]).unwrap().len(), 1);
     }
 }
+
+/// A refused Active_Authentication_Policy or Authorization_Mode write
+/// leaves Reliability as it was, even where the point would judge it
+/// differently now; only a write it takes refreshes it (#2258). Here, beside
+/// the point, for its private Reliability.
+#[test]
+fn a_refused_authorization_write_leaves_reliability_alone() {
+    use bacnet_types::enums::{ErrorClass, ErrorCode};
+    use bacnet_types::error::RemoteError;
+
+    let mut point = AccessPointObject::new(1, "AP-1").unwrap();
+    // Apart from what the point's policy gives it, as an application could
+    // have set it.
+    point.reliability = Reliability::COMMUNICATION_FAILURE;
+    for (property, value, expected) in [
+        (
+            P::ACTIVE_AUTHENTICATION_POLICY,
+            PropertyValue::Unsigned(99),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        ),
+        (
+            P::ACTIVE_AUTHENTICATION_POLICY,
+            PropertyValue::Boolean(true),
+            ErrorCode::INVALID_DATA_TYPE,
+        ),
+        (
+            P::AUTHORIZATION_MODE,
+            PropertyValue::Enumerated(9999),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        ),
+    ] {
+        let result = point.write_property(property, None, value, None);
+        assert!(
+            matches!(result, Err(Error::Remote(RemoteError::Error { class, code }))
+                if class == ErrorClass::PROPERTY && code == expected),
+            "{property:?}: {result:?}"
+        );
+        assert_eq!(point.reliability, Reliability::COMMUNICATION_FAILURE);
+    }
+    point
+        .write_property(
+            P::ACTIVE_AUTHENTICATION_POLICY,
+            None,
+            PropertyValue::Unsigned(1),
+            None,
+        )
+        .unwrap();
+    assert_eq!(point.reliability, Reliability::NO_FAULT_DETECTED);
+}

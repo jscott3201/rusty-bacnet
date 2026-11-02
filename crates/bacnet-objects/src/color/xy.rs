@@ -460,6 +460,7 @@ impl BACnetObject for ColorObject {
         value: PropertyValue,
         priority: Option<u8>,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
@@ -495,7 +496,6 @@ impl BACnetObject for ColorObject {
                 return Err(common::unhandled_write_error(
                     self.property_metadata().as_ref(),
                     property,
-                    array_index,
                 ));
             }
         }
@@ -510,6 +510,7 @@ impl BACnetObject for ColorObject {
         priority: Option<u8>,
         origin: &CommandOrigin,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         match property {
             PropertyIdentifier::VALUE_SOURCE => {
                 self.value_source.correct(array_index, value, origin)

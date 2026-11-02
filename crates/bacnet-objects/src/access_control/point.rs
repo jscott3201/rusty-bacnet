@@ -442,6 +442,7 @@ impl BACnetObject for AccessPointObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         let was_out_of_service = self.out_of_service;
         if let Some(result) =
             common::write_out_of_service(&mut self.out_of_service, property, &value)
@@ -467,13 +468,16 @@ impl BACnetObject for AccessPointObject {
             return Ok(());
         }
         if let Some(result) = self.authorization.write(property, array_index, &value) {
-            self.refresh_reliability();
+            // Only a write the point took can change what Reliability
+            // follows; a refused one changes nothing (#2258).
+            if result.is_ok() {
+                self.refresh_reliability();
+            }
             return result;
         }
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
-            array_index,
         ))
     }
 

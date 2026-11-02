@@ -2064,6 +2064,26 @@ a client's simulated Tracking\_Value stays in place. In service a
 SubscribeCOVProperty on Tracking\_Value is notified of the change; a
 SubscribeCOV report doesn't carry it.
 
+### BACnetServer.set_program_state_local
+
+```python
+def set_program_state_local(
+    self,
+    object_id: ObjectIdentifier,
+    value: PropertyValue,
+) -> Awaitable[None]
+```
+
+Report a Program's Program\_State, the state of the process the application runs.
+
+Program\_State is read-only on the network, and `write_property_local`
+refuses it with WRITE\_ACCESS\_DENIED too, so this is the application's
+route; a client asks for a change through Program\_Change. The value
+is an Enumerated BACnetProgramState from 0 (IDLE) to 5 (UNLOADING): a
+larger number raises VALUE\_OUT\_OF\_RANGE and another datatype
+INVALID\_DATA\_TYPE. An unknown object raises UNKNOWN\_OBJECT and any
+object other than a Program OPTIONAL\_FUNCTIONALITY\_NOT\_SUPPORTED.
+
 ### BACnetServer.report_device_reset_local
 
 ```python
