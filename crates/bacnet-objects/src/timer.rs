@@ -30,8 +30,10 @@
 //! Command's do, with the same gap for a request to another device that
 //! already passed its last check.
 //!
-//! A Timer keeps nothing across a restart: a rebuilt one starts IDLE with
-//! Last_State_Change NONE.
+//! A rebuilt Timer starts IDLE with Last_State_Change NONE. Built
+//! [`with_persistence`](TimerObject::with_persistence), it keeps the three
+//! properties above once a peer has written State_Change_Values or the
+//! references (`saving`, #2243); nothing else survives a restart.
 
 use crate::prelude::*;
 use alloc::borrow::Cow;
@@ -48,6 +50,9 @@ use crate::common::{self, read_common_properties};
 use crate::traits::{BACnetObject, DeadlineWaker, MonotonicClock};
 
 mod metadata;
+mod saving;
+#[cfg(test)]
+mod saving_tests;
 mod state;
 mod state_change;
 #[cfg(test)]
@@ -88,6 +93,11 @@ pub struct TimerObject {
     reliability: Reliability,
     saved_reliability: Option<Reliability>,
     state_change: Option<state_change::StateChange>,
+    /// Where a written set is saved, with persistence.
+    config_storage: Option<crate::write_config::saving::Storage<state_change::TimerSet>>,
+    /// Changes to the set so far, so a staged write can tell whether
+    /// another came between.
+    config_writes: u64,
     clock: Option<Arc<dyn ClockReader>>,
     monotonic_clock: Option<Arc<MonotonicClock>>,
     deadline_waker: Option<Arc<DeadlineWaker>>,
@@ -121,6 +131,8 @@ impl TimerObject {
             reliability: Reliability::NO_FAULT_DETECTED,
             saved_reliability: None,
             state_change: None,
+            config_storage: None,
+            config_writes: 0,
             clock: None,
             monotonic_clock: None,
             deadline_waker: None,
@@ -357,6 +369,14 @@ impl BACnetObject for TimerObject {
 
     fn command_runner_mut(&mut self) -> Option<&mut dyn crate::traits::CommandRunner> {
         match self.state_change {
+            Some(_) => Some(self),
+            None => None,
+        }
+    }
+
+    #[cfg(feature = "durable-writes")]
+    fn durable_writes(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
+        match self.config_storage {
             Some(_) => Some(self),
             None => None,
         }

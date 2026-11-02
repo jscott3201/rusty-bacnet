@@ -20,23 +20,33 @@ use std::sync::Mutex as StdMutex;
 const PV: PropertyIdentifier = PropertyIdentifier::PRESENT_VALUE;
 const IN_PROGRESS: PropertyIdentifier = PropertyIdentifier::IN_PROGRESS;
 
-/// Present_Value storage in memory, shared across server runs.
+/// Output storage in memory, shared across server runs, refusing saves
+/// while `refuse` is set.
 #[derive(Default)]
-struct Memory(StdMutex<Option<ColorOutputSnapshot>>);
+struct Memory {
+    held: StdMutex<Option<ColorOutputSnapshot>>,
+    refuse: std::sync::atomic::AtomicBool,
+}
 
 impl Memory {
     fn held(&self) -> Option<ColorOutputValue> {
-        self.0.lock().unwrap().map(|saved| saved.present_value)
+        self.held
+            .lock()
+            .unwrap()
+            .and_then(|saved| saved.present_value)
     }
 }
 
 impl ColorOutputPersistence for Memory {
     fn load(&self, _object: ObjectIdentifier) -> Result<Option<ColorOutputSnapshot>, Error> {
-        Ok(*self.0.lock().unwrap())
+        Ok(*self.held.lock().unwrap())
     }
 
     fn save(&self, _object: ObjectIdentifier, snapshot: &ColorOutputSnapshot) -> Result<(), Error> {
-        *self.0.lock().unwrap() = Some(*snapshot);
+        if self.refuse.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(Error::Encoding("refused".into()));
+        }
+        *self.held.lock().unwrap() = Some(*snapshot);
         Ok(())
     }
 }
@@ -228,4 +238,103 @@ async fn a_zero_default_keeps_the_stored_value_across_a_restart() {
     assert_eq!(read(&server, oid, PV).await, xy(RED));
     server.stop().await.unwrap();
     assert_eq!(storage.held(), Some(ColorOutputValue::Xy(RED)));
+}
+
+/// A default written through the server is kept with the output (#1956): a
+/// zero one written in a first run keeps the last value at the next start,
+/// over the non-zero default the application configures, for both kinds.
+#[tokio::test(start_paused = true)]
+async fn a_written_zero_default_keeps_the_last_value_at_the_next_start() {
+    let color_storage = Arc::new(Memory::default());
+    let ct_storage = Arc::new(Memory::default());
+    let build = || -> Vec<Box<dyn BACnetObject>> {
+        let mut color = ColorObject::new(1, "color")
+            .unwrap()
+            .with_output_persistence(color_storage.clone())
+            .unwrap();
+        color.set_default_color(RED).unwrap();
+        let mut ct = ColorTemperatureObject::new(1, "ct")
+            .unwrap()
+            .with_output_persistence(ct_storage.clone())
+            .unwrap();
+        ct.set_default_color_temperature(4000).unwrap();
+        vec![Box::new(color), Box::new(ct)]
+    };
+    let color = ObjectIdentifier::new(ObjectType::COLOR, 1).unwrap();
+    let ct = ObjectIdentifier::new(ObjectType::COLOR_TEMPERATURE, 1).unwrap();
+    let mut server = start(database(build())).await;
+    let source = || crate::LocalCommandSource::ServerDevice;
+    for (oid, property, value) in [
+        (color, PV, xy(GREEN)),
+        (color, PropertyIdentifier::DEFAULT_COLOR, xy(ZERO)),
+        (ct, PV, PropertyValue::Unsigned(2700)),
+        (
+            ct,
+            PropertyIdentifier::DEFAULT_COLOR_TEMPERATURE,
+            PropertyValue::Unsigned(0),
+        ),
+    ] {
+        server
+            .write_local(&oid, property, None, value, None, source())
+            .await
+            .unwrap();
+    }
+    server.stop().await.unwrap();
+    drop(server);
+    assert_eq!(color_storage.held(), Some(ColorOutputValue::Xy(GREEN)));
+
+    let mut server = start(database(build())).await;
+    assert_eq!(read(&server, color, PV).await, xy(GREEN));
+    assert_eq!(
+        read(&server, color, PropertyIdentifier::DEFAULT_COLOR).await,
+        xy(ZERO)
+    );
+    assert_eq!(read(&server, ct, PV).await, PropertyValue::Unsigned(2700));
+    assert_eq!(
+        read(&server, ct, PropertyIdentifier::DEFAULT_COLOR_TEMPERATURE).await,
+        PropertyValue::Unsigned(0)
+    );
+    for oid in [color, ct] {
+        assert_eq!(
+            read(&server, oid, IN_PROGRESS).await,
+            state(InProgress::IDLE)
+        );
+    }
+    server.stop().await.unwrap();
+}
+
+/// A default whose save fails is refused through the server, and the old
+/// default stays.
+#[tokio::test(start_paused = true)]
+async fn a_default_that_cannot_be_saved_is_refused() {
+    let storage = Arc::new(Memory::default());
+    let mut color = ColorObject::new(1, "color")
+        .unwrap()
+        .with_output_persistence(storage.clone())
+        .unwrap();
+    color.set_default_color(RED).unwrap();
+    let oid = color.object_identifier();
+    let mut server = start(database(vec![Box::new(color)])).await;
+    storage
+        .refuse
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let refused = server
+        .write_local(
+            &oid,
+            PropertyIdentifier::DEFAULT_COLOR,
+            None,
+            xy(ZERO),
+            None,
+            crate::LocalCommandSource::ServerDevice,
+        )
+        .await;
+    assert!(refused.is_err());
+    assert_eq!(
+        read(&server, oid, PropertyIdentifier::DEFAULT_COLOR).await,
+        xy(RED)
+    );
+    storage
+        .refuse
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    server.stop().await.unwrap();
 }

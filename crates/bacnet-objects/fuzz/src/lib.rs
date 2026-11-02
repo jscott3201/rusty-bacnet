@@ -24,7 +24,7 @@
 //! | --- | --- |
 //! | `log_restore`, `log_restore_file` | the Trend Log, Trend Log Multiple and Event Log snapshots (`log_persistence/codec.rs`) |
 //! | `audit_restore`, `audit_restore_file` | the Audit Log snapshot, schema versions 1 to 3 |
-//! | `object_file_restore`, `object_file_restore_file` | the one-file formats: Notification Forwarder, Notification Class, Tags, the two colour objects' output, Access Rights |
+//! | `object_file_restore`, `object_file_restore_file` | the one-file formats: Notification Forwarder, Notification Class, Tags, the two colour objects' output, Access Rights, and the Timer's and Channel's write configuration |
 //!
 //! An input is a selector octet, which picks a format of the target's
 //! (modulo their count), then the files. For a two-slot format: a flags
@@ -53,6 +53,7 @@ use bacnet_objects::log_persistence::FileLogPersistence;
 use bacnet_objects::notification_class::FileNotificationClassPersistence;
 use bacnet_objects::notification_forwarder::FileNotificationForwarderPersistence;
 use bacnet_objects::object_profile::FileTagsPersistence;
+use bacnet_objects::write_config::FileWriteConfigPersistence;
 use restore::{FORMATS, Files, Format, Medium, Outcome, Scratch, write_files};
 pub use restore::{crc32, seal};
 
@@ -151,6 +152,9 @@ impl Medium for Memory {
     }
     fn rights(&self) -> FileAccessRightsPersistence {
         FileAccessRightsPersistence::in_memory(self.files.clone())
+    }
+    fn write_config(&self) -> FileWriteConfigPersistence {
+        FileWriteConfigPersistence::in_memory(self.files.clone())
     }
     fn fresh(&self) -> Self {
         Self::new(vec![None; self.count])

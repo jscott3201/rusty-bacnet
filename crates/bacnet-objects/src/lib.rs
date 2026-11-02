@@ -75,6 +75,7 @@ pub mod traits;
 pub(crate) mod transition;
 pub mod trend;
 pub mod value_types;
+pub mod write_config;
 
 #[cfg(test)]
 mod log_status_tests;

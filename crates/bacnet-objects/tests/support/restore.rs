@@ -36,6 +36,7 @@ use bacnet_objects::access_control::{
 };
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::audit::{AuditLogObject, AuditLogPersistence, FileAuditLogPersistence};
+use bacnet_objects::channel::ChannelObject;
 use bacnet_objects::color::{
     ColorObject, ColorOutputPersistence, ColorOutputSnapshot, ColorTemperatureObject,
     FileColorOutputPersistence,
@@ -51,8 +52,12 @@ use bacnet_objects::notification_forwarder::{
     NotificationForwarderPersistence,
 };
 use bacnet_objects::object_profile::{FileTagsPersistence, TagsPersistence, TagsSnapshot};
+use bacnet_objects::timer::TimerObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_objects::trend::{TrendLogMultipleObject, TrendLogObject};
+use bacnet_objects::write_config::{
+    FileWriteConfigPersistence, WriteConfigPersistence, WriteConfigSnapshot,
+};
 use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
@@ -83,6 +88,8 @@ enum Kind {
     Color,
     ColorTemperature,
     AccessRights,
+    TimerWriteConfig,
+    ChannelWriteConfig,
 }
 
 /// Where a check's storage lives. Each method opens one backend on it; a
@@ -95,6 +102,7 @@ pub trait Medium: Sized {
     fn tags(&self) -> FileTagsPersistence;
     fn color(&self) -> FileColorOutputPersistence;
     fn rights(&self) -> FileAccessRightsPersistence;
+    fn write_config(&self) -> FileWriteConfigPersistence;
     /// Empty storage of the same kind, for the round trip.
     fn fresh(&self) -> Self;
     /// What each of the format's files holds now, `None` for a missing one.
@@ -137,6 +145,9 @@ impl Medium for Files {
     }
     fn rights(&self) -> FileAccessRightsPersistence {
         FileAccessRightsPersistence::new(&self.base).unwrap()
+    }
+    fn write_config(&self) -> FileWriteConfigPersistence {
+        FileWriteConfigPersistence::new(&self.base).unwrap()
     }
     /// A sibling base, with its files removed.
     fn fresh(&self) -> Self {
@@ -225,6 +236,18 @@ pub const FORMATS: &[Format] = &[
         sample: samples::access_rights,
         kind: Kind::AccessRights,
     },
+    Format {
+        name: "timer_write_config",
+        two_slot: false,
+        sample: samples::timer_write_config,
+        kind: Kind::TimerWriteConfig,
+    },
+    Format {
+        name: "channel_write_config",
+        two_slot: false,
+        sample: samples::channel_write_config,
+        kind: Kind::ChannelWriteConfig,
+    },
 ];
 
 impl Format {
@@ -282,6 +305,16 @@ impl Format {
             Kind::AccessRights => {
                 check_file(medium, oid(ObjectType::ACCESS_RIGHTS), M::rights, |store| {
                     AccessRightsObject::with_persistence(1, "AR", store).map(drop)
+                })
+            }
+            Kind::TimerWriteConfig => {
+                check_file(medium, oid(ObjectType::TIMER), M::write_config, |store| {
+                    TimerObject::with_persistence(1, "TMR", store).map(drop)
+                })
+            }
+            Kind::ChannelWriteConfig => {
+                check_file(medium, oid(ObjectType::CHANNEL), M::write_config, |store| {
+                    ChannelObject::with_persistence(1, "CH", 1, store).map(drop)
                 })
             }
         }
@@ -570,6 +603,7 @@ one_file! {
     FileTagsPersistence => TagsPersistence, TagsSnapshot;
     FileColorOutputPersistence => ColorOutputPersistence, ColorOutputSnapshot;
     FileAccessRightsPersistence => AccessRightsPersistence, AccessRightsSnapshot;
+    FileWriteConfigPersistence => WriteConfigPersistence, WriteConfigSnapshot;
 }
 
 fn check_file<M: Medium, S: OneFile>(

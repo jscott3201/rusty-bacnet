@@ -118,9 +118,14 @@ impl BACnetServer {
     /// `storage_path` (a `str`, the file the object keeps Present_Value in);
     /// with nothing stored it keeps `present_value`, and with neither,
     /// In_Progress reads NOT_CONTROLLED until a write drives the output.
+    ///
+    /// The file keeps a Default_Color written over the network too, which
+    /// wins over `default_color` at the next start (#1956);
+    /// `clear_written_default` drops it first, so `default_color` applies.
     #[pyo3(signature = (
         instance, name, *, present_value=None, default_color=None, storage_path=None,
-        value_source_tracking=false, tags=None, profile_location=None, profile_name=None
+        clear_written_default=false, value_source_tracking=false, tags=None,
+        profile_location=None, profile_name=None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn add_color(
@@ -130,6 +135,7 @@ impl BACnetServer {
         present_value: Option<(f32, f32)>,
         default_color: Option<(f32, f32)>,
         storage_path: Option<&str>,
+        clear_written_default: bool,
         value_source_tracking: bool,
         tags: Option<&Bound<'_, PyAny>>,
         profile_location: Option<String>,
@@ -139,6 +145,7 @@ impl BACnetServer {
             present_value: present_value.map(|(x, y)| BACnetXyColor::new(x, y)),
             default: default_color.map(|(x, y)| BACnetXyColor::new(x, y)),
             storage_path,
+            clear_written_default,
         };
         let mut obj = color(instance, name, output).map_err(to_py_err)?;
         obj.set_value_source_tracking(value_source_tracking);
@@ -156,13 +163,14 @@ impl BACnetServer {
     /// `add_color`.
     ///
     /// `default_color_temperature` (4000 unless given, clamped to the
-    /// limits) and `storage_path` work as `default_color` and `storage_path`
-    /// on `add_color`, with 0 keeping the temperature from before the
-    /// restart (#1526).
+    /// limits), `storage_path` and `clear_written_default` work as
+    /// `default_color`, `storage_path` and `clear_written_default` on
+    /// `add_color`, with 0 keeping the temperature from before the restart
+    /// (#1526).
     #[pyo3(signature = (
         instance, name, *, present_value=None, min_pres_value=None, max_pres_value=None,
-        default_color_temperature=None, storage_path=None, value_source_tracking=false,
-        tags=None, profile_location=None, profile_name=None
+        default_color_temperature=None, storage_path=None, clear_written_default=false,
+        value_source_tracking=false, tags=None, profile_location=None, profile_name=None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn add_color_temperature(
@@ -174,6 +182,7 @@ impl BACnetServer {
         max_pres_value: Option<u32>,
         default_color_temperature: Option<u32>,
         storage_path: Option<&str>,
+        clear_written_default: bool,
         value_source_tracking: bool,
         tags: Option<&Bound<'_, PyAny>>,
         profile_location: Option<String>,
@@ -192,6 +201,7 @@ impl BACnetServer {
             present_value,
             default: default_color_temperature,
             storage_path,
+            clear_written_default,
         };
         let mut obj = color_temperature(instance, name, limits, output).map_err(to_py_err)?;
         obj.set_value_source_tracking(value_source_tracking);
@@ -298,6 +308,8 @@ struct ColorOutput<'a, V> {
     present_value: Option<V>,
     default: Option<V>,
     storage_path: Option<&'a str>,
+    /// Drop a default a write saved before `default` is set.
+    clear_written_default: bool,
 }
 
 impl<V> ColorOutput<'_, V> {
@@ -312,7 +324,8 @@ impl<V> ColorOutput<'_, V> {
 /// Build a Color object: kept in the file at `storage_path` when one is
 /// given (#1526), then its default and Present_Value set through their
 /// checking setters. A colour storage brought back wins over
-/// `present_value`, as a write it saved would.
+/// `present_value`, and a default written over the network and saved wins
+/// over `default` (#1956), as a write it saved would.
 fn color(
     instance: u32,
     name: &str,
@@ -321,6 +334,9 @@ fn color(
     let mut obj = ColorObject::new(instance, name)?;
     if let Some(storage) = output.storage()? {
         obj = obj.with_output_persistence(storage)?;
+    }
+    if output.clear_written_default {
+        obj.clear_written_default()?;
     }
     if let Some(color) = output.default {
         obj.set_default_color(color)?;
@@ -343,6 +359,9 @@ fn color_temperature(
     let mut obj = ColorTemperatureObject::new(instance, name)?;
     if let Some(storage) = output.storage()? {
         obj = obj.with_output_persistence(storage)?;
+    }
+    if output.clear_written_default {
+        obj.clear_written_default()?;
     }
     if let Some((min, max)) = limits {
         obj.set_min_max(min, max)?;
