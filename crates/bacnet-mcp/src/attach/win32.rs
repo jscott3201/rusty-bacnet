@@ -2,9 +2,10 @@
 //! process is at either end, which user a process runs as, the
 //! owner-only security descriptor, and the checks of who may read the
 //! workspace and the pipe's salt and nonce files (#2219, #2237). Each
-//! call is wrapped in a small safe function; every handle and every buffer the system allocates has an
-//! owner that frees it, on error paths too. This module is the crate's
-//! only unsafe code, hence its allow (the workspace denies it).
+//! call is wrapped in a small safe function; every handle and every
+//! buffer the system allocates has an owner that frees it, on error paths
+//! too. This module is the crate's only unsafe code, hence its allow (the
+//! workspace denies it).
 #![allow(unsafe_code)]
 
 use std::fs::File;

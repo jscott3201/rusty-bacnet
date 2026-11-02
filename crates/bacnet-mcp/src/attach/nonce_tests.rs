@@ -5,6 +5,7 @@
 //! (`salt_tests.rs`, `win32_tests.rs`): both files are read by one
 //! function.
 
+use std::cell::Cell;
 use std::fs::File;
 use std::io::Write as _;
 
@@ -144,4 +145,64 @@ fn a_nonce_link_is_refused_and_replaced() {
     assert!(!std::fs::symlink_metadata(&path).unwrap().is_symlink());
     assert_eq!(std::fs::read(&real).unwrap(), [3; NONCE_LEN]);
     assert_eq!(load(dir.path()).unwrap().0, nonce.0);
+}
+
+/// A rename that fails for a moment is tried again, at most
+/// [`PUBLISH_TRIES`] times with a pause between; one that keeps failing
+/// says the TUI isn't listening and leaves nothing temporary; any other
+/// failure isn't retried.
+#[test]
+fn a_failing_rename_is_retried_a_few_times() {
+    let dir = tempfile::tempdir().unwrap();
+    let (tries, pauses) = (Cell::new(0), Cell::new(0));
+    let flaky = |from: &Path, to: &Path| {
+        tries.set(tries.get() + 1);
+        if tries.get() < PUBLISH_TRIES {
+            Err(io::Error::from(io::ErrorKind::PermissionDenied))
+        } else {
+            std::fs::rename(from, to)
+        }
+    };
+    let nonce = fresh().unwrap();
+    publish_with(dir.path(), &nonce, flaky, || pauses.set(pauses.get() + 1)).unwrap();
+    assert_eq!(
+        (tries.get(), pauses.get()),
+        (PUBLISH_TRIES, PUBLISH_TRIES - 1)
+    );
+    assert_eq!(load(dir.path()).unwrap().0, nonce.0);
+
+    tries.set(0);
+    let denied = |_: &Path, _: &Path| {
+        tries.set(tries.get() + 1);
+        Err(io::Error::from(io::ErrorKind::PermissionDenied))
+    };
+    let error = publish_with(dir.path(), &fresh().unwrap(), denied, || ()).unwrap_err();
+    assert!(error.to_string().contains("try again"), "{error}");
+    assert_eq!(tries.get(), PUBLISH_TRIES);
+    assert_eq!(load(dir.path()).unwrap().0, nonce.0, "the last one kept");
+    assert_eq!(files(dir.path()), [NONCE_FILE], "nothing temporary left");
+
+    tries.set(0);
+    let gone = |_: &Path, _: &Path| {
+        tries.set(tries.get() + 1);
+        Err(io::Error::from(io::ErrorKind::NotFound))
+    };
+    publish_with(dir.path(), &fresh().unwrap(), gone, || ()).unwrap_err();
+    assert_eq!(tries.get(), 1, "not retried");
+}
+
+/// Publishing clears the nonce's temporary files a crashed TUI left, and
+/// nothing else.
+#[test]
+fn publishing_sweeps_stale_temporary_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let stale = dir
+        .path()
+        .join(format!("{NONCE_FILE}.0123456789abcdef.tmp"));
+    write_private(&stale, &[1; NONCE_LEN]);
+    let other = dir.path().join("other.tmp");
+    write_private(&other, b"keep");
+    publish(dir.path(), &fresh().unwrap()).unwrap();
+    assert!(!stale.exists());
+    assert_eq!(files(dir.path()), [NONCE_FILE, "other.tmp"]);
 }

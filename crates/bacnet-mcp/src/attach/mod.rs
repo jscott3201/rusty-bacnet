@@ -329,7 +329,7 @@ impl Listener {
         };
         // The socket, its connections and the watch hub's tasks belong to
         // the sessions' runtime.
-        let (mut endpoint, incoming) = preflight.bind(&workspace.dir, &handle).await?;
+        let (mut endpoint, incoming) = preflight.bind(&workspace.dir, &handle)?;
         let entered = handle.enter();
         let shared = match Shared::new(Some(&engine), &policy) {
             Ok(shared) => shared,
@@ -388,6 +388,9 @@ impl Listener {
     /// run's nonce) and release the lock.
     pub async fn shutdown(mut self) {
         self.stop.cancel();
+        // The run's name goes first: a connect from now on hears that no
+        // TUI is listening. The lock is held until the end.
+        self.endpoint.withdraw();
         if let Some(accept) = self.accept.take()
             && let Err(e) = accept.await
             && e.is_panic()

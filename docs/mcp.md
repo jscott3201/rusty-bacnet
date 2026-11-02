@@ -586,13 +586,18 @@ stderr; when the TUI ends the session it exits cleanly.
   workspace's lock and claiming the pipe's name: to a new file owned by
   its user and open to nobody else from creation, synced, then renamed
   over the last run's, so a reader finds one whole file or the other.
-  It removes the file as it stops; one left by a TUI that crashed names
-  a pipe nobody holds, and `connect`, which reads the nonce on every
-  connect, says that no TUI is listening, as it does with no nonce
-  file. The salt stays, though the nonce alone would hide the name: it
-  costs one read, and keeps the name unknown to others should a nonce
-  ever be reused. The
-  salt is 32 random bytes in `mcp-pipe.salt` in the workspace, made by
+  A rename that fails for a moment (a reader holding the old file, say)
+  is tried twice more; one that keeps failing leaves the TUI not
+  listening, with an error that says to try again. It removes the file
+  first thing as it stops; one left by a TUI that crashed names a pipe
+  nobody holds, and `connect`, which reads the nonce on every connect,
+  says that no TUI is listening, as it does with no nonce file. Should
+  someone who saw a crashed TUI's name make a pipe under it, `connect`
+  refuses it with the message naming its owner or user, and passes it
+  nothing; that is safe. The salt stays, though the nonce alone would
+  hide the name: it costs one read, and keeps the name unknown to others
+  should a nonce ever be reused. The salt is 32 random bytes in
+  `mcp-pipe.salt` in the workspace, made by
   the first TUI to listen there and owned by its user. Two TUIs starting
   at once agree on one salt: each writes its own under a temporary name
   and links it into place, and the one that finds a salt there already
@@ -657,7 +662,8 @@ stderr; when the TUI ends the session it exits cleanly.
   agent's listen streams complete, its connection closes, the shared
   watch hub cancels its COV subscriptions, the sessions' threads stop,
   the socket file (or every pipe instance) is removed and the lock
-  released.
+  released. On Windows the run's nonce is withdrawn first, so a
+  `connect` during the shutdown already hears that no TUI is listening.
 
 ## Tests
 
@@ -799,12 +805,14 @@ stderr; when the TUI ends the session it exits cleanly.
   and left alone, and on Unix the owner and mode rule on made-up owners;
   on Windows, the workspace check. `attach/nonce_tests.rs` (every
   platform): two runs naming the pipe differently, the nonce published
-  private, replaced whole and withdrawn, and a corrupt, linked, non-file
-  or readable-by-others nonce file refused. `attach/win32_tests.rs`
+  private, replaced whole and withdrawn, a failing rename retried a few
+  times, stale temporary files swept, and a corrupt, linked, non-file or
+  readable-by-others nonce file refused. `attach/win32_tests.rs`
   (Windows): the owners and entries the salt file and the workspace
   accept, each forbidden right refused, and a workspace junction
   refused. `attach/pipe_tests.rs`: every instance's refusal of remote
-  clients and the first's claim on the name, and the kernel's copy of
+  clients and the first's claim on the name, a name already held under
+  a chosen nonce refused with no nonce published, and the kernel's copy of
   the descriptor and label.
   `fence_tests.rs`: unsafe code only in `attach/win32.rs`.
   `crates/bacnet-cli/src/tui/tests/mcp_attach.rs`:

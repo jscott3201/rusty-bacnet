@@ -1,16 +1,16 @@
 //! The Windows side of the attached mode (#2201): a named pipe whose name
 //! comes from a secret salt, a nonce of the run and the workspace's path,
-//! open to this user's
-//! SID alone and to local clients only, its peers identified by their
-//! process's token, and the bridge's connection to it.
+//! open to this user's SID alone and to local clients only, its peers
+//! identified by their process's token, and the bridge's connection to it.
 //!
 //! The pipe's name is global, so it is guarded four ways. It can't be
 //! worked out without the salt (`salt.rs`, #2219), a file in the
 //! workspace only this user may read; the workspace itself must not be
 //! listable by other users. Anyone may see it listed while the TUI runs,
-//! but each run's nonce (`nonce.rs`, #2237) gives it a new one. The first instance claims the name
-//! (`FILE_FLAG_FIRST_PIPE_INSTANCE`): if anyone holds it already, the
-//! listener is refused rather than joining their pipe. Every instance
+//! but each run's nonce (`nonce.rs`, #2237) gives it a new one. The first
+//! instance claims the name (`FILE_FLAG_FIRST_PIPE_INSTANCE`): if anyone
+//! holds it already, the listener is refused rather than joining their
+//! pipe. Every instance
 //! after it carries the same owner-only descriptor and refuses remote
 //! clients, and the next instance is always made before a connected one
 //! is handed on, so the name never goes free while the listener runs.
@@ -225,12 +225,19 @@ impl Endpoint {
         &self.name
     }
 
-    /// Withdraw the run's nonce, with the listener's lock still held: a
-    /// connect after this finds no TUI listening rather than a stale name.
-    pub(super) fn remove(&mut self) {
+    /// Withdraw the run's nonce, once, with the listener's lock still
+    /// held: a connect after this finds no TUI listening rather than a
+    /// stale name.
+    pub(super) fn withdraw(&mut self) {
         if let Some(dir) = self.workspace.take() {
             nonce::withdraw(&dir);
         }
+    }
+
+    /// Withdraw the nonce, if not yet done: the pipe's name goes with its
+    /// last instance.
+    pub(super) fn remove(&mut self) {
+        self.withdraw();
     }
 }
 
@@ -248,17 +255,26 @@ impl Preflight {
     /// pipe's first instance on `runtime`, claiming the name it gives, and
     /// then publish the nonce for `connect`. A name nobody could know yet
     /// that is taken all the same is refused, never joined.
-    pub(super) async fn bind(
+    pub(super) fn bind(
         self,
         dir: &Path,
         runtime: &Handle,
+    ) -> Result<(Endpoint, Incoming), AttachError> {
+        self.bind_with_nonce(dir, runtime, nonce::fresh()?)
+    }
+
+    /// [`bind`](Self::bind) under the nonce `nonce`: a test's chosen one.
+    pub(super) fn bind_with_nonce(
+        self,
+        dir: &Path,
+        runtime: &Handle,
+        nonce: nonce::Nonce,
     ) -> Result<(Endpoint, Incoming), AttachError> {
         let Self {
             owner,
             salt,
             descriptor,
         } = self;
-        let nonce = nonce::fresh()?;
         let name = salt::pipe_name(&salt, &nonce, dir);
         let created = {
             let _entered = runtime.enter();

@@ -185,6 +185,8 @@ async fn a_second_listener_and_a_taken_name_are_refused() {
         error.to_string().contains("another TUI is listening"),
         "{error}"
     );
+    // Refused by the lock, it published no nonce of its own.
+    assert_eq!(socket_path(dir.path()).unwrap(), first.path());
     let (mut agent, bridge) = bridged(first.path());
     let hello = agent.initialize().await;
     assert!(hello.get("result").is_some(), "the first serves: {hello}");

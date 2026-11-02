@@ -134,10 +134,10 @@ pub(crate) fn write_temporary(dir: &Path, file: &str, bytes: &[u8]) -> io::Resul
     getrandom::fill(&mut tag).map_err(io::Error::other)?;
     let tag: String = tag.iter().map(|b| format!("{b:02x}")).collect();
     let temporary = dir.join(format!("{file}.{tag}.tmp"));
-    let written = platform::create_private(&temporary).and_then(|mut made| {
-        made.write_all(bytes)?;
-        made.sync_all()
-    });
+    // A file already at the name isn't this call's: left alone.
+    let mut made = platform::create_private(&temporary)?;
+    let written = made.write_all(bytes).and_then(|()| made.sync_all());
+    drop(made);
     match written {
         Ok(()) => Ok(temporary),
         Err(e) => {

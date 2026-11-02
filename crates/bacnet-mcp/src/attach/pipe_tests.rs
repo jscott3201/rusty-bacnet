@@ -69,3 +69,26 @@ async fn the_descriptor_grants_only_its_owner() {
     let error = descriptor.create(&options(true), &name).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
 }
+
+/// A name already held when the first instance is made, by a pipe of
+/// anyone's, is refused rather than joined, and no nonce is published for
+/// it. A fresh nonce gives a name nobody holds, so the test picks one.
+#[tokio::test]
+async fn a_taken_name_is_refused_not_joined() {
+    let own = win32::own_sid().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("workspace");
+    let sddl = format!("D:P(A;OICI;FA;;;{own})");
+    win32::create_dir(&dir, &Descriptor::from_sddl(&sddl).unwrap()).unwrap();
+    let ready = preflight(&dir).unwrap();
+    let chosen = [4; nonce::NONCE_LEN];
+    let name = pipe_name(&salt::load(&dir).unwrap(), &nonce::Nonce(chosen), &dir);
+    let _squatter = ServerOptions::new().create(&name).unwrap();
+    let bound = ready.bind_with_nonce(&dir, &Handle::current(), nonce::Nonce(chosen));
+    let Err(error) = bound else {
+        panic!("joined the pipe at {}", name.display());
+    };
+    let error = error.to_string();
+    assert!(error.contains("is taken by another process"), "{error}");
+    assert!(!dir.join(nonce::NONCE_FILE).exists(), "nothing published");
+}
