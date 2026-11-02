@@ -907,10 +907,12 @@ candidate isn't accepted.
   scripts/perf`.
 - **On GitHub:** `.github/workflows/perf-counts.yml`, `workflow_dispatch`
   only, on the `ubuntu-24.04-arm` runner, with the baseline ref, the
-  candidate ref and the workloads as inputs; the same ref twice measures the
-  noise floor. It runs the script's tests first, puts the verdict table in
-  the run summary and uploads the tables and the raw callgrind files as
-  artifacts. Its job is named "Perf counts: ...", so it never stands in for
+  candidate ref, the workloads and the aim as inputs (`rp` for an
+  optimization, `none` for the no-regression check); the same ref twice
+  measures the noise floor. It runs the script's tests first, puts the
+  verdict table in the run summary, writes per-function changes to
+  `attribution.md` when the comparison fails, and uploads the tables and
+  the raw callgrind files as artifacts. Its job is named "Perf counts: ...", so it never stands in for
   CI OK or Native OK.
 
 ### Runner

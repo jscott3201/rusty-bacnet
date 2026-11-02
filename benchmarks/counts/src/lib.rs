@@ -27,7 +27,12 @@ pub struct CountingAlloc;
 
 // SAFETY: every method defers to `System` with the caller's arguments
 // unchanged; the counters are plain atomics.
+//
+// `#[inline(never)]` keeps each method a function of its own under fat LTO,
+// so scripts/perf can find and subtract the counting cost by name; inlined
+// into the allocator shims, it would vanish into them (#2314).
 unsafe impl GlobalAlloc for CountingAlloc {
+    #[inline(never)]
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         CALLS.fetch_add(1, Relaxed);
         BYTES.fetch_add(layout.size() as u64, Relaxed);
@@ -35,6 +40,7 @@ unsafe impl GlobalAlloc for CountingAlloc {
         unsafe { System.alloc(layout) }
     }
 
+    #[inline(never)]
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         CALLS.fetch_add(1, Relaxed);
         BYTES.fetch_add(layout.size() as u64, Relaxed);
@@ -42,11 +48,13 @@ unsafe impl GlobalAlloc for CountingAlloc {
         unsafe { System.alloc_zeroed(layout) }
     }
 
+    #[inline(never)]
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         // SAFETY: the caller upholds `GlobalAlloc::dealloc`'s contract.
         unsafe { System.dealloc(ptr, layout) }
     }
 
+    #[inline(never)]
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         CALLS.fetch_add(1, Relaxed);
         BYTES.fetch_add(new_size as u64, Relaxed);

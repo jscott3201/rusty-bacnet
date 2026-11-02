@@ -1176,6 +1176,26 @@ interleaved matrix compare.
   they read, write or encode before and after the counted loop. The client
   API takes the written value and the ReadPropertyMultiple specifications by
   value, so their clones count as part of each request.
+- **Built like the release.** The harness builds with whole-program LTO and
+  one codegen unit, as the published CLI and wheels do (the `dist`
+  profile), with line tables for attribution. Under the default release
+  profile, a change that only moved the compiler's inlining across codegen
+  units showed as +120 to +170 instructions per request; built this way it
+  doesn't (#2314).
+- **Fixed allocator settings.** Every counted run sets `GLIBC_TUNABLES`: a
+  per-thread cache of 32 chunks per size and fixed mmap, trim and top-pad
+  thresholds. This is a measurement setting only: the shipped binaries use
+  glibc's defaults. With those defaults, which free chunk a request found
+  depended on how the tasks interleaved, and the ReadPropertyMultiple
+  counts of one binary spread over hundreds of instructions; with these
+  settings they spread over tens, and ReadProperty's count is unchanged.
+- **Older figures don't compare.** Counts from before
+  [perf-s0b](benchmarks/results/perf-s0b/README.md) used the default release
+  profile and glibc's default allocator settings, so they aren't comparable
+  with later ones: ReadProperty on the current-thread runtime is 39,864.6
+  instructions per request in perf-s0 and 33,827.3 in perf-s0b, mostly
+  from the build. Compare only counts taken with the same harness and
+  settings, ideally in one matrix.
 - **Per request.** Each run happens twice, with 1,000 and with 10,000 requests
   after 200 warm-up requests (100,000 and 1,000,000 iterations for the codec
   workloads). The difference in instructions divided by the difference in
@@ -1203,6 +1223,17 @@ interleaved matrix compare.
   request. Requested bytes are reported, not gated. Wire bytes must stay
   identical; the existing test suites check that. The script exits non-zero
   when a comparison isn't accepted.
+- **No-regression check.** A change that isn't an optimization, such as a
+  refactor or a feature, runs with `--aim none` (the workflow's `aim`
+  input). It is accepted when no row rises by more than its noise floor and
+  no row adds allocation calls; each row reports its change in floors.
+- **When a comparison fails.** Compare per-function call counts first:
+  `perf_counts.py attribute <run directory> --workload rp --runtime ct`
+  lists the calls per request that changed, then the instructions. The
+  workflow writes the same for each round trip to `attribution.md` when it
+  fails. Unchanged calls with changed instructions point at code
+  generation, such as a function the compiler stopped inlining, rather
+  than at more work per request.
 - **Where.** On Apple silicon, in local Docker; on GitHub, the manual
   `Perf counts` workflow (`.github/workflows/perf-counts.yml`, run from the
   Actions tab with a baseline ref, a candidate ref and the workloads) on an
@@ -1219,13 +1250,20 @@ python3 scripts/perf/perf_counts.py run --noise dev --workloads all --out /tmp/n
 python3 -m unittest discover -s scripts/perf
 ```
 
-For quick local iteration only, `--noise-floors /tmp/noise/summary.json`
+`--callers` adds one pair of profile runs per round trip with callgrind's
+`--separate-callers`, and splits the Tokio semaphore's cost (#1978 item 2a)
+by caller: the client's locks, the server's locks (item 2b) and bounded
+channels' permit returns, in `callers.md`. A channel receive inlined into
+its caller, like the network layer's APDU receiver, leaves no channel frame,
+so that receiver counts as the channel. For quick local iteration only, `--noise-floors /tmp/noise/summary.json`
 skips the A' build and takes the floors from an earlier noise run on the
 same machine; each row of the table names its floor's source. Each run
 writes `summary.md` (the verdict table), per-function and per-line
 instruction slopes under `profiles/`, and the #1978 items' share in
 `items.md`. The first baseline and noise floors on dev are in
-[benchmarks/results/perf-s0](benchmarks/results/perf-s0/README.md).
+[benchmarks/results/perf-s0](benchmarks/results/perf-s0/README.md); the
+current ones, built like the release with the fixed allocator settings, in
+[benchmarks/results/perf-s0b](benchmarks/results/perf-s0b/README.md).
 
 ## 11. How to reproduce
 

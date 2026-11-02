@@ -4,7 +4,11 @@
 
   perf_counts.py run --baseline REF --candidate REF [options]   # A, A' and B
   perf_counts.py run --noise REF [options]                      # A and A'
-  perf_counts.py analyze OUT [--aim rp,...]
+  perf_counts.py analyze OUT [--aim rp,... | --aim none]
+  perf_counts.py attribute OUT [--workload rp] [--runtime ct]   # calls first
+
+`--aim none` is the no-regression check: accepted when no row rises above
+its noise floor and no allocation calls are added.
 
 `run`:
 1. builds the image from scripts/perf/Dockerfile (tag rb-perf-counts:<hash
@@ -51,6 +55,19 @@ DOCKERFILE = REPO / "scripts/perf/Dockerfile"
 HARNESS_FILES = ("Cargo.toml", "Cargo.lock", "src")
 BINARIES = ("counts", "codec-counts")
 VALGRIND = ["valgrind", "--tool=callgrind", "--compress-pos=no"]
+# The glibc allocator settings every counted run uses (#2314; Benchmarks.md
+# section 10.4). A per-thread cache of 32 chunks per size, not 7, and fixed
+# mmap, trim and top-pad thresholds, not glibc's adaptive ones: with the
+# defaults, which free chunk a request finds depends on how the tasks
+# interleaved, and two builds of one commit differed by up to 978
+# instructions per ReadPropertyMultiple. With these the range is about 30,
+# and the ReadProperty slope is unchanged.
+GLIBC_TUNABLES = ":".join([
+    "glibc.malloc.tcache_count=32",
+    "glibc.malloc.mmap_threshold=1048576",
+    "glibc.malloc.trim_threshold=1048576",
+    "glibc.malloc.top_pad=1048576",
+])
 
 
 def log(*parts):
@@ -211,19 +228,20 @@ def build_variant(image, variant, registry):
     return hashes
 
 
-def run_command(image, variant, raw, name, binary, args):
+def run_command(image, variant, raw, name, binary, args, environment=None, valgrind_extra=()):
     expected = variant["binaries"][binary]
     script = (
         f'test "$(sha256sum /target/release/{binary} | cut -d " " -f 1)" = "{expected}" '
         f"|| {{ echo 'binary hash mismatch' >&2; exit 97; }}; "
-        f"{' '.join(VALGRIND)} --callgrind-out-file=/out/{name}.cg /target/release/{binary} {' '.join(args)}; "
+        f"{' '.join([*VALGRIND, *valgrind_extra])} --callgrind-out-file=/out/{name}.cg /target/release/{binary} {' '.join(args)}; "
         # Valgrind creates its output readable by its owner only, and in the
         # container that owner is root. Docker Desktop hides that; a Linux
         # runner then can't read the file, so open it up and keep the status.
         f'status=$?; chmod a+r /out/{name}.cg 2>/dev/null; exit "$status"'
     )
+    env = [arg for key, value in sorted((environment or {}).items()) for arg in ("-e", f"{key}={value}")]
     return [
-        "docker", "run", "--rm", "--network", "none",
+        "docker", "run", "--rm", "--network", "none", *env,
         "-v", f"{variant['volume']}:/target:ro", "-v", f"{raw}:/out",
         image["id"], "sh", "-c", script,
     ]
@@ -255,7 +273,7 @@ def run_matrix(manifest, out, save):
                         "label": label, "ordinal": counts[label], "n": n, "started": now(),
                     }
                     manifest["runs"].append(record)
-                    command = run_command(image, variant, raw, name, binary, args)
+                    command = run_command(image, variant, raw, name, binary, args, manifest.get("environment"))
                     with open(raw / f"{name}.out", "w") as stdout, open(raw / f"{name}.err", "w") as stderr:
                         status = subprocess.run(command, stdout=stdout, stderr=stderr).returncode
                     record.update(exit_code=status, ended=now())
@@ -276,6 +294,39 @@ def run_matrix(manifest, out, save):
                     save()
                     ca.check_harness_ir(record)
                     log("RUN", name, record["instructions"], record["allocs"], record["bytes"])
+
+
+CALLER_DEPTH = 8
+
+
+def caller_split(manifest, out):
+    """Item 2a's semaphore cost by caller, per round trip and runtime, from an
+    extra pair of build A runs with --separate-callers (not gated)."""
+    raw = out / "raw"
+    variant = manifest["variants"]["A"]
+    result, md = {}, ["# Semaphore cost by caller (build A, self instructions per request)", ""]
+    for workload in [w for w in manifest["workloads"] if w in ca.ROUND_TRIP]:
+        for runtime in manifest["runtimes"]:
+            split = {}
+            for n in ca.lengths(workload):
+                name = f"callers-{workload}-{runtime}-{n}"
+                binary, args = workload_command(workload, runtime, n)
+                command = run_command(manifest["image"], variant, raw, name, binary, args, manifest.get("environment"),
+                                      (f"--separate-callers={CALLER_DEPTH}",))
+                with open(raw / f"{name}.out", "w") as stdout, open(raw / f"{name}.err", "w") as stderr:
+                    if subprocess.run(command, stdout=stdout, stderr=stderr).returncode:
+                        raise RuntimeError(f"{name} failed; see {raw / (name + '.err')}")
+                split[n] = ca.split_by_caller(ca.parse_callgrind((raw / f"{name}.cg").read_text())[1])
+            short, long = ca.lengths(workload)
+            groups = sorted(set(split[short]) | set(split[long]))
+            per = {g: ca.slope(split[short].get(g, 0), split[long].get(g, 0), short, long) for g in groups}
+            result[f"{workload}/{runtime}"] = per
+            md += [f"## {workload} / {runtime}", "", ca.table(["Group", "Self instructions per request"], [
+                [g, ca.fmt(v)] for g, v in sorted(per.items(), key=lambda kv: -kv[1])]), ""]
+            log("CALLERS", workload, runtime, {g: round(v, 1) for g, v in per.items()})
+    (out / "callers.md").write_text("\n".join(md) + "\n")
+    (out / "callers.json").write_text(json.dumps(result, indent=2) + "\n")
+    manifest["callers"] = result
 
 
 def annotate(manifest, out):
@@ -356,6 +407,41 @@ def write_profiles(manifest, out, summary):
     (out / "items.json").write_text(json.dumps(items_json, indent=2) + "\n")
 
 
+def attribute(out, workload, runtime, top=25, threshold=0.5):
+    """Calls first, then self instructions: per-function changes per request
+    between A and B (A and A' in a noise run), medians over the ordinals.
+    Unchanged call counts with changed instructions point at codegen."""
+    manifest = ca.load_json(out / "manifest.json")
+    runs = [r for r in manifest["runs"] if (r["workload"], r["runtime"]) == (workload, runtime)
+            and r.get("instructions") is not None]
+    if not runs:
+        raise ValueError(f"no runs of {workload}/{runtime} in {out}")
+    other = "B" if "B" in manifest["variants"] else "P"
+    selves, calls = {}, {}
+    for run in runs:
+        if run["label"] not in ("A", other):
+            continue
+        text = read_cg(out / "raw", run["name"])
+        if text is None:
+            raise ValueError(f"{run['name']}: no callgrind file")
+        _lines, functions, edges = ca.parse_callgrind(text)
+        selves[run["name"]], calls[run["name"]] = functions, ca.calls_in(edges)
+    lines = []
+    for title, data in (("Calls in per request", calls), ("Self instructions per request", selves)):
+        a = ca.symbol_slopes(data, runs, workload, runtime, "A")
+        b = ca.symbol_slopes(data, runs, workload, runtime, other)
+        changes = ca.function_changes(a, b, threshold)
+        lines += [f"## {title}, {workload}/{runtime}: {ca.LABELS[other]} - A "
+                  f"(total over the {len(changes)} functions that moved by {threshold:g} or more: "
+                  f"{sum(r[0] for r in changes):+.1f}; the largest {min(top, len(changes))} listed)", ""]
+        lines.append(ca.table(["A", ca.LABELS[other], "Change", "Function"], [
+            [f"{x:,.2f}", f"{y:,.2f}", f"{d:+,.2f}", f"`{name[:150]}`"] for d, x, y, name in changes[:top]]))
+        lines.append("")
+    text = "\n".join(lines)
+    print(text)
+    return text
+
+
 def read_cg(raw, name):
     path = raw / f"{name}.cg"
     if path.exists():
@@ -432,6 +518,11 @@ def expand_workloads(spec):
     return list(dict.fromkeys(out))
 
 
+def run_environment(args):
+    """The environment every counted run gets (the glibc allocator settings)."""
+    return {"GLIBC_TUNABLES": args.glibc_tunables} if args.glibc_tunables else {}
+
+
 def plan(args):
     """Mode, refs per label, matrix order and floors, checked before any build."""
     workloads = expand_workloads(args.workloads)
@@ -455,8 +546,15 @@ def plan(args):
         mode = "compare"
         if args.noise_floors:
             refs, order = {"A": args.baseline, "B": args.candidate}, "ABBA"
+            environment = run_environment(args)
             for path in args.noise_floors:
-                floors.update(ca.load_json(path)["noise_floors"])
+                recorded = ca.load_json(path)
+                # A file without an environment was recorded with glibc's
+                # defaults (perf-s0 and earlier).
+                if recorded.get("environment", {}) != environment:
+                    raise ValueError(f"{path} was recorded with allocator settings {recorded.get('environment', {})}, "
+                                     f"not this run's {environment}; its floors don't apply")
+                floors.update(recorded["noise_floors"])
             missing = [f"{w}/{r}" for w in workloads for r in (runtimes if w in ca.ROUND_TRIP else ["none"])
                        if f"{w}/{r}" not in floors]
             if missing:
@@ -479,6 +577,7 @@ def run(args):
         "order": order,
         "lengths": ca.LENGTHS,
         "recorded_floors": floors,
+        "environment": run_environment(args),
         "variants": {},
         "runs": [],
     }
@@ -522,6 +621,9 @@ def run(args):
         manifest["completed"] = True
         manifest["ended"] = now()
         save()
+        if args.callers:
+            caller_split(manifest, out)
+            save()
         annotate(manifest, out)
         summary = analyze(out, None, aim)
         if args.gzip_raw:
@@ -561,16 +663,31 @@ def main(argv=None):
     run_parser.add_argument("--noise-floors", action="append",
                             help="quick mode, local only: skip the A' build and use this noise run's floors "
                                  "(summary.json; repeatable)")
-    run_parser.add_argument("--aim", default="rp", help="workloads judged on the saving gate (default rp)")
+    run_parser.add_argument("--aim", default="rp",
+                            help="workloads judged on the saving gate (default rp), or none: the no-regression check")
+    run_parser.add_argument("--glibc-tunables", default=GLIBC_TUNABLES,
+                            help=f"GLIBC_TUNABLES for every counted run (default {GLIBC_TUNABLES!r}; empty for none)")
+    run_parser.add_argument("--callers", action="store_true",
+                            help=f"also split item 2a's semaphore cost by caller (--separate-callers={CALLER_DEPTH}) "
+                                 "from an extra pair of build A runs per round trip; not gated")
     run_parser.add_argument("--gzip-raw", action="store_true", help="gzip the callgrind files afterwards")
     run_parser.add_argument("--keep", action="store_true", help="keep the build volumes and trees")
     analyze_parser = commands.add_parser("analyze", help="re-analyze a completed run")
     analyze_parser.add_argument("out")
     analyze_parser.add_argument("--aim", default="rp")
+    attribute_parser = commands.add_parser(
+        "attribute", help="per-function changes of a completed run: calls in first, then self instructions")
+    attribute_parser.add_argument("out")
+    attribute_parser.add_argument("--workload", default="rp")
+    attribute_parser.add_argument("--runtime", default="ct")
+    attribute_parser.add_argument("--top", type=int, default=25)
     args = parser.parse_args(argv)
     try:
         if args.command == "run":
             summary = run(args)
+        elif args.command == "attribute":
+            attribute(Path(args.out).resolve(), args.workload, args.runtime, args.top)
+            return 0
         else:
             aim = tuple(a.strip() for a in args.aim.split(",") if a.strip())
             summary = analyze(Path(args.out).resolve(), None, aim)
