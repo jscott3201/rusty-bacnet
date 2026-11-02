@@ -571,3 +571,40 @@ fn refuse_and_fit_build_the_refusals() {
     );
     assert!(matches!(reply::fit(error, 1), Apdu::Error(_)));
 }
+
+/// ReadPropertyMultiple's own gate refuses an index on a scalar of a custom
+/// object that would answer it, and passes the whole read (#2274).
+#[test]
+fn rpm_refuses_an_index_on_a_scalar_of_a_lenient_object() {
+    use bacnet_services::rpm::{ReadPropertyMultipleACK, ReadPropertyMultipleRequest};
+    let reference = |index| PropertyReference {
+        property_identifier: P::PRESENT_VALUE,
+        property_array_index: index,
+    };
+    let mut body = BytesMut::new();
+    ReadPropertyMultipleRequest {
+        list_of_read_access_specs: vec![ReadAccessSpecification {
+            object_identifier: oid(ObjectType::ANALOG_VALUE, 9),
+            list_of_property_references: vec![reference(Some(1)), reference(None)],
+        }],
+    }
+    .encode(&mut body)
+    .unwrap();
+    let (outcome, reply) = handle(confirmed(
+        ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+        &body,
+        false,
+    ));
+    assert_eq!(outcome, Outcome::Reply);
+    let Some(Apdu::ComplexAck(ack)) = reply else {
+        panic!("not a ComplexAck: {reply:?}");
+    };
+    let ack = ReadPropertyMultipleACK::decode(&ack.service_ack).unwrap();
+    let results = &ack.list_of_read_access_results[0].list_of_results;
+    assert_eq!(
+        results[0].error,
+        Some((ErrorClass::PROPERTY, ErrorCode::PROPERTY_IS_NOT_AN_ARRAY))
+    );
+    assert_eq!(results[1].error, None);
+    assert!(results[1].property_value.is_some());
+}

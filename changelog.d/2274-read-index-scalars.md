@@ -1,6 +1,7 @@
 ---
 section: Fixed
 ---
-- Every built-in object now refuses an array index on a scalar property when
-  `read_property` is called directly, as the server already did, through the
-  new shared `check_read_array_index`. Nothing changes on the wire (#2274).
+- Built-in objects called directly through `read_property` now refuse an
+  array index on a property that isn't an array, as the server does; this
+  includes a proprietary property the object lacks. Nothing changes on the
+  wire (#2274).
