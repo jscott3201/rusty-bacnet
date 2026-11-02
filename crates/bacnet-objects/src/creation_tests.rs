@@ -8,7 +8,7 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 /// The types CreateObject builds, kept by hand so a type that leaves the
 /// table fails here as well as in its creation test.
-const CREATEABLE: [ObjectType; 21] = [
+const CREATEABLE: [ObjectType; 27] = [
     ObjectType::ANALOG_INPUT,
     ObjectType::ANALOG_OUTPUT,
     ObjectType::ANALOG_VALUE,
@@ -30,6 +30,12 @@ const CREATEABLE: [ObjectType; 21] = [
     ObjectType::DATEPATTERN_VALUE,
     ObjectType::TIMEPATTERN_VALUE,
     ObjectType::DATETIMEPATTERN_VALUE,
+    ObjectType::CALENDAR,
+    ObjectType::SCHEDULE,
+    ObjectType::NOTIFICATION_CLASS,
+    ObjectType::TREND_LOG,
+    ObjectType::EVENT_ENROLLMENT,
+    ObjectType::STRUCTURED_VIEW,
 ];
 
 #[test]
@@ -63,7 +69,7 @@ fn the_table_lists_each_type_once_and_only_types_the_device_lists() {
     }
     assert!(builtin_constructor(ObjectType::DEVICE).is_none());
     assert!(builtin_constructor(ObjectType::NETWORK_PORT).is_none());
-    assert!(builtin_constructor(ObjectType::CALENDAR).is_none());
+    assert!(builtin_constructor(ObjectType::TREND_LOG_MULTIPLE).is_none());
 }
 
 #[test]

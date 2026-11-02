@@ -77,13 +77,15 @@ fn pics_createability_of_every_catalogue_type_follows_the_constructor_table() {
     };
     assert!(createable(ObjectType::ANALOG_VALUE));
     assert!(createable(ObjectType::DATETIMEPATTERN_VALUE));
-    assert!(!createable(ObjectType::CALENDAR));
+    assert!(createable(ObjectType::CALENDAR));
+    assert!(createable(ObjectType::STRUCTURED_VIEW));
+    assert!(!createable(ObjectType::TREND_LOG_MULTIPLE));
     assert!(!createable(ObjectType::DEVICE));
     assert_eq!(
         pics.supported_object_types
             .iter()
             .filter(|entry| entry.createable)
             .count(),
-        21
+        27
     );
 }
