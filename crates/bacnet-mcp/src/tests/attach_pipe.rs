@@ -33,8 +33,8 @@ async fn listener_with(lab: &super::Lab, dir: &Path, credentials: attach::Creden
         Policy::default(),
         "tester".into(),
         workspace(dir),
-        credentials,
-        SessionRuntime::Callers,
+        (credentials, SessionRuntime::Callers),
+        None,
     )
     .await
     .unwrap()

@@ -22,7 +22,7 @@ pub(crate) enum McpAction {
     },
     /// Bridge stdin and stdout to the MCP socket (a named pipe on Windows)
     /// of a TUI that has the profile open, so an agent shares its client.
-    /// Read-only.
+    /// Its writes, if the profile offers them, wait for confirmation there.
     Connect {
         /// The profile the TUI has open; needed when more than one TUI is
         /// listening.

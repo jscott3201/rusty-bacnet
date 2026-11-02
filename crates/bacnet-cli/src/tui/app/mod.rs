@@ -5,6 +5,7 @@
 //! [`Action::Tick`], so the whole state machine is testable without a
 //! terminal or a transport.
 
+pub(crate) mod agents;
 pub(crate) mod browser;
 pub(crate) mod capture;
 pub(crate) mod command_bar;

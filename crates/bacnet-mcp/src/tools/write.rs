@@ -42,6 +42,15 @@ pub(crate) const NAME: &str = "bacnet_write";
 /// The key of the confirmation form in `inputRequests`.
 pub(crate) const CONFIRM: &str = "confirm";
 
+/// `bacnet_write`'s description on a session attached to the TUI.
+pub(super) const ATTACHED: &str = "Write properties of one device's objects, through the \
+    preview tiers, ledger and audit log of the bacnet TUI this agent is attached to. Targets are \
+    numeric (device instance, type:instance objects); values are numbers, booleans, null \
+    (relinquish a commandable slot) or the value grammar. The person at the TUI confirms each \
+    write in its preview dialog, at any tier; the call waits for that answer (declined after \
+    120 s), and requests queue one at a time. Each applied write is kept in the ledger with its \
+    pre-image for bacnet_revert.";
+
 pub(super) const SPEC: Spec = Spec {
     name: NAME,
     title: "Write BACnet properties",
@@ -104,7 +113,7 @@ fn output() -> Value {
         "approval": {
             "type": "object",
             "properties": {
-                "confirmed_via": { "enum": ["elicitation", "server-elicitation", "plan"] },
+                "confirmed_via": { "enum": ["elicitation", "server-elicitation", "plan", "tui"] },
                 "approved_by": { "type": "string" },
             },
         },
@@ -180,6 +189,9 @@ pub(crate) struct Retry {
 pub(crate) enum Step {
     Ask(InputRequiredResult, tokio::time::Instant),
     Sending(Handoff),
+    /// An attached session's write, previewed at its tier over MCP, for
+    /// the TUI to approve (#2185).
+    Wait(Box<Preview>, Tier),
 }
 
 /// A value as the value grammar's text; `None` relinquishes.
@@ -263,7 +275,7 @@ pub(crate) fn context(workspace: &Workspace) -> Context {
 }
 
 /// The fields every record of this call carries.
-fn fields(principal: &str, peer: &Peer, raw: &Map<String, Value>) -> Map<String, Value> {
+pub(crate) fn fields(principal: &str, peer: &Peer, raw: &Map<String, Value>) -> Map<String, Value> {
     let mut fields = Map::new();
     fields.insert("tool".into(), json!(NAME));
     fields.insert("principal".into(), json!(principal));
@@ -481,6 +493,9 @@ async fn preview<T: TransportPort + 'static>(
             return Err(error);
         }
     };
+    if ctx.attached.is_some() {
+        return Ok(Step::Wait(Box::new(preview), tier));
+    }
     let approver: Box<dyn Approver> = if ctx.policy.writes.offered() {
         Box::new(ClientElicitation {
             arm: ctx.policy.writes.arm,

@@ -3,8 +3,9 @@
 A [Model Context Protocol](https://modelcontextprotocol.io) server for
 BACnet sites, read-only unless a profile offers writes: phase 1 (#2066, the
 tools), phase 2 (#2067, resources and subscriptions) and phase 3 (#2068,
-writes) of the MCP epic (#2064), and the first part of phase 4 (#2185,
-#2201, [attached to the TUI](#attached-to-the-tui)). The design, with
+writes) of the MCP epic (#2064), and most of phase 4 (#2185, #2201,
+[attached to the TUI](#attached-to-the-tui), with writes the TUI
+approves). The design, with
 the later phases, is [design/mcp.md](design/mcp.md); the user guide is the
 website's [AI agents](https://jscott3201.github.io/rusty-bacnet/guides/ai-agents/)
 page. Experimental in 0.15.
@@ -457,7 +458,7 @@ second.
 | `page_objects` | Objects on an object-list page | 200 | 1 to 2000 |
 | `max_text` | Characters kept of a device-supplied string | 256 | 16 to 4096 |
 | `call_budget_s` | Seconds a call may wait on the limits and the network | 30 | 1 to 600 |
-| `mcp_writes` | `"elicit"` offers `bacnet_write` and `bacnet_revert` ([Writes](#writes)) | `"never"` | `"never"` or `"elicit"`; `"elicit"` needs the profile's workspace |
+| `mcp_writes` | `"elicit"` offers `bacnet_write` and `bacnet_revert` ([Writes](#writes)), on stdio and through the TUI ([Attached to the TUI](#attached-to-the-tui)) | `"never"` | `"never"` or `"elicit"`; `"elicit"` needs the profile's workspace |
 | `mcp_arm` | `"elicit"` lets the client's confirmation arm a write session | `"never"` | `"elicit"` needs `mcp_writes = "elicit"` |
 | `tui_listener` | Whether `bacnet tui` listens for agents on its local socket while the profile is open ([Attached to the TUI](#attached-to-the-tui)) | `true` once MCP is authorized | `true` or `false`; never listens without the authorization |
 | `[mcp.plan]` | Writes approved in advance ([Writes](#writes)): `devices` and `max_writes` (1 to 10,000) and `hours` (1 to 8) are required; `properties` defaults to `["present-value"]`, `priority_min` to 8 and `priority_max` to 16 (both 1 to 16); `reason` is optional | none | needs `mcp_writes = "elicit"` |
@@ -514,7 +515,7 @@ it sent nothing, else `timeout`.
 
 ## Attached to the TUI
 
-The first part of phase 4 (#2185; the Windows named pipe, #2201). While
+Phase 4 (#2185; the Windows named pipe, #2201). While
 `bacnet tui` has a profile open, agents can attach to it instead of
 starting their own client: `bacnet mcp connect --profile NAME` passes its
 stdin and stdout to a local socket (on Windows, a named pipe) in the TUI's
@@ -527,8 +528,10 @@ stderr; when the TUI ends the session it exits cleanly.
 - **When it listens.** Opening a profile that is authorized for MCP
   (`bacnet mcp authorize`) starts the listener, unless its `[mcp]` table
   sets `tui_listener = false`; a profile authorized before this release
-  starts one too after the upgrade, read-only and for your own user, and
-  the log pane says so. An unauthorized profile, a passive session, an
+  starts one too after the upgrade, for your own user, and the log pane
+  says so. Its agents write only if the table already set `mcp_writes =
+  "elicit"`, and then only what you confirm in the TUI with its write
+  session armed. An unauthorized profile, a passive session, an
   MS/TP monitor, or a command line whose transport flags change the
   authorized transport gets none, and the log pane says why whenever the
   profile asked for one. The status bar shows `MCP n`, the agents
@@ -551,9 +554,45 @@ stderr; when the TUI ends the session it exits cleanly.
   lower of the TUI's and `max_rate`, and `network_rate`, `slow_networks`
   and `fast_networks` pace every request to those networks, the TUI's own
   included. The log pane notes each switch.
-- **Read-only.** The socket (or pipe) never lists `bacnet_write` or `bacnet_revert`,
-  whatever `mcp_writes` says: writes over it wait for the TUI's own
-  approval dialog, which comes next.
+- **Writes, approved in the TUI.** Read-only unless the table sets
+  `mcp_writes = "elicit"`; then the socket (or pipe) lists `bacnet_write`
+  and `bacnet_revert`, and the person at the TUI approves every write, at
+  every tier, as they would their own. The client's confirmation,
+  `mcp_arm` and a `[mcp.plan]` play no part here (a plan grant still
+  works on stdio).
+  - A write's first call reads the targets and previews the change at its
+    tier over MCP (a Relinquish_Default write is T3; priority 6 is
+    refused). The call then waits, outside its `call_budget_s`, for the
+    TUI's answer.
+  - The request opens the TUI's preview dialog under an "agent request"
+    banner naming the agent (its connection number, and the name its
+    client claims). The dialog is the TUI's own: a key within 300 ms of it
+    opening is ignored, T1 takes Enter, T2 `y` and T3 the device instance
+    typed out, and after 120 s it is declined.
+  - The TUI's write session must be armed (`W`), and its profile mustn't
+    set `writes = "never"`; otherwise the request is refused at once
+    (`not-armed`, `write-not-granted`), unshown.
+  - Requests queue one at a time, oldest first, with no "approve all". The
+    banner and the status bar (`MCP n, m to confirm`) show the queue. It
+    holds 4, the one on screen included; one more is refused
+    (`approval-queue-full`). A request waits behind another dialog the
+    person has open.
+  - Confirmed, the write runs on the TUI's own write session: the targets
+    are read again (a preview that changed is refused `stale`), the
+    ledger records it as the agent's (`front_end: mcp` with the
+    principal, so `bacnet_revert` can undo it, and the TUI's `R` too),
+    then it is sent and audited with `confirmed_via: "tui"` and
+    `approved_by` the TUI's OS user. The call returns the outcome as on
+    stdio, and the TUI flashes it.
+  - Declined, timed out, the TUI quitting or its session ending, the call
+    returns `declined`, with nothing sent, and the agent's session audits
+    it (`event: "declined"`, `asked_via: "tui"`). An agent that cancels
+    its call (`withdrawn`) or disconnects has its request taken off the
+    queue, or its dialog closed. However the TUI or the agent ends, no
+    call waits longer than the queue's full turn (490 s).
+  - `bacnet_revert` needs no confirmation, as on stdio; it runs on the
+    TUI's write session too, and puts back only this principal's MCP
+    entries.
 - **The socket (Unix).** `mcp.sock` in the profile's workspace. The workspace
   must be a directory of yours, not a symbolic link; one with a looser
   mode than 0700 is narrowed to 0700 when the listener starts, and the

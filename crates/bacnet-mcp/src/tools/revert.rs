@@ -87,7 +87,7 @@ pub(super) struct Args {
 }
 
 /// An entry this principal wrote through MCP.
-fn ours(entry: &Entry, principal: &str) -> bool {
+pub(super) fn ours(entry: &Entry, principal: &str) -> bool {
     entry.origin.front_end == FrontEnd::Mcp && entry.origin.principal.as_deref() == Some(principal)
 }
 
@@ -160,6 +160,22 @@ pub(crate) async fn run<T: TransportPort + 'static>(
     fields.insert("request_id".into(), json!(peer.request_id));
     let account = Arc::clone(&call.account);
     let sending = write_task::sending();
+    if ctx.attached.is_some() {
+        // The TUI holds the workspace: its desk does the revert (#2185).
+        let job = super::write_attached::revert(
+            Arc::clone(ctx),
+            Arc::clone(&account),
+            wanted,
+            fields.clone(),
+        );
+        let work = async move {
+            let (done, left) = job.await?;
+            body(&done, left)
+        };
+        return Ok(Step::Sending(hand_off(
+            ctx, workspace, account, sending, fields, work,
+        )));
+    }
     let work = {
         let ctx = Arc::clone(ctx);
         let workspace = workspace.clone();

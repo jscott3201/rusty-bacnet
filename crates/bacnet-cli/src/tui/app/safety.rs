@@ -69,6 +69,8 @@ pub(crate) struct SafetyState {
     /// Revert all, then quit.
     quitting: bool,
     last_second: u64,
+    /// Attached agents' write requests (#2185).
+    pub(crate) agents: super::agents::Agents,
 }
 
 impl SafetyState {
@@ -367,6 +369,7 @@ impl App {
     /// prompt left too long (dropping what was typed), disarm at expiry,
     /// and redraw the countdown.
     pub(super) fn safety_tick(&mut self, out: &mut Vec<Command>) {
+        self.agents_tick();
         let prompt = matches!(&self.overlay, Overlay::Safety(m)
             if matches!(**m, Modal::Password { opened, .. }
                 if self.now.saturating_duration_since(opened) >= PREVIEW_LIFETIME));
@@ -377,10 +380,23 @@ impl App {
                 FLASH_FOR,
             );
         }
-        let stale = matches!(&self.overlay, Overlay::Safety(m)
-            if matches!(**m, Modal::Confirm { opened, .. }
-                if self.now.saturating_duration_since(opened) >= PREVIEW_LIFETIME));
-        if stale {
+        let stale = match &self.overlay {
+            Overlay::Safety(m) => match **m {
+                Modal::Confirm { req, opened, .. }
+                    if self.now.saturating_duration_since(opened) >= PREVIEW_LIFETIME =>
+                {
+                    Some(req)
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(req) = stale
+            && self.safety.agents.shows(req)
+        {
+            self.overlay = Overlay::None;
+            self.agent_answer(req, super::agents::AgentAnswer::TimedOut);
+        } else if stale.is_some() {
             self.modal_key(ModalKey::Esc, out);
             self.flash(
                 "The preview expired unconfirmed: nothing was sent.",
@@ -527,8 +543,12 @@ impl App {
     ) -> Option<Modal> {
         let fresh = self.now.saturating_duration_since(opened) < CONFIRM_GUARD;
         let device = change.device();
+        use super::agents::AgentAnswer;
         let confirmed = match (&change.gate(), key) {
             (_, ModalKey::Esc) => {
+                if self.agent_answer(req, AgentAnswer::Declined) {
+                    return None;
+                }
                 declined(change, out);
                 self.flash("Declined: nothing was sent.", FLASH_FOR);
                 return None;
@@ -571,11 +591,18 @@ impl App {
             });
         }
         if self.safety.armed.is_none() {
+            if self.agent_answer(req, AgentAnswer::NotArmed) {
+                return None;
+            }
             self.flash(
                 "The write session has expired; nothing was sent.",
                 FLASH_FOR,
             );
             declined(change, out);
+            return None;
+        }
+        // An agent's write goes back to its session, which sends it.
+        if self.agent_answer(req, AgentAnswer::Confirmed) {
             return None;
         }
         self.safety.pending = Some(req);

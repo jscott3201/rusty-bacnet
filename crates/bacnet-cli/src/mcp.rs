@@ -464,10 +464,13 @@ fn summary(name: &str, section: &McpSection) -> String {
             )
         }
     };
-    let attached = if section.tui_listener == Some(false) {
-        ""
-    } else {
-        ", and read-only through the TUI's local socket while the profile is open there"
+    let attached = match (section.tui_listener, section.mcp_writes) {
+        (Some(false), _) => "",
+        (_, McpChoice::Elicit) => {
+            ", and through the TUI's local socket while the profile is open there (writing \
+             only what the person at the TUI confirms, at any priority)"
+        }
+        _ => ", and read-only through the TUI's local socket while the profile is open there",
     };
     format!(
         "Authorize AI agents to use profile {name} through `bacnet mcp serve`{attached}.\n\

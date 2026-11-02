@@ -43,14 +43,28 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, modal: &Modal, them
             password(request, typed, theme),
         ),
         Modal::Confirm {
+            req,
             change,
             typed,
             error,
             ..
-        } => (
-            format!(" Confirm ({}) ", tier_name(&change.gate())),
-            confirm(change, typed, error.as_deref(), theme),
-        ),
+        } => {
+            let tier = tier_name(&change.gate());
+            let lines = confirm(change, typed, error.as_deref(), theme);
+            // An attached agent's request (#2185): who asks, and the queue.
+            match app.safety.agents.banner(*req) {
+                Some((who, queue)) => {
+                    let mut banner = vec![
+                        Line::styled(who, theme.danger()),
+                        Line::styled(queue, theme.dim()),
+                        Line::raw(""),
+                    ];
+                    banner.extend(lines);
+                    (format!(" Agent request: confirm ({tier}) "), banner)
+                }
+                None => (format!(" Confirm ({tier}) "), lines),
+            }
+        }
         Modal::Result(outcomes) => (" Result ".to_string(), result(outcomes, theme)),
         Modal::Ledger { notice, confirm } => (
             format!(" Session ledger ({}) ", app.safety.ledger.len()),

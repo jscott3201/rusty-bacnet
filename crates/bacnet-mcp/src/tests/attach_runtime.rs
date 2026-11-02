@@ -73,6 +73,7 @@ async fn a_panicking_request_ends_only_its_session_on_the_listeners_threads() {
         "tester",
         workspace(dir.path()),
         own,
+        None,
     )
     .await
     .unwrap();
@@ -151,6 +152,7 @@ async fn a_dropped_listener_lets_its_sessions_end_on_record() {
         "tester",
         workspace(dir.path()),
         SessionRuntime::Own,
+        None,
     )
     .await
     .unwrap();

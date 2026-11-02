@@ -39,8 +39,13 @@ const REFUSALS_PER_MINUTE: u32 = 10;
 /// What every session of one listener shares.
 pub(super) struct Sessions<T: TransportPort + 'static> {
     pub(super) engine: Arc<Engine<T>>,
-    /// Read-only: the listener dropped the write policy.
+    /// Read-only, unless the TUI lends its desk.
     pub(super) policy: Policy,
+    /// The TUI's approval queue and its desk, when writes go through it.
+    pub(super) lending: Option<(
+        tokio::sync::mpsc::Sender<super::AgentApproval>,
+        tokio::sync::mpsc::Sender<super::DeskJob<T>>,
+    )>,
     /// The `[mcp]` limits, joined to the engine's while an agent is in.
     pub(super) overlay: Overlay,
     /// The watch hub and principal bucket every session shares.
@@ -147,12 +152,21 @@ impl<T: TransportPort + 'static> Sessions<T> {
             agents: self.agents.clone(),
             engine: Arc::clone(&self.engine),
         };
+        let connection = self.next.fetch_add(1, Ordering::Relaxed);
+        let lending =
+            self.lending
+                .as_ref()
+                .map(|(approvals, desk)| crate::tools::write_attached::Attached {
+                    approvals: approvals.clone(),
+                    desk: desk.clone(),
+                    agent: connection,
+                });
         let server = match McpServer::attached(
             Arc::clone(&self.engine),
             self.policy.clone(),
             self.principal.clone(),
-            &self.shared,
-            INITIALIZE_WAIT,
+            (&self.shared, INITIALIZE_WAIT),
+            lending,
         ) {
             Ok(server) => server,
             Err(error) => {
@@ -160,7 +174,6 @@ impl<T: TransportPort + 'static> Sessions<T> {
                 return self.refuse_with(Some(peer), "session-failed", Some(error.to_string()));
             }
         };
-        let connection = self.next.fetch_add(1, Ordering::Relaxed);
         let (workspace, principal) = (self.workspace.clone(), self.principal.clone());
         let stop = self.stop.clone();
         let mut fields = platform::peer_fields(Some(&peer), connection);
