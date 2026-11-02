@@ -201,7 +201,6 @@ impl BACnetObject for GroupObject {
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
-            array_index,
         ))
     }
 
@@ -414,7 +413,6 @@ impl BACnetObject for GlobalGroupObject {
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
-            array_index,
         ))
     }
 
@@ -568,7 +566,6 @@ impl BACnetObject for StructuredViewObject {
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
-            array_index,
         ))
     }
 

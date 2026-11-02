@@ -269,7 +269,7 @@ macro_rules! define_value_object_commandable {
                 {
                     return result;
                 }
-                Err(crate::common::unhandled_write_error(self.property_metadata().as_ref(), property, array_index))
+                Err(crate::common::unhandled_write_error(self.property_metadata().as_ref(), property))
             }
 
             fn supports_cov(&self) -> bool {

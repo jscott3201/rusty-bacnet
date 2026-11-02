@@ -7,7 +7,7 @@ use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier}
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
-pub use bacnet_objects::property_metadata::check_write_array_index;
+use bacnet_objects::property_metadata::check_write_array_index;
 
 /// What WriteProperty does with a value's octets before `object` takes it:
 /// [`check_write_array_index`], then [`decode_write_property_value`] with the

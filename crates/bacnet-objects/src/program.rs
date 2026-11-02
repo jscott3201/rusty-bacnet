@@ -14,6 +14,9 @@ use crate::traits::BACnetObject;
 
 mod metadata;
 
+/// The largest standard BACnetProgramState (UNLOADING).
+const PROGRAM_STATE_MAX: u32 = 5;
+
 /// BACnet Program object — represents an application program lifecycle.
 pub struct ProgramObject {
     oid: ObjectIdentifier,
@@ -46,7 +49,10 @@ impl ProgramObject {
 
     /// Set the program state. Program_State is read-only on the network
     /// (Clause 12.22.4): a client asks for a change through Program_Change,
-    /// and the application that runs the program reports the new state here.
+    /// and the application that runs the program reports the new state here,
+    /// or through [`LocalInputValue::ProgramState`] on a served object.
+    ///
+    /// [`LocalInputValue::ProgramState`]: crate::traits::LocalInputValue::ProgramState
     pub fn set_program_state(&mut self, state: u32) {
         self.program_state = state;
     }
@@ -119,13 +125,34 @@ impl BACnetObject for ProgramObject {
             _ => Err(crate::common::unhandled_write_error(
                 self.property_metadata().as_ref(),
                 property,
-                array_index,
             )),
         }
     }
 
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
         metadata::for_object(self)
+    }
+
+    fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
+        Some(self)
+    }
+}
+
+/// The state the application's program reports, in or out of service: the
+/// Program has no simulated Program_State.
+impl crate::traits::LocalInput for ProgramObject {
+    fn apply_local_input(&mut self, input: crate::traits::LocalInputValue) -> Result<(), Error> {
+        let crate::traits::LocalInputValue::ProgramState(value) = input else {
+            return Err(crate::traits::not_supported());
+        };
+        let PropertyValue::Enumerated(state) = value else {
+            return Err(common::invalid_data_type_error());
+        };
+        if state > PROGRAM_STATE_MAX {
+            return Err(common::value_out_of_range_error());
+        }
+        self.program_state = state;
+        Ok(())
     }
 }
 
@@ -185,6 +212,35 @@ mod tests {
             prog.read_property(PropertyIdentifier::PROGRAM_STATE, None)
                 .unwrap(),
             PropertyValue::Enumerated(0)
+        );
+    }
+
+    #[test]
+    fn program_state_local_input_sets_a_standard_state() {
+        use crate::traits::LocalInputValue;
+        let mut prog = ProgramObject::new(1, "PRG-1").unwrap();
+        let mut apply = |value| {
+            prog.local_input()
+                .unwrap()
+                .apply_local_input(LocalInputValue::ProgramState(value))
+        };
+        apply(PropertyValue::Enumerated(2)).unwrap();
+        let code = |result: Result<(), Error>| match result {
+            Err(Error::Remote(bacnet_types::error::RemoteError::Error { code, .. })) => code,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            code(apply(PropertyValue::Enumerated(6))),
+            bacnet_types::enums::ErrorCode::VALUE_OUT_OF_RANGE
+        );
+        assert_eq!(
+            code(apply(PropertyValue::Unsigned(1))),
+            bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE
+        );
+        assert_eq!(
+            prog.read_property(PropertyIdentifier::PROGRAM_STATE, None)
+                .unwrap(),
+            PropertyValue::Enumerated(2)
         );
     }
 

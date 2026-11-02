@@ -495,7 +495,6 @@ impl BACnetObject for LifeSafetyPointObject {
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
-            array_index,
         ))
     }
 
@@ -818,7 +817,6 @@ impl BACnetObject for LifeSafetyZoneObject {
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
-            array_index,
         ))
     }
 

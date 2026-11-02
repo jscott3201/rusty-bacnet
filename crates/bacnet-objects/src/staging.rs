@@ -440,6 +440,29 @@ impl BACnetObject for StagingObject {
         {
             return result;
         }
+        // A Reliability simulated out of service (Clause 12.62.11) ends with
+        // it: back in service, the object reports the one it held before, as
+        // the other objects that simulate Reliability do, until the reference
+        // writes queued on the way back in judge it afresh (Clause 12.62.4.1,
+        // #2258).
+        let was_out_of_service = self.out_of_service;
+        if let Some(result) = common::write_out_of_service_with_reliability_restore(
+            &mut self.out_of_service,
+            &mut self.reliability,
+            &mut self.reliability_before_out_of_service,
+            property,
+            &value,
+        ) {
+            match (was_out_of_service, self.out_of_service) {
+                (false, true) => {
+                    self.generation = self.generation.wrapping_add(1);
+                    self.pending_plan = None;
+                }
+                (true, false) => self.evaluate(true),
+                _ => {}
+            }
+            return result;
+        }
         match property {
             PropertyIdentifier::PRESENT_VALUE => {
                 let PropertyValue::Real(value) = value else {
@@ -448,31 +471,6 @@ impl BACnetObject for StagingObject {
                 common::reject_non_finite(value)?;
                 self.present_value = value.clamp(self.min_present_value, self.max_present_value());
                 self.evaluate(false);
-                Ok(())
-            }
-            // A Reliability simulated out of service (Clause 12.62.11) ends
-            // with it: back in service, the object reports the one it held
-            // before, as the other objects that simulate Reliability do,
-            // until the reference writes queued on the way back in judge it
-            // afresh (Clause 12.62.4.1, #2258).
-            PropertyIdentifier::OUT_OF_SERVICE => {
-                let was_out_of_service = self.out_of_service;
-                common::write_out_of_service_with_reliability_restore(
-                    &mut self.out_of_service,
-                    &mut self.reliability,
-                    &mut self.reliability_before_out_of_service,
-                    property,
-                    &value,
-                )
-                .expect("Out_Of_Service branch")?;
-                match (was_out_of_service, self.out_of_service) {
-                    (false, true) => {
-                        self.generation = self.generation.wrapping_add(1);
-                        self.pending_plan = None;
-                    }
-                    (true, false) => self.evaluate(true),
-                    _ => {}
-                }
                 Ok(())
             }
             PropertyIdentifier::RELIABILITY => {
@@ -523,7 +521,6 @@ impl BACnetObject for StagingObject {
             _ => Err(crate::common::unhandled_write_error(
                 self.property_metadata().as_ref(),
                 property,
-                array_index,
             )),
         }
     }

@@ -52,14 +52,12 @@ pub(crate) fn protocol_error(
 pub(crate) fn unhandled_write_error(
     metadata: &[crate::property_metadata::PropertyMetadata],
     property: bacnet_types::enums::PropertyIdentifier,
-    array_index: Option<u32>,
 ) -> bacnet_types::error::Error {
-    // Built-in objects run `check_write_array_index` first, so an index
-    // reaches here only on an array property.
-    if array_index.is_some()
-        || metadata
-            .iter()
-            .any(|row| row.property_identifier == property)
+    // Built-in objects run `check_write_array_index` first, so an index never
+    // decides the answer here.
+    if metadata
+        .iter()
+        .any(|row| row.property_identifier == property)
     {
         write_access_denied_error()
     } else {

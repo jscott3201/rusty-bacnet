@@ -639,7 +639,6 @@ impl BACnetObject for FileObject {
             _ => Err(crate::common::unhandled_write_error(
                 self.property_metadata().as_ref(),
                 property,
-                array_index,
             )),
         }
     }

@@ -349,7 +349,6 @@ impl BACnetObject for BinaryOutputObject {
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
-            array_index,
         ))
     }
 

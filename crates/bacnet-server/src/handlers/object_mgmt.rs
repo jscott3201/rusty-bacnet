@@ -340,9 +340,9 @@ fn initialize(
     command_origin: Option<&bacnet_objects::command_source::CommandOrigin>,
 ) -> Result<(), CreateObjectRefusal> {
     use bacnet_device_core::write::{
-        WriteTarget, check_and_prepare_name_write, check_write_array_index, commit_attempt,
-        decode_write_property_value,
+        WriteTarget, check_and_prepare_name_write, commit_attempt, decode_write_property_value,
     };
+    use bacnet_objects::property_metadata::check_write_array_index;
     let property = pv.property_identifier;
     let array_index = pv.property_array_index;
     let object = db.get(&created_oid).expect("created above");

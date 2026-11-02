@@ -45,6 +45,10 @@ pub enum LocalInputValue {
     /// event, a Credential Data Input's read or an Access Door's hardware
     /// state, whose values change together (#1132).
     AccessControl(AccessControlInput),
+    /// The Program_State a Program object's program reports, a
+    /// BACnetProgramState. The property is read-only on the network
+    /// (Clause 12.22.4), so this is the application's only route (#2258).
+    ProgramState(PropertyValue),
 }
 
 impl LocalInputValue {
@@ -83,7 +87,8 @@ impl LocalInputValue {
 /// - Controlled_Variable_Value: the Loop;
 /// - a sample: the Averaging object;
 /// - an access-control record: the Access Point, Credential Data Input and
-///   Access Door, each its own kind of record.
+///   Access Door, each its own kind of record;
+/// - Program_State: the Program.
 pub trait LocalInput {
     /// Apply `input`, or leave the object unchanged and return an error.
     ///
