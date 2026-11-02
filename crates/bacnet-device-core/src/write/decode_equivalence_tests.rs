@@ -6,7 +6,8 @@
 //! of payloads; and again by the standard value type alone, as the durable
 //! writes decode before any object is at hand.
 
-use super::{decode_write_property_value, relinquish};
+use super::decode_write_property_value;
+use crate::write::relinquish;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec;

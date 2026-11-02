@@ -483,6 +483,28 @@
 # flash. A spike that also compiled out audit, COV and the clock binding
 # saved under 400 octets each, so those have no feature. The text, rodata
 # (but riscv32imac's) and flash budgets tighten to the new sizes plus 12%.
+#
+# #2210 gives bacnet-device-core a `structured-writes` feature, which `std`
+# turns on: WriteProperty's own decoding of a BACnetEventParameter, a single
+# BACnetRecipient and the elements of a BACnetPortPermission or
+# BACnetStageLimitValue array. The image takes bacnet-device-core with
+# `alloc` alone, so it builds without it, and a write of one of those
+# datatypes is refused with WRITE_ACCESS_DENIED. The decoding picks its arm
+# from a datatype read at run time, so every decoder an arm calls linked,
+# whatever the image's objects serve. Measured with Rust 1.99.0 against
+# dev at c4ceb815e, as text / rodata / flash, before and after:
+#
+#   thumbv7m objects     144916 / 17764 / 163704
+#                        127560 / 15108 / 143692
+#   thumbv7em objects    144744 / 17764 / 163532
+#                        127332 / 15108 / 143464
+#   riscv32imac objects  174556 / 21844 / 196422
+#                        153976 / 18612 / 172610
+#
+# RAM unchanged at 16480. bacnet-encoding's .text went from 34988 / 35050 /
+# 41756 to 19768 / 19776 / 23796 octets; decode_event_parameter alone was
+# 11424 on thumbv7m. The text, rodata and flash budgets tighten to the new
+# sizes plus 12%.
 
 [thumbv7m-none-eabi.mstp]
 text = 18320
@@ -573,11 +595,11 @@ div64_functions = 0
 memmove_functions = 0
 
 [thumbv7m-none-eabi.objects]
-text = 162304
-rodata = 19904
+text = 142880
+rodata = 16928
 data = 64
 bss = 18464
-flash = 183344
+flash = 160944
 ram = 18464
 fmt_functions = 0
 div64_functions = 0
@@ -848,22 +870,22 @@ div64_functions = 0
 memmove_functions = 0
 
 [thumbv7em-none-eabihf.objects]
-text = 162112
-rodata = 19904
+text = 142624
+rodata = 16928
 data = 64
 bss = 18464
-flash = 183152
+flash = 160688
 ram = 18464
 fmt_functions = 0
 div64_functions = 0
 memmove_functions = 2
 
 [riscv32imac-unknown-none-elf.objects]
-text = 195504
-rodata = 24480
+text = 172464
+rodata = 20848
 data = 64
 bss = 18464
-flash = 220000
+flash = 193328
 ram = 18464
 fmt_functions = 0
 div64_functions = 0

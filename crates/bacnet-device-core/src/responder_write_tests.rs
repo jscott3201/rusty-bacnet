@@ -69,12 +69,21 @@ impl BACnetObject for Permissive {
         Ok(())
     }
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
-        const ROWS: &[PropertyMetadata] = &[PropertyMetadata::new(
-            P::DESCRIPTION,
-            PropertyConformance::Optional,
-            None,
-            PropertyWriteCapability::Always,
-        )];
+        const ROWS: &[PropertyMetadata] = &[
+            PropertyMetadata::new(
+                P::DESCRIPTION,
+                PropertyConformance::Optional,
+                None,
+                PropertyWriteCapability::Always,
+            ),
+            // One BACnetRecipient, a datatype `structured-writes` decodes.
+            PropertyMetadata::new(
+                P::AUDIT_NOTIFICATION_RECIPIENT,
+                PropertyConformance::Optional,
+                None,
+                PropertyWriteCapability::Always,
+            ),
+        ];
         Cow::Borrowed(ROWS)
     }
 }
@@ -344,6 +353,43 @@ fn a_null_left_unchanged_is_acknowledged_with_nothing_written() {
     assert!(is_simple_ack(&reply), "{reply:?}");
     assert!(objects.is_empty());
     assert_eq!(read(&mut db, bv1(), P::OBJECT_NAME), before);
+}
+
+/// An Audit_Notification_Recipient, one BACnetRecipient, is taken with the
+/// `structured-writes` feature and refused with WRITE_ACCESS_DENIED without
+/// it, changing nothing (#2210). On a Device that doesn't serve it, it is
+/// UNKNOWN_PROPERTY either way.
+#[test]
+fn a_recipient_write_needs_the_structured_writes_feature() {
+    let mut db = database();
+    let recipient = [0x0c, 0x02, 0x00, 0x00, 0x07];
+    let permissive = oid(ObjectType::DEVICE, 77);
+    let apdu = write_property(
+        permissive,
+        P::AUDIT_NOTIFICATION_RECIPIENT,
+        None,
+        &recipient,
+    );
+    let (outcome, reply, objects) = handle(&mut db, apdu);
+    assert_eq!(outcome, Outcome::Reply);
+    if cfg!(feature = "structured-writes") {
+        assert!(is_simple_ack(&reply), "{reply:?}");
+        assert_eq!(objects, [permissive]);
+    } else {
+        assert_eq!(
+            error_of(reply),
+            (ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED)
+        );
+        assert!(objects.is_empty());
+    }
+    let device = oid(ObjectType::DEVICE, DEVICE);
+    let apdu = write_property(device, P::AUDIT_NOTIFICATION_RECIPIENT, None, &recipient);
+    let (_, reply, objects) = handle(&mut db, apdu);
+    assert_eq!(
+        error_of(reply),
+        (ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY)
+    );
+    assert!(objects.is_empty());
 }
 
 /// The executor serves its own Device properties, so no write reaches a

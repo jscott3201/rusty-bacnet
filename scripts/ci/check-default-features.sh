@@ -85,9 +85,11 @@ cargo_for clippy -p bacnet-objects --all-targets --features test-support --locke
 cargo_for doc -p bacnet-objects --features test-support --no-deps --locked --document-private-items
 
 # bacnet-device-core the same way (#2178): it serves a bacnet-objects
-# database, so it has no build without alloc either.
-echo "==> bacnet-device-core (no_std with alloc$label)"
-cargo_for clippy -p bacnet-device-core --no-default-features --features alloc --locked -- -D warnings
+# database, so it has no build without alloc either. `alloc` alone has
+# structured-writes off (#2210); all targets, so the tests that need it are
+# seen to compile out cleanly. CI's no_std test job lints it on.
+echo "==> bacnet-device-core (no_std with alloc, structured-writes off$label)"
+cargo_for clippy -p bacnet-device-core --all-targets --no-default-features --features alloc --locked -- -D warnings
 cargo_for doc -p bacnet-device-core --no-default-features --features alloc --no-deps --locked --document-private-items
 
 # The rustdoc of the MS/TP and B/IP crates with each storage feature alone,
