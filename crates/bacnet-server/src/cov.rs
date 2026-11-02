@@ -3,8 +3,9 @@
 //! [`CovTable`] holds every subscription, flight and ticket as plain state.
 //! [`CovSubscriptionTable`] is the server's table: the plain one inside the
 //! server's lock, and beside it what only a host keeps, which the plain
-//! table's [`Fenced`] reports drive: the confirmed workers' wake-ups, the
-//! revisit queue, the timestamped histories and the telemetry atomics.
+//! table's [`Fenced`](bacnet_device_core::cov::Fenced) reports drive: the
+//! confirmed workers' wake-ups, the revisit queue, the timestamped histories
+//! and the telemetry atomics.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
