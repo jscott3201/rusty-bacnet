@@ -3,9 +3,13 @@ name: Perf counts
 # The counting harness (Benchmarks.md, "Counting harness"): callgrind
 # instruction counts and allocator calls per request for a baseline and a
 # candidate commit, built and run in the Docker image scripts/perf/Dockerfile
-# pins, in A B B A order, with the gates scripts/perf/count_analysis.py
-# declares. Both commits run in this one job: counts compare only within one
-# machine. arm64, like the earlier count archive (#1978, #2012).
+# pins. A comparison builds the baseline twice (A and A') and the candidate
+# once and runs them interleaved (A B A' A' B A, three times), so its noise
+# floor comes from the same matrix as its verdict; the gates are those
+# scripts/perf/count_analysis.py declares, and the step fails when the
+# candidate isn't accepted. The same ref twice measures the noise floor only.
+# Counts compare only within one matrix on one machine. arm64, like the
+# earlier count archive (#1978, #2012).
 #
 # A manual check: workflow_dispatch is its only trigger, so no push, pull
 # request or schedule ever runs it. Its job's name starts with "Perf
@@ -46,6 +50,8 @@ jobs:
           persist-credentials: false
           # Both refs are exported from this clone with git archive.
           fetch-depth: 0
+      - name: Analysis script tests
+        run: python3 -m unittest discover -s scripts/perf
       # The inputs reach the script as environment variables, never as
       # interpolated shell text.
       - name: Run the matrix

@@ -1,7 +1,8 @@
 # Callgrind image for the counting harness (benchmarks/counts/,
-# scripts/perf/perf_counts.py, Benchmarks.md "Counting harness"). The script
-# builds it on demand and tags it rb-perf-counts:<first 12 hex digits of
-# this file's SHA-256>, so an edit here gives a new tag; it never pulls one.
+# scripts/perf/perf_counts.py, Benchmarks.md section 10.4). The script
+# builds it on demand and tags it rb-perf-counts:<12 hex digits of the
+# SHA-256 of this file and its build arguments>, so an edit here gives a new
+# tag; it never pulls one.
 #
 # arm64 only (the count archive is arm64: Apple silicon Docker locally,
 # GitHub's ubuntu-24.04-arm runner in .github/workflows/perf-counts.yml).
@@ -13,9 +14,13 @@
 # - rustup-init at the version and SHA-256 .github/ci-pins.env pins
 #   (RUSTUP_VERSION, RUSTUP_AARCH64_SHA256), passed in as build arguments,
 #   then the toolchain rust-toolchain.toml pins (RUST_TOOLCHAIN).
-# - Valgrind and the C toolchain from apt at the versions in Ubuntu 24.04's
-#   release pocket, which never changes. VALGRIND_VERSION is the one #2012's
-#   counts used (3.22.0).
+# - Every apt package (the C toolchain, Valgrind and anything they pull in,
+#   libc6-dev for one) from the Ubuntu snapshot archive at SNAPSHOT, the
+#   base image's build date, so a later rebuild installs the same versions.
+#   snapshot.ubuntu.com serves arm64 under ubuntu/ (ubuntu-ports/ answers
+#   401) and only over HTTPS, so ca-certificates comes first from the base
+#   image's own sources; it affects only TLS trust. perf_counts.py records
+#   the libc6, valgrind and gcc versions in each run's manifest.
 #
 # Relation to rb-callgrind:local: the earlier counts (#1713, #1978, PR
 # #2012) ran in a local-only image with no committed recipe (ID 0f6ec719,
@@ -30,6 +35,7 @@ FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce
 ARG RUSTUP_VERSION
 ARG RUSTUP_AARCH64_SHA256
 ARG RUST_TOOLCHAIN
+ARG SNAPSHOT=20261024T000000Z
 ARG VALGRIND_VERSION=1:3.22.0-0ubuntu3
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -40,9 +46,15 @@ ENV DEBIAN_FRONTEND=noninteractive \
     CARGO_INCREMENTAL=0
 
 RUN test "$(dpkg --print-architecture)" = arm64 \
-    && apt-get update \
+    && apt-get -o Acquire::Retries=5 update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && sed -i "s|http://ports.ubuntu.com/ubuntu-ports/|https://snapshot.ubuntu.com/ubuntu/${SNAPSHOT}/|" \
+      /etc/apt/sources.list.d/ubuntu.sources \
+    && grep -q "snapshot.ubuntu.com/ubuntu/${SNAPSHOT}/" /etc/apt/sources.list.d/ubuntu.sources \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get -o Acquire::Retries=5 update \
     && apt-get install -y --no-install-recommends \
-      build-essential ca-certificates curl perl python3 \
+      build-essential curl perl python3 \
       "valgrind=${VALGRIND_VERSION}" \
     && rm -rf /var/lib/apt/lists/*
 

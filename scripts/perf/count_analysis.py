@@ -6,27 +6,33 @@ gates and the per-symbol, per-line and per-item views.
 perf_counts.py runs the matrix and calls `analyze`; this module has no
 Docker or git calls, so test_count_analysis.py covers it with fixtures.
 
+Tests: python3 -m unittest discover -s scripts/perf
+
 Definitions (all per request, or per iteration for the codec workloads):
 
 - slope: (Ir at the long run - Ir at the short run) / (long - short), for
-  one ordinal (the i-th run of a variant in the A B B A order). Setup,
-  oracles and shutdown cancel out.
+  one ordinal (the i-th run of a variant in the matrix order). Setup,
+  oracles and shutdown cancel out. The gated figure excludes the harness's
+  counting allocator (its functions' own instructions and the atomic
+  helpers they call); the figure with it is reported beside it.
 - allocations: the counted loop's allocator calls and requested bytes at the
   long run, divided by its length (the harness's RESULT line).
-- noise floor: in an A vs A' run (two clean builds of one commit), the
-  range (max - min) of all twelve slopes of a workload and runtime. In an A
-  vs B run without a recorded floor, the range of A's six slopes.
+- noise floor: the range (max - min) of the twelve slopes of two clean
+  builds of the baseline (A and A') in the same matrix as the verdict.
+  Counts differ between machines and sessions, so a floor from another run
+  is used only when asked for (quick mode), and each row names its source.
 
-Gates (#1979 decision, 2026-11-02), on every runtime:
+Gates (#1979 decision, 2026-11-02), for a comparison (A, A' and B):
 
-- the aimed workloads (rp by default): the median slope falls by at least
-  100 instructions and by more than 3 times the noise floor, and every
-  ordinal pair falls;
-- the other round-trip workloads: the median slope rises by no more than the
-  noise floor;
-- every round-trip workload: allocation calls and requested bytes per
-  request rise by no more than 0.01;
-- codec workloads are reported, not gated.
+- aimed round trips (rp by default): the median slope falls by at least 100
+  instructions and by more than 3 times the noise floor, and every A and B
+  ordinal pair falls; an aimed codec workload has the same rule without the
+  100-instruction minimum;
+- every other row: the median slope rises by no more than the noise floor;
+- every row: allocation calls per request rise by no more than 0.01;
+  requested bytes are reported, not gated;
+- acceptance needs every row to pass, rp, wp and rpm on both runtimes when
+  any round trip runs, and only known, requested aimed workloads.
 """
 
 import json
@@ -202,7 +208,36 @@ def parse_callgrind(text):
     return lines, functions, edges
 
 
+_HARNESS_RE = re.compile(r"bacnet_counts::CountingAlloc")
+
+
+def harness_ir(functions, edges):
+    """The harness's own counting cost in one run: the counting allocator's
+    self Ir plus the outline atomic helpers (`__aarch64_*`) it calls. The
+    system allocator it defers to isn't included: that cost is the
+    program's."""
+    own = sum(v for f, v in functions.items() if _HARNESS_RE.search(f))
+    helpers = sum(inclusive for (caller, callee), (_calls, inclusive) in edges.items()
+                  if _HARNESS_RE.search(caller) and callee.startswith("__aarch64_"))
+    return own + helpers
+
+
+def calls_in(edges):
+    """Calls into each function from other functions; a recursion level
+    calling itself ("free'2" into "free") isn't a call in."""
+    out = {}
+    for (caller, callee), (count, _inclusive) in edges.items():
+        if caller != callee:
+            out[callee] = out.get(callee, 0) + count
+    return out
+
+
 # ---------------------------------------------------------------- slopes
+
+# Variant labels: A is the baseline, P a second clean build of it (A'), B the
+# candidate. A noise run has A and P; a comparison has all three, so its
+# noise floor comes from the same matrix as its verdict.
+LABELS = {"A": "A", "P": "A'", "B": "B"}
 
 
 def median(values):
@@ -227,16 +262,22 @@ def slope(short, long, short_n, long_n):
 
 
 def variant_metrics(runs, workload, runtime, label):
-    """Slopes and allocation rates of one variant's ordinals."""
+    """Slopes and allocation rates of one variant's ordinals.
+
+    `instructions` excludes the harness's own counting allocator (each run's
+    `harness_ir`, from its profile); `instructions_with_harness` doesn't.
+    """
     short_n, long_n = lengths(workload)
     by_ordinal = ordinal_runs(runs, workload, runtime, label)
-    slopes, calls, bytes_, call_slopes = [], [], [], []
+    slopes, raw, calls, bytes_, call_slopes = [], [], [], [], []
     for ordinal in sorted(by_ordinal):
         pair = by_ordinal[ordinal]
         if short_n not in pair or long_n not in pair:
             raise ValueError(f"{workload}/{runtime}/{label}{ordinal}: missing a run length")
         short, long = pair[short_n], pair[long_n]
-        slopes.append(slope(short["instructions"], long["instructions"], short_n, long_n))
+        raw.append(slope(short["instructions"], long["instructions"], short_n, long_n))
+        slopes.append(slope(short["instructions"] - short.get("harness_ir", 0),
+                            long["instructions"] - long.get("harness_ir", 0), short_n, long_n))
         calls.append(long["allocs"] / long_n)
         bytes_.append(long["bytes"] / long_n)
         call_slopes.append(slope(short["allocs"], long["allocs"], short_n, long_n))
@@ -244,21 +285,41 @@ def variant_metrics(runs, workload, runtime, label):
         raise ValueError(f"{workload}/{runtime}/{label}: no runs")
     return {
         "instructions": describe(slopes),
+        "instructions_with_harness": describe(raw),
         "alloc_calls": describe(calls),
         "alloc_bytes": describe(bytes_),
         "alloc_call_slopes": describe(call_slopes),
     }
 
 
-def noise_floor(metrics_a, metrics_b):
-    """A vs A': the range of all slopes of both builds."""
-    values = metrics_a["instructions"]["values"] + metrics_b["instructions"]["values"]
+def noise_floor(metrics_a, metrics_p):
+    """The range of all slopes of the two builds of the baseline."""
+    values = metrics_a["instructions"]["values"] + metrics_p["instructions"]["values"]
     return max(values) - min(values)
 
 
-def judge(workload, runtime, metrics_a, metrics_b, floor, floor_source, aimed, noise=False):
-    """One row of the verdict table. A noise run (A vs A') has no verdict:
-    it measures the floor the gates use."""
+def validate_aim(aimed, workloads):
+    """Refuses aimed workloads that aren't known or weren't requested."""
+    known = set(ROUND_TRIP) | set(CODEC)
+    unknown = [w for w in aimed if w not in known]
+    if unknown:
+        raise ValueError(f"unknown aimed workload(s): {', '.join(unknown)}")
+    if not aimed:
+        raise ValueError("no aimed workload")
+    missing = [w for w in aimed if w not in workloads]
+    if missing:
+        raise ValueError(f"aimed workload(s) not in the run: {', '.join(missing)}")
+
+
+def judge(workload, runtime, metrics_a, metrics_b, floor, floor_source, aimed):
+    """One row of a comparison's verdict table.
+
+    Round trips aimed at: a saving of at least MIN_SAVING and more than
+    FLOOR_FACTOR floors, every pair lower. Codec workloads aimed at: the
+    same without the 100-instruction minimum, which is a per-request bar.
+    Others: no rise beyond the floor. All: allocation calls up by at most
+    ALLOC_TOLERANCE. Requested bytes are reported, not gated.
+    """
     a, b = metrics_a["instructions"], metrics_b["instructions"]
     delta = b["median"] - a["median"]
     pairs = [vb - va for va, vb in zip(a["values"], b["values"])]
@@ -267,6 +328,8 @@ def judge(workload, runtime, metrics_a, metrics_b, floor, floor_source, aimed, n
         "runtime": runtime,
         "a_median": a["median"],
         "b_median": b["median"],
+        "a_median_with_harness": metrics_a["instructions_with_harness"]["median"],
+        "b_median_with_harness": metrics_b["instructions_with_harness"]["median"],
         "delta": delta,
         "pair_deltas": pairs,
         "noise_floor": floor,
@@ -276,64 +339,98 @@ def judge(workload, runtime, metrics_a, metrics_b, floor, floor_source, aimed, n
         "a_bytes": metrics_a["alloc_bytes"]["median"],
         "b_bytes": metrics_b["alloc_bytes"]["median"],
     }
-    if noise:
-        row["gate"] = "none: measures the noise floor"
-        row["verdict"] = "floor"
-        return row
-    if workload not in ROUND_TRIP:
-        row["gate"] = "report only"
-        row["verdict"] = "info"
-        return row
-    calls_ok = row["b_calls"] - row["a_calls"] <= ALLOC_TOLERANCE
-    bytes_ok = row["b_bytes"] - row["a_bytes"] <= ALLOC_TOLERANCE
+    saving = -delta
+    every_pair_lower = bool(pairs) and all(p < 0 for p in pairs)
     if workload in aimed:
-        saving = -delta
-        instr_ok = saving >= MIN_SAVING and saving > FLOOR_FACTOR * floor and all(p < 0 for p in pairs)
-        row["gate"] = f"saving >= {MIN_SAVING:g} and > {FLOOR_FACTOR:g} x floor, every pair lower"
+        minimum = MIN_SAVING if workload in ROUND_TRIP else 0.0
+        instr_ok = saving >= minimum and saving > FLOOR_FACTOR * floor and every_pair_lower
+        row["gate"] = f"saving >= {minimum:g} and > {FLOOR_FACTOR:g} x floor, every pair lower"
     else:
         instr_ok = delta <= floor
         row["gate"] = "not higher than the noise floor"
     row["instructions_ok"] = instr_ok
-    row["allocations_ok"] = calls_ok and bytes_ok
-    row["verdict"] = "PASS" if instr_ok and calls_ok and bytes_ok else "FAIL"
+    row["allocations_ok"] = row["b_calls"] - row["a_calls"] <= ALLOC_TOLERANCE
+    row["verdict"] = "PASS" if instr_ok and row["allocations_ok"] else "FAIL"
     return row
+
+
+def coverage_problems(rows, aimed):
+    """Why a comparison's rows can't support an acceptance, if they can't."""
+    present = {(r["workload"], r["runtime"]) for r in rows}
+    problems = []
+    if any(w in ROUND_TRIP for w, _ in present):
+        for workload in ROUND_TRIP:
+            for runtime in RUNTIMES:
+                if (workload, runtime) not in present:
+                    problems.append(f"round trips need rp, wp and rpm on ct and mt; {workload}/{runtime} is missing")
+    for workload in aimed:
+        if not any(w == workload for w, _ in present):
+            problems.append(f"aimed workload {workload} has no rows")
+    return problems
+
+
+RUNTIMES = ("ct", "mt")
 
 
 def analyze(manifest, recorded_floors=None, aimed=("rp",)):
     """The summary of a completed matrix manifest.
 
-    `recorded_floors` is {"workload/runtime": floor} from earlier A vs A'
-    summaries; a workload without one uses A's own range.
+    A noise run (A and A') reports floors. A comparison (A, A' and B) takes
+    its floors from its own A and A'; a quick comparison without A' needs
+    `recorded_floors` ({"workload/runtime": floor}) from an earlier noise
+    run, and its rows say so.
     """
+    if not manifest.get("completed"):
+        raise ValueError("the matrix didn't complete; no verdict")
     noise = manifest["mode"] == "noise"
     runs = [r for r in manifest["runs"] if r.get("instructions") is not None]
+    pairs = sorted({(r["workload"], r["runtime"]) for r in runs})
+    if not noise:
+        validate_aim(aimed, {w for w, _ in pairs})
     rows = []
-    for workload, runtime in sorted({(r["workload"], r["runtime"]) for r in runs}):
-        metrics = {label: variant_metrics(runs, workload, runtime, label) for label in "AB"}
+    for workload, runtime in pairs:
+        labels = sorted({r["label"] for r in runs if (r["workload"], r["runtime"]) == (workload, runtime)})
+        metrics = {label: variant_metrics(runs, workload, runtime, label) for label in labels}
         key = f"{workload}/{runtime}"
-        if noise:
-            floor, source = noise_floor(metrics["A"], metrics["B"]), "A vs A' range"
+        if "P" in metrics:
+            floor, source = noise_floor(metrics["A"], metrics["P"]), "A vs A' in this matrix"
         elif recorded_floors and key in recorded_floors:
-            floor, source = recorded_floors[key], "recorded A vs A' run"
+            floor, source = recorded_floors[key], "recorded noise run (quick mode)"
         else:
-            values = metrics["A"]["instructions"]["values"]
-            floor, source = max(values) - min(values), "A's own range"
-        row = judge(workload, runtime, metrics["A"], metrics["B"], floor, source, aimed, noise)
+            raise ValueError(f"{key}: no A' build in the matrix and no recorded floor")
+        if noise:
+            row = {
+                "workload": workload, "runtime": runtime, "noise_floor": floor, "noise_floor_source": source,
+                "a_median": metrics["A"]["instructions"]["median"],
+                "b_median": metrics["P"]["instructions"]["median"],
+                "a_median_with_harness": metrics["A"]["instructions_with_harness"]["median"],
+                "b_median_with_harness": metrics["P"]["instructions_with_harness"]["median"],
+                "delta": metrics["P"]["instructions"]["median"] - metrics["A"]["instructions"]["median"],
+                "pair_deltas": [p - a for a, p in zip(metrics["A"]["instructions"]["values"],
+                                                      metrics["P"]["instructions"]["values"])],
+                "a_calls": metrics["A"]["alloc_calls"]["median"], "b_calls": metrics["P"]["alloc_calls"]["median"],
+                "a_bytes": metrics["A"]["alloc_bytes"]["median"], "b_bytes": metrics["P"]["alloc_bytes"]["median"],
+                "gate": "none: measures the noise floor", "verdict": "floor",
+            }
+        else:
+            row = judge(workload, runtime, metrics["A"], metrics["B"], floor, source, aimed)
         row["metrics"] = metrics
         rows.append(row)
-    gated = [row for row in rows if row["verdict"] in ("PASS", "FAIL")]
     summary = {
         "mode": manifest["mode"],
-        "variants": {label: {k: v for k, v in manifest["variants"][label].items() if k != "root"} for label in "AB"},
-        "aimed": list(aimed),
+        "variants": {label: {k: v for k, v in variant.items() if k != "root"}
+                     for label, variant in manifest["variants"].items()},
         "rows": rows,
         "noise_floors": {f"{r['workload']}/{r['runtime']}": r["noise_floor"] for r in rows},
     }
-    if noise:
-        hashes = [manifest["variants"][label].get("binaries") for label in "AB"]
-        summary["binaries_identical"] = hashes[0] == hashes[1]
-    else:
-        summary["accepted"] = bool(gated) and all(row["verdict"] == "PASS" for row in gated)
+    binaries = [manifest["variants"][label].get("binaries") for label in ("A", "P") if label in manifest["variants"]]
+    if len(binaries) == 2:
+        summary["baseline_builds_identical"] = binaries[0] == binaries[1]
+    if not noise:
+        problems = coverage_problems(rows, aimed)
+        summary["aimed"] = list(aimed)
+        summary["coverage_problems"] = problems
+        summary["accepted"] = not problems and bool(rows) and all(r["verdict"] == "PASS" for r in rows)
     return summary
 
 
@@ -369,35 +466,20 @@ def fmt(value, places=1):
 
 
 def verdict_table(summary):
-    headers = [
-        "Workload",
-        "Runtime",
-        "A median",
-        "B median",
-        "B - A",
-        "Noise floor",
-        "Pairs lower",
-        "Calls A / B",
-        "Bytes A / B",
-        "Verdict",
-    ]
+    """Instructions exclude the harness's counting allocator; the floor's
+    source is on every row. Requested bytes are reported, not gated."""
+    other = "A'" if summary["mode"] == "noise" else "B"
+    headers = ["Workload", "Runtime", "A median", f"{other} median", f"{other} - A", "Noise floor (source)",
+               "Pairs lower", "Calls A / " + other, "Bytes A / " + other + " (report only)", "Verdict"]
     rows = []
     for row in summary["rows"]:
         lower = sum(1 for p in row["pair_deltas"] if p < 0)
-        rows.append(
-            [
-                row["workload"],
-                row["runtime"],
-                fmt(row["a_median"]),
-                fmt(row["b_median"]),
-                fmt(row["delta"]),
-                fmt(row["noise_floor"]),
-                f"{lower} of {len(row['pair_deltas'])}",
-                f"{row['a_calls']:.4f} / {row['b_calls']:.4f}",
-                f"{row['a_bytes']:.2f} / {row['b_bytes']:.2f}",
-                row["verdict"],
-            ]
-        )
+        rows.append([
+            row["workload"], row["runtime"], fmt(row["a_median"]), fmt(row["b_median"]), fmt(row["delta"]),
+            f"{fmt(row['noise_floor'])} ({row['noise_floor_source']})", f"{lower} of {len(row['pair_deltas'])}",
+            f"{row['a_calls']:.4f} / {row['b_calls']:.4f}", f"{row['a_bytes']:.2f} / {row['b_bytes']:.2f}",
+            row["verdict"],
+        ])
     return table(headers, rows)
 
 

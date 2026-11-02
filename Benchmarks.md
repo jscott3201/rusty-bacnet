@@ -1161,8 +1161,10 @@ Wall-clock comparisons of small changes stalled on run-to-run spread (sections
 10.1 and 10.3), so changes aimed at
 [#1978](https://github.com/jscott3201/rusty-bacnet/issues/1978) and
 [#1979](https://github.com/jscott3201/rusty-bacnet/issues/1979) are judged on
-counts instead: callgrind's instruction reads and the allocator's calls and
-requested bytes, which don't move with machine load.
+counts instead: callgrind's instruction reads and the allocator's calls.
+Counts move far less than timings, but not never: timer and clock work
+follows wall time, which machine load stretches, so only values from one
+interleaved matrix compare.
 
 - **What it runs.** `benchmarks/counts/` is a package of its own, with its own
   `Cargo.lock`, so two commits build with the same third-party versions. Its
@@ -1171,42 +1173,56 @@ requested bytes, which don't move with machine load.
   client and server in one process, on Tokio's current-thread runtime (`ct`)
   or its multi-thread runtime with two workers (`mt`). Its `codec-counts`
   binary loops the seven `encoding` suite workloads. Both check the values
-  they read, write or encode before and after the counted loop.
+  they read, write or encode before and after the counted loop. The client
+  API takes the written value and the ReadPropertyMultiple specifications by
+  value, so their clones count as part of each request.
 - **Per request.** Each run happens twice, with 1,000 and with 10,000 requests
   after 200 warm-up requests (100,000 and 1,000,000 iterations for the codec
   workloads). The difference in instructions divided by the difference in
-  length is the cost of one request, without setup, checks or shutdown.
-  Allocations per request are the counted loop's allocator calls and
-  requested bytes divided by its length.
-- **Order and builds.** Each commit is exported into its own tree, built in a
-  fresh Docker volume at the same paths with `--locked`, and run in A B B A
-  order three times, so each commit gets six values per workload and runtime.
-  Every run first checks its binary's SHA-256.
-- **Noise floor.** A noise run builds one commit twice (A and A'). The range
-  of its twelve values per workload and runtime is the noise floor. Two clean
-  builds of one commit give byte-identical binaries.
-- **Gates.** A change aimed at the ReadProperty round trip passes on a runtime
-  when its median instructions per request fall by at least 100 and by more
-  than three times the noise floor, with every one of the six A and B pairs
-  lower. WriteProperty and ReadPropertyMultiple may not rise by more than the
-  noise floor, and on all three, allocation calls and requested bytes per
-  request may not rise by more than 0.01. Codec workloads are reported, not
-  gated. Wire bytes must stay identical; the existing test suites check that.
+  length is the cost of one request, without setup, checks or shutdown. The
+  harness's own counting allocator (about 42 instructions per allocation) is
+  subtracted; the tables show the figure with it too. Allocations per
+  request are the counted loop's allocator calls and requested bytes divided
+  by its length.
+- **Builds and order.** Each commit is exported into its own tree, built in a
+  fresh Docker volume at the same paths with `--locked`. A comparison builds
+  the baseline twice (A and A') and the candidate once (B), and runs them in
+  the order A B A' A' B A, three times, so each build gets six values per
+  workload and runtime. Every run first checks its binary's SHA-256.
+- **Noise floor.** The range of the twelve A and A' values per workload and
+  runtime, from the same matrix as the verdict. Two clean builds of one
+  commit give byte-identical binaries. A noise run (`--noise`) measures only
+  this.
+- **Gates.** A comparison is accepted only when it covers `rp`, `wp` and
+  `rpm` on both runtimes and every row passes. The aimed workload (`rp`
+  unless `--aim` names others) must fall by at least 100 instructions per
+  request and by more than three noise floors, with all six A and B pairs
+  lower; an aimed codec workload has the same rule without the
+  100-instruction minimum. Every other row may not rise by more than its
+  noise floor, and no row's allocation calls may rise by more than 0.01 per
+  request. Requested bytes are reported, not gated. Wire bytes must stay
+  identical; the existing test suites check that. The script exits non-zero
+  when a comparison isn't accepted.
 - **Where.** On Apple silicon, in local Docker; on GitHub, the manual
   `Perf counts` workflow (`.github/workflows/perf-counts.yml`, run from the
   Actions tab with a baseline ref, a candidate ref and the workloads) on an
-  arm64 runner. It isn't part of the CI OK or Native OK checks. Both commits
-  of a comparison run in one job, since counts compare only within one image
-  on one machine. The image is `scripts/perf/Dockerfile`.
+  arm64 runner. It isn't part of the CI OK or Native OK checks. The image is
+  `scripts/perf/Dockerfile`, with its apt packages from a dated Ubuntu
+  snapshot.
 
 ```bash
-# Noise floor of one commit, then a comparison that uses it
+# A comparison: baseline built twice, candidate once, one matrix
+python3 scripts/perf/perf_counts.py run --baseline dev --candidate my-branch --out /tmp/compare
+# The noise floor of one commit alone
 python3 scripts/perf/perf_counts.py run --noise dev --workloads all --out /tmp/noise
-python3 scripts/perf/perf_counts.py run --baseline dev --candidate my-branch \
-  --workloads rp,wp,rpm --noise-floors /tmp/noise/summary.json --out /tmp/compare
+# The analysis script's tests
+python3 -m unittest discover -s scripts/perf
 ```
 
-Each run writes `summary.md` (the verdict table), per-function and per-line
+For quick local iteration only, `--noise-floors /tmp/noise/summary.json`
+skips the A' build and takes the floors from an earlier noise run on the
+same machine; each row of the table names its floor's source. Each run
+writes `summary.md` (the verdict table), per-function and per-line
 instruction slopes under `profiles/`, and the #1978 items' share in
 `items.md`. The first baseline and noise floors on dev are in
 [benchmarks/results/perf-s0](benchmarks/results/perf-s0/README.md).
