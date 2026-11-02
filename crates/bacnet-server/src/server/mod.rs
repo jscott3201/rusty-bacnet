@@ -698,6 +698,8 @@ mod discovery_lock_tests;
 #[cfg(test)]
 mod discovery_tests;
 #[cfg(test)]
+mod empty_array_wire_tests;
+#[cfg(test)]
 mod event_confirmed_routing_tests;
 #[cfg(test)]
 mod event_enable_distribution_tests;

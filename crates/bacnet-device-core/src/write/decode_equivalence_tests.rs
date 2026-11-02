@@ -4,7 +4,8 @@
 //! catalogue object (with the B/IP and B/IPv6 Network Ports) and every
 //! property, named or numbered up to 1023, at every index shape, over a set
 //! of payloads; and again by the standard value type alone, as the durable
-//! writes decode before any object is at hand.
+//! writes decode before any object is at hand. The one change made since
+//! is allowed for: an array written whole with no octets (#2305).
 
 use super::decode_write_property_value;
 use crate::write::relinquish;
@@ -154,9 +155,24 @@ fn compare(
     target: impl Fn() -> String,
 ) {
     let list = value_type.is_some_and(ValueType::is_list);
+    let array = value_type.is_some_and(ValueType::is_array);
     for index in INDEXES {
         for bytes in payloads {
-            let old = answer(old_decode(property, index, list, bytes));
+            let old = match old_decode(property, index, list, bytes) {
+                // The one change since: an array written whole with no
+                // octets is an empty array, not undecodable (#2305).
+                Err(error)
+                    if array
+                        && index.is_none()
+                        && bytes.is_empty()
+                        && format!("{error:?}")
+                            == format!("{:?}", invalid_data_encoding_error()) =>
+                {
+                    Ok(PropertyValue::List(Vec::new()))
+                }
+                old => old,
+            };
+            let old = answer(old);
             let new = answer(decode_write_property_value(
                 property, value_type, index, bytes,
             ));
