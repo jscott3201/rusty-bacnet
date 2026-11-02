@@ -1,5 +1,5 @@
 //! Random WriteProperty calls against one object of every catalogue type
-//! (#2180).
+//! (#2180, #2234).
 //!
 //! Each case takes one object from [`representatives`] and runs a short
 //! run of writes against it through the public `write_property` only: a
@@ -9,59 +9,100 @@
 //! any application value, wrong datatypes included, or a variation of what
 //! the property reads now, so writes of the right shape get through too.
 //!
-//! What it holds the object to:
+//! What it holds the object to, comparing views (every row read whole, an
+//! array's count, and the rows themselves):
 //! - no write or read panics;
 //! - reads change nothing: two views taken back to back are equal;
-//! - a write that fails leaves the object as it was: every row read whole
-//!   (and as a count, for an array), and the rows themselves, compare equal
-//!   before and after (the `write_property` contract).
-//!
-//! A write that succeeds isn't checked further. Which other properties a
-//! write may move (Status_Flags with Out_Of_Service, Number_Of_States with
-//! State_Text, the priority array with Present_Value, a log's counts with
-//! Enable, ...) differs by type and is the object tests' business.
+//! - a write that fails leaves the object as it was (the `write_property`
+//!   contract);
+//! - a write of P that succeeds changes only P and what
+//!   [`may_also_change`] lists for P on that type (a change of the rows
+//!   counts as Property_List). The table and why each entry is there are in
+//!   `support/write_side_effects.rs`.
 //!
 //! Values are compared by their `Debug` text, so a NaN matches itself.
 
+use bacnet_objects::averaging::AveragingObject;
 use bacnet_objects::catalogue::representatives;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
 use proptest::prelude::*;
 
+#[path = "support/write_side_effects.rs"]
+mod write_side_effects;
+
+use write_side_effects::{effects, may_also_change};
+
 /// How many catalogue objects there are; the object index of a case is
 /// taken modulo the real count.
 const CATALOGUE_SPAN: usize = 256;
 
+/// Which part of a view an entry shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Key {
+    /// The metadata rows themselves.
+    Rows,
+    /// A property read whole (raw identifier).
+    Whole(u32),
+    /// An array property's count (raw identifier).
+    Count(u32),
+}
+
+impl Key {
+    /// The property this entry belongs to: the rows count as Property_List.
+    fn property(self) -> PropertyIdentifier {
+        match self {
+            Key::Rows => PropertyIdentifier::PROPERTY_LIST,
+            Key::Whole(raw) | Key::Count(raw) => PropertyIdentifier::from_raw(raw),
+        }
+    }
+}
+
+type View = std::collections::BTreeMap<Key, String>;
+
 /// Everything the public read API shows of `object`: each row's whole
 /// value, an array's count, and the rows themselves.
-fn view(object: &dyn BACnetObject) -> Vec<String> {
+fn view(object: &dyn BACnetObject) -> View {
     let rows = object.property_metadata();
-    let mut view = vec![format!("{rows:?}")];
+    let mut view = View::new();
+    view.insert(Key::Rows, format!("{rows:?}"));
     for row in rows.iter() {
         let property = row.property_identifier;
-        view.push(format!(
-            "{property:?}: {:?}",
-            object.read_property(property, None)
-        ));
+        view.insert(
+            Key::Whole(property.to_raw()),
+            format!("{:?}", object.read_property(property, None)),
+        );
         if object.is_array_property(property) {
-            view.push(format!(
-                "{property:?}[0]: {:?}",
-                object.read_property(property, Some(0))
-            ));
+            view.insert(
+                Key::Count(property.to_raw()),
+                format!("{:?}", object.read_property(property, Some(0))),
+            );
         }
     }
     view
 }
 
+/// The keys whose entries differ between two views, including entries
+/// only one of them has.
+fn changed(before: &View, after: &View) -> Vec<Key> {
+    let mut keys: Vec<Key> = before.keys().chain(after.keys()).copied().collect();
+    keys.sort();
+    keys.dedup();
+    keys.retain(|key| before.get(key) != after.get(key));
+    keys
+}
+
 /// The first entry where two views differ, for the failure message.
-fn first_difference(before: &[String], after: &[String]) -> String {
-    before
-        .iter()
-        .zip(after)
-        .find(|(before, after)| before != after)
-        .map(|(before, after)| format!("before {before}\n after {after}"))
-        .unwrap_or_else(|| format!("{} entries before, {} after", before.len(), after.len()))
+fn first_difference(before: &View, after: &View) -> String {
+    match changed(before, after).first() {
+        Some(key) => format!(
+            "before {key:?} {:?}\n after {key:?} {:?}",
+            before.get(key),
+            after.get(key)
+        ),
+        None => "no difference".into(),
+    }
 }
 
 /// Which property a write names.
@@ -313,11 +354,28 @@ fn write() -> impl Strategy<Value = Write> {
         })
 }
 
+/// The catalogue object at `index`, with the Averaging object holding two
+/// samples so that the writes that reset its window show.
+fn catalogue_object(index: usize) -> Box<dyn BACnetObject> {
+    let mut objects = representatives();
+    let object = objects.swap_remove(index % objects.len());
+    if object.object_identifier().object_type() != ObjectType::AVERAGING {
+        return object;
+    }
+    let mut seeded = AveragingObject::new(
+        object.object_identifier().instance_number(),
+        object.object_name(),
+    )
+    .expect("the catalogue's Averaging instance");
+    for sample in [1.0, 3.0] {
+        seeded.add_sample(sample).expect("a finite sample");
+    }
+    Box::new(seeded)
+}
+
 /// Run `writes` against the catalogue object at `index`, checking each.
 fn run(index: usize, writes: &[Write]) -> Result<(), TestCaseError> {
-    let mut objects = representatives();
-    let mut object = objects.swap_remove(index % objects.len());
-    drop(objects);
+    let mut object = catalogue_object(index);
     let name = format!("{:?}", object.object_identifier());
     for write in writes {
         let rows = object.property_metadata();
@@ -364,6 +422,34 @@ fn run(index: usize, writes: &[Write]) -> Result<(), TestCaseError> {
                 write.priority,
                 first_difference(&before, &after)
             );
+        } else {
+            let after = view(object.as_ref());
+            let object_type = object.object_identifier().object_type();
+            let mut undeclared = Vec::new();
+            for key in changed(&before, &after) {
+                let other = key.property();
+                if other != property
+                    && !may_also_change(object_type, property).any(|listed| listed == other)
+                {
+                    undeclared.push(format!(
+                        "{other:?}{}: {} -> {}",
+                        if matches!(key, Key::Count(_)) {
+                            "[0]"
+                        } else {
+                            ""
+                        },
+                        before.get(&key).map_or("absent", String::as_str),
+                        after.get(&key).map_or("absent", String::as_str),
+                    ));
+                }
+            }
+            prop_assert!(
+                undeclared.is_empty(),
+                "{name}: the write of {property:?}[{:?}] = {value:?} at {:?} also changed what support/write_side_effects.rs doesn't list:\n{}",
+                write.array_index,
+                write.priority,
+                undeclared.join("\n")
+            );
         }
     }
     Ok(())
@@ -374,7 +460,7 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(4096))]
 
     #[test]
-    fn refused_writes_leave_the_object_unchanged(
+    fn writes_change_only_what_they_may(
         index in 0..CATALOGUE_SPAN,
         writes in proptest::collection::vec(write(), 1..8),
     ) {
@@ -386,4 +472,32 @@ proptest! {
 #[test]
 fn every_catalogue_type_is_reachable() {
     assert!(representatives().len() <= CATALOGUE_SPAN);
+}
+
+/// The side-effect table has a row for every catalogue type, and names only
+/// properties the type's object has (Property_List stands for the rows).
+#[test]
+fn the_side_effect_table_covers_the_catalogue() {
+    for object in representatives() {
+        let object_type = object.object_identifier().object_type();
+        let fragments = effects(object_type).unwrap_or_else(|| {
+            panic!("{object_type:?} has no row in support/write_side_effects.rs")
+        });
+        let rows = object.property_metadata();
+        let has = |property: PropertyIdentifier| {
+            rows.iter().any(|row| row.property_identifier == property)
+        };
+        for &(written, changed) in fragments.iter().flat_map(|fragment| fragment.iter()) {
+            assert!(
+                has(written) && object.is_writable_property(written),
+                "{object_type:?}: the table lists a write of {written:?}, which isn't a writable row"
+            );
+            for &other in changed {
+                assert!(
+                    other != written && has(other),
+                    "{object_type:?}: a write of {written:?} lists {other:?}, which isn't another row"
+                );
+            }
+        }
+    }
 }
