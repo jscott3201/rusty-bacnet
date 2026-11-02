@@ -278,7 +278,7 @@ impl Preflight {
         let name = salt::pipe_name(&salt, &nonce, dir);
         let created = {
             let _entered = runtime.enter();
-            descriptor.create(&options(false), &name) // MUTATION
+            descriptor.create(&options(true), &name)
         };
         let waiting = created.map_err(|e| {
             if e.kind() == io::ErrorKind::PermissionDenied {
