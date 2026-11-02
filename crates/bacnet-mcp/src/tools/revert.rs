@@ -86,6 +86,13 @@ pub(super) struct Args {
     all: bool,
 }
 
+/// `bacnet_revert`'s description on a session attached to the TUI.
+pub(super) const ATTACHED: &str = "Put back what was there before this principal's MCP writes \
+    (every agent of this OS user's, through the TUI or stdio): name ledger entries (the ledger_id \
+    of bacnet_write's results, or bacnet://ledger) on one device, or all of them. The person at \
+    the TUI confirms the revert in its preview dialog, at the tier of the writes it undoes; the \
+    call waits for that answer.";
+
 /// An entry this principal wrote through MCP.
 pub(super) fn ours(entry: &Entry, principal: &str) -> bool {
     entry.origin.front_end == FrontEnd::Mcp && entry.origin.principal.as_deref() == Some(principal)
@@ -161,20 +168,9 @@ pub(crate) async fn run<T: TransportPort + 'static>(
     let account = Arc::clone(&call.account);
     let sending = write_task::sending();
     if ctx.attached.is_some() {
-        // The TUI holds the workspace: its desk does the revert (#2185).
-        let job = super::write_attached::revert(
-            Arc::clone(ctx),
-            Arc::clone(&account),
-            wanted,
-            fields.clone(),
-        );
-        let work = async move {
-            let (done, left) = job.await?;
-            body(&done, left)
-        };
-        return Ok(Step::Sending(hand_off(
-            ctx, workspace, account, sending, fields, work,
-        )));
+        // The TUI holds the workspace: the person there confirms the
+        // revert, and its desk does it (#2185).
+        return attached(ctx, &entries, wanted, (workspace, account, sending, fields));
     }
     let work = {
         let ctx = Arc::clone(ctx);
@@ -206,9 +202,66 @@ pub(crate) async fn run<T: TransportPort + 'static>(
     )))
 }
 
+/// An attached session's revert: the writes that put the chosen entries'
+/// pre-images back, for the TUI to confirm at the tier of the writes they
+/// undo. Refused across devices, since the dialog confirms one device; with
+/// nothing to put back, nothing is asked and nothing sent.
+fn attached<T: TransportPort + 'static>(
+    ctx: &Arc<Ctx<T>>,
+    entries: &[Entry],
+    wanted: Option<BTreeSet<u64>>,
+    (workspace, account, sending, fields): (
+        crate::policy::Workspace,
+        Arc<bacnet_ops::limits::Account>,
+        crate::writes::Sending,
+        Map<String, Value>,
+    ),
+) -> Result<Step, ToolError> {
+    let chosen: Vec<Entry> = entries
+        .iter()
+        .filter(|e| {
+            ours(e, &ctx.principal) && wanted.as_ref().is_none_or(|ids| ids.contains(&e.id))
+        })
+        .cloned()
+        .collect();
+    let ids: BTreeSet<u64> = chosen.iter().map(|e| e.id).collect();
+    let preview = bacnet_ops::safety::plan::undo_preview(&chosen);
+    match preview {
+        Some(preview) if !preview.items.is_empty() => {
+            let tier = match preview.gate {
+                bacnet_ops::safety::Gate::Allowed(tier) => tier,
+                bacnet_ops::safety::Gate::Blocked(_) => bacnet_ops::safety::Tier::T3,
+            };
+            Ok(Step::Wait(Box::new(preview), tier, Some(ids)))
+        }
+        None if !chosen.is_empty() => Err(ToolError::refused(
+            "several-devices",
+            "attached to the TUI, a revert goes to one device at a time: name the entries of \
+             one device",
+        )),
+        // Nothing to put back: no prompt, and the desk sends nothing.
+        _ => {
+            let left = entries.iter().filter(|e| ours(e, &ctx.principal)).count();
+            let job = super::write_attached::revert(
+                Arc::clone(ctx),
+                Arc::clone(&account),
+                ids,
+                fields.clone(),
+            );
+            let work = async move {
+                let (done, _) = job.await.unwrap_or_default();
+                body(&done, left)
+            };
+            Ok(Step::Sending(hand_off(
+                ctx, workspace, account, sending, fields, work,
+            )))
+        }
+    }
+}
+
 /// The result: each entry's outcome, and how many of this principal's are
 /// left; an error result when not every entry was put back.
-fn body(done: &[(Entry, Outcome)], left: usize) -> Result<Value, ToolError> {
+pub(super) fn body(done: &[(Entry, Outcome)], left: usize) -> Result<Value, ToolError> {
     let results: Vec<Value> = done
         .iter()
         .map(|(entry, outcome)| {

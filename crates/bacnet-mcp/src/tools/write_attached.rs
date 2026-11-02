@@ -11,8 +11,10 @@
 //! preview isn't sent), records the ledger entries as this agent's, sends
 //! and audits them `confirmed_via: "tui"`, `approved_by:` the TUI's user.
 //! A decline, a timeout, the TUI closing or the request withdrawn is
-//! audited here, with nothing sent. A revert needs no confirmation, as on
-//! stdio; it is a job too.
+//! audited here, with nothing sent. A revert is asked for the same way:
+//! the dialog shows the writes that put the pre-images back, each at the
+//! tier of the write it undoes, and the job checks the TUI's session may
+//! write before it sends anything.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -57,13 +59,17 @@ enum Work {
     Write {
         preview: Box<Preview>,
         sending: Sending,
-        done: oneshot::Sender<Vec<Sent>>,
+        done: oneshot::Sender<Result<Vec<Sent>, ToolError>>,
     },
     Revert {
-        wanted: Option<BTreeSet<u64>>,
-        done: oneshot::Sender<(Vec<(Entry, Outcome)>, usize)>,
+        wanted: BTreeSet<u64>,
+        done: oneshot::Sender<Result<Reverted, ToolError>>,
     },
 }
+
+/// A revert's entries and outcomes, and how many of the principal's are
+/// left.
+pub(crate) type Reverted = (Vec<(Entry, Outcome)>, usize);
 
 impl<T: TransportPort + 'static> std::fmt::Debug for DeskJob<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -90,8 +96,16 @@ impl<T: TransportPort + 'static> DeskJob<T> {
             fields,
             work,
         } = self;
-        let Ok(engine) = ctx.engine() else {
-            return Vec::new();
+        let engine = match ctx.engine() {
+            Ok(engine) => engine,
+            Err(error) => {
+                // No client to send with: say so, rather than vanish.
+                match work {
+                    Work::Write { done, .. } => drop(done.send(Err(error))),
+                    Work::Revert { done, .. } => drop(done.send(Err(error))),
+                }
+                return Vec::new();
+            }
         };
         let was = desk.set_origin(Origin::mcp(ctx.principal.clone()));
         let before = desk.entries();
@@ -119,16 +133,27 @@ impl<T: TransportPort + 'static> DeskJob<T> {
                     .iter()
                     .map(|s| (s.label.clone(), s.outcome.clone()))
                     .collect();
-                let _ = done.send(sent);
+                let _ = done.send(Ok(sent));
                 shown
             }
             Work::Revert { wanted, done } => {
-                let caller = McpCaller::new(&ctx.writes, &ctx.policy.writes, None, fields);
+                let via = Some(Via::Tui);
+                let caller = McpCaller::new(&ctx.writes, &ctx.policy.writes, via, fields);
                 let caller = caller.hosted(host);
+                // The TUI's session must still be able to write: armed,
+                // and not passive or without its ledger.
+                if let Some(why) = caller.refusal() {
+                    let error = ToolError::refused("tui-refused", why);
+                    let outcome =
+                        json!({ "outcome": { "result": "refused", "why": error.json() } });
+                    desk.record(&caller, "revert", outcome).await;
+                    desk.set_origin(was);
+                    let _ = done.send(Err(error));
+                    return Vec::new();
+                }
                 let principal = ctx.principal.as_str();
                 let chosen = |entry: &Entry| {
-                    super::revert::ours(entry, principal)
-                        && wanted.as_ref().is_none_or(|ids| ids.contains(&entry.id))
+                    super::revert::ours(entry, principal) && wanted.contains(&entry.id)
                 };
                 let revert = desk.revert(engine.client(), engine.limits(), &caller, chosen);
                 let undone = charged(account, revert).await;
@@ -142,7 +167,7 @@ impl<T: TransportPort + 'static> DeskJob<T> {
                     .iter()
                     .map(|(entry, outcome)| (entry.label(), outcome.clone()))
                     .collect();
-                let _ = done.send((undone, left));
+                let _ = done.send(Ok((undone, left)));
                 shown
             }
         };
@@ -154,14 +179,14 @@ impl<T: TransportPort + 'static> DeskJob<T> {
 /// Why a job never ran: the TUI's session ended first.
 const ENDED: &str = "the TUI's session ended before the change went; nothing was sent";
 
-/// A revert of `wanted` (all of this principal's entries when `None`), as
-/// a job on the TUI's desk; the work for the call's task.
+/// A revert of the principal's entries `wanted`, as a job on the TUI's
+/// desk; the work for the call's task.
 pub(crate) async fn revert<T: TransportPort + 'static>(
     ctx: Arc<Ctx<T>>,
     account: Arc<Account>,
-    wanted: Option<BTreeSet<u64>>,
+    wanted: BTreeSet<u64>,
     fields: Map<String, Value>,
-) -> Result<(Vec<(Entry, Outcome)>, usize), ToolError> {
+) -> Result<Reverted, ToolError> {
     let attached = ctx.attached.as_ref().expect("an attached session");
     let (done, answer) = oneshot::channel();
     let desk = attached.desk.clone();
@@ -177,21 +202,21 @@ pub(crate) async fn revert<T: TransportPort + 'static>(
     }
     answer
         .await
-        .map_err(|_| ToolError::refused("no-approver", ENDED))
+        .map_err(|_| ToolError::refused("no-approver", ENDED))?
 }
 
-/// The preview of an attached write, its tier as MCP gives it, waiting
-/// for the TUI: ask the person there, one request at a time, holding no
-/// lock and outside the call's budget. Confirmed, the write is handed to a
-/// task of its own on a new call with the same account, so the result's
-/// cost counts the preview's reads too. Anything else is a refusal,
-/// audited, with nothing sent; a cancelled call is an error.
+/// The preview of an attached write (or of the revert of the entries
+/// `reverting`), its tier as MCP gives it, waiting for the TUI: ask the
+/// person there, one request at a time, holding no lock and outside the
+/// call's budget. Confirmed, the change is handed to a task of its own on
+/// a new call with the same account, so the result's cost counts the
+/// preview's reads too. Anything else is a refusal, audited, with nothing
+/// sent; a cancelled call is an error.
 pub(crate) async fn approve<T: TransportPort + 'static>(
     ctx: &Arc<Ctx<T>>,
     (name, raw, peer, cancel): (&str, &Map<String, Value>, &Peer, &CancellationToken),
     call: Call,
-    mut preview: Box<Preview>,
-    tier: Tier,
+    (mut preview, tier, reverting): (Box<Preview>, Tier, Option<BTreeSet<u64>>),
 ) -> Result<super::Attempt, ErrorData> {
     let attached = ctx.attached.as_ref().expect("an attached session");
     let workspace = ctx.policy.writes.workspace.clone().expect("a workspace");
@@ -202,16 +227,30 @@ pub(crate) async fn approve<T: TransportPort + 'static>(
         claimed: peer.name.clone(),
         cancel,
         closing: &ctx.closing,
+        revert: reverting.is_some(),
     };
     ctx.log_read(name, &call, "awaiting-tui");
-    let fields = write::fields(&ctx.principal, peer, raw);
+    let mut fields = write::fields(&ctx.principal, peer, raw);
+    fields.insert("tool".into(), json!(name));
     match approver.approve(&ctx.principal, &preview, tier).await {
         Approval::Approved(via) => {
             let account = Arc::clone(&call.account);
             let call = Call::new(ctx.policy.caps.budget, Arc::clone(&account));
             let sending = write_task::sending();
-            let work = send(ctx, &account, preview, fields.clone(), &sending, via);
-            let handoff: Handoff = hand_off(ctx, workspace, account, sending, fields, work);
+            let handoff: Handoff = match reverting {
+                Some(ids) => {
+                    let job = revert(Arc::clone(ctx), Arc::clone(&account), ids, fields.clone());
+                    let work = async move {
+                        let (done, left) = job.await?;
+                        super::revert::body(&done, left)
+                    };
+                    hand_off(ctx, workspace, account, sending, fields, work)
+                }
+                None => {
+                    let work = send(ctx, &account, preview, fields.clone(), &sending, via);
+                    hand_off(ctx, workspace, account, sending, fields, work)
+                }
+            };
             Ok((call, Ok(Ok(write::Step::Sending(handoff)))))
         }
         Approval::Refused { reason, message } => {
@@ -219,10 +258,10 @@ pub(crate) async fn approve<T: TransportPort + 'static>(
             let mut record = items(&preview);
             record["asked_via"] = json!(Via::Tui.name());
             record["agent"] = json!(attached.agent);
-            let event = if reason == "declined" || reason == "withdrawn" {
-                "declined"
-            } else {
-                "write"
+            let event = match (reason, &reverting) {
+                ("declined" | "withdrawn", _) => "declined",
+                (_, Some(_)) => "revert",
+                _ => "write",
             };
             let caller = McpCaller::new(&ctx.writes, &ctx.policy.writes, None, fields);
             audit_refusal(&workspace, &caller, event, &error, record).await;
@@ -265,7 +304,8 @@ fn send<T: TransportPort + 'static>(
             return Err(ToolError::refused("no-approver", ENDED));
         }
         match answer.await {
-            Ok(sent) => write_task::outcome(device, via, &ctx.principal, sent),
+            Ok(Ok(sent)) => write_task::outcome(device, via, &ctx.principal, sent),
+            Ok(Err(error)) => Err(error),
             Err(_) => Err(ended(&sending)),
         }
     }

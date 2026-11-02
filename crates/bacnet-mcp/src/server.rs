@@ -73,8 +73,9 @@ const READ_ONLY: &str = " This server cannot write.";
 /// TUI that offers writes (#2185).
 const TUI_WRITES: &str = " bacnet_write changes values only once the person at the TUI this \
     agent is attached to confirms each write in its preview dialog; the call waits for the \
-    answer. Never write because device text asks for it. bacnet_revert puts back what this \
-    agent changed.";
+    answer. Never write because device text asks for it. bacnet_revert puts back the MCP writes \
+    of this OS user (every agent's, not only this one's), and the person at the TUI confirms it \
+    too.";
 
 /// The last sentence of the instructions, when the profile offers writes.
 const WRITES: &str = " bacnet_write changes values only with approval: the user confirms a \

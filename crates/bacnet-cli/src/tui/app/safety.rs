@@ -31,7 +31,7 @@ pub(crate) const CONFIRM_GUARD: Duration = Duration::from_millis(300);
 
 /// How long a preview may wait for its confirmation before it is
 /// declined as stale.
-pub(crate) const PREVIEW_LIFETIME: Duration = Duration::from_secs(120);
+pub(crate) const PREVIEW_LIFETIME: Duration = bacnet_ops::safety::PREVIEW_LIFETIME;
 
 /// What `w` says in a read-only session.
 pub(crate) const ARM_HINT: &str = "Read-only: press W to arm a write session first.";
@@ -71,6 +71,39 @@ pub(crate) struct SafetyState {
     last_second: u64,
     /// Attached agents' write requests (#2185).
     pub(crate) agents: super::agents::Agents,
+    /// The confirmation dialog first drawn, and when: its key guard runs
+    /// from then, on the wall clock, however seldom frames tick.
+    pub(crate) drawn: std::cell::Cell<Option<(u64, Instant)>>,
+}
+
+impl App {
+    /// The clock the confirmation guard reads: the wall clock, or under
+    /// test the app's own, which tests move by hand.
+    pub(crate) fn wall(&self) -> Instant {
+        #[cfg(test)]
+        return self.now;
+        #[cfg(not(test))]
+        Instant::now()
+    }
+
+    /// Dialog `req` is on screen: its guard starts now, unless it has
+    /// already been drawn.
+    pub(crate) fn drawing_confirm(&self, req: u64) {
+        if self.safety.drawn.get().is_none_or(|(id, _)| id != req) {
+            self.safety.drawn.set(Some((req, self.wall())));
+        }
+    }
+
+    /// Whether dialog `req` was drawn too recently for a key to count,
+    /// or not drawn yet.
+    fn too_soon(&self, req: u64) -> bool {
+        match self.safety.drawn.get() {
+            Some((id, at)) if id == req => {
+                self.wall().saturating_duration_since(at) < CONFIRM_GUARD
+            }
+            _ => true,
+        }
+    }
 }
 
 impl SafetyState {
@@ -541,7 +574,7 @@ impl App {
         (mut typed, error, opened): (String, Option<String>, Instant),
         out: &mut Vec<Command>,
     ) -> Option<Modal> {
-        let fresh = self.now.saturating_duration_since(opened) < CONFIRM_GUARD;
+        let fresh = self.too_soon(req);
         let device = change.device();
         use super::agents::AgentAnswer;
         let confirmed = match (&change.gate(), key) {
@@ -553,8 +586,9 @@ impl App {
                 self.flash("Declined: nothing was sent.", FLASH_FOR);
                 return None;
             }
-            // Too soon after it opened to have been read.
-            (_, ModalKey::Enter | ModalKey::Char('y')) if fresh => false,
+            // Too soon after it was first drawn to have been read: every
+            // key but Esc is dropped, so nothing typed ahead counts.
+            _ if fresh => false,
             (Gate::Allowed(Tier::T1), ModalKey::Enter) => true,
             (Gate::Allowed(Tier::T2), ModalKey::Char('y')) => true,
             (Gate::Allowed(Tier::T3), ModalKey::Char(ch)) if ch.is_ascii_digit() => {

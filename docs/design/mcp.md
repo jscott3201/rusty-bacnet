@@ -511,7 +511,9 @@ approvers and their tests are unchanged. Because the TUI holds the
 workspace's lock for its whole session, an attached write can't open the
 desk itself: on confirmation the TUI lends its desk, and the write runs
 there as the agent's (its ledger entries name the agent's principal),
-re-read first, at the TUI session's level.
+re-read first, at the TUI session's level. A revert over the socket is
+confirmed the same way, at the tier of the writes it undoes, and the
+lent desk checks the TUI session may still write before it sends.
 
 | Approver | Verified by the server | Phase |
 |---|---|---|

@@ -76,6 +76,8 @@ mod load;
 #[cfg(feature = "mcp")]
 mod mcp_approve;
 #[cfg(feature = "mcp")]
+mod mcp_approve_keys;
+#[cfg(feature = "mcp")]
 mod mcp_attach;
 mod mstp_join_audit;
 mod mstp_layout;
@@ -244,8 +246,11 @@ pub(super) fn type_text(app: &mut App, text: &str) {
     }
 }
 
-/// Move the app's clock to `now` with no other change.
+/// Move the app's clock to `now` with no other change. A frame is drawn
+/// first, as the UI loop draws between ticks, so a dialog on screen has
+/// been seen (its key guard runs from then).
 pub(super) fn tick(app: &mut App, now: Instant) {
+    render(app, 120, 40);
     let dropped = app.dropped;
     let log_generation = app.log.generation();
     update(

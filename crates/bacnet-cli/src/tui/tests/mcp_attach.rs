@@ -29,7 +29,7 @@ pub(super) const LAB: u32 = 100;
 
 /// An agent on the socket: newline-delimited JSON-RPC.
 pub(super) struct Agent {
-    write: Box<dyn AsyncWrite + Send + Unpin>,
+    pub(super) write: Box<dyn AsyncWrite + Send + Unpin>,
     lines: Lines<BufReader<Box<dyn AsyncRead + Send + Unpin>>>,
 }
 

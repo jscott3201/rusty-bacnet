@@ -30,7 +30,7 @@ use crate::tui::worker::session::SessionOptions;
 
 /// The lab, a session armed for writes on a workspace in `dir`, and the
 /// listener offering agents writes.
-async fn armed_site(dir: &Path) -> Site {
+pub(super) async fn armed_site(dir: &Path) -> Site {
     #[cfg(unix)]
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).unwrap();
     let mut listening: Plan = plan(dir);
@@ -53,7 +53,7 @@ async fn armed_site(dir: &Path) -> Site {
 }
 
 /// `bacnet_write` of AO:1 = `value` at `priority`, as request `id`.
-fn write(id: u64, value: u32, priority: u8) -> Value {
+pub(super) fn write(id: u64, value: u32, priority: u8) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {
         "name": "bacnet_write", "arguments": { "device": LAB,
         "writes": [{ "object": "ao:1", "value": value, "priority": priority }] } } })
@@ -61,7 +61,7 @@ fn write(id: u64, value: u32, priority: u8) -> Value {
 
 /// An agent attached at `dir`'s socket, its call `request` waiting on a
 /// task of its own.
-async fn asking(dir: &Path, request: Value) -> JoinHandle<(Agent, Value)> {
+pub(super) async fn asking(dir: &Path, request: Value) -> JoinHandle<(Agent, Value)> {
     let mut agent = attached(&socket_path(dir).unwrap()).await;
     tokio::spawn(async move {
         let answer = agent.request(request).await;
@@ -70,7 +70,7 @@ async fn asking(dir: &Path, request: Value) -> JoinHandle<(Agent, Value)> {
 }
 
 /// The agent whose request the dialog shows, if it shows one.
-fn shown(app: &App) -> Option<String> {
+pub(super) fn shown(app: &App) -> Option<String> {
     match modal(app) {
         Some(Modal::Confirm { req, .. }) => app.safety.agents.banner(*req).map(|(who, _)| who),
         _ => None,
@@ -78,7 +78,7 @@ fn shown(app: &App) -> Option<String> {
 }
 
 /// The audit records `event`, in order.
-fn events(dir: &Path) -> Vec<String> {
+pub(super) fn events(dir: &Path) -> Vec<String> {
     audit(dir)
         .iter()
         .map(|r| r["event"].as_str().unwrap().to_string())
@@ -137,8 +137,8 @@ async fn a_t2_write_runs_only_after_a_confirm() {
     );
     site.pump_until(|app| app.safety.ledger.len() == 1).await;
 
-    // The agent's revert needs no confirmation, and goes through this
-    // session's desk too; its tools say who approves its writes.
+    // The agent's revert goes through this session's desk too, once it is
+    // confirmed here; its tools say who approves its changes.
     let mut revert = tokio::spawn(async move {
         let listed = agent
             .request(json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/list" }))
@@ -151,6 +151,15 @@ async fn a_t2_write_runs_only_after_a_confirm() {
             .await;
         (listed, reverted)
     });
+    site.pump_until(|app| shown(app).is_some()).await;
+    assert!(shown(&site.app).unwrap().contains("to revert"));
+    assert_eq!(
+        slot(&site, 8).await,
+        PropertyValue::Real(42.0),
+        "not before the confirm"
+    );
+    advance(&mut site.app, CONFIRM_GUARD);
+    site.press(KeyCode::Char('y')).await;
     let (listed, reverted) = site.pump_while(&mut revert).await;
     let write_tool = listed["result"]["tools"]
         .as_array()

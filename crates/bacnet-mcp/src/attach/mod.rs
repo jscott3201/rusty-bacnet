@@ -75,7 +75,7 @@ use tokio_util::sync::CancellationToken;
 
 pub use crate::tools::write_attached::DeskJob;
 pub use crate::writes::tui::{
-    AgentApproval, Declined, LIFETIME, MAX_QUEUED, Refusal, WAIT_AT_MOST,
+    AgentApproval, Declined, Gone, LIFETIME, MAX_QUEUED, Refusal, WAIT_AT_MOST,
 };
 pub use bridge::bridge;
 #[cfg(feature = "stdio")]

@@ -14,7 +14,7 @@
 //! the `mcp` feature there are none, and this is all empty.
 
 #[cfg(feature = "mcp")]
-use bacnet_mcp::attach::{AgentApproval, Declined, MAX_QUEUED, Refusal};
+use bacnet_mcp::attach::{AgentApproval, Declined, Gone, MAX_QUEUED, Refusal};
 
 use super::App;
 #[cfg(feature = "mcp")]
@@ -78,7 +78,9 @@ impl Agents {
             .as_ref()
             .filter(|(id, _)| *id == req)
             .map(|(_, request)| {
-                let who = match request.claimed_name() {
+                // The name is the client's claim: no quotes of its own.
+                let claimed = request.claimed_name().map(|n| n.replace(['"', '\\'], ""));
+                let who = match claimed {
                     Some(name) => format!("agent {} (its client says \"{name}\")", request.agent()),
                     None => format!("agent {}", request.agent()),
                 };
@@ -87,10 +89,14 @@ impl Agents {
                     n => format!("{n} more waiting"),
                 };
                 (
-                    format!("AGENT REQUEST from {who}"),
+                    match request.reverts() {
+                        true => format!("AGENT REQUEST to revert, from {who}"),
+                        false => format!("AGENT REQUEST from {who}"),
+                    },
                     format!(
                         "Queue: {queue} (at most {MAX_QUEUED}). Esc declines; unanswered, it is \
-                     declined after 120 s."
+                         declined after {} s.",
+                        super::safety::PREVIEW_LIFETIME.as_secs()
                     ),
                 )
             });
@@ -115,16 +121,17 @@ impl App {
                 return false;
             };
             let agent = request.agent();
+            let what = if request.reverts() { "revert" } else { "write" };
             let text = match how {
                 AgentAnswer::Confirmed if request.confirm() => {
-                    format!("Agent {agent}'s write confirmed: sending it.")
+                    format!("Agent {agent}'s {what} confirmed: sending it.")
                 }
                 AgentAnswer::Confirmed => {
                     format!("Agent {agent} withdrew its request first: nothing was sent.")
                 }
                 AgentAnswer::Declined => {
                     request.decline(Declined::ByUser);
-                    format!("Declined agent {agent}'s write: nothing was sent.")
+                    format!("Declined agent {agent}'s {what}: nothing was sent.")
                 }
                 AgentAnswer::TimedOut => {
                     request.decline(Declined::TimedOut);
@@ -161,14 +168,16 @@ impl App {
             if let Some((id, request)) = &self.safety.agents.shown {
                 let (id, agent) = (*id, request.agent());
                 if request.withdrawn() {
+                    let why = match request.gone() {
+                        Some(Gone::GaveUp) => "stopped waiting (its call ran out of time)",
+                        Some(Gone::Left) => "disconnected",
+                        _ => "withdrew its request",
+                    };
                     self.safety.agents.shown = None;
                     if on_screen(self, id) {
                         self.overlay = Overlay::None;
                     }
-                    self.flash(
-                        format!("Agent {agent} withdrew its request: nothing was sent."),
-                        FLASH_FOR,
-                    );
+                    self.flash(format!("Agent {agent} {why}: nothing was sent."), FLASH_FOR);
                 } else if !on_screen(self, id) {
                     // Closed some other way: declined.
                     request.decline(Declined::Closed);
@@ -193,16 +202,22 @@ impl App {
             Some(_) => None,
         };
         let agent = request.agent();
+        let what = if request.reverts() { "revert" } else { "write" };
         if let Some(why) = refusal {
             request.refuse(why);
             let text = match why {
                 Refusal::QueueFull => format!(
-                    "Refused agent {agent}'s write: {MAX_QUEUED} requests are waiting already."
+                    "Refused agent {agent}'s {what}: {MAX_QUEUED} requests are waiting already."
                 ),
                 Refusal::NotArmed => format!(
-                    "Refused agent {agent}'s write: arm a write session (W) to take agents' writes."
+                    "Refused agent {agent}'s {what}: arm a write session (W) to take agents' writes."
                 ),
-                _ => format!("Refused agent {agent}'s write: writes are off here."),
+                Refusal::WritesOff => {
+                    format!("Refused agent {agent}'s {what}: writes are off here.")
+                }
+                Refusal::NotConnected => format!(
+                    "Refused agent {agent}'s {what}: there is no connected session to write through."
+                ),
             };
             return self.flash(text, FLASH_FOR);
         }
@@ -214,7 +229,12 @@ impl App {
     /// Open the oldest waiting request, once nothing else is on screen.
     #[cfg(feature = "mcp")]
     fn show_next_agent(&mut self) {
-        if self.overlay != Overlay::None || self.safety.agents.shown.is_some() {
+        // Not while text is typed into a filter: the dialog would take its
+        // keys.
+        if self.overlay != Overlay::None
+            || self.filter_editing
+            || self.safety.agents.shown.is_some()
+        {
             return;
         }
         while let Some(request) = self.safety.agents.waiting.pop_front() {

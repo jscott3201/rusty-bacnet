@@ -111,10 +111,10 @@ pub(crate) fn names(policy: &Policy) -> Vec<&'static str> {
 pub(crate) fn list(policy: &Policy, attached: bool) -> Vec<Tool> {
     listed(policy)
         .map(|(spec, writes)| {
-            let description = if attached && spec.name == write::NAME {
-                write::ATTACHED
-            } else {
-                spec.description
+            let description = match spec.name {
+                write::NAME if attached => write::attached(),
+                revert::NAME if attached => revert::ATTACHED.to_string(),
+                _ => spec.description.to_string(),
             };
             let annotations = ToolAnnotations::with_title(spec.title)
                 .read_only(!writes)
@@ -339,9 +339,9 @@ pub(crate) async fn call_write<T: TransportPort + 'static>(
     let (call, finished) = attempt(ctx, name, &args, retry, peer, &cancel, None).await?;
     let (call, finished) = match (finished, &peer.session) {
         // Attached to the TUI: the person there approves it (#2185).
-        (Ok(Ok(write::Step::Wait(preview, tier))), _) => {
+        (Ok(Ok(write::Step::Wait(preview, tier, reverting))), _) => {
             let asked = (name, &args, peer, &cancel);
-            write_attached::approve(ctx, asked, call, preview, tier).await?
+            write_attached::approve(ctx, asked, call, (preview, tier, reverting)).await?
         }
         // A client older than 2026-07-28 that takes the server's
         // elicitation requests: ask it, holding no lock while it answers,

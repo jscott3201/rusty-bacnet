@@ -586,13 +586,30 @@ stderr; when the TUI ends the session it exits cleanly.
     stdio, and the TUI flashes it.
   - Declined, timed out, the TUI quitting or its session ending, the call
     returns `declined`, with nothing sent, and the agent's session audits
-    it (`event: "declined"`, `asked_via: "tui"`). An agent that cancels
+    it (`event: "declined"`, `asked_via: "tui"`). Device text and values in
+    the dialog are shown cleaned of control and invisible characters and
+    cut to 80 characters, and the client's claimed name loses any quotes. An agent that cancels
     its call (`withdrawn`) or disconnects has its request taken off the
     queue, or its dialog closed. However the TUI or the agent ends, no
     call waits longer than the queue's full turn (490 s).
-  - `bacnet_revert` needs no confirmation, as on stdio; it runs on the
-    TUI's write session too, and puts back only this principal's MCP
-    entries.
+  - `bacnet_revert` is confirmed in the same dialog (the banner says it
+    reverts): it shows the writes that put the pre-images back, each at
+    the tier of the write it undoes (T1 at least), and the TUI's write
+    session must be armed, checked again just before anything is sent
+    (`tui-refused` otherwise). Its scope is every MCP entry of the TUI's
+    OS user, the principal: every agent's, through the TUI or on stdio,
+    not only this agent's. The dialog confirms one device, so the
+    entries named (or all of them) must be on one device
+    (`several-devices` otherwise).
+  - A key pressed within 300 ms of the dialog's first frame is dropped,
+    digits typed toward a T3 confirmation included, measured on the wall
+    clock from that frame. A request that arrives while a filter is being
+    typed waits until the filter is done, so the dialog never takes its
+    keys.
+  - `no-approver`: the TUI's session ended (or wasn't connected) before
+    the change went, so nothing was sent. A dropped job whose write had
+    reached the ledger answers `pending` with `applied: "unknown"`
+    instead.
 - **The socket (Unix).** `mcp.sock` in the profile's workspace. The workspace
   must be a directory of yours, not a symbolic link; one with a looser
   mode than 0700 is narrowed to 0700 when the listener starts, and the

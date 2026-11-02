@@ -33,6 +33,7 @@
 //! answer was delivered, and the TUI sends nothing otherwise; so the agent
 //! never hears `declined` for a write that goes, nor the reverse.
 
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -49,7 +50,7 @@ pub const MAX_QUEUED: usize = 4;
 
 /// How long the TUI's dialog waits for an answer before it declines the
 /// request: the TUI's own preview lifetime.
-pub const LIFETIME: Duration = Duration::from_secs(120);
+pub const LIFETIME: Duration = bacnet_ops::safety::PREVIEW_LIFETIME;
 
 /// The longest an agent's call waits for the TUI: a full queue, each
 /// request answered at the last moment, and a little more.
@@ -127,7 +128,22 @@ struct Inner {
     agent: u64,
     claimed: Option<String>,
     preview: Preview,
+    revert: bool,
     answer: Mutex<Option<oneshot::Sender<Decision>>>,
+    /// Why the agent's side stopped waiting, once it did ([`Gone`]).
+    gone: AtomicU8,
+}
+
+/// Why an agent's call stopped waiting for the TUI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gone {
+    /// The agent cancelled the call.
+    Cancelled,
+    /// The agent's session ended: it disconnected, or the listener is
+    /// shutting down.
+    Left,
+    /// The call waited [`WAIT_AT_MOST`] and gave up.
+    GaveUp,
 }
 
 impl std::fmt::Debug for AgentApproval {
@@ -159,9 +175,26 @@ impl AgentApproval {
     }
 
     /// The change, as previewed for the agent; its gate is the tier over
-    /// MCP, which may be stricter than the TUI's own.
+    /// MCP, which may be stricter than the TUI's own. For a revert, the
+    /// writes that put the pre-images back.
     pub fn preview(&self) -> &Preview {
         &self.inner.preview
+    }
+
+    /// Whether it reverts the agent's earlier writes rather than writing.
+    pub fn reverts(&self) -> bool {
+        self.inner.revert
+    }
+
+    /// Why the agent stopped waiting, when it said so; `None` while it
+    /// waits, or when its call simply went away.
+    pub fn gone(&self) -> Option<Gone> {
+        match self.inner.gone.load(Ordering::SeqCst) {
+            1 => Some(Gone::Cancelled),
+            2 => Some(Gone::Left),
+            3 => Some(Gone::GaveUp),
+            _ => None,
+        }
     }
 
     /// True once nobody waits for an answer: the agent cancelled the
@@ -212,6 +245,8 @@ pub(crate) struct TuiApprover<'a> {
     pub(crate) claimed: Option<String>,
     pub(crate) cancel: &'a CancellationToken,
     pub(crate) closing: &'a CancellationToken,
+    /// It asks to revert, not to write.
+    pub(crate) revert: bool,
 }
 
 /// What ended the wait other than an answer.
@@ -239,13 +274,16 @@ impl TuiApprover<'_> {
     async fn wait(&self, preview: &Preview) -> Result<Decision, Stopped> {
         let deadline = Instant::now() + WAIT_AT_MOST;
         let (answer, mut decided) = oneshot::channel();
+        let inner = Arc::new(Inner {
+            agent: self.agent,
+            claimed: self.claimed.clone(),
+            preview: preview.clone(),
+            revert: self.revert,
+            answer: Mutex::new(Some(answer)),
+            gone: AtomicU8::new(0),
+        });
         let request = AgentApproval {
-            inner: Arc::new(Inner {
-                agent: self.agent,
-                claimed: self.claimed.clone(),
-                preview: preview.clone(),
-                answer: Mutex::new(Some(answer)),
-            }),
+            inner: Arc::clone(&inner),
         };
         // A request still in the channel when the wait stops is dropped
         // with it, or found withdrawn by the TUI.
@@ -261,6 +299,13 @@ impl TuiApprover<'_> {
             Ok(Err(_)) => Stopped::Gone,
             Err(stopped) => stopped,
         };
+        let why = match &stopped {
+            Stopped::Cancelled => 1,
+            Stopped::Closing => 2,
+            Stopped::TooLong => 3,
+            Stopped::Gone => 0,
+        };
+        inner.gone.store(why, Ordering::SeqCst);
         // Closed first, so no answer can come after this look.
         decided.close();
         decided.try_recv().map_err(|_| stopped)
@@ -280,9 +325,11 @@ impl WaitingApprover for TuiApprover<'_> {
                 Ok(Decision::Declined(why)) => refused(
                     "declined",
                     match why {
-                        Declined::ByUser => "the person at the TUI declined it",
-                        Declined::TimedOut => "nobody answered in the TUI within 120 s",
-                        Declined::Closed => "the TUI closed the request unanswered",
+                        Declined::ByUser => "the person at the TUI declined it".to_string(),
+                        Declined::TimedOut => {
+                            format!("nobody answered in the TUI within {} s", LIFETIME.as_secs())
+                        }
+                        Declined::Closed => "the TUI closed the request unanswered".to_string(),
                     },
                 ),
                 Ok(Decision::Refused(why)) => refused(why.reason(), why.message()),
@@ -327,6 +374,7 @@ mod tests {
             claimed: Some("agent".into()),
             cancel: &cancel,
             closing: &closing,
+            revert: false,
         };
         let preview = preview();
         let asked = approver.approve("tester", &preview, Tier::T2);
