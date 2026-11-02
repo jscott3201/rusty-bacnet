@@ -3923,6 +3923,16 @@ A Pulse Converter whose Input_Reference names that Present_Value counts a
 written value as input: an increase by its delta, a decrease as a wrap
 through Max_Pres_Value.
 
+An Accumulator's Reliability takes a write the same way, only while
+Out_Of_Service is set, to simulate a fault (#2280): in service the write
+raises WRITE_ACCESS_DENIED, a value that isn't an Enumerated
+INVALID_DATA_TYPE, and a value outside BACnetReliability
+VALUE_OUT_OF_RANGE. Status_Flags FAULT follows it, and the return to service
+puts back the Reliability the object had before. A Max_Pres_Value write
+below the current Present_Value raises VALUE_OUT_OF_RANGE and changes
+nothing; to shrink the range, write a Present_Value that fits while out of
+service first.
+
 A Pulse Converter checks what its Input_Reference names (#1341). Reliability
 reads CONFIGURATION_ERROR (10), and Status_Flags FAULT, while the reference
 names a missing object or a property that isn't an Unsigned or INTEGER, and

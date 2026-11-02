@@ -6375,6 +6375,9 @@ class BACnetServer:
         Present_Value drops them rather than catching up later. Present_Value
         takes a write only then, an Unsigned up to Max_Pres_Value, and once
         back in service the pulses count on from the written value.
+        Reliability takes a write only then too, to simulate a fault: one
+        that isn't an Enumerated raises INVALID_DATA_TYPE, and the return to
+        service puts back the Reliability held before.
         ``pulses`` is an unsigned 64-bit count; a negative or larger int
         raises OverflowError. An unknown object raises
         UNKNOWN_OBJECT and any object other than an Accumulator

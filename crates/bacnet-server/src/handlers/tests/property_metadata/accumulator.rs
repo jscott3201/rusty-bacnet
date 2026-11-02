@@ -229,7 +229,7 @@ fn rpm_accumulator_metadata_corrects_historical_pics_writability() {
     // Accumulator Object_Name writable while no arm routes it, and hid the
     // routed Max_Pres_Value, Pulse_Rate, and Limit_Monitoring_Interval arms.
     // Present_Value is advertised again now that an arm routes it out of
-    // service (#2267).
+    // service (#2267), and Reliability likewise (#2280).
     let object = AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS).unwrap();
     assert!(!object.is_writable_property(P::OBJECT_NAME));
     for p in [
@@ -237,6 +237,7 @@ fn rpm_accumulator_metadata_corrects_historical_pics_writability() {
         P::MAX_PRES_VALUE,
         P::PULSE_RATE,
         P::LIMIT_MONITORING_INTERVAL,
+        P::RELIABILITY,
     ] {
         assert!(object.is_writable_property(p));
     }

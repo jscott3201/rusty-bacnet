@@ -23,7 +23,8 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             (P::STATUS_FLAGS, false, false),
             (P::EVENT_STATE, false, false),
             (P::OUT_OF_SERVICE, false, true),
-            (P::RELIABILITY, true, false),
+            // Writable out of service (Clause 12.61.10, #2280).
+            (P::RELIABILITY, true, true),
             (P::VALUE_BEFORE_CHANGE, true, false),
             (P::VALUE_SET, true, false),
             (P::PROPERTY_LIST, false, false),

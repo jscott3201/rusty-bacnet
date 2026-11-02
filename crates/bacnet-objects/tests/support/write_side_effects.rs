@@ -160,8 +160,7 @@ pub fn effects(object_type: T) -> Option<&'static [&'static [Effect]]> {
         | T::POSITIVE_INTEGER_VALUE
         | T::TIMEPATTERN_VALUE
         | T::TIME_VALUE => &[OUT_OF_SERVICE_FLAGS, COMMANDED, RELINQUISH_DEFAULT],
-        T::ACCUMULATOR
-        | T::GLOBAL_GROUP
+        T::GLOBAL_GROUP
         | T::PROGRAM
         | T::NOTIFICATION_FORWARDER
         | T::NETWORK_PORT
@@ -180,7 +179,7 @@ pub fn effects(object_type: T) -> Option<&'static [&'static [Effect]]> {
                 (P::SCALE_FACTOR, &[P::PRESENT_VALUE]),
             ],
         ],
-        T::LOOP => &[RELIABILITY_SIMULATION],
+        T::LOOP | T::ACCUMULATOR => &[RELIABILITY_SIMULATION],
         T::ACCESS_DOOR => &[
             RELIABILITY_SIMULATION,
             TIME_DELAY_NORMAL_FALLBACK,
