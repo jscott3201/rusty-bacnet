@@ -6344,13 +6344,26 @@ Removing a Staging object gives up the Present_Value slots its stage writes
 filled (#2265), as a Schedule's removal does, through the same path:
 DeleteObject, the application's own `ObjectDatabase::remove`, or an `add`
 that replaces it. The object records every target and priority its plans
-wrote, across stage, reference and priority changes, and the public
-`StagingSource::take_relinquish_writes()` hands the database one relinquish
-NULL per priority as it leaves. Each goes only to a slot whose Value_Source
-still names the Staging object, so a writer that took the slot keeps its
-command. A plan still being written stops at its next target. Changing
-Target_References or Priority_For_Writing doesn't yet give up the slots it
-leaves behind; they are released when the object is removed.
+wrote, and the public `StagingSource::take_relinquish_writes()` hands the
+database one relinquish NULL per priority as it leaves. Each goes only to a
+slot whose Value_Source still names the Staging object, so a writer that took
+the slot keeps its command. A plan still being written stops at its next
+target.
+
+Changing Target_References or Priority_For_Writing gives up the slots the
+new configuration no longer writes (#2289), as a Schedule does: a dropped
+target's slot, or every slot at the old priority. A target that stays, even
+at another position in the array, keeps its command, and a write that changes
+nothing releases nothing. `StagingSource::take_owed_relinquishes()` hands
+those NULLs to the server, which writes them, under the same ownership check,
+in the guard of the object's next target write and before that write. A slot
+the object writes again before its NULL goes out is no longer owed, so a NULL
+never lands after the object's own later write. Out of service the targets
+are left alone (Clause 12.62.11): the NULLs wait for the return to service,
+or go out with the rest if the object is removed first. An application that
+changes the properties directly on the object, rather than through the
+server's write paths, sees them go out with the next plan the server takes
+from it.
 
 #### Lighting & Color (5)
 

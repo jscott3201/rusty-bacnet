@@ -205,6 +205,37 @@ pub(crate) fn relinquish_for_removed(
     }
 }
 
+/// Write, under `db_w`, the NULLs the Staging object `source` owes the slots
+/// a change of its targets or priority left behind (#2289,
+/// [`StagingSource::take_owed_relinquishes`]), with the origin its own
+/// writes carry. Returns whether it owed any.
+///
+/// [`StagingSource::take_owed_relinquishes`]: bacnet_objects::traits::StagingSource::take_owed_relinquishes
+pub(crate) fn relinquish_owed_by_staging(
+    db_w: &mut ObjectDatabase,
+    commit: &mut BackgroundCommit,
+    source: ObjectIdentifier,
+) -> bool {
+    let Some(writes) = db_w
+        .get_mut(&source)
+        .and_then(|object| object.staging_source())
+        .map(|staging| staging.take_owed_relinquishes())
+        .filter(|writes| !writes.is_empty())
+    else {
+        return false;
+    };
+    let origin = command_origin(db_w, source);
+    for write in &writes {
+        debug!(
+            source = %source,
+            refs = write.references.len(),
+            "Staging object relinquishing the slots a change of its targets left"
+        );
+        write_targets(db_w, commit, source, origin.as_ref(), write);
+    }
+    true
+}
+
 /// Whether each Calendar is TRUE on `today`, resolved once per pass so every
 /// Schedule that references one sees the same answer.
 fn calendar_states(db: &ObjectDatabase, today: SpecificDate) -> HashMap<ObjectIdentifier, bool> {

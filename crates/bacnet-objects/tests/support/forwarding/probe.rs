@@ -354,6 +354,14 @@ impl StagingSource for Probe {
         );
         true
     }
+    fn take_owed_relinquishes(&mut self) -> Vec<bacnet_objects::schedule::ScheduleWrite> {
+        self.called("StagingSource::take_owed_relinquishes", ());
+        vec![bacnet_objects::schedule::ScheduleWrite::new(
+            PropertyValue::Null,
+            10,
+            Vec::new(),
+        )]
+    }
     fn take_relinquish_writes(&mut self) -> Vec<bacnet_objects::schedule::ScheduleWrite> {
         self.called("StagingSource::take_relinquish_writes", ());
         vec![bacnet_objects::schedule::ScheduleWrite::new(
