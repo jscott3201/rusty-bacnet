@@ -3,18 +3,27 @@
 //! Annex J.5.2 leaves it to the device how it learns its BBMD's IP address,
 //! and names a name server as one way. The node engine in bip-core works on
 //! addresses only, so a written host name is looked up here, on the hosted
-//! side, and the node moved to what it stands for: once when the row is
-//! activated, and again before each automatic registration attempt (the
-//! first after a start, each renewal and each retry). Until a lookup
-//! succeeds, and whenever one fails, the device keeps registering with the
-//! address it has, and the failure is logged and counted in the
-//! foreign-registration snapshot.
+//! side, and the node moved to what it stands for. The name is looked up
+//! whenever the row is activated, and again alongside the automatic
+//! registration attempts (the first after a start, renewals and retries),
+//! at most once per [`ATTEMPT_LOOKUP_INTERVAL`]. Such an attempt still goes
+//! to the address in use; a lookup that finds the BBMD elsewhere moves the
+//! node, which registers there at once. Until a lookup succeeds, and
+//! whenever one fails, the device keeps registering with the address it
+//! has, and the failure is logged and counted in the foreign-registration
+//! snapshot.
 //!
-//! One lookup runs at a time, bounded by [`LOOKUP_TIMEOUT`]. A name that
-//! stands for several addresses keeps the device where it is while the
-//! address in use is still one of them, so round-robin answers don't move it
-//! at every renewal; otherwise it moves to the first one it can register
-//! with, exactly as an activated address would move it.
+//! One resolver call runs at a time, whichever activation it serves, each
+//! bounded by [`LOOKUP_TIMEOUT`]: a name activated while one runs is looked
+//! up when it ends, and its stale answer is dropped. With the floor between
+//! attempt-driven lookups, a peer that can write the row and reinitialize
+//! the device can't stack resolver threads, and a short time-to-live can't
+//! drive a query per renewal. A lookup that ends without an answer, its
+//! resolver panicking or its task dropped, frees the slot all the same. A
+//! name that stands for several addresses keeps the device where it is while
+//! the address in use is still one of them, so round-robin answers don't
+//! move it; otherwise it moves to the first one it can register with,
+//! exactly as an activated address would move it.
 //!
 //! Lock order, as in the parent: the target's lock, then the node's. The
 //! resolver runs on a task of its own, with no lock held.
@@ -28,6 +37,7 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use bacnet_types::constructed::{BACnetHostAddress, BACnetHostNPort};
+use tokio::time::Instant;
 use tracing::{debug, info, warn};
 
 use super::super::foreign_device::ForeignDeviceConfig;
@@ -41,8 +51,9 @@ pub type BbmdLookup = Pin<Box<dyn Future<Output = io::Result<Vec<Ipv4Addr>>> + S
 /// Looks up the host name a B/IP foreign device's BBMD is known by, when
 /// FD_BBMD_Address names one (#1852).
 ///
-/// The transport calls it once when the name is activated and again before
-/// each registration attempt, one lookup at a time, and gives up on a lookup
+/// The transport calls it whenever the name is activated, and again
+/// alongside the automatic registration attempts, at most once every 30
+/// seconds; one call runs at a time, and the transport gives up on a call
 /// after 10 seconds. Without one set
 /// ([`BipTransport::set_bbmd_resolver`](super::super::BipTransport::set_bbmd_resolver)),
 /// the system's resolver does the work on Tokio's blocking pool, never on a
@@ -91,12 +102,20 @@ pub enum BbmdLookupFailure {
     /// unspecified address, or a broadcast or multicast address. This is
     /// the first of them.
     Unusable(Ipv4Addr),
+    /// The lookup ended without an answer: the resolver panicked, or its
+    /// task was dropped, as when the runtime shuts down.
+    Abandoned,
 }
 
 /// How long a lookup may take before it counts as failed
 /// ([`BbmdLookupFailure::TimedOut`]): long enough for a system resolver
 /// to try a second name server.
 pub(super) const LOOKUP_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The least time between the starts of two lookups the registration
+/// attempts make; an attempt inside it keeps the last answer. An activation
+/// always looks the name up.
+pub(super) const ATTEMPT_LOOKUP_INTERVAL: Duration = Duration::from_secs(30);
 
 /// FD_BBMD_Address as a host name and a port.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -147,11 +166,12 @@ pub(super) struct Lookups {
     /// Counts activations of the BBMD row: a lookup started for an earlier
     /// one is dropped when it ends.
     generation: u64,
-    /// The generation of the lookup running, if any.
-    in_flight: Option<u64>,
-    /// The next registration attempt goes to an address just looked up, so
-    /// it starts no lookup of its own.
-    skip_next: bool,
+    /// The generation of the resolver call running, if any: the only one.
+    running: Option<u64>,
+    /// A name was activated while a call ran: look it up when that ends.
+    rerun: bool,
+    /// When the newest lookup started, for [`ATTEMPT_LOOKUP_INTERVAL`].
+    last_started: Option<Instant>,
     /// The newest lookup failed: a run of failures warns once.
     failing: bool,
 }
@@ -161,8 +181,9 @@ impl Lookups {
         Self {
             resolver,
             generation: 0,
-            in_flight: None,
-            skip_next: false,
+            running: None,
+            rerun: false,
+            last_started: None,
             failing: false,
         }
     }
@@ -171,19 +192,27 @@ impl Lookups {
         self.resolver = resolver;
     }
 
-    /// A node starts: an attempt skipped for an earlier node doesn't carry
-    /// over.
+    /// A node starts: its first registration attempt looks the name up
+    /// again, whenever the last lookup was. A call still running carries on
+    /// as the only one: every started lookup frees its slot when it ends,
+    /// answered or not ([`Lookup`]'s drop), and its answer then serves the
+    /// new node.
     pub(super) fn attached(&mut self) {
-        self.skip_next = false;
+        self.last_started = None;
     }
 }
 
-/// A lookup to start once the target's lock is released.
+/// A lookup to start once the target's lock is released. Once started it
+/// always reports to the target, which frees the resolver slot: with its
+/// answer, or, dropped without one (its resolver panicked, or its task was
+/// dropped with the runtime), as [`BbmdLookupFailure::Abandoned`].
 pub(super) struct Lookup {
     target: Weak<ForeignTarget>,
     resolver: Arc<dyn BbmdResolver>,
     host: String,
     generation: u64,
+    /// Started and not reported yet.
+    armed: bool,
 }
 
 /// A failed lookup, with the resolver's error for the log.
@@ -204,7 +233,8 @@ impl From<BbmdLookupFailure> for Failed {
 impl Lookup {
     /// Run it on a task of its own. With no runtime to run it on, it fails
     /// at once.
-    pub(super) fn start(self) {
+    pub(super) fn start(mut self) {
+        self.armed = true;
         match tokio::runtime::Handle::try_current() {
             Ok(runtime) => {
                 runtime.spawn(self.run());
@@ -219,7 +249,7 @@ impl Lookup {
         }
     }
 
-    async fn run(self) {
+    async fn run(mut self) {
         let lookup = self.resolver.resolve(&self.host);
         let answer = match tokio::time::timeout(LOOKUP_TIMEOUT, lookup).await {
             Ok(Ok(addresses)) => Ok(addresses),
@@ -232,75 +262,107 @@ impl Lookup {
         self.end(answer);
     }
 
-    fn end(self, answer: Result<Vec<Ipv4Addr>, Failed>) {
+    /// Report `answer`, once.
+    fn end(&mut self, answer: Result<Vec<Ipv4Addr>, Failed>) {
+        if !std::mem::take(&mut self.armed) {
+            return;
+        }
         if let Some(target) = self.target.upgrade() {
             target.looked_up(self.generation, answer);
         }
     }
 }
 
+impl Drop for Lookup {
+    /// A started lookup that never answered still ends: unwinding from a
+    /// panicking resolver, or dropped with its task. No lock is held where
+    /// a started one can drop.
+    fn drop(&mut self) {
+        self.end(Err(BbmdLookupFailure::Abandoned.into()));
+    }
+}
+
 impl ForeignTarget {
     /// The BBMD row was activated as `name`, or as an address (`None`):
     /// a lookup started for an earlier value no longer counts, and a name
-    /// is looked up now. `attempt_follows` says whether the activation
-    /// starts a registration attempt, which this lookup then covers.
+    /// is looked up now, or as soon as the call running ends.
     pub(super) fn renamed(
         &self,
         state: &mut TargetState,
         name: Option<BbmdName>,
-        attempt_follows: bool,
     ) -> Option<Lookup> {
         let lookups = &mut state.lookups;
         lookups.generation = lookups.generation.wrapping_add(1);
-        lookups.skip_next = attempt_follows && name.is_some();
+        lookups.rerun = false;
         lookups.failing = false;
         state.name = name;
-        self.lookup(state)
+        self.lookup(state, true)
     }
 
-    /// The node is about to send an automatic registration attempt: look
-    /// the BBMD's name up again, if it has one (#1852).
+    /// The node is sending an automatic registration attempt, to the
+    /// address in use: look the BBMD's name up alongside it, if it has one
+    /// and the last lookup started [`ATTEMPT_LOOKUP_INTERVAL`] ago or more
+    /// (#1852).
     pub(super) fn attempting(&self) {
-        let lookup = {
-            let mut state = self.lock();
-            if std::mem::take(&mut state.lookups.skip_next) {
-                None
-            } else {
-                self.lookup(&mut state)
-            }
-        };
+        let lookup = self.lookup(&mut self.lock(), false);
         if let Some(lookup) = lookup {
             lookup.start();
         }
     }
 
-    /// A lookup of the name in effect, unless there is none, or one is
-    /// already running for it.
-    fn lookup(&self, state: &mut TargetState) -> Option<Lookup> {
+    /// A lookup of the name in effect, unless there is none, or a resolver
+    /// call runs already (an activation then waits for it to end), or,
+    /// unless an activation asks (`activated`) or waits, the last lookup
+    /// started less than [`ATTEMPT_LOOKUP_INTERVAL`] ago.
+    fn lookup(&self, state: &mut TargetState, activated: bool) -> Option<Lookup> {
         let host = state.name.as_ref()?.host.clone();
         let lookups = &mut state.lookups;
-        if lookups.in_flight == Some(lookups.generation) {
+        if lookups.running.is_some() {
+            lookups.rerun |= activated;
             return None;
         }
-        lookups.in_flight = Some(lookups.generation);
+        let now = Instant::now();
+        let recent = lookups
+            .last_started
+            .is_some_and(|started| now < started + ATTEMPT_LOOKUP_INTERVAL);
+        if recent && !activated && !lookups.rerun {
+            return None;
+        }
+        lookups.rerun = false;
+        lookups.running = Some(lookups.generation);
+        lookups.last_started = Some(now);
         Some(Lookup {
             target: self.me.clone(),
             resolver: Arc::clone(&lookups.resolver),
             host,
             generation: lookups.generation,
+            armed: false,
         })
     }
 
-    /// A lookup started for `generation` ended. One for an earlier
-    /// activation, or one that ends with the transport stopped, changes and
-    /// counts nothing: a start looks the name up again.
+    /// A lookup started for `generation` ended, and with it the resolver
+    /// call. One for an earlier activation, or one that ends with the
+    /// transport stopped, changes and counts nothing: a start looks the name
+    /// up again. A name activated meanwhile is looked up now, unless this
+    /// one was abandoned, perhaps with the runtime, when the next attempt
+    /// does it instead.
     fn looked_up(&self, generation: u64, answer: Result<Vec<Ipv4Addr>, Failed>) {
         let mut state = self.lock();
-        if state.lookups.in_flight == Some(generation) {
-            state.lookups.in_flight = None;
+        if state.lookups.running == Some(generation) {
+            state.lookups.running = None;
         }
         if state.lookups.generation != generation {
             debug!("A BBMD host-name lookup ended after the row changed; dropped");
+            let abandoned = answer
+                .as_ref()
+                .is_err_and(|failed| failed.failure == BbmdLookupFailure::Abandoned);
+            let rerun = (state.lookups.rerun && !abandoned)
+                .then(|| self.lookup(&mut state, true))
+                .flatten();
+            drop(state);
+            if let Some(lookup) = rerun {
+                lookup.start();
+            }
             return;
         }
         let (Some(name), Some(node)) = (state.name.clone(), Self::running(&state)) else {
@@ -333,7 +395,6 @@ impl ForeignTarget {
         }
         info!(host = %name.host, bbmd = %config.bbmd(), "The BBMD's host name now resolves elsewhere; registering there");
         state.config = config;
-        state.lookups.skip_next = true;
         drop(state);
         if self.release_previous.load(Ordering::Relaxed) {
             node.release_previous_bbmd(old);

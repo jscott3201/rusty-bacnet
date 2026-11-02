@@ -242,9 +242,10 @@ pub(super) struct NodeHandle {
     state: Mutex<NodeState>,
     /// Tells the driver that the node changed.
     wake: Notify,
-    /// Runs, with no lock held, before the driver sends each automatic
-    /// registration attempt: where a foreign device whose BBMD is known by
-    /// host name looks it up again (#1852).
+    /// Runs, with no lock held, as the driver sends each automatic
+    /// registration attempt to the address in use: where a foreign device
+    /// whose BBMD is known by host name may look it up again alongside it
+    /// (#1852).
     attempt_hook: OnceLock<Box<dyn Fn() + Send + Sync>>,
     /// Runs once in a broadcast send, between the link's decision and the
     /// node's admission: where a test moves the node.
@@ -359,8 +360,9 @@ impl NodeHandle {
         })
     }
 
-    /// Run `hook` before each automatic registration attempt the driver
-    /// sends, from now on. A node takes one hook; a second is ignored.
+    /// Run `hook` as the driver sends each automatic registration attempt,
+    /// from now on, just before the send. A node takes one hook; a second
+    /// is ignored.
     pub(super) fn on_registration_attempt(&self, hook: Box<dyn Fn() + Send + Sync>) {
         let _ = self.attempt_hook.set(hook);
     }

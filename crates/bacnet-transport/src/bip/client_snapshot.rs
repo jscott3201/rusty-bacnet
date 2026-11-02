@@ -128,8 +128,9 @@ pub struct ForeignRegistrationSnapshot {
     /// its time-to-live runs out.
     pub previous_release_unanswered: u64,
     /// Lookups of the BBMD's host name, while FD_BBMD_Address names one
-    /// (#1852): one when it is activated and one before each registration
-    /// attempt, counted when they end with the transport running.
+    /// (#1852): one at each activation, and one alongside a registration
+    /// attempt at most every 30 seconds, counted when they end with the
+    /// transport running.
     pub bbmd_lookups: u64,
     /// Of those, the ones that failed. The device kept registering with the
     /// address it had.

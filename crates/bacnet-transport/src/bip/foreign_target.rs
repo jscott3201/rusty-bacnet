@@ -12,7 +12,8 @@
 //!
 //! FD_BBMD_Address may name the BBMD by host name (#1852): the node then
 //! registers with the address the name last resolved to, and [`lookup`]
-//! looks it up again at activation and before each registration attempt.
+//! looks it up again at each activation and alongside the registration
+//! attempts, at most once per 30 seconds.
 //!
 //! Lock order: the object database (held by the caller), then this
 //! target's lock, then the node's. No lock here is held across an await.
@@ -259,7 +260,7 @@ impl ForeignRegistration for ForeignTarget {
         let old = state.config.bbmd();
         let moved = old != config.bbmd();
         state.config = config;
-        let lookup = name.and_then(|name| self.renamed(&mut state, name, reregister));
+        let lookup = name.and_then(|name| self.renamed(&mut state, name));
         drop(state);
         if moved && self.release_previous.load(Ordering::Relaxed) {
             node.release_previous_bbmd(old);
@@ -301,17 +302,23 @@ impl BipTransport {
     /// [`register_as_foreign_device`](Self::register_as_foreign_device).
     ///
     /// A host name written to FD_BBMD_Address is checked for its form, and
-    /// looked up once ReinitializeDevice activates it, on the side: the
+    /// looked up whenever ReinitializeDevice activates it, on the side: the
     /// activation never waits for it. The device moves to the first address
-    /// it can register with, as an activated address would move it, and
-    /// looks the name up again before each registration attempt: the first
-    /// after a start, each renewal and each retry. While the address in use
-    /// is still among the answers it stays put, so a name with several
-    /// addresses doesn't move it at every renewal. A lookup that fails,
-    /// takes longer than 10 seconds, or finds only addresses the device
-    /// can't register with leaves it registering with the address it had
-    /// (before the first success, the BBMD it registered with before the
-    /// name), and is logged and counted in the snapshot's `bbmd_lookups`,
+    /// it can register with, as an activated address would move it. The
+    /// name is looked up again alongside the registration attempts (the
+    /// first after a start, renewals and retries), at most once every 30
+    /// seconds: such an attempt still goes to the address in use, and a
+    /// lookup that finds the BBMD elsewhere moves the device, which
+    /// registers there at once. So a writer setting a 1-second lifetime
+    /// drives one query every 30 seconds, not two a second. One resolver
+    /// call runs at a time: a name activated while one runs is looked up
+    /// when it ends. While the address in use is still among the answers
+    /// the device stays put, so a name with several addresses doesn't move
+    /// it. A lookup that fails, takes longer than 10 seconds, finds only
+    /// addresses the device can't register with, or ends without an
+    /// answer leaves it registering with the address it had (before the
+    /// first success, the BBMD it registered with before the name), and is
+    /// logged and counted in the snapshot's `bbmd_lookups`,
     /// `bbmd_lookup_failures` and `last_bbmd_lookup_failure`.
     pub fn set_bbmd_resolver(&mut self, resolver: Arc<dyn BbmdResolver>) {
         if let Some(target) = &self.foreign_device {
