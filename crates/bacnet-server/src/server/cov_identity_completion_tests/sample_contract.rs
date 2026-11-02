@@ -23,14 +23,11 @@ impl BACnetObject for Probe {
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         crate::test_rows::read_only(&[PropertyIdentifier::PRESENT_VALUE, SELECTED])
     }
-    fn supports_cov(&self) -> bool {
-        true
+    fn cov(&self) -> Option<&dyn bacnet_objects::traits::CovReporting> {
+        Some(self)
     }
     fn is_array_property(&self, p: PropertyIdentifier) -> bool {
         p == SELECTED && self.0.lock().unwrap().array
-    }
-    fn cov_increment(&self) -> Option<f64> {
-        Some(100.0)
     }
     fn read_property(&self, p: PropertyIdentifier, _: Option<u32>) -> Result<PropertyValue, Error> {
         if p == PropertyIdentifier::PRESENT_VALUE {
@@ -63,6 +60,12 @@ impl BACnetObject for Probe {
         _: Option<u8>,
     ) -> Result<(), Error> {
         Err(Error::Encoding("test read only".into()))
+    }
+}
+
+impl bacnet_objects::traits::CovReporting for Probe {
+    fn cov_increment(&self) -> Option<f64> {
+        Some(100.0)
     }
 }
 async fn fixture(

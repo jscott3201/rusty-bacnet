@@ -96,7 +96,7 @@ fn property_metadata_pulse_converter_exact_sets_readable_rows_and_indexed_list()
         metadata.len()
     );
     assert!(object.is_deleteable());
-    assert!(object.supports_cov());
+    assert!(object.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
     for row in metadata.iter() {
         let cov = COV_ROWS.contains(&row.property_identifier);
         assert_eq!(
@@ -164,7 +164,7 @@ fn property_metadata_pulse_converter_exact_sets_readable_rows_and_indexed_list()
         object.read_property(P::COV_PERIOD, None).unwrap(),
         PropertyValue::Unsigned(0)
     );
-    assert_eq!(object.cov_increment(), Some(0.0));
+    assert_eq!(object.cov().and_then(|cov| cov.cov_increment()), Some(0.0));
     for p in [
         P::INPUT_REFERENCE,
         P::PRESENT_VALUE,
@@ -394,7 +394,7 @@ fn property_metadata_pulse_converter_writes_store_verbatim_with_range_gates() {
             object.read_property(P::COV_INCREMENT, None).unwrap(),
             PropertyValue::Real(0.5)
         );
-        assert_eq!(object.cov_increment(), Some(0.5));
+        assert_eq!(object.cov().and_then(|cov| cov.cov_increment()), Some(0.5));
         // Non-finite and negative values are refused without touching state.
         for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
             for p in [P::SCALE_FACTOR, P::ADJUST_VALUE] {

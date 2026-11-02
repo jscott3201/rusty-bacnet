@@ -4088,6 +4088,29 @@ behaviour, so an object without it writes nothing.
   takes `take_relinquish_writes()` from the removed object. Only
   `tick_schedule` has no default. The built-in `ScheduleObject` lends it
   (see Schedule & Notification below).
+- **`cov()` → `CovReporting`**, for an object that reports changes of
+  value. An object that lends none takes no COV subscription, and the server
+  refuses SubscribeCOV, SubscribeCOVProperty and SubscribeCOVPropertyMultiple
+  naming it with OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. The server
+  reads it under a shared guard only, so it has no `_mut` twin.
+  `supports_subscribe_cov()` (default `true`) admits the whole-object form;
+  an object whose type has no Table 13-1 row, like the built-in Averaging and
+  Command, answers `false` and takes property subscriptions only.
+  `supports_cov_property(p)` (default `true`) decides each property
+  subscription, `cov_increment()` (default `None`) is the object's current
+  COV_Increment, read at each evaluation, and `cov_reported_properties()`
+  lists what a whole-object notification carries after Present_Value and
+  Status_Flags. Its default, `None`, has the server report the object type's
+  Table 13-1 row (`CovReportedProperty::standard_for(object_type)`);
+  `Some(list)` reports exactly that list. These were `supports_cov`,
+  `supports_subscribe_cov_property` and the three hooks of the same names on
+  `BACnetObject` before #2179. `supports_cov_property`'s old default read the
+  object type and the new one doesn't, so a custom Life Safety Point or Zone
+  narrows its own property set, for example to
+  `bacnet_objects::life_safety::COV_PROPERTIES`. Calls on a concrete type
+  need `use bacnet_objects::traits::CovReporting`. The unused
+  `set_overridden` hook was removed with no replacement: an object computes
+  Status_Flags' OVERRIDDEN bit itself when it reads the property.
 - **`audit_log()` and `audit_log_mut()` → `AuditLog`** (hidden, #2179), for
   an Audit Log. `storage()` is the `AuditLogStorage` that AuditLogQuery and
   ReadRange read under a shared guard (it was the public
@@ -4120,6 +4143,32 @@ impl Timed for MyTimer {
         self.deadline
     }
 }
+```
+
+COV reporting moves from its hooks to the capability like this:
+
+```rust,ignore
+// Before: on `impl BACnetObject for MySensor`.
+fn supports_cov(&self) -> bool {
+    true
+}
+fn cov_increment(&self) -> Option<f64> {
+    Some(f64::from(self.cov_increment))
+}
+
+// After: lend the capability; a call site goes through `cov()`.
+use bacnet_objects::traits::{BACnetObject, CovReporting};
+
+fn cov(&self) -> Option<&dyn CovReporting> {
+    Some(self)
+}
+
+impl CovReporting for MySensor {
+    fn cov_increment(&self) -> Option<f64> {
+        Some(f64::from(self.cov_increment))
+    }
+}
+let increment = sensor.cov().and_then(|cov| cov.cov_increment());
 ```
 
 Reliability evaluation moves from its hooks to the capability like this:
@@ -5936,9 +5985,9 @@ Attempted_Samples fail with VALUE_OUT_OF_RANGE and change nothing.
 
 Each sample changes the statistics and counts together, then the server's COV
 path runs, as it does after a write. Averaging has no Table 13-1 row, so
-SubscribeCOV on it is refused (`supports_cov` is false), but it takes
-SubscribeCOVProperty and SubscribeCOVPropertyMultiple
-(`supports_subscribe_cov_property` is true): a numeric property is reported
+SubscribeCOV on it is refused (its `CovReporting` answers
+`supports_subscribe_cov()` with `false`), but it takes SubscribeCOVProperty and
+SubscribeCOVPropertyMultiple (it lends `cov()`): a numeric property is reported
 when it moves by the subscription's COV increment, or on any change if the
 subscription gives none, and the report carries no Status_Flags because the
 object has none. A move to or from the NaN or an infinity of an empty window is

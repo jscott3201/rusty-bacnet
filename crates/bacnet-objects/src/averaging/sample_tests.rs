@@ -131,8 +131,11 @@ fn averaging_sample_hook_is_refused_by_other_objects() {
 #[test]
 fn averaging_takes_property_cov_subscriptions_but_not_subscribe_cov() {
     let avg = AveragingObject::new(1, "AVG-1").unwrap();
-    assert!(!avg.supports_cov(), "Table 13-1 has no Averaging row");
-    assert!(avg.supports_subscribe_cov_property());
+    assert!(
+        !avg.cov().is_some_and(|cov| cov.supports_subscribe_cov()),
+        "Table 13-1 has no Averaging row"
+    );
+    assert!(avg.cov().is_some());
     for property in [
         PropertyIdentifier::MINIMUM_VALUE,
         PropertyIdentifier::MAXIMUM_VALUE,
@@ -140,16 +143,24 @@ fn averaging_takes_property_cov_subscriptions_but_not_subscribe_cov() {
         PropertyIdentifier::ATTEMPTED_SAMPLES,
         PropertyIdentifier::VALID_SAMPLES,
     ] {
-        assert!(avg.supports_cov_property(property), "{property:?}");
+        assert!(
+            avg.cov()
+                .is_some_and(|cov| cov.supports_cov_property(property)),
+            "{property:?}"
+        );
     }
     // Objects that take SubscribeCOV keep taking property subscriptions, and
     // objects that take neither still refuse both.
     let av = crate::analog::AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS)
         .unwrap();
-    assert!(av.supports_cov() && av.supports_subscribe_cov_property());
+    assert!(av.cov().is_some_and(|cov| cov.supports_subscribe_cov()) && av.cov().is_some());
     let file = crate::file::FileObject::new(1, "FILE-1", "text/plain").unwrap();
-    assert!(!file.supports_cov() && !file.supports_subscribe_cov_property());
-    assert!(!file.supports_cov_property(PropertyIdentifier::FILE_SIZE));
+    assert!(!file.cov().is_some_and(|cov| cov.supports_subscribe_cov()) && !file.cov().is_some());
+    assert!(
+        !file
+            .cov()
+            .is_some_and(|cov| cov.supports_cov_property(PropertyIdentifier::FILE_SIZE))
+    );
 }
 
 #[test]

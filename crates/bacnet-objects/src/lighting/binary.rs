@@ -478,14 +478,14 @@ impl BACnetObject for BinaryLightingOutputObject {
         super::metadata::for_binary_lighting_output_object(self)
     }
 
-    fn supports_cov(&self) -> bool {
-        true
-    }
+    crate::traits::lend_cov_reporting!();
 
     fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
         Some(self)
     }
 }
+
+impl crate::traits::CovReporting for BinaryLightingOutputObject {}
 
 impl crate::traits::Timed for BinaryLightingOutputObject {
     fn bind_clocks(&mut self, clocks: &crate::traits::Clocks) {

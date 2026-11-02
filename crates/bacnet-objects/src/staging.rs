@@ -535,17 +535,17 @@ impl BACnetObject for StagingObject {
     }
 
     // Table 13-1 Staging row: Present_Value by COV_Increment, Status_Flags and
-    // Present_Stage trigger, and Present_Stage is reported (the trait default).
-    fn supports_cov(&self) -> bool {
-        true
-    }
-
-    fn cov_increment(&self) -> Option<f64> {
-        Some(f64::from(self.cov_increment))
-    }
+    // Present_Stage trigger, and Present_Stage is reported (the type's row, the default).
+    crate::traits::lend_cov_reporting!();
 
     fn staging_source(&mut self) -> Option<&mut dyn StagingSource> {
         Some(self)
+    }
+}
+
+impl crate::traits::CovReporting for StagingObject {
+    fn cov_increment(&self) -> Option<f64> {
+        Some(f64::from(self.cov_increment))
     }
 }
 

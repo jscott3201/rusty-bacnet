@@ -128,7 +128,7 @@ mod tests {
                     required
                 );
                 assert!(object.is_deleteable());
-                assert!(!object.supports_cov());
+                assert!(!object.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
                 for row in metadata.iter() {
                     let p = row.property_identifier;
                     assert_eq!(row.presence_condition, None);

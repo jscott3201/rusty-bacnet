@@ -111,10 +111,10 @@ use crate::property_metadata::{
 // only Device and NetworkPort, so the is_deleteable=true default holds);
 // neither needs an override. Array gating keeps the default: Priority_Array
 // and Door_Members (BACnetARRAYs per Table 12-30), Access_Doors (Table 12-36)
-// and Property_List admit an index while every other served row rejects one. COV keeps its override: supports_cov=true on
-// Access Door and Access Point (Table 13-1 lists both; #1061 added the
-// point) and false on Access Zone, and the COV gating path (read_property
-// plus supports_cov_property to supports_cov) never consults metadata.
+// and Property_List admit an index while every other served row rejects one. COV keeps its lend: Access Door and Access
+// Point lend `cov()` (Table 13-1 lists both; #1061 added the point) and
+// Access Zone lends none, and the COV gating path (read_property plus
+// `CovReporting::supports_cov_property`) never consults metadata.
 const ACCESS_DOOR_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),

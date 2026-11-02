@@ -272,15 +272,7 @@ macro_rules! define_value_object_commandable {
                 Err(crate::common::unhandled_write_error(self.property_metadata().as_ref(), property))
             }
 
-            fn supports_cov(&self) -> bool {
-                true
-            }
-
-            $(
-            fn cov_increment(&self) -> Option<f64> {
-                Some(<$cov_ty as CovIncrement>::as_f64(self.cov_increment))
-            }
-            )?
+            crate::traits::lend_cov_reporting!();
 
             fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
                 crate::property_metadata::is_writable_in_metadata($property_metadata, property)
@@ -300,6 +292,14 @@ macro_rules! define_value_object_commandable {
             ) -> Result<(), Error> {
                 let units: &mut $units_ty = &mut self.units;
                 crate::analog::initialize_units(units, property, value)
+            }
+            )?
+        }
+
+        impl crate::traits::CovReporting for $struct_name {
+            $(
+            fn cov_increment(&self) -> Option<f64> {
+                Some(<$cov_ty as CovIncrement>::as_f64(self.cov_increment))
             }
             )?
         }

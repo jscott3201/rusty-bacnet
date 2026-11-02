@@ -82,7 +82,7 @@ fn command_run_hooks_and_property_cov_admission_survive_wrapping() {
         selected(),
     );
     source_reporter::install(&mut object, &owner).unwrap();
-    assert!(object.supports_subscribe_cov_property());
+    assert!(object.cov().is_some());
 
     object
         .write_property(

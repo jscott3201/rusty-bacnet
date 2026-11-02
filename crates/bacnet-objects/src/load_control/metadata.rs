@@ -142,7 +142,7 @@ mod tests {
         );
         assert!(object.is_deleteable());
         // Table 13-1 has a Load Control row (#1061).
-        assert!(object.supports_cov());
+        assert!(object.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
         for row in metadata.iter() {
             assert_eq!(row.presence_condition, None);
             let expected = if row.property_identifier == P::REQUESTED_SHED_LEVEL

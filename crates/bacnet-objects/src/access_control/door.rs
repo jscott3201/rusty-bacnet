@@ -624,9 +624,7 @@ impl BACnetObject for AccessDoorObject {
         super::metadata_topology::for_access_door_object(self)
     }
 
-    fn supports_cov(&self) -> bool {
-        true
-    }
+    crate::traits::lend_cov_reporting!();
 
     crate::traits::lend_event_reporting!();
 
@@ -638,6 +636,8 @@ impl BACnetObject for AccessDoorObject {
         Some(self)
     }
 }
+
+impl crate::traits::CovReporting for AccessDoorObject {}
 
 crate::event::impl_change_of_state_reporting!(
     AccessDoorObject,

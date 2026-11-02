@@ -94,7 +94,7 @@ mod tests {
             crate::test_rows::required(&object.property_metadata()),
             REQUIRED
         );
-        assert!(!object.supports_cov());
+        assert!(!object.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
         assert!(object.is_deleteable());
         for row in metadata.iter() {
             assert_eq!(row.presence_condition, None);
