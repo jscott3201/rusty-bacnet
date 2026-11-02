@@ -34,6 +34,11 @@ pub struct ForeignDeviceConfig {
 }
 
 impl ForeignDeviceConfig {
+    /// The BBMD's B/IP address.
+    pub(super) fn bbmd(&self) -> SocketAddrV4 {
+        SocketAddrV4::new(self.bbmd_ip, self.bbmd_port)
+    }
+
     /// The renewal interval on the node engine's timeline: the configured
     /// one, or half the TTL, at least 100 ms.
     pub(super) fn interval(&self) -> Result<CoreDuration, Error> {
@@ -86,7 +91,7 @@ impl ForeignDeviceConfig {
         // Three seconds, exactly.
         let response_timeout =
             CoreDuration::saturating_from_core(BipTransport::BVLC_RESPONSE_TIMEOUT);
-        let mut foreign = Foreign::new(SocketAddrV4::new(self.bbmd_ip, self.bbmd_port), self.ttl);
+        let mut foreign = Foreign::new(self.bbmd(), self.ttl);
         foreign.renewal = interval;
         foreign.response_timeout = interval.min(response_timeout);
         foreign.retry = Retry::Backoff;

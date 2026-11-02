@@ -4639,10 +4639,14 @@ time-to-live. With an `on_reinitialize` handler (see
 [ReinitializeDevice](#reinitializedevice)), a BBMD port's
 BBMD_Broadcast_Distribution_Table and BBMD_Accept_FD_Registrations accept
 writes, set Changes_Pending, and take effect on an accepted ACTIVATE_CHANGES or
-WARMSTART (#1578, #1566). A foreign device's FD_BBMD_Address (an IPv4
-`BACnetHostNPort`, written as `PropertyValue.application_data`) and
-FD_Subscription_Lifetime do the same (#1825): once activated, the next
-registration goes to the new BBMD with the new time-to-live. Without an
+WARMSTART (#1578, #1566). A foreign device's FD_BBMD_Address (a
+`BACnetHostNPort` with an IPv4 address or a host name, written as
+`PropertyValue.application_data`) and FD_Subscription_Lifetime do the same
+(#1825): once activated, the next registration goes to the new BBMD with the
+new time-to-live. A host name is looked up by the system's resolver at each
+activation, and again alongside later registrations at most every 30 seconds;
+until a lookup succeeds, and whenever one fails, the device keeps registering
+with the address it had (#1852). Without an
 `on_reinitialize` handler nothing could activate a written value, so writes
 to these rows raise `BacnetProtocolError` (WRITE_ACCESS_DENIED) and
 Changes_Pending stays FALSE. A stopped transport refuses FD_BBMD_Address and

@@ -47,6 +47,7 @@ pub use bacnet_bip_core::node::ExchangeRefusal;
 pub use exchange::BvlcExchangeError;
 mod foreign_device;
 mod foreign_target;
+pub use foreign_target::{BbmdLookup, BbmdLookupFailure, BbmdResolver};
 mod mode;
 mod node;
 mod send;
@@ -135,6 +136,8 @@ pub struct BipTransport {
     /// Foreign device registration (when registered as a foreign device),
     /// shared with the Network Port object that can change it.
     foreign_device: Option<Arc<foreign_target::ForeignTarget>>,
+    /// Looks up FD_BBMD_Address host names (#1852).
+    bbmd_resolver: Arc<dyn BbmdResolver>,
     /// The node engine of the running transport: its link, its own
     /// management exchanges and a foreign device's registration.
     node: Option<Arc<NodeHandle>>,
@@ -217,6 +220,7 @@ impl BipTransport {
             bbmd: None,
             bbmd_fdt_purge_task: None,
             foreign_device: None,
+            bbmd_resolver: Arc::new(foreign_target::SystemResolver),
             node: None,
             node_task: None,
             client_record: Arc::default(),
@@ -340,25 +344,6 @@ impl BipTransport {
         } else {
             warn!("set_bbmd_alone_on_subnet called before enable_bbmd(); setting will be ignored");
         }
-    }
-
-    /// Configure this transport as a foreign device.
-    /// Call before `start()`, which validates, before any I/O, the TTL and
-    /// renewal settings and the BBMD's address (not the unspecified address,
-    /// a group address or port 0), refuses a BBMD at the transport's own
-    /// address once bound, and starts an automatic worker. Startup is local
-    /// readiness, not a BBMD receipt; use [`Self::bvlc_client_snapshot`] to
-    /// observe outcomes.
-    /// `start()` fails on a transport that is also a BBMD
-    /// ([`enable_bbmd`](Self::enable_bbmd)).
-    ///
-    /// A registered Network Port object can move it to another BBMD or
-    /// time-to-live while it runs (FD_BBMD_Address and
-    /// FD_Subscription_Lifetime, activated by ReinitializeDevice); a later
-    /// start keeps the values it moved to.
-    pub fn register_as_foreign_device(&mut self, config: ForeignDeviceConfig) {
-        let target = foreign_target::ForeignTarget::new(config, self);
-        self.foreign_device = Some(Arc::new(target));
     }
 
     /// Get the BBMD state (if BBMD mode is enabled). It appears when
