@@ -154,6 +154,7 @@ impl BACnetObject for GroupObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        crate::property_metadata::check_read_array_index(self, property, array_index)?;
         // Table 12-17 has no Status_Flags, Reliability or Out_Of_Service (#1064).
         if let Some(result) = read_identity_properties!(self, property, array_index) {
             return result;
@@ -359,6 +360,7 @@ impl BACnetObject for GlobalGroupObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        crate::property_metadata::check_read_array_index(self, property, array_index)?;
         if let Some(result) = read_common_properties!(self, property, array_index) {
             return result;
         }
@@ -522,6 +524,7 @@ impl BACnetObject for StructuredViewObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        crate::property_metadata::check_read_array_index(self, property, array_index)?;
         // Table 12-34 has no Status_Flags, Reliability or Out_Of_Service (#1064).
         if let Some(result) = read_identity_properties!(self, property, array_index) {
             return result;

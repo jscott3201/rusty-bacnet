@@ -262,6 +262,17 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     fn object_name(&self) -> &str;
 
     /// Read a property value.
+    ///
+    /// The array index is checked before the object is called on every read
+    /// path the bundled server and `bacnet-device-core` run, custom objects
+    /// included: an index on a property that isn't an array, as
+    /// [`is_array_property`](crate::property_metadata::is_array_property)
+    /// answers, is PROPERTY_IS_NOT_AN_ARRAY. A caller that reads the object
+    /// directly skips that gate, so the
+    /// built-in objects run
+    /// [`check_read_array_index`](crate::property_metadata::check_read_array_index)
+    /// first themselves; a custom object called directly should do the same
+    /// (#2274).
     fn read_property(
         &self,
         property: PropertyIdentifier,

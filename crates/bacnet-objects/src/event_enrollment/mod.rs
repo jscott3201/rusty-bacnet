@@ -294,6 +294,7 @@ impl BACnetObject for EventEnrollmentObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        crate::property_metadata::check_read_array_index(self, property, array_index)?;
         if property == PropertyIdentifier::STATUS_FLAGS {
             // Clause 12.12 fixes OVERRIDDEN and OUT_OF_SERVICE at FALSE;
             // IN_ALARM follows Event_State and FAULT follows Reliability.

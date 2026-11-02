@@ -777,7 +777,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 | OBJECT_NAME | R |
 | OBJECT_TYPE | R |
 | OUT_OF_SERVICE | RW |
-| PRESENT_VALUE | R |
+| PRESENT_VALUE | RW |
 | RELIABILITY | RO |
 | STATUS_FLAGS | R |
 | UNITS | R |

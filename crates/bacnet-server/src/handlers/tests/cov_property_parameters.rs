@@ -180,3 +180,49 @@ fn subscribe_cov_ordinary_none_and_zero_lifetimes_remain_indefinite() {
     // Single-property decode remains structural even for the service-invalid form.
     assert!(SubscribeCOVPropertyRequest::decode(&raw(object(1), Some(false), Some(0))).is_ok());
 }
+
+fn indexed(oid: ObjectIdentifier, property: PropertyIdentifier, index: u32) -> BytesMut {
+    let mut bytes = BytesMut::new();
+    primitives::encode_ctx_unsigned(&mut bytes, 0, 7);
+    primitives::encode_ctx_object_id(&mut bytes, 1, &oid);
+    primitives::encode_ctx_boolean(&mut bytes, 2, true);
+    primitives::encode_ctx_unsigned(&mut bytes, 3, 300);
+    tags::encode_opening_tag(&mut bytes, 4);
+    primitives::encode_ctx_unsigned(&mut bytes, 0, property.to_raw() as u64);
+    primitives::encode_ctx_unsigned(&mut bytes, 1, u64::from(index));
+    tags::encode_closing_tag(&mut bytes, 4);
+    bytes
+}
+
+/// An index on a scalar is PROPERTY_IS_NOT_AN_ARRAY, and on a property the
+/// object lacks UNKNOWN_PROPERTY, though objects now refuse an index on a
+/// scalar in their own reads (#2274).
+#[test]
+fn subscribe_cov_property_index_on_a_scalar_is_not_an_array() {
+    let db = make_db_with_ai();
+    let mut table = CovSubscriptionTable::new();
+    for (property, code) in [
+        (
+            PropertyIdentifier::PRESENT_VALUE,
+            ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
+        ),
+        (
+            PropertyIdentifier::from_raw(200),
+            ErrorCode::UNKNOWN_PROPERTY,
+        ),
+    ] {
+        let error = handle_subscribe_cov_property_with_initial(
+            &mut table,
+            &db,
+            &[1],
+            &indexed(object(1), property, 1),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, Error::Remote(RemoteError::Error { class, code: got })
+                if class == ErrorClass::PROPERTY && got == code),
+            "{property}: {error:?}"
+        );
+    }
+    assert_eq!(table.len(), 0);
+}

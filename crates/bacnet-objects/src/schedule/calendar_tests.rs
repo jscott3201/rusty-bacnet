@@ -270,9 +270,18 @@ fn calendar_date_list_empty_by_default() {
 fn calendar_date_list_reads_each_entry_under_its_choice_tag() {
     // #996: entries used to read as an application Date or Octet String.
     let mut cal = configured();
-    // Direct reads ignore the index; the service handlers reject list indexing.
-    for index in [None, Some(0), Some(1), Some(u32::MAX)] {
-        assert_eq!(cal.read_property(DATE_LIST, index).unwrap(), wire_list());
+    assert_eq!(cal.read_property(DATE_LIST, None).unwrap(), wire_list());
+    // A list takes no index, on a direct read as on the wire (#2274).
+    for index in [0, 1, u32::MAX] {
+        let refused = cal.read_property(DATE_LIST, Some(index));
+        assert!(
+            matches!(
+                refused,
+                Err(Error::Remote(RemoteError::Error { class, code }))
+                    if class == ErrorClass::PROPERTY && code == ErrorCode::PROPERTY_IS_NOT_AN_ARRAY
+            ),
+            "[{index}]: {refused:?}"
+        );
     }
     let entries: Vec<_> = entries_and_wire().into_iter().map(|(e, _)| e).collect();
     assert_eq!(cal.date_list(), entries.as_slice());

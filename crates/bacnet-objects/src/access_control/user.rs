@@ -111,6 +111,7 @@ impl BACnetObject for AccessUserObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        crate::property_metadata::check_read_array_index(self, property, array_index)?;
         // Clause 12.33 holds the OUT_OF_SERVICE flag FALSE.
         if let Some(result) =
             read_common_properties!(self, property, array_index, no_out_of_service)

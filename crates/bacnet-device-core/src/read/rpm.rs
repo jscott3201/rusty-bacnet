@@ -7,7 +7,7 @@ use super::{LiveLists, ReadOverlay, ReadScope};
 use alloc::vec::Vec;
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_objects::database::ObjectDatabase;
-use bacnet_objects::property_metadata::is_array_property;
+use bacnet_objects::property_metadata::check_read_array_index;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::rpm::{ReadAccessResult, ReadPropertyMultipleRequest, ReadResultElement};
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
@@ -316,10 +316,8 @@ pub(crate) fn element(
     let response_index = property::rpm_response_index(object, id, index);
     let result = match object {
         None => Err((ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT)),
-        Some(object) if index.is_some() && !is_array_property(object, id) => {
-            Err((ErrorClass::PROPERTY, ErrorCode::PROPERTY_IS_NOT_AN_ARRAY))
-        }
-        Some(object) => match read(object) {
+        Some(object) => match check_read_array_index(object, id, index).and_then(|()| read(object))
+        {
             Ok(value) => {
                 // One property may return/encode an arbitrarily large owned
                 // value. Only accumulated service bytes are bounded here.

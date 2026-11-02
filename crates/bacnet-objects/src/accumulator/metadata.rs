@@ -30,17 +30,14 @@ use crate::property_metadata::{
 // (Max_Pres_Value is table R with an arm, so RequiredRead/Always;
 // Limit_Monitoring_Interval is table O with an arm, so Optional/Always;
 // Pulse_Rate is table O and writable only out of service (Clause 12.61.20),
-// so Optional/WhenOutOfService;
+// so Optional/WhenOutOfService; Present_Value is table R with footnote 1,
+// writable only out of service (Clause 12.61.4, #2267), so
+// RequiredRead/WhenOutOfService;
 // Prescale, Reliability, Value_Before_Change, and Value_Set have no arm, so
 // Optional/ReadOnly). Prescale is present only once the application sets
 // one; without it the row is left out, so the property reads as unknown
 // rather than as a NULL its datatype doesn't have.
-// Present_Value is the one deliberate dispatch-first deviation: Table 12-79
-// codes it R with footnote 1, and both that footnote and §12.61 require it to
-// accept writes while Out_Of_Service is TRUE, but the write arm
-// unconditionally denies it and no Value_Set mechanism advances it, so the
-// metadata mirrors dispatch as RequiredRead/ReadOnly rather than advertising
-// a route that does not exist. Status_Flags is computed with event_state=0
+// Status_Flags is computed with event_state=0
 // by the shared common arm even though the object owns an Event_State field;
 // that quirk is preserved, not fixed, by this migration. Presence is None
 // throughout: the implementation models no commandable, intrinsic-reporting,
@@ -57,7 +54,7 @@ const ACCUMULATOR_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
     PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::PRESENT_VALUE, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::PRESENT_VALUE, RequiredRead, None, WhenOutOfService),
     PropertyMetadata::new(P::MAX_PRES_VALUE, RequiredRead, None, Always),
     PropertyMetadata::new(P::SCALE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PRESCALE, Optional, None, ReadOnly),
@@ -280,7 +277,7 @@ mod tests {
                 let p = row.property_identifier;
                 let capability = if writable.contains(&p) {
                     PropertyWriteCapability::Always
-                } else if p == P::PULSE_RATE {
+                } else if p == P::PULSE_RATE || p == P::PRESENT_VALUE {
                     PropertyWriteCapability::WhenOutOfService
                 } else {
                     PropertyWriteCapability::ReadOnly
@@ -318,23 +315,23 @@ mod tests {
                     .unwrap_err(),
                 ErrorCode::WRITE_ACCESS_DENIED,
             );
-            // Present_Value is always denied — even out of service and even
-            // with its own readback — because no arm routes it. The metadata
-            // mirrors dispatch (ReadOnly) rather than the Table 12-79
-            // footnote-1 writability the implementation does not provide.
-            assert!(!crate::property_metadata::is_writable_property(
+            // Present_Value takes a write only out of service (Table 12-79
+            // footnote 1, #2267); in service it stays the input's count.
+            // The row advertises it writable in both states; dispatch gates it.
+            assert!(crate::property_metadata::is_writable_property(
                 &object,
                 P::PRESENT_VALUE
             ));
-            assert_error(
-                object
-                    .write_property(P::PRESENT_VALUE, None, PropertyValue::Unsigned(10), None)
-                    .unwrap_err(),
-                ErrorCode::WRITE_ACCESS_DENIED,
-            );
+            let written =
+                object.write_property(P::PRESENT_VALUE, None, PropertyValue::Unsigned(10), None);
+            if out_of_service {
+                written.unwrap();
+            } else {
+                assert_error(written.unwrap_err(), ErrorCode::WRITE_ACCESS_DENIED);
+            }
             assert_eq!(
                 object.read_property(P::PRESENT_VALUE, None).unwrap(),
-                PropertyValue::Unsigned(0)
+                PropertyValue::Unsigned(if out_of_service { 10 } else { 0 })
             );
             assert_eq!(object.property_metadata().as_ref(), original);
         }

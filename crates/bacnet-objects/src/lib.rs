@@ -124,6 +124,8 @@ mod reliability_writability_tests;
 mod reliability_inhibit_tests;
 
 #[cfg(test)]
+mod read_consistency_tests;
+#[cfg(test)]
 mod read_write_round_trip_seeds;
 #[cfg(test)]
 mod read_write_round_trip_tests;

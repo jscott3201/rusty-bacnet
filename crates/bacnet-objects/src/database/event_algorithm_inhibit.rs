@@ -59,9 +59,13 @@ impl ObjectDatabase {
         let property = PropertyIdentifier::from_raw(reference.property_identifier);
         let index = reference.property_array_index;
         let target = reference.object_identifier;
-        let value = self
-            .get(&target)
-            .and_then(|object| object.read_property(property, index).ok());
+        // A reference that indexes a scalar reads the whole value, as it
+        // did before objects refused such an index themselves (#2274).
+        let value = self.get(&target).and_then(|object| {
+            let index =
+                index.filter(|_| crate::property_metadata::is_array_property(object, property));
+            object.read_property(property, index).ok()
+        });
         match value {
             Some(PropertyValue::Boolean(inhibit)) => inhibit,
             Some(PropertyValue::Enumerated(raw)) => {

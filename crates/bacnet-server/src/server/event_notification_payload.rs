@@ -500,8 +500,18 @@ fn project_event_enrollment_reliability(
         let referenced_value = match captured_value {
             CapturedReferencedValue::Value(value) => Some(value.clone()),
             CapturedReferencedValue::Unavailable => None,
+            // An index on a scalar reads the whole value, as before objects
+            // refused that index themselves (#2274).
             CapturedReferencedValue::NotEvaluated => monitored
-                .read_property(reference.property_identifier, reference.array_index)
+                .read_property(
+                    reference.property_identifier,
+                    reference.array_index.filter(|_| {
+                        bacnet_objects::property_metadata::is_array_property(
+                            monitored,
+                            reference.property_identifier,
+                        )
+                    }),
+                )
                 .ok(),
         };
         if let Some(value) = referenced_value {

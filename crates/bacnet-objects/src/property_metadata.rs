@@ -504,6 +504,28 @@ pub fn check_write_array_index<O: BACnetObject + ?Sized>(
     Ok(())
 }
 
+/// The array-index check every read makes before the value is fetched: an
+/// index on a property that isn't an array on `object` is
+/// PROPERTY_IS_NOT_AN_ARRAY (Clause 15.5.1.3). A whole read (`index` of
+/// `None`) passes.
+///
+/// The read side asks only the array classification, through the property's
+/// value type ([`object_value_type`]): the object's own reader answers
+/// effective absence afterwards. The server's ReadProperty and
+/// ReadPropertyMultiple run this after the object lookup, and each built-in
+/// object runs it first in its own `read_property`, so a direct caller gets
+/// the server's answer (#2274).
+pub fn check_read_array_index<O: BACnetObject + ?Sized>(
+    object: &O,
+    property: PropertyIdentifier,
+    index: Option<u32>,
+) -> Result<(), Error> {
+    if index.is_some() && !object_value_type(object, property).is_some_and(ValueType::is_array) {
+        return Err(crate::common::property_is_not_an_array_error());
+    }
+    Ok(())
+}
+
 /// Whether these rows give `property` a network write route: its row's
 /// [`PropertyWriteCapability::is_writable`]. A property without a row isn't
 /// writable.
