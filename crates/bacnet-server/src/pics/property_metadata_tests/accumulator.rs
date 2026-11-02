@@ -12,7 +12,8 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             (P::OBJECT_NAME, false, false),
             (P::DESCRIPTION, true, true),
             (P::OBJECT_TYPE, false, false),
-            (P::PRESENT_VALUE, false, false),
+            // Writable out of service (Table 12-79 footnote 1, #2267).
+            (P::PRESENT_VALUE, false, true),
             (P::MAX_PRES_VALUE, false, true),
             (P::SCALE, false, false),
             // Prescale only once one is set, which a fresh object hasn't.

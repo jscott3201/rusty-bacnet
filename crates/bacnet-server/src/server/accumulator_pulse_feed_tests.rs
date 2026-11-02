@@ -129,7 +129,8 @@ async fn fed_pulses_step_present_value_through_prescale_and_wrap() {
 #[tokio::test(start_paused = true)]
 async fn out_of_service_keeps_the_clients_values() {
     let (mut h, origin) = start().await;
-    h.server.add_pulses_local(&acc1(), 20).await.unwrap();
+    // 1:2 Prescale: 21 pulses are 10 counts with one pulse held.
+    h.server.add_pulses_local(&acc1(), 21).await.unwrap();
     write(
         &h,
         PropertyIdentifier::OUT_OF_SERVICE,
@@ -137,23 +138,25 @@ async fn out_of_service_keeps_the_clients_values() {
     )
     .await;
     write(&h, RATE, PropertyValue::Unsigned(500)).await;
+    // A client's Present_Value starts afresh, without the held pulse (#2267).
+    write(&h, PV, PropertyValue::Unsigned(50)).await;
     h.server.add_pulses_local(&acc1(), 40).await.unwrap();
     advance_to(origin, 10_000).await;
     advance_to(origin, 20_000).await;
     assert_eq!(read(&h, RATE).await, PropertyValue::Unsigned(500));
-    assert_eq!(read(&h, PV).await, PropertyValue::Unsigned(10));
+    assert_eq!(read(&h, PV).await, PropertyValue::Unsigned(50));
     // Back in service the next window to close sets the rate again, and
-    // Present_Value counts on from where it was held.
+    // Present_Value counts on from the written value: 5 pulses are 2 counts.
     write(
         &h,
         PropertyIdentifier::OUT_OF_SERVICE,
         PropertyValue::Boolean(false),
     )
     .await;
-    h.server.add_pulses_local(&acc1(), 6).await.unwrap();
-    assert_eq!(read(&h, PV).await, PropertyValue::Unsigned(13));
+    h.server.add_pulses_local(&acc1(), 5).await.unwrap();
+    assert_eq!(read(&h, PV).await, PropertyValue::Unsigned(52));
     advance_to(origin, 30_000).await;
-    assert_eq!(read(&h, RATE).await, PropertyValue::Unsigned(6));
+    assert_eq!(read(&h, RATE).await, PropertyValue::Unsigned(5));
     h.server.stop().await.unwrap();
 }
 

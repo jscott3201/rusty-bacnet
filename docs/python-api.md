@@ -3913,6 +3913,13 @@ and Pulse_Rate keeps the value a peer wrote until a window closes back in
 service; the pulses fed meanwhile still count toward that window. Any other object raises
 OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
 
+An Accumulator's Present_Value takes a write, from a peer or
+`write_property_local`, only while Out_Of_Service is set (#2267): an
+Unsigned no larger than Max_Pres_Value. A larger value raises
+VALUE_OUT_OF_RANGE, another datatype INVALID_DATA_TYPE, and a write in
+service WRITE_ACCESS_DENIED. The written value starts with an empty Prescale
+remainder, and fed pulses count on from it once back in service.
+
 A Pulse Converter checks what its Input_Reference names (#1341). Reliability
 reads CONFIGURATION_ERROR (10), and Status_Flags FAULT, while the reference
 names a missing object or a property that isn't an Unsigned or INTEGER, and
