@@ -202,3 +202,6 @@ mod cadence_tests;
 
 #[cfg(all(test, feature = "std"))]
 mod reopen_fit_tests;
+
+#[cfg(all(test, feature = "std"))]
+mod codec_tests;
