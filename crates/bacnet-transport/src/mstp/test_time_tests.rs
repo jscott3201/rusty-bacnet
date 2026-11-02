@@ -2,6 +2,7 @@
 //! test thread moves none of its deadlines, and they come once the test's
 //! runtime goes idle.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -151,6 +152,76 @@ async fn a_slow_dedicated_stop_holds_the_test_clock() {
         .expect("the stop's wait held the test's clock")
         .unwrap();
     assert!(Instant::now() - before < Duration::from_secs(5));
+}
+
+/// A port that takes 200 ms of real time to drop, on the thread that drops
+/// it, then signals: the node's serial port, dropped with the node's future
+/// after an abort.
+struct SignalsDrop {
+    inner: LoopbackSerial,
+    dropped: Arc<tokio::sync::Semaphore>,
+}
+
+impl Drop for SignalsDrop {
+    fn drop(&mut self) {
+        std::thread::sleep(Duration::from_millis(200));
+        self.dropped.add_permits(1);
+    }
+}
+
+impl SerialPort for SignalsDrop {
+    async fn write(&self, data: &[u8]) -> Result<(), bacnet_types::error::Error> {
+        self.inner.write(data).await
+    }
+
+    async fn read(&self, buf: &mut [u8]) -> Result<usize, bacnet_types::error::Error> {
+        self.inner.read(buf).await
+    }
+}
+
+/// An abort (or a bare drop) ends the node on its own thread, and Tokio
+/// wakes the aborted task without the gate. The test's clock must still
+/// stand until the node's future, and the serial port in it, has dropped,
+/// or a test waiting for that drop times out on paused time (#2284: the
+/// Linux CI failure of `mstp_network_numbers`' queued-producer tests).
+async fn aborted_node_holds_the_clock(bare_drop: bool) {
+    let (serial, _peer) = LoopbackSerial::pair();
+    let dropped = Arc::new(tokio::sync::Semaphore::new(0));
+    let serial = SignalsDrop {
+        inner: serial,
+        dropped: Arc::clone(&dropped),
+    };
+    let mut transport =
+        MstpTransport::new(serial, config(3, 7)).with_execution_mode(on_test_time());
+    let _rx = transport.start().await.unwrap();
+    // Paused time moves only once the node is idle: abort an idle node,
+    // with no hold of its own left.
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    let before = Instant::now();
+    if bare_drop {
+        drop(transport);
+    } else {
+        transport.abort();
+    }
+    tokio::time::timeout(Duration::from_secs(5), dropped.acquire())
+        .await
+        .expect("the test's clock waited for the node's serial port to drop")
+        .unwrap()
+        .forget();
+    assert!(
+        Instant::now() - before < T_NO_TOKEN,
+        "no node deadline came first"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_aborted_dedicated_node_holds_the_test_clock_until_dropped() {
+    aborted_node_holds_the_clock(false).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_dropped_dedicated_transport_holds_the_test_clock_until_dropped() {
+    aborted_node_holds_the_clock(true).await;
 }
 
 /// Stopped, the node holds the test's runtime no longer: paused time

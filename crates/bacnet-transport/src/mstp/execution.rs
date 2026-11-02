@@ -367,6 +367,9 @@ pub(super) struct DedicatedRuntime {
     /// [`MstpThreadConfig::with_test_time`].
     #[cfg(any(test, feature = "test-support"))]
     test_time: Option<super::test_time::TestTime>,
+    /// The spawned node's gate, on test time.
+    #[cfg(any(test, feature = "test-support"))]
+    node: Option<super::test_time::Node>,
     shutdown: oneshot::Sender<()>,
     finished: oneshot::Receiver<()>,
 }
@@ -422,6 +425,8 @@ impl DedicatedRuntime {
                 handle,
                 #[cfg(any(test, feature = "test-support"))]
                 test_time,
+                #[cfg(any(test, feature = "test-support"))]
+                node: None,
                 shutdown,
                 finished,
             },
@@ -431,15 +436,26 @@ impl DedicatedRuntime {
 
     /// Spawn the MAC loop on the thread's runtime, on test time if the
     /// config asked for it.
-    pub(super) fn spawn<F>(&self, future: F) -> tokio::task::JoinHandle<()>
+    pub(super) fn spawn<F>(&mut self, future: F) -> tokio::task::JoinHandle<()>
     where
         F: std::future::Future<Output = ()> + Send + 'static,
     {
         #[cfg(any(test, feature = "test-support"))]
         if let Some(time) = &self.test_time {
-            return self.handle.spawn(time.drive(future));
+            let driven = time.drive(future);
+            self.node = Some(driven.node());
+            return self.handle.spawn(driven);
         }
         self.handle.spawn(future)
+    }
+
+    /// Before the node's task is aborted: on test time, hold the test's
+    /// clock until the node has dropped (see the `test_time` module).
+    pub(super) fn hold_until_node_dropped(&self) {
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(node) = &self.node {
+            node.hold_until_dropped();
+        }
     }
 
     /// Hold the test's clock, as [`MstpThreadConfig::hold_time`] does.
