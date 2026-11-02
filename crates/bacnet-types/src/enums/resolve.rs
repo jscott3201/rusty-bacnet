@@ -196,8 +196,9 @@ impl ResolvedEnum {
             164 => Self::LifeSafetyState(LifeSafetyState::from_raw(value)),
             161 => Self::LifeSafetyOperation(LifeSafetyOperation::from_raw(value)), // operation-expected
             163 => Self::SilencedState(SilencedState::from_raw(value)),             // silenced
-            // maintenance-required: BACnetMaintenance on life safety
-            // point/zone (12.15/12.16) and access door (12.26).
+            // maintenance-required: BACnetMaintenance on a life safety
+            // point (12.15) and an access door (12.26); a life safety zone's
+            // is a BOOLEAN, which never reaches this arm.
             158 => Self::Maintenance(Maintenance::from_raw(value)),
 
             // Access door.
