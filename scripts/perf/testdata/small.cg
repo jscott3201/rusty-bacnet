@@ -1,0 +1,33 @@
+# callgrind format
+version: 1
+creator: callgrind-3.22.0
+pid: 7
+cmd:  /target/release/counts rp ct 1000
+part: 1
+
+positions: line
+events: Ir
+summary: 525
+
+ob=(1) /target/release/counts
+fl=(1) src/a.rs
+fn=(1) a::main::h0123456789abcdef
+10 100
+fi=(2) src/inl.rs
+20 50
+fe=(1)
+11 25
+cfl=(1)
+cfn=(2) a::helper'2
+calls=3 30
+11 1000
+fn=(2)
+30 300
++2 20
+* 5
+ob=(2) /usr/lib/aarch64-linux-gnu/libc.so.6
+fl=(3) ./time/../sysdeps/unix/sysv/linux/clock_gettime.c
+fn=(3) clock_gettime@@GLIBC_2.17
+5 25
+
+totals: 525
