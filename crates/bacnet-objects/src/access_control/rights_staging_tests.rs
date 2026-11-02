@@ -3,8 +3,10 @@
 //! its Recipient_List (#1315), and puts storage back when a staged write is
 //! never made (#1363).
 
+#[cfg(feature = "std")]
+use super::test_storage::WAIT;
 use super::test_storage::{
-    MemoryPersistence, WAIT, assert_refused, block_on, octets, persistent, positive_only, write,
+    MemoryPersistence, assert_refused, block_on, octets, persistent, positive_only, write,
     write_positive, zone_rule,
 };
 use super::*;
@@ -39,6 +41,8 @@ fn stage_positive(rights: &mut AccessRightsObject, rules: &[BACnetAccessRule]) -
     stage_saved(rights, P::POSITIVE_ACCESS_RULES, None, &octets(rules))
 }
 
+// std: holds a save open on the writer thread.
+#[cfg(feature = "std")]
 #[test]
 fn a_staged_write_saves_while_the_object_serves_the_old_rules() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -295,6 +299,8 @@ fn an_object_dropped_with_a_staged_write_whose_save_failed_leaves_storage_alone(
     assert_eq!(storage.saves(), 1);
 }
 
+// std: holds a save open on the writer thread.
+#[cfg(feature = "std")]
 #[test]
 fn an_object_dropped_while_its_staged_save_runs_puts_storage_back_after_it() {
     let storage = Arc::new(MemoryPersistence::default());

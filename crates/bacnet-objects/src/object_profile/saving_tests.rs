@@ -288,6 +288,7 @@ fn failed_staged_save_never_publishes_or_needs_a_correction() {
     assert_eq!(store.saved(), None);
 }
 
+// std: its callers hold a save open on the writer thread.
 #[cfg(feature = "std")]
 fn detached_clones<T: BACnetObject + crate::traits::Timed + Clone>(
     mut object: T,

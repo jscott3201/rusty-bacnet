@@ -37,6 +37,8 @@ pub(super) struct SlowPersistence {
 impl SlowPersistence {
     /// Make every later commit report its generation on the first channel
     /// and wait for a message on the second.
+    // std: holds a commit open on the writer thread.
+    #[cfg(feature = "std")]
     pub(super) fn hold(&self) -> (mpsc::Receiver<u64>, mpsc::Sender<()>) {
         let (started, started_rx) = mpsc::channel();
         let (go, go_rx) = mpsc::channel();
@@ -60,9 +62,7 @@ impl AuditLogPersistence for SlowPersistence {
             let _ = go.recv();
         }
         if self.fail.load(Ordering::SeqCst) {
-            return Err(Error::Transport(std::io::Error::other(
-                "injected commit failure",
-            )));
+            return Err(Error::Encoding("injected commit failure".into()));
         }
         *self.snapshot.lock().unwrap() = Some(snapshot.clone());
         self.commits.fetch_add(1, Ordering::SeqCst);
@@ -168,6 +168,8 @@ pub(super) fn block_on(future: impl Future<Output = ()>) {
     }
 }
 
+// std: holds a commit open on the writer thread.
+#[cfg(feature = "std")]
 #[test]
 fn a_staged_batch_commits_while_the_log_serves_its_committed_state() {
     let (mut log, storage) = log();
@@ -238,6 +240,8 @@ fn a_staged_batch_whose_commit_fails_leaves_the_log_as_it_was() {
     assert_eq!(log.generation(), generation + 1);
 }
 
+// std: holds a commit open on the writer thread.
+#[cfg(feature = "std")]
 #[test]
 fn a_second_batch_waits_for_the_first_commit_then_builds_on_it() {
     let (mut log, storage) = log();
@@ -272,6 +276,8 @@ fn a_second_batch_waits_for_the_first_commit_then_builds_on_it() {
     assert_eq!(storage.committed().generation, generation + 2);
 }
 
+// std: holds a commit open on the writer thread.
+#[cfg(feature = "std")]
 #[test]
 fn an_in_place_change_lets_a_staged_batch_land_first() {
     let (mut log, storage) = log();
@@ -345,6 +351,8 @@ pub(super) fn staged_write(step: StageStep) -> SaveWait {
     }
 }
 
+// std: holds a commit open on the writer thread.
+#[cfg(feature = "std")]
 #[test]
 fn a_staged_log_enable_write_commits_off_the_lock_and_is_taken_by_the_write() {
     let (mut log, storage) = log();
@@ -553,6 +561,8 @@ fn a_log_dropped_part_way_through_staged_changes_keeps_the_steps_taken() {
     assert_eq!(reopened.generation(), generation + 2);
 }
 
+// std: holds a commit open on the writer thread.
+#[cfg(feature = "std")]
 #[test]
 fn a_log_dropped_while_its_staged_commit_runs_puts_storage_back_after_it() {
     let (mut log, storage) = log();
@@ -581,6 +591,8 @@ fn a_log_dropped_with_a_committed_batch_keeps_it_as_settling_would() {
     assert_eq!(reopen(&storage).records().len(), 1);
 }
 
+// std: holds a commit open on the writer thread.
+#[cfg(feature = "std")]
 #[test]
 fn settling_forgotten_writes_puts_storage_back_and_takes_a_batch_once_committed() {
     let (mut log, storage) = log();

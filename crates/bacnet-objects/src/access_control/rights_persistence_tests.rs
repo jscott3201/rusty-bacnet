@@ -8,11 +8,15 @@ use super::test_storage::{
 };
 use super::*;
 use crate::access_control::rights_writes::grown_rule;
+#[cfg(feature = "std")]
 use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference};
 use bacnet_types::enums::PropertyIdentifier as P;
+#[cfg(feature = "std")]
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(feature = "std")]
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 const SAVED: [P; 3] = [
     P::POSITIVE_ACCESS_RULES,
@@ -288,8 +292,12 @@ fn saved_state_the_setters_refuse_refuses_the_object() {
     }
 }
 
+// std: the file backend.
+#[cfg(feature = "std")]
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+// std: the file backend.
+#[cfg(feature = "std")]
 fn temp_file() -> PathBuf {
     let serial = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir()
@@ -300,10 +308,14 @@ fn temp_file() -> PathBuf {
         .join("rules")
 }
 
+// std: the file backend.
+#[cfg(feature = "std")]
 fn rights_oid(instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::ACCESS_RIGHTS, instance).unwrap()
 }
 
+// std: the file backend.
+#[cfg(feature = "std")]
 #[test]
 fn file_persistence_round_trips_each_member_and_refuses_bad_files() {
     let path = temp_file();
@@ -423,6 +435,8 @@ fn file_persistence_round_trips_each_member_and_refuses_bad_files() {
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
 
+// std: the file backend.
+#[cfg(feature = "std")]
 #[test]
 fn file_persistence_keeps_rules_across_a_rebuild() {
     let path = temp_file();
@@ -454,6 +468,8 @@ fn file_persistence_keeps_rules_across_a_rebuild() {
 
 /// The longest rule a write accepts: SPECIFIED members whose references
 /// carry every optional part, with the widest numbers.
+// std: the file backend.
+#[cfg(feature = "std")]
 fn longest_rule() -> BACnetAccessRule {
     let widest = |object_type| {
         ObjectIdentifier::new(object_type, ObjectIdentifier::MAX_INSTANCE - 1).unwrap()
@@ -473,6 +489,8 @@ fn longest_rule() -> BACnetAccessRule {
     )
 }
 
+// std: the file backend.
+#[cfg(feature = "std")]
 #[test]
 fn file_persistence_refuses_a_file_past_its_size_or_entry_caps() {
     use super::persistence::MAX_FILE_BYTES;

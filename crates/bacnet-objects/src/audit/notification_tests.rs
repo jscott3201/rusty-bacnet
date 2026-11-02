@@ -31,9 +31,7 @@ impl AuditLogPersistence for MemoryPersistence {
 
     fn commit(&self, snapshot: &AuditLogSnapshot) -> Result<(), Error> {
         if self.fail.load(Ordering::Acquire) {
-            return Err(Error::Transport(std::io::Error::other(
-                "injected commit failure",
-            )));
+            return Err(Error::Encoding("injected commit failure".into()));
         }
         *self.snapshot.lock().unwrap() = Some(snapshot.clone());
         self.commits.fetch_add(1, Ordering::AcqRel);

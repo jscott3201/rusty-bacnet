@@ -647,6 +647,11 @@ pub trait DurableWrites {
     fn expire_staged(&mut self, _now: core::time::Duration) {}
 }
 
+// std: these run saves on the writer thread and sync directories.
 #[cfg(all(test, feature = "std"))]
 #[path = "durable/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "durable/shared_tests.rs"]
+mod shared_tests;
