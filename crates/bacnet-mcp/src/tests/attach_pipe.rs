@@ -118,7 +118,7 @@ async fn refused_by_the_bridge(tag: &str, credentials: attach::ListenerCredentia
     let dir = private_dir();
     let mut salt = [0; 32];
     getrandom::fill(&mut salt).unwrap();
-    let name = pipe_name(&attach::Salt(salt), dir.path());
+    let name = pipe_name(&attach::Salt(salt), &attach::Nonce(salt), dir.path());
     let name = PathBuf::from(format!("{}-{tag}", name.display()));
     let mut impostor = ServerOptions::new().create(&name).unwrap();
     let connecting = tokio::spawn({
@@ -171,8 +171,9 @@ async fn the_bridge_refuses_a_pipe_another_user_owns() {
 
 /// Acceptance: a second listener on the workspace finds the first's lock
 /// and is refused while the first keeps serving; once the first is gone a
-/// listener starts again at once; and a pipe of the same name made by
-/// anyone else, without the lock, is refused rather than joined.
+/// listener starts again at once, under a new name (#2237), so a pipe
+/// made under a name seen during an earlier run doesn't keep it from
+/// listening, and `connect` reaches the new one.
 #[tokio::test(start_paused = true)]
 async fn a_second_listener_and_a_taken_name_are_refused() {
     let lab = lab().await;
@@ -184,24 +185,29 @@ async fn a_second_listener_and_a_taken_name_are_refused() {
         error.to_string().contains("another TUI is listening"),
         "{error}"
     );
+    // Refused by the lock, it published no nonce of its own.
+    assert_eq!(socket_path(dir.path()).unwrap(), first.path());
     let (mut agent, bridge) = bridged(first.path());
     let hello = agent.initialize().await;
     assert!(hello.get("result").is_some(), "the first serves: {hello}");
     agent.close().await;
     bridge.await.unwrap().unwrap();
+    let seen = first.path().to_path_buf();
     first.shutdown().await;
     assert!(!attach::listening(dir.path()), "released at shutdown");
 
+    // Someone who saw the name takes it while no TUI runs.
+    let squatter = ServerOptions::new().create(&seen).unwrap();
     let again = lab.attach(dir.path(), Policy::default()).await.unwrap();
+    assert_ne!(again.path(), seen, "a new name");
+    let path = socket_path(dir.path()).unwrap();
+    assert_eq!(path, again.path(), "the nonce read anew");
+    let (mut agent, bridge) = bridged(&path);
+    let hello = agent.initialize().await;
+    assert!(hello.get("result").is_some(), "the next serves: {hello}");
+    agent.close().await;
+    bridge.await.unwrap().unwrap();
     again.shutdown().await;
-
-    // Squatting takes the salt, which only this user may read.
-    let squatter = ServerOptions::new()
-        .create(socket_path(dir.path()).unwrap())
-        .unwrap();
-    let error = lab.attach(dir.path(), Policy::default()).await.unwrap_err();
-    assert!(error.to_string().contains("is taken"), "{error}");
-    assert!(!attach::listening(dir.path()), "the lock is let go");
     drop(squatter);
     lab.stop().await;
 }
@@ -234,27 +240,42 @@ async fn the_listeners_instances_grant_only_this_user() {
     lab.stop().await;
 }
 
-/// Acceptance (#2219): the listener names its pipe from the workspace's
-/// salt, which it makes owned by and open to this user alone, so the
-/// path alone doesn't give the name; `connect`'s lookup finds the same
-/// name. A workspace other users may list is refused before any pipe or
-/// salt is made.
+/// Acceptance (#2219, #2237): the listener names its pipe from the
+/// workspace's salt and its run's nonce, both files owned by and open to
+/// this user alone, so the path alone doesn't give the name; `connect`'s
+/// lookup finds the same name, and none once the listener has stopped
+/// and withdrawn its nonce. Each run has a new name. A workspace other
+/// users may list is refused before any pipe, salt or nonce is made.
 #[tokio::test(start_paused = true)]
 async fn the_pipe_name_needs_the_private_salt() {
     let lab = lab().await;
     let dir = private_dir();
     let listener = lab.attach(dir.path(), Policy::default()).await.unwrap();
     assert_eq!(listener.path(), socket_path(dir.path()).unwrap());
-    let salt = std::fs::File::open(dir.path().join(attach::SALT_FILE)).unwrap();
     let own = attach::own_sid().unwrap();
-    let security = security_of(&salt).unwrap();
-    assert_eq!(security.owner, own);
-    let entries = &security.access;
-    assert_eq!(entries.len(), 1, "{entries:?}");
-    assert_eq!((entries[0].0, &entries[0].2), (0, &own), "{entries:?}");
+    for file in [attach::SALT_FILE, attach::NONCE_FILE] {
+        let opened = std::fs::File::open(dir.path().join(file)).unwrap();
+        let security = security_of(&opened).unwrap();
+        assert_eq!(security.owner, own, "{file}");
+        let entries = &security.access;
+        assert_eq!(entries.len(), 1, "{file}: {entries:?}");
+        assert_eq!((entries[0].0, &entries[0].2), (0, &own), "{entries:?}");
+    }
     let other = attach::Salt([0; 32]);
-    assert_ne!(listener.path(), pipe_name(&other, dir.path()));
+    let nonce = attach::Nonce([0; 32]);
+    assert_ne!(listener.path(), pipe_name(&other, &nonce, dir.path()));
+    let first = listener.path().to_path_buf();
     listener.shutdown().await;
+    let error = socket_path(dir.path()).unwrap_err().to_string();
+    assert!(error.contains("no TUI is listening"), "{error}");
+    // A nonce left by a TUI that crashed names a pipe nobody holds.
+    attach::publish_nonce(dir.path(), &attach::Nonce([7; 32])).unwrap();
+    let (_agent, bridge) = bridged(&socket_path(dir.path()).unwrap());
+    let error = bridge.await.unwrap().unwrap_err().to_string();
+    assert!(error.contains("no TUI is listening"), "{error}");
+    let again = lab.attach(dir.path(), Policy::default()).await.unwrap();
+    assert_ne!(again.path(), first, "a new name each run");
+    again.shutdown().await;
 
     let open = dir.path().join("open");
     let sddl = format!("D:P(A;OICI;FA;;;{own})(A;;FR;;;WD)");
@@ -262,5 +283,6 @@ async fn the_pipe_name_needs_the_private_salt() {
     let error = lab.attach(&open, Policy::default()).await.unwrap_err();
     assert!(error.to_string().contains("open to other users"), "{error}");
     assert!(!open.join(attach::SALT_FILE).exists());
+    assert!(!open.join(attach::NONCE_FILE).exists());
     lab.stop().await;
 }
