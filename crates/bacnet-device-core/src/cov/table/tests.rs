@@ -3,6 +3,7 @@ use super::*;
 use crate::cov::CovNotificationKind;
 use alloc::vec;
 use bacnet_time::Duration;
+use bacnet_types::MacAddr;
 use bacnet_types::enums::ObjectType;
 
 const T0: Instant = Instant::from_secs(1_000);

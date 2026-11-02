@@ -10,7 +10,6 @@ use crate::cov::{
 };
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_time::Instant;
-use bacnet_types::MacAddr;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::ObjectIdentifier;
 
@@ -40,24 +39,32 @@ pub struct Fenced {
     pub contexts: Vec<MultipleContextKey>,
 }
 
-/// The entries, ordered by their key, which puts the monitored object first.
+/// The entries in one vector sorted by their key, which puts the monitored
+/// object first, so an object's entries are one run found by binary search.
+/// Measured against a `BTreeMap` for #2303 (design §11): smaller in an
+/// image and faster on the fanout's lookup and on admission, slower only
+/// on removal, which a cancellation or a deleted object makes.
 #[derive(Debug, Default)]
-pub(super) struct Entries(BTreeMap<CovSubscriptionKey, CovSubscriptionSnapshot>);
+pub(super) struct Entries(Vec<CovSubscriptionSnapshot>);
 
 impl Entries {
+    fn find(&self, key: &CovSubscriptionKey) -> Result<usize, usize> {
+        self.0.binary_search_by(|entry| entry.key.cmp(key))
+    }
+
     pub(super) fn get(&self, key: &CovSubscriptionKey) -> Option<&CovSubscriptionSnapshot> {
-        self.0.get(key)
+        self.find(key).ok().map(|at| &self.0[at])
     }
 
     pub(super) fn get_mut(
         &mut self,
         key: &CovSubscriptionKey,
     ) -> Option<&mut CovSubscriptionSnapshot> {
-        self.0.get_mut(key)
+        self.find(key).ok().map(|at| &mut self.0[at])
     }
 
     pub(super) fn contains(&self, key: &CovSubscriptionKey) -> bool {
-        self.0.contains_key(key)
+        self.find(key).is_ok()
     }
 
     /// Insert under the snapshot's own key, returning the entry it replaced.
@@ -65,11 +72,17 @@ impl Entries {
         &mut self,
         snapshot: CovSubscriptionSnapshot,
     ) -> Option<CovSubscriptionSnapshot> {
-        self.0.insert(snapshot.key.clone(), snapshot)
+        match self.find(&snapshot.key) {
+            Ok(at) => Some(core::mem::replace(&mut self.0[at], snapshot)),
+            Err(at) => {
+                self.0.insert(at, snapshot);
+                None
+            }
+        }
     }
 
     pub(super) fn remove(&mut self, key: &CovSubscriptionKey) -> Option<CovSubscriptionSnapshot> {
-        self.0.remove(key)
+        self.find(key).ok().map(|at| self.0.remove(at))
     }
 
     pub(super) fn len(&self) -> usize {
@@ -77,11 +90,11 @@ impl Entries {
     }
 
     pub(super) fn values(&self) -> impl Iterator<Item = &CovSubscriptionSnapshot> {
-        self.0.values()
+        self.0.iter()
     }
 
     pub(super) fn values_mut(&mut self) -> impl Iterator<Item = &mut CovSubscriptionSnapshot> {
-        self.0.values_mut()
+        self.0.iter_mut()
     }
 
     /// The entries monitoring `oid`, found without visiting the others.
@@ -89,18 +102,10 @@ impl Entries {
         &self,
         oid: ObjectIdentifier,
     ) -> impl Iterator<Item = &CovSubscriptionSnapshot> {
-        // The least key of any entry on `oid`: keys order by object, then
-        // family (ordinary first), recipient (a direct, empty MAC least) and
-        // process.
-        let least = CovSubscriptionKey::Object {
-            recipient: CovRecipient::Direct(MacAddr::new()),
-            process_id: 0,
-            object: oid,
-        };
-        self.0
-            .range(least..)
-            .take_while(move |(key, _)| key.object() == oid)
-            .map(|(_, entry)| entry)
+        let start = self.0.partition_point(|entry| entry.key.object() < oid);
+        self.0[start..]
+            .iter()
+            .take_while(move |entry| entry.key.object() == oid)
     }
 }
 
