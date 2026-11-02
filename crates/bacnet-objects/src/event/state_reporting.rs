@@ -38,7 +38,7 @@ use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, PropertyIdentifier,
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
 
-use super::history::{EventHistory, EventTransitionState};
+use super::history::{EventHistory, EventTransitionState, detection_gate};
 use super::options::ReportingOptions;
 use super::{
     ChangeOfStateDetector, EnrollmentSummaryCapability, EventStateChange, EventTransitionCommit,
@@ -184,12 +184,14 @@ impl ChangeOfStateReporting {
     }
 
     /// Commit one transition through the shared kernel, then settle the
-    /// detector's countdown and fault edge.
+    /// detector's countdown and fault edge. With detection off, a target
+    /// other than NORMAL is refused ([`detection_gate`]).
     pub(crate) fn commit(
         &mut self,
         commit: EventTransitionCommit,
         reliability: Reliability,
     ) -> Result<(), EventTransitionCommitError> {
+        detection_gate(self.event_detection_enable, &commit)?;
         let change = commit.change.clone();
         EventTransitionState::new(
             &mut self.event_detector.event_state,

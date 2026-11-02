@@ -614,9 +614,7 @@ impl crate::traits::EventReporting for EventEnrollmentObject {
         &mut self,
         commit: EventTransitionCommit,
     ) -> Result<(), EventTransitionCommitError> {
-        if !self.event_detection_enable && commit.change.to != EventState::NORMAL {
-            return Err(EventTransitionCommitError::DetectionDisabled);
-        }
+        crate::event::history::detection_gate(self.event_detection_enable, &commit)?;
         transition::commit_event_transition(
             &mut self.event_state,
             &mut self.acked_transitions,

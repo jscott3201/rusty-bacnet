@@ -97,14 +97,34 @@ impl<'a> EventTransitionState<'a> {
     }
 }
 
+/// The Event_Detection_Enable gate on a transition commit, shared by every
+/// built-in reporter: while detection is off (`detection_enabled` FALSE) a
+/// commit whose target is not NORMAL is refused with
+/// [`DetectionDisabled`](EventTransitionCommitError::DetectionDisabled)
+/// before anything is touched, since Clause 13.2.2.1 stops the state
+/// machine then. A NORMAL target passes: disabling detection resets the
+/// object to NORMAL directly, not through a commit, so this gate never
+/// stands in the reset's way.
+pub(crate) fn detection_gate(
+    detection_enabled: bool,
+    commit: &EventTransitionCommit,
+) -> Result<(), EventTransitionCommitError> {
+    if detection_enabled || commit.change.to == EventState::NORMAL {
+        Ok(())
+    } else {
+        Err(EventTransitionCommitError::DetectionDisabled)
+    }
+}
+
 /// Implement proposal-and-commit intrinsic reporting for built-in object
 /// families: the [`EventReporting`](crate::traits::EventReporting) of
 /// `$object`, which lends it with `crate::traits::lend_event_reporting!()`.
 ///
 /// The evaluation hooks only propose transitions. The commit hook lends the
 /// detector and object history to the shared kernel and finalizes private
-/// detector state only after that kernel succeeds. The gated arms enforce
-/// Clause 13.2.2.1's Event_Detection_Enable state-machine gate.
+/// detector state only after that kernel succeeds. The gated arms, the
+/// commit among them ([`detection_gate`]), enforce Clause 13.2.2.1's
+/// Event_Detection_Enable state-machine gate.
 macro_rules! impl_builtin_intrinsic_reporting {
     (
         $object:ty,
@@ -163,6 +183,10 @@ macro_rules! impl_builtin_intrinsic_reporting {
                 &mut self,
                 commit: $crate::event::EventTransitionCommit,
             ) -> Result<(), $crate::event::EventTransitionCommitError> {
+                $crate::event::history::detection_gate(
+                    self.$event_detection_enable_field,
+                    &commit,
+                )?;
                 let change = commit.change.clone();
                 $crate::event::history::EventTransitionState::new(
                     &mut self.$detector_field.event_state,

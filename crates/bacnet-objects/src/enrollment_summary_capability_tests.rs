@@ -4,8 +4,8 @@ use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use crate::event::{EventStateChange, EventTransition, EventTransitionCommit};
 use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject};
 use crate::traits::BACnetObject;
-use bacnet_types::enums::{EngineeringUnits, EventState, EventType};
-use bacnet_types::primitives::BACnetTimeStamp;
+use bacnet_types::enums::{EngineeringUnits, EventState, EventType, PropertyIdentifier};
+use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
 
 #[test]
 fn all_eleven_intrinsic_families_report_implied_algorithm_and_shared_commit_coordinate() {
@@ -65,6 +65,16 @@ fn all_eleven_intrinsic_families_report_implied_algorithm_and_shared_commit_coor
         assert_eq!(capability.event_type, *expected_event_type);
         assert_eq!(capability.last_transition, None);
 
+        // Binary and Multi-state Output start with detection off, which
+        // refuses this commit (#2271).
+        object
+            .write_property(
+                PropertyIdentifier::EVENT_DETECTION_ENABLE,
+                None,
+                PropertyValue::Boolean(true),
+                None,
+            )
+            .unwrap();
         object
             .event_reporting_mut()
             .unwrap()
