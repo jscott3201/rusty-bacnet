@@ -34,8 +34,9 @@ use bacnet_encoding::constructed::{
     encode_device_object_property_reference, encode_device_object_reference,
 };
 use bacnet_objects::database::{LocalDevice, ObjectDatabase};
+use bacnet_objects::property_metadata::{Datatype, ValueShape, ValueType};
 use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference};
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use bytes::BytesMut;
@@ -94,26 +95,27 @@ impl DeviceQualified for BACnetDeviceObjectReference {
 /// Rewrites a written value so no reference in it names the given Device.
 type Rewrite = fn(PropertyValue, ObjectIdentifier) -> PropertyValue;
 
-/// The rewrite for `property` of an object of `object_type`, if the server
-/// localizes its references. A list or an array takes
+/// The rewrite for a property of this value type, if the server localizes
+/// its references: one whose row marks them kept inside the device
+/// ([`ValueType::device_local`]). A list or an array takes
 /// [`localize_members`], a property holding one reference
-/// [`localize_single`].
-fn rewrite(object_type: ObjectType, property: PropertyIdentifier) -> Option<Rewrite> {
-    match (object_type, property) {
-        (
-            ObjectType::SCHEDULE | ObjectType::CHANNEL,
-            PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES,
-        ) => Some(localize_members::<BACnetDeviceObjectPropertyReference>),
-        (ObjectType::STAGING, PropertyIdentifier::TARGET_REFERENCES) => {
-            Some(localize_members::<BACnetDeviceObjectReference>)
-        }
-        (ObjectType::AVERAGING, PropertyIdentifier::OBJECT_PROPERTY_REFERENCE)
-        | (ObjectType::TREND_LOG, PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY) => {
+/// [`localize_single`], each with the codec of the row's reference datatype.
+fn rewrite(value_type: ValueType) -> Option<Rewrite> {
+    if !value_type.device_local {
+        return None;
+    }
+    let single = matches!(value_type.shape, ValueShape::Single);
+    match value_type.datatype {
+        Datatype::DeviceObjectPropertyReference if single => {
             Some(localize_single::<BACnetDeviceObjectPropertyReference>)
         }
-        (ObjectType::TREND_LOG_MULTIPLE, PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY) => {
+        Datatype::DeviceObjectPropertyReference => {
             Some(localize_members::<BACnetDeviceObjectPropertyReference>)
         }
+        Datatype::DeviceObjectReference if single => {
+            Some(localize_single::<BACnetDeviceObjectReference>)
+        }
+        Datatype::DeviceObjectReference => Some(localize_members::<BACnetDeviceObjectReference>),
         _ => None,
     }
 }
@@ -135,7 +137,7 @@ pub fn localize(
     property: PropertyIdentifier,
     value: PropertyValue,
 ) -> PropertyValue {
-    let Some(rewrite) = rewrite(oid.object_type(), property) else {
+    let Some(rewrite) = db.value_type(&oid, property).and_then(rewrite) else {
         return value;
     };
     let Some(local) = db.local_device().identifier() else {
@@ -238,6 +240,47 @@ fn localize_bytes<R: DeviceQualified>(bytes: &[u8], local: ObjectIdentifier) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bacnet_objects::property_metadata::standard_value_type;
+    use bacnet_types::enums::ObjectType;
+
+    /// The rewrite's match before #2177, frozen.
+    fn old_rewrite(object_type: ObjectType, property: PropertyIdentifier) -> Option<Rewrite> {
+        match (object_type, property) {
+            (
+                ObjectType::SCHEDULE | ObjectType::CHANNEL,
+                PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES,
+            ) => Some(localize_members::<BACnetDeviceObjectPropertyReference>),
+            (ObjectType::STAGING, PropertyIdentifier::TARGET_REFERENCES) => {
+                Some(localize_members::<BACnetDeviceObjectReference>)
+            }
+            (ObjectType::AVERAGING, PropertyIdentifier::OBJECT_PROPERTY_REFERENCE)
+            | (ObjectType::TREND_LOG, PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY) => {
+                Some(localize_single::<BACnetDeviceObjectPropertyReference>)
+            }
+            (ObjectType::TREND_LOG_MULTIPLE, PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY) => {
+                Some(localize_members::<BACnetDeviceObjectPropertyReference>)
+            }
+            _ => None,
+        }
+    }
+
+    /// Before/after table test for #2177: the old match against the
+    /// standard value types every built-in row resolves to, over every
+    /// (object type, property) pair, comparing the rewrite chosen.
+    #[test]
+    fn standard_value_types_localize_where_the_old_match_did() {
+        let mut differences = Vec::new();
+        for object_type in (0..=1023).map(ObjectType::from_raw) {
+            for property in (0..=1023).map(PropertyIdentifier::from_raw) {
+                let new = standard_value_type(object_type, property).and_then(rewrite);
+                let old = old_rewrite(object_type, property);
+                if new.map(|f| f as usize) != old.map(|f| f as usize) {
+                    differences.push(format!("{object_type:?} {property:?}"));
+                }
+            }
+        }
+        assert!(differences.is_empty(), "{}", differences.join("\n"));
+    }
     use bacnet_objects::device::{DeviceConfig, DeviceObject};
     use bacnet_objects::schedule::ScheduleObject;
 

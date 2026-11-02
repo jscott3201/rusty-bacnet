@@ -411,6 +411,22 @@
 # riscv32imac (from 166992 / 166288 / 200590), RAM unchanged at 16480. The
 # fmt_functions rows are 0, and the octet budgets are --suggest's (size
 # plus 12%).
+#
+# #2177 gives each property a datatype and shape: the array and list checks,
+# the NULL rule and the local form of references read them from the
+# metadata rows, which take the standard value type table in bacnet-types
+# when a row states none. That table replaces the smaller array and list
+# matches, and each row grew by one optional value type (16 to 20 octets).
+# Measured with Rust 1.99.0 against dev at c89b112d3, as text / rodata /
+# flash:
+#
+#   thumbv7m objects      145416 / 17448 / 163888   148548 / 18304 / 167876
+#   thumbv7em objects     144640 / 17448 / 163112   147620 / 18304 / 166948
+#   riscv32imac objects   178064 / 18896 / 196982   180256 / 22264 / 202542
+#
+# RAM unchanged at 16480. riscv32imac's .rodata outgrew its budget (its
+# switch tables land there), so that budget is the new size plus 12%; the
+# other budgets are unchanged.
 
 [thumbv7m-none-eabi.mstp]
 text = 18320
@@ -788,7 +804,7 @@ memmove_functions = 2
 
 [riscv32imac-unknown-none-elf.objects]
 text = 201008
-rodata = 21680
+rodata = 24944
 data = 64
 bss = 18464
 flash = 222704

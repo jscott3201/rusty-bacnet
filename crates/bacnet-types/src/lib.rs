@@ -21,6 +21,7 @@ pub mod calendar;
 #[cfg(feature = "alloc")]
 pub mod constructed;
 pub mod data_link;
+pub mod datatype;
 pub mod enums;
 pub mod error;
 pub mod map_hash;

@@ -7,6 +7,7 @@ use bacnet_encoding::constructed::{
     encode_recipient,
 };
 use bacnet_encoding::primitives::decode_application_value;
+use bacnet_objects::property_metadata::{Datatype, ElementCodec, ValueType};
 use bacnet_services::list_manipulation::ListElementRequest;
 use bacnet_types::constructed::{
     BACnetCalendarEntry, BACnetDestination, BACnetDeviceObjectPropertyReference,
@@ -68,8 +69,8 @@ pub fn handle_remove_list_element(
 }
 
 /// How a list's elements travel in the request and how the object holds them.
-#[derive(Clone, Copy)]
-enum ElementCodec {
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ListCodec {
     /// Consecutive application-tagged values, held as `PropertyValue::List`.
     Values,
     /// BACnetDestination entries, held as the framed list in `ApplicationData`.
@@ -85,40 +86,25 @@ enum ElementCodec {
     Subscriptions,
 }
 
-impl ElementCodec {
-    /// The codec the property's datatype implies, known even when the object
-    /// is missing. Only a BACnetLIST of BACnetDestination, the Recipient_List
-    /// of Notification Class and Notification Forwarder (Tables 12-24 and
-    /// 12-58), takes the destination codec, only Calendar's Date_List, a
-    /// BACnetLIST of BACnetCalendarEntry (Table 12-11), the calendar codec,
-    /// only the Schedule's List_Of_Object_Property_References, a BACnetLIST
-    /// of BACnetDeviceObjectPropertyReference (Table 12-28), the reference
-    /// codec, and only the Notification Forwarder's Subscribed_Recipients, a
-    /// BACnetLIST of BACnetEventNotificationSubscription (Table 12-58), the
-    /// subscription codec.
-    fn for_datatype(object_type: ObjectType, property: PropertyIdentifier) -> Self {
-        match property {
-            PropertyIdentifier::RECIPIENT_LIST
-                if matches!(
-                    object_type,
-                    ObjectType::NOTIFICATION_CLASS | ObjectType::NOTIFICATION_FORWARDER
-                ) =>
-            {
-                Self::Destinations
-            }
-            PropertyIdentifier::DATE_LIST if object_type == ObjectType::CALENDAR => {
-                Self::CalendarEntries
-            }
-            PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES
-                if object_type == ObjectType::SCHEDULE =>
-            {
-                Self::References
-            }
-            PropertyIdentifier::SUBSCRIBED_RECIPIENTS
-                if object_type == ObjectType::NOTIFICATION_FORWARDER =>
-            {
-                Self::Subscriptions
-            }
+impl ListCodec {
+    /// The codec for a list of this value type: the one for its datatype
+    /// when its row says the list services edit it by datatype
+    /// ([`bacnet_objects::property_metadata::ElementCodec::Datatype`]), and
+    /// application values otherwise. Only a BACnetLIST of BACnetDestination,
+    /// of BACnetCalendarEntry, of BACnetDeviceObjectPropertyReference or of
+    /// BACnetEventNotificationSubscription has a codec of its own here.
+    fn for_value_type(value_type: Option<ValueType>) -> Self {
+        let Some(value_type) = value_type else {
+            return Self::Values;
+        };
+        if value_type.element_codec() != Some(ElementCodec::Datatype) {
+            return Self::Values;
+        }
+        match value_type.datatype {
+            Datatype::Destination => Self::Destinations,
+            Datatype::CalendarEntry => Self::CalendarEntries,
+            Datatype::DeviceObjectPropertyReference => Self::References,
+            Datatype::EventNotificationSubscription => Self::Subscriptions,
             _ => Self::Values,
         }
     }
@@ -588,7 +574,7 @@ impl Refusal {
 fn list_target(
     db: &ObjectDatabase,
     request: &ListElementRequest,
-    codec: ElementCodec,
+    codec: ListCodec,
 ) -> Result<PropertyValue, Refusal> {
     let object = db.get(&request.object_identifier).ok_or_else(|| {
         Refusal::unread(protocol_error(
@@ -655,9 +641,8 @@ pub(crate) fn edited_list_value(
     remove: bool,
 ) -> Option<PropertyValue> {
     let request = ListElementRequest::decode(service_data).ok()?;
-    let codec = ElementCodec::for_datatype(
-        request.object_identifier.object_type(),
-        request.property_identifier,
+    let codec = ListCodec::for_value_type(
+        db.value_type(&request.object_identifier, request.property_identifier),
     );
     let current = list_target(db, &request, codec).ok()?;
     let mut edits = codec.decode(&request.list_of_elements).ok()?;
@@ -679,9 +664,8 @@ pub(crate) fn handle_list_element_observed(
     mut before: impl FnMut(&ObjectDatabase, &ListElementRequest, Option<&PropertyValue>),
 ) -> Result<ObjectIdentifier, Error> {
     let request = ListElementRequest::decode(service_data).map_err(Error::into_request_reject)?;
-    let codec = ElementCodec::for_datatype(
-        request.object_identifier.object_type(),
-        request.property_identifier,
+    let codec = ListCodec::for_value_type(
+        db.value_type(&request.object_identifier, request.property_identifier),
     );
     let target = list_target(db, &request, codec);
     // Every request decodes its elements once, with the codec its datatype
@@ -715,3 +699,6 @@ pub(crate) fn handle_list_element_observed(
         .map_err(|error| object_refusal(error, remove, &added))?;
     Ok(request.object_identifier)
 }
+
+#[cfg(test)]
+mod codec_tests;

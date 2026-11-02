@@ -1,10 +1,18 @@
 //! Every built-in object answers the array and list queries from the shared
 //! classification table, so a client that knows only the object type and
-//! property (`standard_array_property`, `standard_list_property`) shapes a
+//! property (`standard_value_type`) shapes a
 //! value the way the object serves it (#1296).
 
 use super::*;
-use crate::traits::{standard_array_property, standard_list_property};
+use crate::property_metadata::standard_value_type;
+
+fn standard_array_property(object_type: ObjectType, property: PropertyIdentifier) -> bool {
+    standard_value_type(object_type, property).is_some_and(|v| v.is_array())
+}
+
+fn standard_list_property(object_type: ObjectType, property: PropertyIdentifier) -> bool {
+    standard_value_type(object_type, property).is_some_and(|v| v.is_list())
+}
 use bacnet_types::error::RemoteError;
 
 #[test]
