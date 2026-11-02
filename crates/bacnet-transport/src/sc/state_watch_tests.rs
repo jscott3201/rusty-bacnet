@@ -60,7 +60,10 @@ fn bvlc_result_nak(message_id: u16) -> ScMessage {
     }
 }
 
-#[tokio::test]
+// Paused clock: the heartbeat deadline follows it (#2124). On real time a
+// stall past the 300 ms timeout before the first wait would hide Connected
+// behind Disconnected, and the wait for Connected would time out (#2310).
+#[tokio::test(start_paused = true)]
 async fn sc_connection_state_changes_reports_connected_then_disconnected() {
     let (ws_client, ws_hub) = LoopbackWebSocket::pair();
     let client_vmac = [0x01; 6];
