@@ -157,14 +157,17 @@ async fn out_of_service_keeps_the_clients_values() {
     h.server.stop().await.unwrap();
 }
 
-/// The encoded Pulse_Rate a notification about ACC-1 carries.
-fn rate_in(notification: &bacnet_services::cov::COVNotificationRequest) -> Vec<u8> {
+/// The encoded `property` a notification about ACC-1 carries.
+fn value_in(
+    notification: &bacnet_services::cov::COVNotificationRequest,
+    property: PropertyIdentifier,
+) -> Vec<u8> {
     assert_eq!(notification.monitored_object_identifier, acc1());
     notification
         .list_of_values
         .iter()
-        .find(|value| value.property_identifier == RATE)
-        .expect("Pulse_Rate reported")
+        .find(|value| value.property_identifier == property)
+        .expect("property reported")
         .value
         .clone()
 }
@@ -188,10 +191,37 @@ async fn a_closed_window_notifies_pulse_rate_subscribers() {
         .await;
     assert_eq!(response(&h).await, Ok(()));
     // The subscription's initial report carries the rate as it is.
-    assert_eq!(rate_in(&h.cov_notification().await), vec![0x21, 0x00]);
+    assert_eq!(
+        value_in(&h.cov_notification().await, RATE),
+        vec![0x21, 0x00]
+    );
     h.server.add_pulses_local(&acc1(), 3).await.unwrap();
     advance_to(origin, 10_000).await;
-    assert_eq!(rate_in(&h.cov_notification().await), vec![0x21, 0x03]);
+    assert_eq!(
+        value_in(&h.cov_notification().await, RATE),
+        vec![0x21, 0x03]
+    );
+    h.server.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_feed_notifies_present_value_subscribers() {
+    let (mut h, _origin) = start().await;
+    let mut body = BytesMut::new();
+    bacnet_services::cov::SubscribeCOVRequest {
+        subscriber_process_identifier: 8,
+        monitored_object_identifier: acc1(),
+        issue_confirmed_notifications: Some(false),
+        lifetime: Some(300),
+    }
+    .encode(&mut body)
+    .unwrap();
+    h.request(ConfirmedServiceChoice::SUBSCRIBE_COV, body).await;
+    assert_eq!(response(&h).await, Ok(()));
+    assert_eq!(value_in(&h.cov_notification().await, PV), vec![0x21, 0x00]);
+    // 1:2 Prescale: 10 pulses are 5 counts.
+    h.server.add_pulses_local(&acc1(), 10).await.unwrap();
+    assert_eq!(value_in(&h.cov_notification().await, PV), vec![0x21, 0x05]);
     h.server.stop().await.unwrap();
 }
 

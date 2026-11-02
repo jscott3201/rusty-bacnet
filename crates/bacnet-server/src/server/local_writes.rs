@@ -384,12 +384,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// last call, counted by the application (#2259).
     ///
     /// In service the pulses step Present_Value, through Prescale's ratio
-    /// when the object has one, wrapping to zero past Max_Pres_Value. They
+    /// when the object has one, rolling over modulo Max_Pres_Value + 1. They
     /// also count toward Pulse_Rate: once Limit_Monitoring_Interval is set,
     /// the server's monotonic task closes a window at the end of each
     /// interval and Pulse_Rate becomes that window's count. While
-    /// `Out_Of_Service` is TRUE, Present_Value and Pulse_Rate keep the
-    /// values a client wrote: the pulses still fill the rate window, but
+    /// `Out_Of_Service` is TRUE, Present_Value holds and Pulse_Rate keeps
+    /// the value a client wrote: the pulses still fill the rate window, but
     /// Present_Value drops them rather than catching up later. An unknown
     /// object fails with OBJECT / UNKNOWN_OBJECT and any object other than
     /// an Accumulator with OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,

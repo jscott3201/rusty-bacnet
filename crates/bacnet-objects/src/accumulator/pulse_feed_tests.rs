@@ -172,6 +172,33 @@ fn a_bound_clock_opens_the_window_and_an_interval_write_wakes_the_host() {
 }
 
 #[test]
+fn a_new_clock_reopens_the_window_on_its_time_base_keeping_the_pulses() {
+    let (first, millis, _wakes) = clocks();
+    let mut object = accumulator();
+    object.set_limit_monitoring_interval(10);
+    millis.store(2_000, Ordering::Relaxed);
+    object.bind_clocks(&first);
+    assert_eq!(
+        object.next_monotonic_deadline(),
+        Some(Duration::from_secs(12))
+    );
+    feed(&mut object, 5);
+    let (second, other, _) = clocks();
+    other.store(100_000, Ordering::Relaxed);
+    object.bind_clocks(&second);
+    assert_eq!(
+        object.next_monotonic_deadline(),
+        Some(Duration::from_secs(110))
+    );
+    assert!(!object.advance_monotonic_time(Duration::from_secs(109)));
+    assert!(object.advance_monotonic_time(Duration::from_secs(110)));
+    assert_eq!(
+        object.read_property(P::PULSE_RATE, None).unwrap(),
+        PropertyValue::Unsigned(5)
+    );
+}
+
+#[test]
 fn the_deadline_always_moves_past_the_advance() {
     let (clocks, _millis, _wakes) = clocks();
     let mut object = accumulator();

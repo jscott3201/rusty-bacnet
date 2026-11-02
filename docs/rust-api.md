@@ -6914,7 +6914,7 @@ registered, `apply_local_input(LocalInputValue::Pulses(pulses))` on its
 
 - **Present_Value** steps by one count per pulse, or by Prescale's ratio when
   the object has one, keeping the remainder between feeds (Clause 12.61.13),
-  and wraps to zero past Max_Pres_Value (Clause 12.61.4). A Prescale with a
+  and rolls over modulo Max_Pres_Value + 1 (Clause 12.61.4). A Prescale with a
   modulo-divide of zero has no ratio and leaves Present_Value alone.
 - **Pulse_Rate** counts in a fixed window, in integer arithmetic only. Once
   Limit_Monitoring_Interval is set (`set_limit_monitoring_interval`, or a
@@ -6924,12 +6924,14 @@ registered, `apply_local_input(LocalInputValue::Pulses(pulses))` on its
   notified, and the next window opens at that boundary. A pass that comes
   late closes one window with every pulse counted and carries the part of an
   interval left over, so the next deadline is always later than the pass. A
-  change of interval starts a new, empty window. With an interval of zero,
+  change of interval starts a new, empty window; rewriting the interval it
+  already has changes nothing, so a client that repeats the write doesn't
+  hold Pulse_Rate back. With an interval of zero,
   the default, no window closes. An application that measures the rate
   itself calls `set_pulse_rate` before registering the object.
-- **Out_Of_Service.** While it is TRUE, a client's values stay (Clause
-  12.61.10): Present_Value drops fed pulses rather than catching up on the
-  return to service, and Pulse_Rate keeps a written value, though the pulses
+- **Out_Of_Service.** While it is TRUE (Clause 12.61.10), Present_Value
+  holds, dropping fed pulses rather than catching up on the return to
+  service, and Pulse_Rate keeps a client's written value, though the pulses
   still fill the window, so the first window to close in service counts them.
 
 Pulse_Rate is writable only while Out_Of_Service is TRUE (Clause 12.61.20);

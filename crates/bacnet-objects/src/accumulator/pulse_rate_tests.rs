@@ -134,6 +134,49 @@ fn out_of_service_keeps_the_clients_rate() {
     assert_eq!(rate(&object), PropertyValue::Unsigned(2));
 }
 
+#[test]
+fn pulses_fed_out_of_service_count_in_the_window_that_closes_in_service() {
+    let mut object = accumulator(10);
+    set_out_of_service(&mut object, true);
+    feed(&mut object, 5);
+    at(&mut object, 4);
+    set_out_of_service(&mut object, false);
+    feed(&mut object, 2);
+    assert!(at(&mut object, 10));
+    assert_eq!(rate(&object), PropertyValue::Unsigned(7));
+}
+
+#[test]
+fn a_window_with_the_same_count_reports_no_change() {
+    let mut object = accumulator(10);
+    feed(&mut object, 4);
+    assert!(at(&mut object, 10));
+    feed(&mut object, 4);
+    assert!(!at(&mut object, 20), "an unchanged rate is no change");
+    assert_eq!(rate(&object), PropertyValue::Unsigned(4));
+    // The window still closed: the next one counts only its own pulses.
+    feed(&mut object, 1);
+    assert!(at(&mut object, 30));
+    assert_eq!(rate(&object), PropertyValue::Unsigned(1));
+}
+
+#[test]
+fn rewriting_the_same_interval_keeps_the_window() {
+    let mut object = accumulator(10);
+    feed(&mut object, 3);
+    at(&mut object, 5);
+    object
+        .write_property(
+            P::LIMIT_MONITORING_INTERVAL,
+            None,
+            PropertyValue::Unsigned(10),
+            None,
+        )
+        .unwrap();
+    assert!(at(&mut object, 10));
+    assert_eq!(rate(&object), PropertyValue::Unsigned(3));
+}
+
 fn assert_property_error(error: Error, expected: ErrorCode) {
     assert!(
         matches!(error, Error::Remote(RemoteError::Error { class, code })

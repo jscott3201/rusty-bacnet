@@ -135,9 +135,14 @@ impl AccumulatorObject {
     }
 
     /// Set Limit_Monitoring_Interval, the length in seconds of the window
-    /// Pulse_Rate counts over, and start a new, empty window. Zero, the
+    /// Pulse_Rate counts over, and start a new, empty window. Setting the
+    /// interval it already has changes nothing, so a client that rewrites
+    /// the same value doesn't keep restarting the window. Zero, the
     /// default, leaves Pulse_Rate to the application and network writes.
     pub fn set_limit_monitoring_interval(&mut self, seconds: u32) {
+        if seconds == self.limit_monitoring_interval {
+            return;
+        }
         self.limit_monitoring_interval = seconds;
         self.restart_rate_window();
     }
