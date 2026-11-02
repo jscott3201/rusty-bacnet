@@ -1,32 +1,32 @@
 {
   "rp/ct": {
-    "2a: client (transaction table and other client locks)": 826.752,
-    "2b: server (database and other server locks)": 298.246,
-    "channel permits (bounded mpsc)": 4.496
+    "2a: client (transaction table and other client locks)": 757.0,
+    "2b: server (database and other server locks)": 228.494,
+    "channel permits (bounded mpsc)": 144.0
   },
   "rp/mt": {
-    "2a: client (transaction table and other client locks)": 826.752,
-    "2b: server (database and other server locks)": 298.3242222222222,
-    "channel permits (bounded mpsc)": 4.496
+    "2a: client (transaction table and other client locks)": 757.0,
+    "2b: server (database and other server locks)": 228.57222222222222,
+    "channel permits (bounded mpsc)": 144.0
   },
   "wp/ct": {
-    "2a: client (transaction table and other client locks)": 826.752,
-    "2b: server (database and other server locks)": 1182.3437777777779,
-    "channel permits (bounded mpsc)": 4.496
+    "2a: client (transaction table and other client locks)": 757.0,
+    "2b: server (database and other server locks)": 1112.5917777777777,
+    "channel permits (bounded mpsc)": 144.0
   },
   "wp/mt": {
-    "2a: client (transaction table and other client locks)": 826.752,
-    "2b: server (database and other server locks)": 1182.4922222222222,
-    "channel permits (bounded mpsc)": 4.495888888888889
+    "2a: client (transaction table and other client locks)": 757.0,
+    "2b: server (database and other server locks)": 1112.7402222222222,
+    "channel permits (bounded mpsc)": 143.99988888888888
   },
   "rpm/ct": {
-    "2a: client (transaction table and other client locks)": 826.752,
-    "2b: server (database and other server locks)": 299.9478888888889,
-    "channel permits (bounded mpsc)": 4.496
+    "2a: client (transaction table and other client locks)": 757.0,
+    "2b: server (database and other server locks)": 230.1958888888889,
+    "channel permits (bounded mpsc)": 144.0
   },
   "rpm/mt": {
-    "2a: client (transaction table and other client locks)": 826.9153333333334,
-    "2b: server (database and other server locks)": 301.7464444444444,
-    "channel permits (bounded mpsc)": 4.496
+    "2a: client (transaction table and other client locks)": 757.1633333333333,
+    "2b: server (database and other server locks)": 231.99444444444444,
+    "channel permits (bounded mpsc)": 144.0
   }
 }

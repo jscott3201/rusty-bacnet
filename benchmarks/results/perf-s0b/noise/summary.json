@@ -2138,5 +2138,8 @@
     "wp/ct": 9.94422222222056,
     "wp/mt": 146.01755555555428
   },
+  "environment": {
+    "GLIBC_TUNABLES": "glibc.malloc.tcache_count=32:glibc.malloc.mmap_threshold=1048576:glibc.malloc.trim_threshold=1048576:glibc.malloc.top_pad=1048576"
+  },
   "baseline_builds_identical": true
 }

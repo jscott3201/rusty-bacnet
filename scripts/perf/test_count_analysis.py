@@ -5,6 +5,8 @@
 """
 
 import argparse
+import json
+import tempfile
 import copy
 import unittest
 from pathlib import Path
@@ -308,6 +310,37 @@ class Gates(unittest.TestCase):
         self.assertEqual(ca.change_over_floor({"delta": 3.0, "noise_floor": 0.00003}), "+inf")
         self.assertEqual(ca.change_over_floor({"delta": -5.0, "noise_floor": 10.0}), "-0.5 x")
 
+    def test_no_regression_boundary_is_the_floor(self):
+        # A and A' spread over 7 instructions: a rise of exactly 7 passes, 8 fails.
+        at = ca.analyze(manifest(self.A, [x + 7 for x in self.A], slopes_p=self.P, cells=ALL_ROUND_TRIPS),
+                        None, ("none",))
+        self.assertTrue(at["accepted"])
+        above = ca.analyze(manifest(self.A, [x + 8 for x in self.A], slopes_p=self.P, cells=ALL_ROUND_TRIPS),
+                           None, ("none",))
+        self.assertFalse(above["accepted"])
+
+    def test_no_regression_needs_the_round_trips(self):
+        codec = "full_stack_encode_rp"
+        only = ca.analyze(manifest([1412.0] * 6, [1412.0] * 6, workload=codec, runtime="none",
+                                   slopes_p=[1412.0] * 6), None, ("none",))
+        self.assertFalse(only["accepted"])
+        self.assertTrue(any("rp/ct" in p for p in only["coverage_problems"]))
+
+    def test_exact_codec_rows_tolerate_whole_program_jitter(self):
+        # A' equal to A (floor 0) and B 0.00003 per iteration higher.
+        m = manifest([1412.0] * 6, [1412.00003] * 6, workload="full_stack_encode_rp", runtime="none",
+                     slopes_p=[1412.0] * 6)
+        rounds = manifest(self.A, list(self.P), slopes_p=self.P, cells=ALL_ROUND_TRIPS)
+        m["runs"] += rounds["runs"]
+        s = ca.analyze(m, None, ("none",))
+        self.assertEqual(self.row(s, "full_stack_encode_rp", "none")["verdict"], "PASS")
+        self.assertTrue(s["accepted"])
+        jumped = copy.deepcopy(m)
+        for run in jumped["runs"]:
+            if run["workload"] == "full_stack_encode_rp" and run["label"] == "B" and run["n"] == 1_000_000:
+                run["instructions"] += 900_000  # +1 per iteration
+        self.assertFalse(ca.analyze(jumped, None, ("none",))["accepted"])
+
     def test_function_changes_rank_by_size(self):
         rows = ca.function_changes({"f": 10.0, "g": 5.0, "h": 1.0}, {"f": 10.2, "g": 9.0, "k": 2.0})
         self.assertEqual([r[3] for r in rows], ["g", "k", "h"])
@@ -330,7 +363,7 @@ class Runner(unittest.TestCase):
 
     def args(self, **kwargs):
         base = dict(noise=None, baseline="dev", candidate="topic", workloads="rp,wp,rpm", runtimes="ct,mt",
-                    aim="rp", noise_floors=None, blocks=3)
+                    aim="rp", noise_floors=None, blocks=3, glibc_tunables="")
         base.update(kwargs)
         return argparse.Namespace(**base)
 
@@ -362,6 +395,19 @@ class Runner(unittest.TestCase):
         self.assertEqual(perf_counts.third_party(lock), perf_counts.third_party(bumped_path))
         self.assertNotEqual(perf_counts.third_party(lock), perf_counts.third_party(bumped_tokio))
 
+    def test_quick_mode_refuses_floors_from_other_allocator_settings(self):
+        tuned = "glibc.malloc.tcache_count=32"
+        with self.assertRaisesRegex(ValueError, "allocator settings"):
+            perf_counts.plan(self.args(workloads="rp", noise_floors=[DATA / "floors-rp.json"], glibc_tunables=tuned))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "floors.json"
+            path.write_text(json.dumps({"environment": {"GLIBC_TUNABLES": tuned},
+                                        "noise_floors": {"rp/ct": 11.4, "rp/mt": 14.8}}))
+            self.assertEqual(perf_counts.plan(self.args(workloads="rp", noise_floors=[path],
+                                                        glibc_tunables=tuned))[-1]["rp/ct"], 11.4)
+            with self.assertRaisesRegex(ValueError, "allocator settings"):
+                perf_counts.plan(self.args(workloads="rp", noise_floors=[path]))
+
     def test_exit_status(self):
         self.assertEqual(perf_counts.exit_code({"mode": "compare", "accepted": False}), 1)
         self.assertEqual(perf_counts.exit_code({"mode": "compare", "accepted": True}), 0)
@@ -387,6 +433,17 @@ class Callers(unittest.TestCase):
         self.assertEqual(split["2b: server (database and other server locks)"], 50)
         self.assertEqual(split["other or deeper than the caller depth"], 7)
         self.assertEqual(sum(split.values()), 187)  # malloc isn't semaphore cost
+
+    def test_inlined_channel_receive_counts_as_the_channel(self):
+        # The bounded channel's receive is inlined into the network layer's
+        # APDU receiver: no mpsc frame between it and the semaphore.
+        functions = {
+            "<tokio::sync::batch_semaphore::Semaphore>::add_permits_locked'<bacnet_network::layer::ingress::"
+            "ApduReceiver>::poll_recv'<bacnet_server::server::BACnetServer<B>>::run": 139,
+            "<tokio::sync::batch_semaphore::Semaphore>::add_permits_locked'<bacnet_network::layer::ingress::"
+            "ApduReceiver>::poll_recv'<bacnet_client::client::BACnetClient<B>>::dispatch": 5,
+        }
+        self.assertEqual(ca.split_by_caller(functions), {"channel permits (bounded mpsc)": 144})
 
 
 class Profiles(unittest.TestCase):

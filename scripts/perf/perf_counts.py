@@ -432,7 +432,8 @@ def attribute(out, workload, runtime, top=25, threshold=0.5):
         b = ca.symbol_slopes(data, runs, workload, runtime, other)
         changes = ca.function_changes(a, b, threshold)
         lines += [f"## {title}, {workload}/{runtime}: {ca.LABELS[other]} - A "
-                  f"(total {sum(r[0] for r in changes):+.1f} over {len(changes)} functions)", ""]
+                  f"(total over the {len(changes)} functions that moved by {threshold:g} or more: "
+                  f"{sum(r[0] for r in changes):+.1f}; the largest {min(top, len(changes))} listed)", ""]
         lines.append(ca.table(["A", ca.LABELS[other], "Change", "Function"], [
             [f"{x:,.2f}", f"{y:,.2f}", f"{d:+,.2f}", f"`{name[:150]}`"] for d, x, y, name in changes[:top]]))
         lines.append("")
@@ -517,6 +518,11 @@ def expand_workloads(spec):
     return list(dict.fromkeys(out))
 
 
+def run_environment(args):
+    """The environment every counted run gets (the glibc allocator settings)."""
+    return {"GLIBC_TUNABLES": args.glibc_tunables} if args.glibc_tunables else {}
+
+
 def plan(args):
     """Mode, refs per label, matrix order and floors, checked before any build."""
     workloads = expand_workloads(args.workloads)
@@ -540,8 +546,15 @@ def plan(args):
         mode = "compare"
         if args.noise_floors:
             refs, order = {"A": args.baseline, "B": args.candidate}, "ABBA"
+            environment = run_environment(args)
             for path in args.noise_floors:
-                floors.update(ca.load_json(path)["noise_floors"])
+                recorded = ca.load_json(path)
+                # A file without an environment was recorded with glibc's
+                # defaults (perf-s0 and earlier).
+                if recorded.get("environment", {}) != environment:
+                    raise ValueError(f"{path} was recorded with allocator settings {recorded.get('environment', {})}, "
+                                     f"not this run's {environment}; its floors don't apply")
+                floors.update(recorded["noise_floors"])
             missing = [f"{w}/{r}" for w in workloads for r in (runtimes if w in ca.ROUND_TRIP else ["none"])
                        if f"{w}/{r}" not in floors]
             if missing:
@@ -564,7 +577,7 @@ def run(args):
         "order": order,
         "lengths": ca.LENGTHS,
         "recorded_floors": floors,
-        "environment": {"GLIBC_TUNABLES": args.glibc_tunables} if args.glibc_tunables else {},
+        "environment": run_environment(args),
         "variants": {},
         "runs": [],
     }

@@ -115,17 +115,19 @@ instructions per request, by the nearest caller that names a group:
 
 | Workload | Client locks (2a) | Server locks (2b) | Bounded channel permits |
 | --- | --- | --- | --- |
-| ReadProperty, ct and mt | 826.8 | 298.2 / 298.3 | 4.5 |
-| WriteProperty, ct and mt | 826.8 | 1,182.3 / 1,182.5 | 4.5 |
-| ReadPropertyMultiple, ct and mt | 826.8 / 826.9 | 299.9 / 301.7 | 4.5 |
+| ReadProperty, ct and mt | 757.0 | 228.5 / 228.6 | 144.0 |
+| WriteProperty, ct and mt | 757.0 | 1,112.6 / 1,112.7 | 144.0 |
+| ReadPropertyMultiple, ct and mt | 757.0 / 757.2 | 230.2 / 232.0 | 144.0 |
 
-Every semaphore instruction found a group within eight callers. The client's
-share is the same for every service; the server's grows for WriteProperty,
-which takes the database lock for writing. The channels' permit returns are
-small: the S0 estimate of about 190 came from callgrind's inclusive call
-costs, which this split doesn't use. Item 2a's by-function total in
-`noise/items.md` (1,488.6 for ReadProperty, ct) also counts the Mutex and
-RwLock wrappers' own code, which isn't semaphore code.
+Every semaphore instruction found a group within eight callers. The bounded
+channel's receive is inlined into the network layer's APDU receiver, so its
+permit returns (about 1.9 per request) appear with that receiver as their
+nearest caller and no channel frame; the split counts the receiver as the
+channel. The client's share is the same for every service; the server's
+grows for WriteProperty, which takes the database lock for writing. S0's
+estimate of about 190 for the channel share was close. Item 2a's
+by-function total in `noise/items.md` (1,488.6 for ReadProperty, ct) also
+counts the Mutex and RwLock wrappers' own code, which isn't semaphore code.
 
 ## Reproduce
 

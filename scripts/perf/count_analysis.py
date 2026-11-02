@@ -335,7 +335,7 @@ def noise_floor(metrics_a, metrics_p):
 
 
 # `--aim none`: the no-regression check, for a change that isn't an
-# optimization. Every row must stay within its floor; nothing must fall.
+# optimization. Every row must stay within its floor; no row has to fall.
 NO_REGRESSION = "none"
 
 
@@ -396,7 +396,9 @@ def judge(workload, runtime, metrics_a, metrics_b, floor, floor_source, aimed):
         instr_ok = saving >= minimum and saving > FLOOR_FACTOR * floor and every_pair_lower
         row["gate"] = f"saving >= {minimum:g} and > {FLOOR_FACTOR:g} x floor, every pair lower"
     else:
-        instr_ok = delta <= floor
+        # A floor under EXACT (the codec rows: a few instructions per whole
+        # program) counts as EXACT, so +0.00003 per iteration isn't a rise.
+        instr_ok = delta <= max(floor, EXACT)
         row["gate"] = "not higher than the noise floor"
     row["instructions_ok"] = instr_ok
     row["allocations_ok"] = row["b_calls"] - row["a_calls"] <= ALLOC_TOLERANCE
@@ -408,7 +410,9 @@ def coverage_problems(rows, aimed):
     """Why a comparison's rows can't support an acceptance, if they can't."""
     present = {(r["workload"], r["runtime"]) for r in rows}
     problems = []
-    if any(w in ROUND_TRIP for w, _ in present):
+    # The no-regression check is about the round trips: a codec-only run
+    # can't show that nothing got worse.
+    if regression_only(aimed) or any(w in ROUND_TRIP for w, _ in present):
         for workload in ROUND_TRIP:
             for runtime in RUNTIMES:
                 if (workload, runtime) not in present:
@@ -473,6 +477,8 @@ def analyze(manifest, recorded_floors=None, aimed=("rp",)):
                      for label, variant in manifest["variants"].items()},
         "rows": rows,
         "noise_floors": {f"{r['workload']}/{r['runtime']}": r["noise_floor"] for r in rows},
+        # The allocator settings the floors hold for; quick mode checks them.
+        "environment": manifest.get("environment", {}),
     }
     binaries = [manifest["variants"][label].get("binaries") for label in ("A", "P") if label in manifest["variants"]]
     if len(binaries) == 2:
@@ -591,10 +597,13 @@ ITEMS = {
 # with callgrind's --separate-callers: each function name then carries its
 # callers, nearest first, joined by "'". The nearest caller that matches a
 # group decides; bounded mpsc channels return permits through the same
-# semaphore, so they are a group of their own.
+# semaphore, so they are a group of their own. The network layer's APDU
+# receiver has the channel's receive inlined (no mpsc frame is left between
+# it and the semaphore), so its frames count as the channel too.
 SEMAPHORE_RE = re.compile(r"tokio::sync::batch_semaphore")
 CALLER_GROUPS = (
-    ("channel permits (bounded mpsc)", re.compile(r"tokio::sync::mpsc")),
+    ("channel permits (bounded mpsc)",
+     re.compile(r"tokio::sync::mpsc|bacnet_network::layer::ingress|ApduReceiver")),
     ("2a: client (transaction table and other client locks)", re.compile(r"bacnet_client")),
     ("2b: server (database and other server locks)", re.compile(r"bacnet_server|bacnet_device_core|bacnet_objects")),
 )
