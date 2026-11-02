@@ -29,6 +29,7 @@ const COMMAND_GROUP: [P; 3] = [
 ];
 
 /// The reporting rows beyond Event_State.
+#[cfg(feature = "event-reporting")]
 const REPORTING_GROUP: [P; 6] = [
     P::EVENT_DETECTION_ENABLE,
     P::NOTIFICATION_CLASS,
