@@ -262,7 +262,8 @@ jobs:
           path: dist/
           if-no-files-found: error
 
-  # The wheels for CPython PYTHONS and the CLI, on each platform's own runner.
+  # The wheels for CPython PYTHONS, the CLI and its MCP bundle, on each
+  # platform's own runner.
   # Packet capture (pcap) only on Linux, as in 0.11.0. The minimum macOS
   # versions are those of the 0.11.0 wheels and Rust's defaults; the artifact
   # check fails if a binary disagrees with its wheel tag.
@@ -365,6 +366,21 @@ jobs:
             interpreters+=("${!var}")
           done
           bash scripts/release/build_native.sh "$TARGET" "$CLI" "${interpreters[@]}"
+      # The MCP bundle for Claude Desktop (#2304): the CLI binary just built,
+      # byte for byte, with a manifest that runs `bacnet mcp serve --stdio`.
+      # No second build; the artifact check compares the two.
+      - name: MCP bundle
+        env:
+          PLATFORM: ${{ matrix.name }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          PY312: ${{ steps.py312.outputs.python-path }}
+        run: |
+          python=${PY312:-python3}
+          if [ "$RUNNER_OS" = Windows ]; then python=$(cygpath -m "$python"); fi
+          cli=(out/bacnet-*)
+          [ ${#cli[@]} = 1 ] && [ -f "${cli[0]}" ] || { echo "::error::expected one CLI binary in out/, found: ${cli[*]}"; exit 1; }
+          "$python" -I scripts/release/mcpb.py pack --binary "${cli[0]}" --platform "$PLATFORM" --version "$VERSION" \
+            --license LICENSE --notices crates/rusty-bacnet/THIRD-PARTY-NOTICES --out out
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: wheels-${{ matrix.name }}
@@ -400,7 +416,9 @@ jobs:
         run: |
           mkdir release
           cp artifacts/cli-*/* artifacts/wheels-*/* artifacts/sdist/* artifacts/notices/THIRD-PARTY-NOTICES release/
-          chmod +x release/bacnet-*
+          for file in release/bacnet-*; do
+            case $file in *.mcpb) ;; *) chmod +x "$file" ;; esac
+          done
           ls -l release
           (cd release && sha256sum -- *)
       - name: Versions, wheel tags, notices, architectures and linkage
@@ -416,6 +434,9 @@ jobs:
             --cli bacnet-linux-amd64=linux_x86_64 bacnet-linux-arm64=linux_aarch64 \
               bacnet-macos-amd64=macosx_10_12_x86_64 bacnet-macos-arm64=macosx_11_0_arm64 \
               bacnet-windows-amd64.exe=win_amd64 \
+            --mcpb bacnet-linux-amd64.mcpb=bacnet-linux-amd64 bacnet-linux-arm64.mcpb=bacnet-linux-arm64 \
+              bacnet-macos-amd64.mcpb=bacnet-macos-amd64 bacnet-macos-arm64.mcpb=bacnet-macos-arm64 \
+              bacnet-windows-amd64.mcpb=bacnet-windows-amd64.exe \
             --notices release/THIRD-PARTY-NOTICES
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -538,6 +559,17 @@ jobs:
           # Artifacts drop the executable bit.
           chmod +x "assets/$CLI"
           bash scripts/release/cli_smoke.sh "${capture[@]}" --expect-version "$VERSION" "assets/$CLI" "$python"
+      # The platform's MCP bundle as an MCP host runs it (#2304): unzipped,
+      # started with a profile, refusing a missing or unauthorized one at
+      # once, and answering initialize and tools/list with read tools only
+      # for an authorized read-only profile.
+      - name: MCP bundle
+        env:
+          CLI: ${{ matrix.cli }}
+        run: |
+          python=$RUNNER_TEMP/venv-cp312/bin/python
+          if [ "$RUNNER_OS" = Windows ]; then python=$(cygpath -m "$RUNNER_TEMP")/venv-cp312/Scripts/python; fi
+          "$python" -I scripts/release/mcpb.py smoke "assets/${CLI%.exe}.mcpb"
       # The Python suite against the installed cp312 wheel. Native tests run it
       # on macOS and Windows against each PR's own build.
       - name: Python suite
