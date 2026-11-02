@@ -104,9 +104,37 @@ fn a_slot_that_cannot_be_opened_fails_the_commit_and_the_load() {
         storage.commit(&snapshot()),
         Err(Error::Transport(_))
     ));
-    // Not a missing slot: a load that cannot open one is fatal.
-    assert!(matches!(storage.load(oid()), Err(Error::Transport(_))));
+    // Not a missing slot: a load that cannot open one is fatal. Unix
+    // answers ENAMETOOLONG; Windows may answer an overlong name as a path
+    // not found, a missing slot, so there the next test shows the rule.
+    let loaded = storage.load(oid());
+    if cfg!(unix) {
+        assert!(matches!(loaded, Err(Error::Transport(_))), "{loaded:?}");
+    } else {
+        assert!(
+            matches!(loaded, Err(Error::Transport(_)) | Ok(None)),
+            "{loaded:?}"
+        );
+    }
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_slot_that_is_a_directory_fails_the_commit_and_the_load() {
+    let dir = temp_dir("directory-slot");
+    let storage = FileAuditLogPersistence::new(dir.join("state")).unwrap();
+    let [slot0, slot1] = storage.slot_paths();
+    std::fs::create_dir(&slot1).unwrap();
+    // Generation 1 goes to slot 1, which can't be written as a file.
+    assert!(matches!(
+        storage.commit(&snapshot()),
+        Err(Error::Transport(_))
+    ));
+    assert!(!slot0.exists() && slot1.is_dir());
+    // Opening a directory fails on Windows and reading one fails on Unix:
+    // either way the load is fatal, not a missing slot.
+    assert!(matches!(storage.load(oid()), Err(Error::Transport(_))));
     let _ = std::fs::remove_dir_all(dir);
 }
 

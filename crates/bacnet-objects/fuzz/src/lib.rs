@@ -9,6 +9,9 @@
 //! the storage as it was; a log or Audit Log built from a snapshot serves
 //! its counts. libFuzzer stands in for the rest: an allocation past its
 //! limit (2,048 megabytes by default) or a stack overflow fails the target.
+//! The targets build without a sanitizer (`scripts/ci/fuzz.sh`, #2233), and
+//! libFuzzer's per-allocation limit needs one, so [`Capped`], this crate's
+//! global allocator, keeps it.
 //!
 //! The main targets run the file backends in their in-memory mode
 //! (`bacnet-objects`' hidden `test-support` feature, #2233): the same load,
@@ -42,6 +45,7 @@ pub mod restore;
 #[cfg(test)]
 mod seeds;
 
+use std::alloc::{GlobalAlloc, Layout, System};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -56,6 +60,57 @@ use bacnet_objects::object_profile::FileTagsPersistence;
 use bacnet_objects::write_config::FileWriteConfigPersistence;
 use restore::{FORMATS, Files, Format, Medium, Outcome, Scratch, write_files};
 pub use restore::{crc32, seal};
+
+/// libFuzzer's default limit on one allocation, its `-rss_limit_mb`.
+const ALLOCATION_LIMIT: usize = 2048 << 20;
+
+/// The system allocator, aborting on a request past [`ALLOCATION_LIMIT`].
+/// libFuzzer enforces `-malloc_limit_mb` through a sanitizer's malloc
+/// hooks, which a build without a sanitizer lacks; without this, a crafted
+/// length could reserve gigabytes it never touches and pass unnoticed. The
+/// abort is a crash, so libFuzzer saves the input.
+pub struct Capped;
+
+impl Capped {
+    fn check(size: usize) {
+        if size > ALLOCATION_LIMIT {
+            use std::io::Write;
+            // No formatting: nothing here may allocate.
+            let _ = std::io::stderr()
+                .write_all(b"objects-fuzz: an allocation passed the 2,048 MB limit\n");
+            std::process::abort();
+        }
+    }
+}
+
+// SAFETY: every call goes to `System` unchanged once the size is checked.
+unsafe impl GlobalAlloc for Capped {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        Self::check(layout.size());
+        // SAFETY: the caller's contract for `alloc`, passed on.
+        unsafe { System.alloc(layout) }
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        Self::check(layout.size());
+        // SAFETY: as for `alloc`.
+        unsafe { System.alloc_zeroed(layout) }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        // SAFETY: `ptr` came from `System` through this allocator.
+        unsafe { System.dealloc(ptr, layout) }
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        Self::check(new_size);
+        // SAFETY: as for `dealloc`, with the caller's `realloc` contract.
+        unsafe { System.realloc(ptr, layout, new_size) }
+    }
+}
+
+#[global_allocator]
+static ALLOCATOR: Capped = Capped;
 
 /// A fuzz target: which formats its selector picks from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
