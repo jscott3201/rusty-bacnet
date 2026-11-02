@@ -2,6 +2,7 @@
 //! Out_Of_Service is TRUE (Clauses 12.36.4, 12.36.7 and 12.36.8, Table 12-43
 //! footnote 1, #1168).
 
+use crate::property_metadata::is_writable_property;
 use crate::traits::Timed;
 use bacnet_types::error::RemoteError;
 use std::sync::Arc;
@@ -190,8 +191,8 @@ fn credential_data_input_refuses_simulated_rows_in_service() {
         assert_eq!(served(&reader), device(false), "{property:?}");
     }
     // Both rows have a write route, open only out of service.
-    assert!(reader.is_writable_property(P::PRESENT_VALUE));
-    assert!(reader.is_writable_property(P::RELIABILITY));
+    assert!(is_writable_property(&reader, P::PRESENT_VALUE));
+    assert!(is_writable_property(&reader, P::RELIABILITY));
 }
 
 #[test]

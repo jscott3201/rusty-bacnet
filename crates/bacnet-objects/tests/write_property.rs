@@ -24,6 +24,7 @@
 
 use bacnet_objects::averaging::AveragingObject;
 use bacnet_objects::catalogue::representatives;
+use bacnet_objects::property_metadata::is_writable_property;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use proptest::prelude::*;
@@ -123,7 +124,7 @@ fn the_side_effect_table_covers_the_catalogue() {
         };
         for &(written, changed) in fragments.iter().flat_map(|fragment| fragment.iter()) {
             assert!(
-                has(written) && object.is_writable_property(written),
+                has(written) && is_writable_property(&*object, written),
                 "{object_type:?}: the table lists a write of {written:?}, which isn't a writable row"
             );
             for &other in changed {

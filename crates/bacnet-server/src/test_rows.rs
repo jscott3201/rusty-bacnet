@@ -10,7 +10,7 @@
 use std::borrow::Cow;
 
 use bacnet_objects::property_metadata::{
-    PropertyConformance, PropertyMetadata, PropertyWriteCapability,
+    PropertyConformance, PropertyMetadata, PropertyWriteCapability, ValueType,
 };
 use bacnet_types::enums::PropertyIdentifier as P;
 
@@ -52,4 +52,22 @@ pub(crate) fn rows(served: &[P], writable: &[P]) -> Cow<'static, [PropertyMetada
 /// [`rows`] with no write route.
 pub(crate) fn read_only(served: &[P]) -> Cow<'static, [PropertyMetadata]> {
     rows(served, &[])
+}
+
+/// `rows` with each property in `types` stating that value type, as a
+/// custom object states a vendor array or list on its rows.
+pub(crate) fn typed(
+    rows: Cow<'static, [PropertyMetadata]>,
+    types: &[(P, ValueType)],
+) -> Cow<'static, [PropertyMetadata]> {
+    let rows = rows.into_owned().into_iter().map(|row| {
+        match types
+            .iter()
+            .find(|(property, _)| *property == row.property_identifier)
+        {
+            Some(&(_, value_type)) => row.with_value_type(value_type),
+            None => row,
+        }
+    });
+    Cow::Owned(rows.collect())
 }

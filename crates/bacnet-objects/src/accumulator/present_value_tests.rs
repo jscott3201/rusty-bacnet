@@ -55,7 +55,10 @@ fn out_of_service_write_sets_present_value() {
     let mut object = accumulator();
     object.set_present_value(5);
     set_out_of_service(&mut object, true);
-    assert!(object.is_writable_property(P::PRESENT_VALUE));
+    assert!(crate::property_metadata::is_writable_property(
+        &object,
+        P::PRESENT_VALUE
+    ));
     write(&mut object, PropertyValue::Unsigned(1250)).unwrap();
     assert_eq!(present_value(&object), PropertyValue::Unsigned(1250));
     // The row says when: only out of service.
@@ -123,7 +126,10 @@ fn in_service_writes_are_denied() {
     let mut object = accumulator();
     object.set_present_value(7);
     // Advertised as writable (out of service), but dispatch gates it.
-    assert!(object.is_writable_property(P::PRESENT_VALUE));
+    assert!(crate::property_metadata::is_writable_property(
+        &object,
+        P::PRESENT_VALUE
+    ));
     for value in [
         PropertyValue::Unsigned(10),
         PropertyValue::Unsigned(u64::MAX),

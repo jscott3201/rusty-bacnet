@@ -2,6 +2,7 @@
 //! Door_Pulse_Time, Door_Extended_Pulse_Time, Door_Open_Too_Long_Time and
 //! Current_Command_Priority.
 
+use crate::property_metadata::is_writable_property;
 use crate::traits::Timed;
 use bacnet_types::error::RemoteError;
 use std::sync::Arc;
@@ -201,7 +202,7 @@ fn access_door_current_command_priority_tracks_the_winning_slot() {
 fn access_door_times_are_unsigned32_tenths() {
     let mut door = AccessDoorObject::new(1, "DOOR-1").unwrap();
     for property in [PULSE, EXTENDED, TOO_LONG] {
-        assert!(door.is_writable_property(property));
+        assert!(is_writable_property(&door, property));
         door.write_property(
             property,
             None,
@@ -235,7 +236,7 @@ fn access_door_times_are_unsigned32_tenths() {
         }
     }
     // Current_Command_Priority is derived and read-only.
-    assert!(!door.is_writable_property(CCP));
+    assert!(!is_writable_property(&door, CCP));
     assert!(
         door.write_property(CCP, None, PropertyValue::Unsigned(8), None)
             .is_err()

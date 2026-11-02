@@ -1,6 +1,7 @@
 //! Door_Status, Lock_Status and Door_Alarm_State writes while Out_Of_Service
 //! is TRUE (Clause 12.26.9, Table 12-30 footnote 1, #1131).
 
+use crate::property_metadata::is_writable_property;
 use crate::traits::Timed;
 use bacnet_types::error::RemoteError;
 use std::time::Duration;
@@ -87,7 +88,7 @@ fn access_door_refuses_simulated_rows_in_service() {
         }
         // The PICS still lists the row writable: the route exists, gated on
         // Out_Of_Service.
-        assert!(door.is_writable_property(property), "{property:?}");
+        assert!(is_writable_property(&door, property), "{property:?}");
     }
     assert_eq!(served(&door), before);
 }

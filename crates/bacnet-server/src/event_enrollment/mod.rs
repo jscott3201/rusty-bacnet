@@ -62,6 +62,7 @@ mod fault;
 mod reference;
 mod support;
 
+use bacnet_objects::property_metadata::is_array_property;
 use std::collections::{HashMap, HashSet};
 
 pub use algorithms::{
@@ -298,7 +299,7 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
             queue_observation_gap(&mut updates, *oid, eval_state_supported, eval_source);
             continue;
         };
-        if monitored.array_index.is_some() && !monitored_obj.is_array_property(monitored_prop) {
+        if monitored.array_index.is_some() && !is_array_property(monitored_obj, monitored_prop) {
             queue_invalid_reference(&mut updates, *oid, eval_state_supported, eval_source);
             queue_reliability_transition(
                 &mut updates,

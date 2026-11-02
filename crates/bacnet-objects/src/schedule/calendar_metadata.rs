@@ -104,7 +104,10 @@ mod tests {
             .iter()
             .map(|p| PropertyValue::Enumerated(p.to_raw()))
             .collect();
-        assert!(object.is_array_property(P::PROPERTY_LIST));
+        assert!(crate::property_metadata::is_array_property(
+            &object,
+            P::PROPERTY_LIST
+        ));
         assert_eq!(
             object.read_property(P::PROPERTY_LIST, None).unwrap(),
             PropertyValue::List(wire.clone())
@@ -143,7 +146,11 @@ mod tests {
                 row.write_capability,
                 if writable { Always } else { ReadOnly }
             );
-            assert_eq!(object.is_writable_property(p), writable, "{p:?}");
+            assert_eq!(
+                crate::property_metadata::is_writable_property(&object, p),
+                writable,
+                "{p:?}"
+            );
             let before = object.read_property(p, None).unwrap();
             let result = object.write_property(p, None, before.clone(), None);
             if writable {
@@ -215,7 +222,7 @@ mod tests {
             P::RELINQUISH_DEFAULT,
             P::ALL,
         ] {
-            assert!(!object.is_writable_property(p));
+            assert!(!crate::property_metadata::is_writable_property(&object, p));
             assert_error(
                 object.read_property(p, None).unwrap_err(),
                 ErrorCode::UNKNOWN_PROPERTY,

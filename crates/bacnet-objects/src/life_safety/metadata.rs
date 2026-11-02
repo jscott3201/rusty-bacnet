@@ -113,7 +113,7 @@ mod tests {
                 };
                 assert_eq!(row.write_capability, capability, "{p:?}");
                 assert_eq!(
-                    object.is_writable_property(p),
+                    crate::property_metadata::is_writable_property(&*object, p),
                     capability.is_writable(),
                     "{p:?}"
                 );
@@ -151,7 +151,10 @@ mod tests {
     }
 
     fn assert_indexed_property_list(object: &dyn BACnetObject, wire: &[PropertyValue]) {
-        assert!(object.is_array_property(P::PROPERTY_LIST));
+        assert!(crate::property_metadata::is_array_property(
+            object,
+            P::PROPERTY_LIST
+        ));
         assert_eq!(
             object.read_property(P::PROPERTY_LIST, None).unwrap(),
             PropertyValue::List(wire.to_vec())
@@ -391,7 +394,7 @@ mod tests {
             );
         }
         for p in [P::DEVICE_TYPE, P::RELIABILITY_EVALUATION_INHIBIT, P::ALL] {
-            assert!(!object.is_writable_property(p));
+            assert!(!crate::property_metadata::is_writable_property(&object, p));
             assert_error(
                 object.read_property(p, None).unwrap_err(),
                 ErrorCode::UNKNOWN_PROPERTY,
@@ -443,7 +446,7 @@ mod tests {
             );
         }
         for p in [P::DEVICE_TYPE, P::ALL] {
-            assert!(!object.is_writable_property(p));
+            assert!(!crate::property_metadata::is_writable_property(&object, p));
             assert_error(
                 object.read_property(p, None).unwrap_err(),
                 ErrorCode::UNKNOWN_PROPERTY,

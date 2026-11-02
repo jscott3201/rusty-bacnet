@@ -9,6 +9,7 @@
 //! - A NULL written to Description succeeds and leaves it as it was, the
 //!   shared helper's rule, on every object whose Description is writable.
 
+use crate::property_metadata::{is_array_property, is_writable_property};
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
 use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::PropertyValue;
@@ -34,7 +35,7 @@ fn every_scalar_row_refuses_an_indexed_direct_write() {
         let rows = object.property_metadata().into_owned();
         for row in rows {
             let property = row.property_identifier;
-            if object.is_array_property(property) {
+            if is_array_property(&*object, property) {
                 continue;
             }
             assert!(not_an_array(&check_write_array_index(
@@ -66,7 +67,7 @@ fn every_writable_description_takes_null_as_unchanged() {
     let mut checked = 0;
     for mut object in representatives() {
         let object_type = object.object_identifier().object_type();
-        if !object.is_writable_property(PropertyIdentifier::DESCRIPTION) {
+        if !is_writable_property(&*object, PropertyIdentifier::DESCRIPTION) {
             continue;
         }
         let text = PropertyValue::CharacterString("before".into());

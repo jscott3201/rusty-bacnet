@@ -8,6 +8,7 @@
 //! only a numeric Present_Value takes the object's COV_Increment (Table 13-1
 //! for the objects it lists, Table 13-1a for any other property).
 
+use crate::property_metadata::is_array_property;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::PropertyValue;
 
@@ -22,7 +23,7 @@ pub fn is_numeric(
     index: Option<u32>,
     value: &PropertyValue,
 ) -> bool {
-    let array = object.is_array_property(property);
+    let array = is_array_property(object, property);
     !(array && (index.is_none() || index == Some(0)))
         && matches!(
             value,

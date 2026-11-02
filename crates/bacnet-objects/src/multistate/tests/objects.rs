@@ -1,4 +1,6 @@
 use super::super::*;
+use crate::property_metadata::is_writable_property;
+use bacnet_types::enums::PropertyIdentifier as P;
 
 // --- MultiStateInput ---
 
@@ -548,44 +550,41 @@ fn mso_direct_priority_array_index_17_error() {
 
 #[test]
 fn msi_is_writable_matches_factory() {
-    use crate::traits::BACnetObject;
     let msi = MultiStateInputObject::new(1, "msi-1", 2).unwrap();
     // PRESENT_VALUE (when OOS) + STATE_TEXT + common.
-    assert!(msi.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
-    assert!(msi.is_writable_property(PropertyIdentifier::STATE_TEXT));
-    assert!(msi.is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
-    assert!(msi.is_writable_property(PropertyIdentifier::OBJECT_NAME));
+    assert!(is_writable_property(&msi, P::PRESENT_VALUE));
+    assert!(is_writable_property(&msi, PropertyIdentifier::STATE_TEXT));
+    assert!(is_writable_property(&msi, P::OUT_OF_SERVICE));
+    assert!(is_writable_property(&msi, PropertyIdentifier::OBJECT_NAME));
     // Not commandable.
-    assert!(!msi.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
+    assert!(!is_writable_property(&msi, P::PRIORITY_ARRAY));
     // EVENT_ENABLE writable since #229 (see generic_event_properties.rs).
-    assert!(msi.is_writable_property(PropertyIdentifier::EVENT_ENABLE));
+    assert!(is_writable_property(&msi, PropertyIdentifier::EVENT_ENABLE));
 }
 
 #[test]
 fn mso_is_writable_matches_factory() {
-    use crate::traits::BACnetObject;
     let mso = MultiStateOutputObject::new(1, "mso-1", 2).unwrap();
     // Commandable + STATE_TEXT + common.
-    assert!(!mso.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
-    assert!(mso.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
-    assert!(mso.is_writable_property(PropertyIdentifier::STATE_TEXT));
-    assert!(mso.is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
+    assert!(!is_writable_property(&mso, P::PRIORITY_ARRAY));
+    assert!(is_writable_property(&mso, P::PRESENT_VALUE));
+    assert!(is_writable_property(&mso, PropertyIdentifier::STATE_TEXT));
+    assert!(is_writable_property(&mso, P::OUT_OF_SERVICE));
     // Writable since #222: Clause 12.19 requires the supported Event_Enable
     // value set to include (T, T, T); writability is this stack's route to
     // that minimum, since the detectors default to (F, F, F) and had no
     // other commissioning path.
-    assert!(mso.is_writable_property(PropertyIdentifier::EVENT_ENABLE));
+    assert!(is_writable_property(&mso, PropertyIdentifier::EVENT_ENABLE));
 }
 
 #[test]
 fn msv_is_writable_matches_factory() {
-    use crate::traits::BACnetObject;
     let msv = MultiStateValueObject::new(1, "msv-1", 2).unwrap();
     // Commandable + STATE_TEXT + common.
-    assert!(!msv.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
-    assert!(msv.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
-    assert!(msv.is_writable_property(PropertyIdentifier::STATE_TEXT));
-    assert!(msv.is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
+    assert!(!is_writable_property(&msv, P::PRIORITY_ARRAY));
+    assert!(is_writable_property(&msv, P::PRESENT_VALUE));
+    assert!(is_writable_property(&msv, PropertyIdentifier::STATE_TEXT));
+    assert!(is_writable_property(&msv, P::OUT_OF_SERVICE));
 }
 
 // --- number_of_states boundary (#119) ---

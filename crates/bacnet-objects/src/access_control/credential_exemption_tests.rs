@@ -2,6 +2,7 @@
 //! application sets it, then served as a list of enumerations and read-only
 //! over the network; the setter's refusals.
 
+use crate::property_metadata::{is_array_property, is_list_property, is_writable_property};
 use bacnet_types::enums::{AuthorizationExemption as Exemption, ErrorClass, ErrorCode};
 use bacnet_types::error::RemoteError;
 
@@ -30,13 +31,13 @@ fn assert_listed(credential: &AccessCredentialObject, listed: bool) {
     let metadata = credential.property_metadata();
     let row = metadata.iter().find(|row| row.property_identifier == AE);
     assert_eq!(row.is_some(), listed);
-    assert!(!credential.is_writable_property(AE));
+    assert!(!is_writable_property(credential, AE));
     assert!(
         !crate::property_metadata::required_properties(&credential.property_metadata())
             .any(|required| required == AE)
     );
-    assert!(credential.is_list_property(AE));
-    assert!(!credential.is_array_property(AE));
+    assert!(is_list_property(credential, AE));
+    assert!(!is_array_property(credential, AE));
     if let Some(row) = row {
         assert_eq!(row.conformance, PropertyConformance::Optional);
         assert_eq!(row.write_capability, PropertyWriteCapability::ReadOnly);

@@ -6,6 +6,7 @@ mod identity;
 
 use super::*;
 use crate::clock::{ClockFrame, ClockReader};
+use crate::property_metadata::{is_array_property, is_writable_property};
 use crate::traits::Timed;
 use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::{Date, Time};
@@ -503,7 +504,7 @@ fn active_cov_multiple_subscriptions_standalone_optional_read_only_list() {
         .unwrap();
     assert!(!row.is_required());
     assert!(!row.write_capability.is_writable());
-    assert!(!dev.is_array_property(property));
+    assert!(!is_array_property(&dev, property));
     let denied = dev.write_property(
         property,
         None,
@@ -666,7 +667,7 @@ fn device_property_metadata_preserves_dynamic_list_and_write_dispatch() {
                         PropertyWriteCapability::ReadOnly
                     }
                 );
-                assert_eq!(device.is_writable_property(p), p == P::DESCRIPTION);
+                assert_eq!(is_writable_property(&device, p), p == P::DESCRIPTION);
                 let result = device.write_property(p, None, before.clone(), None);
                 if p == P::DESCRIPTION {
                     result.unwrap();

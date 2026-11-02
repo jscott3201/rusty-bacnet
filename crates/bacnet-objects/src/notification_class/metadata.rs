@@ -153,7 +153,10 @@ mod tests {
                 _ => ReadOnly,
             };
             assert_eq!(row.write_capability, capability, "{p:?}");
-            assert_eq!(object.is_writable_property(p), capability.is_writable());
+            assert_eq!(
+                crate::property_metadata::is_writable_property(&object, p),
+                capability.is_writable()
+            );
             let value = object.read_property(p, None).unwrap();
             let result = object.write_property(p, None, value, None);
             if capability == Always {
@@ -178,9 +181,18 @@ mod tests {
             object.read_property(P::NOTIFICATION_CLASS, None).unwrap(),
             PropertyValue::Unsigned(99)
         );
-        assert!(object.is_array_property(P::PRIORITY));
-        assert!(!object.is_array_property(P::ACK_REQUIRED));
-        assert!(!object.is_array_property(P::RECIPIENT_LIST));
+        assert!(crate::property_metadata::is_array_property(
+            &object,
+            P::PRIORITY
+        ));
+        assert!(!crate::property_metadata::is_array_property(
+            &object,
+            P::ACK_REQUIRED
+        ));
+        assert!(!crate::property_metadata::is_array_property(
+            &object,
+            P::RECIPIENT_LIST
+        ));
         assert_error(
             object
                 .write_property(
@@ -199,7 +211,7 @@ mod tests {
             P::ALL,
             P::OUT_OF_SERVICE,
         ] {
-            assert!(!object.is_writable_property(p));
+            assert!(!crate::property_metadata::is_writable_property(&object, p));
             assert_error(
                 object.read_property(p, None).unwrap_err(),
                 ErrorCode::UNKNOWN_PROPERTY,

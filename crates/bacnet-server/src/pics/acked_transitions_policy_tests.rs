@@ -6,6 +6,7 @@ use bacnet_objects::event_enrollment::{AlertEnrollmentObject, EventEnrollmentObj
 use bacnet_objects::multistate::{
     MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject,
 };
+use bacnet_objects::property_metadata::is_writable_property;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::{
     EngineeringUnits, ErrorClass, ErrorCode, EventType, ObjectType, PropertyIdentifier,
@@ -117,7 +118,7 @@ fn acked_transitions_network_policy_is_uniform_on_all_supported_types() {
             "{label}: Acked_Transitions must be a three-bit BitString, got {before:?}"
         );
         assert!(
-            !object.is_writable_property(PropertyIdentifier::ACKED_TRANSITIONS),
+            !is_writable_property(&*object, PropertyIdentifier::ACKED_TRANSITIONS),
             "{label}: Acked_Transitions must not be advertised writable"
         );
 

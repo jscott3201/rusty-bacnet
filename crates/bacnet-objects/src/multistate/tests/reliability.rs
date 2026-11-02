@@ -1,6 +1,7 @@
 //! Multi-state Number_Of_States configuration and object-owned Reliability.
 
 use super::super::*;
+use crate::property_metadata::is_writable_property;
 use crate::traits::EventReporting as _;
 use crate::traits::ReliabilityEvaluation;
 use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, Reliability};
@@ -158,7 +159,10 @@ macro_rules! assert_number_of_states_policy {
         );
         // A whole State_Text write changes it (#1443), but no write naming it
         // is taken, so it doesn't count as writable.
-        assert!(!object.is_writable_property(PropertyIdentifier::NUMBER_OF_STATES));
+        assert!(!is_writable_property(
+            &object,
+            PropertyIdentifier::NUMBER_OF_STATES
+        ));
         assert_eq!(
             read_unsigned(&object, PropertyIdentifier::NUMBER_OF_STATES),
             4,
@@ -413,7 +417,10 @@ fn msv_configuration_sources_recompute_immediately_and_fault_values_stays_absent
         &alarms.property_metadata(),
         PropertyIdentifier::FAULT_VALUES
     ));
-    assert!(!alarms.is_writable_property(PropertyIdentifier::FAULT_VALUES));
+    assert!(!is_writable_property(
+        &alarms,
+        PropertyIdentifier::FAULT_VALUES
+    ));
 }
 
 #[test]

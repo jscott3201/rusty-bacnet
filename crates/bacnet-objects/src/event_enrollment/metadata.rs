@@ -46,6 +46,11 @@ pub(super) static EVENT_ENROLLMENT_PROPERTIES: &[PropertyMetadata] = &[
         None,
         ReadOnly,
     ),
+    // Writable though Table 12-14 codes it R: Clause 12.1.2 lets an R
+    // property take writes unless its description forbids them, Clause 12.12
+    // doesn't, and Annex K's AE-AVM-A BIBB (Table K-17) expects a workstation
+    // to write it. The intrinsic limits (High_Limit, Time_Delay and so on)
+    // have no rows: an Event Enrollment carries them in Event_Parameters.
     PropertyMetadata::new(
         PropertyIdentifier::EVENT_DETECTION_ENABLE,
         RequiredRead,

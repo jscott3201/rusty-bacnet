@@ -2,6 +2,7 @@
 //! BACnetDeviceObjectReference naming Access Credentials and Access Users
 //! (Clauses 12.33.12 to 12.33.14, #1394).
 
+use crate::property_metadata::{is_array_property, is_list_property, is_writable_property};
 use bacnet_types::constructed::BACnetDeviceObjectReference;
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
 use bacnet_types::error::RemoteError;
@@ -71,9 +72,9 @@ fn access_user_lists_serve_device_object_references() {
         )])
     );
     for property in LISTS {
-        assert!(user.is_list_property(property));
-        assert!(!user.is_array_property(property));
-        assert!(!user.is_writable_property(property));
+        assert!(is_list_property(&user, property));
+        assert!(!is_array_property(&user, property));
+        assert!(!is_writable_property(&user, property));
         // Table 12-38 codes Credentials R and the other two O, with no
         // network write: a client's write of the served value is refused.
         let served = read(&user, property);

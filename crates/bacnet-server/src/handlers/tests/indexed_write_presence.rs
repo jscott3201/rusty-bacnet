@@ -400,10 +400,15 @@ impl BACnetObject for VendorArray {
     fn property_metadata(
         &self,
     ) -> std::borrow::Cow<'_, [bacnet_objects::property_metadata::PropertyMetadata]> {
-        crate::test_rows::rows(&[VENDOR], &[VENDOR])
-    }
-    fn is_array_property(&self, property: PropertyIdentifier) -> bool {
-        property == VENDOR
+        crate::test_rows::typed(
+            crate::test_rows::rows(&[VENDOR], &[VENDOR]),
+            &[(
+                VENDOR,
+                bacnet_objects::property_metadata::ValueType::array(
+                    bacnet_objects::property_metadata::Datatype::Unsigned,
+                ),
+            )],
+        )
     }
 }
 

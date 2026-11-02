@@ -5,6 +5,7 @@
 
 use super::super::*;
 use super::assert_value_out_of_range;
+use crate::property_metadata::is_writable_property;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::RemoteError;
 
@@ -146,7 +147,7 @@ fn membership_rows_are_read_only_over_the_network() {
             (INSTALLATION_ID, PropertyValue::Unsigned(3)),
             (INSTALLATION_ID, PropertyValue::Enumerated(3)),
         ] {
-            assert!(!object.is_writable_property(property), "{property:?}");
+            assert!(!is_writable_property(&*object, property), "{property:?}");
             assert_write_access_denied(
                 object.write_property(property, None, value, None),
                 &format!("{property:?}"),

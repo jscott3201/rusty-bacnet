@@ -4,6 +4,7 @@
 //! policy to zero and Reliability to CONFIGURATION_ERROR, and Reliability
 //! takes simulated writes while out of service (Clause 12.31.8).
 
+use crate::property_metadata::{is_array_property, is_writable_property};
 use bacnet_encoding::constructed::encode_authentication_policy;
 use bacnet_types::constructed::{BACnetAuthenticationPolicy, BACnetAuthenticationPolicyEntry};
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
@@ -91,7 +92,7 @@ fn access_point_serves_the_policy_arrays_once_the_application_sets_them() {
             property
         ));
         assert!(point.read_property(property, None).is_err());
-        assert!(point.is_array_property(property));
+        assert!(is_array_property(&point, property));
     }
     let policies = card_and_pin();
     point.set_authentication_policies(policies.clone()).unwrap();
@@ -134,7 +135,7 @@ fn access_point_serves_the_policy_arrays_once_the_application_sets_them() {
             !crate::property_metadata::required_properties(&point.property_metadata())
                 .any(|required| required == property)
         );
-        assert!(!point.is_writable_property(property));
+        assert!(!is_writable_property(&point, property));
     }
     // The first policy is valid and in effect.
     assert_eq!(read(&point, POLICY), PropertyValue::Unsigned(1));

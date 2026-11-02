@@ -33,7 +33,7 @@ fn every_scalar_row_refuses_an_indexed_direct_read() {
         let object_type = object.object_identifier().object_type();
         for row in object.property_metadata().iter() {
             let property = row.property_identifier;
-            if object.is_array_property(property) {
+            if crate::property_metadata::is_array_property(&*object, property) {
                 continue;
             }
             assert!(not_an_array(&check_read_array_index(
@@ -62,7 +62,7 @@ fn array_rows_pass_the_read_check() {
         let object_type = object.object_identifier().object_type();
         for row in object.property_metadata().iter() {
             let property = row.property_identifier;
-            if !object.is_array_property(property) {
+            if !crate::property_metadata::is_array_property(&*object, property) {
                 continue;
             }
             // Element 0 is the array's size, which every array serves.

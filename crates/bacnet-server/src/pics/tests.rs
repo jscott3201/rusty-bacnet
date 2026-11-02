@@ -1,3 +1,4 @@
+use bacnet_objects::property_metadata::is_writable_property;
 use std::borrow::Cow;
 
 use bacnet_objects::property_metadata::PropertyMetadata;
@@ -662,7 +663,7 @@ fn pics_writability_matches_runtime_write_property() {
     let mut ai = AnalogInputObject::new(1, "ai-1", NO_UNITS).unwrap();
     // PICS (via the trait method) must report it writable.
     assert!(
-        ai.is_writable_property(PropertyIdentifier::LIMIT_ENABLE),
+        is_writable_property(&ai, PropertyIdentifier::LIMIT_ENABLE),
         "is_writable_property must report LIMIT_ENABLE writable on AnalogInput"
     );
     // And the runtime write_property must accept it.
@@ -683,7 +684,7 @@ fn pics_writability_matches_runtime_write_property() {
 
     // Cross-check a property PICS reports non-writable: STATUS_FLAGS.
     assert!(
-        !ai.is_writable_property(PropertyIdentifier::STATUS_FLAGS),
+        !is_writable_property(&ai, PropertyIdentifier::STATUS_FLAGS),
         "STATUS_FLAGS must not be writable on AnalogInput"
     );
     let result = ai.write_property(

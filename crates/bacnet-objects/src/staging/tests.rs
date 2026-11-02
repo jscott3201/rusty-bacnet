@@ -1,6 +1,7 @@
 use super::*;
+use crate::property_metadata::is_writable_property;
 use bacnet_encoding::constructed::encode_device_object_reference;
-use bacnet_types::error::RemoteError;
+use bacnet_types::{enums::PropertyIdentifier as P, error::RemoteError};
 
 fn reference(object_type: ObjectType, instance: u32) -> BACnetDeviceObjectReference {
     BACnetDeviceObjectReference {
@@ -681,8 +682,8 @@ fn metadata_and_property_list_are_truthful_and_non_intrinsic() {
     ] {
         assert!(list.contains(&required), "missing {required:?}");
     }
-    assert!(object.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
-    assert!(!object.is_writable_property(PropertyIdentifier::PRESENT_STAGE));
+    assert!(is_writable_property(&object, P::PRESENT_VALUE));
+    assert!(!is_writable_property(&object, P::PRESENT_STAGE));
     assert!(object.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
 
     let mut unnamed = config();
@@ -712,7 +713,7 @@ fn staging_cov_increment_and_reported_present_stage() {
         PropertyValue::Real(0.0)
     );
     assert_eq!(object.cov().and_then(|cov| cov.cov_increment()), Some(0.0));
-    assert!(object.is_writable_property(PropertyIdentifier::COV_INCREMENT));
+    assert!(is_writable_property(&object, P::COV_INCREMENT));
     object
         .write_property(
             PropertyIdentifier::COV_INCREMENT,

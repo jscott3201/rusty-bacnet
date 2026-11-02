@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::bip::BipEndpointBuilder;
+use bacnet_objects::property_metadata::is_writable_property;
 use bacnet_types::enums::Reliability;
 use std::net::{Ipv4Addr, SocketAddrV4};
 
@@ -355,9 +356,10 @@ async fn direct_bip_ipv4_client_only_and_both_start_stop_silently() {
                     )
                     .any(|required| required == PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT)
                 );
-                assert!(
-                    device.is_writable_property(PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT)
-                );
+                assert!(is_writable_property(
+                    device,
+                    PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT
+                ));
                 assert!(
                     !bacnet_objects::property_metadata::required_properties(
                         &device.property_metadata()

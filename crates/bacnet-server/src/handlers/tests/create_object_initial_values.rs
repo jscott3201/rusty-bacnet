@@ -1,6 +1,6 @@
 //! CreateObject applies each initial value the way WriteProperty applies its
 //! value (#1389, #1416): the array index is checked against the new object,
-//! the value is decoded whole with the object's list classification, the
+//! the value is decoded whole by its value type on the object, the
 //! raw-octet properties reach the object as their octets, and a NULL the
 //! property leaves as it is counts as applied. The first initial value that
 //! can't be applied is named by its position, and nothing is created

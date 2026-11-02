@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::clock::{ClockFrame, ClockReader};
+use crate::property_metadata::is_writable_property;
 use crate::traits::Timed;
 use bacnet_types::bitstring::LogStatus;
 use bacnet_types::calendar::SpecificDate;
@@ -149,7 +150,10 @@ fn logging_type_takes_polled_or_triggered_and_refuses_cov() {
         read(&log, PropertyIdentifier::LOG_INTERVAL),
         PropertyValue::Unsigned(0)
     );
-    assert!(!log.is_writable_property(PropertyIdentifier::LOG_INTERVAL));
+    assert!(!is_writable_property(
+        &log,
+        PropertyIdentifier::LOG_INTERVAL
+    ));
     for value in [PropertyValue::Unsigned(500), PropertyValue::Null] {
         assert_refused(
             write(&mut log, PropertyIdentifier::LOG_INTERVAL, value),
@@ -165,7 +169,7 @@ fn logging_type_takes_polled_or_triggered_and_refuses_cov() {
 
     // POLLED with a zero interval takes the default; a nonzero one stays.
     log.set_logging_type(LoggingType::POLLED).unwrap();
-    assert!(log.is_writable_property(PropertyIdentifier::LOG_INTERVAL));
+    assert!(is_writable_property(&log, PropertyIdentifier::LOG_INTERVAL));
     assert_eq!(
         read(&log, PropertyIdentifier::LOG_INTERVAL),
         PropertyValue::Unsigned(DEFAULT_LOG_INTERVAL.into())

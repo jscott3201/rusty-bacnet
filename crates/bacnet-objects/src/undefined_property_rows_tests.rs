@@ -20,6 +20,7 @@ use crate::file::FileObject;
 use crate::group::{GroupObject, StructuredViewObject};
 use crate::load_control::LoadControlObject;
 use crate::notification_class::NotificationClass;
+use crate::property_metadata::is_writable_property;
 use crate::traits::BACnetObject;
 use bacnet_types::enums::{ErrorClass, ErrorCode, EventType, PropertyIdentifier as P};
 use bacnet_types::error::{Error, RemoteError};
@@ -123,7 +124,10 @@ fn rows_outside_the_property_tables_are_unknown() {
                     .any(|row| row.property_identifier == property),
                 "{context} in metadata"
             );
-            assert!(!object.is_writable_property(property), "{context} writable");
+            assert!(
+                !is_writable_property(&*object, property),
+                "{context} writable"
+            );
             assert_unknown_property(object.read_property(property, None).map(|_| ()), &context);
             for value in [
                 PropertyValue::Boolean(true),

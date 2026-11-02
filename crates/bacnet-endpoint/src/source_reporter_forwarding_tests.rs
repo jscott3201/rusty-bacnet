@@ -3,7 +3,8 @@ use bacnet_objects::audit::{AuditLogQueryPage, AuditLogStorage, AuditReporterAut
 use bacnet_objects::clock::{ClockFrame, ClockReader};
 use bacnet_objects::event_enrollment::{EventEnrollmentEvalState, EventEnrollmentMonitoredSource};
 use bacnet_objects::property_metadata::{
-    PropertyConformance, PropertyMetadata, PropertyWriteCapability, has_property, property_list,
+    Datatype, PropertyConformance, PropertyMetadata, PropertyWriteCapability, ValueType,
+    has_property, is_array_property, is_list_property, is_writable_property, property_list,
     required_properties,
 };
 use bacnet_objects::traits::{AuditLog, Clocks, EnrollmentEval, Timed};
@@ -115,7 +116,10 @@ async fn built_in_configuration_identity_metadata_and_writes_survive_wrapping() 
             read(object, PropertyIdentifier::AUDIT_SOURCE_REPORTER),
             PropertyValue::Boolean(true)
         );
-        assert!(!object.is_writable_property(PropertyIdentifier::AUDIT_SOURCE_REPORTER));
+        assert!(!is_writable_property(
+            &*object,
+            PropertyIdentifier::AUDIT_SOURCE_REPORTER
+        ));
         denied(object.write_property(
             PropertyIdentifier::AUDIT_SOURCE_REPORTER,
             None,
@@ -215,7 +219,6 @@ async fn built_in_configuration_identity_metadata_and_writes_survive_wrapping() 
 }
 
 const CUSTOM: PropertyIdentifier = PropertyIdentifier::from_raw(5000);
-const CUSTOM_LIST: PropertyIdentifier = PropertyIdentifier::from_raw(5001);
 
 #[derive(Default)]
 struct Calls {
@@ -288,22 +291,16 @@ impl BACnetObject for ExtendedReporter {
     }
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         let mut rows = self.reporter.property_metadata().into_owned();
-        rows.push(PropertyMetadata::new(
-            CUSTOM,
-            PropertyConformance::RequiredWrite,
-            None,
-            PropertyWriteCapability::Always,
-        ));
+        rows.push(
+            PropertyMetadata::new(
+                CUSTOM,
+                PropertyConformance::RequiredWrite,
+                None,
+                PropertyWriteCapability::Always,
+            )
+            .with_value_type(ValueType::array(Datatype::Unsigned)),
+        );
         Cow::Owned(rows)
-    }
-    fn is_writable_property(&self, p: PropertyIdentifier) -> bool {
-        p == CUSTOM || self.reporter.is_writable_property(p)
-    }
-    fn is_array_property(&self, p: PropertyIdentifier) -> bool {
-        p == CUSTOM || self.reporter.is_array_property(p)
-    }
-    fn is_list_property(&self, p: PropertyIdentifier) -> bool {
-        p == CUSTOM_LIST || self.reporter.is_list_property(p)
     }
     fn timed(&mut self) -> Option<&mut dyn Timed> {
         Some(self)
@@ -447,10 +444,9 @@ async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
         let rows = object.property_metadata();
         assert!(has_property(&rows, CUSTOM));
         assert!(required_properties(&rows).any(|p| p == CUSTOM));
-        assert!(object.is_array_property(CUSTOM));
-        assert!(object.is_list_property(CUSTOM_LIST));
-        assert!(!object.is_list_property(CUSTOM));
-        assert!(object.is_writable_property(CUSTOM));
+        assert!(is_array_property(&*object, CUSTOM));
+        assert!(!is_list_property(&*object, CUSTOM));
+        assert!(is_writable_property(&*object, CUSTOM));
         assert_eq!(read(object, CUSTOM), PropertyValue::Unsigned(7));
         object
             .write_property(CUSTOM, Some(3), PropertyValue::Unsigned(42), Some(7))

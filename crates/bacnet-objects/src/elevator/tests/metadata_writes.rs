@@ -5,6 +5,7 @@
 
 use super::super::*;
 use super::metadata::assert_error;
+use crate::property_metadata::is_writable_property;
 use bacnet_types::enums::PropertyIdentifier as P;
 use bacnet_types::enums::{
     ErrorCode, EscalatorFault, EscalatorMode, EscalatorOperationDirection, LiftCarDirection,
@@ -56,7 +57,7 @@ fn property_metadata_elevator_group_writes_store_verbatim() {
             object.write_property(p, None, value, None).unwrap_err(),
             ErrorCode::WRITE_ACCESS_DENIED,
         );
-        assert!(!object.is_writable_property(p));
+        assert!(!is_writable_property(&object, p));
     }
 }
 
@@ -287,7 +288,7 @@ fn property_metadata_lift_writes_store_verbatim_with_range_gates() {
                 object.write_property(p, None, value, None).unwrap_err(),
                 ErrorCode::WRITE_ACCESS_DENIED,
             );
-            assert!(!object.is_writable_property(p));
+            assert!(!is_writable_property(&object, p));
         }
         // The per-door arrays and car-state rows take their read-back
         // values only out of service.
@@ -311,7 +312,7 @@ fn property_metadata_lift_writes_store_verbatim_with_range_gates() {
             } else {
                 assert_error(result.unwrap_err(), ErrorCode::WRITE_ACCESS_DENIED);
             }
-            assert!(object.is_writable_property(p));
+            assert!(is_writable_property(&object, p));
         }
     }
 }

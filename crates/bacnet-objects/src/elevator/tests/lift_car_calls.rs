@@ -9,6 +9,7 @@ use super::{
     assert_invalid_data_type, assert_property_error, assert_value_out_of_range, frame,
     set_out_of_service,
 };
+use crate::property_metadata::{is_array_property, is_writable_property};
 use bacnet_types::constructed::{
     AssignedLandingCall, BACnetAssignedLandingCalls, BACnetLiftCarCallList,
 };
@@ -74,7 +75,7 @@ fn lift_call_arrays_start_with_one_empty_element_per_door() {
         (P::REGISTERED_CAR_CALL, frame(&[0x0E, 0x0F])),
         (P::CAR_DOOR_COMMAND, PropertyValue::Enumerated(0)),
     ] {
-        assert!(lift.is_array_property(p), "{p:?}");
+        assert!(is_array_property(&lift, p), "{p:?}");
         assert_eq!(
             lift.read_property(p, None).unwrap(),
             PropertyValue::List(vec![element.clone()]),
@@ -453,7 +454,7 @@ fn lift_call_arrays_refuse_writes_in_service() {
         (P::REGISTERED_CAR_CALL, frame(&[0x0E, 0x21, 0x02, 0x0F])),
         (P::CAR_DOOR_COMMAND, command(LiftCarDoorCommand::OPEN)),
     ] {
-        assert!(lift.is_writable_property(p), "{p:?}");
+        assert!(is_writable_property(&lift, p), "{p:?}");
         let before = lift.read_property(p, None).unwrap();
         for index in [None, Some(1)] {
             assert_property_error(

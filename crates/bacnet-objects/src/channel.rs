@@ -50,6 +50,7 @@
 //! goes out if the delete lands in that gap.
 
 use crate::prelude::*;
+use crate::property_metadata::is_array_property;
 use alloc::borrow::Cow;
 use alloc::sync::Arc;
 
@@ -420,7 +421,7 @@ impl BACnetObject for ChannelObject {
         priority: Option<u8>,
     ) -> Result<(), Error> {
         crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
-        if array_index.is_some() && !self.is_array_property(property) {
+        if array_index.is_some() && !is_array_property(self, property) {
             return Err(common::property_is_not_an_array_error());
         }
         if let Some(result) = common::write_object_name(&mut self.name, property, &value) {

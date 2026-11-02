@@ -149,7 +149,7 @@ mod tests {
                 &object.property_metadata(),
                 p
             ));
-            assert!(!object.is_writable_property(p));
+            assert!(!crate::property_metadata::is_writable_property(&object, p));
             assert_error(
                 object
                     .write_property(p, None, PropertyValue::Null, None)
@@ -236,7 +236,10 @@ mod tests {
             object.read_property(P::MEMBER_OF, None).unwrap(),
             PropertyValue::ApplicationData(vec![0x0c, 0x02, 0, 0, 9, 0x1c, 0x0f, 0x40, 0, 2])
         );
-        assert!(!object.is_writable_property(P::MEMBER_OF));
+        assert!(!crate::property_metadata::is_writable_property(
+            &*object,
+            P::MEMBER_OF
+        ));
 
         let mut other: Box<dyn BACnetObject> =
             Box::new(crate::binary::BinaryValueObject::new(1, "Other").unwrap());
@@ -325,7 +328,10 @@ mod tests {
             .map(|p| PropertyValue::Enumerated(p.to_raw()))
             .collect();
         assert_eq!(wire.len(), 8);
-        assert!(object.is_array_property(P::PROPERTY_LIST));
+        assert!(crate::property_metadata::is_array_property(
+            &object,
+            P::PROPERTY_LIST
+        ));
         assert_eq!(
             object.read_property(P::PROPERTY_LIST, None).unwrap(),
             PropertyValue::List(wire.clone())
@@ -364,7 +370,11 @@ mod tests {
                 if writable { Always } else { ReadOnly },
                 "{p:?}"
             );
-            assert_eq!(object.is_writable_property(p), writable, "{p:?}");
+            assert_eq!(
+                crate::property_metadata::is_writable_property(&object, p),
+                writable,
+                "{p:?}"
+            );
             if p == P::LOG_BUFFER {
                 // Present but readable only by ReadRange; writes are denied.
                 assert_error(
@@ -408,15 +418,21 @@ mod tests {
         }
         // The metadata fixes two legacy-default drifts: Object_Name is not
         // writable and Enable is, matching the write_property arms.
-        assert!(!object.is_writable_property(P::OBJECT_NAME));
-        assert!(object.is_writable_property(P::LOG_ENABLE));
+        assert!(!crate::property_metadata::is_writable_property(
+            &object,
+            P::OBJECT_NAME
+        ));
+        assert!(crate::property_metadata::is_writable_property(
+            &object,
+            P::LOG_ENABLE
+        ));
         for p in [
             P::OBJECT_NAME,
             P::RECORD_COUNT,
             P::LOG_BUFFER,
             P::RELIABILITY,
         ] {
-            assert!(!object.is_writable_property(p));
+            assert!(!crate::property_metadata::is_writable_property(&object, p));
             assert_error(
                 object
                     .write_property(p, None, PropertyValue::Null, None)

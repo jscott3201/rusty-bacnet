@@ -3,6 +3,7 @@
 //! validity window against the wall clock, Global_Identifier, and the two
 //! constructed arrays.
 
+use crate::property_metadata::is_writable_property;
 use crate::traits::Timed;
 use bacnet_types::error::RemoteError;
 use std::sync::{Arc, Mutex};
@@ -489,7 +490,7 @@ fn access_credential_arrays_refuse_bad_elements_and_network_writes() {
     // Table 12-40 makes both R; the network can't write them, whole or by
     // element.
     for property in [AF, AAR] {
-        assert!(!credential.is_writable_property(property));
+        assert!(!is_writable_property(&credential, property));
         for index in [None, Some(1)] {
             let value = credential.read_property(property, index).unwrap();
             assert_property_error(

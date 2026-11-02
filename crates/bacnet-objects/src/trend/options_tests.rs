@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::clock::ClockFrame;
+use crate::property_metadata::is_writable_property;
 use crate::traits::Timed;
 use bacnet_types::constructed::LogDatum;
 use bacnet_types::error::RemoteError;
@@ -98,7 +99,7 @@ fn logging_type_takes_polled_triggered_and_cov() {
     .unwrap();
     assert_eq!(logging_type(&log), LoggingType::COV);
     assert_eq!(interval(&log), PropertyValue::Unsigned(0));
-    assert!(log.is_writable_property(PropertyIdentifier::LOG_INTERVAL));
+    assert!(is_writable_property(&log, PropertyIdentifier::LOG_INTERVAL));
     log.set_logging_type(LoggingType::POLLED).unwrap();
     log.set_log_interval(500).unwrap();
     log.set_logging_type(LoggingType::COV).unwrap();
@@ -119,7 +120,10 @@ fn logging_type_takes_polled_triggered_and_cov() {
     )
     .unwrap();
     assert_eq!(interval(&log), PropertyValue::Unsigned(0));
-    assert!(!log.is_writable_property(PropertyIdentifier::LOG_INTERVAL));
+    assert!(!is_writable_property(
+        &log,
+        PropertyIdentifier::LOG_INTERVAL
+    ));
     for value in [PropertyValue::Unsigned(500), PropertyValue::Null] {
         assert_refused(
             write(&mut log, PropertyIdentifier::LOG_INTERVAL, value),
@@ -135,7 +139,7 @@ fn logging_type_takes_polled_triggered_and_cov() {
 
     // POLLED with a zero interval takes the default; a nonzero one stays.
     log.set_logging_type(LoggingType::POLLED).unwrap();
-    assert!(log.is_writable_property(PropertyIdentifier::LOG_INTERVAL));
+    assert!(is_writable_property(&log, PropertyIdentifier::LOG_INTERVAL));
     assert_eq!(
         interval(&log),
         PropertyValue::Unsigned(DEFAULT_LOG_INTERVAL.into())

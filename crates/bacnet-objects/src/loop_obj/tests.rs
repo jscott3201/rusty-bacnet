@@ -1,4 +1,5 @@
 use super::*;
+use crate::property_metadata::is_writable_property;
 use bacnet_types::error::RemoteError;
 
 #[test]
@@ -139,7 +140,7 @@ fn loop_cov_increment_is_writable_validated_and_drives_cov() {
         PropertyValue::Real(0.0)
     );
     assert_eq!(lo.cov().and_then(|cov| cov.cov_increment()), Some(0.0));
-    assert!(lo.is_writable_property(PropertyIdentifier::COV_INCREMENT));
+    assert!(is_writable_property(&lo, PropertyIdentifier::COV_INCREMENT));
 
     lo.write_property(
         PropertyIdentifier::COV_INCREMENT,
@@ -177,7 +178,7 @@ fn loop_present_value_is_writable_only_out_of_service() {
     let mut lo = LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     lo.set_present_value(10.0);
     // Writable for PICS purposes; the state gate decides each request.
-    assert!(lo.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
+    assert!(is_writable_property(&lo, PropertyIdentifier::PRESENT_VALUE));
     assert_property_error(
         lo.write_property(
             PropertyIdentifier::PRESENT_VALUE,
@@ -304,7 +305,10 @@ fn loop_controlled_variable_value_is_application_fed_and_read_only() {
         read(&lo, PropertyIdentifier::CONTROLLED_VARIABLE_VALUE),
         PropertyValue::Real(21.5)
     );
-    assert!(!lo.is_writable_property(PropertyIdentifier::CONTROLLED_VARIABLE_VALUE));
+    assert!(!is_writable_property(
+        &lo,
+        PropertyIdentifier::CONTROLLED_VARIABLE_VALUE
+    ));
     for out_of_service in [false, true] {
         set_out_of_service(&mut lo, out_of_service);
         assert_property_error(

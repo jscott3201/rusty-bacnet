@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::property_metadata::is_writable_property;
 use crate::traits::EventReporting as _;
 use bacnet_types::bitstring::LimitEnable;
 use bacnet_types::enums::EventState;
@@ -292,19 +293,25 @@ fn ai_is_writable_property_mirrors_write_property() {
     let ai = AnalogInputObject::new(1, "ai-1", EngineeringUnits::NO_UNITS).unwrap();
     // Event properties accepted via write_generic_event_properties! / write_analog_event_properties! — the old
     // heuristic omitted these (false-negatives).
-    assert!(ai.is_writable_property(PropertyIdentifier::LIMIT_ENABLE));
-    assert!(ai.is_writable_property(PropertyIdentifier::NOTIFY_TYPE));
-    assert!(ai.is_writable_property(PropertyIdentifier::TIME_DELAY));
-    assert!(ai.is_writable_property(PropertyIdentifier::EVENT_ENABLE));
-    assert!(ai.is_writable_property(PropertyIdentifier::NOTIFICATION_CLASS));
+    assert!(is_writable_property(&ai, PropertyIdentifier::LIMIT_ENABLE));
+    assert!(is_writable_property(&ai, PropertyIdentifier::NOTIFY_TYPE));
+    assert!(is_writable_property(&ai, PropertyIdentifier::TIME_DELAY));
+    assert!(is_writable_property(&ai, PropertyIdentifier::EVENT_ENABLE));
+    assert!(is_writable_property(
+        &ai,
+        PropertyIdentifier::NOTIFICATION_CLASS
+    ));
     // Common + RELIABILITY + COV_INCREMENT.
-    assert!(ai.is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
-    assert!(ai.is_writable_property(PropertyIdentifier::OBJECT_NAME));
-    assert!(ai.is_writable_property(PropertyIdentifier::DESCRIPTION));
-    assert!(ai.is_writable_property(PropertyIdentifier::RELIABILITY));
-    assert!(ai.is_writable_property(PropertyIdentifier::COV_INCREMENT));
+    assert!(is_writable_property(
+        &ai,
+        PropertyIdentifier::OUT_OF_SERVICE
+    ));
+    assert!(is_writable_property(&ai, PropertyIdentifier::OBJECT_NAME));
+    assert!(is_writable_property(&ai, PropertyIdentifier::DESCRIPTION));
+    assert!(is_writable_property(&ai, PropertyIdentifier::RELIABILITY));
+    assert!(is_writable_property(&ai, PropertyIdentifier::COV_INCREMENT));
     // PRESENT_VALUE accepted when out-of-service.
-    assert!(ai.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
+    assert!(is_writable_property(&ai, PropertyIdentifier::PRESENT_VALUE));
     // Read-only despite being an event property: Acked_Transitions is modified only by the
     // AcknowledgeAlarm service, which ORs the acknowledged bit in where a property write
     // would assign — so an assignable arm could both fabricate and erase acknowledgments,
@@ -313,7 +320,10 @@ fn ai_is_writable_property_mirrors_write_property() {
     // silently turned this write into Ok(()) on all three analog types, and nothing here
     // caught it.
     let mut ai_mut = AnalogInputObject::new(2, "ai-2", EngineeringUnits::NO_UNITS).unwrap();
-    assert!(!ai.is_writable_property(PropertyIdentifier::ACKED_TRANSITIONS));
+    assert!(!is_writable_property(
+        &ai,
+        PropertyIdentifier::ACKED_TRANSITIONS
+    ));
     assert!(
         ai_mut
             .write_property(
@@ -329,13 +339,25 @@ fn ai_is_writable_property_mirrors_write_property() {
     );
 
     // Universal read-only.
-    assert!(!ai.is_writable_property(PropertyIdentifier::OBJECT_IDENTIFIER));
-    assert!(!ai.is_writable_property(PropertyIdentifier::OBJECT_TYPE));
-    assert!(!ai.is_writable_property(PropertyIdentifier::PROPERTY_LIST));
-    assert!(!ai.is_writable_property(PropertyIdentifier::STATUS_FLAGS));
+    assert!(!is_writable_property(
+        &ai,
+        PropertyIdentifier::OBJECT_IDENTIFIER
+    ));
+    assert!(!is_writable_property(&ai, PropertyIdentifier::OBJECT_TYPE));
+    assert!(!is_writable_property(
+        &ai,
+        PropertyIdentifier::PROPERTY_LIST
+    ));
+    assert!(!is_writable_property(&ai, PropertyIdentifier::STATUS_FLAGS));
     // Not accepted by AI write_property.
-    assert!(!ai.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
-    assert!(!ai.is_writable_property(PropertyIdentifier::RELINQUISH_DEFAULT));
+    assert!(!is_writable_property(
+        &ai,
+        PropertyIdentifier::PRIORITY_ARRAY
+    ));
+    assert!(!is_writable_property(
+        &ai,
+        PropertyIdentifier::RELINQUISH_DEFAULT
+    ));
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -568,7 +590,7 @@ fn analog_time_delay_normal_round_trips_and_matches_pics() {
             "{label}: Time_Delay_Normal must be advertised in Property_List"
         );
         assert!(
-            object.is_writable_property(PropertyIdentifier::TIME_DELAY_NORMAL),
+            is_writable_property(&*object, PropertyIdentifier::TIME_DELAY_NORMAL),
             "{label}: Time_Delay_Normal must be advertised writable"
         );
 

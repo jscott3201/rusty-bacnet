@@ -316,7 +316,7 @@ mod tests {
                             object.read_property(p, None).unwrap_err(),
                             ErrorCode::UNKNOWN_PROPERTY,
                         );
-                        assert!(!object.is_writable_property(p));
+                        assert!(!crate::property_metadata::is_writable_property(&*object, p));
                     }
                 }
             }
@@ -379,7 +379,7 @@ mod tests {
                     };
                     assert_eq!(row.write_capability, capability, "{p:?}");
                     assert_eq!(
-                        object.is_writable_property(p),
+                        crate::property_metadata::is_writable_property(&*object, p),
                         capability.is_writable(),
                         "{p:?}"
                     );
@@ -406,7 +406,10 @@ mod tests {
                         assert_error(result.unwrap_err(), ErrorCode::WRITE_ACCESS_DENIED);
                     }
                 }
-                assert!(!object.is_writable_property(P::ALL));
+                assert!(!crate::property_metadata::is_writable_property(
+                    &*object,
+                    P::ALL
+                ));
                 assert_error(
                     object
                         .write_property(P::ALL, None, PropertyValue::Null, None)
@@ -420,8 +423,14 @@ mod tests {
     #[test]
     fn property_metadata_multistate_state_text_writes_by_element_or_whole() {
         for mut object in objects() {
-            assert!(object.is_array_property(P::STATE_TEXT));
-            assert!(!object.is_array_property(P::NUMBER_OF_STATES));
+            assert!(crate::property_metadata::is_array_property(
+                &*object,
+                P::STATE_TEXT
+            ));
+            assert!(!crate::property_metadata::is_array_property(
+                &*object,
+                P::NUMBER_OF_STATES
+            ));
             let mut expected: Vec<_> = (1..=3)
                 .map(|i| PropertyValue::CharacterString(format!("State {i}")))
                 .collect();
@@ -489,7 +498,10 @@ mod tests {
     #[test]
     fn property_metadata_multistate_alarm_list_cap_and_atomic_rejection() {
         for mut object in objects().into_iter().take(2) {
-            assert!(!object.is_array_property(P::ALARM_VALUES));
+            assert!(!crate::property_metadata::is_array_property(
+                &*object,
+                P::ALARM_VALUES
+            ));
             let at_cap = PropertyValue::List(vec![
                 PropertyValue::Unsigned(2);
                 crate::multistate::MAX_ALARM_VALUES
