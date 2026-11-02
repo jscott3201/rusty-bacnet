@@ -1,6 +1,25 @@
 //! Accumulator (type 23) and Pulse Converter (type 24) objects.
 //!
 //! Per ASHRAE 135-2020 §12.61 Table 12-79 (Accumulator) and §12.23 Table 12-27 (PulseConverter).
+//!
+//! # Present_Value stays within Max_Pres_Value
+//!
+//! Clause 12.61.4 keeps an Accumulator's Present_Value between zero and
+//! Max_Pres_Value, and counts modulo Max_Pres_Value + 1. Table 12-79 lists
+//! Max_Pres_Value as R, which leaves its writability to the device; this one
+//! takes a write (#2280). A write that would put Max_Pres_Value below the
+//! current Present_Value is refused with VALUE_OUT_OF_RANGE and changes
+//! nothing. The alternatives were weighed and rejected:
+//! - clamping Present_Value to the new maximum would invent a reading no
+//!   pulse produced;
+//! - reducing it modulo the new range would silently drop the high part of
+//!   a metered total, and a Pulse Converter reading it would count the drop
+//!   as a wrap.
+//!
+//! A client that does mean to shrink the range sets Out_Of_Service, writes a
+//! Present_Value that fits, then lowers Max_Pres_Value. The application's
+//! [`AccumulatorObject::set_present_value`] keeps the same range: it stores
+//! its value modulo Max_Pres_Value + 1, as the pulse feed does.
 
 use crate::prelude::*;
 use alloc::borrow::Cow;
@@ -28,6 +47,8 @@ mod pulse_feed;
 mod pulse_feed_tests;
 #[cfg(test)]
 mod pulse_rate_tests;
+#[cfg(test)]
+mod reliability_max_tests;
 
 #[doc(hidden)]
 pub(crate) use pulse_converter::InputReading;
@@ -48,7 +69,11 @@ pub use pulse_converter::PulseConverterObject;
 /// in a window its [`Timed`](crate::traits::Timed) capability closes, which
 /// a server drives from its monotonic task.
 ///
-/// While Out_Of_Service is TRUE a client may write Present_Value (#2267).
+/// While Out_Of_Service is TRUE a client may write Present_Value (#2267)
+/// and Reliability (#2280), to simulate a reading or a fault
+/// (Clause 12.61.10). The Reliability in force when the object left service
+/// comes back when it returns. In service, Reliability is the application's,
+/// set through [`ReliabilityEval::set_reliability`](crate::traits::ReliabilityEval::set_reliability).
 /// Dependents take the written value as input (Clause 12.61.10): a Pulse
 /// Converter whose Input_Reference names it counts an increase as its delta
 /// and a decrease as a wrap through Max_Pres_Value.
@@ -79,6 +104,9 @@ pub struct AccumulatorObject {
     event_state: EventState,
     out_of_service: bool,
     reliability: Reliability,
+    /// The in-service Reliability, set aside while a client simulates one
+    /// out of service, and restored on the return.
+    reliability_before_out_of_service: Option<Reliability>,
     value_before_change: u64,
     value_set: u64,
 }
@@ -110,15 +138,22 @@ impl AccumulatorObject {
             event_state: EventState::NORMAL,
             out_of_service: false,
             reliability: Reliability::NO_FAULT_DETECTED,
+            reliability_before_out_of_service: None,
             value_before_change: 0,
             value_set: 0,
         })
     }
 
-    /// Set the present value (application use). Prescale's remainder is
-    /// left as it is; only a client's write, out of service, clears it.
+    /// Set the present value (application use). Present_Value stays
+    /// between zero and Max_Pres_Value (Clause 12.61.4), so a value above
+    /// Max_Pres_Value is stored modulo Max_Pres_Value + 1, as fed pulses
+    /// roll over. Prescale's remainder is left as it is; only a client's
+    /// write, out of service, clears it.
     pub fn set_present_value(&mut self, value: u64) {
-        self.present_value = value;
+        self.present_value = match self.max_pres_value.checked_add(1) {
+            Some(modulus) => value % modulus,
+            None => value,
+        };
     }
 
     /// Set the description string.
@@ -255,9 +290,15 @@ impl BACnetObject for AccumulatorObject {
         _priority: Option<u8>,
     ) -> Result<(), Error> {
         crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
-        if let Some(result) =
-            common::write_out_of_service(&mut self.out_of_service, property, &value)
-        {
+        // A Reliability simulated out of service (Clause 12.61.10) ends
+        // with it: back in service, the one set aside comes back.
+        if let Some(result) = common::write_out_of_service_with_reliability_restore(
+            &mut self.out_of_service,
+            &mut self.reliability,
+            &mut self.reliability_before_out_of_service,
+            property,
+            &value,
+        ) {
             return result;
         }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
@@ -281,13 +322,32 @@ impl BACnetObject for AccumulatorObject {
                 self.write_present_value(v);
                 Ok(())
             }
+            // Never below the count it bounds: see the module doc (#2280).
             p if p == PropertyIdentifier::MAX_PRES_VALUE => {
-                if let PropertyValue::Unsigned(v) = value {
-                    self.max_pres_value = v;
-                    Ok(())
-                } else {
-                    Err(common::invalid_data_type_error())
+                let PropertyValue::Unsigned(v) = value else {
+                    return Err(common::invalid_data_type_error());
+                };
+                if v < self.present_value {
+                    return Err(common::value_out_of_range_error());
                 }
+                self.max_pres_value = v;
+                Ok(())
+            }
+            // Writable only while Out_Of_Service is TRUE (Clause 12.61.10),
+            // to simulate a fault; in service the application owns it.
+            p if p == PropertyIdentifier::RELIABILITY => {
+                if !self.out_of_service {
+                    return Err(common::write_access_denied_error());
+                }
+                let PropertyValue::Enumerated(raw) = value else {
+                    return Err(common::invalid_data_type_error());
+                };
+                let reliability = Reliability::from_raw(raw);
+                if !common::is_reliability_value_valid(reliability) {
+                    return Err(common::value_out_of_range_error());
+                }
+                self.reliability = reliability;
+                Ok(())
             }
             // Writable only while Out_Of_Service is TRUE (Clause 12.61.20),
             // for simulation; in service the input owns it.
@@ -325,6 +385,8 @@ impl BACnetObject for AccumulatorObject {
         Some(self)
     }
 
+    crate::traits::lend_reliability_eval!();
+
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
         metadata::for_accumulator_object(self)
     }
@@ -333,6 +395,23 @@ impl BACnetObject for AccumulatorObject {
 }
 
 impl crate::traits::CovReporting for AccumulatorObject {}
+
+/// The application's route to Reliability: the Accumulator runs no fault
+/// algorithm of its own, so it only takes the value the application works
+/// out, in service.
+impl crate::traits::ReliabilityEval for AccumulatorObject {
+    fn set_reliability(&mut self, reliability: Reliability) -> Result<(), Error> {
+        // Out of service a client's simulated value is in force.
+        if self.out_of_service {
+            return Err(common::write_access_denied_error());
+        }
+        if !common::is_reliability_value_valid(reliability) {
+            return Err(common::value_out_of_range_error());
+        }
+        self.reliability = reliability;
+        Ok(())
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Tests

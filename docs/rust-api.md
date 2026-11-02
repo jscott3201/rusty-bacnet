@@ -7199,6 +7199,23 @@ Pulse_Rate is writable only while Out_Of_Service is TRUE (Clause 12.61.20);
 in service a write is WRITE_ACCESS_DENIED. A write must be an Unsigned; the
 REAL the object used to serve is INVALID_DATA_TYPE (#2251).
 
+Reliability is writable only while Out_Of_Service is TRUE too, so a client
+can simulate a fault (Clause 12.61.10; #2280): in service a write is
+WRITE_ACCESS_DENIED, and out of service it must be a BACnetReliability value.
+Status_Flags FAULT follows it. In service the application owns Reliability
+through [`ReliabilityEval::set_reliability`](#capabilities), which the
+Accumulator now lends and which is refused while Out_Of_Service is TRUE.
+Entering out of service sets the in-service value aside, and the return
+puts it back over whatever a client simulated.
+
+Max_Pres_Value never drops below Present_Value (#2280). A write below the
+current count is VALUE_OUT_OF_RANGE and changes nothing: clamping would
+invent a reading and a modulo reduction would lose the high part of a metered
+total. To shrink the range, a client sets Out_Of_Service, writes a
+Present_Value that fits and then lowers Max_Pres_Value.
+`AccumulatorObject::set_present_value` stores a value above Max_Pres_Value
+modulo Max_Pres_Value + 1, as fed pulses roll over.
+
 A Pulse Converter's Input_Reference, set with `set_input_reference`, reads and
 takes writes like the Loop's variable references: the context-tagged
 `BACnetObjectPropertyReference` in a `PropertyValue::ApplicationData`, with
