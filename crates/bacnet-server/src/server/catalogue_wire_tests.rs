@@ -36,6 +36,60 @@ mod values;
 
 const DEVICE_INSTANCE: u32 = 2175;
 
+/// One object per catalogue type. A type added to the catalogue changes it.
+const CATALOGUE_TYPES: usize = 64;
+/// Values an RPM ALL reads over the catalogue: every row but Property_List.
+/// A row added or dropped changes it.
+const VALUES_READ: usize = 1138;
+/// Rows a write over the wire is refused for access: the rows without a
+/// write route and the Out_Of_Service rows, but the empty arrays below.
+const REFUSED_ROWS: usize = 678;
+/// Types the built-in table creates. A table entry changes it.
+const CREATED_TYPES: usize = 27;
+/// Types DeleteObject removes: all but Device and Network Port.
+const DELETED_TYPES: usize = 62;
+
+/// The read-only arrays that read empty, which a write of their own value
+/// (no octets) gets INVALID_DATA_ENCODING for: the write decoder takes no
+/// octets as no value at all for an array written whole, before the
+/// object sees the write, although an empty array encodes as nothing
+/// (Clause 20.2.17). An exception until #2305 settles the decoder.
+const EMPTY_ARRAYS: [(ObjectType, PropertyIdentifier); 12] = [
+    (ObjectType::COMMAND, PropertyIdentifier::ACTION),
+    (ObjectType::GLOBAL_GROUP, PropertyIdentifier::GROUP_MEMBERS),
+    (ObjectType::GLOBAL_GROUP, PropertyIdentifier::PRESENT_VALUE),
+    (
+        ObjectType::GLOBAL_GROUP,
+        PropertyIdentifier::GROUP_MEMBER_NAMES,
+    ),
+    (
+        ObjectType::STRUCTURED_VIEW,
+        PropertyIdentifier::SUBORDINATE_ANNOTATIONS,
+    ),
+    (ObjectType::ACCESS_DOOR, PropertyIdentifier::DOOR_MEMBERS),
+    (
+        ObjectType::ACCESS_CREDENTIAL,
+        PropertyIdentifier::ASSIGNED_ACCESS_RIGHTS,
+    ),
+    (
+        ObjectType::ACCESS_CREDENTIAL,
+        PropertyIdentifier::AUTHENTICATION_FACTORS,
+    ),
+    (ObjectType::ACCESS_POINT, PropertyIdentifier::ACCESS_DOORS),
+    (
+        ObjectType::CREDENTIAL_DATA_INPUT,
+        PropertyIdentifier::SUPPORTED_FORMATS,
+    ),
+    (
+        ObjectType::CREDENTIAL_DATA_INPUT,
+        PropertyIdentifier::SUPPORTED_FORMAT_CLASSES,
+    ),
+    (
+        ObjectType::ELEVATOR_GROUP,
+        PropertyIdentifier::GROUP_MEMBERS,
+    ),
+];
+
 struct Wire {
     server: BACnetServer<TestTransport>,
     tx: mpsc::Sender<ReceivedNpdu>,
@@ -252,7 +306,11 @@ fn expansion(rows: &[PropertyMetadata], property: PropertyIdentifier) -> Vec<Pro
 async fn every_catalogue_type_reads_all_required_and_optional_over_the_wire() {
     let mut wire = Wire::start().await;
     let objects = wire.objects().await;
-    assert_eq!(objects.len(), 64, "one object per catalogue type");
+    assert_eq!(
+        objects.len(),
+        CATALOGUE_TYPES,
+        "one object per catalogue type"
+    );
     let mut failures = Vec::new();
     let mut values_checked = 0;
     for (oid, rows) in &objects {
@@ -288,10 +346,7 @@ async fn every_catalogue_type_reads_all_required_and_optional_over_the_wire() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
-    assert!(
-        values_checked > 1000,
-        "only {values_checked} values checked"
-    );
+    assert_eq!(values_checked, VALUES_READ, "values read");
 }
 
 #[tokio::test(start_paused = true)]
@@ -299,7 +354,7 @@ async fn rows_without_a_write_route_refuse_writes_over_the_wire() {
     let mut wire = Wire::start().await;
     let objects = wire.objects().await;
     let mut failures = Vec::new();
-    let (mut refused, mut empty_arrays) = (0, 0);
+    let (mut refused, mut empty_arrays) = (0, Vec::new());
     for (oid, rows) in &objects {
         let results = wire.rpm(*oid, PropertyIdentifier::ALL).await;
         for row in rows {
@@ -321,11 +376,7 @@ async fn rows_without_a_write_route_refuse_writes_over_the_wire() {
                 .find(|result| result.property_identifier == property)
                 .and_then(|result| result.property_value.clone())
                 .unwrap_or_else(|| vec![0x00]);
-            // Exception, a follow-up to #2175: the write decoder takes no
-            // octets for an array written whole as no value at all, so an
-            // empty array's own value is refused as INVALID_DATA_ENCODING
-            // before the object sees it, although an empty array encodes as
-            // nothing (Clause 20.2.17).
+            // The exception (#2305).
             let empty_array = value.is_empty()
                 && row
                     .effective_value_type(oid.object_type())
@@ -335,17 +386,17 @@ async fn rows_without_a_write_route_refuse_writes_over_the_wire() {
                 Reply::Error(ErrorClass::PROPERTY, ErrorCode::INVALID_DATA_ENCODING)
                     if empty_array =>
                 {
-                    empty_arrays += 1;
+                    empty_arrays.push((oid.object_type(), property));
                 }
                 other => failures.push(format!("{oid:?} {property:?}: {other:?}")),
             }
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
-    assert!(refused > 600, "only {refused} refusals checked");
+    assert_eq!(refused, REFUSED_ROWS, "rows refused for access");
     assert_eq!(
-        empty_arrays, 12,
-        "the empty read-only arrays of the exception"
+        empty_arrays, EMPTY_ARRAYS,
+        "the empty arrays of the exception"
     );
 }
 
@@ -353,7 +404,9 @@ async fn rows_without_a_write_route_refuse_writes_over_the_wire() {
 async fn create_and_delete_follow_the_type_registry_over_the_wire() {
     let mut wire = Wire::start().await;
     let objects = wire.objects().await;
-    let registry = crate::server::ObjectTypeRegistry::default();
+    // The registry the running server answers from.
+    let config = Arc::clone(&wire.server.config);
+    let registry = &config.object_types;
     let mut failures = Vec::new();
     let (mut created, mut deleted) = (0, 0);
     for (oid, _) in &objects {
@@ -363,13 +416,24 @@ async fn create_and_delete_follow_the_type_registry_over_the_wire() {
         match (&reply, registry.creates(object_type)) {
             (Reply::Ack(ack), true) => {
                 assert_eq!(CreateObjectAck::decode(ack).unwrap().object_identifier, new);
-                // The new object serves its required rows.
+                // The new object serves its required rows: each reads, but a
+                // log's Log_Buffer, which refuses.
                 let results = wire.rpm(new, PropertyIdentifier::REQUIRED).await;
-                for result in results.iter().filter(|r| {
-                    r.error.is_some() && !values::range_only(object_type, r.property_identifier)
-                }) {
-                    failures.push(format!("{new:?} {result:?}"));
+                let db = wire.server.database().read().await;
+                let object = db.get(&new).unwrap();
+                let rows = object.property_metadata();
+                let read: Vec<PropertyIdentifier> =
+                    results.iter().map(|r| r.property_identifier).collect();
+                if results.is_empty() || read != expansion(&rows, PropertyIdentifier::REQUIRED) {
+                    failures.push(format!("{new:?} REQUIRED read {read:?}"));
                 }
+                for result in &results {
+                    if result.error.is_some() && !values::range_only_refusal(object, result) {
+                        failures.push(format!("{new:?} {result:?}"));
+                    }
+                }
+                drop(rows);
+                drop(db);
                 match wire.delete(new).await {
                     Reply::Simple => {}
                     other => failures.push(format!("{new:?} delete: {other:?}")),
@@ -400,6 +464,12 @@ async fn create_and_delete_follow_the_type_registry_over_the_wire() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
-    assert_eq!(created, 27, "the built-in table's createable types");
-    assert_eq!(deleted, 62, "every type but Device and Network Port");
+    assert_eq!(
+        created, CREATED_TYPES,
+        "the built-in table's createable types"
+    );
+    assert_eq!(
+        deleted, DELETED_TYPES,
+        "every type but Device and Network Port"
+    );
 }

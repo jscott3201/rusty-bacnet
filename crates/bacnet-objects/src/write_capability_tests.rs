@@ -2,8 +2,9 @@
 //! object's write arm does (#2175).
 //!
 //! Every row of one object of each catalogue type is written the value it
-//! reads (NULL where it doesn't read whole), through `write_property_from`
-//! and, for a row that refuses, `write_property` too:
+//! reads (NULL for a log's ReadRange-only Log_Buffer, the one row that
+//! doesn't read whole), through `write_property_from` and, for a row that
+//! refuses, `write_property` too:
 //! - a row with no write route of its own (`ReadOnly`, `Through`) is refused
 //!   with PROPERTY / WRITE_ACCESS_DENIED on both routes;
 //! - an `Always` row isn't refused for access: the object may still refuse
@@ -17,6 +18,10 @@
 //! catalogue's starting state are listed in [`STATE_REFUSED`], each with
 //! its reason. A row that leaves the list, or one that joins it unlisted,
 //! fails the test.
+//!
+//! A write to a property without a row, any identifier the
+//! served-without-a-row sweep reads, is refused with PROPERTY /
+//! UNKNOWN_PROPERTY on both routes: the object doesn't have it.
 
 use alloc::format;
 use alloc::string::String;
@@ -29,7 +34,21 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use crate::catalogue::representatives;
 use crate::command_source::{CommandOrigin, test_origin};
 use crate::property_metadata::PropertyWriteCapability as W;
+use crate::property_metadata::has_property;
+use crate::property_metadata_tests::{
+    is_read_access_denied, range_only, swept_property_identifiers,
+};
 use crate::traits::BACnetObject;
+
+/// Rows without a write route: 686 of them. A row added, dropped or given
+/// a write route changes it.
+const REFUSED_ROWS: usize = 686;
+/// Rows Out_Of_Service opens. A `WhenOutOfService` row added or dropped
+/// changes it.
+const OUT_OF_SERVICE_ROWS: usize = 48;
+/// Rows only the command's writer may correct (Value_Source). A
+/// `WhenCommandOwner` row added or dropped changes it.
+const OWNER_ROWS: usize = 8;
 
 /// Rows writable by capability that the object refuses for access in the
 /// catalogue's starting state, and why.
@@ -59,12 +78,16 @@ fn state_refused(object_type: ObjectType, property: P) -> bool {
         .any(|(t, p, _)| *t == object_type && *p == property)
 }
 
-fn access_denied(result: &Result<(), Error>) -> bool {
+fn refused_with(result: &Result<(), Error>, expected: ErrorCode) -> bool {
     matches!(
         result,
         Err(Error::Remote(RemoteError::Error { class, code }))
-            if *class == ErrorClass::PROPERTY && *code == ErrorCode::WRITE_ACCESS_DENIED
+            if *class == ErrorClass::PROPERTY && *code == expected
     )
+}
+
+fn access_denied(result: &Result<(), Error>) -> bool {
+    refused_with(result, ErrorCode::WRITE_ACCESS_DENIED)
 }
 
 /// A local writer other than [`test_origin`]'s, owned by another device.
@@ -75,12 +98,16 @@ fn other_origin() -> CommandOrigin {
     }
 }
 
-/// What the row reads whole, or NULL for a row that doesn't read (a log's
-/// ReadRange-only Log_Buffer, the Staging object's unset Present_Stage).
+/// What the row reads whole, or NULL for a log's ReadRange-only
+/// Log_Buffer, which refuses a read. Any other read failure fails the test:
+/// the audit holds every row readable.
 fn current(object: &dyn BACnetObject, property: P) -> PropertyValue {
-    object
-        .read_property(property, None)
-        .unwrap_or(PropertyValue::Null)
+    let object_type = object.object_identifier().object_type();
+    let result = object.read_property(property, None);
+    if range_only(object_type, property) && is_read_access_denied(&result) {
+        return PropertyValue::Null;
+    }
+    result.unwrap_or_else(|error| panic!("{object_type} {property} must read: {error:?}"))
 }
 
 /// Write `property` its current value from `origin`.
@@ -213,15 +240,45 @@ fn every_row_write_capability_matches_the_write_arm() {
     assert!(tally.failures.is_empty(), "{}", tally.failures.join("\n"));
     let listed: Vec<(ObjectType, P)> = STATE_REFUSED.iter().map(|(t, p, _)| (*t, *p)).collect();
     assert_eq!(tally.state_refused, listed, "STATE_REFUSED is exact");
-    assert!(
-        tally.refused > 600,
-        "only {} refusals checked",
-        tally.refused
+    assert_eq!(tally.refused, REFUSED_ROWS, "rows without a write route");
+    assert_eq!(
+        tally.out_of_service, OUT_OF_SERVICE_ROWS,
+        "Out_Of_Service rows"
     );
-    assert!(
-        tally.out_of_service > 20,
-        "only {} out-of-service rows",
-        tally.out_of_service
-    );
-    assert!(tally.owned >= 8, "only {} owner rows", tally.owned);
+    assert_eq!(tally.owned, OWNER_ROWS, "command-owner rows");
+}
+
+/// The other half: a property the object has no row for takes no write.
+/// Every identifier the served-without-a-row sweep reads is written an
+/// ordinary value through each route, and each write is refused as
+/// unknown, the answer `unknown_writes` pins for one such identifier.
+#[test]
+fn every_property_without_a_row_refuses_writes() {
+    let mut failures = Vec::new();
+    let mut checked = 0;
+    for mut object in representatives() {
+        let object_type = object.object_identifier().object_type();
+        let rows = object.property_metadata().into_owned();
+        for property in swept_property_identifiers() {
+            if has_property(&rows, property) {
+                continue;
+            }
+            let direct = object.write_property(property, None, PropertyValue::Null, None);
+            let from = object.write_property_from(
+                property,
+                None,
+                PropertyValue::Unsigned(17),
+                None,
+                &test_origin(),
+            );
+            for (route, result) in [("write_property", direct), ("write_property_from", from)] {
+                if !refused_with(&result, ErrorCode::UNKNOWN_PROPERTY) {
+                    failures.push(format!("{object_type} {property} {route}: {result:?}"));
+                }
+            }
+            checked += 1;
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert!(checked > 64 * 500, "only {checked} identifiers written");
 }

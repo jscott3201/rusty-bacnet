@@ -17,24 +17,34 @@ mod analog;
 mod groups;
 mod intrinsic;
 
-/// Whether `property` reads the way its metadata row promises: with a value,
-/// or, for a log's Log_Buffer, with the PROPERTY / READ_ACCESS_DENIED that
-/// marks a present row only ReadRange (and AuditLogQuery) serve
-/// (Clauses 12.25.14, 12.27.13, 12.30.19 and 12.64.10).
-pub(crate) fn metadata_row_reads(object: &dyn BACnetObject, property: PropertyIdentifier) -> bool {
+/// The log types whose Log_Buffer only ReadRange (and AuditLogQuery) serve:
+/// a read of it answers PROPERTY / READ_ACCESS_DENIED (Clauses 12.25.14,
+/// 12.27.13, 12.30.19 and 12.64.10).
+pub(crate) const RANGE_ONLY_LOGS: [ObjectType; 4] = [
+    ObjectType::AUDIT_LOG,
+    ObjectType::EVENT_LOG,
+    ObjectType::TREND_LOG,
+    ObjectType::TREND_LOG_MULTIPLE,
+];
+
+/// Whether `property` of `object_type` is a Log_Buffer only ReadRange serves.
+pub(crate) fn range_only(object_type: ObjectType, property: PropertyIdentifier) -> bool {
+    property == PropertyIdentifier::LOG_BUFFER && RANGE_ONLY_LOGS.contains(&object_type)
+}
+
+/// Whether `result` is the refusal a [`range_only`] Log_Buffer read gives.
+pub(crate) fn is_read_access_denied<T>(result: &Result<T, Error>) -> bool {
     use bacnet_types::enums::{ErrorClass, ErrorCode};
+    matches!(result, Err(Error::Remote(RemoteError::Error { class, code }))
+        if *class == ErrorClass::PROPERTY && *code == ErrorCode::READ_ACCESS_DENIED)
+}
+
+/// Whether `property` reads the way its metadata row promises: with a value,
+/// or, for a [`range_only`] Log_Buffer, with PROPERTY / READ_ACCESS_DENIED.
+pub(crate) fn metadata_row_reads(object: &dyn BACnetObject, property: PropertyIdentifier) -> bool {
     let result = object.read_property(property, None);
-    if matches!(
-        object.object_identifier().object_type(),
-        ObjectType::AUDIT_LOG
-            | ObjectType::EVENT_LOG
-            | ObjectType::TREND_LOG
-            | ObjectType::TREND_LOG_MULTIPLE
-    ) && property == PropertyIdentifier::LOG_BUFFER
-    {
-        return matches!(result, Err(Error::Remote(RemoteError::Error { class, code }))
-            if class == ErrorClass::PROPERTY
-                && code == ErrorCode::READ_ACCESS_DENIED);
+    if range_only(object.object_identifier().object_type(), property) {
+        return is_read_access_denied(&result);
     }
     result.is_ok()
 }

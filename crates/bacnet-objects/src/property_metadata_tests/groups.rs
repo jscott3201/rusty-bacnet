@@ -28,6 +28,11 @@ const COMMAND_GROUP: [P; 3] = [
     P::CURRENT_COMMAND_PRIORITY,
 ];
 
+/// The catalogue's commandable types: the analog, binary and multi-state
+/// outputs and values, the twelve value types, the Access Door and the two
+/// lighting outputs. A type gaining or losing Priority_Array changes it.
+const COMMANDABLE_TYPES: usize = 21;
+
 /// The reporting rows beyond Event_State.
 #[cfg(feature = "event-reporting")]
 const REPORTING_GROUP: [P; 6] = [
@@ -85,9 +90,7 @@ fn command_rows_come_together() {
         }
         commanded += 1;
     }
-    // The outputs, the values that take commands, the lighting and colour
-    // objects and the Access Door.
-    assert!(commanded >= 21, "only {commanded} commandable types");
+    assert_eq!(commanded, COMMANDABLE_TYPES, "commandable catalogue types");
 }
 
 #[test]

@@ -7,7 +7,7 @@ use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::rpm::ReadResultElement;
 use bacnet_types::datatype::Datatype;
-use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
 use bacnet_types::primitives::PropertyValue;
 use bytes::BytesMut;
 
@@ -34,17 +34,17 @@ fn of_datatype(datatype: Datatype, value: &PropertyValue) -> Option<bool> {
     })
 }
 
-/// A log's Log_Buffer, which only ReadRange (and AuditLogQuery) serve: a
-/// read answers PROPERTY / READ_ACCESS_DENIED.
-pub(super) fn range_only(object_type: ObjectType, property: PropertyIdentifier) -> bool {
-    property == PropertyIdentifier::LOG_BUFFER
-        && matches!(
-            object_type,
-            ObjectType::AUDIT_LOG
-                | ObjectType::EVENT_LOG
-                | ObjectType::TREND_LOG
-                | ObjectType::TREND_LOG_MULTIPLE
-        )
+/// Whether `result` is the refusal a log's Log_Buffer read gives: only
+/// ReadRange (and AuditLogQuery) serve it, so a read answers PROPERTY /
+/// READ_ACCESS_DENIED. The logs are the objects that lend the server their
+/// records for those services, Trend and Event Logs through `log_buffer`
+/// and the Audit Log through `audit_log`; the list of types that do is a
+/// bacnet-objects test's, out of reach here.
+pub(super) fn range_only_refusal(object: &dyn BACnetObject, result: &ReadResultElement) -> bool {
+    result.property_identifier == PropertyIdentifier::LOG_BUFFER
+        && (object.log_buffer().is_some() || object.audit_log().is_some())
+        && result.property_value.is_none()
+        && result.error == Some((ErrorClass::PROPERTY, ErrorCode::READ_ACCESS_DENIED))
 }
 
 /// Check one result of an RPM ALL on `object`, whose row is `row`.
@@ -55,12 +55,10 @@ pub(super) fn check(
 ) -> Result<(), String> {
     let object_type = object.object_identifier().object_type();
     let property = row.property_identifier;
+    if range_only_refusal(object, result) {
+        return Ok(());
+    }
     if let Some(error) = result.error {
-        if range_only(object_type, property)
-            && error == (ErrorClass::PROPERTY, ErrorCode::READ_ACCESS_DENIED)
-        {
-            return Ok(());
-        }
         return Err(format!("read failed: {error:?}"));
     }
     let octets = result
