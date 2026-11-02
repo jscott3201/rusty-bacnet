@@ -62,15 +62,16 @@ impl FileLogPersistence {
     /// Test support, not a stable API: keep the slots in `memory`'s
     /// entries 0 and 1 instead of on disk, decoding, selecting and encoding
     /// them as on disk (#2233). [`slot_paths`](Self::slot_paths) are then
-    /// placeholders.
+    /// empty placeholders, which cost no allocation.
     /// Nothing reaches disk: the state is gone when the process ends, so
     /// never use this outside tests.
     #[cfg(feature = "test-support")]
     #[doc(hidden)]
     pub fn in_memory(memory: crate::durable::MemoryFiles) -> Self {
-        let mut store = Self::new("in-memory").expect("a path that isn't empty");
-        store.memory = Some(memory);
-        store
+        Self {
+            slot_paths: [PathBuf::new(), PathBuf::new()],
+            memory: Some(memory),
+        }
     }
 
     /// The two slot paths, for application backup and diagnostics.

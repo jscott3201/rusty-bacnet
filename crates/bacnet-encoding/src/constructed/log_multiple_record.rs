@@ -46,26 +46,27 @@ const ANY: u8 = 8;
 /// Fails, leaving `buf` unchanged, for a bit string whose unused-bit count
 /// is above 7 (or nonzero with no data) or an any-value whose bytes aren't
 /// complete tagged values.
-pub fn encode_log_multiple_record(
-    record: &BACnetLogMultipleRecord,
-    buf: &mut BytesMut,
-) -> Result<(), Error> {
-    let mut out = BytesMut::new();
-    encode_timestamp(&mut out, &record.date, &record.time);
-    tags::encode_opening_tag(&mut out, 1);
+pub fn encode_log_multiple_record(record: &BACnetLogMultipleRecord, buf: &mut BytesMut) -> Result<(), Error> {
+    // Straight into `buf`, cut back on failure: no staging buffer (#2233).
+    let start = buf.len();
+    write_log_multiple_record(record, buf).inspect_err(|_| buf.truncate(start))
+}
+
+fn write_log_multiple_record(record: &BACnetLogMultipleRecord, out: &mut BytesMut) -> Result<(), Error> {
+    encode_timestamp(out, &record.date, &record.time);
+    tags::encode_opening_tag(out, 1);
     match &record.log_data {
-        LogData::LogStatus(status) => encode_log_status(&mut out, 0, *status),
+        LogData::LogStatus(status) => encode_log_status(out, 0, *status),
         LogData::Values(values) => {
-            tags::encode_opening_tag(&mut out, 1);
+            tags::encode_opening_tag(out, 1);
             for value in values {
-                encode_value(value, &mut out)?;
+                encode_value(value, out)?;
             }
-            tags::encode_closing_tag(&mut out, 1);
+            tags::encode_closing_tag(out, 1);
         }
-        LogData::TimeChange(seconds) => primitives::encode_ctx_real(&mut out, 2, *seconds),
+        LogData::TimeChange(seconds) => primitives::encode_ctx_real(out, 2, *seconds),
     }
-    tags::encode_closing_tag(&mut out, 1);
-    buf.extend_from_slice(&out);
+    tags::encode_closing_tag(out, 1);
     Ok(())
 }
 

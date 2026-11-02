@@ -49,45 +49,49 @@ const STATUS_FLAGS: u8 = 2;
 /// is above 7 (or nonzero with no data) or an any-value whose bytes aren't
 /// complete tagged values.
 pub fn encode_log_record(record: &BACnetLogRecord, buf: &mut BytesMut) -> Result<(), Error> {
-    let mut out = BytesMut::new();
-    encode_timestamp(&mut out, &record.date, &record.time);
-    tags::encode_opening_tag(&mut out, 1);
+    // Straight into `buf`, cut back on failure: no staging buffer (#2233).
+    let start = buf.len();
+    write_log_record(record, buf).inspect_err(|_| buf.truncate(start))
+}
+
+fn write_log_record(record: &BACnetLogRecord, out: &mut BytesMut) -> Result<(), Error> {
+    encode_timestamp(out, &record.date, &record.time);
+    tags::encode_opening_tag(out, 1);
     match &record.log_datum {
-        LogDatum::LogStatus(status) => encode_log_status(&mut out, LOG_STATUS, *status),
-        LogDatum::BooleanValue(value) => primitives::encode_ctx_boolean(&mut out, BOOLEAN, *value),
-        LogDatum::RealValue(value) => primitives::encode_ctx_real(&mut out, REAL, *value),
+        LogDatum::LogStatus(status) => encode_log_status(out, LOG_STATUS, *status),
+        LogDatum::BooleanValue(value) => primitives::encode_ctx_boolean(out, BOOLEAN, *value),
+        LogDatum::RealValue(value) => primitives::encode_ctx_real(out, REAL, *value),
         // An ENUMERATED's contents are encoded as an Unsigned's are.
-        LogDatum::EnumValue(value) => primitives::encode_ctx_unsigned(&mut out, ENUMERATED, *value),
+        LogDatum::EnumValue(value) => primitives::encode_ctx_unsigned(out, ENUMERATED, *value),
         LogDatum::UnsignedValue(value) => {
-            primitives::encode_ctx_unsigned(&mut out, UNSIGNED, *value)
+            primitives::encode_ctx_unsigned(out, UNSIGNED, *value)
         }
-        LogDatum::SignedValue(value) => encode_ctx_integer(&mut out, INTEGER, *value),
+        LogDatum::SignedValue(value) => encode_ctx_integer(out, INTEGER, *value),
         LogDatum::BitstringValue { unused_bits, data } => {
             check_bit_string(
                 *unused_bits,
                 data,
                 "bitstring-value has {} unused bits over {} octets",
             )?;
-            primitives::encode_ctx_bit_string(&mut out, BIT_STRING, *unused_bits, data);
+            primitives::encode_ctx_bit_string(out, BIT_STRING, *unused_bits, data);
         }
-        LogDatum::NullValue => tags::encode_tag(&mut out, NULL, tags::TagClass::Context, 0),
+        LogDatum::NullValue => tags::encode_tag(out, NULL, tags::TagClass::Context, 0),
         LogDatum::Failure {
             error_class,
             error_code,
-        } => encode_failure(&mut out, FAILURE, *error_class, *error_code),
+        } => encode_failure(out, FAILURE, *error_class, *error_code),
         LogDatum::TimeChange(seconds) => {
-            primitives::encode_ctx_real(&mut out, TIME_CHANGE, *seconds)
+            primitives::encode_ctx_real(out, TIME_CHANGE, *seconds)
         }
-        LogDatum::AnyValue(bytes) => encode_any_value(&mut out, ANY, bytes)?,
+        LogDatum::AnyValue(bytes) => encode_any_value(out, ANY, bytes)?,
     }
-    tags::encode_closing_tag(&mut out, 1);
+    tags::encode_closing_tag(out, 1);
     if let Some(flags) = record.status_flags {
         // StatusFlags keeps in-alarm as its highest of four bits, so shifting
         // puts it in the top bit of the octet, where the wire wants bit 0.
         let octet = (flags & StatusFlags::all()).bits() << 4;
-        primitives::encode_ctx_bit_string(&mut out, STATUS_FLAGS, 4, &[octet]);
+        primitives::encode_ctx_bit_string(out, STATUS_FLAGS, 4, &[octet]);
     }
-    buf.extend_from_slice(&out);
     Ok(())
 }
 

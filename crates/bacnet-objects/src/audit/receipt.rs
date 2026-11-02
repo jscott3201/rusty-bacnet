@@ -1,4 +1,3 @@
-use crate::collections::HashSet;
 use crate::prelude::*;
 
 use bacnet_types::error::Error;
@@ -73,16 +72,38 @@ pub(super) fn validate_receipts(receipts: &[CompletedAuditReceipt]) -> Result<()
             receipts.len()
         )));
     }
-    let mut keys = HashSet::with_capacity(receipts.len());
-    for receipt in receipts {
+    let first_repeat = first_repeated_key(receipts);
+    for (index, receipt) in receipts.iter().enumerate() {
         validate_key(receipt.key())?;
-        if !keys.insert(receipt.key()) {
+        if first_repeat == Some(index) {
             return Err(Error::Encoding(
                 "AuditLog completed receipt keys must be unique".into(),
             ));
         }
     }
     Ok(())
+}
+
+/// The index of the first receipt whose key an earlier one already has.
+/// Sorting the indices by key, then index, puts each key's receipts side
+/// by side in order, so every one after the first of its run repeats a key:
+/// no hashing of keys up to 65 KiB long, and one allocation (#2233).
+fn first_repeated_key(receipts: &[CompletedAuditReceipt]) -> Option<usize> {
+    if receipts.len() < 2 {
+        return None;
+    }
+    let mut order: Vec<usize> = (0..receipts.len()).collect();
+    order.sort_unstable_by(|&left, &right| {
+        receipts[left]
+            .key()
+            .cmp(receipts[right].key())
+            .then(left.cmp(&right))
+    });
+    order
+        .windows(2)
+        .filter(|pair| receipts[pair[0]].key() == receipts[pair[1]].key())
+        .map(|pair| pair[1])
+        .min()
 }
 
 pub(super) fn contains(

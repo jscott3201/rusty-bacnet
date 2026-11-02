@@ -8,6 +8,12 @@ use crate::audit::receipt::{
 
 pub(super) fn encoded_len(receipts: &[CompletedAuditReceipt]) -> Result<usize, Error> {
     receipt::validate_receipts(receipts)?;
+    checked_len(receipts)
+}
+
+/// [`encoded_len`] of receipts already validated, as `validate_snapshot`
+/// has them (#2233).
+pub(super) fn checked_len(receipts: &[CompletedAuditReceipt]) -> Result<usize, Error> {
     receipts.iter().try_fold(4usize, |length, receipt| {
         length
             .checked_add(8 + 4)

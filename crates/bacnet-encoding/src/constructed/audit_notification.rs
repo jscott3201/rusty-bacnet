@@ -229,7 +229,7 @@ pub fn decode_audit_notification_at(
         let (body, next) = decode_ctx_constructed(data, offset, 12, WHAT)?;
         let (property, property_end) = decode_property_reference(body)?;
         expect_end(body, property_end, offset, WHAT)?;
-        let mut canonical = BytesMut::new();
+        let mut canonical = BytesMut::with_capacity(body.len());
         encode_property_reference(&mut canonical, &property);
         if canonical.as_ref() != body {
             return Err(Error::decoding(
@@ -349,7 +349,7 @@ fn decode_wrapped_recipient(
     let (body, next) = decode_ctx_constructed(data, offset, tag_number, what)?;
     let (recipient, recipient_end) = decode_recipient(body, 0)?;
     expect_end(body, recipient_end, offset, what)?;
-    let mut canonical = BytesMut::new();
+    let mut canonical = BytesMut::with_capacity(body.len());
     write_recipient(&mut canonical, &recipient);
     if canonical.as_ref() != body {
         return Err(not_canonical(offset, what));
@@ -364,7 +364,7 @@ fn decode_canonical_timestamp(
     what: &'static str,
 ) -> Result<(bacnet_types::primitives::BACnetTimeStamp, usize), Error> {
     let (timestamp, next) = primitives::decode_timestamp(data, offset, tag_number)?;
-    let mut canonical = BytesMut::new();
+    let mut canonical = BytesMut::with_capacity(next - offset);
     primitives::encode_timestamp(&mut canonical, tag_number, &timestamp)?;
     if canonical.as_ref() != &data[offset..next] {
         return Err(not_canonical(offset, what));

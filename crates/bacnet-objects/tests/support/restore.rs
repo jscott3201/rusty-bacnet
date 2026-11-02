@@ -308,16 +308,27 @@ const SLOT_HEADER_LEN: usize = 8 + 2 + 4 + 8 + 4;
 const SLOT_TRAILER_LEN: usize = 4;
 
 /// The CRC-32 (IEEE 802.3, reflected) the slots end with, written here
-/// from its definition.
+/// from its definition: the table holds each octet's eight shift steps, so
+/// the fuzz targets seal a slot with one lookup per octet (#2233).
 pub fn crc32(data: &[u8]) -> u32 {
-    let mut crc = !0u32;
-    for byte in data {
-        crc ^= u32::from(*byte);
-        for _ in 0..8 {
-            crc = (crc >> 1) ^ (0xedb8_8320 & 0u32.wrapping_sub(crc & 1));
+    static TABLE: [u32; 256] = {
+        let mut table = [0u32; 256];
+        let mut n = 0;
+        while n < 256 {
+            let mut crc = n as u32;
+            let mut bit = 0;
+            while bit < 8 {
+                crc = (crc >> 1) ^ (0xedb8_8320 & 0u32.wrapping_sub(crc & 1));
+                bit += 1;
+            }
+            table[n] = crc;
+            n += 1;
         }
-    }
-    !crc
+        table
+    };
+    !data.iter().fold(!0u32, |crc, &byte| {
+        TABLE[usize::from(crc as u8 ^ byte)] ^ (crc >> 8)
+    })
 }
 
 /// Give a two-slot format's `slot` the length field and checksum of what
@@ -390,8 +401,32 @@ pub fn write_files(paths: &[PathBuf], contents: &[Option<Vec<u8>>]) {
     }
 }
 
+/// Whether `left` and `right` have the same `Debug` text. The fuzz targets
+/// run this on every snapshot they load, so it formats `left` into a
+/// buffer the thread keeps and matches `right`'s text against it as it is
+/// written, stopping at the first difference (#2233).
 fn same<T: Debug>(left: &T, right: &T) -> bool {
-    format!("{left:?}") == format!("{right:?}")
+    use std::fmt::Write;
+
+    /// The text still to match.
+    struct Rest<'a>(&'a str);
+
+    impl Write for Rest<'_> {
+        fn write_str(&mut self, text: &str) -> std::fmt::Result {
+            self.0 = self.0.strip_prefix(text).ok_or(std::fmt::Error)?;
+            Ok(())
+        }
+    }
+
+    thread_local! {
+        static LEFT: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+    }
+    LEFT.with_borrow_mut(|text| {
+        text.clear();
+        write!(text, "{left:?}").expect("Debug text formats");
+        let mut rest = Rest(text);
+        write!(rest, "{right:?}").is_ok() && rest.0.is_empty()
+    })
 }
 
 fn check_log<R: Debug + Send + Sync + 'static>(

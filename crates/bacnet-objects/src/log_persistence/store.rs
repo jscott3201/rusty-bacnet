@@ -284,6 +284,12 @@ impl<R: SnapshotRecord> LogStore<R> {
     pub(crate) fn idle(&self) -> SaveWait {
         self.writer.idle()
     }
+
+    /// The log is dropping: its final commit may run on the caller's thread
+    /// when no writer thread has started (`SaveWriter::closing`).
+    pub(crate) fn closing(&mut self) {
+        self.writer.closing();
+    }
 }
 
 /// Fit a loaded snapshot to the Buffer_Size the application configured,
@@ -429,6 +435,11 @@ macro_rules! impl_durable_log {
 
         impl Drop for $log {
             fn drop(&mut self) {
+                if let Some(store) =
+                    $crate::log_persistence::store::DurableLog::durable_parts(self).0
+                {
+                    store.closing();
+                }
                 // The writer's own drop, which follows, waits for it.
                 let _ = $crate::log_persistence::store::DurableLog::commit_final(self);
             }

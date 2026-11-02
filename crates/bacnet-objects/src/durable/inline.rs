@@ -71,6 +71,10 @@ impl<S: Send + 'static> SaveWriter<S> {
         let _ = self.submit(served).take_outcome();
     }
 
+    /// The owner is going away. Every save already runs here, so there is
+    /// nothing to change.
+    pub(crate) fn closing(&mut self) {}
+
     /// Make one storage call, report it to the done hook, drop the snapshot
     /// and complete `ticket`, in that order, as the hosted writer does.
     fn run(&self, snapshot: S, ticket: Option<&SaveTicket>) {

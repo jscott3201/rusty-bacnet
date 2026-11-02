@@ -29,26 +29,27 @@ const TIME_CHANGE: u8 = 2;
 /// Fails, leaving `buf` unchanged, for a notification that would not encode,
 /// such as one whose raw event values aren't a well-formed run of tagged
 /// fields.
-pub fn encode_event_log_record(
-    record: &BACnetEventLogRecord,
-    buf: &mut BytesMut,
-) -> Result<(), Error> {
-    let mut out = BytesMut::new();
-    encode_timestamp(&mut out, &record.date, &record.time);
-    tags::encode_opening_tag(&mut out, 1);
+pub fn encode_event_log_record(record: &BACnetEventLogRecord, buf: &mut BytesMut) -> Result<(), Error> {
+    // Straight into `buf`, cut back on failure: no staging buffer (#2233).
+    let start = buf.len();
+    write_event_log_record(record, buf).inspect_err(|_| buf.truncate(start))
+}
+
+fn write_event_log_record(record: &BACnetEventLogRecord, out: &mut BytesMut) -> Result<(), Error> {
+    encode_timestamp(out, &record.date, &record.time);
+    tags::encode_opening_tag(out, 1);
     match &record.log_datum {
-        EventLogDatum::LogStatus(status) => encode_log_status(&mut out, LOG_STATUS, *status),
+        EventLogDatum::LogStatus(status) => encode_log_status(out, LOG_STATUS, *status),
         EventLogDatum::Notification(notification) => {
-            tags::encode_opening_tag(&mut out, NOTIFICATION);
-            encode_event_notification(notification, &mut out)?;
-            tags::encode_closing_tag(&mut out, NOTIFICATION);
+            tags::encode_opening_tag(out, NOTIFICATION);
+            encode_event_notification(notification, out)?;
+            tags::encode_closing_tag(out, NOTIFICATION);
         }
         EventLogDatum::TimeChange(seconds) => {
-            primitives::encode_ctx_real(&mut out, TIME_CHANGE, *seconds)
+            primitives::encode_ctx_real(out, TIME_CHANGE, *seconds)
         }
     }
-    tags::encode_closing_tag(&mut out, 1);
-    buf.extend_from_slice(&out);
+    tags::encode_closing_tag(out, 1);
     Ok(())
 }
 
