@@ -790,6 +790,8 @@ mod staging_cov_tests;
 #[cfg(test)]
 mod staging_delete_tests;
 #[cfg(test)]
+mod staging_ref_change_tests;
+#[cfg(test)]
 mod staging_reference_write_tests;
 #[cfg(test)]
 mod subscribed_recipients_expiry_tests;

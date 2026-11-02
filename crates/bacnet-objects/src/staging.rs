@@ -4,13 +4,15 @@
 //! local target-write plans for the server, which executes them after releasing
 //! the source-object database mutation lock.
 //!
-//! **On removal** (#2265) the object gives up the Present_Value slots its
-//! stage writes filled, at each priority it wrote them (`held`). Clause 12.62
-//! doesn't cover deletion; a Staging object holds its targets' slots for as
-//! long as it exists, as a Schedule does, so it follows the Schedule's
-//! release (#2256, #2264), with the same check that the slot is still its own.
-//! A plan still being written when the object goes stops at its next target
-//! (each write checks the generation under its own guard).
+//! **Releasing slots** (#2265, #2289): the object gives up the Present_Value
+//! slots its stage writes filled (`held`) when it is removed, and those a
+//! change of Target_References or Priority_For_Writing leaves behind: a
+//! dropped target's, or every slot at the old priority. Clause 12.62 covers
+//! neither; it follows the Schedule (#1088, #2256, #2264), with the same
+//! check that the slot is still its own. Those NULLs go out ahead of the
+//! object's next target write, and not while it is out of service. A plan
+//! still being written when the object goes stops at its next target (each
+//! write checks the generation under its own guard).
 
 use crate::prelude::*;
 use alloc::borrow::Cow;
@@ -28,10 +30,13 @@ use bytes::BytesMut;
 use crate::common::{self, read_common_properties};
 use crate::device_reference;
 use crate::property_metadata::{PropertyConformance, PropertyMetadata, PropertyWriteCapability};
-use crate::traits::{BACnetObject, StagingSource};
+use crate::traits::BACnetObject;
+#[cfg(test)]
+use crate::traits::StagingSource;
 
 mod held;
 mod metadata;
+mod source;
 use metadata::STAGING_PROPERTY_METADATA;
 
 /// Complete atomic configuration for a [`StagingObject`].
@@ -296,7 +301,7 @@ impl StagingObject {
         validate_target_references(&candidate)?;
         if candidate != self.target_references {
             self.target_references = candidate;
-            self.reset_and_reevaluate();
+            self.targets_changed();
         }
         Ok(())
     }
@@ -516,7 +521,7 @@ impl BACnetObject for StagingObject {
                     .ok_or_else(common::value_out_of_range_error)?;
                 if priority != self.priority_for_writing {
                     self.priority_for_writing = priority;
-                    self.reset_and_reevaluate();
+                    self.targets_changed();
                 }
                 Ok(())
             }
@@ -552,7 +557,7 @@ impl BACnetObject for StagingObject {
     // Present_Stage trigger, and Present_Stage is reported (the type's row, the default).
     crate::traits::lend_cov_reporting!();
 
-    fn staging_source(&mut self) -> Option<&mut dyn StagingSource> {
+    fn staging_source(&mut self) -> Option<&mut dyn crate::traits::StagingSource> {
         Some(self)
     }
 }
@@ -560,42 +565,6 @@ impl BACnetObject for StagingObject {
 impl crate::traits::CovReporting for StagingObject {
     fn cov_increment(&self) -> Option<f64> {
         Some(f64::from(self.cov_increment))
-    }
-}
-
-impl StagingSource for StagingObject {
-    fn take_staging_write_plan(&mut self) -> Option<StagingWritePlan> {
-        if self.present_stage == 0 {
-            self.evaluate(false);
-        }
-        self.pending_plan.take()
-    }
-
-    fn staging_generation(&self) -> u64 {
-        self.generation
-    }
-
-    fn complete_staging_write_plan(&mut self, generation: u64, success: bool) -> bool {
-        if generation != self.generation || self.out_of_service {
-            return false;
-        }
-        let reliability = if success {
-            Reliability::NO_FAULT_DETECTED
-        } else {
-            Reliability::UNRELIABLE_OTHER
-        };
-        if reliability == self.reliability {
-            return false;
-        }
-        self.reliability = reliability;
-        true
-    }
-
-    fn take_relinquish_writes(&mut self) -> Vec<crate::schedule::ScheduleWrite> {
-        // A plan never taken wrote nothing, but its slots are recorded; the
-        // ownership check skips them.
-        self.pending_plan = None;
-        self.held.take_relinquish_writes()
     }
 }
 
