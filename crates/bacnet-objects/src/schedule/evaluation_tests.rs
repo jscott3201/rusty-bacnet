@@ -430,6 +430,7 @@ fn tick_schedule_writes_the_typed_value_at_priority_for_writing() {
             priority: 9,
             references: references(),
             retry: false,
+            relinquish: false,
         })
     );
     assert_eq!(tick(&mut sched, monday(), at(7, 30)), None);

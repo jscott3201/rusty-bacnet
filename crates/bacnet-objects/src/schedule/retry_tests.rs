@@ -77,6 +77,7 @@ fn retry_to_av9() -> ScheduleWrite {
         priority: 9,
         references: vec![av9()],
         retry: true,
+        relinquish: false,
     }
 }
 
@@ -114,6 +115,7 @@ fn a_retry_that_fails_otherwise_ends_the_refusal() {
         // A write that isn't a retry and fails otherwise leaves the refusal.
         let write = ScheduleWrite {
             retry: false,
+            relinquish: false,
             ..retry_to_av9()
         };
         assert!(!sched.complete_schedule_write(&write, &[Failed]));
@@ -142,6 +144,7 @@ fn a_retry_leaves_the_held_slots_alone() {
             priority: 9,
             references: vec![av2(), ao4()],
             retry: false,
+            relinquish: true,
         }]
     );
 }
