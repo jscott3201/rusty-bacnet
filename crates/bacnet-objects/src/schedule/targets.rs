@@ -48,7 +48,10 @@
 //!   since. Leaving Effective_Period gives them up. Clause 12.24.6 has
 //!   seasonal Schedules share references and a priority, each writing only in
 //!   its own period, so an out-of-season Schedule whose list or priority is
-//!   edited must not clear the command of the one in season.
+//!   edited must not clear the command of the one in season. Each of those
+//!   NULLs is a [`relinquish`](ScheduleWrite::relinquish) write, which the
+//!   bundled server sends only to a slot whose Value_Source still names
+//!   this Schedule (#2264): another writer may have taken the slot since.
 //! - Every accepted write counts as a change, even of the value already
 //!   held; sending the current value again is harmless.
 
@@ -132,6 +135,7 @@ impl ScheduleObject {
                     priority,
                     references: left,
                     retry: false,
+                    relinquish: true,
                 });
             }
             if !kept.is_empty() {
@@ -166,6 +170,7 @@ impl ScheduleObject {
             priority: self.priority_for_writing,
             references: references.clone(),
             retry: false,
+            relinquish: false,
         })
     }
 
@@ -180,6 +185,7 @@ impl ScheduleObject {
             priority: held.priority,
             references: held.references,
             retry: false,
+            relinquish: true,
         }));
         self.simulated_write = None;
         self.rewrite_owed = false;

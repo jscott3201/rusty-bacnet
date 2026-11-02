@@ -33,7 +33,12 @@ use super::ScheduleObject;
 use crate::common;
 
 /// The writes one Schedule evaluation owes to List_Of_Object_Property_References.
+///
+/// Outside this crate, build one with [`new`](Self::new) and the
+/// [`with_retry`](Self::with_retry) and
+/// [`with_relinquish`](Self::with_relinquish) builders.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct ScheduleWrite {
     /// The new Present_Value in the scheduled value's own datatype. A NULL
     /// relinquishes the slot at `priority` in a commandable target.
@@ -47,6 +52,43 @@ pub struct ScheduleWrite {
     /// it on every pass with nothing else to send while a refusal stands, so
     /// the server logs a target's failure of it at debug, not warn.
     pub retry: bool,
+    /// Whether this is a NULL that gives up slots the Schedule held, not a
+    /// value it calculated: one a change of its references or priority left
+    /// behind, or one its removal owes (#2264). The bundled server sends it
+    /// only to a slot whose Value_Source still names the Schedule, so a
+    /// writer that took the slot since keeps its command. A calculated NULL
+    /// goes to every reference, whoever holds the slot.
+    pub relinquish: bool,
+}
+
+impl ScheduleWrite {
+    /// A calculated write of `value` at `priority` to `references`: neither
+    /// a retry nor a relinquish.
+    pub fn new(
+        value: PropertyValue,
+        priority: u8,
+        references: Vec<BACnetObjectPropertyReference>,
+    ) -> Self {
+        Self {
+            value,
+            priority,
+            references,
+            retry: false,
+            relinquish: false,
+        }
+    }
+
+    /// This write with [`retry`](Self::retry) set to `retry`.
+    pub fn with_retry(mut self, retry: bool) -> Self {
+        self.retry = retry;
+        self
+    }
+
+    /// This write with [`relinquish`](Self::relinquish) set to `relinquish`.
+    pub fn with_relinquish(mut self, relinquish: bool) -> Self {
+        self.relinquish = relinquish;
+        self
+    }
 }
 
 /// How one target took a [`ScheduleWrite`], as the server reports it back

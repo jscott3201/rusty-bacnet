@@ -14,9 +14,18 @@
 //! once after a CreateObject or DeleteObject, and from a background task
 //! after an application's own `add` or `remove`.
 //!
+//! Removing a Schedule queues the NULLs that give up the slots it holds on
+//! its targets ([`ScheduleRunner::take_relinquish_writes`], #2264), taken
+//! from the object as it leaves. The server writes them with an origin that
+//! names the removed Schedule, so DeleteObject and an application's own
+//! `remove` relinquish through this one path.
+//!
 //! The queue holds each entry once, and a retry only while a Schedule holds
 //! a refusal naming the object. Without a server nothing takes it, so it
-//! stays bounded by the objects and refusals that can produce entries.
+//! stays bounded by the objects and refusals that can produce entries, and
+//! by the distinct slots removed Schedules held.
+//!
+//! [`ScheduleRunner::take_relinquish_writes`]: crate::traits::ScheduleRunner::take_relinquish_writes
 
 use crate::prelude::*;
 use alloc::sync::Arc;
@@ -25,6 +34,8 @@ use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::ObjectIdentifier;
 
 use super::ObjectDatabase;
+use crate::schedule::ScheduleWrite;
+use crate::traits::BACnetObject;
 
 /// Called when a change of membership queues work, so a server can take it
 /// (`ObjectDatabase::take_membership_work_internal`). It runs under the
@@ -38,12 +49,13 @@ pub type MembershipWaker = dyn Fn() + Send + Sync;
 pub(super) struct MembershipQueue {
     changed: Vec<ObjectIdentifier>,
     schedule_retries: Vec<(ObjectIdentifier, ObjectIdentifier)>,
+    relinquishes: Vec<(ObjectIdentifier, ScheduleWrite)>,
     waker: Option<Arc<MembershipWaker>>,
 }
 
 /// What changes of membership left for the server since it last took them.
 #[doc(hidden)]
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct MembershipWork {
     /// Objects whose readable state the changes altered, each owing COV:
     /// Pulse Converters whose Reliability the check of their Input_Reference
@@ -54,12 +66,17 @@ pub struct MembershipWork {
     /// [`retry_refusals_naming`](crate::traits::ScheduleRunner::retry_refusals_naming)
     /// write for that object.
     pub schedule_retries: Vec<(ObjectIdentifier, ObjectIdentifier)>,
+    /// `(schedule, write)` pairs: a Schedule removed from the database still
+    /// held slots on its targets, and the server owes them these NULLs
+    /// ([`relinquish`](ScheduleWrite::relinquish) writes), with the removed
+    /// Schedule as their initiating object.
+    pub relinquishes: Vec<(ObjectIdentifier, ScheduleWrite)>,
 }
 
 impl MembershipWork {
     /// Whether there is nothing to do.
     pub fn is_empty(&self) -> bool {
-        self.changed.is_empty() && self.schedule_retries.is_empty()
+        self.changed.is_empty() && self.schedule_retries.is_empty() && self.relinquishes.is_empty()
     }
 }
 
@@ -77,6 +94,33 @@ impl ObjectDatabase {
         MembershipWork {
             changed: core::mem::take(&mut self.membership.changed),
             schedule_retries: core::mem::take(&mut self.membership.schedule_retries),
+            relinquishes: core::mem::take(&mut self.membership.relinquishes),
+        }
+    }
+
+    /// Queue the NULLs `removed`, the object just taken out under `oid`,
+    /// owes the slots it holds, when it lends a
+    /// [`ScheduleRunner`](crate::traits::ScheduleRunner), and wake the
+    /// server. The object gives them up as it leaves, so it owes none after.
+    pub(super) fn schedule_removed(
+        &mut self,
+        oid: ObjectIdentifier,
+        removed: &mut dyn BACnetObject,
+    ) {
+        let Some(runner) = removed.schedule_runner() else {
+            return;
+        };
+        let writes = runner.take_relinquish_writes();
+        if writes.is_empty() {
+            return;
+        }
+        for relinquish in writes.into_iter().map(|write| (oid, write)) {
+            if !self.membership.relinquishes.contains(&relinquish) {
+                self.membership.relinquishes.push(relinquish);
+            }
+        }
+        if let Some(waker) = &self.membership.waker {
+            waker();
         }
     }
 

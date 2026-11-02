@@ -82,6 +82,15 @@ fn write(
         priority,
         references,
         retry: false,
+        relinquish: false,
+    }
+}
+
+/// The NULL that gives up the slots `references` hold at `priority`.
+fn relinquish(priority: u8, references: Vec<BACnetObjectPropertyReference>) -> ScheduleWrite {
+    ScheduleWrite {
+        relinquish: true,
+        ..write(PropertyValue::Null, priority, references)
     }
 }
 
@@ -327,7 +336,7 @@ fn a_dropped_reference_is_relinquished_at_the_priority_it_holds() {
     write_references(&mut sched, &[a()]).unwrap();
     assert_eq!(
         sched.take_owed_schedule_writes(),
-        [write(PropertyValue::Null, 16, vec![b()])]
+        [relinquish(16, vec![b()])]
     );
     assert_eq!(
         tick(&mut sched),
@@ -337,7 +346,7 @@ fn a_dropped_reference_is_relinquished_at_the_priority_it_holds() {
     write_references(&mut sched, &[]).unwrap();
     assert_eq!(
         sched.take_owed_schedule_writes(),
-        [write(PropertyValue::Null, 16, vec![a()])]
+        [relinquish(16, vec![a()])]
     );
     assert_eq!(tick(&mut sched), None);
 }
@@ -348,7 +357,7 @@ fn a_priority_change_moves_every_target_to_the_new_slot() {
     write_priority(&mut sched, 9).unwrap();
     assert_eq!(
         sched.take_owed_schedule_writes(),
-        [write(PropertyValue::Null, 16, vec![a(), b()])]
+        [relinquish(16, vec![a(), b()])]
     );
     assert_eq!(
         tick(&mut sched),
@@ -371,10 +380,7 @@ fn two_changes_before_a_pass_owe_each_slot_once() {
     write_priority(&mut sched, 9).unwrap();
     assert_eq!(
         sched.take_owed_schedule_writes(),
-        [
-            write(PropertyValue::Null, 16, vec![b()]),
-            write(PropertyValue::Null, 16, vec![a()]),
-        ]
+        [relinquish(16, vec![b()]), relinquish(16, vec![a()])]
     );
     assert_eq!(
         tick(&mut sched),
@@ -433,7 +439,7 @@ fn out_of_service_a_change_owes_the_current_value() {
     assert_eq!(
         sched.take_owed_schedule_writes(),
         [
-            write(PropertyValue::Null, 16, vec![a()]),
+            relinquish(16, vec![a()]),
             write(PropertyValue::Real(30.0), 16, vec![b()]),
         ]
     );
@@ -453,7 +459,7 @@ fn deletion_relinquishes_the_held_slots_and_any_owed_once() {
     let mut sched = commanding();
     assert_eq!(
         sched.take_relinquish_writes(),
-        [write(PropertyValue::Null, 16, vec![a(), b()])]
+        [relinquish(16, vec![a(), b()])]
     );
     // Taken once, and nothing is owed to a pass afterwards.
     assert!(sched.take_relinquish_writes().is_empty());
@@ -465,10 +471,7 @@ fn deletion_relinquishes_the_held_slots_and_any_owed_once() {
     write_references(&mut sched, &[a()]).unwrap();
     assert_eq!(
         sched.take_relinquish_writes(),
-        [
-            write(PropertyValue::Null, 16, vec![b()]),
-            write(PropertyValue::Null, 16, vec![a()]),
-        ]
+        [relinquish(16, vec![b()]), relinquish(16, vec![a()])]
     );
 }
 
@@ -485,7 +488,7 @@ fn deletion_owes_no_value_write() {
         .unwrap();
     assert_eq!(
         sched.take_relinquish_writes(),
-        [write(PropertyValue::Null, 16, vec![a(), b()])]
+        [relinquish(16, vec![a(), b()])]
     );
     assert!(sched.take_owed_schedule_writes().is_empty());
 
