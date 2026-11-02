@@ -39,7 +39,10 @@ fn validate_cov_property(
     let value = object
         .read_property(property, array_index)
         .map_err(|_| cov_property_error(ErrorCode::UNKNOWN_PROPERTY))?;
-    if !object.supports_cov_property(property) {
+    if !object
+        .cov()
+        .is_some_and(|cov| cov.supports_cov_property(property))
+    {
         return Err(cov_property_error(ErrorCode::NOT_COV_PROPERTY));
     }
     crate::cov::prepare::validate_sample(object, property, array_index, &value)?;
@@ -99,7 +102,7 @@ pub(crate) fn handle_subscribe_cov_with_initial_endpoint(
                 ErrorCode::UNKNOWN_OBJECT,
             ));
         }
-        Some(obj) if !obj.supports_cov() => {
+        Some(obj) if !obj.cov().is_some_and(|cov| cov.supports_subscribe_cov()) => {
             return Err(Error::protocol(
                 ErrorClass::OBJECT,
                 ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
@@ -202,7 +205,7 @@ pub(crate) fn handle_subscribe_cov_property_with_initial_endpoint(
 
     // An object can take property subscriptions without supporting
     // SubscribeCOV (Averaging, which Table 13-1 doesn't list).
-    if !object.supports_subscribe_cov_property() {
+    if object.cov().is_none() {
         return Err(Error::protocol(
             ErrorClass::OBJECT,
             ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
@@ -371,7 +374,7 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
     'specs: for spec in &request.list_of_cov_subscription_specifications {
         let monitored = spec.monitored_object_identifier;
         let object = match db.get(&monitored) {
-            Some(object) if object.supports_subscribe_cov_property() => object,
+            Some(object) if object.cov().is_some() => object,
             found => {
                 let code = match found {
                     None => ErrorCode::UNKNOWN_OBJECT,

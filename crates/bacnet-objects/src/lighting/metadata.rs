@@ -67,8 +67,8 @@ use crate::property_metadata::{
 // neither needs an override. Array gating keeps the default: Priority_Array
 // and Property_List admit an index (BACnetARRAY per Tables 12-64/12-69)
 // while every other served row rejects one. COV keeps its override:
-// supports_cov=true on both objects, and the COV gating path (read_property
-// plus supports_cov_property to supports_cov) never consults metadata.
+// both objects lend `cov()`, and the COV gating path (read_property plus
+// `CovReporting::supports_cov_property`) never consults metadata.
 const LIGHTING_OUTPUT_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
@@ -239,7 +239,7 @@ mod tests {
             metadata.len()
         );
         assert!(object.is_deleteable());
-        assert!(object.supports_cov());
+        assert!(object.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
         for row in metadata.iter() {
             // The value-source rows are required by their footnotes, not
             // their base code (#1866).

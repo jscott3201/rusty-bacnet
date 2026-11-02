@@ -49,9 +49,9 @@ use crate::property_metadata::{
 // (delete denies only Device and NetworkPort, so the is_deleteable=true
 // default holds); neither needs an override. Array gating keeps the default:
 // Property_List admits an index (BACnetARRAY per Table 12-79) while every
-// other served row rejects one. COV keeps its supports_cov=true override, and
-// the COV gating path (read_property plus supports_cov_property to
-// supports_cov) never consults metadata.
+// other served row rejects one. COV keeps its `cov()` lend, and the COV
+// gating path (read_property plus `CovReporting::supports_cov_property`)
+// never consults metadata.
 const ACCUMULATOR_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
@@ -129,7 +129,7 @@ mod tests {
             metadata.len()
         );
         assert!(object.is_deleteable());
-        assert!(object.supports_cov());
+        assert!(object.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
         for row in metadata.iter() {
             assert_eq!(row.presence_condition, None);
             let expected = if required.contains(&row.property_identifier) {

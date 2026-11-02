@@ -245,10 +245,8 @@ impl BACnetObject for CredentialDataInputObject {
         super::metadata_identity::for_credential_data_input_object(self)
     }
 
-    /// Table 13-1 lists Credential Data Input, so it takes SubscribeCOV.
-    fn supports_cov(&self) -> bool {
-        true
-    }
+    // Table 13-1 lists Credential Data Input, so it takes SubscribeCOV.
+    crate::traits::lend_cov_reporting!();
 
     crate::traits::lend_reliability_eval!();
 
@@ -260,6 +258,8 @@ impl BACnetObject for CredentialDataInputObject {
         Some(self)
     }
 }
+
+impl crate::traits::CovReporting for CredentialDataInputObject {}
 
 impl crate::traits::ReliabilityEval for CredentialDataInputObject {
     /// The application's Reliability for the reader. Like the other

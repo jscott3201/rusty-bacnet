@@ -31,11 +31,8 @@ impl BACnetObject for Probe {
         }
         Cow::Owned(rows)
     }
-    fn supports_cov(&self) -> bool {
-        true
-    }
-    fn cov_increment(&self) -> Option<f64> {
-        Some(2.0)
+    fn cov(&self) -> Option<&dyn bacnet_objects::traits::CovReporting> {
+        Some(self)
     }
     fn read_property(&self, p: PropertyIdentifier, i: Option<u32>) -> Result<PropertyValue, Error> {
         let mut state = self.state.lock().unwrap();
@@ -56,6 +53,12 @@ impl BACnetObject for Probe {
         _: Option<u8>,
     ) -> Result<(), Error> {
         Err(Error::Encoding("read only probe".into()))
+    }
+}
+
+impl bacnet_objects::traits::CovReporting for Probe {
+    fn cov_increment(&self) -> Option<f64> {
+        Some(2.0)
     }
 }
 async fn fixture(
