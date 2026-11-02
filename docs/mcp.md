@@ -641,8 +641,10 @@ stderr; when the TUI ends the session it exits cleanly.
   of the request meter, and the watch list's meter adds the same share
   (`agents n/s`): a request counts as an agent's when it is charged to an
   agent's call or to the agents' watch hub, so the pane and the meter
-  agree. The sessions record each call on the listener's threads; the
-  TUI copies the list each frame it changed, never waiting on them.
+  agree. The sessions record each call on the listener's threads; on each
+  tick of its loop the TUI copies the list if it changed, skipping the
+  tick rather than waiting when a session holds it. Scrolled down, the
+  pane keeps the same calls in view as new ones arrive.
 - **The socket (Unix).** `mcp.sock` in the profile's workspace. The workspace
   must be a directory of yours, not a symbolic link; one with a looser
   mode than 0700 is narrowed to 0700 when the listener starts, and the

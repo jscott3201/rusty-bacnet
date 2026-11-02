@@ -17,7 +17,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Paragraph, Row, Table};
 
-use super::{FULL_WIDTH, Theme, ellipsize, sanitize};
+use super::{FULL_WIDTH, Theme, ellipsize, sanitize, text_width};
 use crate::tui::app::App;
 use crate::tui::app::agents::Held;
 use crate::tui::app::safety::Modal;
@@ -90,16 +90,15 @@ fn title(app: &App, wide: bool) -> String {
     }
 }
 
-/// One waiting request as a line; shorter when not `wide`.
-fn waiting_line(held: &Held, theme: &Theme, wide: bool) -> Line<'static> {
-    let who = match (&held.client, wide) {
-        (Some(name), true) => format!("{} (\"{}\")", held.agent, sanitize(name)),
-        _ => held.agent.to_string(),
-    };
+/// One waiting request as a line `width` wide, shorter when not `wide`:
+/// what it would do, its age, its countdown and the host warning first,
+/// then who asks, the agent's claimed name cut to the room left, so no
+/// name can push the countdown or the warning off screen.
+fn waiting_line(held: &Held, theme: &Theme, wide: bool, width: usize) -> Line<'static> {
     let (what, device, age) = (held.what, held.device, held.age.as_secs());
     let mut text = match wide {
-        true => format!("  agent {who}: {what} device {device}, waiting {age} s"),
-        false => format!("  agent {who} {what} dev {device}: {age} s"),
+        true => format!("  {what} device {device}, waiting {age} s"),
+        false => format!("  {what} dev {device}: {age} s"),
     };
     if let Some(left) = held.left {
         text.push_str(&match wide {
@@ -107,19 +106,28 @@ fn waiting_line(held: &Held, theme: &Theme, wide: bool) -> Line<'static> {
             false => format!(", shown, {} s left", left.as_secs()),
         });
     }
-    if held.age >= HOST_TIMEOUT {
+    let late = held.age >= HOST_TIMEOUT;
+    if late {
         text.push_str(match wide {
             true => " (its host may have stopped waiting)",
             false => " (host may be gone)",
         });
-        return Line::styled(text, theme.warn());
     }
-    Line::raw(text)
+    let who = match &held.client {
+        Some(name) => format!(", agent {} \"{}\"", held.agent, sanitize(name)),
+        None => format!(", agent {}", held.agent),
+    };
+    let room = width.saturating_sub(text_width(&text));
+    text.push_str(&ellipsize(&who, room));
+    match late {
+        true => Line::styled(text, theme.warn()),
+        false => Line::raw(text),
+    }
 }
 
 /// The waiting requests: a heading, one line each, and the host timeout
 /// note; shorter when not `wide`.
-fn waiting(app: &App, theme: &Theme, wide: bool) -> Vec<Line<'static>> {
+fn waiting(app: &App, theme: &Theme, wide: bool, width: usize) -> Vec<Line<'static>> {
     let opened = match &app.overlay {
         crate::tui::app::Overlay::Safety(modal) => match **modal {
             Modal::Confirm { req, opened, .. } if app.safety.agents.shows(req) => Some(opened),
@@ -138,7 +146,7 @@ fn waiting(app: &App, theme: &Theme, wide: bool) -> Vec<Line<'static>> {
         ),
         theme.accent(),
     )];
-    lines.extend(held.iter().map(|h| waiting_line(h, theme, wide)));
+    lines.extend(held.iter().map(|h| waiting_line(h, theme, wide, width)));
     let note = match wide {
         true => {
             "Hosts often end a tool call after about 60 s; raise the host's tool timeout if it has one."
@@ -158,7 +166,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         .border_style(theme.dim());
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    let waiting = waiting(app, theme, wide);
+    let waiting = waiting(app, theme, wide, usize::from(inner.width));
     let [top, calls] = Layout::vertical([
         Constraint::Length(u16::try_from(waiting.len()).unwrap_or(u16::MAX)),
         Constraint::Min(2),

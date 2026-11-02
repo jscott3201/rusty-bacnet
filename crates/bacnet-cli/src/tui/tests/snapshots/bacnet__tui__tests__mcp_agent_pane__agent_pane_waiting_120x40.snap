@@ -5,7 +5,7 @@ expression: wide
 " bacnet | 1 2 3 4 7 [8 Agents] | BIP 10.0.0.1:47808 | up | WRITE 13:55 | COV 0 | MCP 1, 1 to confirm | drop 0    ? help "
 "┌ Agents: 1 attached | requests 0.0/s of 0.0/s | writes here armed ────────────────────────────────────────────────────┐"
 "│Waiting for you here (1 of at most 4):                                                                                │"
-"│  agent 1 ("agent"): write device 100, waiting 65 s (its host may have stopped waiting)                               │"
+"│  write device 100, waiting 65 s (its host may have stopped waiting), agent 1 "agent"                                 │"
 "│Hosts often end a tool call after about 60 s; raise the host's tool timeout if it has one.                            │"
 "│                                                                                                                      │"
 "│No agent calls yet. Agents attach with `bacnet mcp connect --profile NAME`.                                           │"

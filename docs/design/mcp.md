@@ -815,12 +815,14 @@ As built (#2185), three decisions close the phase:
 
 Agent hosts often end a tool call after about 60 s, while the dialog waits up
 to 120 s; the pane shows each waiting request's age, and the guide advises
-raising the host's tool timeout where it has one. The agents' sessions run on a Tokio runtime of
-the listener's own, whose threads the TUI's panic hook recognizes by name: a
-bug an agent's request reaches ends that agent's session, audited, without
-restoring the terminal (#2203). The engine, client and transport stay on the
-TUI's runtime; the sessions reach them through Tokio's synchronization
-primitives, which work across runtimes.
+raising the host's tool timeout where it has one.
+
+The agents' sessions run on a Tokio runtime of the listener's own, whose
+threads the TUI's panic hook recognizes by name: a bug an agent's request
+reaches ends that agent's session, audited, without restoring the terminal
+(#2203). The engine, client and transport stay on the TUI's runtime; the
+sessions reach them through Tokio's synchronization primitives, which work
+across runtimes.
 
 **Background daemon (phase 4b, optional).** One background process per
 profile owns the transport, the client, the engine and the MCP endpoints,

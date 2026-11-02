@@ -603,21 +603,23 @@ impl<T: TransportPort + 'static> ServerHandler for McpServer<T> {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let args = request.arguments.unwrap_or_default();
-        // An attached session's calls show on the TUI's agent pane (#2185).
+        let writing = tools::writes(&request.name);
+        // Built once: a write needs it, and an attached session's agent
+        // pane names the client (#2185).
+        let peer = (writing || self.ctx.pane.is_some()).then(|| peer(&context));
         let noted = self.ctx.pane.as_ref().map(|pane| {
             let started = tokio::time::Instant::now();
-            let what = (crate::board::target(&args), peer(&context).name);
-            (pane, started, what)
+            let client = peer.as_ref().and_then(|p| p.name.clone());
+            (pane, started, (crate::board::target(&args), client))
         });
         let call = async {
-            if tools::writes(&request.name) {
+            if let Some(peer) = peer.as_ref().filter(|_| writing) {
                 let retry = tools::write::Retry {
                     state: request.request_state,
                     responses: request.input_responses,
                     server: false,
                 };
-                let peer = peer(&context);
-                return tools::call_write(&self.ctx, &request.name, args, retry, &peer, context.ct)
+                return tools::call_write(&self.ctx, &request.name, args, retry, peer, context.ct)
                     .await;
             }
             tools::call(&self.ctx, &request.name, args, context.ct)

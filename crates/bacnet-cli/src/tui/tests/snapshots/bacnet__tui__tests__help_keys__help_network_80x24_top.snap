@@ -1,6 +1,5 @@
 ---
 source: crates/bacnet-cli/src/tui/tests/help_keys.rs
-assertion_line: 342
 expression: top
 ---
 " 1 2 3 [4 Network] 7 | BIP 10.0.0.1:47808 | up | READ-ONLY | drop 0      ? help "

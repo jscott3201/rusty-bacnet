@@ -97,6 +97,90 @@ fn the_pane_lists_calls_newest_first() {
     assert_snapshot!("agent_pane_calls_80x24", screen(&mut app, 80, 24));
 }
 
+/// An agent's long claimed name and a seven-digit device never push the
+/// countdown or the host warning off an 80-column screen: the name comes
+/// last, cut to the room left.
+#[test]
+fn a_long_name_leaves_the_countdown_and_warning_in_view() {
+    use crate::tui::app::agents::Held;
+    let (mut app, _board, _count) = pane(1);
+    app.safety.agents.staged.push(Held {
+        agent: 7,
+        client: Some("n".repeat(64)),
+        what: "write",
+        device: 4_194_302,
+        age: Duration::from_secs(75),
+        left: Some(Duration::from_secs(45)),
+    });
+    let narrow = screen(&mut app, 80, 24);
+    let line = narrow.lines().find(|l| l.contains("4194302")).unwrap();
+    assert!(
+        line.contains("45 s left") && line.contains("(host may be gone)"),
+        "{line}"
+    );
+    assert!(line.contains("agent 7"), "{line}");
+    assert_snapshot!("agent_pane_long_name_80x24", narrow);
+    let wide = screen(&mut app, 120, 40);
+    let line = wide.lines().find(|l| l.contains("4194302")).unwrap();
+    assert!(
+        line.contains("declined in 45 s (its host may have stopped waiting)"),
+        "{line}"
+    );
+}
+
+/// The heading gives the agents' share of the request meter.
+#[test]
+fn the_heading_shows_the_agents_share() {
+    let (mut app, board, _count) = pane(1);
+    board.record(call(3, 1, "bacnet_read", "dev 100 ai:1", CallOutcome::Ok));
+    app.watch.stats.recent_requests = 30;
+    app.watch.stats.agent_requests = 12;
+    advance(&mut app, Duration::from_millis(100));
+    let wide = screen(&mut app, 120, 40);
+    assert!(wide.contains("requests 1.2/s of 3.0/s"), "{wide}");
+    assert_snapshot!("agent_pane_share_120x40", wide);
+    assert!(screen(&mut app, 80, 24).contains("1.2/s of 3.0/s"));
+}
+
+/// Scrolled down, the view keeps the same calls as new ones arrive on top.
+#[test]
+fn a_scrolled_view_stays_on_its_calls() {
+    let (mut app, board, _count) = pane(1);
+    for n in 0..60 {
+        board.record(call(
+            n,
+            1,
+            "bacnet_read",
+            &format!("dev {n}"),
+            CallOutcome::Ok,
+        ));
+    }
+    advance(&mut app, Duration::from_millis(100));
+    for _ in 0..5 {
+        press(&mut app, KeyCode::Down);
+    }
+    let top = |app: &mut App| {
+        let text = screen(app, 120, 40);
+        text.lines()
+            .find(|l| l.contains("dev "))
+            .unwrap()
+            .to_string()
+    };
+    let before = top(&mut app);
+    assert!(before.contains("dev 54"), "{before}");
+    for n in 60..63 {
+        board.record(call(
+            n,
+            1,
+            "bacnet_read",
+            &format!("dev {n}"),
+            CallOutcome::Ok,
+        ));
+    }
+    advance(&mut app, Duration::from_millis(100));
+    assert_eq!(top(&mut app), before);
+}
+
 /// Past the ring's size the oldest calls go, and the heading counts them.
 #[test]
 fn the_heading_counts_the_calls_dropped() {

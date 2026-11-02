@@ -22,7 +22,9 @@ pub(crate) struct AgentPane {
     /// The calls, newest first, as last copied.
     #[cfg(feature = "mcp")]
     pub(crate) calls: bacnet_mcp::attach::Calls,
-    /// The first call row shown; the view clamps it.
+    /// The first call row shown, counted from the newest; the view clamps
+    /// it. Scrolled down, it moves with the rows each new call pushes in,
+    /// so the same calls stay in view.
     pub(crate) scroll: std::cell::Cell<usize>,
     /// Whether the write session was armed at the last look.
     armed: bool,
@@ -76,6 +78,12 @@ impl App {
                 .as_ref()
                 .and_then(|b| b.calls_since(pane.calls.seq))
             {
+                let scroll = pane.scroll.get();
+                if scroll > 0 {
+                    let added = usize::try_from(calls.seq.saturating_sub(pane.calls.seq))
+                        .unwrap_or(usize::MAX);
+                    pane.scroll.set(scroll.saturating_add(added));
+                }
                 pane.calls = calls;
                 self.dirty |= self.screen == super::watch::Screen::Agents;
             }

@@ -187,42 +187,67 @@ impl Pane {
     }
 }
 
+/// The longest target summary, in characters.
+const TARGET: usize = 48;
+
 /// What the arguments `args` aim at, in a few words: the device, the
 /// first object read or written (and how many more), a network, or the
-/// ledger entries of a revert. Agent text, so cleaned and capped.
+/// ledger entries of a revert. Agent text, so cleaned and capped; it stops
+/// once the cap is reached, never rendering a whole long value first.
 pub(crate) fn target(args: &Map<String, Value>) -> String {
-    let text = |value: &Value| match value {
-        Value::String(s) => s.clone(),
-        other => other.to_string(),
+    let mut out = String::new();
+    let mut push = |label: &str, value: Option<&Value>| {
+        if out.chars().count() > TARGET {
+            return;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(label);
+        match value {
+            Some(Value::String(text)) => out.extend(text.chars().take(TARGET)),
+            Some(Value::Number(n)) => out.push_str(&n.to_string()),
+            Some(Value::Bool(b)) => out.push_str(if *b { "true" } else { "false" }),
+            Some(_) => out.push('…'),
+            None => {}
+        }
     };
-    let mut parts = Vec::new();
     if let Some(device) = args.get("device") {
-        parts.push(format!("dev {}", text(device)));
+        push("dev ", Some(device));
     }
     if let Some(network) = args.get("network") {
-        parts.push(format!("net {}", text(network)));
+        push("net ", Some(network));
     }
     if let Some(object) = args.get("object") {
-        parts.push(text(object));
+        push("", Some(object));
     }
     for list in ["reads", "writes", "points"] {
         if let Some(Value::Array(items)) = args.get(list)
             && let Some(first) = items.first()
         {
-            parts.push(first.get("object").map_or_else(|| text(first), text));
+            push("", Some(first.get("object").unwrap_or(first)));
             if items.len() > 1 {
-                parts.push(format!("+{}", items.len() - 1));
+                push(&format!("+{}", items.len() - 1), None);
             }
         }
     }
     if let Some(Value::Array(entries)) = args.get("entries") {
-        let ids: Vec<String> = entries.iter().map(text).collect();
-        parts.push(format!("entries {}", ids.join(",")));
+        let mut ids = String::new();
+        for entry in entries.iter().take(TARGET) {
+            if ids.len() > TARGET {
+                break;
+            }
+            if !ids.is_empty() {
+                ids.push(',');
+            }
+            ids.push_str(&entry.as_u64().map_or("?".into(), |n| n.to_string()));
+        }
+        push("entries ", Some(&Value::String(ids)));
     }
     if args.get("all") == Some(&Value::Bool(true)) {
-        parts.push("all".into());
+        push("all", None);
     }
-    crate::untrusted::clean(&parts.join(" "), 48).0
+    crate::untrusted::clean(&out, TARGET).0
 }
 
 /// How a call's result `body` (its structured content, `is_error` when it
@@ -308,6 +333,22 @@ mod tests {
             outcome(Some(&json!({ "error": "timeout" })), true),
             CallOutcome::Error("timeout".into())
         );
+    }
+
+    /// A huge argument is cut, not rendered whole first.
+    #[test]
+    fn a_long_target_is_cut() {
+        let args = json!({ "device": "x".repeat(10_000), "entries": (0..5000).collect::<Vec<_>>(),
+            "reads": [{ "object": { "nested": "y".repeat(10_000) } }] });
+        let Value::Object(args) = args else {
+            unreachable!()
+        };
+        assert!(target(&args).chars().count() <= TARGET);
+        let args = json!({ "entries": [4, 5] });
+        let Value::Object(args) = args else {
+            unreachable!()
+        };
+        assert_eq!(target(&args), "entries 4,5");
     }
 
     /// The target names the device, the first object and how many more,

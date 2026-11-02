@@ -56,6 +56,9 @@ pub(crate) struct Agents {
     waiting: std::collections::VecDeque<(Instant, AgentApproval)>,
     /// The agent pane's state (#2185).
     pub(crate) pane: super::agent_pane::AgentPane,
+    /// Requests a frame test lists after the real ones.
+    #[cfg(all(test, feature = "mcp"))]
+    pub(crate) staged: Vec<Held>,
 }
 
 /// A request held here, as the agent pane lists it.
@@ -153,7 +156,10 @@ impl Agents {
                 held(request, *came, left)
             });
             let waiting = self.waiting.iter().map(|(came, r)| held(r, *came, None));
-            shown.chain(waiting).collect()
+            let held = shown.chain(waiting);
+            #[cfg(test)]
+            let held = held.chain(self.staged.iter().cloned());
+            held.collect()
         }
     }
 }
