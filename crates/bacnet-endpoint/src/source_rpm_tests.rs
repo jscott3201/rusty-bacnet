@@ -285,7 +285,9 @@ async fn source_rpm_unique_successful_device_projection_and_per_reference_filter
         if case == 3 {
             db.get_mut(&selected())
                 .unwrap()
-                .configure_audit_reporter_internal(
+                .audit_reporter_mut()
+                .expect("an Audit Reporter")
+                .configure(
                     AuditLevel::AUDIT_CONFIG,
                     AuditOperationFlags::from_bits(1).unwrap(),
                     false,

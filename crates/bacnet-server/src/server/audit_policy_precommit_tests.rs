@@ -50,7 +50,9 @@ async fn mandatory_policy_send_capacity_denial_is_atomic() {
     assert_eq!(
         db.get(&target)
             .unwrap()
-            .audit_object_policy_internal()
+            .audit_policy()
+            .map(|policy| policy.object_policy())
+            .unwrap_or_default()
             .level,
         Some(AuditLevel::NONE)
     );
@@ -88,7 +90,9 @@ async fn assert_unchanged(f: &Fixture, kind: ObjectType, before: ObjectAuditPoli
     assert_eq!(
         db.get(&oid(kind, 11))
             .unwrap()
-            .audit_object_policy_internal(),
+            .audit_policy()
+            .map(|policy| policy.object_policy())
+            .unwrap_or_default(),
         before
     );
     assert_eq!(db.reserve_event_sequence_number().number(), sequence);
@@ -528,7 +532,11 @@ async fn mandatory_policy_stop_between_capture_and_commit_denies_without_assignm
         &Error::protocol(ErrorClass::SERVICES, ErrorCode::SERVICE_REQUEST_DENIED),
     );
     assert_eq!(
-        db.get(&target.oid).unwrap().audit_object_policy_internal(),
+        db.get(&target.oid)
+            .unwrap()
+            .audit_policy()
+            .map(|policy| policy.object_policy())
+            .unwrap_or_default(),
         policy()
     );
     assert_eq!(db.reserve_event_sequence_number().number(), 0);
@@ -575,7 +583,9 @@ async fn mandatory_policy_admitted_worker_is_joined_after_cancelled_stop() {
     assert_eq!(
         db.get(&oid(ObjectType::BINARY_VALUE, 11))
             .unwrap()
-            .audit_object_policy_internal()
+            .audit_policy()
+            .map(|policy| policy.object_policy())
+            .unwrap_or_default()
             .level,
         Some(AuditLevel::AUDIT_CONFIG)
     );

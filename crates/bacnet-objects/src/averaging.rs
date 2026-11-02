@@ -297,14 +297,6 @@ impl BACnetObject for AveragingObject {
         true
     }
 
-    fn take_due_averaging_sample_internal(
-        &mut self,
-        now: Duration,
-    ) -> Option<BACnetObjectPropertyReference> {
-        let reference = self.object_property_reference.clone()?;
-        self.window.take_due(now).then_some(reference)
-    }
-
     fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
         Some(self)
     }
@@ -344,6 +336,11 @@ impl crate::traits::Timed for AveragingObject {
         // Only an object with a reference has anything for the server to read.
         self.object_property_reference.as_ref()?;
         self.window.next_due()
+    }
+
+    fn take_due_sample(&mut self, now: Duration) -> Option<BACnetObjectPropertyReference> {
+        let reference = self.object_property_reference.clone()?;
+        self.window.take_due(now).then_some(reference)
     }
 }
 

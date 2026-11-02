@@ -3,24 +3,17 @@
 use bacnet_objects::database::AuditOwnership;
 use std::borrow::Cow;
 use std::sync::{Arc, Weak};
-use std::time::Duration;
 
-use bacnet_objects::audit::{
-    AuditLogForwarding, AuditLogNotificationSink, AuditLogStorage, AuditReporterObject,
-};
+use bacnet_objects::audit::{AuditReporterAuthority, AuditReporterObject};
 use bacnet_objects::durable::DurableWrites;
 use bacnet_objects::file::{FileConfiguration, FileStorage};
 use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::traits::{
-    AccessEvents, BACnetObject, CalendarState, CommandRunner, CovReportedProperty, EnrollmentEval,
-    EventReporting, LifeSafety, LocalInput, LogBuffer, ReliabilityEval, ScheduleRunner,
-    StagingSource, Timed,
+    AccessEvents, AuditLog, AuditPolicy, BACnetObject, CalendarState, CommandRunner,
+    CovReportedProperty, EnrollmentEval, EventReporting, LifeSafety, LocalInput, LogBuffer,
+    ReliabilityEval, ScheduleRunner, StagingSource, Timed,
 };
-use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
-use bacnet_types::constructed::{
-    BACnetDeviceObjectReference, BACnetObjectPropertyReference, BACnetObjectSelector,
-};
-use bacnet_types::enums::{AuditLevel, ErrorClass, ErrorCode, PropertyIdentifier};
+use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
@@ -64,48 +57,25 @@ impl BACnetObject for SourceReporter {
         self.wrapped.device_authority_internal()
     }
 
-    fn audit_reporter_authority_internal(
-        &mut self,
-    ) -> Option<bacnet_objects::audit::AuditReporterAuthority<'_>> {
-        self.wrapped.audit_reporter_authority_internal()
+    fn audit_policy(&self) -> Option<&dyn AuditPolicy> {
+        self.wrapped.audit_policy()
     }
 
-    fn audit_policy_authority_internal(
-        &mut self,
-    ) -> Option<bacnet_objects::audit::AuditPolicyAuthority<'_>> {
-        self.wrapped.audit_policy_authority_internal()
+    fn audit_policy_mut(&mut self) -> Option<&mut dyn AuditPolicy> {
+        self.wrapped.audit_policy_mut()
     }
 
-    fn audit_object_policy_internal(&self) -> bacnet_objects::audit::ObjectAuditPolicy {
-        self.wrapped.audit_object_policy_internal()
+    fn audit_reporter(&self) -> Option<&AuditReporterObject> {
+        self.wrapped.audit_reporter()
     }
 
-    fn audit_reporter_internal(&self) -> Option<&AuditReporterObject> {
-        self.wrapped.audit_reporter_internal()
-    }
-
-    fn configure_audit_reporter_internal(
-        &mut self,
-        level: AuditLevel,
-        operations: AuditOperationFlags,
-        confirmed: bool,
-        selectors: Option<Vec<BACnetObjectSelector>>,
-        priorities: BACnetPriorityFilter,
-        maximum_send_delay: Option<bacnet_objects::audit::AuditSendDelay>,
-    ) -> Result<(), Error> {
-        if self.active() && (selectors.is_some() || maximum_send_delay.is_some()) {
-            return Err(Error::Encoding(
-                "source Audit does not support Monitored_Objects or delayed notifications".into(),
-            ));
-        }
-        self.wrapped.configure_audit_reporter_internal(
-            level,
-            operations,
-            confirmed,
-            selectors,
-            priorities,
-            maximum_send_delay,
-        )
+    // The Reporter's configuration answers to this source owner: while it is
+    // active, Monitored_Objects and a send delay are refused.
+    fn audit_reporter_mut(&mut self) -> Option<AuditReporterAuthority<'_>> {
+        let owner = &self.owner;
+        self.wrapped
+            .audit_reporter_mut()
+            .map(|reporter| reporter.with_source_owner(owner))
     }
 
     fn object_identifier(&self) -> ObjectIdentifier {
@@ -276,47 +246,12 @@ impl BACnetObject for SourceReporter {
         self.wrapped.set_overridden(overridden)
     }
 
-    fn take_due_averaging_sample_internal(
-        &mut self,
-        now: Duration,
-    ) -> Option<BACnetObjectPropertyReference> {
-        self.wrapped.take_due_averaging_sample_internal(now)
+    fn audit_log(&self) -> Option<&dyn AuditLog> {
+        self.wrapped.audit_log()
     }
 
-    fn input_reference_internal(&self) -> Option<Option<&BACnetObjectPropertyReference>> {
-        self.wrapped.input_reference_internal()
-    }
-
-    fn set_input_usable_internal(&mut self, usable: bool) -> bool {
-        self.wrapped.set_input_usable_internal(usable)
-    }
-
-    fn take_input_reading_internal(
-        &mut self,
-        reading: Option<bacnet_objects::accumulator::InputReading>,
-    ) -> bool {
-        self.wrapped.take_input_reading_internal(reading)
-    }
-
-    fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {
-        self.wrapped.audit_log_storage_internal()
-    }
-
-    fn audit_log_forwarding_internal(&self) -> Option<Arc<AuditLogForwarding>> {
-        self.wrapped.audit_log_forwarding_internal()
-    }
-
-    fn set_audit_log_parent_internal(
-        &mut self,
-        parent: BACnetDeviceObjectReference,
-    ) -> Result<(), Error> {
-        self.wrapped.set_audit_log_parent_internal(parent)
-    }
-
-    fn audit_log_notification_sink_internal(
-        &mut self,
-    ) -> Option<&mut dyn AuditLogNotificationSink> {
-        self.wrapped.audit_log_notification_sink_internal()
+    fn audit_log_mut(&mut self) -> Option<&mut dyn AuditLog> {
+        self.wrapped.audit_log_mut()
     }
 
     fn durable_writes(&mut self) -> Option<&mut dyn DurableWrites> {

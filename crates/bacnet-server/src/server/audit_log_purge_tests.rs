@@ -139,7 +139,8 @@ async fn held(db: &Arc<RwLock<ObjectDatabase>>) -> Vec<u64> {
         .await
         .get(&audit_log())
         .unwrap()
-        .audit_log_storage_internal()
+        .audit_log()
+        .map(|log| log.storage())
         .unwrap()
         .retained_records()
         .iter()
@@ -153,7 +154,8 @@ async fn first_status(db: &Arc<RwLock<ObjectDatabase>>) -> LogStatus {
     let records = db
         .get(&audit_log())
         .unwrap()
-        .audit_log_storage_internal()
+        .audit_log()
+        .map(|log| log.storage())
         .unwrap()
         .retained_records();
     match &records.front().expect("a record is held").record.datum {

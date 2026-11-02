@@ -16,14 +16,17 @@ async fn target_reporter_off_runtime_silent_change_commits_without_worker() {
         let reporter = database.get_mut(&reporter_id).unwrap();
         let mut operations = AuditOperationFlags::empty();
         operations.insert(AuditOperation::WRITE);
-        reporter.configure_audit_reporter_internal(
-            AuditLevel::NONE,
-            operations,
-            false,
-            None,
-            BACnetPriorityFilter::all(),
-            None,
-        )?;
+        reporter
+            .audit_reporter_mut()
+            .expect("an Audit Reporter")
+            .configure(
+                AuditLevel::NONE,
+                operations,
+                false,
+                None,
+                BACnetPriorityFilter::all(),
+                None,
+            )?;
         reporter.write_property(
             PropertyIdentifier::DESCRIPTION,
             None,
@@ -45,7 +48,9 @@ async fn target_reporter_off_runtime_silent_change_commits_without_worker() {
         // no runtime is available; the silent path must not weaken this guard.
         assert!(
             reporter
-                .configure_audit_reporter_internal(
+                .audit_reporter_mut()
+                .expect("an Audit Reporter")
+                .configure(
                     AuditLevel::AUDIT_ALL,
                     operations,
                     false,

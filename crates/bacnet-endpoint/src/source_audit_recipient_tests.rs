@@ -225,11 +225,7 @@ async fn retained_config_sets_availability_without_clearing_failure_or_sending()
         for configured in [false, true] {
             let (session, _peer, observed) = configured_session(role);
             let db = database();
-            let reporter = db
-                .get(&selected())
-                .unwrap()
-                .audit_reporter_internal()
-                .unwrap();
+            let reporter = db.get(&selected()).unwrap().audit_reporter().unwrap();
             let status = reporter.status_internal();
             status.set_configured(configured);
             // Existing failures must not be cleared by static configuration.
@@ -299,7 +295,9 @@ async fn direct_bip_ipv4_client_only_and_both_start_stop_silently() {
             let mut db = database();
             db.get_mut(&selected())
                 .unwrap()
-                .configure_audit_reporter_internal(
+                .audit_reporter_mut()
+                .expect("an Audit Reporter")
+                .configure(
                     AuditLevel::AUDIT_ALL,
                     bacnet_types::bitstring::AuditOperationFlags::from_bits(0xff).unwrap(),
                     confirmed,
@@ -308,11 +306,7 @@ async fn direct_bip_ipv4_client_only_and_both_start_stop_silently() {
                     None,
                 )
                 .unwrap();
-            let reporter = db
-                .get(&selected())
-                .unwrap()
-                .audit_reporter_internal()
-                .unwrap();
+            let reporter = db.get(&selected()).unwrap().audit_reporter().unwrap();
             let original = std::ptr::from_ref(reporter);
             let status = reporter.status_internal();
             let initial_delivery = status.begin_delivery();
@@ -338,11 +332,7 @@ async fn direct_bip_ipv4_client_only_and_both_start_stop_silently() {
                 let db = session.database.as_ref().unwrap().read().await;
                 assert!(source(&db, selected()));
                 assert!(!source(&db, target()));
-                let reporter = db
-                    .get(&selected())
-                    .unwrap()
-                    .audit_reporter_internal()
-                    .unwrap();
+                let reporter = db.get(&selected()).unwrap().audit_reporter().unwrap();
                 assert!(std::ptr::eq(original, reporter));
                 assert!(Arc::ptr_eq(&status, &reporter.status_internal()));
                 assert_eq!(
@@ -412,11 +402,7 @@ async fn source_post_start_broadcast_fact_invalidates_device_route_without_callb
     assert_eq!(observed.bip_reads.load(Ordering::SeqCst), 2);
     {
         let mut db = session.database.as_ref().unwrap().write().await;
-        let reporter = db
-            .get(&selected())
-            .unwrap()
-            .audit_reporter_internal()
-            .unwrap();
+        let reporter = db.get(&selected()).unwrap().audit_reporter().unwrap();
         assert_eq!(
             reliability(reporter),
             PropertyValue::Enumerated(Reliability::CONFIGURATION_ERROR.to_raw())

@@ -71,7 +71,7 @@ pub(super) fn initialize<T: TransportPort>(
         .audit_notification_sink
         .filter(|sink| sink.object_type() == ObjectType::AUDIT_LOG)
         .and_then(|sink| db.get(&sink))
-        .and_then(|object| object.audit_log_forwarding_internal())
+        .and_then(|object| object.audit_log().and_then(|log| log.forwarding()))
     {
         // Before the link starts, while no local network number is known.
         profile.status().set_configured(
@@ -105,7 +105,10 @@ impl ForwardBatch {
             return None;
         }
         Some(Self {
-            profile: db.get(&sink)?.audit_log_forwarding_internal()?,
+            profile: db
+                .get(&sink)?
+                .audit_log()
+                .and_then(|log| log.forwarding())?,
             local: present_local(db),
             payload,
         })

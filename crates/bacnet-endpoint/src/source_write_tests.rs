@@ -7,7 +7,9 @@ fn write_database(confirmed: bool) -> ObjectDatabase {
     let mut db = database(confirmed);
     db.get_mut(&selected())
         .unwrap()
-        .configure_audit_reporter_internal(
+        .audit_reporter_mut()
+        .expect("an Audit Reporter")
+        .configure(
             AuditLevel::AUDIT_ALL,
             AuditOperationFlags::from_bits(2).unwrap(),
             confirmed,
@@ -300,7 +302,9 @@ async fn source_write_commandability_priority_policy_matrix() {
             .await
             .get_mut(&selected())
             .unwrap()
-            .configure_audit_reporter_internal(
+            .audit_reporter_mut()
+            .expect("an Audit Reporter")
+            .configure(
                 level,
                 AuditOperationFlags::from_bits(operations).unwrap(),
                 false,

@@ -268,7 +268,7 @@ pub(super) fn log_buffer<'a>(
     if request.property_identifier != PropertyIdentifier::LOG_BUFFER {
         return Ok(None);
     }
-    let resolved = if let Some(storage) = object.audit_log_storage_internal() {
+    let resolved = if let Some(storage) = object.audit_log().map(|log| log.storage()) {
         let records = storage.retained_records();
         (
             RangeItems::AuditRecords(records),

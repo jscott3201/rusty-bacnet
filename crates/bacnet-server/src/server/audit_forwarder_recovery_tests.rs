@@ -155,10 +155,13 @@ async fn audit_forwarding_old_instance_completion_and_cancellation_cannot_update
             .remove(&oid(ObjectType::AUDIT_LOG, 7))
             .unwrap()
             .unwrap();
-        let old_profile = old.audit_log_forwarding_internal().unwrap();
+        let old_profile = old.audit_log().and_then(|log| log.forwarding()).unwrap();
         let mut replacement = AuditLogObject::new(7, "replacement", 16, f.store.clone()).unwrap();
         replacement.set_member_of(Some(parent()));
-        let replacement_profile = replacement.audit_log_forwarding_internal().unwrap();
+        let replacement_profile = replacement
+            .audit_log()
+            .and_then(|log| log.forwarding())
+            .unwrap();
         assert!(!Arc::ptr_eq(&old_profile, &replacement_profile));
         f.server
             .db
@@ -282,7 +285,7 @@ async fn audit_forwarding_file_v1_reopen_has_no_replay_or_historical_receipt() {
     assert!(original.completed_receipts.is_empty());
     assert_eq!(original.records[0].record, record);
     let mut log = AuditLogObject::new(7, "v1", 2, storage.clone()).unwrap();
-    assert!(log.audit_log_forwarding_internal().is_none());
+    assert!(log.audit_log().and_then(|log| log.forwarding()).is_none());
     log.set_member_of(Some(parent()));
     let (server, wire) = start(
         10,

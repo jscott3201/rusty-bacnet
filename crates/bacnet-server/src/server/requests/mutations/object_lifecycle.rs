@@ -120,7 +120,7 @@ impl Request<'_> {
             let schedule = crate::schedule::DeletedSchedule::plan(&mut db, deleted_oid);
             let removed_status = deleted_oid.and_then(|oid| {
                 db.get(&oid)
-                    .and_then(|object| object.audit_reporter_internal())
+                    .and_then(|object| object.audit_reporter())
                     .map(|reporter| reporter.status_internal())
             });
             if let Some(oid) = deleted_oid {

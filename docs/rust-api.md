@@ -4087,6 +4087,18 @@ behaviour, so an object without it writes nothing.
   takes `take_relinquish_writes()` from the removed object. Only
   `tick_schedule` has no default. The built-in `ScheduleObject` lends it
   (see Schedule & Notification below).
+- **`audit_log()` and `audit_log_mut()` → `AuditLog`** (hidden, #2179), for
+  an Audit Log. `storage()` is the `AuditLogStorage` that AuditLogQuery and
+  ReadRange read under a shared guard (it was the public
+  `audit_log_storage_internal()`); `forwarding()`, `set_parent(..)` and
+  `notification_sink()` replace the forwarding, parent and
+  `audit_log_notification_sink_internal()` hooks. An Audit Log that lends
+  none answers AuditLogQuery with `SERVICES /
+  OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`. Audit overrides moved the same way
+  to the hidden `AuditPolicy` (`audit_policy()` and `audit_policy_mut()`), and
+  the built-in Reporter is reached through `audit_reporter()` and
+  `audit_reporter_mut()`, whose authority's `configure` replaced
+  `configure_audit_reporter_internal`.
 
 ```rust,ignore
 use bacnet_objects::traits::{BACnetObject, Clocks, Timed};
@@ -5662,9 +5674,15 @@ conformance is not claimed.
 #### Audit Reporter configuration and send delay
 
 Trusted local configuration through `dyn BACnetObject` uses one atomic
-`configure_audit_reporter_internal(level, operations, confirmed, selectors, priorities, maximum_send_delay)`
-contract. It replaces all six settings once; invalid or resource-denied changes
-leave every field unchanged. The final argument is `Option<AuditSendDelay>`:
+contract, `audit_reporter_mut()` and then
+`AuditReporterAuthority::configure(level, operations, confirmed, selectors,
+priorities, maximum_send_delay)` (the hidden
+`configure_audit_reporter_internal` hook before #2179). A wrapper around a
+Reporter lends the Reporter's own authority, so it can't intercept a
+configuration; the endpoint's source Reporter adapter marks the authority
+with its source owner, which refuses Monitored_Objects and a send delay
+while the owner is active. It replaces all six settings once; invalid or
+resource-denied changes leave every field unchanged. The final argument is `Option<AuditSendDelay>`:
 `None` omits both delay/control properties, while `Some(AuditSendDelay::new(0)?)`
 exposes the pair with immediate delivery. Positive values enable bounded target
 batching; see [delay controls and limits](delayed-target-audit.md). Built-in live
@@ -5876,7 +5894,9 @@ read, or a value of a datatype the object can't average counts as a missed
 attempt. References are always local: a written reference naming another
 device is refused (see below). The server's monotonic operation task does this through
 `ObjectDatabase::sample_due_averaging_objects`, which an application driving
-its own database can call as well.
+its own database can call as well. It asks each Averaging object for its
+due sample through the hidden `Timed::take_due_sample` (#2179), so an
+adapter that forwards `timed()` keeps a wrapped one sampled.
 
 The application feeds an object that has no reference. In a running server it
 passes each result to
@@ -6491,6 +6511,15 @@ that started it fails with OBJECT / BUSY, so such a loop stops after one round.
 | `LifeSafetyPointObject` | `::new(instance, name)` |
 | `LifeSafetyZoneObject` | `::new(instance, name)` |
 
+A Point's Maintenance_Required is a BACnetMaintenance (Table 12-18), served
+as an Enumerated and named by `bacnet_types::enums::Maintenance`. It starts
+as `NONE`; the application sets it with `set_maintenance_required`, and a
+client's write must be an Enumerated holding a standard value or one from the
+proprietary range 256..=65535. A reserved or larger number is
+VALUE_OUT_OF_RANGE, and a BOOLEAN, the datatype the Point used to serve, is
+INVALID_DATA_TYPE (#2252). A Zone's Maintenance_Required is a BOOLEAN
+(Table 12-19), which the Zone doesn't serve yet.
+
 #### Access Control (7)
 
 | Type | Constructor |
@@ -6881,6 +6910,25 @@ their context-tagged Clause 21 forms, encoded with
 float `[0]` or integer `[1]` alternative, and Prescale's multiplier `[0]` and
 modulo divide `[1]` (#1487). Both are read-only.
 
+An Accumulator's Pulse_Rate is an Unsigned (Table 12-79): the input pulses
+counted over the last whole Limit_Monitoring_Interval (Clause 12.61.20). The
+object counts it in a fixed window when the application feeds it: set the
+interval with `set_limit_monitoring_interval` (or a client's write of
+Limit_Monitoring_Interval), count pulses with `record_pulses`, and let time
+pass with `advance_rate_window(seconds)`. Each time a whole interval has
+passed, Pulse_Rate becomes that window's count and a new window starts, in
+integer arithmetic only. An application that measures the rate itself calls
+`set_pulse_rate` instead. These routes need the concrete
+`AccumulatorObject`, so they work only before the object is registered: no
+server path reaches them yet, and in a running server Pulse_Rate changes only
+through a write while Out_Of_Service is TRUE, from a client or `write_local`.
+Pulse_Rate is writable only while Out_Of_Service is TRUE (Clause 12.61.20);
+in service a write is WRITE_ACCESS_DENIED. While out of service it keeps the
+written value and ignores the application routes. A write must be an
+Unsigned; the REAL the object used to serve is INVALID_DATA_TYPE (#2251). `record_pulses`
+counts toward the rate only: Present_Value stays the application's
+(`set_present_value`).
+
 A Pulse Converter's Input_Reference, set with `set_input_reference`, reads and
 takes writes like the Loop's variable references: the context-tagged
 `BACnetObjectPropertyReference` in a `PropertyValue::ApplicationData`, with
@@ -6905,8 +6953,9 @@ that changes. While Out_Of_Service is TRUE, Reliability takes a client's
 value (Clause 12.23.10), and the return to service applies the latest
 verdict. A running server also counts from the property at least once a
 second (`ObjectDatabase::count_pulse_inputs`, on every wake of its monotonic
-operation task): each increase over the last reading goes into Count as
-`add_pulses` would, and the first reading after the reference is set or
+operation task; the built-in `PulseConverterObject` only, so a wrapped one
+is neither judged nor counted, #2179): each increase over the last reading
+goes into Count as `add_pulses` would, and the first reading after the reference is set or
 changed only sets the baseline, so re-pointing it at a larger value counts
 nothing. A reading below the last one counts the wrap when the source is an
 Accumulator's Present_Value, modulo its Max_Pres_Value + 1 (Clause 12.61.4);

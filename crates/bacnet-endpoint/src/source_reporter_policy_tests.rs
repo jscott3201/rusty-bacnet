@@ -21,7 +21,13 @@ fn object_audit_policy_snapshot_is_forwarded_from_the_original_instance() {
         selected(),
     );
     source_reporter::install(&mut object, &owner).unwrap();
-    assert_eq!(object.audit_object_policy_internal(), policy);
+    assert_eq!(
+        object
+            .audit_policy()
+            .map(|policy| policy.object_policy())
+            .unwrap_or_default(),
+        policy
+    );
     object
         .write_property(
             PropertyIdentifier::AUDIT_LEVEL,
@@ -31,7 +37,11 @@ fn object_audit_policy_snapshot_is_forwarded_from_the_original_instance() {
         )
         .unwrap();
     assert_eq!(
-        object.audit_object_policy_internal().level,
+        object
+            .audit_policy()
+            .map(|policy| policy.object_policy())
+            .unwrap_or_default()
+            .level,
         Some(AuditLevel::AUDIT_ALL)
     );
     assert_eq!(
@@ -42,7 +52,11 @@ fn object_audit_policy_snapshot_is_forwarded_from_the_original_instance() {
     );
     owner.seal();
     assert_eq!(
-        object.audit_object_policy_internal().level,
+        object
+            .audit_policy()
+            .map(|policy| policy.object_policy())
+            .unwrap_or_default()
+            .level,
         Some(AuditLevel::AUDIT_ALL)
     );
 }
@@ -65,24 +79,34 @@ fn sealed_policy_authority_forwards_assignment_and_dropped_preparation() {
     source_reporter::install(&mut object, &owner).unwrap();
     let value = PropertyValue::Enumerated(AuditLevel::AUDIT_ALL.to_raw());
     object
-        .audit_policy_authority_internal()
+        .audit_policy_mut()
+        .and_then(|policy| policy.policy_authority())
         .unwrap()
         .prepare(PropertyIdentifier::AUDIT_LEVEL, None, &value, None)
         .unwrap()
         .unwrap();
     assert_eq!(
-        object.audit_object_policy_internal().level,
+        object
+            .audit_policy()
+            .map(|policy| policy.object_policy())
+            .unwrap_or_default()
+            .level,
         Some(AuditLevel::NONE)
     );
     object
-        .audit_policy_authority_internal()
+        .audit_policy_mut()
+        .and_then(|policy| policy.policy_authority())
         .unwrap()
         .prepare(PropertyIdentifier::AUDIT_LEVEL, None, &value, None)
         .unwrap()
         .unwrap()
         .commit();
     assert_eq!(
-        object.audit_object_policy_internal().level,
+        object
+            .audit_policy()
+            .map(|policy| policy.object_policy())
+            .unwrap_or_default()
+            .level,
         Some(AuditLevel::AUDIT_ALL)
     );
 }

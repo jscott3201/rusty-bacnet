@@ -247,7 +247,7 @@ fn write_with_source(
         PropertyIdentifier::DESCRIPTION
             | PropertyIdentifier::MAXIMUM_SEND_DELAY
             | PropertyIdentifier::SEND_NOW
-    ) && let Some(mut reporter) = object.audit_reporter_authority_internal()
+    ) && let Some(mut reporter) = object.audit_reporter_mut()
     {
         return reporter.write_property(property, value, index, source);
     }
