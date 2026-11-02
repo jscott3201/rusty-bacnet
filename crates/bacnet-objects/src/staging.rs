@@ -666,3 +666,6 @@ fn protocol_error(class: ErrorClass, code: ErrorCode) -> Error {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod write_validation_tests;
