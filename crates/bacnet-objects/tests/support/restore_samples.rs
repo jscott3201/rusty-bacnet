@@ -23,13 +23,17 @@ use bacnet_objects::notification_forwarder::{
     FileNotificationForwarderPersistence, ForwarderSnapshot, NotificationForwarderPersistence,
 };
 use bacnet_objects::object_profile::{FileTagsPersistence, TagsPersistence, TagsSnapshot};
+use bacnet_objects::write_config::{
+    ChannelMembers, ChannelWriteConfig, FileWriteConfigPersistence, TimerStateChange,
+    TimerWriteConfig, WriteConfigPersistence, WriteConfigSnapshot,
+};
 use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits, LogStatus};
 use bacnet_types::constructed::{
     BACnetAccessRule, BACnetAuditLogDatum, BACnetAuditLogRecord, BACnetAuditLogRecordResult,
     BACnetDestination, BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference,
     BACnetEventLogRecord, BACnetEventNotificationSubscription, BACnetLogMultipleRecord,
-    BACnetLogRecord, BACnetNameValue, BACnetRecipient, BACnetXyColor, EventLogDatum, LogData,
-    LogDatum, LogValue,
+    BACnetLogRecord, BACnetNameValue, BACnetRecipient, BACnetTimerStateChangeValue, BACnetXyColor,
+    EventLogDatum, LogData, LogDatum, LogValue,
 };
 use bacnet_types::enums::{LoggingType, ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
@@ -107,6 +111,58 @@ fn save_color(path: &Path, kind: ObjectType, present_value: ColorOutputValue) {
         .unwrap()
         .save(oid(kind), &ColorOutputSnapshot { present_value })
         .expect("the sample saves");
+}
+
+pub fn timer_write_config(path: &Path) {
+    let values = [
+        BACnetTimerStateChangeValue::Primitive(PropertyValue::Real(20.5)),
+        BACnetTimerStateChangeValue::NoValue,
+        BACnetTimerStateChangeValue::Primitive(PropertyValue::Null),
+        BACnetTimerStateChangeValue::DateTime(DATE, UNSPECIFIED.1),
+        BACnetTimerStateChangeValue::Constructed(vec![0x21, 0x07]),
+        BACnetTimerStateChangeValue::NoValue,
+        BACnetTimerStateChangeValue::Primitive(PropertyValue::Unsigned(9)),
+    ];
+    let snapshot = WriteConfigSnapshot::Timer(TimerWriteConfig {
+        state_change: Some(TimerStateChange {
+            values,
+            references: vec![member(1, None), member(2, Some(9))],
+            priority_for_writing: 8,
+        }),
+    });
+    save_write_config(path, ObjectType::TIMER, &snapshot);
+}
+
+pub fn channel_write_config(path: &Path) {
+    let snapshot = WriteConfigSnapshot::Channel(ChannelWriteConfig {
+        members: Some(ChannelMembers {
+            references: vec![member(1, None), member(2, Some(9))],
+            execution_delay: vec![0, 250],
+        }),
+        channel_number: Some(12),
+        control_groups: Some(vec![3, 0]),
+        allow_group_delay_inhibit: Some(true),
+    });
+    save_write_config(path, ObjectType::CHANNEL, &snapshot);
+}
+
+fn save_write_config(path: &Path, kind: ObjectType, snapshot: &WriteConfigSnapshot) {
+    FileWriteConfigPersistence::new(path)
+        .unwrap()
+        .save(oid(kind), snapshot)
+        .expect("the sample saves");
+}
+
+/// A member or reference naming Present_Value of an Analog Output, in
+/// `device` if given.
+fn member(instance: u32, device: Option<u32>) -> BACnetDeviceObjectPropertyReference {
+    BACnetDeviceObjectPropertyReference {
+        object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, instance).unwrap(),
+        property_identifier: PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        property_array_index: (instance == 2).then_some(1),
+        device_identifier: device
+            .map(|device| ObjectIdentifier::new(ObjectType::DEVICE, device).unwrap()),
+    }
 }
 
 pub fn access_rights(path: &Path) {

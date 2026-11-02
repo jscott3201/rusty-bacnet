@@ -73,6 +73,7 @@ use super::TimerObject;
 use crate::command::{CommandRun, RunPlan, WriteFailure, next_generation};
 use crate::common;
 use crate::device_reference;
+use crate::durable::PendingWrite;
 use crate::traits::CommandRunner;
 
 /// The most references List_Of_Object_Property_References holds; a write or
@@ -83,11 +84,20 @@ pub const MAX_TIMER_REFERENCES: usize = 1024;
 /// (7).
 pub type StateChangeValues = [BACnetTimerStateChangeValue; 7];
 
+/// The three properties, as a write leaves them.
+#[derive(Clone)]
+pub(crate) struct TimerSet {
+    pub(super) values: StateChangeValues,
+    pub(super) references: Vec<BACnetDeviceObjectPropertyReference>,
+    pub(super) priority: u8,
+    /// A write set State_Change_Values or the references, now or before a
+    /// restart: with storage, it keeps the set (`saving`).
+    pub(super) written: bool,
+}
+
 /// The three properties and the run they drive.
 pub(super) struct StateChange {
-    values: StateChangeValues,
-    references: Vec<BACnetDeviceObjectPropertyReference>,
-    priority: u8,
+    pub(super) set: TimerSet,
     /// How the last run ended, as Reliability.
     verdict: Reliability,
     /// A fresh `next_generation` at every transition.
@@ -108,30 +118,28 @@ impl TimerObject {
     /// priority outside 1..=16, a value with no encoding or a reference whose
     /// device identifier isn't a Device, and with RESOURCES /
     /// NO_SPACE_TO_WRITE_PROPERTY past [`MAX_TIMER_REFERENCES`] references.
+    ///
+    /// On a Timer [`with_persistence`](Self::with_persistence) whose storage
+    /// holds a set a write made ([`state_change_saved`](Self::state_change_saved)),
+    /// the saved set wins: the arguments are checked but not taken.
     pub fn set_state_change(
         &mut self,
         values: StateChangeValues,
         references: Vec<BACnetDeviceObjectPropertyReference>,
         priority: u8,
     ) -> Result<(), Error> {
-        if !(1..=16).contains(&priority) {
-            return Err(common::value_out_of_range_error());
+        check_set(&values, &references, priority)?;
+        if self.state_change_saved() {
+            log_debug!(timer = %self.oid, "Saved State_Change_Values kept over a configured set");
+            return Ok(());
         }
-        let mut scratch = BytesMut::new();
-        for value in &values {
-            encode_timer_state_change_value(&mut scratch, value)
-                .map_err(|_| common::value_out_of_range_error())?;
-        }
-        check_references(&references)?;
-        self.state_change = Some(StateChange {
+        self.state_change = Some(StateChange::new(TimerSet {
             values,
             references,
             priority,
-            verdict: Reliability::NO_FAULT_DETECTED,
-            generation: next_generation(),
-            running: None,
-            pending: None,
-        });
+            written: false,
+        }));
+        self.config_changed();
         Ok(())
     }
 
@@ -139,7 +147,7 @@ impl TimerObject {
     pub(super) fn served_reliability(&self) -> Reliability {
         match &self.state_change {
             Some(change) if !self.out_of_service => {
-                if mixed_datatypes(&change.values) {
+                if mixed_datatypes(&change.set.values) {
                     Reliability::CONFIGURATION_ERROR
                 } else {
                     change.verdict
@@ -157,9 +165,10 @@ impl TimerObject {
         };
         let mut commands = Vec::new();
         let index = (transition.to_raw() as usize).wrapping_sub(1);
-        if let Some(value) = change.values.get(index).and_then(write_value) {
+        if let Some(value) = change.set.values.get(index).and_then(write_value) {
             commands.extend(
                 change
+                    .set
                     .references
                     .iter()
                     .map(|reference| BACnetActionCommand {
@@ -170,7 +179,7 @@ impl TimerObject {
                         ),
                         property_array_index: reference.property_array_index,
                         property_value: value.clone(),
-                        priority: Some(change.priority),
+                        priority: Some(change.set.priority),
                         post_delay: None,
                         quit_on_failure: false,
                         write_successful: false,
@@ -204,16 +213,17 @@ impl TimerObject {
         let change = self.state_change.as_ref()?;
         Some(match property {
             PropertyIdentifier::STATE_CHANGE_VALUES => change
+                .set
                 .values
                 .iter()
                 .map(read_value)
                 .collect::<Result<Vec<_>, _>>()
                 .and_then(|values| common::read_array(values, array_index)),
             PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES => {
-                Ok(device_reference::reference_list(&change.references))
+                Ok(device_reference::reference_list(&change.set.references))
             }
             PropertyIdentifier::PRIORITY_FOR_WRITING => {
-                Ok(PropertyValue::Unsigned(change.priority.into()))
+                Ok(PropertyValue::Unsigned(change.set.priority.into()))
             }
             _ => return None,
         })
@@ -221,28 +231,91 @@ impl TimerObject {
 
     /// Take a write of State_Change_Values or List_Of_Object_Property_References;
     /// `None` for any other property, or before [`Self::set_state_change`].
+    /// With storage the set is saved first (`saving`).
     pub(super) fn write_state_change(
         &mut self,
         property: PropertyIdentifier,
         array_index: Option<u32>,
         value: &PropertyValue,
     ) -> Option<Result<(), Error>> {
-        let change = self.state_change.as_mut()?;
-        Some(match property {
-            PropertyIdentifier::STATE_CHANGE_VALUES => {
-                write_values(&mut change.values, array_index, value)
-            }
-            PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES => {
-                if array_index.is_some() {
-                    return Some(Err(common::property_is_not_an_array_error()));
-                }
-                device_reference::decode_references(value)
-                    .and_then(|references| check_references(&references).map(|()| references))
-                    .map(|references| change.references = references)
-            }
-            _ => return None,
-        })
+        self.state_change.as_ref()?;
+        if !TimerSet::written_by(property) {
+            return None;
+        }
+        Some(crate::write_config::saving::write(
+            self,
+            PendingWrite {
+                property,
+                array_index,
+                value: value.clone(),
+            },
+        ))
     }
+}
+
+impl StateChange {
+    /// `set`, served with no run yet and NO_FAULT_DETECTED.
+    pub(super) fn new(set: TimerSet) -> Self {
+        Self {
+            set,
+            verdict: Reliability::NO_FAULT_DETECTED,
+            generation: next_generation(),
+            running: None,
+            pending: None,
+        }
+    }
+}
+
+impl TimerSet {
+    /// Whether a write of `property` changes the set.
+    pub(super) fn written_by(property: PropertyIdentifier) -> bool {
+        matches!(
+            property,
+            PropertyIdentifier::STATE_CHANGE_VALUES
+                | PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES
+        )
+    }
+
+    /// The set a write of `value` to `property` (at `array_index`) leaves,
+    /// or the Timer's refusal.
+    pub(super) fn after_write(
+        &self,
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+        value: &PropertyValue,
+    ) -> Result<Self, Error> {
+        let mut next = self.clone();
+        if property == PropertyIdentifier::STATE_CHANGE_VALUES {
+            write_values(&mut next.values, array_index, value)?;
+        } else {
+            if array_index.is_some() {
+                return Err(common::property_is_not_an_array_error());
+            }
+            let references = device_reference::decode_references(value)?;
+            check_references(&references)?;
+            next.references = references;
+        }
+        next.written = true;
+        Ok(next)
+    }
+}
+
+/// Refuse a set the Timer can't serve, as [`TimerObject::set_state_change`]
+/// documents.
+pub(super) fn check_set(
+    values: &StateChangeValues,
+    references: &[BACnetDeviceObjectPropertyReference],
+    priority: u8,
+) -> Result<(), Error> {
+    if !(1..=16).contains(&priority) {
+        return Err(common::value_out_of_range_error());
+    }
+    let mut scratch = BytesMut::new();
+    for value in values {
+        encode_timer_state_change_value(&mut scratch, value)
+            .map_err(|_| common::value_out_of_range_error())?;
+    }
+    check_references(references)
 }
 
 /// The writes a run makes for its Timer. A run supersedes the one before, so

@@ -36,6 +36,11 @@
 //! for it too: the object only stores the flag, and the server reads it to
 //! decide whether a WriteGroup asking for no delays gets them.
 //!
+//! A Channel built [`with_persistence`](ChannelObject::with_persistence)
+//! keeps the members, delays, Channel_Number, Control_Groups and
+//! Allow_Group_Delay_Inhibit a peer writes across a restart (`saving`,
+//! #2243).
+//!
 //! **On deletion** (#2265) a Channel releases nothing. It holds no slot of
 //! its own: each member write fills the slot at the priority the
 //! Channel's writer chose (Clause 12.53.5), so the slot is that writer's.
@@ -70,6 +75,9 @@ use crate::traits::{BACnetObject, CommandRunner};
 mod arrays;
 mod coercion;
 mod metadata;
+mod saving;
+
+use arrays::ChannelConfig;
 
 pub use arrays::{MAX_CHANNEL_MEMBERS, MAX_CONTROL_GROUPS};
 pub use coercion::{CoercionFailure, MemberDatatype, coerce_channel_value};
@@ -124,15 +132,14 @@ pub struct ChannelObject {
     /// in service.
     simulated_reliability: Option<Reliability>,
     out_of_service: bool,
-    members: Vec<BACnetDeviceObjectPropertyReference>,
-    /// The datatype the server learned for each member in another device,
-    /// slot by slot with `members`; a slot whose member is replaced forgets
-    /// it (#1342).
-    learned: Vec<Option<MemberDatatype>>,
-    execution_delay: Vec<u32>,
-    channel_number: u16,
-    control_groups: Vec<u32>,
-    allow_group_delay_inhibit: bool,
+    /// The members, their delays, Channel_Number, Control_Groups and
+    /// Allow_Group_Delay_Inhibit.
+    config: ChannelConfig,
+    /// Where written configuration is saved, with persistence.
+    config_storage: Option<crate::write_config::saving::Storage<ChannelConfig>>,
+    /// Configuration changes so far, so a staged write can tell whether
+    /// another came between.
+    config_writes: u64,
     /// A fresh `next_generation` value at every Present_Value write that
     /// starts a distribution, unique across the process.
     generation: u64,
@@ -155,12 +162,9 @@ impl ChannelObject {
             reliability: Reliability::NO_FAULT_DETECTED,
             simulated_reliability: None,
             out_of_service: false,
-            members: Vec::new(),
-            learned: Vec::new(),
-            execution_delay: Vec::new(),
-            channel_number,
-            control_groups: vec![0],
-            allow_group_delay_inhibit: false,
+            config: ChannelConfig::new(channel_number),
+            config_storage: None,
+            config_writes: 0,
             generation: next_generation(),
             pending_run: None,
         })
@@ -174,20 +178,23 @@ impl ChannelObject {
     /// PROPERTY / VALUE_OUT_OF_RANGE for a member whose device identifier
     /// isn't a Device object (#1285), and with RESOURCES /
     /// NO_SPACE_TO_WRITE_PROPERTY past [`MAX_CHANNEL_MEMBERS`].
+    ///
+    /// On a Channel [`with_persistence`](Self::with_persistence) whose
+    /// storage holds a member list a write set, the saved list wins: the
+    /// members are checked but not taken. So do the setters below for the
+    /// parts they configure.
     pub fn set_members(
         &mut self,
         members: Vec<BACnetDeviceObjectPropertyReference>,
     ) -> Result<(), Error> {
-        if members.len() > MAX_CHANNEL_MEMBERS {
-            return Err(common::protocol_error(
-                ErrorClass::RESOURCES,
-                ErrorCode::NO_SPACE_TO_WRITE_PROPERTY,
-            ));
+        saving::check_members(&members)?;
+        if self.saved().members {
+            return Ok(());
         }
-        crate::device_reference::check_device_members(&members)?;
-        self.execution_delay.resize(members.len(), 0);
-        self.learned = vec![None; members.len()];
-        self.members = members;
+        self.config.execution_delay.resize(members.len(), 0);
+        self.config.learned = vec![None; members.len()];
+        self.config.members = members;
+        self.config_changed();
         Ok(())
     }
 
@@ -195,11 +202,16 @@ impl ChannelObject {
     ///
     /// Refused with PROPERTY / VALUE_OUT_OF_RANGE, leaving the delays as they
     /// were, unless there's exactly one per member, so set the members first.
+    /// Delays configured for members a saved list replaced are not taken.
     pub fn set_execution_delay(&mut self, delays: Vec<u32>) -> Result<(), Error> {
-        if delays.len() != self.members.len() {
+        if self.saved().members {
+            return Ok(());
+        }
+        if delays.len() != self.config.members.len() {
             return Err(common::value_out_of_range_error());
         }
-        self.execution_delay = delays;
+        self.config.execution_delay = delays;
+        self.config_changed();
         Ok(())
     }
 
@@ -211,7 +223,11 @@ impl ChannelObject {
     /// NO_SPACE_TO_WRITE_PROPERTY past [`MAX_CONTROL_GROUPS`].
     pub fn set_control_groups(&mut self, groups: Vec<u32>) -> Result<(), Error> {
         arrays::check_group_count(groups.len())?;
-        self.control_groups = groups;
+        if self.saved().groups {
+            return Ok(());
+        }
+        self.config.control_groups = groups;
+        self.config_changed();
         Ok(())
     }
 
@@ -220,7 +236,11 @@ impl ChannelObject {
     /// 12.53.13). WriteProperty and WritePropertyMultiple keep the delays
     /// either way.
     pub fn set_allow_group_delay_inhibit(&mut self, allow: bool) {
-        self.allow_group_delay_inhibit = allow;
+        if self.saved().inhibit {
+            return;
+        }
+        self.config.allow_group_delay_inhibit = allow;
+        self.config_changed();
     }
 
     /// Take a Present_Value write (Clauses 12.53.5 to 12.53.7).
@@ -244,17 +264,18 @@ impl ChannelObject {
         if self.out_of_service {
             return Ok(());
         }
-        if self.members.is_empty() {
+        if self.config.members.is_empty() {
             self.write_status = WriteStatus::IDLE;
             self.reliability = Reliability::NO_FAULT_DETECTED;
             return Ok(());
         }
         self.generation = next_generation();
-        let members: Vec<ChannelMember> = self
+        let config = &self.config;
+        let members: Vec<ChannelMember> = config
             .members
             .iter()
-            .zip(&self.execution_delay)
-            .zip(&self.learned)
+            .zip(&config.execution_delay)
+            .zip(&config.learned)
             .enumerate()
             .filter(|(_, ((member, _), _))| !arrays::is_empty(member))
             .map(|(slot, ((member, delay), learned))| ChannelMember {
@@ -386,24 +407,26 @@ impl BACnetObject for ChannelObject {
             )),
             PropertyIdentifier::OUT_OF_SERVICE => Ok(PropertyValue::Boolean(self.out_of_service)),
             PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES => common::read_array(
-                crate::device_reference::reference_elements(&self.members),
+                crate::device_reference::reference_elements(&self.config.members),
                 array_index,
             ),
             PropertyIdentifier::EXECUTION_DELAY => common::read_array(
-                self.execution_delay
+                self.config
+                    .execution_delay
                     .iter()
                     .map(|delay| PropertyValue::Unsigned((*delay).into()))
                     .collect(),
                 array_index,
             ),
-            PropertyIdentifier::ALLOW_GROUP_DELAY_INHIBIT => {
-                Ok(PropertyValue::Boolean(self.allow_group_delay_inhibit))
-            }
+            PropertyIdentifier::ALLOW_GROUP_DELAY_INHIBIT => Ok(PropertyValue::Boolean(
+                self.config.allow_group_delay_inhibit,
+            )),
             PropertyIdentifier::CHANNEL_NUMBER => {
-                Ok(PropertyValue::Unsigned(self.channel_number.into()))
+                Ok(PropertyValue::Unsigned(self.config.channel_number.into()))
             }
             PropertyIdentifier::CONTROL_GROUPS => common::read_array(
-                self.control_groups
+                self.config
+                    .control_groups
                     .iter()
                     .map(|group| PropertyValue::Unsigned((*group).into()))
                     .collect(),
@@ -434,26 +457,15 @@ impl BACnetObject for ChannelObject {
             PropertyIdentifier::PRESENT_VALUE => self.write_present_value(value, priority),
             PropertyIdentifier::OUT_OF_SERVICE => self.write_out_of_service(value),
             PropertyIdentifier::RELIABILITY => self.write_reliability(value),
-            PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES => {
-                self.write_members(array_index, value)
-            }
-            PropertyIdentifier::EXECUTION_DELAY => self.write_execution_delay(array_index, value),
-            PropertyIdentifier::ALLOW_GROUP_DELAY_INHIBIT => {
-                let PropertyValue::Boolean(allow) = value else {
-                    return Err(common::invalid_data_type_error());
-                };
-                self.allow_group_delay_inhibit = allow;
-                Ok(())
-            }
-            PropertyIdentifier::CHANNEL_NUMBER => {
-                let PropertyValue::Unsigned(raw) = value else {
-                    return Err(common::invalid_data_type_error());
-                };
-                self.channel_number =
-                    u16::try_from(raw).map_err(|_| common::value_out_of_range_error())?;
-                Ok(())
-            }
-            PropertyIdentifier::CONTROL_GROUPS => self.write_control_groups(array_index, value),
+            // With storage each is saved first (`saving`).
+            property if ChannelConfig::written_by(property) => crate::write_config::saving::write(
+                self,
+                crate::durable::PendingWrite {
+                    property,
+                    array_index,
+                    value,
+                },
+            ),
             _ => Err(common::unhandled_write_error(
                 self.property_metadata().as_ref(),
                 property,
@@ -472,6 +484,14 @@ impl BACnetObject for ChannelObject {
     fn command_runner_mut(&mut self) -> Option<&mut dyn CommandRunner> {
         Some(self)
     }
+
+    #[cfg(feature = "durable-writes")]
+    fn durable_writes(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
+        match self.config_storage {
+            Some(_) => Some(self),
+            None => None,
+        }
+    }
 }
 
 impl CommandRunner for ChannelObject {
@@ -489,8 +509,8 @@ impl CommandRunner for ChannelObject {
         reference: &BACnetDeviceObjectPropertyReference,
         datatype: Option<MemberDatatype>,
     ) {
-        if self.members.get(slot) == Some(reference) {
-            self.learned[slot] = datatype;
+        if self.config.members.get(slot) == Some(reference) {
+            self.config.learned[slot] = datatype;
         }
     }
 
@@ -520,3 +540,6 @@ mod reliability_tests;
 
 #[cfg(test)]
 mod learned_tests;
+
+#[cfg(test)]
+mod saving_tests;

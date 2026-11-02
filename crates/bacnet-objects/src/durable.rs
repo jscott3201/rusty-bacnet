@@ -1,9 +1,10 @@
 //! Saving object state off the object database lock (#1270).
 //!
-//! The Audit Log, the Notification Forwarder, the Notification Class and the
-//! Access Rights object keep state in storage the application provides
-//! ([`AuditLogPersistence`], [`NotificationForwarderPersistence`],
-//! [`NotificationClassPersistence`] and [`AccessRightsPersistence`]).
+//! The Audit Log, the Notification Forwarder, the Notification Class, the
+//! Access Rights object, and the Timer and Channel keep state in storage the
+//! application provides ([`AuditLogPersistence`],
+//! [`NotificationForwarderPersistence`], [`NotificationClassPersistence`],
+//! [`AccessRightsPersistence`] and [`WriteConfigPersistence`]).
 //! A storage call can be slow, since the file backends write, synchronize and
 //! rename, so none of these objects makes one while its caller holds the
 //! database's write guard. They all follow the pattern this module provides.
@@ -122,7 +123,8 @@
 //! The Notification Forwarder's `saving` module is the full example: a list
 //! write stages, and the operation task's saves coalesce. The Notification
 //! Class's is the smallest: a Recipient_List write stages, and nothing else
-//! saves. The Access Rights object's stages indexed array writes too, keyed
+//! saves. The Timer and Channel share theirs (`write_config::saving`): an
+//! object hands it its configuration and how a write changes it. The Access Rights object's stages indexed array writes too, keyed
 //! by the index as well as the value.
 //!
 //! [`AuditLogPersistence`]: crate::audit::AuditLogPersistence
@@ -130,6 +132,7 @@
 //! [`NotificationClassPersistence`]: crate::notification_class::NotificationClassPersistence
 //! [`AccessRightsPersistence`]: crate::access_control::AccessRightsPersistence
 //! [`LogPersistence`]: crate::log_persistence::LogPersistence
+//! [`WriteConfigPersistence`]: crate::write_config::WriteConfigPersistence
 
 use alloc::sync::Arc;
 use core::future::Future;

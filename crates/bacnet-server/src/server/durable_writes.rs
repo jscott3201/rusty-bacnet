@@ -3,8 +3,9 @@
 //! A Notification Forwarder saves a written Recipient_List or
 //! Subscribed_Recipients, a Notification Class a written Recipient_List
 //! (#1315), an Access Rights object a written rule array, Enable (#1392) or
-//! Accompaniment (#1393), and an Audit Log a Log_Enable or Buffer_Size
-//! change, before serving it, and refuses the write if the save fails. So
+//! Accompaniment (#1393), an Audit Log a Log_Enable or Buffer_Size change,
+//! and a Timer or Channel the configuration a peer writes to it (#2243),
+//! before serving it, and refuses the write if the save fails. So
 //! that the save never runs while the database guard is held, a request
 //! that makes such a write stages it first ([`DurableWrites`]): under the
 //! guard the object queues the save, the request awaits it with the guard
@@ -81,8 +82,11 @@ enum TargetValue {
 /// Whether a bundled object of `oid`'s type may save a write of `property`
 /// first. A forwarder saves its Recipient_List and Subscribed_Recipients, a
 /// Notification Class its Recipient_List, an Audit Log its Log_Enable and
-/// Buffer_Size, and an Access Rights object its two rule arrays, Enable
-/// (property 133, named `LOG_ENABLE`) and Accompaniment. Under a policy
+/// Buffer_Size, an Access Rights object its two rule arrays, Enable
+/// (property 133, named `LOG_ENABLE`) and Accompaniment, a Timer its
+/// State_Change_Values and List_Of_Object_Property_References, and a
+/// Channel its members, Execution_Delay, Channel_Number, Control_Groups and
+/// Allow_Group_Delay_Inhibit (#2243). Under a policy
 /// that decides mutations, only these attempts of a WritePropertyMultiple are decided
 /// ahead of the handler (#1321).
 ///
@@ -122,6 +126,19 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
                 | PropertyIdentifier::NEGATIVE_ACCESS_RULES
                 | PropertyIdentifier::LOG_ENABLE
                 | PropertyIdentifier::ACCOMPANIMENT
+        ),
+        ObjectType::TIMER => matches!(
+            property,
+            PropertyIdentifier::STATE_CHANGE_VALUES
+                | PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES
+        ),
+        ObjectType::CHANNEL => matches!(
+            property,
+            PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES
+                | PropertyIdentifier::EXECUTION_DELAY
+                | PropertyIdentifier::CHANNEL_NUMBER
+                | PropertyIdentifier::CONTROL_GROUPS
+                | PropertyIdentifier::ALLOW_GROUP_DELAY_INHIBIT
         ),
         _ => false,
     }
