@@ -35,6 +35,7 @@ use crate::event::{
     EventTransitionCommitError, TransitionOutcome,
 };
 use crate::log_persistence::LogReportingSettings;
+use crate::prelude::String;
 use crate::property_metadata::{
     PropertyConformance::Optional,
     PropertyMetadata,
@@ -307,6 +308,11 @@ impl BufferReadyReporting {
             options.restore_inhibit(inhibit);
             self.written.inhibit = true;
         }
+    }
+
+    /// Event_Message_Texts_Config, whose strings a durable log caps (#1952).
+    pub(crate) fn message_texts_config(&self) -> &[String; 3] {
+        self.history.options.message_texts_config()
     }
 
     /// Mark every setting as one no write has set, so a durable log's

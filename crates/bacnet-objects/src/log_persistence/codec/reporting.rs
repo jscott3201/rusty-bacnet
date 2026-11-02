@@ -34,7 +34,8 @@ use crate::log_persistence::LogReportingSettings;
 
 /// The most octets one Event_Message_Texts_Config string may take in a
 /// slot, so the three fit the room [`super::FIXED_ALLOWANCE`] keeps beside
-/// the records. A longer one fails the commit, and so the write.
+/// the records. A durable log refuses a longer one as it is written, with
+/// RESOURCES / NO_SPACE_TO_WRITE_PROPERTY, whatever its storage (#1952).
 pub(crate) const MAX_TEXT_OCTETS: usize = 16 * 1024;
 
 const CLASS: u16 = 1 << 0;

@@ -5627,7 +5627,8 @@ persistence)`.
   the setters apply again; call it before the log joins a database.
   Snapshots are schema version 2; a version 1 file still loads, with nothing
   written. Each Event_Message_Texts_Config string a log keeps is at most
-  16 KiB; a longer write fails its commit.
+  16 KiB; a durable log refuses a longer one with RESOURCES /
+  NO_SPACE_TO_WRITE_PROPERTY, whatever its storage.
 - **Committing.** The log copies its state and queues it on its own writer
   thread (`bacnet_objects::durable`), so the copy is
   taken under the database guard and the file I/O runs outside it. It commits

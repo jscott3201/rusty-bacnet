@@ -57,6 +57,7 @@ fn python_add_trend_log_multiple_settings_reach_every_row() {
             align_intervals: Some(true),
             interval_offset: Some(300),
             total_record_count: u32::MAX - 1,
+            clear_written_reporting: false,
         },
     )
     .unwrap();

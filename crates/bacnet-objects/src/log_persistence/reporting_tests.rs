@@ -621,3 +621,65 @@ fn a_write_nobody_staged_supersedes_a_staged_one() {
         PropertyValue::Unsigned(9)
     );
 }
+
+fn no_space(result: &Result<(), Error>) -> bool {
+    matches!(result, Err(Error::Remote(RemoteError::Error { class, code }))
+        if *class == ErrorClass::RESOURCES && *code == ErrorCode::NO_SPACE_TO_WRITE_PROPERTY)
+}
+
+/// A message text past what a snapshot keeps is refused as it is written,
+/// before anything stages or commits, with storage that never encodes a
+/// snapshot as with the file backend; the log then still reopens.
+#[test]
+fn an_over_long_message_text_is_refused_with_any_storage() {
+    let long = "x".repeat(16 * 1024 + 1);
+    let fits = "y".repeat(16 * 1024);
+    let texts_property = P::EVENT_MESSAGE_TEXTS_CONFIG;
+    let storage = MemoryLog::<BACnetLogRecord>::new();
+    let mut log = trend_log(&storage);
+    let whole = texts([long.as_str(), "", ""]);
+    assert!(no_space(&log.write_property(
+        texts_property,
+        None,
+        whole,
+        None
+    )));
+    let element = PropertyValue::CharacterString(long.clone());
+    assert!(no_space(&log.write_property(
+        texts_property,
+        Some(2),
+        element.clone(),
+        None
+    )));
+    let staged_write = PendingWrite {
+        property: texts_property,
+        array_index: Some(2),
+        value: element,
+    };
+    assert!(matches!(log.stage_writes(&[staged_write]), StageStep::Skip));
+    assert_eq!(storage.commits(), 0);
+    let fitting = PropertyValue::CharacterString(fits);
+    log.write_property(texts_property, Some(1), fitting.clone(), None)
+        .unwrap();
+    drop(log);
+    let reopened = trend_log(&storage);
+    assert_eq!(
+        reopened.read_property(texts_property, Some(1)).unwrap(),
+        fitting
+    );
+
+    // std: the file backend gives the same answer.
+    #[cfg(feature = "std")]
+    {
+        let base = super::tests::TempBase::new("long-text");
+        let files = Arc::new(FileLogPersistence::new(base.path()).unwrap());
+        let mut log = EventLogObject::with_persistence(1, "EL", 8, files).unwrap();
+        let element = PropertyValue::CharacterString(long);
+        assert!(no_space(&log.write_property(
+            texts_property,
+            Some(3),
+            element,
+            None
+        )));
+    }
+}

@@ -140,6 +140,8 @@ impl BACnetServer {
     /// counts, Notification_Threshold and the settings a peer can write,
     /// the reporting settings a write set among them (#1952), ignoring the
     /// keyword arguments, and appends a LOG_INTERRUPTED record.
+    /// `clear_written_reporting` drops those reporting settings first, as
+    /// on `add_trend_log`.
     /// `buffer_size` wins over the saved Buffer_Size; a smaller one keeps the
     /// newest records. A file that can't be read, or a `buffer_size` past
     /// what a slot holds, raises BacnetError.
@@ -156,6 +158,7 @@ impl BACnetServer {
         align_intervals=None,
         interval_offset=None,
         storage_path=None,
+        clear_written_reporting=false,
         total_record_count=0
     ))]
     fn add_trend_log_multiple(
@@ -171,6 +174,7 @@ impl BACnetServer {
         align_intervals: Option<bool>,
         interval_offset: Option<u32>,
         storage_path: Option<&str>,
+        clear_written_reporting: bool,
         total_record_count: u32,
     ) -> PyResult<()> {
         let settings = TrendLogMultipleSettings {
@@ -189,6 +193,7 @@ impl BACnetServer {
             align_intervals,
             interval_offset,
             total_record_count,
+            clear_written_reporting,
         };
         let obj = trend_log_multiple(instance, name, buffer_size, storage_path, settings)
             .map_err(to_py_err)?;
@@ -222,6 +227,8 @@ struct TrendLogMultipleSettings {
     interval_offset: Option<u32>,
     /// Total_Record_Count to seed the empty log at.
     total_record_count: u32,
+    /// Drop the reporting settings a write saved.
+    clear_written_reporting: bool,
 }
 
 /// Build the log through the Rust setters, so Python gets their checks.
@@ -244,6 +251,9 @@ fn trend_log_multiple(
         )?,
         None => TrendLogMultipleObject::new(instance, name, buffer_size)?,
     };
+    if settings.clear_written_reporting {
+        log.clear_written_reporting()?;
+    }
     if log.reopened() {
         return Ok(log);
     }

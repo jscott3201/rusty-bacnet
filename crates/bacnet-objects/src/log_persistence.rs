@@ -147,7 +147,8 @@ pub struct LogReportingSettings {
     /// Event_Detection_Enable.
     pub event_detection_enable: Option<bool>,
     /// Event_Message_Texts_Config, ordered TO_OFFNORMAL, TO_FAULT,
-    /// TO_NORMAL; at most 16 KiB of UTF-8 each in a snapshot.
+    /// TO_NORMAL; at most 16 KiB of UTF-8 each, as a durable log refuses a
+    /// longer write.
     pub event_message_texts_config: Option<[String; 3]>,
     /// Event_Algorithm_Inhibit_Ref, when a write set one. A write of the
     /// unset form leaves `None`, which reopens as unset too.
@@ -219,7 +220,9 @@ pub trait LogPersistence<R>: Send + Sync {
     fn load(&self, expected_object: ObjectIdentifier) -> Result<Option<LogSnapshot<R>>, Error>;
 
     /// Durably store `snapshot`, whose generation is one past the last one
-    /// committed (or loaded).
+    /// committed (or loaded). Store all of it, `reporting` included: a
+    /// write of a reporting setting is answered once this returns `Ok`, so
+    /// a backend that drops it loses a write the peer was told succeeded.
     fn commit(&self, snapshot: &LogSnapshot<R>) -> Result<(), Error>;
 
     /// Test support, not a stable API: whether the log's final commit may

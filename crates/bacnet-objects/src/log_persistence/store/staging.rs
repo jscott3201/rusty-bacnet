@@ -43,6 +43,7 @@ use crate::common;
 use crate::durable::staged;
 use crate::durable::{PendingWrite, SaveWait, StageStep};
 use crate::log_persistence::LogReportingSettings;
+use crate::log_persistence::codec::MAX_TEXT_OCTETS;
 use crate::log_reporting::BufferReadyReporting;
 use crate::trend::CovSettings;
 
@@ -64,9 +65,21 @@ impl LogReporting {
     }
 
     /// The settings `write` leaves on top of these, or the log's refusal.
+    /// A durable log also refuses an Event_Message_Texts_Config string its
+    /// snapshot can't keep, with RESOURCES / NO_SPACE_TO_WRITE_PROPERTY: not
+    /// enough room to store the value (Clause 15.9.1.3.1). This is checked
+    /// here, before anything is staged or committed, so every storage
+    /// backend gives that answer, not only one that encodes the snapshot.
     fn after(&self, write: &PendingWrite, total: u32) -> Result<Self, Error> {
         let mut next = self.clone();
         make(&mut next.buffer_ready, next.cov.as_mut(), write, total)?;
+        let texts = next.buffer_ready.message_texts_config();
+        if texts.iter().any(|text| text.len() > MAX_TEXT_OCTETS) {
+            return Err(common::protocol_error(
+                ErrorClass::RESOURCES,
+                ErrorCode::NO_SPACE_TO_WRITE_PROPERTY,
+            ));
+        }
         Ok(next)
     }
 

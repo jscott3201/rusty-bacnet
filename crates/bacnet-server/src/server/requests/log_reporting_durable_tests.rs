@@ -308,30 +308,45 @@ async fn a_write_property_multiple_commits_a_logs_writes_once() {
     }
 }
 
+/// A message text past what the log's snapshot keeps is refused on the
+/// wire before anything is saved, with RESOURCES (3) /
+/// NO_SPACE_TO_WRITE_PROPERTY (20), whatever the storage.
+#[tokio::test(start_paused = true)]
+async fn an_over_long_message_text_is_refused_on_the_wire() {
+    let storages = Storages::default();
+    let fixture = served_by(&storages).await;
+    let property = PropertyIdentifier::EVENT_MESSAGE_TEXTS_CONFIG;
+    let before = fixture.read(oid(TL, 1), property).await;
+    let long = PropertyValue::CharacterString("x".repeat(20 * 1024));
+    let request = write_property(TL, property, Some(2), value(long));
+    let response = wire(&fixture, ConfirmedServiceChoice::WRITE_PROPERTY, request).await;
+    assert_eq!(response, [ERROR_PDU, 5, 15, 0x91, 3, 0x91, 20]);
+    assert_eq!(fixture.read(oid(TL, 1), property).await, before);
+    assert_eq!(storages.saves(TL), 0);
+}
+
 /// The commit runs with the database guard dropped: the database answers a
-/// reader and a writer while each log's commit is held.
+/// reader and a writer while each covered write's commit is held.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_log_commit_runs_while_the_database_stays_available() {
-    for kind in [TL, TLM, EL] {
+    for (kind, property, index, octets) in cases() {
         let storages = Storages::default();
         let fixture = served_by(&storages).await;
-        let request = write_property(
-            kind,
-            PropertyIdentifier::NOTIFICATION_CLASS,
-            None,
-            value(PropertyValue::Unsigned(9)),
-        );
+        let request = write_property(kind, property, index, octets);
         let service = ConfirmedServiceChoice::WRITE_PROPERTY;
         let (response, available) = match kind {
             TL => while_saving(&fixture, &storages.trend, service, request, WAIT).await,
             TLM => while_saving(&fixture, &storages.multiple, service, request, WAIT).await,
             _ => while_saving(&fixture, &storages.event, service, request, WAIT).await,
         };
-        assert_eq!(response, SIMPLE_ACK_WRITE, "{kind:?}");
+        assert_eq!(
+            response, SIMPLE_ACK_WRITE,
+            "{kind:?} {property:?} {index:?}"
+        );
         assert!(
             available,
-            "the database was held while the {kind:?} committed"
+            "the database was held while the {kind:?} committed {property:?} {index:?}"
         );
-        assert_eq!(storages.saves(kind), 1, "{kind:?}");
+        assert_eq!(storages.saves(kind), 1, "{kind:?} {property:?} {index:?}");
     }
 }

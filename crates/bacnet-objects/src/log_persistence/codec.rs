@@ -36,6 +36,8 @@ use crate::trend::MAX_LOG_DEVICE_OBJECT_PROPERTIES;
 
 mod reporting;
 
+pub(super) use reporting::MAX_TEXT_OCTETS;
+
 const MAGIC: &[u8; 8] = b"RBLOGS01";
 /// The schema written: version 2 adds the written reporting settings.
 pub(super) const SCHEMA_VERSION: u16 = 2;

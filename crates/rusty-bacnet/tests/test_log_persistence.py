@@ -71,16 +71,19 @@ class StoragePathSignatureTests(unittest.TestCase):
                     "storage_path", [argument.arg for argument in stub.args.kwonlyargs]
                 )
 
-    def test_add_trend_log_takes_a_keyword_only_clear_written_reporting(self) -> None:
-        parameter = inspect.signature(BACnetServer.add_trend_log).parameters[
-            "clear_written_reporting"
-        ]
-        self.assertEqual(parameter.kind, inspect.Parameter.KEYWORD_ONLY)
-        self.assertIs(parameter.default, False)
-        stub = installed_stub_method("add_trend_log")
-        self.assertIn(
-            "clear_written_reporting", [argument.arg for argument in stub.args.kwonlyargs]
-        )
+    def test_each_log_takes_a_keyword_only_clear_written_reporting(self) -> None:
+        for name in METHODS:
+            with self.subTest(name=name):
+                parameter = inspect.signature(getattr(BACnetServer, name)).parameters[
+                    "clear_written_reporting"
+                ]
+                self.assertEqual(parameter.kind, inspect.Parameter.KEYWORD_ONLY)
+                self.assertIs(parameter.default, False)
+                stub = installed_stub_method(name)
+                self.assertIn(
+                    "clear_written_reporting",
+                    [argument.arg for argument in stub.args.kwonlyargs],
+                )
 
     def test_an_empty_or_unreadable_storage_path_is_refused(self) -> None:
         server = BACnetServer(1_541_000, interface="127.0.0.1", port=0)
@@ -232,10 +235,21 @@ class WrittenReportingTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(directory.cleanup)
         self.state = Path(directory.name)
 
-    async def start(self, **keywords) -> BACnetServer:
+    async def start(self, clear: bool = False, **keywords) -> BACnetServer:
         server = BACnetServer(1_952_001, interface="127.0.0.1", port=0)
-        server.add_trend_log(1, "TL-1", storage_path=str(self.state / "tl-1"), **keywords)
-        server.add_event_log(1, "EL-1", storage_path=str(self.state / "el-1"))
+        server.add_trend_log(
+            1,
+            "TL-1",
+            storage_path=str(self.state / "tl-1"),
+            clear_written_reporting=clear,
+            **keywords,
+        )
+        server.add_trend_log_multiple(
+            1, "TLM-1", storage_path=str(self.state / "tlm-1"), clear_written_reporting=clear
+        )
+        server.add_event_log(
+            1, "EL-1", storage_path=str(self.state / "el-1"), clear_written_reporting=clear
+        )
         await server.start()
         return server
 
@@ -246,7 +260,7 @@ class WrittenReportingTests(unittest.IsolatedAsyncioTestCase):
         P = PropertyIdentifier
         server = await self.start(client_cov_increment=1.0)
         try:
-            for oid in (TREND_LOG, EVENT_LOG):
+            for oid in (TREND_LOG, MULTIPLE, EVENT_LOG):
                 await server.write_property_local(
                     oid, P.NOTIFICATION_CLASS, PropertyValue.unsigned(9), source_object=None
                 )
@@ -258,7 +272,7 @@ class WrittenReportingTests(unittest.IsolatedAsyncioTestCase):
 
         server = await self.start(client_cov_increment=2.0)
         try:
-            for oid in (TREND_LOG, EVENT_LOG):
+            for oid in (TREND_LOG, MULTIPLE, EVENT_LOG):
                 with self.subTest(oid=oid):
                     self.assertEqual(
                         await self.read(server, oid, P.NOTIFICATION_CLASS),
@@ -270,7 +284,7 @@ class WrittenReportingTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await server.stop()
 
-        server = await self.start(client_cov_increment=2.0, clear_written_reporting=True)
+        server = await self.start(clear=True, client_cov_increment=2.0)
         try:
             self.assertEqual(
                 await self.read(server, TREND_LOG, P.CLIENT_COV_INCREMENT),
@@ -279,16 +293,16 @@ class WrittenReportingTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await server.stop()
 
-        # Nothing written is saved for the Trend Log any more; the Event
-        # Log, not cleared, keeps its write.
+        # Nothing written is saved any more: each log starts from its
+        # defaults.
         server = await self.start(client_cov_increment=2.0)
         try:
-            self.assertEqual(
-                await self.read(server, TREND_LOG, P.NOTIFICATION_CLASS), PropertyValue.unsigned(0)
-            )
-            self.assertEqual(
-                await self.read(server, EVENT_LOG, P.NOTIFICATION_CLASS), PropertyValue.unsigned(9)
-            )
+            for oid in (TREND_LOG, MULTIPLE, EVENT_LOG):
+                with self.subTest(oid=oid):
+                    self.assertEqual(
+                        await self.read(server, oid, P.NOTIFICATION_CLASS),
+                        PropertyValue.unsigned(0),
+                    )
         finally:
             await server.stop()
 

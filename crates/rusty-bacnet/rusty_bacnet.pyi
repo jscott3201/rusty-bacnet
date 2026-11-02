@@ -5122,6 +5122,7 @@ class BACnetServer:
         align_intervals: bool | None = None,
         interval_offset: int | None = None,
         storage_path: Optional[str] = None,
+        clear_written_reporting: bool = False,
         total_record_count: int = 0,
     ) -> None:
         """Add a Trend Log Multiple (Clause 12.30) that the server polls or
@@ -5168,7 +5169,9 @@ class BACnetServer:
         from those files serves its saved records, Total_Record_Count,
         BUFFER_READY counts and Notification_Threshold, Enable,
         Stop_When_Full and every setting a peer can write, Notification_Class
-        and the other reporting settings among them, and appends one
+        and the other reporting settings among them
+        (``clear_written_reporting=True`` drops those first, as on
+        ``add_trend_log``), and appends one
         LOG_INTERRUPTED record to mark the restart (none when it reopens full
         and stopped); the saved state wins over the keyword arguments.
         ``buffer_size`` wins over the saved Buffer_Size: a smaller one keeps
@@ -5188,6 +5191,7 @@ class BACnetServer:
         log_received_notifications: bool = False,
         *,
         storage_path: Optional[str] = None,
+        clear_written_reporting: bool = False,
         total_record_count: int = 0,
     ) -> None:
         """Register an Event Log of ``buffer_size`` records before start().
@@ -5210,8 +5214,9 @@ class BACnetServer:
         ``storage_path`` keeps the log in files, as on
         ``add_trend_log_multiple``, Notification_Class and the other
         reporting settings a write set included; such a write is refused when
-        it can't be saved. ``log_received_notifications`` isn't saved and
-        applies on every start.
+        it can't be saved, and ``clear_written_reporting=True`` drops them
+        first, as on ``add_trend_log``. ``log_received_notifications`` isn't
+        saved and applies on every start.
         """
         ...
     def add_audit_log(self, instance: int, name: str, storage_path: str, buffer_size: int = 100) -> None: ...
