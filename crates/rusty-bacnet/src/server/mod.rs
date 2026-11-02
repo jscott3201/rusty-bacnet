@@ -221,6 +221,7 @@ mod server_methods {
     mod access_credential_methods;
     mod access_input_methods;
     mod access_rights_methods;
+    mod accumulator_methods;
     mod audit_log_methods;
     mod averaging_methods;
     mod channel_methods;

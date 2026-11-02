@@ -6339,6 +6339,29 @@ class BACnetServer:
         """
         ...
 
+    def add_pulses_local(
+        self,
+        object_id: ObjectIdentifier,
+        pulses: int,
+    ) -> Awaitable[None]:
+        """Feed an Accumulator the input pulses its meter produced since the
+        last call, counted by the application.
+
+        In service the pulses step Present_Value, through Prescale's ratio
+        when the object has one, wrapping to zero past Max_Pres_Value. They
+        also count toward Pulse_Rate: once Limit_Monitoring_Interval is set
+        (``write_property_local`` or a client's write), the server closes a
+        window at the end of each interval and Pulse_Rate becomes that
+        window's count, which a SubscribeCOVProperty on it is notified of.
+        While Out_Of_Service is set a client's values stay: the pulses still
+        fill the rate window, but Present_Value drops them rather than
+        catching up later. ``pulses`` is an unsigned 64-bit count; a negative
+        or larger int raises OverflowError. An unknown object raises
+        UNKNOWN_OBJECT and any object other than an Accumulator
+        OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
+        """
+        ...
+
     def comm_state(self) -> Awaitable[EnableDisable]:
         """Get the DeviceCommunicationControl state.
 

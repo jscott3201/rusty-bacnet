@@ -56,6 +56,9 @@ pub(super) enum LocalWrite<'s> {
     /// The application reporting an access-control object's input: an
     /// access event, a credential read or a door's hardware state (#1132).
     ApplicationAccessInput(&'s bacnet_objects::access_control::AccessControlInput),
+    /// The application feeding an Accumulator the input pulses it counted
+    /// (#2259).
+    ApplicationPulses(u64),
     /// One value of an inbound WriteGroup for a Channel's `Present_Value`, at
     /// the priority the request gave it (Clause 15.11). Under the write guard
     /// the Channel takes it only while its Control_Groups still holds `group`
@@ -375,6 +378,41 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ) -> Result<(), Error> {
         self.write_local_as(oid, LocalWrite::ApplicationTrackingValue, value, None)
             .await
+    }
+
+    /// Feed an Accumulator the input pulses its meter produced since the
+    /// last call, counted by the application (#2259).
+    ///
+    /// In service the pulses step Present_Value, through Prescale's ratio
+    /// when the object has one, wrapping to zero past Max_Pres_Value. They
+    /// also count toward Pulse_Rate: once Limit_Monitoring_Interval is set,
+    /// the server's monotonic task closes a window at the end of each
+    /// interval and Pulse_Rate becomes that window's count. While
+    /// `Out_Of_Service` is TRUE, Present_Value and Pulse_Rate keep the
+    /// values a client wrote: the pulses still fill the rate window, but
+    /// Present_Value drops them rather than catching up later. An unknown
+    /// object fails with OBJECT / UNKNOWN_OBJECT and any object other than
+    /// an Accumulator with OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+    /// as with [`BACnetServer::set_present_value_local`].
+    ///
+    /// A change to Present_Value goes through the same post-write COV and
+    /// event processing as `set_present_value_local` once the database
+    /// lock is released, and a window that changes Pulse_Rate reports it to
+    /// its property subscribers from the monotonic task. The Python binding
+    /// exposes this as `BACnetServer.add_pulses_local`.
+    ///
+    /// Like [`write_local`](Self::write_local), it must be awaited inside a
+    /// Tokio runtime, failing before anything is written outside one, and a
+    /// caller dropped once the write has committed skips none of the work
+    /// the write owes (#1367).
+    pub async fn add_pulses_local(&self, oid: &ObjectIdentifier, pulses: u64) -> Result<(), Error> {
+        self.write_local_as(
+            oid,
+            LocalWrite::ApplicationPulses(pulses),
+            PropertyValue::Null,
+            None,
+        )
+        .await
     }
 
     /// Commit the write, then hand what it owes to a task of its own in the
@@ -774,7 +812,8 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                 | LocalWrite::ApplicationAveragingSample
                 | LocalWrite::ApplicationAveragingMiss
                 | LocalWrite::ApplicationTrackingValue
-                | LocalWrite::ApplicationAccessInput(_) => None,
+                | LocalWrite::ApplicationAccessInput(_)
+                | LocalWrite::ApplicationPulses(_) => None,
             };
             let value = match write {
                 LocalWrite::Property { property, .. } => {
@@ -810,6 +849,7 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                 | LocalWrite::ApplicationAveragingMiss
                 | LocalWrite::ApplicationTrackingValue
                 | LocalWrite::ApplicationAccessInput(_)
+                | LocalWrite::ApplicationPulses(_)
                 | LocalWrite::WriteGroup { .. } => None,
             };
             // The application's own Present_Value comes from this Device, which
@@ -857,6 +897,9 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                     }
                     LocalWrite::ApplicationAccessInput(input) => {
                         apply_local_input(object, LocalInputValue::AccessControl(input.clone()))
+                    }
+                    LocalWrite::ApplicationPulses(pulses) => {
+                        apply_local_input(object, LocalInputValue::Pulses(pulses))
                     }
                     LocalWrite::WriteGroup { priority, .. } => object.write_property(
                         PropertyIdentifier::PRESENT_VALUE,

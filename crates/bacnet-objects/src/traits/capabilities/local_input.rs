@@ -45,6 +45,10 @@ pub enum LocalInputValue {
     /// event, a Credential Data Input's read or an Access Door's hardware
     /// state, whose values change together (#1132).
     AccessControl(AccessControlInput),
+    /// Input pulses an Accumulator's meter produced since the last feed,
+    /// counted by the application (#2259). They advance Present_Value
+    /// through Prescale and count toward Pulse_Rate.
+    Pulses(u64),
 }
 
 impl LocalInputValue {
@@ -83,7 +87,8 @@ impl LocalInputValue {
 /// - Controlled_Variable_Value: the Loop;
 /// - a sample: the Averaging object;
 /// - an access-control record: the Access Point, Credential Data Input and
-///   Access Door, each its own kind of record.
+///   Access Door, each its own kind of record;
+/// - input pulses: the Accumulator.
 pub trait LocalInput {
     /// Apply `input`, or leave the object unchanged and return an error.
     ///
