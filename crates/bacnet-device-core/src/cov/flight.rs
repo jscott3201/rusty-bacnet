@@ -65,7 +65,7 @@
 use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 
-use bacnet_device_core::cov::{CovSubscriptionKey, MultipleContextKey, SubscriberEndpoint};
+use crate::cov::{CovSubscriptionKey, MultipleContextKey, SubscriberEndpoint};
 use bacnet_time::{Duration, Instant};
 
 use super::observation_order::PreparedCovCompletion;

@@ -3,7 +3,7 @@
 use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 
-use bacnet_device_core::cov::{CovRecipient, MultipleContextKey, SubscriberEndpoint};
+use crate::cov::{CovRecipient, MultipleContextKey, SubscriberEndpoint};
 use bacnet_time::Instant;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::Error;

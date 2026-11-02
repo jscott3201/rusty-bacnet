@@ -1,7 +1,7 @@
 //! A proposed COV subscription and the immutable snapshot a table accepts.
 use core::ops::Deref;
 
-use bacnet_device_core::cov::{
+use crate::cov::{
     CovNotificationKind, CovObservation, CovRecipient, CovSubscriptionKey, MultipleContextKey,
     SubscriberEndpoint,
 };

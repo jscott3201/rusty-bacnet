@@ -1,7 +1,7 @@
 //! Entries keyed by monitored object first (#2303).
 use super::*;
+use crate::cov::CovNotificationKind;
 use alloc::vec;
-use bacnet_device_core::cov::CovNotificationKind;
 use bacnet_time::Duration;
 use bacnet_types::enums::ObjectType;
 

@@ -17,25 +17,17 @@ use tokio::sync::Notify;
 
 use crate::runtime_clock;
 use bacnet_device_core::cov::{
-    CovObservation, CovPolicy, CovRecipient, CovSample, CovSubscriptionKey, MultipleContextKey,
-    SubscriberEndpoint,
+    BeginRefusal, CovObservation, CovPolicy, CovRecipient, CovSample, CovSubscription,
+    CovSubscriptionKey, CovSubscriptionSnapshot, CovTable, CovTimeRemaining, Delivery,
+    FlightTiming, MultipleContextKey, MultipleRefusal, PreparedCovCompletion, SubscriberEndpoint,
+    Token,
 };
+use bacnet_objects::database::ObjectDatabase;
 
-mod subscription;
-pub use subscription::{CovSubscription, CovSubscriptionSnapshot};
-mod table;
-pub use table::{CovTable, Fenced};
 pub(crate) mod active;
-mod admission;
-pub use admission::MultipleRefusal;
 mod confirmed;
 pub(crate) use confirmed::{ConfirmedFlight, CovRevisits};
-mod flight;
-pub use flight::{BeginRefusal, Delivery, FlightTiming, Token};
-mod observation_order;
-pub use observation_order::{ObservationTicket, PreparedCovCompletion};
 pub(crate) mod flags;
-mod lifetime;
 pub(crate) mod multiple_reads;
 pub(crate) mod prepare;
 pub(crate) mod reported;
@@ -43,7 +35,6 @@ pub(crate) mod timed;
 mod timed_capture;
 pub(crate) use timed_capture::TimedWriteCapture;
 pub(crate) mod value_source;
-pub use lifetime::CovTimeRemaining;
 
 mod policy;
 pub use policy::*;
@@ -276,6 +267,35 @@ impl CovSubscriptionTable {
             Err(_) => &[],
         };
         self.sync(published);
+        accepted
+    }
+
+    /// SubscribeCOV from `peer`; see [`CovTable::subscribe_cov`].
+    pub fn subscribe_cov(
+        &mut self,
+        db: &ObjectDatabase,
+        peer: &SubscriberEndpoint,
+        service_data: &[u8],
+    ) -> Result<Option<CovSubscriptionSnapshot>, Error> {
+        let accepted = self
+            .core
+            .subscribe_cov(db, peer, service_data, runtime_clock::core_now());
+        self.sync(accepted.as_ref().map(Option::as_slice).unwrap_or_default());
+        accepted
+    }
+
+    /// SubscribeCOVProperty from `peer`; see
+    /// [`CovTable::subscribe_cov_property`].
+    pub fn subscribe_cov_property(
+        &mut self,
+        db: &ObjectDatabase,
+        peer: &SubscriberEndpoint,
+        service_data: &[u8],
+    ) -> Result<Option<CovSubscriptionSnapshot>, Error> {
+        let accepted =
+            self.core
+                .subscribe_cov_property(db, peer, service_data, runtime_clock::core_now());
+        self.sync(accepted.as_ref().map(Option::as_slice).unwrap_or_default());
         accepted
     }
 

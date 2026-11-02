@@ -64,11 +64,12 @@ use crate::audit_notification::{
     AuditNotificationAuthorizationContext, MAX_AUDIT_NOTIFICATION_BYTES, MAX_AUDIT_NOTIFICATIONS,
     UnconfirmedAuditNotificationAuthorizationContext,
 };
-use crate::cov::{CovSubscription, CovSubscriptionSnapshot, CovSubscriptionTable};
+use crate::cov::CovSubscriptionTable;
 use crate::life_safety::LifeSafetyOperationAuthorizationContext;
 use crate::{handlers, runtime_clock};
 use bacnet_device_core::cov::CovNotificationKind;
 use bacnet_device_core::cov::{CovCounters, CovPolicy};
+use bacnet_device_core::cov::{CovSubscription, CovSubscriptionSnapshot};
 use confirmed_request_tracker::{
     ConfirmedRequestAdmission, ConfirmedRequestTracker, PendingConfirmedRequest,
 };

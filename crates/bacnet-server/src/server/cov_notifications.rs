@@ -487,7 +487,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let table = cov_table.read().await;
                 table
                     .remaining_lifetime(sub, runtime_clock::core_now())
-                    .and_then(crate::cov::CovTimeRemaining::wire_seconds)
+                    .and_then(bacnet_device_core::cov::CovTimeRemaining::wire_seconds)
                     .filter(|_| table.confirmed_idle(sub))
             };
             let Some(time_remaining) = time_remaining else {

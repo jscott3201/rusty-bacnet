@@ -4,7 +4,7 @@
 use super::super::cov_notify_context::CovFanoutHandles;
 use super::*;
 use crate::cov::timed::TimedClaim;
-use crate::cov::{BeginRefusal, Delivery, PreparedCovCompletion};
+use bacnet_device_core::cov::{BeginRefusal, Delivery, PreparedCovCompletion};
 use bacnet_device_core::cov::{CovObservation, CovSubscriptionKey};
 
 /// A confirmed notification ready for admission.

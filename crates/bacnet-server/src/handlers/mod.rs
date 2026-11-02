@@ -11,7 +11,6 @@ use bacnet_objects::database::ObjectDatabase;
 use bacnet_services::alarm_event::{
     AcknowledgeAlarmRequest, EventSummary, GetEventInformationAck, GetEventInformationRequest,
 };
-use bacnet_services::cov::SubscribeCOVRequest;
 use bacnet_services::device_mgmt::{DeviceCommunicationControlRequest, ReinitializeDeviceRequest};
 use bacnet_services::object_mgmt::{CreateObjectRequest, DeleteObjectRequest, ObjectSpecifier};
 #[cfg(test)]
@@ -33,11 +32,12 @@ use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue}
 
 use bytes::BytesMut;
 
-use crate::cov::{CovSubscription, CovSubscriptionSnapshot, CovSubscriptionTable};
+use crate::cov::CovSubscriptionTable;
 use crate::device_view::DeviceReadContext;
 use bacnet_device_core::cov::{
     CovNotificationKind, CovSubscriptionKey, MultipleContextKey, SubscriberEndpoint,
 };
+use bacnet_device_core::cov::{CovSubscription, CovSubscriptionSnapshot};
 
 mod alarm_event;
 mod audit_log_query;

@@ -1,7 +1,8 @@
 use super::*;
-use crate::cov::{
-    BeginRefusal, CovSubscription, CovSubscriptionSnapshot, CovSubscriptionTable, Delivery,
-    FlightTiming, PreparedCovCompletion,
+use crate::cov::CovSubscriptionTable;
+use bacnet_device_core::cov::{
+    BeginRefusal, CovSubscription, CovSubscriptionSnapshot, Delivery, FlightTiming,
+    PreparedCovCompletion,
 };
 use bacnet_device_core::cov::{CovNotificationKind, CovObservation, CovSample, SubscriberEndpoint};
 use bacnet_encoding::npdu::NpduAddress;

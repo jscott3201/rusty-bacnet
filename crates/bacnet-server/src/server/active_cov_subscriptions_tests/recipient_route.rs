@@ -128,7 +128,7 @@ async fn single_two_routers_renew_one_recipient_and_deliver_via_latest_route() {
     renewal_wire(true).await;
 }
 
-async fn live(wire: &Wire) -> crate::cov::CovSubscriptionSnapshot {
+async fn live(wire: &Wire) -> bacnet_device_core::cov::CovSubscriptionSnapshot {
     wire.server
         .cov_table
         .write()
@@ -136,7 +136,7 @@ async fn live(wire: &Wire) -> crate::cov::CovSubscriptionSnapshot {
         .subscriptions_for(&av(1))[0]
         .clone()
 }
-async fn unchanged(wire: &Wire, before: &crate::cov::CovSubscriptionSnapshot) {
+async fn unchanged(wire: &Wire, before: &bacnet_device_core::cov::CovSubscriptionSnapshot) {
     let table = wire.server.cov_table.read().await;
     let current = table.get_subscription(before.key()).unwrap();
     assert!(table.is_current(before));

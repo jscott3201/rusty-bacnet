@@ -19,9 +19,9 @@ use bacnet_types::primitives::ObjectIdentifier;
 
 use super::cov_notifications_tests::recording_transport;
 use super::*;
-use crate::cov::CovSubscription;
 use crate::handlers::{handle_subscribe_cov, handle_subscribe_cov_property_multiple_with_initial};
 use crate::server::test_transport::TestTransport;
+use bacnet_device_core::cov::CovSubscription;
 use bacnet_device_core::cov::{CovNotificationKind, CovPolicy};
 
 fn ai(instance: u32) -> ObjectIdentifier {

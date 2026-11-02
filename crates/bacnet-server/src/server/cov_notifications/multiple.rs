@@ -249,7 +249,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 for (sub, prepared) in candidates {
                     let Some(remaining) = table
                         .remaining_lifetime(sub, now)
-                        .and_then(crate::cov::CovTimeRemaining::wire_seconds)
+                        .and_then(bacnet_device_core::cov::CovTimeRemaining::wire_seconds)
                     else {
                         continue;
                     };
@@ -337,7 +337,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     }
                     let Some(remaining) = table
                         .remaining_lifetime(other, now)
-                        .and_then(crate::cov::CovTimeRemaining::wire_seconds)
+                        .and_then(bacnet_device_core::cov::CovTimeRemaining::wire_seconds)
                     else {
                         continue;
                     };
@@ -374,7 +374,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         other.timestamped
                             && table
                                 .remaining_lifetime(other, now)
-                                .and_then(crate::cov::CovTimeRemaining::wire_seconds)
+                                .and_then(bacnet_device_core::cov::CovTimeRemaining::wire_seconds)
                                 .is_some()
                     })
                     .map(|other| {
@@ -595,7 +595,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 type Carried = (
     CovSubscriptionSnapshot,
     bacnet_device_core::cov::CovObservation,
-    crate::cov::PreparedCovCompletion,
+    bacnet_device_core::cov::PreparedCovCompletion,
 );
 
 /// The references `part` completes, each with its observation: those it

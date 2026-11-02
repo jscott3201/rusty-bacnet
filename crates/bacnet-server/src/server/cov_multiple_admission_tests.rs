@@ -229,7 +229,7 @@ async fn the_reference_past_the_subscription_cap_is_named_and_the_ones_before_it
         let mut table = h.server.cov_table.write().await;
         for process in 0..1022 {
             table
-                .subscribe(crate::cov::CovSubscription {
+                .subscribe(bacnet_device_core::cov::CovSubscription {
                     subscriber_mac: MacAddr::from_slice(&[10, 0, 0, 9, 0xBA, 0xC0]),
                     subscriber_network: None,
                     subscriber_process_identifier: process,

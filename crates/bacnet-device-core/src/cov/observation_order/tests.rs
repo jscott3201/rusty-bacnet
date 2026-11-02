@@ -1,7 +1,7 @@
 use super::*;
+use crate::cov::{CovNotificationKind, CovSample};
 use crate::cov::{CovSubscription, Delivery};
 use alloc::vec;
-use bacnet_device_core::cov::{CovNotificationKind, CovSample};
 use bacnet_time::Duration;
 use bacnet_types::{
     MacAddr,

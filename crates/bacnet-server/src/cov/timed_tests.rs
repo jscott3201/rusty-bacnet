@@ -557,8 +557,8 @@ async fn the_latest_admitted_delay_applies_until_the_context_goes() {
 pub(super) fn timed_reference(
     process_id: u32,
     expires_at: bacnet_time::Instant,
-) -> crate::cov::CovSubscription {
-    crate::cov::CovSubscription {
+) -> bacnet_device_core::cov::CovSubscription {
+    bacnet_device_core::cov::CovSubscription {
         subscriber_mac: MacAddr::from_slice(&[10, 0, 0, 1, 0xBA, 0xC0]),
         subscriber_network: None,
         subscriber_process_identifier: process_id,

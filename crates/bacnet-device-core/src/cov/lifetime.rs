@@ -64,9 +64,9 @@ impl CovTable {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cov::CovNotificationKind;
     use crate::cov::CovSubscription;
     use alloc::vec;
-    use bacnet_device_core::cov::CovNotificationKind;
     use bacnet_types::MacAddr;
     use bacnet_types::enums::PropertyIdentifier;
     use bacnet_types::primitives::ObjectIdentifier;

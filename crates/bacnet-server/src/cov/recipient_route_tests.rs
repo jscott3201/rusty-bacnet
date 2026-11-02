@@ -63,7 +63,7 @@ fn cov_recipient_failed_renewal_preserves_current_route_terms_and_observation() 
         let mut table = CovSubscriptionTable::new();
         let mut sub = routed_single(property);
         let old = table.subscribe(sub.clone()).unwrap();
-        table.core.generation = u64::MAX;
+        table.core.set_generation_for_test(u64::MAX);
         sub.subscriber_mac = MacAddr::from_slice(&[2]);
         sub.issue_confirmed_notifications = true;
         sub.expires_at = Some(crate::runtime_clock::core_now() + Duration::from_secs(600));

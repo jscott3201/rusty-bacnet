@@ -287,7 +287,10 @@ async fn multiple_route_rejected_wire_renewals_preserve_live_context() {
     wire.server.stop().await.unwrap();
 }
 
-async fn assert_live_unchanged(wire: &Wire, before: &crate::cov::CovSubscriptionSnapshot) {
+async fn assert_live_unchanged(
+    wire: &Wire,
+    before: &bacnet_device_core::cov::CovSubscriptionSnapshot,
+) {
     let table = wire.server.cov_table.read().await;
     assert!(table.is_current(before));
     assert_eq!(table.len(), 1);

@@ -1,8 +1,8 @@
 //! The plain flight state: deadlines, outcomes and fences (#896, #2303).
 use super::*;
+use crate::cov::{CovNotificationKind, CovObservation, CovSample};
 use crate::cov::{CovSubscription, Fenced};
 use alloc::vec;
-use bacnet_device_core::cov::{CovNotificationKind, CovObservation, CovSample};
 use bacnet_types::MacAddr;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};

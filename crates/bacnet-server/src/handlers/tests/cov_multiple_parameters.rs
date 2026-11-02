@@ -1,5 +1,5 @@
 use super::*;
-use crate::cov::MultipleRefusal;
+use bacnet_device_core::cov::MultipleRefusal;
 use bacnet_services::cov_multiple::{COVReference, COVSubscriptionSpecification};
 use bacnet_types::constructed::PropertyReference;
 use bacnet_types::error::RemoteError;

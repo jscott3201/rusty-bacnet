@@ -19,6 +19,7 @@ default = ["std"]
 # Hosted builds: std in every dependency. It doesn't turn on bacnet-objects'
 # `alloc`, so a hosted build compiles none of its no_std stand-ins.
 std = [
+    "bacnet-time/std",
     "bacnet-types/std",
     "bacnet-encoding/std",
     "bacnet-services/std",
@@ -55,6 +56,7 @@ targets = []
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
+bacnet-time = { workspace = true }
 bacnet-types = { workspace = true }
 bacnet-encoding = { workspace = true }
 bacnet-services = { workspace = true }

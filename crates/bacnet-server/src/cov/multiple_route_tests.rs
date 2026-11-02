@@ -24,7 +24,7 @@ fn cov_multiple_route_empty_renewal_fences_all_old_snapshots_without_new_generat
     ];
     let context = context(&a);
     let expiry = crate::runtime_clock::core_now() + Duration::from_secs(600);
-    table.core.generation = u64::MAX;
+    table.core.set_generation_for_test(u64::MAX);
     table
         .subscribe_multiple(&context, &a.endpoint(), expiry, 2, None, vec![])
         .unwrap();
@@ -39,7 +39,7 @@ fn cov_multiple_route_empty_renewal_fences_all_old_snapshots_without_new_generat
             .unwrap()
             .is_empty()
     );
-    assert_eq!(table.core.generation, u64::MAX);
+    assert_eq!(table.core.generation_for_test(), u64::MAX);
     for snapshot in &old {
         assert!(!table.is_current(snapshot));
         assert!(!table.complete_for_test(
@@ -47,7 +47,7 @@ fn cov_multiple_route_empty_renewal_fences_all_old_snapshots_without_new_generat
             snapshot.last_notified_observation.clone().unwrap()
         ));
         let live = table.get_subscription(snapshot.key()).unwrap();
-        assert_eq!(live.generation, snapshot.generation);
+        assert_eq!(live.generation(), snapshot.generation());
         assert_eq!(
             live.last_notified_observation,
             snapshot.last_notified_observation
@@ -104,7 +104,7 @@ fn cov_multiple_route_rejected_generation_or_identity_preserves_live_target() {
         ),
         "a proposal through A cannot publish on a separately supplied B route"
     );
-    table.core.generation = u64::MAX;
+    table.core.set_generation_for_test(u64::MAX);
     let exhausted = table
         .subscribe_multiple(&context, &b.endpoint(), expiry, 9, None, vec![b.clone()])
         .unwrap_err();

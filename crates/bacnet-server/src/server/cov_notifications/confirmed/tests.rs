@@ -1,9 +1,9 @@
 //! Admission refusals and follow-up budgets of confirmed COV reports (#896),
 //! driven straight through the sender and the follow-up fanout.
 use super::*;
-use crate::cov::CovSubscription;
 use crate::server::cov_notify_context::CovNotifyContext;
 use crate::server::test_transport::{BIP_LOCAL_MAC, SendLog, SendMode, TestTransport};
+use bacnet_device_core::cov::CovSubscription;
 use bacnet_device_core::cov::{CovNotificationKind, CovSample};
 use bacnet_objects::analog::AnalogValueObject;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};

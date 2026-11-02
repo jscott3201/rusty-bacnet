@@ -241,8 +241,8 @@ impl ServerConfig {
 
     /// How the COV table times confirmed notifications: this config's retry
     /// timeout and the server's retries, which the notification workers use.
-    pub(crate) fn cov_flight_timing(&self) -> crate::cov::FlightTiming {
-        crate::cov::FlightTiming::new(
+    pub(crate) fn cov_flight_timing(&self) -> bacnet_device_core::cov::FlightTiming {
+        bacnet_device_core::cov::FlightTiming::new(
             bacnet_time::Duration::from_millis(self.cov_retry_timeout_ms),
             super::DEFAULT_APDU_RETRIES,
         )

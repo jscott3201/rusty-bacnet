@@ -54,7 +54,7 @@ impl CovSubscriptionTable {
                     time_remaining,
                     // `subscribe_multiple` is the only admission path for a
                     // Multiple reference and always records its delay.
-                    max_notification_delay: entry.max_notification_delay?,
+                    max_notification_delay: entry.max_notification_delay()?,
                     explicit_increment: entry.cov_increment,
                     timestamped: entry.timestamped,
                 })

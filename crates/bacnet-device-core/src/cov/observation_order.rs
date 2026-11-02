@@ -1,6 +1,6 @@
 //! Local completion order for whole observations: unconfirmed reports complete
 //! once sent (#826), confirmed ones once acknowledged (#896).
-use bacnet_device_core::cov::CovObservation;
+use crate::cov::CovObservation;
 use bacnet_time::Instant;
 
 use super::{CovSubscriptionSnapshot, CovTable};

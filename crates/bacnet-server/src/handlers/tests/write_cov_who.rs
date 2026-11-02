@@ -1,5 +1,6 @@
 use super::*;
 use bacnet_device_core::discovery::who_has;
+use bacnet_services::cov::SubscribeCOVRequest;
 use bacnet_services::who_is::DeviceInstanceRange;
 
 #[test]
