@@ -328,6 +328,7 @@ impl<'s, T: TransportPort + 'static> State<'s, T> {
         let stats = WatchStats {
             subscriptions: hub_stats.cov + hub_stats.cancelling,
             recent_requests: rate.recent(),
+            agent_requests: rate.recent_agents(),
             csv: self.csv.as_ref().map(|log| log.path.display().to_string()),
         };
         if stats != self.stats {

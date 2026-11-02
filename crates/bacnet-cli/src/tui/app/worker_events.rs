@@ -253,6 +253,10 @@ impl App {
             WorkerEvent::Mcp(crate::tui::message::McpListener::Request(request)) => {
                 self.agent_request(request)
             }
+            #[cfg(feature = "mcp")]
+            WorkerEvent::Mcp(crate::tui::message::McpListener::Board(board)) => {
+                self.agents_board(board)
+            }
             WorkerEvent::Mcp(listener) => self.mcp = Some(listener),
             WorkerEvent::Network(event) => self.network_event(event),
             WorkerEvent::Discovery(event) => self.discovery_event(event),

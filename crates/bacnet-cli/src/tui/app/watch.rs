@@ -42,6 +42,8 @@ pub(crate) enum Screen {
     Mstp,
     /// Live capture: frames, their decode, filters, pcap export.
     Capture,
+    /// Attached agents: their calls and the requests waiting here (#2185).
+    Agents,
 }
 
 /// One watched point as shown.

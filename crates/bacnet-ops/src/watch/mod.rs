@@ -446,7 +446,11 @@ impl<T: TransportPort + 'static> Hub<T> {
         let (stop_dispatch, stopped) = watch::channel(false);
         let notifications = engine.client().cov_notifications();
         let dispatcher = tokio::spawn(dispatch::run(Arc::clone(&registry), notifications, stopped));
-        let account = Arc::new(Account::new(options.bucket.clone()));
+        let bucket = options.bucket.clone();
+        let account = Arc::new(match options.agent {
+            true => Account::agent(bucket),
+            false => Account::new(bucket),
+        });
         Ok(Self {
             inner: Arc::new(Inner {
                 engine,

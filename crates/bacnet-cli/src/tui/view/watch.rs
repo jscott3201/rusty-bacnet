@@ -69,8 +69,13 @@ fn source_label(source: &Source) -> &'static str {
 fn title(app: &App) -> String {
     let stats = &app.watch.stats;
     let rate = stats.recent_requests as f64 / METER_WINDOW_SECS as f64;
+    // The agents' share, while any agent sent requests (#2185).
+    let agents = match stats.agent_requests {
+        0 => String::new(),
+        n => format!(", agents {:.1}/s", n as f64 / METER_WINDOW_SECS as f64),
+    };
     format!(
-        " Watch ({}) | COV {} | requests {rate:.1}/s ",
+        " Watch ({}) | COV {} | requests {rate:.1}/s{agents} ",
         app.watch.rows().len(),
         stats.subscriptions
     )

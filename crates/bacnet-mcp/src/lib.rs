@@ -33,6 +33,7 @@
 
 #[cfg(any(unix, windows))]
 pub mod attach;
+mod board;
 mod contain;
 mod context;
 mod cursor;

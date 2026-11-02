@@ -102,8 +102,12 @@ pub(crate) struct WatchStats {
     pub(crate) subscriptions: usize,
     /// Confirmed requests sent in the last
     /// [`METER_WINDOW_SECS`](bacnet_ops::limits::METER_WINDOW_SECS) seconds,
-    /// browser and watch list together.
+    /// browser, watch list and attached agents together.
     pub(crate) recent_requests: usize,
+    /// Of those, the attached agents' (#2185): the requests charged to
+    /// their calls (the re-read before a write included) and to their
+    /// watch hub, as the agent pane's cost column counts them.
+    pub(crate) agent_requests: usize,
     /// The CSV file samples go to, when logging.
     pub(crate) csv: Option<String>,
 }

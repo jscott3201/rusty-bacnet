@@ -2,7 +2,7 @@
 source: crates/bacnet-cli/src/tui/tests/mcp_approve.rs
 expression: "screen(&mut site.app, 120, 40)"
 ---
-" bacnet | [1 Devices] 2 3 4 7 | BIP 10.0.0.1:47808 | up | WRITE 15:00 | COV 0 | MCP 3, 3 to confirm | drop 0     ? help "
+" bacnet | [1 Devices] 2 3 4 7 8 | BIP 10.0.0.1:47808 | up | WRITE 15:00 | COV 0 | MCP 3, 3 to confirm | drop 0   ? help "
 "┌ Devices (1) | sort: instance ↑ ──────────────────────────────────────────────────────────────────────────────────────┐"
 "│  Instance* Name Address          Network Vendor Max APDU Segmentation Last seen                                      │"
 "│> 100       …    10.0.0.100:47808 local   260    1476     none         0s                                             │"

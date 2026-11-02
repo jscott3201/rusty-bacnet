@@ -419,6 +419,10 @@ pub(crate) enum McpListener {
     /// leaves the bar's state as it was.
     #[cfg(feature = "mcp")]
     Request(bacnet_mcp::attach::AgentApproval),
+    /// The listener's board, for the agent pane; it leaves the bar's state
+    /// as it was.
+    #[cfg(feature = "mcp")]
+    Board(bacnet_mcp::attach::Board),
 }
 
 impl McpListener {
@@ -428,7 +432,7 @@ impl McpListener {
             Self::Agents(count) => Some(*count.borrow()),
             Self::Off => None,
             #[cfg(feature = "mcp")]
-            Self::Request(_) => None,
+            Self::Request(_) | Self::Board(_) => None,
         }
     }
 }
@@ -439,7 +443,11 @@ impl PartialEq for McpListener {
             #[cfg(feature = "mcp")]
             (Self::Request(a), Self::Request(b)) => a == b,
             #[cfg(feature = "mcp")]
-            (Self::Request(_), _) | (_, Self::Request(_)) => false,
+            (Self::Board(a), Self::Board(b)) => a == b,
+            #[cfg(feature = "mcp")]
+            (Self::Request(_) | Self::Board(_), _) | (_, Self::Request(_) | Self::Board(_)) => {
+                false
+            }
             _ => self.agents() == other.agents(),
         }
     }

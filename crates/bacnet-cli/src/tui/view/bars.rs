@@ -385,6 +385,10 @@ fn screen_hints(app: &App, theme: &Theme, tab_focus: bool) -> Vec<Part> {
             parts.push(h(2, "z", "clear"));
             parts.push(h(8, "Esc", "back"));
         }
+        Screen::Agents => {
+            parts.push(h(5, "j/k", "scroll"));
+            parts.push(h(8, "Esc", "back"));
+        }
         Screen::Watch => {
             parts.push(h(6, "x", "remove"));
             parts.push(h(5, ":watch", "DEV OBJ"));

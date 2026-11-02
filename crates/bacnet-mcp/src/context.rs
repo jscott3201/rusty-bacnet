@@ -90,6 +90,9 @@ pub(crate) struct Ctx<T: TransportPort + 'static> {
     /// On a session attached to the TUI that offers writes, the TUI's
     /// approval queue and the desk it lends (#2185).
     pub(crate) attached: Option<crate::tools::write_attached::Attached<T>>,
+    /// On a session attached to the TUI, where its calls go for the agent
+    /// pane and where the TUI's armed state is read (#2185).
+    pub(crate) pane: Option<crate::board::Pane>,
 }
 
 /// The points a principal watches, each with the number of its sessions
@@ -480,6 +483,12 @@ impl<T: TransportPort + 'static> Ctx<T> {
             ));
         }
         Ok(())
+    }
+
+    /// A new account for one call: its requests take the principal's
+    /// tokens, and the request-rate meter counts them as an agent's.
+    pub(crate) fn account(&self) -> Arc<Account> {
+        Arc::new(Account::agent(Some(Arc::clone(&self.bucket))))
     }
 
     /// Record a finished call in the read log, as a summary line.

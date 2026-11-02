@@ -7,7 +7,7 @@ use std::time::Duration;
 use bacnet_ops::engine::{Wanted, unreachable};
 use bacnet_ops::format::{self, RawRow, RowError};
 use bacnet_ops::label::kebab;
-use bacnet_ops::limits::{Account, charged};
+use bacnet_ops::limits::charged;
 use bacnet_ops::watch::{Point, Snapshot, Source, State, Watched};
 use bacnet_transport::port::TransportPort;
 use serde_json::{Map, Value, json};
@@ -319,7 +319,7 @@ pub(crate) async fn refresh_alarms<T: TransportPort + 'static>(ctx: &Ctx<T>, tex
         }
         _ => return false,
     };
-    let account = Arc::new(Account::new(Some(Arc::clone(&ctx.bucket))));
+    let account = ctx.account();
     let call = Call::new(ctx.policy.caps.budget, Arc::clone(&account));
     let events =
         |device: u32| cached(&ctx.alarms, device, Duration::MAX).map(|body| body["events"].clone());
@@ -403,7 +403,16 @@ pub(super) fn session<T: TransportPort + 'static>(ctx: &Ctx<T>) -> Value {
         },
     });
     if let Some(engine) = &ctx.engine {
-        body["rate"] = json!({ "requests_last_10_s": engine.limits().recent() });
+        let limits = engine.limits();
+        body["rate"] = json!({
+            "requests_last_10_s": limits.recent(),
+            "agents_requests_last_10_s": limits.recent_agents(),
+        });
+    }
+    // Attached to the TUI: whether a write could be confirmed there now
+    // (#2185). Read-only: only the person at the TUI arms it.
+    if let Some(pane) = &ctx.pane {
+        body["tui"] = json!({ "armed": pane.board.armed() });
     }
     if let Some(hub) = &ctx.hub {
         let stats = hub.stats();

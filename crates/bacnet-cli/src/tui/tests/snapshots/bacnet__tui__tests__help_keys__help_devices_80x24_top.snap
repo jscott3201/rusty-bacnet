@@ -14,7 +14,7 @@ expression: top
 "│ │   :                The command bar, with the commands listed below       │ │"
 "│ │   p c              The profile dialog; connect again, or retry           │ │"
 "│ │   1 2              Devices; 2 is Browse, the open device's browser       │ │"
-"│ │   3 4 5 6 7        Watch, Network, SC, MS/TP, Capture; see the top line  │ │"
+"│ │   3 4 5 6 7 8      The other screens, as the top line names them         │ │"
 "│ │ Devices (1)                                                              │ │"
 "│ │   d                The Who-Is form                                       │ │"
 "│ │   Enter            Browse the selected device (the one kept open comes   │ │"

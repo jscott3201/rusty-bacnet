@@ -10,7 +10,7 @@
 use super::app::command_bar::COMMANDS;
 use super::app::watch::Screen;
 use super::app::{App, Link};
-use super::keymap::{BROWSER, Binding, CAPTURE, DEVICES, GLOBAL, MSTP, NETWORK, SC, WATCH};
+use super::keymap::{AGENTS, BROWSER, Binding, CAPTURE, DEVICES, GLOBAL, MSTP, NETWORK, SC, WATCH};
 
 /// One screen in the strip.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,8 +26,9 @@ pub(crate) struct Tab {
 /// The screens that apply to this session, in key order: Devices,
 /// Browse, Watch and Capture always; Network once a session is connected
 /// (its Networks tab works on every transport), SC on BACnet/SC, MS/TP
-/// with a serial port. The screen shown is listed even where it
-/// doesn't apply, so the strip always says where the operator is.
+/// with a serial port, Agents while the session's MCP listener runs. The
+/// screen shown is listed even where it doesn't apply, so the strip always
+/// says where the operator is.
 pub(crate) fn screens(app: &App) -> Vec<Tab> {
     let serial = app.transport == "MSTP" || app.monitor.is_some();
     // The Networks tab (routers heard) works on every transport.
@@ -40,6 +41,7 @@ pub(crate) fn screens(app: &App) -> Vec<Tab> {
         Screen::Sc => '5',
         Screen::Mstp => '6',
         Screen::Capture => '7',
+        Screen::Agents => '8',
     };
     [
         ('1', "Devices", true),
@@ -49,6 +51,7 @@ pub(crate) fn screens(app: &App) -> Vec<Tab> {
         ('5', "SC", app.transport == "SC"),
         ('6', "MS/TP", serial),
         ('7', "Capture", true),
+        ('8', "Agents", app.mcp.is_some()),
     ]
     .into_iter()
     .filter(|(key, _, applies)| *applies || *key == current)
@@ -117,6 +120,7 @@ pub(crate) fn sections(app: &App) -> Vec<Section> {
         Screen::Sc => out.push(Section::keys("BACnet/SC (5)", SC)),
         Screen::Mstp => out.push(Section::keys("MS/TP (6)", MSTP)),
         Screen::Capture => out.push(Section::keys("Capture (7)", CAPTURE)),
+        Screen::Agents => out.push(Section::keys("Agents (8)", AGENTS)),
     }
     out.push(Section {
         title: "Commands (:)",

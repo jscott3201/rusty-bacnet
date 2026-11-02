@@ -262,8 +262,9 @@ session level: `READ-ONLY` by default (discovery, reads, finite COV
 subscriptions and foreign-device registrations), a red `WRITE mm:ss` while a
 write session is armed (`WRITE+DANGER mm:ss` on a profile with
 `dangerous = true`; see [Write sessions](#write-sessions)), or `PASSIVE`.
-Screens: `1` devices, `3` watch list, `4` network, `5` SC, `6` MS/TP and `7`
-[capture](#capture-screen). The design is in
+Screens: `1` devices, `3` watch list, `4` network, `5` SC, `6` MS/TP, `7`
+[capture](#capture-screen) and, while agents can attach, `8` the agent pane
+(see `bacnet mcp connect` below). The design is in
 [docs/design/tui.md](design/tui.md).
 
 Explicit global network flags without `--profile`, or `--no-profile`, start
@@ -521,7 +522,7 @@ table is refreshed from the client's discovery table afterwards.
 | `d` | Who-Is form |
 | `/` | Filter rows by instance, address, network or vendor; Enter keeps the filter, Esc clears it |
 | `Enter` | Browse the selected device |
-| `1` / `2` / `3` / `4` / `5` / `6` / `7` | The devices / Browse, the open device's browser / the watch list / the Network screen (BBMD tables on B/IP; the Networks tab on every transport) / the SC screen / the MS/TP screen / Capture. The status bar's strip numbers those that apply to the session (Network once connected, SC on SC, MS/TP with a serial port), with the one shown in brackets. `1` keeps an open browser as it was, and `2` shows it again; with no device open, `2` stays on the devices and says so |
+| `1` / `2` / `3` / `4` / `5` / `6` / `7` / `8` | The devices / Browse, the open device's browser / the watch list / the Network screen (BBMD tables on B/IP; the Networks tab on every transport) / the SC screen / the MS/TP screen / Capture / the agent pane, the attached agents' MCP calls and the write requests waiting for you (only while the profile's MCP listener runs; otherwise `8` stays and says so). The status bar's strip numbers those that apply to the session (Network once connected, SC on SC, MS/TP with a serial port, Agents with a listener), with the one shown in brackets. `1` keeps an open browser as it was, and `2` shows it again; with no device open, `2` stays on the devices and says so |
 | `:` | Command bar: `watch DEVICE OBJECT [PROPERTY]`, `csv on`, `csv off`, `writem DEVICE OBJECT PROPERTY VALUE[@P] ...`, `bbmd [ADDRESS]`, `find NAME`, `mstp rotation MS`, `mstp hold MS`, `mstp listen SECS`, `mstp scan SECS`, `mstp scan cancel`, `dcc enable`, `dcc ACTION [MINUTES|forever]`, `reinit STATE`; the footer shows the syntax of the commands matching what is typed |
 | `W` | Arm a write session, or disarm the armed one |
 | `w` / `n` | On an open object, in a write session: write a property / relinquish a priority slot |
@@ -1068,8 +1069,14 @@ port isn't contended for. The agent host launches it as it launches
 bar shows `MCP n` with the agents attached. Over the socket or pipe the tools are
 read-only unless `mcp_writes = "elicit"`: then each write an agent asks
 for opens the TUI's preview dialog, and only your confirmation there
-sends it. The table's rates join the TUI's only while an agent is
-attached. Only your own OS user can connect.
+sends it. Disarming the TUI refuses every request still waiting
+(`not-armed`). Screen `8`, the agent pane, lists every call the agents
+made, newest first, with its outcome and cost (the requests charged to it),
+and the write requests waiting for you with their ages; the watch list's
+rate meter shows the agents' share. Agent hosts often end a tool call after
+about 60 s, while a request may wait up to 120 s here: raise the host's
+tool timeout if it has one. The table's rates join the TUI's only while an
+agent is attached. Only your own OS user can connect.
 On Unix the workspace is kept at mode 0700 (a looser one is narrowed when
 the listener starts), the socket is 0600, and each connection's peer
 credentials are checked. On Windows the pipe's access list grants your

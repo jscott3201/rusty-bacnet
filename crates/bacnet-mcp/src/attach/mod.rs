@@ -73,6 +73,7 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+pub use crate::board::{Board, CALLS, CallOutcome, CallRow, Calls};
 pub use crate::tools::write_attached::DeskJob;
 pub use crate::writes::tui::{
     AgentApproval, Declined, Gone, LIFETIME, MAX_QUEUED, Refusal, WAIT_AT_MOST,
@@ -260,6 +261,8 @@ pub struct Listener {
     runtime: Option<OwnRuntime>,
     /// The agents' write requests, until the TUI takes them.
     approvals: Option<mpsc::Receiver<AgentApproval>>,
+    /// The agents' calls and the TUI's armed state, for the agent pane.
+    board: Board,
     /// The listener's lock, held for its life and released last.
     _lock: std::fs::File,
 }
@@ -371,7 +374,9 @@ impl Listener {
             }
             None => (None, None),
         };
+        let board = Board::default();
         let sessions = Sessions {
+            board: board.clone(),
             lending,
             overlay: policy.overlay(),
             engine,
@@ -396,6 +401,7 @@ impl Listener {
             finish: Some(finish),
             runtime,
             approvals,
+            board,
             _lock: lock,
         })
     }
@@ -405,6 +411,13 @@ impl Listener {
     /// Dropping it (or each request unanswered) declines them.
     pub fn approvals(&mut self) -> Option<mpsc::Receiver<AgentApproval>> {
         self.approvals.take()
+    }
+
+    /// The agents' calls, for the TUI's agent pane, and where the TUI says
+    /// whether its write session is armed, which `bacnet://session` reports
+    /// to the agents.
+    pub fn board(&self) -> Board {
+        self.board.clone()
     }
 
     /// The socket's path, or on Windows the pipe's name.

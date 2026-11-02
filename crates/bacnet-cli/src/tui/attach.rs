@@ -156,6 +156,8 @@ pub(crate) async fn run<T: TransportPort + 'static>(
     // The bar reads the count from the listener's own channel, so it
     // always shows the latest.
     let agents = McpListener::Agents(listener.agents());
+    sink.deliver(WorkerEvent::Mcp(McpListener::Board(listener.board())))
+        .await;
     sink.deliver(WorkerEvent::Mcp(agents)).await;
     loop {
         tokio::select! {
