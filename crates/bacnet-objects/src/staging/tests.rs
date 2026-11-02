@@ -738,7 +738,7 @@ fn staging_cov_increment_and_reported_present_stage() {
     assert_eq!(object.cov().and_then(|cov| cov.cov_increment()), Some(1.5));
     // Table 13-1: a Present_Stage change triggers a report and is carried.
     assert_eq!(
-        object.cov().unwrap().cov_reported_properties(),
+        crate::cov_reporting_tests::reported(&object),
         [Trigger(PropertyIdentifier::PRESENT_STAGE)]
     );
 }

@@ -204,3 +204,28 @@ fn life_safety_property_cancellation_bypasses_current_capability_checks() {
     assert!(initial.is_empty());
     assert!(table.is_empty());
 }
+
+#[test]
+fn single_property_cov_refuses_an_object_that_lends_no_cov_reporting() {
+    let mut db = ObjectDatabase::new();
+    let class = bacnet_objects::notification_class::NotificationClass::new(4, "class").unwrap();
+    assert!(class.cov().is_none());
+    db.add(Box::new(class)).unwrap();
+    let oid = ObjectIdentifier::new(ObjectType::NOTIFICATION_CLASS, 4).unwrap();
+    let mut table = CovSubscriptionTable::new();
+    // Present_Value isn't served, so a property check would answer
+    // UNKNOWN_PROPERTY; the object refusal comes first.
+    let error = handle_subscribe_cov_property(
+        &mut table,
+        &db,
+        &[1, 2, 3],
+        &property_request(oid, PropertyIdentifier::OBJECT_NAME),
+    )
+    .unwrap_err();
+    assert_protocol(
+        error,
+        ErrorClass::OBJECT,
+        ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+    );
+    assert!(table.is_empty());
+}

@@ -4,7 +4,7 @@
 //! here until the tables below change with it.
 
 use crate::catalogue::representatives;
-use crate::traits::CovReportedProperty;
+use crate::traits::{BACnetObject, CovReportedProperty};
 use alloc::collections::BTreeSet;
 use bacnet_types::enums::ObjectType;
 
@@ -53,6 +53,18 @@ const LENDERS: [ObjectType; 37] = [
 /// only.
 const PROPERTY_ONLY: [ObjectType; 2] = [ObjectType::AVERAGING, ObjectType::COMMAND];
 
+/// What a whole-object notification reports after the leading value and
+/// Status_Flags, resolved as the bundled server resolves it: the object's own
+/// list, or its type's Table 13-1 row when it names none.
+pub(crate) fn reported(object: &dyn BACnetObject) -> &'static [CovReportedProperty] {
+    match object.cov() {
+        None => &[],
+        Some(cov) => cov.cov_reported_properties().unwrap_or_else(|| {
+            CovReportedProperty::standard_for(object.object_identifier().object_type())
+        }),
+    }
+}
+
 #[test]
 fn exactly_the_cov_reporters_lend_cov_reporting() {
     let mut seen = BTreeSet::new();
@@ -72,12 +84,8 @@ fn exactly_the_cov_reporters_lend_cov_reporting() {
                 !PROPERTY_ONLY.contains(&object_type),
                 "{object_type:?}: SubscribeCOV"
             );
-            // Each lender reports its type's Table 13-1 extras.
-            assert_eq!(
-                cov.cov_reported_properties(),
-                CovReportedProperty::standard_for(object_type),
-                "{object_type:?}"
-            );
+            // Each lender leaves its Table 13-1 extras to its type's row.
+            assert_eq!(cov.cov_reported_properties(), None, "{object_type:?}");
         }
         seen.insert(object_type.to_raw());
     }

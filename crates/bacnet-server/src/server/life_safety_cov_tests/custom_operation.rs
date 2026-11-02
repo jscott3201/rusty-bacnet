@@ -118,13 +118,7 @@ impl BACnetObject for CustomPoint {
 
 impl bacnet_objects::traits::CovReporting for CustomPoint {
     fn supports_cov_property(&self, p: PropertyIdentifier) -> bool {
-        [
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::TRACKING_VALUE,
-            PropertyIdentifier::SILENCED,
-            PropertyIdentifier::STATUS_FLAGS,
-        ]
-        .contains(&p)
+        bacnet_objects::life_safety::COV_PROPERTIES.contains(&p)
     }
 }
 

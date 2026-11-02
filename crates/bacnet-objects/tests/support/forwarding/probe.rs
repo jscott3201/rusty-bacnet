@@ -479,9 +479,9 @@ impl CovReporting for Probe {
         self.called("CovReporting::cov_increment", ());
         Some(1.25)
     }
-    fn cov_reported_properties(&self) -> &'static [CovReportedProperty] {
+    fn cov_reported_properties(&self) -> Option<&'static [CovReportedProperty]> {
         self.called("CovReporting::cov_reported_properties", ());
-        &REPORTED
+        Some(&REPORTED)
     }
 }
 

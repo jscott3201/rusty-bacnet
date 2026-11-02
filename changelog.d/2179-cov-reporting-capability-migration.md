@@ -1,9 +1,9 @@
 ---
 section: Migration notes
 ---
-- **CovReporting (Rust API, #2179):** replace `supports_cov() -> true` with
-  `fn cov(&self) -> Option<&dyn CovReporting> { Some(self) }` and move
-  `cov_increment`, `supports_cov_property` and `cov_reported_properties` into
-  `impl CovReporting`. `supports_subscribe_cov_property() -> true` becomes a
-  lent `cov()` whose `supports_subscribe_cov()` answers `false`. Delete any
-  `set_overridden` override ([details](docs/rust-api.md#capabilities)).
+- **CovReporting (Rust API, #2179):** lend `cov()` in place of
+  `supports_cov() -> true` and move the COV hooks into `impl CovReporting`;
+  a property-only object answers `supports_subscribe_cov()` with `false`.
+  `cov_reported_properties` returns `None` for the type's Table 13-1 row. A
+  custom Life Safety object narrows its own properties. Concrete calls need
+  `use bacnet_objects::traits::CovReporting` ([details](docs/rust-api.md#capabilities)).

@@ -259,11 +259,7 @@ impl BACnetObject for CredentialDataInputObject {
     }
 }
 
-impl crate::traits::CovReporting for CredentialDataInputObject {
-    fn cov_reported_properties(&self) -> &'static [crate::traits::CovReportedProperty] {
-        crate::traits::CovReportedProperty::standard_for(ObjectType::CREDENTIAL_DATA_INPUT)
-    }
-}
+impl crate::traits::CovReporting for CredentialDataInputObject {}
 
 impl crate::traits::ReliabilityEval for CredentialDataInputObject {
     /// The application's Reliability for the reader. Like the other

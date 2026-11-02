@@ -491,14 +491,7 @@ impl bacnet_objects::traits::BACnetObject for WritablePoint {
 // A custom Life Safety Point takes the standardized property surface.
 impl bacnet_objects::traits::CovReporting for WritablePoint {
     fn supports_cov_property(&self, property: PropertyIdentifier) -> bool {
-        matches!(
-            property,
-            PropertyIdentifier::PRESENT_VALUE
-                | PropertyIdentifier::STATUS_FLAGS
-                | PropertyIdentifier::TRACKING_VALUE
-                | PropertyIdentifier::SILENCED
-                | PropertyIdentifier::OPERATION_EXPECTED
-        )
+        bacnet_objects::life_safety::COV_PROPERTIES.contains(&property)
     }
 }
 

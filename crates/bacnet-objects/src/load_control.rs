@@ -244,12 +244,8 @@ impl BACnetObject for LoadControlObject {
     }
 
     // Table 13-1 lists Load Control, so it takes SubscribeCOV; the shed
-    // rows it reports are that row's (`CovReporting` below).
+    // rows it reports are that row's (the default).
     crate::traits::lend_cov_reporting!();
 }
 
-impl crate::traits::CovReporting for LoadControlObject {
-    fn cov_reported_properties(&self) -> &'static [crate::traits::CovReportedProperty] {
-        crate::traits::CovReportedProperty::standard_for(ObjectType::LOAD_CONTROL)
-    }
-}
+impl crate::traits::CovReporting for LoadControlObject {}

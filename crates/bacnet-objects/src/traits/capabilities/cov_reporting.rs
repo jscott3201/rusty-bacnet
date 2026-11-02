@@ -6,6 +6,7 @@ use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 /// One property a whole-object (SubscribeCOV) notification reports after
 /// Present_Value and Status_Flags, from the object type's Table 13-1 row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CovReportedProperty {
     /// Carried in each notification; a change of it alone sends none.
     Value(PropertyIdentifier),
@@ -44,9 +45,8 @@ impl CovReportedProperty {
     /// - Pulse Converter: Update_Time.
     /// - Staging: Present_Stage, a trigger.
     ///
-    /// The built-in objects of these types answer
-    /// [`CovReporting::cov_reported_properties`] with it, and a custom object
-    /// of a standard type can too.
+    /// The bundled server reports this row for an object whose
+    /// [`CovReporting::cov_reported_properties`] answers `None`, the default.
     pub fn standard_for(object_type: ObjectType) -> &'static [Self] {
         use CovReportedProperty::{Trigger, Value};
         use PropertyIdentifier as P;
@@ -91,13 +91,8 @@ impl CovReportedProperty {
 /// when the object has it, then
 /// [`cov_reported_properties`](Self::cov_reported_properties).
 ///
-/// The built-in objects that lend it: the Analog, Binary and Multi-state
-/// Inputs, Outputs and Values; the Integer, Positive Integer, Large Analog,
-/// CharacterString and other value types; the Loop, Staging, Load Control,
-/// Accumulator and Pulse Converter; the Lighting and Binary Lighting
-/// Outputs, Color and Color Temperature; the Life Safety Point and Zone;
-/// the Access Door and Point and the Credential Data Input; and, for
-/// property subscriptions only, the Averaging and Command objects.
+/// Calls on a concrete type need `use bacnet_objects::traits::CovReporting`.
+/// The crate's `cov_reporting_tests` pin which built-in types lend it.
 pub trait CovReporting {
     /// Whether SubscribeCOV, the whole-object form, may subscribe to this
     /// object.
@@ -105,8 +100,12 @@ pub trait CovReporting {
     /// The default, `true`, suits a type with Table 13-1 criteria. An object
     /// whose type has none answers `false`: it still takes property
     /// subscriptions, which follow Table 13-1a, but the bundled server
-    /// refuses SubscribeCOV naming it. The built-in Averaging and Command
-    /// objects do this.
+    /// refuses SubscribeCOV naming it with OBJECT /
+    /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. The built-in Averaging and
+    /// Command objects do this. The reverse, SubscribeCOV without property
+    /// subscriptions, can't be expressed: an object that lends this takes
+    /// property subscriptions, narrowed only per property through
+    /// [`supports_cov_property`](Self::supports_cov_property).
     fn supports_subscribe_cov(&self) -> bool {
         true
     }
@@ -115,16 +114,21 @@ pub trait CovReporting {
     /// SubscribeCOVPropertyMultiple) may monitor `property`.
     ///
     /// The server asks this only of a property that reads; a `false` answer
-    /// refuses the subscription with NOT_COV_PROPERTY. The default takes
-    /// every property. The built-in Life Safety Point and Zone take only
-    /// Present_Value, Status_Flags, Tracking_Value, Silenced and
-    /// Operation_Expected, and a custom one should narrow it the same way.
+    /// refuses the subscription with PROPERTY / NOT_COV_PROPERTY (in
+    /// SubscribeCOVPropertyMultiple, naming that reference). The default
+    /// takes every property. The built-in Life Safety Point and Zone take
+    /// only [`COV_PROPERTIES`](crate::life_safety::COV_PROPERTIES), and a
+    /// custom one must narrow its own set the same way: the default doesn't
+    /// read the object type.
     fn supports_cov_property(&self, _property: PropertyIdentifier) -> bool {
         true
     }
 
     /// The object's COV_Increment, for an object whose numeric
     /// Present_Value reports only a change at least this large.
+    ///
+    /// The server reads it at each evaluation, so return the current
+    /// value: a write to COV_Increment takes effect at the next change.
     ///
     /// The built-in Analog Inputs, Outputs and Values, Loop, Staging, Pulse
     /// Converter, Lighting Output and the Integer, Positive Integer and Large
@@ -149,12 +153,12 @@ pub trait CovReporting {
     /// leaves out a listed property the object's Property_List lacks.
     /// Property subscriptions report their own property instead.
     ///
-    /// The default reports nothing more. An object of a type whose Table
-    /// 13-1 row lists more answers that row,
-    /// [`CovReportedProperty::standard_for`] its type, as the built-in ones
-    /// do.
-    fn cov_reported_properties(&self) -> &'static [CovReportedProperty] {
-        &[]
+    /// The default, `None`, reports the object type's Table 13-1 row,
+    /// [`CovReportedProperty::standard_for`] it, as every built-in object
+    /// does. `Some(list)` reports exactly `list`, an empty one nothing
+    /// more; a proprietary type, which has no row, may name its own.
+    fn cov_reported_properties(&self) -> Option<&'static [CovReportedProperty]> {
+        None
     }
 }
 

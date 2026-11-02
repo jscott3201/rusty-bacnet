@@ -161,7 +161,7 @@ fn apply_silenced_operation(
 
 /// Properties a Point or Zone offers for property COV, in the order an
 /// operation outcome reports their deltas.
-const COV_PROPERTIES: [PropertyIdentifier; 5] = [
+pub const COV_PROPERTIES: [PropertyIdentifier; 5] = [
     PropertyIdentifier::PRESENT_VALUE,
     PropertyIdentifier::TRACKING_VALUE,
     PropertyIdentifier::SILENCED,

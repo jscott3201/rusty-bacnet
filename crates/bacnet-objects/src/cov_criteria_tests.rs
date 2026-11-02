@@ -110,9 +110,7 @@ fn table_13_1_extra_values_follow_each_row() {
             .find(|(row, _)| *row == object_type)
             .map_or(&[][..], |(_, reported)| *reported);
         assert_eq!(
-            object
-                .cov()
-                .map_or(&[][..], |cov| cov.cov_reported_properties()),
+            crate::cov_reporting_tests::reported(&*object),
             expected,
             "{object_type:?}"
         );

@@ -480,10 +480,6 @@ impl crate::traits::CovReporting for LoopObject {
     fn cov_increment(&self) -> Option<f64> {
         Some(f64::from(self.cov_increment))
     }
-
-    fn cov_reported_properties(&self) -> &'static [crate::traits::CovReportedProperty] {
-        crate::traits::CovReportedProperty::standard_for(ObjectType::LOOP)
-    }
 }
 
 impl crate::traits::ReliabilityEval for LoopObject {

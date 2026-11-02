@@ -689,8 +689,7 @@ fn pulse_converter_cov_reports_update_time() {
     // Table 13-1 lists Update_Time after Present_Value and Status_Flags; a
     // change of it alone sends no notification.
     assert_eq!(
-        pc.cov()
-            .map_or(&[][..], |cov| cov.cov_reported_properties()),
+        crate::cov_reporting_tests::reported(&pc),
         [Value(PropertyIdentifier::UPDATE_TIME)]
     );
     assert!(crate::property_metadata::has_property(

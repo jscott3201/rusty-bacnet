@@ -637,11 +637,7 @@ impl BACnetObject for AccessDoorObject {
     }
 }
 
-impl crate::traits::CovReporting for AccessDoorObject {
-    fn cov_reported_properties(&self) -> &'static [crate::traits::CovReportedProperty] {
-        crate::traits::CovReportedProperty::standard_for(ObjectType::ACCESS_DOOR)
-    }
-}
+impl crate::traits::CovReporting for AccessDoorObject {}
 
 crate::event::impl_change_of_state_reporting!(
     AccessDoorObject,

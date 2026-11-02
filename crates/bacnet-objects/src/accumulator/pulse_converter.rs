@@ -470,10 +470,6 @@ impl crate::traits::CovReporting for PulseConverterObject {
     fn cov_increment(&self) -> Option<f64> {
         Some(f64::from(self.cov_increment))
     }
-
-    fn cov_reported_properties(&self) -> &'static [crate::traits::CovReportedProperty] {
-        crate::traits::CovReportedProperty::standard_for(ObjectType::PULSE_CONVERTER)
-    }
 }
 
 impl crate::traits::Timed for PulseConverterObject {

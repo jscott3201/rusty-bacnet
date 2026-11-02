@@ -389,18 +389,14 @@ fn loop_cov_reports_setpoint_and_controlled_variable_value() {
     use crate::traits::CovReportedProperty::Value;
     let lo = LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     assert_eq!(
-        lo.cov()
-            .map_or(&[][..], |cov| cov.cov_reported_properties()),
+        crate::cov_reporting_tests::reported(&lo),
         [
             Value(PropertyIdentifier::SETPOINT),
             Value(PropertyIdentifier::CONTROLLED_VARIABLE_VALUE),
         ]
     );
     let list = crate::test_rows::listed(&lo.property_metadata());
-    for reported in lo
-        .cov()
-        .map_or(&[][..], |cov| cov.cov_reported_properties())
-    {
+    for reported in crate::cov_reporting_tests::reported(&lo) {
         assert!(list.contains(&reported.property()));
         assert!(!reported.triggers(), "Table 13-1 reports them only");
     }

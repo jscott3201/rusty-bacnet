@@ -498,11 +498,7 @@ impl BACnetObject for AccessPointObject {
     }
 }
 
-impl crate::traits::CovReporting for AccessPointObject {
-    fn cov_reported_properties(&self) -> &'static [crate::traits::CovReportedProperty] {
-        crate::traits::CovReportedProperty::standard_for(ObjectType::ACCESS_POINT)
-    }
-}
+impl crate::traits::CovReporting for AccessPointObject {}
 
 /// Take an access event the application reports (#1132), through
 /// [`Self::set_access_event`]. Refused with WRITE_ACCESS_DENIED while

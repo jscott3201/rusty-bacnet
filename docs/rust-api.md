@@ -4095,15 +4095,18 @@ behaviour, so an object without it writes nothing.
   an object whose type has no Table 13-1 row, like the built-in Averaging and
   Command, answers `false` and takes property subscriptions only.
   `supports_cov_property(p)` (default `true`) decides each property
-  subscription, `cov_increment()` (default `None`) is the object's
-  COV_Increment, and `cov_reported_properties()` (default empty) lists what a
-  whole-object notification carries after Present_Value and Status_Flags;
-  `CovReportedProperty::standard_for(object_type)` gives a standard type's
-  Table 13-1 row. These were `supports_cov`, `supports_subscribe_cov_property`
-  and the three hooks of the same names on `BACnetObject` before #2179, whose
-  defaults read the object type; the capability's don't, so a custom Life
-  Safety Point or Zone narrows `supports_cov_property` itself and a custom
-  object of a type with a Table 13-1 row returns that row. The unused
+  subscription, `cov_increment()` (default `None`) is the object's current
+  COV_Increment, read at each evaluation, and `cov_reported_properties()`
+  lists what a whole-object notification carries after Present_Value and
+  Status_Flags. Its default, `None`, has the server report the object type's
+  Table 13-1 row (`CovReportedProperty::standard_for(object_type)`);
+  `Some(list)` reports exactly that list. These were `supports_cov`,
+  `supports_subscribe_cov_property` and the three hooks of the same names on
+  `BACnetObject` before #2179. `supports_cov_property`'s old default read the
+  object type and the new one doesn't, so a custom Life Safety Point or Zone
+  narrows its own property set, for example to
+  `bacnet_objects::life_safety::COV_PROPERTIES`. Calls on a concrete type
+  need `use bacnet_objects::traits::CovReporting`. The unused
   `set_overridden` hook was removed with no replacement: an object computes
   Status_Flags' OVERRIDDEN bit itself when it reads the property.
 - **`audit_log()` and `audit_log_mut()` → `AuditLog`** (hidden, #2179), for
