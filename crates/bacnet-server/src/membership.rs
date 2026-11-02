@@ -4,21 +4,22 @@
 //! `ObjectDatabase::add` and `remove` judge again the Pulse Converters whose
 //! Input_Reference names the object, under the caller's guard, and queue
 //! those whose Reliability changed; `add` also queues each Schedule holding
-//! a refused reference to the new object, and a Schedule's removal (or
-//! replacement by `add`) queues the NULLs that give up the slots it held. The rest is the server's: the
-//! Schedule's retry to the new object ([`crate::schedule::retry_for_created`]),
-//! the removed Schedule's relinquishes
-//! ([`crate::schedule::relinquish_for_removed`], #2256, #2264) and the COV
-//! for what changed. A CreateObject or DeleteObject takes the
-//! queue under its own guard and adds the fanout, and any Command run a
-//! retry starts, to the request's, and an application's own `add` or
-//! `remove` wakes the waker [`install_waker`] puts on the database, which
-//! the server's Schedule task waits on to take the queue under the next
-//! guard it gets ([`settle_committed`]). Every Schedule pass also drains the
-//! queue ([`drain`]) before it evaluates, so a removed Schedule's NULLs
-//! always land before a Schedule re-added under its identifier writes:
-//! their Value_Source check can't tell the two apart (#2264). Lock order is
-//! the server's: the database guard, then the COV table.
+//! a refused reference to the new object, and the removal of a Schedule or
+//! a Staging object (or its replacement by `add`) queues the NULLs that give
+//! up the slots it held. The rest is the server's: the Schedule's retry to
+//! the new object ([`crate::schedule::retry_for_created`]), the removed
+//! object's relinquishes ([`crate::schedule::relinquish_for_removed`],
+//! #2256, #2264, #2265) and the COV for what changed. A CreateObject or
+//! DeleteObject takes the queue under its own guard and adds the fanout, and
+//! any Command run a retry starts, to the request's, and an application's
+//! own `add` or `remove` wakes the waker [`install_waker`] puts on the
+//! database, which the server's Schedule task waits on to take the queue
+//! under the next guard it gets ([`settle_committed`]). Every Schedule pass,
+//! and every Staging target write, also drains the queue ([`drain`]) first,
+//! so a removed object's NULLs always land before one re-added under its
+//! identifier writes: their Value_Source check can't tell the two apart
+//! (#2264, #2265). Lock order is the server's: the database guard, then the
+//! COV table.
 
 use std::sync::Arc;
 
@@ -43,7 +44,7 @@ pub(crate) async fn settle(
 }
 
 /// Take the work queued on `db_w` and do it into `commit`: the removed
-/// Schedules' relinquishes, then the retries to created objects, with the
+/// Schedules' and Staging objects' relinquishes, then the retries to created objects, with the
 /// objects they changed and those the queue names collected for COV.
 /// Returns whether there was any.
 pub(crate) fn drain(db_w: &mut ObjectDatabase, commit: &mut BackgroundCommit) -> bool {

@@ -9,6 +9,10 @@
 //! server sends each only while the target's Value_Source still names the
 //! Staging object, so a slot another writer has taken keeps that writer's
 //! value (Clause 19.2 warns about two writers sharing a priority).
+//!
+//! The question of checking a Schedule's calculated NULLs for ownership
+//! (#2265's second item) is out of scope here: a Staging object only writes
+//! ACTIVE or INACTIVE, never a calculated NULL.
 
 use crate::prelude::*;
 
@@ -21,7 +25,7 @@ use crate::schedule::ScheduleWrite;
 use super::StagingWritePlan;
 
 /// The `(target, priority)` slots a Staging object has written. Bounded by
-/// its targets times the 16 priorities.
+/// every target it has ever referenced times the 16 priorities.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(super) struct HeldSlots(Vec<(ObjectIdentifier, u8)>);
 

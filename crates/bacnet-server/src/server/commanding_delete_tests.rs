@@ -239,3 +239,51 @@ async fn timer_deleted_while_its_start_writes_wait_on_another_device_writes_no_m
     assert_eq!(h.server.notification_transactions.active_count(), 0);
     assert_eq!(slot9(&h, ao(2)).await, PropertyValue::Null);
 }
+
+/// The server's run host refuses a write for a run that is no longer its
+/// object's current one under the guard that would commit it, so a delete
+/// landing after the run's earlier check still stops it; the same write for
+/// the current run is made.
+#[tokio::test(start_paused = true)]
+async fn the_server_host_refuses_a_write_for_a_stale_run_under_its_guard() {
+    use crate::command_lists::RunHost;
+    use bacnet_objects::command::{CommandRun, RunPlan};
+    let h = Harness::start_with(ServerConfig::default(), |db| {
+        outputs(db);
+        db.add(Box::new(CommandObject::new(1, "CMD-1").unwrap()))
+            .unwrap();
+    })
+    .await;
+    let current = h
+        .server
+        .database()
+        .read()
+        .await
+        .get(&cmd(1))
+        .and_then(|object| object.command_runner())
+        .unwrap()
+        .command_generation();
+    let runner = super::command_runs::CommandRunner::for_server(&h.server);
+    let command = write(ao(1), PropertyValue::Real(40.0), 8);
+    let run = |generation| CommandRun {
+        source: cmd(1),
+        generation,
+        plan: RunPlan::Actions(Vec::new()),
+        chain: Arc::from([]),
+    };
+    // Generation 0 is never handed out.
+    let refused = runner.write(&run(0), &command).await.unwrap_err();
+    assert!(
+        matches!(
+            refused,
+            bacnet_types::error::Error::Remote(bacnet_types::error::RemoteError::Error {
+                class: bacnet_types::enums::ErrorClass::OBJECT,
+                code: bacnet_types::enums::ErrorCode::UNKNOWN_OBJECT,
+            })
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(slot8(&h, ao(1)).await, PropertyValue::Null);
+    runner.write(&run(current), &command).await.unwrap();
+    assert_eq!(slot8(&h, ao(1)).await, PropertyValue::Real(40.0));
+}

@@ -257,6 +257,8 @@ mod tests {
             RemoteRequestError::NoInvokeId,
             RemoteRequestError::Stopping,
             RemoteRequestError::NoNetwork,
+            RemoteRequestError::Malformed,
+            RemoteRequestError::Withdrawn,
         ] {
             assert_eq!(unmade(local), WriteFailure::Process);
         }

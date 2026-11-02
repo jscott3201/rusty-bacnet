@@ -92,8 +92,9 @@ impl Request<'_> {
     }
 
     /// DeleteObject. The work the removal queued on the database
-    /// (`crate::membership`), the relinquishes a deleted Schedule owes its
-    /// targets included (#2256, #2264), is taken under the same guard, and
+    /// (`crate::membership`), the relinquishes a deleted Schedule or Staging
+    /// object owes its targets included (#2256, #2264, #2265), is taken under
+    /// the same guard, and
     /// its COV fanout joins the request's.
     pub(in crate::server::requests) async fn delete_object<T: TransportPort + 'static>(
         &self,

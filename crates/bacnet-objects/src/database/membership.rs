@@ -25,7 +25,7 @@
 //! The queue holds each entry once, and a retry only while a Schedule holds
 //! a refusal naming the object. Without a server nothing takes it, so it
 //! stays bounded by the objects and refusals that can produce entries, and
-//! by the distinct slots removed Schedules held.
+//! by the distinct slots removed Schedules and Staging objects held.
 //!
 //! [`ScheduleRunner::take_relinquish_writes`]: crate::traits::ScheduleRunner::take_relinquish_writes
 //! [`StagingSource::take_relinquish_writes`]: crate::traits::StagingSource::take_relinquish_writes

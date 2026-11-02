@@ -149,3 +149,17 @@ async fn a_removed_staging_objects_null_lands_before_its_replacement_writes() {
     tokio::time::sleep(Duration::from_secs(1)).await;
     assert_eq!(slot8(&h).await, INACTIVE);
 }
+
+#[tokio::test(start_paused = true)]
+async fn replacing_a_staging_object_through_add_relinquishes_the_old_ones_slot() {
+    let h = start().await;
+    // The replacement starts from what it holds: nothing until it writes.
+    h.server
+        .database()
+        .write()
+        .await
+        .add(Box::new(staging(5.0)))
+        .unwrap();
+    h.settle().await;
+    assert_eq!(slot8(&h).await, PropertyValue::Null);
+}

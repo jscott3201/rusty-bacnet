@@ -471,11 +471,15 @@ fn write_targets(
                     "Schedule retry still refused by controlled property"
                 )
             }
+            // The source may be a removed Staging object's relinquish too
+            // (#2265), so the log names it.
             Err(e) => warn!(
+                source = %schedule,
+                source_type = ?schedule.object_type(),
                 target = %target_oid,
                 property = prop_id,
                 error = %e,
-                "Schedule failed to write to controlled property"
+                "Schedule or Staging object failed to write to controlled property"
             ),
         }
         outcomes.push(outcome);

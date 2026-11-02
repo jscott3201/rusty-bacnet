@@ -168,11 +168,12 @@ pub(super) struct RemoteWriter<'a, T: TransportPort + 'static> {
     pub(super) max_apdu: u32,
 }
 
-/// A run a write is made for, checked before its invoke ID is leased and
-/// again before each attempt is sent (#2265): a run that went stale while
-/// the write waited for a binding, or between retries, sends nothing more.
-/// The database's read guard is taken for the check alone, never across a
-/// send or a wait.
+/// A run a write is made for, checked once the route is known, before its
+/// invoke ID is leased, and again before each retry (#2265): a run that went
+/// stale while the write waited for a binding, or between retries, sends
+/// nothing more. The database's read guard is taken for the check alone,
+/// never across a send or a wait, so an attempt that passed its check is
+/// still sent if the run goes stale before the send.
 #[derive(Clone, Copy)]
 pub(super) struct RunCheck<'a> {
     pub(super) db: &'a Arc<RwLock<ObjectDatabase>>,

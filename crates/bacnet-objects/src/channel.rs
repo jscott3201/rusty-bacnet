@@ -38,12 +38,16 @@
 //!
 //! **On deletion** (#2265) a Channel releases nothing. It holds no slot of
 //! its own: each member write fills the slot at the priority the
-//! Channel's writer chose (Clause 12.53.5), so the slot is that writer's,
-//! who gives it up by writing NULL to the Channel. Clause 12.53 says
-//! nothing about deletion. A distribution in progress stops: once the
-//! object is gone, no member still waiting on its Execution_Delay is
-//! written, in this device or another, because every write checks the run's
-//! generation under the guard that commits it.
+//! Channel's writer chose (Clause 12.53.5), so the slot is that writer's.
+//! While the Channel exists that writer gives it up by writing NULL to the
+//! Channel; once it is deleted, the writer relinquishes each member's slot
+//! directly. Clause 12.53 says nothing about deletion. A distribution in
+//! progress stops: a member in this device checks the run's generation under
+//! the guard that commits its write, so none still waiting on its
+//! Execution_Delay is written once the object is gone. A member in another
+//! device is checked once its route is known, before its invoke ID is
+//! leased, and before each retry; a request that passed its last check still
+//! goes out if the delete lands in that gap.
 
 use crate::prelude::*;
 use alloc::borrow::Cow;
