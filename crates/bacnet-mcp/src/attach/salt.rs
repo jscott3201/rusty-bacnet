@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest as _, Sha256};
 
 use super::AttachError;
+use super::nonce::Nonce;
 
 /// The salt's file name in the profile's workspace.
 pub(crate) const SALT_FILE: &str = "mcp-pipe.salt";
@@ -62,31 +63,40 @@ impl From<SaltError> for AttachError {
     }
 }
 
-/// The pipe's name for the workspace `dir`: a hash of the salt and then
-/// the workspace's canonical path, so each profile has its own and nobody
-/// who can't read the salt can work it out. The salt's fixed length
-/// keeps the two parts apart.
-pub(crate) fn pipe_name(salt: &Salt, dir: &Path) -> PathBuf {
+/// The pipe's name for the workspace `dir` in one run of its listener: a
+/// hash of the salt, the run's nonce and then the workspace's canonical
+/// path, so each profile has its own, nobody who can't read the salt and
+/// the nonce can work it out, and each run has a new one (#2237). The
+/// salt's and the nonce's fixed lengths keep the parts apart.
+pub(crate) fn pipe_name(salt: &Salt, nonce: &Nonce, dir: &Path) -> PathBuf {
     let canonical = std::fs::canonicalize(dir)
         .or_else(|_| std::path::absolute(dir))
         .unwrap_or_else(|_| dir.to_path_buf());
     let digest = Sha256::new()
         .chain_update(salt.0)
+        .chain_update(nonce.0)
         .chain_update(canonical.as_os_str().as_encoded_bytes())
         .finalize();
     let hex: String = digest[..16].iter().map(|b| format!("{b:02x}")).collect();
     PathBuf::from(format!(r"\\.\pipe\rusty-bacnet-mcp-{hex}"))
 }
 
-/// The workspace `dir`'s salt, checked: the file must be a plain file,
-/// owned by this user and open to nobody else (see the module), and hold exactly
-/// [`SALT_LEN`] bytes.
+/// The workspace `dir`'s salt, checked as [`read_private`] does.
 pub(crate) fn load(dir: &Path) -> Result<Salt, SaltError> {
-    let path = dir.join(SALT_FILE);
+    read_private(&dir.join(SALT_FILE)).map(Salt)
+}
+
+/// The `N` bytes of the private file at `path`, checked: it must be a
+/// plain file, owned by this user and open to nobody else (see the
+/// module), and hold exactly `N` bytes. The salt and the nonce are both
+/// read here.
+pub(crate) fn read_private<const N: usize>(path: &Path) -> Result<[u8; N], SaltError> {
     let shown = path.display();
-    let mut file = match platform::open(&path) {
+    let mut file = match platform::open(path) {
         Ok(file) => file,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Err(SaltError::Missing(path)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Err(SaltError::Missing(path.to_path_buf()));
+        }
         Err(e) => return Err(SaltError::Refused(format!("cannot open {shown}: {e}"))),
     };
     let plain = file
@@ -103,18 +113,47 @@ pub(crate) fn load(dir: &Path) -> Result<Salt, SaltError> {
              on this profile, and the next TUI makes a new one"
         ))
     })?;
-    let mut bytes = Vec::with_capacity(SALT_LEN + 1);
+    let mut bytes = Vec::with_capacity(N + 1);
     (&mut file)
-        .take(SALT_LEN as u64 + 1)
+        .take(N as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| SaltError::Refused(format!("cannot read {shown}: {e}")))?;
-    let salt = <[u8; SALT_LEN]>::try_from(bytes.as_slice()).map_err(|_| {
+    <[u8; N]>::try_from(bytes.as_slice()).map_err(|_| {
         SaltError::Refused(format!(
-            "{shown} is corrupt: it doesn't hold exactly {SALT_LEN} bytes; remove it with no \
+            "{shown} is corrupt: it doesn't hold exactly {N} bytes; remove it with no \
              TUI open on this profile, and the next TUI makes a new one"
         ))
-    })?;
-    Ok(Salt(salt))
+    })
+}
+
+/// Write `bytes` whole and synced to a new private file of `dir` under a
+/// random temporary name beside `file`, and give that name: the salt is
+/// linked into place from it, the nonce renamed.
+pub(crate) fn write_temporary(dir: &Path, file: &str, bytes: &[u8]) -> io::Result<PathBuf> {
+    let mut tag = [0u8; 8];
+    getrandom::fill(&mut tag).map_err(io::Error::other)?;
+    let tag: String = tag.iter().map(|b| format!("{b:02x}")).collect();
+    let temporary = dir.join(format!("{file}.{tag}.tmp"));
+    // A file already at the name isn't this call's: left alone.
+    let mut made = platform::create_private(&temporary)?;
+    let written = made.write_all(bytes).and_then(|()| made.sync_all());
+    drop(made);
+    match written {
+        Ok(()) => Ok(temporary),
+        Err(e) => {
+            remove_temporary(&temporary);
+            Err(e)
+        }
+    }
+}
+
+/// Remove the temporary file `path`, if it is there still.
+pub(crate) fn remove_temporary(path: &Path) {
+    if let Err(e) = std::fs::remove_file(path)
+        && e.kind() != io::ErrorKind::NotFound
+    {
+        tracing::warn!("cannot remove {}: {e}", path.display());
+    }
 }
 
 /// The workspace `dir`'s salt, made now if it has none.
@@ -131,24 +170,15 @@ pub(crate) fn load_or_create(dir: &Path) -> Result<Salt, SaltError> {
 fn create(dir: &Path) -> Result<Salt, SaltError> {
     let path = dir.join(SALT_FILE);
     let mut salt = [0u8; SALT_LEN];
-    let mut tag = [0u8; 8];
     getrandom::fill(&mut salt)
-        .and_then(|()| getrandom::fill(&mut tag))
         .map_err(|e| SaltError::Refused(format!("no random bytes for the MCP pipe's salt: {e}")))?;
-    let tag: String = tag.iter().map(|b| format!("{b:02x}")).collect();
-    let temporary = dir.join(format!("{SALT_FILE}.{tag}.tmp"));
-    let written = platform::create_private(&temporary).and_then(|mut file| {
-        file.write_all(&salt)?;
-        file.sync_all()
+    let linked = write_temporary(dir, SALT_FILE, &salt).and_then(|temporary| {
+        let linked = std::fs::hard_link(&temporary, &path);
+        // Made or not, the temporary name goes; the file stays under the
+        // other name when linked.
+        remove_temporary(&temporary);
+        linked
     });
-    let linked = written.and_then(|()| std::fs::hard_link(&temporary, &path));
-    // Made or not, the temporary name goes; the file stays under the
-    // other name when linked.
-    if let Err(e) = std::fs::remove_file(&temporary)
-        && e.kind() != io::ErrorKind::NotFound
-    {
-        tracing::warn!("cannot remove {}: {e}", temporary.display());
-    }
     match linked {
         Ok(()) => Ok(Salt(salt)),
         // The race's loser takes the winner's salt; that one gone again
@@ -167,11 +197,11 @@ fn create(dir: &Path) -> Result<Salt, SaltError> {
     }
 }
 
-/// How the salt file is made, opened and checked: on Windows with the
-/// owner-only descriptor the pipe carries, its reparse points not
-/// followed.
+/// How the salt and nonce files are made, opened and checked: on Windows
+/// with the owner-only descriptor the pipe carries, their reparse points
+/// not followed.
 #[cfg(windows)]
-mod platform {
+pub(crate) mod platform {
     use std::fs::{File, OpenOptions};
     use std::io;
     use std::os::windows::fs::OpenOptionsExt as _;
@@ -182,13 +212,13 @@ mod platform {
     use super::super::win32::{self, Descriptor};
 
     /// A new file at `path`, owned by this user and open to nobody else.
-    pub(super) fn create_private(path: &Path) -> io::Result<File> {
+    pub(crate) fn create_private(path: &Path) -> io::Result<File> {
         let descriptor = Descriptor::owner_only(&win32::own_sid()?)?;
         win32::create_file(path, &descriptor)
     }
 
     /// The file at `path` for reading; a link is opened as itself.
-    pub(super) fn open(path: &Path) -> io::Result<File> {
+    pub(crate) fn open(path: &Path) -> io::Result<File> {
         OpenOptions::new()
             .read(true)
             .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
@@ -197,22 +227,23 @@ mod platform {
 
     /// Whether `file` is owned by this user and its access list grants
     /// nobody else but SYSTEM and the Administrators group.
-    pub(super) fn check_private(file: &File) -> io::Result<()> {
+    pub(crate) fn check_private(file: &File) -> io::Result<()> {
         win32::check_private_file(file, &win32::own_sid()?)
     }
 }
 
-/// How the salt file is made, opened and checked in Unix test builds:
+/// How the salt and nonce files are made, opened and checked in Unix test
+/// builds:
 /// mode 0600, never through a link.
 #[cfg(unix)]
-mod platform {
+pub(crate) mod platform {
     use std::fs::{File, OpenOptions};
     use std::io;
     use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
     use std::path::Path;
 
     /// A new file at `path`, mode 0600.
-    pub(super) fn create_private(path: &Path) -> io::Result<File> {
+    pub(crate) fn create_private(path: &Path) -> io::Result<File> {
         OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -222,7 +253,7 @@ mod platform {
     }
 
     /// The file at `path` for reading, not through a link.
-    pub(super) fn open(path: &Path) -> io::Result<File> {
+    pub(crate) fn open(path: &Path) -> io::Result<File> {
         OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_NOFOLLOW)
@@ -230,16 +261,23 @@ mod platform {
     }
 
     /// Whether `file` is this user's and nobody else may read or write it.
-    pub(super) fn check_private(file: &File) -> io::Result<()> {
+    pub(crate) fn check_private(file: &File) -> io::Result<()> {
         let metadata = file.metadata()?;
-        if metadata.uid() != super::super::socket::own_uid() {
-            return Err(io::Error::other(format!("owned by uid {}", metadata.uid())));
+        private(
+            metadata.uid(),
+            metadata.mode(),
+            super::super::socket::own_uid(),
+        )
+    }
+
+    /// Whether a file owned by `uid` with `mode` is the user `own`'s
+    /// alone.
+    pub(crate) fn private(uid: u32, mode: u32, own: u32) -> io::Result<()> {
+        if uid != own {
+            return Err(io::Error::other(format!("owned by uid {uid}")));
         }
-        if metadata.mode() & 0o077 != 0 {
-            return Err(io::Error::other(format!(
-                "mode {:o}",
-                metadata.mode() & 0o777
-            )));
+        if mode & 0o077 != 0 {
+            return Err(io::Error::other(format!("mode {:o}", mode & 0o777)));
         }
         Ok(())
     }

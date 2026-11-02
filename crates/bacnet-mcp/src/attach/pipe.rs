@@ -1,14 +1,16 @@
 //! The Windows side of the attached mode (#2201): a named pipe whose name
-//! comes from a secret salt and the workspace's path, open to this user's
-//! SID alone and to local clients only, its peers identified by their
-//! process's token, and the bridge's connection to it.
+//! comes from a secret salt, a nonce of the run and the workspace's path,
+//! open to this user's SID alone and to local clients only, its peers
+//! identified by their process's token, and the bridge's connection to it.
 //!
 //! The pipe's name is global, so it is guarded four ways. It can't be
 //! worked out without the salt (`salt.rs`, #2219), a file in the
 //! workspace only this user may read; the workspace itself must not be
-//! listable by other users. The first instance claims the name
-//! (`FILE_FLAG_FIRST_PIPE_INSTANCE`): if anyone holds it already, the
-//! listener is refused rather than joining their pipe. Every instance
+//! listable by other users. Anyone may see it listed while the TUI runs,
+//! but each run's nonce (`nonce.rs`, #2237) gives it a new one. The first
+//! instance claims the name (`FILE_FLAG_FIRST_PIPE_INSTANCE`): if anyone
+//! holds it already, the listener is refused rather than joining their
+//! pipe. Every instance
 //! after it carries the same owner-only descriptor and refuses remote
 //! clients, and the next instance is always made before a connected one
 //! is handed on, so the name never goes free while the listener runs.
@@ -33,10 +35,10 @@ use tokio::net::windows::named_pipe::{
 };
 use tokio::runtime::Handle;
 
-use super::salt;
 use super::sessions::Sessions;
 use super::win32::{self, Descriptor};
 use super::{ACCEPT_BACKOFF, AttachError, not_listening};
+use super::{nonce, salt};
 
 /// How the audit records name the way a connection came in.
 pub(crate) const VIA: &str = "named-pipe";
@@ -72,15 +74,18 @@ impl fmt::Debug for Sid {
     }
 }
 
-/// The TUI's pipe for the workspace `dir`: a name from a hash of the
-/// workspace's salt file and canonical path, so each profile has its own,
-/// `bacnet mcp connect` finds it with no setting, and nobody who can't
-/// read the salt can work it out. Fails when the workspace has no salt
-/// (no TUI has listened on it) or its salt file isn't this user's alone,
-/// or is corrupt.
+/// The pipe of the TUI listening in the workspace `dir`: a name from a
+/// hash of the workspace's salt, the running listener's nonce and the
+/// workspace's canonical path, so each profile has its own, `bacnet mcp
+/// connect` finds it with no setting, nobody who can't read both files
+/// can work it out, and a TUI started again has a new one. The nonce is
+/// read anew on each call. Fails when the workspace has no salt (no TUI
+/// has listened on it) or no nonce (none listens now), or when either
+/// file isn't this user's alone or is corrupt.
 pub fn socket_path(dir: &Path) -> Result<PathBuf, AttachError> {
     let salt = salt::load(dir)?;
-    Ok(salt::pipe_name(&salt, dir))
+    let nonce = nonce::load(dir)?;
+    Ok(salt::pipe_name(&salt, &nonce, dir))
 }
 
 /// Who is at the other end of a connection, as the OS reports it.
@@ -176,11 +181,12 @@ pub(super) fn options(first: bool) -> ServerOptions {
 /// What the listener found before taking its lock.
 pub(super) struct Preflight {
     owner: Sid,
-    name: PathBuf,
+    salt: salt::Salt,
     descriptor: Descriptor,
 }
 
-/// This user's SID, the pipe's name and its owner-only descriptor.
+/// This user's SID, the workspace's salt and the pipe's owner-only
+/// descriptor.
 /// Refused when other users may list the workspace, or when its salt
 /// file is not this user's alone or is corrupt; the salt is made when
 /// the workspace has none.
@@ -201,15 +207,17 @@ pub(super) fn preflight(dir: &Path) -> Result<Preflight, AttachError> {
     let salt = salt::load_or_create(dir)?;
     Ok(Preflight {
         owner,
-        name: salt::pipe_name(&salt, dir),
+        salt,
         descriptor,
     })
 }
 
-/// The pipe's name. Nothing to remove: the name goes with its last
-/// instance.
+/// The pipe's name, and the workspace whose nonce gave it. The name goes
+/// with the pipe's last instance.
 pub(super) struct Endpoint {
     name: PathBuf,
+    /// Taken as the nonce is withdrawn, once.
+    workspace: Option<PathBuf>,
 }
 
 impl Endpoint {
@@ -217,8 +225,20 @@ impl Endpoint {
         &self.name
     }
 
-    /// Nothing to do: the Unix socket's file is removed here.
-    pub(super) fn remove(&mut self) {}
+    /// Withdraw the run's nonce, once, with the listener's lock still
+    /// held: a connect after this finds no TUI listening rather than a
+    /// stale name.
+    pub(super) fn withdraw(&mut self) {
+        if let Some(dir) = self.workspace.take() {
+            nonce::withdraw(&dir);
+        }
+    }
+
+    /// Withdraw the nonce, if not yet done: the pipe's name goes with its
+    /// last instance.
+    pub(super) fn remove(&mut self) {
+        self.withdraw();
+    }
 }
 
 /// What the accept loop takes connections from: the instance waiting for
@@ -230,54 +250,51 @@ pub(super) struct Incoming {
     owner: Sid,
 }
 
-/// How many times the first instance is tried while the name is taken,
-/// and how long apart: a listener of this workspace that just stopped may
-/// still be closing its last instances.
-const FIRST_TRIES: u32 = 5;
-const FIRST_RETRY: Duration = Duration::from_millis(50);
-
 impl Preflight {
-    /// With the listener's lock held: create the pipe's first instance on
-    /// `runtime`, claiming its name.
-    pub(super) async fn bind(
+    /// With the listener's lock held: pick the run's nonce, create the
+    /// pipe's first instance on `runtime`, claiming the name it gives, and
+    /// then publish the nonce for `connect`. A name nobody could know yet
+    /// that is taken all the same is refused, never joined.
+    pub(super) fn bind(
         self,
-        _dir: &Path,
+        dir: &Path,
         runtime: &Handle,
+    ) -> Result<(Endpoint, Incoming), AttachError> {
+        self.bind_with_nonce(dir, runtime, nonce::fresh()?)
+    }
+
+    /// [`bind`](Self::bind) under the nonce `nonce`: a test's chosen one.
+    pub(super) fn bind_with_nonce(
+        self,
+        dir: &Path,
+        runtime: &Handle,
+        nonce: nonce::Nonce,
     ) -> Result<(Endpoint, Incoming), AttachError> {
         let Self {
             owner,
-            name,
+            salt,
             descriptor,
         } = self;
-        let mut tries = 0;
-        let waiting = loop {
-            let created = {
-                let _entered = runtime.enter();
-                descriptor.create(&options(true), &name)
-            };
-            match created {
-                Ok(first) => break first,
-                Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
-                    tries += 1;
-                    if tries == FIRST_TRIES {
-                        return Err(AttachError(format!(
-                            "the MCP pipe {} is taken: the previous listener may still be \
-                             closing, or another process (perhaps another user's) holds it; \
-                             not listening",
-                            name.display()
-                        )));
-                    }
-                    tokio::time::sleep(FIRST_RETRY).await;
-                }
-                Err(e) => {
-                    return Err(AttachError(format!(
-                        "cannot make the MCP pipe {}: {e}",
-                        name.display()
-                    )));
-                }
-            }
+        let name = salt::pipe_name(&salt, &nonce, dir);
+        let created = {
+            let _entered = runtime.enter();
+            descriptor.create(&options(true), &name)
         };
-        let endpoint = Endpoint { name: name.clone() };
+        let waiting = created.map_err(|e| {
+            if e.kind() == io::ErrorKind::PermissionDenied {
+                AttachError(format!(
+                    "the MCP pipe {} is taken by another process; not listening",
+                    name.display()
+                ))
+            } else {
+                AttachError(format!("cannot make the MCP pipe {}: {e}", name.display()))
+            }
+        })?;
+        nonce::publish(dir, &nonce)?;
+        let endpoint = Endpoint {
+            name: name.clone(),
+            workspace: Some(dir.to_path_buf()),
+        };
         let incoming = Incoming {
             waiting,
             name,
