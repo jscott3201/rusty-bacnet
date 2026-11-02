@@ -1176,6 +1176,18 @@ interleaved matrix compare.
   they read, write or encode before and after the counted loop. The client
   API takes the written value and the ReadPropertyMultiple specifications by
   value, so their clones count as part of each request.
+- **Built like the release.** The harness builds with whole-program LTO and
+  one codegen unit, as the published CLI and wheels do (the `dist`
+  profile), with line tables for attribution. Under the default release
+  profile, a change that only moved the compiler's inlining across codegen
+  units showed as +120 to +170 instructions per request; built this way it
+  doesn't (#2314).
+- **Fixed allocator settings.** Every counted run sets `GLIBC_TUNABLES`: a
+  per-thread cache of 32 chunks per size and fixed mmap, trim and top-pad
+  thresholds. With glibc's defaults, which free chunk a request found
+  depended on how the tasks interleaved, and the ReadPropertyMultiple
+  counts of one binary spread over hundreds of instructions; with these
+  settings they spread over tens, and ReadProperty's count is unchanged.
 - **Per request.** Each run happens twice, with 1,000 and with 10,000 requests
   after 200 warm-up requests (100,000 and 1,000,000 iterations for the codec
   workloads). The difference in instructions divided by the difference in
@@ -1230,13 +1242,18 @@ python3 scripts/perf/perf_counts.py run --noise dev --workloads all --out /tmp/n
 python3 -m unittest discover -s scripts/perf
 ```
 
-For quick local iteration only, `--noise-floors /tmp/noise/summary.json`
+`--callers` adds one pair of profile runs per round trip with callgrind's
+`--separate-callers`, and splits the Tokio semaphore's cost (#1978 item 2a)
+by caller: the client's locks, the server's locks (item 2b) and bounded
+channels' permit returns, in `callers.md`. For quick local iteration only, `--noise-floors /tmp/noise/summary.json`
 skips the A' build and takes the floors from an earlier noise run on the
 same machine; each row of the table names its floor's source. Each run
 writes `summary.md` (the verdict table), per-function and per-line
 instruction slopes under `profiles/`, and the #1978 items' share in
 `items.md`. The first baseline and noise floors on dev are in
-[benchmarks/results/perf-s0](benchmarks/results/perf-s0/README.md).
+[benchmarks/results/perf-s0](benchmarks/results/perf-s0/README.md); the
+current ones, built like the release with the fixed allocator settings, in
+[benchmarks/results/perf-s0b](benchmarks/results/perf-s0b/README.md).
 
 ## 11. How to reproduce
 

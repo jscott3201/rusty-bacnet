@@ -1,0 +1,32 @@
+{
+  "rp/ct": {
+    "2a: client (transaction table and other client locks)": 826.752,
+    "2b: server (database and other server locks)": 298.246,
+    "channel permits (bounded mpsc)": 4.496
+  },
+  "rp/mt": {
+    "2a: client (transaction table and other client locks)": 826.752,
+    "2b: server (database and other server locks)": 298.3242222222222,
+    "channel permits (bounded mpsc)": 4.496
+  },
+  "wp/ct": {
+    "2a: client (transaction table and other client locks)": 826.752,
+    "2b: server (database and other server locks)": 1182.3437777777779,
+    "channel permits (bounded mpsc)": 4.496
+  },
+  "wp/mt": {
+    "2a: client (transaction table and other client locks)": 826.752,
+    "2b: server (database and other server locks)": 1182.4922222222222,
+    "channel permits (bounded mpsc)": 4.495888888888889
+  },
+  "rpm/ct": {
+    "2a: client (transaction table and other client locks)": 826.752,
+    "2b: server (database and other server locks)": 299.9478888888889,
+    "channel permits (bounded mpsc)": 4.496
+  },
+  "rpm/mt": {
+    "2a: client (transaction table and other client locks)": 826.9153333333334,
+    "2b: server (database and other server locks)": 301.7464444444444,
+    "channel permits (bounded mpsc)": 4.496
+  }
+}
