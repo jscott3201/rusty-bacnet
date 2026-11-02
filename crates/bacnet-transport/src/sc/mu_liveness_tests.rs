@@ -1,8 +1,8 @@
 //! Local admission policy, not a universal AB.6.3 invalid-frame rule.
-//! Real-time timing unless a test says otherwise; these tests require
-//! progressing WebSocket writes.
+//! Tests that wait on heartbeat timing run on tokio's paused clock (#2310);
+//! all of them require progressing WebSocket writes.
 
-use crate::sc::heartbeat_validation_tests::{start_timed, start_timed_with_timeout};
+use crate::sc::heartbeat_validation_tests::start_timed;
 use crate::sc::*;
 use tokio::time::timeout;
 
@@ -49,12 +49,9 @@ async fn barrier(ws: &LoopbackWebSocket) {
     assert_eq!(recv(ws).await, [0, 0, 0x33, 0x44, 0x0A, 1, 0, 0, 7, 0, 7]);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn mu_liveness_rejected_burst_preserves_pending_probe_and_matching_ack() {
-    // The burst below runs on real time while the probe stays unanswered.
-    // A 5 s liveness timeout keeps a loaded runner from dropping the link
-    // first; probes still go out after 100 ms of idle.
-    let (mut transport, mut rx, ws) = start_timed_with_timeout(5000).await;
+    let (mut transport, mut rx, ws) = start_timed().await;
     let probe = recv(&ws).await;
     assert_eq!(probe[0], 0x0A);
     for &(options, marker) in OPTIONS {
@@ -86,7 +83,7 @@ async fn mu_liveness_rejected_burst_preserves_pending_probe_and_matching_ack() {
     transport.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn mu_liveness_rejected_traffic_keeps_original_idle_timeout_and_reconnects() {
     let (client, ws) = LoopbackWebSocket::pair();
     let (redial_tx, mut redial_rx) = mpsc::unbounded_channel();
@@ -106,13 +103,13 @@ async fn mu_liveness_rejected_traffic_keeps_original_idle_timeout_and_reconnects
     let (rx, ()) = tokio::join!(transport.start(), super::hub_accept(&ws, [0x10; 6]));
     let mut rx = rx.unwrap();
     let mut states = transport.connection_state_changes();
-    let started = Instant::now();
+    let started = tokio::time::Instant::now();
     let mut next = 0;
     let mut probes = 0;
     let mut naks = 0;
     let mut interval = tokio::time::interval(Duration::from_millis(20));
     // No valid sentinel/ACK during this window. Drain NAKs so the send path
-    // progresses; std::Instant is deliberately NOT replaced by Tokio advance.
+    // progresses.
     let expired = timeout(Duration::from_millis(1700), async {
         loop {
             tokio::select! {

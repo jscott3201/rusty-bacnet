@@ -529,7 +529,11 @@ async fn sc_connect_duplicate_vmac_reseed_failure_does_not_try_failover() {
     assert_eq!(c.local_vmac, original_vmac);
 }
 
-#[tokio::test]
+// Paused clock: the heartbeat deadline follows it (#2124). On real time a
+// stalled runner could send the 500 ms heartbeat before the test's Result
+// went out, and the silence check would catch it (#2310). The silence window
+// spans a full interval so a loop that stayed open would be caught.
+#[tokio::test(start_paused = true)]
 async fn sc_result_nak_closes_receive_loop_before_heartbeat() {
     let (ws_client, ws_hub) = LoopbackWebSocket::pair();
     let client_vmac = [0x01; 6];
@@ -552,7 +556,7 @@ async fn sc_result_nak_closes_receive_loop_before_heartbeat() {
     wait_until_disconnected(&conn).await;
 
     assert!(
-        tokio::time::timeout(Duration::from_millis(200), ws_hub.recv())
+        tokio::time::timeout(Duration::from_millis(600), ws_hub.recv())
             .await
             .is_err(),
         "receive loop should close before sending another heartbeat"
@@ -601,7 +605,11 @@ async fn encapsulated_npdu_result_nak_keeps_receive_loop_open() {
     transport.stop().await.unwrap();
 }
 
-#[tokio::test]
+// Paused clock: the heartbeat deadline follows it (#2124). On real time a
+// stalled runner could send the 500 ms heartbeat before the test's Result
+// went out, and the silence check would catch it (#2310). The silence window
+// spans a full interval so a loop that stayed open would be caught.
+#[tokio::test(start_paused = true)]
 async fn malformed_wire_bvlc_result_closes_receive_loop() {
     let (ws_client, ws_hub) = LoopbackWebSocket::pair();
     let client_vmac = [0x01; 6];
@@ -624,7 +632,7 @@ async fn malformed_wire_bvlc_result_closes_receive_loop() {
     wait_until_disconnected(&conn).await;
 
     assert!(
-        tokio::time::timeout(Duration::from_millis(200), ws_hub.recv())
+        tokio::time::timeout(Duration::from_millis(600), ws_hub.recv())
             .await
             .is_err(),
         "malformed Result should close the receive loop without a Result response"

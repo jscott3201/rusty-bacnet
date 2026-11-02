@@ -316,8 +316,10 @@ async fn unknown_function_during_handshake_is_ignored_without_nak() {
     assert!(silent, "handshake unexpectedly rejected unknown function");
 }
 
-#[tokio::test]
-async fn unknown_function_burst_before_and_after_probe_cannot_refresh_real_clock() {
+// Paused clock: the heartbeat deadline follows it (#2124), so the 2 s bound
+// can't expire on a stalled runner before the 700 ms timeout fires (#2310).
+#[tokio::test(start_paused = true)]
+async fn unknown_function_burst_before_and_after_probe_cannot_refresh_activity() {
     let (client, hub) = LoopbackWebSocket::pair();
     let mut transport = ScTransport::new(client, [1; 6])
         .with_device_uuid([1; 16])
@@ -327,7 +329,7 @@ async fn unknown_function_burst_before_and_after_probe_cannot_refresh_real_clock
         super::data_attribute_tests::hub_accept(&hub, [0x10; 6])
     );
     let mut rx = rx.unwrap();
-    let started = Instant::now();
+    let started = tokio::time::Instant::now();
     let mut states = transport.connection_state_changes();
     let mut interval = tokio::time::interval(Duration::from_millis(15));
     let mut sent = 0;
@@ -364,7 +366,9 @@ async fn unknown_function_burst_before_and_after_probe_cannot_refresh_real_clock
     assert!(rx.try_recv().is_err());
 }
 
-#[tokio::test]
+// Paused clock: the heartbeat deadline follows it (#2124). On real time a
+// stalled runner could pass the 700 ms timeout before the probe's ACK (#2310).
+#[tokio::test(start_paused = true)]
 async fn unknown_function_original_ack_and_valid_npdu_resume_activity() {
     let (client, hub) = LoopbackWebSocket::pair();
     let mut transport = ScTransport::new(client, [1; 6])
