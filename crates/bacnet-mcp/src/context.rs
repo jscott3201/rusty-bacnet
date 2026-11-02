@@ -87,6 +87,9 @@ pub(crate) struct Ctx<T: TransportPort + 'static> {
     pub(crate) handoffs: tokio_util::task::TaskTracker,
     /// A request's panic, which ends the session (#2203).
     pub(crate) panics: crate::contain::Panics,
+    /// On a session attached to the TUI that offers writes, the TUI's
+    /// approval queue and the desk it lends (#2185).
+    pub(crate) attached: Option<crate::tools::write_attached::Attached<T>>,
 }
 
 /// The points a principal watches, each with the number of its sessions

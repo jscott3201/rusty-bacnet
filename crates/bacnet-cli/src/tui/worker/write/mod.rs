@@ -12,7 +12,10 @@
 //! ends are recorded as not sent.
 //!
 //! While it runs it holds the workspace's lock (`bacnet_ops::safety::lock`),
-//! so a second session on the same profile can't arm.
+//! so a second session on the same profile can't arm. An agent attached
+//! to the TUI (#2185) writes through this desk, which it lends: a
+//! [`Lent`] job runs here between the app's commands, at this session's
+//! level and under its refusals, after the person here confirmed it.
 
 mod manage;
 
@@ -216,11 +219,50 @@ struct Runner<'a> {
     armed: Armed,
 }
 
-/// Serve write session requests until `commands` closes.
-pub(crate) async fn run<T: TransportPort + 'static>(
+/// A lent job's run: each target's label and outcome, when it ends.
+pub(crate) type Running<'a> =
+    std::pin::Pin<Box<dyn Future<Output = Vec<(String, Outcome)>> + Send + 'a>>;
+
+/// A job another front end runs on this session's desk: an attached
+/// agent's write or revert (#2185). It reports each target's outcome.
+pub(crate) trait Lent: Send {
+    /// Run it on `desk` for `host`, this session.
+    fn run<'a>(self, desk: &'a mut Desk, host: &'a dyn Caller) -> Running<'a>;
+}
+
+/// No jobs without the `mcp` feature.
+impl Lent for std::convert::Infallible {
+    fn run<'a>(self, _: &'a mut Desk, _: &'a dyn Caller) -> Running<'a> {
+        match self {}
+    }
+}
+
+#[cfg(feature = "mcp")]
+impl<T: TransportPort + 'static> Lent for bacnet_mcp::attach::DeskJob<T> {
+    fn run<'a>(self, desk: &'a mut Desk, host: &'a dyn Caller) -> Running<'a> {
+        Box::pin(bacnet_mcp::attach::DeskJob::run(self, desk, host))
+    }
+}
+
+/// The request id an agent's outcome is reported under: never one of the
+/// app's, which start at 1.
+pub(crate) const AGENT_REQ: u64 = 0;
+
+/// The next lent job, or never once there are none to come.
+async fn lent<J>(jobs: &mut Option<mpsc::Receiver<J>>) -> Option<J> {
+    match jobs {
+        Some(jobs) => jobs.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Serve write session requests until `commands` closes, and the jobs
+/// lent this desk meanwhile. Each runs to its end before the next: both
+/// receivers are cancel-safe, and neither holds a lock while unpolled.
+pub(crate) async fn run<T: TransportPort + 'static, J: Lent>(
     client: &BACnetClient<T>,
     sink: &EventSink,
-    mut commands: mpsc::Receiver<SafetyCommand>,
+    (mut commands, mut jobs): (mpsc::Receiver<SafetyCommand>, Option<mpsc::Receiver<J>>),
     rate: &RequestLimits,
     options: &SafetyOptions,
     local: &str,
@@ -259,9 +301,20 @@ pub(crate) async fn run<T: TransportPort + 'static>(
         },
     )
     .await;
-    while let Some(command) = commands.recv().await {
-        runner.handle(client, sink, rate, command).await;
+    loop {
+        tokio::select! {
+            biased;
+            command = commands.recv() => match command {
+                Some(command) => runner.handle(client, sink, rate, command).await,
+                None => break,
+            },
+            job = lent(&mut jobs) => match job {
+                Some(job) => runner.lend(sink, job).await,
+                None => jobs = None,
+            },
+        }
     }
+    // A job still queued is dropped unrun: its agent hears nothing was sent.
 }
 
 /// The outcomes as the app shows them.
@@ -270,6 +323,23 @@ fn outcomes(sent: Vec<Sent>) -> Vec<(String, Outcome)> {
 }
 
 impl<'a> Runner<'a> {
+    /// Run `job` on this desk for an attached agent, then show the ledger
+    /// and how it went.
+    async fn lend<J: Lent>(&mut self, sink: &EventSink, job: J) {
+        let host = Session {
+            options: self.options,
+            armed: &self.armed,
+            sink,
+            missing: None,
+        };
+        let outcomes = job.run(&mut self.desk, &host).await;
+        tell(sink, SafetyEvent::Ledger(self.desk.entries())).await;
+        if !outcomes.is_empty() {
+            let req = AGENT_REQ;
+            tell(sink, SafetyEvent::Done { req, outcomes }).await;
+        }
+    }
+
     fn caller<'s>(&'s self, sink: &'s EventSink) -> Session<'s> {
         Session {
             options: self.options,

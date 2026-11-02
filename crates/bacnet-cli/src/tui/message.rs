@@ -415,6 +415,10 @@ pub(crate) enum McpListener {
     Agents(tokio::sync::watch::Receiver<usize>),
     /// The profile asked for a listener, and it couldn't start.
     Off,
+    /// An attached agent's write, for the person here to confirm; it
+    /// leaves the bar's state as it was.
+    #[cfg(feature = "mcp")]
+    Request(bacnet_mcp::attach::AgentApproval),
 }
 
 impl McpListener {
@@ -423,13 +427,21 @@ impl McpListener {
         match self {
             Self::Agents(count) => Some(*count.borrow()),
             Self::Off => None,
+            #[cfg(feature = "mcp")]
+            Self::Request(_) => None,
         }
     }
 }
 
 impl PartialEq for McpListener {
     fn eq(&self, other: &Self) -> bool {
-        self.agents() == other.agents()
+        match (self, other) {
+            #[cfg(feature = "mcp")]
+            (Self::Request(a), Self::Request(b)) => a == b,
+            #[cfg(feature = "mcp")]
+            (Self::Request(_), _) | (_, Self::Request(_)) => false,
+            _ => self.agents() == other.agents(),
+        }
     }
 }
 

@@ -118,7 +118,15 @@ impl Lab {
     /// A listener on `dir` over the lab's engine.
     pub(super) async fn attach(&self, dir: &Path, policy: Policy) -> Result<Listener, AttachError> {
         let callers = SessionRuntime::Callers;
-        Listener::bind(self.engine(), policy, "tester", workspace(dir), callers).await
+        Listener::bind(
+            self.engine(),
+            policy,
+            "tester",
+            workspace(dir),
+            callers,
+            None,
+        )
+        .await
     }
 }
 
@@ -271,8 +279,8 @@ async fn another_users_connection_is_refused_and_audited() {
         Policy::default(),
         "tester".into(),
         workspace(dir.path()),
-        stranger,
-        SessionRuntime::Callers,
+        (stranger, SessionRuntime::Callers),
+        None,
     )
     .await
     .unwrap();

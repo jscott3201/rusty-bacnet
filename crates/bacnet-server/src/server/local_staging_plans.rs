@@ -46,8 +46,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Each guard first does the work the membership queue holds, so a
     /// removed Staging object's NULLs land before one re-added under its
     /// identifier writes (#2265; the Value_Source check can't tell the two
-    /// apart). Returns the Command and Channel runs that work queued, for the
-    /// caller to start.
+    /// apart), then writes the NULLs the plan's source owes for a change of
+    /// its targets or priority (#2289), stale plan or not, so each lands
+    /// before the source writes that slot again. A plan with no targets
+    /// takes one guard for that alone. Returns the Command and Channel runs
+    /// that work queued, for the caller to start.
     pub(in crate::server) async fn execute_staging_plans(
         delivery: &EventDelivery<'_, T>,
         cov: &CovNotifyContext<'_, T>,
@@ -56,6 +59,23 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let db = delivery.db;
         let mut runs = TakenRuns::default();
         for plan in plans {
+            if plan.writes.is_empty() {
+                let owed = {
+                    let mut database = db.write().await;
+                    crate::membership::settle_for_staging(
+                        db,
+                        &mut database,
+                        cov.cov_table,
+                        plan.source,
+                    )
+                    .await
+                };
+                if !owed.is_empty() {
+                    Self::fire_post_write_cov_notifications(cov, &owed.coarse, &owed.life_safety)
+                        .await;
+                    runs.extend(owed.command_runs);
+                }
+            }
             let mut all_succeeded = true;
             for target in &plan.writes {
                 enum TargetResult {
@@ -66,8 +86,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
                 let (result, membership) = {
                     let mut database = db.write().await;
-                    let membership =
-                        crate::membership::settle(db, &mut database, cov.cov_table).await;
+                    let membership = crate::membership::settle_for_staging(
+                        db,
+                        &mut database,
+                        cov.cov_table,
+                        plan.source,
+                    )
+                    .await;
                     let current = database
                         .get_mut(&plan.source)
                         .and_then(|source| source.staging_source())

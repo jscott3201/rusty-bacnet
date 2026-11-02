@@ -103,7 +103,7 @@ With `mcp_writes = "elicit"` in the `[mcp]` table the server also offers `bacnet
 - **Targets are numbers.** The device instance and `type:instance` objects come from the agent, never from a name a device reported.
 - **Not offered:** DeviceCommunicationControl, ReinitializeDevice, or anything that creates or deletes objects.
 
-`bacnet_revert` puts back what this agent changed: a slot is relinquished (or given back the value another commander had), another property gets its old value. While the TUI has the profile open it holds the ledger, so a write is refused (`workspace-locked`) until it closes; reads go on.
+`bacnet_revert` puts back what this agent changed: a slot is relinquished (or given back the value another commander had), another property gets its old value. While the TUI has the profile open it holds the ledger, so a write is refused (`workspace-locked`) until it closes; reads go on. Attach the agent to the open TUI instead (`bacnet mcp connect`), and it can write there: each write waits in the TUI's preview dialog, under an agent banner, until you confirm it (any tier, with the TUI's write session armed) or decline it.
 
 ## Resources and subscriptions
 

@@ -43,6 +43,25 @@ pub(crate) async fn settle(
     commit.finish(db, db_w, cov_table).await
 }
 
+/// [`settle`] for a write of the Staging object `source`'s plan (#2289):
+/// the queue's work, then the NULLs `source` owes for a change of its
+/// targets (`crate::schedule::relinquish_owed_by_staging`), both before the
+/// write this guard makes.
+pub(crate) async fn settle_for_staging(
+    db: &Arc<RwLock<ObjectDatabase>>,
+    db_w: &mut ObjectDatabase,
+    cov_table: &RwLock<CovSubscriptionTable>,
+    source: bacnet_types::primitives::ObjectIdentifier,
+) -> CommittedCov {
+    let mut commit = BackgroundCommit::new();
+    let queued = drain(db_w, &mut commit);
+    let owed = crate::schedule::relinquish_owed_by_staging(db_w, &mut commit, source);
+    if !(queued || owed) {
+        return CommittedCov::default();
+    }
+    commit.finish(db, db_w, cov_table).await
+}
+
 /// Take the work queued on `db_w` and do it into `commit`: the removed
 /// Schedules' and Staging objects' relinquishes, then the retries to created objects, with the
 /// objects they changed and those the queue names collected for COV.

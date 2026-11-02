@@ -208,6 +208,21 @@ fn enter_right_after_a_preview_opens_is_ignored() {
     ));
 }
 
+/// The guard reads the wall clock, not the app's frame clock: the frame
+/// clock racing ahead (as a stalled frame timer might report) doesn't let a
+/// key through before 300 ms have really passed since the first frame.
+#[test]
+fn the_guard_runs_on_the_wall_clock() {
+    use crate::tui::app::safety::WALL;
+    WALL.set(true);
+    let mut app = confirming();
+    render(&mut app, 120, 40);
+    app.now += Duration::from_secs(5);
+    let commands = press(&mut app, KeyCode::Enter);
+    WALL.set(false);
+    assert!(commands.is_empty(), "{commands:?}");
+}
+
 #[test]
 fn a_preview_left_unconfirmed_expires_as_declined() {
     use crate::tui::app::safety::PREVIEW_LIFETIME;

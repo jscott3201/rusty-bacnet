@@ -25,17 +25,17 @@ use super::*;
 use crate::tui::attach::Plan;
 use crate::tui::worker::session::SessionOptions;
 
-const LAB: u32 = 100;
+pub(super) const LAB: u32 = 100;
 
 /// An agent on the socket: newline-delimited JSON-RPC.
-struct Agent {
-    write: Box<dyn AsyncWrite + Send + Unpin>,
+pub(super) struct Agent {
+    pub(super) write: Box<dyn AsyncWrite + Send + Unpin>,
     lines: Lines<BufReader<Box<dyn AsyncRead + Send + Unpin>>>,
 }
 
 impl Agent {
     /// Connect as the bridge does, checking the listener's user.
-    async fn connect(path: &Path) -> Self {
+    pub(super) async fn connect(path: &Path) -> Self {
         let stream = bacnet_mcp::attach::connect(path).await.unwrap();
         let (read, write) = tokio::io::split(stream);
         let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(read);
@@ -46,7 +46,7 @@ impl Agent {
     }
 
     /// Send `request` and return the answer with its id.
-    async fn request(&mut self, request: Value) -> Value {
+    pub(super) async fn request(&mut self, request: Value) -> Value {
         let line = format!("{request}\n");
         self.write.write_all(line.as_bytes()).await.unwrap();
         if request.get("id").is_none() {
@@ -77,7 +77,7 @@ pub(super) fn panic_if_armed() {
 }
 
 /// An agent on the socket at `path`, its session open.
-async fn attached(path: &Path) -> Agent {
+pub(super) async fn attached(path: &Path) -> Agent {
     let mut agent = Agent::connect(path).await;
     let hello = agent
         .request(
@@ -101,13 +101,13 @@ fn read(id: u64) -> Value {
 }
 
 /// The agents the bar counts, while the listener runs.
-fn mcp_agents(app: &App) -> Option<usize> {
+pub(super) fn mcp_agents(app: &App) -> Option<usize> {
     app.mcp
         .as_ref()
         .and_then(crate::tui::message::McpListener::agents)
 }
 
-fn plan(dir: &Path) -> Plan {
+pub(super) fn plan(dir: &Path) -> Plan {
     Plan {
         policy: Policy::default(),
         workspace: Workspace {
@@ -188,9 +188,9 @@ async fn an_agent_reads_through_the_open_session() {
 }
 
 /// The listener a profile asks for: only once MCP is authorized and
-/// `tui_listener` isn't false, never in a passive session, read-only
-/// whatever the table offers, and refused when the command line changes
-/// the transport the authorization covered.
+/// `tui_listener` isn't false, never in a passive session, offering writes
+/// as `mcp_writes` does, and refused when the command line changes the
+/// transport the authorization covered.
 #[test]
 fn the_plan_follows_the_profile() {
     use crate::tui::attach::plan;
@@ -217,7 +217,23 @@ fn the_plan_follows_the_profile() {
         .unwrap()
         .expect("a listener");
     assert_eq!(planned.policy.networks, Some([0].into()));
-    assert!(!planned.policy.writes.offered(), "read-only");
+    // `mcp_writes` offers writes, approved here; nothing else of the
+    // write policy reaches the listener.
+    assert!(planned.policy.writes.offered());
+    assert_eq!(
+        planned.policy.writes.arm,
+        bacnet_mcp::policy::ArmMode::Never
+    );
+    assert!(planned.policy.writes.plan.is_none());
+    assert_eq!(
+        planned
+            .policy
+            .writes
+            .workspace
+            .as_ref()
+            .map(|w| w.dir.as_path()),
+        Some(dir)
+    );
     assert_eq!(planned.workspace.dir, dir);
     assert_eq!(planned.workspace.profile.as_deref(), Some("site"));
     assert!(
