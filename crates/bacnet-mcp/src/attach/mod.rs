@@ -12,8 +12,9 @@
 //! when looser), the socket file is made 0600, and every connection's
 //! peer credentials must name the listener's own user before any MCP
 //! traffic flows. On Windows the listener is a named pipe whose name comes
-//! from the workspace's path and a secret salt kept in it (#2219), which
-//! must be this user's alone, in a workspace other users may not list.
+//! from the workspace's path, a secret salt kept in it (#2219) and a nonce
+//! each run publishes beside the salt (#2237), both files this user's
+//! alone, in a workspace other users may not list.
 //! The pipe's security descriptor grants access to this user's SID
 //! alone, it takes no remote clients, its first instance
 //! claims the name, and every client process's token must name this user
@@ -46,6 +47,8 @@ mod bridge;
 #[cfg(unix)]
 mod guard;
 mod lock;
+#[cfg(any(windows, all(unix, test)))]
+mod nonce;
 #[cfg(windows)]
 mod pipe;
 #[cfg(any(windows, all(unix, test)))]
@@ -71,6 +74,8 @@ pub use bridge::bridge;
 #[cfg(feature = "stdio")]
 pub use bridge::bridge_stdio;
 pub use lock::LOCK_FILE;
+#[cfg(all(test, windows))]
+pub(crate) use nonce::{NONCE_FILE, Nonce, publish as publish_nonce};
 #[cfg(windows)]
 use pipe as platform;
 #[cfg(all(test, windows))]
@@ -272,8 +277,8 @@ impl Listener {
     /// socket path is too long, a symbolic link or some other file, or
     /// when the TUI runs as the overflow uid. On Windows, refused when the
     /// pipe's name is already taken, by anyone; when the workspace lets
-    /// other users list it; or when its salt file isn't this user's alone
-    /// or is corrupt.
+    /// other users list it; when its salt file isn't this user's alone
+    /// or is corrupt; or when the run's nonce can't be published.
     pub async fn bind<T: TransportPort + 'static>(
         engine: Arc<Engine<T>>,
         policy: Policy,
@@ -324,7 +329,7 @@ impl Listener {
         };
         // The socket, its connections and the watch hub's tasks belong to
         // the sessions' runtime.
-        let (mut endpoint, incoming) = preflight.bind(&workspace.dir, &handle).await?;
+        let (mut endpoint, incoming) = preflight.bind(&workspace.dir, &handle)?;
         let entered = handle.enter();
         let shared = match Shared::new(Some(&engine), &policy) {
             Ok(shared) => shared,
@@ -379,9 +384,13 @@ impl Listener {
     /// Stop accepting, end every session gracefully (listen streams
     /// complete, writes in flight settle), cancel the COV subscriptions
     /// through the sessions' shared watch hub, stop the sessions' own
-    /// runtime, then remove the socket file and release the lock.
+    /// runtime, then remove the socket file (on Windows, withdraw the
+    /// run's nonce) and release the lock.
     pub async fn shutdown(mut self) {
         self.stop.cancel();
+        // The run's name goes first: a connect from now on hears that no
+        // TUI is listening. The lock is held until the end.
+        self.endpoint.withdraw();
         if let Some(accept) = self.accept.take()
             && let Err(e) = accept.await
             && e.is_panic()

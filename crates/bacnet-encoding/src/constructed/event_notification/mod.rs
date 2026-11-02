@@ -170,9 +170,18 @@ pub fn decode_event_notification(data: &[u8]) -> Result<EventNotificationRequest
     )?;
     offset = new_offset;
 
-    // [9] ackRequired (optional — present for ALARM/EVENT)
+    // [9] ackRequired, [10] fromState and [12] eventValues describe an
+    // ALARM or EVENT transition, and an ACK_NOTIFICATION leaves all three
+    // out (Clauses 13.8.1.1.10, .11 and .13; Clause 13.9 has the same
+    // parameters). The encoder drops them for one, so a decoder that read
+    // them there would hand back values that can't survive a re-encode
+    // (#2247): such a request is refused, with the stray tag where To State
+    // [11] is due or with eventValues as octets past the request's end.
+    let transition = notify_type != NotifyType::ACK_NOTIFICATION;
+
+    // [9] ackRequired (ALARM/EVENT only; read as false when left out)
     let mut ack_required = false;
-    if offset < data.len() {
+    if transition && offset < data.len() {
         let (peek, _) = tags::decode_tag(data, offset)?;
         if peek.is_context(9) {
             (ack_required, offset) =
@@ -180,19 +189,17 @@ pub fn decode_event_notification(data: &[u8]) -> Result<EventNotificationRequest
         }
     }
 
-    // [10] fromState (absent for ACK_NOTIFICATION)
+    // [10] fromState (required for ALARM/EVENT)
     let mut from_state = EventState::NORMAL;
-    if offset < data.len() {
-        let (peek, _) = tags::decode_tag(data, offset)?;
-        if peek.is_context(10) {
-            (from_state, offset) = decode_context_enum(
-                data,
+    if transition {
+        if offset >= data.len() {
+            return Err(Error::missing(
                 offset,
-                10,
-                "EventNotification fromState",
-                EventState::from_raw,
-            )?;
-        } else if notify_type != NotifyType::ACK_NOTIFICATION {
+                "EventNotification missing fromState",
+            ));
+        }
+        let (peek, _) = tags::decode_tag(data, offset)?;
+        if !peek.is_context(10) {
             return Err(misplaced_tag(
                 data,
                 &peek,
@@ -201,11 +208,13 @@ pub fn decode_event_notification(data: &[u8]) -> Result<EventNotificationRequest
                 "EventNotification expected fromState",
             ));
         }
-    } else if notify_type != NotifyType::ACK_NOTIFICATION {
-        return Err(Error::missing(
+        (from_state, offset) = decode_context_enum(
+            data,
             offset,
-            "EventNotification missing fromState",
-        ));
+            10,
+            "EventNotification fromState",
+            EventState::from_raw,
+        )?;
     }
 
     // [11] toState
@@ -217,6 +226,14 @@ pub fn decode_event_notification(data: &[u8]) -> Result<EventNotificationRequest
         EventState::from_raw,
     )?;
     offset = new_offset;
+
+    // An ACK_NOTIFICATION ends at To State.
+    if !transition && offset < data.len() {
+        return Err(Error::trailing(
+            offset,
+            "EventNotification ACK_NOTIFICATION has octets after toState",
+        ));
+    }
 
     // [12] eventValues — optional
     let mut event_values = None;
