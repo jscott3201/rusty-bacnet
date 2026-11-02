@@ -92,9 +92,9 @@ impl Request<'_> {
     }
 
     /// DeleteObject. The work the removal queued on the database
-    /// (`crate::membership`) is taken under the same guard, as are the
-    /// relinquishes a deleted Schedule owes its targets (#2256), and their
-    /// COV fanout joins the request's.
+    /// (`crate::membership`), the relinquishes a deleted Schedule owes its
+    /// targets included (#2256, #2264), is taken under the same guard, and
+    /// its COV fanout joins the request's.
     pub(in crate::server::requests) async fn delete_object<T: TransportPort + 'static>(
         &self,
         db: &Arc<RwLock<ObjectDatabase>>,
@@ -117,7 +117,6 @@ impl Request<'_> {
         let database = db;
         let (result, removed, settled) = {
             let mut db = db.write().await;
-            let schedule = crate::schedule::DeletedSchedule::plan(&mut db, deleted_oid);
             let removed_status = deleted_oid.and_then(|oid| {
                 db.get(&oid)
                     .and_then(|object| object.audit_reporter())
@@ -132,7 +131,7 @@ impl Request<'_> {
                     true,
                 );
             }
-            let (result, mut removed) = match handlers::delete_object(
+            let (result, removed) = match handlers::delete_object(
                 &mut db,
                 &self.config.object_constructors,
                 &self.req.service_request,
@@ -146,24 +145,14 @@ impl Request<'_> {
                 status.set_configured(false);
             }
             audit.lifecycle_completed(&mut db, &result);
-            let relinquished = match (schedule, removed.as_mut()) {
-                (Some(schedule), Some(object)) => {
-                    schedule
-                        .issue(database, &mut db, object.as_mut(), cov_table)
-                        .await
-                }
-                _ => Default::default(),
-            };
             let membership = crate::membership::settle(database, &mut db, cov_table).await;
-            (result, removed, [relinquished, membership])
+            (result, removed, membership)
         };
-        for fanout in settled {
-            fanout.merge_into(
-                &mut effects.coarse_cov_oids,
-                &mut effects.life_safety_cov_changes,
-                &mut effects.command_runs,
-            );
-        }
+        settled.merge_into(
+            &mut effects.coarse_cov_oids,
+            &mut effects.life_safety_cov_changes,
+            &mut effects.command_runs,
+        );
         // Dropping an object that saves its state waits for its queued saves,
         // so drop it with the guard released and off the async workers.
         if let Some(removed) = removed {

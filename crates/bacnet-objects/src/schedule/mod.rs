@@ -58,8 +58,10 @@ pub use evaluation::{ScheduleTargetOutcome, ScheduleWrite};
 /// priority sends the current value to the new targets and relinquishes the
 /// slots it leaves behind (see
 /// [`set_object_property_references`](Self::set_object_property_references)).
-/// Deleting the object over the network relinquishes every slot it holds
-/// ([`ScheduleRunner::take_relinquish_writes`]).
+/// Removing the object from the database, by DeleteObject, the
+/// application's own `remove` or an `add` that replaces it, relinquishes
+/// every slot it holds ([`ScheduleRunner::take_relinquish_writes`]); the
+/// bundled server skips a slot another writer has taken since (#2264).
 ///
 /// Reliability is CONFIGURATION_ERROR while the non-NULL values in the two
 /// schedules and Schedule_Default are not all of one datatype, or while a
