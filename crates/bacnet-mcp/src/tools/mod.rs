@@ -25,6 +25,7 @@ mod trend;
 mod trend_data;
 mod watch;
 pub(crate) mod write;
+pub(crate) mod write_attached;
 mod write_confirm;
 pub(crate) mod write_task;
 
@@ -105,16 +106,22 @@ pub(crate) fn names(policy: &Policy) -> Vec<&'static str> {
     listed(policy).map(|(spec, _)| spec.name).collect()
 }
 
-/// The tools the policy lists.
-pub(crate) fn list(policy: &Policy) -> Vec<Tool> {
+/// The tools the policy lists; a session `attached` to the TUI describes
+/// its writes as the TUI approves them.
+pub(crate) fn list(policy: &Policy, attached: bool) -> Vec<Tool> {
     listed(policy)
         .map(|(spec, writes)| {
+            let description = match spec.name {
+                write::NAME if attached => write::attached(),
+                revert::NAME if attached => revert::ATTACHED.to_string(),
+                _ => spec.description.to_string(),
+            };
             let annotations = ToolAnnotations::with_title(spec.title)
                 .read_only(!writes)
                 .destructive(writes)
                 .idempotent(spec.idempotent)
                 .open_world(spec.open_world);
-            Tool::new(spec.name, spec.description, object((spec.input)()))
+            Tool::new(spec.name, description, object((spec.input)()))
                 .with_title(spec.title)
                 .with_raw_output_schema(Arc::new(object((spec.output)())))
                 .with_annotations(annotations)
@@ -314,6 +321,7 @@ pub(crate) async fn call_write<T: TransportPort + 'static>(
     let asking = if name == write::NAME
         && retry.state.is_none()
         && peer.session.is_some()
+        && ctx.attached.is_none()
         && ctx.writes.plan(&ctx.policy.writes).is_none()
     {
         match ctx.writes.ask() {
@@ -330,6 +338,11 @@ pub(crate) async fn call_write<T: TransportPort + 'static>(
     };
     let (call, finished) = attempt(ctx, name, &args, retry, peer, &cancel, None).await?;
     let (call, finished) = match (finished, &peer.session) {
+        // Attached to the TUI: the person there approves it (#2185).
+        (Ok(Ok(write::Step::Wait(preview, tier, reverting))), _) => {
+            let asked = (name, &args, peer, &cancel);
+            write_attached::approve(ctx, asked, call, (preview, tier, reverting)).await?
+        }
         // A client older than 2026-07-28 that takes the server's
         // elicitation requests: ask it, holding no lock while it answers,
         // then go on as a retry with the form's answer would (#2158).
@@ -346,6 +359,7 @@ pub(crate) async fn call_write<T: TransportPort + 'static>(
         }
         // Handed off: from here the call never says nothing was sent. A
         // cancel or the budget only stops the waiting; the task goes on.
+        Ok(Ok(write::Step::Wait(..))) => unreachable!("approved or refused above"),
         Ok(Ok(write::Step::Sending(mut handoff))) => {
             let deadline = call.started + budget + GRACE;
             tokio::select! {
@@ -379,7 +393,7 @@ const PENDING_WHY: &str =
 
 /// What one run of a write tool came to, under its own budget: the call
 /// that counted it, and its step or error, or `Err` past the budget.
-type Attempt = (
+pub(crate) type Attempt = (
     Call,
     Result<Result<write::Step, ToolError>, tokio::time::error::Elapsed>,
 );

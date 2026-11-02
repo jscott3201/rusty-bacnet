@@ -506,12 +506,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     }
 
     /// Borrow the COV notification handles for a local mutation.
-    fn local_cov_context(&self) -> CovNotifyContext<'_, T> {
+    pub(in crate::server) fn local_cov_context(&self) -> CovNotifyContext<'_, T> {
         self.local_writer().cov_context()
     }
 
     /// Borrow the EventNotification handles for a local mutation.
-    fn local_event_delivery(&self) -> EventDelivery<'_, T> {
+    pub(in crate::server) fn local_event_delivery(&self) -> EventDelivery<'_, T> {
         self.local_writer().event_delivery()
     }
 }

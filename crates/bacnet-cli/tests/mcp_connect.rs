@@ -176,7 +176,7 @@ async fn connect_bridges_an_agent_to_the_listener() {
             local: "10.0.0.1:47808".into(),
         };
         let own = SessionRuntime::Own;
-        let listener = Listener::bind(Arc::clone(&engine), policy, "tester", place, own)
+        let listener = Listener::bind(Arc::clone(&engine), policy, "tester", place, own, None)
             .await
             .unwrap();
         let before = engine.limits().recent();

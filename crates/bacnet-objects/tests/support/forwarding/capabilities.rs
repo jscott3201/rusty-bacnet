@@ -169,6 +169,13 @@ pub const CAPABILITY_ROWS: &[(&str, Row)] = &[
         }),
     ),
     (
+        "StagingSource::take_owed_relinquishes",
+        Row::Command(|o| {
+            let writes = o.staging_source().map(|s| s.take_owed_relinquishes());
+            format!("{writes:?}")
+        }),
+    ),
+    (
         "StagingSource::take_relinquish_writes",
         Row::Command(|o| {
             let writes = o.staging_source().map(|s| s.take_relinquish_writes());

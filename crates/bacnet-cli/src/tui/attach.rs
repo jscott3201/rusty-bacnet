@@ -1,16 +1,21 @@
 //! The TUI's MCP listener (#2185; design §9): while a profile is open,
 //! agents attach through `bacnet mcp connect` to a local socket in its
-//! workspace (on Windows, a named pipe named after it), and each gets a
-//! read-only MCP session on the session's own engine, so their reads
-//! share the client, the transport and the rate meter. The listener runs beside the session's workers and ends with
-//! the session: every agent's session ends gracefully and the socket file
-//! goes. The agents' sessions run on the listener's own runtime, whose
-//! threads the panic hook leaves alone (#2203).
+//! workspace (on Windows, a named pipe named after it), and each gets an
+//! MCP session on the session's own engine, so their reads share the
+//! client, the transport and the rate meter. With `mcp_writes = "elicit"`
+//! the agents may write too: the write worker lends them its desk, and
+//! each write waits for the person here to confirm it in the preview
+//! dialog (`app::agents`); this loop hands the requests to the app. The
+//! listener runs beside the session's workers and ends with the session:
+//! every agent's session ends gracefully and the socket file goes. The
+//! agents' sessions run on the listener's own runtime, whose threads the
+//! panic hook leaves alone (#2203).
 
 use std::path::Path;
 use std::sync::Arc;
 
 use bacnet_mcp::Policy;
+use bacnet_mcp::attach::DeskJob;
 use bacnet_mcp::policy::Workspace;
 use bacnet_ops::engine::Engine;
 use bacnet_transport::port::TransportPort;
@@ -23,8 +28,8 @@ use crate::transport::TransportArgs;
 /// What a profile's session listens with.
 #[derive(Debug, Clone)]
 pub(crate) struct Plan {
-    /// The `[mcp]` table's reach, rates and caps; the listener drops any
-    /// write policy.
+    /// The `[mcp]` table's reach, rates and caps, and whether it offers
+    /// writes, which the person here then approves.
     pub(crate) policy: Policy,
     /// The workspace that holds the socket and the audit log.
     pub(crate) workspace: Workspace,
@@ -74,14 +79,25 @@ pub(crate) fn plan(
         ));
     };
     let (transport, local) = crate::mcp::local(args);
+    let workspace = Workspace {
+        dir: dir.to_path_buf(),
+        profile: Some(name.to_string()),
+        transport,
+        local,
+    };
+    let mut policy = crate::mcp::policy(&section, false)?;
+    // Only `mcp_writes` counts here: the person at the TUI approves every
+    // write, so `mcp_arm` and a plan grant play no part.
+    if section.mcp_writes == crate::tui::profile::mcp::McpChoice::Elicit {
+        policy.writes = bacnet_mcp::policy::WritePolicy {
+            mode: bacnet_mcp::policy::WriteMode::Elicit,
+            workspace: Some(workspace.clone()),
+            ..bacnet_mcp::policy::WritePolicy::default()
+        };
+    }
     Ok(Some(Plan {
-        policy: crate::mcp::policy(&section, false)?,
-        workspace: Workspace {
-            dir: dir.to_path_buf(),
-            profile: Some(name.to_string()),
-            transport,
-            local,
-        },
+        policy,
+        workspace,
         principal: crate::mcp::principal(),
         own_runtime: true,
     }))
@@ -89,13 +105,15 @@ pub(crate) fn plan(
 
 /// Run `plan`'s listener over `engine` until `stop` closes (the session
 /// loop ended) or the session is cancelled, handing the UI the agents'
-/// count; then end their sessions and remove the socket. While an agent
+/// count and their write requests, their writes run on the write worker's
+/// `desk`; then end their sessions and remove the socket. While an agent
 /// is attached the `[mcp]` limits join the engine's, the listener's doing.
 pub(crate) async fn run<T: TransportPort + 'static>(
     engine: &Arc<Engine<T>>,
     plan: Option<&Plan>,
     sink: &EventSink,
     mut stop: mpsc::Receiver<()>,
+    desk: mpsc::Sender<DeskJob<T>>,
 ) {
     use super::message::{McpListener, WorkerEvent};
     use bacnet_mcp::attach::{Listener, SessionRuntime};
@@ -113,9 +131,10 @@ pub(crate) async fn run<T: TransportPort + 'static>(
         plan.principal.clone(),
         plan.workspace.clone(),
         runtime,
+        Some(desk),
     )
     .await;
-    let listener = match bound {
+    let mut listener = match bound {
         Ok(listener) => listener,
         Err(error) => {
             tracing::warn!("MCP: agents can't attach: {error}");
@@ -124,18 +143,46 @@ pub(crate) async fn run<T: TransportPort + 'static>(
         }
     };
     let profile = plan.workspace.profile.as_deref().unwrap_or_default();
+    let mut approvals = listener.approvals();
+    let reach = if approvals.is_some() {
+        "writes confirmed here"
+    } else {
+        "read-only"
+    };
     tracing::info!(
-        "MCP: agents can attach with `bacnet mcp connect --profile {profile}` (read-only; {})",
+        "MCP: agents can attach with `bacnet mcp connect --profile {profile}` ({reach}; {})",
         listener.path().display()
     );
     // The bar reads the count from the listener's own channel, so it
     // always shows the latest.
     let agents = McpListener::Agents(listener.agents());
     sink.deliver(WorkerEvent::Mcp(agents)).await;
-    tokio::select! {
-        biased;
-        _ = stop.recv() => {}
-        () = sink.cancelled() => {}
+    loop {
+        tokio::select! {
+            biased;
+            _ = stop.recv() => break,
+            () = sink.cancelled() => break,
+            request = next(&mut approvals) => match request {
+                // The app queues it; a request it never answers is
+                // declined once dropped.
+                Some(request) => {
+                    sink.deliver(WorkerEvent::Mcp(McpListener::Request(request))).await;
+                }
+                None => approvals = None,
+            },
+        }
     }
+    // Requests still waiting here are dropped, and so declined.
+    drop(approvals);
     listener.shutdown().await;
+}
+
+/// The next write request, or never without a queue.
+async fn next(
+    approvals: &mut Option<mpsc::Receiver<bacnet_mcp::attach::AgentApproval>>,
+) -> Option<bacnet_mcp::attach::AgentApproval> {
+    match approvals {
+        Some(approvals) => approvals.recv().await,
+        None => std::future::pending().await,
+    }
 }

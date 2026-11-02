@@ -1,20 +1,23 @@
 //! Writes over MCP (#2068; design §7): the server's write session, who may
-//! approve a write ([`Approver`]), the sealed confirmation state
-//! ([`seal`]), and the MCP front end as a caller of the shared write desk
-//! (`bacnet_ops::safety::desk`), which owns the ledger and the audit log.
+//! approve a write ([`Approver`], and its waiting form [`WaitingApprover`]),
+//! the sealed confirmation state ([`seal`]), and the MCP front end as a
+//! caller of the shared write desk (`bacnet_ops::safety::desk`), which owns
+//! the ledger and the audit log.
 //!
-//! The tools themselves are `tools/write.rs` and `tools/revert.rs`.
+//! The tools themselves are `tools/write.rs` and `tools/revert.rs`; an
+//! attached session's writes go through the TUI ([`tui`], #2185).
 
 pub(crate) mod budget;
 pub(crate) mod notify;
 pub(crate) mod seal;
+pub(crate) mod tui;
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use bacnet_ops::safety::desk::Caller;
+use bacnet_ops::safety::desk::{Caller, Waiting};
 use bacnet_ops::safety::{DEFAULT_MINUTES, Level, Preview, Tier, hex};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -192,6 +195,9 @@ pub(crate) enum Via {
     ServerElicitation,
     /// A plan grant a person approved in a terminal.
     Plan,
+    /// The person at the TUI an agent is attached to, in its own preview
+    /// dialog (#2185): every tier.
+    Tui,
 }
 
 impl Via {
@@ -201,14 +207,17 @@ impl Via {
             Self::Elicitation => "elicitation",
             Self::ServerElicitation => "server-elicitation",
             Self::Plan => "plan",
+            Self::Tui => "tui",
         }
     }
 
-    /// `approved_by`: who stands behind the approval.
-    pub(crate) fn by(self) -> &'static str {
+    /// `approved_by`: who stands behind the approval; at the TUI, its OS
+    /// user, who is the `principal`.
+    pub(crate) fn by(self, principal: &str) -> String {
         match self {
-            Self::Elicitation | Self::ServerElicitation => "client",
-            Self::Plan => "plan",
+            Self::Elicitation | Self::ServerElicitation => "client".into(),
+            Self::Plan => "plan".into(),
+            Self::Tui => principal.into(),
         }
     }
 }
@@ -240,6 +249,22 @@ fn refused(reason: &'static str, message: impl Into<String>) -> Approval {
 pub(crate) trait Approver: Send + Sync {
     /// Whether `principal` may make `preview`, whose tier is `tier`.
     fn approve(&self, principal: &str, preview: &Preview, tier: Tier) -> Approval;
+}
+
+/// The waiting form of an approver (design §7.3; phase 4 brings it back):
+/// it holds the call until a person answers on a channel the server
+/// controls, then answers [`Approval::Approved`] or [`Approval::Refused`],
+/// never [`Approval::Ask`]. The wait holds no lock; the caller bounds it
+/// and may drop it, which withdraws the request.
+pub(crate) trait WaitingApprover: Send + Sync {
+    /// Whether `principal` may make `preview`, whose tier is `tier`, once
+    /// a person has said so.
+    fn approve<'a>(
+        &'a self,
+        principal: &'a str,
+        preview: &'a Preview,
+        tier: Tier,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Approval> + Send + 'a>>;
 }
 
 /// Approves nothing: the default, when no other channel is configured.
@@ -364,6 +389,10 @@ pub(crate) struct McpCaller<'a> {
     pub(crate) sending: Option<Sending>,
     /// Set once this caller's `sending` rows were announced.
     announced: AtomicBool,
+    /// The front end whose desk this write runs on, lent to it (the
+    /// TUI's, #2185): its level, refusal and going are this caller's, and
+    /// it hears of the ledger's changes too.
+    host: Option<&'a dyn Caller>,
 }
 
 /// The ledger ids a handed-off write has recorded, shared with its call.
@@ -384,6 +413,7 @@ impl McpCaller<'_> {
             fields,
             sending: None,
             announced: AtomicBool::new(false),
+            host: None,
         }
     }
 
@@ -394,12 +424,26 @@ impl McpCaller<'_> {
     }
 }
 
+impl<'a> McpCaller<'a> {
+    /// This caller, on the desk `host` lends it.
+    pub(crate) fn hosted(mut self, host: &'a dyn Caller) -> Self {
+        self.host = Some(host);
+        self
+    }
+}
+
 impl Caller for McpCaller<'_> {
     fn level(&self) -> Level {
-        self.writes.level(self.policy)
+        match self.host {
+            Some(host) => host.level(),
+            None => self.writes.level(self.policy),
+        }
     }
 
     fn refusal(&self) -> Option<String> {
+        if let Some(host) = self.host {
+            return host.refusal();
+        }
         match self.via {
             Some(Via::Elicitation | Via::ServerElicitation) if !self.writes.is_armed() => {
                 Some("the write session expired before the write went".into())
@@ -417,10 +461,21 @@ impl Caller for McpCaller<'_> {
         }
     }
 
+    fn gone(&self) -> bool {
+        self.host.is_some_and(|host| host.gone())
+    }
+
+    fn going(&self) -> Waiting<'_> {
+        match self.host {
+            Some(host) => host.going(),
+            None => Box::pin(std::future::pending()),
+        }
+    }
+
     fn ledger_changed<'a>(
         &'a self,
         entries: &'a [bacnet_ops::safety::ledger::Entry],
-    ) -> bacnet_ops::safety::desk::Waiting<'a> {
+    ) -> Waiting<'a> {
         // The `sending` rows are in the file now: tell the ledger's
         // subscribers, and again once they settle, however they settle.
         self.announced.store(true, Ordering::Release);
@@ -437,14 +492,22 @@ impl Caller for McpCaller<'_> {
                 .map(|e| e.id);
             *sending.lock().unwrap_or_else(PoisonError::into_inner) = ids.collect();
         }
-        Box::pin(async {})
+        match self.host {
+            Some(host) => host.ledger_changed(entries),
+            None => Box::pin(async {}),
+        }
     }
 
     fn fields(&self) -> Map<String, Value> {
         let mut fields = self.fields.clone();
         if let Some(via) = self.via {
+            let principal = fields
+                .get("principal")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let by = via.by(principal);
             fields.insert("confirmed_via".into(), json!(via.name()));
-            fields.insert("approved_by".into(), json!(via.by()));
+            fields.insert("approved_by".into(), json!(by));
             if via == Via::Plan
                 && let Some(plan) = &self.policy.plan
             {

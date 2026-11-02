@@ -42,6 +42,20 @@ pub(crate) const NAME: &str = "bacnet_write";
 /// The key of the confirmation form in `inputRequests`.
 pub(crate) const CONFIRM: &str = "confirm";
 
+/// `bacnet_write`'s description on a session attached to the TUI.
+pub(super) fn attached() -> String {
+    format!(
+        "Write properties of one device's objects, through the preview tiers, ledger and audit \
+         log of the bacnet TUI this agent is attached to. Targets are numeric (device instance, \
+         type:instance objects); values are numbers, booleans, null (relinquish a commandable \
+         slot) or the value grammar. The person at the TUI confirms each write in its preview \
+         dialog, at any tier; the call waits for that answer (declined after {} s), and requests \
+         queue one at a time. Each applied write is kept in the ledger with its pre-image for \
+         bacnet_revert.",
+        bacnet_ops::safety::PREVIEW_LIFETIME.as_secs()
+    )
+}
+
 pub(super) const SPEC: Spec = Spec {
     name: NAME,
     title: "Write BACnet properties",
@@ -104,7 +118,7 @@ fn output() -> Value {
         "approval": {
             "type": "object",
             "properties": {
-                "confirmed_via": { "enum": ["elicitation", "server-elicitation", "plan"] },
+                "confirmed_via": { "enum": ["elicitation", "server-elicitation", "plan", "tui"] },
                 "approved_by": { "type": "string" },
             },
         },
@@ -180,6 +194,9 @@ pub(crate) struct Retry {
 pub(crate) enum Step {
     Ask(InputRequiredResult, tokio::time::Instant),
     Sending(Handoff),
+    /// An attached session's write, previewed at its tier over MCP, or its
+    /// revert of these ledger entries, for the TUI to approve (#2185).
+    Wait(Box<Preview>, Tier, Option<std::collections::BTreeSet<u64>>),
 }
 
 /// A value as the value grammar's text; `None` relinquishes.
@@ -263,7 +280,7 @@ pub(crate) fn context(workspace: &Workspace) -> Context {
 }
 
 /// The fields every record of this call carries.
-fn fields(principal: &str, peer: &Peer, raw: &Map<String, Value>) -> Map<String, Value> {
+pub(crate) fn fields(principal: &str, peer: &Peer, raw: &Map<String, Value>) -> Map<String, Value> {
     let mut fields = Map::new();
     fields.insert("tool".into(), json!(NAME));
     fields.insert("principal".into(), json!(principal));
@@ -481,6 +498,9 @@ async fn preview<T: TransportPort + 'static>(
             return Err(error);
         }
     };
+    if ctx.attached.is_some() {
+        return Ok(Step::Wait(Box::new(preview), tier, None));
+    }
     let approver: Box<dyn Approver> = if ctx.policy.writes.offered() {
         Box::new(ClientElicitation {
             arm: ctx.policy.writes.arm,
@@ -514,7 +534,7 @@ async fn preview<T: TransportPort + 'static>(
 /// The tier a change takes over MCP: the planner's, except that a write
 /// to Relinquish_Default, the value a point falls back to when every slot
 /// is empty, is T3, so a client's confirmation can't approve it.
-fn mcp_tier(preview: &Preview, tier: Tier) -> Tier {
+pub(super) fn mcp_tier(preview: &Preview, tier: Tier) -> Tier {
     let fallback = preview
         .items
         .iter()

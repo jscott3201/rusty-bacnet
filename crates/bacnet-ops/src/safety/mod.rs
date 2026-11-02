@@ -43,6 +43,10 @@ pub const DEFAULT_MINUTES: u32 = 15;
 /// Longest write session, in minutes.
 pub const MAX_MINUTES: u32 = 480;
 
+/// How long a preview waits for its confirmation before it is declined:
+/// the TUI's dialog, an agent's request to it, and an MCP confirmation.
+pub const PREVIEW_LIFETIME: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// Which front end made a change or a record: written into the ledger and
 /// the audit log, so one front end's view lists another's changes as
 /// theirs.

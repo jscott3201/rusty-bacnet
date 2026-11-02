@@ -409,6 +409,8 @@ async fn serve_with<T: TransportPort + 'static>(
         let (browse, browse_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
         let (watch, watch_rx) = mpsc::channel(WATCH_CHANNEL_CAPACITY);
         let (safety, safety_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
+        // The desk the write worker lends attached agents (#2185).
+        let (lend, lent) = lent_desk();
         let (network, network_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
         let (discovery, discovery_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
         let (capture, capture_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
@@ -571,7 +573,7 @@ async fn serve_with<T: TransportPort + 'static>(
             Box::pin(super::write::run(
                 &client,
                 &sink,
-                safety_rx,
+                (safety_rx, lent),
                 &rate,
                 &options.safety,
                 &local
@@ -582,10 +584,31 @@ async fn serve_with<T: TransportPort + 'static>(
             Box::pin(crate::tui::capture::worker::run(
                 &*client, &sink, capture_rx, style
             )),
-            Box::pin(attached(&engine, &sink, &options, attach_stop_rx))
+            Box::pin(attached(&engine, &sink, &options, (attach_stop_rx, lend)))
         );
     }
     stop_shared(client).await;
+}
+
+/// The write worker's desk, lent to attached agents: the listener's end
+/// and the worker's.
+#[cfg(feature = "mcp")]
+type Lend<T> = (
+    mpsc::Sender<bacnet_mcp::attach::DeskJob<T>>,
+    Option<mpsc::Receiver<bacnet_mcp::attach::DeskJob<T>>>,
+);
+
+#[cfg(feature = "mcp")]
+fn lent_desk<T: TransportPort + 'static>() -> Lend<T> {
+    // One job a seat: each agent waits for its own.
+    let (lend, lent) = mpsc::channel(bacnet_mcp::attach::MAX_AGENTS);
+    (lend, Some(lent))
+}
+
+/// No desk to lend without the `mcp` feature.
+#[cfg(not(feature = "mcp"))]
+fn lent_desk() -> ((), Option<mpsc::Receiver<std::convert::Infallible>>) {
+    ((), None)
 }
 
 /// The MCP listener, while the session runs.
@@ -594,9 +617,12 @@ async fn attached<T: TransportPort + 'static>(
     engine: &Arc<Engine<T>>,
     sink: &EventSink,
     options: &SessionOptions,
-    stop: mpsc::Receiver<()>,
+    (stop, desk): (
+        mpsc::Receiver<()>,
+        mpsc::Sender<bacnet_mcp::attach::DeskJob<T>>,
+    ),
 ) {
-    crate::tui::attach::run(engine, options.attach.as_ref(), sink, stop).await;
+    crate::tui::attach::run(engine, options.attach.as_ref(), sink, stop, desk).await;
 }
 
 /// No MCP listener without the `mcp` feature.
@@ -605,7 +631,7 @@ async fn attached<T: TransportPort + 'static>(
     _engine: &Arc<Engine<T>>,
     _sink: &EventSink,
     _options: &SessionOptions,
-    _stop: mpsc::Receiver<()>,
+    _: (mpsc::Receiver<()>, ()),
 ) {
 }
 

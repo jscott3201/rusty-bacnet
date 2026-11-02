@@ -102,6 +102,8 @@ pub struct Desk {
     _lock: Option<WorkspaceLock>,
     /// Why there is no ledger to write to.
     missing: String,
+    /// Whose front end the ledger's entries and the audit records name.
+    origin: Origin,
 }
 
 /// Why a desk without a workspace can't write.
@@ -119,6 +121,7 @@ impl Desk {
             audit: None,
             _lock: None,
             missing: String::new(),
+            origin: origin.clone(),
         };
         let Some(dir) = workspace else {
             desk.missing = NO_WORKSPACE.into();
@@ -147,6 +150,21 @@ impl Desk {
             }
         }
         desk
+    }
+
+    /// Work for `origin`'s front end until set back, returning the origin
+    /// it had: the entries the ledger records and the audit records name
+    /// it. The TUI lends its desk so to an attached agent's writes
+    /// (#2185), which are then the agent's to revert.
+    pub fn set_origin(&mut self, origin: Origin) -> Origin {
+        if let Some(audit) = self.audit.take() {
+            let audit = audit.written_by(origin.front_end.clone(), origin.principal.clone());
+            self.audit = Some(audit);
+        }
+        if let Some(ledger) = self.ledger.take() {
+            self.ledger = Some(ledger.written_by(origin.clone()));
+        }
+        std::mem::replace(&mut self.origin, origin)
     }
 
     /// The ledger, while this desk holds the workspace.
@@ -276,12 +294,7 @@ impl Desk {
     }
 
     /// Record every write of `preview` as not sent, and why.
-    pub(crate) async fn not_sent(
-        &self,
-        caller: &dyn Caller,
-        preview: &Preview,
-        why: &str,
-    ) -> Vec<Sent> {
+    pub async fn not_sent(&self, caller: &dyn Caller, preview: &Preview, why: &str) -> Vec<Sent> {
         let outcome = Outcome::NotSent(why.into());
         for item in &preview.items {
             self.audit_write(caller, preview, item, "write", &outcome)

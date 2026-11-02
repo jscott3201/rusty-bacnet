@@ -158,7 +158,7 @@ pub(crate) async fn confirmed<T: TransportPort + 'static>(
     ctx.writes
         .signals
         .ledger_settled(&before, &desk, caller.announced());
-    outcome(fresh.device, via, sent)
+    outcome(fresh.device, via, &ctx.principal, sent)
 }
 
 /// A write under a plan grant: everything under the workspace's lock,
@@ -218,7 +218,7 @@ pub(crate) async fn planned<T: TransportPort + 'static>(
     ctx.writes
         .signals
         .ledger_settled(&before, &desk, caller.announced());
-    outcome(preview.device, Via::Plan, sent)
+    outcome(preview.device, Via::Plan, &ctx.principal, sent)
 }
 
 async fn desk_refusal(desk: &Desk, caller: &McpCaller<'_>, error: &ToolError, preview: &Preview) {
@@ -253,8 +253,14 @@ pub(crate) async fn open<T: TransportPort + 'static>(
 }
 
 /// The result: each write's outcome and ledger entry, or the error body
-/// when not every write was acknowledged.
-fn outcome(device: u32, via: Via, sent: Vec<Sent>) -> Result<Value, ToolError> {
+/// when not every write was acknowledged; approved `via`, by `principal`
+/// at the TUI.
+pub(crate) fn outcome(
+    device: u32,
+    via: Via,
+    principal: &str,
+    sent: Vec<Sent>,
+) -> Result<Value, ToolError> {
     if !sent.is_empty()
         && sent
             .iter()
@@ -276,7 +282,7 @@ fn outcome(device: u32, via: Via, sent: Vec<Sent>) -> Result<Value, ToolError> {
     let ids: Vec<u64> = sent.iter().filter_map(|s| s.entry).collect();
     let mut body = json!({
         "device": device,
-        "approval": { "confirmed_via": via.name(), "approved_by": via.by() },
+        "approval": { "confirmed_via": via.name(), "approved_by": via.by(principal) },
         "results": results,
     });
     if !ids.is_empty() {

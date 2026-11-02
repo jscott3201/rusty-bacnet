@@ -22,8 +22,9 @@
 //!
 //! The TUI uses the table for its local MCP socket (#2185): while the
 //! profile is open, agents may attach through `bacnet mcp connect`, under
-//! the table's reach and rates and read-only, unless `tui_listener =
-//! false`. The table's first-use
+//! the table's reach and rates, unless `tui_listener = false`; with
+//! `mcp_writes = "elicit"` they may write what the person at the TUI
+//! confirms. The table's first-use
 //! authorization, separate from the TUI's, is recorded in it by `bacnet mcp
 //! authorize` (`authorized_at_unix`, and the reach it covered as
 //! `[mcp.authorized]`) and cleared when the table widens the server's
