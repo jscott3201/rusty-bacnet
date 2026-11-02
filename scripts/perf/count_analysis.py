@@ -33,6 +33,14 @@ Gates (#1979 decision, 2026-11-02), for a comparison (A, A' and B):
   requested bytes are reported, not gated;
 - acceptance needs every row to pass, rp, wp and rpm on both runtimes when
   any round trip runs, and only known, requested aimed workloads.
+
+The no-regression check (`--aim none`, #2314) aims at nothing: every row
+must stay within its floor and keep its allocation calls, for a change that
+isn't an optimization. Each row reports its change in floors.
+
+When a comparison fails, compare per-function call counts first
+(`perf_counts.py attribute`): unchanged calls with changed instructions
+point at codegen (inlining) rather than at more work per request.
 """
 
 import json
@@ -326,8 +334,22 @@ def noise_floor(metrics_a, metrics_p):
     return max(values) - min(values)
 
 
+# `--aim none`: the no-regression check, for a change that isn't an
+# optimization. Every row must stay within its floor; nothing must fall.
+NO_REGRESSION = "none"
+
+
+def regression_only(aimed):
+    return tuple(aimed) == (NO_REGRESSION,)
+
+
 def validate_aim(aimed, workloads):
-    """Refuses aimed workloads that aren't known or weren't requested."""
+    """Refuses aimed workloads that aren't known or weren't requested, and
+    `none` mixed with workload names."""
+    if regression_only(aimed):
+        return
+    if NO_REGRESSION in aimed:
+        raise ValueError("--aim none can't be combined with workload names")
     known = set(ROUND_TRIP) | set(CODEC)
     unknown = [w for w in aimed if w not in known]
     if unknown:
@@ -369,7 +391,7 @@ def judge(workload, runtime, metrics_a, metrics_b, floor, floor_source, aimed):
     }
     saving = -delta
     every_pair_lower = bool(pairs) and all(p < 0 for p in pairs)
-    if workload in aimed:
+    if workload in aimed and not regression_only(aimed):
         minimum = MIN_SAVING if workload in ROUND_TRIP else 0.0
         instr_ok = saving >= minimum and saving > FLOOR_FACTOR * floor and every_pair_lower
         row["gate"] = f"saving >= {minimum:g} and > {FLOOR_FACTOR:g} x floor, every pair lower"
@@ -391,7 +413,7 @@ def coverage_problems(rows, aimed):
             for runtime in RUNTIMES:
                 if (workload, runtime) not in present:
                     problems.append(f"round trips need rp, wp and rpm on ct and mt; {workload}/{runtime} is missing")
-    for workload in aimed:
+    for workload in () if regression_only(aimed) else aimed:
         if not any(w == workload for w, _ in present):
             problems.append(f"aimed workload {workload} has no rows")
     return problems
@@ -496,18 +518,34 @@ def fmt(value, places=1):
     return f"{value:,.{places}f}"
 
 
+def change_over_floor(row):
+    """The median change in noise floors: "+0.4 x" is within, "+2.1 x" above."""
+    if row["noise_floor"] > 0:
+        return f"{row['delta'] / row['noise_floor']:+.1f} x"
+    return "0 x" if row["delta"] == 0 else ("+inf" if row["delta"] > 0 else "-inf")
+
+
+def function_changes(a, b, threshold=0.5):
+    """Rows (change, a, b, function) of per-function values (self Ir or calls
+    per request) that moved by at least `threshold`, largest first."""
+    rows = [(b.get(k, 0.0) - a.get(k, 0.0), a.get(k, 0.0), b.get(k, 0.0), k) for k in set(a) | set(b)]
+    return sorted((r for r in rows if abs(r[0]) >= threshold), key=lambda r: (-abs(r[0]), r[3]))
+
+
 def verdict_table(summary):
     """Instructions exclude the harness's counting allocator; the floor's
     source is on every row. Requested bytes are reported, not gated."""
     other = "A'" if summary["mode"] == "noise" else "B"
     headers = ["Workload", "Runtime", "A median", f"{other} median", f"{other} - A", "Noise floor (source)",
-               "Pairs lower", "Calls A / " + other, "Bytes A / " + other + " (report only)", "Verdict"]
+               "Change / floor", "Pairs lower", "Calls A / " + other, "Bytes A / " + other + " (report only)",
+               "Verdict"]
     rows = []
     for row in summary["rows"]:
         lower = sum(1 for p in row["pair_deltas"] if p < 0)
         rows.append([
             row["workload"], row["runtime"], fmt(row["a_median"]), fmt(row["b_median"]), fmt(row["delta"]),
-            f"{fmt(row['noise_floor'])} ({row['noise_floor_source']})", f"{lower} of {len(row['pair_deltas'])}",
+            f"{fmt(row['noise_floor'])} ({row['noise_floor_source']})", change_over_floor(row),
+            f"{lower} of {len(row['pair_deltas'])}",
             f"{row['a_calls']:.4f} / {row['b_calls']:.4f}", f"{row['a_bytes']:.2f} / {row['b_bytes']:.2f}",
             row["verdict"],
         ])

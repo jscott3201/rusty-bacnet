@@ -1203,6 +1203,17 @@ interleaved matrix compare.
   request. Requested bytes are reported, not gated. Wire bytes must stay
   identical; the existing test suites check that. The script exits non-zero
   when a comparison isn't accepted.
+- **No-regression check.** A change that isn't an optimization, such as a
+  refactor or a feature, runs with `--aim none` (the workflow's `aim`
+  input). It is accepted when no row rises by more than its noise floor and
+  no row adds allocation calls; each row reports its change in floors.
+- **When a comparison fails.** Compare per-function call counts first:
+  `perf_counts.py attribute <run directory> --workload rp --runtime ct`
+  lists the calls per request that changed, then the instructions. The
+  workflow writes the same for each round trip to `attribution.md` when it
+  fails. Unchanged calls with changed instructions point at code
+  generation, such as a function the compiler stopped inlining, rather
+  than at more work per request.
 - **Where.** On Apple silicon, in local Docker; on GitHub, the manual
   `Perf counts` workflow (`.github/workflows/perf-counts.yml`, run from the
   Actions tab with a baseline ref, a candidate ref and the workloads) on an

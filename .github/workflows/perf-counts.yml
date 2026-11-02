@@ -31,6 +31,10 @@ on:
         description: "Comma-separated: rp, wp, rpm, codec (all seven), a codec workload name, or all."
         required: true
         default: rp,wp,rpm
+      aim:
+        description: "What the candidate must show: rp (an optimization of ReadProperty; other workload names too), or none (no-regression check: nothing above its noise floor)."
+        required: true
+        default: rp
 
 permissions:
   contents: read
@@ -59,6 +63,7 @@ jobs:
           BASELINE: ${{ inputs.baseline }}
           CANDIDATE: ${{ inputs.candidate }}
           WORKLOADS: ${{ inputs.workloads }}
+          AIM: ${{ inputs.aim }}
         run: |
           # A branch name exists here only as origin/<name>.
           resolve() {
@@ -72,8 +77,17 @@ jobs:
             python3 scripts/perf/perf_counts.py run --noise "$base" --workloads "$WORKLOADS" --out perf-out --gzip-raw
           else
             python3 scripts/perf/perf_counts.py run --baseline "$base" --candidate "$cand" \
-              --workloads "$WORKLOADS" --out perf-out --gzip-raw
+              --workloads "$WORKLOADS" --aim "$AIM" --out perf-out --gzip-raw
           fi
+      # A failed comparison: per-function changes, calls first, for the
+      # round trips' current-thread rows (Benchmarks.md section 10.4).
+      - name: Attribution
+        if: failure() && hashFiles('perf-out/summary.json') != ''
+        run: |
+          for w in rp wp rpm; do
+            python3 scripts/perf/perf_counts.py attribute perf-out --workload "$w" --runtime ct \
+              >> perf-out/attribution.md || true
+          done
       - name: Verdict table
         if: always()
         run: |
@@ -92,6 +106,7 @@ jobs:
             perf-out/summary.json
             perf-out/items.md
             perf-out/items.json
+            perf-out/attribution.md
             perf-out/manifest.json
             perf-out/profiles/
           if-no-files-found: warn

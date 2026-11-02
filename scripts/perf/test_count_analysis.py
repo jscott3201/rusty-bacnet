@@ -278,6 +278,36 @@ class Gates(unittest.TestCase):
             with self.subTest(value=value), self.assertRaisesRegex(ValueError, "counting-allocator"):
                 ca.analyze(m)
 
+    # The no-regression check (#2314).
+
+    def test_no_regression_accepts_a_commit_against_itself(self):
+        same = ca.analyze(manifest(self.A, list(self.P), slopes_p=self.P, cells=ALL_ROUND_TRIPS), None, ("none",))
+        self.assertTrue(same["accepted"])
+        self.assertTrue(all(r["gate"] == "not higher than the noise floor" for r in same["rows"]))
+        self.assertIn("Change / floor", ca.verdict_table(same))
+
+    def test_no_regression_refuses_a_forced_extra_loop(self):
+        # A loop of 500 instructions per request added to every request.
+        slower = ca.analyze(manifest(self.A, [x + 500 for x in self.A], slopes_p=self.P, cells=ALL_ROUND_TRIPS),
+                            None, ("none",))
+        self.assertFalse(slower["accepted"])
+        self.assertEqual({r["verdict"] for r in slower["rows"]}, {"FAIL"})
+        self.assertEqual(ca.change_over_floor(self.row(slower)), "+71.4 x")
+
+    def test_no_regression_refuses_added_allocations_and_needs_coverage(self):
+        more = ca.analyze(manifest(self.A, list(self.P), slopes_p=self.P, cells=ALL_ROUND_TRIPS,
+                                   calls=(22.0, 23.0)), None, ("none",))
+        self.assertFalse(more["accepted"])
+        partial = ca.analyze(manifest(self.A, list(self.P), slopes_p=self.P), None, ("none",))
+        self.assertFalse(partial["accepted"])
+        with self.assertRaisesRegex(ValueError, "can't be combined"):
+            ca.validate_aim(("none", "rp"), {"rp"})
+
+    def test_function_changes_rank_by_size(self):
+        rows = ca.function_changes({"f": 10.0, "g": 5.0, "h": 1.0}, {"f": 10.2, "g": 9.0, "k": 2.0})
+        self.assertEqual([r[3] for r in rows], ["g", "k", "h"])
+        self.assertEqual(rows[0][:3], (4.0, 5.0, 9.0))
+
     def test_incomplete_matrix_has_no_verdict(self):
         m = manifest(self.A, [x - 520 for x in self.A])
         m["completed"] = False

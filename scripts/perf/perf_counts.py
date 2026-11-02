@@ -4,7 +4,11 @@
 
   perf_counts.py run --baseline REF --candidate REF [options]   # A, A' and B
   perf_counts.py run --noise REF [options]                      # A and A'
-  perf_counts.py analyze OUT [--aim rp,...]
+  perf_counts.py analyze OUT [--aim rp,... | --aim none]
+  perf_counts.py attribute OUT [--workload rp] [--runtime ct]   # calls first
+
+`--aim none` is the no-regression check: accepted when no row rises above
+its noise floor and no allocation calls are added.
 
 `run`:
 1. builds the image from scripts/perf/Dockerfile (tag rb-perf-counts:<hash
@@ -356,6 +360,40 @@ def write_profiles(manifest, out, summary):
     (out / "items.json").write_text(json.dumps(items_json, indent=2) + "\n")
 
 
+def attribute(out, workload, runtime, top=25, threshold=0.5):
+    """Calls first, then self instructions: per-function changes per request
+    between A and B (A and A' in a noise run), medians over the ordinals.
+    Unchanged call counts with changed instructions point at codegen."""
+    manifest = ca.load_json(out / "manifest.json")
+    runs = [r for r in manifest["runs"] if (r["workload"], r["runtime"]) == (workload, runtime)
+            and r.get("instructions") is not None]
+    if not runs:
+        raise ValueError(f"no runs of {workload}/{runtime} in {out}")
+    other = "B" if "B" in manifest["variants"] else "P"
+    selves, calls = {}, {}
+    for run in runs:
+        if run["label"] not in ("A", other):
+            continue
+        text = read_cg(out / "raw", run["name"])
+        if text is None:
+            raise ValueError(f"{run['name']}: no callgrind file")
+        _lines, functions, edges = ca.parse_callgrind(text)
+        selves[run["name"]], calls[run["name"]] = functions, ca.calls_in(edges)
+    lines = []
+    for title, data in (("Calls in per request", calls), ("Self instructions per request", selves)):
+        a = ca.symbol_slopes(data, runs, workload, runtime, "A")
+        b = ca.symbol_slopes(data, runs, workload, runtime, other)
+        changes = ca.function_changes(a, b, threshold)
+        lines += [f"## {title}, {workload}/{runtime}: {ca.LABELS[other]} - A "
+                  f"(total {sum(r[0] for r in changes):+.1f} over {len(changes)} functions)", ""]
+        lines.append(ca.table(["A", ca.LABELS[other], "Change", "Function"], [
+            [f"{x:,.2f}", f"{y:,.2f}", f"{d:+,.2f}", f"`{name[:150]}`"] for d, x, y, name in changes[:top]]))
+        lines.append("")
+    text = "\n".join(lines)
+    print(text)
+    return text
+
+
 def read_cg(raw, name):
     path = raw / f"{name}.cg"
     if path.exists():
@@ -561,16 +599,26 @@ def main(argv=None):
     run_parser.add_argument("--noise-floors", action="append",
                             help="quick mode, local only: skip the A' build and use this noise run's floors "
                                  "(summary.json; repeatable)")
-    run_parser.add_argument("--aim", default="rp", help="workloads judged on the saving gate (default rp)")
+    run_parser.add_argument("--aim", default="rp",
+                            help="workloads judged on the saving gate (default rp), or none: the no-regression check")
     run_parser.add_argument("--gzip-raw", action="store_true", help="gzip the callgrind files afterwards")
     run_parser.add_argument("--keep", action="store_true", help="keep the build volumes and trees")
     analyze_parser = commands.add_parser("analyze", help="re-analyze a completed run")
     analyze_parser.add_argument("out")
     analyze_parser.add_argument("--aim", default="rp")
+    attribute_parser = commands.add_parser(
+        "attribute", help="per-function changes of a completed run: calls in first, then self instructions")
+    attribute_parser.add_argument("out")
+    attribute_parser.add_argument("--workload", default="rp")
+    attribute_parser.add_argument("--runtime", default="ct")
+    attribute_parser.add_argument("--top", type=int, default=25)
     args = parser.parse_args(argv)
     try:
         if args.command == "run":
             summary = run(args)
+        elif args.command == "attribute":
+            attribute(Path(args.out).resolve(), args.workload, args.runtime, args.top)
+            return 0
         else:
             aim = tuple(a.strip() for a in args.aim.split(",") if a.strip())
             summary = analyze(Path(args.out).resolve(), None, aim)
