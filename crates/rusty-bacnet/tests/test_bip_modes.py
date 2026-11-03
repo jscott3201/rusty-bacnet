@@ -220,6 +220,11 @@ class LoopbackTests(unittest.IsolatedAsyncioTestCase):
                                     foreign_device=foreign) as client:
                 status = await accepted_registration(client)
                 self.assertEqual(status["last_bbmd"], address)
+                # The name was looked up once, at start, and resolved.
+                self.assertEqual(
+                    (status["bbmd_lookups"], status["bbmd_lookup_failures"],
+                     status["last_bbmd_lookup_failure"], status["waiting_for_bbmd"]),
+                    (1, 0, None, False))
         finally:
             await server.stop()
 
@@ -232,6 +237,18 @@ class LoopbackTests(unittest.IsolatedAsyncioTestCase):
             status = await client.foreign_registration()
             self.assertEqual((status["attempts"], status["registered"]), (0, False))
             self.assertIsNone(status["last_outcome"])
+            self.assertTrue(status["waiting_for_bbmd"])
+
+            async def failed():
+                status = await client.foreign_registration()
+                return status if status["bbmd_lookup_failures"] else None
+            # The system resolver says no such name, or, on a host with no
+            # name service, gives up after 10 seconds.
+            status = await eventually(failed, seconds=15)
+            self.assertEqual(status["bbmd_lookups"], 1)
+            self.assertIn(status["last_bbmd_lookup_failure"],
+                          ("not_resolved", "timed_out"))
+            self.assertTrue(status["waiting_for_bbmd"])
 
     async def test_a_refused_registration_is_reported(self):
         # A BBMD that takes no foreign devices refuses the registration.

@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use bacnet_transport::bbmd::{BdtEntry, ForeignDevicePolicy, NatTraversal, PrivateRange};
+use bacnet_transport::bbmd_lookup::BbmdLookupFailure;
 use bacnet_transport::bip::{
     BbmdOptions, BipMode, BipMulticast, DEFAULT_BACNET_PORT, ForeignBbmd, ForeignDeviceConfig,
     ForeignRegistrationOutcome, ForeignRegistrationSnapshot,
@@ -568,8 +569,30 @@ pub(crate) fn registration_dict(registration: ForeignRegistrationSnapshot) -> Py
         dict.set_item("refused", registration.refused)?;
         dict.set_item("lapses", registration.lapses)?;
         dict.set_item("renewal_hints", registration.renewal_hints)?;
+        dict.set_item("bbmd_lookups", registration.bbmd_lookups)?;
+        dict.set_item("bbmd_lookup_failures", registration.bbmd_lookup_failures)?;
+        dict.set_item(
+            "last_bbmd_lookup_failure",
+            registration.last_bbmd_lookup_failure.map(lookup_failure),
+        )?;
+        dict.set_item("waiting_for_bbmd", registration.waiting_for_bbmd)?;
         Ok(dict.into_any().unbind())
     })
+}
+
+/// Why a lookup of the BBMD's host name failed (#2308), as the
+/// `last_bbmd_lookup_failure` value names it. The resolver's own error
+/// keeps only its kind, which for the system resolver says nothing more
+/// than that the name did not resolve.
+fn lookup_failure(failure: BbmdLookupFailure) -> &'static str {
+    match failure {
+        BbmdLookupFailure::Error(_) => "not_resolved",
+        BbmdLookupFailure::TimedOut => "timed_out",
+        BbmdLookupFailure::NoAddress => "no_ipv4_address",
+        BbmdLookupFailure::Unusable(_) => "unusable_address",
+        BbmdLookupFailure::Abandoned => "abandoned",
+        _ => "other",
+    }
 }
 
 /// The NAT setting the `nat_global_address` and `nat_private_ranges`

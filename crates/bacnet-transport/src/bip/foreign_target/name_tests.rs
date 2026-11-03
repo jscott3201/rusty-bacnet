@@ -648,6 +648,7 @@ async fn a_configured_name_that_fails_waits_and_is_tried_again_every_30_s() {
     );
     assert_eq!((snapshot.attempts, snapshot.registered), (0, false));
     assert_eq!(snapshot.next_attempt_in, None);
+    assert!(snapshot.waiting_for_bbmd);
     for _ in 0..16 {
         device
             .node
@@ -689,6 +690,7 @@ async fn a_configured_name_that_fails_waits_and_is_tried_again_every_30_s() {
         (3, 2)
     );
     assert_eq!(snapshot.broadcasts_hold_full, 1);
+    assert!(!snapshot.waiting_for_bbmd);
 }
 
 /// An address written while the device waits for a name ends the wait at

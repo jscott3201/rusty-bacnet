@@ -104,6 +104,7 @@ mod names_filter;
 mod names_site;
 mod network;
 mod network_frames;
+mod network_names;
 mod network_nat;
 mod network_notes;
 mod passive_discovery;

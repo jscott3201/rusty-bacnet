@@ -7946,7 +7946,8 @@ registrations at most every 30 seconds, by the system's resolver or the one
 that doesn't resolve still starts the transport: its node waits for a BBMD
 (`bacnet-bip-core`'s waiting state), with no registration sent and broadcasts held
 and then refused, the failure counted in `bbmd_lookups`, `bbmd_lookup_failures` and
-`last_bbmd_lookup_failure`, and the name tried again every 30 seconds. The first
+`last_bbmd_lookup_failure`, `waiting_for_bbmd` reading true, and the name tried again
+every 30 seconds. The first
 address it resolves to that a start would accept is registered with at once;
 `foreign_device_config()` then reads that address.
 
