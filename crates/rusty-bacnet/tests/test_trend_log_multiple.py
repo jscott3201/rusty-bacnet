@@ -43,6 +43,8 @@ KEYWORDS = [
     "interval_offset",
     "storage_path",
 ]
+# The keywords after them, which default to False and 0 (#1952, #1537).
+LAST = ["clear_written_reporting", "total_record_count"]
 
 
 def member(instance: int) -> dict:
@@ -113,9 +115,9 @@ class TrendLogMultipleStubContractTests(unittest.TestCase):
         parameters = inspect.signature(BACnetServer.add_trend_log_multiple).parameters
         self.assertEqual(
             list(parameters),
-            ["self", "instance", "name", "buffer_size", *KEYWORDS, "total_record_count"],
+            ["self", "instance", "name", "buffer_size", *KEYWORDS, *LAST],
         )
-        for name in [*KEYWORDS, "total_record_count"]:
+        for name in [*KEYWORDS, *LAST]:
             with self.subTest(keyword=name):
                 self.assertEqual(parameters[name].kind, inspect.Parameter.KEYWORD_ONLY)
         for name in KEYWORDS:
@@ -125,7 +127,7 @@ class TrendLogMultipleStubContractTests(unittest.TestCase):
         method = installed_stub_method("add_trend_log_multiple")
         self.assertEqual(
             [argument.arg for argument in method.args.kwonlyargs],
-            [*KEYWORDS, "total_record_count"],
+            [*KEYWORDS, *LAST],
         )
         docs = ast.get_docstring(method)
         assert docs is not None

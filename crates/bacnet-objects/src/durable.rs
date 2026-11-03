@@ -9,8 +9,9 @@
 //! rename, so none of these objects makes one while its caller holds the
 //! database's write guard. They all follow the pattern this module provides.
 //! The Trend Log, Trend Log Multiple and Event Log commit to their
-//! [`LogPersistence`] through the same writer, on a cadence rather than per
-//! request (see [`crate::log_persistence`]), so they never stage.
+//! [`LogPersistence`] through the same writer, mostly on a cadence rather
+//! than per request (see [`crate::log_persistence`]); only a write of a
+//! reporting setting they keep stages its commit (#1952).
 //!
 //! - Under the guard, the object copies the state to keep and queues the copy
 //!   on its save writer. The writer's own thread makes the storage calls, one

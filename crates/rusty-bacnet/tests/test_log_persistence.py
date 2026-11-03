@@ -4,7 +4,9 @@
 keyword-only ``storage_path``. The log commits to ``<path>.slot0`` and
 ``.slot1`` on a cadence and once more at ``stop()``; a server started on the
 same files serves the saved records, numbering and settings, plus one
-LOG_INTERRUPTED record that marks the restart.
+LOG_INTERRUPTED record that marks the restart. A reporting setting a write
+set is saved before it is served and wins over ``add_trend_log``'s keywords
+until ``clear_written_reporting=True`` drops it (#1952).
 """
 
 from __future__ import annotations
@@ -67,6 +69,20 @@ class StoragePathSignatureTests(unittest.TestCase):
                 stub = installed_stub_method(name)
                 self.assertIn(
                     "storage_path", [argument.arg for argument in stub.args.kwonlyargs]
+                )
+
+    def test_each_log_takes_a_keyword_only_clear_written_reporting(self) -> None:
+        for name in METHODS:
+            with self.subTest(name=name):
+                parameter = inspect.signature(getattr(BACnetServer, name)).parameters[
+                    "clear_written_reporting"
+                ]
+                self.assertEqual(parameter.kind, inspect.Parameter.KEYWORD_ONLY)
+                self.assertIs(parameter.default, False)
+                stub = installed_stub_method(name)
+                self.assertIn(
+                    "clear_written_reporting",
+                    [argument.arg for argument in stub.args.kwonlyargs],
                 )
 
     def test_an_empty_or_unreadable_storage_path_is_refused(self) -> None:
@@ -208,6 +224,87 @@ class LogRestartTests(unittest.IsolatedAsyncioTestCase):
             await server.stop()
         for name in ("tlm-1", "tl-1", "el-1"):
             self.assertTrue((self.state / f"{name}.slot0").exists() or (self.state / f"{name}.slot1").exists())
+
+
+class WrittenReportingTests(unittest.IsolatedAsyncioTestCase):
+    """Reporting settings written to a durable log come back at the next
+    start, over the application's keywords (#1952)."""
+
+    async def asyncSetUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.state = Path(directory.name)
+
+    async def start(self, clear: bool = False, **keywords) -> BACnetServer:
+        server = BACnetServer(1_952_001, interface="127.0.0.1", port=0)
+        server.add_trend_log(
+            1,
+            "TL-1",
+            storage_path=str(self.state / "tl-1"),
+            clear_written_reporting=clear,
+            **keywords,
+        )
+        server.add_trend_log_multiple(
+            1, "TLM-1", storage_path=str(self.state / "tlm-1"), clear_written_reporting=clear
+        )
+        server.add_event_log(
+            1, "EL-1", storage_path=str(self.state / "el-1"), clear_written_reporting=clear
+        )
+        await server.start()
+        return server
+
+    async def read(self, server: BACnetServer, oid: ObjectIdentifier, prop) -> PropertyValue:
+        return await server.read_property(oid, prop)
+
+    async def test_a_written_setting_wins_over_the_keywords_until_cleared(self) -> None:
+        P = PropertyIdentifier
+        server = await self.start(client_cov_increment=1.0)
+        try:
+            for oid in (TREND_LOG, MULTIPLE, EVENT_LOG):
+                await server.write_property_local(
+                    oid, P.NOTIFICATION_CLASS, PropertyValue.unsigned(9), source_object=None
+                )
+            await server.write_property_local(
+                TREND_LOG, P.CLIENT_COV_INCREMENT, PropertyValue.null(), source_object=None
+            )
+        finally:
+            await server.stop()
+
+        server = await self.start(client_cov_increment=2.0)
+        try:
+            for oid in (TREND_LOG, MULTIPLE, EVENT_LOG):
+                with self.subTest(oid=oid):
+                    self.assertEqual(
+                        await self.read(server, oid, P.NOTIFICATION_CLASS),
+                        PropertyValue.unsigned(9),
+                    )
+            self.assertEqual(
+                await self.read(server, TREND_LOG, P.CLIENT_COV_INCREMENT), PropertyValue.null()
+            )
+        finally:
+            await server.stop()
+
+        server = await self.start(clear=True, client_cov_increment=2.0)
+        try:
+            self.assertEqual(
+                await self.read(server, TREND_LOG, P.CLIENT_COV_INCREMENT),
+                PropertyValue.real(2.0),
+            )
+        finally:
+            await server.stop()
+
+        # Nothing written is saved any more: each log starts from its
+        # defaults.
+        server = await self.start(client_cov_increment=2.0)
+        try:
+            for oid in (TREND_LOG, MULTIPLE, EVENT_LOG):
+                with self.subTest(oid=oid):
+                    self.assertEqual(
+                        await self.read(server, oid, P.NOTIFICATION_CLASS),
+                        PropertyValue.unsigned(0),
+                    )
+        finally:
+            await server.stop()
 
 
 if __name__ == "__main__":

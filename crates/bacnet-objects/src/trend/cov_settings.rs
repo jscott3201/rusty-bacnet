@@ -8,18 +8,23 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 
 use crate::common;
+use crate::log_persistence::LogReportingSettings;
 
 /// The COV_Resubscription_Interval a new Trend Log holds, in seconds (one
 /// hour). Clause 12.25.10 asks only that it be nonzero.
 pub const DEFAULT_COV_RESUBSCRIPTION_INTERVAL: u32 = 3_600;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct CovSettings {
+pub(crate) struct CovSettings {
     /// `None` is the NULL choice: the referenced property's own COV
     /// criteria (Clause 12.25.11).
     client_cov_increment: Option<f32>,
     /// Seconds; never zero.
     resubscription_interval: u32,
+    /// A write set Client_COV_Increment, now or before a restart (#1952).
+    increment_written: bool,
+    /// A write set COV_Resubscription_Interval (#1952).
+    interval_written: bool,
 }
 
 impl Default for CovSettings {
@@ -27,11 +32,49 @@ impl Default for CovSettings {
         Self {
             client_cov_increment: None,
             resubscription_interval: DEFAULT_COV_RESUBSCRIPTION_INTERVAL,
+            increment_written: false,
+            interval_written: false,
         }
     }
 }
 
 impl CovSettings {
+    /// Whether a write has set `property`, one of the two (#1952).
+    pub(crate) fn written(&self, property: P) -> bool {
+        match property {
+            P::CLIENT_COV_INCREMENT => self.increment_written,
+            P::COV_RESUBSCRIPTION_INTERVAL => self.interval_written,
+            _ => false,
+        }
+    }
+
+    /// Put the two settings a write set into `saved` (#1952).
+    pub(crate) fn save_into(&self, saved: &mut LogReportingSettings) {
+        saved.client_cov_increment = self.increment_written.then_some(self.client_cov_increment);
+        saved.cov_resubscription_interval = self
+            .interval_written
+            .then_some(self.resubscription_interval);
+    }
+
+    /// Take back the two settings a log saved, each marked written again.
+    /// The snapshot was checked as it loaded.
+    pub(crate) fn restore(&mut self, saved: &LogReportingSettings) {
+        if let Some(increment) = saved.client_cov_increment {
+            self.client_cov_increment = increment;
+            self.increment_written = true;
+        }
+        if let Some(seconds) = saved.cov_resubscription_interval {
+            self.resubscription_interval = seconds;
+            self.interval_written = true;
+        }
+    }
+
+    /// Mark both as no write's, so the setters apply again (#1952).
+    pub(crate) fn unwrite(&mut self) {
+        self.increment_written = false;
+        self.interval_written = false;
+    }
+
     /// Serve one of the two rows; `None` for any other property.
     pub(super) fn read(&self, property: P) -> Option<PropertyValue> {
         Some(match property {
@@ -45,13 +88,14 @@ impl CovSettings {
         })
     }
 
-    /// A write of one of the two rows; `None` for any other property.
-    pub(super) fn write(
+    /// A write of one of the two rows; `None` for any other property. One
+    /// it takes is marked written (#1952).
+    pub(crate) fn write(
         &mut self,
         property: P,
         value: &PropertyValue,
     ) -> Option<Result<(), Error>> {
-        Some(match (property, value) {
+        let result = match (property, value) {
             (P::CLIENT_COV_INCREMENT, PropertyValue::Null) => {
                 self.client_cov_increment = None;
                 Ok(())
@@ -67,7 +111,14 @@ impl CovSettings {
                 Err(common::invalid_data_type_error())
             }
             _ => return None,
-        })
+        };
+        if result.is_ok() {
+            match property {
+                P::CLIENT_COV_INCREMENT => self.increment_written = true,
+                _ => self.interval_written = true,
+            }
+        }
+        Some(result)
     }
 
     /// Set Client_COV_Increment; `None` is NULL. An increment that is

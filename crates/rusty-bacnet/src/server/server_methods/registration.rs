@@ -537,8 +537,10 @@ impl BACnetServer {
     /// on `add_trend_log`: a log reopened from it keeps its saved records
     /// and settings, ignores `total_record_count`, and appends a
     /// LOG_INTERRUPTED record (#1541); `buffer_size` wins over the saved
-    /// Buffer_Size.
-    /// `log_received_notifications` isn't saved and applies on every start.
+    /// Buffer_Size. The settings include the reporting settings a write set
+    /// (#1952); `clear_written_reporting` drops those first, as on
+    /// `add_trend_log`. `log_received_notifications` isn't saved and applies
+    /// on every start.
     #[pyo3(signature = (
         instance,
         name,
@@ -546,6 +548,7 @@ impl BACnetServer {
         log_received_notifications=false,
         *,
         storage_path=None,
+        clear_written_reporting=false,
         total_record_count=0
     ))]
     fn add_event_log(
@@ -555,6 +558,7 @@ impl BACnetServer {
         buffer_size: u32,
         log_received_notifications: bool,
         storage_path: Option<&str>,
+        clear_written_reporting: bool,
         total_record_count: u32,
     ) -> PyResult<()> {
         let mut obj = match storage_path {
@@ -566,6 +570,9 @@ impl BACnetServer {
             None => EventLogObject::new(instance, name, buffer_size),
         }
         .map_err(to_py_err)?;
+        if clear_written_reporting {
+            obj.clear_written_reporting().map_err(to_py_err)?;
+        }
         obj.set_log_received_notifications(log_received_notifications);
         if !obj.reopened() {
             obj.restore_log_buffer(total_record_count, [])
