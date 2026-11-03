@@ -891,7 +891,11 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
     Its retries end the usual way before that, the last answer window
     whole, so the deadline only ever frees an aborted worker's coordinate;
     and a report that begins on a coordinate still marked by an unsettled
-    one past its deadline fences it (§5.5).
+    one past its deadline fences it (§5.5). The cutoff runs from the
+    instant the table began the report, which for the Single fanout is its
+    evaluation (PR 2a): so the fanout starts every confirmed worker before
+    it awaits any unconfirmed send, and a send that stalls can't shorten a
+    report's answer window.
 11. Lead, 2026-11-02: PR 2 splits in two. PR 2a moves the active lists,
     value preparation and Life Safety snapshots, and puts the server's
     Single fanout on `cov::evaluate`; PR 2b adds the `report` module, the
