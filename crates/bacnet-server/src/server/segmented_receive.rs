@@ -475,22 +475,3 @@ pub(super) fn remove_peer_aborted_request(
         remove_matching_reassemblies(receivers, &key);
     }
 }
-
-/// Defensive fallback only: carries neither an original route nor DER authority.
-pub(super) fn empty_reassembled_envelope() -> bacnet_network::layer::ReceivedApdu {
-    warn!("received consumed twice - using empty fallback");
-    bacnet_network::layer::ReceivedApdu {
-        router_response: None,
-        direct_response: None,
-        apdu: Bytes::new(),
-        source_mac: MacAddr::new(),
-        ingress_network: None,
-        source_network: None,
-        link_layer_group: false,
-        is_group: false,
-        global_broadcast: false,
-        data_attributes: Vec::new(),
-        provenance: bacnet_transport::port::TransportProvenance::unverified(),
-        reply_tx: None,
-    }
-}
