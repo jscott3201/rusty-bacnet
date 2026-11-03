@@ -387,9 +387,15 @@ impl NodeHandle {
                 .into_iter()
                 .partition::<Vec<_>, _>(|release| release.to == foreign.bbmd);
             state.releases = kept;
+            // At an instant no later than the node's own, which it takes as
+            // its own (time never runs backwards): the cancel then catches
+            // up to nothing new, so it can't start an attempt to the BBMD
+            // being left that falls due now; the move below does that work.
             for release in dropped {
                 let cancelled = LocalFailure::Cancelled;
-                state.node.exchange_failed(release.exchange, cancelled, now);
+                state
+                    .node
+                    .exchange_failed(release.exchange, cancelled, CoreInstant::ZERO);
             }
             state.node.retarget(foreign, now).map_err(config_error)?;
             // The node cancelled the attempt this would have sent; its

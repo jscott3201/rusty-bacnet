@@ -292,7 +292,7 @@ impl<const X: usize> Node<X> {
             } else {
                 &mut self.counters.previous_release_refused
             });
-            self.release_ended(slot.peer, outcome, now);
+            self.release_ended(&slot, outcome, now);
             return;
         }
         if slot.operation != Operation::RegisterForeignDevice {
@@ -479,7 +479,7 @@ impl<const X: usize> Node<X> {
             Owner::Manual => {}
             Owner::Release => {
                 bump(&mut self.counters.previous_release_unanswered);
-                self.release_ended(slot.peer, outcome, now);
+                self.release_ended(slot, outcome, now);
             }
             Owner::Registration => {
                 if let Some(lifecycle) = &mut self.lifecycle {
@@ -635,9 +635,11 @@ impl<const X: usize> Node<X> {
     /// effort: whatever comes of it is counted (`previous_release*` in
     /// [`NodeCounters`]) and changes nothing else, and one that can't be
     /// admitted counts as unanswered. A move back to a BBMD whose release
-    /// is still in flight registers there as soon as the release ends,
-    /// answered or not, since a success couldn't tell the two apart; one
-    /// still queued, never polled, is dropped unsent. Each release's end is
+    /// is still in flight registers there as soon as the release is
+    /// answered, since a success couldn't tell the two apart; if it goes
+    /// unanswered, not until one response timeout after it ended, so a late
+    /// answer to it can't pass for the registration's. One still queued,
+    /// never polled, is dropped unsent. Each release's end is
     /// also reported as a [`RegistrationEvent::PreviousRelease`] when the
     /// event list has room.
     ///
@@ -685,17 +687,28 @@ impl<const X: usize> Node<X> {
         Ok(())
     }
 
-    /// A release of `bbmd` ended with `outcome`: report it, and if the device
-    /// has moved back to that BBMD, whose registration attempt the release
-    /// held off (a success couldn't tell the two apart), let the attempt go
-    /// at once.
-    fn release_ended(&mut self, bbmd: SocketAddrV4, outcome: AttemptOutcome, now: Instant) {
+    /// The release `slot` held ended with `outcome`: report it. If the
+    /// device has moved back to that BBMD, whose registration attempt the
+    /// release held off (a success couldn't tell the two apart), an answer
+    /// lets the attempt go at once. A release sent and left unanswered may
+    /// still be answered, until one response timeout after it ended, and a
+    /// late success would be taken for the attempt's: the attempt waits
+    /// that long, or its retry's wait if longer.
+    fn release_ended(&mut self, slot: &Slot, outcome: AttemptOutcome, now: Instant) {
+        let bbmd = slot.peer;
         self.actions
             .event_if_room(RegistrationEvent::PreviousRelease { bbmd, outcome });
-        if let (Mode::Foreign(foreign), Some(lifecycle)) = (&self.link.mode, &mut self.lifecycle)
-            && foreign.bbmd == bbmd
-        {
+        let (Mode::Foreign(foreign), Some(lifecycle)) = (&self.link.mode, &mut self.lifecycle)
+        else {
+            return;
+        };
+        if foreign.bbmd != bbmd {
+            return;
+        }
+        if matches!(outcome, AttemptOutcome::Accepted | AttemptOutcome::Refused) {
             lifecycle.due_now(now);
+        } else if matches!(slot.phase, Phase::Sent { .. }) {
+            lifecycle.not_before(now + slot.timeout);
         }
     }
 

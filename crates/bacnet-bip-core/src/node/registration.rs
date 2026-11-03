@@ -430,15 +430,24 @@ impl Lifecycle {
         wait.min(self.renewal)
     }
 
-    /// A release of the BBMD the device registers with ended at `now`: a
-    /// move back to it may have found the release in the way (a success
-    /// can't tell the two apart), so with no attempt in flight and no live
-    /// lease, the next attempt is due at once rather than after a retry's
-    /// wait.
+    /// A release of the BBMD the device registers with was answered at
+    /// `now`: a move back to it may have found the release in the way (a
+    /// success can't tell the two apart), so with no live lease the next
+    /// attempt is due at once rather than after a retry's wait. While an
+    /// attempt is in flight `next` is `None`, so nothing changes.
     pub(crate) fn due_now(&mut self, now: Instant) {
         let live = self.lease.is_some_and(|lease| lease.is_live_at(now));
-        if self.attempt.is_none() && !live && self.next.is_some_and(|next| next > now) {
+        if !live && self.next.is_some_and(|next| next > now) {
             self.next = Some(now);
+        }
+    }
+
+    /// No attempt before `at`: a release of this BBMD went unanswered, and
+    /// its answer may still arrive until then, which an attempt in flight
+    /// would take for its own. While one is in flight nothing changes.
+    pub(crate) fn not_before(&mut self, at: Instant) {
+        if self.next.is_some_and(|next| next < at) {
+            self.next = Some(at);
         }
     }
 

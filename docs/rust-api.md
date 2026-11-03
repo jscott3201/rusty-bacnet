@@ -3132,9 +3132,10 @@ within the old registration's response timeout, a send that failed or was given
 up, or no free slot). It also reports each one's end, with the BBMD, as
 `RegistrationEvent::PreviousRelease { bbmd, outcome }` when the event list has
 room. The move never waits for it. A move back to a BBMD whose release is still
-in flight registers there as soon as the release ends, since a success couldn't
-tell the two apart. It is off by default, for the reasons
-`BipTransport::set_release_previous_bbmd` gives.
+in flight registers there as soon as the release is answered, since a success
+couldn't tell the two apart; if it goes unanswered, not until one response timeout
+after it ended, so a late answer to it can't pass for the registration's. It is
+off by default, for the reasons `BipTransport::set_release_previous_bbmd` gives.
 
 `bbmd::GRACE_PERIOD` is a `Duration`. `bbmd::StorageFull` and
 `BdtError::Capacity` carry `needed` and `available`, in entries, as the

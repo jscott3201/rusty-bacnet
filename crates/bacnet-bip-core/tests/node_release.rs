@@ -248,37 +248,69 @@ fn a_release_that_isnt_sent_counts_as_unanswered() {
     }
 }
 
-/// A move back to the BBMD a release is still in flight to can't register
-/// there while it is (a success couldn't tell the two apart), but does as
-/// soon as the release ends, answered or not, rather than after a retry's
-/// wait of one response timeout.
+/// Move back to [`BBMD`] at 1.005 s while its release, sent at 1 s, is in
+/// flight: the registration there can't start (a success couldn't tell the
+/// two apart), and the retry would wait until 4.005 s.
+fn moved_back_with_the_release_in_flight() -> Node {
+    let mut node: Node = registered();
+    node.retarget(releasing(NEW_BBMD), at(1_000)).unwrap();
+    send_all(&mut node, at(1_000));
+    node.retarget(releasing(BBMD), at(1_005)).unwrap();
+    let actions = send_all(&mut node, at(1_005));
+    // No attempt to the old BBMD yet; the release to the new one goes.
+    assert!(registers(&actions).is_empty());
+    assert_eq!(release_of(&actions).map(|(_, to, _)| to), Some(NEW_BBMD));
+    let view = node.registration(at(1_005)).unwrap();
+    assert_eq!(view.next_attempt, Some(at(4_005)));
+    node
+}
+
+/// An answer to the release in the way, success or its NAK, lets the
+/// registration there go at once: nothing more can come for the release.
 #[test]
-fn a_move_back_registers_as_soon_as_the_release_in_flight_ends() {
-    for answered in [true, false] {
-        let mut node: Node = registered();
-        node.retarget(releasing(NEW_BBMD), at(1_000)).unwrap();
-        send_all(&mut node, at(1_000));
-        node.retarget(releasing(BBMD), at(1_005)).unwrap();
-        let actions = send_all(&mut node, at(1_005));
-        // No attempt to the old BBMD yet; the release to the new one goes.
-        assert!(registers(&actions).is_empty());
-        assert_eq!(release_of(&actions).map(|(_, to, _)| to), Some(NEW_BBMD));
-        // The retry would wait until 4.005 s.
-        let view = node.registration(at(1_005)).unwrap();
-        assert_eq!(view.next_attempt, Some(at(4_005)));
-        let (ended, outcome) = if answered {
-            says(&mut node, &result(SUCCESS), BBMD, at(1_010));
-            (at(1_010), AttemptOutcome::Accepted)
-        } else {
-            // Sent at 1 s, the release times out at 4 s.
-            node.on_deadline(at(4_000));
-            (at(4_000), AttemptOutcome::TimedOut)
-        };
-        let actions = send_all(&mut node, ended);
-        assert_eq!(registers(&actions), [BBMD], "answered: {answered}");
+fn a_move_back_registers_as_soon_as_the_release_in_flight_is_answered() {
+    for (code, outcome) in [
+        (SUCCESS, AttemptOutcome::Accepted),
+        (DELETE_NAK, AttemptOutcome::Refused),
+    ] {
+        let mut node = moved_back_with_the_release_in_flight();
+        says(&mut node, &result(code), BBMD, at(1_010));
+        let actions = send_all(&mut node, at(1_010));
+        assert_eq!(registers(&actions), [BBMD], "{outcome:?}");
         assert_eq!(ends(&actions), [(BBMD, outcome)]);
         assert_eq!(node.take_counters().previous_releases, 2);
     }
+}
+
+/// A release in the way that times out is not followed at once: its answer
+/// may still come, until one response timeout after it ended, and would be
+/// taken for the registration's. Here the retry waits until 7 s, past its
+/// own 4.005 s; a late success at 5 s matches nothing and proves no lease,
+/// and the registration that follows is proven by its own answer.
+#[test]
+fn a_late_answer_to_a_timed_out_release_is_never_taken_for_the_registration() {
+    let mut node = moved_back_with_the_release_in_flight();
+    node.on_deadline(at(4_000));
+    let actions = send_all(&mut node, at(4_000));
+    assert!(registers(&actions).is_empty());
+    assert_eq!(ends(&actions), [(BBMD, AttemptOutcome::TimedOut)]);
+    assert_eq!(
+        node.registration(at(4_000)).unwrap().next_attempt,
+        Some(at(7_000))
+    );
+    node.on_deadline(at(4_005));
+    assert!(registers(&send_all(&mut node, at(4_005))).is_empty());
+    assert!(matches!(
+        says(&mut node, &result(SUCCESS), BBMD, at(5_000)),
+        Inbound::Unmatched { late: true, .. }
+    ));
+    assert!(!node.registration(at(5_000)).unwrap().registered);
+    assert_eq!(node.next_deadline(), Some(at(7_000)));
+    node.on_deadline(at(7_000));
+    assert_eq!(registers(&send_all(&mut node, at(7_000))), [BBMD]);
+    says(&mut node, &result(SUCCESS), BBMD, at(7_010));
+    let view = node.registration(at(7_010)).unwrap();
+    assert_eq!(view.lease.map(span), Some((at(7_000), at(67_000))));
 }
 
 /// A release that ends while the device registers with another BBMD pulls
