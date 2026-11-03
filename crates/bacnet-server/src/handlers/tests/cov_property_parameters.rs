@@ -2,7 +2,7 @@ use super::*;
 use bacnet_encoding::{primitives, tags};
 use bacnet_services::cov::{SubscribeCOVPropertyRequest, SubscribeCOVRequest};
 use bacnet_types::error::RemoteError;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 fn object(instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::ANALOG_INPUT, instance).unwrap()
@@ -42,7 +42,8 @@ fn subscribe_cov_property_parameter_errors_precede_lookup_and_expired_entry_purg
     )
     .unwrap();
     let mut expired = (*seeded[0]).clone();
-    expired.expires_at = Some(Instant::now() - Duration::from_secs(1));
+    expired.expires_at =
+        Some(crate::runtime_clock::core_now() - bacnet_time::Duration::from_secs(1));
     table.subscribe(expired.clone()).unwrap();
     for target in [object(1), object(999)] {
         for (confirmed, lifetime, reject) in [
@@ -76,8 +77,8 @@ fn subscribe_cov_property_parameter_errors_precede_lookup_and_expired_entry_purg
                 "invalid request must not purge even expired entries"
             );
             let current = table
-                .get_subscription(&crate::cov::CovSubscriptionKey::Property {
-                    recipient: crate::cov::CovRecipient::from_endpoint(
+                .get_subscription(&bacnet_device_core::cov::CovSubscriptionKey::Property {
+                    recipient: bacnet_device_core::cov::CovRecipient::from_endpoint(
                         &MacAddr::from_slice(&mac),
                         None,
                     ),
@@ -120,7 +121,10 @@ async fn subscribe_cov_property_positive_renewal_expiry_and_nonexistent_cancel()
     )
     .unwrap()
     .remove(0);
-    assert!(renewed.expires_at.unwrap() > first.expires_at.unwrap() + Duration::from_secs(28000));
+    assert!(
+        renewed.expires_at.unwrap()
+            > first.expires_at.unwrap() + bacnet_time::Duration::from_secs(28000)
+    );
     assert!(renewed.issue_confirmed_notifications);
     assert_eq!(table.len(), 1);
     assert_eq!(table.peer_indefinite_count(&renewed.recipient()), 0);

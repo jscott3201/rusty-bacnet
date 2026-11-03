@@ -323,9 +323,9 @@ async fn a_failed_confirmed_chunk_goes_out_again_before_the_rest() {
 #[tokio::test(start_paused = true)]
 async fn chunks_an_exhausted_budget_held_back_go_out_at_the_deadline() {
     let mut h = Harness::start(ServerConfig {
-        cov_policy: crate::cov::CovPolicy {
+        cov_policy: bacnet_device_core::cov::CovPolicy {
             max_notifications_per_event: 1,
-            ..crate::cov::CovPolicy::default()
+            ..bacnet_device_core::cov::CovPolicy::default()
         },
         ..ServerConfig::default()
     })

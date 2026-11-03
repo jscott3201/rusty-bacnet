@@ -16,7 +16,10 @@
 //! picks the level of a log line.
 //! An unsynchronized Device clock still reads wall time from `SystemTime`.
 
+use std::sync::OnceLock;
 use std::time::Instant;
+
+use bacnet_time::HostClock;
 
 /// Now, on tokio's clock.
 ///
@@ -33,4 +36,20 @@ use std::time::Instant;
 /// that hands one of them an instant builds it from here too.
 pub(crate) fn now() -> Instant {
     tokio::time::Instant::now().into_std()
+}
+
+/// Tokio's clock as the cores' timeline (#2303): the one map from the
+/// server's instants to the `bacnet_time::Instant`s the COV table stores
+/// and compares. It reads [`now`], so paused-time tests move the table's
+/// deadlines too. Its origin, the first instant anything asked for, sits
+/// mid-timeline, so a test runtime whose paused clock started earlier in
+/// the same process still maps exactly.
+pub(crate) fn core_clock() -> HostClock {
+    static CLOCK: OnceLock<HostClock> = OnceLock::new();
+    *CLOCK.get_or_init(|| HostClock::centred(now()).reading(now))
+}
+
+/// Now, on [`core_clock`]'s timeline.
+pub(crate) fn core_now() -> bacnet_time::Instant {
+    core_clock().now()
 }

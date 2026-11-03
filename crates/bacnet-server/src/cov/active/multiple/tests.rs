@@ -1,8 +1,10 @@
 use super::*;
+use bacnet_device_core::cov::CovNotificationKind;
 use bacnet_objects::analog::AnalogValueObject;
 use bacnet_objects::binary::BinaryValueObject;
+use bacnet_time::Duration;
+use bacnet_types::MacAddr;
 use bacnet_types::enums::{EngineeringUnits, ObjectType};
-use std::time::Duration;
 
 const MULTIPLE: PropertyIdentifier = PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS;
 const PV: PropertyIdentifier = PropertyIdentifier::PRESENT_VALUE;
@@ -62,7 +64,7 @@ fn reference(
 
 #[test]
 fn active_cov_multiple_entries_follow_context_refresh_without_purging_or_single() {
-    let now = Instant::now();
+    let now = crate::runtime_clock::core_now();
     let unconfirmed = context(direct(), 2, false);
     let confirmed = context(direct(), 2, true);
     let mut table = CovSubscriptionTable::new();
@@ -301,7 +303,7 @@ fn live_device_cov_resolves_only_selected_lists() {
             active_cov_multiple: selected_multiple,
             address_bindings: false,
         };
-        let entries = table.live_cov_entries(selection, Instant::now());
+        let entries = table.live_cov_entries(selection, crate::runtime_clock::core_now());
         for live in [
             LiveDeviceCov::project(&db, selection, entries),
             LiveDeviceCov::stopped(selection),

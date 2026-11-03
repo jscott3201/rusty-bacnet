@@ -13,6 +13,7 @@ use bacnet_device_core::read::LiveLists;
 use bacnet_encoding::constructed::encode_cov_subscription_list;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::traits::BACnetObject;
+use bacnet_time::Instant;
 use bacnet_types::constructed::{
     BACnetAddress, BACnetCOVSubscription, BACnetObjectPropertyReference, BACnetRecipient,
     BACnetRecipientProcess,
@@ -44,10 +45,9 @@ impl CovSubscriptionTable {
     /// purging, so admission and the periodic purge remain the only mutators.
     /// Indefinite entries report zero; finite entries report rounded-up seconds.
     pub(crate) fn active_cov_entries(&self, now: Instant) -> Vec<ActiveCovEntry> {
-        self.subs
-            .values()
+        self.entries()
             .filter_map(|entry| {
-                let (process_id, object, property) = match &entry.key {
+                let (process_id, object, property) = match entry.key() {
                     CovSubscriptionKey::Object {
                         process_id, object, ..
                     } => (*process_id, *object, None),
@@ -324,7 +324,8 @@ fn increment_in_use(
 ) -> Option<f32> {
     let increment = prepare::effective_increment(object, property, true, explicit)?;
     let value = object.read_property(property, index).ok()?;
-    let (_, numeric) = prepare::validate_sample(object, property, index, &value).ok()?;
+    let (_, numeric) =
+        bacnet_device_core::cov::validate_sample(object, property, index, &value).ok()?;
     // The subscription list reports the increment as a REAL, so a wider
     // object increment (a Large Analog Value's Double) is narrowed here.
     numeric.then_some(increment as f32)
@@ -333,11 +334,13 @@ fn increment_in_use(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bacnet_device_core::cov::CovNotificationKind;
     use bacnet_objects::analog::AnalogValueObject;
     use bacnet_objects::binary::BinaryValueObject;
+    use bacnet_time::Duration;
+    use bacnet_types::MacAddr;
     use bacnet_types::enums::EngineeringUnits;
     use bacnet_types::enums::ObjectType;
-    use std::time::Duration;
 
     fn av(instance: u32) -> ObjectIdentifier {
         ObjectIdentifier::new(ObjectType::ANALOG_VALUE, instance).unwrap()
@@ -371,7 +374,7 @@ mod tests {
 
     #[test]
     fn active_cov_entries_read_one_instant_without_purging_or_multiple() {
-        let now = Instant::now();
+        let now = crate::runtime_clock::core_now();
         let mut table = CovSubscriptionTable::new();
         table
             .subscribe(proposal(
@@ -585,7 +588,7 @@ mod tests {
         }
         assert_eq!(table.len(), 2);
 
-        let entries = table.active_cov_entries(Instant::now());
+        let entries = table.active_cov_entries(crate::runtime_clock::core_now());
         let projected = ActiveCovSubscriptions::project(&db, device(), entries);
         let Some(PropertyValue::ApplicationData(list)) =
             projected.resolve(device(), PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS)
