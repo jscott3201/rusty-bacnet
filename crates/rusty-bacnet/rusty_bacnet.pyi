@@ -7072,6 +7072,15 @@ class BipEndpoint:
         """Broadcast one I-Am consistent with the composed identity."""
         ...
 
+    def report_device_reset_local(self) -> Awaitable[None]:
+        """Record a reset the application makes for its own reasons: a
+        DEVICE_RESET Audit record from this device, with no invoke ID, through
+        the session's source Reporter when it has one, as
+        ``BACnetServer.report_device_reset_local`` does (#1837). A peer's
+        accepted restart is recorded already. RuntimeError when the endpoint
+        is not running."""
+        ...
+
     @property
     def device_instance(self) -> int: ...
     @property
@@ -7187,6 +7196,15 @@ class ScEndpoint:
 
     def broadcast_i_am(self) -> Awaitable[None]:
         """Broadcast one I-Am via the hub relay."""
+        ...
+
+    def report_device_reset_local(self) -> Awaitable[None]:
+        """Record a reset the application makes for its own reasons: a
+        DEVICE_RESET Audit record from this device, with no invoke ID, through
+        the session's source Reporter when it has one, as
+        ``BACnetServer.report_device_reset_local`` does (#1837). A peer's
+        accepted restart is recorded already. RuntimeError when the endpoint
+        is not running."""
         ...
 
     @property
@@ -7328,6 +7346,15 @@ class MstpEndpoint:
 
     def broadcast_i_am(self) -> Awaitable[None]:
         """Broadcast one I-Am (MS/TP local broadcast)."""
+        ...
+
+    def report_device_reset_local(self) -> Awaitable[None]:
+        """Record a reset the application makes for its own reasons: a
+        DEVICE_RESET Audit record from this device, with no invoke ID, through
+        the session's source Reporter when it has one, as
+        ``BACnetServer.report_device_reset_local`` does (#1837). A peer's
+        accepted restart is recorded already. RuntimeError when the endpoint
+        is not running."""
         ...
 
     @property

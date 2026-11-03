@@ -4806,7 +4806,10 @@ server = BACnetServer(1234, reinit_password="secret",
 endpoint's only Audit Reporter is its source Reporter, which Clause 19.6.2
 casts as the operation source's; writing the DEVICE_RESET, DEVICE_BACKUP and
 DEVICE_RESTORE records of requests it carries out through that Reporter is
-this library's local choice.
+this library's local choice. Endpoints take `await endpoint.report_device_reset_local()`
+too (#1837). Python can't configure an endpoint's source Reporter yet, so
+there it records nothing; it raises RuntimeError when the endpoint is not
+running.
 
 ### Runtime Object Access
 

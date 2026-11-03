@@ -141,11 +141,12 @@ class EndpointStubParityTests(unittest.TestCase):
         # Native Future-returning owner methods.
         for cls, methods in (
             (BipEndpoint, ["start", "close", "client", "server", "local_address",
-                           "status", "foreign_registration", "broadcast_i_am"]),
+                           "status", "foreign_registration", "broadcast_i_am",
+                           "report_device_reset_local"]),
             (ScEndpoint, ["start", "close", "client", "server", "local_address",
-                          "status", "broadcast_i_am"]),
+                          "status", "broadcast_i_am", "report_device_reset_local"]),
             (MstpEndpoint, ["start", "close", "client", "server", "local_address",
-                            "status", "broadcast_i_am"]),
+                            "status", "broadcast_i_am", "report_device_reset_local"]),
         ):
             for name in methods:
                 with self.subTest(cls=cls.__name__, method=name):
