@@ -1,4 +1,6 @@
 //! One immutable delivered observation per accepted reference.
+use alloc::boxed::Box;
+
 use super::CovSample;
 use bacnet_types::{error::Error, primitives::PropertyValue};
 
@@ -28,25 +30,23 @@ impl CovObservation {
         })
     }
     /// Attach the bounded trigger values captured with a whole-object report.
-    pub(crate) fn with_triggers(mut self, triggers: Box<[CovSample]>) -> Self {
+    pub fn with_triggers(mut self, triggers: Box<[CovSample]>) -> Self {
         self.triggers = triggers;
         self
     }
     /// Whether a captured trigger value differs from the last delivered one.
     /// An object with no trigger values never reports through this check.
-    pub(crate) fn triggers_changed(&self, previous: Option<&Self>) -> bool {
+    pub fn triggers_changed(&self, previous: Option<&Self>) -> bool {
         !self.triggers.is_empty() && previous.map(|p| &p.triggers) != Some(&self.triggers)
     }
     /// Attach the bounded PV and optional command priority captured with a source.
-    pub(crate) fn with_source_companions(
-        mut self,
-        pv: CovSample,
-        priority: Option<CovSample>,
-    ) -> Self {
+    pub fn with_source_companions(mut self, pv: CovSample, priority: Option<CovSample>) -> Self {
         self.source_companions = Some((pv, priority));
         self
     }
-    pub(crate) fn source_companions(&self) -> Option<&(CovSample, Option<CovSample>)> {
+    /// The PV and optional command priority captured with a Value_Source
+    /// report, if any.
+    pub fn source_companions(&self) -> Option<&(CovSample, Option<CovSample>)> {
         self.source_companions.as_ref()
     }
     /// The immutable bounded selected value.
@@ -58,11 +58,13 @@ impl CovObservation {
         self.flags
     }
     /// Only a present changed value is a status trigger; disappearance is not.
-    pub(crate) fn flags_changed(&self, previous: Option<&Self>) -> bool {
+    pub fn flags_changed(&self, previous: Option<&Self>) -> bool {
         self.flags.is_some() && previous.map(|p| p.flags) != Some(self.flags)
     }
 }
-pub(crate) fn validate_flags(value: &PropertyValue) -> Result<u8, Error> {
+/// The four used Status_Flags bits of a canonical four-bit BitString: one
+/// octet with its four unused low bits zero.
+pub fn validate_flags(value: &PropertyValue) -> Result<u8, Error> {
     match value {
         PropertyValue::BitString {
             unused_bits: 4,

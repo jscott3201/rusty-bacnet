@@ -293,7 +293,10 @@ async fn cov_identity_two_router_paths_renew_one_context_and_cleanup_current_rou
         }
         assert!(matches!(fixture.take_apdus()[0], Apdu::SimpleAck(_)));
     }
-    let peer = crate::cov::CovRecipient::from_endpoint(&MacAddr::from_slice(&[1]), Some(&remote));
+    let peer = bacnet_device_core::cov::CovRecipient::from_endpoint(
+        &MacAddr::from_slice(&[1]),
+        Some(&remote),
+    );
     {
         let mut table = fixture.cov_table.write().await;
         assert_eq!(table.peer_subscription_count(&peer), 1);

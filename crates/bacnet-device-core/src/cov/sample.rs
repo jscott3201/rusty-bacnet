@@ -1,11 +1,12 @@
 //! Bounded immutable values retained by COV subscription snapshots.
+use alloc::sync::Arc;
+use alloc::vec::Vec;
 use bacnet_objects::cov_change::{reports_change, same_value};
 use bacnet_types::{
     enums::{ErrorClass, ErrorCode},
     error::Error,
     primitives::PropertyValue,
 };
-use std::sync::Arc;
 
 /// A validated typed COV baseline. Clones share immutable, normalized storage.
 /// Local retention limits: 32 nested Lists, 1,024 nodes and 65,536 payload bytes.
@@ -26,12 +27,7 @@ impl CovSample {
     /// Whether this sample is a change from `previous` worth reporting,
     /// by the shared Clause 13.1 test ([`reports_change`]); with no
     /// previous sample it always is.
-    pub(crate) fn reports(
-        &self,
-        previous: Option<&Self>,
-        increment: Option<f64>,
-        numeric: bool,
-    ) -> bool {
+    pub fn reports(&self, previous: Option<&Self>, increment: Option<f64>, numeric: bool) -> bool {
         previous.is_none_or(|previous| {
             reports_change(self.value(), previous.value(), increment, numeric)
         })

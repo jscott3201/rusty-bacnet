@@ -1,5 +1,15 @@
-use super::*;
+//! Who a COV subscription belongs to and what it monitors: the delivery
+//! route, the original client address, and the coordinates every table
+//! operation keys on.
+use alloc::string::String;
+use core::cmp::Ordering;
+
+use bacnet_encoding::npdu::NpduAddress;
+use bacnet_types::MacAddr;
 use bacnet_types::constructed::BACnetAddress;
+use bacnet_types::enums::PropertyIdentifier;
+use bacnet_types::error::Error;
+use bacnet_types::primitives::ObjectIdentifier;
 
 /// Delivery endpoint, including the immediate router for routed traffic.
 /// All COV family keys use the original client recipient as identity.
@@ -25,7 +35,9 @@ impl SubscriberEndpoint {
 /// Original BACnet client address for COV identity, quota and notification accounting.
 /// A routed address is independent of the immediate router; it is a claimed
 /// protocol address, not an authentication credential.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+///
+/// Recipients order direct before routed, then by address.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CovRecipient {
     /// A local-network client, identified by its source MAC.
     Direct(MacAddr),
@@ -48,7 +60,7 @@ impl CovRecipient {
     /// fit: the NPDU codec bounds a routed source (#1141) and the network
     /// layer drops a frame from a longer link-layer MAC (#1198). The check
     /// stays for subscriptions that reach the public table API another way.
-    pub(crate) fn validate(&self) -> Result<(), Error> {
+    pub fn validate(&self) -> Result<(), Error> {
         if matches!(self, Self::Routed(source) if source.mac_address.is_empty()) {
             return Err(Error::Encoding(
                 "COV routed recipient requires a nonempty source MAC".into(),
@@ -59,18 +71,37 @@ impl CovRecipient {
             Self::Routed(source) => &source.mac_address,
         };
         if mac.len() > BACnetAddress::MAX_MAC_LEN {
-            return Err(Error::Encoding(format!(
-                "COV recipient MAC of {} octets exceeds the {}-octet BACnetAddress limit",
-                mac.len(),
-                BACnetAddress::MAX_MAC_LEN
-            )));
+            return Err(Error::Encoding(mac_too_long(mac.len())));
         }
         Ok(())
     }
 }
 
+/// The refusal of a recipient MAC of `octets` octets, written without
+/// `core::fmt`, so a firmware image formats nothing on its account (#2187).
+fn mac_too_long(octets: usize) -> String {
+    const _: () = assert!(BACnetAddress::MAX_MAC_LEN == 18);
+    // usize::MAX has at most twenty digits.
+    let mut digits = [0u8; 20];
+    let mut start = digits.len();
+    let mut rest = octets;
+    loop {
+        start -= 1;
+        // `rest % 10` is below ten, so the cast keeps it whole.
+        digits[start] = b'0' + (rest % 10) as u8;
+        rest /= 10;
+        if rest == 0 {
+            break;
+        }
+    }
+    let mut message = String::from("COV recipient MAC of ");
+    message.extend(digits[start..].iter().copied().map(char::from));
+    message.push_str(" octets exceeds the 18-octet BACnetAddress limit");
+    message
+}
+
 /// Multiple notification context. Confirmed and unconfirmed forms are independent.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MultipleContextKey {
     /// Original client address, without the immediate router.
     pub recipient: CovRecipient,
@@ -81,6 +112,10 @@ pub struct MultipleContextKey {
 }
 
 /// Complete accepted subscription coordinates used by every table operation.
+///
+/// Keys order by monitored object first, so a table finds an object's
+/// subscriptions together; then ordinary before Single before Multiple, and
+/// by recipient, process, form, property and index.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CovSubscriptionKey {
     /// Ordinary whole-object subscription.
@@ -135,87 +170,70 @@ impl CovSubscriptionKey {
             _ => None,
         }
     }
-}
 
-impl CovSubscription {
-    /// Current immediate transport route and original routed source.
-    pub fn endpoint(&self) -> SubscriberEndpoint {
-        SubscriberEndpoint::new(&self.subscriber_mac, self.subscriber_network.as_ref())
-    }
-
-    /// Validate and derive the sole table identity from this proposed subscription.
-    pub fn key(&self) -> Result<CovSubscriptionKey, Error> {
-        let recipient = self.recipient();
-        recipient.validate()?;
-        let process_id = self.subscriber_process_identifier;
-        let object = self.monitored_object_identifier;
-        let index = self.monitored_property_array_index;
-        match (self.notification_kind, self.monitored_property, index) {
-            (CovNotificationKind::Single, None, None) => Ok(CovSubscriptionKey::Object { recipient, process_id, object }),
-            (CovNotificationKind::Single, Some(property), _) => Ok(CovSubscriptionKey::Property { recipient, process_id, object, property, index }),
-            (CovNotificationKind::Multiple, Some(property), _) => Ok(CovSubscriptionKey::Multiple {
-                context: MultipleContextKey { recipient, process_id, confirmed: self.issue_confirmed_notifications }, object, property, index,
-            }),
-            _ => Err(Error::Encoding("COV reference requires a property; whole-object subscriptions cannot carry an index".into())),
+    /// Every coordinate but the object, in comparison order. Each field of
+    /// each family appears, so two keys compare equal exactly when `Eq`
+    /// says they are.
+    #[allow(clippy::type_complexity)]
+    fn rank(
+        &self,
+    ) -> (
+        u8,
+        &CovRecipient,
+        u32,
+        bool,
+        Option<PropertyIdentifier>,
+        Option<u32>,
+    ) {
+        match self {
+            Self::Object {
+                recipient,
+                process_id,
+                ..
+            } => (0, recipient, *process_id, false, None, None),
+            Self::Property {
+                recipient,
+                process_id,
+                property,
+                index,
+                ..
+            } => (1, recipient, *process_id, false, Some(*property), *index),
+            Self::Multiple {
+                context,
+                property,
+                index,
+                ..
+            } => (
+                2,
+                &context.recipient,
+                context.process_id,
+                context.confirmed,
+                Some(*property),
+                *index,
+            ),
         }
     }
 }
 
-/// Immutable accepted entry carried through initial notification and fanout work.
-/// Only a table can create it. Renewal/recreation invalidates earlier snapshots;
-/// snapshots from another table cannot complete this table's entries.
-#[derive(Debug, Clone)]
-pub struct CovSubscriptionSnapshot {
-    pub(super) key: CovSubscriptionKey,
-    pub(super) generation: u64,
-    pub(super) owner: Arc<ObservationOwner>,
-    // Zero is the initial marker; issued tickets start at one and never wrap.
-    pub(super) last_successful_ticket: u64,
-    // Outstanding confirmed report and hold-off of this entry's coordinate
-    // (#896): the entry itself for ordinary and Single subscriptions, the whole
-    // context for Multiple ones. A Multiple context shares it for one live route
-    // incarnation, so a route change fences old snapshots; a same-route refresh
-    // keeps it. Private so callers cannot forge completion authority.
-    pub(super) flight: super::confirmed::FlightMarker,
-    pub(super) subscription: CovSubscription,
-    /// Reported maximum notification delay of a Multiple reference; `None`
-    /// for ordinary and Single entries. The timed store keeps the context's
-    /// current value for its deadline backstop.
-    pub(super) max_notification_delay: Option<u32>,
-    /// Max-APDU-length-accepted the subscriber of a Multiple reference last
-    /// advertised in a SubscribeCOVPropertyMultiple request header, if known.
-    pub(super) subscriber_max_apdu: Option<u16>,
-}
-
-impl CovSubscriptionSnapshot {
-    /// Canonical identity captured at acceptance.
-    pub fn key(&self) -> &CovSubscriptionKey {
-        &self.key
-    }
-
-    /// Table generation of this accepted entry; renewal publishes a new one.
-    pub(crate) fn generation(&self) -> u64 {
-        self.generation
-    }
-
-    /// Maximum notification delay reported for a Multiple reference (`None`
-    /// for ordinary and Single entries). A table-held entry follows every
-    /// refresh of its context; a captured snapshot keeps its acceptance value.
-    pub fn max_notification_delay(&self) -> Option<u32> {
-        self.max_notification_delay
-    }
-
-    /// Maximum APDU the subscriber of a Multiple reference advertised, when
-    /// known; its notifications fit the smaller of it and the local maximum.
-    /// A table-held entry follows every refresh of its context.
-    pub fn subscriber_max_apdu(&self) -> Option<u16> {
-        self.subscriber_max_apdu
+impl Ord for CovSubscriptionKey {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.object()
+            .cmp(&other.object())
+            .then_with(|| self.rank().cmp(&other.rank()))
     }
 }
 
-impl std::ops::Deref for CovSubscriptionSnapshot {
-    type Target = CovSubscription;
-    fn deref(&self) -> &Self::Target {
-        &self.subscription
+impl PartialOrd for CovSubscriptionKey {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
+}
+
+/// COV notification service family for a stored subscription.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CovNotificationKind {
+    /// COVNotification / ConfirmedCOVNotification.
+    Single,
+    /// COVNotificationMultiple / ConfirmedCOVNotificationMultiple.
+    Multiple,
 }

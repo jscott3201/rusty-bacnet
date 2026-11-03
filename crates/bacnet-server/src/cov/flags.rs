@@ -1,5 +1,5 @@
 //! Flags preparation shared by ordinary, Single and Multiple notification contexts.
-use super::{CovObservation, CovSample, observation::validate_flags};
+use bacnet_device_core::cov::{CovObservation, CovSample, validate_flags};
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_objects::property_metadata::has_property;
 use bacnet_objects::traits::BACnetObject;
@@ -44,7 +44,7 @@ impl PreparedFlags {
             .value
             .as_ref()
             .ok_or_else(|| Error::Encoding("Selected Status_Flags is not declared".into()))?;
-        let (sample, numeric) = super::prepare::validate_sample(
+        let (sample, numeric) = bacnet_device_core::cov::validate_sample(
             object,
             PropertyIdentifier::STATUS_FLAGS,
             index,

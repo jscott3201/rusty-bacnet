@@ -37,6 +37,15 @@ the database guard, the transport, addressing and time.
   references naming this device; and the end of a Command's or Channel's
   run a host can't make.
 - `discovery`: Who-Is and I-Am, Who-Has and I-Have.
+- `cov`: the COV subscription table (`CovTable`), with SubscribeCOV and
+  SubscribeCOVProperty (`subscribe_cov`, `subscribe_cov_property`), the
+  admission caps of a `CovPolicy`, lifetimes on `bacnet-time`, and the
+  confirmed reports' state as plain data: a report begun with
+  `begin_confirmed` ends through `delivered`, or by itself at its deadline.
+  The host keeps the table under its own guard, passes `now` to every call,
+  and after each change takes what it fenced or removed (`take_fenced`) and
+  the counts (`take_counts`). `bacnet-server` runs its table on it. The
+  `Responder` doesn't dispatch the COV services yet.
 - `reply`: the reply PDUs, and the one map from an error to its Reject or
   Error PDU.
 - `responder`: `Responder`, which strings the steps together for a host

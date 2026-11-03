@@ -7,7 +7,7 @@
 //! ready, such as handling an Ack and the fanout that follows it.
 use super::cov_wire_test_support::*;
 use super::*;
-use crate::cov::CovSample;
+use bacnet_device_core::cov::CovSample;
 use bacnet_objects::binary::BinaryValueObject;
 use bacnet_services::cov::SubscribeCOVRequest;
 use bacnet_types::enums::ObjectType;
