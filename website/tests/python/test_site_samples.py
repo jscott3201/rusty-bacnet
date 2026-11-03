@@ -34,7 +34,7 @@ import tomllib
 import unittest
 
 import site_samples as samples
-from site_samples import Covered, Deps, Example, Expect, Parse, Run, Skip
+from site_samples import ApiCheck, CargoRun, Construct, Covered, Deps, Example, Expect, Parse, Run, ScriptArgs, Skip
 
 REPO = samples.REPO
 SMOKE = REPO / "scripts/release/cli_smoke.sh"
@@ -299,7 +299,8 @@ class SampleInventory(unittest.TestCase):
     def test_entries_are_well_formed(self):
         for key, spec in samples.SAMPLES.items():
             with self.subTest(key=key):
-                self.assertIsInstance(spec, (Run, Covered, Parse, Skip, Example, Deps))
+                self.assertIsInstance(spec, (Run, Covered, Parse, Skip, Example, Deps, Construct, ApiCheck,
+                                             ScriptArgs, CargoRun))
                 if isinstance(spec, Skip):
                     self.assertIn(spec.cls, "CDEFG")
                     self.assertTrue(spec.reason)
