@@ -37,7 +37,10 @@
 //! - **A move:** the node moves to a second BBMD ([`NodePort::retarget`]),
 //!   as a Network Port activation moves the hosted transport (#1825), so
 //!   the image links and measures it (#1852). The first attempt there goes
-//!   out at once, and its success registers the node with it.
+//!   out at once, and its success registers the node with it. The move
+//!   releases the first BBMD ([`Foreign::release_previous`], #2307): a
+//!   Delete-Foreign-Device-Table-Entry for the node's own address goes
+//!   there right after, and that BBMD's success is counted.
 //!
 //! `tests/node.rs` runs it natively and compares the whole summary with
 //! [`expected()`]; the `node` image (`src/bin/node.rs`) links it, and its
@@ -71,7 +74,8 @@ use bacnet_bip_core::{Duration, Instant, LocalSubnet};
 
 use crate::tally::Sent;
 
-/// Exchange slots: one for the registration, one for a manual request.
+/// Exchange slots: one for the registration, one for the release of the
+/// BBMD a move leaves (or a manual request).
 pub const EXCHANGES: usize = 2;
 
 /// The node as the image builds it.
@@ -446,6 +450,8 @@ impl Datagrams for Socket<'_> {
             Bvll::RegisterForeignDevice { ttl: TTL } if to == BBMD || to == BBMD2 => {
                 record(&mut summary.attempts, self.now, &mut summary.errors);
             }
+            // The release of the BBMD the move leaves.
+            Bvll::DeleteForeignDeviceTableEntry(OWN) if to == BBMD => {}
             Bvll::BvlcResult(code) => self.result = Some((to, code)),
             // Every broadcast is the one Who-Is, to the BBMD.
             Bvll::DistributeBroadcastToNetwork(npdu) if npdu == WHO_IS && to == BBMD => {}
@@ -542,16 +548,21 @@ impl Device<'_, '_> {
         self.answer();
 
         // It moves to the second BBMD: the first attempt there goes out at
-        // once, and that BBMD's success registers it.
+        // once, and that BBMD's success registers it. The first BBMD is
+        // asked to delete the node's entry, and does.
         self.at(110_000);
         let mut moved = FOREIGN;
         moved.bbmd = BBMD2;
+        moved.release_previous = true;
         let now = self.socket.now;
         if self.port.retarget(moved, now, &mut self.socket).is_err() {
             self.socket.summary.error();
         }
         self.socket.now += ROUND_TRIP;
         self.success_from(BBMD2);
+        if self.receive(&Bvll::BvlcResult(SUCCESS), BBMD) != Seen::Handled {
+            self.socket.summary.error();
+        }
 
         let now = self.socket.now;
         let registration = self.port.node().registration(now);

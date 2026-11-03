@@ -56,6 +56,25 @@ impl<T: TransportPort + 'static> ClientBuilder<T> {
 }
 
 impl BipClientBuilder {
+    /// In [`BipMode::Foreign`], after a move to another BBMD (a Network
+    /// Port activation, or the BBMD's host name resolving elsewhere), ask
+    /// the BBMD left behind to delete this device's entry rather than let
+    /// it lapse (#2307). Off by default; see
+    /// [`BipTransport::set_release_previous_bbmd`] for why, and for the
+    /// counts it keeps. Ignored, with a warning, in the other modes.
+    pub fn release_previous_bbmd(mut self, release: bool) -> Self {
+        self.release_previous_bbmd = release;
+        self
+    }
+
+    /// Look up a BBMD named by host name with `resolver` instead of the
+    /// system's resolver (#1852, #2307). See
+    /// [`BipTransport::set_bbmd_resolver`].
+    pub fn bbmd_resolver(mut self, resolver: Arc<dyn BbmdResolver>) -> Self {
+        self.bbmd_resolver = Some(resolver);
+        self
+    }
+
     /// Set the independent event notification broadcast channel capacity.
     pub fn event_channel_capacity(mut self, capacity: usize) -> Self {
         self.options.event_channel_capacity = capacity;

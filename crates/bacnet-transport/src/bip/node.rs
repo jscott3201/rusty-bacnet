@@ -9,8 +9,9 @@
 //! exchange and the driver's timer take, and never across an await. After
 //! every call the node's actions are drained under that lock: an exchange
 //! that timed out fails its waiter at once, and a send the node asks for (a
-//! registration attempt, or the broadcasts it held for one) waits for the
-//! driver task, which makes every such send. A call made where nothing can
+//! registration attempt, the release of the BBMD a move left, or the
+//! broadcasts held for the first attempt) waits for the driver task, which
+//! makes every such send. A call made where nothing can
 //! be awaited, as when a request is dropped, so never has to send.
 //!
 //! Two clocks, which never meet: the node runs on Tokio time from the start
@@ -127,6 +128,15 @@ struct Attempt {
     ttl: u16,
 }
 
+/// A release of the BBMD a move left that the node asked to send
+/// ([`Action::ReleasePrevious`], #2307).
+#[derive(Debug, Clone, Copy)]
+struct Release {
+    exchange: ExchangeId,
+    to: SocketAddrV4,
+    entry: SocketAddrV4,
+}
+
 /// What the node lock guards.
 pub(super) struct NodeState {
     pub(super) node: HostNode,
@@ -134,6 +144,8 @@ pub(super) struct NodeState {
     pub(super) waiters: HashMap<ExchangeId, Waiter>,
     /// A registration attempt for the driver to send.
     register: Option<Attempt>,
+    /// Releases for the driver to send, after the attempt.
+    releases: Vec<Release>,
     /// When the automatic attempt in flight started.
     attempt_started: Option<CoreInstant>,
     /// Broadcasts held for the first registration.
@@ -171,10 +183,20 @@ impl NodeState {
                 Action::ReleaseHeld => self.release.extend(self.held.drain(..)),
                 Action::DiscardHeld => self.held.clear(),
                 Action::Registration(event) => self.log_registration(event),
+                Action::ReleasePrevious {
+                    exchange,
+                    to,
+                    entry,
+                } => self.releases.push(Release {
+                    exchange,
+                    to,
+                    entry,
+                }),
             }
         }
         let counters = self.node.take_counters();
         if !self.stopped {
+            log_releases(&counters);
             record.absorb(&counters);
         }
     }
@@ -278,6 +300,7 @@ impl NodeHandle {
                 node,
                 waiters: HashMap::new(),
                 register: None,
+                releases: Vec::new(),
                 attempt_started: None,
                 held: VecDeque::new(),
                 release: Vec::new(),
@@ -326,9 +349,12 @@ impl NodeHandle {
 
     /// Register with `foreign`'s BBMD and time-to-live from now on
     /// ([`Node::retarget`]): the attempt the driver hasn't sent yet is
-    /// dropped, and one to the new BBMD goes at once. Refused, changing
-    /// nothing, as the node refuses it. A stopped node has nothing to move:
-    /// the next start builds a new one.
+    /// dropped, and one to the new BBMD goes at once. With
+    /// `foreign.release_previous`, a move to another BBMD also has the node
+    /// ask the old one to delete this device's entry, which the driver sends
+    /// after that attempt (#2307). Refused, changing nothing, as the node
+    /// refuses it. A stopped node has nothing to move: the next start
+    /// builds a new one.
     pub(super) fn retarget(&self, foreign: Foreign) -> Result<(), Error> {
         self.with(|state, now| {
             if state.stopped {
@@ -527,6 +553,7 @@ impl NodeHandle {
         state.stopped = true;
         state.waiters.clear();
         state.register = None;
+        state.releases.clear();
         state.held.clear();
         state.release.clear();
         state.queued.clear();
@@ -549,11 +576,24 @@ impl NodeHandle {
             // with it, so the BBMD sees the device register before it is
             // asked to distribute for it.
             let attempt = self.lock().register.take();
-            if let Some(attempt) = attempt {
+            if let Some(Attempt { exchange, to, ttl }) = attempt {
                 if let Some(hook) = self.attempt_hook.get() {
                     hook();
                 }
-                self.send_attempt(attempt).await;
+                let message = Bvll::RegisterForeignDevice { ttl };
+                self.send_request(exchange, to, &message).await;
+            }
+            // The release of the BBMD a move left goes after the attempt to
+            // the new one.
+            let releases = std::mem::take(&mut self.lock().releases);
+            for Release {
+                exchange,
+                to,
+                entry,
+            } in releases
+            {
+                let message = Bvll::DeleteForeignDeviceTableEntry(entry);
+                self.send_request(exchange, to, &message).await;
             }
             self.send_releases().await;
             // A deadline past the host clock's range never comes.
@@ -574,13 +614,14 @@ impl NodeHandle {
         }
     }
 
-    async fn send_attempt(&self, attempt: Attempt) {
-        let mut buf = BytesMut::with_capacity(6);
-        let message = Bvll::RegisterForeignDevice { ttl: attempt.ttl };
-        let sent = match encode_bvll(&mut buf, &message) {
+    /// Send the request of one of the node's own exchanges, a registration
+    /// attempt or a release, and report it to the node.
+    async fn send_request(&self, exchange: ExchangeId, to: SocketAddrV4, message: &Bvll<'_>) {
+        let mut buf = BytesMut::with_capacity(10);
+        let sent = match encode_bvll(&mut buf, message) {
             Ok(()) => self
                 .socket
-                .send_to(&buf, attempt.to)
+                .send_to(&buf, to)
                 .await
                 .map(drop)
                 .map_err(Error::Transport),
@@ -588,13 +629,14 @@ impl NodeHandle {
         };
         match sent {
             Ok(()) => {
-                self.with(|state, now| state.node.exchange_sent(attempt.exchange, now));
+                self.with(|state, now| state.node.exchange_sent(exchange, now));
             }
             Err(error) => {
-                debug!(bbmd = %attempt.to, %error, "Foreign registration attempt was not sent");
+                let function = message.function();
+                debug!(bbmd = %to, %function, %error, "A foreign device's BVLC request was not sent");
                 self.with(|state, now| {
                     let failure = LocalFailure::SendFailed;
-                    state.node.exchange_failed(attempt.exchange, failure, now);
+                    state.node.exchange_failed(exchange, failure, now);
                 });
             }
         }
@@ -656,6 +698,24 @@ fn refused(decode: Option<BvllError>, policy: Option<Error>) -> Error {
         (Some(error), _) => bvll_error(error),
         (None, Some(error)) => error,
         (None, None) => Error::Encoding("BVLC response refused".into()),
+    }
+}
+
+/// Log what came of the releases of the BBMDs moves left (#2307), as the
+/// node counted them.
+fn log_releases(counters: &NodeCounters) {
+    if counters.previous_released > 0 {
+        debug!("The BBMD this foreign device left deleted its entry");
+    }
+    if counters.previous_release_refused > 0 {
+        info!(
+            "The BBMD this foreign device left refused to delete its entry; it lapses on its own"
+        );
+    }
+    if counters.previous_release_unanswered > 0 {
+        info!(
+            "The BBMD this foreign device left did not confirm deleting its entry; it lapses on its own"
+        );
     }
 }
 

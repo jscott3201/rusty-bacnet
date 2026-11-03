@@ -175,44 +175,6 @@ impl NodeHandle {
     }
 }
 
-impl NodeHandle {
-    /// Ask `bbmd`, a BBMD this foreign device has just moved away from, to
-    /// delete the entry it keeps for it with Delete-Foreign-Device-Table-
-    /// Entry (Annex J.2.9), so the entry goes now rather than once its
-    /// time-to-live and grace period run out (J.5.2.3, #1852). Best effort,
-    /// on a task of its own: it never holds up or fails the move, and what
-    /// came of it is only counted and logged, a NAK or silence included.
-    /// The entry named is this node's own local address (`link().address`,
-    /// on a wildcard bind the default-route address); see
-    /// [`BipTransport::set_release_previous_bbmd`] for when that isn't the
-    /// address the old BBMD knows it by.
-    pub(super) fn release_previous_bbmd(self: &Arc<Self>, bbmd: SocketAddrV4) {
-        self.record().release_started();
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            let unsent = Err(Error::Encoding("no Tokio runtime to send it from".into()).into());
-            return self.record().release_ended(bbmd, &unsent);
-        };
-        let node = Arc::clone(self);
-        runtime.spawn(async move {
-            let own = node.link().address;
-            let target = crate::bvll::encode_bip_mac(bbmd.ip().octets(), bbmd.port());
-            let request = Bvll::DeleteForeignDeviceTableEntry(own);
-            let result = match node
-                .request(&target, request, BipTransport::BVLC_RESPONSE_TIMEOUT)
-                .await
-            {
-                Ok(msg) => acknowledged(&msg),
-                Err(error) => Err(error),
-            };
-            // A stopped node counts nothing more (`NodeHandle::stop`): the
-            // request it failed is left as started.
-            if !node.is_stopped() {
-                node.record().release_ended(bbmd, &result);
-            }
-        });
-    }
-}
-
 impl Exchange {
     /// The request went out: its timeout starts, and a response that beat
     /// the send is handed over now.

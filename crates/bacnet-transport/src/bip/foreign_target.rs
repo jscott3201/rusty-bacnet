@@ -28,6 +28,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
+use bacnet_bip_core::node::Foreign;
 use bacnet_types::bip_port::{ForeignDeviceChanges, ForeignRegistration};
 use bacnet_types::constructed::{BACnetHostAddress, BACnetHostNPort};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
@@ -63,7 +64,8 @@ pub(crate) struct ForeignTarget {
     broadcast: Ipv4Addr,
     interface: Ipv4Addr,
     /// After a move to another BBMD, ask the old one to delete this
-    /// device's entry ([`BipTransport::set_release_previous_bbmd`]).
+    /// device's entry ([`BipTransport::set_release_previous_bbmd`]): set on
+    /// each registration handed to the node.
     release_previous: AtomicBool,
     /// This target, for the lookups it starts.
     me: Weak<ForeignTarget>,
@@ -128,6 +130,15 @@ impl ForeignTarget {
         self.lock().config.clone()
     }
 
+    /// `config` as the node engine's registration, which, with
+    /// [`BipTransport::set_release_previous_bbmd`] on, releases the BBMD a
+    /// move to it leaves (#2307).
+    fn engine(&self, config: &ForeignDeviceConfig) -> Result<Foreign, Error> {
+        let mut foreign = config.engine(config.interval()?);
+        foreign.release_previous = self.release_previous.load(Ordering::Relaxed);
+        Ok(foreign)
+    }
+
     /// Change the configuration in a test, as a caller with the transport
     /// could before the target existed.
     #[cfg(test)]
@@ -146,8 +157,7 @@ impl ForeignTarget {
     ) -> Result<(), Error> {
         let mut state = self.lock();
         if state.config != *used {
-            let interval = state.config.interval()?;
-            node.retarget(state.config.engine(interval))?;
+            node.retarget(self.engine(&state.config)?)?;
         }
         state.node = Arc::downgrade(node);
         state.lookups.attached();
@@ -206,12 +216,11 @@ impl ForeignTarget {
             config.renewal_interval = state.configured_renewal.map(|renewal| renewal.min(half));
         }
         // A zero time-to-live is refused, as at start.
-        let interval = config.interval().map_err(|_| out_of_range())?;
+        let foreign = self.engine(&config).map_err(|_| out_of_range())?;
         config
             .check_bbmd(self.broadcast, self.interface)
             .map_err(|_| out_of_range())?;
-        node.check_retarget(config.engine(interval))
-            .map_err(|_| out_of_range())?;
+        node.check_retarget(foreign).map_err(|_| out_of_range())?;
         Ok(Planned { node, config, name })
     }
 }
@@ -237,12 +246,13 @@ impl ForeignRegistration for ForeignTarget {
     }
 
     /// With [`BipTransport::set_release_previous_bbmd`] on, a move to
-    /// another BBMD also asks the old one to delete this device's entry,
-    /// on the side: whatever comes of that, the move stands (#1852).
+    /// another BBMD also has the node ask the old one to delete this
+    /// device's entry, after the first registration with the new one:
+    /// whatever comes of that, the move stands (#1852, #2307).
     ///
-    /// A host name is looked up on the side too (#1852), and the device
-    /// moves once it resolves; a name alone, with the time-to-live as it
-    /// was, sends nothing to the BBMD in use before then.
+    /// A host name is looked up on the side (#1852), and the device moves
+    /// once it resolves; a name alone, with the time-to-live as it was,
+    /// sends nothing to the BBMD in use before then.
     fn activate(&self, changes: &ForeignDeviceChanges) -> Result<(), Error> {
         let mut state = self.lock();
         let Planned { node, config, name } = self.changed(&state, changes)?;
@@ -250,18 +260,12 @@ impl ForeignRegistration for ForeignTarget {
         // the BBMD by a host name, which registers once looked up.
         let reregister = !matches!(name, Some(Some(_))) || config != state.config;
         if reregister {
-            let interval = config.interval().map_err(|_| out_of_range())?;
-            node.retarget(config.engine(interval))
-                .map_err(|_| out_of_range())?;
+            let foreign = self.engine(&config).map_err(|_| out_of_range())?;
+            node.retarget(foreign).map_err(|_| out_of_range())?;
         }
-        let old = state.config.bbmd();
-        let moved = old != config.bbmd();
         state.config = config;
         let lookup = name.and_then(|name| self.renamed(&mut state, name));
         drop(state);
-        if moved && self.release_previous.load(Ordering::Relaxed) {
-            node.release_previous_bbmd(old);
-        }
         if let Some(lookup) = lookup {
             lookup.start();
         }
@@ -338,9 +342,13 @@ impl BipTransport {
     /// also ask the BBMD it left to delete its entry
     /// (Delete-Foreign-Device-Table-Entry, Annex J.2.9) rather than leave it
     /// until its time-to-live and grace period run out (J.5.2.3, #1852).
-    /// Best effort: the request goes on the side, never holds up or fails
-    /// the move, and its outcome is counted in the snapshot's
-    /// `previous_release*` fields.
+    /// The node engine runs it
+    /// ([`Foreign::release_previous`](bacnet_bip_core::node::Foreign::release_previous),
+    /// #2307): one request, sent after the first registration with the new
+    /// BBMD, and given up after the old registration's response timeout (3
+    /// seconds, or its renewal interval when shorter). Best effort: it
+    /// never holds up or fails the move, and its outcome is counted in the
+    /// snapshot's `previous_release*` fields.
     ///
     /// The request names this device's own local address (on a wildcard
     /// bind, the default-route address). Behind a NAT router, or on a

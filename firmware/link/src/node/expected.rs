@@ -12,12 +12,14 @@ use super::{Attempt, BBMD2, Expected, ORIGIN, PEER, Registration, Summary, TTL};
 use crate::tally::Sent;
 
 /// The hash over every datagram the port sends and where it goes. It was
-/// worked out apart from the codec, from the 18 datagrams written out by
-/// hand from the Annex J.2 layouts (126 octets): the six NAKs, nine
+/// worked out apart from the codec, from the 19 datagrams written out by
+/// hand from the Annex J.2 layouts (136 octets): the six NAKs, nine
 /// Register-Foreign-Device requests (the last to the second BBMD, #1852),
-/// and three Distribute-Broadcast-To-Network messages. The port sends what
-/// the scenario sent by hand before it (#1766), in the same order.
-const SENT_FNV: u32 = 0xB467_EB34;
+/// three Distribute-Broadcast-To-Network messages, and the
+/// Delete-Foreign-Device-Table-Entry that releases the first BBMD after the
+/// move (#2307). The port sends what the scenario sent by hand before it
+/// (#1766), in the same order.
+const SENT_FNV: u32 = 0x0B91_E36D;
 
 const fn at(millis: u64) -> Instant {
     Instant::from_millis(millis)
@@ -36,8 +38,16 @@ fn counters() -> NodeCounters {
     register.results = 6;
     register.last_result = Some(SUCCESS);
     register.timeouts = 3;
+    // The release of the first BBMD after the move, which it accepts.
+    let mut delete = ExchangeCounters::default();
+    delete.sent = 1;
+    delete.results = 1;
+    delete.last_result = Some(SUCCESS);
     let mut counters = NodeCounters::default();
     counters.register_foreign_device = register;
+    counters.delete_fdt_entry = delete;
+    counters.previous_releases = 1;
+    counters.previous_released = 1;
     counters.registration_attempts = 9;
     counters.registrations_accepted = 6;
     // The DBTN NAK, taken as the hint.
@@ -92,7 +102,7 @@ pub fn expected() -> Expected {
         // answer's lease starts at the unanswered 70 s attempt, which it
         // could also be answering, and is due for renewal at once (100.01 s).
         // At 110 s the node moves to the second BBMD, and its first attempt
-        // there goes out at once.
+        // there goes out at once, then the release of the first.
         attempts: [
             Some(at(0)),
             Some(at(30_000)),
@@ -119,11 +129,12 @@ pub fn expected() -> Expected {
         // In `Expected::registration`.
         registration: None,
         counters: counters(),
-        // Six NAKs and nine registrations of 6 octets, and three
-        // Distribute-Broadcast-To-Network messages of 12.
+        // Six NAKs and nine registrations of 6 octets, three
+        // Distribute-Broadcast-To-Network messages of 12, and one
+        // Delete-Foreign-Device-Table-Entry of 10.
         sent: Sent {
-            count: 18,
-            octets: 126,
+            count: 19,
+            octets: 136,
             fnv: SENT_FNV,
         },
         refused: 0,

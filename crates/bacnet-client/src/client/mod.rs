@@ -36,6 +36,7 @@ use bacnet_network::layer::NetworkLayer;
 use bacnet_npdu::NetworkPriority;
 use bacnet_services::cov::COVNotificationRequest;
 use bacnet_transport::any::AnyTransport;
+use bacnet_transport::bbmd_lookup::BbmdResolver;
 use bacnet_transport::bip::{BipMode, BipMulticast, BipTransport};
 #[cfg(feature = "ipv6")]
 use bacnet_transport::bip6::{Bip6ForeignDeviceConfig, Bip6Transport};
@@ -291,6 +292,10 @@ pub struct BipClientBuilder {
     options: ClientOptions,
     mode: BipMode,
     multicast: Option<BipMulticast>,
+    /// See [`Self::release_previous_bbmd`].
+    release_previous_bbmd: bool,
+    /// See [`Self::bbmd_resolver`].
+    bbmd_resolver: Option<Arc<dyn BbmdResolver>>,
 }
 
 impl BipClientBuilder {
@@ -600,6 +605,8 @@ impl BACnetClient<BipTransport> {
             options: ClientOptions::default(),
             mode: BipMode::Normal,
             multicast: None,
+            release_previous_bbmd: false,
+            bbmd_resolver: None,
         }
     }
 }

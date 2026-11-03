@@ -39,14 +39,32 @@ pub enum Action {
     DiscardHeld,
     /// A change in the foreign device's registration.
     Registration(RegistrationEvent),
+    /// Send a Delete-Foreign-Device-Table-Entry for `entry`
+    /// ([`Action::message`]) to `to`, the BBMD a move just left
+    /// ([`Foreign::release_previous`](super::Foreign::release_previous)),
+    /// then report it with
+    /// [`Node::exchange_sent`](super::Node::exchange_sent) or
+    /// [`Node::exchange_failed`](super::Node::exchange_failed). What comes
+    /// of it is only counted ([`NodeCounters`](super::NodeCounters)'s
+    /// `previous_release*` fields).
+    ReleasePrevious {
+        /// The release's exchange.
+        exchange: ExchangeId,
+        /// The BBMD the device left.
+        to: SocketAddrV4,
+        /// The entry to delete: this node's own B/IP address.
+        entry: SocketAddrV4,
+    },
 }
 
 impl Action {
-    /// The message a [`Register`](Action::Register) sends.
+    /// The message a [`Register`](Action::Register) or a
+    /// [`ReleasePrevious`](Action::ReleasePrevious) sends.
     #[must_use]
     pub const fn message(&self) -> Option<Bvll<'static>> {
         match *self {
             Self::Register { ttl, .. } => Some(Bvll::RegisterForeignDevice { ttl }),
+            Self::ReleasePrevious { entry, .. } => Some(Bvll::DeleteForeignDeviceTableEntry(entry)),
             _ => None,
         }
     }
@@ -58,8 +76,10 @@ const EVENTS: usize = 3;
 
 /// Pending actions, in fixed storage that can't overflow: one ended mark
 /// per exchange slot, a short list of registration events, one verdict on
-/// the held broadcasts (the first attempt ends once), and one registration
-/// attempt (one is in flight at a time). They are polled in that order.
+/// the held broadcasts (the first attempt ends once), one registration
+/// attempt (one is in flight at a time), and one release of the BBMD a move
+/// left (one move per call, and the caller polls after each). They are
+/// polled in that order.
 #[derive(Debug, Clone)]
 pub(crate) struct Actions<const X: usize> {
     /// Per slot, the generation of an exchange that timed out.
@@ -67,6 +87,8 @@ pub(crate) struct Actions<const X: usize> {
     events: [Option<RegistrationEvent>; EVENTS],
     held: Option<bool>,
     register: Option<(ExchangeId, SocketAddrV4, u16)>,
+    /// The release's exchange, the BBMD left and this node's address.
+    release: Option<(ExchangeId, SocketAddrV4, SocketAddrV4)>,
 }
 
 impl<const X: usize> Actions<X> {
@@ -76,6 +98,7 @@ impl<const X: usize> Actions<X> {
             events: [None; EVENTS],
             held: None,
             register: None,
+            release: None,
         }
     }
 
@@ -110,6 +133,24 @@ impl<const X: usize> Actions<X> {
         }
     }
 
+    pub(crate) fn release(&mut self, exchange: ExchangeId, to: SocketAddrV4, entry: SocketAddrV4) {
+        self.release = Some((exchange, to, entry));
+    }
+
+    /// Take the release queued and never polled, if it went to a BBMD
+    /// `drop` picks.
+    pub(crate) fn take_release_if(
+        &mut self,
+        drop: impl FnOnce(SocketAddrV4) -> bool,
+    ) -> Option<ExchangeId> {
+        let (exchange, to, _) = self.release?;
+        if !drop(to) {
+            return None;
+        }
+        self.release = None;
+        Some(exchange)
+    }
+
     pub(crate) fn poll(&mut self) -> Action {
         for (slot, ended) in self.ended.iter_mut().enumerate() {
             if let Some(generation) = ended.take() {
@@ -134,8 +175,15 @@ impl<const X: usize> Actions<X> {
                 Action::DiscardHeld
             };
         }
-        match self.register.take() {
-            Some((exchange, to, ttl)) => Action::Register { exchange, to, ttl },
+        if let Some((exchange, to, ttl)) = self.register.take() {
+            return Action::Register { exchange, to, ttl };
+        }
+        match self.release.take() {
+            Some((exchange, to, entry)) => Action::ReleasePrevious {
+                exchange,
+                to,
+                entry,
+            },
             None => Action::Idle,
         }
     }

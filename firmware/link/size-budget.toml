@@ -359,6 +359,21 @@
 # 1,036 / 756 on thumbv7m / thumbv6m / riscv32imc / thumbv7em; RAM is
 # unchanged. Every image stays within its budget; no budget changed.
 #
+# 2026-11-02 (#2307): the move in the node scenario now releases the BBMD
+# it leaves (Foreign::release_previous): bacnet-bip-core admits one
+# Delete-Foreign-Device-Table-Entry exchange, the port sends it, and the
+# node counts its answer. Measured with Rust 1.99.0 against dev at
+# a1d54afb8, node .text grew from 13968 / 15604 / 16280 / 13936 to
+# 14720 / 16476 / 17132 / 14660 octets (+752 / +872 / +852 / +724) on
+# thumbv7m / thumbv6m / riscv32imc / thumbv7em, flash by the same less 32
+# octets of .rodata on riscv32imc, and RAM is unchanged. 220 to 420
+# octets of that is bacnet-bip-core's own code (the action, the counters
+# and the move's admission), the rest the port's send and the scenario's
+# extra steps, inlined into the image. thumbv6m and riscv32imc reached or passed their
+# .text budgets, so the node rows' text and flash budgets are the new
+# sizes plus 12%; the other budgets are unchanged, and the bbmd image grew
+# by at most 4 octets.
+#
 # The objects rows are from when that image joined, on 2026-10-30, same
 # toolchain (#2178), as flash / ram:
 #
@@ -554,11 +569,11 @@ div64_functions = 0
 memmove_functions = 0
 
 [thumbv7m-none-eabi.node]
-text = 15088
+text = 16496
 rodata = 352
 data = 64
 bss = 272
-flash = 16576
+flash = 18000
 ram = 272
 fmt_functions = 0
 div64_functions = 0
@@ -653,11 +668,11 @@ div64_functions = 0
 memmove_functions = 0
 
 [thumbv6m-none-eabi.node]
-text = 16480
+text = 18464
 rodata = 368
 data = 64
 bss = 272
-flash = 17056
+flash = 19088
 ram = 272
 fmt_functions = 0
 div64_functions = 0
@@ -741,11 +756,11 @@ div64_functions = 0
 memmove_functions = 0
 
 [riscv32imc-unknown-none-elf.node]
-text = 17088
+text = 19200
 rodata = 864
 data = 64
 bss = 272
-flash = 17968
+flash = 20096
 ram = 272
 fmt_functions = 0
 div64_functions = 0
@@ -829,11 +844,11 @@ div64_functions = 0
 memmove_functions = 0
 
 [thumbv7em-none-eabihf.node]
-text = 15024
+text = 16432
 rodata = 352
 data = 64
 bss = 272
-flash = 16512
+flash = 17936
 ram = 272
 fmt_functions = 0
 div64_functions = 0

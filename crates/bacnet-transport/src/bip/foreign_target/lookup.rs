@@ -1,14 +1,14 @@
 //! FD_BBMD_Address as a host name on B/IP (Clause 12.56.37, #1852). When
 //! to look the name up, and how, is [`crate::bbmd_lookup`]'s policy, which
 //! B/IPv6 shares; this is what an answer means here: the device moves to
-//! the first IPv4 address it can register with, as an activated address
-//! would move it.
+//! the first IPv4 address it can register with, and with
+//! [`BipTransport::set_release_previous_bbmd`](super::super::BipTransport::set_release_previous_bbmd)
+//! on, the node releases the BBMD it leaves (#2307).
 //!
 //! Lock order, as in the parent: the target's lock, then the node's.
 
 use std::net::{IpAddr, SocketAddrV4};
 use std::sync::Weak;
-use std::sync::atomic::Ordering;
 
 use tracing::{debug, info};
 
@@ -68,9 +68,9 @@ impl ForeignTarget {
         };
         let usable = |bbmd| {
             let config = at(bbmd);
-            config.interval().is_ok_and(|interval| {
+            self.engine(&config).is_ok_and(|foreign| {
                 config.check_bbmd(self.broadcast, self.interface).is_ok()
-                    && node.check_retarget(config.engine(interval)).is_ok()
+                    && node.check_retarget(foreign).is_ok()
             })
         };
         let ip = |bbmd: SocketAddrV4| IpAddr::V4(*bbmd.ip());
@@ -121,20 +121,16 @@ impl NameTarget for ForeignTarget {
         let Some(config) = moved_to else {
             return;
         };
-        let old = state.config.bbmd();
         // `choose` checked the move as a retarget would, under this lock.
-        let moved = config
-            .interval()
-            .and_then(|interval| node.retarget(config.engine(interval)));
+        // The node releases the BBMD it leaves when asked to (#2307).
+        let moved = self
+            .engine(&config)
+            .and_then(|foreign| node.retarget(foreign));
         if let Err(error) = moved {
             debug!(%error, "The node refused the address the BBMD's host name resolved to");
             return;
         }
         info!(host = %name.host(), bbmd = %config.bbmd(), "The BBMD's host name now resolves elsewhere; registering there");
         state.config = config;
-        drop(state);
-        if self.release_previous.load(Ordering::Relaxed) {
-            node.release_previous_bbmd(old);
-        }
     }
 }
