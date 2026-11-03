@@ -520,19 +520,26 @@ fn file_persistence_refuses_a_file_past_its_size_or_entry_caps() {
     assert!(file_len < MAX_FILE_BYTES, "{file_len}");
     assert_eq!(storage.load(rights).unwrap(), Some(full.clone()));
 
-    // One rule past the cap is refused. The backend saves what it is given,
-    // so a file like this can only come from elsewhere.
+    // One rule past the cap is refused, and never saved: a file like this,
+    // written here by hand, can only come from elsewhere.
     let mut too_many = full_array;
     too_many.push(zone_rule(1));
-    storage
-        .save(
-            rights,
-            &AccessRightsSnapshot {
-                negative_access_rules: Some(too_many),
-                ..AccessRightsSnapshot::default()
-            },
-        )
-        .unwrap();
+    let past_cap = AccessRightsSnapshot {
+        negative_access_rules: Some(too_many.clone()),
+        ..AccessRightsSnapshot::default()
+    };
+    assert!(matches!(
+        storage.save(rights, &past_cap),
+        Err(Error::OutOfRange(_))
+    ));
+    let mut body = BytesMut::new();
+    bacnet_encoding::tags::encode_opening_tag(&mut body, 1);
+    for rule in &too_many {
+        encode_access_rule(&mut body, rule);
+    }
+    bacnet_encoding::tags::encode_closing_tag(&mut body, 1);
+    let raw = crate::snapshot::framing::seal(&crate::snapshot::access_rights::MAGIC, rights, &body);
+    std::fs::write(&path, raw).unwrap();
     assert!(
         refusal(&storage)
             .to_string()

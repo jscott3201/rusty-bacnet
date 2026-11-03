@@ -34,11 +34,10 @@ const BODY_HEADER_LEN: usize = 1 + 4;
 
 /// The file octets for `snapshot`, saved for the forwarder `object`.
 ///
-/// Refuses ([`OutOfRange`](super::SnapshotErrorKind::OutOfRange)) an
-/// entry that doesn't encode and octets past [`MAX_LEN`]. It writes the
-/// lists it is given, however long, as the file backend always has; a
-/// forwarder never holds more than [`MAX_RECIPIENT_LIST_DESTINATIONS`] and
-/// [`MAX_SUBSCRIBED_RECIPIENTS`], and [`decode`] refuses more.
+/// Refuses ([`OutOfRange`](super::SnapshotErrorKind::OutOfRange)) a list
+/// longer than a forwarder keeps ([`MAX_RECIPIENT_LIST_DESTINATIONS`],
+/// [`MAX_SUBSCRIBED_RECIPIENTS`]), an entry that doesn't encode, and octets
+/// past [`MAX_LEN`]: what [`decode`] would refuse.
 pub fn encode(
     object: ObjectIdentifier,
     snapshot: &ForwarderSnapshot,
@@ -62,9 +61,16 @@ fn encode_file(
     snapshot: &ForwarderSnapshot,
 ) -> Result<Vec<u8>, SnapshotError> {
     let unencodable = SnapshotError::out_of_range("holds an entry that doesn't encode");
+    let too_long = SnapshotError::out_of_range("holds more entries than a forwarder keeps");
     let mut recipient_list = BytesMut::new();
     if let Some(list) = &snapshot.recipient_list {
+        if list.len() > MAX_RECIPIENT_LIST_DESTINATIONS {
+            return Err(too_long);
+        }
         encode_destination_list(&mut recipient_list, list).map_err(|_| unencodable)?;
+    }
+    if snapshot.subscribed_recipients.len() > MAX_SUBSCRIBED_RECIPIENTS {
+        return Err(too_long);
     }
     let mut body = BytesMut::with_capacity(BODY_HEADER_LEN + recipient_list.len() + 1024);
     body.extend_from_slice(&[u8::from(snapshot.recipient_list.is_some())]);

@@ -22,11 +22,10 @@ pub const MAX_LEN: usize = 64 * 1024;
 
 /// The file octets for `snapshot`, saved for the class `object`.
 ///
-/// Refuses ([`OutOfRange`](super::SnapshotErrorKind::OutOfRange)) a
-/// destination that doesn't encode and octets past [`MAX_LEN`]. It writes
-/// the list it is given, however long, as the file backend always has; a
-/// class never holds more than [`MAX_RECIPIENT_LIST_DESTINATIONS`], and
-/// [`decode`] refuses more.
+/// Refuses ([`OutOfRange`](super::SnapshotErrorKind::OutOfRange)) more
+/// destinations than [`MAX_RECIPIENT_LIST_DESTINATIONS`], a destination
+/// that doesn't encode, and octets past [`MAX_LEN`]: what [`decode`] would
+/// refuse.
 pub fn encode(
     object: ObjectIdentifier,
     snapshot: &NotificationClassSnapshot,
@@ -54,6 +53,11 @@ fn encode_file(
     let mut body = BytesMut::new();
     body.extend_from_slice(&[u8::from(snapshot.recipient_list.is_some())]);
     if let Some(list) = &snapshot.recipient_list {
+        if list.len() > MAX_RECIPIENT_LIST_DESTINATIONS {
+            return Err(SnapshotError::out_of_range(
+                "holds more destinations than a class keeps",
+            ));
+        }
         encode_destination_list(&mut body, list)
             .map_err(|_| SnapshotError::out_of_range("holds a destination that doesn't encode"))?;
     }
