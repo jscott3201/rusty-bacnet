@@ -62,6 +62,9 @@ use crate::types::{PyEventType, PyObjectIdentifier, PyPropertyIdentifier, PyProp
 
 mod audit_configuration;
 use audit_configuration::AuditNotificationSink;
+pub(crate) use audit_configuration::{
+    reporter_audit_level, reporter_auditable_operations, validate_audit_recipient,
+};
 
 /// Async BACnet server that hosts objects and responds to requests.
 ///

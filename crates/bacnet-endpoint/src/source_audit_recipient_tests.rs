@@ -479,3 +479,73 @@ async fn source_post_start_address_rejection_joins_ingress_and_is_terminal() {
     ));
     assert!(session.start().await.is_err());
 }
+
+/// The link's broadcast address is no route at any port (#2348), as the
+/// server's Device bindings refuse it: a binding to it at another port
+/// leaves the Device unresolved once the started link's broadcast endpoint
+/// is known, and a recipient write naming it is refused at run time with the
+/// value unchanged.
+#[tokio::test]
+async fn source_refuses_the_link_broadcast_address_at_any_port() {
+    let other_port = || bacnet_types::MacAddr::from_slice(&[192, 168, 1, 255, 0xBA, 0xC1]);
+    let (session, _peer, observed) = session(SessionRole::ClientOnly);
+    let mut session = session
+        .with_database(database())
+        .with_source_audit_reporter(selected());
+    session
+        .source_audit_bindings
+        .push((destination(), "192.168.1.255:47809".parse().unwrap()));
+    session.start().await.unwrap();
+    {
+        let db = session.database.as_ref().unwrap().read().await;
+        let reporter = db.get(&selected()).unwrap().audit_reporter().unwrap();
+        assert_eq!(
+            reliability(reporter),
+            PropertyValue::Enumerated(Reliability::CONFIGURATION_ERROR.to_raw())
+        );
+    }
+    assert_eq!(observed.sends.load(Ordering::SeqCst), 0);
+    session.stop().await.unwrap();
+
+    let (mut session, _peer, observed) = configured_session(SessionRole::ClientOnly);
+    session = session
+        .with_database(database())
+        .with_source_audit_reporter(selected());
+    session.start().await.unwrap();
+    let mut bytes = bytes::BytesMut::new();
+    bacnet_encoding::constructed::encode_recipient(
+        &mut bytes,
+        &bacnet_types::constructed::BACnetRecipient::Address(
+            bacnet_types::constructed::BACnetAddress {
+                network_number: 0,
+                mac_address: other_port(),
+            },
+        ),
+    )
+    .unwrap();
+    {
+        let mut db = session.database.as_ref().unwrap().write().await;
+        let device = db.get_mut(&oid(ObjectType::DEVICE, 123)).unwrap();
+        let before = device
+            .read_property(PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT, None)
+            .unwrap();
+        assert!(
+            device
+                .write_property(
+                    PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT,
+                    None,
+                    PropertyValue::ApplicationData(bytes.to_vec()),
+                    None
+                )
+                .is_err()
+        );
+        assert_eq!(
+            device
+                .read_property(PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT, None)
+                .unwrap(),
+            before
+        );
+    }
+    assert_eq!(observed.sends.load(Ordering::SeqCst), 0);
+    session.stop().await.unwrap();
+}
