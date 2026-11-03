@@ -195,8 +195,7 @@ pub async fn foreign(param: u64, duration: Duration) -> Result<DegradationPoint,
         .broadcast_address(Ipv4Addr::new(172, 20, 4, 255))
         .apdu_timeout_ms(5000)
         .mode(BipMode::Foreign(ForeignDeviceConfig {
-            bbmd_ip: Ipv4Addr::new(172, 20, 0, 2),
-            bbmd_port: 47808,
+            bbmd: (Ipv4Addr::new(172, 20, 0, 2), 47808).into(),
             ttl: 300,
             renewal_interval: None,
         }))

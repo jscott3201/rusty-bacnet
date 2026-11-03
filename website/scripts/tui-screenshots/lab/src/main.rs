@@ -86,8 +86,7 @@ fn bbmd(port: u16, peers: &[u16]) -> BipTransport {
 fn foreign(port: u16, bbmd_port: u16) -> BipTransport {
     let mut t = BipTransport::new(Ipv4Addr::LOCALHOST, port, LOOPBACK_BROADCAST);
     t.register_as_foreign_device(ForeignDeviceConfig {
-        bbmd_ip: Ipv4Addr::LOCALHOST,
-        bbmd_port,
+        bbmd: (Ipv4Addr::LOCALHOST, bbmd_port).into(),
         ttl: 60,
         renewal_interval: Some(Duration::from_secs(20)),
     });

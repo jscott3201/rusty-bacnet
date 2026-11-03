@@ -157,11 +157,11 @@ async fn connect(
                 finish_build(Box::pin(transport::build_bip_client(&args)), &sink).await
             {
                 if let Some(foreign) = &args.foreign_device {
-                    let bbmd = std::net::SocketAddrV4::new(foreign.bbmd_ip, foreign.bbmd_port);
+                    let named = &foreign.bbmd;
                     let outcome = tokio::select! {
                         biased;
                         () = sink.cancelled() => None,
-                        result = crate::foreign::await_registration(&client, bbmd) => Some(result),
+                        result = crate::foreign::await_registration(&client, named) => Some(result),
                     };
                     let Some(outcome) = outcome else {
                         if let Err(error) = client.stop().await {
@@ -171,22 +171,30 @@ async fn connect(
                     };
                     match outcome {
                         Ok(()) => tracing::info!(
-                            "BBMD {bbmd} accepted the foreign-device registration; it renews automatically"
+                            "BBMD {named} accepted the foreign-device registration; it renews automatically"
                         ),
                         Err(error) => tracing::warn!("{error}; retrying in the background"),
                     }
+                    // The address in use: a host name's once it resolved
+                    // (#2308). Until then the Network screen has no BBMD.
+                    let in_use = client
+                        .transport()
+                        .foreign_device_config()
+                        .and_then(|config| config.bbmd.address());
                     // Accepted or retrying, the BBMD may hold an FDT entry
                     // for us until its TTL runs out: part of the footprint.
                     let renewal = foreign
                         .renewal_interval
                         .unwrap_or(Duration::from_secs(u64::from(foreign.ttl)) / 2);
-                    let foreign = Foreign {
-                        bbmd,
-                        ttl: foreign.ttl,
-                        renewal,
-                        nat_global: args.nat_global_address,
-                    };
-                    sink.deliver(WorkerEvent::ForeignDevice(foreign)).await;
+                    if let Some(bbmd) = in_use {
+                        let foreign = Foreign {
+                            bbmd,
+                            ttl: foreign.ttl,
+                            renewal,
+                            nat_global: args.nat_global_address,
+                        };
+                        sink.deliver(WorkerEvent::ForeignDevice(foreign)).await;
+                    }
                 }
                 Box::pin(serve(client, style, sink, commands, options)).await;
             }

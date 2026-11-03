@@ -113,8 +113,7 @@ pub async fn run(duration_secs: u64, steps: &[u64]) -> Vec<DegradationPoint> {
         for i in 0..count {
             let mut fd = foreign_transport(i);
             fd.register_as_foreign_device(ForeignDeviceConfig {
-                bbmd_ip: Ipv4Addr::from(bbmd_ip),
-                bbmd_port,
+                bbmd: (Ipv4Addr::from(bbmd_ip), bbmd_port).into(),
                 renewal_interval: None,
                 ttl: 600,
             });

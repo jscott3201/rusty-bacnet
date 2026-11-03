@@ -2794,8 +2794,7 @@ let server = BACnetServer::bip_builder()
 let client = BACnetClient::bip_builder()
     .port(0)
     .mode(BipMode::Foreign(ForeignDeviceConfig {
-        bbmd_ip: Ipv4Addr::new(203, 0, 113, 7),
-        bbmd_port: 47808,
+        bbmd: (Ipv4Addr::new(203, 0, 113, 7), 47808).into(),
         ttl: 600,
         renewal_interval: Some(Duration::from_secs(20)),
     }))
@@ -3136,6 +3135,17 @@ in flight registers there as soon as the release is answered, since a success
 couldn't tell the two apart; if it goes unanswered, not until one response timeout
 after it ended, so a late answer to it can't pass for the registration's. It is
 off by default, for the reasons `BipTransport::set_release_previous_bbmd` gives.
+
+**A foreign node with no BBMD yet** (#2308). `Foreign::bbmd` is an `Option`:
+`Foreign::new` sets `Some`, and `Foreign::waiting(ttl)` (`None`) starts, or moves, a node that waits for its
+BBMD, as a device whose BBMD's host name hasn't resolved does. It has no
+registration attempt due, holds broadcasts up to `Foreign::hold` and refuses the
+next with `SendRefusal::HoldFull` (with no hold, every one), trusts no
+Forwarded-NPDU from a configured BBMD, and `Link::broadcast` answers
+`SendRefusal::NoBbmd`. The first `Node::retarget` to a known BBMD ends the wait,
+its attempt due at once and the held broadcasts going out when it resolves; there
+is nothing to release from the wait, while a move from a known BBMD into it
+releases that one as any move does.
 
 `bbmd::GRACE_PERIOD` is a `Duration`. `bbmd::StorageFull` and
 `BdtError::Capacity` carry `needed` and `available`, in entries, as the
@@ -5152,6 +5162,11 @@ implements `From<SnapshotError>`, the mapping the file backends use.
 | --- | --- | --- | --- |
 | `snapshot::log` | `LogSnapshot<R>` (Trend Log, Trend Log Multiple, Event Log) | `RBLOGS01`, version 2; version 1 still loads | `FileLogPersistence` (one slot of the two) |
 | `snapshot::write_config` | `WriteConfigSnapshot` (Timer, Channel) | `RBNWCF01`, kinds 2 and 3; kind 1 still loads | `FileWriteConfigPersistence` |
+| `snapshot::notification_class` | `NotificationClassSnapshot` | `RBNNCL01` | `FileNotificationClassPersistence` |
+| `snapshot::notification_forwarder` | `ForwarderSnapshot` | `RBNFWD01` | `FileNotificationForwarderPersistence` |
+| `snapshot::tags` | `TagsSnapshot` | `RBNTAG01` | `FileTagsPersistence` |
+| `snapshot::color` | `ColorOutputSnapshot` (Color, Color Temperature) | `RBNCLR02`; `RBNCLR01` still loads | `FileColorOutputPersistence` |
+| `snapshot::access_rights` | `AccessRightsSnapshot` | `RBNACR01` | `FileAccessRightsPersistence` |
 
 ```rust
 use bacnet_objects::snapshot::write_config;
@@ -7930,14 +7945,26 @@ use std::{net::Ipv4Addr, time::Duration};
 let client = BACnetClient::bip_builder()
     .port(0)
     .mode(BipMode::Foreign(ForeignDeviceConfig {
-        bbmd_ip: Ipv4Addr::new(192, 0, 2, 10),
-        bbmd_port: 47808,
+        bbmd: (Ipv4Addr::new(192, 0, 2, 10), 47808).into(),
         ttl: 60,
         renewal_interval: Some(Duration::from_secs(20)),
     }))
     .build().await?;
 let registration = client.foreign_registration()?;
 ```
+
+`ForeignDeviceConfig::bbmd` is a `ForeignBbmd`: an address, or a host name and
+port (#2308), which parses from `ip`, `host` or either with `:port`
+(`"bbmd.example:47808".parse()?`). A host name is looked up as one written to
+FD_BBMD_Address is: when the transport starts, and again alongside the
+registrations at most every 30 seconds, by the system's resolver or the one
+`BipTransport::set_bbmd_resolver` (or the builders' `bbmd_resolver`) gives. A name
+that doesn't resolve still starts the transport: its node waits for a BBMD
+(`bacnet-bip-core`'s waiting state), with no registration sent and broadcasts held
+and then refused, the failure counted in `bbmd_lookups`, `bbmd_lookup_failures` and
+`last_bbmd_lookup_failure`, and the name tried again every 30 seconds. The first
+address it resolves to that a start would accept is registered with at once;
+`foreign_device_config()` then reads that address.
 
 `renewal_interval: None` uses half the advertised TTL, including 500 ms for
 TTL 1; a shorter interval renews more often without changing the TTL the BBMD

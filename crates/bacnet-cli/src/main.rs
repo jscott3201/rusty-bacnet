@@ -702,7 +702,7 @@ async fn cli_main(cli: Cli) -> CliResult {
         let cmd = cli.command.as_ref().expect("a command after parsing");
         // Broadcasts reach the remote network once the BBMD has taken the
         // registration (#938).
-        if let Some(bbmd) = cli.foreign_bbmd
+        if let Some(bbmd) = &cli.foreign_bbmd
             && let Err(e) = foreign::await_registration(&client, bbmd).await
         {
             // The registration's failure is the error to report.

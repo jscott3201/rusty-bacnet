@@ -341,7 +341,7 @@ impl BipClientBuilder {
     /// let mut client = BACnetClient::bip_builder()
     ///     .port(0)
     ///     .mode(BipMode::Foreign(ForeignDeviceConfig {
-    ///         bbmd_ip: Ipv4Addr::new(192, 0, 2, 10), bbmd_port: 47808,
+    ///         bbmd: (Ipv4Addr::new(192, 0, 2, 10), 47808).into(),
     ///         ttl: 60, renewal_interval: Some(Duration::from_secs(20)),
     ///     }))
     ///     .build().await?;

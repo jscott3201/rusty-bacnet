@@ -332,18 +332,22 @@ fn file_persistence_refuses_a_file_past_its_size_or_entry_caps() {
     storage.save(class, &full).unwrap();
     assert_eq!(storage.load(class).unwrap(), Some(full.clone()));
 
-    // One destination past the cap is refused. The backend saves what it is
-    // given, so a file like this can only come from elsewhere.
+    // One destination past the cap is refused, and never saved: a file
+    // like this, written here by hand, can only come from elsewhere.
     let mut too_many = destinations;
     too_many.push(make_dest_device(999));
-    storage
-        .save(
-            class,
-            &NotificationClassSnapshot {
-                recipient_list: Some(too_many),
-            },
-        )
-        .unwrap();
+    let past_cap = NotificationClassSnapshot {
+        recipient_list: Some(too_many),
+    };
+    assert!(matches!(
+        storage.save(class, &past_cap),
+        Err(Error::OutOfRange(_))
+    ));
+    let mut bytes = std::fs::read(&path).unwrap();
+    let mut extra = BytesMut::new();
+    encode_destination_list(&mut extra, &[make_dest_device(999)]).unwrap();
+    bytes.extend_from_slice(&extra);
+    std::fs::write(&path, &bytes).unwrap();
     assert!(refusal(&storage).contains("more entries than the cap"));
 
     // A file past the size cap is refused before any of it is decoded; one

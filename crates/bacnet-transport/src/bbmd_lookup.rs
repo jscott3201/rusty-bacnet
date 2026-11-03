@@ -28,7 +28,10 @@
 //!   can register with, as an activated address would move it;
 //! - until a lookup succeeds, and whenever one fails, the device keeps
 //!   registering with the address it has, and the failure is logged (at
-//!   warn once per run of failures) and counted.
+//!   warn once per run of failures) and counted. A B/IP device whose
+//!   configured BBMD is a name not resolved yet has no address: it waits,
+//!   registering nowhere, and tries the name again 30 seconds after each
+//!   failure (#2308).
 //!
 //! With the floor between attempt-driven lookups, a peer that can write the
 //! row and reinitialize the device can't stack resolver threads, and a short
@@ -89,7 +92,8 @@ impl BbmdResolver for SystemResolver {
 }
 
 /// Why a lookup of the BBMD's host name failed (#1852). The device kept
-/// registering with the address it had.
+/// registering with the address it had, or, with none yet, kept waiting
+/// for one (#2308).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BbmdLookupFailure {

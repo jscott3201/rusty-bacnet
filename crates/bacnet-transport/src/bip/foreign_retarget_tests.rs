@@ -18,8 +18,7 @@ async fn bbmd() -> UdpSocket {
 
 fn foreign_to(peer: &UdpSocket, ttl: u16) -> ForeignDeviceConfig {
     ForeignDeviceConfig {
-        bbmd_ip: Ipv4Addr::LOCALHOST,
-        bbmd_port: peer.local_addr().unwrap().port(),
+        bbmd: (Ipv4Addr::LOCALHOST, peer.local_addr().unwrap().port()).into(),
         ttl,
         renewal_interval: None,
     }
@@ -309,8 +308,7 @@ async fn a_broadcast_racing_a_move_goes_to_the_new_bbmd() {
     // No hold, so the broadcast is sent at once after the move too.
     let foreign = |port| {
         let config = ForeignDeviceConfig {
-            bbmd_ip: Ipv4Addr::LOCALHOST,
-            bbmd_port: port,
+            bbmd: (Ipv4Addr::LOCALHOST, port).into(),
             ttl: 60,
             renewal_interval: None,
         };
@@ -361,8 +359,7 @@ async fn a_move_releases_the_old_bbmds_entry_when_asked() {
     let second = bbmd().await;
     let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     transport.register_as_foreign_device(ForeignDeviceConfig {
-        bbmd_ip: Ipv4Addr::LOCALHOST,
-        bbmd_port: old_port,
+        bbmd: (Ipv4Addr::LOCALHOST, old_port).into(),
         ttl: 60,
         renewal_interval: None,
     });
@@ -490,10 +487,33 @@ async fn a_host_name_resolves_through_the_system_resolver() {
     assert_eq!(registration(&second).await.0, 60);
     assert_eq!(view.bbmd(), named);
     let config = transport.foreign_device_config().unwrap();
-    assert_eq!(
-        (config.bbmd_ip, config.bbmd_port),
-        (Ipv4Addr::LOCALHOST, named.port)
-    );
+    assert_eq!(config.bbmd, (Ipv4Addr::LOCALHOST, named.port).into());
+    let snapshot = observed(&transport, |s| s.bbmd_lookups >= 1).await;
+    assert_eq!(snapshot.bbmd_lookup_failures, 0);
+    transport.stop().await.unwrap();
+}
+
+/// A BBMD configured by host name (#2308) is looked up as the transport
+/// starts, through the system's resolver: `localhost` stands for 127.0.0.1
+/// on every host, so the device registers with the BBMD on loopback, and
+/// the registration in use reads back its address.
+#[tokio::test]
+async fn a_configured_host_name_registers_at_start() {
+    let first = bbmd().await;
+    let port = first.local_addr().unwrap().port();
+    let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+    transport.register_as_foreign_device(ForeignDeviceConfig {
+        bbmd: ForeignBbmd::Name {
+            host: "localhost".into(),
+            port,
+        },
+        ttl: 60,
+        renewal_interval: None,
+    });
+    let _rx = transport.start().await.unwrap();
+    assert_eq!(registration(&first).await.0, 60);
+    let config = transport.foreign_device_config().unwrap();
+    assert_eq!(config.bbmd, (Ipv4Addr::LOCALHOST, port).into());
     let snapshot = observed(&transport, |s| s.bbmd_lookups >= 1).await;
     assert_eq!(snapshot.bbmd_lookup_failures, 0);
     transport.stop().await.unwrap();

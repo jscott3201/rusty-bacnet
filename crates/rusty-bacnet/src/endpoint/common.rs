@@ -9,15 +9,16 @@ use std::net::Ipv4Addr;
 
 use bacnet_endpoint::identity::{DeviceIdentity, build_database_with_extra};
 use bacnet_objects::analog::{AnalogInputObject, AnalogValueObject};
-use bacnet_objects::audit::ObjectAuditPolicy;
+use bacnet_objects::audit::{AuditReporterObject, ObjectAuditPolicy};
 use bacnet_objects::binary::{BinaryInputObject, BinaryValueObject};
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::object_profile::ObjectProfile;
 use bacnet_objects::present_value_access::PresentValueAccess;
 use bacnet_objects::traits::BACnetObject;
+use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
 use bacnet_types::constructed::ReadAccessSpecification;
 use bacnet_types::enums::{
-    EngineeringUnits, ErrorClass, ErrorCode, Segmentation, ServiceSupported,
+    AuditLevel, EngineeringUnits, ErrorClass, ErrorCode, Segmentation, ServiceSupported,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::{PyErr, PyResult};
@@ -235,6 +236,15 @@ pub(crate) enum PendingObject {
         name: String,
         members: Vec<ReadAccessSpecification>,
     },
+    /// A B/IP endpoint's Audit Reporter, configured once here: peers can't
+    /// write it through an endpoint (#2348).
+    AuditReporter {
+        instance: u32,
+        name: String,
+        level: AuditLevel,
+        operations: AuditOperationFlags,
+        confirmed: bool,
+    },
 }
 
 impl PendingObject {
@@ -301,6 +311,28 @@ impl PendingObject {
                 name,
                 members,
             } => Ok(Box::new(group_members::group(*instance, name, members)?)),
+            Self::AuditReporter {
+                instance,
+                name,
+                level,
+                operations,
+                confirmed,
+            } => {
+                let mut object = AuditReporterObject::new(*instance, name).map_err(to_py_err)?;
+                object
+                    .audit_reporter_mut()
+                    .ok_or_else(|| PyValueError::new_err("Audit Reporter lacks its capability"))?
+                    .configure(
+                        *level,
+                        *operations,
+                        *confirmed,
+                        None,
+                        BACnetPriorityFilter::all(),
+                        None,
+                    )
+                    .map_err(to_py_err)?;
+                Ok(Box::new(object))
+            }
         }
     }
 }

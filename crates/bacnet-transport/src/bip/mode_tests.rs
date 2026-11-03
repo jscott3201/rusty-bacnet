@@ -12,8 +12,7 @@ use crate::bbmd::NatTraversal;
 
 fn foreign_to(bbmd_port: u16) -> ForeignDeviceConfig {
     ForeignDeviceConfig {
-        bbmd_ip: Ipv4Addr::LOCALHOST,
-        bbmd_port,
+        bbmd: (Ipv4Addr::LOCALHOST, bbmd_port).into(),
         ttl: 60,
         renewal_interval: Some(Duration::from_secs(5)),
     }

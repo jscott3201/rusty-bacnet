@@ -62,6 +62,11 @@ pub enum SendRefusal {
     /// The host's socket couldn't send the datagram: its buffer can't hold
     /// the encoded message, or the send failed.
     SocketError,
+    /// A foreign device's BBMD isn't known yet
+    /// ([`Foreign::bbmd`](super::Foreign::bbmd) is `None`), so
+    /// [`Link::broadcast`] has nowhere to send. The node holds such a
+    /// broadcast, or refuses it ([`HoldFull`](Self::HoldFull)), meanwhile.
+    NoBbmd,
 }
 
 impl fmt::Display for SendRefusal {
@@ -74,6 +79,7 @@ impl fmt::Display for SendRefusal {
             }
             Self::SocketFull => f.write_str("the socket can't take the datagram now"),
             Self::SocketError => f.write_str("the socket couldn't send the datagram"),
+            Self::NoBbmd => f.write_str("the foreign device's BBMD isn't known yet"),
         }
     }
 }
@@ -136,7 +142,9 @@ impl Link {
     /// ([`Tables::own_broadcast`](crate::bbmd::Tables::own_broadcast)).
     ///
     /// A foreign device asks [`Node::admit_broadcast`](super::Node::admit_broadcast)
-    /// first.
+    /// first. One whose BBMD isn't known yet gets
+    /// [`SendRefusal::NoBbmd`] for an NPDU that fits: the node holds it
+    /// meanwhile, or refuses it.
     pub fn broadcast<'n>(&self, npdu: &'n [u8]) -> Result<(Outgoing<'n>, bool), SendRefusal> {
         self.fits(npdu, Cast::Broadcast)?;
         let local = Outgoing {
@@ -148,7 +156,7 @@ impl Link {
             Mode::Bbmd => (local, true),
             Mode::Foreign(foreign) => (
                 Outgoing {
-                    to: foreign.bbmd,
+                    to: foreign.bbmd.ok_or(SendRefusal::NoBbmd)?,
                     message: Bvll::DistributeBroadcastToNetwork(npdu),
                 },
                 false,

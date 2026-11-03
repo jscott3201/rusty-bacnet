@@ -193,8 +193,7 @@ async fn bbmd_register_foreign_device() {
     // Start a foreign device that registers with the BBMD
     let mut fd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     fd_transport.register_as_foreign_device(ForeignDeviceConfig {
-        bbmd_ip: Ipv4Addr::from(bbmd_ip),
-        bbmd_port,
+        bbmd: (Ipv4Addr::from(bbmd_ip), bbmd_port).into(),
         renewal_interval: None,
         ttl: 60,
     });
@@ -260,8 +259,7 @@ async fn read_fdt_from_bbmd() {
     // Register a foreign device
     let mut fd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     fd_transport.register_as_foreign_device(ForeignDeviceConfig {
-        bbmd_ip: Ipv4Addr::from(bbmd_ip),
-        bbmd_port,
+        bbmd: (Ipv4Addr::from(bbmd_ip), bbmd_port).into(),
         renewal_interval: None,
         ttl: 120,
     });
@@ -685,8 +683,7 @@ async fn foreign_device_broadcast_via_bbmd() {
     // Foreign device
     let mut fd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     fd_transport.register_as_foreign_device(ForeignDeviceConfig {
-        bbmd_ip: Ipv4Addr::from(bbmd_ip),
-        bbmd_port,
+        bbmd: (Ipv4Addr::from(bbmd_ip), bbmd_port).into(),
         renewal_interval: None,
         ttl: 60,
     });

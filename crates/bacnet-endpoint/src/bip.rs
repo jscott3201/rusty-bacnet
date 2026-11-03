@@ -432,8 +432,7 @@ mod mode_tests {
         let mut endpoint = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
             .role(SessionRole::ClientOnly)
             .mode(BipMode::Foreign(ForeignDeviceConfig {
-                bbmd_ip: Ipv4Addr::LOCALHOST,
-                bbmd_port: bbmd.local_addr().unwrap().port(),
+                bbmd: (Ipv4Addr::LOCALHOST, bbmd.local_addr().unwrap().port()).into(),
                 renewal_interval: None,
                 ttl: 60,
             }))
@@ -489,8 +488,7 @@ mod mode_tests {
         let (old, new) = (socket().await.unwrap(), socket().await.unwrap());
         let mut transport = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
             .mode(BipMode::Foreign(ForeignDeviceConfig {
-                bbmd_ip: Ipv4Addr::LOCALHOST,
-                bbmd_port: old.local_addr().unwrap().port(),
+                bbmd: (Ipv4Addr::LOCALHOST, old.local_addr().unwrap().port()).into(),
                 renewal_interval: None,
                 ttl: 60,
             }))

@@ -56,7 +56,7 @@ impl ForeignTarget {
         let current = SocketAddrV6::new(config.bbmd_ip, config.bbmd_port, 0, 0);
         let usable = |bbmd| Self::usable(own, &at(bbmd));
         let ip = |bbmd: SocketAddrV6| IpAddr::V6(*bbmd.ip());
-        Ok(choose(&candidates, current, usable, ip)?.map(at))
+        Ok(choose(&candidates, Some(current), usable, ip)?.map(at))
     }
 }
 
@@ -97,7 +97,7 @@ impl NameTarget for ForeignTarget {
             Ok(moved_to) => moved_to,
             Err(failed) => {
                 let bbmd = SocketAddrV6::new(state.config.bbmd_ip, state.config.bbmd_port, 0, 0);
-                state.lookups.failed(&name, bbmd, &failed);
+                state.lookups.failed(&name, Some(bbmd), &failed);
                 return;
             }
         };

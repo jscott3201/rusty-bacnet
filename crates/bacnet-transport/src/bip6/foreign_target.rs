@@ -160,7 +160,7 @@ impl ForeignTarget {
             state: Mutex::new(State {
                 config,
                 own: None,
-                lookups: Lookups::new(resolver),
+                lookups: Lookups::new(resolver, None),
                 counters: BbmdLookupCounters::default(),
             }),
             changed: Notify::new(),
