@@ -44,8 +44,8 @@ pub(crate) fn parse_bbmd_arg(value: &str) -> Result<SocketAddrV4, String> {
 pub(crate) fn parse_nat_global_arg(value: &str) -> Result<SocketAddrV4, String> {
     let address = value
         .parse::<SocketAddrV4>()
-        .map_err(|_| format!("'{value}' is not an IPv4 ip:port"))?;
-    nat_global_address(address).map_err(|why| format!("'{value}' {why}"))
+        .map_err(|_| "not an IPv4 ip:port".to_string())?;
+    nat_global_address(address).map_err(|why| format!("it {why}"))
 }
 
 /// Check a NAT global address: an IPv4 unicast endpoint with a nonzero

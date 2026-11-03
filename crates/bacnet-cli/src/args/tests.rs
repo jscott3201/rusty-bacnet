@@ -107,8 +107,8 @@ fn the_nat_global_address_is_checked_and_reaches_the_args() {
     .unwrap();
 
     for (value, why) in [
-        ("203.0.113.7", "is not an IPv4 ip:port"),
-        ("[2001:db8::1]:61000", "is not an IPv4 ip:port"),
+        ("203.0.113.7", "not an IPv4 ip:port"),
+        ("[2001:db8::1]:61000", "not an IPv4 ip:port"),
         ("203.0.113.7:0", "needs a nonzero port"),
         ("0.0.0.0:61000", "is not a unicast address"),
         ("224.0.0.1:61000", "is not a unicast address"),

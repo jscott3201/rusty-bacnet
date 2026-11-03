@@ -37,10 +37,22 @@ fn behind_nat(global: Option<SocketAddrV4>, fdt: Vec<SocketAddrV4>) -> App {
     app
 }
 
+/// An FDT with another device and our entry at the global address.
+fn translated() -> App {
+    let other = SocketAddrV4::new(Ipv4Addr::new(10, 0, 7, 9), 47808);
+    behind_nat(Some(GLOBAL), vec![other, GLOBAL])
+}
+
+/// The panel line of `text`, the frame drawn.
+fn own_line(text: &str) -> &str {
+    text.lines()
+        .find(|line| line.contains("As the BBMD sees us"))
+        .unwrap_or_else(|| panic!("{text}"))
+}
+
 #[test]
 fn the_entry_at_the_global_address_is_ours_and_translated_120x40() {
-    let other = SocketAddrV4::new(Ipv4Addr::new(10, 0, 7, 9), 47808);
-    let mut app = behind_nat(Some(GLOBAL), vec![other, GLOBAL]);
+    let mut app = translated();
     assert_eq!(
         app.network.own,
         Some(OwnEntry {
@@ -50,7 +62,10 @@ fn the_entry_at_the_global_address_is_ours_and_translated_120x40() {
     );
     let text = screen(&mut app, 120, 40);
     assert!(
-        text.contains("As the BBMD sees us 203.0.113.7:61000  NAT-translated from 10.0.9.5:47808"),
+        own_line(&text).contains(
+            "As the BBMD sees us 203.0.113.7:61000  TTL 60 s + 30 s grace, 88 s left; \
+             NAT-translated from 10.0.9.5:47808"
+        ),
         "{text}"
     );
     assert!(
@@ -61,10 +76,43 @@ fn the_entry_at_the_global_address_is_ours_and_translated_120x40() {
     assert_snapshot!("network_fdt_nat_120x40", text);
 }
 
-/// An entry at our own address still wins over the global address.
+/// The panel line doesn't wrap: narrower, it keeps the lease and the NAT
+/// note and drops the local address, then the grace.
 #[test]
-fn an_entry_at_our_address_wins_over_the_global_address() {
-    let mut app = behind_nat(Some(GLOBAL), vec![GLOBAL, LOCAL]);
+fn the_translated_line_keeps_the_lease_and_the_nat_note_at_80_and_100() {
+    let mut app = translated();
+    let text = screen(&mut app, 100, 30);
+    assert!(
+        own_line(&text).contains("203.0.113.7:61000  TTL 60 s + 30 s grace, 88 s left; via NAT"),
+        "{text}"
+    );
+    let text = screen(&mut app, 80, 24);
+    assert!(
+        own_line(&text).contains("203.0.113.7:61000  via NAT, TTL 60 s, 88 s left"),
+        "{text}"
+    );
+    assert_snapshot!("network_fdt_nat_80x24", text);
+}
+
+/// The user said a NAT router translates us: with both addresses in the
+/// FDT, the global one is ours, since the local match may be another
+/// site's device on the same private range, or a stale entry.
+#[test]
+fn the_global_address_wins_when_both_are_in_the_fdt() {
+    let mut app = behind_nat(Some(GLOBAL), vec![LOCAL, GLOBAL]);
+    assert_eq!(
+        app.network.own,
+        Some(OwnEntry {
+            index: 1,
+            translated: true
+        })
+    );
+    let text = screen(&mut app, 120, 40);
+    assert!(text.contains("us, via NAT"), "{text}");
+    assert!(!text.contains("this client"), "{text}");
+    // A global address with no entry leaves our local entry standing.
+    let elsewhere = SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 8), 61000);
+    let mut app = behind_nat(Some(elsewhere), vec![GLOBAL, LOCAL]);
     assert_eq!(
         app.network.own,
         Some(OwnEntry {
@@ -73,33 +121,50 @@ fn an_entry_at_our_address_wins_over_the_global_address() {
         })
     );
     let text = screen(&mut app, 120, 40);
-    assert!(!text.contains("NAT-translated"), "{text}");
+    assert!(!text.contains("NAT"), "{text}");
     assert!(text.contains("this client"), "{text}");
 }
 
 /// No entry at either address: the hint names what was looked for, and
-/// without a global address it points at the option.
+/// without a global address the option, whole, at 80, 100 and 120 columns.
 #[test]
 fn the_hint_names_the_option_or_the_global_address() {
     let other = SocketAddrV4::new(Ipv4Addr::new(10, 0, 7, 9), 47808);
     let mut app = behind_nat(None, vec![other, GLOBAL]);
     assert_eq!(app.network.own, None);
-    let text = screen(&mut app, 200, 40);
-    assert!(
-        text.contains(
-            "no FDT entry has our address 10.0.9.5:47808; a NAT router may have rewritten it \
-             (name it with --nat-global-address)"
+    for (width, height, hint) in [
+        (
+            120,
+            40,
+            "no FDT entry has our address 10.0.9.5:47808; behind NAT? set --nat-global-address",
         ),
-        "{text}"
-    );
+        (
+            100,
+            30,
+            "none at 10.0.9.5:47808; NAT? set --nat-global-address",
+        ),
+        (
+            80,
+            24,
+            "none at 10.0.9.5:47808; NAT? set --nat-global-address",
+        ),
+    ] {
+        let text = screen(&mut app, width, height);
+        assert!(own_line(&text).contains(hint), "{width}: {text}");
+    }
     let elsewhere = SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 8), 61000);
     let mut app = behind_nat(Some(elsewhere), vec![other, GLOBAL]);
     assert_eq!(app.network.own, None);
-    let text = screen(&mut app, 200, 40);
+    let text = screen(&mut app, 120, 40);
     assert!(
-        text.contains(
-            "no FDT entry has our address 10.0.9.5:47808 or the NAT global address 203.0.113.8:61000"
+        own_line(&text).contains(
+            "no FDT entry has our address 10.0.9.5:47808 or NAT address 203.0.113.8:61000"
         ),
+        "{text}"
+    );
+    let text = screen(&mut app, 80, 24);
+    assert!(
+        own_line(&text).contains("no FDT entry at 10.0.9.5:47808 or 203.0.113.8:61000"),
         "{text}"
     );
 }
@@ -179,10 +244,7 @@ async fn a_translated_registration_is_found_at_the_global_address() {
     assert!(fdt.iter().all(|entry| entry.address != local(&net.app)));
     net.press(KeyCode::Tab).await;
     let text = screen(&mut net.app, 160, 40);
-    let line = format!(
-        "As the BBMD sees us {global}  NAT-translated from {}",
-        local(&net.app)
-    );
+    let line = format!("; NAT-translated from {}", local(&net.app));
     assert!(text.contains(&line), "{text}");
     assert!(text.contains("us, via NAT"), "{text}");
     net.stop().await;

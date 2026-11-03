@@ -603,10 +603,13 @@ recorded for us, the address it forwards broadcasts to. Behind a NAT router
 the BBMD records the router's address instead: give it with
 `--nat-global-address IP:PORT` (or `nat_global_address` in the profile), and
 the entry at that address is marked as ours (`us, via NAT` in the FDT, and
-`NAT-translated from` our local address in the panel). An entry at our local
-address still wins. When neither address has an entry, the panel says a NAT
-router may have rewritten it and names the option. `:bbmd ADDRESS` reads any other
-BBMD, and `:bbmd` alone goes back to ours, as the footer says meanwhile. Tab
+`NAT-translated from` our local address in the panel, or `via NAT` when the
+line is short). It wins over an entry at our local address, which may be
+another site's device on the same private range or a stale entry; without
+the option, or with no entry at it, the local entry is ours. When neither
+address has an entry, the panel names both addresses, or, with no global
+address set, our own and the option. `:bbmd ADDRESS` reads any other BBMD,
+and `:bbmd` alone goes back to ours, as the footer says meanwhile. Tab
 switches between the BDT, with what each entry's mask means for forwarding,
 the FDT, with each entry's seconds left (`!` and `expiring` under 30 s), and
 the consistency matrix; `r` reads again. `m` reads the BDT of every BBMD the
@@ -2000,8 +2003,9 @@ Flag mistakes are usage errors: the CLI exits with status 2 before opening the
 port and prints nothing on stdout, and the message on stderr names the values
 the flag takes. That includes an empty port name and, on either side of the
 subcommand, any B/IP, B/IPv6 or BACnet/SC flag (`-i`, `-p`, `-b`,
-`--foreign-bbmd`, `--ttl`, `--renewal`, `--nat-global-address`, `--ipv6*`, `--device-instance`,
-`--sc*`), which MS/TP would otherwise ignore. A port that can't be opened exits with status 1.
+`--foreign-bbmd`, `--ttl`, `--renewal`, `--nat-global-address`, `--ipv6*`,
+`--device-instance`, `--sc*`), which MS/TP would otherwise ignore. A port that
+can't be opened exits with status 1.
 
 The station runs its token handling on a dedicated thread. Its timing defaults
 suit a USB adapter: it waits up to 100 ms for the rest of a frame, and its

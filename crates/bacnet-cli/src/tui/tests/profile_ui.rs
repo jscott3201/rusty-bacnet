@@ -130,6 +130,51 @@ fn clearing_bbmd_returns_to_normal_and_network_edits_require_new_attestation() {
 }
 
 #[test]
+fn clearing_bbmd_also_clears_the_nat_global_address() {
+    let mut app = profile_app();
+    let mut p = Profile::default();
+    p.bip_mut().bbmd = Some("127.0.0.2:47808".parse().unwrap());
+    p.bip_mut().renewal_secs = Some(12);
+    // Set only in the file (#1943): the editor has no field for it, so a
+    // blank BBMD must clear it too or the save is refused.
+    p.bip_mut().nat_global_address = Some("203.0.113.7:61000".parse().unwrap());
+    p.authorized_at_unix = Some(1_794_000_000);
+    p.authorized_safety = Some(p.safety.clone());
+    worker(
+        &mut app,
+        WorkerEvent::Profile(Ok(Reply::Loaded {
+            name: "site".into(),
+            profile: p.clone(),
+            checks: Default::default(),
+        })),
+    );
+    press(&mut app, KeyCode::Char('e'));
+    for _ in 0..5 {
+        press(&mut app, KeyCode::Tab);
+    }
+    assert_eq!(app.connection.as_ref().unwrap().focus, 6);
+    for _ in 0..30 {
+        press(&mut app, KeyCode::Backspace);
+    }
+    let commands = press(&mut app, KeyCode::Enter);
+    let [
+        Command::Profile(Request::Save {
+            profile,
+            previous: Some(previous),
+            ..
+        }),
+    ] = commands.as_slice()
+    else {
+        panic!("{commands:?}");
+    };
+    assert_eq!(previous, &p);
+    assert!(profile.bip().bbmd.is_none() && profile.bip().renewal_secs.is_none());
+    assert!(profile.bip().nat_global_address.is_none());
+    profile.validate().unwrap();
+    assert!(profile.authorized_at_unix.is_none());
+}
+
+#[test]
 fn list_selection_and_reload_request_disk_state_without_connecting() {
     let mut app = profile_app();
     worker(

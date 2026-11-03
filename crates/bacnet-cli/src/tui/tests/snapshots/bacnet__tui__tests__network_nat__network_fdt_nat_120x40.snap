@@ -8,7 +8,7 @@ expression: text
 "│Status registered, lease 43 s left   attempts 2  accepted 2  refused 0  lapses 0                                      │"
 "│Last BVLC-Result successful-completion (0x0000), attempt accepted                                                     │"
 "│Next registration in  13 s  ███████████████████████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░│"
-"│As the BBMD sees us 203.0.113.7:61000  NAT-translated from 10.0.9.5:47808  TTL 60 s + 30 s grace, 88 s left           │"
+"│As the BBMD sees us 203.0.113.7:61000  TTL 60 s + 30 s grace, 88 s left; NAT-translated from 10.0.9.5:47808           │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘"
 "┌ BDT [FDT] Matrix Networks | 10.0.1.1:47808 | read 0s ago ────────────────────────────────────────────────────────────┐"
 "│Foreign device         TTL       Left                                                                                 │"

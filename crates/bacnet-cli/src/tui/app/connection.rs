@@ -337,7 +337,9 @@ impl Connection {
             b.ttl = f[7].parse().map_err(|_| "TTL must be 0-65535")?;
             b.renewal_secs = optional(&f[8], "Renewal must be an unsigned number")?;
             if b.bbmd.is_none() {
+                // Both need a BBMD, and only the file sets the NAT address.
                 b.renewal_secs = None;
+                b.nat_global_address = None;
             }
             // A blank group clears multicast, and the group port with it.
             b.multicast = optional(&f[9], "Group must be an IPv4 multicast address")?;

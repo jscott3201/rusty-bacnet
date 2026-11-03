@@ -718,6 +718,7 @@ pub(crate) fn capture_sources(matches: &clap::ArgMatches) -> Result<Vec<String>,
             "--renewal requires --foreign-bbmd (or a named TUI profile containing a BBMD)",
         ));
     }
+    crate::mstp::check_matches(matches)?;
     if matches
         .get_one::<std::net::SocketAddrV4>("nat_global_address")
         .is_some()
@@ -731,7 +732,6 @@ pub(crate) fn capture_sources(matches: &clap::ArgMatches) -> Result<Vec<String>,
             "--nat-global-address requires --foreign-bbmd (or a named TUI profile containing a BBMD)",
         ));
     }
-    crate::mstp::check_matches(matches)?;
     Ok(explicit)
 }
 

@@ -316,43 +316,71 @@ fn own_line<'a>(state: &NetworkState, app: &App, theme: &Theme, width: u16) -> L
     let own = state
         .own
         .and_then(|own| Some((own, entries.get(own.index)?)));
+    // The line doesn't wrap: each case offers shorter wordings, and the
+    // first that fits after the label (and the address) is shown.
+    let room = usize::from(width).saturating_sub(label.content.chars().count());
     match own {
         Some((own, entry)) => {
-            // Found at the NAT global address (#1943): say from where.
-            let translated = if own.translated {
-                format!("  NAT-translated from {local}")
+            let address = entry.address.to_string();
+            let (ttl, left) = (entry.ttl, state.remaining(entry, app.now));
+            // The BBMD keeps an FDT entry 30 s past its TTL (Annex J).
+            let lease = format!("  TTL {ttl} s + 30 s grace, {left} s left");
+            // Found at the NAT global address (#1943): say so, and from where
+            // when there is room.
+            let text = if own.translated {
+                fit(
+                    room.saturating_sub(address.chars().count()),
+                    [
+                        format!("{lease}; NAT-translated from {local}"),
+                        format!("{lease}; via NAT"),
+                        format!("  via NAT, TTL {ttl} s, {left} s left"),
+                    ],
+                )
             } else {
-                String::new()
+                lease
             };
             Line::from(vec![
                 label,
-                Span::styled(entry.address.to_string(), theme.selected()),
-                Span::styled(
-                    // The BBMD keeps an FDT entry 30 s past its TTL (Annex J).
-                    format!(
-                        "{translated}  TTL {} s + 30 s grace, {} s left",
-                        entry.ttl,
-                        state.remaining(entry, app.now)
-                    ),
-                    theme.dim(),
-                ),
+                Span::styled(address, theme.selected()),
+                Span::styled(text, theme.dim()),
             ])
         }
         None => {
             let text = match state.foreign.and_then(|f| f.nat_global) {
-                Some(global) => {
-                    format!(
-                        "no FDT entry has our address {local} or the NAT global address {global}"
-                    )
-                }
-                None => format!(
-                    "no FDT entry has our address {local}; a NAT router may have rewritten it \
-                     (name it with --nat-global-address)"
+                Some(global) => fit(
+                    room,
+                    [
+                        format!("no FDT entry has our address {local} or NAT address {global}"),
+                        format!("no FDT entry at {local} or {global}"),
+                    ],
+                ),
+                None => fit(
+                    room,
+                    [
+                        format!(
+                            "no FDT entry has our address {local}; behind NAT? set --nat-global-address"
+                        ),
+                        format!("none at {local}; NAT? set --nat-global-address"),
+                        "none at our address; NAT? set --nat-global-address".into(),
+                    ],
                 ),
             };
             Line::from(vec![label, Span::styled(text, theme.warn())])
         }
     }
+}
+
+/// The first of `wordings` that fits in `room` characters, else the last.
+fn fit<const N: usize>(room: usize, wordings: [String; N]) -> String {
+    let mut wordings = wordings.into_iter();
+    let mut last = String::new();
+    for text in wordings.by_ref() {
+        if text.chars().count() <= room {
+            return text;
+        }
+        last = text;
+    }
+    last
 }
 
 /// An error or an empty table as one line.

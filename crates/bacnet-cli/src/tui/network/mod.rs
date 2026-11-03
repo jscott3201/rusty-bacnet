@@ -60,31 +60,33 @@ pub(crate) struct OwnEntry {
     pub(crate) translated: bool,
 }
 
-/// The FDT entry that is this client's own. The one recorded at our local
-/// address wins; a client bound to `0.0.0.0` matches on the port alone.
-/// Failing that, the one at the configured NAT global address, marked
-/// translated. `None` when neither has an entry, as when a NAT router
-/// rewrote the source of our registration and no global address is set.
+/// The FDT entry that is this client's own. With a NAT global address set,
+/// the entry recorded there is ours, marked translated: the user said a NAT
+/// router sits between us and the BBMD, so an entry at our private address
+/// may be another site's device on the same range, or one left from before
+/// the NAT. Otherwise, or when no entry has the global address, the one at
+/// our local address; a client bound to `0.0.0.0` matches on the port
+/// alone. `None` when neither has an entry.
 pub(crate) fn own_entry(
     entries: &[FdtRow],
     local: SocketAddrV4,
     nat_global: Option<SocketAddrV4>,
 ) -> Option<OwnEntry> {
-    let at_local = entries.iter().position(|entry| {
-        entry.address.port() == local.port()
-            && (local.ip().is_unspecified() || entry.address.ip() == local.ip())
-    });
-    if let Some(index) = at_local {
+    let at_global =
+        nat_global.and_then(|global| entries.iter().position(|entry| entry.address == global));
+    if let Some(index) = at_global {
         return Some(OwnEntry {
             index,
-            translated: false,
+            translated: true,
         });
     }
-    let global = nat_global?;
-    let index = entries.iter().position(|entry| entry.address == global)?;
+    let index = entries.iter().position(|entry| {
+        entry.address.port() == local.port()
+            && (local.ip().is_unspecified() || entry.address.ip() == local.ip())
+    })?;
     Some(OwnEntry {
         index,
-        translated: true,
+        translated: false,
     })
 }
 
@@ -156,20 +158,22 @@ mod tests {
         ];
         assert_eq!(own_entry(&fdt, at("10.0.0.5:50000"), None), direct(1));
         assert_eq!(own_entry(&fdt, at("0.0.0.0:50000"), None), direct(1));
-        // An exact local match wins over the global address.
+        // With both in the FDT, the global address wins: the user said a
+        // NAT router translates us.
         let global = Some(at("203.0.113.7:61000"));
-        assert_eq!(own_entry(&fdt, at("10.0.0.5:50000"), global), direct(1));
+        let translated = Some(OwnEntry {
+            index: 2,
+            translated: true,
+        });
+        assert_eq!(own_entry(&fdt, at("10.0.0.5:50000"), global), translated);
+        // A global address with no entry leaves the local match standing.
+        let absent = Some(at("203.0.113.9:61000"));
+        assert_eq!(own_entry(&fdt, at("10.0.0.5:50000"), absent), direct(1));
         // Behind NAT the BBMD recorded another address: with no global
         // address nothing matches, and with one its entry is ours.
         let private = at("192.168.1.5:50000");
         assert_eq!(own_entry(&fdt, private, None), None);
-        assert_eq!(
-            own_entry(&fdt, private, global),
-            Some(OwnEntry {
-                index: 2,
-                translated: true
-            })
-        );
+        assert_eq!(own_entry(&fdt, private, global), translated);
         // The global address must match exactly, port included.
         assert_eq!(
             own_entry(&fdt, private, Some(at("203.0.113.7:61001"))),
