@@ -32,6 +32,11 @@
 //! Default_Timeout that no longer lies in the range the application gives
 //! the Timer is dropped for the application's value, with a warning.
 //!
+//! The same store keeps the reporting settings peers write to the analog,
+//! binary and multi-state Input, Output and Value objects (#2331), as kind 4
+//! of the format: a [`ReportingWriteConfig`], kept once an object opts in
+//! with its `with_reporting_persistence` builder call.
+//!
 //! A Command has nothing here: its Action is read-only over the network
 //! (Table 12-12 codes it R, and this stack takes no write to it), so only
 //! the application sets it.
@@ -41,19 +46,24 @@
 //! [`ChannelObject`]: crate::channel::ChannelObject
 
 mod persistence;
+pub(crate) mod reporting;
 pub(crate) mod saving;
 
 #[cfg(feature = "std")]
 pub use persistence::FileWriteConfigPersistence;
 pub use persistence::{
-    ChannelMembers, ChannelWriteConfig, TimerStateChange, TimerWriteConfig, WriteConfigPersistence,
-    WriteConfigSnapshot,
+    ChannelMembers, ChannelWriteConfig, ReportingWriteConfig, TimerStateChange, TimerWriteConfig,
+    WriteConfigPersistence, WriteConfigSnapshot,
 };
 
 // std: these load and save through the file backend.
 #[cfg(all(test, feature = "std"))]
 #[path = "write_config/persistence_tests.rs"]
 mod persistence_tests;
+// event-reporting: the reporting persistence these test is compiled with it.
+#[cfg(all(test, feature = "event-reporting"))]
+#[path = "write_config/reporting_tests.rs"]
+mod reporting_tests;
 #[cfg(test)]
 #[path = "write_config/test_storage.rs"]
 pub(crate) mod test_storage;

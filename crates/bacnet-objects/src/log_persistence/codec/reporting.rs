@@ -36,7 +36,7 @@ use crate::snapshot::SnapshotError;
 /// slot, so the three fit the room [`super::FIXED_ALLOWANCE`] keeps beside
 /// the records. A durable log refuses a longer one as it is written, with
 /// RESOURCES / NO_SPACE_TO_WRITE_PROPERTY, whatever its storage (#1952).
-pub(crate) const MAX_TEXT_OCTETS: usize = 16 * 1024;
+pub(crate) const MAX_TEXT_OCTETS: usize = crate::event::options::MAX_KEPT_TEXT_OCTETS;
 
 const CLASS: u16 = 1 << 0;
 const ENABLE: u16 = 1 << 1;

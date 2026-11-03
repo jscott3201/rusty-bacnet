@@ -126,6 +126,18 @@ fn timer_config() -> WriteConfigSnapshot {
     })
 }
 
+/// An Analog Input's written reporting settings (#2331).
+// std: only the file backend's test takes it.
+#[cfg(feature = "std")]
+fn reporting_config() -> WriteConfigSnapshot {
+    WriteConfigSnapshot::Reporting(crate::write_config::ReportingWriteConfig {
+        notification_class: Some(4),
+        event_detection_enable: Some(false),
+        event_message_texts_config: Some(["off".into(), String::new(), "on".into()]),
+        ..Default::default()
+    })
+}
+
 fn channel_config() -> WriteConfigSnapshot {
     WriteConfigSnapshot::Channel(ChannelWriteConfig {
         members: Some(ChannelMembers {
@@ -349,7 +361,12 @@ pub(super) mod file_backends {
 
     #[test]
     fn the_write_config_file_backend_writes_and_reads_the_public_octets() {
-        for (object, config) in [(timer(), timer_config()), (channel(), channel_config())] {
+        let analog = oid(ObjectType::ANALOG_INPUT, 2);
+        for (object, config) in [
+            (timer(), timer_config()),
+            (channel(), channel_config()),
+            (analog, reporting_config()),
+        ] {
             let scratch = Scratch::new();
             let path = scratch.path("config");
             let store = FileWriteConfigPersistence::new(&path).unwrap();
@@ -366,6 +383,10 @@ pub(super) mod file_backends {
                 WriteConfigSnapshot::Channel(mut config) => {
                     config.channel_number = Some(13);
                     WriteConfigSnapshot::Channel(config)
+                }
+                WriteConfigSnapshot::Reporting(mut config) => {
+                    config.notification_class = Some(13);
+                    WriteConfigSnapshot::Reporting(config)
                 }
             };
             std::fs::write(&path, write_config::encode(object, &changed).unwrap()).unwrap();

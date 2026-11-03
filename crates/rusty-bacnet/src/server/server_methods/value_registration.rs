@@ -1,18 +1,58 @@
 //! Analog, binary and multi-state object registration. Each takes the
 //! `tags`, `profile_location` and `profile_name` keywords that provision the
-//! optional profile rows (#1553); the Value objects also take
-//! `present_value_access`, `value_source_tracking` (#1552) and the
-//! independently optional Audit policy.
+//! optional profile rows (#1553), and `storage_path` and
+//! `clear_written_reporting`, which keep the reporting settings a peer
+//! writes (#2331); the Value objects also take `present_value_access`,
+//! `value_source_tracking` (#1552) and the independently optional Audit
+//! policy.
 use super::super::*;
 use crate::object_options::{present_value_access, provision_profile};
+use bacnet_objects::write_config::{FileWriteConfigPersistence, WriteConfigPersistence};
 use bacnet_types::enums::EngineeringUnits;
+use bacnet_types::error::Error;
+
+/// Build an object with `build`, keeping its reporting settings in the file
+/// at `storage_path` when there is one (#2331). With `clear`, the settings a
+/// write saved are dropped first and the object is opened again on the
+/// cleared file, so it starts from its defaults, as `add_timer` does.
+fn keep_reporting<T>(
+    build: impl Fn() -> Result<T, Error>,
+    storage_path: Option<&str>,
+    clear: bool,
+    attach: fn(T, Arc<dyn WriteConfigPersistence>) -> Result<T, Error>,
+    clear_written: fn(&mut T) -> Result<(), Error>,
+) -> PyResult<T> {
+    let Some(path) = storage_path else {
+        return build().map_err(to_py_err);
+    };
+    let storage: Arc<dyn WriteConfigPersistence> =
+        Arc::new(FileWriteConfigPersistence::new(path).map_err(to_py_err)?);
+    let open = || build().and_then(|object| attach(object, storage.clone()));
+    let mut object = open().map_err(to_py_err)?;
+    if clear {
+        clear_written(&mut object).map_err(to_py_err)?;
+        // Dropping it waits for its saves.
+        drop(object);
+        object = open().map_err(to_py_err)?;
+    }
+    Ok(object)
+}
 
 #[pymethods]
 impl BACnetServer {
     /// Add an Analog Input object to the server (before starting).
+    ///
+    /// `storage_path` (a `str`) keeps the reporting settings a peer writes
+    /// (Notification_Class, Event_Enable, Notify_Type,
+    /// Event_Detection_Enable, Event_Message_Texts_Config and the
+    /// Event_Algorithm_Inhibit pair) in that file (#2331): such a write is
+    /// saved before it is answered, refused if it can't be, and served again
+    /// after a restart. `clear_written_reporting` drops what was saved first.
+    /// Every analog, binary and multi-state builder takes both.
     #[pyo3(signature = (
         instance, name, units=62, present_value=0.0, *,
-        tags=None, profile_location=None, profile_name=None
+        tags=None, profile_location=None, profile_name=None,
+        storage_path=None, clear_written_reporting=false
     ))]
     #[allow(clippy::too_many_arguments)]
     fn add_analog_input(
@@ -24,9 +64,16 @@ impl BACnetServer {
         tags: Option<&Bound<'_, PyAny>>,
         profile_location: Option<String>,
         profile_name: Option<String>,
+        storage_path: Option<&str>,
+        clear_written_reporting: bool,
     ) -> PyResult<()> {
-        let mut ai = AnalogInputObject::new(instance, name, EngineeringUnits::from_raw(units))
-            .map_err(to_py_err)?;
+        let mut ai = keep_reporting(
+            || AnalogInputObject::new(instance, name, EngineeringUnits::from_raw(units)),
+            storage_path,
+            clear_written_reporting,
+            AnalogInputObject::with_reporting_persistence,
+            AnalogInputObject::clear_written_reporting,
+        )?;
         ai.set_present_value(present_value);
         provision_profile(tags, profile_location, profile_name, |p| ai.set_profile(p))?;
         self.push_pending(Box::new(ai))
@@ -34,7 +81,8 @@ impl BACnetServer {
 
     /// Add an Analog Output object to the server (before starting).
     #[pyo3(signature = (
-        instance, name, units=62, *, tags=None, profile_location=None, profile_name=None
+        instance, name, units=62, *, tags=None, profile_location=None, profile_name=None,
+        storage_path=None, clear_written_reporting=false
     ))]
     fn add_analog_output(
         &self,
@@ -44,15 +92,25 @@ impl BACnetServer {
         tags: Option<&Bound<'_, PyAny>>,
         profile_location: Option<String>,
         profile_name: Option<String>,
+        storage_path: Option<&str>,
+        clear_written_reporting: bool,
     ) -> PyResult<()> {
-        let mut ao = AnalogOutputObject::new(instance, name, EngineeringUnits::from_raw(units))
-            .map_err(to_py_err)?;
+        let mut ao = keep_reporting(
+            || AnalogOutputObject::new(instance, name, EngineeringUnits::from_raw(units)),
+            storage_path,
+            clear_written_reporting,
+            AnalogOutputObject::with_reporting_persistence,
+            AnalogOutputObject::clear_written_reporting,
+        )?;
         provision_profile(tags, profile_location, profile_name, |p| ao.set_profile(p))?;
         self.push_pending(Box::new(ao))
     }
 
     /// Add a Binary Input object to the server (before starting).
-    #[pyo3(signature = (instance, name, *, tags=None, profile_location=None, profile_name=None))]
+    #[pyo3(signature = (
+        instance, name, *, tags=None, profile_location=None, profile_name=None,
+        storage_path=None, clear_written_reporting=false
+    ))]
     fn add_binary_input(
         &self,
         instance: u32,
@@ -60,14 +118,25 @@ impl BACnetServer {
         tags: Option<&Bound<'_, PyAny>>,
         profile_location: Option<String>,
         profile_name: Option<String>,
+        storage_path: Option<&str>,
+        clear_written_reporting: bool,
     ) -> PyResult<()> {
-        let mut bi = BinaryInputObject::new(instance, name).map_err(to_py_err)?;
+        let mut bi = keep_reporting(
+            || BinaryInputObject::new(instance, name),
+            storage_path,
+            clear_written_reporting,
+            BinaryInputObject::with_reporting_persistence,
+            BinaryInputObject::clear_written_reporting,
+        )?;
         provision_profile(tags, profile_location, profile_name, |p| bi.set_profile(p))?;
         self.push_pending(Box::new(bi))
     }
 
     /// Add a Binary Output object to the server (before starting).
-    #[pyo3(signature = (instance, name, *, tags=None, profile_location=None, profile_name=None))]
+    #[pyo3(signature = (
+        instance, name, *, tags=None, profile_location=None, profile_name=None,
+        storage_path=None, clear_written_reporting=false
+    ))]
     fn add_binary_output(
         &self,
         instance: u32,
@@ -75,8 +144,16 @@ impl BACnetServer {
         tags: Option<&Bound<'_, PyAny>>,
         profile_location: Option<String>,
         profile_name: Option<String>,
+        storage_path: Option<&str>,
+        clear_written_reporting: bool,
     ) -> PyResult<()> {
-        let mut bo = BinaryOutputObject::new(instance, name).map_err(to_py_err)?;
+        let mut bo = keep_reporting(
+            || BinaryOutputObject::new(instance, name),
+            storage_path,
+            clear_written_reporting,
+            BinaryOutputObject::with_reporting_persistence,
+            BinaryOutputObject::clear_written_reporting,
+        )?;
         provision_profile(tags, profile_location, profile_name, |p| bo.set_profile(p))?;
         self.push_pending(Box::new(bo))
     }
@@ -84,7 +161,8 @@ impl BACnetServer {
     /// Add a Multi-State Input object to the server (before starting).
     #[pyo3(signature = (
         instance, name, number_of_states, *,
-        tags=None, profile_location=None, profile_name=None
+        tags=None, profile_location=None, profile_name=None,
+        storage_path=None, clear_written_reporting=false
     ))]
     fn add_multistate_input(
         &self,
@@ -94,9 +172,16 @@ impl BACnetServer {
         tags: Option<&Bound<'_, PyAny>>,
         profile_location: Option<String>,
         profile_name: Option<String>,
+        storage_path: Option<&str>,
+        clear_written_reporting: bool,
     ) -> PyResult<()> {
-        let mut msi =
-            MultiStateInputObject::new(instance, name, number_of_states).map_err(to_py_err)?;
+        let mut msi = keep_reporting(
+            || MultiStateInputObject::new(instance, name, number_of_states),
+            storage_path,
+            clear_written_reporting,
+            MultiStateInputObject::with_reporting_persistence,
+            MultiStateInputObject::clear_written_reporting,
+        )?;
         provision_profile(tags, profile_location, profile_name, |p| msi.set_profile(p))?;
         self.push_pending(Box::new(msi))
     }
@@ -104,7 +189,8 @@ impl BACnetServer {
     /// Add a Multi-State Output object to the server (before starting).
     #[pyo3(signature = (
         instance, name, number_of_states, *,
-        tags=None, profile_location=None, profile_name=None
+        tags=None, profile_location=None, profile_name=None,
+        storage_path=None, clear_written_reporting=false
     ))]
     fn add_multistate_output(
         &self,
@@ -114,9 +200,16 @@ impl BACnetServer {
         tags: Option<&Bound<'_, PyAny>>,
         profile_location: Option<String>,
         profile_name: Option<String>,
+        storage_path: Option<&str>,
+        clear_written_reporting: bool,
     ) -> PyResult<()> {
-        let mut mso =
-            MultiStateOutputObject::new(instance, name, number_of_states).map_err(to_py_err)?;
+        let mut mso = keep_reporting(
+            || MultiStateOutputObject::new(instance, name, number_of_states),
+            storage_path,
+            clear_written_reporting,
+            MultiStateOutputObject::with_reporting_persistence,
+            MultiStateOutputObject::clear_written_reporting,
+        )?;
         provision_profile(tags, profile_location, profile_name, |p| mso.set_profile(p))?;
         self.push_pending(Box::new(mso))
     }
@@ -128,7 +221,8 @@ impl BACnetServer {
     #[pyo3(signature = (
         instance, name, number_of_states, *,
         present_value_access="commandable", value_source_tracking=false,
-        tags=None, profile_location=None, profile_name=None
+        tags=None, profile_location=None, profile_name=None,
+        storage_path=None, clear_written_reporting=false
     ))]
     #[allow(clippy::too_many_arguments)]
     fn add_multistate_value(
@@ -141,10 +235,17 @@ impl BACnetServer {
         tags: Option<&Bound<'_, PyAny>>,
         profile_location: Option<String>,
         profile_name: Option<String>,
+        storage_path: Option<&str>,
+        clear_written_reporting: bool,
     ) -> PyResult<()> {
         let access = self::present_value_access(present_value_access, value_source_tracking)?;
-        let mut msv = MultiStateValueObject::with_access(instance, name, number_of_states, access)
-            .map_err(to_py_err)?;
+        let mut msv = keep_reporting(
+            || MultiStateValueObject::with_access(instance, name, number_of_states, access),
+            storage_path,
+            clear_written_reporting,
+            MultiStateValueObject::with_reporting_persistence,
+            MultiStateValueObject::clear_written_reporting,
+        )?;
         msv.set_value_source_tracking(value_source_tracking);
         provision_profile(tags, profile_location, profile_name, |p| msv.set_profile(p))?;
         self.push_pending(Box::new(msv))
@@ -163,7 +264,8 @@ impl BACnetServer {
         instance, name, units=62, *,
         present_value_access="commandable", value_source_tracking=false,
         audit_level=None, auditable_operations=None, audit_priority_filter=None,
-        tags=None, profile_location=None, profile_name=None
+        tags=None, profile_location=None, profile_name=None,
+        storage_path=None, clear_written_reporting=false
     ))]
     #[allow(clippy::too_many_arguments)]
     fn add_analog_value(
@@ -179,6 +281,8 @@ impl BACnetServer {
         tags: Option<&Bound<'_, PyAny>>,
         profile_location: Option<String>,
         profile_name: Option<String>,
+        storage_path: Option<&str>,
+        clear_written_reporting: bool,
     ) -> PyResult<()> {
         let access = self::present_value_access(present_value_access, value_source_tracking)?;
         let audit_policy = crate::object_audit_policy::parse(
@@ -186,13 +290,20 @@ impl BACnetServer {
             auditable_operations,
             audit_priority_filter,
         )?;
-        let mut obj = AnalogValueObject::with_access(
-            instance,
-            name,
-            EngineeringUnits::from_raw(units),
-            access,
-        )
-        .map_err(to_py_err)?;
+        let mut obj = keep_reporting(
+            || {
+                AnalogValueObject::with_access(
+                    instance,
+                    name,
+                    EngineeringUnits::from_raw(units),
+                    access,
+                )
+            },
+            storage_path,
+            clear_written_reporting,
+            AnalogValueObject::with_reporting_persistence,
+            AnalogValueObject::clear_written_reporting,
+        )?;
         obj.set_audit_policy(audit_policy);
         obj.set_value_source_tracking(value_source_tracking);
         provision_profile(tags, profile_location, profile_name, |p| obj.set_profile(p))?;
@@ -207,7 +318,8 @@ impl BACnetServer {
         instance, name, *,
         present_value_access="commandable", value_source_tracking=false,
         audit_level=None, auditable_operations=None, audit_priority_filter=None,
-        tags=None, profile_location=None, profile_name=None
+        tags=None, profile_location=None, profile_name=None,
+        storage_path=None, clear_written_reporting=false
     ))]
     #[allow(clippy::too_many_arguments)]
     fn add_binary_value(
@@ -222,6 +334,8 @@ impl BACnetServer {
         tags: Option<&Bound<'_, PyAny>>,
         profile_location: Option<String>,
         profile_name: Option<String>,
+        storage_path: Option<&str>,
+        clear_written_reporting: bool,
     ) -> PyResult<()> {
         let access = self::present_value_access(present_value_access, value_source_tracking)?;
         let audit_policy = crate::object_audit_policy::parse(
@@ -229,7 +343,13 @@ impl BACnetServer {
             auditable_operations,
             audit_priority_filter,
         )?;
-        let mut bv = BinaryValueObject::with_access(instance, name, access).map_err(to_py_err)?;
+        let mut bv = keep_reporting(
+            || BinaryValueObject::with_access(instance, name, access),
+            storage_path,
+            clear_written_reporting,
+            BinaryValueObject::with_reporting_persistence,
+            BinaryValueObject::clear_written_reporting,
+        )?;
         bv.set_audit_policy(audit_policy);
         bv.set_value_source_tracking(value_source_tracking);
         provision_profile(tags, profile_location, profile_name, |p| bv.set_profile(p))?;

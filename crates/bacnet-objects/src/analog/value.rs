@@ -48,6 +48,10 @@ pub struct AnalogValueObject {
     min_pres_value: Option<f32>,
     max_pres_value: Option<f32>,
     pub(crate) event_history: EventHistory,
+    /// The reporting settings a write set, kept in storage once the
+    /// object opts in (#2331).
+    #[cfg(feature = "event-reporting")]
+    reporting_store: crate::write_config::reporting::ReportingStore,
     /// Value source tracking.
     value_source: crate::command_source::ValueSourceTracking,
     /// The last writer of a noncommandable Present_Value, once tracked (#1552).
@@ -102,6 +106,8 @@ impl AnalogValueObject {
             min_pres_value: None,
             max_pres_value: None,
             event_history: EventHistory::default(),
+            #[cfg(feature = "event-reporting")]
+            reporting_store: Default::default(),
             value_source: crate::command_source::ValueSourceTracking::default(),
             write_source: crate::command_source::SingleValueSource::default(),
         })
@@ -225,6 +231,8 @@ impl AnalogValueObject {
         Ok(v)
     }
 }
+
+crate::write_config::reporting::impl_reporting_persistence!(AnalogValueObject);
 
 impl BACnetObject for AnalogValueObject {
     crate::traits::lend_audit_policy!();
@@ -377,6 +385,7 @@ impl BACnetObject for AnalogValueObject {
         priority: Option<u8>,
     ) -> Result<(), Error> {
         crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
+        crate::write_config::reporting::admit(self, property, array_index, &value)?;
         if metadata::excludes(self, property) {
             return Err(common::unknown_property_error());
         }
@@ -482,7 +491,7 @@ impl BACnetObject for AnalogValueObject {
 
     #[cfg(feature = "durable-writes")]
     fn durable_writes(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
-        self.profile.capability()
+        self.durable_capability()
     }
 
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {

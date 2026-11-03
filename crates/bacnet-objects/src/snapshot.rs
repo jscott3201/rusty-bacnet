@@ -24,7 +24,7 @@
 //! | Module | Snapshot | Tag | Versions read (written) | File backend |
 //! | --- | --- | --- | --- | --- |
 //! | [`log`] | [`LogSnapshot`] | `RBLOGS01` | 1, 2 (2) | `FileLogPersistence`, one slot of two |
-//! | [`write_config`] | [`WriteConfigSnapshot`] | `RBNWCF01` | kinds 1, 2, 3 (2, 3) | `FileWriteConfigPersistence` |
+//! | [`write_config`] | [`WriteConfigSnapshot`] | `RBNWCF01` | kinds 1, 2, 3, 4 (2, 3, 4) | `FileWriteConfigPersistence` |
 //! | [`notification_class`] | [`NotificationClassSnapshot`] | `RBNNCL01` | 1 (1) | `FileNotificationClassPersistence` |
 //! | [`notification_forwarder`] | [`ForwarderSnapshot`] | `RBNFWD01` | 1 (1) | `FileNotificationForwarderPersistence` |
 //! | [`tags`] | [`TagsSnapshot`] | `RBNTAG01` | 1 (1) | `FileTagsPersistence` |
@@ -129,6 +129,8 @@ pub use error::{SnapshotError, SnapshotErrorKind};
 
 #[cfg(test)]
 mod one_file_tests;
+#[cfg(test)]
+mod reporting_tests;
 #[cfg(test)]
 mod slot_tests;
 #[cfg(test)]

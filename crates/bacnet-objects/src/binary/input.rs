@@ -187,6 +187,10 @@ pub struct BinaryInputObject {
     /// event-state-machine evaluation under Clause 13.2.2.1.
     event_detection_enable: bool,
     pub(crate) event_history: EventHistory,
+    /// The reporting settings a write set, kept in storage once the
+    /// object opts in (#2331).
+    #[cfg(feature = "event-reporting")]
+    reporting_store: crate::write_config::reporting::ReportingStore,
 }
 
 impl BinaryInputObject {
@@ -213,6 +217,8 @@ impl BinaryInputObject {
             },
             event_detection_enable: true,
             event_history: EventHistory::default(),
+            #[cfg(feature = "event-reporting")]
+            reporting_store: Default::default(),
         })
     }
 
@@ -275,6 +281,8 @@ impl BinaryInputObject {
     }
 }
 
+crate::write_config::reporting::impl_reporting_persistence!(BinaryInputObject);
+
 impl BACnetObject for BinaryInputObject {
     fn object_identifier(&self) -> ObjectIdentifier {
         self.oid
@@ -286,7 +294,7 @@ impl BACnetObject for BinaryInputObject {
 
     #[cfg(feature = "durable-writes")]
     fn durable_writes(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
-        self.profile.capability()
+        self.durable_capability()
     }
 
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
@@ -370,6 +378,7 @@ impl BACnetObject for BinaryInputObject {
         _priority: Option<u8>,
     ) -> Result<(), Error> {
         crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
+        crate::write_config::reporting::admit(self, property, array_index, &value)?;
         if property == PropertyIdentifier::PRESENT_VALUE {
             if !self.out_of_service {
                 return Err(common::write_access_denied_error());

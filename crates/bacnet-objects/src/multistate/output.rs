@@ -36,6 +36,10 @@ pub struct MultiStateOutputObject {
     /// COMMAND_FAILURE event detector.
     event_detector: CommandFailureDetector,
     pub(crate) event_history: EventHistory,
+    /// The reporting settings a write set, kept in storage once the
+    /// object opts in (#2331).
+    #[cfg(feature = "event-reporting")]
+    reporting_store: crate::write_config::reporting::ReportingStore,
     /// Implemented paired command-source tracking (Clause 19.5).
     value_source: crate::command_source::ValueSourceTracking,
 }
@@ -71,6 +75,8 @@ impl MultiStateOutputObject {
                 .collect(),
             event_detector: CommandFailureDetector::default(),
             event_history: EventHistory::default(),
+            #[cfg(feature = "event-reporting")]
+            reporting_store: Default::default(),
             value_source: crate::command_source::ValueSourceTracking::default(),
         })
     }
@@ -189,6 +195,8 @@ impl MultiStateOutputObject {
         Ok(())
     }
 }
+
+crate::write_config::reporting::impl_reporting_persistence!(MultiStateOutputObject);
 
 impl BACnetObject for MultiStateOutputObject {
     fn object_identifier(&self) -> ObjectIdentifier {
@@ -326,6 +334,7 @@ impl BACnetObject for MultiStateOutputObject {
         _priority: Option<u8>,
     ) -> Result<(), Error> {
         crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
+        crate::write_config::reporting::admit(self, property, array_index, &value)?;
         if matches!(
             property,
             PropertyIdentifier::PRESENT_VALUE | PropertyIdentifier::VALUE_SOURCE
@@ -452,7 +461,7 @@ impl BACnetObject for MultiStateOutputObject {
 
     #[cfg(feature = "durable-writes")]
     fn durable_writes(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
-        self.profile.capability()
+        self.durable_capability()
     }
 
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {

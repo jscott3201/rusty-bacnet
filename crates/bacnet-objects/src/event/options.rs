@@ -93,6 +93,12 @@ pub(crate) const REPORTING_OPTION_METADATA: [PropertyMetadata; 3] = [
     ),
 ];
 
+/// The most octets of UTF-8 one Event_Message_Texts_Config string may hold
+/// on an object that keeps its reporting settings in storage (#1952,
+/// #2331): a durable object refuses a longer write with RESOURCES /
+/// NO_SPACE_TO_WRITE_PROPERTY, so what it saves always fits.
+pub(crate) const MAX_KEPT_TEXT_OCTETS: usize = 16 * 1024;
+
 /// The object type an unset Event_Algorithm_Inhibit_Ref names at the
 /// reserved instance: one whose Present_Value is a BinaryPV.
 const UNSET_REFERENCE_TYPE: ObjectType = ObjectType::BINARY_VALUE;

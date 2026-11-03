@@ -42,6 +42,10 @@ pub struct AnalogInputObject {
     /// Optional maximum engineering bound metadata for Present_Value.
     max_pres_value: Option<f32>,
     pub(crate) event_history: EventHistory,
+    /// The reporting settings a write set, kept in storage once the
+    /// object opts in (#2331).
+    #[cfg(feature = "event-reporting")]
+    reporting_store: crate::write_config::reporting::ReportingStore,
 }
 
 impl AnalogInputObject {
@@ -71,6 +75,8 @@ impl AnalogInputObject {
             min_pres_value: None,
             max_pres_value: None,
             event_history: EventHistory::default(),
+            #[cfg(feature = "event-reporting")]
+            reporting_store: Default::default(),
         })
     }
 
@@ -155,6 +161,8 @@ impl AnalogInputObject {
     }
 }
 
+crate::write_config::reporting::impl_reporting_persistence!(AnalogInputObject);
+
 impl BACnetObject for AnalogInputObject {
     fn object_identifier(&self) -> ObjectIdentifier {
         self.oid
@@ -236,6 +244,7 @@ impl BACnetObject for AnalogInputObject {
         _priority: Option<u8>,
     ) -> Result<(), Error> {
         crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
+        crate::write_config::reporting::admit(self, property, array_index, &value)?;
         // AI present-value is writable only when out-of-service
         if property == PropertyIdentifier::PRESENT_VALUE {
             if !self.out_of_service {
@@ -317,7 +326,7 @@ impl BACnetObject for AnalogInputObject {
 
     #[cfg(feature = "durable-writes")]
     fn durable_writes(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
-        self.profile.capability()
+        self.durable_capability()
     }
 
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {

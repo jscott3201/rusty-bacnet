@@ -37,6 +37,10 @@ pub struct MultiStateValueObject {
     /// event-state-machine evaluation under Clause 13.2.2.1.
     event_detection_enable: bool,
     pub(crate) event_history: EventHistory,
+    /// The reporting settings a write set, kept in storage once the
+    /// object opts in (#2331).
+    #[cfg(feature = "event-reporting")]
+    reporting_store: crate::write_config::reporting::ReportingStore,
     /// Implemented paired command-source tracking (Clause 19.5).
     value_source: crate::command_source::ValueSourceTracking,
     /// The last writer of a noncommandable Present_Value, once tracked (#1552).
@@ -89,6 +93,8 @@ impl MultiStateValueObject {
             event_detector: ChangeOfStateDetector::default(),
             event_detection_enable: true,
             event_history: EventHistory::default(),
+            #[cfg(feature = "event-reporting")]
+            reporting_store: Default::default(),
             value_source: crate::command_source::ValueSourceTracking::default(),
             write_source: crate::command_source::SingleValueSource::default(),
         })
@@ -270,6 +276,8 @@ impl MultiStateValueObject {
     }
 }
 
+crate::write_config::reporting::impl_reporting_persistence!(MultiStateValueObject);
+
 impl BACnetObject for MultiStateValueObject {
     fn object_identifier(&self) -> ObjectIdentifier {
         self.oid
@@ -426,6 +434,7 @@ impl BACnetObject for MultiStateValueObject {
         _priority: Option<u8>,
     ) -> Result<(), Error> {
         crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
+        crate::write_config::reporting::admit(self, property, array_index, &value)?;
         if metadata::excludes(self, property) {
             return Err(common::unknown_property_error());
         }
@@ -541,7 +550,7 @@ impl BACnetObject for MultiStateValueObject {
 
     #[cfg(feature = "durable-writes")]
     fn durable_writes(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
-        self.profile.capability()
+        self.durable_capability()
     }
 
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {

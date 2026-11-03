@@ -90,6 +90,7 @@ enum Kind {
     AccessRights,
     TimerWriteConfig,
     ChannelWriteConfig,
+    ReportingWriteConfig,
 }
 
 /// Where a check's storage lives. Each method opens one backend on it; a
@@ -248,6 +249,12 @@ pub const FORMATS: &[Format] = &[
         sample: samples::channel_write_config,
         kind: Kind::ChannelWriteConfig,
     },
+    Format {
+        name: "reporting_write_config",
+        two_slot: false,
+        sample: samples::reporting_write_config,
+        kind: Kind::ReportingWriteConfig,
+    },
 ];
 
 impl Format {
@@ -317,6 +324,17 @@ impl Format {
                     ChannelObject::with_persistence(1, "CH", 1, store).map(drop)
                 })
             }
+            Kind::ReportingWriteConfig => check_file(
+                medium,
+                oid(ObjectType::ANALOG_INPUT),
+                M::write_config,
+                |store| {
+                    let units = EngineeringUnits::DEGREES_CELSIUS;
+                    AnalogInputObject::new(1, "AI", units)?
+                        .with_reporting_persistence(store)
+                        .map(drop)
+                },
+            ),
         }
     }
 
