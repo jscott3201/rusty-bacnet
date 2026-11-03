@@ -387,15 +387,16 @@ impl CovSubscriptionTable {
     }
 
     /// Mark the coordinate of one confirmed notification's references
-    /// outstanding, and register its worker's wake-up for a fence.
-    pub(crate) fn begin_confirmed<'a>(
+    /// outstanding, keeping the observation each carries for the Ack, and
+    /// register its worker's wake-up for a fence.
+    pub(crate) fn begin_confirmed<S: std::borrow::Borrow<CovSubscriptionSnapshot>>(
         &mut self,
         completion: PreparedCovCompletion,
-        snapshots: impl IntoIterator<Item = &'a CovSubscriptionSnapshot>,
+        references: impl IntoIterator<Item = (S, CovObservation)>,
     ) -> Result<ConfirmedFlight, BeginRefusal> {
         let token = self
             .core
-            .begin_confirmed(completion, snapshots, runtime_clock::core_now())?;
+            .begin_confirmed(completion, references, runtime_clock::core_now())?;
         // A report it replaced past its deadline is fenced: wake its worker,
         // if one still runs, and drop its wake-up (#2303).
         self.sync(&[]);
@@ -404,11 +405,17 @@ impl CovSubscriptionTable {
         Ok(ConfirmedFlight::new(token, wake))
     }
 
-    /// End the report `flight` names, as `outcome` says.
-    pub(crate) fn delivered(&mut self, flight: &ConfirmedFlight, outcome: Delivery) {
+    /// End the report `flight` names, as `outcome` says; an Ack commits
+    /// what it carried and returns the references owed a fresh look. See
+    /// [`CovTable::delivered`].
+    pub(crate) fn delivered(
+        &mut self,
+        flight: &ConfirmedFlight,
+        outcome: Delivery,
+    ) -> Vec<CovSubscriptionKey> {
         self.wakes.remove(&flight.token());
         self.core
-            .delivered(flight.token(), outcome, runtime_clock::core_now());
+            .delivered(flight.token(), outcome, runtime_clock::core_now())
     }
 
     /// Whether a fanout may report this ordinary or Single subscription now;
@@ -552,7 +559,7 @@ impl CovSubscriptionTable {
         if !snapshot.issue_confirmed_notifications {
             return self.complete_observation(snapshot, completion, value);
         }
-        let Ok(flight) = self.begin_confirmed(completion, [snapshot]) else {
+        let Ok(flight) = self.begin_confirmed(completion, [(snapshot, value.clone())]) else {
             return false;
         };
         let completed = self.complete_observation(snapshot, completion, value);

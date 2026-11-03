@@ -1,6 +1,7 @@
 use super::cov_notify_context::{CovFanoutHandles, CovNotifyContext};
 use super::*;
 use crate::cov::InFlightAcquireError;
+use bacnet_device_core::cov::EventBudget;
 use confirmed::ConfirmedReport;
 
 mod confirmed;
@@ -9,71 +10,6 @@ mod multiple;
 mod multiple_chunks;
 mod multiple_items;
 mod revisit;
-
-#[derive(Debug)]
-pub(super) struct EventBudget {
-    max_notifications: usize,
-    max_bytes: usize,
-    notifications_sent: usize,
-    bytes_sent: usize,
-}
-
-impl EventBudget {
-    pub(super) fn new(policy: &CovPolicy) -> Self {
-        Self {
-            max_notifications: policy.max_notifications_per_event,
-            max_bytes: policy.max_notification_bytes_per_event,
-            notifications_sent: 0,
-            bytes_sent: 0,
-        }
-    }
-
-    pub(super) fn with_limits(max_notifications: usize, max_bytes: usize) -> Self {
-        Self {
-            max_notifications,
-            max_bytes,
-            notifications_sent: 0,
-            bytes_sent: 0,
-        }
-    }
-
-    pub(super) fn remaining_notifications(&self) -> usize {
-        self.max_notifications
-            .saturating_sub(self.notifications_sent)
-    }
-
-    pub(super) fn remaining_bytes(&self) -> usize {
-        self.max_bytes.saturating_sub(self.bytes_sent)
-    }
-
-    pub(super) fn is_exhausted(&self) -> bool {
-        self.notifications_sent >= self.max_notifications || self.bytes_sent >= self.max_bytes
-    }
-
-    pub(super) fn try_consume(&mut self, bytes: usize) -> bool {
-        if self.notifications_sent >= self.max_notifications {
-            return false;
-        }
-        if self.bytes_sent.saturating_add(bytes) > self.max_bytes {
-            return false;
-        }
-        self.notifications_sent += 1;
-        self.bytes_sent = self.bytes_sent.saturating_add(bytes);
-        true
-    }
-
-    pub(super) fn refund(&mut self, bytes: usize) {
-        self.notifications_sent = self.notifications_sent.saturating_sub(1);
-        self.bytes_sent = self.bytes_sent.saturating_sub(bytes);
-    }
-
-    pub(super) fn consume_sub_budget(&mut self, sub_budget: &EventBudget) {
-        self.notifications_sent = self
-            .notifications_sent
-            .saturating_add(sub_budget.notifications_sent);
-        self.bytes_sent = self.bytes_sent.saturating_add(sub_budget.bytes_sent);
-    }
-}
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
     pub(super) async fn send_cov_apdu(

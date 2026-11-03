@@ -104,7 +104,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let mut table = ctx.cov_table.write().await;
             let flight = table.begin_confirmed(
                 report.completion,
-                report.observations.iter().map(|(sub, _)| sub),
+                report
+                    .observations
+                    .iter()
+                    .map(|(sub, observation)| (sub, observation.clone())),
             );
             (flight, Arc::clone(table.revisits()))
         };
@@ -161,13 +164,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // dead or refusing subscriber to half the in-flight time at most.
         let hold_off = apdu_timeout * (u32::from(apdu_retries) + 1);
         ctx.notification_transactions.spawn(async move {
-            let ConfirmedReport {
-                route,
-                completion,
-                observations,
-                claim,
-                ..
-            } = report;
+            let ConfirmedReport { route, claim, .. } = report;
             // Whether an attempt got past the DCC check, so went to the link.
             let attempted = std::sync::atomic::AtomicBool::new(false);
             let delivery = run_notification_under_dcc(
@@ -227,24 +224,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     if let Some(claim) = claim {
                         claim.commit();
                     }
-                    let completed: Vec<_> = observations
-                        .into_iter()
-                        .filter(|(sub, observation)| {
-                            table.complete_observation(sub, completion, observation.clone())
-                        })
-                        .map(|(sub, _)| sub.key().clone())
-                        .collect();
-                    table.delivered(&flight, Delivery::Acknowledged);
-                    // Changes to any reference of a context were held while the
-                    // report was outstanding, not only to those it carried, and
-                    // they still are if every carried reference has gone since.
-                    match route.key().multiple_context() {
-                        Some(context) => table
-                            .multiple_context_references(context)
-                            .map(|sub| sub.key().clone())
-                            .collect(),
-                        None => completed,
-                    }
+                    // Changes to the references were held while the report was
+                    // outstanding: to a context's every reference, not only to
+                    // those it carried, and still if every carried one has gone.
+                    table.delivered(&flight, Delivery::Acknowledged)
                 }
                 Ok(NotificationWorkerResult::Error(_) | NotificationWorkerResult::Exhausted) => {
                     if matches!(result, Ok(NotificationWorkerResult::Error(_))) {

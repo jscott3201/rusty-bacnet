@@ -8,6 +8,8 @@ use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
+use super::CovSubscription;
+
 /// The COV surface a Point and a Zone share, Tracking_Value included.
 const PROPERTIES: [PropertyIdentifier; 5] = [
     PropertyIdentifier::PRESENT_VALUE,
@@ -27,6 +29,25 @@ pub struct LifeSafetyCovChange {
 }
 
 impl LifeSafetyCovChange {
+    /// Whether Status_Flags changed: every subscription to the object then
+    /// reports, whatever its baseline.
+    pub fn status_changed(&self) -> bool {
+        self.changed_properties
+            .contains(&PropertyIdentifier::STATUS_FLAGS)
+    }
+
+    /// Whether this change notifies `subscription` to the object: a
+    /// whole-object one on a Present_Value change, a property one on a
+    /// change of its property, and either on a Status_Flags change.
+    pub fn notifies(&self, subscription: &CovSubscription) -> bool {
+        self.status_changed()
+            || self.changed_properties.contains(
+                &subscription
+                    .monitored_property
+                    .unwrap_or(PropertyIdentifier::PRESENT_VALUE),
+            )
+    }
+
     /// A change of `changed_properties`, or `None` when there are none.
     pub fn new(
         object_identifier: ObjectIdentifier,

@@ -3,8 +3,9 @@
 //! SubscribeCOVProperty services, who a subscription belongs to and what it
 //! monitors, the subscription policy, the bounded values a subscription
 //! keeps of what it last reported, the values a notification carries
-//! ([`prepare`], [`flags`], [`reported`], [`value_source`], [`life_safety`])
-//! and the Device's two subscription lists ([`active`]).
+//! ([`prepare`], [`flags`], [`reported`], [`value_source`], [`life_safety`]),
+//! what a change of an object reports ([`evaluate`], within an
+//! [`EventBudget`]) and the Device's two subscription lists ([`active`]).
 //!
 //! Plain state on `bacnet-time`: no lock, clock or async. A host keeps the
 //! [`CovTable`] under its own guard, passes `now` (one monotonic timeline)
@@ -14,6 +15,8 @@
 
 pub mod active;
 mod admission;
+mod budget;
+mod evaluate;
 pub mod flags;
 mod flight;
 mod identity;
@@ -31,6 +34,8 @@ mod table;
 pub mod value_source;
 
 pub use admission::MultipleRefusal;
+pub use budget::EventBudget;
+pub use evaluate::{CovReport, Evaluation, evaluate};
 pub use flight::{BeginRefusal, Delivery, FlightTiming, Token};
 pub use identity::{
     CovNotificationKind, CovRecipient, CovSubscriptionKey, MultipleContextKey, SubscriberEndpoint,

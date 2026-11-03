@@ -153,7 +153,9 @@ async fn the_next_report_past_the_deadline_wakes_a_worker_that_never_reported() 
         let mut table = h.server.cov_table.write().await;
         let sub = table.entries().next().unwrap().clone();
         let report = table.prepare_completion(&sub).unwrap();
-        table.begin_confirmed(report, [&sub]).unwrap()
+        table
+            .begin_confirmed(report, [&sub].map(|sub| (sub, placeholder())))
+            .unwrap()
     };
     // Before the deadline the coordinate is busy: a newer value waits.
     set_quietly(&h, 20.0).await;
@@ -168,4 +170,16 @@ async fn the_next_report_past_the_deadline_wakes_a_worker_that_never_reported() 
         .expect("the next report fences the abandoned one");
     assert_eq!(received(&h).first(), Some(&20.0));
     h.server.stop().await.unwrap();
+}
+
+/// An observation for a report these tests never acknowledge.
+fn placeholder() -> bacnet_device_core::cov::CovObservation {
+    bacnet_device_core::cov::CovObservation::new(
+        bacnet_device_core::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(
+            0.0,
+        ))
+        .unwrap(),
+        None,
+    )
+    .unwrap()
 }
