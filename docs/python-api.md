@@ -5513,8 +5513,9 @@ ClientOnly has no responder and keeps its service list as a local declaration.
 
 ### Endpoint source Audit Reporter
 
-A `BipEndpoint` can name a source Audit Reporter (#2348), the Python side of
-the Rust session's `with_source_audit_reporter`. Through it the session
+`BipEndpoint`, `ScEndpoint` and `MstpEndpoint` can name a source Audit
+Reporter (#2348, #2357), the Python side of the Rust session's
+`with_source_audit_reporter`. Through it the session
 reports the ReinitializeDevice resets, backup steps and restore steps it
 carries out for peers, each `report_device_reset_local()` call, and the
 client role's reads, each filtered by the Reporter's Audit_Level and
@@ -5562,9 +5563,28 @@ endpoint.add_audit_reporter(1, "Source", audit_level="audit_all",
   isn't a direct unicast B/IP one), and a malformed, repeated or
   non-unicast binding, each naming its keyword. Whether the Reporter was added is known
   only at start, which raises BacnetError for a missing one.
-- **B/IP only:** the Rust session reports source records on IPv4 B/IP only,
-  so `ScEndpoint` and `MstpEndpoint` don't take these keywords yet; #2357
-  tracks link-generic routes and bindings and their keywords.
+- **Each link's bindings** (#2357) take the address format of that link's
+  `local_address()`:
+  - `BipEndpoint`: `"ipv4:port"`, by the rule above.
+  - `ScEndpoint`: a VMAC, `"xx:xx:xx:xx:xx:xx"` (twelve hex digits also do);
+    never the broadcast or zero VMAC or the endpoint's own.
+  - `MstpEndpoint`: a station, `"0"` to `"254"`; never 255 or the
+    endpoint's own `mstp_mac`.
+
+  On SC and MS/TP, `audit_recipient` must be a Device, as
+  `BACnetServer.configure_audit_recipient` requires off B/IP: an address
+  recipient needs B/IP.
+
+```python
+endpoint = MstpEndpoint(
+    1001, "/dev/ttyUSB0", mstp_mac=3,
+    on_reinitialize=lambda request: None,
+    device_write_policy=lambda context: context.source_mac == bytes([7]),
+    source_audit_reporter=reporter,
+    audit_recipient={"kind": "device", "object_identifier": logger},
+    audit_device_bindings=[(logger, "7")],
+)
+```
 
 ### Endpoint lifecycle and cancellation
 

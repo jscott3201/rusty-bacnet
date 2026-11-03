@@ -236,7 +236,7 @@ pub(crate) enum PendingObject {
         name: String,
         members: Vec<ReadAccessSpecification>,
     },
-    /// A B/IP endpoint's Audit Reporter, configured once here: peers can't
+    /// An endpoint's Audit Reporter, configured once here: peers can't
     /// write it through an endpoint (#2348).
     AuditReporter {
         instance: u32,

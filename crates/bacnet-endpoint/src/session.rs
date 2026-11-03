@@ -76,6 +76,7 @@ use tokio::task::JoinHandle;
 
 #[path = "source_profile.rs"]
 mod source_profile;
+pub(crate) use source_profile::check_link_bindings;
 #[path = "source_reporter.rs"]
 pub(crate) mod source_reporter;
 #[path = "session_start.rs"]
@@ -289,6 +290,7 @@ pub struct EndpointSession<T: TransportPort + 'static = bacnet_transport::any::A
     source_audit_reporter: Option<ObjectIdentifier>,
     source_audit: Option<Arc<crate::source_audit::SourceAudit>>,
     pub(crate) source_audit_bindings: Vec<(ObjectIdentifier, std::net::SocketAddrV4)>,
+    pub(crate) source_audit_link_bindings: Vec<(ObjectIdentifier, bacnet_types::MacAddr)>,
     source_recipient: Option<Arc<crate::source_audit::recipient::SourceRecipient>>,
     stop_exit: Option<Result<SessionExit, Error>>,
     durable_settlement: Option<JoinHandle<()>>,
@@ -402,6 +404,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             source_audit_reporter: None,
             source_audit: None,
             source_audit_bindings: Vec::new(),
+            source_audit_link_bindings: Vec::new(),
             source_recipient: None,
             stop_exit: None,
             durable_settlement: None,
