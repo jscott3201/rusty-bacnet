@@ -9,6 +9,17 @@ use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
 use std::time::{Duration, Instant};
 
+/// How much each client asks for: requests until a shared deadline, or a
+/// fixed number of requests each (#1979: counts of refusals then compare
+/// across runs and machines, whatever the request rate).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Load {
+    /// Requests until this long after the common start.
+    Window(Duration),
+    /// This many requests per client.
+    Requests(u64),
+}
+
 pub struct StepReport {
     pub point: Option<DegradationPoint>,
     pub diagnostics: StepDiagnostics,
@@ -42,7 +53,7 @@ pub async fn stop_clients<T: TransportPort + 'static>(
 pub async fn drive<T: TransportPort + 'static>(
     clients: Vec<BACnetClient<T>>,
     server_mac: Vec<u8>,
-    duration: Duration,
+    load: Load,
     snapshot: fn(&T) -> Option<Snapshot>,
     report: &mut StepReport,
 ) {
@@ -56,14 +67,19 @@ pub async fn drive<T: TransportPort + 'static>(
         })
         .collect();
     let started = Instant::now();
-    let deadline = started + duration;
+    let (deadline, quota) = match load {
+        Load::Window(duration) => (Some(started + duration), u64::MAX),
+        Load::Requests(n) => (None, n),
+    };
     let mut handles = Vec::new();
     for (mut client, before) in prepared {
         let mac = server_mac.clone();
         handles.push(tokio::spawn(async move {
             let mut recorder = LatencyRecorder::new();
             let mut failures = Failures::default();
-            while Instant::now() < deadline {
+            let mut sent = 0u64;
+            while sent < quota && deadline.is_none_or(|deadline| Instant::now() < deadline) {
+                sent += 1;
                 let start = Instant::now();
                 match client
                     .read_property(&mac, oid, PropertyIdentifier::PRESENT_VALUE, None)

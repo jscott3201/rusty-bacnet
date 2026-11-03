@@ -14,8 +14,8 @@ use crate::enums::{AbortReason, ErrorClass, ErrorCode, RejectReason};
 /// is `Error::Structured` (with `alloc`) instead.
 ///
 /// It displays as the [`Error`](super::Error) that holds it does: an error's
-/// class and code by name in lower case with hyphens (the number for a value
-/// without a name), a reason as its number.
+/// class and code, or a reason, by name in lower case with hyphens (the
+/// number for a value without a name).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, thiserror::Error)]
 pub enum RemoteError {
     /// An Error PDU (Clause 20.1.7).
@@ -27,13 +27,13 @@ pub enum RemoteError {
         code: ErrorCode,
     },
     /// A Reject PDU (Clause 20.1.5).
-    #[error("BACnet reject: reason={}", reason.to_raw())]
+    #[error("BACnet reject: {}", ReasonText { name: reason.name(), raw: reason.to_raw() })]
     Reject {
         /// Reject reason (Clause 18.9).
         reason: RejectReason,
     },
     /// An Abort PDU (Clause 20.1.6).
-    #[error("BACnet abort: reason={}", reason.to_raw())]
+    #[error("BACnet abort: {}", ReasonText { name: reason.name(), raw: reason.to_raw() })]
     Abort {
         /// Abort reason (Clause 18.10).
         reason: AbortReason,
@@ -49,28 +49,44 @@ pub(super) struct ProtocolText {
 
 impl fmt::Display for ProtocolText {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fn name(
-            f: &mut fmt::Formatter<'_>,
-            named: Option<&str>,
-            field: &str,
-            value: u16,
-        ) -> fmt::Result {
-            let Some(named) = named else {
-                return write!(f, "{field}={value}");
-            };
-            for c in named.chars() {
-                let c = if c == '_' {
-                    '-'
-                } else {
-                    c.to_ascii_lowercase()
-                };
-                fmt::Write::write_char(f, c)?;
-            }
-            Ok(())
-        }
         f.write_str("BACnet error: ")?;
-        name(f, self.class.name(), "class", self.class.to_raw())?;
+        write_name(f, self.class.name(), "class", self.class.to_raw())?;
         f.write_str(" / ")?;
-        name(f, self.code.name(), "code", self.code.to_raw())
+        write_name(f, self.code.name(), "code", self.code.to_raw())
     }
+}
+
+/// How a Reject or Abort reason reads: its name in lower case with hyphens,
+/// or `reason=` and the raw number for a value without one.
+struct ReasonText {
+    name: Option<&'static str>,
+    raw: u8,
+}
+
+impl fmt::Display for ReasonText {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write_name(f, self.name, "reason", u16::from(self.raw))
+    }
+}
+
+/// Write a constant's `named` name in lower case with hyphens, or
+/// `field=value` for a value without a name.
+fn write_name(
+    f: &mut fmt::Formatter<'_>,
+    named: Option<&str>,
+    field: &str,
+    value: u16,
+) -> fmt::Result {
+    let Some(named) = named else {
+        return write!(f, "{field}={value}");
+    };
+    for c in named.chars() {
+        let c = if c == '_' {
+            '-'
+        } else {
+            c.to_ascii_lowercase()
+        };
+        fmt::Write::write_char(f, c)?;
+    }
+    Ok(())
 }

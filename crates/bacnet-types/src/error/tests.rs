@@ -1,10 +1,10 @@
 use super::*;
 
 /// A remote error reads the same on its own and inside `Error::Remote`, and
-/// keeps the text the three variants it replaced had (#1815): class and code
-/// by name, a number for a value without one, reasons as numbers.
+/// names class, code and reason in lower case with hyphens, with a number
+/// only for a value without a name (#1815, #2325).
 #[test]
-fn remote_error_display_is_unchanged() {
+fn remote_error_display_names_class_code_and_reason() {
     for (remote, text) in [
         (
             RemoteError::Error {
@@ -24,7 +24,7 @@ fn remote_error_display_is_unchanged() {
             RemoteError::Reject {
                 reason: RejectReason::UNDEFINED_ENUMERATION,
             },
-            "BACnet reject: reason=8",
+            "BACnet reject: undefined-enumeration",
         ),
         (
             RemoteError::Reject {
@@ -36,7 +36,7 @@ fn remote_error_display_is_unchanged() {
             RemoteError::Abort {
                 reason: AbortReason::SEGMENTATION_NOT_SUPPORTED,
             },
-            "BACnet abort: reason=4",
+            "BACnet abort: segmentation-not-supported",
         ),
         (
             RemoteError::Abort {

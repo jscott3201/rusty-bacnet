@@ -1,0 +1,298 @@
+{
+  "mode": "compare",
+  "variants": {
+    "A": {
+      "label": "A",
+      "ref": "a1d54afb8",
+      "sha": "a1d54afb8246e2b062d6bd5d408390c6d70ee02b",
+      "volume": "rb-perf-9a345eb3-A",
+      "lock_dropped": [],
+      "lock_sha256": "14826b59dd9ad4f50587eab1dd8016551fc8238504795206c707509ac5681312",
+      "lock_refreshed": false,
+      "rustc": "1.99.0",
+      "binaries": {
+        "counts": "a509f2d10f6a173948261d6c0223175d2259a9b230b21703c0a45e1c418c919c",
+        "codec-counts": "f1e56b374ace9128d144ea5daa3d16a031031306c0fbbcb53777ca94786a7e79"
+      }
+    },
+    "P": {
+      "label": "P",
+      "ref": "a1d54afb8",
+      "sha": "a1d54afb8246e2b062d6bd5d408390c6d70ee02b",
+      "volume": "rb-perf-9a345eb3-P",
+      "lock_dropped": [],
+      "lock_sha256": "14826b59dd9ad4f50587eab1dd8016551fc8238504795206c707509ac5681312",
+      "lock_refreshed": false,
+      "rustc": "1.99.0",
+      "binaries": {
+        "counts": "a509f2d10f6a173948261d6c0223175d2259a9b230b21703c0a45e1c418c919c",
+        "codec-counts": "f1e56b374ace9128d144ea5daa3d16a031031306c0fbbcb53777ca94786a7e79"
+      }
+    },
+    "B": {
+      "label": "B",
+      "ref": "c3086c3d7125ef20a90793e330db6109fcce6f0d",
+      "sha": "c3086c3d7125ef20a90793e330db6109fcce6f0d",
+      "volume": "rb-perf-9a345eb3-B",
+      "lock_dropped": [],
+      "lock_sha256": "14826b59dd9ad4f50587eab1dd8016551fc8238504795206c707509ac5681312",
+      "lock_refreshed": false,
+      "rustc": "1.99.0",
+      "binaries": {
+        "counts": "3ed31d6c5add3b34746c18c72125c44f499a3104af87cb4b4e637a5671b27af4",
+        "codec-counts": "06bc20735562009cd97b574ee9f5313af68e152f8707df21b4785bd170a166d7"
+      }
+    }
+  },
+  "rows": [
+    {
+      "workload": "decode_npdu_100b_payload",
+      "runtime": "none",
+      "a_median": 219.00002111111112,
+      "b_median": 158.00002111111112,
+      "a_median_with_harness": 219.00002111111112,
+      "b_median_with_harness": 158.00002111111112,
+      "delta": -61.0,
+      "pair_deltas": [
+        -61.00000222222221,
+        -61.0,
+        -60.99999777777779,
+        -60.99999777777779,
+        -61.00000222222221,
+        -61.000002222222236
+      ],
+      "noise_floor": 4.444444442697204e-06,
+      "noise_floor_source": "A vs A' in this matrix",
+      "a_calls": 0.0,
+      "b_calls": 0.0,
+      "a_bytes": 0.0,
+      "b_bytes": 0.0,
+      "gate": "not higher than the noise floor",
+      "instructions_ok": true,
+      "allocations_ok": true,
+      "verdict": "PASS",
+      "metrics": {
+        "A": {
+          "instructions": {
+            "median": 219.00002111111112,
+            "min": 219.00002111111112,
+            "max": 219.00002333333333,
+            "values": [
+              219.00002333333333,
+              219.00002111111112,
+              219.00002111111112,
+              219.00002111111112,
+              219.00002333333333,
+              219.00002111111112
+            ]
+          },
+          "instructions_with_harness": {
+            "median": 219.00002111111112,
+            "min": 219.00002111111112,
+            "max": 219.00002333333333,
+            "values": [
+              219.00002333333333,
+              219.00002111111112,
+              219.00002111111112,
+              219.00002111111112,
+              219.00002333333333,
+              219.00002111111112
+            ]
+          },
+          "alloc_calls": {
+            "median": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "values": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "alloc_bytes": {
+            "median": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "values": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "alloc_call_slopes": {
+            "median": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "values": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "B": {
+          "instructions": {
+            "median": 158.00002111111112,
+            "min": 158.0000188888889,
+            "max": 158.00002333333333,
+            "values": [
+              158.00002111111112,
+              158.00002111111112,
+              158.00002333333333,
+              158.00002333333333,
+              158.00002111111112,
+              158.0000188888889
+            ]
+          },
+          "instructions_with_harness": {
+            "median": 158.00002111111112,
+            "min": 158.0000188888889,
+            "max": 158.00002333333333,
+            "values": [
+              158.00002111111112,
+              158.00002111111112,
+              158.00002333333333,
+              158.00002333333333,
+              158.00002111111112,
+              158.0000188888889
+            ]
+          },
+          "alloc_calls": {
+            "median": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "values": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "alloc_bytes": {
+            "median": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "values": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "alloc_call_slopes": {
+            "median": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "values": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "P": {
+          "instructions": {
+            "median": 219.00002111111112,
+            "min": 219.0000188888889,
+            "max": 219.00002333333333,
+            "values": [
+              219.00002111111112,
+              219.00002111111112,
+              219.00002111111112,
+              219.00002111111112,
+              219.0000188888889,
+              219.00002333333333
+            ]
+          },
+          "instructions_with_harness": {
+            "median": 219.00002111111112,
+            "min": 219.0000188888889,
+            "max": 219.00002333333333,
+            "values": [
+              219.00002111111112,
+              219.00002111111112,
+              219.00002111111112,
+              219.00002111111112,
+              219.0000188888889,
+              219.00002333333333
+            ]
+          },
+          "alloc_calls": {
+            "median": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "values": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "alloc_bytes": {
+            "median": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "values": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "alloc_call_slopes": {
+            "median": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "values": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "noise_floors": {
+    "decode_npdu_100b_payload/none": 4.444444442697204e-06
+  },
+  "environment": {
+    "GLIBC_TUNABLES": "glibc.malloc.tcache_count=32:glibc.malloc.mmap_threshold=1048576:glibc.malloc.trim_threshold=1048576:glibc.malloc.top_pad=1048576"
+  },
+  "baseline_builds_identical": true,
+  "aimed": [
+    "none"
+  ],
+  "coverage_problems": [
+    "round trips need rp, wp and rpm on ct and mt; rp/ct is missing",
+    "round trips need rp, wp and rpm on ct and mt; rp/mt is missing",
+    "round trips need rp, wp and rpm on ct and mt; wp/ct is missing",
+    "round trips need rp, wp and rpm on ct and mt; wp/mt is missing",
+    "round trips need rp, wp and rpm on ct and mt; rpm/ct is missing",
+    "round trips need rp, wp and rpm on ct and mt; rpm/mt is missing"
+  ],
+  "accepted": false
+}
