@@ -1,6 +1,7 @@
 ---
 section: Fixed
 ---
-- `bacnet` prints a fatal error as plain text on stderr (`Error: ` and the
-  message), not quoted with escapes, so Windows paths no longer show doubled
-  backslashes; the exit code stays 1 (#2325).
+- `bacnet` prints a fatal error as its message, not its Debug form: no quotes
+  or doubled backslashes, and `transport error: Can't assign requested address
+  (os error 49)` instead of `Transport(Os { code: 49, … })`; exit code 1 is
+  unchanged (#2325).
