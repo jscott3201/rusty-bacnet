@@ -95,9 +95,9 @@ pub(crate) struct TimerSet {
     pub(super) written: bool,
 }
 
-/// The three properties and the run they drive.
-pub(super) struct StateChange {
-    pub(super) set: TimerSet,
+/// The run the three properties drive. A Timer without them never starts
+/// one.
+pub(super) struct StateChangeRun {
     /// How the last run ended, as Reliability.
     verdict: Reliability,
     /// A fresh `next_generation` at every transition.
@@ -123,7 +123,7 @@ impl TimerObject {
     /// holds a set a write made ([`state_change_saved`](Self::state_change_saved)),
     /// the saved set wins, so an application that sets its configuration at
     /// each start keeps a peer's write: the arguments are checked but not
-    /// taken, and [`clear_written_state_change`](Self::clear_written_state_change)
+    /// taken, and [`clear_written_config`](Self::clear_written_config)
     /// lets them apply again.
     pub fn set_state_change(
         &mut self,
@@ -136,24 +136,25 @@ impl TimerObject {
             log_debug!(timer = %self.oid, "Saved State_Change_Values kept over a configured set");
             return Ok(());
         }
-        self.state_change = Some(StateChange::new(TimerSet {
+        self.config.set = Some(TimerSet {
             values,
             references,
             priority,
             written: false,
-        }));
+        });
+        self.run = StateChangeRun::new();
         self.config_changed();
         Ok(())
     }
 
     /// Reliability as served: see the module documentation.
     pub(super) fn served_reliability(&self) -> Reliability {
-        match &self.state_change {
-            Some(change) if !self.out_of_service => {
-                if mixed_datatypes(&change.set.values) {
+        match &self.config.set {
+            Some(set) if !self.out_of_service => {
+                if mixed_datatypes(&set.values) {
                     Reliability::CONFIGURATION_ERROR
                 } else {
-                    change.verdict
+                    self.run.verdict
                 }
             }
             _ => self.reliability,
@@ -163,31 +164,24 @@ impl TimerObject {
     /// Queue the writes `transition` makes, superseding any run still going.
     pub(super) fn plan_writes(&mut self, transition: TimerTransition) {
         let oid = self.oid;
-        let Some(change) = &mut self.state_change else {
+        let Some(set) = &self.config.set else {
             return;
         };
+        let change = &mut self.run;
         let mut commands = Vec::new();
         let index = (transition.to_raw() as usize).wrapping_sub(1);
-        if let Some(value) = change.set.values.get(index).and_then(write_value) {
-            commands.extend(
-                change
-                    .set
-                    .references
-                    .iter()
-                    .map(|reference| BACnetActionCommand {
-                        device_identifier: reference.device_identifier,
-                        object_identifier: reference.object_identifier,
-                        property_identifier: PropertyIdentifier::from_raw(
-                            reference.property_identifier,
-                        ),
-                        property_array_index: reference.property_array_index,
-                        property_value: value.clone(),
-                        priority: Some(change.set.priority),
-                        post_delay: None,
-                        quit_on_failure: false,
-                        write_successful: false,
-                    }),
-            );
+        if let Some(value) = set.values.get(index).and_then(write_value) {
+            commands.extend(set.references.iter().map(|reference| BACnetActionCommand {
+                device_identifier: reference.device_identifier,
+                object_identifier: reference.object_identifier,
+                property_identifier: PropertyIdentifier::from_raw(reference.property_identifier),
+                property_array_index: reference.property_array_index,
+                property_value: value.clone(),
+                priority: Some(set.priority),
+                post_delay: None,
+                quit_on_failure: false,
+                write_successful: false,
+            }));
         }
         change.generation = next_generation();
         change.running = (!commands.is_empty()).then_some(commands.len());
@@ -201,9 +195,7 @@ impl TimerObject {
 
     /// Whether a transition's writes wait to be taken.
     pub(super) fn has_pending_writes(&self) -> bool {
-        self.state_change
-            .as_ref()
-            .is_some_and(|change| change.pending.is_some())
+        self.run.pending.is_some()
     }
 
     /// Serve one of the three; `None` for any other property, or before
@@ -213,20 +205,19 @@ impl TimerObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Option<Result<PropertyValue, Error>> {
-        let change = self.state_change.as_ref()?;
+        let set = self.config.set.as_ref()?;
         Some(match property {
-            PropertyIdentifier::STATE_CHANGE_VALUES => change
-                .set
+            PropertyIdentifier::STATE_CHANGE_VALUES => set
                 .values
                 .iter()
                 .map(read_value)
                 .collect::<Result<Vec<_>, _>>()
                 .and_then(|values| common::read_array(values, array_index)),
             PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES => {
-                Ok(device_reference::reference_list(&change.set.references))
+                Ok(device_reference::reference_list(&set.references))
             }
             PropertyIdentifier::PRIORITY_FOR_WRITING => {
-                Ok(PropertyValue::Unsigned(change.set.priority.into()))
+                Ok(PropertyValue::Unsigned(set.priority.into()))
             }
             _ => return None,
         })
@@ -241,7 +232,7 @@ impl TimerObject {
         array_index: Option<u32>,
         value: &PropertyValue,
     ) -> Option<Result<(), Error>> {
-        self.state_change.as_ref()?;
+        self.config.set.as_ref()?;
         if !TimerSet::written_by(property) {
             return None;
         }
@@ -256,11 +247,10 @@ impl TimerObject {
     }
 }
 
-impl StateChange {
-    /// `set`, served with no run yet and NO_FAULT_DETECTED.
-    pub(super) fn new(set: TimerSet) -> Self {
+impl StateChangeRun {
+    /// No run yet, and NO_FAULT_DETECTED.
+    pub(super) fn new() -> Self {
         Self {
-            set,
             verdict: Reliability::NO_FAULT_DETECTED,
             generation: next_generation(),
             running: None,
@@ -326,25 +316,20 @@ pub(super) fn check_set(
 /// first failure.
 impl CommandRunner for TimerObject {
     fn take_command_run(&mut self) -> Option<CommandRun> {
-        self.state_change.as_mut()?.pending.take()
+        self.run.pending.take()
     }
 
     fn command_generation(&self) -> u64 {
-        self.state_change
-            .as_ref()
-            .map_or(0, |change| change.generation)
+        self.run.generation
     }
 
     fn record_command_write(&mut self, generation: u64, command: usize, _success: bool) -> bool {
-        self.state_change.as_ref().is_some_and(|change| {
-            change.generation == generation && change.running.is_some_and(|len| command < len)
-        })
+        let change = &self.run;
+        change.generation == generation && change.running.is_some_and(|len| command < len)
     }
 
     fn complete_command_run(&mut self, generation: u64, outcome: Result<(), WriteFailure>) -> bool {
-        let Some(change) = &mut self.state_change else {
-            return false;
-        };
+        let change = &mut self.run;
         if change.generation != generation || change.running.take().is_none() {
             return false;
         }

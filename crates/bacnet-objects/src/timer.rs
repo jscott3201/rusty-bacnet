@@ -33,7 +33,8 @@
 //! A rebuilt Timer starts IDLE with Last_State_Change NONE. Built
 //! [`with_persistence`](TimerObject::with_persistence), it keeps the three
 //! properties above once a peer has written State_Change_Values or the
-//! references (`saving`, #2243); nothing else survives a restart.
+//! references (`saving`, #2243), and a Default_Timeout a peer wrote
+//! (#2312); nothing else survives a restart.
 
 use crate::prelude::*;
 use alloc::borrow::Cow;
@@ -59,6 +60,8 @@ mod state_change;
 mod state_change_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod timeout_saving_tests;
 
 use state::Countdown;
 pub use state_change::{MAX_TIMER_REFERENCES, StateChangeValues};
@@ -80,9 +83,11 @@ pub struct TimerObject {
     timer_state: TimerState,
     last_state_change: TimerTransition,
     initial_timeout: u64,
-    default_timeout: u64,
-    min_pres_value: u64,
-    max_pres_value: u64,
+    /// What a write may change, with the range it is checked against.
+    config: TimerConfig,
+    /// Default_Timeout as the application last set it: what applies again
+    /// when a saved, written one no longer fits the range.
+    configured_timeout: u64,
     countdown: Countdown,
     update_time: (Date, Time),
     /// Set on entering IDLE or EXPIRED; while RUNNING the read computes it.
@@ -92,9 +97,10 @@ pub struct TimerObject {
     out_of_service: bool,
     reliability: Reliability,
     saved_reliability: Option<Reliability>,
-    state_change: Option<state_change::StateChange>,
-    /// Where a written set is saved, with persistence.
-    config_storage: Option<crate::write_config::saving::Storage<state_change::TimerSet>>,
+    /// The run the set drives, and how the last one ended.
+    run: state_change::StateChangeRun,
+    /// Where a written configuration is saved, with persistence.
+    config_storage: Option<crate::write_config::saving::Storage<TimerConfig>>,
     /// Changes to the set so far, so a staged write can tell whether
     /// another came between.
     config_writes: u64,
@@ -104,6 +110,29 @@ pub struct TimerObject {
     /// Elapsed time from the test-only `advance_time`, used when no monotonic
     /// clock is bound.
     logical_now: Duration,
+}
+
+/// What a Timer serves that a peer's write may change, as one value, so a
+/// staged write can take it whole (`saving`): the set, Default_Timeout, and
+/// the range a written Default_Timeout must lie in, which only the
+/// application sets.
+#[derive(Clone)]
+pub(crate) struct TimerConfig {
+    /// The three properties, once [`TimerObject::set_state_change`] or a
+    /// restore has given them.
+    set: Option<state_change::TimerSet>,
+    default_timeout: u64,
+    /// A write set Default_Timeout, now or before a restart: with storage,
+    /// it is kept.
+    timeout_written: bool,
+    min_pres_value: u64,
+    max_pres_value: u64,
+}
+
+impl TimerConfig {
+    fn in_range(&self, timeout_ms: u64) -> bool {
+        (self.min_pres_value..=self.max_pres_value).contains(&timeout_ms)
+    }
 }
 
 impl TimerObject {
@@ -119,9 +148,14 @@ impl TimerObject {
             timer_state: TimerState::IDLE,
             last_state_change: TimerTransition::NONE,
             initial_timeout: 0,
-            default_timeout: DEFAULT_TIMEOUT,
-            min_pres_value: DEFAULT_MIN_PRES_VALUE,
-            max_pres_value: DEFAULT_MAX_PRES_VALUE,
+            config: TimerConfig {
+                set: None,
+                default_timeout: DEFAULT_TIMEOUT,
+                timeout_written: false,
+                min_pres_value: DEFAULT_MIN_PRES_VALUE,
+                max_pres_value: DEFAULT_MAX_PRES_VALUE,
+            },
+            configured_timeout: DEFAULT_TIMEOUT,
             countdown: Countdown::Stopped,
             update_time: crate::clock::UNSPECIFIED_DATETIME,
             expiration_time: crate::clock::UNSPECIFIED_DATETIME,
@@ -130,7 +164,7 @@ impl TimerObject {
             out_of_service: false,
             reliability: Reliability::NO_FAULT_DETECTED,
             saved_reliability: None,
-            state_change: None,
+            run: state_change::StateChangeRun::new(),
             config_storage: None,
             config_writes: 0,
             clock: None,
@@ -150,23 +184,57 @@ impl TimerObject {
     /// [`Self::set_default_timeout`] with a value inside the new range
     /// first. A timer already running keeps its countdown, even one whose
     /// time left now lies outside the narrowed range.
+    ///
+    /// On a Timer [`with_persistence`](Self::with_persistence) serving a
+    /// saved Default_Timeout a peer wrote
+    /// ([`default_timeout_saved`](Self::default_timeout_saved)), the check
+    /// is of the application's own value, the last one `set_default_timeout`
+    /// took. If the saved value lies outside the new range, the application
+    /// narrowed the range since the write: the saved value is dropped with a
+    /// warning, the application's value applies, and storage is saved
+    /// without it (#2312).
     pub fn set_pres_value_range(&mut self, min: u64, max: u64) -> Result<(), Error> {
-        if min == 0 || min > max || !(min..=max).contains(&self.default_timeout) {
+        let saved = self.default_timeout_saved();
+        let kept = if saved {
+            self.configured_timeout
+        } else {
+            self.config.default_timeout
+        };
+        if min == 0 || min > max || !(min..=max).contains(&kept) {
             return Err(common::value_out_of_range_error());
         }
-        self.min_pres_value = min;
-        self.max_pres_value = max;
+        self.config.min_pres_value = min;
+        self.config.max_pres_value = max;
+        // A staged write worked out under the old range gives way.
+        self.config_changed();
+        if saved && !self.config.in_range(self.config.default_timeout) {
+            self.drop_saved_timeout();
+        }
         Ok(())
     }
 
     /// Set Default_Timeout, in milliseconds, as a write would: a value
     /// outside Min_Pres_Value..=Max_Pres_Value is refused with PROPERTY /
     /// VALUE_OUT_OF_RANGE.
+    ///
+    /// On a Timer [`with_persistence`](Self::with_persistence) whose storage
+    /// holds a Default_Timeout a peer wrote
+    /// ([`default_timeout_saved`](Self::default_timeout_saved)), the saved
+    /// value wins, as for [`set_state_change`](Self::set_state_change): the
+    /// argument is checked and remembered, but not served, until
+    /// [`clear_written_config`](Self::clear_written_config) or a narrowed
+    /// range drops the saved value.
     pub fn set_default_timeout(&mut self, timeout_ms: u64) -> Result<(), Error> {
         if !self.in_range(timeout_ms) {
             return Err(common::value_out_of_range_error());
         }
-        self.default_timeout = timeout_ms;
+        self.configured_timeout = timeout_ms;
+        if self.default_timeout_saved() {
+            log_debug!(timer = %self.oid, "Saved Default_Timeout kept over a configured one");
+            return Ok(());
+        }
+        self.config.default_timeout = timeout_ms;
+        self.config_changed();
         Ok(())
     }
 
@@ -181,7 +249,7 @@ impl TimerObject {
     }
 
     fn in_range(&self, timeout_ms: u64) -> bool {
-        (self.min_pres_value..=self.max_pres_value).contains(&timeout_ms)
+        self.config.in_range(timeout_ms)
     }
 
     fn datetime(value: (Date, Time)) -> PropertyValue {
@@ -264,13 +332,13 @@ impl BACnetObject for TimerObject {
                 Ok(PropertyValue::Unsigned(self.initial_timeout))
             }
             p if p == PropertyIdentifier::DEFAULT_TIMEOUT => {
-                Ok(PropertyValue::Unsigned(self.default_timeout))
+                Ok(PropertyValue::Unsigned(self.config.default_timeout))
             }
             p if p == PropertyIdentifier::MIN_PRES_VALUE => {
-                Ok(PropertyValue::Unsigned(self.min_pres_value))
+                Ok(PropertyValue::Unsigned(self.config.min_pres_value))
             }
             p if p == PropertyIdentifier::MAX_PRES_VALUE => {
-                Ok(PropertyValue::Unsigned(self.max_pres_value))
+                Ok(PropertyValue::Unsigned(self.config.max_pres_value))
             }
             p if p == PropertyIdentifier::UPDATE_TIME => {
                 Ok(Self::datetime(self.served_update_time()))
@@ -339,12 +407,15 @@ impl BACnetObject for TimerObject {
                 };
                 self.write_timer_state(TimerState::from_raw(raw))
             }
-            p if p == PropertyIdentifier::DEFAULT_TIMEOUT => {
-                let PropertyValue::Unsigned(timeout) = value else {
-                    return Err(common::invalid_data_type_error());
-                };
-                self.set_default_timeout(timeout)
-            }
+            // Saved first with storage (`saving`, #2312).
+            p if p == PropertyIdentifier::DEFAULT_TIMEOUT => crate::write_config::saving::write(
+                self,
+                crate::durable::PendingWrite {
+                    property,
+                    array_index,
+                    value,
+                },
+            ),
             p if p == PropertyIdentifier::RELIABILITY => self.write_reliability(value),
             _ => Err(crate::common::unhandled_write_error(
                 self.property_metadata().as_ref(),
@@ -362,13 +433,14 @@ impl BACnetObject for TimerObject {
     }
 
     fn command_runner(&self) -> Option<&dyn crate::traits::CommandRunner> {
-        self.state_change
+        self.config
+            .set
             .is_some()
             .then_some(self as &dyn crate::traits::CommandRunner)
     }
 
     fn command_runner_mut(&mut self) -> Option<&mut dyn crate::traits::CommandRunner> {
-        match self.state_change {
+        match self.config.set {
             Some(_) => Some(self),
             None => None,
         }
