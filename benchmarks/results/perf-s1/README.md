@@ -20,11 +20,13 @@ Rust 1.99.0), with the harness's fixed allocator settings.
 
 A is v0.13.0 (`dca94f7f`), B is dev `a1d54afb8`. v0.13.0 builds the harness
 with `benchmarks/counts/compat/v013_setup.rs` in place of `src/setup.rs`
-(`perf_counts.py run --baseline-compat v013`): only the round-trip setup's
-constructors moved, and the codec binary doesn't use them. Refreshing the
-harness lock for v0.13.0 dropped four packages that tree no longer uses
-(autocfg, cfg_aliases, memoffset, nix); every shared package kept its
-version.
+(`perf_counts.py run --baseline-compat v013`), in A and A' only: only the
+round-trip setup's constructors moved, and the codec binary doesn't use
+them. The compat setup is compile-only, so the script accepts it with codec
+workloads alone. Refreshing the harness lock for v0.13.0 dropped four
+packages that tree no longer uses (autocfg, cfg_aliases, memoffset, nix;
+the manifest lists them per build as `lock_dropped`, next to
+`setup_compat`); every shared package kept its version.
 
 The harness builds like the published binaries (fat LTO, one codegen unit:
 "release-like"). The timings in section 10.1 came from the Criterion suite,
@@ -59,7 +61,12 @@ workloads (`bisect/counts-*.txt`; these include the counting allocator,
 which is the same at every commit, so the changes are unaffected). Each tree
 is touched before its build: `git archive` stamps files with the commit
 time, and a shared target directory would otherwise reuse the previous
-commit's crates. The merges that moved a count:
+commit's crates. The sweep started from the harness's `Cargo.lock` (not
+committed with `codec-harness-Cargo.toml`), refreshed the path packages at
+each commit and logged any third-party package that would be added; none
+was, but unlike `perf_counts.py` the sweep didn't refuse one. The totals
+telescope either way: consecutive counts are differences of the same
+builds. The merges that moved a count:
 
 Default profile (what section 10.1 timed):
 
@@ -114,6 +121,14 @@ per-function changes and call counts at the steps that matter:
   compiler outlines one more `write_tagged` call after #1990 and one fewer
   after #1832. Calls of real work and allocations are unchanged.
 
+Those are the steps tied to functions (`steps.md`): #1780, #1788, #1821,
+#1832 and #1990 in the default profile, and #1757 and #1788 release-like
+(#1821 release-like moves the same two `Bytes` calls but wasn't profiled
+apart). The rest are tied only to their merge: #1757 in the default profile
+(-17), #1760 (-27; release-like +60 and +64), #1798 (-21; release-like -6
+and -4), #1780 release-like (-7 to +4), #1788's -2 release-like decode,
+#1843 (-2 and +1) and #1751 (+1).
+
 ## 3. A direct NPDU parser (variant R)
 
 `direct-npdu-decode.patch` is a scratch change to dev (never merged): an
@@ -127,9 +142,11 @@ decode only (`direct-npdu-*/`):
 | Release-like | 172 | 154 | -18 |
 | Default | 219 | 158 | -61 |
 
-In the default profile R recovers 61 instructions, 120% of the +51 the view
-adapter added in #1788. Release-like, #1788 added nothing to recover; R still
-saves 18 on the parse.
+In the default profile R saves 61 instructions, more than the +51 the view
+adapter added in #1788. That compares R with one gross step, not with the
+net change from v0.13.0 (-3), which is a saving and leaves nothing to
+recover. Release-like, #1788 added nothing either; R still saves 18 on the
+parse.
 
 ## 4. Verdict
 
@@ -137,22 +154,28 @@ The declared rule (plan section 3(a)) asks that listed deltas cover at least
 90% of the net change per iteration, each tied to a commit, and that for NPDU
 decode a direct parser recover at least 80% of the delta.
 
-- **Both shifts are explained.** The merge tables cover 100% of every net
-  change in both profiles, each step tied to a merge and, in `steps.md`, to
-  the functions it moved. The direct parser recovers 120% of the adapter's
-  cost.
+- **Both shifts are attributed.** The merge tables cover 100% of every net
+  change in both profiles, but that holds by construction: a sweep over every
+  merge telescopes. The evidence is the per-function ties in `steps.md`,
+  which cover the large steps (section 2 lists which steps have them and
+  which are tied only to a merge).
+- **The 80% clause is vacuous.** On the net change it asks about, NPDU decode
+  got cheaper in both profiles (-3 and -47), so there is nothing to recover.
+  R's 61 is measured against #1788's gross +51, one step of the sweep.
 - **Release-like builds (what ships) got cheaper.** Dev runs fewer
   instructions than v0.13.0 in all seven codec workloads, 426 fewer for a
   whole ReadProperty request and 47 fewer per NPDU decode.
 - **ReadProperty encode, as timed, is #1780.** In the default profile the
   whole request costs 222 more instructions (+11%), in the same direction
   as the timed +3%; #1780's out-of-line sink path is +257 of it.
-- **NPDU decode's timed rise is not instructions.** In the profile that was
-  timed, dev's count is 3 lower: #1788's adapter (+51) and #1821's removed
-  clone (-55) cancel. The 35% wall-clock rise therefore comes from how the
-  instructions run (the 88-byte view and 128-byte owned copies through the
-  stack, as #1997 measured, and code layout), not from more of them. It is
-  recorded as such in Benchmarks.md, and timing it stops.
+- **NPDU decode's timed rise is not explained by instruction counts.** In
+  the profile that was timed, dev's count is 3 lower: #1788's adapter (+51)
+  and #1821's removed clone (-55) cancel. What makes the same number of
+  instructions take 35% longer is not established here: no cache or branch
+  simulation ran, #1997's explanation (the 88-byte view and 128-byte owned
+  copies through the stack) is untested by these counts, and #1821 removed
+  two atomic read-modify-writes, which on their own would predict a faster
+  decode, not a slower one.
 
 No production change is in this slice. A direct `decode_npdu` and inlining
 the slice sink would help builds without LTO (61 per decode, up to about 250

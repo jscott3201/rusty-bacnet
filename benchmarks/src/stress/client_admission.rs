@@ -38,7 +38,7 @@ async fn server(
 }
 
 /// One B/IP clients step on a fresh server with [`policy`]; the report
-/// carries the server's peak of live ordinary confirmed handlers.
+/// carries the server's peak of live confirmed handlers.
 pub async fn step(
     index: usize,
     object_count: u32,

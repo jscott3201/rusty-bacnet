@@ -32,9 +32,11 @@ Raising the reserve to 3 (61 ordinary slots) fails the test.
 `stress-test clients --transport bip --requests 2000` gives each client
 exactly 2,000 ReadProperty requests, one outstanding at a time;
 `--max-confirmed-in-flight` sets the server's limit, and each step reports
-the most ordinary confirmed handlers that were live at once
-(`confirmed_peak`). Three repetitions each, release build, macOS 27.2 on an
-Apple M5 laptop shared with other work, B/IP on loopback. Counts of refusals
+the most confirmed handlers that were live at once (`confirmed_peak`,
+the peak of the server's `confirmed_active` counter, which would include
+recovery handlers; these clients send none). Three repetitions each,
+release build, macOS 27.2 on an Apple M5 laptop shared with other work,
+B/IP on loopback. Counts of refusals
 don't depend on the machine's speed the way rates in a window do, but which
 requests overlap still depends on scheduling, so the counts vary between
 runs; macOS is fine for counting them. `runs.tsv` has every step.
@@ -80,11 +82,20 @@ still refuses now and then. Above the limit the rate swings between runs
 requests arrive inside those moments, which is scheduling, not per-request
 cost; that also fits the spread of rates between revisions in section 10.1.
 
-The silent drops matter more than their number suggests. From 80 clients
-up, each run silently dropped 12 to 34 requests when all 8 Abort workers
-were busy; each such client waits out its 5-second request timeout before
-retrying, and those runs took 5.5 to 7 seconds against 1.5 to 3.6 for runs
-without drops.
+**Silent drops come from the start of a run.** From 80 clients up, each run
+silently dropped 12 to 34 requests when all 8 Abort workers were busy. Each
+such client waits out its 5-second request timeout and retries, and the
+retry succeeds: none of the 24 steps had a failure other than the Aborts.
+Those runs took 5.5 to 7 seconds against 1.5 to 3.6 without drops; the
+difference is that timeout, not lower throughput. The independent review
+reran the release binary with fewer requests per client and found the drops
+barely depend on run length: at 80 clients, 3 drops with 5 requests per
+client, 7 with 20, 12 with 200 and 18 with 2,000; at 100 clients, 25 with 20
+and 30 with 200. With one request per client there were no drops at 80
+clients and no Aborts at 61 to 80. So the drops come early, while the
+clients still send in step and more than 8 refusals arrive together. This is
+documented behaviour of the policy, not a fault; more Abort workers would be
+a separate decision.
 
 ## Reproduce
 

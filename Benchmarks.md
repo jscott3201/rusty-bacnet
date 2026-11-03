@@ -1279,13 +1279,16 @@ open ([perf-s1](benchmarks/results/perf-s1/README.md),
   costs 222 more instructions on dev, 257 of them from #1780's encoders:
   without link-time optimization, their writes through a stack buffer are
   separate function calls.
-- **The timed decode rise is not more instructions.** Built as the suite
-  times it, dev's NPDU decode runs 3 fewer instructions: #1788's decoding
-  through the borrowed view added 51 and #1821's removal of a buffer clone
-  took 55. The slower timing comes from how those instructions run, so
-  timing it again won't explain more.
-- **Every change is tied to a merge.** Counts at each merge between the
-  two releases account for all of both differences.
+- **Instruction counts don't explain the timed decode rise.** Built as the
+  suite times it, dev's NPDU decode runs 3 fewer instructions: #1788's
+  decoding through the borrowed view added 51 and #1821's removal of a
+  buffer clone took 55. Why the same count runs slower is not established:
+  no cache or branch simulation ran, #1997's explanation (copies of the
+  decoded header through the stack) is untested here, and the two atomic
+  operations #1821 removed would on their own predict a faster decode.
+- **Each change is tied to a merge.** Counts at each merge between the two
+  releases add up to both differences, as any such sweep must; the larger
+  steps are also traced to the functions they changed.
 - **The 100-client Aborts are the admission policy.** The server runs at
   most 60 ordinary confirmed requests at once (64 less a reserve of 4) and
   refuses the rest with an Abort, so refusals start at about 60 clients.

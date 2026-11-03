@@ -81,8 +81,9 @@ pub struct StepDiagnostics {
     pub valid: bool,
     pub server_counters: Option<super::client_counters::CounterDelta>,
     pub client_counters: Vec<super::client_counters::CounterDelta>,
-    /// The most ordinary confirmed handlers the server ran at once during
-    /// the step, preflight included, where the scenario samples it (#1979).
+    /// The most confirmed handlers the server ran at once during the step,
+    /// preflight included (recovery handlers would count too; the stress
+    /// clients send none), where the scenario samples it (#1979).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub confirmed_peak: Option<usize>,
 }

@@ -179,7 +179,9 @@ def compat_setup(harness, name):
 
 def install_compat(harness, name, manifest):
     """Puts compat/NAME_setup.rs in place of src/setup.rs in the baseline
-    trees (A and A'), and records its hash with them."""
+    trees (A and A') only, never the candidate's, and records its hash with
+    them. A compat setup only lets the older tree compile: `plan` allows it
+    with codec workloads alone, whose binary never calls the setup."""
     source = compat_setup(harness, name)
     for label in ("A", "P"):
         variant = manifest["variants"].get(label)
@@ -572,6 +574,9 @@ def plan(args):
     if args.blocks < 3:
         raise ValueError("--blocks must be at least 3 (six runs per build)")
     floors = {}
+    if getattr(args, "baseline_compat", None) and any(w in ca.ROUND_TRIP for w in workloads):
+        raise ValueError("--baseline-compat is for codec workloads only: the compat setup is compile-only, "
+                         "and round trips through it wouldn't compare with the candidate's setup")
     if args.noise:
         if args.baseline or args.candidate or args.noise_floors:
             raise ValueError("--noise takes no --baseline, --candidate or --noise-floors")
@@ -702,7 +707,7 @@ def main(argv=None):
     run_parser.add_argument("--image", help="image tag to use or build (default: from the Dockerfile's hash)")
     run_parser.add_argument("--baseline-compat", metavar="NAME",
                             help="build the baseline trees with the harness's compat/NAME_setup.rs as src/setup.rs "
-                                 "(v013: a v0.13.0 baseline)")
+                                 "(v013: a v0.13.0 baseline); compile-only, so codec workloads only")
     run_parser.add_argument("--noise-floors", action="append",
                             help="quick mode, local only: skip the A' build and use this noise run's floors "
                                  "(summary.json; repeatable)")

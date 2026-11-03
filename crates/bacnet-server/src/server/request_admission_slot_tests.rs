@@ -126,7 +126,7 @@ fn abort_workers_cap_at_eight_without_peer_registration() {
 }
 
 #[test]
-fn the_confirmed_peak_keeps_the_most_live_handlers_and_skips_refusals() {
+fn the_confirmed_peak_follows_confirmed_active_and_skips_refusals() {
     let admission = Admission::new(policy(3, 1)).unwrap();
     assert_eq!(admission.confirmed_peak_active(), 0);
     let a = admission
@@ -142,15 +142,16 @@ fn the_confirmed_peak_keeps_the_most_live_handlers_and_skips_refusals() {
             .is_err()
     );
     assert_eq!(admission.confirmed_peak_active(), 2);
-    drop((a, b));
+    // A protected recovery handler counts in confirmed_active, so in its peak.
+    let r = admission
+        .try_enter(Class::Recovery, peer(4), false)
+        .unwrap();
+    assert_eq!(admission.snapshot().confirmed_active, 3);
+    assert_eq!(admission.confirmed_peak_active(), 3);
+    drop((a, b, r));
     let _c = admission
         .try_enter(Class::Confirmed, peer(3), false)
         .unwrap();
     assert_eq!(admission.snapshot().confirmed_active, 1);
-    assert_eq!(admission.confirmed_peak_active(), 2, "a peak never falls");
-    // Recovery handlers count in their own pool, not the ordinary peak.
-    let _r = admission
-        .try_enter(Class::Recovery, peer(4), false)
-        .unwrap();
-    assert_eq!(admission.confirmed_peak_active(), 2);
+    assert_eq!(admission.confirmed_peak_active(), 3, "a peak never falls");
 }

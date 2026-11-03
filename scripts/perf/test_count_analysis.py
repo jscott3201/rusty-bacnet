@@ -413,6 +413,32 @@ class Runner(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "v013"):
             perf_counts.compat_setup(harness, "v012")
 
+    def test_compat_setup_goes_to_the_baseline_trees_only(self):
+        harness = Path(__file__).resolve().parents[2] / "benchmarks/counts"
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = {"variants": {}}
+            for label in ("A", "P", "B"):
+                src = Path(tmp) / label / "benchmarks/counts/src"
+                src.mkdir(parents=True)
+                (src / "setup.rs").write_text("// the harness's own setup\n")
+                manifest["variants"][label] = {"root": str(Path(tmp) / label)}
+            perf_counts.install_compat(harness, "v013", manifest)
+            compat = (harness / "compat/v013_setup.rs").read_text()
+            for label in ("A", "P"):
+                setup = Path(tmp) / label / "benchmarks/counts/src/setup.rs"
+                self.assertEqual(setup.read_text(), compat)
+                self.assertEqual(manifest["variants"][label]["setup_compat"]["name"], "v013")
+            candidate = Path(tmp) / "B" / "benchmarks/counts/src/setup.rs"
+            self.assertEqual(candidate.read_text(), "// the harness's own setup\n")
+            self.assertNotIn("setup_compat", manifest["variants"]["B"])
+
+    def test_baseline_compat_is_for_codec_workloads_only(self):
+        mode, *_ = perf_counts.plan(self.args(workloads="codec", aim="none", baseline_compat="v013"))
+        self.assertEqual(mode, "compare")
+        for workloads in ("rp", "codec,wp", "all"):
+            with self.subTest(workloads=workloads), self.assertRaisesRegex(ValueError, "codec workloads only"):
+                perf_counts.plan(self.args(workloads=workloads, aim="none", baseline_compat="v013"))
+
     def test_quick_mode_refuses_floors_from_other_allocator_settings(self):
         tuned = "glibc.malloc.tcache_count=32"
         with self.assertRaisesRegex(ValueError, "allocator settings"):
