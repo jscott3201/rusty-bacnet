@@ -50,7 +50,7 @@ impl TransactionPeer {
     /// before the number was known (#1465). The TSM is locked only for an
     /// answer relayed with this network's number as SNET.
     pub(crate) async fn of_answer_in(
-        tsm: &Mutex<Tsm>,
+        tsm: &SyncMutex<Tsm>,
         source_mac: &[u8],
         source_network: Option<&NpduAddress>,
         local_network: Option<u16>,
@@ -62,7 +62,7 @@ impl TransactionPeer {
             return answer;
         };
         let alias = Self::of(alias);
-        let tsm = tsm.lock().await;
+        let tsm = tsm.lock();
         if !tsm.has_transaction(&answer.tsm_mac, invoke_id)
             && tsm.has_transaction(&alias.tsm_mac, invoke_id)
         {

@@ -45,7 +45,7 @@ async fn client_with_peer_advertising(
         .await
         .unwrap();
 
-    client.device_table.lock().await.upsert(DiscoveredDevice {
+    client.device_table.lock().upsert(DiscoveredDevice {
         object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 2003).unwrap(),
         mac_address: MacAddr::from_slice(&remote_mac),
         max_apdu_length,
