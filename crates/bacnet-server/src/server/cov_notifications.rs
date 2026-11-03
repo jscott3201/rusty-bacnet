@@ -1,7 +1,7 @@
 use super::cov_notify_context::{CovFanoutHandles, CovNotifyContext};
 use super::*;
 use crate::cov::InFlightAcquireError;
-use bacnet_device_core::cov::{Delivery, Evaluation, EventBudget};
+use bacnet_device_core::cov::{CovReport, Delivery, Evaluation, EventBudget};
 use confirmed::ConfirmedSend;
 
 mod confirmed;
@@ -291,9 +291,19 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             )
         };
 
+        // Every confirmed worker starts before any unconfirmed send is
+        // awaited: a report's retry window runs from `begun`, the instant
+        // its flight began, so a stalled send ahead of it would eat into it.
+        let mut unconfirmed = Vec::with_capacity(reports.len());
         for (report, flight) in reports {
-            let sub = &subs[report.index];
-            if let Some(lease) = report.lease {
+            let CovReport {
+                index,
+                params,
+                token,
+                lease,
+            } = report;
+            let sub = &subs[index];
+            if let Some(lease) = lease {
                 let flight = flight.expect("a confirmed report's flight began with its lease");
                 let max_apdu_length =
                     apdu::max_apdu_header_at_or_below(u32::from(config.device.max_apdu_length()))
@@ -308,7 +318,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     sequence_number: None,
                     proposed_window_size: None,
                     service_choice: ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION,
-                    service_request: report.params,
+                    service_request: params,
                 });
                 let mut buf = BytesMut::new();
                 encode_apdu(&mut buf, &pdu).expect("valid APDU encoding");
@@ -325,11 +335,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         begun,
                     },
                 );
-                continue;
+            } else {
+                unconfirmed.push((sub, params, token));
             }
+        }
+        for (sub, params, token) in unconfirmed {
             let pdu = Apdu::UnconfirmedRequest(UnconfirmedRequestPdu {
                 service_choice: UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION,
-                service_request: report.params,
+                service_request: params,
             });
             let mut buf = BytesMut::new();
             encode_apdu(&mut buf, &pdu).expect("valid APDU encoding");
@@ -353,7 +366,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             cov_table
                 .write()
                 .await
-                .delivered_unconfirmed(report.token, outcome);
+                .delivered_unconfirmed(token, outcome);
         }
     }
 }

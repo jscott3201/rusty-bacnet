@@ -193,10 +193,21 @@ impl<'h, const X: usize, const N: usize> NodePort<'h, X, N> {
         now: Instant,
         out: &mut impl Datagrams,
     ) -> Result<Admission, SendRefusal> {
-        let (outgoing, _) = self.node.link().broadcast(npdu)?;
+        // The link refuses what it can't carry. One whose BBMD isn't known
+        // yet has nowhere to send, and the node holds or refuses the
+        // broadcast meanwhile.
+        let decided = self.node.link().broadcast(npdu);
+        if let Err(refusal) = decided
+            && refusal != SendRefusal::NoBbmd
+        {
+            return Err(refusal);
+        }
         let admission = self.node.admit_broadcast(now)?;
         match admission {
-            Admission::Send => out.send(outgoing.to, &outgoing.message)?,
+            Admission::Send => {
+                let (outgoing, _) = decided?;
+                out.send(outgoing.to, &outgoing.message)?;
+            }
             Admission::Hold => {
                 // `new` lent a slot for each broadcast the node holds, each
                 // as long as any the link's limit lets through.

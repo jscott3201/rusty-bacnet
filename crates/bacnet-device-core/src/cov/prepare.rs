@@ -23,8 +23,7 @@ pub struct PreparedCovValue {
     pub sample: CovSample,
     /// The value encoded as a notification carries it.
     pub encoded: Vec<u8>,
-    /// Whether the value is numeric, so that an increment measures it.
-    pub numeric: bool,
+    pub(super) numeric: bool,
     pub(super) increment: Option<f64>,
 }
 impl PreparedCovValue {
@@ -155,3 +154,6 @@ fn known_whole_array(object: ObjectType, property: PropertyIdentifier) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod tests;

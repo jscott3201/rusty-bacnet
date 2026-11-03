@@ -95,7 +95,7 @@ impl TransportArgs {
             ipv6: cli.ipv6,
             ipv6_interface,
             device_instance: cli.device_instance,
-            foreign_device: crate::foreign::config(cli.foreign_bbmd, cli.ttl, cli.renewal),
+            foreign_device: crate::foreign::config(cli.foreign_bbmd.clone(), cli.ttl, cli.renewal),
             nat_global_address: cli.nat_global_address,
             multicast,
             mstp: crate::mstp::MstpArgs::from_cli(cli)?,

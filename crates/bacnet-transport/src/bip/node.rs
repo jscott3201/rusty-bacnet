@@ -214,10 +214,17 @@ impl NodeState {
     /// refusal warns again: a BBMD that keeps refusing warns once, not at
     /// every attempt.
     fn log_registration(&mut self, event: RegistrationEvent) {
-        let Mode::Foreign(foreign) = self.node.link().mode else {
+        if let RegistrationEvent::PreviousRelease { bbmd, outcome } = event {
+            log_release(bbmd, outcome);
+            return;
+        }
+        // Every other event follows an attempt, so it has a BBMD to name.
+        let Mode::Foreign(Foreign {
+            bbmd: Some(bbmd), ..
+        }) = self.node.link().mode
+        else {
             return;
         };
-        let bbmd = foreign.bbmd;
         match event {
             RegistrationEvent::Registered { since, until } => {
                 self.refusal_warned = false;
@@ -242,28 +249,31 @@ impl NodeState {
             RegistrationEvent::Unanswered => {
                 debug!("Foreign registration attempt did not return a matched result");
             }
-            // The release of a BBMD a move left (#2307), named, since the
-            // device has moved on from it.
-            RegistrationEvent::PreviousRelease { bbmd, outcome } => match outcome {
-                AttemptOutcome::Accepted => {
-                    debug!(%bbmd, "The BBMD this foreign device left deleted its entry");
-                }
-                AttemptOutcome::Refused => info!(
-                    %bbmd,
-                    "The BBMD this foreign device left refused to delete its entry; it lapses on its own"
-                ),
-                AttemptOutcome::Cancelled => debug!(
-                    %bbmd,
-                    "The release of the BBMD this foreign device left was dropped unsent; its entry lapses on its own"
-                ),
-                outcome => info!(
-                    %bbmd,
-                    ?outcome,
-                    "The BBMD this foreign device left did not confirm deleting its entry; it lapses on its own"
-                ),
-            },
             other => debug!(?other, "Foreign registration event"),
         }
+    }
+}
+
+/// Log what came of the release of `bbmd`, a BBMD a move left (#2307),
+/// named, since the device has moved on from it.
+fn log_release(bbmd: SocketAddrV4, outcome: AttemptOutcome) {
+    match outcome {
+        AttemptOutcome::Accepted => {
+            debug!(%bbmd, "The BBMD this foreign device left deleted its entry");
+        }
+        AttemptOutcome::Refused => info!(
+            %bbmd,
+            "The BBMD this foreign device left refused to delete its entry; it lapses on its own"
+        ),
+        AttemptOutcome::Cancelled => debug!(
+            %bbmd,
+            "The release of the BBMD this foreign device left was dropped unsent; its entry lapses on its own"
+        ),
+        outcome => info!(
+            %bbmd,
+            ?outcome,
+            "The BBMD this foreign device left did not confirm deleting its entry; it lapses on its own"
+        ),
     }
 }
 
@@ -385,7 +395,7 @@ impl NodeHandle {
             self.check_retarget(foreign)?;
             let (dropped, kept) = std::mem::take(&mut state.releases)
                 .into_iter()
-                .partition::<Vec<_>, _>(|release| release.to == foreign.bbmd);
+                .partition::<Vec<_>, _>(|release| foreign.bbmd == Some(release.to));
             state.releases = kept;
             // At an instant no later than the node's own, which it takes as
             // its own (time never runs backwards): the cancel then catches
@@ -404,7 +414,7 @@ impl NodeHandle {
             state.attempt_started = None;
             state.refusal_warned = false;
             *self.link.write().unwrap_or_else(PoisonError::into_inner) = *state.node.link();
-            info!(bbmd = %foreign.bbmd, ttl = foreign.ttl, "B/IP foreign device moved to a new BBMD registration");
+            info!(bbmd = ?foreign.bbmd, ttl = foreign.ttl, "B/IP foreign device moved to a new BBMD registration");
             Ok(())
         })
     }

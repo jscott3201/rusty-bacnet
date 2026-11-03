@@ -53,6 +53,8 @@ struct BipEndpointConfig {
     reinitialize: crate::reinitialize::EndpointReinitialize,
     /// The `device_write_policy` callable, if any (#2033).
     device_writes: crate::mutation_policy::DeviceWritePolicy,
+    /// The source Audit Reporter keywords, if any (#2348).
+    source_audit: Option<super::source_audit::SourceAuditKeywords>,
 }
 
 type BipSession = EndpointSession<BipTransport>;
@@ -82,7 +84,10 @@ impl BipEndpointConfig {
             }
         }
         let boxes = build_pending_boxes(&objects)?;
-        let db = build_database(&config.identity, boxes)?;
+        let mut db = build_database(&config.identity, boxes)?;
+        if let Some(source) = &config.source_audit {
+            source.provision(&config.identity, &mut db)?;
+        }
         let mut builder = BipEndpointBuilder::new(config.interface, config.port, config.broadcast)
             .share_port_by_address(config.share_port_by_address)
             .role(SessionRole::Both)
@@ -102,7 +107,13 @@ impl BipEndpointConfig {
             .map_err(to_py_err)?;
             builder = builder.registered_network_port(oid);
         }
-        let session = builder.build_session().map_err(to_py_err)?;
+        if let Some(source) = &config.source_audit {
+            builder = source.bind(builder);
+        }
+        let mut session = builder.build_session().map_err(to_py_err)?;
+        if let Some(source) = &config.source_audit {
+            session = session.with_source_audit_reporter(source.reporter());
+        }
         let session = config.device_writes.install(session);
         Ok(config.reinitialize.install(session))
     }
@@ -199,6 +210,19 @@ impl PyBipEndpoint {
     ///         `MutationContext` and returns a bool, with the fail-closed
     ///         rules of `BACnetServer`'s `mutation_policy` callable. Without
     ///         it the endpoint executes no WriteProperty.
+    ///     source_audit_reporter / audit_recipient / audit_device_bindings:
+    ///         Keyword-only (#2348). `source_audit_reporter` is the
+    ///         `ObjectIdentifier` of an Audit Reporter added with
+    ///         `add_audit_reporter`; the session reports through it the
+    ///         ReinitializeDevice resets, backups and restores it carries
+    ///         out, `report_device_reset_local()` calls, and the client
+    ///         role's reads. It needs `device_write_policy` and
+    ///         `audit_recipient`, the Device's Audit recipient (an
+    ///         `AuditRecipientInput`). `audit_device_bindings` is a list of
+    ///         `(ObjectIdentifier, "ipv4:port")` routes to recipient
+    ///         Devices. A Reporter identifier of another type, and other
+    ///         shapes construction can check, raise ValueError here; a
+    ///         Reporter that wasn't added raises BacnetError at start.
     #[new]
     #[pyo3(signature = (
         device_instance,
@@ -227,7 +251,10 @@ impl PyBipEndpoint {
         on_reinitialize=None,
         after_reinitialize=None,
         reinit_password=None,
-        device_write_policy=None
+        device_write_policy=None,
+        source_audit_reporter=None,
+        audit_recipient=None,
+        audit_device_bindings=None
     ))]
     fn new(
         device_instance: u32,
@@ -256,6 +283,9 @@ impl PyBipEndpoint {
         after_reinitialize: Option<&Bound<'_, PyAny>>,
         reinit_password: Option<String>,
         device_write_policy: Option<&Bound<'_, PyAny>>,
+        source_audit_reporter: Option<crate::types::PyObjectIdentifier>,
+        audit_recipient: Option<&Bound<'_, PyAny>>,
+        audit_device_bindings: Option<Vec<(crate::types::PyObjectIdentifier, String)>>,
     ) -> PyResult<Self> {
         let reinitialize = crate::reinitialize::EndpointReinitialize::parse(
             on_reinitialize,
@@ -282,6 +312,14 @@ impl PyBipEndpoint {
             crate::client::parse_min_request_interval_ms(min_request_interval_ms)?;
         let interface_ip = parse_ipv4(interface, "interface")?;
         let broadcast = parse_ipv4(broadcast_address, "broadcast_address")?;
+        let source_audit = super::source_audit::SourceAuditKeywords::parse(
+            source_audit_reporter,
+            audit_recipient,
+            audit_device_bindings,
+            device_instance,
+            broadcast,
+            device_writes.enabled(),
+        )?;
         if let Some(selected) = registered_network_port
             && (!(1..=255).contains(&selected)
                 || selected != network_port_instance
@@ -333,6 +371,7 @@ impl PyBipEndpoint {
                 multicast,
                 reinitialize,
                 device_writes,
+                source_audit,
             },
         })
     }
@@ -342,6 +381,38 @@ impl PyBipEndpoint {
     #[doc(hidden)]
     fn _pending_registration_count(&self) -> PyResult<usize> {
         Ok(self.lifecycle.pending_count())
+    }
+
+    /// Add an Audit Reporter object (before start), for
+    /// `source_audit_reporter` to select (#2348).
+    ///
+    /// `audit_level` ("none", "audit_config" or "audit_all") and
+    /// `auditable_operations` (bit n for AuditOperation n) are required, as
+    /// on `BACnetServer.configure_audit_reporters`, and filter what the
+    /// session reports. Peers can't change them through an endpoint. A
+    /// Reporter that `source_audit_reporter` doesn't select records nothing.
+    #[pyo3(signature = (
+        instance, name, *,
+        audit_level, auditable_operations, issue_confirmed_notifications=false
+    ))]
+    fn add_audit_reporter(
+        &self,
+        instance: u32,
+        name: &str,
+        audit_level: &str,
+        auditable_operations: &Bound<'_, PyAny>,
+        issue_confirmed_notifications: bool,
+    ) -> PyResult<()> {
+        use crate::server::{reporter_audit_level, reporter_auditable_operations};
+        let pending = PendingObject::AuditReporter {
+            instance,
+            name: name.to_string(),
+            level: reporter_audit_level(audit_level)?,
+            operations: reporter_auditable_operations(auditable_operations)?,
+            confirmed: issue_confirmed_notifications,
+        };
+        pending.build()?;
+        self.push_pending(pending)
     }
 
     /// Add a Group object (before start); its Present_Value is rebuilt from

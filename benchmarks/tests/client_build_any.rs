@@ -108,8 +108,7 @@ async fn bip_builders_preserve_foreign_mode_and_registration_status() {
             .interface(Ipv4Addr::LOCALHOST)
             .port(0)
             .mode(BipMode::Foreign(ForeignDeviceConfig {
-                bbmd_ip: Ipv4Addr::LOCALHOST,
-                bbmd_port: peer.local_addr().unwrap().port(),
+                bbmd: (Ipv4Addr::LOCALHOST, peer.local_addr().unwrap().port()).into(),
                 ttl: 75,
                 renewal_interval: Some(Duration::from_secs(15)),
             }));

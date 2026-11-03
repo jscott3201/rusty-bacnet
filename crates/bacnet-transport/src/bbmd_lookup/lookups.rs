@@ -69,10 +69,11 @@ pub(crate) struct Lookups {
 }
 
 impl Lookups {
-    pub(crate) fn new(resolver: Arc<dyn BbmdResolver>) -> Self {
+    /// Lookups with `resolver`, of `name` if the BBMD is configured by one.
+    pub(crate) fn new(resolver: Arc<dyn BbmdResolver>, name: Option<BbmdName>) -> Self {
         Self {
             resolver,
-            name: None,
+            name,
             generation: 0,
             running: None,
             rerun: false,
@@ -88,6 +89,11 @@ impl Lookups {
     /// The host name FD_BBMD_Address holds, if it holds one.
     pub(crate) fn name(&self) -> Option<&BbmdName> {
         self.name.as_ref()
+    }
+
+    /// Whether a resolver call runs.
+    pub(crate) fn is_running(&self) -> bool {
+        self.running.is_some()
     }
 
     /// A node starts: its first registration attempt looks the name up
@@ -184,13 +190,22 @@ impl Lookups {
         }
     }
 
-    /// Log a failed lookup of `name`, the device staying at `bbmd`: the
-    /// first of a run at warn, the rest at debug.
-    pub(crate) fn failed(&mut self, name: &BbmdName, bbmd: impl Display, failed: &Failed) {
+    /// Log a failed lookup of `name`, the device staying at `bbmd`, or,
+    /// with no address yet (`None`, a configured name), waiting for one:
+    /// the first of a run at warn, the rest at debug.
+    pub(crate) fn failed<A: Display>(&mut self, name: &BbmdName, bbmd: Option<A>, failed: &Failed) {
         let host = name.host();
         let failure = failed.failure;
         let error = failed.error.as_ref().map(ToString::to_string);
         let repeat = std::mem::replace(&mut self.failing, true);
+        let Some(bbmd) = bbmd else {
+            if repeat {
+                debug!(%host, ?failure, ?error, "The BBMD's host name still doesn't resolve; trying again in 30 s");
+            } else {
+                warn!(%host, ?failure, ?error, "The BBMD's host name doesn't resolve to a usable address; no BBMD to register with yet, trying again in 30 s");
+            }
+            return;
+        };
         if failure == BbmdLookupFailure::Abandoned {
             if repeat {
                 debug!(%host, %bbmd, "A lookup of the BBMD's host name ended without an answer again");
@@ -206,17 +221,18 @@ impl Lookups {
 }
 
 /// Where a lookup's `answers`, the ones of the transport's family in the
-/// order given, put the BBMD now at `current`: `None` to stay, while it is
-/// still among them, or else the first one `usable` takes. Failing that,
+/// order given, put the BBMD now at `current` (`None` when it has no
+/// address yet): `None` to stay, while it is still among them, or else the
+/// first one `usable` takes. Failing that,
 /// [`BbmdLookupFailure::Unusable`] with the first of them, or
 /// [`BbmdLookupFailure::NoAddress`] when there are none.
 pub(crate) fn choose<A: Copy + PartialEq>(
     answers: &[A],
-    current: A,
+    current: Option<A>,
     usable: impl Fn(A) -> bool,
     ip: impl Fn(A) -> IpAddr,
 ) -> Result<Option<A>, BbmdLookupFailure> {
-    if answers.contains(&current) {
+    if current.is_some_and(|current| answers.contains(&current)) {
         return Ok(None);
     }
     if let Some(found) = answers.iter().copied().find(|answer| usable(*answer)) {
@@ -322,7 +338,7 @@ mod tests {
         let pick = |answers: &[Ipv4Addr], usable: &[Ipv4Addr]| {
             choose(
                 answers,
-                ip(1),
+                Some(ip(1)),
                 |answer| usable.contains(&answer),
                 IpAddr::V4,
             )
@@ -337,5 +353,8 @@ mod tests {
             Err(BbmdLookupFailure::Unusable(ip(2).into()))
         );
         assert_eq!(pick(&[], &[]), Err(BbmdLookupFailure::NoAddress));
+        // With no address yet, the device never stays.
+        let first = choose(&[ip(1)], None, |_| true, IpAddr::V4);
+        assert_eq!(first, Ok(Some(ip(1))));
     }
 }

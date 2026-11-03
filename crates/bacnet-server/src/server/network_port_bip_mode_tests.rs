@@ -142,8 +142,7 @@ async fn a_foreign_device_transport_publishes_its_bbmd_and_lifetime() {
     let mut transport =
         BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::new(127, 255, 255, 255));
     transport.register_as_foreign_device(ForeignDeviceConfig {
-        bbmd_ip: Ipv4Addr::LOCALHOST,
-        bbmd_port,
+        bbmd: (Ipv4Addr::LOCALHOST, bbmd_port).into(),
         renewal_interval: None,
         ttl: 120,
     });
@@ -173,8 +172,7 @@ async fn a_bbmd_that_also_registers_as_a_foreign_device_fails_to_start() {
         BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::new(127, 255, 255, 255));
     transport.enable_bbmd(Vec::new());
     transport.register_as_foreign_device(ForeignDeviceConfig {
-        bbmd_ip: Ipv4Addr::LOCALHOST,
-        bbmd_port: 47808,
+        bbmd: (Ipv4Addr::LOCALHOST, 47808).into(),
         renewal_interval: None,
         ttl: 120,
     });
@@ -227,8 +225,7 @@ async fn the_builders_foreign_mode_reports_a_refused_registration() {
         .database(database())
         .registered_network_port(port_oid())
         .mode(BipMode::Foreign(ForeignDeviceConfig {
-            bbmd_ip: Ipv4Addr::LOCALHOST,
-            bbmd_port: bbmd.local_addr().unwrap().port(),
+            bbmd: (Ipv4Addr::LOCALHOST, bbmd.local_addr().unwrap().port()).into(),
             renewal_interval: None,
             ttl: 120,
         }))

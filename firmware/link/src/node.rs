@@ -552,7 +552,7 @@ impl Device<'_, '_> {
         // asked to delete the node's entry, and does.
         self.at(110_000);
         let mut moved = FOREIGN;
-        moved.bbmd = BBMD2;
+        moved.bbmd = Some(BBMD2);
         moved.release_previous = true;
         let now = self.socket.now;
         if self.port.retarget(moved, now, &mut self.socket).is_err() {

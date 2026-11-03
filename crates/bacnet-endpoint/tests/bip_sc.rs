@@ -24,8 +24,7 @@ fn bdt_entry(ip: [u8; 4], port: u16) -> BdtEntry {
 
 fn foreign() -> BipMode {
     BipMode::Foreign(ForeignDeviceConfig {
-        bbmd_ip: Ipv4Addr::LOCALHOST,
-        bbmd_port: 47808,
+        bbmd: (Ipv4Addr::LOCALHOST, 47808).into(),
         renewal_interval: None,
         ttl: 60,
     })

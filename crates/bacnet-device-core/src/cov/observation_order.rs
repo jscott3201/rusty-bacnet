@@ -152,29 +152,40 @@ impl CovTable {
         })
     }
 
+    /// Let go of the unconfirmed reports that can no longer complete at
+    /// `now`: their entry gone, replaced, expired, or completed by a later
+    /// report. A host reports every send's end, so the list holds the
+    /// reports whose sends are under way, and besides them only those a
+    /// host dropped between evaluation and the send (a stop, a panic). Such
+    /// a report goes at the first evaluation after a later report of its
+    /// subscription completes, or the subscription ends, renews or expires,
+    /// or with the table.
+    pub(super) fn prune_pending(&mut self, now: Instant) {
+        if self.pending.is_empty() {
+            return;
+        }
+        let mut pending = core::mem::take(&mut self.pending);
+        pending.retain(|report| self.may_complete(report.token, &report.completion, now));
+        self.pending = pending;
+    }
+
     /// Hand an unconfirmed report of `snapshot` to the host under `ticket`:
     /// its token commits `observation` once [`delivered`](Self::delivered)
-    /// says it was sent. Reports that can no longer complete, their entry
-    /// gone, replaced, expired or completed past them (a host that dropped
-    /// one without reporting its end), are let go first.
+    /// says it was sent.
     pub(super) fn begin_unconfirmed(
         &mut self,
         ticket: ObservationTicket,
         snapshot: &CovSubscriptionSnapshot,
         observation: CovObservation,
-        now: Instant,
     ) -> Token {
-        let mut pending = core::mem::take(&mut self.pending);
-        pending.retain(|report| self.may_complete(report.token, &report.completion, now));
         let token = Token {
             flight: snapshot.flight,
             ticket: ticket.get(),
         };
-        pending.push(Pending {
+        self.pending.push(Pending {
             token,
             completion: Completion::new(snapshot, observation),
         });
-        self.pending = pending;
         token
     }
 
@@ -186,6 +197,11 @@ impl CovTable {
         outcome: super::Delivery,
         now: Instant,
     ) -> bool {
+        // Usually nothing is pending: a confirmed report's end, or the last
+        // send of a fanout, finds out at once.
+        if self.pending.is_empty() {
+            return false;
+        }
         let Some(at) = self.pending.iter().position(|report| report.token == token) else {
             return false;
         };

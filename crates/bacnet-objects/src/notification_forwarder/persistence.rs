@@ -13,23 +13,14 @@ use crate::prelude::*;
 #[cfg(feature = "std")]
 use std::path::Path;
 
-#[cfg(feature = "std")]
-use bacnet_encoding::constructed::{
-    decode_destination, decode_event_notification_subscription, encode_destination_list,
-    encode_event_notification_subscription_list,
-};
 use bacnet_types::constructed::{BACnetDestination, BACnetEventNotificationSubscription};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
-#[cfg(feature = "std")]
-use bytes::BytesMut;
 
-#[cfg(feature = "std")]
-use super::MAX_RECIPIENT_LIST_DESTINATIONS;
 #[cfg(feature = "std")]
 use crate::durable::file::ObjectFile;
 #[cfg(feature = "std")]
-use crate::subscribed_recipients::MAX_SUBSCRIBED_RECIPIENTS;
+use crate::snapshot::notification_forwarder as format;
 
 /// What a forwarder keeps across a restart: both of its lists.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -62,18 +53,11 @@ pub trait NotificationForwarderPersistence: Send + Sync {
     fn save(&self, forwarder: ObjectIdentifier, snapshot: &ForwarderSnapshot) -> Result<(), Error>;
 }
 
+/// The most octets a file may take ([`snapshot::notification_forwarder::MAX_LEN`]).
+///
+/// [`snapshot::notification_forwarder::MAX_LEN`]: crate::snapshot::notification_forwarder::MAX_LEN
 #[cfg(feature = "std")]
-const MAGIC: &[u8; 8] = b"RBNFWD01";
-/// After the shared header (the magic tag and the object identifier): one
-/// octet, 1 when the file holds a Recipient_List and 0 when not, then the
-/// Recipient_List's length.
-#[cfg(feature = "std")]
-const BODY_HEADER_LEN: usize = 1 + 4;
-/// A full Recipient_List of the longest destinations is 1,504 octets and a
-/// full Subscribed_Recipients 1,184; anything much larger is not a file this
-/// backend wrote.
-#[cfg(feature = "std")]
-pub(super) const MAX_FILE_BYTES: u64 = 64 * 1024;
+pub(super) const MAX_FILE_BYTES: u64 = format::MAX_LEN as u64;
 
 /// A file holding one forwarder's lists, replaced whole on each save.
 ///
@@ -82,10 +66,13 @@ pub(super) const MAX_FILE_BYTES: u64 = 64 * 1024;
 /// previous lists in place and a completed one survives a power loss. Once
 /// the rename succeeds the save has landed: a directory sync that fails is
 /// logged, not returned. (On Windows the directory is not synchronized: see
-/// the [`durable`](crate::durable) module.) The file holds a magic tag, the
-/// forwarder's object identifier, whether a Recipient_List follows, the
-/// encoded Recipient_List with its length, and the encoded
-/// Subscribed_Recipients. It does not coordinate between processes.
+/// the [`durable`](crate::durable) module.) It does not coordinate between
+/// processes.
+///
+/// The file holds what [`snapshot::notification_forwarder::encode`] returns; that module
+/// documents the format.
+///
+/// [`snapshot::notification_forwarder::encode`]: crate::snapshot::notification_forwarder::encode
 #[derive(Clone, Debug)]
 #[cfg(feature = "std")]
 pub struct FileNotificationForwarderPersistence {
@@ -97,12 +84,7 @@ impl FileNotificationForwarderPersistence {
     /// Keep the lists in the file at `path`.
     pub fn new(path: impl AsRef<Path>) -> Result<Self, Error> {
         Ok(Self {
-            file: ObjectFile::new(
-                path.as_ref(),
-                MAGIC,
-                MAX_FILE_BYTES,
-                "Notification Forwarder file",
-            )?,
+            file: ObjectFile::new(path.as_ref(), MAX_FILE_BYTES, "Notification Forwarder file")?,
         })
     }
 
@@ -128,50 +110,13 @@ impl FileNotificationForwarderPersistence {
 #[cfg(feature = "std")]
 impl NotificationForwarderPersistence for FileNotificationForwarderPersistence {
     fn load(&self, forwarder: ObjectIdentifier) -> Result<Option<ForwarderSnapshot>, Error> {
-        let Some(body) = self.file.load(forwarder)? else {
+        let Some(octets) = self.file.read()? else {
             return Ok(None);
         };
-        if body.len() < BODY_HEADER_LEN {
-            return Err(self.file.corrupt("has no valid header"));
-        }
-        let length = u32::from_be_bytes(body[1..BODY_HEADER_LEN].try_into().unwrap());
-        let split = usize::try_from(length)
-            .ok()
-            .and_then(|length| BODY_HEADER_LEN.checked_add(length))
-            .filter(|split| *split <= body.len())
-            .ok_or_else(|| self.file.corrupt("has a Recipient_List past its end"))?;
-        let recipient_list = &body[BODY_HEADER_LEN..split];
-        let recipient_list = match body[0] {
-            0 if recipient_list.is_empty() => None,
-            1 => Some(self.file.decode_capped(
-                recipient_list,
-                MAX_RECIPIENT_LIST_DESTINATIONS,
-                decode_destination,
-            )?),
-            _ => return Err(self.file.corrupt("has no valid header")),
-        };
-        Ok(Some(ForwarderSnapshot {
-            recipient_list,
-            subscribed_recipients: self.file.decode_capped(
-                &body[split..],
-                MAX_SUBSCRIBED_RECIPIENTS,
-                decode_event_notification_subscription,
-            )?,
-        }))
+        Ok(Some(format::decode(forwarder, &octets)?))
     }
 
     fn save(&self, forwarder: ObjectIdentifier, snapshot: &ForwarderSnapshot) -> Result<(), Error> {
-        let mut recipient_list = BytesMut::new();
-        if let Some(list) = &snapshot.recipient_list {
-            encode_destination_list(&mut recipient_list, list)?;
-        }
-        let mut body = BytesMut::with_capacity(BODY_HEADER_LEN + recipient_list.len() + 1024);
-        body.extend_from_slice(&[u8::from(snapshot.recipient_list.is_some())]);
-        let length = u32::try_from(recipient_list.len())
-            .map_err(|_| Error::OutOfRange("Recipient_List too long to save".into()))?;
-        body.extend_from_slice(&length.to_be_bytes());
-        body.extend_from_slice(&recipient_list);
-        encode_event_notification_subscription_list(&mut body, &snapshot.subscribed_recipients)?;
-        self.file.save(forwarder, &body)
+        self.file.save_octets(format::encode(forwarder, snapshot)?)
     }
 }

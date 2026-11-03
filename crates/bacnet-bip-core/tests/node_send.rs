@@ -224,10 +224,10 @@ fn a_link_is_checked_before_it_runs() {
             ConfigError::ResponseTimeout,
         ),
         (
-            with(base, |f| f.bbmd = addr(10, 0, 0, 1, 0)),
+            with(base, |f| f.bbmd = Some(addr(10, 0, 0, 1, 0))),
             ConfigError::BbmdPort,
         ),
-        (with(base, |f| f.bbmd = OWN), ConfigError::BbmdIsSelf),
+        (with(base, |f| f.bbmd = Some(OWN)), ConfigError::BbmdIsSelf),
     ];
     for (foreign, error) in cases {
         assert_eq!(check(OWN, mode(foreign), budget), Err(error), "{foreign:?}");
@@ -241,7 +241,7 @@ fn a_link_is_checked_before_it_runs() {
     let tiny = with(Foreign::new(BBMD, 1), |f| f.renewal = ms(1));
     assert_eq!(check(OWN, mode(tiny), budget), Ok(()));
     // The BBMD at the node's IP but another port is another node.
-    let beside = with(base, |f| f.bbmd = addr(192, 168, 1, 10, 47_809));
+    let beside = with(base, |f| f.bbmd = Some(addr(192, 168, 1, 10, 47_809)));
     assert_eq!(check(OWN, mode(beside), budget), Ok(()));
     assert!(!ConfigError::Renewal.to_string().is_empty());
 }
@@ -251,7 +251,7 @@ fn a_bbmd_at_no_single_address_is_refused() {
     let base = foreign();
     let check = |bbmd| {
         let link = with(link(Mode::Normal), |link| {
-            link.mode = Mode::Foreign(with(base, |f| f.bbmd = bbmd));
+            link.mode = Mode::Foreign(with(base, |f| f.bbmd = Some(bbmd)));
             link.budget = None;
         });
         link.validate()

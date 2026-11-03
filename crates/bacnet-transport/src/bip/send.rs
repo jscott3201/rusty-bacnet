@@ -3,7 +3,7 @@
 //! broadcast asks the node itself.
 
 use bacnet_bip_codec as codec;
-use bacnet_bip_core::node::Mode;
+use bacnet_bip_core::node::{Mode, SendRefusal};
 use bacnet_types::error::Error;
 use bytes::BytesMut;
 
@@ -47,19 +47,22 @@ impl NodeHandle {
         forwarder: Option<&OwnBroadcastForwarder>,
     ) -> Result<(), Error> {
         let link = self.link();
-        let (mut outgoing, forward_own) = link
-            .broadcast(npdu)
-            .map_err(|refusal| self.refuse_send(refusal))?;
-
-        let mut buf = BytesMut::with_capacity(4 + npdu.len());
-        encode_bvll(&mut buf, &outgoing.message)?;
+        // The link refuses what it can't carry. A foreign device whose BBMD
+        // isn't known yet has nowhere to send (#2308): its node holds the
+        // broadcast, or refuses it, below.
+        let mut decided = match link.broadcast(npdu) {
+            Ok(decided) => Some(decided),
+            Err(SendRefusal::NoBbmd) => None,
+            Err(refusal) => return Err(self.refuse_send(refusal)),
+        };
 
         // A foreign device asks its node first, which holds the broadcast
         // while the first registration attempt after a start or a move to
-        // another BBMD is outstanding, refuses it when that hold is full
-        // (#1622), and queues it behind released broadcasts its driver
-        // hasn't sent yet. A broadcast it sends goes on the link it decided
-        // under: a move since the copy above sends it to the new BBMD.
+        // another BBMD is outstanding, or while it waits for its BBMD,
+        // refuses it when that hold is full (#1622), and queues it behind
+        // released broadcasts its driver hasn't sent yet. A broadcast it
+        // sends goes on the link it decided under: a move since the copy
+        // above sends it to the new BBMD.
         if matches!(link.mode, Mode::Foreign(_)) {
             #[cfg(test)]
             {
@@ -75,19 +78,22 @@ impl NodeHandle {
             }
             match self.admit_broadcast(npdu)? {
                 None => return Ok(()),
-                Some(decided) if decided != link => {
+                Some(admitted) if admitted != link || decided.is_none() => {
                     // A move is foreign to foreign, so the mode, and with it
                     // `forward_own` (false for a foreign device), stays.
-                    outgoing = decided
+                    let again = admitted
                         .broadcast(npdu)
-                        .map_err(|refusal| self.refuse_send(refusal))?
-                        .0;
-                    buf.clear();
-                    encode_bvll(&mut buf, &outgoing.message)?;
+                        .map_err(|refusal| self.refuse_send(refusal))?;
+                    decided = Some(again);
                 }
                 Some(_) => {}
             }
         }
+        // Only a waiting foreign device has none, and its node never sends.
+        let (outgoing, forward_own) =
+            decided.ok_or_else(|| self.refuse_send(SendRefusal::NoBbmd))?;
+        let mut buf = BytesMut::with_capacity(4 + npdu.len());
+        encode_bvll(&mut buf, &outgoing.message)?;
 
         // The fanout is queued first, so its targets are fixed before the
         // local frame is on the wire. Whatever happens to it (see

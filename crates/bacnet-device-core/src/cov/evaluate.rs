@@ -19,9 +19,10 @@
 //! - Each compares with the observation the subscription's last delivered
 //!   notification established, not one merely sent.
 //!
-//! A confirmed subscription whose report is outstanding, or holding off
-//! after a failure, is skipped: that report's Ack owes it a fresh look
-//! ([`CovTable::delivered`]). The input's [`EventBudget`] bounds what one
+//! A confirmed subscription whose report is outstanding is skipped, and its
+//! report's Ack owes it a fresh look ([`CovTable::delivered`]). One holding
+//! off after a failure is skipped too; nothing looks again when the
+//! hold-off ends, and its next change reports. The input's [`EventBudget`] bounds what one
 //! change sends; a report past it is counted
 //! ([`CovCounters::notifications_throttled_fanout`](super::CovCounters::notifications_throttled_fanout))
 //! and dropped.
@@ -43,8 +44,8 @@ use super::prepare::prepare_value;
 use super::reported::{PreparedReported, lead};
 use super::value_source::{self, PreparedValueSource};
 use super::{
-    CovObservation, CovSample, CovSubscriptionSnapshot, CovTable, CovTimeRemaining, EventBudget,
-    PreparedCovCompletion, Token,
+    CovNotificationKind, CovObservation, CovSample, CovSubscriptionSnapshot, CovTable,
+    CovTimeRemaining, EventBudget, PreparedCovCompletion, Token,
 };
 
 #[cfg(test)]
@@ -107,6 +108,15 @@ pub fn evaluate<L>(
     if budget.is_exhausted() {
         return reports;
     }
+    debug_assert!(
+        subscriptions.iter().all(|sub| {
+            sub.notification_kind == CovNotificationKind::Single
+                && sub.monitored_object_identifier == object.object_identifier()
+        }),
+        "evaluate takes ordinary and Single subscriptions to `object` only"
+    );
+    // Once per evaluation, not per report: both guards are held.
+    table.prune_pending(now);
     let ordinary = subscriptions
         .iter()
         .any(|sub| sub.monitored_property.is_none())
@@ -173,7 +183,7 @@ pub fn evaluate<L>(
                 }
             }
             PreparedCovCompletion::Unconfirmed(ticket) => {
-                table.begin_unconfirmed(ticket, sub, observation, now)
+                table.begin_unconfirmed(ticket, sub, observation)
             }
         };
         reports.push(CovReport {
