@@ -59,7 +59,7 @@ pub use client_snapshot::{
     BvlcClientSnapshot, BvlcClientStatus, BvlcRequestCounters, ForeignRegistrationOutcome,
     ForeignRegistrationSnapshot,
 };
-pub use foreign_device::ForeignDeviceConfig;
+pub use foreign_device::{ForeignBbmd, ForeignDeviceConfig};
 pub use mode::{BbmdOptions, BipMode};
 mod fanout;
 mod groups;
@@ -444,6 +444,7 @@ impl BipTransport {
         if let Some(node) = self.node.take() {
             node.stop();
         }
+        self.detach_foreign_device();
         #[cfg(test)]
         if let Some(between) = self.between_stops.take() {
             between();

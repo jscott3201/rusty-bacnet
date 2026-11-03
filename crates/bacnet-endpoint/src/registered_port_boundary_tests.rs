@@ -52,8 +52,7 @@ async fn registered_port_invalid_selection_profile_and_identity_fail_before_publ
                 .device(id)
                 .mode(bacnet_transport::bip::BipMode::Foreign(
                     bacnet_transport::bip::ForeignDeviceConfig {
-                        bbmd_ip: Ipv4Addr::LOCALHOST,
-                        bbmd_port: 47808,
+                        bbmd: (Ipv4Addr::LOCALHOST, 47808).into(),
                         renewal_interval: None,
                         ttl: 0,
                     },
@@ -116,8 +115,7 @@ async fn registered_port_publishes_the_bbmd_or_foreign_mode() {
             BipMode::Bbmd(bacnet_transport::bip::BbmdOptions::default())
         } else {
             BipMode::Foreign(bacnet_transport::bip::ForeignDeviceConfig {
-                bbmd_ip: Ipv4Addr::LOCALHOST,
-                bbmd_port: stand_in.local_addr().unwrap().port(),
+                bbmd: (Ipv4Addr::LOCALHOST, stand_in.local_addr().unwrap().port()).into(),
                 renewal_interval: None,
                 ttl: 60,
             })

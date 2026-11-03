@@ -23,10 +23,7 @@ fn a_profiles_global_address_survives_a_save_and_reaches_the_args() {
     );
     // A display hint only: the registration itself is unchanged.
     let foreign = args.foreign_device.unwrap();
-    assert_eq!(
-        (foreign.bbmd_ip, foreign.bbmd_port),
-        (Ipv4Addr::new(198, 51, 100, 1), 47808)
-    );
+    assert_eq!(foreign.bbmd, (Ipv4Addr::new(198, 51, 100, 1), 47808).into());
     let root = tempfile::tempdir().unwrap();
     let store = Store::new(root.path().join("config"));
     store.save("nat", &profile, true).unwrap();

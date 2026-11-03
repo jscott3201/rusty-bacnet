@@ -70,8 +70,7 @@ async fn bip_foreign_builder_discovers_device_through_bbmd_after_observed_regist
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .mode(BipMode::Foreign(ForeignDeviceConfig {
-            bbmd_ip: Ipv4Addr::LOCALHOST,
-            bbmd_port,
+            bbmd: (Ipv4Addr::LOCALHOST, bbmd_port).into(),
             ttl: 60,
             renewal_interval: Some(Duration::from_secs(20)),
         }))

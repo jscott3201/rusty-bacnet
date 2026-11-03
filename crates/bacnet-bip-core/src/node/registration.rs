@@ -233,6 +233,9 @@ pub(crate) struct Lifecycle {
     timeout: Duration,
     retry: Retry,
     hold_limit: u16,
+    /// The BBMD isn't known yet: no attempt is due, and broadcasts are
+    /// held, or refused once the hold is full, even with no hold at all.
+    waiting: bool,
     lease: Option<Lease>,
     /// The lease's end was reported.
     lapsed: bool,
@@ -249,7 +252,8 @@ pub(crate) struct Lifecycle {
 }
 
 impl Lifecycle {
-    /// The lifecycle of `foreign`, its first attempt due at `now`.
+    /// The lifecycle of `foreign`, its first attempt due at `now`, or, with
+    /// no BBMD known yet, waiting for one.
     pub(crate) fn new(foreign: &Foreign, now: Instant) -> Self {
         Self {
             ttl: foreign.ttl_duration(),
@@ -257,6 +261,7 @@ impl Lifecycle {
             timeout: foreign.effective_response_timeout(),
             retry: foreign.retry,
             hold_limit: foreign.hold,
+            waiting: foreign.bbmd.is_none(),
             lease: None,
             lapsed: false,
             unanswered_since: None,
@@ -265,7 +270,7 @@ impl Lifecycle {
             last_start: None,
             last_outcome: None,
             failures: 0,
-            next: Some(now),
+            next: foreign.bbmd.map(|_| now),
             first_resolved: false,
             held: 0,
         }
@@ -283,7 +288,8 @@ impl Lifecycle {
     /// yet, and would refuse to distribute them (Annex J.4.5). A hold
     /// smaller than the broadcasts already held drops none of them: they
     /// stay held and go out together when the next attempt resolves, and
-    /// further broadcasts are refused as a full hold until then.
+    /// further broadcasts are refused as a full hold until then. With no
+    /// BBMD known, the lifecycle waits for one, with no attempt due.
     pub(crate) fn retarget(&mut self, foreign: &Foreign, now: Instant, same_bbmd: bool) {
         self.ttl = foreign.ttl_duration();
         self.renewal = foreign.effective_renewal();
@@ -301,7 +307,8 @@ impl Lifecycle {
         self.attempt = None;
         self.last_start = None;
         self.failures = 0;
-        self.next = Some(now);
+        self.waiting = foreign.bbmd.is_none();
+        self.next = foreign.bbmd.map(|_| now);
     }
 
     /// How long after its request a success, or a copy of it, may still
@@ -469,7 +476,7 @@ impl Lifecycle {
 
     /// Whether to send, hold or refuse a broadcast at `now`.
     pub(crate) fn admit_broadcast(&mut self, now: Instant) -> BroadcastDecision {
-        if !self.first_resolved && self.hold_limit > 0 {
+        if !self.first_resolved && (self.hold_limit > 0 || self.waiting) {
             if self.held >= self.hold_limit {
                 return BroadcastDecision::Full;
             }

@@ -37,8 +37,7 @@ impl Device {
         let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
         let socket = Arc::new(BipSocket::recording(socket, sink.clone()));
         let config = ForeignDeviceConfig {
-            bbmd_ip: Ipv4Addr::from(BBMD.0),
-            bbmd_port: BBMD.1,
+            bbmd: (Ipv4Addr::from(BBMD.0), BBMD.1).into(),
             ttl: 60,
             renewal_interval: Some(interval),
         };

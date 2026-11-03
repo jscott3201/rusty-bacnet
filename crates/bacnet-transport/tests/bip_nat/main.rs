@@ -87,8 +87,7 @@ async fn foreign_device(
     let mut transport =
         BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::new(127, 255, 255, 255));
     transport.register_as_foreign_device(ForeignDeviceConfig {
-        bbmd_ip: *bbmd.ip(),
-        bbmd_port: bbmd.port(),
+        bbmd: (*bbmd.ip(), bbmd.port()).into(),
         ttl: 60,
         renewal_interval: renewal,
     });

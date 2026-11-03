@@ -46,8 +46,7 @@ async fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
         .interface(Ipv4Addr::UNSPECIFIED)
         .port(0)
         .mode(BipMode::Foreign(ForeignDeviceConfig {
-            bbmd_ip: *args.bbmd.ip(),
-            bbmd_port: args.bbmd.port(),
+            bbmd: (*args.bbmd.ip(), args.bbmd.port()).into(),
             ttl: 300,
             renewal_interval: Some(Duration::from_secs(args.renewal)),
         }))

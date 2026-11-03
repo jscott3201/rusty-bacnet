@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use bacnet_transport::bbmd::{BdtEntry, ForeignDevicePolicy, NatTraversal, PrivateRange};
 use bacnet_transport::bip::{
-    BbmdOptions, BipMode, BipMulticast, DEFAULT_BACNET_PORT, ForeignDeviceConfig,
+    BbmdOptions, BipMode, BipMulticast, DEFAULT_BACNET_PORT, ForeignBbmd, ForeignDeviceConfig,
     ForeignRegistrationOutcome, ForeignRegistrationSnapshot,
 };
 use bacnet_transport::bip6::Bip6ForeignDeviceConfig;
@@ -32,11 +32,15 @@ const MIN_RENEWAL_SECS: f64 = 0.1;
 /// A foreign-device registration, for the `foreign_device=` keyword (#938,
 /// #1941).
 ///
-/// `bbmd` names a B/IP BBMD as `"ip"` or `"ip:port"`, or a B/IPv6 one as
-/// `"ip"`, `"[ip]"` or `"[ip]:port"` (port 47808 by default; a port needs
-/// the brackets, since `"2001:db8::10:4780"` is a bare address); the owner's
-/// transport must match. A B/IPv6 BBMD must be a unicast host: not unspecified,
-/// multicast, link-local, IPv4-mapped or IPv4-compatible. `ttl`, at least
+/// `bbmd` names a B/IP BBMD as `"ip"`, `"host"` or either with `":port"`,
+/// or a B/IPv6 one as `"ip"`, `"[ip]"` or `"[ip]:port"` (port 47808 by
+/// default; a port needs the brackets, since `"2001:db8::10:4780"` is a bare
+/// address); the owner's transport must match. A host name (B/IP only,
+/// #2308) is looked up at start and again alongside the registrations; one
+/// that doesn't resolve still starts the owner, with registration waiting
+/// and the name tried again every 30 s. A B/IPv6 BBMD must be a unicast
+/// host: not unspecified, multicast, link-local, IPv4-mapped or
+/// IPv4-compatible. `ttl`, at least
 /// 1, is how many seconds the BBMD keeps the entry. `renewal` (B/IP only)
 /// is the seconds between registrations, at least 0.1 and shorter than
 /// `ttl`; `None` renews at half the TTL, which is what a B/IPv6 foreign
@@ -71,13 +75,19 @@ impl PyForeignDevice {
         if let Some(address) = parse_ipv6_address(bbmd)? {
             return Self::bip6(bbmd, address, ttl, renewal);
         }
-        if bbmd.parse::<SocketAddrV4>().is_err() && bbmd.parse::<Ipv4Addr>().is_err() {
-            return Err(PyValueError::new_err(format!(
-                "bbmd: '{bbmd}' is not an IPv4 or IPv6 address ('ip' or 'ip:port' for B/IP, \
-                 'ip' or '[ip]:port' for B/IPv6)"
-            )));
-        }
-        let address = parse_address(bbmd, "bbmd")?;
+        // An IPv4 address, with or without a port, takes the unicast checks
+        // and messages the other options do; anything else may be a name.
+        let is_address = bbmd.parse::<SocketAddrV4>().is_ok() || bbmd.parse::<Ipv4Addr>().is_ok();
+        let address = match bbmd.parse::<ForeignBbmd>() {
+            _ if is_address => parse_address(bbmd, "bbmd")?.into(),
+            Ok(named) => named,
+            Err(_) => {
+                return Err(PyValueError::new_err(format!(
+                    "bbmd: '{bbmd}' is not an IPv4 or IPv6 address or a host name ('ip', \
+                     'host' or either with ':port' for B/IP, 'ip' or '[ip]:port' for B/IPv6)"
+                )));
+            }
+        };
         if ttl == 0 {
             return Err(PyValueError::new_err("ttl must be at least 1 second"));
         }
@@ -94,21 +104,18 @@ impl PyForeignDevice {
             .transpose()?;
         Ok(Self {
             registration: Registration::Bip(ForeignDeviceConfig {
-                bbmd_ip: *address.ip(),
-                bbmd_port: address.port(),
+                bbmd: address,
                 ttl,
                 renewal_interval,
             }),
         })
     }
 
-    /// The BBMD's address: `"ip:port"`, or `"[ip]:port"` for B/IPv6.
+    /// The BBMD: `"ip:port"` or `"host:port"`, or `"[ip]:port"` for B/IPv6.
     #[getter]
     fn bbmd(&self) -> String {
         match &self.registration {
-            Registration::Bip(config) => {
-                SocketAddrV4::new(config.bbmd_ip, config.bbmd_port).to_string()
-            }
+            Registration::Bip(config) => config.bbmd.to_string(),
             Registration::Bip6(config) => {
                 SocketAddrV6::new(config.bbmd_ip, config.bbmd_port, 0, 0).to_string()
             }

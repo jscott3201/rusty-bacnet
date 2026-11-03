@@ -42,8 +42,7 @@ async fn foreign_server(bbmd: &UdpSocket, handler: bool) -> BACnetServer<BipTran
     let mut transport =
         BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::new(127, 255, 255, 255));
     transport.register_as_foreign_device(ForeignDeviceConfig {
-        bbmd_ip: Ipv4Addr::LOCALHOST,
-        bbmd_port: port_of(bbmd),
+        bbmd: (Ipv4Addr::LOCALHOST, port_of(bbmd)).into(),
         ttl: 60,
         renewal_interval: None,
     });
@@ -110,7 +109,7 @@ async fn written_bbmd_and_lifetime_move_the_next_registration_on_activate_change
     );
     let config = server.test_network().transport().foreign_device_config();
     assert_eq!(
-        config.map(|c| (c.bbmd_port, c.ttl)),
+        config.map(|c| (c.bbmd.port(), c.ttl)),
         Some((port_of(&first), 60))
     );
 
