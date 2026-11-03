@@ -17,23 +17,23 @@ use tokio::time::timeout;
 use super::*;
 use crate::port::TransportPort;
 
-async fn bbmd() -> UdpSocket {
+pub(super) async fn bbmd() -> UdpSocket {
     UdpSocket::bind("[::1]:0").await.unwrap()
 }
 
-fn address_of(peer: &UdpSocket) -> BACnetHostNPort {
+pub(super) fn address_of(peer: &UdpSocket) -> BACnetHostNPort {
     BACnetHostNPort::from_socket_addr(peer.local_addr().unwrap())
 }
 
 /// The next datagram `peer` receives that `accept` takes.
-async fn next<T>(peer: &UdpSocket, accept: impl Fn(Bvll6<'_>) -> Option<T>) -> T {
+pub(super) async fn next<T>(peer: &UdpSocket, accept: impl Fn(Bvll6<'_>) -> Option<T>) -> T {
     next_within(peer, Duration::from_secs(5), accept).await
 }
 
 /// [`next`] with a deadline of `within`: a test on paused time passes one
 /// longer than any renewal it waits for, since an idle runtime jumps to the
 /// earliest timer.
-async fn next_within<T>(
+pub(super) async fn next_within<T>(
     peer: &UdpSocket,
     within: Duration,
     accept: impl Fn(Bvll6<'_>) -> Option<T>,
@@ -51,7 +51,7 @@ async fn next_within<T>(
 }
 
 /// The time-to-live of the next Register-Foreign-Device `peer` receives.
-async fn registration(peer: &UdpSocket) -> u16 {
+pub(super) async fn registration(peer: &UdpSocket) -> u16 {
     next(peer, |message| match message {
         Bvll6::RegisterForeignDevice { ttl, .. } => Some(ttl),
         _ => None,
@@ -60,7 +60,10 @@ async fn registration(peer: &UdpSocket) -> u16 {
 }
 
 /// A started foreign device of `peer`, and the registration it lends.
-async fn started(peer: &UdpSocket, ttl: u16) -> (Bip6Transport, Arc<dyn ForeignRegistration>) {
+pub(super) async fn started(
+    peer: &UdpSocket,
+    ttl: u16,
+) -> (Bip6Transport, Arc<dyn ForeignRegistration>) {
     let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(55));
     transport.register_as_foreign_device(Bip6ForeignDeviceConfig {
         bbmd_ip: Ipv6Addr::LOCALHOST,
@@ -76,7 +79,7 @@ async fn started(peer: &UdpSocket, ttl: u16) -> (Bip6Transport, Arc<dyn ForeignR
     (transport, lent)
 }
 
-fn changes(bbmd: Option<BACnetHostNPort>, ttl: Option<u16>) -> ForeignDeviceChanges {
+pub(super) fn changes(bbmd: Option<BACnetHostNPort>, ttl: Option<u16>) -> ForeignDeviceChanges {
     let mut changes = ForeignDeviceChanges::default();
     changes.bbmd = bbmd;
     changes.subscription_lifetime = ttl;

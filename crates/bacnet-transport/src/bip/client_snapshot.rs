@@ -141,6 +141,12 @@ pub struct ForeignRegistrationSnapshot {
     /// Why the newest lookup failed; `None` once one succeeds, and cleared
     /// on stop/start.
     pub last_bbmd_lookup_failure: Option<BbmdLookupFailure>,
+    /// Whether the automatic registration waits for its BBMD's address: the
+    /// BBMD was configured by a host name that hasn't resolved yet (#2308),
+    /// so no attempt is due and broadcasts are held, then refused, until
+    /// a lookup succeeds. False outside automatic foreign mode and after
+    /// stop.
+    pub waiting_for_bbmd: bool,
 }
 
 impl ForeignRegistrationSnapshot {
@@ -153,6 +159,7 @@ impl ForeignRegistrationSnapshot {
         self.registered = false;
         self.lease_remaining = None;
         self.last_bbmd_lookup_failure = None;
+        self.waiting_for_bbmd = false;
     }
 }
 

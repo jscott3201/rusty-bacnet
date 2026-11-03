@@ -22,7 +22,7 @@ use bacnet_transport::bip::BipTransport;
 use bacnet_transport::port::TransportPort;
 use tokio::sync::mpsc;
 
-use super::EventSink;
+use super::{EventSink, Offer};
 use crate::tui::message::WorkerEvent;
 use crate::tui::network::{
     BdtRow, FdtRow, NetworkCommand, NetworkEvent, address_of, mac, probe_error, read_error,
@@ -67,6 +67,8 @@ pub(crate) async fn run<T: TransportPort + 'static>(
     let mut running: Option<NetworkCommand> = None;
     let mut job = None;
     let mut registered = false;
+    // The registration's BBMD address last reported (#2308).
+    let mut in_use = None;
     loop {
         if job.is_none()
             && let (Some(bip), Some(next)) = (bip, queue.pop_front())
@@ -98,6 +100,15 @@ pub(crate) async fn run<T: TransportPort + 'static>(
             _ = status.tick(), if bip.is_some() => {
                 let Some(bip) = bip else { continue };
                 let snapshot = bip.bvlc_client_snapshot().foreign_registration;
+                // A BBMD named by host name: the address it stands for now,
+                // which a later lookup may find, or move (#2308).
+                let config = bip.foreign_device_config();
+                if let Some(bbmd) = config.as_ref().and_then(|config| config.bbmd.address())
+                    && in_use != Some(bbmd)
+                    && matches!(sink.offer(WorkerEvent::Network(NetworkEvent::Bbmd(bbmd))), Offer::Sent)
+                {
+                    in_use = Some(bbmd);
+                }
                 if let Some(bbmd) = snapshot.last_bbmd {
                     // Newly registered: read the FDT to see the entry the
                     // BBMD recorded for us.
@@ -106,6 +117,10 @@ pub(crate) async fn run<T: TransportPort + 'static>(
                         queue.push_back(tables);
                     }
                     registered = snapshot.registered;
+                }
+                // A device waiting for its BBMD's name has made no attempt
+                // yet, and its status still shows.
+                if snapshot.last_bbmd.is_some() || config.is_some() {
                     sink.offer(WorkerEvent::Network(NetworkEvent::Registration(snapshot)));
                 }
             }

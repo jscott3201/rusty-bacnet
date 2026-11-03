@@ -378,3 +378,87 @@ async fn bip_builder_hands_the_transport_its_resolver_and_release() {
     );
     client.stop().await.unwrap();
 }
+
+/// A resolver that answers every name with the IPv6 loopback address.
+#[cfg(feature = "ipv6")]
+struct Loopback6;
+
+#[cfg(feature = "ipv6")]
+impl bacnet_transport::bbmd_lookup::BbmdResolver for Loopback6 {
+    fn resolve(&self, _host: &str) -> bacnet_transport::bbmd_lookup::BbmdLookup {
+        Box::pin(async { Ok(vec![std::net::IpAddr::V6(Ipv6Addr::LOCALHOST)]) })
+    }
+}
+
+/// The B/IPv6 builder hands its transport the BBMD resolver and the
+/// release of the BBMD a move leaves (#2338), as the B/IP one does: a host
+/// name activated on the port moves the client to the BBMD the resolver
+/// names, which it registers with, and the BBMD it left is asked to delete
+/// the entry of the client's own B/IPv6 address.
+#[cfg(feature = "ipv6")]
+#[tokio::test]
+async fn bip6_builder_hands_the_transport_its_resolver_and_release() {
+    use bacnet_transport::bip6::Bip6ForeignDeviceConfig;
+    use bacnet_types::bip_port::{BipPortMode, ForeignDeviceChanges};
+    use bacnet_types::constructed::{BACnetHostAddress, BACnetHostNPort};
+    let socket = || tokio::net::UdpSocket::bind((Ipv6Addr::LOCALHOST, 0));
+    let (old, new) = (socket().await.unwrap(), socket().await.unwrap());
+    let mut client = BACnetClient::bip6_builder()
+        .interface(Ipv6Addr::LOCALHOST)
+        .port(0)
+        .device_instance(0x12_3456)
+        .foreign_device(Bip6ForeignDeviceConfig {
+            bbmd_ip: Ipv6Addr::LOCALHOST,
+            bbmd_port: old.local_addr().unwrap().port(),
+            ttl: 90,
+        })
+        .release_previous_bbmd(true)
+        .bbmd_resolver(Arc::new(Loopback6))
+        .build()
+        .await
+        .unwrap();
+    // Register-Foreign-Device from the instance's VMAC, for 90 s.
+    let registration = [0x82, 0x09, 0, 9, 0x12, 0x34, 0x56, 0, 90];
+    let wait = Duration::from_secs(5);
+    let mut packet = [0; 64];
+    let (len, _) = timeout(wait, old.recv_from(&mut packet))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(&packet[..len], registration);
+    let Some(BipPortMode::Foreign { registration: lent }) =
+        client.transport().bip6_port().map(|port| port.mode)
+    else {
+        panic!("a foreign device's port");
+    };
+    let mut changes = ForeignDeviceChanges::default();
+    changes.bbmd = Some(BACnetHostNPort {
+        host: BACnetHostAddress::Name("bbmd.test".into()),
+        port: new.local_addr().unwrap().port(),
+    });
+    lent.activate(&changes).unwrap();
+    let (len, _) = timeout(wait, new.recv_from(&mut packet))
+        .await
+        .expect("a registration with the new BBMD")
+        .unwrap();
+    assert_eq!(&packet[..len], registration);
+    // Delete-Foreign-Device-Table-Entry: the VMAC, then the entry, the
+    // client's own address and port (U.2.11).
+    let (len, _) = timeout(wait, old.recv_from(&mut packet))
+        .await
+        .expect("a release of the old BBMD")
+        .unwrap();
+    assert_eq!(&packet[..7], [0x82, 0x0A, 0, 25, 0x12, 0x34, 0x56]);
+    let own = client.transport().local_address().unwrap();
+    assert_eq!(&packet[7..23], own.ip().octets());
+    assert_eq!(&packet[23..len], own.port().to_be_bytes());
+    let transport = client.transport();
+    assert_eq!(
+        (
+            transport.previous_bbmd_releases().releases,
+            transport.bbmd_lookup_counters().lookups
+        ),
+        (1, 1)
+    );
+    client.stop().await.unwrap();
+}

@@ -589,6 +589,22 @@ async fn a_quick_move_back_drops_the_release_it_would_meet() {
     );
 }
 
+/// A BBMD configured by address is never waited for (#2308): not at start,
+/// and not while the first attempt is out, unanswered.
+#[tokio::test(start_paused = true)]
+async fn a_device_configured_by_address_never_waits() {
+    let device = Device::new(60).await;
+    assert!(!device.snapshot().waiting_for_bbmd);
+    device.after(1).await;
+    assert_eq!(registrations(&device.sink.take()), [A]);
+    let snapshot = device.snapshot();
+    assert_eq!(
+        (snapshot.last_outcome, snapshot.registered),
+        (Some(ForeignRegistrationOutcome::Pending), false)
+    );
+    assert!(!snapshot.waiting_for_bbmd);
+}
+
 /// A configured BBMD named by host name (#2308): the start runs with no
 /// BBMD, looks the name up at once, and registers with what it stands for.
 /// The row reads back the name, and the registration in use the address.
@@ -648,6 +664,7 @@ async fn a_configured_name_that_fails_waits_and_is_tried_again_every_30_s() {
     );
     assert_eq!((snapshot.attempts, snapshot.registered), (0, false));
     assert_eq!(snapshot.next_attempt_in, None);
+    assert!(snapshot.waiting_for_bbmd);
     for _ in 0..16 {
         device
             .node
@@ -689,6 +706,7 @@ async fn a_configured_name_that_fails_waits_and_is_tried_again_every_30_s() {
         (3, 2)
     );
     assert_eq!(snapshot.broadcasts_hold_full, 1);
+    assert!(!snapshot.waiting_for_bbmd);
 }
 
 /// An address written while the device waits for a name ends the wait at
