@@ -321,11 +321,14 @@ impl CovTable {
     ) -> Result<(), Error> {
         self.expire(now);
 
+        // Indefinite subscriptions are optional (Clause 13.14.1.1.4). A device
+        // that takes none answers that the lifetime is outside the range it
+        // supports, the code Clause 13.14.1.3.1 gives (#2317).
         if is_indefinite && !self.policy.allow_indefinite_subscriptions {
             self.counts.subscriptions_rejected_indefinite += 1;
             return Err(Error::protocol(
                 ErrorClass::SERVICES,
-                ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+                ErrorCode::VALUE_OUT_OF_RANGE,
             ));
         }
 
@@ -365,7 +368,7 @@ impl CovTable {
                 self.counts.subscriptions_rejected_indefinite += 1;
                 return Err(Error::protocol(
                     ErrorClass::SERVICES,
-                    ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+                    ErrorCode::VALUE_OUT_OF_RANGE,
                 ));
             }
             let current_indefinite = self.peer_indefinite_counts.get(peer).copied().unwrap_or(0);

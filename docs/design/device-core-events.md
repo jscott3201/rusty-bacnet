@@ -449,7 +449,7 @@ Active_COV_Subscriptions) matches, and PR 2 removes the pin.
 | An index on a property that isn't an array | PROPERTY / PROPERTY_IS_NOT_AN_ARRAY | 13.15.1.1.5 | `cov/prepare.rs:60` |
 | A cap reached | RESOURCES / NO_SPACE_TO_ADD_LIST_ELEMENT | 13.14.1.3.1 | `cov/admission.rs:404-413`, `:425-452` |
 | SubscribeCOVProperty with a zero lifetime | SERVICES / VALUE_OUT_OF_RANGE | 13.15.1.1.4, 13.15.1.3.1 | `:180-187` |
-| SubscribeCOV indefinite while the policy refuses it | SERVICES / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED today; the standard's list gives VALUE_OUT_OF_RANGE (#2317 fixes it, not the move) | 13.14.1.1.4, 13.14.1.3.1 | `cov/admission.rs:353-361`, `:395-402` |
+| SubscribeCOV indefinite while the policy refuses it | SERVICES / VALUE_OUT_OF_RANGE (#2317; before it, OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, which the standard's list lacks) | 13.14.1.1.4, 13.14.1.3.1 | `cov/admission.rs:353-361`, `:395-402` |
 | A lifetime without the confirmed flag | Reject INCONSISTENT_PARAMETERS | 13.14.1.1.3, 18.9 | `:91-93`, `:189-191` |
 | Parameters don't decode | Reject, the decoder's reason | 18.9, 20.1.8 | `:87`, `:176` |
 
