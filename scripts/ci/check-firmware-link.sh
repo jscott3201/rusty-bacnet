@@ -10,7 +10,7 @@
 # allocation-free profile of bacnet-encoding and bacnet-services) have no
 # global allocator; apdu (bacnet-encoding and bacnet-services, no_std with alloc)
 # objects (bacnet-device-core's Responder over a bacnet-objects database,
-# #2178) and reporting (that database with the core's COV table, #2303) have
+# #2178) and reporting (that database with the core's COV Reporter, #2303) have
 # one, over a fixed arena. objects and reporting need atomic
 # compare-and-swap, so they build for thumbv7m, thumbv7em and riscv32imac
 # only, and riscv32imac builds those two only (`builds_on` below).

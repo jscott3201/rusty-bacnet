@@ -35,7 +35,7 @@ Foundations
   bacnet-device-core    Sans-IO request core over a borrowed ObjectDatabase: the read
                         and write paths, discovery, the COV subscription table, COV
                         evaluation and the reply map the server runs on, and a
-                        Responder for firmware
+                        Responder and a COV Reporter for firmware
                         (no_std + alloc where atomics allow, #2178, #2303)
 
 Runtime and application roles

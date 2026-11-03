@@ -78,22 +78,23 @@ pub struct CovReport<L> {
     /// Its end comes back through [`CovTable::delivered`]: an unconfirmed
     /// report's send, a confirmed report's answer.
     pub token: Token,
-    /// The host's admission of a confirmed report; `None` for an
-    /// unconfirmed one.
-    pub lease: Option<L>,
+    /// What the host's admission gave the report.
+    pub lease: L,
 }
 
 /// Decide what a change of `object` reports to `subscriptions`, all of them
 /// ordinary or Single subscriptions to it, and hand each report to the host
 /// in their order.
 ///
-/// A confirmed report first takes `admit`'s lease, which the host makes of
-/// whatever it needs to send one (an in-flight slot, an invoke ID); a report
-/// that gets none is dropped, its budget unspent. Every report then spends
-/// the budget for its APDU and takes a ticket: a confirmed one begins its
-/// flight ([`CovTable::begin_confirmed`]), and an unconfirmed one waits for
-/// its send to end. The host sends each, and reports how it ended through
-/// [`CovTable::delivered`].
+/// Each report first takes `admit`'s lease, given the subscription and the
+/// octets of its APDU. The host makes the lease of whatever it needs to send
+/// the report (an in-flight slot and an invoke ID for a confirmed one, room
+/// in an outbox); a report that gets none is dropped, its budget unspent,
+/// and the host may owe its subscription a later look. Every admitted
+/// report then spends the budget for its APDU and takes a ticket: a
+/// confirmed one begins its flight ([`CovTable::begin_confirmed`]), and an
+/// unconfirmed one waits for its send to end. The host sends each, and
+/// reports how it ended through [`CovTable::delivered`].
 pub fn evaluate<L>(
     table: &mut CovTable,
     object: &dyn BACnetObject,
@@ -101,7 +102,7 @@ pub fn evaluate<L>(
     evaluation: Evaluation,
     budget: &mut EventBudget,
     now: Instant,
-    mut admit: impl FnMut(&CovSubscriptionSnapshot) -> Option<L>,
+    mut admit: impl FnMut(&CovSubscriptionSnapshot, usize) -> Option<L>,
 ) -> Vec<CovReport<L>> {
     let mut reports = Vec::new();
     if budget.is_exhausted() {
@@ -153,21 +154,15 @@ pub fn evaluate<L>(
             list_of_values: values,
         }
         .encode(&mut params);
-        let confirmed = sub.issue_confirmed_notifications;
-        let lease = if confirmed {
-            let Some(lease) = admit(sub) else {
-                continue;
-            };
-            Some(lease)
-        } else {
-            None
-        };
         let octets = params.len()
-            + if confirmed {
+            + if sub.issue_confirmed_notifications {
                 CONFIRMED_HEADER
             } else {
                 UNCONFIRMED_HEADER
             };
+        let Some(lease) = admit(sub, octets) else {
+            continue;
+        };
         let Some(completion) = table.prepare_completion(sub) else {
             continue;
         };

@@ -26,7 +26,9 @@ use bytes::BytesMut;
 use core::cmp::Ordering as CmpOrdering;
 
 mod multiple;
+mod overlay;
 pub use multiple::{ActiveCovMultipleEntry, ActiveCovMultipleSubscriptions};
+pub use overlay::{ActiveCovOverlay, ActiveCovView};
 
 /// One ordinary or Single entry copied from the table at a sampled instant.
 #[derive(Debug, Clone, PartialEq)]
@@ -106,7 +108,10 @@ impl ActiveCovSubscriptions {
         device: ObjectIdentifier,
         mut entries: Vec<ActiveCovEntry>,
     ) -> Self {
-        entries.sort_by(order);
+        // The order is total, so an unstable sort gives the same list, and
+        // links no 64-bit division on a 32-bit target, as the stable one's
+        // run-length scale does.
+        entries.sort_unstable_by(order);
         let subscriptions: Vec<_> = entries
             .into_iter()
             .filter_map(|entry| {

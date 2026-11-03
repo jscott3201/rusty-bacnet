@@ -271,13 +271,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             // invoke IDs) and awaits nothing, and nothing here runs beside
             // an unpolled future that holds a guard (#1494).
             let mut table = cov_table.write().await;
-            let reports = table.evaluate(object, subs, evaluation, budget, |sub| {
+            // An unconfirmed report needs nothing of the host before its send.
+            let reports = table.evaluate(object, subs, evaluation, budget, |sub, _| {
+                if !sub.issue_confirmed_notifications {
+                    return Some(None);
+                }
                 Self::admit_confirmed(
                     handles,
                     sub,
                     ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION,
                     "COV notification",
                 )
+                .map(Some)
             });
             (
                 reports,

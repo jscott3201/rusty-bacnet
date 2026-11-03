@@ -161,7 +161,7 @@ fn changed(table: &mut CovTable, object: &dyn BACnetObject, force: bool) -> Vec<
         },
         &mut budget,
         NOW,
-        |_| Some(()),
+        |_, _| Some(()),
     )
 }
 
@@ -409,7 +409,7 @@ fn a_life_safety_change_reports_from_its_snapshot() {
         },
         &mut budget,
         NOW,
-        |_| Some(()),
+        |_, _| Some(()),
     );
     assert_eq!(summary(&reports)[0].0, 1, "the whole-object subscription");
     assert_eq!(
@@ -452,7 +452,7 @@ fn the_budget_cuts_off_what_one_change_sends_and_counts_it() {
         evaluation,
         &mut budget,
         NOW,
-        |_| Some(()),
+        |_, _| Some(()),
     );
     assert_eq!(cut.len(), 1);
     assert_eq!(budget.remaining_bytes(), octets - 1);
@@ -470,7 +470,6 @@ fn a_change_while_a_report_is_out_is_owed_to_its_ack() {
         .key()
         .clone();
     let initial = changed(&mut table, &probe, true);
-    assert!(initial[0].lease.is_some(), "a confirmed report is admitted");
     assert_eq!(
         table.delivered(initial[0].token, Delivery::Acknowledged, NOW),
         core::slice::from_ref(&key)
@@ -495,7 +494,7 @@ fn a_change_while_a_report_is_out_is_owed_to_its_ack() {
         },
         &mut budget,
         NOW,
-        |_| {
+        |_, _| {
             admitted += 1;
             Some(())
         },
@@ -517,26 +516,43 @@ fn a_change_while_a_report_is_out_is_owed_to_its_ack() {
 fn a_refused_admission_drops_the_report_unspent() {
     let mut table = CovTable::default();
     let probe = Probe::new();
-    let sub = table
-        .subscribe(proposal(probe.object_identifier(), 1, None, true), NOW)
-        .unwrap();
+    let oid = probe.object_identifier();
+    let confirmed = table.subscribe(proposal(oid, 1, None, true), NOW).unwrap();
+    table.subscribe(proposal(oid, 2, None, false), NOW).unwrap();
+    let subs = live(&mut table, oid);
     let mut budget = EventBudget::new(table.policy());
     let evaluation = Evaluation {
         device: device(),
         force: true,
     };
+    // Every report is offered with its APDU's octets, confirmed or not.
+    let mut offered = Vec::new();
     let reports = evaluate(
         &mut table,
         &probe,
-        core::slice::from_ref(&sub),
+        &subs,
         evaluation,
         &mut budget,
         NOW,
-        |_| None::<()>,
+        |sub, octets| {
+            offered.push((sub.subscriber_process_identifier, octets));
+            None::<()>
+        },
     );
     assert!(reports.is_empty());
+    let header = |process| {
+        if process == 1 {
+            CONFIRMED_HEADER
+        } else {
+            UNCONFIRMED_HEADER
+        }
+    };
+    offered.sort_unstable();
+    assert_eq!(offered.len(), 2);
+    assert_eq!(offered[0].1 - header(1), offered[1].1 - header(2));
     assert_eq!(budget.remaining_notifications(), 64);
-    assert!(table.confirmed_idle(&sub, NOW), "no flight began");
+    assert!(table.confirmed_idle(&confirmed, NOW), "no flight began");
+    assert!(table.pending.is_empty(), "nothing awaits a send");
 }
 
 #[test]

@@ -93,7 +93,10 @@ impl ActiveCovMultipleSubscriptions {
         device: ObjectIdentifier,
         mut entries: Vec<ActiveCovMultipleEntry>,
     ) -> Self {
-        entries.sort_by(order);
+        // The order is total, so an unstable sort gives the same list, and
+        // links no 64-bit division on a 32-bit target, as the stable one's
+        // run-length scale does.
+        entries.sort_unstable_by(order);
         let mut contexts: Vec<BACnetCOVMultipleSubscription> = Vec::new();
         let mut current: Option<&MultipleContextKey> = None;
         for entry in &entries {
