@@ -61,9 +61,11 @@ class EventLogStubContractTests(unittest.TestCase):
         parameters = inspect.signature(BACnetServer.add_event_log).parameters
         positional = ["self", "instance", "name", "buffer_size", "log_received_notifications"]
         self.assertEqual(
-            list(parameters), [*positional, "storage_path", "total_record_count"]
+            list(parameters),
+            [*positional, "storage_path", "clear_written_reporting", "total_record_count"],
         )
         self.assertIsNone(parameters["storage_path"].default)
+        self.assertIs(parameters["clear_written_reporting"].default, False)
         self.assertIs(parameters["log_received_notifications"].default, False)
         self.assertEqual(
             parameters["total_record_count"].kind, inspect.Parameter.KEYWORD_ONLY
@@ -73,7 +75,7 @@ class EventLogStubContractTests(unittest.TestCase):
         self.assertEqual([argument.arg for argument in method.args.args], positional)
         self.assertEqual(
             [argument.arg for argument in method.args.kwonlyargs],
-            ["storage_path", "total_record_count"],
+            ["storage_path", "clear_written_reporting", "total_record_count"],
         )
         docs = ast.get_docstring(method)
         assert docs is not None
