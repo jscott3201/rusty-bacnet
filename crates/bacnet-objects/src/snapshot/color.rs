@@ -16,8 +16,8 @@ use bacnet_types::constructed::BACnetXyColor;
 use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::ObjectIdentifier;
 
-use super::SnapshotError;
 use super::framing;
+use super::{SnapshotError, SnapshotErrorKind};
 use crate::color::{ColorOutputSnapshot, ColorOutputValue};
 
 /// The format's tag: version 2, which keeps a written default too (#1956).
@@ -114,7 +114,12 @@ fn decode_file(
     let width = match kind {
         KIND_XY => 8,
         KIND_KELVIN => 4,
-        _ => return Err(no_value),
+        _ => {
+            return Err(SnapshotError::new(
+                SnapshotErrorKind::UnknownKind(kind),
+                "holds a value of an unknown kind",
+            ));
+        }
     };
     let value = |octets: &[u8]| match kind {
         KIND_XY => ColorOutputValue::Xy(BACnetXyColor::new(

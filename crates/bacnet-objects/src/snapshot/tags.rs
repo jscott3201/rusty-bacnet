@@ -83,7 +83,14 @@ fn decode_file(object: ObjectIdentifier, octets: &[u8]) -> Result<TagsSnapshot, 
         _ => return Err(SnapshotError::damaged("has no valid presence marker")),
     };
     let snapshot = TagsSnapshot { tags };
-    encode_body(&snapshot)
-        .map_err(|_| SnapshotError::damaged("holds Tags a write would refuse"))?;
+    check_loaded(&snapshot)?;
     Ok(snapshot)
+}
+
+/// Refuse loaded Tags a write would refuse, as damage: the file backend's
+/// decode and a custom backend's load answer alike.
+pub(crate) fn check_loaded(snapshot: &TagsSnapshot) -> Result<(), SnapshotError> {
+    encode_body(snapshot)
+        .map(|_| ())
+        .map_err(|_| SnapshotError::damaged("holds Tags a write would refuse"))
 }

@@ -50,10 +50,9 @@ const WHAT: &str = "Access Rights file";
 
 /// The file octets for `snapshot`, saved for `object`.
 ///
-/// Refuses ([`OutOfRange`](super::SnapshotErrorKind::OutOfRange)) octets
-/// past [`MAX_LEN`]. It writes the arrays it is given, however long, as the
-/// file backend always has; the object never holds more than
-/// [`MAX_ACCESS_RULES`], and [`decode`] refuses more.
+/// Refuses ([`OutOfRange`](super::SnapshotErrorKind::OutOfRange)) an array
+/// of more than [`MAX_ACCESS_RULES`] rules and octets past [`MAX_LEN`]:
+/// what [`decode`] would refuse.
 pub fn encode(
     object: ObjectIdentifier,
     snapshot: &AccessRightsSnapshot,
@@ -84,6 +83,11 @@ fn encode_file(
         (NEGATIVE_TAG, &snapshot.negative_access_rules),
     ] {
         if let Some(rules) = rules {
+            if rules.len() > MAX_ACCESS_RULES {
+                return Err(SnapshotError::out_of_range(
+                    "holds more rules than the object keeps",
+                ));
+            }
             tags::encode_opening_tag(&mut body, tag);
             for rule in rules {
                 encode_access_rule(&mut body, rule);

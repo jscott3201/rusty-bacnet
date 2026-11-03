@@ -14,8 +14,11 @@ pub(crate) const HEADER_LEN: usize = 8 + 4;
 /// The body of a file's `octets` saved for `object`, after the header, and
 /// whether its tag is `previous` (a version of the format before `magic`,
 /// which still loads) rather than `magic`. Refuses a file past `max_len`
-/// before looking at any of it, one without either tag, and one saved for
-/// another object.
+/// before looking at any of it, one saved for another object, and one
+/// without either tag: a tag of the same family (its first six octets) with
+/// another two-digit version is a version this build doesn't read, so a
+/// backend keeping two copies doesn't fall back past it; any other tag is
+/// another format.
 pub(crate) fn open<'a>(
     octets: &'a [u8],
     magic: &[u8; 8],
@@ -33,6 +36,11 @@ pub(crate) fn open<'a>(
     let is_previous = match octets.get(..magic.len()) {
         Some(tag) if tag == magic => false,
         Some(tag) if previous.is_some_and(|previous| tag == previous) => true,
+        Some(tag) if tag[..FAMILY_LEN] == magic[..FAMILY_LEN] => {
+            return Err(version(&tag[FAMILY_LEN..]).map_or(no_header, |version| {
+                SnapshotError::new(SnapshotErrorKind::UnknownVersion(version), "")
+            }));
+        }
         _ => return Err(no_header),
     };
     if octets.len() < HEADER_LEN {
@@ -45,6 +53,19 @@ pub(crate) fn open<'a>(
         ));
     }
     Ok((is_previous, &octets[HEADER_LEN..]))
+}
+
+/// The octets of a tag that name its format: the rest, two ASCII digits,
+/// name the version.
+const FAMILY_LEN: usize = 6;
+
+/// The version two ASCII digits name, or `None` for anything else.
+fn version(digits: &[u8]) -> Option<u16> {
+    digits.iter().try_fold(0u16, |version, digit| {
+        digit
+            .is_ascii_digit()
+            .then(|| version * 10 + u16::from(digit - b'0'))
+    })
 }
 
 /// The file octets for `body` saved for `object` under `magic`.

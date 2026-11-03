@@ -215,6 +215,57 @@ fn a_version_1_colour_file_loads_with_no_default() {
     );
 }
 
+/// A newer version of a format's tag, or a newer colour kind, is a sound
+/// file this build doesn't read, not damage: a backend keeping two copies
+/// must not fall back past it. A tag of another family is another format.
+#[test]
+fn a_newer_tag_or_kind_is_not_damage() {
+    let (object, snapshot) = class();
+    let mut octets = notification_class::encode(object, &snapshot).unwrap();
+    octets[6..8].copy_from_slice(b"02");
+    let error = notification_class::decode(object, &octets).unwrap_err();
+    assert_eq!(error.kind(), SnapshotErrorKind::UnknownVersion(2));
+    assert!(!error.is_damage());
+    let (object, snapshot) = colour();
+    let mut octets = color::encode(object, &snapshot).unwrap();
+    octets[6..8].copy_from_slice(b"07");
+    assert_eq!(
+        color::decode(object, &octets).unwrap_err().kind(),
+        SnapshotErrorKind::UnknownVersion(7)
+    );
+    let mut octets = color::encode(object, &snapshot).unwrap();
+    octets[12] = 3;
+    let error = color::decode(object, &octets).unwrap_err();
+    assert_eq!(error.kind(), SnapshotErrorKind::UnknownKind(3));
+    assert!(!error.is_damage());
+    // Another family, or a version that isn't two digits: not this format.
+    for tag in [*b"RBNFWD01", *b"RBNCLRxx"] {
+        let mut octets = color::encode(object, &snapshot).unwrap();
+        octets[..8].copy_from_slice(&tag);
+        let error = color::decode(object, &octets).unwrap_err();
+        assert_eq!(error.kind(), SnapshotErrorKind::NotThisFormat);
+        assert!(error.is_damage());
+    }
+}
+
+/// A list longer than the object keeps never encodes.
+#[test]
+fn an_over_long_list_never_encodes() {
+    let (object, mut snapshot) = class();
+    snapshot.recipient_list = Some(vec![destination(2); 33]);
+    let error = notification_class::encode(object, &snapshot).unwrap_err();
+    assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange);
+    let (object, mut snapshot) = forwarder();
+    let entry = snapshot.subscribed_recipients[0].clone();
+    snapshot.subscribed_recipients = vec![entry; 33];
+    let error = notification_forwarder::encode(object, &snapshot).unwrap_err();
+    assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange);
+    let (object, mut snapshot) = rights();
+    snapshot.negative_access_rules = Some(vec![BACnetAccessRule::new(None, None, true); 1025]);
+    let error = access_rights::encode(object, &snapshot).unwrap_err();
+    assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange);
+}
+
 /// Values no save writes are damage on decode and refusals on encode.
 #[test]
 fn values_out_of_range_are_damage_in_and_refused_out() {

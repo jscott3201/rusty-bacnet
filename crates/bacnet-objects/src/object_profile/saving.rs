@@ -44,7 +44,9 @@ impl ProfileState {
         persistence: Arc<dyn TagsPersistence>,
     ) -> Result<Self, Error> {
         let snapshot = persistence.load(oid)?.unwrap_or_default();
-        encode_snapshot(&snapshot)?;
+        // As the file backend refuses the same Tags in a file.
+        crate::snapshot::tags::check_loaded(&snapshot)
+            .map_err(|error| Error::from(error.in_format("Tags snapshot")))?;
         let writer = SaveWriter::new(
             format!("bacnet-tags-{oid}-save"),
             move |snapshot: &TagsSnapshot| persistence.save(oid, snapshot),
