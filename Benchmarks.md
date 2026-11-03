@@ -1265,6 +1265,26 @@ instruction slopes under `profiles/`, and the #1978 items' share in
 current ones, built like the release with the fixed allocator settings, in
 [benchmarks/results/perf-s0b](benchmarks/results/perf-s0b/README.md).
 
+### 10.5 Request-path copies (#1978 items 1 and 7)
+
+Two changes on the B/IP request path, each counted against its own
+baseline with the harness above
+([benchmarks/results/perf-s3](benchmarks/results/perf-s3/README.md)):
+
+- **MAC address copies.** Cloning a MAC address copied it one byte at a
+  time, eight times per ReadProperty round trip. The client, the
+  transaction coordinator and the server now copy the bytes at once or
+  borrow them. That saves about 515 instructions per request on
+  ReadProperty, WriteProperty and ten-object ReadPropertyMultiple, on both
+  runtimes, with every pair lower and allocations unchanged. This is the
+  section 10.3 candidate again, now judged on counts rather than wall-clock
+  time.
+- **Response route.** The server built each request's response route twice;
+  it now builds it once. That saves about 80 instructions per ReadProperty
+  and WriteProperty request, under the 100-instruction bar for an
+  optimization, and adds nothing anywhere. It is kept as a simplification
+  of the receive loop.
+
 ## 11. How to reproduce
 
 Run one suite at a time on an idle machine. Each Criterion suite takes 1 to
